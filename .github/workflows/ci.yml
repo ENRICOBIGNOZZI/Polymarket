@@ -38,3 +38,7 @@ jobs:
           ./build/polymarket_engine --config config/paper.example.json --once --scan-only --markets 5 --min-liquidity 100 --run-dir /tmp/polymarket-live-smoke
           test -s /tmp/polymarket-live-smoke/status.json
           test -s /tmp/polymarket-live-smoke/signals.csv
+      - name: Live multi-horizon statistical arbitrage diagnostic (read-only)
+        run: |
+          ./build/polymarket_stat_arb --config config/paper_v3.json --markets 240 --history-universe 100 --lookback-hours 336 --fidelity-minutes 30 --min-z 1.5 --top 25 --csv /tmp/stat_arb.csv
+          test -s /tmp/stat_arb.csv
