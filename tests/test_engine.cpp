@@ -40,11 +40,12 @@ int main() {
     auto c = hash_text_embedding("Will France win the World Cup?", 32);
     assert(cosine_similarity(a,b) > cosine_similarity(a,c));
 
-    const std::string gamma = R"JSON([{"id":"42","question":"Test?","conditionId":"0xabc","active":true,"closed":false,"acceptingOrders":true,"liquidity":"1234.5","clobTokenIds":"[\"111\",\"222\"]","outcomePrices":"[\"0.61\",\"0.39\"]","feesEnabled":true,"feeSchedule":{"rate":0.04,"exponent":2,"takerOnly":true}}])JSON";
+    const std::string gamma = R"JSON([{"id":"42","question":"Test?","conditionId":"0xabc","active":true,"closed":false,"acceptingOrders":true,"liquidity":"1234.5","clobTokenIds":"[\"111\",\"222\"]","outcomePrices":"[\"0.61\",\"0.39\"]","umaResolutionStatus":"proposed","feesEnabled":true,"feeSchedule":{"rate":0.04,"exponent":2,"takerOnly":true}}])JSON";
     auto p = parse_gamma_markets_json(gamma);
     assert(p.size() == 1 && p[0].yes_token == "111" && p[0].no_token == "222");
     assert(std::abs(p[0].gamma_yes_price - 0.61) < 1e-9);
     assert(p[0].fees.live && std::abs(p[0].fees.rate - 0.04) < 1e-12);
+    assert(p[0].resolution_status == "proposed");
 
     const std::string keyset = R"JSON({"markets":[{"id":"7","question":"K?","active":true,"closed":false,"clobTokenIds":"[\"1\",\"2\"]","outcomePrices":"[\"0.4\",\"0.6\"]"}],"next_cursor":"abc"})JSON";
     auto kp = parse_gamma_markets_json(keyset);
@@ -74,6 +75,16 @@ int main() {
     assert(std::abs(br.marked_equity(mid) - 1020.0) < 1e-9);
     auto close = br.close_token("m", "t", "YES", 0.6, 0.0, 1.0, 0.0);
     assert(close && std::abs(br.cash() - 1020.0) < 1e-9 && br.positions().empty());
+
+    PaperBroker void_br(1000.0);
+    TradeIdea void_i = i;
+    void_i.token_id = "voidY";
+    auto void_buy = void_br.buy(void_i, 100.0, 0.0, 1.0, 0.0);
+    assert(void_buy);
+    auto void_fills = void_br.settle_market("m", 0.5);
+    assert(void_fills.size() == 1);
+    assert(std::abs(void_fills[0].price - 0.5) < 1e-12);
+    assert(std::abs(void_br.cash() - 1000.0) < 1e-9);
 
     RiskManager rr(cfg);
     TradeIdea edge = i;
@@ -111,6 +122,9 @@ int main() {
     bool pca_active = false;
     for (const auto& ep : fv.components) if (ep.expert == "pca_factor") pca_active = ep.active;
     assert(pca_active);
+    assert(!model.pending_market_ids().empty());
+    model.forget_prediction("a");
+    for (const auto& id : model.pending_market_ids()) assert(id != "a");
 
     std::filesystem::remove_all(tmp);
     std::cout << "all tests passed\n";
