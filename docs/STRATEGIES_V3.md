@@ -16,9 +16,11 @@ Implementation: `polymarket_negrisk_arb` plus pair-parity diagnostics in the mai
 
 ## Strategy B — Statistical arbitrage
 
-Multi-horizon relative-value alpha. It is not a terminal probability forecast.
+Multi-horizon relative-value alpha. This strategy produces expected mark-to-market convergence, not a terminal probability, and therefore does not use binary-outcome Kelly sizing.
 
-For candidate markets `i,j`, the strategy works with timestamp-aligned logit probabilities and estimates
+### B1 — Pair residual sleeve
+
+For candidate markets `i,j`, timestamp-aligned logit probabilities are used to estimate
 
 `logit(p_j,t) = a + beta logit(p_i,t) + r_t`.
 
@@ -26,23 +28,28 @@ The residual is screened with an ADF-style one-lag regression
 
 `Delta r_t = c + gamma r_{t-1} + eps_t`,
 
-with `phi = 1 + gamma`. Candidate trades require:
+with `phi = 1 + gamma`. Candidate trades require sufficient common timestamps, an economically/statistically plausible relationship, stable hedge ratio/residual dynamics across split samples, negative residual feedback, finite half-life and a sufficiently extreme current residual z-score. Same-event and semantic pairs receive economically motivated gates; unrelated latent pairs require much stronger return correlation and reversion evidence.
 
-- sufficient common timestamp observations;
-- economically/statistically plausible relation (same event, semantic relation, or a much stricter latent-correlation gate);
-- stable hedge ratio and residual dynamics across split samples;
-- negative and sufficiently significant residual feedback;
-- finite half-life below the configured maximum;
-- current residual z-score beyond the entry threshold.
-
-The expected residual convergence is mapped into expected mark-to-market moves for both legs. This produces `expected_mark_move`, not `P(outcome=YES)`. Therefore Kelly sizing based on binary terminal payoff is not used for this strategy.
-
-The scanner evaluates several windows and reports both:
-
-- conservative taker-entry/taker-exit economics;
-- maker-entry/taker-exit economics as a diagnostic, without assuming a passive fill.
+Several horizons are fit and the expected residual convergence is mapped into a two-leg expected mark move. Both taker-entry/taker-exit and maker-entry/taker-exit economics are reported separately.
 
 Implementation: `polymarket_stat_arb`.
+
+### B2 — PCA / factor-residual sleeve
+
+This is the timestamp-aligned replacement for the old index-aligned PCA signal.
+
+- historical YES probabilities are bucketed by their actual timestamps and transformed to logit space;
+- a sparse panel is retained rather than pretending different observation times are synchronous;
+- pairwise correlations use only common timestamps;
+- the leading factor directions are estimated from that correlation structure;
+- at each timestamp factor scores are projected using only markets observed at that timestamp;
+- each market's idiosyncratic residual is tested separately for mean reversion, half-life and split-sample stability;
+- an extreme current factor residual is converted into an expected mark-to-market move over approximately one half-life;
+- taker and maker-entry economics are costed separately.
+
+This is a timestamp-aware sparse-panel factor/PCA approximation, not a claim of exact balanced-panel PCA.
+
+Implementation: `polymarket_pca_stat_arb`.
 
 ## Execution — conservative paper maker
 
@@ -59,11 +66,11 @@ Initial implementation deliberately biases against optimistic fills:
 - exits are simulated as taker, including book walk, slippage and taker fee;
 - orders and positions are persisted across ticks.
 
-This is intentionally harsher than a fill-probability model. A calibrated queue/fill hazard model can replace it only after enough empirical paper-order data have been collected.
+This is intentionally harsher than a fill-probability model. A calibrated queue/fill hazard model should replace it only after enough empirical paper-order data have been collected.
 
 ## Terminal-probability sleeve
 
-The original terminal forecasting engine remains available, but `config/paper_v3.json` assigns zero ensemble weight to `micro` and the legacy index-aligned `pca` expert. Structural graph/external terminal information can still be used there.
+The original terminal forecasting engine remains available, but `config/paper_v3.json` assigns zero ensemble weight to `micro` and the legacy `pca` expert. Structural graph/external terminal information can still be used there.
 
 This prevents short-horizon price signals from being interpreted as terminal probabilities and prevents Kelly from being applied to the wrong object.
 
@@ -71,7 +78,7 @@ This prevents short-horizon price signals from being interpreted as terminal pro
 
 - maker microstructure loop: approximately every 10 seconds;
 - structural-arbitrage scan: approximately every 30 seconds;
-- statistical-arbitrage refit: approximately every 15 minutes;
-- terminal-probability scan: slower, or event-driven when external information changes.
+- pair and PCA statistical-arbitrage refits: approximately every 15 minutes;
+- terminal-probability scan: slower or event-driven when external information changes.
 
-Performance should be reported by strategy and execution mode separately before any portfolio-level aggregation.
+Performance must be reported separately for Strategy A, Strategy B1, Strategy B2 and maker execution before any portfolio-level aggregation.
