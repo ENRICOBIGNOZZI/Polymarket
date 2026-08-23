@@ -226,7 +226,7 @@ std::vector<Market> PolymarketClient::discover_markets(std::size_t n) const {
     try {
         while (out.size() < n) {
             const auto page_size = std::min(page_cap, n - out.size());
-            std::string url = "https://gamma-api.polymarket.com/markets/keyset?active=true&closed=false&order=volume24hr&ascending=false&limit=" + std::to_string(page_size);
+            std::string url = "https://gamma-api.polymarket.com/markets/keyset?closed=false&order=volume_num&ascending=false&limit=" + std::to_string(page_size);
             if (!cursor.empty()) url += "&after_cursor=" + url_encode(cursor);
             const auto body = http_.get(url);
             auto page = parse_gamma_markets_json(body);
@@ -323,7 +323,7 @@ std::vector<LiveMarket> PolymarketClient::snapshot(std::size_t limit, double min
     eligible.reserve(markets.size());
     tokens.reserve(markets.size() * 2);
     for (auto& m : markets) {
-        if (m.accepting_orders && m.liquidity >= min_liq) {
+        if (m.active && !m.closed && m.accepting_orders && m.liquidity >= min_liq) {
             tokens.push_back(m.yes_token);
             tokens.push_back(m.no_token);
             eligible.push_back(std::move(m));
