@@ -49,6 +49,23 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('http://127.0.0.1:3000/api/search', updater)
         self.assertIn('http://127.0.0.1:3000/api/search', finish)
 
+    def test_autoupdate_heartbeat_proves_main_is_deployed(self):
+        updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
+        health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(encoding="utf-8")
+
+        self.assertIn('autoupdate_status.env', updater)
+        self.assertIn('checked_ts=', updater)
+        self.assertIn('status=%s', updater)
+        self.assertIn('write_status up_to_date', updater)
+        self.assertIn('write_status deployed', updater)
+        self.assertIn('write_status rollback', updater)
+        self.assertIn('git fetch -q origin main', health)
+        self.assertIn('test "$head_sha" = "$origin_sha"', health)
+        self.assertIn('system/com.polymarket.autoupdate', health)
+        self.assertIn('autoupdate_status.env', health)
+        self.assertIn('now - checked_ts', health)
+        self.assertIn('up_to_date|deployed', health)
+
 
 if __name__ == "__main__":
     unittest.main()
