@@ -11,17 +11,23 @@ class MacOSOpsContractTest(unittest.TestCase):
         installer = (ROOT / "ops" / "install_autoupdate_macos.sh").read_text(encoding="utf-8")
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
 
-        # update_server_macos.sh resolves APP_DIR/CACHE_DIR from HOME before it
-        # discovers Homebrew, so a system LaunchDaemon must explicitly provide
-        # HOME and a PATH containing the Homebrew prefix.
         self.assertIn('${POLYMARKET_APP_DIR:-$HOME/polymarket}', updater)
-        self.assertIn('command -v brew', updater)
         self.assertIn('<key>EnvironmentVariables</key>', installer)
         self.assertIn('<key>HOME</key>', installer)
         self.assertIn('<key>PATH</key>', installer)
         self.assertIn('<key>POLYMARKET_APP_DIR</key>', installer)
-        self.assertIn('BREW_PREFIX="$(brew --prefix)"', installer)
         self.assertIn('$BREW_PREFIX/bin:$BREW_PREFIX/sbin', installer)
+
+    def test_homebrew_discovery_survives_minimal_path(self):
+        installer = (ROOT / "ops" / "install_autoupdate_macos.sh").read_text(encoding="utf-8")
+        updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
+
+        for script in (installer, updater):
+            self.assertIn('find_brew()', script)
+            self.assertIn('/opt/homebrew/bin/brew', script)
+            self.assertIn('/usr/local/bin/brew', script)
+            self.assertIn('BREW_BIN="$(find_brew)"', script)
+            self.assertIn('"$BREW_BIN" --prefix', script)
 
     def test_autoupdate_remains_paper_deploy_only(self):
         installer = (ROOT / "ops" / "install_autoupdate_macos.sh").read_text(encoding="utf-8")
