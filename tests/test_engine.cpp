@@ -12,6 +12,12 @@ int main() {
     assert(cosine_similarity(a,b) > cosine_similarity(a,c));
     assert(std::abs(clamp_probability(-2.0)-0.001)<1e-12);
 
+    const std::string gamma = R"JSON([{"id":"42","question":"Test?","slug":"test","conditionId":"0xabc","active":true,"closed":false,"acceptingOrders":true,"negRisk":false,"liquidity":"1234.5","clobTokenIds":"[\"111\", \"222\"]","outcomePrices":"[\"0.61\", \"0.39\"]"}])JSON";
+    auto parsed=parse_gamma_markets_json(gamma);
+    assert(parsed.size()==1);
+    assert(parsed[0].yes_token=="111" && parsed[0].no_token=="222");
+    assert(std::abs(parsed[0].gamma_yes_price-0.61)<1e-9);
+
     EngineConfig cfg;
     RiskManager r(cfg);
     r.update_equity(9000.0);
