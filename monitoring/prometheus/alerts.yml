@@ -8,7 +8,7 @@ groups:
           severity: critical
         annotations:
           summary: Polymarket telemetry exporter is down
-          description: Prometheus has not been able to scrape the file exporter for one minute.
+          description: Prometheus has not been able to scrape the exporter for one minute.
 
       - alert: PolymarketMakerDataStale
         expr: (polymarket_maker_state_present == 0) or (polymarket_maker_staleness_seconds > 60)
@@ -17,7 +17,7 @@ groups:
           severity: warning
         annotations:
           summary: Paper-maker state is stale
-          description: The latest maker equity snapshot is more than 60 seconds old.
+          description: The latest legacy maker equity snapshot is more than 60 seconds old.
 
       - alert: PolymarketMakerDrawdownWarning
         expr: polymarket_maker_drawdown_ratio >= 0.10
@@ -34,4 +34,50 @@ groups:
           severity: critical
         annotations:
           summary: Paper-maker kill switch is active
-          description: New paper-maker risk is frozen by the persisted drawdown kill switch.
+          description: New legacy maker risk is frozen by the persisted drawdown kill switch.
+
+  - name: polymarket-latest-runtime
+    rules:
+      - alert: PolymarketLatestExecutionStale
+        expr: polymarket_runtime_execution_staleness_seconds > 60
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Latest Polymarket execution telemetry is stale
+          description: The auto-selected runtime has stale execution inputs/state; escalation to real money must remain blocked.
+
+      - alert: PolymarketLatestDrawdownWarning
+        expr: polymarket_runtime_drawdown_ratio >= 0.10
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: Latest Polymarket paper runtime drawdown above 10%
+          description: The auto-selected runtime has crossed the pre-kill drawdown warning level.
+
+      - alert: PolymarketLatestKillSwitchActive
+        expr: polymarket_runtime_kill_switch == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: Latest Polymarket runtime kill switch is active
+          description: New risk must remain frozen until the latest runtime is flat and reviewed.
+
+      - alert: PolymarketLatestExecutionImbalance
+        expr: polymarket_runtime_execution_imbalance_ratio > 0.50
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: Latest Polymarket runtime has severe execution imbalance
+          description: Cross-leg fill imbalance exceeds 50 percentage points in the auto-selected runtime.
+
+      - alert: PolymarketLatestOOSReportStale
+        expr: (polymarket_runtime_oos_trades > 0) and (polymarket_runtime_oos_staleness_seconds > 7200)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Latest Polymarket OOS report is stale
+          description: The auto-selected runtime's walk-forward gate is more than two hours old.

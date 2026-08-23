@@ -19,9 +19,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Validate exporter and provisioned dashboard
+      - name: Validate version-agnostic exporter and stable dashboard
         run: |
-          python3 -m unittest tests/test_monitoring_exporter.py -v
-          python3 -m py_compile monitoring/exporter.py
-          python3 -m json.tool monitoring/grafana/dashboards/polymarket-live.json >/dev/null
+          python3 -m unittest tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py tests/test_monitoring_latest_exporter.py -v
+          python3 -m py_compile monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_latest.py
+          python3 -m json.tool monitoring/grafana/dashboards/polymarket-latest.json >/dev/null
           bash -n scripts/monitoring_up.sh scripts/monitoring_down.sh
+          docker compose -f docker-compose.monitoring.yml config >/dev/null
