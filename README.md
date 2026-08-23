@@ -30,7 +30,7 @@ The forecasting layer, trade decision, portfolio construction and execution are 
 - **Semantic RV** — hashed text embedding plus conservative nearest-neighbour shrinkage. This is deliberately a lightweight first implementation; a learned event encoder can replace it without changing the rest of the engine.
 - **External information** — generic `(market_id, probability, confidence, source, timestamp)` interface with exponential staleness decay.
 
-Experts may abstain. Active predictions are combined with confidence and an adaptive penalty based on each expert's realized Brier loss. Expert calibration state survives process restarts.
+Experts may abstain. Active predictions are combined with confidence and an adaptive penalty based on each expert's realized Brier loss. Expert calibration state survives process restarts. Resolution checks are rate-limited and continue for markets that leave the active universe, so Brier weights are learned from resolved forecasts even when those markets were never traded. Non-binary/void payouts are excluded from the Bernoulli Brier update rather than being mislabeled as YES or NO.
 
 ## Live market data
 
@@ -117,7 +117,9 @@ Paper exit:
 fill = bid * (1 - slippage_bps / 10000)
 ```
 
-Cash, positions, fees, model calibration and drawdown state are persisted after fills and at the end of every cycle. Held markets are reconciled even if they disappear from the normal tradable scan; resolved markets are automatically settled at 0/1 when resolution is visible in Gamma.
+Cash, positions, fees, model calibration and drawdown state are persisted after fills and at the end of every cycle. Held markets are reconciled even if they disappear from the normal tradable scan.
+
+Settlement is deliberately stricter than a simple `closed=true` check. When `umaResolutionStatus` is available, `requested`, `proposed`, and `disputed` are treated as non-final; paper settlement is allowed only at `resolved` or `settled`. Some automatically resolved markets do not expose UMA state, so the conservative fallback requires both closure and an effectively binary terminal YES payout. At final resolution the paper broker uses the actual terminal YES payout: a void/non-binary payout such as 0.5 therefore credits YES at 0.5 and NO at 0.5, rather than pretending that one side won. Such non-binary outcomes are not fed into Bernoulli Brier calibration.
 
 Runtime files:
 
@@ -143,7 +145,7 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-The unit test suite covers Gamma legacy/keyset parsing, fee calculations, drawdown kill logic, broker accounting/persistence, text similarity and synchronized PCA activation.
+The unit test suite covers Gamma legacy/keyset parsing, UMA resolution-state parsing, current fee calculations, drawdown kill logic, broker accounting/persistence, non-binary settlement, text similarity and synchronized PCA activation.
 
 ## Run live-data paper trading
 
