@@ -31,9 +31,7 @@ log "Installing native macOS dependencies"
 brew update
 brew install git cmake pkg-config boost curl python prometheus grafana
 
-mkdir -p "$STATE_DIR" "$LOG_DIR" "$APP_DIR/runs/monitoring/prometheus" \
-  "$APP_DIR/runs/monitoring/grafana/data" "$APP_DIR/runs/monitoring/grafana/logs" \
-  "$APP_DIR/runs/monitoring/grafana/plugins" "$STATE_DIR/grafana/provisioning/datasources" \
+mkdir -p "$STATE_DIR" "$LOG_DIR" "$STATE_DIR/grafana/provisioning/datasources" \
   "$STATE_DIR/grafana/provisioning/dashboards"
 
 if [[ -d "$APP_DIR/.git" ]]; then
@@ -47,6 +45,9 @@ else
   git clone --branch "$BRANCH" --single-branch "$REPO_URL" "$APP_DIR"
 fi
 
+mkdir -p "$APP_DIR/runs/monitoring/prometheus" \
+  "$APP_DIR/runs/monitoring/grafana/data" "$APP_DIR/runs/monitoring/grafana/logs" \
+  "$APP_DIR/runs/monitoring/grafana/plugins"
 cd "$APP_DIR"
 
 export PKG_CONFIG_PATH="$(brew --prefix curl)/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
@@ -66,7 +67,7 @@ bash -n scripts/paper_latest_loop.sh scripts/paper_v4_once.sh scripts/paper_v4_l
 
 log "Writing native Prometheus configuration"
 cat > "$STATE_DIR/prometheus.yml" <<EOF
- global:
+global:
   scrape_interval: 5s
   evaluation_interval: 5s
 rule_files:
@@ -76,8 +77,7 @@ scrape_configs:
     static_configs:
       - targets: ["127.0.0.1:9108"]
 EOF
-# Remove the leading space before global while keeping the heredoc readable above.
-sed -i '' '1s/^ //' "$STATE_DIR/prometheus.yml"
+"$BREW_PREFIX/bin/promtool" check config "$STATE_DIR/prometheus.yml"
 
 log "Writing native Grafana provisioning"
 cat > "$STATE_DIR/grafana/provisioning/datasources/prometheus.yml" <<'EOF'
@@ -176,13 +176,14 @@ EOF
 </plist>
 EOF
   } > "$tmp"
+  /usr/bin/plutil -lint "$tmp" >/dev/null
   sudo install -o root -g wheel -m 0644 "$tmp" "/Library/LaunchDaemons/$label.plist"
   rm -f "$tmp"
 }
 
 log "Installing launchd services"
 write_plist com.polymarket.awake "$USER" /usr/bin/caffeinate "$HOME" \
-  "$LOG_DIR/awake.out.log" "$LOG_DIR/awake.err.log" -dims
+  "$LOG_DIR/awake.out.log" "$LOG_DIR/awake.err.log" -ims
 write_plist com.polymarket.paper "$USER" /bin/bash "$APP_DIR" \
   "$LOG_DIR/paper.out.log" "$LOG_DIR/paper.err.log" "$APP_DIR/scripts/paper_latest_loop.sh"
 write_plist com.polymarket.exporter "$USER" "$PYTHON_BIN" "$APP_DIR" \
@@ -194,7 +195,6 @@ write_plist com.polymarket.prometheus "$USER" "$PROM_BIN" "$APP_DIR" \
   "--config.file=$STATE_DIR/prometheus.yml" "--storage.tsdb.path=$APP_DIR/runs/monitoring/prometheus" \
   --web.listen-address=127.0.0.1:9090 --web.enable-lifecycle
 
-# Grafana needs an extra environment variable for the bootstrap admin password.
 GRAFANA_PLIST="$(mktemp)"
 cat > "$GRAFANA_PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -229,6 +229,7 @@ cat > "$GRAFANA_PLIST" <<EOF
 </dict>
 </plist>
 EOF
+/usr/bin/plutil -lint "$GRAFANA_PLIST" >/dev/null
 sudo install -o root -g wheel -m 0644 "$GRAFANA_PLIST" /Library/LaunchDaemons/com.polymarket.grafana.plist
 rm -f "$GRAFANA_PLIST"
 
