@@ -8,7 +8,7 @@ groups:
           severity: critical
         annotations:
           summary: Polymarket telemetry exporter is down
-          description: Prometheus has not been able to scrape the file exporter for one minute.
+          description: Prometheus has not been able to scrape the exporter for one minute.
 
       - alert: PolymarketMakerDataStale
         expr: (polymarket_maker_state_present == 0) or (polymarket_maker_staleness_seconds > 60)
@@ -35,3 +35,58 @@ groups:
         annotations:
           summary: Paper-maker kill switch is active
           description: New paper-maker risk is frozen by the persisted drawdown kill switch.
+
+  - name: polymarket-v4-execution
+    rules:
+      - alert: PolymarketTradeRecorderStale
+        expr: (polymarket_trade_recorder_state_present == 0) or (polymarket_trade_recorder_staleness_seconds > 60)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: V4 public trade recorder is stale
+          description: Queue/fill inference is unsafe because the trade tape is missing or stale.
+
+      - alert: PolymarketMultiLegStateStale
+        expr: (polymarket_multileg_state_present == 0) or (polymarket_multileg_staleness_seconds > 30)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: V4 multi-leg broker telemetry is stale
+          description: The paper broker has not published a fresh equity/risk snapshot.
+
+      - alert: PolymarketMultiLegDrawdownWarning
+        expr: polymarket_multileg_drawdown_ratio >= 0.10
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: V4 multi-leg paper drawdown above 10%
+          description: Multi-leg marked drawdown has crossed the warning threshold.
+
+      - alert: PolymarketMultiLegKillSwitchActive
+        expr: polymarket_multileg_kill_switch == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: V4 multi-leg kill switch is active
+          description: New multi-leg risk is frozen and live bundles should be unwinding.
+
+      - alert: PolymarketMultiLegFillImbalance
+        expr: polymarket_multileg_max_fill_imbalance_ratio > 0.50
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: V4 bundle has severe partial-fill imbalance
+          description: At least one live bundle differs by more than 50 percentage points across leg fill fractions.
+
+      - alert: PolymarketOOSReportStale
+        expr: (polymarket_oos_state_present == 1) and (polymarket_oos_staleness_seconds > 7200)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: V4 walk-forward report is stale
+          description: The latest OOS gate report is more than two hours old.
