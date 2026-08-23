@@ -1,0 +1,22 @@
+name: C++ CI and Polymarket live smoke
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ pkg-config libcurl4-openssl-dev libboost-all-dev
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build -j2
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Live read-only paper smoke test
+        run: ./build/poly_live --once --markets 10 --capital 10000 --min-liquidity 0
