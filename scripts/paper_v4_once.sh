@@ -18,13 +18,13 @@ mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/terminal"
   --config "$CONFIG" --markets 600 --min-liquidity 100 --top 60 \
   | tee "$RUN_ROOT/structural_latest.log"
 
-# B1/B2 emit complete standardized maker-bundle intents for the common broker.
+# B1/B2 remain pure alpha scanners. The adapter below converts their immutable
+# CSV diagnostics into complete standardized maker-bundle intents.
 ./build/polymarket_stat_arb \
   --config "$CONFIG" --markets 600 --history-universe 160 \
   --lookback-hours 336 --fidelity-minutes 30 --min-z 1.5 \
   --max-half-life-hours 168 --top 60 \
   --csv "$RUN_ROOT/stat_arb_pairs.csv" \
-  --intents "$RUN_ROOT/b1_intents.csv" --intent-min-edge 0.001 \
   | tee "$RUN_ROOT/stat_arb_pairs_latest.log"
 
 ./build/polymarket_pca_stat_arb \
@@ -32,9 +32,14 @@ mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/terminal"
   --lookback-hours 336 --fidelity-minutes 30 --factors 3 --min-z 1.5 \
   --max-half-life-hours 168 --top 60 \
   --csv "$RUN_ROOT/stat_arb_pca.csv" \
-  --intents "$RUN_ROOT/b2_intents.csv" --intent-min-edge 0.001 \
   | tee "$RUN_ROOT/stat_arb_pca_latest.log"
 
+python3 scripts/build_v4_intents.py \
+  --strategy B1 --input "$RUN_ROOT/stat_arb_pairs.csv" --output "$RUN_ROOT/b1_intents.csv" \
+  --config "$CONFIG" --min-edge 0.001
+python3 scripts/build_v4_intents.py \
+  --strategy B2 --input "$RUN_ROOT/stat_arb_pca.csv" --output "$RUN_ROOT/b2_intents.csv" \
+  --config "$CONFIG" --min-edge 0.001
 python3 scripts/merge_v4_intents.py \
   --input "$RUN_ROOT/b1_intents.csv" --input "$RUN_ROOT/b2_intents.csv" \
   --output "$RUN_ROOT/intents.csv" --min-edge 0.001 --max-age-seconds 600 --max-bundles 20
