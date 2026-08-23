@@ -6,6 +6,7 @@ BRANCH="${POLYMARKET_BRANCH:-main}"
 APP_DIR="${POLYMARKET_APP_DIR:-$HOME/polymarket}"
 RUN_NAME="${POLYMARKET_RUN_NAME:-paper_v4_live}"
 CONFIG="${POLYMARKET_CONFIG:-config/paper_v4.json}"
+DEPLOY_USER="$(id -un)"
 
 log() { printf '[bootstrap] %s\n' "$*"; }
 fail() { printf '[bootstrap] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -28,6 +29,7 @@ else
 fi
 
 sudo systemctl enable --now docker
+sudo usermod -aG docker "$DEPLOY_USER" || true
 
 if [[ -d "$APP_DIR/.git" ]]; then
   log "Updating existing checkout in $APP_DIR"
@@ -80,7 +82,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=$USER
+User=$DEPLOY_USER
 WorkingDirectory=$APP_DIR
 EnvironmentFile=/etc/polymarket/runtime.env
 ExecStart=/usr/bin/env bash $APP_DIR/scripts/paper_v4_loop.sh $APP_DIR/$CONFIG $APP_DIR/runs/$RUN_NAME
@@ -119,9 +121,22 @@ EOF
 sudo install -m 0644 "$TMP_MON" /etc/systemd/system/polymarket-monitoring.service
 rm -f "$TMP_MON"
 
+log "Installing narrowly-scoped passwordless deploy restarts"
+SYSTEMCTL="$(command -v systemctl)"
+TMP_SUDOERS="$(mktemp)"
+cat > "$TMP_SUDOERS" <<EOF
+Cmnd_Alias POLYMARKET_SYSTEMD = $SYSTEMCTL restart polymarket-paper.service, $SYSTEMCTL restart polymarket-monitoring.service, $SYSTEMCTL is-active polymarket-paper.service, $SYSTEMCTL is-active polymarket-monitoring.service, $SYSTEMCTL status polymarket-paper.service, $SYSTEMCTL status polymarket-monitoring.service
+$DEPLOY_USER ALL=(root) NOPASSWD: POLYMARKET_SYSTEMD
+EOF
+sudo visudo -cf "$TMP_SUDOERS" >/dev/null
+sudo install -m 0440 "$TMP_SUDOERS" /etc/sudoers.d/polymarket-deploy
+rm -f "$TMP_SUDOERS"
+
 sudo systemctl daemon-reload
 sudo systemctl enable --now polymarket-paper.service
 sudo systemctl enable --now polymarket-monitoring.service
+
+touch "$APP_DIR/.server_bootstrapped"
 
 log "Service status"
 sudo systemctl --no-pager --full status polymarket-paper.service | sed -n '1,20p' || true
@@ -133,3 +148,4 @@ printf 'Runtime:    %s\n' "$APP_DIR/runs/$RUN_NAME"
 printf 'Grafana:    http://127.0.0.1:3000 (use an SSH tunnel)\n'
 printf 'Paper logs: sudo journalctl -u polymarket-paper -f\n'
 printf 'Monitor:    sudo journalctl -u polymarket-monitoring -f\n'
+printf 'NOTE: reconnect once so your docker-group membership is refreshed.\n'
