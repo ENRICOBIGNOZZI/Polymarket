@@ -15,6 +15,10 @@ public:
         std::int64_t start_ts,
         std::int64_t end_ts,
         std::size_t fidelity_minutes) const;
+    std::vector<MarketTrade> fetch_market_trades(
+        const std::vector<std::string>& condition_ids,
+        std::int64_t start_ts,
+        std::int64_t end_ts) const;
     std::optional<Market> fetch_market_by_id(const std::string& id) const;
     FeeDetails fetch_fee_details(const Market& market) const;
 private:
