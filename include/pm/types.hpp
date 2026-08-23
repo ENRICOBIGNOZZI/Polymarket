@@ -97,6 +97,9 @@ struct Market {
     bool closed = false;
     bool enable_order_book = true;
     bool accepting_orders = true;
+    bool timed_sports = false;
+    std::int64_t game_start_ts = 0;
+    int seconds_delay = 0;
     std::optional<int> resolved_yes;
     double fee_rate = -1.0;
     double fee_exponent = 1.0;

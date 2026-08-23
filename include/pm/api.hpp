@@ -1,5 +1,6 @@
 #pragma once
 #include "pm/http.hpp"
+#include "pm/market_data.hpp"
 #include "pm/types.hpp"
 #include <unordered_map>
 
@@ -16,6 +17,12 @@ public:
         std::int64_t end_ts,
         std::size_t fidelity_minutes) const;
     std::optional<Market> fetch_market_by_id(const std::string& id) const;
+    std::optional<MarketTiming> fetch_market_timing(const std::string& id) const;
+    std::vector<RecentTrade> fetch_recent_trades(
+        const std::vector<std::string>& condition_ids,
+        std::int64_t start_ts,
+        std::int64_t end_ts,
+        std::size_t limit_per_market = 1000) const;
     FeeDetails fetch_fee_details(const Market& market) const;
 private:
     Config cfg_;
