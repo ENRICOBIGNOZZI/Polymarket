@@ -12,7 +12,7 @@ Gamma `gameStartTime`, `sportsMarketType`, and `secondsDelay` metadata are store
 
 The gate is strategy-scoped: structural arbitrage and genuine terminal-probability scans retain their universe, while only mean-reversion and maker-entry sleeves are blocked around game start.
 
-Outstanding simulated maker orders carry their persisted game-start timestamp and are cancelled with `CANCEL_GAME_START` at the start time. Any partially filled position is then unwound as a taker when displayed depth permits.
+Outstanding simulated maker orders carry their persisted game-start timestamp and are cancelled with `CANCEL_GAME_START` at the start time. Any partially filled position is then unwound as a taker when displayed depth permits; if only part of the position is executable, the residual position remains persisted rather than disappearing from accounting.
 
 ## Tape-driven maker fills
 
@@ -29,6 +29,10 @@ Trade cursors and same-timestamp trade IDs persist across restarts. If the trade
 ## State migration
 
 Legacy V3 resting orders are not restored because they do not contain a condition ID, game clock, or trade-tape cursor. Existing V3 positions remain loadable and retain conservative taker exit behavior.
+
+## Validation
+
+Deterministic tests cover the 15-minute boundary, missing-clock fail-closed behavior, aggressive-side and price eligibility, queue-ahead depletion, and true partial fills. The complete project must build and pass CTest in both Release and Debug configurations before this hotfix is mergeable.
 
 ## Remaining limitations
 
