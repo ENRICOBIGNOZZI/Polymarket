@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(polymarket_quant_engine VERSION 0.6.0 LANGUAGES CXX)
+project(polymarket_quant_engine VERSION 0.6.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -9,7 +9,7 @@ pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
 
 add_library(pm_core
     src/http.cpp
-    src/api.cpp
+    src/api_safe.cpp
     src/event_api.cpp
     src/engine.cpp
     src/boost_json.cpp
@@ -33,7 +33,7 @@ add_executable(polymarket_pca_stat_arb src/pca_stat_arb.cpp)
 target_link_libraries(polymarket_pca_stat_arb PRIVATE pm_core)
 target_compile_options(polymarket_pca_stat_arb PRIVATE -Wall -Wextra -Wpedantic)
 
-add_executable(polymarket_maker_paper src/maker_paper.cpp)
+add_executable(polymarket_maker_paper src/maker_paper_safe.cpp)
 target_link_libraries(polymarket_maker_paper PRIVATE pm_core)
 target_compile_options(polymarket_maker_paper PRIVATE -Wall -Wextra -Wpedantic)
 
