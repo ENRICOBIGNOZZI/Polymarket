@@ -90,7 +90,7 @@ std::optional<Market> parse_market_object(const json::object& o, double min_liqu
         if(s=="yes") yi=static_cast<int>(i); else if(s=="no") ni=static_cast<int>(i);
     }
     m.yes_token=tokens[yi]; m.no_token=tokens[ni];
-    m.resolved_yes=resolution_from_market(o,outcomes);
+    m.resolved_yes=m.closed?resolution_from_market(o,outcomes):std::nullopt;
     if(auto it=o.find("feeSchedule");it!=o.end()&&it->value().is_object()) {
         auto const& fs=it->value().as_object();
         if(auto x=fs.find("rate");x!=fs.end()) m.fee_rate=as_double(x->value(),-1.0);

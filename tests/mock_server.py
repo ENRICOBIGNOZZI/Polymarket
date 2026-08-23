@@ -10,7 +10,8 @@ def market_obj(is_closed=False):
     return {'id':'m1','conditionId':'c1','slug':'mock-market','question':'Will mock event happen?',
             'liquidityNum':5000,'negRisk':False,'active':not is_closed,'closed':is_closed,'eventId':'e1',
             'clobTokenIds':json.dumps([YES,NO]),'outcomes':json.dumps(['Yes','No']),
-            'outcomePrices':json.dumps(['1.0','0.0'] if is_closed else ['0.40','0.60']),
+            # Active markets can legitimately trade near 0/1; that must not be mistaken for resolution.
+            'outcomePrices':json.dumps(['1.0','0.0'] if is_closed else ['0.999','0.001']),
             'feesEnabled':False,'feeSchedule':{'exponent':1,'rate':0.0,'takerOnly':True}}
 class H(BaseHTTPRequestHandler):
     def log_message(self,*args): pass
