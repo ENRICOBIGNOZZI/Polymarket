@@ -42,6 +42,7 @@ struct Market {
     double gamma_yes_price{0.5};
     double volume_24h{0.0};
     double liquidity{0.0};
+    double fee_rate{-1.0};
 };
 
 struct LiveMarket {
@@ -103,6 +104,7 @@ struct EngineConfig {
     double uncertainty_buffer{0.35};
     double slippage_bps{5.0};
     double assumed_fee_bps{0.0};
+    double fallback_taker_fee_rate{0.05};
     double initial_capital{10000.0};
     double max_drawdown{0.15};
     double max_gross_fraction{0.65};
@@ -125,6 +127,7 @@ public:
     explicit PolymarketClient(HttpClient http = HttpClient{});
     std::vector<Market> discover_markets(std::size_t limit) const;
     BookSnapshot get_book(const std::string& token_id) const;
+    std::optional<double> get_fee_rate(const std::string& condition_id) const;
     std::vector<LiveMarket> snapshot(std::size_t limit, double min_liquidity, double max_spread) const;
 private:
     HttpClient http_;
