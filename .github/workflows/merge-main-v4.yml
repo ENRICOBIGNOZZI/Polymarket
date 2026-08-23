@@ -1,8 +1,8 @@
 name: merge-main-v4
 
 on:
-  push:
-    branches: [implement/paper-live-oos-pilot-v4]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   merge:
-    if: github.actor != 'github-actions[bot]'
+    if: github.head_ref == 'implement/paper-live-oos-pilot-v4'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -52,29 +52,33 @@ jobs:
 
           p = Path('src/stat_arb.cpp')
           s = p.read_text()
-          old = '''        auto books = api.fetch_books(tokens);\n\n        std::vector<const pm::Market*> universe;\n        universe.reserve(markets.size());\n        for (const auto& m : markets) {\n'''
-          new = '''        auto books = api.fetch_books(tokens);\n        const std::int64_t now = static_cast<std::int64_t>(std::time(nullptr));\n\n        std::vector<const pm::Market*> universe;\n        universe.reserve(markets.size());\n        for (const auto& m : markets) {\n            if (!pm::pregame_market_eligible(\n                    pm::MarketTiming{m.timed_sports, m.game_start_ts, m.seconds_delay}, now)) continue;\n'''
-          if old not in s:
-              raise SystemExit('stat_arb insertion anchor not found')
-          s = s.replace(old, new, 1)
-          old_now = '''        for (auto* m : universe) yes_tokens.push_back(m->yes_token);\n        const std::int64_t now = static_cast<std::int64_t>(std::time(nullptr));\n        const std::int64_t start = now - static_cast<std::int64_t>(lookback_hours) * 3600;\n'''
-          new_now = '''        for (auto* m : universe) yes_tokens.push_back(m->yes_token);\n        const std::int64_t start = now - static_cast<std::int64_t>(lookback_hours) * 3600;\n'''
-          if old_now not in s:
-              raise SystemExit('stat_arb now anchor not found')
-          p.write_text(s.replace(old_now, new_now, 1))
+          if 'pregame_market_eligible' not in s:
+              old = '''        auto books = api.fetch_books(tokens);\n\n        std::vector<const pm::Market*> universe;\n        universe.reserve(markets.size());\n        for (const auto& m : markets) {\n'''
+              new = '''        auto books = api.fetch_books(tokens);\n        const std::int64_t now = static_cast<std::int64_t>(std::time(nullptr));\n\n        std::vector<const pm::Market*> universe;\n        universe.reserve(markets.size());\n        for (const auto& m : markets) {\n            if (!pm::pregame_market_eligible(\n                    pm::MarketTiming{m.timed_sports, m.game_start_ts, m.seconds_delay}, now)) continue;\n'''
+              if old not in s:
+                  raise SystemExit('stat_arb insertion anchor not found')
+              s = s.replace(old, new, 1)
+              old_now = '''        for (auto* m : universe) yes_tokens.push_back(m->yes_token);\n        const std::int64_t now = static_cast<std::int64_t>(std::time(nullptr));\n        const std::int64_t start = now - static_cast<std::int64_t>(lookback_hours) * 3600;\n'''
+              new_now = '''        for (auto* m : universe) yes_tokens.push_back(m->yes_token);\n        const std::int64_t start = now - static_cast<std::int64_t>(lookback_hours) * 3600;\n'''
+              if old_now not in s:
+                  raise SystemExit('stat_arb now anchor not found')
+              s = s.replace(old_now, new_now, 1)
+              p.write_text(s)
 
           p = Path('src/pca_stat_arb.cpp')
           s = p.read_text()
-          old = '''        auto books = api.fetch_books(all_tokens);\n\n        std::vector<const pm::Market*> universe;\n        for (const auto& m : markets) {\n'''
-          new = '''        auto books = api.fetch_books(all_tokens);\n        const auto now = std::chrono::duration_cast<std::chrono::seconds>(\n            std::chrono::system_clock::now().time_since_epoch()).count();\n\n        std::vector<const pm::Market*> universe;\n        for (const auto& m : markets) {\n            if (!pm::pregame_market_eligible(\n                    pm::MarketTiming{m.timed_sports, m.game_start_ts, m.seconds_delay}, now)) continue;\n'''
-          if old not in s:
-              raise SystemExit('pca insertion anchor not found')
-          s = s.replace(old, new, 1)
-          old_now = '''        for (auto* m : universe) yes_tokens.push_back(m->yes_token);\n        const auto now = std::chrono::duration_cast<std::chrono::seconds>(\n            std::chrono::system_clock::now().time_since_epoch()).count();\n        const auto start = now - static_cast<std::int64_t>(lookback_hours) * 3600;\n'''
-          new_now = '''        for (auto* m : universe) yes_tokens.push_back(m->yes_token);\n        const auto start = now - static_cast<std::int64_t>(lookback_hours) * 3600;\n'''
-          if old_now not in s:
-              raise SystemExit('pca now anchor not found')
-          p.write_text(s.replace(old_now, new_now, 1))
+          if 'pregame_market_eligible' not in s:
+              old = '''        auto books = api.fetch_books(all_tokens);\n\n        std::vector<const pm::Market*> universe;\n        for (const auto& m : markets) {\n'''
+              new = '''        auto books = api.fetch_books(all_tokens);\n        const auto now = std::chrono::duration_cast<std::chrono::seconds>(\n            std::chrono::system_clock::now().time_since_epoch()).count();\n\n        std::vector<const pm::Market*> universe;\n        for (const auto& m : markets) {\n            if (!pm::pregame_market_eligible(\n                    pm::MarketTiming{m.timed_sports, m.game_start_ts, m.seconds_delay}, now)) continue;\n'''
+              if old not in s:
+                  raise SystemExit('pca insertion anchor not found')
+              s = s.replace(old, new, 1)
+              old_now = '''        for (auto* m : universe) yes_tokens.push_back(m->yes_token);\n        const auto now = std::chrono::duration_cast<std::chrono::seconds>(\n            std::chrono::system_clock::now().time_since_epoch()).count();\n        const auto start = now - static_cast<std::int64_t>(lookback_hours) * 3600;\n'''
+              new_now = '''        for (auto* m : universe) yes_tokens.push_back(m->yes_token);\n        const auto start = now - static_cast<std::int64_t>(lookback_hours) * 3600;\n'''
+              if old_now not in s:
+                  raise SystemExit('pca now anchor not found')
+              s = s.replace(old_now, new_now, 1)
+              p.write_text(s)
           PY
 
           rm -f .github/workflows/merge-main-v4.yml
