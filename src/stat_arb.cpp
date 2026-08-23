@@ -266,7 +266,8 @@ int main(int argc, char** argv) {
         std::size_t lookback_hours = 336, fidelity_minutes = 30;
         double min_liquidity = 100.0, min_z = 1.50, max_half_life_hours = 168.0;
         double min_t_reversion = 1.75;
-        std::string csv_path;
+        std::string csv_path, intents_path;
+        double intent_min_edge = 0.001;
 
         for (int i = 1; i < argc; ++i) {
             const std::string a = argv[i];
@@ -282,10 +283,13 @@ int main(int argc, char** argv) {
             else if (a == "--min-t-reversion") min_t_reversion = std::stod(next());
             else if (a == "--top") top = static_cast<std::size_t>(std::stoull(next()));
             else if (a == "--csv") csv_path = next();
+            else if (a == "--intents") intents_path = next();
+            else if (a == "--intent-min-edge") intent_min_edge = std::stod(next());
             else if (a == "--help" || a == "-h") {
                 std::cout << "polymarket_stat_arb [--config FILE] [--markets N] [--history-universe N] "
                              "[--lookback-hours H] [--fidelity-minutes M] [--min-z Z] "
-                             "[--max-half-life-hours H] [--min-t-reversion T] [--top N] [--csv FILE]\n";
+                             "[--max-half-life-hours H] [--min-t-reversion T] [--top N] [--csv FILE] "
+                             "[--intents FILE] [--intent-min-edge X]\n";
                 return 0;
             } else throw std::runtime_error("Unknown argument: " + a);
         }
@@ -492,6 +496,30 @@ int main(int argc, char** argv) {
                     << o.raw_expected_edge << ',' << o.taker_net_edge << ',' << o.maker_entry_net_edge << ','
                     << o.executable_notional << ',' << o.y_side << ',' << o.x_side << ',' << o.y_limit << ',' << o.x_limit << ','
                     << o.y_weight << ',' << o.x_weight << '\n';
+            }
+        }
+
+        if (!intents_path.empty()) {
+            std::ofstream out(intents_path);
+            if (!out) throw std::runtime_error("Cannot open intents CSV: " + intents_path);
+            out << "bundle_id,strategy,event_id,created_ts,mode,expected_edge,max_notional,market_id,side,weight,limit_price,execution_deadline_ts,hold_deadline_ts\n";
+            std::size_t serial = 0;
+            for (const auto& o : opportunities) {
+                if (o.maker_entry_net_edge <= intent_min_edge || o.executable_notional <= 0.0) continue;
+                const double max_notional = std::min(cfg.max_trade_usd, o.executable_notional);
+                if (max_notional <= 0.0) continue;
+                const std::int64_t exec_deadline = now + 300;
+                const std::int64_t hold_seconds = static_cast<std::int64_t>(
+                    std::clamp(o.half_life_hours * 3600.0, 300.0, 86400.0));
+                const std::int64_t hold_deadline = exec_deadline + hold_seconds;
+                const std::string event = o.y->event_id == o.x->event_id ? o.y->event_id : (o.y->event_id + "|" + o.x->event_id);
+                const std::string bundle = "B1-" + std::to_string(now) + "-" + o.y->id + "-" + o.x->id + "-" + std::to_string(serial++);
+                out << bundle << ",B1," << event << ',' << now << ",MAKER," << o.maker_entry_net_edge << ','
+                    << max_notional << ',' << o.y->id << ',' << o.y_side << ',' << o.y_weight << ',' << o.y_limit << ','
+                    << exec_deadline << ',' << hold_deadline << '\n';
+                out << bundle << ",B1," << event << ',' << now << ",MAKER," << o.maker_entry_net_edge << ','
+                    << max_notional << ',' << o.x->id << ',' << o.x_side << ',' << o.x_weight << ',' << o.x_limit << ','
+                    << exec_deadline << ',' << hold_deadline << '\n';
             }
         }
         return 0;

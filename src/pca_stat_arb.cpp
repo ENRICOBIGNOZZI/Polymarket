@@ -272,11 +272,12 @@ PortfolioEconomics evaluate_portfolio(
 
 int main(int argc, char** argv) {
     try {
-        std::string config = "config/paper_v3.json", csv_path;
+        std::string config = "config/paper_v3.json", csv_path, intents_path;
         std::size_t market_limit = 600, universe_limit = 100, lookback_hours = 336;
         std::size_t fidelity_minutes = 30, factors = 3, max_hedges = 8, top = 40;
         double min_liquidity = 100.0, min_z = 1.5, min_t = 1.75, max_half_life_hours = 168.0;
         double max_factor_hedge_error = 0.20;
+        double intent_min_edge = 0.001;
 
         for (int i = 1; i < argc; ++i) {
             const std::string a = argv[i];
@@ -298,11 +299,14 @@ int main(int argc, char** argv) {
             else if (a == "--max-factor-hedge-error") max_factor_hedge_error = std::stod(next());
             else if (a == "--top") top = static_cast<std::size_t>(std::stoull(next()));
             else if (a == "--csv") csv_path = next();
+            else if (a == "--intents") intents_path = next();
+            else if (a == "--intent-min-edge") intent_min_edge = std::stod(next());
             else if (a == "--help" || a == "-h") {
                 std::cout << "polymarket_pca_stat_arb [--config FILE] [--markets N] [--universe N] "
                              "[--lookback-hours H] [--fidelity-minutes M] [--factors K] [--max-hedges N] "
                              "[--min-z Z] [--min-t-reversion T] [--max-half-life-hours H] "
-                             "[--max-factor-hedge-error X] [--top N] [--csv FILE]\n";
+                             "[--max-factor-hedge-error X] [--top N] [--csv FILE] "
+                             "[--intents FILE] [--intent-min-edge X]\n";
                 return 0;
             } else {
                 throw std::runtime_error("Unknown argument: " + a);
@@ -633,6 +637,39 @@ int main(int argc, char** argv) {
                     << o.half_life_hours << ',' << o.t_reversion << ',' << o.stability << ',' << o.factor_hedge_error << ','
                     << o.expected_mark_move << ',' << o.raw_expected_edge << ',' << o.taker_net_edge << ','
                     << o.maker_entry_net_edge << ',' << o.executable_notional << ',' << o.legs << '\n';
+            }
+        }
+
+        if (!intents_path.empty()) {
+            std::ofstream out(intents_path);
+            if (!out) throw std::runtime_error("Cannot open intents CSV: " + intents_path);
+            out << "bundle_id,strategy,event_id,created_ts,mode,expected_edge,max_notional,market_id,side,weight,limit_price,execution_deadline_ts,hold_deadline_ts\n";
+            const std::int64_t now_ts = static_cast<std::int64_t>(std::time(nullptr));
+            std::size_t serial = 0;
+            for (const auto& o : opportunities) {
+                if (o.maker_entry_net_edge <= intent_min_edge || o.executable_notional <= 0.0) continue;
+                const double max_notional = std::min(cfg.max_trade_usd, o.executable_notional);
+                if (max_notional <= 0.0) continue;
+                const std::int64_t exec_deadline = now_ts + 300;
+                const std::int64_t hold_seconds = static_cast<std::int64_t>(
+                    std::clamp(o.half_life_hours * 3600.0, 300.0, 86400.0));
+                const std::int64_t hold_deadline = exec_deadline + hold_seconds;
+                const std::string bundle = "B2-" + std::to_string(now_ts) + "-" + o.market->id + "-" + std::to_string(serial++);
+                std::stringstream ls(o.legs);
+                std::string leg;
+                while (std::getline(ls, leg, '|')) {
+                    const auto a = leg.find(':');
+                    const auto b = a == std::string::npos ? std::string::npos : leg.find(':', a + 1);
+                    if (a == std::string::npos || b == std::string::npos) continue;
+                    const std::string market_id = leg.substr(0, a);
+                    const std::string side = leg.substr(a + 1, b - a - 1);
+                    double weight = 0.0;
+                    try { weight = std::stod(leg.substr(b + 1)); } catch (...) { continue; }
+                    if (market_id.empty() || (side != "YES" && side != "NO") || weight <= 0.0) continue;
+                    out << bundle << ",B2," << o.market->event_id << ',' << now_ts << ",MAKER,"
+                        << o.maker_entry_net_edge << ',' << max_notional << ',' << market_id << ',' << side << ','
+                        << weight << ",0," << exec_deadline << ',' << hold_deadline << '\n';
+                }
             }
         }
         return 0;

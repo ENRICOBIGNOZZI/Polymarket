@@ -161,3 +161,26 @@ Required CI builds the complete project in Release and Debug mode and runs deter
 The separate `live-api-smoke` workflow runs every six hours and can also be triggered manually. It performs a small read-only Gamma/CLOB scan, records `status.json` and `signals.csv`, and uploads the diagnostics. It never creates paper fills or authenticated orders.
 
 For the detailed V3 design rationale see [`docs/STRATEGIES_V3.md`](docs/STRATEGIES_V3.md). For repository workflow and safety gates see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+
+## V4: execution realism → paper-live → OOS → tiny pilot
+
+The current V4 implementation deliberately skips a large external-information project and focuses on proving whether the existing structural/B1/B2 edges are executable. It adds a public trade-tape recorder, a persistent multi-leg maker paper broker with queue-ahead/partial-fill/cancel/unwind logic, an atomic B1/B2 intent pipeline, chronological walk-forward evaluation, execution-cost stress tests, and an opt-in tiny real-money pilot that is dry-run by default.
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel 2
+ctest --test-dir build --output-on-failure
+bash scripts/paper_v4_once.sh
+# or, for continuous paper research:
+bash scripts/paper_v4_loop.sh
+```
+
+Out-of-sample gate:
+
+```bash
+python3 scripts/walk_forward_v4.py \
+  --ledger runs/paper_v4_live/bundle_ledger.csv \
+  --output runs/paper_v4_live/walk_forward.json
+```
+
+The real-money adapter is **never run by the paper loop or CI**. See `docs/EXECUTION_V4.md` before using `scripts/tiny_live_pilot.py`.
