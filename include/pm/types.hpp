@@ -19,6 +19,11 @@ struct Level {
     double size = 0.0;
 };
 
+struct PricePoint {
+    std::int64_t ts = 0;
+    double price = 0.5;
+};
+
 struct Book {
     std::string token_id;
     std::vector<Level> bids;
@@ -39,7 +44,7 @@ struct Book {
     [[nodiscard]] double midpoint() const {
         const auto b = best_bid(), a = best_ask();
         if (std::isfinite(b) && std::isfinite(a)) return 0.5 * (a + b);
-        if (std::isfinite(last_trade) && last_trade > 0.0) return last_trade;
+        if (std::isfinite(last_trade) && last_trade > 0.0 && last_trade < 1.0) return last_trade;
         return std::numeric_limits<double>::quiet_NaN();
     }
     [[nodiscard]] double spread() const {
@@ -54,6 +59,27 @@ struct Book {
         for (std::size_t i=0; i<std::min(n, v.size()); ++i) s += std::max(0.0, v[i].size);
         return s;
     }
+    [[nodiscard]] double weighted_depth(bool bid_side, std::size_t n = 5) const {
+        auto v = bid_side ? bids : asks;
+        if (v.empty()) return 0.0;
+        if (bid_side) std::sort(v.begin(), v.end(), [](auto const& x, auto const& y){ return x.price > y.price; });
+        else std::sort(v.begin(), v.end(), [](auto const& x, auto const& y){ return x.price < y.price; });
+        const double best = v.front().price;
+        const double scale = std::max(1e-4, 3.0 * tick_size);
+        double d = 0.0;
+        for (std::size_t i=0; i<std::min(n, v.size()); ++i) {
+            const double distance = std::abs(v[i].price-best);
+            d += std::max(0.0, v[i].size) * std::exp(-distance/scale);
+        }
+        return d;
+    }
+    [[nodiscard]] double microprice(std::size_t n = 5) const {
+        const double b = best_bid(), a = best_ask();
+        if (!std::isfinite(b) || !std::isfinite(a) || a < b) return midpoint();
+        const double db = weighted_depth(true,n), da = weighted_depth(false,n);
+        if (db+da <= 1e-12) return 0.5*(a+b);
+        return std::clamp((a*db + b*da)/(db+da), b, a);
+    }
 };
 
 struct Market {
@@ -65,9 +91,12 @@ struct Market {
     std::string yes_token;
     std::string no_token;
     double liquidity = 0.0;
+    double volume24h = 0.0;
     bool neg_risk = false;
     bool active = true;
     bool closed = false;
+    bool enable_order_book = true;
+    bool accepting_orders = true;
     std::optional<int> resolved_yes;
     double fee_rate = -1.0;
     double fee_exponent = 1.0;
@@ -97,6 +126,8 @@ struct Signal {
     double uncertainty = 1.0;
     double fee_per_share = 0.0;
     double slippage_per_share = 0.0;
+    double gross_edge = -1.0;
+    double cost_adjusted_edge = -1.0;
     double net_edge = -1.0;
     double score = -1.0;
     double desired_notional = 0.0;
@@ -137,15 +168,22 @@ struct Fill {
 struct Config {
     std::string gamma_url = "https://gamma-api.polymarket.com";
     std::string clob_url = "https://clob.polymarket.com";
-    std::string run_dir = "runs/paper";
+    std::string run_dir = "runs/paper_v2";
     std::string external_signals_file = "data/external_signals.csv";
-    std::size_t market_limit = 150;
+
+    std::size_t market_limit = 600;
+    std::size_t gamma_page_size = 100;
     std::size_t books_batch_size = 80;
     int interval_seconds = 10;
     double starting_capital = 10000.0;
-    double min_liquidity = 500.0;
-    double min_net_edge = 0.01;
-    double uncertainty_penalty = 0.25;
+    double min_liquidity = 100.0;
+    double min_volume24h = 0.0;
+    double min_mid = 0.01;
+    double max_mid = 0.99;
+    double max_spread = 0.15;
+
+    double min_net_edge = 0.005;
+    double uncertainty_penalty = 0.20;
     double slippage_bps = 5.0;
     double fractional_kelly = 0.10;
     double max_trade_usd = 250.0;
@@ -153,11 +191,23 @@ struct Config {
     double max_event_fraction = 0.08;
     double max_gross_fraction = 0.25;
     double max_drawdown = 0.15;
-    std::size_t pca_window = 40;
-    std::size_t pca_min_history = 12;
-    std::size_t pca_universe = 80;
+
+    bool history_bootstrap = true;
+    std::size_t bootstrap_market_limit = 240;
+    std::size_t history_lookback_hours = 72;
+    std::size_t history_fidelity_minutes = 15;
+    std::size_t pca_window = 96;
+    std::size_t pca_min_history = 24;
+    std::size_t pca_universe = 200;
+    double pca_mr_strength = 0.35;
+    double pca_min_residual_z = 0.75;
+
+    double graph_max_sum_error = 0.20;
+    double semantic_min_similarity = 0.68;
+    double semantic_shrink = 0.08;
+
     bool scan_only = false;
-    std::map<std::string,double> expert_weights{{"micro",0.25},{"pca",0.35},{"graph",0.55},{"semantic",0.15},{"external",1.0}};
+    std::map<std::string,double> expert_weights{{"micro",0.35},{"pca",0.60},{"graph",0.80},{"semantic",0.08},{"external",1.0}};
 };
 
 inline double clamp_prob(double p) { return std::clamp(p, 1e-6, 1.0-1e-6); }
