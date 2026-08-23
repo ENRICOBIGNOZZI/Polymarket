@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <thread>
 #include <utility>
+#include <unordered_set>
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 
@@ -220,31 +221,73 @@ PolymarketClient::PolymarketClient(HttpClient h) : http_(std::move(h)) {}
 
 std::vector<Market> PolymarketClient::discover_markets(std::size_t n) const {
     if (n == 0) return {};
+
+    // The standard Gamma list endpoint currently supports the economically useful
+    // volume sort and is therefore the preferred discovery path.  The keyset
+    // endpoint is retained as a future-proof fallback, but we intentionally do
+    // not request a mutable sort key there: the live API has returned 422 for
+    // order=volume_num despite that combination appearing in the schema.
     std::vector<Market> out;
+    try {
+        std::size_t offset = 0;
+        constexpr std::size_t page_cap = 500;
+        while (out.size() < n) {
+            const auto page_size = std::min<std::size_t>(page_cap, n - out.size());
+            const std::string url =
+                "https://gamma-api.polymarket.com/markets?active=true&closed=false&order=volume24hr&ascending=false&limit=" +
+                std::to_string(page_size) + "&offset=" + std::to_string(offset);
+            auto page = parse_gamma_markets_json(http_.get(url));
+            if (page.empty()) break;
+            const auto got = page.size();
+            out.insert(out.end(), page.begin(), page.end());
+            if (got < page_size) break;
+            offset += got;
+        }
+        if (!out.empty()) {
+            if (out.size() > n) out.resize(n);
+            return out;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[warn] sorted Gamma market discovery failed: " << e.what()
+                  << "; trying keyset discovery\n";
+    }
+
+    out.clear();
     std::string cursor;
+    std::unordered_set<std::string> seen;
     const auto page_cap = std::min<std::size_t>(100, n);
     try {
         while (out.size() < n) {
             const auto page_size = std::min(page_cap, n - out.size());
-            std::string url = "https://gamma-api.polymarket.com/markets/keyset?closed=false&order=volume_num&ascending=false&limit=" + std::to_string(page_size);
+            std::string url = "https://gamma-api.polymarket.com/markets/keyset?closed=false&limit=" + std::to_string(page_size);
             if (!cursor.empty()) url += "&after_cursor=" + url_encode(cursor);
             const auto body = http_.get(url);
             auto page = parse_gamma_markets_json(body);
-            out.insert(out.end(), page.begin(), page.end());
+            std::size_t added = 0;
+            for (auto& m : page) {
+                if (seen.insert(m.id).second) {
+                    out.push_back(std::move(m));
+                    ++added;
+                }
+            }
 
             std::istringstream is(body);
             ptree root;
             boost::property_tree::read_json(is, root);
             const auto next = root.get<std::string>("next_cursor", "");
-            if (page.empty() || next.empty() || next == cursor) break;
+            if (added == 0 || next.empty() || next == cursor) break;
             cursor = next;
         }
     } catch (const std::exception& e) {
-        std::cerr << "[warn] keyset market discovery failed: " << e.what() << "; falling back to legacy listing\n";
-        const auto limit = std::min<std::size_t>(n, 1000);
-        out = parse_gamma_markets_json(http_.get(
-            "https://gamma-api.polymarket.com/markets?active=true&closed=false&order=volume24hr&ascending=false&limit=" + std::to_string(limit)));
+        if (out.empty()) throw;
+        std::cerr << "[warn] keyset discovery stopped early: " << e.what() << '\n';
     }
+
+    // Keyset order is intentionally left server-default for compatibility;
+    // recover the desired economic ranking locally over the retrieved set.
+    std::stable_sort(out.begin(), out.end(), [](const Market& a, const Market& b) {
+        return a.volume_24h > b.volume_24h;
+    });
     if (out.size() > n) out.resize(n);
     return out;
 }
