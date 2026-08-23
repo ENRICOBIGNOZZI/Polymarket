@@ -1,0 +1,33 @@
+cmake_minimum_required(VERSION 3.20)
+project(polymarket_quant_engine VERSION 0.2.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+  pkg_check_modules(LIBCURL QUIET IMPORTED_TARGET libcurl)
+endif()
+if(NOT TARGET PkgConfig::LIBCURL)
+  find_package(CURL REQUIRED)
+endif()
+
+add_library(poly_engine src/engine.cpp)
+target_include_directories(poly_engine PUBLIC include)
+if(TARGET PkgConfig::LIBCURL)
+  target_link_libraries(poly_engine PUBLIC PkgConfig::LIBCURL)
+else()
+  target_link_libraries(poly_engine PUBLIC CURL::libcurl)
+endif()
+target_compile_options(poly_engine PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(poly_live src/main.cpp)
+target_link_libraries(poly_live PRIVATE poly_engine)
+
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(poly_tests tests/test_engine.cpp)
+  target_link_libraries(poly_tests PRIVATE poly_engine)
+  add_test(NAME poly_tests COMMAND poly_tests)
+endif()
