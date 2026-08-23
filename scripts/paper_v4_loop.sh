@@ -73,7 +73,8 @@ while true; do
 
   if (( now - last_structural >= 300 )); then
     ./build/polymarket_negrisk_arb --config "$CONFIG" --markets 600 --min-liquidity 100 --top 60 \
-      > "$RUN_ROOT/structural_latest.log" 2> "$RUN_ROOT/structural_errors.log" || true
+      2> "$RUN_ROOT/structural_errors.log" \
+      | tee "$RUN_ROOT/structural_latest.log" "$RUN_ROOT/structural_latest.csv" >/dev/null || true
     last_structural=$now
   fi
 

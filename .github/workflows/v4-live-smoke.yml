@@ -37,7 +37,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          R=live-v4-smoke
+          R=paper_v4_live
           mkdir -p "$R" "$R/maker" "$R/terminal"
 
           ./build/polymarket_trade_recorder \
@@ -47,7 +47,7 @@ jobs:
 
           ./build/polymarket_negrisk_arb \
             --config config/paper_v4.json --markets 400 --min-liquidity 100 --top 80 \
-            | tee "$R/structural_latest.log"
+            | tee "$R/structural_latest.log" "$R/structural_latest.csv"
 
           ./build/polymarket_stat_arb \
             --config config/paper_v4.json --markets 400 --history-universe 120 \
@@ -89,27 +89,31 @@ jobs:
           PYTHONPATH=monitoring python3 - <<'PY'
           from pathlib import Path
           from exporter_latest import LatestCollector
-          c = LatestCollector(Path('.'), Path('config'), 'live-v4-smoke', 'config/paper_v4.json', 20)
+          c = LatestCollector(Path('.'), Path('config'), 'paper_v4_live', 'config/paper_v4.json', 20)
           text = c.collect()
-          assert 'polymarket_runtime_info' in text
-          Path('live-v4-smoke/metrics.prom').write_text(text)
+          assert 'polymarket_runtime_info{adapter="v4",run_root="paper_v4_live",version="v4"} 1' in text
+          assert 'polymarket_strategy_state_present{sleeve="structural"} 1' in text
+          assert 'polymarket_multileg_state_present 1' in text
+          assert 'polymarket_oos_state_present 1' in text
+          Path('paper_v4_live/metrics.prom').write_text(text)
           PY
 
       - name: Publish live summary
         if: always()
         shell: bash
         run: |
+          R=paper_v4_live
           echo '## V4 live paper smoke' >> "$GITHUB_STEP_SUMMARY"
-          for f in live-v4-smoke/trade_recorder_latest.log live-v4-smoke/stat_arb_pairs_latest.log live-v4-smoke/stat_arb_pca_latest.log live-v4-smoke/multileg_latest.log live-v4-smoke/maker_latest.log live-v4-smoke/terminal_latest.log; do
+          for f in "$R/trade_recorder_latest.log" "$R/structural_latest.log" "$R/stat_arb_pairs_latest.log" "$R/stat_arb_pca_latest.log" "$R/multileg_latest.log" "$R/maker_latest.log" "$R/terminal_latest.log"; do
             echo "### $f" >> "$GITHUB_STEP_SUMMARY"
             echo '```text' >> "$GITHUB_STEP_SUMMARY"
             tail -n 8 "$f" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           done
-          if test -s live-v4-smoke/walk_forward.json; then
+          if test -s "$R/walk_forward.json"; then
             echo '### walk-forward' >> "$GITHUB_STEP_SUMMARY"
             echo '```json' >> "$GITHUB_STEP_SUMMARY"
-            cat live-v4-smoke/walk_forward.json >> "$GITHUB_STEP_SUMMARY"
+            cat "$R/walk_forward.json" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -118,6 +122,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: v4-live-paper-smoke-${{ github.run_id }}
-          path: live-v4-smoke/
+          path: paper_v4_live/
           if-no-files-found: warn
           retention-days: 7
