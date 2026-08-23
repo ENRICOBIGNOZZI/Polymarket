@@ -1,0 +1,4 @@
+type,left,right
+# implication,A_market_id,B_market_id means A implies B
+# exclusive_pair,A_market_id,B_market_id means A and B cannot both occur
+# exhaustive_group,group_id,market_id adds one outcome to a complete group
