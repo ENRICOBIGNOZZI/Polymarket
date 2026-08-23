@@ -219,14 +219,8 @@ public:
                     return a.net_expected_edge < b.net_expected_edge;
                 });
 
-                std::optional<pm::MarketTiming> timing;
-                try {
-                    timing = api_.fetch_market_timing(m.id);
-                } catch (const std::exception& e) {
-                    std::cerr << "maker_timing_error market=" << m.id << " error=" << e.what() << '\n';
-                    continue;
-                }
-                if (!timing || !pm::pregame_market_eligible(*timing, now)) continue;
+                const pm::MarketTiming timing{m.timed_sports, m.game_start_ts, m.seconds_delay};
+                if (!pm::pregame_market_eligible(timing, now)) continue;
 
                 const double limit = c.book->best_bid();
                 if (!std::isfinite(limit) || !std::isfinite(c.book->best_ask()) ||
@@ -261,8 +255,8 @@ public:
                 o.shares = shares;
                 o.queue_ahead = touch_size(*c.book, true);
                 o.created_ts = now;
-                o.game_start_ts = timing->game_start_ts;
-                o.timed_sports = timing->timed_sports;
+                o.game_start_ts = timing.game_start_ts;
+                o.timed_sports = timing.timed_sports;
                 o.last_trade_ts = now;
                 o.last_trade_keys = "|";
                 o.fee_rate = fd.rate;

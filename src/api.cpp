@@ -163,6 +163,10 @@ std::optional<Market> parse_market_object(const json::object& o, double min_liqu
     if (auto it = o.find("closed"); it != o.end()) m.closed = as_bool(it->value());
     if (auto it = o.find("enableOrderBook"); it != o.end()) m.enable_order_book = as_bool(it->value(), true);
     if (auto it = o.find("acceptingOrders"); it != o.end()) m.accepting_orders = as_bool(it->value(), true);
+    const auto timing = timing_from_object(o);
+    m.timed_sports = timing.timed_sports;
+    m.game_start_ts = timing.game_start_ts;
+    m.seconds_delay = timing.seconds_delay;
     if (auto it = o.find("eventId"); it != o.end()) m.event_id = as_string(it->value());
     if (m.event_id.empty()) {
         auto it = o.find("events");
@@ -240,7 +244,6 @@ std::vector<Market> PolymarketApi::discover_markets(std::size_t limit, double mi
     out.reserve(requested);
     std::unordered_set<std::string> seen;
     std::size_t offset = 0;
-    const auto now = static_cast<std::int64_t>(std::time(nullptr));
 
     while (out.size() < requested && offset < 10000) {
         std::ostringstream u;
@@ -262,10 +265,6 @@ std::vector<Market> PolymarketApi::discover_markets(std::size_t limit, double mi
 
         for (const auto& v : *arr) {
             if (!v.is_object()) continue;
-            const auto timing = timing_from_object(v.as_object());
-            // The public Gamma metadata is the venue clock for timed sports. Fail closed for
-            // timed sport markets without a valid start and stop admitting them 15 minutes pre-game.
-            if (!pregame_market_eligible(timing, now)) continue;
             if (auto m = parse_market_object(v.as_object(), min_liquidity)) {
                 if (seen.insert(m->id).second) out.push_back(std::move(*m));
                 if (out.size() >= requested) break;

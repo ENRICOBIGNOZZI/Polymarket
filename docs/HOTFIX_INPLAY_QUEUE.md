@@ -4,13 +4,13 @@ This hotfix removes two sources of false paper alpha.
 
 ## Timed sports gate
 
-Gamma `gameStartTime` and `sportsMarketType` metadata are parsed before a market enters the discovered universe. A timed sports market is rejected from new scans and new maker orders when:
+Gamma `gameStartTime`, `sportsMarketType`, and `secondsDelay` metadata are stored on each discovered market. B1, B2, and maker entry reject a timed sports market when:
 
 - its game-start timestamp is missing or invalid; or
 - the current time is inside the fixed 15-minute pre-game buffer; or
 - the game has already started.
 
-The gate currently applies at the shared discovery layer. This is intentionally conservative: it also removes timed in-play sports from structural and terminal scans until strategy-specific universe routing is introduced.
+The gate is strategy-scoped: structural arbitrage and genuine terminal-probability scans retain their universe, while only mean-reversion and maker-entry sleeves are blocked around game start.
 
 Outstanding simulated maker orders carry their persisted game-start timestamp and are cancelled with `CANCEL_GAME_START` at the start time. Any partially filled position is then unwound as a taker when displayed depth permits.
 
