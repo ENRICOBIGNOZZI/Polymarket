@@ -532,26 +532,65 @@ std::unordered_map<std::string,Engine::Adjustment> Engine::pca_adjustments(
     std::unordered_map<std::string,Adjustment> out;
     for (std::size_t j = 0; j < N; ++j) {
         std::vector<double> states;
-        states.reserve(T - H + 1);
-        for (std::size_t t = H - 1; t < T; ++t) {
+        std::vector<double> next_resid;
+        states.reserve(T - H);
+        next_resid.reserve(T - H);
+        for (std::size_t t = H - 1; t + 1 < T; ++t) {
             double state = 0.0;
             for (std::size_t k = t + 1 - H; k <= t; ++k) state += resid[k][j];
             states.push_back(state);
+            next_resid.push_back(resid[t + 1][j]);
         }
+        if (states.size() < 8) continue;
+
         const double state_mu = mean(states);
         const double state_sd = std::max(0.20, sample_sd(states, state_mu));
         double state_now = current_x[j] - v[j] * current_factor;
         for (std::size_t t = T - (H - 1); t < T; ++t) state_now += resid[t][j];
-        const double z = (state_now - state_mu) / state_sd;
+        const double x_now = state_now - state_mu;
+        const double z = x_now / state_sd;
         if (std::abs(z) < cfg_.pca_min_residual_z) continue;
 
+        // Estimate whether residual dislocations actually predict reversal instead of
+        // assuming every large residual will mean-revert. The target is the next
+        // standardized idiosyncratic return conditional on the rolling residual state.
+        const double y_mu = mean(next_resid);
+        double sxx = 0.0, sxy = 0.0;
+        for (std::size_t i = 0; i < states.size(); ++i) {
+            const double x = states[i] - state_mu;
+            const double y = next_resid[i] - y_mu;
+            sxx += x * x;
+            sxy += x * y;
+        }
+        if (sxx <= 1e-8) continue;
+        const double ridge = 0.05 * static_cast<double>(states.size()) * state_sd * state_sd;
+        const double beta = sxy / (sxx + ridge);
+        if (beta >= -1e-4) continue;
+
+        double rss = 0.0;
+        for (std::size_t i = 0; i < states.size(); ++i) {
+            const double fitted = y_mu + beta * (states[i] - state_mu);
+            const double e = next_resid[i] - fitted;
+            rss += e * e;
+        }
+        const double dof = static_cast<double>(std::max<std::size_t>(1, states.size() - 2));
+        const double sigma2 = rss / dof;
+        const double se_beta = std::sqrt(std::max(0.0, sigma2) / std::max(1e-8, sxx + ridge));
+        const double t_reversion = se_beta > 1e-8 ? -beta / se_beta : 0.0;
+        if (t_reversion < 0.75) continue;
+
+        const double forecast_std = y_mu + beta * x_now;
+        if (forecast_std * x_now >= 0.0) continue;
+
         const double cur = yes_books.at(s[j].m->yes_token).midpoint();
-        const double delta = std::clamp(cfg_.pca_mr_strength * state_now * s[j].sd, -0.35, 0.35);
-        const double q = logistic(logit(cur) - delta);
+        const double forecast_logit = std::clamp(cfg_.pca_mr_strength * forecast_std * s[j].sd, -0.20, 0.20);
+        if (std::abs(forecast_logit) < 1e-5) continue;
+        const double q = logistic(logit(cur) + forecast_logit);
         const double z_conf = std::clamp((std::abs(z) - cfg_.pca_min_residual_z) / 3.0 + 0.20, 0.10, 1.0);
         const double sample_conf = std::min(1.0, static_cast<double>(T) / 48.0);
         const double factor_conf = std::clamp(0.35 + 1.5 * explained, 0.35, 1.0);
-        out[s[j].m->id] = {q, std::clamp(z_conf * sample_conf * factor_conf, 0.05, 1.0)};
+        const double reversion_conf = std::clamp((t_reversion - 0.75) / 2.5, 0.05, 1.0);
+        out[s[j].m->id] = {q, std::clamp(z_conf * sample_conf * factor_conf * reversion_conf, 0.02, 1.0)};
     }
     return out;
 }
@@ -766,8 +805,14 @@ void Engine::paper_trade(const Signal& s, const Market& m, const Book& book, con
     const double fee = protocol_fee(shares, px, fd);
     const double cost = shares * px + fee;
     if (cost > cash_ || shares < book.min_order_size) return;
-    const double realized = s.fair_side - px - fee / shares;
-    if (realized <= cfg_.min_net_edge) return;
+
+    // Re-run the complete admission test at the actual simulated VWAP. The ranking
+    // stage sees the top ask; walking the book can consume enough edge that the
+    // uncertainty-adjusted trade is no longer admissible.
+    const double realized_cost_edge = s.fair_side - px - fee / shares;
+    const double realized_net_edge = realized_cost_edge - cfg_.uncertainty_penalty * s.uncertainty;
+    if (realized_net_edge <= cfg_.min_net_edge) return;
+
     positions_[m.id] = Position{m.id, m.event_id, m.slug, s.side, s.side == "YES" ? m.yes_token : m.no_token,
                                 shares, px, cost, fee};
     cash_ -= cost;
@@ -781,7 +826,6 @@ void Engine::maybe_exit(const Market& m, const Book& book, double fair_yes, cons
     const double fair = p.side == "YES" ? fair_yes : 1.0 - fair_yes;
     const double bid = book.best_bid();
     if (!std::isfinite(bid)) return;
-    if (!killed_ && fair >= bid - cfg_.min_net_edge * 0.5) return;
 
     auto levels = book.bids;
     std::sort(levels.begin(), levels.end(), [](const auto& a, const auto& b){ return a.price > b.price; });
@@ -796,6 +840,9 @@ void Engine::maybe_exit(const Market& m, const Book& book, double fair_yes, cons
     if (sold + 1e-9 < p.shares) return;
     const double px = (proceeds / sold) * (1.0 - cfg_.slippage_bps / 10000.0);
     const double fee = protocol_fee(sold, px, fd);
+    const double net_px = px - fee / sold;
+    if (!killed_ && fair >= net_px - cfg_.min_net_edge * 0.5) return;
+
     cash_ += sold * px - fee;
     append_fill({now_s(), m.id, m.slug, "SELL", p.side, sold, px, sold * px, fee});
     positions_.erase(it);
