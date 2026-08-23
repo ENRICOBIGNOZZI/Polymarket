@@ -729,7 +729,10 @@ std::pair<double,double> Engine::ensemble(const std::vector<ExpertPrediction>& p
         sw += w;
         q += w * e.q_yes;
     }
-    if (sw <= 1e-12) return {0.5, 1.0};
+    if (sw <= 1e-12) {
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        return {nan, nan};
+    }
     q /= sw;
     double v = 0.0;
     for (const auto& e : preds) {
@@ -921,7 +924,7 @@ void Engine::run_once(bool paper, bool scan_only) {
     struct Candidate { Signal s; const Market* m; const Book* b; FeeDetails fd; };
     std::vector<Candidate> candidates;
     const auto ts = now_s();
-    std::size_t gross_positive = 0, cost_positive = 0, net_positive = 0;
+    std::size_t gross_positive = 0, cost_positive = 0, net_positive = 0, no_terminal_evidence = 0;
     double best_net = -1e9;
     std::ofstream arb(fs::path(cfg_.run_dir) / "arbitrage.csv", std::ios::app);
 
@@ -932,8 +935,14 @@ void Engine::run_once(bool paper, bool scan_only) {
         const double mid = yi->second.midpoint();
         auto preds = build_experts(m, yi->second, ni->second, tradable, yes_books, external, pca, graph);
         auto [fair, uncertainty] = ensemble(preds, std::max(yi->second.spread(), ni->second.spread()));
+        const bool has_terminal_evidence = std::isfinite(fair) && std::isfinite(uncertainty);
         last_forecasts_[m.id].clear();
-        for (const auto& e : preds) last_forecasts_[m.id][e.name] = e.q_yes;
+        for (const auto& e : preds) {
+            auto wit = cfg_.expert_weights.find(e.name);
+            if (wit != cfg_.expert_weights.end() && wit->second > 0.0 && e.confidence > 0.0) {
+                last_forecasts_[m.id][e.name] = e.q_yes;
+            }
+        }
         const FeeDetails fd = fee_for(m);
 
         const double ay = yi->second.best_ask(), an = ni->second.best_ask();
@@ -971,13 +980,21 @@ void Engine::run_once(bool paper, bool scan_only) {
             best_net = std::max(best_net, s.net_edge);
             candidates.push_back({std::move(s), &m, &book, fd});
         };
-        make("YES", yi->second, fair);
-        make("NO", ni->second, 1.0 - fair);
+        if (has_terminal_evidence) {
+            make("YES", yi->second, fair);
+            make("NO", ni->second, 1.0 - fair);
+        } else {
+            ++no_terminal_evidence;
+        }
 
         auto pit = positions_.find(m.id);
         if (pit != positions_.end()) {
             auto bit = books.find(pit->second.token_id);
-            if (bit != books.end()) maybe_exit(m, bit->second, fair, fd);
+            // Missing terminal evidence is a hard entry gate, not an instruction to
+            // liquidate. Use the live market midpoint only for conservative exit
+            // management of an already-open position.
+            const double exit_fair = has_terminal_evidence ? fair : mid;
+            if (bit != books.end()) maybe_exit(m, bit->second, exit_fair, fd);
         }
         append_history(ts, m, mid);
     }
@@ -997,8 +1014,9 @@ void Engine::run_once(bool paper, bool scan_only) {
 
     persist_state(equity(books), gross_exposure(books));
     std::cout << "discovered=" << markets.size() << " tradable=" << tradable.size() << " candidates=" << candidates.size()
+              << " no_terminal_evidence=" << no_terminal_evidence
               << " gross_pos=" << gross_positive << " cost_pos=" << cost_positive << " net_pos=" << net_positive
-              << " best_net=" << (std::isfinite(best_net) ? best_net : 0.0) << " pca=" << pca.size() << " graph=" << graph.size()
+              << " best_net=" << (candidates.empty() ? 0.0 : best_net) << " pca=" << pca.size() << " graph=" << graph.size()
               << " positions=" << positions_.size() << " cash=" << cash_ << " equity=" << equity(books) << " killed=" << killed_ << '\n';
 }
 

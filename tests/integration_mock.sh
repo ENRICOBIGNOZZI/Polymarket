@@ -37,6 +37,30 @@ test "$FIRST" -eq 1
 SECOND=$(($(wc -l < "$TMP/run/fills.csv")-1))
 test "$SECOND" -eq 1
 grep -q '"open_positions":1' "$TMP/run/status.json"
+
+# Regression: experts whose configured terminal weights are all zero must
+# not fall back to a 0.5 fair value or create a paper trade.
+cat > "$TMP/config_zero.json" <<E
+{
+ "gamma_url":"http://127.0.0.1:$PORT",
+ "clob_url":"http://127.0.0.1:$PORT",
+ "run_dir":"$TMP/run_zero",
+ "external_signals_file":"$TMP/ext.csv",
+ "market_limit":10,"books_batch_size":10,"starting_capital":10000,
+ "min_liquidity":0,"min_net_edge":0.01,"uncertainty_penalty":0.05,"slippage_bps":0,
+ "fractional_kelly":0.10,"max_trade_usd":100,"max_market_fraction":0.1,
+ "max_event_fraction":0.1,"max_gross_fraction":0.2,"max_drawdown":0.15,
+ "pca_window":10,"pca_min_history":3,"pca_universe":10,
+ "expert_weights":{"micro":0.0,"pca":0.0,"graph":0.0,"semantic":0.0,"external":0.0}
+}
+E
+"$BIN" --config "$TMP/config_zero.json" --once --paper
+ZERO_FILLS=$(($(wc -l < "$TMP/run_zero/fills.csv")-1))
+ZERO_SIGNALS=$(($(wc -l < "$TMP/run_zero/signals.csv")-1))
+test "$ZERO_FILLS" -eq 0
+test "$ZERO_SIGNALS" -eq 0
+grep -q '"open_positions":0' "$TMP/run_zero/status.json"
+
 touch "$STATE"
 "$BIN" --config "$TMP/config.json" --once --paper
 THIRD=$(($(wc -l < "$TMP/run/fills.csv")-1))
