@@ -1,0 +1,123 @@
+name: v4-live-paper-smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "37 */6 * * *"
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v4-live-paper-smoke
+  cancel-in-progress: true
+
+jobs:
+  live-paper-smoke:
+    if: github.event_name != 'pull_request' || github.head_ref == 'implement/paper-live-oos-pilot-v4'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+
+      - name: Build Release V4
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+
+      - name: Fresh public-data V4 paper smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          R=live-v4-smoke
+          mkdir -p "$R" "$R/maker" "$R/terminal"
+
+          ./build/polymarket_trade_recorder \
+            --config config/paper_v4.json --run-dir "$R" \
+            --markets 240 --batch 40 --min-liquidity 100 --lookback-seconds 180 --once \
+            | tee "$R/trade_recorder_latest.log"
+
+          ./build/polymarket_negrisk_arb \
+            --config config/paper_v4.json --markets 400 --min-liquidity 100 --top 80 \
+            | tee "$R/structural_latest.log"
+
+          ./build/polymarket_stat_arb \
+            --config config/paper_v4.json --markets 400 --history-universe 120 \
+            --lookback-hours 336 --fidelity-minutes 30 --min-z 1.5 \
+            --max-half-life-hours 168 --top 80 --csv "$R/stat_arb_pairs.csv" \
+            | tee "$R/stat_arb_pairs_latest.log"
+
+          ./build/polymarket_pca_stat_arb \
+            --config config/paper_v4.json --markets 400 --universe 100 \
+            --lookback-hours 336 --fidelity-minutes 30 --factors 3 --min-z 1.5 \
+            --max-half-life-hours 168 --top 80 --csv "$R/stat_arb_pca.csv" \
+            | tee "$R/stat_arb_pca_latest.log"
+
+          python3 scripts/build_v4_intents.py --strategy B1 \
+            --input "$R/stat_arb_pairs.csv" --output "$R/b1_intents.csv" --config config/paper_v4.json --min-edge 0.001
+          python3 scripts/build_v4_intents.py --strategy B2 \
+            --input "$R/stat_arb_pca.csv" --output "$R/b2_intents.csv" --config config/paper_v4.json --min-edge 0.001
+          python3 scripts/merge_v4_intents.py \
+            --input "$R/b1_intents.csv" --input "$R/b2_intents.csv" --output "$R/intents.csv" \
+            --min-edge 0.001 --max-age-seconds 600 --max-bundles 20
+
+          ./build/polymarket_multileg_paper \
+            --config config/paper_v4.json --run-dir "$R" --intents "$R/intents.csv" --trade-tape "$R/trade_tape.csv" \
+            --min-edge 0.001 --completion-threshold 0.95 --submit-latency-ms 250 --cancel-latency-ms 250 \
+            --max-replaces 3 --max-leg-risk-usd 5 --adverse-horizon-seconds 60 --once \
+            | tee "$R/multileg_latest.log"
+
+          ./build/polymarket_maker_paper \
+            --config config/paper_v4.json --run-dir "$R/maker" --markets 160 --min-liquidity 100 \
+            --min-edge 0.003 --max-order-usd 50 --ttl-seconds 300 --hold-seconds 180 \
+            --adverse-selection-mult 0.50 --once | tee "$R/maker_latest.log"
+
+          ./build/polymarket_engine \
+            --config config/paper_v4.json --once --scan-only --markets 120 --min-liquidity 100 \
+            --run-dir "$R/terminal" | tee "$R/terminal_latest.log"
+
+          python3 scripts/walk_forward_v4.py --ledger "$R/bundle_ledger.csv" --output "$R/walk_forward.json" --starting-capital 10000 || true
+
+          PYTHONPATH=monitoring python3 - <<'PY'
+          from pathlib import Path
+          from exporter_latest import LatestCollector
+          c = LatestCollector(Path('.'), Path('config'), 'live-v4-smoke', 'config/paper_v4.json', 20)
+          text = c.collect()
+          assert 'polymarket_runtime_info' in text
+          Path('live-v4-smoke/metrics.prom').write_text(text)
+          PY
+
+      - name: Publish live summary
+        if: always()
+        shell: bash
+        run: |
+          echo '## V4 live paper smoke' >> "$GITHUB_STEP_SUMMARY"
+          for f in live-v4-smoke/trade_recorder_latest.log live-v4-smoke/stat_arb_pairs_latest.log live-v4-smoke/stat_arb_pca_latest.log live-v4-smoke/multileg_latest.log live-v4-smoke/maker_latest.log live-v4-smoke/terminal_latest.log; do
+            echo "### $f" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            tail -n 8 "$f" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          done
+          if test -s live-v4-smoke/walk_forward.json; then
+            echo '### walk-forward' >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat live-v4-smoke/walk_forward.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload live diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4-live-paper-smoke-${{ github.run_id }}
+          path: live-v4-smoke/
+          if-no-files-found: warn
+          retention-days: 7
