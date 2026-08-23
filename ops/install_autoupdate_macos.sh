@@ -7,7 +7,7 @@ INTERVAL="${POLYMARKET_UPDATE_INTERVAL_SECONDS:-300}"
 LABEL="com.polymarket.autoupdate"
 
 [[ "$(uname -s)" == "Darwin" ]] || { echo "macOS only" >&2; exit 1; }
-[[ -x "$APP_DIR/ops/update_server_macos.sh" ]] || { echo "missing $APP_DIR/ops/update_server_macos.sh" >&2; exit 1; }
+[[ -f "$APP_DIR/ops/update_server_macos.sh" ]] || { echo "missing $APP_DIR/ops/update_server_macos.sh" >&2; exit 1; }
 [[ -f "$APP_DIR/.server_bootstrapped_macos" ]] || { echo "run ops/bootstrap_macos.sh first" >&2; exit 1; }
 [[ "$INTERVAL" =~ ^[0-9]+$ ]] && (( INTERVAL >= 60 )) || { echo "interval must be >= 60 seconds" >&2; exit 1; }
 
