@@ -5,7 +5,9 @@ CONFIG="${1:-config/paper_v4.json}"
 RUN_ROOT="${2:-runs/paper_v4_live}"
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/terminal"
 
-# Create a valid empty broker input before starting the long-lived processes.
+# Create valid empty adapter/broker inputs before starting long-lived processes.
+python3 scripts/build_v4_intents.py --strategy B1 --input "$RUN_ROOT/stat_arb_pairs.csv" --output "$RUN_ROOT/b1_intents.csv" --config "$CONFIG" >/dev/null
+python3 scripts/build_v4_intents.py --strategy B2 --input "$RUN_ROOT/stat_arb_pca.csv" --output "$RUN_ROOT/b2_intents.csv" --config "$CONFIG" >/dev/null
 python3 scripts/merge_v4_intents.py \
   --input "$RUN_ROOT/b1_intents.csv" --input "$RUN_ROOT/b2_intents.csv" \
   --output "$RUN_ROOT/intents.csv" --max-bundles 20 >/dev/null
@@ -49,13 +51,19 @@ while true; do
     ./build/polymarket_stat_arb \
       --config "$CONFIG" --markets 600 --history-universe 160 \
       --lookback-hours 336 --fidelity-minutes 30 --min-z 1.5 --max-half-life-hours 168 --top 60 \
-      --csv "$RUN_ROOT/stat_arb_pairs.csv" --intents "$RUN_ROOT/b1_intents.csv" --intent-min-edge 0.001 \
+      --csv "$RUN_ROOT/stat_arb_pairs.csv" \
       > "$RUN_ROOT/stat_arb_pairs_latest.log" 2> "$RUN_ROOT/stat_arb_pairs_errors.log" || true
     ./build/polymarket_pca_stat_arb \
       --config "$CONFIG" --markets 600 --universe 120 \
       --lookback-hours 336 --fidelity-minutes 30 --factors 3 --min-z 1.5 --max-half-life-hours 168 --top 60 \
-      --csv "$RUN_ROOT/stat_arb_pca.csv" --intents "$RUN_ROOT/b2_intents.csv" --intent-min-edge 0.001 \
+      --csv "$RUN_ROOT/stat_arb_pca.csv" \
       > "$RUN_ROOT/stat_arb_pca_latest.log" 2> "$RUN_ROOT/stat_arb_pca_errors.log" || true
+    python3 scripts/build_v4_intents.py \
+      --strategy B1 --input "$RUN_ROOT/stat_arb_pairs.csv" --output "$RUN_ROOT/b1_intents.csv" \
+      --config "$CONFIG" --min-edge 0.001 >> "$RUN_ROOT/intent_build.log" 2>&1 || true
+    python3 scripts/build_v4_intents.py \
+      --strategy B2 --input "$RUN_ROOT/stat_arb_pca.csv" --output "$RUN_ROOT/b2_intents.csv" \
+      --config "$CONFIG" --min-edge 0.001 >> "$RUN_ROOT/intent_build.log" 2>&1 || true
     python3 scripts/merge_v4_intents.py \
       --input "$RUN_ROOT/b1_intents.csv" --input "$RUN_ROOT/b2_intents.csv" \
       --output "$RUN_ROOT/intents.csv" --min-edge 0.001 --max-age-seconds 600 --max-bundles 20 \
