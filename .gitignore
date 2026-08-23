@@ -1,0 +1,6 @@
+build/
+.DS_Store
+*.db
+*.sqlite
+*.log
+.env
