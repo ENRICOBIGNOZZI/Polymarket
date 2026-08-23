@@ -42,3 +42,10 @@ jobs:
         run: |
           ./build/polymarket_stat_arb --config config/paper_v3.json --markets 240 --history-universe 100 --lookback-hours 336 --fidelity-minutes 30 --min-z 1.5 --top 25 --csv /tmp/stat_arb.csv
           test -s /tmp/stat_arb.csv
+      - name: Conservative maker paper smoke (local simulation only)
+        run: |
+          ./build/polymarket_maker_paper --config config/paper_v3.json --run-dir /tmp/maker-paper --markets 120 --min-liquidity 100 --min-edge 0.003 --max-order-usd 50 --once
+          test -s /tmp/maker-paper/maker_equity.csv
+          test -s /tmp/maker-paper/maker_order_log.csv
+          echo '--- maker orders ---'
+          head -n 12 /tmp/maker-paper/maker_order_log.csv || true
