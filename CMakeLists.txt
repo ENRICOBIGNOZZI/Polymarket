@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(polymarket_quant_engine VERSION 0.5.0 LANGUAGES CXX)
+project(polymarket_quant_engine VERSION 0.6.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -28,6 +28,10 @@ target_compile_options(polymarket_negrisk_arb PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(polymarket_stat_arb src/stat_arb.cpp)
 target_link_libraries(polymarket_stat_arb PRIVATE pm_core)
 target_compile_options(polymarket_stat_arb PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(polymarket_pca_stat_arb src/pca_stat_arb.cpp)
+target_link_libraries(polymarket_pca_stat_arb PRIVATE pm_core)
+target_compile_options(polymarket_pca_stat_arb PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(polymarket_maker_paper src/maker_paper.cpp)
 target_link_libraries(polymarket_maker_paper PRIVATE pm_core)
