@@ -141,12 +141,12 @@ std::optional<PaperFill> PaperBroker::close_token(const std::string& mid, const 
     return PaperFill{"SELL", mid, tok, outcome, shares, fill, principal, fee, cash_};
 }
 
-std::vector<PaperFill> PaperBroker::settle_market(const std::string& mid, bool yes) {
+std::vector<PaperFill> PaperBroker::settle_market(const std::string& mid, double yes_payout) {
     std::vector<PaperFill> fills;
+    yes_payout = std::clamp(yes_payout, 0.0, 1.0);
     for (const auto& p : positions_) {
         if (p.market_id != mid) continue;
-        const bool win = (yes && p.outcome == "YES") || (!yes && p.outcome == "NO");
-        const double price = win ? 1.0 : 0.0;
+        const double price = p.outcome == "YES" ? yes_payout : 1.0 - yes_payout;
         const double principal = p.shares * price;
         cash_ += principal;
         fills.push_back({"SETTLE", p.market_id, p.token_id, p.outcome, p.shares, price, principal, 0.0, cash_});
