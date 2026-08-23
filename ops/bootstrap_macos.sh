@@ -63,7 +63,8 @@ ctest --test-dir build --output-on-failure
 "$BREW_PREFIX/bin/python3" -m py_compile \
   monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_latest.py \
   scripts/build_v4_intents.py scripts/merge_v4_intents.py scripts/walk_forward_v4.py scripts/tiny_live_pilot.py
-bash -n scripts/paper_latest_loop.sh scripts/paper_v4_once.sh scripts/paper_v4_loop.sh
+bash -n scripts/paper_latest_loop.sh scripts/paper_v4_once.sh scripts/paper_v4_loop.sh \
+  ops/apply_runtime_config_macos.sh
 
 log "Writing native Prometheus configuration"
 cat > "$STATE_DIR/prometheus.yml" <<EOF
@@ -80,33 +81,7 @@ EOF
 "$BREW_PREFIX/bin/promtool" check config "$STATE_DIR/prometheus.yml"
 
 log "Writing native Grafana provisioning"
-cat > "$STATE_DIR/grafana/provisioning/datasources/prometheus.yml" <<'EOF'
-apiVersion: 1
-prune: true
-datasources:
-  - name: Prometheus
-    uid: prometheus
-    type: prometheus
-    access: proxy
-    url: http://127.0.0.1:9090
-    isDefault: true
-    editable: false
-    jsonData:
-      timeInterval: 5s
-EOF
-cat > "$STATE_DIR/grafana/provisioning/dashboards/dashboards.yml" <<EOF
-apiVersion: 1
-providers:
-  - name: polymarket
-    orgId: 1
-    folder: Polymarket
-    type: file
-    disableDeletion: false
-    allowUiUpdates: true
-    updateIntervalSeconds: 10
-    options:
-      path: "$APP_DIR/monitoring/grafana/dashboards"
-EOF
+bash "$APP_DIR/ops/apply_runtime_config_macos.sh"
 
 PASSWORD_FILE="$STATE_DIR/grafana-admin-password"
 if [[ ! -s "$PASSWORD_FILE" ]]; then
@@ -114,18 +89,6 @@ if [[ ! -s "$PASSWORD_FILE" ]]; then
   chmod 600 "$PASSWORD_FILE"
 fi
 GRAFANA_PASSWORD="$(cat "$PASSWORD_FILE")"
-
-cat > "$STATE_DIR/grafana.ini" <<EOF
-[server]
-http_addr = 127.0.0.1
-http_port = 3000
-[users]
-allow_sign_up = false
-[auth.anonymous]
-enabled = false
-[dashboards]
-default_home_dashboard_path = $APP_DIR/monitoring/grafana/dashboards/polymarket-latest.json
-EOF
 
 PYTHON_BIN="$BREW_PREFIX/bin/python3"
 PROM_BIN="$BREW_PREFIX/bin/prometheus"
@@ -239,9 +202,11 @@ for label in com.polymarket.awake com.polymarket.paper com.polymarket.exporter c
 done
 
 log "Installing constrained passwordless deploy control"
+sudo install -d -o root -g wheel -m 0755 /usr/local/sbin
 sudo install -o root -g wheel -m 0755 "$APP_DIR/ops/macos_service_control.sh" /usr/local/sbin/polymarket-service-control
 SUDOERS_TMP="$(mktemp)"
 printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/polymarket-service-control *\n' "$USER" > "$SUDOERS_TMP"
+sudo install -d -o root -g wheel -m 0755 /etc/sudoers.d
 sudo install -o root -g wheel -m 0440 "$SUDOERS_TMP" /etc/sudoers.d/polymarket-deploy
 rm -f "$SUDOERS_TMP"
 sudo visudo -cf /etc/sudoers.d/polymarket-deploy >/dev/null
@@ -252,7 +217,8 @@ log "Waiting for exporter, Prometheus and Grafana"
 for _ in {1..30}; do
   if curl -fsS http://127.0.0.1:9108/healthz >/dev/null 2>&1 && \
      curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1 && \
-     curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1; then
+     curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 && \
+     curl -fsS http://127.0.0.1:3000/api/search >/dev/null 2>&1; then
     break
   fi
   sleep 2
@@ -261,12 +227,13 @@ curl -fsS http://127.0.0.1:9108/healthz >/dev/null || fail "exporter health chec
 curl -fsS http://127.0.0.1:9108/metrics | grep -q '^polymarket_runtime_info' || fail "canonical runtime metrics missing"
 curl -fsS http://127.0.0.1:9090/-/ready >/dev/null || fail "Prometheus is not ready"
 curl -fsS http://127.0.0.1:3000/api/health >/dev/null || fail "Grafana is not healthy"
+curl -fsS http://127.0.0.1:3000/api/search >/dev/null || fail "Grafana anonymous Viewer access is not active"
 
 log "Bootstrap complete"
 printf 'Repository: %s\n' "$APP_DIR"
 printf 'Git head:    %s\n' "$(git rev-parse HEAD)"
-printf 'Grafana:     http://127.0.0.1:3000 (use SSH tunnel)\n'
-printf 'Grafana user: admin\n'
-printf 'Grafana password file: %s\n' "$PASSWORD_FILE"
+printf 'Grafana:     http://127.0.0.1:3000 (via SSH tunnel when remote)\n'
+printf 'Grafana access: anonymous Viewer; no password required\n'
+printf 'Admin recovery password file: %s\n' "$PASSWORD_FILE"
 printf 'Logs:        %s\n' "$LOG_DIR"
 printf 'Status:      sudo /usr/local/sbin/polymarket-service-control status\n'
