@@ -3,12 +3,14 @@ name: live-full-now
 on:
   push:
     branches: ["ops/live-test-now"]
+  pull_request:
+    branches: ["main"]
 
 permissions:
   contents: read
 
 concurrency:
-  group: live-full-now
+  group: live-full-now-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
