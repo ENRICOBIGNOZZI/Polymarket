@@ -21,7 +21,7 @@ class V4MonitoringContractTest(unittest.TestCase):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
         self.assertIn("R=paper_v4_live", smoke)
         self.assertIn("'paper_v4_live', 'config/paper_v4.json'", smoke)
-        self.assertIn('adapter=\\"v4\\"', smoke)
+        self.assertIn('adapter="v4"', smoke)
         self.assertIn('polymarket_multileg_state_present 1', smoke)
         self.assertIn('polymarket_oos_state_present 1', smoke)
 
