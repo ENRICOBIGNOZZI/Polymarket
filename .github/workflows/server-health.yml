@@ -1,0 +1,86 @@
+name: paper-server-health
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: polymarket-paper-server-health
+  cancel-in-progress: true
+
+jobs:
+  health:
+    if: github.event_name == 'workflow_dispatch' || vars.POLYMARKET_SERVER_DEPLOY == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+    steps:
+      - name: Join private tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Configure SSH identity
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}" || { echo "missing POLYMARKET_SERVER_SSH_KEY" >&2; exit 1; }
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_deploy
+          chmod 600 ~/.ssh/polymarket_deploy
+          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
+
+      - name: Inspect server
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE' | tee server-health.txt
+          set -euo pipefail
+          cd ~/polymarket
+          printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          printf 'os=%s\n' "$(uname -s)"
+          printf 'head=%s\n' "$(git rev-parse HEAD)"
+          printf 'branch=%s\n' "$(git branch --show-current)"
+          curl -fsS http://127.0.0.1:9108/healthz >/dev/null
+          curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
+          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+          metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
+          grep -q '^polymarket_runtime_info' <<<"$metrics"
+          printf '%s\n' "$metrics" | grep -E '^polymarket_(runtime_info|runtime_equity_usd|runtime_pnl_usd|runtime_drawdown_ratio|runtime_kill_switch|runtime_realized_pnl_usd_total|runtime_execution_imbalance_ratio|runtime_oos_net_pnl_usd|runtime_oos_stressed_net_pnl_usd|runtime_oos_eligible|trade_recorder_staleness_seconds|multileg_live_bundles)' || true
+          case "$(uname -s)" in
+            Darwin) sudo -n /usr/local/sbin/polymarket-service-control status ;;
+            Linux)
+              systemctl is-active --quiet polymarket-paper.service
+              systemctl is-active --quiet polymarket-monitoring.service
+              ;;
+          esac
+          REMOTE
+
+      - name: Publish health summary
+        if: always()
+        shell: bash
+        run: |
+          echo '## Polymarket private paper server' >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          cat server-health.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo 'health output missing' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload health evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-server-health-${{ github.run_id }}
+          path: server-health.txt
+          if-no-files-found: warn
+          retention-days: 7

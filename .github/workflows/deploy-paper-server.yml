@@ -1,0 +1,91 @@
+name: deploy-paper-server
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: polymarket-paper-server
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || vars.POLYMARKET_SERVER_DEPLOY == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Join private tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Configure SSH identity
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}" || { echo "POLYMARKET_SERVER_SSH_KEY secret is required" >&2; exit 1; }
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_deploy
+          chmod 600 ~/.ssh/polymarket_deploy
+          for i in {1..20}; do
+            if ssh-keyscan -T 3 -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          test -s ~/.ssh/known_hosts
+
+      - name: Deploy validated main
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd ~/polymarket
+          case "$(uname -s)" in
+            Darwin) exec bash ops/update_server_macos.sh ;;
+            Linux)  exec bash ops/update_server.sh ;;
+            *) echo "unsupported server OS: $(uname -s)" >&2; exit 1 ;;
+          esac
+          REMOTE
+
+      - name: Verify production paper services
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
+            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd ~/polymarket
+          git fetch origin main >/dev/null
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+          curl -fsS http://127.0.0.1:9108/healthz
+          curl -fsS http://127.0.0.1:9108/metrics | grep -q '^polymarket_runtime_info'
+          curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
+          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+          printf 'server_head=%s\n' "$(git rev-parse HEAD)"
+          case "$(uname -s)" in
+            Darwin) sudo -n /usr/local/sbin/polymarket-service-control status ;;
+            Linux)
+              systemctl is-active --quiet polymarket-paper.service
+              systemctl is-active --quiet polymarket-monitoring.service
+              systemctl --no-pager --full status polymarket-paper.service | sed -n '1,12p'
+              systemctl --no-pager --full status polymarket-monitoring.service | sed -n '1,12p'
+              ;;
+          esac
+          REMOTE

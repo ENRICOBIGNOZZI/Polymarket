@@ -41,3 +41,9 @@ jobs:
 
       - name: Unit and mock integration tests (${{ matrix.build_type }})
         run: ctest --test-dir build-${{ matrix.build_type }} --output-on-failure
+
+      - name: Deployment script syntax
+        run: |
+          bash -n scripts/paper_latest_loop.sh \
+            ops/bootstrap_server.sh ops/update_server.sh \
+            ops/bootstrap_macos.sh ops/update_server_macos.sh ops/macos_service_control.sh

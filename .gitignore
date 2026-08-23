@@ -1,6 +1,8 @@
 # CMake and compiler output
 build/
 build-*/
+build.next/
+build.previous/
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt
@@ -29,6 +31,7 @@ config/local*.json
 config/*secret*.json
 *.pem
 *.key
+.server_bootstrapped*
 
 # Editors and operating systems
 .vscode/

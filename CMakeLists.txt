@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(PkgConfig REQUIRED)
+find_package(Boost REQUIRED)
 pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
 
 add_library(pm_core
@@ -14,7 +15,7 @@ add_library(pm_core
     src/engine.cpp
     src/boost_json.cpp
 )
-target_include_directories(pm_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(pm_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_core PUBLIC PkgConfig::LIBCURL)
 target_compile_options(pm_core PRIVATE -Wall -Wextra -Wpedantic)
 
