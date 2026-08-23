@@ -32,6 +32,7 @@ private:
     std::unordered_map<std::string,double> expert_count_;
     std::unordered_map<std::string,std::unordered_map<std::string,double>> last_forecasts_;
     std::unordered_map<std::string,FeeDetails> fee_cache_;
+    mutable std::unordered_map<std::string,std::vector<Market>> event_markets_cache_;
 
     void ensure_runtime();
     void load_state();
