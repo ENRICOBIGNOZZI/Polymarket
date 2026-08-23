@@ -17,7 +17,7 @@ groups:
           severity: warning
         annotations:
           summary: Paper-maker state is stale
-          description: The latest maker equity snapshot is more than 60 seconds old.
+          description: The latest legacy maker equity snapshot is more than 60 seconds old.
 
       - alert: PolymarketMakerDrawdownWarning
         expr: polymarket_maker_drawdown_ratio >= 0.10
@@ -34,59 +34,50 @@ groups:
           severity: critical
         annotations:
           summary: Paper-maker kill switch is active
-          description: New paper-maker risk is frozen by the persisted drawdown kill switch.
+          description: New legacy maker risk is frozen by the persisted drawdown kill switch.
 
-  - name: polymarket-v4-execution
+  - name: polymarket-latest-runtime
     rules:
-      - alert: PolymarketTradeRecorderStale
-        expr: (polymarket_trade_recorder_state_present == 0) or (polymarket_trade_recorder_staleness_seconds > 60)
+      - alert: PolymarketLatestExecutionStale
+        expr: polymarket_runtime_execution_staleness_seconds > 60
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: V4 public trade recorder is stale
-          description: Queue/fill inference is unsafe because the trade tape is missing or stale.
+          summary: Latest Polymarket execution telemetry is stale
+          description: The auto-selected runtime has stale execution inputs/state; escalation to real money must remain blocked.
 
-      - alert: PolymarketMultiLegStateStale
-        expr: (polymarket_multileg_state_present == 0) or (polymarket_multileg_staleness_seconds > 30)
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: V4 multi-leg broker telemetry is stale
-          description: The paper broker has not published a fresh equity/risk snapshot.
-
-      - alert: PolymarketMultiLegDrawdownWarning
-        expr: polymarket_multileg_drawdown_ratio >= 0.10
+      - alert: PolymarketLatestDrawdownWarning
+        expr: polymarket_runtime_drawdown_ratio >= 0.10
         for: 30s
         labels:
           severity: warning
         annotations:
-          summary: V4 multi-leg paper drawdown above 10%
-          description: Multi-leg marked drawdown has crossed the warning threshold.
+          summary: Latest Polymarket paper runtime drawdown above 10%
+          description: The auto-selected runtime has crossed the pre-kill drawdown warning level.
 
-      - alert: PolymarketMultiLegKillSwitchActive
-        expr: polymarket_multileg_kill_switch == 1
+      - alert: PolymarketLatestKillSwitchActive
+        expr: polymarket_runtime_kill_switch == 1
         labels:
           severity: critical
         annotations:
-          summary: V4 multi-leg kill switch is active
-          description: New multi-leg risk is frozen and live bundles should be unwinding.
+          summary: Latest Polymarket runtime kill switch is active
+          description: New risk must remain frozen until the latest runtime is flat and reviewed.
 
-      - alert: PolymarketMultiLegFillImbalance
-        expr: polymarket_multileg_max_fill_imbalance_ratio > 0.50
+      - alert: PolymarketLatestExecutionImbalance
+        expr: polymarket_runtime_execution_imbalance_ratio > 0.50
         for: 30s
         labels:
           severity: warning
         annotations:
-          summary: V4 bundle has severe partial-fill imbalance
-          description: At least one live bundle differs by more than 50 percentage points across leg fill fractions.
+          summary: Latest Polymarket runtime has severe execution imbalance
+          description: Cross-leg fill imbalance exceeds 50 percentage points in the auto-selected runtime.
 
-      - alert: PolymarketOOSReportStale
-        expr: (polymarket_oos_state_present == 1) and (polymarket_oos_staleness_seconds > 7200)
+      - alert: PolymarketLatestOOSReportStale
+        expr: (polymarket_runtime_oos_trades > 0) and (polymarket_runtime_oos_staleness_seconds > 7200)
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: V4 walk-forward report is stale
-          description: The latest OOS gate report is more than two hours old.
+          summary: Latest Polymarket OOS report is stale
+          description: The auto-selected runtime's walk-forward gate is more than two hours old.
