@@ -1,0 +1,223 @@
+name: experiment-v3-live-paper-10m
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: experiment-v3-live-paper-10m-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-paper-10m:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+
+      - name: Build Release engine
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+
+      - name: Ten-minute public-data paper-live forward test
+        shell: bash
+        run: |
+          set -uo pipefail
+          RUN="$RUNNER_TEMP/polymarket-v3-live-10m"
+          mkdir -p "$RUN/maker" "$RUN/terminal_initial" "$RUN/terminal_final" "$RUN/structural"
+
+          echo "Pre-window terminal scan"
+          ./build/polymarket_engine \
+            --config config/paper_v3.json \
+            --once --scan-only --markets 600 --min-liquidity 100 \
+            --run-dir "$RUN/terminal_initial" \
+            > "$RUN/terminal_initial.log" 2>&1 || true
+
+          WINDOW_START=$(date +%s)
+          WINDOW_END=$((WINDOW_START + 600))
+          echo "$WINDOW_START" > "$RUN/window_start_epoch.txt"
+          echo "$WINDOW_END" > "$RUN/window_end_epoch.txt"
+
+          echo "Starting pair and PCA relative-value scans in parallel"
+          ./build/polymarket_stat_arb \
+            --config config/paper_v3.json \
+            --markets 600 --history-universe 160 \
+            --lookback-hours 336 --fidelity-minutes 30 \
+            --min-z 1.5 --max-half-life-hours 168 --top 100 \
+            --csv "$RUN/stat_arb_pairs.csv" \
+            > "$RUN/stat_arb_pairs.log" 2> "$RUN/stat_arb_pairs_errors.log" &
+          PAIR_PID=$!
+
+          ./build/polymarket_pca_stat_arb \
+            --config config/paper_v3.json \
+            --markets 600 --universe 120 \
+            --lookback-hours 336 --fidelity-minutes 30 \
+            --factors 3 --min-z 1.5 --max-half-life-hours 168 \
+            --top 100 --csv "$RUN/stat_arb_pca.csv" \
+            > "$RUN/stat_arb_pca.log" 2> "$RUN/stat_arb_pca_errors.log" &
+          PCA_PID=$!
+
+          tick=0
+          last_structural=0
+          while (( $(date +%s) < WINDOW_END )); do
+            tick=$((tick + 1))
+            now=$(date +%s)
+            echo "===== LIVE PAPER TICK $tick epoch=$now =====" | tee -a "$RUN/maker.log"
+
+            ./build/polymarket_maker_paper \
+              --config config/paper_v3.json \
+              --run-dir "$RUN/maker" \
+              --markets 600 --min-liquidity 100 \
+              --min-edge 0.003 --max-order-usd 75 \
+              --ttl-seconds 300 --hold-seconds 180 \
+              --adverse-selection-mult 0.50 --once \
+              2>&1 | tee -a "$RUN/maker.log" || true
+
+            if (( now - last_structural >= 30 )); then
+              ./build/polymarket_negrisk_arb \
+                --config config/paper_v3.json \
+                --markets 600 --min-liquidity 100 --top 100 \
+                > "$RUN/structural/scan_${tick}_${now}.txt" \
+                2>> "$RUN/structural_errors.log" || true
+              last_structural=$now
+            fi
+
+            target=$((WINDOW_START + tick * 10))
+            current=$(date +%s)
+            if (( target > current && current < WINDOW_END )); then
+              delay=$((target - current))
+              remaining=$((WINDOW_END - current))
+              if (( delay > remaining )); then delay=$remaining; fi
+              if (( delay > 0 )); then sleep "$delay"; fi
+            fi
+          done
+          echo "$tick" > "$RUN/maker_tick_count.txt"
+          date +%s > "$RUN/actual_window_end_epoch.txt"
+
+          wait "$PAIR_PID" || true
+          wait "$PCA_PID" || true
+
+          echo "Post-window terminal scan"
+          ./build/polymarket_engine \
+            --config config/paper_v3.json \
+            --once --scan-only --markets 600 --min-liquidity 100 \
+            --run-dir "$RUN/terminal_final" \
+            > "$RUN/terminal_final.log" 2>&1 || true
+
+          python3 - "$RUN" <<'PY'
+          import csv
+          import json
+          import pathlib
+          import sys
+          from collections import Counter
+
+          root = pathlib.Path(sys.argv[1])
+
+          def rows(path):
+              if not path.exists() or path.stat().st_size == 0:
+                  return []
+              with path.open(newline="") as f:
+                  return list(csv.DictReader(f))
+
+          order_rows = rows(root / "maker" / "maker_order_log.csv")
+          fill_rows = rows(root / "maker" / "maker_fills.csv")
+          equity_rows = rows(root / "maker" / "maker_equity.csv")
+          pair_rows = rows(root / "stat_arb_pairs.csv")
+          pca_rows = rows(root / "stat_arb_pca.csv")
+
+          structural = []
+          structural_summaries = []
+          for path in sorted((root / "structural").glob("scan_*.txt")):
+              lines = path.read_text(errors="replace").splitlines()
+              if lines:
+                  structural_summaries.append(lines[0])
+              header_idx = next((i for i, line in enumerate(lines) if line.startswith("type,event_id,")), None)
+              if header_idx is not None:
+                  structural.extend(csv.DictReader(lines[header_idx:]))
+
+          def max_number(rs, keys):
+              best = None
+              for row in rs:
+                  for key in keys:
+                      try:
+                          x = float(row.get(key, ""))
+                      except (TypeError, ValueError):
+                          continue
+                      best = x if best is None else max(best, x)
+              return best
+
+          summary = {
+              "window_start_epoch": int((root / "window_start_epoch.txt").read_text()),
+              "target_window_end_epoch": int((root / "window_end_epoch.txt").read_text()),
+              "actual_window_end_epoch": int((root / "actual_window_end_epoch.txt").read_text()),
+              "maker_ticks": int((root / "maker_tick_count.txt").read_text()),
+              "maker_order_events": len(order_rows),
+              "maker_order_actions": dict(Counter(r.get("action", "") for r in order_rows)),
+              "maker_fills": len(fill_rows),
+              "maker_fill_actions": dict(Counter(r.get("action", "") for r in fill_rows)),
+              "maker_best_signal_edge": max_number(order_rows, ["signal_edge"]),
+              "maker_final_equity_row": equity_rows[-1] if equity_rows else None,
+              "structural_scans": len(structural_summaries),
+              "structural_scan_summaries": structural_summaries,
+              "structural_opportunities_logged": len(structural),
+              "structural_best_raw_edge": max_number(structural, ["raw_edge"]),
+              "structural_best_net_edge_pre_gas": max_number(structural, ["net_edge_pre_gas"]),
+              "pair_candidates": len(pair_rows),
+              "pair_best_taker_net": max_number(pair_rows, ["taker_net_edge", "net_edge", "net_expected_edge"]),
+              "pair_best_maker_net": max_number(pair_rows, ["maker_net_edge", "maker_entry_net_edge"]),
+              "pca_candidates": len(pca_rows),
+              "pca_best_taker_net": max_number(pca_rows, ["taker_net_edge", "net_edge", "net_expected_edge"]),
+              "pca_best_maker_net": max_number(pca_rows, ["maker_net_edge", "maker_entry_net_edge"]),
+              "terminal_initial_status": None,
+              "terminal_final_status": None,
+          }
+          for key, rel in [("terminal_initial_status", "terminal_initial/status.json"),
+                           ("terminal_final_status", "terminal_final/status.json")]:
+              path = root / rel
+              if path.exists():
+                  try:
+                      summary[key] = json.loads(path.read_text())
+                  except Exception:
+                      summary[key] = {"raw": path.read_text(errors="replace")}
+
+          (root / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+          cp -a "$RUN" "$GITHUB_WORKSPACE/live-10m-output"
+
+      - name: Publish experiment summary
+        if: always()
+        run: |
+          echo "## V3 ten-minute paper-live experiment" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          if test -s live-10m-output/summary.json; then
+            cat live-10m-output/summary.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '{"summary":"missing"}' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "### Maker log tail" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 25 live-10m-output/maker.log 2>/dev/null >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload all paper-live diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: polymarket-v3-live-10m-${{ github.run_id }}
+          path: live-10m-output/
+          if-no-files-found: error
+          retention-days: 7
