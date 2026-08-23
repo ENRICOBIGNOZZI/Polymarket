@@ -29,6 +29,8 @@ jobs:
           cat .v4payload/00 .v4payload/01 .v4payload/02 .v4payload/03 .v4payload/04 | base64 -d > /tmp/v4_payload.tgz
           echo "12b8ca32ced3f40ee712ee376b3f9596d10545aba321febf45ececb012b2e117  /tmp/v4_payload.tgz" | sha256sum -c -
           tar -xzf /tmp/v4_payload.tgz
+          # Normalize the one formatting defect discovered only by git diff --check.
+          sed -i 's/[[:space:]]\+$//' src/multileg_paper.cpp
           rm -rf .v4payload
           rm -f .github/workflows/source-export-v4.yml
           rm -f .github/workflows/apply-v4-payload.yml
