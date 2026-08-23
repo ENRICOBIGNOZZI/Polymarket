@@ -40,6 +40,7 @@ struct Market {
     std::string condition_id;
     std::string event_id;
     std::string end_date;
+    std::string resolution_status;
     std::string yes_token;
     std::string no_token;
     bool active{false};
@@ -143,6 +144,8 @@ struct EngineConfig {
     double semantic_similarity_threshold{0.72};
     double semantic_shrinkage{0.15};
     double external_decay_hours{48.0};
+    std::size_t max_resolution_checks_per_cycle{20};
+    std::int64_t resolution_check_interval_seconds{1800};
 };
 
 class HttpClient {
@@ -193,6 +196,8 @@ public:
     void load_state(const std::string& path);
     void save_state(const std::string& path) const;
     void observe_resolution(const std::string& market_id, bool yes_outcome);
+    void forget_prediction(const std::string& market_id);
+    std::vector<std::string> pending_market_ids() const;
 private:
     struct TimedPrice { std::int64_t timestamp{0}; double price{0.5}; };
     ExpertPrediction microstructure(const LiveMarket& m) const;
@@ -231,7 +236,7 @@ public:
     explicit PaperBroker(double cash);
     std::optional<PaperFill> buy(const TradeIdea& idea, double principal, double fee_rate, double fee_exponent, double slippage_bps);
     std::optional<PaperFill> close_token(const std::string& market_id, const std::string& token_id, const std::string& outcome, double best_bid, double fee_rate, double fee_exponent, double slippage_bps);
-    std::vector<PaperFill> settle_market(const std::string& market_id, bool yes_outcome);
+    std::vector<PaperFill> settle_market(const std::string& market_id, double yes_payout);
     void load_state(const std::string& path);
     void save_state(const std::string& path) const;
     double cash() const { return cash_; }
@@ -268,6 +273,7 @@ private:
     PaperBroker broker_;
     double last_equity_{0.0};
     std::vector<TradeIdea> last_ideas_;
+    std::unordered_map<std::string, std::int64_t> next_resolution_check_;
 };
 
 } // namespace poly
