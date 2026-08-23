@@ -3,12 +3,15 @@ name: apply-pregame-queue-hotfix
 on:
   push:
     branches: [fix/pregame-tape-fills]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
   apply-build-test:
+    if: github.event_name == 'push' || github.head_ref == 'fix/pregame-tape-fills'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
