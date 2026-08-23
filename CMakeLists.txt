@@ -10,6 +10,7 @@ pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
 add_library(pm_core
     src/http.cpp
     src/api.cpp
+    src/event_api.cpp
     src/engine.cpp
     src/boost_json.cpp
 )
