@@ -1,0 +1,3 @@
+market_id,probability,confidence,source
+# Replace with live Gamma market ids. Example row:
+# 123456,0.64,0.80,my_model
