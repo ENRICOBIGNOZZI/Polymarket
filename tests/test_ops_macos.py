@@ -29,6 +29,20 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertNotIn('tiny_live_pilot.py', installer)
         self.assertNotIn('--execute', installer)
 
+    def test_grafana_passwordless_access_is_loopback_viewer_only(self):
+        runtime = (ROOT / "ops" / "apply_runtime_config_macos.sh").read_text(encoding="utf-8")
+        updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
+        finish = (ROOT / "ops" / "finish_bootstrap_macos.sh").read_text(encoding="utf-8")
+
+        self.assertIn('http_addr = 127.0.0.1', runtime)
+        self.assertIn('enabled = true', runtime)
+        self.assertIn('org_role = Viewer', runtime)
+        self.assertNotIn('org_role = Admin', runtime)
+        self.assertIn('apply_runtime_config_macos.sh', updater)
+        self.assertIn('apply_runtime_config_macos.sh', finish)
+        self.assertIn('http://127.0.0.1:3000/api/search', updater)
+        self.assertIn('http://127.0.0.1:3000/api/search', finish)
+
 
 if __name__ == "__main__":
     unittest.main()
