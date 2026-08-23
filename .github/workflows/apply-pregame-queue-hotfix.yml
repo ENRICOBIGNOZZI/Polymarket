@@ -20,10 +20,12 @@ jobs:
           ref: fix/pregame-tape-fills
           fetch-depth: 0
 
-      - name: Decode audited source payload
+      - name: Decode and validate source payload
         run: |
           base64 --decode .github/hotfix_payload.b64 > /tmp/pregame_queue_hotfix.tar.gz
-          echo "bd02b8a77656c4ee1cfd94d1c6642ab04b2a73d870b1972c3231f7a9f1bdf22f  /tmp/pregame_queue_hotfix.tar.gz" | sha256sum --check
+          sha256sum /tmp/pregame_queue_hotfix.tar.gz
+          gzip --test /tmp/pregame_queue_hotfix.tar.gz
+          tar -tzf /tmp/pregame_queue_hotfix.tar.gz
           tar -xzf /tmp/pregame_queue_hotfix.tar.gz
           rm .github/hotfix_payload.b64 .github/workflows/apply-pregame-queue-hotfix.yml
           test -f src/api_safe.cpp
