@@ -150,7 +150,15 @@ double Engine::full_kelly(double q,double p){if(p<=0||p>=1)return 0;return std::
 std::unordered_map<std::string,Engine::Adjustment> Engine::pca_adjustments(const std::vector<Market>&markets,const std::unordered_map<std::string,Book>&yes_books) const{
     struct S{const Market*m=nullptr;double mean=0,sd=0;std::vector<double>r;};
     std::vector<const Market*>base;
-    for(auto const&m:markets){auto h=history_.find(m.id),b=yes_books.find(m.yes_token);if(h==history_.end()||b==yes_books.end())continue;double cur=b->second.midpoint();if(!std::isfinite(cur)||cur<=cfg_.min_mid||cur>=cfg_.max_mid||b->second.spread()>cfg_.max_spread)continue;if(h->second.size()<cfg_.pca_min_history)continue;base.push_back(&m);}
+    for(auto const&m:markets){
+        auto h=history_.find(m.id);
+        auto b=yes_books.find(m.yes_token);
+        if(h==history_.end()||b==yes_books.end())continue;
+        double cur=b->second.midpoint();
+        if(!std::isfinite(cur)||cur<=cfg_.min_mid||cur>=cfg_.max_mid||b->second.spread()>cfg_.max_spread)continue;
+        if(h->second.size()<cfg_.pca_min_history)continue;
+        base.push_back(&m);
+    }
     std::sort(base.begin(),base.end(),[](auto*a,auto*b){return a->liquidity>b->liquidity;});if(base.size()>cfg_.pca_universe)base.resize(cfg_.pca_universe);if(base.size()<3)return{};
     std::size_t T=cfg_.pca_window;for(auto*m:base)T=std::min(T,history_.at(m->id).size()-1);if(T+1<cfg_.pca_min_history||T<8)return{};
 
@@ -251,7 +259,6 @@ void Engine::run_once(bool paper,bool scan_only){
         auto pit=positions_.find(m.id);if(pit!=positions_.end()){auto bit=books.find(pit->second.token_id);if(bit!=books.end())maybe_exit(m,bit->second,fair,fd);}append_history(ts,m,mid);
     }
 
-    // Guaranteed basket check for complete-looking NegRisk groups. Logging only; multi-leg execution remains separate.
     std::unordered_map<std::string,std::vector<const Market*>>ng;for(auto const&m:tradable)if(m.neg_risk)ng[m.event_id].push_back(&m);for(auto const&[event,v]:ng){if(v.size()<2)continue;double raw=1.0,net=1.0;bool ok=true;std::ostringstream legs;for(std::size_t i=0;i<v.size();++i){auto it=books.find(v[i]->yes_token);if(it==books.end()||!std::isfinite(it->second.best_ask())){ok=false;break;}double a=it->second.best_ask();auto fd=fee_for(*v[i]);double f=fd.rate*std::pow(a*(1.0-a),std::max(0.0,fd.exponent));raw-=a;net-=a+f+a*cfg_.slippage_bps/10000.0;if(i)legs<<"|";legs<<v[i]->yes_token;}if(ok&&net>-0.02)arb<<ts<<",NEGRISK_BASKET,"<<csv_escape(event)<<","<<raw<<","<<net<<","<<csv_escape(legs.str())<<"\n";}
 
     std::sort(cands.begin(),cands.end(),[](auto const&a,auto const&b){return a.s.score>b.s.score;});eq=equity(books);gross=gross_exposure(books);for(auto&c:cands){c.s.desired_notional=size_trade(c.s,*c.m,eq,gross);append_signal(c.s);if(paper&&!scan_only&&!cfg_.scan_only&&c.s.net_edge>cfg_.min_net_edge&&c.s.desired_notional>0&&!positions_.count(c.m->id)){paper_trade(c.s,*c.m,*c.b,c.fd,c.s.desired_notional);eq=equity(books);gross=gross_exposure(books);}}
