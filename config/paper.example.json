@@ -1,7 +1,8 @@
 {
   "gamma_url": "https://gamma-api.polymarket.com",
   "clob_url": "https://clob.polymarket.com",
-  "run_dir": "runs/paper_v2",
+  "data_url": "https://data-api.polymarket.com",
+  "run_dir": "runs/paper_v3",
   "external_signals_file": "data/external_signals.csv",
 
   "market_limit": 600,
@@ -38,8 +39,19 @@
   "graph_max_sum_error": 0.08,
   "semantic_min_similarity": 0.68,
   "semantic_shrink": 0.08,
-  "scan_only": false,
 
+  "maker_enabled": true,
+  "maker_min_edge": 0.005,
+  "maker_quote_usd": 50.0,
+  "maker_fractional_kelly": 0.05,
+  "maker_uncertainty_penalty": 0.20,
+  "maker_adverse_spread_mult": 0.10,
+  "maker_max_open_quotes": 25,
+  "maker_order_ttl_seconds": 60,
+  "maker_min_fill_fraction": 0.25,
+  "maker_improve_ticks": 1,
+
+  "scan_only": false,
   "expert_weights": {
     "micro": 0.35,
     "pca": 0.60,
