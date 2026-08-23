@@ -191,6 +191,22 @@ BookSnapshot PolymarketClient::get_book(const std::string& token_id) const {
     return b;
 }
 
+std::optional<double> PolymarketClient::get_fee_rate(const std::string& condition_id) const {
+    if (condition_id.empty()) return std::nullopt;
+    const std::string url = "https://clob.polymarket.com/clob-markets/" + condition_id;
+    try {
+        std::istringstream in(http_.get(url));
+        ptree root;
+        boost::property_tree::read_json(in, root);
+        if (auto r = root.get_optional<double>("fd.r")) return std::max(0.0, *r);
+        if (auto rs = root.get_optional<std::string>("fd.r")) {
+            try { return std::max(0.0, std::stod(*rs)); } catch (...) {}
+        }
+        if (!root.get_child_optional("fd")) return 0.0;
+    } catch (...) {}
+    return std::nullopt;
+}
+
 std::vector<LiveMarket> PolymarketClient::snapshot(std::size_t limit, double min_liquidity, double max_spread) const {
     std::vector<LiveMarket> out;
     for (auto& m : discover_markets(limit)) {
@@ -198,6 +214,7 @@ std::vector<LiveMarket> PolymarketClient::snapshot(std::size_t limit, double min
         try {
             auto y = get_book(m.yes_token);
             auto n = get_book(m.no_token);
+            if (auto fee = get_fee_rate(m.condition_id)) m.fee_rate = *fee;
             if (y.bids.empty() || y.asks.empty() || n.bids.empty() || n.asks.empty()) continue;
             if (y.spread() <= 0.0 || y.spread() > max_spread || n.spread() <= 0.0 || n.spread() > max_spread) continue;
             LiveMarket lm{m, std::move(y), std::move(n), hash_text_embedding(m.question)};
@@ -499,7 +516,9 @@ TradeIdea QuantEngine::make_idea(const LiveMarket& m, const FairValue& fair) con
         idea.token_id=m.market.no_token; idea.outcome="NO"; idea.fair_probability=qn; idea.entry_price=n_entry; idea.raw_edge=n_edge;
     }
     const double spread = idea.outcome=="YES" ? m.yes_book.spread() : m.no_book.spread();
-    idea.estimated_cost = 0.5*spread + (cfg_.slippage_bps+cfg_.assumed_fee_bps)/10000.0 + cfg_.uncertainty_buffer*fair.uncertainty;
+    const double fee_rate = m.market.fee_rate >= 0.0 ? m.market.fee_rate : cfg_.fallback_taker_fee_rate;
+    const double taker_fee_per_share = fee_rate * idea.entry_price * (1.0-idea.entry_price);
+    idea.estimated_cost = 0.5*spread + taker_fee_per_share + (cfg_.slippage_bps+cfg_.assumed_fee_bps)/10000.0 + cfg_.uncertainty_buffer*fair.uncertainty;
     idea.net_edge = idea.raw_edge-idea.estimated_cost;
     return idea;
 }
