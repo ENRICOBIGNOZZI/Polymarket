@@ -1,4 +1,38 @@
+# CMake and compiler output
 build/
+build-*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+Testing/
+
+# Runtime and paper-trading state
 runs/
+run/
+artifacts/
 *.log
+*.pid
+*.sqlite
+*.sqlite3
+*.db
+*.tmp
+*.tgz
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+config/local*.json
+config/*secret*.json
+*.pem
+*.key
+
+# Editors and operating systems
+.vscode/
+.idea/
+*.swp
+*.swo
 .DS_Store
