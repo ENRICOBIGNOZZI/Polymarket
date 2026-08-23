@@ -38,6 +38,3 @@ jobs:
           ./build/polymarket_engine --config config/paper.example.json --once --scan-only --markets 5 --min-liquidity 100 --run-dir /tmp/polymarket-live-smoke
           test -s /tmp/polymarket-live-smoke/status.json
           test -s /tmp/polymarket-live-smoke/signals.csv
-      - name: Wide NegRisk structural scan (read-only)
-        run: |
-          ./build/polymarket_negrisk_arb --config config/paper.example.json --markets 600 --min-liquidity 100 --top 40
