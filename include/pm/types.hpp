@@ -14,14 +14,16 @@
 
 namespace pm {
 
-struct Level {
-    double price = 0.0;
-    double size = 0.0;
-};
+struct Level { double price = 0.0; double size = 0.0; };
+struct PricePoint { std::int64_t ts = 0; double price = 0.5; };
 
-struct PricePoint {
-    std::int64_t ts = 0;
-    double price = 0.5;
+struct MarketTrade {
+    std::string condition_id;
+    std::string asset;
+    std::string side;
+    double size = 0.0;
+    double price = 0.0;
+    std::int64_t timestamp = 0;
 };
 
 struct Book {
@@ -103,17 +105,8 @@ struct Market {
     bool fee_taker_only = true;
 };
 
-struct FeeDetails {
-    double rate = 0.0;
-    double exponent = 1.0;
-    bool taker_only = true;
-};
-
-struct ExpertPrediction {
-    std::string name;
-    double q_yes = 0.5;
-    double confidence = 0.0;
-};
+struct FeeDetails { double rate = 0.0; double exponent = 1.0; bool taker_only = true; };
+struct ExpertPrediction { std::string name; double q_yes = 0.5; double confidence = 0.0; };
 
 struct Signal {
     std::string market_id;
@@ -134,12 +127,40 @@ struct Signal {
     std::vector<ExpertPrediction> experts;
 };
 
-struct ExternalSignal {
-    double q_yes = 0.5;
-    double confidence = 0.0;
-    std::string source;
-    std::int64_t timestamp = 0;
+struct MakerCandidate {
+    std::string market_id;
+    std::string condition_id;
+    std::string event_id;
+    std::string slug;
+    std::string side;
+    std::string token_id;
+    double bid = 0.0;
+    double ask = 0.0;
+    double quote = 0.0;
+    double fair_side = 0.5;
+    double uncertainty = 1.0;
+    double maker_edge = -1.0;
+    double queue_ahead = 0.0;
+    double min_order_size = 1.0;
 };
+
+struct MakerOrder {
+    std::string market_id;
+    std::string condition_id;
+    std::string event_id;
+    std::string slug;
+    std::string side;
+    std::string token_id;
+    double quote = 0.0;
+    double shares = 0.0;
+    double queue_ahead = 0.0;
+    double fair_at_submit = 0.5;
+    double uncertainty_at_submit = 1.0;
+    std::int64_t created_ts = 0;
+    std::int64_t last_checked_ts = 0;
+};
+
+struct ExternalSignal { double q_yes = 0.5; double confidence = 0.0; std::string source; std::int64_t timestamp = 0; };
 
 struct Position {
     std::string market_id;
@@ -168,7 +189,8 @@ struct Fill {
 struct Config {
     std::string gamma_url = "https://gamma-api.polymarket.com";
     std::string clob_url = "https://clob.polymarket.com";
-    std::string run_dir = "runs/paper_v2";
+    std::string data_url = "https://data-api.polymarket.com";
+    std::string run_dir = "runs/paper_v3";
     std::string external_signals_file = "data/external_signals.csv";
 
     std::size_t market_limit = 600;
@@ -202,9 +224,20 @@ struct Config {
     double pca_mr_strength = 0.35;
     double pca_min_residual_z = 0.75;
 
-    double graph_max_sum_error = 0.20;
+    double graph_max_sum_error = 0.08;
     double semantic_min_similarity = 0.68;
     double semantic_shrink = 0.08;
+
+    bool maker_enabled = true;
+    double maker_min_edge = 0.005;
+    double maker_quote_usd = 50.0;
+    double maker_fractional_kelly = 0.05;
+    double maker_uncertainty_penalty = 0.20;
+    double maker_adverse_spread_mult = 0.10;
+    std::size_t maker_max_open_quotes = 25;
+    std::int64_t maker_order_ttl_seconds = 60;
+    double maker_min_fill_fraction = 0.25;
+    std::size_t maker_improve_ticks = 1;
 
     bool scan_only = false;
     std::map<std::string,double> expert_weights{{"micro",0.35},{"pca",0.60},{"graph",0.80},{"semantic",0.08},{"external",1.0}};
