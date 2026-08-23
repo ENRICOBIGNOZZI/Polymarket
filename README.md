@@ -1,80 +1,138 @@
 # Polymarket Universal Quant Engine
 
-C++20 **live-data / paper-trading** engine for scanning Polymarket across categories. The core is category-agnostic: every contract is treated as a probabilistic event and routed through multiple alpha experts rather than hard-coding election, sports, crypto, macro, or other domain strategies.
+C++20 live-data **paper-trading** engine implementing the category-agnostic architecture in the accompanying research note. Every binary contract is treated as a probabilistic claim and passed through the same pipeline rather than hard-coding election, sports, crypto, macro, or other domain strategies.
 
 ## Architecture
 
-`Gamma discovery -> batched CLOB books -> universal representation -> experts -> adaptive ensemble -> executable net edge -> risk -> paper broker`
+```text
+Gamma keyset discovery
+        -> batched CLOB books
+        -> universal market state
+        -> microstructure expert
+        -> synchronized PCA / statistical-arbitrage expert
+        -> event-graph / NegRisk expert
+        -> semantic relative-value expert
+        -> external-information expert
+        -> adaptive Brier-weighted ensemble
+        -> fair probability + uncertainty
+        -> executable net edge
+        -> fractional-Kelly + portfolio/drawdown limits
+        -> persistent paper broker
+```
 
-Current experts:
+The forecasting layer, trade decision, portfolio construction and execution are intentionally separate.
 
-- **Microstructure**: midpoint, spread and near-touch depth imbalance.
-- **Online PCA/stat-arb**: rolling first principal component of logit-probability changes; trades only idiosyncratic residuals after a warm-up window.
-- **NegRisk graph consistency**: relative-value normalization among linked markets, with a completeness guard to avoid using obviously partial event groups.
-- **Semantic relative value**: conservative hashed-text nearest-neighbour shrinkage across similar contracts.
-- **External-information expert**: generic probability/confidence input, independent of domain; stale signals decay automatically.
+## Current experts
 
-The ensemble weights active experts by confidence and exponentially penalizes experts with worse observed Brier loss. Experts can abstain when the required information is unavailable.
+- **Microstructure** — midpoint, spread and near-touch depth imbalance. Confidence rises with depth and falls with spread.
+- **PCA/stat-arb** — one-factor PCA of synchronized logit-probability changes. The model is inactive until sufficient common history exists and mean-reverts only the current idiosyncratic residual.
+- **Graph / NegRisk** — normalizes linked mutually-exclusive outcomes only when the observed probability sum is close enough to one for the group to look complete.
+- **Semantic RV** — hashed text embedding plus conservative nearest-neighbour shrinkage. This is deliberately a lightweight first implementation; a learned event encoder can replace it without changing the rest of the engine.
+- **External information** — generic `(market_id, probability, confidence, source, timestamp)` interface with exponential staleness decay.
 
-## Live data
+Experts may abstain. Active predictions are combined with confidence and an adaptive penalty based on each expert's realized Brier loss. Expert calibration state survives process restarts.
 
-The engine currently uses public, read-only Polymarket endpoints:
+## Live market data
 
-- Gamma market discovery: `https://gamma-api.polymarket.com/markets`
+The engine uses public read-only Polymarket endpoints:
+
+- Gamma keyset market discovery: `GET https://gamma-api.polymarket.com/markets/keyset`
 - CLOB batched books: `POST https://clob.polymarket.com/books`
-- single-book fallback: `https://clob.polymarket.com/book?token_id=...`
-- per-market CLOB information: `https://clob.polymarket.com/clob-markets/<condition_id>`
+- single-book fallback: `GET https://clob.polymarket.com/book?token_id=...`
+- CLOB market metadata fallback: `GET https://clob.polymarket.com/clob-markets/<condition_id>`
 
-`clobTokenIds` and `outcomePrices` are parsed defensively because Gamma may encode them as JSON strings. Books are scanned for the true max bid / min ask rather than assuming response ordering.
+Market discovery uses cursor pagination with pages of at most 100 markets. The engine filters for active, open, order-accepting markets and then validates true two-sided order books. Best bid and ask are computed from the returned levels rather than assuming response ordering.
+
+Transient HTTP/network/429/5xx failures are retried with exponential backoff; failed batched-book requests fall back to single-book reads.
 
 ## Fees and executable edge
 
-The engine reads the live fee descriptor `(r,e)` from CLOB market information and uses
+For a taker trade at probability price `p`, the current public fee rule is modeled as
 
 ```text
-fee_per_share = r * [p * (1-p)]^e
+fee_per_share = feeRate * p * (1 - p)
 ```
 
-with conservative fallbacks when live fee metadata are unavailable.
+and simulated total fees are rounded to five decimal places. Live fee metadata from Gamma/CLOB are preferred; the configured conservative fallback is used only when fee metadata cannot be obtained.
 
-The alpha calculation is based on the **executable ask**, not midpoint, so spread is not subtracted twice. Expected edge is then reduced by live taker fee, configured slippage and a model-uncertainty buffer.
+Signals are measured against the **executable ask**. The engine therefore does not subtract half the bid-ask spread a second time.
 
-## Paper fills and exits
+```text
+raw_edge = side_fair_probability - executable_ask
+net_edge = raw_edge - taker_fee - slippage - other_costs - uncertainty_penalty
+```
 
-The paper broker now changes cash exactly when simulated fills occur:
+Only positive net edge above the configured threshold is admissible.
 
-- entry at ask plus configured slippage;
-- live per-market fee debited from cash;
-- exit at bid minus configured slippage;
-- exit fee debited from cash;
-- repeated entries aggregate shares by token;
-- positions can close on a sufficiently strong opposite signal or when fair value falls below the executable bid.
+## PCA / statistical-arbitrage implementation
 
-Runtime output is persisted in:
+History is stored with timestamps. Markets enter the same PCA calculation only when their recent observation timestamps match, preventing different loop iterations from being accidentally treated as simultaneous cross-sectional observations.
 
-- `runs/signals.csv` — every evaluated signal;
-- `runs/fills.csv` — simulated entries/exits, fees and cash;
-- `runs/history.csv` — persisted midpoint history for the PCA/stat-arb warm-up;
-- `runs/status.json` — current paper equity, cash, positions, ideas and drawdown state.
+For each synchronized group:
 
-## Risk
+1. convert prices to logits;
+2. compute logit changes;
+3. estimate the first covariance eigenvector by power iteration;
+4. estimate the current common shock;
+5. isolate each market's idiosyncratic residual;
+6. partially mean-revert the residual in logit space;
+7. scale confidence using residual z-score, cross-sectional size and factor strength.
 
-Defaults:
+The factor model is computed once per synchronized group per cycle and cached for all markets in that group.
 
-- hard drawdown kill switch: **15%**;
-- ex-ante drawdown-room constraint using current loss from peak plus worst-case open-position loss;
+## Ensemble uncertainty
+
+The model returns both a fair probability and uncertainty. Uncertainty combines weighted disagreement among active experts with a spread/liquidity proxy. Ranking is based on net edge relative to uncertainty rather than raw edge alone.
+
+## Portfolio and drawdown control
+
+Default controls include:
+
+- hard maximum drawdown: **15%**;
+- ex-ante remaining drawdown room after current loss from peak and worst-case open-position loss;
 - max gross exposure: 65% of equity;
 - max exposure per market: 4%;
 - max exposure per event: 12%;
 - max single trade: 2%;
-- 0.20 Kelly multiplier;
-- ranking by net edge relative to model uncertainty.
+- fractional Kelly multiplier: 0.20.
 
-The 15% control is a risk budget, not a mathematical guarantee against gap/default/execution risk.
+Kelly sizing uses the **cost- and uncertainty-adjusted executable net edge**, not the raw `q-p` discrepancy.
 
-## Build
+If the hard drawdown kill switch fires, new entries stop immediately and the paper broker attempts to liquidate every open token for which a current bid is available. The 15% level is a risk budget, not a mathematical guarantee against gaps, resolution shocks, unavailable liquidity, stale data or model misspecification.
 
-Requirements: CMake >= 3.20, C++20 compiler, libcurl, Boost headers.
+## Persistent paper execution
+
+Paper entry:
+
+```text
+fill = ask * (1 + slippage_bps / 10000)
+```
+
+Paper exit:
+
+```text
+fill = bid * (1 - slippage_bps / 10000)
+```
+
+Cash, positions, fees, model calibration and drawdown state are persisted after fills and at the end of every cycle. Held markets are reconciled even if they disappear from the normal tradable scan; resolved markets are automatically settled at 0/1 when resolution is visible in Gamma.
+
+Runtime files:
+
+```text
+runs/signals.csv
+runs/fills.csv
+runs/history.csv
+runs/broker_state.csv
+runs/risk_state.csv
+runs/model_state.csv
+runs/status.json
+```
+
+`--fresh` explicitly deletes this paper state before startup. Do not use it when continuing an existing paper run.
+
+## Build and tests
+
+Requirements: CMake >= 3.20, C++20 compiler, libcurl and Boost headers.
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -82,41 +140,56 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-## Run on live Polymarket data
+The unit test suite covers Gamma legacy/keyset parsing, fee calculations, drawdown kill logic, broker accounting/persistence, text similarity and synchronized PCA activation.
 
-One read-only snapshot + paper decision cycle:
+## Run live-data paper trading
+
+Single decision cycle:
 
 ```bash
-./build/poly_live --once --markets 50 --capital 10000
+./build/poly_live --once --markets 100 --capital 10000
 ```
 
 Continuous paper mode:
 
 ```bash
-./build/poly_live --loop --interval 10 --markets 100 --capital 10000
+./build/poly_live --loop --interval 10 --markets 500 --capital 10000
 ```
 
-## External information without domain hard-coding
-
-Optional CSV schema:
+Useful controls:
 
 ```text
-market_id,probability,confidence,source
-123456,0.64,0.80,my_model
+--min-edge <probability edge>
+--min-liquidity <USD>
+--max-spread <probability spread>
+--slippage-bps <bps>
+--max-drawdown <0..0.15>
+--external-csv <file>
+--fresh
 ```
 
-Run with:
+## External information
 
-```bash
-./build/poly_live --loop --external-csv examples/external_signals.csv
+CSV schema:
+
+```text
+market_id,probability,confidence,source,timestamp
+123456,0.64,0.80,my_model,2026-08-23T10:30:00Z
 ```
 
-Any future data connector only has to map outside information to `(market_id, probability, confidence, source)`. Polls, bookmaker odds, macro models, weather, crypto data, news/NLP and proprietary forecasts can therefore enter the same universal interface without changing the portfolio engine.
+`timestamp` is optional and may be Unix seconds or UTC ISO-8601. If omitted, load time is used. This interface is deliberately domain-independent: polling models, bookmaker odds, macro forecasts, weather, crypto derivatives, news/NLP systems or proprietary models can all feed the same ensemble.
 
-## CI / live smoke
+## CI
 
-GitHub Actions builds the C++ engine, runs unit tests and then performs a **read-only live Polymarket smoke test**. No API credentials or wallet are required for this path.
+GitHub Actions:
 
-## Deliberately not enabled
+1. installs C++ dependencies;
+2. configures and builds the engine;
+3. runs unit tests;
+4. performs a read-only live Polymarket paper smoke test.
 
-Real-money signing/submission is intentionally excluded. It should be a separate execution adapter with credentials, explicit capital limits and a manual enable flag only after paper logs provide enough evidence on calibration, turnover, realized slippage and drawdown.
+No wallet or private key is required.
+
+## Deliberately excluded
+
+Real-money signing/order submission is not enabled. Production execution should remain a separate authenticated adapter with explicit capital limits, reconciliation, cancel/replace handling and manual enablement after paper evidence is sufficient.
