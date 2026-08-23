@@ -19,6 +19,8 @@ public:
     static double full_kelly(double q, double p);
 
 private:
+    using Adjustment = std::pair<double,double>; // q_yes, confidence
+
     Config cfg_;
     PolymarketApi api_;
     double cash_ = 0.0;
@@ -29,6 +31,7 @@ private:
     std::unordered_map<std::string,double> expert_brier_;
     std::unordered_map<std::string,double> expert_count_;
     std::unordered_map<std::string,std::unordered_map<std::string,double>> last_forecasts_;
+    std::unordered_map<std::string,FeeDetails> fee_cache_;
 
     void ensure_runtime();
     void load_state();
@@ -36,17 +39,19 @@ private:
     void append_signal(const Signal& s);
     void append_fill(const Fill& f);
     void append_history(std::int64_t ts, const Market& m, double mid);
+    void bootstrap_history(const std::vector<Market>& markets);
+    FeeDetails fee_for(const Market& m);
     std::unordered_map<std::string,ExternalSignal> load_external() const;
-    std::vector<ExpertPrediction> build_experts(const Market& m, const Book& yes,
+    std::vector<ExpertPrediction> build_experts(const Market& m, const Book& yes, const Book& no,
                                                 const std::vector<Market>& universe,
                                                 const std::unordered_map<std::string,Book>& yes_books,
                                                 const std::unordered_map<std::string,ExternalSignal>& external,
-                                                const std::unordered_map<std::string,double>& pca_adjustment,
-                                                const std::unordered_map<std::string,double>& graph_adjustment) const;
-    std::unordered_map<std::string,double> pca_adjustments(const std::vector<Market>& markets,
-                                                            const std::unordered_map<std::string,Book>& yes_books) const;
-    std::unordered_map<std::string,double> graph_adjustments(const std::vector<Market>& markets,
-                                                              const std::unordered_map<std::string,Book>& yes_books) const;
+                                                const std::unordered_map<std::string,Adjustment>& pca_adjustment,
+                                                const std::unordered_map<std::string,Adjustment>& graph_adjustment) const;
+    std::unordered_map<std::string,Adjustment> pca_adjustments(const std::vector<Market>& markets,
+                                                               const std::unordered_map<std::string,Book>& yes_books) const;
+    std::unordered_map<std::string,Adjustment> graph_adjustments(const std::vector<Market>& markets,
+                                                                 const std::unordered_map<std::string,Book>& yes_books) const;
     std::pair<double,double> ensemble(const std::vector<ExpertPrediction>& preds, double spread) const;
     double equity(const std::unordered_map<std::string,Book>& books) const;
     double gross_exposure(const std::unordered_map<std::string,Book>& books) const;
