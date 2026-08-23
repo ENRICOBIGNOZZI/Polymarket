@@ -12,6 +12,7 @@ std::vector<Signal> LogicalArbModel::generate(
         const std::unordered_map<std::string, BookSnapshot>& books) const {
     std::vector<Signal> out;
 
+    // Binary complement arbitrage: buying YES + NO for less than $1 locks $1 at resolution.
     std::unordered_map<std::string, std::vector<std::string>> by_market;
     for (const auto& [token, m] : meta) by_market[m.market_id].push_back(token);
 
@@ -43,12 +44,13 @@ std::vector<Signal> LogicalArbModel::generate(
                 s.net_edge = s.gross_edge - s.est_cost;
                 s.score = s.net_edge / std::max(1e-4, b.spread());
                 s.confidence = 0.999;
-                s.rationale = "binary complement basket asks sum below 1; execute legs transactionally";
+                s.rationale = "binary complement basket asks sum below 1; execute legs atomically in live version";
                 if (s.net_edge > 0.0) out.push_back(std::move(s));
             }
         }
     }
 
+    // Negative-risk multi-market event consistency: YES asks across mutually exclusive outcomes.
     std::unordered_map<std::string, std::vector<std::string>> by_event_yes;
     for (const auto& [token, m] : meta) {
         if (!m.neg_risk || m.event_id.empty()) continue;
@@ -71,7 +73,10 @@ std::vector<Signal> LogicalArbModel::generate(
             const auto& m = meta.at(t);
             const auto& b = books.at(t);
             Signal s;
-            s.kind = SignalKind::ExactBasketArb;
+            // Negative-risk pricing is shown as a logical consistency candidate only.
+            // Until the event outcome set is explicitly verified as complete, treating the
+            // discovered YES subset as a guaranteed $1 payout basket would create false arb P&L.
+            s.kind = SignalKind::LogicalArb;
             s.token_id = t;
             s.market_id = m.market_id;
             s.event_id = event_id;
@@ -83,8 +88,8 @@ std::vector<Signal> LogicalArbModel::generate(
             s.est_cost = taker_fee_usdc(1.0, s.observed_price, m.category);
             s.net_edge = s.gross_edge - s.est_cost;
             s.score = s.net_edge / std::max(1e-4, b.spread());
-            s.confidence = 0.999;
-            s.rationale = "negative-risk mutually-exclusive YES basket below 1";
+            s.confidence = 0.50;
+            s.rationale = "negative-risk consistency candidate: discovered YES asks sum below 1; outcome-set completeness not yet verified";
             if (s.net_edge > 0.0) out.push_back(std::move(s));
         }
     }

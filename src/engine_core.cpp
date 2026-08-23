@@ -130,29 +130,61 @@ void QuantEngine::run_cycle() {
     std::sort(combined.begin(), combined.end(), [](const Signal& a, const Signal& b){ return a.score > b.score; });
     if (combined.size() > 500) combined.resize(500);
 
-    // Statistical signals go through normal allocation. Exact baskets are excluded here and
-    // paper-executed separately as all-or-nothing groups. A future real-money adapter must
-    // guarantee all legs or use Polymarket atomic conversion primitives where applicable.
+    // Exit logic runs before new allocation. Statistical positions are closed once
+    // their live net alpha has decayed below the exit threshold after a short hysteresis.
+    // At the emergency drawdown threshold every liquid position, including arb baskets,
+    // is flattened before any new risk can be considered.
+    const auto exit_orders = risk_.exits(stat_signals, meta_copy, books, portfolio_before);
+    PortfolioState portfolio_after_exits = portfolio_before;
+    {
+        std::lock_guard lock(mu_);
+        if (engine_cfg_.paper_trading) {
+            for (const auto& o : exit_orders) {
+                const auto mit = meta_copy.find(o.token_id);
+                const auto bit = books.find(o.token_id);
+                if (mit != meta_copy.end() && bit != books.end()) broker_.execute(o, mit->second, bit->second);
+            }
+        }
+        broker_.mark(books);
+        portfolio_after_exits = broker_.state();
+    }
+
+    // Only statistical alpha is allowed into the ordinary allocator. Logical consistency
+    // candidates stay visible but do not create P&L. Exact binary baskets are handled
+    // separately as all-or-nothing paper transactions.
     std::vector<Signal> allocatable;
     for (const auto& s : combined) {
-        if (s.kind != SignalKind::ExactBasketArb) allocatable.push_back(s);
+        if (s.kind != SignalKind::ExactBasketArb && s.kind != SignalKind::LogicalArb) {
+            allocatable.push_back(s);
+        }
     }
-    const auto orders = risk_.allocate(allocatable, meta_copy, books, portfolio_before);
+    const auto orders = risk_.allocate(allocatable, meta_copy, books, portfolio_after_exits);
 
-    struct BasketCandidate { double edge{0.0}; std::vector<OrderIntent> orders; };
+    struct BasketCandidate {
+        double edge{0.0};
+        std::string event_id;
+        double approx_notional{0.0};
+        std::vector<OrderIntent> orders;
+    };
     std::vector<BasketCandidate> baskets;
-    if (engine_cfg_.paper_trading && risk_.risk_multiplier(portfolio_before) > 0.0) {
+    if (engine_cfg_.paper_trading && risk_.risk_multiplier(portfolio_after_exits) > 0.0) {
+        std::unordered_map<std::string, double> existing_event_exposure;
+        for (const auto& [token, pos] : portfolio_after_exits.positions) {
+            const auto mit = meta_copy.find(token);
+            if (mit == meta_copy.end()) continue;
+            existing_event_exposure[mit->second.event_id] += std::abs(pos.shares * pos.mark);
+        }
+
         std::unordered_map<std::string, std::vector<const Signal*>> groups;
         for (const auto& s : arb_signals) {
             if (s.kind != SignalKind::ExactBasketArb) continue;
-            const bool binary = s.rationale.find("binary complement") == 0;
-            const std::string key = binary ? "m:" + s.market_id : "e:" + s.event_id;
-            groups[key].push_back(&s);
+            // In v0.1 ExactBasketArb is restricted to a fully known binary YES/NO market.
+            groups["m:" + s.market_id].push_back(&s);
         }
         for (const auto& [_, legs] : groups) {
             if (legs.size() < 2) continue;
             double cost_per_share = 0.0;
-            double payout = 1.0;
+            const double payout = 1.0;
             double max_equal_shares = std::numeric_limits<double>::infinity();
             bool ok = true;
             for (const auto* sp : legs) {
@@ -168,10 +200,17 @@ void QuantEngine::run_cycle() {
             }
             const double edge = payout - cost_per_share;
             if (!ok || edge <= 0.001 || !(max_equal_shares > 0.0)) continue;
-            const double basket_budget = 0.01 * portfolio_before.equity * risk_.risk_multiplier(portfolio_before);
+            const std::string event_id = legs.front()->event_id;
+            const double event_cap = 0.10 * portfolio_after_exits.equity;
+            const double event_room = std::max(0.0, event_cap - existing_event_exposure[event_id]);
+            const double basket_budget = std::min(
+                0.01 * portfolio_after_exits.equity * risk_.risk_multiplier(portfolio_after_exits),
+                event_room);
             const double shares = std::min(max_equal_shares, basket_budget / std::max(1e-6, cost_per_share));
             if (shares <= 0.0) continue;
-            BasketCandidate bc; bc.edge = edge;
+            BasketCandidate bc;
+            bc.edge = edge;
+            bc.event_id = event_id;
             for (const auto* sp : legs) {
                 const auto& b = books.at(sp->token_id);
                 if (shares < b.min_order_size) { bc.orders.clear(); break; }
@@ -183,7 +222,11 @@ void QuantEngine::run_cycle() {
                     .source = SignalKind::ExactBasketArb
                 });
             }
-            if (bc.orders.size() == legs.size()) baskets.push_back(std::move(bc));
+            if (bc.orders.size() == legs.size()) {
+                bc.approx_notional = shares * cost_per_share;
+                existing_event_exposure[event_id] += bc.approx_notional;
+                baskets.push_back(std::move(bc));
+            }
         }
         std::sort(baskets.begin(), baskets.end(), [](const auto& a, const auto& b){ return a.edge > b.edge; });
     }
@@ -197,10 +240,9 @@ void QuantEngine::run_cycle() {
                 if (mit != meta_copy.end() && bit != books.end()) broker_.execute(o, mit->second, bit->second);
             }
             double basket_spent_budget = 0.0;
-            const double basket_cycle_cap = 0.10 * portfolio_before.equity * risk_.risk_multiplier(portfolio_before);
+            const double basket_cycle_cap = 0.10 * portfolio_after_exits.equity * risk_.risk_multiplier(portfolio_after_exits);
             for (const auto& basket : baskets) {
-                double approx = 0.0;
-                for (const auto& o : basket.orders) approx += o.shares * books.at(o.token_id).best_ask();
+                const double approx = basket.approx_notional;
                 if (basket_spent_budget + approx > basket_cycle_cap) continue;
                 const auto fills = broker_.execute_basket(basket.orders, meta_copy, books);
                 if (fills.size() == basket.orders.size()) basket_spent_budget += approx;
@@ -221,7 +263,7 @@ void QuantEngine::run_cycle() {
         ++metrics_.cycle;
         equity_curve_.emplace_back(epoch_ms(Clock::now()), broker_.state().equity);
         while (equity_curve_.size() > 10000) equity_curve_.pop_front();
-        metrics_.status = broker_.state().drawdown >= 0.15 ? "risk_halt" : "paper_live";
+        metrics_.status = risk_.risk_multiplier(broker_.state()) <= 0.0 ? "risk_halt" : "paper_live";
     }
 }
 
@@ -244,6 +286,8 @@ std::string QuantEngine::state_json() const {
     json_object_object_add(root, "gross_exposure", json_object_new_double(p.gross_exposure));
     json_object_object_add(root, "net_exposure", json_object_new_double(p.net_exposure));
     json_object_object_add(root, "fees", json_object_new_double(p.total_fees));
+    json_object_object_add(root, "realized_pnl", json_object_new_double(p.realized_pnl));
+    json_object_object_add(root, "unrealized_pnl", json_object_new_double(p.unrealized_pnl));
     json_object_object_add(root, "positions", json_object_new_int64(p.positions.size()));
     return json_string(root);
 }

@@ -77,12 +77,8 @@ struct BookSnapshot {
         if (!std::isfinite(a) || !std::isfinite(b)) return std::numeric_limits<double>::infinity();
         return std::max(0.0, a - b);
     }
-    [[nodiscard]] double bid_depth() const {
-        double s = 0.0; for (const auto& l : bids) s += l.size; return s;
-    }
-    [[nodiscard]] double ask_depth() const {
-        double s = 0.0; for (const auto& l : asks) s += l.size; return s;
-    }
+    [[nodiscard]] double bid_depth() const { double s = 0.0; for (const auto& l : bids) s += l.size; return s; }
+    [[nodiscard]] double ask_depth() const { double s = 0.0; for (const auto& l : asks) s += l.size; return s; }
 };
 
 enum class Side { Buy, Sell };
@@ -156,6 +152,9 @@ struct Position {
     double mark{0.0};
     double realized_pnl{0.0};
     double unrealized_pnl{0.0};
+    SignalKind source{SignalKind::Pca};
+    TimePoint opened_at{Clock::now()};
+    TimePoint last_trade_at{Clock::now()};
 };
 
 struct PortfolioState {

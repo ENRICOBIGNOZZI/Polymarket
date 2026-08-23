@@ -1,6 +1,7 @@
 #include "poly/risk.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <unordered_map>
 
@@ -10,7 +11,7 @@ RiskEngine::RiskEngine(RiskConfig cfg) : cfg_(std::move(cfg)) {}
 
 double RiskEngine::risk_multiplier(const PortfolioState& p) const {
     const double d = std::max(0.0, p.drawdown);
-    if (d >= cfg_.max_drawdown) return 0.0;
+    if (d >= cfg_.emergency_flatten_drawdown) return 0.0;
     if (d <= cfg_.soft_drawdown) return 1.0;
     if (d >= cfg_.hard_deleverage_drawdown) {
         const double width = std::max(1e-6, cfg_.max_drawdown - cfg_.hard_deleverage_drawdown);
@@ -73,15 +74,10 @@ std::vector<OrderIntent> RiskEngine::allocate(
         const double event_used = event_alloc[mit->second.event_id];
         const double token_used = token_alloc[sp->token_id];
 
-        // Depth cap uses displayed asks and prevents a paper fill from consuming an
-        // unrealistic fraction of the visible book.
         double visible_notional = 0.0;
         for (const auto& l : bit->second.asks) visible_notional += l.price * l.size;
         const double depth_cap = cfg_.depth_fraction * visible_notional;
 
-        // Capped fractional-Kelly proxy. Binary terminal variance prevents a tiny
-        // model standard error from producing absurd leverage. The 0.25 multiplier
-        // deliberately uses quarter Kelly before portfolio/event/drawdown caps.
         const double payoff_var = std::max(1e-4, ask * (1.0 - ask));
         const double model_var = sp->uncertainty * sp->uncertainty;
         const double kelly_fraction = std::clamp(0.25 * sp->net_edge / (payoff_var + model_var),
@@ -107,6 +103,50 @@ std::vector<OrderIntent> RiskEngine::allocate(
         token_alloc[sp->token_id] += notional;
         event_alloc[mit->second.event_id] += notional;
         remaining_gross -= notional;
+    }
+    return orders;
+}
+
+std::vector<OrderIntent> RiskEngine::exits(
+        const std::vector<Signal>& signals,
+        const std::unordered_map<std::string, TokenMeta>& meta,
+        const std::unordered_map<std::string, BookSnapshot>& books,
+        const PortfolioState& portfolio) const {
+    std::vector<OrderIntent> orders;
+    if (portfolio.positions.empty()) return orders;
+
+    std::unordered_map<std::string, double> best_live_edge;
+    for (const auto& s : signals) {
+        if (s.side != Side::Buy || s.kind == SignalKind::ExactBasketArb) continue;
+        auto& x = best_live_edge[s.token_id];
+        x = std::max(x, s.net_edge);
+    }
+
+    const bool emergency = portfolio.drawdown >= cfg_.emergency_flatten_drawdown;
+    const auto now = Clock::now();
+    for (const auto& [token, pos] : portfolio.positions) {
+        if (pos.shares <= 0.0) continue;
+        const auto mit = meta.find(token);
+        const auto bit = books.find(token);
+        if (mit == meta.end() || bit == books.end()) continue;
+        const double bid = bit->second.best_bid();
+        if (!std::isfinite(bid) || bid <= 0.0) continue;
+
+        // Locked arbitrage baskets are held unless the portfolio-level emergency
+        // drawdown controller requires a flatten. Statistical positions use hysteresis:
+        // they can only exit after a minimum hold and once net alpha has decayed.
+        if (!emergency && pos.source == SignalKind::ExactBasketArb) continue;
+        const auto age = std::chrono::duration_cast<std::chrono::seconds>(now - pos.opened_at).count();
+        const double live_edge = best_live_edge.contains(token) ? best_live_edge.at(token) : 0.0;
+        if (!emergency && (age < cfg_.min_hold_seconds || live_edge > cfg_.exit_net_edge)) continue;
+
+        orders.push_back(OrderIntent{
+            .token_id = token,
+            .side = Side::Sell,
+            .shares = pos.shares,
+            .max_slippage = emergency ? 0.08 : std::min(0.05, std::max(0.005, 2.0 * bit->second.spread())),
+            .source = pos.source
+        });
     }
     return orders;
 }

@@ -17,6 +17,9 @@ struct RiskConfig {
     double min_net_edge{0.003};
     double min_score{0.25};
     double depth_fraction{0.10};
+    double exit_net_edge{0.001};
+    double emergency_flatten_drawdown{0.135};
+    int min_hold_seconds{60};
 };
 
 class RiskEngine {
@@ -29,6 +32,11 @@ public:
                                       const std::unordered_map<std::string, TokenMeta>& meta,
                                       const std::unordered_map<std::string, BookSnapshot>& books,
                                       const PortfolioState& portfolio) const;
+
+    std::vector<OrderIntent> exits(const std::vector<Signal>& signals,
+                                   const std::unordered_map<std::string, TokenMeta>& meta,
+                                   const std::unordered_map<std::string, BookSnapshot>& books,
+                                   const PortfolioState& portfolio) const;
 
 private:
     RiskConfig cfg_;

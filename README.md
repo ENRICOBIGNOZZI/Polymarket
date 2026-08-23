@@ -9,7 +9,7 @@ The design goal is not to predict isolated events. It continuously scans the act
 - a sparse/robust low-rank residual model;
 - hierarchical global + category factors;
 - semantic/event graph residuals;
-- binary complement and negative-risk basket arbitrage;
+- exact binary complement arbitrage plus negative-risk consistency scanning;
 - book-aware transaction costs and paper fills;
 - capped fractional-Kelly sizing with a 15% drawdown risk overlay.
 
@@ -101,8 +101,8 @@ The project objective is to maximize net out-of-sample return subject to a **15%
 - 150% gross-exposure ceiling;
 - liquidity/depth caps;
 - progressive deleveraging from 6% drawdown;
-- severe deleveraging at 12%;
-- no new risk at 15%.
+- severe deleveraging above 12%;
+- emergency flatten and zero new risk at 13.5%, leaving a buffer to the 15% MDD target.
 
 A 15% drawdown cannot be guaranteed under jumps, resolution shocks, API outages or non-atomic execution. The internal controller therefore begins reducing risk well before 15%.
 
@@ -114,7 +114,7 @@ Paper fills are not marked at midpoint. Buy orders walk displayed asks and are r
 fee = shares * feeRate * p * (1-p)
 ```
 
-and displayed depth limits sizing. Exact arbitrage baskets are quoted and committed transactionally in paper mode: if any leg lacks depth, the whole basket is rejected.
+and displayed depth limits sizing. Exact binary arbitrage baskets are quoted and committed transactionally in paper mode: if any leg lacks depth, the whole basket is rejected. Negative-risk multi-outcome inconsistencies are displayed but do not enter paper P&L until outcome-set completeness is explicitly verified.
 
 ## Current scope
 
@@ -124,9 +124,9 @@ Implemented:
 - batched CLOB books;
 - batched six-hour historical warm start;
 - five statistical relative-value engines;
-- exact binary/negative-risk basket scanner;
-- transaction-cost-aware paper broker;
-- drawdown-aware portfolio sizing;
+- exact binary basket scanner + guarded negative-risk consistency scanner;
+- transaction-cost-aware BUY/SELL paper broker with alpha-decay exits;
+- drawdown-aware portfolio sizing and emergency flatten;
 - local live dashboard;
 - C++ unit tests + GitHub Actions CI.
 

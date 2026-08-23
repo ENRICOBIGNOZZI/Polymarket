@@ -103,9 +103,9 @@ a^{YES}+a^{NO}+fees < 1
 
 creates a locked paper-arbitrage candidate.
 
-For negative-risk multi-market events, the engine checks the sum of executable YES asks across the outcome set. These signals are handled as baskets, never as independent legs.
+For negative-risk multi-market events, the engine checks the sum of executable YES asks across the *discovered* outcome set. In v0.1 these observations are only **consistency candidates**: they are displayed but never allocated or counted in paper P&L until metadata proves that the event outcome set is complete. This guard prevents missing outcomes from manufacturing false arbitrage.
 
-The paper broker pre-quotes every leg at one book snapshot and commits only if every requested leg is fully fillable. This prevents partial-fill pseudo-arbitrage in the demo.
+For a fully known binary YES/NO market, the paper broker pre-quotes both legs at one book snapshot and commits only if every requested leg is fully fillable after fees. This prevents partial-fill pseudo-arbitrage in the demo. Exact-basket exposure is additionally capped per event.
 
 ## 5. Net alpha
 
@@ -156,7 +156,7 @@ Let
 D_t=1-\frac{V_t}{\max_{s\le t}V_s}.
 \]
 
-Actual risk is multiplied by `m(D_t)`, with full risk below 6%, progressive deleveraging from 6% to 12%, severe deleveraging between 12% and 15%, and zero new risk at 15%.
+Actual risk is multiplied by `m(D_t)`, with full risk below 6%, progressive deleveraging from 6% to 12%, severe deleveraging above 12%, and an emergency flatten / zero-new-risk threshold at 13.5%. The 1.5 percentage-point buffer is intentional because the research target is a 15% maximum drawdown, while jumps and book gaps make an exact hard guarantee impossible.
 
 The research objective is
 
@@ -181,5 +181,7 @@ The engines should be evaluated separately and as an ensemble using walk-forward
 - concentration and factor exposures;
 - performance with taker-only versus maker-first execution assumptions;
 - ablation of PCA, robust, hierarchical, graph and logical components.
+
+Statistical positions are closed after a short minimum holding period once their live net alpha falls below the exit threshold; exact-arbitrage baskets are held unless the portfolio emergency controller requires liquidation.
 
 The sophisticated model is accepted only if it beats the simple PCA/EW-PCA baselines out of sample after costs.
