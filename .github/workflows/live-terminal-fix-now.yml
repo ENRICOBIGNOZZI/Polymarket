@@ -1,0 +1,51 @@
+name: live-terminal-fix-now
+
+on:
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  terminal-live-validation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+      - name: Build and deterministic tests
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+      - name: Fresh terminal scan with hard evidence gate
+        run: |
+          mkdir -p live-terminal
+          ./build/polymarket_engine \
+            --config config/paper_v3.json \
+            --once --scan-only --markets 120 --min-liquidity 100 \
+            --run-dir live-terminal | tee live-terminal/run.log
+          test -s live-terminal/status.json
+          test -s live-terminal/signals.csv
+      - name: Publish result
+        if: always()
+        run: |
+          echo "## Terminal evidence-gate live validation" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          cat live-terminal/run.log 2>/dev/null || true >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat live-terminal/status.json 2>/dev/null || true >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminal-evidence-gate-${{ github.run_id }}
+          path: live-terminal/
+          if-no-files-found: warn
+          retention-days: 7
