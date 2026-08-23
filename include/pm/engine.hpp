@@ -17,11 +17,9 @@ public:
     static std::optional<std::pair<double,double>> walk_book(const Book& book, bool buy, double requested_notional);
     static double protocol_fee(double shares, double price, const FeeDetails& fd);
     static double full_kelly(double q, double p);
-    static double maker_quote_price(const Book& book, std::size_t improve_ticks);
-    static double maker_queue_ahead(const Book& book, double quote);
 
 private:
-    using Adjustment = std::pair<double,double>; // q_yes, confidence
+    using Adjustment = std::pair<double,double>;
 
     Config cfg_;
     PolymarketApi api_;
@@ -35,7 +33,6 @@ private:
     std::unordered_map<std::string,std::unordered_map<std::string,double>> last_forecasts_;
     std::unordered_map<std::string,FeeDetails> fee_cache_;
     mutable std::unordered_map<std::string,std::vector<Market>> event_markets_cache_;
-    std::unordered_map<std::string,MakerOrder> maker_orders_; // one pending quote per market
 
     void ensure_runtime();
     void load_state();
@@ -66,16 +63,6 @@ private:
     void paper_trade(const Signal& s, const Market& m, const Book& side_book, const FeeDetails& fd, double notional);
     void maybe_exit(const Market& m, const Book& side_book, double fair_yes, const FeeDetails& fd);
     void score_resolved(const std::vector<Market>& markets);
-
-    void ensure_maker_runtime();
-    void load_maker_state();
-    void persist_maker_state() const;
-    void append_maker_candidate(const MakerCandidate& c) const;
-    void process_maker_orders(const std::unordered_map<std::string,Book>& books, bool allow_fill);
-    void place_maker_orders(std::vector<MakerCandidate> candidates, double eq, double gross, bool allow_place);
-    double maker_reserved_notional() const;
-    double maker_reserved_event(const std::string& event_id) const;
-
     static std::string csv_escape(const std::string& s);
 };
 
