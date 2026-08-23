@@ -33,12 +33,12 @@ jobs:
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j2
-      - name: Wide live Gamma + CLOB diagnostic (no paper fills)
+      - name: Wide 600-market live Gamma + CLOB diagnostic (no paper fills)
         run: |
-          ./build/polymarket_engine --config config/paper.example.json --once --scan-only --markets 100 --min-liquidity 100 --run-dir /tmp/polymarket-live-smoke
+          ./build/polymarket_engine --config config/paper.example.json --once --scan-only --markets 600 --min-liquidity 100 --run-dir /tmp/polymarket-live-smoke
           test -s /tmp/polymarket-live-smoke/status.json
           test -s /tmp/polymarket-live-smoke/signals.csv
           echo '--- top ranked signals ---'
-          head -n 16 /tmp/polymarket-live-smoke/signals.csv || true
+          head -n 26 /tmp/polymarket-live-smoke/signals.csv || true
           echo '--- near pair arbitrage ---'
-          head -n 16 /tmp/polymarket-live-smoke/arbitrage.csv || true
+          head -n 26 /tmp/polymarket-live-smoke/arbitrage.csv || true
