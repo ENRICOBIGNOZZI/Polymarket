@@ -439,4 +439,18 @@ void UniversalModel::observe_resolution(const std::string& id, bool yes) {
     last_prediction_.erase(it);
 }
 
+void UniversalModel::forget_prediction(const std::string& id) {
+    last_prediction_.erase(id);
+}
+
+std::vector<std::string> UniversalModel::pending_market_ids() const {
+    std::vector<std::string> ids;
+    ids.reserve(last_prediction_.size());
+    for (const auto& [id, fair] : last_prediction_) {
+        (void)fair;
+        ids.push_back(id);
+    }
+    return ids;
+}
+
 } // namespace poly
