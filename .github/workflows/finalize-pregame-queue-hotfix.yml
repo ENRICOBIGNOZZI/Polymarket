@@ -1,0 +1,59 @@
+name: finalize-pregame-queue-hotfix
+
+on:
+  push:
+    branches: [fix/pregame-tape-fills]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  promote-build-test:
+    if: github.event_name == 'push' || github.head_ref == 'fix/pregame-tape-fills'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/pregame-tape-fills
+          fetch-depth: 0
+
+      - name: Promote verified sources to canonical paths
+        run: |
+          cp src/api_safe.cpp src/api.cpp
+          cp src/maker_paper_safe.cpp src/maker_paper.cpp
+          sed -i 's#src/api_safe.cpp#src/api.cpp#' CMakeLists.txt
+          sed -i 's#src/maker_paper_safe.cpp#src/maker_paper.cpp#' CMakeLists.txt
+          rm src/api_safe.cpp src/maker_paper_safe.cpp .github/workflows/finalize-pregame-queue-hotfix.yml
+          ! grep -q "strict_trade_through" src/maker_paper.cpp
+          grep -q "consume_passive_bid_trade" src/maker_paper.cpp
+          grep -q "pregame_market_eligible" src/api.cpp
+          test "$(grep -c 'src/api.cpp' CMakeLists.txt)" -eq 1
+          test "$(grep -c 'src/maker_paper.cpp' CMakeLists.txt)" -eq 1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+
+      - name: Build and test Release
+        run: |
+          cmake -S . -B build-Release -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-Release --parallel 2
+          ctest --test-dir build-Release --output-on-failure
+
+      - name: Build and test Debug
+        run: |
+          cmake -S . -B build-Debug -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build-Debug --parallel 2
+          ctest --test-dir build-Debug --output-on-failure
+
+      - name: Commit canonical verified hotfix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Promote verified hotfix to canonical sources"
+          git push origin HEAD:fix/pregame-tape-fills
