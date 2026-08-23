@@ -9,14 +9,26 @@ STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
 log() { printf '[mac-deploy] %s\n' "$*"; }
 fail() { printf '[mac-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 
+find_brew() {
+  if command -v brew >/dev/null 2>&1; then
+    command -v brew
+  elif [[ -x /opt/homebrew/bin/brew ]]; then
+    printf '%s\n' /opt/homebrew/bin/brew
+  elif [[ -x /usr/local/bin/brew ]]; then
+    printf '%s\n' /usr/local/bin/brew
+  else
+    return 1
+  fi
+}
+
 [[ "$(uname -s)" == "Darwin" ]] || fail "This updater is for macOS only"
 [[ -d "$APP_DIR/.git" ]] || fail "$APP_DIR is not a git checkout"
 [[ -f "$APP_DIR/.server_bootstrapped_macos" ]] || fail "run ops/bootstrap_macos.sh interactively once first"
-command -v brew >/dev/null 2>&1 || fail "Homebrew is required"
+BREW_BIN="$(find_brew)" || fail "Homebrew is required (checked PATH, /opt/homebrew/bin/brew, /usr/local/bin/brew)"
 
-BREW_PREFIX="$(brew --prefix)"
+BREW_PREFIX="$("$BREW_BIN" --prefix)"
 export PATH="$BREW_PREFIX/bin:$BREW_PREFIX/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-export PKG_CONFIG_PATH="$(brew --prefix curl)/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+export PKG_CONFIG_PATH="$("$BREW_BIN" --prefix curl)/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 PYTHON_BIN="$BREW_PREFIX/bin/python3"
 
 cd "$APP_DIR"
