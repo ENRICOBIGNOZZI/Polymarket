@@ -1,0 +1,27 @@
+name: monitoring
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: monitoring-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate exporter and provisioned dashboard
+        run: |
+          python3 -m unittest tests/test_monitoring_exporter.py -v
+          python3 -m py_compile monitoring/exporter.py
+          python3 -m json.tool monitoring/grafana/dashboards/polymarket-live.json >/dev/null
+          bash -n scripts/monitoring_up.sh scripts/monitoring_down.sh

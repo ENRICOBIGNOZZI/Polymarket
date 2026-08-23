@@ -1,0 +1,37 @@
+groups:
+  - name: polymarket-paper-live
+    rules:
+      - alert: PolymarketExporterDown
+        expr: up{job="polymarket-exporter"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Polymarket telemetry exporter is down
+          description: Prometheus has not been able to scrape the file exporter for one minute.
+
+      - alert: PolymarketMakerDataStale
+        expr: (polymarket_maker_state_present == 0) or (polymarket_maker_staleness_seconds > 60)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Paper-maker state is stale
+          description: The latest maker equity snapshot is more than 60 seconds old.
+
+      - alert: PolymarketMakerDrawdownWarning
+        expr: polymarket_maker_drawdown_ratio >= 0.10
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: Paper-maker drawdown above 10%
+          description: Current marked drawdown has crossed the warning threshold.
+
+      - alert: PolymarketMakerKillSwitchActive
+        expr: polymarket_maker_kill_switch == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: Paper-maker kill switch is active
+          description: New paper-maker risk is frozen by the persisted drawdown kill switch.
