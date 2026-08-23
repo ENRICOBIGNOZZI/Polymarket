@@ -1,0 +1,78 @@
+name: v4-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  v4-build-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+      - name: Configure and build
+        run: |
+          cmake -S v4 -B build-v4 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-v4 -j2
+      - name: Deterministic V4 tests
+        run: |
+          ctest --test-dir build-v4 --output-on-failure
+
+  v4-live-record-replay:
+    runs-on: ubuntu-24.04
+    needs: v4-build-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev
+      - name: Build V4
+        run: |
+          cmake -S v4 -B build-v4 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-v4 -j2 --target polymarket_v4 polymarket_v4_replay
+      - name: Live public-data paper tick
+        run: |
+          set -euo pipefail
+          RUN=/tmp/polymarket-v4-live
+          rm -rf "$RUN"
+          for attempt in 1 2 3; do
+            if ./build-v4/polymarket_v4 \
+              --config config/v4.paper.example.json \
+              --once --paper \
+              --markets 100 --min-liquidity 100 \
+              --run-dir "$RUN"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep 3
+          done
+          test -s "$RUN/events.jsonl"
+          test -s "$RUN/decisions.jsonl"
+          test -s "$RUN/status.json"
+      - name: Exact replay
+        run: |
+          set -euo pipefail
+          ./build-v4/polymarket_v4_replay \
+            --config config/v4.paper.example.json \
+            --events /tmp/polymarket-v4-live/events.jsonl \
+            --expected /tmp/polymarket-v4-live/decisions.jsonl \
+            --run-dir /tmp/polymarket-v4-replay
+          python3 - <<'PY'
+          import json
+          with open('/tmp/polymarket-v4-replay/replay_summary.json') as f:
+              result = json.load(f)
+          assert result['mismatches'] == 0, result
+          assert result['deterministic'] is True, result
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: polymarket-v4-live-${{ github.run_id }}
+          path: |
+            /tmp/polymarket-v4-live
+            /tmp/polymarket-v4-replay
+          retention-days: 7
