@@ -1,0 +1,48 @@
+{
+  "gamma_url": "https://gamma-api.polymarket.com",
+  "clob_url": "https://clob.polymarket.com",
+  "run_dir": "runs/v4_paper",
+  "external_signals_file": "data/external_signals.csv",
+  "relations_file": "data/v4_relations.csv",
+
+  "market_limit": 1200,
+  "books_batch_size": 80,
+  "interval_seconds": 5,
+  "starting_capital": 10000.0,
+  "min_liquidity": 50.0,
+  "min_mid": 0.005,
+  "max_mid": 0.995,
+  "max_spread": 0.20,
+
+  "max_trade_usd": 100.0,
+  "max_market_fraction": 0.02,
+  "max_event_fraction": 0.06,
+  "max_gross_fraction": 0.20,
+  "max_drawdown": 0.15,
+
+  "structural_min_edge": 0.0025,
+  "structural_completeness_tolerance": 0.08,
+
+  "terminal_min_edge": 0.0125,
+  "terminal_min_confidence": 0.55,
+
+  "rv_min_edge": 0.0075,
+  "rv_z_threshold": 2.0,
+  "rv_min_mr_probability": 0.68,
+  "rv_reversion_strength": 0.30,
+  "history_window": 240,
+  "rv_min_history": 24,
+
+  "maker_enabled": true,
+  "maker_min_expected_edge": 0.0005,
+  "maker_rebate_per_share": 0.0,
+  "maker_liquidity_reward_per_share": 0.0,
+  "maker_horizon_seconds": 60.0,
+  "maker_min_fill_probability": 0.05,
+  "maker_latency_ms": 250,
+  "maker_max_order_usd": 50.0,
+
+  "taker_slippage_bps": 5.0,
+  "uncertainty_penalty": 0.20,
+  "scan_only": false
+}
