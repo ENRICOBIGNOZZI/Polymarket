@@ -7,13 +7,25 @@ INTERVAL="${POLYMARKET_UPDATE_INTERVAL_SECONDS:-300}"
 LABEL="com.polymarket.autoupdate"
 DEPLOY_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 
+find_brew() {
+  if command -v brew >/dev/null 2>&1; then
+    command -v brew
+  elif [[ -x /opt/homebrew/bin/brew ]]; then
+    printf '%s\n' /opt/homebrew/bin/brew
+  elif [[ -x /usr/local/bin/brew ]]; then
+    printf '%s\n' /usr/local/bin/brew
+  else
+    return 1
+  fi
+}
+
 [[ "$(uname -s)" == "Darwin" ]] || { echo "macOS only" >&2; exit 1; }
 [[ -f "$APP_DIR/ops/update_server_macos.sh" ]] || { echo "missing $APP_DIR/ops/update_server_macos.sh" >&2; exit 1; }
 [[ -f "$APP_DIR/.server_bootstrapped_macos" ]] || { echo "run ops/bootstrap_macos.sh first" >&2; exit 1; }
 [[ "$INTERVAL" =~ ^[0-9]+$ ]] && (( INTERVAL >= 60 )) || { echo "interval must be >= 60 seconds" >&2; exit 1; }
-command -v brew >/dev/null 2>&1 || { echo "Homebrew is required" >&2; exit 1; }
+BREW_BIN="$(find_brew)" || { echo "Homebrew is required (checked PATH, /opt/homebrew/bin/brew, /usr/local/bin/brew)" >&2; exit 1; }
 
-BREW_PREFIX="$(brew --prefix)"
+BREW_PREFIX="$("$BREW_BIN" --prefix)"
 LAUNCH_PATH="$BREW_PREFIX/bin:$BREW_PREFIX/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 xml_escape() {
