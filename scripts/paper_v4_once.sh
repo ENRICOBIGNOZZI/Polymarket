@@ -13,10 +13,11 @@ mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/terminal"
   --lookback-seconds 120 --once \
   | tee "$RUN_ROOT/trade_recorder_latest.log"
 
-# Strategy A remains independently monitored as a structural scanner.
+# Strategy A remains independently monitored as a structural scanner. Keep the
+# human-readable log while also satisfying the exporter's structural CSV contract.
 ./build/polymarket_negrisk_arb \
   --config "$CONFIG" --markets 600 --min-liquidity 100 --top 60 \
-  | tee "$RUN_ROOT/structural_latest.log"
+  | tee "$RUN_ROOT/structural_latest.log" "$RUN_ROOT/structural_latest.csv"
 
 # B1/B2 remain pure alpha scanners. The adapter below converts their immutable
 # CSV diagnostics into complete standardized maker-bundle intents.
