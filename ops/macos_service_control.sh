@@ -2,6 +2,7 @@
 set -euo pipefail
 
 labels=(
+  com.polymarket.awake
   com.polymarket.paper
   com.polymarket.exporter
   com.polymarket.prometheus
