@@ -1,27 +1,244 @@
 #include "poly/engine.hpp"
+
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 
 namespace poly {
-RiskManager::RiskManager(EngineConfig c):cfg_(c),peak_equity_(c.initial_capital){}
-double RiskManager::drawdown(double e)const{return peak_equity_>0?std::max(0.0,1-e/peak_equity_):0;}
-void RiskManager::update_equity(double e){peak_equity_=std::max(peak_equity_,e);if(drawdown(e)>=cfg_.max_drawdown)killed_=true;}
-void RiskManager::load_state(const std::string&path){std::ifstream in(path);if(!in)return;std::string line;while(std::getline(in,line)){std::stringstream ss(line);std::string k,v;std::getline(ss,k,',');std::getline(ss,v,',');try{if(k=="peak_equity")peak_equity_=std::max(cfg_.initial_capital,std::stod(v));else if(k=="killed")killed_=(std::stoi(v)!=0);}catch(...){}}}
-void RiskManager::save_state(const std::string&path)const{std::ofstream o(path);o<<"peak_equity,"<<peak_equity_<<'\n'<<"killed,"<<(killed_?1:0)<<'\n';}
-double RiskManager::allowed_notional(const TradeIdea&i,double e,double gross,double market,double event,double open_loss)const{if(killed_||e<=0||i.net_edge<=0)return 0;double rb=std::max(0.0,cfg_.max_gross_fraction*e-gross),mb=std::max(0.0,cfg_.max_market_fraction*e-market),eb=std::max(0.0,cfg_.max_event_fraction*e-event),tb=cfg_.max_trade_fraction*e;double p=std::clamp(i.entry_price,.001,.999),q=std::clamp(i.fair_probability,.001,.999),kb=cfg_.kelly_fraction*std::max(0.0,(q-p)/(1-p))*e;double loss_from_peak=std::max(0.0,peak_equity_-e),dd_room=std::max(0.0,cfg_.max_drawdown*peak_equity_-loss_from_peak-open_loss);return std::max(0.0,std::min({rb,mb,eb,tb,kb,dd_room}));}
+namespace {
 
-PaperBroker::PaperBroker(double c):cash_(c){}
-std::optional<PaperFill> PaperBroker::buy(const TradeIdea&i,double principal,double r,double exp,double slip_bps){if(principal<=0||i.entry_price<=0)return std::nullopt;double fill=std::min(.999,i.entry_price*(1+slip_bps/10000.0)),shares=principal/fill,fee=shares*platform_fee_per_share(fill,r,exp),total=principal+fee;if(total>cash_){double scale=cash_/total;principal*=scale;shares*=scale;fee*=scale;total=cash_;}if(principal<=0)return std::nullopt;auto it=std::find_if(positions_.begin(),positions_.end(),[&](const auto&p){return p.token_id==i.token_id;});if(it==positions_.end())positions_.push_back({i.market_id,i.token_id,i.outcome,shares,principal,fee});else{it->shares+=shares;it->cost+=principal;it->fees_paid+=fee;}cash_-=total;return PaperFill{"BUY",i.market_id,i.token_id,i.outcome,shares,fill,principal,fee,cash_};}
-std::optional<PaperFill> PaperBroker::close_token(const std::string&mid,const std::string&tok,const std::string&outcome,double bid,double r,double exp,double slip_bps){double fill=std::max(.001,bid*(1-slip_bps/10000.0)),shares=0;for(const auto&p:positions_)if(p.token_id==tok)shares+=p.shares;if(shares<=0)return std::nullopt;double principal=shares*fill,fee=shares*platform_fee_per_share(fill,r,exp);cash_+=std::max(0.0,principal-fee);positions_.erase(std::remove_if(positions_.begin(),positions_.end(),[&](const auto&p){return p.token_id==tok;}),positions_.end());return PaperFill{"SELL",mid,tok,outcome,shares,fill,principal,fee,cash_};}
-std::vector<PaperFill> PaperBroker::settle_market(const std::string&mid,bool yes){std::vector<PaperFill>fills;for(const auto&p:positions_)if(p.market_id==mid){bool win=(yes&&p.outcome=="YES")||(!yes&&p.outcome=="NO");double price=win?1.0:0.0,principal=p.shares*price;cash_+=principal;fills.push_back({"SETTLE",p.market_id,p.token_id,p.outcome,p.shares,price,principal,0.0,cash_});}positions_.erase(std::remove_if(positions_.begin(),positions_.end(),[&](const auto&p){return p.market_id==mid;}),positions_.end());return fills;}
-void PaperBroker::load_state(const std::string&path){std::ifstream in(path);if(!in)return;std::string line;std::vector<Position>loaded;double loaded_cash=cash_;while(std::getline(in,line)){if(line.empty())continue;std::stringstream ss(line);std::vector<std::string>x;std::string v;while(std::getline(ss,v,','))x.push_back(v);try{if(x.size()>=2&&x[0]=="cash")loaded_cash=std::stod(x[1]);else if(x.size()>=6&&x[0]!="market_id")loaded.push_back({x[0],x[1],x[2],std::stod(x[3]),std::stod(x[4]),std::stod(x[5])});}catch(...){}}cash_=loaded_cash;positions_=std::move(loaded);}
-void PaperBroker::save_state(const std::string&path)const{std::ofstream o(path);o<<"cash,"<<cash_<<'\n'<<"market_id,token_id,outcome,shares,cost,fees_paid\n";for(const auto&p:positions_)o<<p.market_id<<','<<p.token_id<<','<<p.outcome<<','<<p.shares<<','<<p.cost<<','<<p.fees_paid<<'\n';}
-double PaperBroker::marked_equity(const std::unordered_map<std::string,double>&px)const{double e=cash_;for(const auto&p:positions_){auto i=px.find(p.token_id);double m=i==px.end()?p.cost/std::max(p.shares,1e-12):i->second;e+=p.shares*m;}return e;}
-double PaperBroker::gross_value(const std::unordered_map<std::string,double>&px)const{double x=0;for(const auto&p:positions_){auto i=px.find(p.token_id);x+=p.shares*(i==px.end()?p.cost/std::max(p.shares,1e-12):i->second);}return x;}
-double PaperBroker::worst_case_loss(const std::unordered_map<std::string,double>&px)const{return gross_value(px);}
-double PaperBroker::market_exposure(const std::string&id,const std::unordered_map<std::string,double>&px)const{double x=0;for(const auto&p:positions_)if(p.market_id==id){auto i=px.find(p.token_id);x+=p.shares*(i==px.end()?p.cost/std::max(p.shares,1e-12):i->second);}return x;}
-double PaperBroker::event_exposure(const std::string&e,const std::unordered_map<std::string,std::string>&m2e,const std::unordered_map<std::string,double>&px)const{if(e.empty())return 0;double x=0;for(const auto&p:positions_){auto m=m2e.find(p.market_id);if(m!=m2e.end()&&m->second==e){auto i=px.find(p.token_id);x+=p.shares*(i==px.end()?p.cost/std::max(p.shares,1e-12):i->second);}}return x;}
-bool PaperBroker::owns_token(const std::string&t)const{return std::any_of(positions_.begin(),positions_.end(),[&](const auto&p){return p.token_id==t&&p.shares>0;});}
+double rounded_fee(double x) {
+    if (x < 0.000005) return 0.0;
+    return std::round(x * 100000.0) / 100000.0;
+}
+
+void atomic_write(const std::string& path, const std::string& content) {
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::trunc);
+        if (!out) throw std::runtime_error("cannot write state file: " + tmp);
+        out << content;
+        out.flush();
+        if (!out) throw std::runtime_error("failed writing state file: " + tmp);
+    }
+    std::error_code ec;
+    std::filesystem::rename(tmp, path, ec);
+    if (ec) {
+        std::filesystem::remove(path, ec);
+        ec.clear();
+        std::filesystem::rename(tmp, path, ec);
+        if (ec) throw std::runtime_error("cannot atomically replace state file: " + path);
+    }
+}
+
+} // namespace
+
+RiskManager::RiskManager(EngineConfig c) : cfg_(c), peak_equity_(c.initial_capital) {}
+
+double RiskManager::drawdown(double e) const {
+    return peak_equity_ > 0.0 ? std::max(0.0, 1.0 - e / peak_equity_) : 0.0;
+}
+
+void RiskManager::update_equity(double e) {
+    if (!std::isfinite(e) || e < 0.0) { killed_ = true; return; }
+    peak_equity_ = std::max(peak_equity_, e);
+    if (drawdown(e) >= cfg_.max_drawdown) killed_ = true;
+}
+
+void RiskManager::load_state(const std::string& path) {
+    std::ifstream in(path);
+    if (!in) return;
+    std::string line;
+    while (std::getline(in, line)) {
+        std::stringstream ss(line);
+        std::string k, v;
+        std::getline(ss, k, ',');
+        std::getline(ss, v, ',');
+        try {
+            if (k == "peak_equity") peak_equity_ = std::max(cfg_.initial_capital, std::stod(v));
+            else if (k == "killed") killed_ = (std::stoi(v) != 0);
+        } catch (...) {}
+    }
+}
+
+void RiskManager::save_state(const std::string& path) const {
+    std::ostringstream out;
+    out << "peak_equity," << peak_equity_ << '\n'
+        << "killed," << (killed_ ? 1 : 0) << '\n';
+    atomic_write(path, out.str());
+}
+
+double RiskManager::allowed_notional(const TradeIdea& i, double e, double gross, double market,
+                                     double event, double open_loss) const {
+    if (killed_ || e <= 0.0 || i.net_edge <= 0.0) return 0.0;
+    const double gross_budget = std::max(0.0, cfg_.max_gross_fraction * e - gross);
+    const double market_budget = std::max(0.0, cfg_.max_market_fraction * e - market);
+    const double event_budget = std::max(0.0, cfg_.max_event_fraction * e - event);
+    const double trade_budget = cfg_.max_trade_fraction * e;
+
+    const double p = std::clamp(i.entry_price, 0.001, 0.999);
+    // Cost- and uncertainty-adjusted Kelly proxy: replace q-p by executable net edge.
+    const double kelly_budget = cfg_.kelly_fraction * std::max(0.0, i.net_edge / (1.0 - p)) * e;
+
+    const double loss_from_peak = std::max(0.0, peak_equity_ - e);
+    const double dd_room = std::max(0.0, cfg_.max_drawdown * peak_equity_ - loss_from_peak - open_loss);
+    const double conservative_loss_multiplier = 1.0 + std::clamp(i.estimated_cost / p, 0.0, 0.50);
+    const double dd_budget = dd_room / conservative_loss_multiplier;
+
+    return std::max(0.0, std::min({gross_budget, market_budget, event_budget, trade_budget, kelly_budget, dd_budget}));
+}
+
+PaperBroker::PaperBroker(double c) : cash_(c) {}
+
+std::optional<PaperFill> PaperBroker::buy(const TradeIdea& i, double principal, double r, double exp, double slip_bps) {
+    if (principal <= 0.0 || i.entry_price <= 0.0 || i.entry_price >= 1.0 || cash_ <= 0.0) return std::nullopt;
+    const double fill = std::clamp(i.entry_price * (1.0 + slip_bps / 10000.0), 1e-6, 0.999999);
+    double shares = principal / fill;
+    double fee = rounded_fee(shares * platform_fee_per_share(fill, r, exp));
+    double total = principal + fee;
+    if (total > cash_) {
+        const double unit_cost = fill + platform_fee_per_share(fill, r, exp);
+        shares = unit_cost > 0.0 ? cash_ / unit_cost : 0.0;
+        principal = shares * fill;
+        fee = rounded_fee(shares * platform_fee_per_share(fill, r, exp));
+        total = principal + fee;
+        if (total > cash_) {
+            const double scale = cash_ / total;
+            shares *= scale;
+            principal *= scale;
+            fee = rounded_fee(fee * scale);
+            total = principal + fee;
+        }
+    }
+    if (principal <= 0.0 || shares <= 0.0) return std::nullopt;
+
+    auto it = std::find_if(positions_.begin(), positions_.end(), [&](const auto& p){ return p.token_id == i.token_id; });
+    if (it == positions_.end()) positions_.push_back({i.market_id, i.token_id, i.outcome, shares, principal, fee});
+    else {
+        it->shares += shares;
+        it->cost += principal;
+        it->fees_paid += fee;
+    }
+    cash_ = std::max(0.0, cash_ - total);
+    return PaperFill{"BUY", i.market_id, i.token_id, i.outcome, shares, fill, principal, fee, cash_};
+}
+
+std::optional<PaperFill> PaperBroker::close_token(const std::string& mid, const std::string& tok,
+                                                   const std::string& outcome, double bid,
+                                                   double r, double exp, double slip_bps) {
+    if (bid <= 0.0) return std::nullopt;
+    const double fill = std::clamp(bid * (1.0 - slip_bps / 10000.0), 1e-6, 0.999999);
+    double shares = 0.0;
+    for (const auto& p : positions_) if (p.token_id == tok) shares += p.shares;
+    if (shares <= 0.0) return std::nullopt;
+    const double principal = shares * fill;
+    const double fee = rounded_fee(shares * platform_fee_per_share(fill, r, exp));
+    cash_ += std::max(0.0, principal - fee);
+    positions_.erase(std::remove_if(positions_.begin(), positions_.end(), [&](const auto& p){ return p.token_id == tok; }), positions_.end());
+    return PaperFill{"SELL", mid, tok, outcome, shares, fill, principal, fee, cash_};
+}
+
+std::vector<PaperFill> PaperBroker::settle_market(const std::string& mid, bool yes) {
+    std::vector<PaperFill> fills;
+    for (const auto& p : positions_) {
+        if (p.market_id != mid) continue;
+        const bool win = (yes && p.outcome == "YES") || (!yes && p.outcome == "NO");
+        const double price = win ? 1.0 : 0.0;
+        const double principal = p.shares * price;
+        cash_ += principal;
+        fills.push_back({"SETTLE", p.market_id, p.token_id, p.outcome, p.shares, price, principal, 0.0, cash_});
+    }
+    positions_.erase(std::remove_if(positions_.begin(), positions_.end(), [&](const auto& p){ return p.market_id == mid; }), positions_.end());
+    return fills;
+}
+
+void PaperBroker::load_state(const std::string& path) {
+    std::ifstream in(path);
+    if (!in) return;
+    std::string line;
+    std::vector<Position> loaded;
+    double loaded_cash = cash_;
+    while (std::getline(in, line)) {
+        if (line.empty()) continue;
+        std::stringstream ss(line);
+        std::vector<std::string> x;
+        std::string v;
+        while (std::getline(ss, v, ',')) x.push_back(v);
+        try {
+            if (x.size() >= 2 && x[0] == "cash") loaded_cash = std::stod(x[1]);
+            else if (x.size() >= 6 && x[0] != "market_id")
+                loaded.push_back({x[0], x[1], x[2], std::stod(x[3]), std::stod(x[4]), std::stod(x[5])});
+        } catch (...) {}
+    }
+    cash_ = loaded_cash;
+    positions_ = std::move(loaded);
+}
+
+void PaperBroker::save_state(const std::string& path) const {
+    std::ostringstream out;
+    out << "cash," << cash_ << '\n'
+        << "market_id,token_id,outcome,shares,cost,fees_paid\n";
+    for (const auto& p : positions_)
+        out << p.market_id << ',' << p.token_id << ',' << p.outcome << ',' << p.shares << ',' << p.cost << ',' << p.fees_paid << '\n';
+    atomic_write(path, out.str());
+}
+
+double PaperBroker::marked_equity(const std::unordered_map<std::string,double>& px) const {
+    double e = cash_;
+    for (const auto& p : positions_) {
+        auto it = px.find(p.token_id);
+        const double mark = it == px.end() ? p.cost / std::max(p.shares, 1e-12) : it->second;
+        e += p.shares * std::clamp(mark, 0.0, 1.0);
+    }
+    return e;
+}
+
+double PaperBroker::gross_value(const std::unordered_map<std::string,double>& px) const {
+    double x = 0.0;
+    for (const auto& p : positions_) {
+        auto it = px.find(p.token_id);
+        const double mark = it == px.end() ? p.cost / std::max(p.shares, 1e-12) : it->second;
+        x += p.shares * std::clamp(mark, 0.0, 1.0);
+    }
+    return x;
+}
+
+double PaperBroker::worst_case_loss(const std::unordered_map<std::string,double>& px) const {
+    // From current marked equity, a long binary token can lose at most its current marked value.
+    return gross_value(px);
+}
+
+double PaperBroker::market_exposure(const std::string& id, const std::unordered_map<std::string,double>& px) const {
+    double x = 0.0;
+    for (const auto& p : positions_) {
+        if (p.market_id != id) continue;
+        auto it = px.find(p.token_id);
+        const double mark = it == px.end() ? p.cost / std::max(p.shares, 1e-12) : it->second;
+        x += p.shares * std::clamp(mark, 0.0, 1.0);
+    }
+    return x;
+}
+
+double PaperBroker::event_exposure(const std::string& e,
+                                   const std::unordered_map<std::string,std::string>& m2e,
+                                   const std::unordered_map<std::string,double>& px) const {
+    if (e.empty()) return 0.0;
+    double x = 0.0;
+    for (const auto& p : positions_) {
+        auto m = m2e.find(p.market_id);
+        if (m == m2e.end() || m->second != e) continue;
+        auto it = px.find(p.token_id);
+        const double mark = it == px.end() ? p.cost / std::max(p.shares, 1e-12) : it->second;
+        x += p.shares * std::clamp(mark, 0.0, 1.0);
+    }
+    return x;
+}
+
+bool PaperBroker::owns_token(const std::string& t) const {
+    return std::any_of(positions_.begin(), positions_.end(), [&](const auto& p){ return p.token_id == t && p.shares > 0.0; });
+}
+
 } // namespace poly
