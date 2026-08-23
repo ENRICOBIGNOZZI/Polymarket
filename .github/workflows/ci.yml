@@ -38,3 +38,52 @@ jobs:
           ./build/polymarket_engine --config config/paper.example.json --once --scan-only --markets 5 --min-liquidity 100 --run-dir /tmp/polymarket-live-smoke
           test -s /tmp/polymarket-live-smoke/status.json
           test -s /tmp/polymarket-live-smoke/signals.csv
+
+  paper-forward:
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/live-paper-forward-20260823'
+    runs-on: ubuntu-24.04
+    needs: build-test
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j2
+      - name: Twenty live paper snapshots
+        run: |
+          set -euo pipefail
+          RUN=/tmp/polymarket-forward
+          rm -rf "$RUN"
+          mkdir -p "$RUN"
+          for i in $(seq 1 20); do
+            echo "===== PAPER TICK $i/20 ====="
+            ok=0
+            for attempt in 1 2 3; do
+              if ./build/polymarket_engine --config config/paper.example.json --once --paper --markets 80 --min-liquidity 500 --run-dir "$RUN"; then
+                ok=1
+                break
+              fi
+              sleep 2
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "Paper tick $i failed after retries" >&2
+              exit 1
+            fi
+            if [ "$i" -lt 20 ]; then sleep 10; fi
+          done
+          echo "===== FINAL STATUS ====="
+          cat "$RUN/status.json"
+          echo "===== FILE SIZES ====="
+          wc -l "$RUN"/*.csv || true
+      - name: Upload forward-test logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: polymarket-live-forward-${{ github.run_id }}
+          path: /tmp/polymarket-forward
+          if-no-files-found: error
+          retention-days: 7
