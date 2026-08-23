@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <deque>
@@ -23,6 +24,60 @@ struct PricePoint {
     std::int64_t ts = 0;
     double price = 0.5;
 };
+
+struct PublicTrade {
+    std::string condition_id;
+    std::string asset_id;
+    std::string side;
+    double price = 0.0;
+    double size = 0.0;
+    std::int64_t ts = 0;
+    std::string transaction_hash;
+    std::string key;
+};
+
+struct QueueFillResult {
+    double queue_ahead = 0.0;
+    double remaining_shares = 0.0;
+    double filled_shares = 0.0;
+};
+
+inline QueueFillResult consume_bid_queue(
+    double queue_ahead,
+    double remaining_shares,
+    double aggressive_sell_size) {
+    QueueFillResult out{
+        std::max(0.0, queue_ahead),
+        std::max(0.0, remaining_shares),
+        0.0
+    };
+    double volume = std::max(0.0, aggressive_sell_size);
+    const double ahead = std::min(out.queue_ahead, volume);
+    out.queue_ahead -= ahead;
+    volume -= ahead;
+    out.filled_shares = std::min(out.remaining_shares, volume);
+    out.remaining_shares -= out.filled_shares;
+    return out;
+}
+
+inline bool is_aggressive_sell_for_bid(
+    const PublicTrade& trade,
+    const std::string& token_id,
+    double limit_price,
+    double tick_size,
+    std::int64_t order_created_ts) {
+    std::string side = trade.side;
+    std::transform(side.begin(), side.end(), side.begin(), [](unsigned char c) {
+        return static_cast<char>(std::toupper(c));
+    });
+    const double tolerance = 0.25 * std::max(1e-6, tick_size);
+    return trade.ts > order_created_ts &&
+           trade.asset_id == token_id &&
+           side == "SELL" &&
+           trade.size > 0.0 &&
+           trade.price > 0.0 &&
+           trade.price <= limit_price + tolerance;
+}
 
 struct Book {
     std::string token_id;
@@ -97,11 +152,22 @@ struct Market {
     bool closed = false;
     bool enable_order_book = true;
     bool accepting_orders = true;
+    bool sports_market = false;
+    std::int64_t game_start_ts = 0;
     std::optional<int> resolved_yes;
     double fee_rate = -1.0;
     double fee_exponent = 1.0;
     bool fee_taker_only = true;
 };
+
+inline bool eligible_before_game_start(
+    const Market& market,
+    std::int64_t now,
+    std::int64_t safety_buffer_seconds = 0) {
+    if (!market.sports_market) return true;
+    if (market.game_start_ts <= 0) return false;
+    return now + std::max<std::int64_t>(0, safety_buffer_seconds) < market.game_start_ts;
+}
 
 struct FeeDetails {
     double rate = 0.0;
