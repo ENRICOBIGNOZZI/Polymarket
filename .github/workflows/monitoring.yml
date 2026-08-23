@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate version-agnostic exporter and stable dashboard
         run: |
-          python3 -m unittest tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py tests/test_monitoring_latest_exporter.py -v
+          python3 -m unittest tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py tests/test_monitoring_latest_exporter.py tests/test_v4_monitoring_contract.py -v
           python3 -m py_compile monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_latest.py
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-latest.json >/dev/null
           bash -n scripts/monitoring_up.sh scripts/monitoring_down.sh
