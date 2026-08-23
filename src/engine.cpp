@@ -31,6 +31,20 @@ FeeInfo effective_fee(const Market& m, const EngineConfig& cfg) {
     return {cfg.fallback_taker_fee_rate, cfg.fallback_taker_fee_exponent, false, true};
 }
 
+bool final_resolution_visible(const Market& m) {
+    if (m.resolution_status == "resolved" || m.resolution_status == "settled") return true;
+    if (m.resolution_status == "requested" || m.resolution_status == "proposed" || m.resolution_status == "disputed") return false;
+    // Some automatically-resolved markets do not expose UMA state.  In that
+    // case require both closure and an effectively binary terminal price.
+    return m.closed && (m.gamma_yes_price <= 0.001 || m.gamma_yes_price >= 0.999);
+}
+
+void apply_resolution_to_model(UniversalModel& model, const Market& m) {
+    if (m.gamma_yes_price >= 0.999) model.observe_resolution(m.id, true);
+    else if (m.gamma_yes_price <= 0.001) model.observe_resolution(m.id, false);
+    else model.forget_prediction(m.id); // void/invalid/non-binary payout: no Brier target
+}
+
 } // namespace
 
 QuantEngine::QuantEngine(EngineConfig c)
@@ -154,11 +168,10 @@ void QuantEngine::run_once() {
             px[m.yes_token] = clamp_probability(m.gamma_yes_price);
             px[m.no_token] = clamp_probability(1.0 - m.gamma_yes_price);
 
-            const bool resolved_yes = m.closed && m.gamma_yes_price >= 0.999;
-            const bool resolved_no = m.closed && m.gamma_yes_price <= 0.001;
-            if (resolved_yes || resolved_no) {
-                model_.observe_resolution(mid, resolved_yes);
-                for (const auto& fill : broker_.settle_market(mid, resolved_yes)) append_fill_log(fill, "resolution");
+            if (final_resolution_visible(m)) {
+                apply_resolution_to_model(model_, m);
+                for (const auto& fill : broker_.settle_market(mid, m.gamma_yes_price)) append_fill_log(fill, "resolution");
+                next_resolution_check_.erase(mid);
                 persist_state();
                 continue;
             }
@@ -196,6 +209,32 @@ void QuantEngine::run_once() {
         fair[m.market.id] = f;
         idea[m.market.id] = x;
         append_signal_log(x, f);
+    }
+
+    // Calibrate experts on resolved markets even when we never traded them.
+    // Only markets that have left the current active universe need a metadata
+    // check, and those checks are rate-limited per cycle and per market.
+    std::unordered_set<std::string> current_market_ids;
+    for (const auto& m : u) current_market_ids.insert(m.market.id);
+    const auto now_sec = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::size_t resolution_checks = 0;
+    for (const auto& mid : model_.pending_market_ids()) {
+        if (current_market_ids.count(mid) || held_market_ids.count(mid)) continue;
+        auto next = next_resolution_check_.find(mid);
+        if (next != next_resolution_check_.end() && next->second > now_sec) continue;
+        if (resolution_checks >= cfg_.max_resolution_checks_per_cycle) break;
+        ++resolution_checks;
+        next_resolution_check_[mid] = now_sec + std::max<std::int64_t>(60, cfg_.resolution_check_interval_seconds);
+        try {
+            const auto m = client_.get_market(mid);
+            if (final_resolution_visible(m)) {
+                apply_resolution_to_model(model_, m);
+                next_resolution_check_.erase(mid);
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "[warn] resolution calibration check failed for " << mid << ": " << e.what() << '\n';
+        }
     }
 
     // Normal model-driven exits for positions whose market is still in the tradable universe.
