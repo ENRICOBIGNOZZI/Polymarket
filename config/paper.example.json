@@ -35,7 +35,7 @@
   "pca_mr_strength": 0.35,
   "pca_min_residual_z": 0.75,
 
-  "graph_max_sum_error": 0.20,
+  "graph_max_sum_error": 0.08,
   "semantic_min_similarity": 0.68,
   "semantic_shrink": 0.08,
   "scan_only": false,
