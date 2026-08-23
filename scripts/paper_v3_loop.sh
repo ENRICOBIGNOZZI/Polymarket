@@ -11,7 +11,7 @@ last_stat=0
 while true; do
   now=$(date +%s)
 
-  # Execution experiment: frequent because it follows the live book.
+  # Conservative maker execution experiment: frequent because it follows the live book.
   ./build/polymarket_maker_paper \
     --config "$CONFIG" \
     --run-dir "$RUN_ROOT/maker" \
@@ -24,7 +24,7 @@ while true; do
     --adverse-selection-mult 0.50 \
     --once >> "$RUN_ROOT/maker.log" 2>&1 || true
 
-  # Structural arbitrage: faster than statistical refits, but not every maker tick.
+  # Strategy A: structural arbitrage.
   if (( now - last_structural >= 30 )); then
     ./build/polymarket_negrisk_arb \
       --config "$CONFIG" \
@@ -34,7 +34,7 @@ while true; do
     last_structural=$now
   fi
 
-  # Statistical arbitrage: deliberately slower, multi-day state and 30-minute history buckets.
+  # Strategy B: slower multi-day refits for both independent statistical sleeves.
   if (( now - last_stat >= 900 )); then
     ./build/polymarket_stat_arb \
       --config "$CONFIG" \
@@ -45,7 +45,19 @@ while true; do
       --min-z 1.5 \
       --max-half-life-hours 168 \
       --top 60 \
-      --csv "$RUN_ROOT/stat_arb.csv" > "$RUN_ROOT/stat_arb_latest.log" 2> "$RUN_ROOT/stat_arb_errors.log" || true
+      --csv "$RUN_ROOT/stat_arb_pairs.csv" > "$RUN_ROOT/stat_arb_pairs_latest.log" 2> "$RUN_ROOT/stat_arb_pairs_errors.log" || true
+
+    ./build/polymarket_pca_stat_arb \
+      --config "$CONFIG" \
+      --markets 600 \
+      --universe 120 \
+      --lookback-hours 336 \
+      --fidelity-minutes 30 \
+      --factors 3 \
+      --min-z 1.5 \
+      --max-half-life-hours 168 \
+      --top 60 \
+      --csv "$RUN_ROOT/stat_arb_pca.csv" > "$RUN_ROOT/stat_arb_pca_latest.log" 2> "$RUN_ROOT/stat_arb_pca_errors.log" || true
     last_stat=$now
   fi
 
