@@ -38,3 +38,50 @@ jobs:
           ./build/polymarket_engine --config config/paper.example.json --once --scan-only --markets 5 --min-liquidity 100 --run-dir /tmp/polymarket-live-smoke
           test -s /tmp/polymarket-live-smoke/status.json
           test -s /tmp/polymarket-live-smoke/signals.csv
+
+  v2-wide-paper-forward:
+    runs-on: ubuntu-24.04
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j2
+      - name: Three wide-universe live paper snapshots
+        run: |
+          set -euo pipefail
+          RUN=/tmp/polymarket-v2-wide-forward
+          rm -rf "$RUN"
+          mkdir -p "$RUN"
+          for i in 1 2 3; do
+            echo "===== V2 WIDE PAPER TICK $i/3 ====="
+            ./build/polymarket_engine \
+              --config config/paper.example.json \
+              --once --paper --markets 600 --min-liquidity 100 \
+              --run-dir "$RUN"
+            if [ "$i" -lt 3 ]; then sleep 8; fi
+          done
+          echo "===== FINAL STATUS ====="
+          cat "$RUN/status.json"
+          echo "===== COUNTS ====="
+          wc -l "$RUN"/*.csv || true
+          echo "===== TOP NET EDGES ====="
+          python3 - <<'PY'
+          import csv, pathlib
+          p=pathlib.Path('/tmp/polymarket-v2-wide-forward/signals.csv')
+          rows=list(csv.DictReader(p.open()))
+          rows.sort(key=lambda r: float(r['net_edge']), reverse=True)
+          for r in rows[:20]:
+              print(r['slug'], r['side'], 'gross=',r['gross_edge'],'cost=',r['cost_adjusted_edge'],'net=',r['net_edge'],'experts=',r['experts'])
+          PY
+      - name: Upload wide-forward logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: polymarket-v2-wide-forward-${{ github.run_id }}
+          path: /tmp/polymarket-v2-wide-forward
+          retention-days: 7
