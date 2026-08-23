@@ -145,6 +145,7 @@ private:
 std::vector<double> hash_text_embedding(const std::string& text, std::size_t dim = 32);
 double cosine_similarity(const std::vector<double>& a, const std::vector<double>& b);
 double clamp_probability(double p);
+std::vector<Market> parse_gamma_markets_json(const std::string& body);
 
 class UniversalModel {
 public:
