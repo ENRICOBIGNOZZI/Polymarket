@@ -86,6 +86,7 @@ Market parse_market(const ptree& p) {
     m.condition_id = p.get<std::string>("conditionId", p.get<std::string>("condition_id", ""));
     m.event_id = event_id(p);
     m.end_date = p.get<std::string>("endDate", p.get<std::string>("end_date_iso", ""));
+    m.resolution_status = p.get<std::string>("umaResolutionStatus", p.get<std::string>("uma_resolution_status", ""));
     m.active = bval(p, "active");
     m.closed = bval(p, "closed");
     m.accepting_orders = bval(p, "acceptingOrders", bval(p, "accepting_orders", true));
