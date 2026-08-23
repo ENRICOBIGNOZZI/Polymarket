@@ -1,8 +1,26 @@
 # Polymarket Quant Engine
 
+[![CI](https://github.com/ENRICOBIGNOZZI/Polymarket/actions/workflows/ci.yml/badge.svg)](https://github.com/ENRICOBIGNOZZI/Polymarket/actions/workflows/ci.yml)
+[![Live API smoke](https://github.com/ENRICOBIGNOZZI/Polymarket/actions/workflows/live-smoke.yml/badge.svg)](https://github.com/ENRICOBIGNOZZI/Polymarket/actions/workflows/live-smoke.yml)
+
 C++20 live-data **paper-trading and relative-value research engine** for Polymarket. The V3 design keeps economically different alphas separate instead of forcing every signal into one terminal-probability ensemble.
 
 There is **no authenticated order submission code** in this repository. It cannot place real-money orders.
+
+## Repository status
+
+| Component | Current status |
+|---|---|
+| Authoritative code | `main`: V3 paper-only engine |
+| Structural arbitrage | Implemented as read-only executable diagnostics |
+| Pair and PCA statistical arbitrage | Implemented as costed relative-value scanners |
+| Maker execution | Conservative queue-aware paper simulator |
+| Real-money broker | Intentionally absent |
+| Active broad development | Draft PR [#17](https://github.com/ENRICOBIGNOZZI/Polymarket/pull/17) for V4 research and execution realism |
+
+Required CI is deterministic and runs both Release and Debug builds. Public Gamma/CLOB integration is checked by a separate scheduled or manually triggered read-only workflow, so external API instability does not invalidate the code test suite.
+
+Branch roles, merge gates and experiment cleanup are defined in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md). `main` is the only authoritative line; unmerged branches are research-in-progress.
 
 ## V3 architecture
 
@@ -136,8 +154,10 @@ The original terminal paper engine applies executable price, taker fee, book imp
 
 The maker simulator uses separate conservative reservation accounting for resting orders and open positions. The configured 15% drawdown is an **operating constraint, not a mathematical guarantee** against gaps, stale data, resolution shocks, API failures or software defects.
 
-## Tests
+## Tests and live verification
 
-`ctest` runs deterministic unit tests and a local mock end-to-end test. GitHub Actions builds every V3 executable and runs a small public-API read-only Gamma/CLOB smoke scan.
+Required CI builds the complete project in Release and Debug mode and runs deterministic unit plus local mock end-to-end tests.
 
-For the detailed design rationale see `docs/STRATEGIES_V3.md`.
+The separate `live-api-smoke` workflow runs every six hours and can also be triggered manually. It performs a small read-only Gamma/CLOB scan, records `status.json` and `signals.csv`, and uploads the diagnostics. It never creates paper fills or authenticated orders.
+
+For the detailed V3 design rationale see [`docs/STRATEGIES_V3.md`](docs/STRATEGIES_V3.md). For repository workflow and safety gates see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
