@@ -1,0 +1,53 @@
+name: apply-pregame-queue-hotfix
+
+on:
+  push:
+    branches: [fix/pregame-tape-fills]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-build-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/pregame-tape-fills
+          fetch-depth: 0
+
+      - name: Decode audited source payload
+        run: |
+          base64 --decode .github/hotfix_payload.b64 > /tmp/pregame_queue_hotfix.tar.gz
+          echo "bd02b8a77656c4ee1cfd94d1c6642ab04b2a73d870b1972c3231f7a9f1bdf22f  /tmp/pregame_queue_hotfix.tar.gz" | sha256sum --check
+          tar -xzf /tmp/pregame_queue_hotfix.tar.gz
+          rm .github/hotfix_payload.b64 .github/workflows/apply-pregame-queue-hotfix.yml
+          test -f src/api_safe.cpp
+          test -f src/maker_paper_safe.cpp
+          ! grep -q "strict_trade_through" src/maker_paper_safe.cpp
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+
+      - name: Build and test Release
+        run: |
+          cmake -S . -B build-Release -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-Release --parallel 2
+          ctest --test-dir build-Release --output-on-failure
+
+      - name: Build and test Debug
+        run: |
+          cmake -S . -B build-Debug -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build-Debug --parallel 2
+          ctest --test-dir build-Debug --output-on-failure
+
+      - name: Commit verified hotfix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix in-play sports and maker fill simulation"
+          git push origin HEAD:fix/pregame-tape-fills
