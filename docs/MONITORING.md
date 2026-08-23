@@ -1,125 +1,93 @@
-# Grafana monitoring for the paper-live engine
+# Grafana monitoring for the V4 paper-live engine
 
-This stack monitors the existing file-based paper runtime without adding code to the C++ trading path and without adding authenticated order submission.
+This stack monitors the file-based paper runtime without adding latency or authenticated order submission to the C++ execution path.
 
 ## What is included
 
-- `monitoring/exporter.py`: standard-library Python exporter that reads the restartable CSV/JSON runtime state and exposes Prometheus metrics on port `9108`.
+- `monitoring/exporter.py`: the existing V3-compatible metrics.
+- `monitoring/exporter_v4.py`: a thin V4 extension for public trade-tape health, multi-leg execution, realized paper PnL and walk-forward/OOS gates.
 - Prometheus: five-second scraping, 30-day default retention and local warning rules.
-- Grafana: provisioned Prometheus datasource and the `Polymarket Paper-Live Monitor` dashboard.
-- `docker-compose.monitoring.yml`: one-command local stack. All published ports bind to `127.0.0.1` by default.
+- Grafana: provisioned Prometheus datasource and `Polymarket V4 — Paper Live` as the default home dashboard.
+- `docker-compose.monitoring.yml`: local stack, bound to `127.0.0.1` by default.
 
-The dashboard covers:
-
-1. maker paper equity, PnL, return, drawdown, kill switch and state freshness;
-2. cash, reserved cash, resting orders, open positions, fills, fees and traded notional;
-3. pair and factor-neutral PCA statistical-arbitrage diagnostics;
-4. NegRisk structural diagnostics, explicitly labelled **pre-gas/pre-latency**;
-5. terminal-probability sleeve status and executable-edge signals, when that sleeve is running.
+The V4 dashboard covers multi-leg marked equity/PnL, reserved cash, drawdown and kill switch; trade-recorder freshness; live bundle completion and fill imbalance; realized bundle PnL; OOS/stressed PnL and bootstrap gate; and the existing structural, pair and factor-neutral PCA diagnostics.
 
 ## Start
 
-Build the C++ executables first, then start the paper loop:
+Build V4 and start the continuous paper loop:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-bash scripts/paper_v3_loop.sh config/paper_v3.json runs/paper_v3_live
+bash scripts/paper_v4_loop.sh config/paper_v4.json runs/paper_v4_live
 ```
 
-In another terminal, start monitoring:
+In another terminal:
 
 ```bash
 bash scripts/monitoring_up.sh
 ```
 
-Open:
+Open Grafana at `http://localhost:3000`. The local default login is `admin / polymarket-paper`; set `GRAFANA_ADMIN_PASSWORD` to a strong value before exposing Grafana beyond localhost.
 
-```text
-http://localhost:3000
-```
-
-Default local login:
-
-```text
-user:     admin
-password: polymarket-paper
-```
-
-Set a different password before startup for anything beyond a private local machine:
-
-```bash
-export GRAFANA_ADMIN_PASSWORD='replace-with-a-strong-local-password'
-bash scripts/monitoring_up.sh
-```
-
-The optional environment variables are documented in `monitoring/.env.example`. `POLYMARKET_RUN_NAME` must match the final directory name passed as the second argument to `paper_v3_loop.sh`; its default is `paper_v3_live`.
-
-## Endpoints
-
-```text
-Grafana:    http://127.0.0.1:3000
-Prometheus: http://127.0.0.1:9090
-Exporter:   http://127.0.0.1:9108/metrics
-Health:     http://127.0.0.1:9108/healthz
-```
-
-Prometheus and the exporter are exposed only for local diagnostics. Remove their `ports` entries from `docker-compose.monitoring.yml` if host access is unnecessary; Grafana can still reach Prometheus over the internal Compose network.
+`POLYMARKET_RUN_NAME` must match the final directory name supplied to `paper_v4_loop.sh`; the default is `paper_v4_live`.
 
 ## Runtime files consumed
 
-The exporter reads, when present:
+V3-compatible files remain supported. V4 additionally reads:
 
 ```text
-runs/<run-name>/maker/maker_equity.csv
-runs/<run-name>/maker/maker_order_log.csv
-runs/<run-name>/maker/maker_fills.csv
-runs/<run-name>/maker/maker_orders.csv
-runs/<run-name>/maker/maker_positions.csv
-runs/<run-name>/terminal/status.json
-runs/<run-name>/terminal/signals.csv
-runs/<run-name>/terminal/fills.csv
-runs/<run-name>/terminal/broker_state.csv
-runs/<run-name>/structural_latest.csv
-runs/<run-name>/stat_arb_pairs.csv
-runs/<run-name>/stat_arb_pca.csv
+runs/<run-name>/trade_tape.csv
+runs/<run-name>/multileg_equity.csv
+runs/<run-name>/multileg_bundles.csv
+runs/<run-name>/multileg_legs.csv
+runs/<run-name>/bundle_ledger.csv
+runs/<run-name>/walk_forward.json
 ```
 
-Long append-only fill and order logs are aggregated incrementally. The high-frequency maker equity file is tail-read, so the exporter does not rescan its full history every five seconds.
+`multileg_equity.csv` is tail-read. The bundle ledger is intentionally append-only so realized paper PnL cannot be rewritten by later model changes.
+
+## Important V4 metrics
+
+- `polymarket_trade_recorder_staleness_seconds`
+- `polymarket_multileg_equity_usd`
+- `polymarket_multileg_pnl_usd`
+- `polymarket_multileg_drawdown_ratio`
+- `polymarket_multileg_kill_switch`
+- `polymarket_multileg_bundle_completion_ratio`
+- `polymarket_multileg_bundle_fill_imbalance_ratio`
+- `polymarket_multileg_realized_net_pnl_usd_total`
+- `polymarket_oos_net_pnl_usd`
+- `polymarket_oos_stressed_net_pnl_usd`
+- `polymarket_oos_bootstrap_pvalue`
+- `polymarket_oos_eligible_for_tiny_pilot`
 
 ## Built-in warning rules
 
-Prometheus evaluates four local rules:
+Prometheus warns if the public trade tape or multi-leg state becomes stale, if multi-leg drawdown exceeds 10%, if the persisted 15% kill switch is active, or if a live bundle develops more than 50 percentage points of cross-leg fill imbalance. The existing maker alerts remain enabled.
 
-- exporter unavailable for one minute;
-- maker state older than 60 seconds for two minutes;
-- maker drawdown at or above 10%;
-- persisted maker kill switch active.
+No external Alertmanager credentials are configured.
 
-These rules are visible in Prometheus. No external Alertmanager or notification credentials are configured.
-
-## Stop or reset
-
-Stop containers while retaining Grafana and Prometheus history:
+## Stop / reset
 
 ```bash
 bash scripts/monitoring_down.sh
 ```
 
-Remove the monitoring time series and Grafana local database as well:
+To remove monitoring history too:
 
 ```bash
 docker compose -f docker-compose.monitoring.yml down -v
 ```
 
-This does not delete the paper engine's `runs/` state.
+This never deletes `runs/`.
 
 ## Validation
 
-The exporter unit tests use only Python's standard library:
-
 ```bash
-python3 -m unittest tests/test_monitoring_exporter.py -v
+python3 -m unittest tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py -v
+python3 -m py_compile monitoring/exporter.py monitoring/exporter_v4.py
+python3 -m json.tool monitoring/grafana/dashboards/polymarket-v4-live.json >/dev/null
 ```
 
-The CI job also parses the provisioned dashboard JSON and runs these tests.
+The same checks run in CI.
