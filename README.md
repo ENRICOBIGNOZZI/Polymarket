@@ -4,8 +4,8 @@ C++20 live-data research and **paper-trading** engine for broad Polymarket relat
 
 The design goal is not to predict isolated events. It continuously scans the active market universe and combines:
 
-- PCA factor-residual mean reversion;
-- exponentially weighted PCA;
+- PCA factor-residual **state** mean reversion with per-token OU/AR(1) estimation;
+- exponentially weighted PCA with the same OU residual-state filter;
 - a sparse/robust low-rank residual model;
 - hierarchical global + category factors;
 - semantic/event graph residuals;
@@ -71,6 +71,12 @@ cmake --build build -j
 ./build/poly-engine --port 8080 --cycle 5 --cash 10000 --web-root web
 ```
 
+For one live discovery/history/book/model cycle without starting the dashboard:
+
+```bash
+./build/poly-engine --once --cash 10000 --max-markets 5000
+```
+
 Then open:
 
 ```text
@@ -88,7 +94,7 @@ Useful options:
 --web-root web
 ```
 
-At startup the engine discovers active CLOB markets, warm-starts the factor models from the batch price-history endpoint, then refreshes order books in batches. The dashboard exposes equity, P&L, drawdown, gross exposure, fees, live signals and positions.
+At startup the engine discovers active CLOB markets, warm-starts the factor models from timestamped one-minute history over the last six hours, then refreshes order books in batches. Statistical state is sampled on fixed one-minute bars even though the execution/risk loop can run every few seconds. The dashboard exposes equity, P&L, drawdown, gross exposure, fees, live signals and positions.
 
 ## Risk conventions
 
@@ -122,8 +128,8 @@ Implemented:
 
 - broad market discovery;
 - batched CLOB books;
-- batched six-hour historical warm start;
-- five statistical relative-value engines;
+- timestamp-aligned six-hour warm start at one-minute fidelity;
+- five statistical relative-value engines, with PCA-family residual-state OU filters;
 - exact binary basket scanner + guarded negative-risk consistency scanner;
 - transaction-cost-aware BUY/SELL paper broker with alpha-decay exits;
 - drawdown-aware portfolio sizing and emergency flatten;

@@ -14,16 +14,15 @@ struct ClientConfig {
     double min_liquidity_for_book{25.0};
     std::size_t warm_start_tokens{600};
     std::size_t history_batch_size{20};
-    int history_fidelity_min{5};
+    int history_fidelity_min{1};
 };
 
 class PolymarketClient {
 public:
     explicit PolymarketClient(ClientConfig cfg = {});
-
     std::unordered_map<std::string, TokenMeta> discover_tokens() const;
     std::unordered_map<std::string, BookSnapshot> fetch_books(const std::unordered_map<std::string, TokenMeta>& tokens) const;
-    std::unordered_map<std::string, std::vector<double>> fetch_warm_history(const std::unordered_map<std::string, TokenMeta>& tokens) const;
+    std::unordered_map<std::string, std::vector<HistoricalPoint>> fetch_warm_history(const std::unordered_map<std::string, TokenMeta>& tokens) const;
 
 private:
     ClientConfig cfg_;

@@ -21,6 +21,11 @@ struct BookLevel {
     double size{0.0};
 };
 
+struct HistoricalPoint {
+    std::int64_t ts{0}; // Unix seconds.
+    double price{0.0};
+};
+
 struct TokenMeta {
     std::string token_id;
     std::string market_id;
