@@ -1,8 +1,11 @@
 #include "pm/engine.hpp"
+#include "pm/maker.hpp"
+#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 namespace {
 void usage(){
@@ -32,14 +35,34 @@ int main(int argc,char**argv){
             else if(a=="--help"||a=="-h"){usage();return 0;}
             else throw std::runtime_error("Unknown argument: "+a);
         }
+
         auto cfg=pm::Engine::load_config(config);
+        pm::MakerPaperController::apply_config(cfg,config);
         if(markets)cfg.market_limit=*markets;
         if(min_liq)cfg.min_liquidity=*min_liq;
         if(run_dir)cfg.run_dir=*run_dir;
         if(scan)cfg.scan_only=true;
-        pm::Engine engine(cfg);
-        if(loop)engine.run_loop(paper);
-        else if(once)engine.run_once(paper,scan);
+
+        auto tick=[&](){
+            {
+                pm::Engine engine(cfg);
+                engine.run_once(paper,scan);
+            }
+            {
+                pm::MakerPaperController maker(cfg);
+                maker.run_once(paper&&!scan&&!cfg.scan_only);
+            }
+        };
+
+        if(loop){
+            for(;;){
+                try{tick();}
+                catch(const std::exception&e){std::cerr<<"tick error: "<<e.what()<<"\n";}
+                std::this_thread::sleep_for(std::chrono::seconds(std::max(1,cfg.interval_seconds)));
+            }
+        }else if(once){
+            tick();
+        }
         return 0;
     }catch(std::exception const&e){std::cerr<<"fatal: "<<e.what()<<"\n";return 1;}
 }
