@@ -1,4 +1,5 @@
 #include "pm/engine.hpp"
+#include "pm/maker.hpp"
 #include <cassert>
 #include <cmath>
 #include <iostream>
@@ -21,8 +22,18 @@ int main(){
     const double micro=b.microprice();
     assert(std::isfinite(micro));
     assert(micro>=b.best_bid()&&micro<=b.best_ask());
-    // More bid than ask depth should push microprice above the midpoint.
     assert(micro>mid);
+
+    // One-tick spread: improving would cross, so join the displayed bid.
+    assert(std::abs(pm::MakerPaperController::quote_price(b,1)-0.39)<1e-12);
+    assert(std::abs(pm::MakerPaperController::queue_ahead(b,0.39)-300.0)<1e-12);
+
+    pm::Book wide;
+    wide.tick_size=0.01;
+    wide.bids={{0.30,50}};
+    wide.asks={{0.35,60}};
+    assert(std::abs(pm::MakerPaperController::quote_price(wide,1)-0.31)<1e-12);
+    assert(pm::MakerPaperController::queue_ahead(wide,0.31)==0.0);
 
     pm::FeeDetails fd{0.04,1.0,true};
     double fee=pm::Engine::protocol_fee(100,0.5,fd);
