@@ -1,20 +1,21 @@
-# Grafana monitoring for the V4 paper-live engine
+# Grafana monitoring for the latest Polymarket runtime
 
-This stack monitors the file-based paper runtime without adding latency or authenticated order submission to the C++ execution path.
+Grafana is deliberately version-agnostic. The monitoring stack auto-selects the highest `runs/paper_v*` runtime and exposes a stable `polymarket_runtime_*` namespace, so V5/V6/... can replace the engine without replacing the default dashboard.
 
-## What is included
+## Architecture
 
-- `monitoring/exporter.py`: the existing V3-compatible metrics.
-- `monitoring/exporter_v4.py`: a thin V4 extension for public trade-tape health, multi-leg execution, realized paper PnL and walk-forward/OOS gates.
-- Prometheus: five-second scraping, 30-day default retention and local warning rules.
-- Grafana: provisioned Prometheus datasource and `Polymarket V4 — Paper Live` as the default home dashboard.
-- `docker-compose.monitoring.yml`: local stack, bound to `127.0.0.1` by default.
+- `monitoring/exporter.py`: legacy/base metrics.
+- `monitoring/exporter_v4.py`: optional detailed V4 adapter.
+- `monitoring/exporter_latest.py`: stable front door; auto-selects the latest versioned runtime and emits canonical metrics.
+- `docs/TELEMETRY_CONTRACT.md`: the small `runtime_status.json` contract future versions should publish.
+- Prometheus: five-second scraping, local risk rules.
+- Grafana: `Polymarket — Latest Runtime` is the stable home dashboard.
 
-The V4 dashboard covers multi-leg marked equity/PnL, reserved cash, drawdown and kill switch; trade-recorder freshness; live bundle completion and fill imbalance; realized bundle PnL; OOS/stressed PnL and bootstrap gate; and the existing structural, pair and factor-neutral PCA diagnostics.
+If a future runtime publishes `runtime_status.json`, the default dashboard works immediately even if all internal execution files changed. Version-specific exporters/dashboards are optional detail, not a dependency.
 
 ## Start
 
-Build V4 and start the continuous paper loop:
+Start whichever paper engine is current. For V4 today:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -22,51 +23,47 @@ cmake --build build -j
 bash scripts/paper_v4_loop.sh config/paper_v4.json runs/paper_v4_live
 ```
 
-In another terminal:
+Then, independently:
 
 ```bash
 bash scripts/monitoring_up.sh
 ```
 
-Open Grafana at `http://localhost:3000`. The local default login is `admin / polymarket-paper`; set `GRAFANA_ADMIN_PASSWORD` to a strong value before exposing Grafana beyond localhost.
+Open `http://localhost:3000`. By default `POLYMARKET_RUN_NAME=auto`, which selects the numerically highest versioned `paper_v*` directory. Set `POLYMARKET_RUN_NAME` only when intentionally pinning an older/historical run.
 
-`POLYMARKET_RUN_NAME` must match the final directory name supplied to `paper_v4_loop.sh`; the default is `paper_v4_live`.
+## Stable home-dashboard metrics
 
-## Runtime files consumed
+The critical dashboard and alerts depend only on canonical metrics such as:
 
-V3-compatible files remain supported. V4 additionally reads:
+- `polymarket_runtime_info`
+- `polymarket_runtime_equity_usd`
+- `polymarket_runtime_pnl_usd`
+- `polymarket_runtime_drawdown_ratio`
+- `polymarket_runtime_kill_switch`
+- `polymarket_runtime_reserved_cash_usd`
+- `polymarket_runtime_gross_exposure_usd`
+- `polymarket_runtime_realized_pnl_usd_total`
+- `polymarket_runtime_execution_imbalance_ratio`
+- `polymarket_runtime_execution_staleness_seconds`
+- `polymarket_runtime_oos_trades`
+- `polymarket_runtime_oos_net_pnl_usd`
+- `polymarket_runtime_oos_stressed_net_pnl_usd`
+- `polymarket_runtime_oos_bootstrap_pvalue`
+- `polymarket_runtime_oos_eligible`
 
-```text
-runs/<run-name>/trade_tape.csv
-runs/<run-name>/multileg_equity.csv
-runs/<run-name>/multileg_bundles.csv
-runs/<run-name>/multileg_legs.csv
-runs/<run-name>/bundle_ledger.csv
-runs/<run-name>/walk_forward.json
-```
+These names are the long-lived contract. New engine versions may add detailed metrics but should not rename the canonical namespace.
 
-`multileg_equity.csv` is tail-read. The bundle ledger is intentionally append-only so realized paper PnL cannot be rewritten by later model changes.
+## V4 compatibility
 
-## Important V4 metrics
+V4 is supported without a canonical JSON file: the latest exporter derives the canonical state from `multileg_equity.csv`, `multileg_legs.csv`, `bundle_ledger.csv`, `trade_tape.csv` and `walk_forward.json`. Future engines should prefer atomic `runtime_status.json` publishing.
 
-- `polymarket_trade_recorder_staleness_seconds`
-- `polymarket_multileg_equity_usd`
-- `polymarket_multileg_pnl_usd`
-- `polymarket_multileg_drawdown_ratio`
-- `polymarket_multileg_kill_switch`
-- `polymarket_multileg_bundle_completion_ratio`
-- `polymarket_multileg_bundle_fill_imbalance_ratio`
-- `polymarket_multileg_realized_net_pnl_usd_total`
-- `polymarket_oos_net_pnl_usd`
-- `polymarket_oos_stressed_net_pnl_usd`
-- `polymarket_oos_bootstrap_pvalue`
-- `polymarket_oos_eligible_for_tiny_pilot`
+## Alerts
 
-## Built-in warning rules
+Critical/warning rules follow the auto-selected runtime rather than a version number. They cover exporter availability, execution staleness, drawdown, kill switch, execution imbalance and stale OOS evidence. Legacy single-market maker alerts remain available as secondary diagnostics.
 
-Prometheus warns if the public trade tape or multi-leg state becomes stale, if multi-leg drawdown exceeds 10%, if the persisted 15% kill switch is active, or if a live bundle develops more than 50 percentage points of cross-leg fill imbalance. The existing maker alerts remain enabled.
+## Security
 
-No external Alertmanager credentials are configured.
+Grafana, Prometheus and the exporter bind to localhost by default. Change the default Grafana password before exposing the interface beyond a private machine. No Alertmanager credentials are stored in the repository.
 
 ## Stop / reset
 
@@ -74,20 +71,21 @@ No external Alertmanager credentials are configured.
 bash scripts/monitoring_down.sh
 ```
 
-To remove monitoring history too:
+To remove Prometheus/Grafana history as well:
 
 ```bash
 docker compose -f docker-compose.monitoring.yml down -v
 ```
 
-This never deletes `runs/`.
+This does not delete paper-run state under `runs/`.
 
 ## Validation
 
 ```bash
-python3 -m unittest tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py -v
-python3 -m py_compile monitoring/exporter.py monitoring/exporter_v4.py
-python3 -m json.tool monitoring/grafana/dashboards/polymarket-v4-live.json >/dev/null
+python3 -m unittest tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py tests/test_monitoring_latest_exporter.py -v
+python3 -m py_compile monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_latest.py
+python3 -m json.tool monitoring/grafana/dashboards/polymarket-latest.json >/dev/null
+bash -n scripts/monitoring_up.sh scripts/monitoring_down.sh
 ```
 
-The same checks run in CI.
+The same contract is checked in CI.
