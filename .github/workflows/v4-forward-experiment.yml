@@ -1,0 +1,86 @@
+name: v4-forward-experiment
+
+on:
+  pull_request:
+
+jobs:
+  v4-forward:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+      - name: Build V4
+        run: |
+          cmake -S v4 -B build-v4 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-v4 -j2 --target polymarket_v4 polymarket_v4_replay
+      - name: Thirty-six live paper snapshots
+        run: |
+          set -euo pipefail
+          RUN=/tmp/polymarket-v4-forward
+          REPLAY=/tmp/polymarket-v4-forward-replay
+          rm -rf "$RUN" "$REPLAY"
+          mkdir -p "$RUN"
+          for i in $(seq 1 36); do
+            echo "===== V4 PAPER TICK $i/36 ====="
+            ok=0
+            for attempt in 1 2 3; do
+              if ./build-v4/polymarket_v4 \
+                --config config/v4.paper.example.json \
+                --once --paper \
+                --markets 250 --min-liquidity 50 \
+                --run-dir "$RUN"; then
+                ok=1
+                break
+              fi
+              sleep 3
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "tick $i failed after retries" >&2
+              exit 1
+            fi
+            if [ "$i" -lt 36 ]; then sleep 5; fi
+          done
+          test -s "$RUN/events.jsonl"
+          test -s "$RUN/decisions.jsonl"
+          test -s "$RUN/status.json"
+          ./build-v4/polymarket_v4_replay \
+            --config config/v4.paper.example.json \
+            --events "$RUN/events.jsonl" \
+            --expected "$RUN/decisions.jsonl" \
+            --run-dir "$REPLAY"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          run = Path('/tmp/polymarket-v4-forward')
+          replay = Path('/tmp/polymarket-v4-forward-replay')
+          with (replay / 'replay_summary.json').open() as f:
+              rr = json.load(f)
+          assert rr['mismatches'] == 0, rr
+          assert rr['deterministic'] is True, rr
+          status = json.loads((run / 'status.json').read_text())
+          summary = {
+              'ticks_requested': 36,
+              'events_lines': sum(1 for _ in (run / 'events.jsonl').open()),
+              'decisions_lines': sum(1 for _ in (run / 'decisions.jsonl').open()),
+              'orders_lines': sum(1 for _ in (run / 'orders.jsonl').open()) if (run / 'orders.jsonl').exists() else 0,
+              'fills_lines': sum(1 for _ in (run / 'fills.jsonl').open()) if (run / 'fills.jsonl').exists() else 0,
+              'markouts_lines': max(0, sum(1 for _ in (run / 'markouts.csv').open()) - 1) if (run / 'markouts.csv').exists() else 0,
+              'status': status,
+              'replay': rr,
+          }
+          (run / 'experiment_summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+          print(json.dumps(summary, indent=2))
+          PY
+      - name: Upload V4 forward-test logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: polymarket-v4-forward-${{ github.run_id }}
+          path: |
+            /tmp/polymarket-v4-forward
+            /tmp/polymarket-v4-forward-replay
+          if-no-files-found: error
+          retention-days: 7
