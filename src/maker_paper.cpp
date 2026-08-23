@@ -1,5 +1,6 @@
 #include "pm/api.hpp"
 #include "pm/engine.hpp"
+#include "pm/market_data.hpp"
 #include "pm/types.hpp"
 
 #include <algorithm>
@@ -40,33 +41,47 @@ double touch_size(const pm::Book& b, bool bid_side) {
     if (!std::isfinite(px)) return 0.0;
     double q = 0.0;
     const auto& levels = bid_side ? b.bids : b.asks;
-    for (const auto& l : levels)
+    for (const auto& l : levels) {
         if (std::abs(l.price - px) <= 1e-9) q += l.size;
+    }
     return q;
 }
 
 struct Order {
     std::string market_id;
     std::string event_id;
+    std::string condition_id;
     std::string slug;
     std::string side;
     std::string token_id;
     double limit_price = 0.0;
-    double shares = 0.0;
+    double shares = 0.0; // Remaining shares only.
     double queue_ahead = 0.0;
-    double created_last_trade = 0.0;
     std::int64_t created_ts = 0;
+    std::int64_t game_start_ts = 0;
+    bool timed_sports = false;
+    std::int64_t last_trade_ts = 0;
+    std::string last_trade_keys = "|";
+    double fee_rate = 0.07;
+    double fee_exponent = 1.0;
+    bool fee_taker_only = true;
 };
 
 struct Position {
     std::string market_id;
     std::string event_id;
+    std::string condition_id;
     std::string slug;
     std::string side;
     std::string token_id;
     double shares = 0.0;
     double entry_price = 0.0;
     std::int64_t entry_ts = 0;
+    std::int64_t game_start_ts = 0;
+    bool timed_sports = false;
+    double fee_rate = 0.07;
+    double fee_exponent = 1.0;
+    bool fee_taker_only = true;
 };
 
 struct MicroSignal {
@@ -84,15 +99,38 @@ MicroSignal micro_signal(const pm::Book& yes, const pm::Book& no) {
     const double wy = std::sqrt(std::max(0.0, dy)) / (1.0 + 20.0 * yes.spread());
     const double wn = std::sqrt(std::max(0.0, dn)) / (1.0 + 20.0 * no.spread());
     double q = mid;
-    if (std::isfinite(y) && std::isfinite(n) && wy + wn > 1e-12)
+    if (std::isfinite(y) && std::isfinite(n) && wy + wn > 1e-12) {
         q = (wy * y + wn * (1.0 - n)) / (wy + wn);
-    else if (std::isfinite(y))
+    } else if (std::isfinite(y)) {
         q = y;
+    }
     const double parity = std::isfinite(y) && std::isfinite(n) ? std::abs(y - (1.0 - n)) : 0.25;
     const double liq = (dy + dn) / (dy + dn + 200.0);
     const double spread_conf = std::exp(-5.0 * (yes.spread() + no.spread()));
     const double conf = std::clamp(liq * spread_conf * std::exp(-8.0 * parity), 0.02, 1.0);
     return {std::clamp(q, 0.001, 0.999), conf};
+}
+
+bool cursor_contains(const Order& o, const std::string& trade_id) {
+    return o.last_trade_keys.find('|' + trade_id + '|') != std::string::npos;
+}
+
+void cursor_remember(Order& o, const pm::RecentTrade& trade) {
+    if (trade.ts > o.last_trade_ts) {
+        o.last_trade_ts = trade.ts;
+        o.last_trade_keys = "|";
+    }
+    if (trade.ts == o.last_trade_ts && !cursor_contains(o, trade.id)) {
+        o.last_trade_keys += trade.id + '|';
+    }
+}
+
+pm::MarketTiming order_timing(const Order& o) {
+    return pm::MarketTiming{o.timed_sports, o.game_start_ts, 0};
+}
+
+pm::MarketTiming position_timing(const Position& p) {
+    return pm::MarketTiming{p.timed_sports, p.game_start_ts, 0};
 }
 
 class MakerPaper {
@@ -117,23 +155,22 @@ public:
             tokens.push_back(m.yes_token);
             tokens.push_back(m.no_token);
         }
-        for (const auto& [id,o] : orders_) {
+        for (const auto& [id, o] : orders_) {
             (void)id;
             if (std::find(tokens.begin(), tokens.end(), o.token_id) == tokens.end()) tokens.push_back(o.token_id);
         }
-        for (const auto& [id,p] : positions_) {
+        for (const auto& [id, p] : positions_) {
             (void)id;
             if (std::find(tokens.begin(), tokens.end(), p.token_id) == tokens.end()) tokens.push_back(p.token_id);
         }
         auto books = tokens.empty() ? std::unordered_map<std::string,pm::Book>{} : api_.fetch_books(tokens);
         const auto now = now_s();
 
-        // Mark risk before processing fills/exits so a drawdown immediately freezes new maker risk.
         double eq = equity(books);
         peak_equity_ = std::max(peak_equity_, eq);
         if (peak_equity_ > 0.0 && 1.0 - eq / peak_equity_ >= cfg_.max_drawdown) killed_ = true;
 
-        process_orders(books, market_by_id, now);
+        process_orders(books, now);
         process_positions(books, market_by_id, now);
         eq = equity(books);
         peak_equity_ = std::max(peak_equity_, eq);
@@ -150,7 +187,7 @@ public:
                 const double mid = yb.midpoint();
                 if (!std::isfinite(mid) || mid <= cfg_.min_mid || mid >= cfg_.max_mid) continue;
                 if (yb.spread() > cfg_.max_spread || nb.spread() > cfg_.max_spread) continue;
-                auto ms = micro_signal(yb, nb);
+                const auto ms = micro_signal(yb, nb);
                 if (ms.confidence < 0.10) continue;
                 const auto fd = api_.fetch_fee_details(m);
 
@@ -162,12 +199,12 @@ public:
                     double net_expected_edge = -1.0;
                 };
                 std::vector<Choice> choices;
-                auto consider = [&](const std::string& side, const pm::Book& b, const std::string& token, double fair) {
+                auto consider = [&](const std::string& side, const pm::Book& b,
+                                    const std::string& token, double fair) {
                     const double bid = b.best_bid(), ask = b.best_ask(), spread = b.spread();
                     if (!std::isfinite(bid) || !std::isfinite(ask) || !std::isfinite(spread) ||
                         bid <= 0.0 || ask <= bid) return;
                     const double adverse_buffer = adverse_mult_ * spread * (1.0 - ms.confidence);
-                    // Entry is maker, but the expected exit is deliberately costed as taker.
                     const double future_bid = std::clamp(fair - 0.5 * spread, 0.001, 0.999) *
                                               (1.0 - cfg_.slippage_bps / 10000.0);
                     const double exit_fee_per_share = pm::Engine::protocol_fee(1.0, future_bid, fd);
@@ -178,9 +215,12 @@ public:
                 consider("NO", nb, m.no_token, 1.0 - ms.q_yes);
                 if (choices.empty()) continue;
                 ++signals;
-                auto c = *std::max_element(choices.begin(), choices.end(), [](const auto& a, const auto& b) {
+                const auto c = *std::max_element(choices.begin(), choices.end(), [](const auto& a, const auto& b) {
                     return a.net_expected_edge < b.net_expected_edge;
                 });
+
+                const pm::MarketTiming timing{m.timed_sports, m.game_start_ts, m.seconds_delay};
+                if (!pm::pregame_market_eligible(timing, now)) continue;
 
                 const double limit = c.book->best_bid();
                 if (!std::isfinite(limit) || !std::isfinite(c.book->best_ask()) ||
@@ -194,24 +234,35 @@ public:
                 const double current_drawdown_dollars = std::max(0.0, peak_equity_ - eq);
                 const double loss_room = cfg_.max_drawdown * peak_equity_ - current_drawdown_dollars - pos_cost - reserved;
                 const double max_cash = std::min({
-                    max_order_usd_,
-                    available_cash,
-                    cfg_.max_market_fraction * eq,
-                    std::max(0.0, event_room),
-                    std::max(0.0, gross_room),
-                    std::max(0.0, loss_room)
+                    max_order_usd_, available_cash, cfg_.max_market_fraction * eq,
+                    std::max(0.0, event_room), std::max(0.0, gross_room), std::max(0.0, loss_room)
                 });
                 if (max_cash <= 0.0) continue;
 
                 double shares = max_cash / limit;
-                // Do not pretend we can jump an arbitrarily large displayed queue.
-                shares = std::min(shares, std::max(c.book->min_order_size, 0.25 * std::max(1.0, touch_size(*c.book, true))));
+                shares = std::min(shares,
+                    std::max(c.book->min_order_size, 0.25 * std::max(1.0, touch_size(*c.book, true))));
                 if (shares < c.book->min_order_size || shares * limit > available_cash + 1e-9) continue;
 
-                orders_[m.id] = Order{
-                    m.id, m.event_id, m.slug, c.side, c.token, limit, shares,
-                    touch_size(*c.book, true), c.book->last_trade, now
-                };
+                Order o;
+                o.market_id = m.id;
+                o.event_id = m.event_id;
+                o.condition_id = m.condition_id;
+                o.slug = m.slug;
+                o.side = c.side;
+                o.token_id = c.token;
+                o.limit_price = limit;
+                o.shares = shares;
+                o.queue_ahead = touch_size(*c.book, true);
+                o.created_ts = now;
+                o.game_start_ts = timing.game_start_ts;
+                o.timed_sports = timing.timed_sports;
+                o.last_trade_ts = now;
+                o.last_trade_keys = "|";
+                o.fee_rate = fd.rate;
+                o.fee_exponent = fd.exponent;
+                o.fee_taker_only = fd.taker_only;
+                orders_[m.id] = std::move(o);
                 append_order("POST", orders_.at(m.id), c.net_expected_edge, ms.confidence);
                 ++posted;
             }
@@ -256,9 +307,11 @@ private:
                 f << header << '\n';
             }
         };
-        ensure("maker_order_log.csv", "timestamp,action,market_id,slug,side,token_id,limit_price,shares,queue_ahead,signal_edge,confidence");
+        ensure("maker_order_log.csv",
+               "timestamp,action,market_id,slug,side,token_id,limit_price,remaining_shares,queue_ahead,signal_edge,confidence");
         ensure("maker_fills.csv", "timestamp,market_id,slug,action,side,shares,price,fee,reason");
-        ensure("maker_equity.csv", "timestamp,cash,equity,reserved_cash,resting_orders,positions,peak_equity,drawdown,killed");
+        ensure("maker_equity.csv",
+               "timestamp,cash,equity,reserved_cash,resting_orders,positions,peak_equity,drawdown,killed");
     }
 
     void load_state() {
@@ -267,7 +320,7 @@ private:
             std::string line;
             std::getline(f, line);
             if (std::getline(f, line)) {
-                auto x = split(line);
+                const auto x = split(line);
                 try {
                     if (!x.empty()) cash_ = std::stod(x[0]);
                     if (x.size() >= 2) peak_equity_ = std::stod(x[1]);
@@ -280,11 +333,19 @@ private:
             std::string line;
             std::getline(f, line);
             while (std::getline(f, line)) {
-                auto x = split(line);
-                if (x.size() < 10) continue;
+                const auto x = split(line);
+                // Old V3 orders are deliberately not restored: they lack a tape cursor and game clock.
+                if (x.size() < 17) continue;
                 try {
-                    Order o{x[0],x[1],x[2],x[3],x[4],std::stod(x[5]),std::stod(x[6]),std::stod(x[7]),std::stod(x[8]),std::stoll(x[9])};
-                    orders_[o.market_id] = std::move(o);
+                    Order o;
+                    o.market_id = x[0]; o.event_id = x[1]; o.condition_id = x[2]; o.slug = x[3];
+                    o.side = x[4]; o.token_id = x[5]; o.limit_price = std::stod(x[6]);
+                    o.shares = std::stod(x[7]); o.queue_ahead = std::stod(x[8]);
+                    o.created_ts = std::stoll(x[9]); o.game_start_ts = std::stoll(x[10]);
+                    o.timed_sports = std::stoi(x[11]) != 0; o.last_trade_ts = std::stoll(x[12]);
+                    o.last_trade_keys = x[13].empty() ? "|" : x[13]; o.fee_rate = std::stod(x[14]);
+                    o.fee_exponent = std::stod(x[15]); o.fee_taker_only = std::stoi(x[16]) != 0;
+                    if (o.shares > 0.0 && !o.market_id.empty()) orders_[o.market_id] = std::move(o);
                 } catch (...) {}
             }
         }
@@ -293,11 +354,24 @@ private:
             std::string line;
             std::getline(f, line);
             while (std::getline(f, line)) {
-                auto x = split(line);
-                if (x.size() < 8) continue;
+                const auto x = split(line);
                 try {
-                    Position p{x[0],x[1],x[2],x[3],x[4],std::stod(x[5]),std::stod(x[6]),std::stoll(x[7])};
-                    positions_[p.market_id] = std::move(p);
+                    Position p;
+                    if (x.size() >= 14) {
+                        p.market_id = x[0]; p.event_id = x[1]; p.condition_id = x[2]; p.slug = x[3];
+                        p.side = x[4]; p.token_id = x[5]; p.shares = std::stod(x[6]);
+                        p.entry_price = std::stod(x[7]); p.entry_ts = std::stoll(x[8]);
+                        p.game_start_ts = std::stoll(x[9]); p.timed_sports = std::stoi(x[10]) != 0;
+                        p.fee_rate = std::stod(x[11]); p.fee_exponent = std::stod(x[12]);
+                        p.fee_taker_only = std::stoi(x[13]) != 0;
+                    } else if (x.size() >= 8) {
+                        p.market_id = x[0]; p.event_id = x[1]; p.slug = x[2]; p.side = x[3];
+                        p.token_id = x[4]; p.shares = std::stod(x[5]);
+                        p.entry_price = std::stod(x[6]); p.entry_ts = std::stoll(x[7]);
+                    } else {
+                        continue;
+                    }
+                    if (p.shares > 0.0 && !p.market_id.empty()) positions_[p.market_id] = std::move(p);
                 } catch (...) {}
             }
         }
@@ -311,20 +385,27 @@ private:
         }
         {
             std::ofstream f(fs::path(run_dir_) / "maker_orders.csv");
-            f << "market_id,event_id,slug,side,token_id,limit_price,shares,queue_ahead,created_last_trade,created_ts\n";
-            for (const auto& [id,o] : orders_) {
+            f << "market_id,event_id,condition_id,slug,side,token_id,limit_price,remaining_shares,queue_ahead,"
+                 "created_ts,game_start_ts,timed_sports,last_trade_ts,last_trade_keys,fee_rate,fee_exponent,fee_taker_only\n";
+            for (const auto& [id, o] : orders_) {
                 (void)id;
-                f << o.market_id << ',' << o.event_id << ',' << o.slug << ',' << o.side << ',' << o.token_id << ','
-                  << o.limit_price << ',' << o.shares << ',' << o.queue_ahead << ',' << o.created_last_trade << ',' << o.created_ts << '\n';
+                f << o.market_id << ',' << o.event_id << ',' << o.condition_id << ',' << o.slug << ',' << o.side << ','
+                  << o.token_id << ',' << o.limit_price << ',' << o.shares << ',' << o.queue_ahead << ','
+                  << o.created_ts << ',' << o.game_start_ts << ',' << (o.timed_sports ? 1 : 0) << ','
+                  << o.last_trade_ts << ',' << o.last_trade_keys << ',' << o.fee_rate << ',' << o.fee_exponent << ','
+                  << (o.fee_taker_only ? 1 : 0) << '\n';
             }
         }
         {
             std::ofstream f(fs::path(run_dir_) / "maker_positions.csv");
-            f << "market_id,event_id,slug,side,token_id,shares,entry_price,entry_ts\n";
-            for (const auto& [id,p] : positions_) {
+            f << "market_id,event_id,condition_id,slug,side,token_id,shares,entry_price,entry_ts,game_start_ts,"
+                 "timed_sports,fee_rate,fee_exponent,fee_taker_only\n";
+            for (const auto& [id, p] : positions_) {
                 (void)id;
-                f << p.market_id << ',' << p.event_id << ',' << p.slug << ',' << p.side << ',' << p.token_id << ','
-                  << p.shares << ',' << p.entry_price << ',' << p.entry_ts << '\n';
+                f << p.market_id << ',' << p.event_id << ',' << p.condition_id << ',' << p.slug << ',' << p.side << ','
+                  << p.token_id << ',' << p.shares << ',' << p.entry_price << ',' << p.entry_ts << ','
+                  << p.game_start_ts << ',' << (p.timed_sports ? 1 : 0) << ',' << p.fee_rate << ','
+                  << p.fee_exponent << ',' << (p.fee_taker_only ? 1 : 0) << '\n';
             }
         }
     }
@@ -335,21 +416,23 @@ private:
           << o.limit_price << ',' << o.shares << ',' << o.queue_ahead << ',' << edge << ',' << confidence << '\n';
     }
 
-    void append_fill(const Position& p, const std::string& action, double px, double fee, const std::string& reason) const {
+    void append_fill(const Position& p, const std::string& action, double shares,
+                     double px, double fee, const std::string& reason) const {
         std::ofstream f(fs::path(run_dir_) / "maker_fills.csv", std::ios::app);
-        f << now_s() << ',' << p.market_id << ',' << p.slug << ',' << action << ',' << p.side << ',' << p.shares << ','
+        f << now_s() << ',' << p.market_id << ',' << p.slug << ',' << action << ',' << p.side << ',' << shares << ','
           << px << ',' << fee << ',' << reason << '\n';
     }
 
     void append_equity(std::int64_t ts, double eq) const {
         std::ofstream f(fs::path(run_dir_) / "maker_equity.csv", std::ios::app);
-        f << ts << ',' << cash_ << ',' << eq << ',' << reserved_cash() << ',' << orders_.size() << ',' << positions_.size() << ','
-          << peak_equity_ << ',' << (peak_equity_ > 0.0 ? 1.0 - eq / peak_equity_ : 0.0) << ',' << (killed_ ? 1 : 0) << '\n';
+        f << ts << ',' << cash_ << ',' << eq << ',' << reserved_cash() << ',' << orders_.size() << ','
+          << positions_.size() << ',' << peak_equity_ << ','
+          << (peak_equity_ > 0.0 ? 1.0 - eq / peak_equity_ : 0.0) << ',' << (killed_ ? 1 : 0) << '\n';
     }
 
     double reserved_cash() const {
         double x = 0.0;
-        for (const auto& [id,o] : orders_) {
+        for (const auto& [id, o] : orders_) {
             (void)id;
             x += std::max(0.0, o.shares * o.limit_price);
         }
@@ -358,7 +441,7 @@ private:
 
     double position_cost() const {
         double x = 0.0;
-        for (const auto& [id,p] : positions_) {
+        for (const auto& [id, p] : positions_) {
             (void)id;
             x += std::max(0.0, p.shares * p.entry_price);
         }
@@ -367,51 +450,47 @@ private:
 
     double event_committed(const std::string& event_id) const {
         double x = 0.0;
-        for (const auto& [id,o] : orders_) {
+        for (const auto& [id, o] : orders_) {
             (void)id;
             if (o.event_id == event_id) x += o.shares * o.limit_price;
         }
-        for (const auto& [id,p] : positions_) {
+        for (const auto& [id, p] : positions_) {
             (void)id;
             if (p.event_id == event_id) x += p.shares * p.entry_price;
         }
         return x;
     }
 
-    bool strict_trade_through(const Order& o, const pm::Book& b) const {
-        const double tick = std::max(1e-6, b.tick_size);
-        const double ask = b.best_ask();
-        if (std::isfinite(ask) && ask < o.limit_price - 0.25 * tick) return true;
-        if (b.last_trade > 0.0 && std::abs(b.last_trade - o.created_last_trade) > 1e-12 &&
-            b.last_trade < o.limit_price - 0.25 * tick) return true;
-        return false;
+    void add_position_fill(const Order& o, double filled_shares, std::int64_t now) {
+        auto it = positions_.find(o.market_id);
+        if (it == positions_.end()) {
+            Position p;
+            p.market_id = o.market_id; p.event_id = o.event_id; p.condition_id = o.condition_id;
+            p.slug = o.slug; p.side = o.side; p.token_id = o.token_id;
+            p.shares = filled_shares; p.entry_price = o.limit_price; p.entry_ts = now;
+            p.game_start_ts = o.game_start_ts; p.timed_sports = o.timed_sports;
+            p.fee_rate = o.fee_rate; p.fee_exponent = o.fee_exponent; p.fee_taker_only = o.fee_taker_only;
+            positions_[o.market_id] = std::move(p);
+            return;
+        }
+        auto& p = it->second;
+        const double new_shares = p.shares + filled_shares;
+        if (new_shares <= 0.0) return;
+        p.entry_price = (p.shares * p.entry_price + filled_shares * o.limit_price) / new_shares;
+        p.shares = new_shares;
+        p.entry_ts = std::min(p.entry_ts, now);
     }
 
-    void process_orders(const std::unordered_map<std::string,pm::Book>& books,
-                        const std::unordered_map<std::string,const pm::Market*>& market_by_id,
-                        std::int64_t now) {
+    void process_orders(const std::unordered_map<std::string,pm::Book>& books, std::int64_t now) {
         std::vector<std::string> erase;
-        const double total_reserved = reserved_cash();
-        for (auto& [id,o] : orders_) {
-            auto bit = books.find(o.token_id);
-            if (bit == books.end()) continue;
+        for (auto& [id, o] : orders_) {
             if (killed_) {
                 append_order("CANCEL_KILL", o, 0.0, 0.0);
                 erase.push_back(id);
                 continue;
             }
-            if (strict_trade_through(o, bit->second)) {
-                const double cost = o.shares * o.limit_price;
-                const double other_reserved = std::max(0.0, total_reserved - cost);
-                if (cost + other_reserved <= cash_ + 1e-9) {
-                    cash_ -= cost;
-                    Position p{o.market_id,o.event_id,o.slug,o.side,o.token_id,o.shares,o.limit_price,now};
-                    positions_[id] = p;
-                    append_fill(p, "BUY_MAKER", o.limit_price, 0.0, "strict_trade_through");
-                    append_order("FILL", o, 0.0, 0.0);
-                } else {
-                    append_order("CANCEL_CAPITAL", o, 0.0, 0.0);
-                }
+            if (pm::timed_sports_started(order_timing(o), now)) {
+                append_order("CANCEL_GAME_START", o, 0.0, 0.0);
                 erase.push_back(id);
                 continue;
             }
@@ -420,6 +499,67 @@ private:
                 erase.push_back(id);
                 continue;
             }
+            if (o.condition_id.empty()) {
+                append_order("CANCEL_LEGACY_STATE", o, 0.0, 0.0);
+                erase.push_back(id);
+                continue;
+            }
+
+            std::vector<pm::RecentTrade> trades;
+            try {
+                trades = api_.fetch_recent_trades(
+                    {o.condition_id}, std::max(o.created_ts, o.last_trade_ts), now, 1000);
+            } catch (const std::exception& e) {
+                // Tape failure is fail-closed: the order remains resting but cannot fill.
+                std::cerr << "maker_trade_tape_error market=" << o.market_id << " error=" << e.what() << '\n';
+            }
+
+            bool completed = false;
+            for (const auto& trade : trades) {
+                if (trade.ts < o.last_trade_ts) continue;
+                if (trade.ts == o.last_trade_ts && cursor_contains(o, trade.id)) continue;
+                cursor_remember(o, trade);
+                if (trade.token_id != o.token_id) continue;
+
+                auto consumed = pm::consume_passive_bid_trade(
+                    o.queue_ahead, o.shares, o.limit_price,
+                    books.count(o.token_id) ? books.at(o.token_id).tick_size : 0.01,
+                    o.created_ts, trade);
+                if (!consumed.eligible_trade) continue;
+                const double old_queue = o.queue_ahead;
+                o.queue_ahead = consumed.queue_ahead;
+
+                if (consumed.filled_shares <= 0.0) {
+                    if (o.queue_ahead + 1e-12 < old_queue) append_order("QUEUE_DEPLETION", o, 0.0, 0.0);
+                    continue;
+                }
+
+                const double other_reserved = std::max(0.0, reserved_cash() - o.shares * o.limit_price);
+                const double fill_cost = consumed.filled_shares * o.limit_price;
+                if (fill_cost + other_reserved > cash_ + 1e-9) {
+                    append_order("CANCEL_CAPITAL", o, 0.0, 0.0);
+                    erase.push_back(id);
+                    completed = true;
+                    break;
+                }
+
+                cash_ -= fill_cost;
+                o.shares = consumed.remaining_shares;
+                add_position_fill(o, consumed.filled_shares, now);
+                const auto& p = positions_.at(id);
+                append_fill(p, o.shares <= 1e-12 ? "BUY_MAKER" : "BUY_MAKER_PARTIAL",
+                            consumed.filled_shares, o.limit_price, 0.0, "taker_sell_consumed_queue");
+                append_order(o.shares <= 1e-12 ? "FILL" : "PARTIAL_FILL", o, 0.0, 0.0);
+                if (o.shares <= 1e-12) {
+                    erase.push_back(id);
+                    completed = true;
+                    break;
+                }
+            }
+            if (completed) continue;
+
+            auto bit = books.find(o.token_id);
+            if (bit == books.end()) continue;
             const double bb = bit->second.best_bid();
             if (std::isfinite(bb) && bb > o.limit_price + 0.5 * std::max(1e-6, bit->second.tick_size)) {
                 append_order("CANCEL_STALE", o, 0.0, 0.0);
@@ -427,23 +567,26 @@ private:
             }
         }
         for (const auto& id : erase) orders_.erase(id);
-        (void)market_by_id;
     }
 
     void process_positions(const std::unordered_map<std::string,pm::Book>& books,
                            const std::unordered_map<std::string,const pm::Market*>& market_by_id,
                            std::int64_t now) {
         std::vector<std::string> erase;
-        for (auto& [id,p] : positions_) {
+        for (auto& [id, p] : positions_) {
+            // Do not turn a partially filled entry into an unintended churn loop while the residual rests.
+            if (orders_.count(id)) continue;
             auto bit = books.find(p.token_id);
             if (bit == books.end()) continue;
-            bool exit = killed_ || now - p.entry_ts >= hold_;
+
+            const bool game_start = pm::timed_sports_started(position_timing(p), now);
+            bool exit = killed_ || game_start || now - p.entry_ts >= hold_;
             auto mit = market_by_id.find(id);
             if (mit != market_by_id.end()) {
                 const auto* m = mit->second;
                 auto yi = books.find(m->yes_token), ni = books.find(m->no_token);
                 if (yi != books.end() && ni != books.end()) {
-                    auto ms = micro_signal(yi->second, ni->second);
+                    const auto ms = micro_signal(yi->second, ni->second);
                     const double fair = p.side == "YES" ? ms.q_yes : 1.0 - ms.q_yes;
                     const double bid = bit->second.best_bid();
                     if (std::isfinite(bid) && fair <= bid + 0.25 * bit->second.spread()) exit = true;
@@ -453,24 +596,27 @@ private:
 
             const double best_bid = bit->second.best_bid();
             if (!std::isfinite(best_bid)) continue;
-            auto walked = pm::Engine::walk_book(bit->second, false, p.shares * std::max(1e-6, best_bid));
-            if (!walked || walked->first + 1e-9 < p.shares * 0.98) continue;
+            const auto walked = pm::Engine::walk_book(bit->second, false, p.shares * std::max(1e-6, best_bid));
+            if (!walked || walked->first <= 1e-12) continue;
             const double shares = std::min(p.shares, walked->first);
             const double px = walked->second * (1.0 - cfg_.slippage_bps / 10000.0);
-            pm::FeeDetails fd;
+            pm::FeeDetails fd{p.fee_rate, p.fee_exponent, p.fee_taker_only};
             if (mit != market_by_id.end()) fd = api_.fetch_fee_details(*mit->second);
             const double fee = pm::Engine::protocol_fee(shares, px, fd);
             cash_ += shares * px - fee;
-            append_fill(p, "SELL_TAKER", px, fee,
-                        killed_ ? "drawdown_kill" : (now - p.entry_ts >= hold_ ? "max_hold" : "micro_reversal"));
-            erase.push_back(id);
+            p.shares = std::max(0.0, p.shares - shares);
+            const std::string reason = killed_ ? "drawdown_kill" :
+                (game_start ? "game_start" : (now - p.entry_ts >= hold_ ? "max_hold" : "micro_reversal"));
+            const bool fully_exited = p.shares <= 1e-9;
+            append_fill(p, fully_exited ? "SELL_TAKER" : "SELL_TAKER_PARTIAL", shares, px, fee, reason);
+            if (fully_exited) erase.push_back(id);
         }
         for (const auto& id : erase) positions_.erase(id);
     }
 
     double equity(const std::unordered_map<std::string,pm::Book>& books) const {
         double e = cash_;
-        for (const auto& [id,p] : positions_) {
+        for (const auto& [id, p] : positions_) {
             (void)id;
             auto it = books.find(p.token_id);
             const double bid = it != books.end() ? it->second.best_bid() : p.entry_price;
@@ -511,8 +657,8 @@ int main(int argc, char** argv) {
             else if (a == "--once") loop = false;
             else if (a == "--help" || a == "-h") {
                 std::cout << "polymarket_maker_paper [--config FILE] [--run-dir DIR] [--markets N] [--min-edge X] "
-                             "[--max-order-usd X] [--ttl-seconds N] [--hold-seconds N] [--adverse-selection-mult X] "
-                             "[--interval N] [--once|--loop]\n";
+                             "[--max-order-usd X] [--ttl-seconds N] [--hold-seconds N] "
+                             "[--adverse-selection-mult X] [--interval N] [--once|--loop]\n";
                 return 0;
             } else {
                 throw std::runtime_error("Unknown argument: " + a);

@@ -300,10 +300,13 @@ int main(int argc, char** argv) {
         tokens.reserve(markets.size() * 2);
         for (const auto& m : markets) { tokens.push_back(m.yes_token); tokens.push_back(m.no_token); }
         auto books = api.fetch_books(tokens);
+        const std::int64_t now = static_cast<std::int64_t>(std::time(nullptr));
 
         std::vector<const pm::Market*> universe;
         universe.reserve(markets.size());
         for (const auto& m : markets) {
+            if (!pm::pregame_market_eligible(
+                    pm::MarketTiming{m.timed_sports, m.game_start_ts, m.seconds_delay}, now)) continue;
             auto y = books.find(m.yes_token), n = books.find(m.no_token);
             if (y == books.end() || n == books.end()) continue;
             const double p = y->second.midpoint();
@@ -318,7 +321,6 @@ int main(int argc, char** argv) {
         std::vector<std::string> yes_tokens;
         yes_tokens.reserve(universe.size());
         for (auto* m : universe) yes_tokens.push_back(m->yes_token);
-        const std::int64_t now = static_cast<std::int64_t>(std::time(nullptr));
         const std::int64_t start = now - static_cast<std::int64_t>(lookback_hours) * 3600;
         auto hist = api.fetch_price_history(yes_tokens, start, now, fidelity_minutes);
         const std::int64_t bucket_s = static_cast<std::int64_t>(std::max<std::size_t>(1, fidelity_minutes)) * 60;
