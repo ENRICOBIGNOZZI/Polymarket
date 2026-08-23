@@ -13,7 +13,7 @@ mkdir -p "$RUN_ROOT"
   --top 60 \
   | tee "$RUN_ROOT/structural_arb.log"
 
-# Strategy B: medium-horizon statistical relative value. Read-only alpha scan.
+# Strategy B1: pair-residual multi-horizon relative value.
 ./build/polymarket_stat_arb \
   --config "$CONFIG" \
   --markets 600 \
@@ -23,8 +23,22 @@ mkdir -p "$RUN_ROOT"
   --min-z 1.5 \
   --max-half-life-hours 168 \
   --top 60 \
-  --csv "$RUN_ROOT/stat_arb.csv" \
-  | tee "$RUN_ROOT/stat_arb.log"
+  --csv "$RUN_ROOT/stat_arb_pairs.csv" \
+  | tee "$RUN_ROOT/stat_arb_pairs.log"
+
+# Strategy B2: timestamp-aligned PCA/factor residual relative value.
+./build/polymarket_pca_stat_arb \
+  --config "$CONFIG" \
+  --markets 600 \
+  --universe 120 \
+  --lookback-hours 336 \
+  --fidelity-minutes 30 \
+  --factors 3 \
+  --min-z 1.5 \
+  --max-half-life-hours 168 \
+  --top 60 \
+  --csv "$RUN_ROOT/stat_arb_pca.csv" \
+  | tee "$RUN_ROOT/stat_arb_pca.log"
 
 # Conservative paper maker execution experiment. Never submits an authenticated order.
 ./build/polymarket_maker_paper \
