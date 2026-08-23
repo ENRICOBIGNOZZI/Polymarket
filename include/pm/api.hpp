@@ -15,6 +15,10 @@ public:
         std::int64_t start_ts,
         std::int64_t end_ts,
         std::size_t fidelity_minutes) const;
+    std::unordered_map<std::string,std::vector<PublicTrade>> fetch_public_trades(
+        const std::vector<std::string>& condition_ids,
+        std::int64_t after_ts,
+        std::size_t max_pages = 5) const;
     std::optional<Market> fetch_market_by_id(const std::string& id) const;
     FeeDetails fetch_fee_details(const Market& market) const;
 private:
