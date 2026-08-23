@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(polymarket_quant_engine VERSION 0.2.0 LANGUAGES CXX)
+project(polymarket_quant_engine VERSION 0.3.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -20,6 +20,10 @@ target_compile_options(pm_core PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(polymarket_engine src/main.cpp)
 target_link_libraries(polymarket_engine PRIVATE pm_core)
+
+add_executable(polymarket_negrisk_arb src/negrisk_arb.cpp)
+target_link_libraries(polymarket_negrisk_arb PRIVATE pm_core)
+target_compile_options(polymarket_negrisk_arb PRIVATE -Wall -Wextra -Wpedantic)
 
 include(CTest)
 if(BUILD_TESTING)
