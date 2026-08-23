@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -26,6 +25,12 @@ struct BookSnapshot {
     double spread() const { return best_ask - best_bid; }
 };
 
+struct FeeInfo {
+    double rate{0.0};
+    double exponent{1.0};
+    bool live{false};
+};
+
 struct Market {
     std::string id;
     std::string question;
@@ -42,7 +47,7 @@ struct Market {
     double gamma_yes_price{0.5};
     double volume_24h{0.0};
     double liquidity{0.0};
-    double fee_rate{-1.0};
+    FeeInfo fees{};
 };
 
 struct LiveMarket {
@@ -92,19 +97,34 @@ struct Position {
     std::string outcome;
     double shares{0.0};
     double cost{0.0};
+    double fees_paid{0.0};
+};
+
+struct PaperFill {
+    std::string action;
+    std::string market_id;
+    std::string token_id;
+    std::string outcome;
+    double shares{0.0};
+    double price{0.0};
+    double principal{0.0};
+    double fee{0.0};
+    double cash_after{0.0};
 };
 
 struct EngineConfig {
-    std::size_t market_limit{50};
+    std::size_t market_limit{100};
     std::size_t min_factor_history{20};
-    std::size_t factor_history{120};
+    std::size_t factor_history{180};
     double min_liquidity{250.0};
     double max_spread{0.12};
     double min_net_edge{0.015};
+    double exit_edge{0.005};
     double uncertainty_buffer{0.35};
     double slippage_bps{5.0};
     double assumed_fee_bps{0.0};
     double fallback_taker_fee_rate{0.05};
+    double fallback_taker_fee_exponent{1.0};
     double initial_capital{10000.0};
     double max_drawdown{0.15};
     double max_gross_fraction{0.65};
@@ -120,6 +140,7 @@ public:
     HttpClient();
     ~HttpClient();
     std::string get(const std::string& url) const;
+    std::string post_json(const std::string& url, const std::string& body) const;
 };
 
 class PolymarketClient {
@@ -127,10 +148,12 @@ public:
     explicit PolymarketClient(HttpClient http = HttpClient{});
     std::vector<Market> discover_markets(std::size_t limit) const;
     BookSnapshot get_book(const std::string& token_id) const;
-    std::optional<double> get_fee_rate(const std::string& condition_id) const;
+    std::unordered_map<std::string, BookSnapshot> get_books(const std::vector<std::string>& token_ids) const;
+    FeeInfo get_fee_info(const std::string& condition_id) const;
     std::vector<LiveMarket> snapshot(std::size_t limit, double min_liquidity, double max_spread) const;
 private:
     HttpClient http_;
+    mutable std::unordered_map<std::string, FeeInfo> fee_cache_;
 };
 
 class ExternalSignalStore {
@@ -145,6 +168,7 @@ private:
 std::vector<double> hash_text_embedding(const std::string& text, std::size_t dim = 32);
 double cosine_similarity(const std::vector<double>& a, const std::vector<double>& b);
 double clamp_probability(double p);
+double platform_fee_per_share(double price, double fee_rate, double fee_exponent);
 std::vector<Market> parse_gamma_markets_json(const std::string& body);
 
 class UniversalModel {
@@ -153,7 +177,9 @@ public:
     FairValue predict(const LiveMarket& market,
                       const std::vector<LiveMarket>& universe,
                       const ExternalSignalStore& external);
+    void load_history(const std::string& path);
     void update_history(const std::vector<LiveMarket>& universe);
+    std::size_t history_size(const std::string& market_id) const;
     void observe_resolution(const std::string& market_id, bool yes_outcome);
 private:
     ExpertPrediction microstructure(const LiveMarket& m) const;
@@ -164,6 +190,7 @@ private:
     double expert_weight(const ExpertPrediction& p) const;
 
     EngineConfig cfg_;
+    std::string history_path_;
     std::unordered_map<std::string, std::deque<double>> price_history_;
     std::unordered_map<std::string, double> expert_brier_sum_;
     std::unordered_map<std::string, std::size_t> expert_brier_n_;
@@ -181,7 +208,8 @@ public:
                             double equity,
                             double gross_exposure,
                             double market_exposure,
-                            double event_exposure) const;
+                            double event_exposure,
+                            double worst_case_open_loss) const;
 private:
     EngineConfig cfg_;
     double peak_equity_{0.0};
@@ -191,12 +219,27 @@ private:
 class PaperBroker {
 public:
     explicit PaperBroker(double cash);
-    bool buy(const TradeIdea& idea, double notional);
+    std::optional<PaperFill> buy(const TradeIdea& idea,
+                                 double principal,
+                                 double fee_rate,
+                                 double fee_exponent,
+                                 double slippage_bps);
+    std::optional<PaperFill> close_token(const std::string& market_id,
+                                         const std::string& token_id,
+                                         const std::string& outcome,
+                                         double best_bid,
+                                         double fee_rate,
+                                         double fee_exponent,
+                                         double slippage_bps);
     double cash() const { return cash_; }
-    double gross_cost() const;
     double marked_equity(const std::unordered_map<std::string, double>& token_mid) const;
-    double market_exposure(const std::string& market_id) const;
-    double event_exposure(const std::string& event_id, const std::unordered_map<std::string, std::string>& market_to_event) const;
+    double gross_value(const std::unordered_map<std::string, double>& token_mid) const;
+    double worst_case_loss(const std::unordered_map<std::string, double>& token_mid) const;
+    double market_exposure(const std::string& market_id, const std::unordered_map<std::string, double>& token_mid) const;
+    double event_exposure(const std::string& event_id,
+                          const std::unordered_map<std::string, std::string>& market_to_event,
+                          const std::unordered_map<std::string, double>& token_mid) const;
+    bool owns_token(const std::string& token_id) const;
     const std::vector<Position>& positions() const { return positions_; }
 private:
     double cash_{0.0};
@@ -213,7 +256,8 @@ public:
 private:
     TradeIdea make_idea(const LiveMarket& m, const FairValue& fair) const;
     void append_signal_log(const TradeIdea& idea, const FairValue& fair) const;
-    void append_trade_log(const TradeIdea& idea, double notional) const;
+    void append_fill_log(const PaperFill& fill, const std::string& reason) const;
+    void write_status(const std::vector<LiveMarket>& universe) const;
 
     EngineConfig cfg_;
     PolymarketClient client_;
