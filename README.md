@@ -5,7 +5,7 @@ C++20 live-data **paper-trading** engine implementing the category-agnostic arch
 ## Architecture
 
 ```text
-Gamma keyset discovery
+Gamma market discovery
         -> batched CLOB books
         -> universal market state
         -> microstructure expert
@@ -36,12 +36,15 @@ Experts may abstain. Active predictions are combined with confidence and an adap
 
 The engine uses public read-only Polymarket endpoints:
 
-- Gamma keyset market discovery: `GET https://gamma-api.polymarket.com/markets/keyset`
-- CLOB batched books: `POST https://clob.polymarket.com/books`
-- single-book fallback: `GET https://clob.polymarket.com/book?token_id=...`
-- CLOB market metadata fallback: `GET https://clob.polymarket.com/clob-markets/<condition_id>`
+- primary Gamma discovery: `GET https://gamma-api.polymarket.com/markets` with active/open filters and 24h-volume sorting;
+- resilient Gamma fallback: `GET https://gamma-api.polymarket.com/markets/keyset` with cursor pagination and no mutable sort key;
+- CLOB batched books: `POST https://clob.polymarket.com/books`;
+- single-book fallback: `GET https://clob.polymarket.com/book?token_id=...`;
+- CLOB market metadata fallback: `GET https://clob.polymarket.com/clob-markets/<condition_id>`.
 
-Market discovery uses cursor pagination with pages of at most 100 markets. The engine filters for active, open, order-accepting markets and then validates true two-sided order books. Best bid and ask are computed from the returned levels rather than assuming response ordering.
+The normal list endpoint is preferred while it supports the economically useful 24h-volume sort. The keyset endpoint is retained as a compatibility fallback and uses `after_cursor`; mutable sorting is deliberately avoided there because the live Gamma backend has returned HTTP 422 for `order=volume_num` even though that combination appears in the schema. Keyset results are de-duplicated and sorted locally by 24h volume.
+
+The engine filters for active, open, order-accepting markets and then validates true two-sided order books. Best bid and ask are computed from the returned levels rather than assuming response ordering.
 
 Transient HTTP/network/429/5xx failures are retried with exponential backoff; failed batched-book requests fall back to single-book reads.
 
