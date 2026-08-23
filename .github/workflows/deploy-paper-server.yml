@@ -1,0 +1,83 @@
+name: deploy-paper-server
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: polymarket-paper-server
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || vars.POLYMARKET_SERVER_DEPLOY == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Join private tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          ping: 100.104.183.109
+
+      - name: Configure SSH identity
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          if [[ -n "${SSH_PRIVATE_KEY:-}" ]]; then
+            printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_deploy
+            chmod 600 ~/.ssh/polymarket_deploy
+          fi
+          for i in {1..20}; do
+            if ssh-keyscan -T 3 -p 22 100.104.183.109 >> ~/.ssh/known_hosts 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          test -s ~/.ssh/known_hosts
+
+      - name: Bootstrap or update server
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEY_ARGS=()
+          if [[ -s ~/.ssh/polymarket_deploy ]]; then
+            KEY_ARGS=(-i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes)
+          fi
+          ssh "${KEY_ARGS[@]}" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
+            -p 22 enrico@100.104.183.109 \
+            'bash -s' < ops/bootstrap_server.sh
+
+      - name: Verify production paper services
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEY_ARGS=()
+          if [[ -s ~/.ssh/polymarket_deploy ]]; then
+            KEY_ARGS=(-i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes)
+          fi
+          ssh "${KEY_ARGS[@]}" -o BatchMode=yes -p 22 enrico@100.104.183.109 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd ~/polymarket
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+          systemctl is-active --quiet polymarket-paper.service
+          systemctl is-active --quiet polymarket-monitoring.service
+          curl -fsS http://127.0.0.1:9108/healthz
+          curl -fsS http://127.0.0.1:9108/metrics | grep -q '^polymarket_runtime_info'
+          printf 'server_head=%s\n' "$(git rev-parse HEAD)"
+          systemctl --no-pager --full status polymarket-paper.service | sed -n '1,12p'
+          systemctl --no-pager --full status polymarket-monitoring.service | sed -n '1,12p'
+          REMOTE
