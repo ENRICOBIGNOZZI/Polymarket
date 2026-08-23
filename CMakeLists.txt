@@ -9,7 +9,7 @@ pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
 
 add_library(pm_core
     src/http.cpp
-    src/api_safe.cpp
+    src/api.cpp
     src/event_api.cpp
     src/engine.cpp
     src/boost_json.cpp
@@ -33,7 +33,7 @@ add_executable(polymarket_pca_stat_arb src/pca_stat_arb.cpp)
 target_link_libraries(polymarket_pca_stat_arb PRIVATE pm_core)
 target_compile_options(polymarket_pca_stat_arb PRIVATE -Wall -Wextra -Wpedantic)
 
-add_executable(polymarket_maker_paper src/maker_paper_safe.cpp)
+add_executable(polymarket_maker_paper src/maker_paper.cpp)
 target_link_libraries(polymarket_maker_paper PRIVATE pm_core)
 target_compile_options(polymarket_maker_paper PRIVATE -Wall -Wextra -Wpedantic)
 
