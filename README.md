@@ -28,7 +28,9 @@ Defaults:
 - max exposure per event: 12%;
 - max single trade: 2%;
 - 0.20 Kelly multiplier;
-- edge is reduced by half-spread, assumed fees, slippage and model-uncertainty buffer.
+- edge is reduced by half-spread, **live per-market taker fees**, slippage and model-uncertainty buffer. Fee coefficients are read from CLOB market info (`fd.r`); if unavailable the engine uses a conservative 5% coefficient fallback.
+
+For a taker fill at price `p`, the engine subtracts the current Polymarket-style per-share fee term `feeRate * p * (1-p)` from expected edge.
 
 ## Build
 
@@ -79,6 +81,7 @@ The engine uses public read-only endpoints:
 
 - Gamma market discovery: `https://gamma-api.polymarket.com/markets`
 - CLOB order book: `https://clob.polymarket.com/book?token_id=...`
+- CLOB per-market information / fee coefficient: `https://clob.polymarket.com/clob-markets/<condition_id>`
 
 It parses `clobTokenIds` defensively because Gamma may encode arrays as JSON strings. The book implementation scans all levels for max bid/min ask instead of assuming response ordering.
 
