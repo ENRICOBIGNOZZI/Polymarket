@@ -1,8 +1,8 @@
 name: apply-v4-payload
 
 on:
-  push:
-    branches: ["implement/paper-live-oos-pilot-v4"]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
@@ -13,11 +13,13 @@ concurrency:
 
 jobs:
   apply:
+    if: github.head_ref == 'implement/paper-live-oos-pilot-v4'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: implement/paper-live-oos-pilot-v4
           fetch-depth: 0
 
       - name: Reconstruct and apply validated payload
