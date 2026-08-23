@@ -46,4 +46,5 @@ jobs:
         run: |
           bash -n scripts/paper_latest_loop.sh \
             ops/bootstrap_server.sh ops/update_server.sh \
-            ops/bootstrap_macos.sh ops/update_server_macos.sh ops/macos_service_control.sh
+            ops/bootstrap_macos.sh ops/update_server_macos.sh ops/macos_service_control.sh \
+            ops/install_autoupdate_macos.sh
