@@ -5,6 +5,7 @@ APP_DIR="${POLYMARKET_APP_DIR:-$HOME/polymarket}"
 BRANCH="${POLYMARKET_BRANCH:-main}"
 CACHE_DIR="${POLYMARKET_DEPLOY_CACHE:-$HOME/.cache/polymarket-deploy}"
 STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
+STATUS_FILE="$STATE_DIR/autoupdate_status.env"
 
 log() { printf '[mac-deploy] %s\n' "$*"; }
 fail() { printf '[mac-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -19,6 +20,20 @@ find_brew() {
   else
     return 1
   fi
+}
+
+write_status() {
+  local status="$1" head_sha="$2" origin_sha="$3"
+  mkdir -p "$STATE_DIR"
+  local tmp
+  tmp="$(mktemp "$STATE_DIR/autoupdate_status.XXXXXX")"
+  {
+    printf 'checked_ts=%s\n' "$(date +%s)"
+    printf 'status=%s\n' "$status"
+    printf 'head=%s\n' "$head_sha"
+    printf 'origin=%s\n' "$origin_sha"
+  } > "$tmp"
+  mv "$tmp" "$STATUS_FILE"
 }
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "This updater is for macOS only"
@@ -37,6 +52,7 @@ git fetch origin "$BRANCH"
 NEW_SHA="$(git rev-parse "origin/$BRANCH")"
 
 if [[ "$OLD_SHA" == "$NEW_SHA" ]]; then
+  write_status up_to_date "$OLD_SHA" "$NEW_SHA"
   log "Already deployed at $NEW_SHA"
   exit 0
 fi
@@ -106,6 +122,7 @@ rollback() {
       cp "$CONFIG_BACKUP/$rel" "$STATE_DIR/$rel"
     fi
   done
+  write_status rollback "$OLD_SHA" "$NEW_SHA"
   sudo -n /usr/local/sbin/polymarket-service-control restart || true
   exit 1
 }
@@ -136,6 +153,7 @@ done
 [[ "$healthy" -eq 1 ]] || rollback "post-deploy health checks failed"
 
 rm -rf build.previous
+write_status deployed "$NEW_SHA" "$NEW_SHA"
 printf 'deployed_sha=%s\n' "$NEW_SHA"
 printf 'previous_sha=%s\n' "$OLD_SHA"
 log "Deployment healthy"
