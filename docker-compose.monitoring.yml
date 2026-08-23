@@ -6,11 +6,13 @@ services:
     command:
       - python
       - -B
-      - /app/exporter_v4.py
-      - --runs-root
-      - /runs/${POLYMARKET_RUN_NAME:-paper_v4_live}
-      - --config
-      - /config/paper_v4.json
+      - /app/exporter_latest.py
+      - --runs-base
+      - /runs
+      - --run-name
+      - ${POLYMARKET_RUN_NAME:-auto}
+      - --config-dir
+      - /config
       - --host
       - 0.0.0.0
       - --port
@@ -20,8 +22,7 @@ services:
     working_dir: /app
     read_only: true
     volumes:
-      - ./monitoring/exporter.py:/app/exporter.py:ro
-      - ./monitoring/exporter_v4.py:/app/exporter_v4.py:ro
+      - ./monitoring:/app:ro
       - ./runs:/runs:ro
       - ./config:/config:ro
     ports:
@@ -58,7 +59,7 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-polymarket-paper}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/polymarket-v4-live.json
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/polymarket-latest.json
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
