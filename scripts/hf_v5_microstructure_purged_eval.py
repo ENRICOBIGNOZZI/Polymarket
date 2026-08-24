@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import math
+import sys
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -16,6 +16,7 @@ SPEC = importlib.util.spec_from_file_location(
 )
 assert SPEC and SPEC.loader
 base = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = base
 SPEC.loader.exec_module(base)
 
 
