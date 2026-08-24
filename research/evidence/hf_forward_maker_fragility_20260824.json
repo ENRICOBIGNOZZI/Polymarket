@@ -1,0 +1,100 @@
+{
+  "schema": "polymarket_forward_maker_fragility_v1",
+  "source_schema": "polymarket_forward_maker_probe_v1",
+  "source_generated_ts": 1787594933,
+  "read_only": true,
+  "production_action": "no_change",
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "policy_summaries": {
+    "fade1": {
+      "probes": 14,
+      "any_fill_count": 0,
+      "pair_fill_count": 0,
+      "one_sided_only_count": 0,
+      "pair_completion_given_any_fill": null,
+      "pnl_ex_rewards_usd": 0.0,
+      "conditional_pnl_with_rewards_usd": 0.002106801798035692,
+      "one_sided_downside_usd": 0.0,
+      "one_sided_downside_per_share": null,
+      "exit_fee_fraction_of_one_sided_downside": null,
+      "conditional_reward_offset_fraction": null,
+      "filled_share_weighted_markout_60": null,
+      "minimum_queue_relative_headroom": null,
+      "maximum_break_even_pair_completion_probability": null,
+      "filled_legs": []
+    },
+    "improve1": {
+      "probes": 14,
+      "any_fill_count": 1,
+      "pair_fill_count": 0,
+      "one_sided_only_count": 1,
+      "pair_completion_given_any_fill": 0.0,
+      "pnl_ex_rewards_usd": -0.13894351315407616,
+      "conditional_pnl_with_rewards_usd": -0.13429274641313027,
+      "one_sided_downside_usd": 0.13894351315407616,
+      "one_sided_downside_per_share": 0.013950151923100014,
+      "exit_fee_fraction_of_one_sided_downside": 0.8468117041462925,
+      "conditional_reward_offset_fraction": 0.033472356034272635,
+      "filled_share_weighted_markout_60": -0.0020000000000000018,
+      "minimum_queue_relative_headroom": 0.1509090909090911,
+      "maximum_break_even_pair_completion_probability": 0.9331110476238796,
+      "filled_legs": [
+        {
+          "market_id": "616902",
+          "policy": "improve1",
+          "side": "NO",
+          "filled_shares": 9.96,
+          "initial_queue_ahead": 66.0,
+          "compatible_sell_volume": 75.96000000000001,
+          "queue_erase_multiplier": 1.150909090909091,
+          "queue_relative_headroom": 0.1509090909090911,
+          "markout_60_bid_per_share": -0.0020000000000000018,
+          "markout_300_bid_per_share": null,
+          "one_sided_downside_per_share": 0.013950151923100014,
+          "paired_locked_edge_per_share": 0.0010000000000000009,
+          "break_even_pair_completion_probability": 0.9331110476238796
+        }
+      ]
+    },
+    "join": {
+      "probes": 14,
+      "any_fill_count": 1,
+      "pair_fill_count": 0,
+      "one_sided_only_count": 1,
+      "pair_completion_given_any_fill": 0.0,
+      "pnl_ex_rewards_usd": -0.13894351315407616,
+      "conditional_pnl_with_rewards_usd": -0.13429293900376116,
+      "one_sided_downside_usd": 0.13894351315407616,
+      "one_sided_downside_per_share": 0.013950151923100014,
+      "exit_fee_fraction_of_one_sided_downside": 0.8468117041462925,
+      "conditional_reward_offset_fraction": 0.033470969926878966,
+      "filled_share_weighted_markout_60": -0.0020000000000000018,
+      "minimum_queue_relative_headroom": 0.1509090909090911,
+      "maximum_break_even_pair_completion_probability": 0.9331110476238796,
+      "filled_legs": [
+        {
+          "market_id": "616902",
+          "policy": "join",
+          "side": "NO",
+          "filled_shares": 9.96,
+          "initial_queue_ahead": 66.0,
+          "compatible_sell_volume": 75.96000000000001,
+          "queue_erase_multiplier": 1.150909090909091,
+          "queue_relative_headroom": 0.1509090909090911,
+          "markout_60_bid_per_share": -0.0020000000000000018,
+          "markout_300_bid_per_share": null,
+          "one_sided_downside_per_share": 0.013950151923100014,
+          "paired_locked_edge_per_share": 0.0010000000000000009,
+          "break_even_pair_completion_probability": 0.9331110476238796
+        }
+      ]
+    }
+  },
+  "diagnostics": {
+    "filled_leg_count": 2,
+    "break_even_pair_probability_ge_90pct_count": 2,
+    "queue_headroom_le_25pct_count": 2,
+    "negative_60s_markout_count": 2
+  },
+  "interpretation": "A passive complete-set edge is not sufficient evidence of executable alpha. Promotion requires repeated paired fills, robust queue headroom, and non-adverse post-fill markout."
+}
