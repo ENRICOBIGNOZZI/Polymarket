@@ -39,16 +39,21 @@ jobs:
           test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
           echo "validation_sha=$VALIDATION_SHA"
 
-      - name: Validate version-agnostic exporter and simulated live dashboard
+      - name: Validate latest exporter and total/per-strategy dashboards
         run: |
           python3 -m unittest \
             tests/test_monitoring_exporter.py \
             tests/test_monitoring_v4_exporter.py \
             tests/test_monitoring_latest_exporter.py \
+            tests/test_monitoring_v5_exporter.py \
             tests/test_v4_monitoring_contract.py \
-            tests/test_grafana_fast_paper_contract.py -v
-          python3 -m py_compile monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_latest.py
+            tests/test_grafana_fast_paper_contract.py \
+            tests/test_grafana_multi_strategy_contract.py -v
+          python3 -m py_compile \
+            monitoring/exporter.py monitoring/exporter_v4.py \
+            monitoring/exporter_v5.py monitoring/exporter_latest.py
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-latest.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-fast-paper.json >/dev/null
+          python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
           bash -n scripts/monitoring_up.sh scripts/monitoring_down.sh
           docker compose -f docker-compose.monitoring.yml config >/dev/null
