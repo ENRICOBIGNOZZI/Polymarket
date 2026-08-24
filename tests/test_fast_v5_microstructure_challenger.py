@@ -100,7 +100,7 @@ class V5MicrostructureSemanticsTest(unittest.TestCase):
                 ],
             },
         }
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             root = pathlib.Path(directory)
             capture = root / "capture.jsonl"
             features = root / "features.csv"
