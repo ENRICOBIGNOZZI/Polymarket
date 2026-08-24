@@ -82,6 +82,12 @@ jobs:
           printf 'broker_restarts=%s\n' "$broker_restarts"
           printf 'recorder_pid=%s\n' "$recorder_pid"
           printf 'broker_pid=%s\n' "$broker_pid"
+          printf '%s\n' 'trade_recorder_tail_begin'
+          tail -n 20 "$HOME/polymarket/runs/paper_v4_live/trade_recorder.log" 2>/dev/null || true
+          printf '%s\n' 'trade_recorder_tail_end'
+          printf '%s\n' 'multileg_tail_begin'
+          tail -n 20 "$HOME/polymarket/runs/paper_v4_live/multileg.log" 2>/dev/null || true
+          printf '%s\n' 'multileg_tail_end'
 
           case "$(uname -s)" in
             Darwin)
