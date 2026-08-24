@@ -95,10 +95,15 @@ jobs:
           p=json.loads(Path('runs/paper_v4_live/fast/fast_arb_status.json').read_text())
           assert p['mode'] == 'shadow', p
           assert p['real_order_submission'] is False, p
-          assert p['markets'] >= 100, p
+          assert p['markets'] == 500, p
+          assert p['tokens'] >= p['markets'], p
+          assert p['ws_workers'] >= 1, p
           assert p['ws_messages'] > 0, p
           assert p['book_updates'] > 0, p
-          assert p['ws_connected_workers'] == p['ws_workers'], p
+          assert p['ws_errors'] == 0, p
+          assert 0 <= p['feed_stale_ms'] < 5000, p
+          if not p.get('stopping', False):
+              assert p['ws_connected_workers'] == p['ws_workers'], p
           print(json.dumps(p, sort_keys=True))
           PY
 
