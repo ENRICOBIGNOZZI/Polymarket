@@ -10,11 +10,13 @@ SCRIPT = ROOT / "scripts" / "summarize_live_smoke.py"
 
 
 class LiveSmokeSummaryTest(unittest.TestCase):
-    def test_snapshot_contains_metrics_candidates_intents_and_log_tails(self):
+    def test_snapshot_contains_metrics_candidates_intents_shadow_fillability_and_log_tails(self):
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
             run = td / "paper_v4_live"
             run.mkdir()
+            shadow = run / "shadow_b1"
+            shadow.mkdir()
             (run / "metrics.prom").write_text(
                 'polymarket_runtime_info{adapter="v4",run_root="paper_v4_live",version="v4"} 1\n'
                 'polymarket_runtime_equity_usd 10001\n'
@@ -31,16 +33,59 @@ class LiveSmokeSummaryTest(unittest.TestCase):
                 "market,maker_entry_net_edge\np1,-0.002\np2,0.004\n",
                 encoding="utf-8",
             )
+            intent_header = "bundle_id,strategy,event_id,created_ts,mode,expected_edge,max_notional,market_id,side,weight,limit_price,execution_deadline_ts,hold_deadline_ts\n"
             (run / "intents.csv").write_text(
-                "bundle_id,strategy,event_id,created_ts,mode,expected_edge,max_notional,market_id,side,weight,limit_price,execution_deadline_ts,hold_deadline_ts\n"
-                "b1,B1,e,1,MAKER,0.006,20,m1,YES,1,0.4,2,3\n"
-                "b1,B1,e,1,MAKER,0.006,20,m2,NO,1,0.4,2,3\n",
+                intent_header
+                + "b1,B1,e,1,MAKER,0.006,20,m1,YES,1,0.4,2,3\n"
+                + "b1,B1,e,1,MAKER,0.006,20,m2,NO,1,0.4,2,3\n",
+                encoding="utf-8",
+            )
+            (run / "trade_tape.csv").write_text(
+                "timestamp,received_ms,lag_ms,condition_id,asset_id,outcome,side,price,size,transaction_hash,slug,event_slug\n"
+                "100,100000,0,c1,tokA,YES,SELL,0.40,30,tx1,s1,e1\n"
+                "200,200000,0,c2,tokB,NO,SELL,0.50,40,tx2,s2,e2\n",
+                encoding="utf-8",
+            )
+            (shadow / "stat_arb_pairs.csv").write_text(
+                "y_market,x_market,maker_entry_net_edge\nshadow-y,shadow-x,0.0012\n",
+                encoding="utf-8",
+            )
+            (shadow / "stat_arb_pairs_latest.log").write_text("shadow-summary\n", encoding="utf-8")
+            (shadow / "intents.csv").write_text(
+                intent_header
+                + "shadow-bundle,B1,e,1,MAKER,0.0012,20,m1,YES,1,0.4,2,3\n"
+                + "shadow-bundle,B1,e,1,MAKER,0.0012,20,m2,NO,1,0.5,2,3\n",
+                encoding="utf-8",
+            )
+            (shadow / "multileg_bundles.csv").write_text(
+                "bundle_id,strategy,expected_edge\nshadow-bundle,B1,0.0012\n",
+                encoding="utf-8",
+            )
+            (shadow / "multileg_legs.csv").write_text(
+                "bundle_id,market_id,side,token_id,target_shares,limit_price,queue_ahead\n"
+                "shadow-bundle,m1,YES,tokA,10,0.4,50\n"
+                "shadow-bundle,m2,NO,tokB,20,0.5,80\n",
                 encoding="utf-8",
             )
             (run / "walk_forward.json").write_text(json.dumps({"eligible_for_tiny_pilot": False}), encoding="utf-8")
             out = td / "snapshot.json"
             subprocess.run(
-                [sys.executable, str(SCRIPT), "--run-root", str(run), "--output", str(out), "--git-sha", "abc", "--run-id", "42", "--tail-lines", "2"],
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--run-root",
+                    str(run),
+                    "--output",
+                    str(out),
+                    "--git-sha",
+                    "abc",
+                    "--run-id",
+                    "42",
+                    "--tail-lines",
+                    "2",
+                    "--trade-lookback-seconds",
+                    "400",
+                ],
                 check=True,
             )
             data = json.loads(out.read_text(encoding="utf-8"))
@@ -56,6 +101,19 @@ class LiveSmokeSummaryTest(unittest.TestCase):
             self.assertEqual(data["intents"]["bundles"], 1)
             self.assertEqual(data["intents"]["strategies"], {"B1": 2})
             self.assertEqual(data["intents"]["max_expected_edge"], 0.006)
+
+            shadow_data = data["shadow_b1"]
+            self.assertEqual(shadow_data["z_threshold"], 1.25)
+            self.assertEqual(shadow_data["tape_window_seconds"], 400)
+            self.assertEqual(shadow_data["tape_observed_span_seconds"], 100)
+            self.assertEqual(shadow_data["candidates"][0]["y_market"], "shadow-y")
+            self.assertEqual(shadow_data["intents"]["bundles"], 1)
+            self.assertEqual(len(shadow_data["legs"]), 2)
+            self.assertAlmostEqual(shadow_data["legs"][0]["compatible_sell_volume"], 30.0)
+            self.assertAlmostEqual(shadow_data["legs"][0]["estimated_queue_plus_target_clear_seconds"], 800.0)
+            self.assertAlmostEqual(shadow_data["legs"][1]["estimated_queue_plus_target_clear_seconds"], 1000.0)
+            self.assertTrue(shadow_data["bundles"][0]["all_legs_have_recent_compatible_flow"])
+            self.assertAlmostEqual(shadow_data["bundles"][0]["max_estimated_clear_seconds"], 1000.0)
 
 
 if __name__ == "__main__":
