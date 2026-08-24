@@ -48,7 +48,7 @@ jobs:
           fi
 
           gh run list --limit 200 \
-            --json databaseId,workflowName,status,conclusion,headSha,event,createdAt,updatedAt,url \
+            --json databaseId,workflowName,status,conclusion,headBranch,headSha,event,createdAt,updatedAt,url \
             > scheduler-runs.json
           gh pr list --state open --base main --limit 100 \
             --json number,title,url,headRefName,isDraft,labels,mergeStateStatus,statusCheckRollup,createdAt,updatedAt \
