@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Calibrate passive-quote policies from repeated forward shadow experiments.
+"""Calibrate passive quote policies from repeated forward shadow experiments.
 
-The input is the bounded JSONL history produced by forward-maker-research.yml.
-Each line is one independent forward session. Dependence inside a session is
-preserved by resampling complete sessions rather than individual quote probes.
+The persistent history contains one compact record per forward session. Raw probe
+artifacts remain attached to the workflow run; only sufficient statistics needed
+for policy inference are carried across runs. Inference resamples complete,
+chronologically adjacent sessions so probes from one run are never treated as
+independent and short-lived serial regimes are not ignored.
 
-Promotion is deliberately based on *ex-reward* PnL. Approximate liquidity
-rewards and maker-rebate fee basis are reported, but they cannot make a policy
-eligible until actual venue payouts are reconciled.
+Promotion is deliberately based on ex-reward PnL. Estimated liquidity rewards
+and unverified maker rebates are reported but cannot make a policy eligible.
 """
 from __future__ import annotations
 
@@ -39,6 +40,10 @@ def optional_finite(value: Any) -> float | None:
     return out if math.isfinite(out) else None
 
 
+def nonnegative_int(value: Any) -> int:
+    return max(0, int(finite(value, 0.0)))
+
+
 def truthy(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -65,8 +70,12 @@ def quantile(values: list[float], probability: float) -> float:
     return ordered[lo] * (1.0 - weight) + ordered[hi] * weight
 
 
-def wilson_interval(successes: int, trials: int, z: float = 1.6448536269514722) -> tuple[float, float]:
-    """One-sided 95% Wilson-style bounds using z=1.64485 by default."""
+def wilson_interval(
+    successes: int,
+    trials: int,
+    z: float = 1.6448536269514722,
+) -> tuple[float, float]:
+    """Central 90% Wilson interval, equivalent to one-sided 95% bounds."""
     if trials <= 0:
         return 0.0, 1.0
     n = float(trials)
@@ -74,13 +83,16 @@ def wilson_interval(successes: int, trials: int, z: float = 1.6448536269514722) 
     z2 = z * z
     denominator = 1.0 + z2 / n
     center = (p + z2 / (2.0 * n)) / denominator
-    radius = z * math.sqrt(max(0.0, p * (1.0 - p) / n + z2 / (4.0 * n * n))) / denominator
+    radius = z * math.sqrt(
+        max(0.0, p * (1.0 - p) / n + z2 / (4.0 * n * n))
+    ) / denominator
     return max(0.0, center - radius), min(1.0, center + radius)
 
 
 @dataclass(frozen=True)
 class GateConfig:
     min_sessions: int = 12
+    min_history_span_seconds: int = 18_000
     min_probes: int = 180
     min_any_fills: int = 20
     min_pair_fills: int = 10
@@ -88,6 +100,7 @@ class GateConfig:
     max_one_sided_given_fill_upper: float = 0.40
     bootstrap_reps: int = 2000
     bootstrap_alpha: float = 0.05
+    bootstrap_block_sessions: int = 4
     seed: int = 20260824
 
 
@@ -111,6 +124,14 @@ class SessionPolicy:
     markout_300_weight: float
 
 
+def supported_session(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    return isinstance(value.get("results"), list) or isinstance(
+        value.get("policy_summaries"), list
+    )
+
+
 def load_history(path: Path) -> tuple[list[dict[str, Any]], int]:
     sessions: list[dict[str, Any]] = []
     malformed = 0
@@ -126,7 +147,7 @@ def load_history(path: Path) -> tuple[list[dict[str, Any]], int]:
             except json.JSONDecodeError:
                 malformed += 1
                 continue
-            if not isinstance(value, dict) or not isinstance(value.get("results"), list):
+            if not supported_session(value):
                 malformed += 1
                 continue
             sessions.append(value)
@@ -146,8 +167,10 @@ def session_identifier(session: dict[str, Any], index: int) -> tuple[str, int]:
     return identifier, generated_ts
 
 
-def deduplicate_sessions(raw_sessions: Iterable[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
-    """Drop exact run/session duplicates so workflow retries cannot inflate evidence."""
+def deduplicate_sessions(
+    raw_sessions: Iterable[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Drop workflow retries so reruns cannot inflate the evidence base."""
     unique: dict[str, dict[str, Any]] = {}
     anonymous: list[dict[str, Any]] = []
     duplicates = 0
@@ -162,16 +185,56 @@ def deduplicate_sessions(raw_sessions: Iterable[dict[str, Any]]) -> tuple[list[d
     return [*unique.values(), *anonymous], duplicates
 
 
+def session_policy_from_compact(
+    value: dict[str, Any],
+    session_id: str,
+    generated_ts: int,
+) -> SessionPolicy | None:
+    policy = str(value.get("policy") or "").strip()
+    if not policy:
+        return None
+    return SessionPolicy(
+        session_id=session_id,
+        generated_ts=generated_ts,
+        policy=policy,
+        probes=nonnegative_int(value.get("probes")),
+        any_fills=nonnegative_int(value.get("any_fills")),
+        pair_fills=nonnegative_int(value.get("pair_fills")),
+        one_sided=nonnegative_int(value.get("one_sided")),
+        pnl_ex_rewards=finite(value.get("pnl_ex_rewards")),
+        pnl_with_conditional_rewards=finite(value.get("pnl_with_conditional_rewards")),
+        conditional_rewards=finite(value.get("conditional_rewards")),
+        matched_shares=max(0.0, finite(value.get("matched_shares"))),
+        maker_rebate_fee_basis=max(
+            0.0, finite(value.get("maker_rebate_fee_basis"))
+        ),
+        markout_60_weighted_sum=finite(value.get("markout_60_weighted_sum")),
+        markout_60_weight=max(0.0, finite(value.get("markout_60_weight"))),
+        markout_300_weighted_sum=finite(value.get("markout_300_weighted_sum")),
+        markout_300_weight=max(0.0, finite(value.get("markout_300_weight"))),
+    )
+
+
 def summarize_session(session: dict[str, Any], index: int) -> list[SessionPolicy]:
     session_id, generated_ts = session_identifier(session, index)
+    compact = session.get("policy_summaries")
+    if isinstance(compact, list):
+        summaries: list[SessionPolicy] = []
+        for value in compact:
+            if not isinstance(value, dict):
+                continue
+            parsed = session_policy_from_compact(value, session_id, generated_ts)
+            if parsed is not None:
+                summaries.append(parsed)
+        return summaries
+
     grouped: dict[str, list[dict[str, Any]]] = {}
     for value in session.get("results", []):
         if not isinstance(value, dict):
             continue
         policy = str(value.get("policy") or "").strip()
-        if not policy:
-            continue
-        grouped.setdefault(policy, []).append(value)
+        if policy:
+            grouped.setdefault(policy, []).append(value)
 
     output: list[SessionPolicy] = []
     for policy, rows in grouped.items():
@@ -186,12 +249,16 @@ def summarize_session(session: dict[str, Any], index: int) -> list[SessionPolicy
             pair_fills += int(truthy(row.get("pair_fill")))
             one_sided += int(truthy(row.get("one_sided_only")))
             ex_reward = finite(row.get("conservative_pnl_ex_rewards_usd"))
-            with_reward = finite(row.get("conditional_pnl_including_reward_usd"), ex_reward)
+            with_reward = finite(
+                row.get("conditional_pnl_including_reward_usd"), ex_reward
+            )
             pnl_ex_rewards += ex_reward
             pnl_with_rewards += with_reward
             conditional_rewards += with_reward - ex_reward
             matched_shares += max(0.0, finite(row.get("matched_shares")))
-            rebate_basis += max(0.0, finite(row.get("maker_rebate_fee_basis_usd_not_revenue")))
+            rebate_basis += max(
+                0.0, finite(row.get("maker_rebate_fee_basis_usd_not_revenue"))
+            )
 
             for side in ("yes", "no"):
                 leg = row.get(side)
@@ -232,33 +299,63 @@ def summarize_session(session: dict[str, Any], index: int) -> list[SessionPolicy
     return output
 
 
+def compact_session(session: dict[str, Any]) -> dict[str, Any]:
+    """Convert a raw forward run to compact per-policy sufficient statistics."""
+    summaries = summarize_session(session, 0)
+    return {
+        "schema": "polymarket_forward_maker_session_summary_v1",
+        "generated_ts": int(finite(session.get("generated_ts"), 0.0)),
+        "git_sha": str(session.get("git_sha") or ""),
+        "github_run_id": str(session.get("github_run_id") or ""),
+        "policy_summaries": [
+            {key: value for key, value in asdict(summary).items() if key != "session_id"}
+            for summary in summaries
+        ],
+    }
+
+
 def stable_policy_seed(base_seed: int, policy: str) -> int:
     digest = hashlib.sha256(policy.encode("utf-8")).digest()
     return base_seed ^ int.from_bytes(digest[:8], "big")
 
 
-def cluster_bootstrap_mean_per_probe(
+def block_bootstrap_mean_per_probe(
     sessions: list[SessionPolicy],
     reps: int,
     alpha: float,
     seed: int,
+    block_sessions: int,
 ) -> tuple[float, float, float]:
+    """Circular moving-block bootstrap over chronologically ordered sessions."""
     if not sessions:
         return 0.0, 0.0, 0.0
-    total_probes = sum(max(0, x.probes) for x in sessions)
-    point = sum(x.pnl_ex_rewards for x in sessions) / total_probes if total_probes else 0.0
+    ordered = sorted(sessions, key=lambda x: (x.generated_ts, x.session_id))
+    total_probes = sum(max(0, x.probes) for x in ordered)
+    point = sum(x.pnl_ex_rewards for x in ordered) / total_probes if total_probes else 0.0
     if reps <= 0:
         return point, point, point
+
+    n = len(ordered)
+    block = min(n, max(1, block_sessions))
     rng = random.Random(seed)
     draws: list[float] = []
     for _ in range(reps):
-        sampled = [sessions[rng.randrange(len(sessions))] for _ in sessions]
+        sampled: list[SessionPolicy] = []
+        while len(sampled) < n:
+            start = rng.randrange(n)
+            sampled.extend(ordered[(start + offset) % n] for offset in range(block))
+        sampled = sampled[:n]
         probes = sum(max(0, x.probes) for x in sampled)
-        draws.append(sum(x.pnl_ex_rewards for x in sampled) / probes if probes else 0.0)
+        pnl = sum(x.pnl_ex_rewards for x in sampled)
+        draws.append(pnl / probes if probes else 0.0)
     return point, quantile(draws, alpha), quantile(draws, 1.0 - alpha)
 
 
-def policy_report(policy: str, sessions: list[SessionPolicy], config: GateConfig) -> dict[str, Any]:
+def policy_report(
+    policy: str,
+    sessions: list[SessionPolicy],
+    config: GateConfig,
+) -> dict[str, Any]:
     probes = sum(x.probes for x in sessions)
     any_fills = sum(x.any_fills for x in sessions)
     pair_fills = sum(x.pair_fills for x in sessions)
@@ -273,11 +370,12 @@ def policy_report(policy: str, sessions: list[SessionPolicy], config: GateConfig
     pair_l, pair_u = wilson_interval(pair_fills, probes)
     one_cond_l, one_cond_u = wilson_interval(one_sided, any_fills)
 
-    point, pnl_lcb, pnl_ucb = cluster_bootstrap_mean_per_probe(
+    point, pnl_lcb, pnl_ucb = block_bootstrap_mean_per_probe(
         sessions,
         config.bootstrap_reps,
         config.bootstrap_alpha,
         stable_policy_seed(config.seed, policy),
+        config.bootstrap_block_sessions,
     )
 
     active_sessions = [x for x in sessions if x.any_fills > 0]
@@ -287,6 +385,9 @@ def policy_report(policy: str, sessions: list[SessionPolicy], config: GateConfig
     session_means = [x.pnl_ex_rewards / x.probes for x in sessions if x.probes > 0]
     session_mean = statistics.fmean(session_means) if session_means else 0.0
     session_median = statistics.median(session_means) if session_means else 0.0
+
+    generated = sorted(x.generated_ts for x in sessions if x.generated_ts > 0)
+    history_span = generated[-1] - generated[0] if len(generated) >= 2 else 0
 
     markout_60_weight = sum(x.markout_60_weight for x in sessions)
     markout_300_weight = sum(x.markout_300_weight for x in sessions)
@@ -304,6 +405,8 @@ def policy_report(policy: str, sessions: list[SessionPolicy], config: GateConfig
     failures: list[str] = []
     if len(sessions) < config.min_sessions:
         failures.append("insufficient_sessions")
+    if history_span < config.min_history_span_seconds:
+        failures.append("insufficient_history_span")
     if probes < config.min_probes:
         failures.append("insufficient_probes")
     if any_fills < config.min_any_fills:
@@ -324,8 +427,9 @@ def policy_report(policy: str, sessions: list[SessionPolicy], config: GateConfig
         "eligible_for_paper_shadow": not failures,
         "gate_failures": failures,
         "sessions": len(sessions),
-        "first_generated_ts": min((x.generated_ts for x in sessions if x.generated_ts > 0), default=0),
-        "last_generated_ts": max((x.generated_ts for x in sessions), default=0),
+        "history_span_seconds": history_span,
+        "first_generated_ts": min(generated, default=0),
+        "last_generated_ts": max(generated, default=0),
         "probes": probes,
         "any_fills": any_fills,
         "pair_fills": pair_fills,
@@ -346,6 +450,8 @@ def policy_report(policy: str, sessions: list[SessionPolicy], config: GateConfig
         "total_conditional_rewards_usd_not_booked": conditional_rewards,
         "total_pnl_with_conditional_rewards_usd_not_booked": total_with_rewards,
         "mean_pnl_ex_rewards_per_probe_usd": point,
+        "block_bootstrap_lcb_mean_pnl_ex_rewards_per_probe_usd": pnl_lcb,
+        "block_bootstrap_ucb_mean_pnl_ex_rewards_per_probe_usd": pnl_ucb,
         "cluster_bootstrap_lcb_mean_pnl_ex_rewards_per_probe_usd": pnl_lcb,
         "cluster_bootstrap_ucb_mean_pnl_ex_rewards_per_probe_usd": pnl_ucb,
         "mean_session_pnl_ex_rewards_per_probe_usd": session_mean,
@@ -377,7 +483,7 @@ def calibrate(
     eligible = [report for report in reports.values() if report["eligible_for_paper_shadow"]]
     eligible.sort(
         key=lambda x: (
-            finite(x.get("cluster_bootstrap_lcb_mean_pnl_ex_rewards_per_probe_usd")),
+            finite(x.get("block_bootstrap_lcb_mean_pnl_ex_rewards_per_probe_usd")),
             finite(x.get("pair_fill_rate_wilson_lower")),
             -finite(x.get("one_sided_given_any_fill_wilson_upper"), 1.0),
         ),
@@ -389,15 +495,16 @@ def calibrate(
         for session in sessions
         if int(finite(session.get("generated_ts"), 0.0)) > 0
     ]
+    history_span = max(generated, default=0) - min(generated, default=0) if generated else 0
 
     return {
-        "schema": "polymarket_forward_maker_calibration_v1",
+        "schema": "polymarket_forward_maker_calibration_v2",
         "read_only": True,
         "real_money_eligible": False,
         "production_action": "no_change",
         "selection_basis": (
-            "cluster bootstrap over complete forward sessions; promotion excludes estimated "
-            "liquidity rewards and unverified maker rebates"
+            "moving-block bootstrap over complete forward sessions; promotion excludes "
+            "estimated liquidity rewards and unverified maker rebates"
         ),
         "history": {
             "valid_sessions": len(sessions),
@@ -405,6 +512,7 @@ def calibrate(
             "duplicate_sessions_dropped": duplicate_sessions,
             "first_generated_ts": min(generated, default=0),
             "last_generated_ts": max(generated, default=0),
+            "history_span_seconds": history_span,
         },
         "gate_config": asdict(config),
         "selected_policy_for_paper_shadow": selected,
@@ -432,6 +540,7 @@ def main() -> int:
     parser.add_argument("--history", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--min-sessions", type=int, default=12)
+    parser.add_argument("--min-history-span-seconds", type=int, default=18_000)
     parser.add_argument("--min-probes", type=int, default=180)
     parser.add_argument("--min-any-fills", type=int, default=20)
     parser.add_argument("--min-pair-fills", type=int, default=10)
@@ -439,11 +548,13 @@ def main() -> int:
     parser.add_argument("--max-one-sided-given-fill-upper", type=float, default=0.40)
     parser.add_argument("--bootstrap-reps", type=int, default=2000)
     parser.add_argument("--bootstrap-alpha", type=float, default=0.05)
+    parser.add_argument("--bootstrap-block-sessions", type=int, default=4)
     parser.add_argument("--seed", type=int, default=20260824)
     args = parser.parse_args()
 
     if (
         args.min_sessions < 1
+        or args.min_history_span_seconds < 0
         or args.min_probes < 1
         or args.min_any_fills < 1
         or args.min_pair_fills < 1
@@ -451,12 +562,14 @@ def main() -> int:
         or not 0.0 <= args.max_one_sided_given_fill_upper <= 1.0
         or args.bootstrap_reps < 100
         or not 0.0 < args.bootstrap_alpha < 0.5
+        or args.bootstrap_block_sessions < 1
     ):
         raise SystemExit("invalid calibration gate arguments")
 
     sessions, malformed = load_history(args.history)
     config = GateConfig(
         min_sessions=args.min_sessions,
+        min_history_span_seconds=args.min_history_span_seconds,
         min_probes=args.min_probes,
         min_any_fills=args.min_any_fills,
         min_pair_fills=args.min_pair_fills,
@@ -464,6 +577,7 @@ def main() -> int:
         max_one_sided_given_fill_upper=args.max_one_sided_given_fill_upper,
         bootstrap_reps=args.bootstrap_reps,
         bootstrap_alpha=args.bootstrap_alpha,
+        bootstrap_block_sessions=args.bootstrap_block_sessions,
         seed=args.seed,
     )
     payload = calibrate(sessions, config, malformed)
@@ -471,6 +585,7 @@ def main() -> int:
     print(
         "forward_maker_calibration"
         f" sessions={payload['history']['valid_sessions']}"
+        f" span_s={payload['history']['history_span_seconds']}"
         f" malformed={payload['history']['malformed_lines']}"
         f" policies={len(payload['by_policy'])}"
         f" selected={payload['selected_policy_for_paper_shadow'] or 'NONE'}"
