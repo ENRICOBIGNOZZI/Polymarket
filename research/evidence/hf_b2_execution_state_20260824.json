@@ -1,6 +1,6 @@
 {
-  "schema": "polymarket_hf_b2_execution_state_v1",
-  "generated_utc": "2026-08-24T20:11:08Z",
+  "schema": "polymarket_hf_b2_execution_state_v2",
+  "generated_utc": "2026-08-24T20:45:00Z",
   "evidence_state": "MORE_EVIDENCE_REQUIRED",
   "source_live_smoke": {
     "git_sha": "f6db4c4f7eda73568a03e465505d66b7570c77b9",
@@ -68,6 +68,17 @@
       "eligible_for_paper_shadow": false
     }
   },
+  "first_b2_forward_probe_pr_run": {
+    "workflow_run_id": 32774017050,
+    "duration_seconds": 120,
+    "candidate_count": 3,
+    "quote_definitions": 6,
+    "stress_rows": 24,
+    "full_completion_rows": 0,
+    "rows_with_any_fill": 0,
+    "telemetry_published": false,
+    "interpretation": "Direct B2 execution evidence is now collected on the correct five-leg strategy class, but this short PR window produced no fills and is not sufficient for a fill-probability estimate."
+  },
   "fast_shadow_reference": {
     "observed_executable_maker_complete_set_rows": 92,
     "hard_executable_rows": 0,
@@ -79,10 +90,25 @@
     "research_ready": false,
     "promotion_ready": false
   },
+  "measurement_integrity": {
+    "requested_arrival_latencies_ms": [250, 500, 750],
+    "rest_book_poll_seconds": 10.0,
+    "trade_timestamp_resolution_ms_in_current_replay": 1000.0,
+    "latency_scenarios_count_as_independent_evidence": false,
+    "reason": "The current public trade replay parses timestamps to integer epoch seconds and the B2 probe snapshots REST books every 10 seconds. Therefore 250/500/750 ms scenarios are stress labels but are not empirically resolved arrival states and must not be counted as independent latency observations.",
+    "snapshot_ofi_predictor_safe": false,
+    "snapshot_ofi_role": "post-decision realized-window diagnostic only; using it as a quote-time predictor would leak future information",
+    "predictor_safe_quote_time_features": [
+      "initial_weighted_imbalance_l1",
+      "initial_weighted_microprice_minus_mid"
+    ],
+    "guard": "scripts/hf_b2_evidence_guard.py"
+  },
   "interpretation": {
     "complete_set_evidence_transfer_to_b2_allowed": false,
     "reason": "The existing forward-maker worker observes two-leg complete-set/reward quotes, while current B2 candidates are five-leg factor hedges. Fill, queue, latency and completion distributions must be measured on the actual B2 execution class.",
-    "next_experiment": "Forward-probe actual B2 legs on common chronological windows under 250/500/750ms arrival latency and 1x/1.25x/1.5x/2x queue stress while recording microprice, near-touch depth/imbalance, snapshot OFI, partial/full completion, forced-completion cost and 60s/300s markout."
+    "current_b2_result": "The first direct B2 PR probe produced 0/24 full completions and 0/24 rows with any fill in a 120-second window. This is negative execution evidence but too short to estimate the completion probability.",
+    "next_experiment": "Capture the actual B2 token books in event time with timestamp resolution finer than the 250/500/750 ms latency scenarios, compute strictly causal pre-arrival microprice/depth/imbalance/OFI, and replay the same legs under queue stress, partial/full completion, forced completion cost, and 60s/300s fill-conditioned markout."
   },
   "safety": {
     "read_only": true,
