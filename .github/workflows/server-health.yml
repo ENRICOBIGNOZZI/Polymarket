@@ -67,6 +67,22 @@ jobs:
           grep -q '^polymarket_runtime_info' <<<"$metrics"
           printf '%s\n' "$metrics" | grep -E '^polymarket_(runtime_info|runtime_equity_usd|runtime_pnl_usd|runtime_drawdown_ratio|runtime_kill_switch|runtime_realized_pnl_usd_total|runtime_execution_imbalance_ratio|runtime_oos_net_pnl_usd|runtime_oos_stressed_net_pnl_usd|runtime_oos_eligible|trade_recorder_staleness_seconds|multileg_live_bundles)' || true
 
+          supervisor="$HOME/polymarket/runs/paper_v4_live/runtime_supervisor.csv"
+          test -s "$supervisor"
+          supervisor_row="$(tail -n 1 "$supervisor")"
+          IFS=, read -r supervisor_ts recorder_alive broker_alive recorder_restarts broker_restarts recorder_pid broker_pid <<<"$supervisor_row"
+          now="$(date +%s)"
+          test "$recorder_alive" = "1"
+          test "$broker_alive" = "1"
+          test $(( now - supervisor_ts )) -le 60
+          printf 'supervisor_timestamp=%s\n' "$supervisor_ts"
+          printf 'recorder_alive=%s\n' "$recorder_alive"
+          printf 'broker_alive=%s\n' "$broker_alive"
+          printf 'recorder_restarts=%s\n' "$recorder_restarts"
+          printf 'broker_restarts=%s\n' "$broker_restarts"
+          printf 'recorder_pid=%s\n' "$recorder_pid"
+          printf 'broker_pid=%s\n' "$broker_pid"
+
           case "$(uname -s)" in
             Darwin)
               sudo -n /usr/local/sbin/polymarket-service-control status
