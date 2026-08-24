@@ -20,8 +20,18 @@ def labels(pr: dict[str, Any]) -> set[str]:
 
 
 def latest_by_workflow(runs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Return the latest non-PR run for each workflow.
+
+    Failed candidate PR checks are evidence about that candidate, not evidence
+    that the deployed control plane is unhealthy. Production supervision uses
+    push, schedule, workflow-dispatch, repository-dispatch and workflow-run
+    executions only; PR policy and integration gates handle candidate checks.
+    """
+
     latest: dict[str, dict[str, Any]] = {}
     for run in runs:
+        if str(run.get("event") or "").lower() == "pull_request":
+            continue
         name = str(run.get("workflowName") or run.get("name") or "")
         if not name:
             continue
@@ -85,13 +95,21 @@ def render(
                 "state": state,
                 "created_at": None if run is None else run.get("createdAt"),
                 "url": None if run is None else run.get("url"),
+                "event": None if run is None else run.get("event"),
+                "head_branch": None if run is None else run.get("headBranch"),
+                "head_sha": None if run is None else run.get("headSha"),
                 "critical": bool(item.get("critical")),
             }
         )
-        if bool(item.get("critical")) and state in {"failure", "cancelled", "timed_out", "action_required"}:
-            blockers.append(f"critical scheduler {item.get('id')} latest state is {state}")
+        if bool(item.get("critical")) and state in {
+            "failure",
+            "cancelled",
+            "timed_out",
+            "action_required",
+        }:
+            blockers.append(f"critical scheduler {item.get('id')} latest production state is {state}")
         elif run is None:
-            warnings.append(f"no workflow run is visible yet for {item.get('id')}")
+            warnings.append(f"no non-PR workflow run is visible yet for {item.get('id')}")
 
     lines = [
         "# Polymarket administrator supervisor",
@@ -113,14 +131,17 @@ def render(
         "",
         "## Scheduler health",
         "",
-        "| Scheduler | State | Latest run |",
-        "|---|---|---|",
+        "| Scheduler | State | Event / branch | Latest run |",
+        "|---|---|---|---|",
     ]
     for row in scheduler_rows:
         latest_text = row["created_at"] or "not seen"
         if row["url"]:
             latest_text = f"[{latest_text}]({row['url']})"
-        lines.append(f"| {row['id']} | `{row['state']}` | {latest_text} |")
+        origin = "not seen"
+        if row["event"] or row["head_branch"]:
+            origin = f"{row['event'] or 'unknown'} / {row['head_branch'] or 'detached'}"
+        lines.append(f"| {row['id']} | `{row['state']}` | {origin} | {latest_text} |")
 
     lines.extend(["", "## Control-plane blockers"])
     if blockers:
