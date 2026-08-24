@@ -34,7 +34,7 @@ permissions:
 
 concurrency:
   group: forward-maker-alpha-research
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   forward-shadow:
