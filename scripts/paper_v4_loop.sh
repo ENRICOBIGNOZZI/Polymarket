@@ -3,6 +3,9 @@ set -euo pipefail
 
 CONFIG="${1:-config/paper_v4.json}"
 RUN_ROOT="${2:-runs/paper_v4_live}"
+RECORDER_MARKETS="${V4_RECORDER_MARKETS:-600}"
+RECORDER_BATCH="${V4_RECORDER_BATCH:-20}"
+RECORDER_LOOKBACK_SECONDS="${V4_RECORDER_LOOKBACK_SECONDS:-300}"
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/terminal"
 
 python3 scripts/build_v4_intents.py --strategy B1 --input "$RUN_ROOT/stat_arb_pairs.csv" --output "$RUN_ROOT/b1_intents.csv" --config "$CONFIG" >/dev/null
@@ -20,7 +23,8 @@ supervise_execution() {
   start_recorder() {
     ./build/polymarket_trade_recorder \
       --config "$CONFIG" --run-dir "$RUN_ROOT" \
-      --markets 400 --batch 40 --min-liquidity 100 --lookback-seconds 120 \
+      --markets "$RECORDER_MARKETS" --batch "$RECORDER_BATCH" --min-liquidity 100 \
+      --lookback-seconds "$RECORDER_LOOKBACK_SECONDS" \
       --interval 10 --loop >> "$RUN_ROOT/trade_recorder.log" 2>&1 &
     rec_pid=$!
   }
