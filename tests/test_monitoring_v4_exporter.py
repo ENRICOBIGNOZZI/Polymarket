@@ -11,7 +11,7 @@ from exporter_v4 import V4Collector
 
 
 class V4ExporterTest(unittest.TestCase):
-    def test_multileg_and_oos_metrics(self):
+    def test_multileg_terminal_and_oos_metrics(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "paper_v4_live"
             root.mkdir(parents=True)
@@ -31,6 +31,26 @@ class V4ExporterTest(unittest.TestCase):
             (root / "bundle_ledger.csv").write_text(
                 "bundle_id,strategy,event_id,created_ts,closed_ts,status,expected_edge,max_notional,entry_cash,gross_pnl,fees,slippage,net_pnl,return_on_capital,fill_fraction,adverse_mark_pnl,abort_reason\n"
                 "z,B1,e0,1,2,CLOSED,0.01,10,10,1,0.1,0.1,0.8,0.08,1,0,\n", encoding="utf-8")
+
+            terminal = root / "terminal"
+            terminal.mkdir()
+            (terminal / "status.json").write_text(json.dumps({
+                "timestamp": 2,
+                "cash": 9950,
+                "equity": 10012,
+                "peak_equity": 10015,
+                "drawdown": 0.00029955,
+                "gross_exposure": 62,
+                "open_positions": 2,
+                "killed": False,
+            }), encoding="utf-8")
+            (terminal / "fills.csv").write_text(
+                "timestamp,market_id,slug,action,side,shares,price,notional,fee\n"
+                "1,m1,s1,BUY,YES,10,0.5,5,0.01\n"
+                "2,m2,s2,SELL,NO,8,0.6,4.8,0.01\n",
+                encoding="utf-8",
+            )
+
             (root / "walk_forward.json").write_text(json.dumps({
                 "input_trades": 40,
                 "eligible_for_tiny_pilot": True,
@@ -43,6 +63,12 @@ class V4ExporterTest(unittest.TestCase):
             self.assertIn("polymarket_multileg_equity_usd 10005", text)
             self.assertIn("polymarket_multileg_max_fill_imbalance_ratio 0.6", text)
             self.assertIn("polymarket_multileg_realized_net_pnl_usd_total 0.8", text)
+            self.assertIn("polymarket_terminal_equity_usd 10012", text)
+            self.assertIn("polymarket_terminal_pnl_usd 12", text)
+            self.assertIn("polymarket_terminal_open_positions 2", text)
+            self.assertIn("polymarket_terminal_fills_total 2", text)
+            self.assertIn("polymarket_terminal_buy_fills_total 1", text)
+            self.assertIn("polymarket_terminal_sell_fills_total 1", text)
             self.assertIn("polymarket_oos_eligible_for_tiny_pilot 1", text)
             self.assertIn("polymarket_oos_stressed_net_pnl_usd 5", text)
             self.assertIn("polymarket_trade_recorder_rows 1", text)
