@@ -3,7 +3,7 @@ name: Arbitrage Theory Hourly Research
 on:
   workflow_dispatch:
   schedule:
-    - cron: "37 * * * *"
+    - cron: "27 * * * *"
 
 permissions:
   actions: read
