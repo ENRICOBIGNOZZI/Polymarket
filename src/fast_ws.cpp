@@ -15,6 +15,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
+#include <fstream>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
@@ -108,6 +110,8 @@ struct MarketWebSocketFeed::Impl {
     std::atomic<std::uint64_t> messages{0};
     std::atomic<std::uint64_t> reconnects{0};
     std::atomic<std::uint64_t> errors{0};
+    std::ofstream capture;
+    std::mutex capture_mutex;
 
     Impl(std::string url, std::vector<std::string> ids, std::size_t shard_size,
          MessageHandler message_handler, ErrorHandler error_handler)
@@ -124,11 +128,24 @@ struct MarketWebSocketFeed::Impl {
             shards.emplace_back(ids.begin() + static_cast<std::ptrdiff_t>(pos),
                                 ids.begin() + static_cast<std::ptrdiff_t>(end));
         }
+        if (const char* path = std::getenv("POLYMARKET_FAST_WS_CAPTURE"); path && *path) {
+            capture.open(path, std::ios::app);
+            if (!capture) throw std::runtime_error("cannot open optional fast WebSocket capture");
+        }
     }
 
     void report(std::size_t shard, std::string_view message) {
         errors.fetch_add(1, std::memory_order_relaxed);
         if (on_error) on_error(shard, message);
+    }
+
+    void capture_message(std::int64_t received_ms, std::size_t shard, const std::string& message) {
+        if (!capture.is_open() || message.empty() || (message.front() != '{' && message.front() != '[')) {
+            return;
+        }
+        std::scoped_lock lock(capture_mutex);
+        capture << "{\"received_ts_ms\":" << received_ms << ",\"shard\":" << shard
+                << ",\"payload\":" << message << "}\n";
     }
 
     void run_worker(std::stop_token stop, std::size_t shard_index,
@@ -199,6 +216,7 @@ struct MarketWebSocketFeed::Impl {
                     std::string message = beast::buffers_to_string(buffer.data());
                     if (message != "PONG" && !message.empty()) {
                         messages.fetch_add(1, std::memory_order_relaxed);
+                        capture_message(received_ms, shard_index, message);
                         on_message(message, received_ms, shard_index);
                     }
                     if (received_ms - last_text_ping >= 10000) {
@@ -235,6 +253,7 @@ struct MarketWebSocketFeed::Impl {
         if (!started.exchange(false)) return;
         for (auto& thread : threads) thread.request_stop();
         threads.clear();
+        if (capture.is_open()) capture.flush();
     }
 };
 
@@ -244,7 +263,7 @@ MarketWebSocketFeed::MarketWebSocketFeed(std::string url,
                                          MessageHandler on_message,
                                          ErrorHandler on_error)
     : impl_(std::make_unique<Impl>(std::move(url), std::move(asset_ids), shard_size,
-                                   std::move(on_message), std::move(on_error))) {}
+                                   std::move(message_handler), std::move(error_handler))) {}
 
 MarketWebSocketFeed::~MarketWebSocketFeed() { stop(); }
 
