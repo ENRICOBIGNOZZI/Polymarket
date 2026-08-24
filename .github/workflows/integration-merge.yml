@@ -3,7 +3,7 @@ name: Polymarket Integration Merge
 on:
   workflow_dispatch:
   schedule:
-    - cron: "23 * * * *"
+    - cron: "33 * * * *"
 
 permissions:
   actions: read
@@ -43,6 +43,7 @@ jobs:
             --main-sha "$main_sha"
             --validated-sha "$validated_sha"
             --deploy-enabled "$SERVER_DEPLOY_ENABLED"
+            --max-age-seconds 7200
             --output incumbent-gate-report.md
           )
 
