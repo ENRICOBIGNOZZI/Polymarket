@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 
@@ -82,7 +83,9 @@ class MacOSOpsContractTest(unittest.TestCase):
         health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(encoding="utf-8")
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
         deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(encoding="utf-8")
+        context = json.loads((ROOT / "config" / "scheduler_context.json").read_text(encoding="utf-8"))
 
+        self.assertEqual(context["remote_runtime"]["deployment_ref"], "paper-validated")
         self.assertIn('${POLYMARKET_DEPLOY_REF:-paper-validated}', updater)
         self.assertIn('git fetch origin "$LOCAL_BRANCH" "$DEPLOY_REF"', updater)
         self.assertIn('origin/$DEPLOY_REF', updater)
@@ -105,11 +108,12 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('validated_ref=%s', linux_updater)
         self.assertNotIn('NEW_SHA="$(git rev-parse "origin/$BRANCH")"', linux_updater)
 
-        self.assertIn('git fetch -q origin main paper-validated', health)
-        self.assertIn('origin/paper-validated', health)
+        self.assertIn('--scheduler-id paper-server-health', health)
+        self.assertIn('git fetch -q origin main "$DEPLOYMENT_REF"', health)
+        self.assertIn('origin/$DEPLOYMENT_REF', health)
         self.assertIn('test "$head_sha" = "$validated_sha"', health)
         self.assertIn('git merge-base --is-ancestor "$validated_sha" "$main_sha"', health)
-        self.assertIn('test "$status_ref" = "paper-validated"', health)
+        self.assertIn('test "$status_ref" = "$DEPLOYMENT_REF"', health)
         self.assertIn('test "$status_validated" = "$validated_sha"', health)
         self.assertIn('up_to_date|deployed|repaired', health)
 
@@ -138,10 +142,11 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertNotIn('push:\n    branches: [main]', deploy)
         self.assertIn('EXPECTED_VALIDATED_SHA', deploy)
         self.assertIn('test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"', deploy)
-        self.assertRegex(deploy, r'git fetch(?: -q)? origin main paper-validated')
-        self.assertIn('validated_sha="$(git rev-parse origin/paper-validated)"', deploy)
+        self.assertIn('--scheduler-id paper-server-deploy', deploy)
+        self.assertIn('git fetch origin main "$DEPLOYMENT_REF"', deploy)
+        self.assertIn('validated_sha="$(git rev-parse "origin/$DEPLOYMENT_REF")"', deploy)
         self.assertIn('git show "$validated_sha:$updater_path"', deploy)
-        self.assertIn('POLYMARKET_DEPLOY_REF=paper-validated bash "$updater"', deploy)
+        self.assertIn('POLYMARKET_DEPLOY_REF="$DEPLOYMENT_REF" bash "$updater"', deploy)
         self.assertIn('test "$head_sha" = "$validated_sha"', deploy)
         self.assertIn('git merge-base --is-ancestor "$validated_sha" "$main_sha"', deploy)
         self.assertIn('paper-server-deploy-${{ github.run_id }}', deploy)
