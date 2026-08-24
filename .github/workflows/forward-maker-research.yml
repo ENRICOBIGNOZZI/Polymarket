@@ -7,6 +7,7 @@ on:
     paths:
       - "scripts/forward_maker_probe.py"
       - "scripts/hf_multileg_forward_probe.py"
+      - "scripts/hf_b2_evidence_guard.py"
       - "scripts/select_forward_candidates.py"
       - "scripts/finalize_forward_probe.py"
       - "scripts/calibrate_forward_maker.py"
@@ -16,6 +17,7 @@ on:
       - "include/pm/rewards.hpp"
       - "tests/test_forward_maker_probe.py"
       - "tests/test_hf_multileg_forward_probe.py"
+      - "tests/test_hf_b2_evidence_guard.py"
       - "tests/test_forward_candidate_selection.py"
       - "tests/test_finalize_forward_probe.py"
       - "tests/test_calibrate_forward_maker.py"
@@ -27,6 +29,7 @@ on:
     paths:
       - "scripts/forward_maker_probe.py"
       - "scripts/hf_multileg_forward_probe.py"
+      - "scripts/hf_b2_evidence_guard.py"
       - "scripts/select_forward_candidates.py"
       - "scripts/finalize_forward_probe.py"
       - "scripts/calibrate_forward_maker.py"
@@ -36,6 +39,7 @@ on:
       - "include/pm/rewards.hpp"
       - "tests/test_forward_maker_probe.py"
       - "tests/test_hf_multileg_forward_probe.py"
+      - "tests/test_hf_b2_evidence_guard.py"
       - "tests/test_forward_candidate_selection.py"
       - "tests/test_finalize_forward_probe.py"
       - "tests/test_calibrate_forward_maker.py"
@@ -222,6 +226,12 @@ jobs:
             --max-notional 250 --max-leg-shares 100 \
             | tee "$R/b2_multileg_forward_probe.log"
 
+          python3 scripts/hf_b2_evidence_guard.py \
+            --probe "$R/b2_multileg_forward_probe.json" \
+            --output "$R/b2_multileg_evidence_guard.json" \
+            --trade-timestamp-resolution-ms 1000 \
+            | tee "$R/b2_multileg_evidence_guard.log"
+
           cat "$R/b2_history_existing.jsonl" "$R/b2_multileg_forward_history_line.jsonl" \
             | tail -n 120 > "$R/forward-b2-multileg-history.jsonl"
           python3 - <<'PY'
@@ -245,6 +255,7 @@ jobs:
           tail -n 5 "$R/forward_maker_probe.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           tail -n 5 "$R/forward_maker_calibration.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           tail -n 5 "$R/b2_multileg_forward_probe.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          tail -n 5 "$R/b2_multileg_evidence_guard.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           if test -s "$R/forward_maker_probe.json"; then
             echo '### Current complete-set session' >> "$GITHUB_STEP_SUMMARY"
@@ -278,6 +289,12 @@ jobs:
           PY
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
+          if test -s "$R/b2_multileg_evidence_guard.json"; then
+            echo '### B2 evidence interpretation guard' >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat "$R/b2_multileg_evidence_guard.json" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
           if test -s "$R/forward_maker_calibration.json"; then
             echo '### Repeated-session complete-set calibration' >> "$GITHUB_STEP_SUMMARY"
             echo '```json' >> "$GITHUB_STEP_SUMMARY"
@@ -297,6 +314,7 @@ jobs:
           test -s "$R/forward-maker-history.jsonl"
           test -s "$R/forward_maker_calibration.json"
           test -s "$R/b2_multileg_forward_probe.json"
+          test -s "$R/b2_multileg_evidence_guard.json"
           test -s "$R/forward-b2-multileg-history.jsonl"
 
           publish_file() {
@@ -336,6 +354,10 @@ jobs:
           publish_file "$R/b2_multileg_forward_probe.json" \
             "telemetry/latest-forward-b2-multileg.json" \
             "Update latest B2 multi-leg forward execution evidence"
+
+          publish_file "$R/b2_multileg_evidence_guard.json" \
+            "telemetry/latest-forward-b2-evidence-guard.json" \
+            "Update B2 execution evidence interpretation guard"
 
           publish_file "$R/forward-b2-multileg-history.jsonl" \
             "telemetry/forward-b2-multileg-history.jsonl" \
