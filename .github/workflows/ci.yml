@@ -68,4 +68,4 @@ jobs:
             ops/bootstrap_macos.sh ops/update_server_macos.sh ops/macos_service_control.sh \
             ops/install_autoupdate_macos.sh ops/finish_bootstrap_macos.sh \
             ops/apply_runtime_config_macos.sh
-          python3 -m unittest tests/test_ops_macos.py -v
+          python3 -m unittest tests/test_ops_macos.py tests/test_workflow_yaml_contracts.py -v
