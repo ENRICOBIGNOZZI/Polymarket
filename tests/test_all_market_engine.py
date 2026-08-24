@@ -135,6 +135,41 @@ class AllMarketEngineTests(unittest.TestCase):
             self.assertEqual(candidates[0]["source_id"], "fast-1")
             self.assertTrue(all(float(row["raw_edge"]) > 0 for row in candidates))
 
+    def test_passive_fast_complete_set_remains_research_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "fast.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "kind", "id", "event_id", "executable", "hard_arbitrage",
+                        "raw_edge_per_share", "net_edge_per_share", "capital_required",
+                        "expected_profit", "risk_class", "legs",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "kind": "MAKER_COMPLETE_SET_SHADOW",
+                        "id": "maker-binary:1",
+                        "event_id": "event",
+                        "executable": "1",
+                        "hard_arbitrage": "0",
+                        "raw_edge_per_share": "0.70",
+                        "net_edge_per_share": "0.69",
+                        "capital_required": "50",
+                        "expected_profit": "34.5",
+                        "risk_class": "NON_ATOMIC_PASSIVE_TWO_SIDED",
+                        "legs": "yes-post|no-post",
+                    }
+                )
+            rows = list(book.fast_rows(path))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["source_id"], "maker-binary:1")
+            self.assertEqual(rows[0]["eligible"], 0)
+            self.assertEqual(rows[0]["hard_arbitrage"], 0)
+            self.assertAlmostEqual(float(rows[0]["net_edge"]), 0.69)
+
     def test_terminal_candidates_are_fresh_and_use_universal_experts(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "signals.csv"
