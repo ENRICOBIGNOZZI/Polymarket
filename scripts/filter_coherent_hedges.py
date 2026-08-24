@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Fail-closed coherence gate for B2 PCA hedge baskets.
+"""Coherence gate for B2 PCA hedge baskets.
 
-The raw PCA file remains a research diagnostic. Only rows whose hedge legs belong
-to the same explicit event or a strong semantic cluster are written to the
-execution-facing CSV. Any metadata or filter failure leaves that CSV empty.
+The default mode remains fail-closed and only accepts same-event or strongly
+semantic hedge legs. The live aggressive paper runtime may explicitly enable a
+second, risk-controlled latent-factor lane. That lane never bypasses missing
+metadata and only admits baskets with bounded PCA hedge error, stable residual
+mean reversion, a material residual displacement, and (optionally) positive
+maker-entry economics.
 """
 from __future__ import annotations
 
@@ -154,7 +157,7 @@ def fetch_metadata(
 ) -> MarketMeta:
     url = gamma_url.rstrip("/") + "/markets/" + urllib.parse.quote(market_id, safe="")
     request = urllib.request.Request(
-        url, headers={"User-Agent": "polymarket-coherent-hedges/1"}
+        url, headers={"User-Agent": "polymarket-coherent-hedges/2"}
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = json.loads(response.read().decode("utf-8"))
@@ -179,6 +182,14 @@ def parse_leg_ids(spec: str) -> list[str]:
     return out
 
 
+def row_float(row: dict[str, str], key: str, default: float) -> float:
+    try:
+        value = float(row.get(key, ""))
+    except (TypeError, ValueError):
+        return default
+    return value if value == value and abs(value) != float("inf") else default
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, required=True)
@@ -191,10 +202,13 @@ def main() -> int:
     parser.add_argument("--min-shared-tokens", type=int, default=2)
     parser.add_argument("--timeout-seconds", type=float, default=8.0)
     parser.add_argument("--now", type=int, default=None)
+    parser.add_argument("--allow-latent-factor", action="store_true")
+    parser.add_argument("--max-latent-hedge-error", type=float, default=0.85)
+    parser.add_argument("--min-latent-stability", type=float, default=0.20)
+    parser.add_argument("--min-latent-z", type=float, default=0.65)
+    parser.add_argument("--require-positive-maker-edge", action="store_true")
     args = parser.parse_args()
 
-    # This happens before input parsing or network access. A crash can no longer
-    # leave an old production-facing B2 file behind.
     initialise_fail_closed(args.output, args.rejections)
 
     now = int(time.time()) if args.now is None else args.now
@@ -243,16 +257,19 @@ def main() -> int:
         unrelated: list[str] = []
         scopes: list[str] = []
         similarities: list[float] = []
+        metadata_missing = False
 
         target = get_meta(target_id) if target_id else None
         if not target:
             reason = "target_metadata_unavailable"
+            metadata_missing = True
         elif not hedge_ids:
             reason = "no_hedge_legs"
         else:
             for hedge_id in hedge_ids:
                 hedge = get_meta(hedge_id)
                 if not hedge:
+                    metadata_missing = True
                     unrelated.append(hedge_id)
                     scopes.append("metadata_unavailable")
                     continue
@@ -264,8 +281,33 @@ def main() -> int:
                 scopes.append(f"{scope}:{similarity:.4f}:{shared}")
                 if scope == "unrelated":
                     unrelated.append(hedge_id)
+
             if unrelated:
-                reason = "unrelated_or_unknown_hedge_legs"
+                hedge_error = row_float(row, "hedge_error", float("inf"))
+                stability = row_float(row, "stability", float("-inf"))
+                residual_z = abs(row_float(row, "residual_z", 0.0))
+                maker_edge = row_float(row, "maker_entry_net_edge", float("-inf"))
+                latent_ok = (
+                    args.allow_latent_factor
+                    and not metadata_missing
+                    and hedge_error <= args.max_latent_hedge_error
+                    and stability >= args.min_latent_stability
+                    and residual_z >= args.min_latent_z
+                    and (
+                        not args.require_positive_maker_edge
+                        or maker_edge > 0.0
+                    )
+                )
+                if latent_ok:
+                    relation_counts["latent_factor"] += 1
+                    scopes.append(
+                        "latent_factor:"
+                        f"hedge_error={hedge_error:.4f}:"
+                        f"stability={stability:.4f}:z={residual_z:.4f}"
+                    )
+                    unrelated.clear()
+                else:
+                    reason = "unrelated_or_unknown_hedge_legs"
 
         enriched = dict(row)
         enriched["coherence_scope"] = "|".join(scopes)
