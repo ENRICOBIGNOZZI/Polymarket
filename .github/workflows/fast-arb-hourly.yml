@@ -16,6 +16,7 @@ on:
       - "src/fast_runtime/**"
       - "config/fast_arb_*"
       - "scripts/arb_theory_scheduler.py"
+      - "scripts/validate_fast_data_health.py"
       - "scripts/paper_latest_loop.sh"
       - "tests/test_fast_*"
       - "tests/test_arb_theory_scheduler.py"
@@ -47,6 +48,7 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j2
           ctest --test-dir build --output-on-failure
+          python3 -m unittest tests/test_fast_data_health.py -v
 
       - name: Run read-only fast shadow probe
         shell: bash
@@ -80,19 +82,19 @@ jobs:
             --output-json runs/hourly-fast/fast_arb_candidate.json \
             --output-markdown runs/hourly-fast/fast_arb_theory_report.md \
             --output-header runs/hourly-fast/fast_arb_candidate_policy.hpp
+          python3 scripts/validate_fast_data_health.py \
+            --status runs/hourly-fast/fast_arb_status.json \
+            --errors runs/hourly-fast/fast_arb_errors.csv \
+            --max-feed-stale-ms 45000 \
+            --min-rest-resyncs 2
           python3 - <<'PY'
           import json
           from pathlib import Path
           status = json.loads(Path("runs/hourly-fast/fast_arb_status.json").read_text())
           candidate = json.loads(Path("runs/hourly-fast/fast_arb_candidate.json").read_text())
           base_policy = json.loads(Path("config/fast_arb_policy.json").read_text())
-          errors = Path("runs/hourly-fast/fast_arb_errors.csv").read_text()
           assert status["mode"] == "shadow"
           assert status["real_order_submission"] is False
-          assert status["ws_workers"] > 0
-          assert status["ws_messages"] > 0, "public WebSocket produced no messages"
-          assert status["book_updates"] > 0, "WebSocket messages did not update books"
-          assert "Unsupported protocol" not in errors
           assert candidate["mode"] == "research_only"
           assert candidate["real_order_submission"] is False
           assert candidate["candidate_policy"]["min_net_edge"] >= base_policy["min_net_edge"]
