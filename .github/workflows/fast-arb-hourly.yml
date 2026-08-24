@@ -16,6 +16,8 @@ on:
       - "src/fast_runtime/**"
       - "config/fast_arb_*"
       - "scripts/arb_theory_scheduler.py"
+      - "scripts/hf_v5_microstructure_challenger.py"
+      - "scripts/hf_v5_microstructure_purged_eval.py"
       - "scripts/validate_fast_data_health.py"
       - "scripts/paper_latest_loop.sh"
       - "tests/test_fast_*"
@@ -52,11 +54,13 @@ jobs:
 
       - name: Run read-only fast shadow probe
         shell: bash
+        env:
+          POLYMARKET_FAST_WS_CAPTURE: runs/hourly-fast/market-ws-capture.jsonl
         run: |
           set -euo pipefail
           mkdir -p runs/hourly-fast
           duration=180
-          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then duration=45; fi
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then duration=300; fi
           ./build/polymarket_fast_arb_shadow \
             --config config/paper_v4.json \
             --policy config/fast_arb_policy.json \
@@ -69,6 +73,28 @@ jobs:
             --snapshot-refresh-seconds 20 \
             --duration-seconds "$duration" \
             --recycle-seconds 0
+
+      - name: Evaluate purged causal HF markout challenger
+        shell: bash
+        run: |
+          set -euo pipefail
+          capture=runs/hourly-fast/market-ws-capture.jsonl
+          test -s "$capture"
+          for horizon in 1000 5000 30000 60000; do
+            extra=()
+            if [[ "$horizon" == "5000" ]]; then
+              extra=(--output-features runs/hourly-fast/hf-v5-event-features.csv)
+            fi
+            python3 scripts/hf_v5_microstructure_purged_eval.py \
+              --capture "$capture" \
+              --horizon-ms "$horizon" \
+              --slippage-bps 2 \
+              "${extra[@]}" \
+              --output-json "runs/hourly-fast/hf-v5-purged-${horizon}.json" \
+              --output-markdown "runs/hourly-fast/hf-v5-purged-${horizon}.md"
+            cat "runs/hourly-fast/hf-v5-purged-${horizon}.md" >> "$GITHUB_STEP_SUMMARY"
+            printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          done
 
       - name: Produce cost-stressed research evidence
         if: always()
