@@ -59,10 +59,11 @@ jobs:
           done < evidence/run-ids.txt
           python3 - <<'PY'
           import json
+          import os
           import shutil
           from pathlib import Path
 
-          expected_context = "${{ env.POLYMARKET_SCHEDULER_CONTEXT_SHA }}"
+          expected_context = os.environ["POLYMARKET_SCHEDULER_CONTEXT_SHA"]
           valid = 0
           for status_path in list(Path("evidence").rglob("fast_arb_status.json")):
               run_root = status_path.parent
@@ -101,13 +102,14 @@ jobs:
             --output-header research-output/include/pm/generated/fast_arb_candidate_policy.hpp
           python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
           report = json.loads(Path("research-output/config/candidates/fast_arb_candidate.json").read_text())
           base_policy = json.loads(Path("config/fast_arb_policy.json").read_text())
           context = json.loads(Path("research-output/scheduler-context.json").read_text())
           assert context["valid"] is True
           assert context["scheduler_id"] == "arb-theory-research"
-          assert context["context_sha256"] == "${{ env.POLYMARKET_SCHEDULER_CONTEXT_SHA }}"
+          assert context["context_sha256"] == os.environ["POLYMARKET_SCHEDULER_CONTEXT_SHA"]
           assert report["real_order_submission"] is False
           assert report["candidate_policy"]["real_order_submission"] is False
           assert report["candidate_policy"]["min_net_edge"] >= base_policy["min_net_edge"]
