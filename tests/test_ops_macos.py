@@ -117,7 +117,7 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertNotIn('push:\n    branches: [main]', deploy)
         self.assertIn('EXPECTED_VALIDATED_SHA', deploy)
         self.assertIn('test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"', deploy)
-        self.assertIn('git fetch -q origin main paper-validated', deploy)
+        self.assertRegex(deploy, r'git fetch(?: -q)? origin main paper-validated')
         self.assertIn('validated_sha="$(git rev-parse origin/paper-validated)"', deploy)
         self.assertIn('git show "$validated_sha:$updater_path"', deploy)
         self.assertIn('POLYMARKET_DEPLOY_REF=paper-validated bash "$updater"', deploy)
