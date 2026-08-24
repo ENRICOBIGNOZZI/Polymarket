@@ -19,7 +19,10 @@
     "fdr_q": 0.10,
     "min_active_folds": 2,
     "min_positive_fold_fraction": 0.50,
-    "cost_stress_multipliers": [1.5, 2.0],
+    "cost_stress_multipliers": [
+      1.5,
+      2.0
+    ],
     "min_shadow_runs": 24,
     "min_shadow_pair_fills": 20,
     "max_one_sided_fill_rate": 0.25,
@@ -52,7 +55,10 @@
         "max_age_seconds": 7200,
         "dispatchable": true,
         "priority": 30,
-        "dependencies": ["ci.yml", "monitoring.yml"]
+        "dependencies": [
+          "ci.yml",
+          "monitoring.yml"
+        ]
       },
       "forward-maker-research.yml": {
         "name": "forward-maker-alpha-research",
@@ -60,7 +66,9 @@
         "max_age_seconds": 5400,
         "dispatchable": true,
         "priority": 40,
-        "dependencies": ["ci.yml"]
+        "dependencies": [
+          "ci.yml"
+        ]
       },
       "alpha-factory.yml": {
         "name": "Polymarket Alpha Factory",
@@ -68,15 +76,20 @@
         "max_age_seconds": 10800,
         "dispatchable": true,
         "priority": 50,
-        "dependencies": ["v4-live-smoke.yml", "forward-maker-research.yml"]
+        "dependencies": [
+          "v4-live-smoke.yml",
+          "forward-maker-research.yml"
+        ]
       },
-      "model-governance.yml": {
-        "name": "Polymarket System Watch - Model Governance",
+      "research-policy.yml": {
+        "name": "Polymarket Research Policy",
         "requires_current_main": true,
         "max_age_seconds": 7200,
         "dispatchable": true,
         "priority": 60,
-        "dependencies": ["ci.yml", "monitoring.yml", "v4-live-smoke.yml"]
+        "dependencies": [
+          "ci.yml"
+        ]
       },
       "server-health.yml": {
         "name": "paper-server-health",
@@ -92,7 +105,9 @@
         "max_age_seconds": 0,
         "dispatchable": false,
         "priority": 80,
-        "dependencies": ["v4-live-smoke.yml"]
+        "dependencies": [
+          "v4-live-smoke.yml"
+        ]
       }
     },
     "allowlisted_dispatches": [
@@ -101,7 +116,7 @@
       "v4-live-smoke.yml",
       "forward-maker-research.yml",
       "alpha-factory.yml",
-      "model-governance.yml"
+      "research-policy.yml"
     ],
     "forbidden_dispatches": [
       "deploy-paper-server.yml",
