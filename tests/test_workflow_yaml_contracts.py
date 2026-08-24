@@ -44,6 +44,18 @@ class WorkflowYamlContractTest(unittest.TestCase):
         self.assertNotIn("paper-validated", ci)
         self.assertNotIn("POLYMARKET_DEPLOY_REF", ci)
 
+    def test_live_smoke_retries_telemetry_publish_before_failing_validation(self) -> None:
+        smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("for attempt in 1 2 3 4 5; do", smoke)
+        self.assertIn('current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha', smoke)
+        self.assertIn('if gh api "${args[@]}" >/dev/null 2>"$publish_error"; then', smoke)
+        self.assertIn('if [[ "$attempt" -eq 5 ]]; then', smoke)
+        self.assertIn("sleep $((attempt * 2))", smoke)
+        self.assertIn("- name: Advance paper validated ref", smoke)
+        self.assertNotIn("continue-on-error: true", smoke)
+
 
 if __name__ == "__main__":
     unittest.main()

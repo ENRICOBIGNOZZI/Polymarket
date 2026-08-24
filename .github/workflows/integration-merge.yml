@@ -25,6 +25,17 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Require current main to be publicly paper-validated
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main paper-validated
+          main_sha="$(git rev-parse origin/main)"
+          validated_sha="$(git rev-parse origin/paper-validated)"
+          test "$main_sha" = "$validated_sha"
+          test "$(git rev-parse HEAD)" = "$main_sha"
+          echo "validated_base_sha=$main_sha"
+
       - name: Build locally-green automatic promotion queue
         shell: bash
         env:
@@ -152,6 +163,8 @@ jobs:
             echo "- merged main revision: \`$merged_sha\`"
             echo '- selection: first fully-green candidate/source pair; unready pairs are skipped'
             echo '- merge mode: squash; at most one candidate per scheduler cycle'
+            echo '- base gate: current main must already equal paper-validated'
+            echo '- private server-health: not an integration precondition'
             echo '- manual approval labels: not required'
             echo '- handoff: repository dispatch `champion-integration-merged`'
             echo '- real-money execution: unchanged/disabled'

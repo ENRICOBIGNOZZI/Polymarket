@@ -191,12 +191,24 @@ jobs:
           test -s paper_v5_live/live_snapshot.json
           endpoint="repos/${GITHUB_REPOSITORY}/contents/telemetry/latest-live-smoke.json"
           content="$(base64 -w0 paper_v5_live/live_snapshot.json)"
-          current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
-          args=("$endpoint" --method PUT -f message="Update public V5 live smoke telemetry" -f content="$content" -f branch=telemetry)
-          if [[ -n "$current_sha" ]]; then
-            args+=(-f sha="$current_sha")
-          fi
-          gh api "${args[@]}" >/dev/null
+          publish_error="$(mktemp)"
+          for attempt in 1 2 3 4 5; do
+            current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
+            args=("$endpoint" --method PUT -f message="Update public V5 live smoke telemetry" -f content="$content" -f branch=telemetry)
+            if [[ -n "$current_sha" ]]; then
+              args+=(-f sha="$current_sha")
+            fi
+            if gh api "${args[@]}" >/dev/null 2>"$publish_error"; then
+              rm -f "$publish_error"
+              exit 0
+            fi
+            if [[ "$attempt" -eq 5 ]]; then
+              cat "$publish_error" >&2
+              rm -f "$publish_error"
+              exit 1
+            fi
+            sleep $((attempt * 2))
+          done
 
       - name: Upload live diagnostics
         if: always()
