@@ -191,6 +191,11 @@ while true; do
       --annual-capital-rate 0.20 --adverse-bps 50 --one-sided-fills-per-day 1.0 \
       --csv "$RUN_ROOT/reward_opportunities.csv" \
       > "$RUN_ROOT/reward_latest.log" 2> "$RUN_ROOT/reward_errors.log" || true
+    if [[ -s "$RUN_ROOT/reward_opportunities.csv" ]]; then
+      python3 scripts/apply_reward_payout_floor.py \
+        --csv "$RUN_ROOT/reward_opportunities.csv" --minimum-daily-payout-usd 1.0 \
+        >> "$RUN_ROOT/reward_latest.log" 2>> "$RUN_ROOT/reward_errors.log" || true
+    fi
     last_rewards=$now
   fi
 
