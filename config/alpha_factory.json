@@ -91,8 +91,8 @@
           "ci.yml"
         ]
       },
-      "integration-merge.yml": {
-        "name": "Polymarket Integration Merge",
+      "promotion-controller.yml": {
+        "name": "Polymarket Promotion Controller",
         "requires_current_main": true,
         "max_age_seconds": 1800,
         "dispatchable": true,
@@ -101,7 +101,8 @@
           "ci.yml",
           "monitoring.yml",
           "v4-live-smoke.yml",
-          "research-policy.yml"
+          "research-policy.yml",
+          "alpha-factory.yml"
         ]
       },
       "server-health.yml": {
@@ -130,9 +131,10 @@
       "forward-maker-research.yml",
       "alpha-factory.yml",
       "research-policy.yml",
-      "integration-merge.yml"
+      "promotion-controller.yml"
     ],
     "forbidden_dispatches": [
+      "integration-merge.yml",
       "deploy-paper-server.yml",
       "server-health.yml"
     ]
