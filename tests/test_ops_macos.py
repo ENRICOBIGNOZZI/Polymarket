@@ -136,6 +136,15 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn("github.event.workflow_run.head_branch == 'main'", deploy)
         self.assertIn("github.event.workflow_run.event != 'pull_request'", deploy)
         self.assertNotIn('push:\n    branches: [main]', deploy)
+
+        # A freshly validated main revision must deploy immediately. The deploy
+        # toggle is retained only for periodic reconciliation, not workflow_run.
+        schedule_gate = deploy.index("github.event_name == 'schedule'")
+        workflow_run_gate = deploy.index("github.event_name == 'workflow_run'")
+        runs_on = deploy.index("runs-on: ubuntu-24.04")
+        self.assertIn("vars.POLYMARKET_SERVER_DEPLOY == 'true'", deploy[schedule_gate:workflow_run_gate])
+        self.assertNotIn("vars.POLYMARKET_SERVER_DEPLOY", deploy[workflow_run_gate:runs_on])
+
         self.assertIn('EXPECTED_VALIDATED_SHA', deploy)
         self.assertIn('test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"', deploy)
         self.assertRegex(deploy, r'git fetch(?: -q)? origin main paper-validated')
