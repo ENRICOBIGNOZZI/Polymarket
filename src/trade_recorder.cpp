@@ -173,52 +173,70 @@ public:
         }
 
         const std::int64_t end = now_s();
-        const std::int64_t start = std::max<std::int64_t>(0, std::max(last_trade_ts_ - 2, end - lookback_s_));
+        // Always replay a fixed overlap window. A global last-trade watermark is
+        // unsafe: success in one batch could otherwise advance the cursor past
+        // trades missed by a failed or delayed batch. The durable seen-set makes
+        // this overlapping replay idempotent.
+        const std::int64_t start = std::max<std::int64_t>(0, end - lookback_s_);
         std::vector<Trade> rows;
-        std::size_t requests = 0, errors = 0, fetched = 0;
+        std::size_t requests = 0, errors = 0, fetched = 0, truncated_batches = 0;
+        constexpr std::size_t page_limit = 10000;
 
         for (std::size_t lo = 0; lo < conditions.size(); lo += batch_size_) {
             const std::size_t hi = std::min(conditions.size(), lo + batch_size_);
-            std::ostringstream url;
-            url << data_url_ << "/trades?limit=10000&takerOnly=true&start=" << start << "&end=" << end
-                << "&market=" << join_conditions(conditions, lo, hi);
-            ++requests;
-            try {
-                const auto r = http_.get(url.str());
-                if (r.status < 200 || r.status >= 300) {
+            const auto market_query = join_conditions(conditions, lo, hi);
+            bool page_failed = false;
+            for (std::size_t offset : {std::size_t{0}, page_limit}) {
+                std::ostringstream url;
+                url << data_url_ << "/trades?limit=" << page_limit << "&offset=" << offset
+                    << "&takerOnly=true&start=" << start << "&end=" << end
+                    << "&market=" << market_query;
+                ++requests;
+                try {
+                    const auto r = http_.get(url.str());
+                    if (r.status < 200 || r.status >= 300) {
+                        ++errors;
+                        page_failed = true;
+                        break;
+                    }
+                    auto root = json::parse(r.body);
+                    if (!root.is_array()) {
+                        ++errors;
+                        page_failed = true;
+                        break;
+                    }
+                    const auto page_size = root.as_array().size();
+                    fetched += page_size;
+                    for (const auto& v : root.as_array()) {
+                        if (!v.is_object()) continue;
+                        const auto& o = v.as_object();
+                        Trade t;
+                        t.ts = get_integer(o, "timestamp");
+                        t.received_ms = now_ms();
+                        t.condition_id = get_text(o, "conditionId");
+                        t.asset_id = get_text(o, "asset");
+                        t.outcome = get_text(o, "outcome");
+                        t.side = get_text(o, "side");
+                        t.price = get_number(o, "price");
+                        t.size = get_number(o, "size");
+                        t.tx_hash = get_text(o, "transactionHash");
+                        t.slug = get_text(o, "slug");
+                        t.event_slug = get_text(o, "eventSlug");
+                        if (t.ts <= 0 || t.asset_id.empty() || t.price <= 0.0 || t.price >= 1.0 || t.size <= 0.0) continue;
+                        if (!by_condition.count(t.condition_id)) continue;
+                        const auto key = trade_key(t);
+                        if (seen_.insert(key).second) rows.push_back(std::move(t));
+                    }
+                    if (page_size < page_limit) break;
+                    if (offset == page_limit) ++truncated_batches;
+                } catch (const std::exception& e) {
                     ++errors;
-                    continue;
+                    page_failed = true;
+                    std::cerr << "trade recorder request failed: " << e.what() << '\n';
+                    break;
                 }
-                auto root = json::parse(r.body);
-                if (!root.is_array()) {
-                    ++errors;
-                    continue;
-                }
-                fetched += root.as_array().size();
-                for (const auto& v : root.as_array()) {
-                    if (!v.is_object()) continue;
-                    const auto& o = v.as_object();
-                    Trade t;
-                    t.ts = get_integer(o, "timestamp");
-                    t.received_ms = now_ms();
-                    t.condition_id = get_text(o, "conditionId");
-                    t.asset_id = get_text(o, "asset");
-                    t.outcome = get_text(o, "outcome");
-                    t.side = get_text(o, "side");
-                    t.price = get_number(o, "price");
-                    t.size = get_number(o, "size");
-                    t.tx_hash = get_text(o, "transactionHash");
-                    t.slug = get_text(o, "slug");
-                    t.event_slug = get_text(o, "eventSlug");
-                    if (t.ts <= 0 || t.asset_id.empty() || t.price <= 0.0 || t.price >= 1.0 || t.size <= 0.0) continue;
-                    if (!by_condition.count(t.condition_id)) continue;
-                    const auto key = trade_key(t);
-                    if (seen_.insert(key).second) rows.push_back(std::move(t));
-                }
-            } catch (const std::exception& e) {
-                ++errors;
-                std::cerr << "trade recorder request failed: " << e.what() << '\n';
             }
+            (void)page_failed;
         }
 
         std::sort(rows.begin(), rows.end(), [](const Trade& a, const Trade& b) {
@@ -241,7 +259,8 @@ public:
 
         std::cout << "trade_recorder markets=" << markets.size() << " conditions=" << conditions.size()
                   << " requests=" << requests << " fetched=" << fetched << " new_trades=" << rows.size()
-                  << " errors=" << errors << " last_trade_ts=" << last_trade_ts_
+                  << " errors=" << errors << " truncated_batches=" << truncated_batches
+                  << " last_trade_ts=" << last_trade_ts_
                   << " elapsed_ms=" << (now_ms() - started_ms) << '\n';
     }
 
@@ -303,9 +322,9 @@ int main(int argc, char** argv) {
         std::string config = "config/paper_v3.json";
         std::string run_dir = "runs/paper_v4";
         std::string data_url = "https://data-api.polymarket.com";
-        std::size_t markets = 600, batch = 40;
+        std::size_t markets = 600, batch = 20;
         double min_liquidity = 100.0;
-        std::int64_t lookback_s = 180;
+        std::int64_t lookback_s = 300;
         int interval_s = 10;
         bool loop = false;
 
