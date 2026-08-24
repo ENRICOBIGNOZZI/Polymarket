@@ -77,10 +77,8 @@ jobs:
           # are carried forward for inference.
           : > "$R/history_existing.jsonl"
           history_endpoint="repos/${GITHUB_REPOSITORY}/contents/telemetry/forward-maker-history.jsonl"
-          history_url="$(gh api "${history_endpoint}?ref=telemetry" --jq .download_url 2>/dev/null || true)"
-          if [[ -n "$history_url" && "$history_url" != "null" ]]; then
-            curl -fsSL "$history_url" > "$R/history_existing.jsonl" || true
-          fi
+          gh api "${history_endpoint}?ref=telemetry" --jq .content 2>/dev/null \
+            | tr -d '\n' | base64 -d > "$R/history_existing.jsonl" 2>/dev/null || true
 
           DURATION=480
           MARKETS=15
@@ -91,14 +89,28 @@ jobs:
             POLL=10
           fi
 
-          ./build/polymarket_rewards_scan \
-            --config config/paper_v4.json --markets 1500 --top 40 \
-            --quote-shares 50 --max-notional 100 --improve-ticks 0 \
-            --competition-multiplier 2.0 --reward-haircut 0.25 \
-            --native-reward-unit-usd 1.0 --annual-capital-rate 0.20 \
-            --adverse-bps 50 --one-sided-fills-per-day 1.0 \
-            --csv "$R/reward_opportunities.csv" \
-            | tee "$R/reward_scan.log"
+          : > "$R/reward_scan.log"
+          scan_ok=0
+          for attempt in 1 2 3; do
+            rm -f "$R/reward_opportunities.csv"
+            if ./build/polymarket_rewards_scan \
+              --config config/paper_v4.json --markets 1500 --top 40 \
+              --quote-shares 50 --max-notional 100 --improve-ticks 0 \
+              --competition-multiplier 2.0 --reward-haircut 0.25 \
+              --native-reward-unit-usd 1.0 --annual-capital-rate 0.20 \
+              --adverse-bps 50 --one-sided-fills-per-day 1.0 \
+              --csv "$R/reward_opportunities.csv" \
+              2>&1 | tee -a "$R/reward_scan.log"; then
+              scan_ok=1
+              break
+            fi
+            echo "reward_scan_retry attempt=$attempt" | tee -a "$R/reward_scan.log"
+            sleep $((attempt * 5))
+          done
+          if [[ "$scan_ok" -ne 1 ]]; then
+            echo "reward_scan_failed_after_retries" | tee -a "$R/reward_scan.log"
+            exit 1
+          fi
 
           python3 scripts/apply_reward_payout_floor.py \
             --csv "$R/reward_opportunities.csv" --minimum-daily-payout-usd 1.0 \
