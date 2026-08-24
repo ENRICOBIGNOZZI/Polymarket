@@ -130,6 +130,7 @@ start_supervisor
 
 last_stat=0
 last_structural=0
+last_rewards=0
 last_terminal=0
 last_oos=0
 
@@ -178,6 +179,19 @@ while true; do
       2> "$RUN_ROOT/structural_errors.log" \
       | tee "$RUN_ROOT/structural_latest.log" "$RUN_ROOT/structural_latest.csv" >/dev/null || true
     last_structural=$now
+  fi
+
+  # B3 is diagnostic only. Rewards are not booked as paper PnL and no intent is
+  # sent to the broker until estimated shares are validated against real earnings.
+  if (( now - last_rewards >= 300 )); then
+    ./build/polymarket_rewards_scan \
+      --config "$CONFIG" --markets 2000 --top 80 \
+      --quote-shares 50 --max-notional 100 --improve-ticks 0 \
+      --competition-multiplier 2.0 --reward-haircut 0.25 --native-reward-unit-usd 1.0 \
+      --annual-capital-rate 0.20 --adverse-bps 50 --one-sided-fills-per-day 1.0 \
+      --csv "$RUN_ROOT/reward_opportunities.csv" \
+      > "$RUN_ROOT/reward_latest.log" 2> "$RUN_ROOT/reward_errors.log" || true
+    last_rewards=$now
   fi
 
   if (( now - last_terminal >= 300 )); then

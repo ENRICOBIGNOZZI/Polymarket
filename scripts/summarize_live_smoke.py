@@ -32,6 +32,7 @@ SELECTED = {
 LOGS = {
     "trade_recorder": "trade_recorder_latest.log",
     "structural": "structural_latest.log",
+    "rewards": "reward_latest.log",
     "b1": "stat_arb_pairs_latest.log",
     "b2": "stat_arb_pca_latest.log",
     "multileg": "multileg_latest.log",
@@ -197,7 +198,7 @@ def main() -> int:
             walk = {}
 
     snapshot = {
-        "schema": "polymarket_public_live_smoke_v1",
+        "schema": "polymarket_public_live_smoke_v2",
         "generated_ts": int(time.time()),
         "git_sha": args.git_sha,
         "github_run_id": args.run_id,
@@ -207,6 +208,7 @@ def main() -> int:
         "candidates": {
             "b1": top_rows(args.run_root / "stat_arb_pairs.csv", "maker_entry_net_edge"),
             "b2": top_rows(args.run_root / "stat_arb_pca.csv", "maker_entry_net_edge"),
+            "b3_rewards": top_rows(args.run_root / "reward_opportunities.csv", "conservative_daily_score"),
         },
         "intents": intent_summary(args.run_root / "intents.csv"),
         "shadow_b1": shadow_fillability(args.run_root, args.trade_lookback_seconds),

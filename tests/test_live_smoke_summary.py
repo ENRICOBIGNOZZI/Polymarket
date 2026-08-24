@@ -25,12 +25,19 @@ class LiveSmokeSummaryTest(unittest.TestCase):
                 encoding="utf-8",
             )
             (run / "stat_arb_pairs_latest.log").write_text("a\nb\nc\n", encoding="utf-8")
+            (run / "reward_latest.log").write_text("reward-a\nreward-b\n", encoding="utf-8")
             (run / "stat_arb_pairs.csv").write_text(
                 "y_market,x_market,maker_entry_net_edge\nlow,x,0.001\nhigh,y,0.009\n",
                 encoding="utf-8",
             )
             (run / "stat_arb_pca.csv").write_text(
                 "market,maker_entry_net_edge\np1,-0.002\np2,0.004\n",
+                encoding="utf-8",
+            )
+            (run / "reward_opportunities.csv").write_text(
+                "market_id,conservative_daily_score,estimated_native_daily_value\n"
+                "r-low,0.01,0.02\n"
+                "r-high,0.08,0.10\n",
                 encoding="utf-8",
             )
             intent_header = "bundle_id,strategy,event_id,created_ts,mode,expected_edge,max_notional,market_id,side,weight,limit_price,execution_deadline_ts,hold_deadline_ts\n"
@@ -89,14 +96,17 @@ class LiveSmokeSummaryTest(unittest.TestCase):
                 check=True,
             )
             data = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(data["schema"], "polymarket_public_live_smoke_v2")
             self.assertEqual(data["git_sha"], "abc")
             self.assertEqual(data["github_run_id"], "42")
             self.assertEqual(data["metrics"]["polymarket_runtime_equity_usd"], 10001.0)
             self.assertNotIn("unrelated_metric", data["metrics"])
             self.assertEqual(data["logs"]["b1"], ["b", "c"])
+            self.assertEqual(data["logs"]["rewards"], ["reward-a", "reward-b"])
             self.assertFalse(data["walk_forward"]["eligible_for_tiny_pilot"])
             self.assertEqual(data["candidates"]["b1"][0]["y_market"], "high")
             self.assertEqual(data["candidates"]["b2"][0]["market"], "p2")
+            self.assertEqual(data["candidates"]["b3_rewards"][0]["market_id"], "r-high")
             self.assertEqual(data["intents"]["rows"], 2)
             self.assertEqual(data["intents"]["bundles"], 1)
             self.assertEqual(data["intents"]["strategies"], {"B1": 2})
