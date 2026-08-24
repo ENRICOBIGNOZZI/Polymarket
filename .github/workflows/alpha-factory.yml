@@ -10,18 +10,24 @@ on:
       - "config/alpha_factory.json"
       - "config/live_champion.json"
       - "scripts/alpha_factory.py"
+      - "scripts/attach_external_evidence.py"
       - "tests/test_alpha_factory.py"
+      - "tests/test_attach_external_evidence.py"
       - ".github/workflows/alpha-factory.yml"
       - "docs/ALPHA_FACTORY.md"
+      - "docs/EXTERNAL_INTELLIGENCE.md"
   pull_request:
     branches: [main]
     paths:
       - "config/alpha_factory.json"
       - "config/live_champion.json"
       - "scripts/alpha_factory.py"
+      - "scripts/attach_external_evidence.py"
       - "tests/test_alpha_factory.py"
+      - "tests/test_attach_external_evidence.py"
       - ".github/workflows/alpha-factory.yml"
       - "docs/ALPHA_FACTORY.md"
+      - "docs/EXTERNAL_INTELLIGENCE.md"
 
 permissions:
   contents: write
@@ -45,8 +51,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m unittest tests/test_alpha_factory.py -v
-          python3 -m py_compile scripts/alpha_factory.py
+          python3 -m unittest \
+            tests/test_alpha_factory.py \
+            tests/test_attach_external_evidence.py -v
+          python3 -m py_compile \
+            scripts/alpha_factory.py \
+            scripts/attach_external_evidence.py
           python3 -m json.tool config/alpha_factory.json >/dev/null
           python3 - <<'PY'
           import json
@@ -83,6 +93,8 @@ jobs:
             alpha_factory/input/forward-maker-history.jsonl
           extract_or_empty telemetry/alpha-factory-state.json \
             alpha_factory/input/alpha-factory-state.json
+          extract_or_empty telemetry/latest-external-intelligence.json \
+            alpha_factory/input/latest-external-intelligence.json
 
       - name: Diagnose bottlenecks and evaluate challengers
         shell: bash
@@ -99,6 +111,33 @@ jobs:
             --output-json alpha_factory/output/latest-alpha-factory.json \
             --output-markdown alpha_factory/output/latest-alpha-factory.md \
             | tee alpha_factory/output/alpha-factory.log
+
+      - name: Attach external-information evidence fail-closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/attach_external_evidence.py \
+            --alpha-report alpha_factory/output/latest-alpha-factory.json \
+            --alpha-state alpha_factory/output/alpha-factory-state.json \
+            --external-report alpha_factory/input/latest-external-intelligence.json \
+            --alpha-markdown alpha_factory/output/latest-alpha-factory.md \
+            --output-report alpha_factory/output/latest-alpha-factory.json \
+            --output-state alpha_factory/output/alpha-factory-state.json \
+            --output-markdown alpha_factory/output/latest-alpha-factory.md \
+            --max-age-seconds 10800 \
+            | tee alpha_factory/output/alpha-external-adapter.log
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("alpha_factory/output/latest-alpha-factory.json").read_text())
+          state = json.loads(Path("alpha_factory/output/alpha-factory-state.json").read_text())
+          assert report["submitted_orders"] == 0
+          assert report["authenticated_execution"] is False
+          assert report["direct_champion_mutation"] is False
+          assert state["invariants"]["external_direct_champion_mutation"] is False
+          assert state["invariants"]["external_authenticated_execution"] is False
+          PY
 
       - name: Publish Alpha Factory summary
         if: always()
