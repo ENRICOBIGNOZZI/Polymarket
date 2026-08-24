@@ -50,6 +50,15 @@ jobs:
             --config config/paper_v4.json --markets 400 --min-liquidity 100 --top 80 \
             | tee "$R/structural_latest.log" "$R/structural_latest.csv"
 
+          # B3 remains shadow-only: no intents, no reward accrual in PnL.
+          ./build/polymarket_rewards_scan \
+            --config config/paper_v4.json --markets 1200 --top 80 \
+            --quote-shares 50 --max-notional 100 --improve-ticks 0 \
+            --competition-multiplier 2.0 --reward-haircut 0.25 --native-reward-unit-usd 1.0 \
+            --annual-capital-rate 0.20 --adverse-bps 50 --one-sided-fills-per-day 1.0 \
+            --csv "$R/reward_opportunities.csv" \
+            | tee "$R/reward_latest.log"
+
           ./build/polymarket_stat_arb \
             --config config/paper_v4.json --markets 400 --history-universe 120 \
             --lookback-hours 336 --fidelity-minutes 30 --min-z 1.5 \
@@ -158,7 +167,7 @@ jobs:
         run: |
           R=paper_v4_live
           echo '## V4 live paper smoke' >> "$GITHUB_STEP_SUMMARY"
-          for f in "$R/trade_recorder_latest.log" "$R/structural_latest.log" "$R/stat_arb_pairs_latest.log" "$R/stat_arb_pca_latest.log" "$R/multileg_latest.log" "$R/maker_latest.log" "$R/terminal_latest.log" "$R/shadow_b1/stat_arb_pairs_latest.log" "$R/shadow_b1/multileg_latest.log"; do
+          for f in "$R/trade_recorder_latest.log" "$R/structural_latest.log" "$R/reward_latest.log" "$R/stat_arb_pairs_latest.log" "$R/stat_arb_pca_latest.log" "$R/multileg_latest.log" "$R/maker_latest.log" "$R/terminal_latest.log" "$R/shadow_b1/stat_arb_pairs_latest.log" "$R/shadow_b1/multileg_latest.log"; do
             echo "### $f" >> "$GITHUB_STEP_SUMMARY"
             echo '```text' >> "$GITHUB_STEP_SUMMARY"
             tail -n 8 "$f" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
