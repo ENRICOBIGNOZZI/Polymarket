@@ -102,8 +102,9 @@ jobs:
       - name: Unit and mock integration tests (${{ matrix.build_type }})
         run: ctest --test-dir build-${{ matrix.build_type }} --output-on-failure
 
-      - name: Deployment script syntax and contracts
+      - name: Deployment, scheduler context, and runtime contracts
         run: |
+          set -euo pipefail
           bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh \
             ops/bootstrap_server.sh ops/update_server.sh \
             ops/bootstrap_macos.sh ops/update_server_macos.sh ops/macos_service_control.sh \
@@ -111,9 +112,26 @@ jobs:
             ops/apply_runtime_config_macos.sh
           python3 -m py_compile \
             scripts/multi_strategy_paper.py scripts/compact_strategy_logs.py \
+            scripts/project_context_snapshot.py scripts/validate_project_context.py \
+            scripts/validate_scheduler_registry.py \
             monitoring/exporter_v5.py
           python3 -m json.tool config/paper_v5.json >/dev/null
+          python3 -m json.tool config/project_context.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
+          python3 scripts/validate_scheduler_registry.py \
+            --root . \
+            --registry config/scheduler_registry.json \
+            --output /tmp/scheduler-registry-report.md
+          python3 scripts/validate_project_context.py \
+            --root . \
+            --output /tmp/project-context-validation.md
+          python3 scripts/project_context_snapshot.py \
+            --root . \
+            --manifest config/project_context.json \
+            --output-json /tmp/project-context.json \
+            --output-markdown /tmp/project-context.md
+          test -s /tmp/project-context.json
+          test -s /tmp/project-context.md
           python3 -m unittest \
             tests/test_compact_strategy_logs.py \
             tests/test_ops_macos.py \
