@@ -8,12 +8,14 @@ on:
       - "scripts/forward_maker_probe.py"
       - "scripts/select_forward_candidates.py"
       - "scripts/finalize_forward_probe.py"
+      - "scripts/calibrate_forward_maker.py"
       - "scripts/apply_reward_payout_floor.py"
       - "src/rewards_scan.cpp"
       - "include/pm/rewards.hpp"
       - "tests/test_forward_maker_probe.py"
       - "tests/test_forward_candidate_selection.py"
       - "tests/test_finalize_forward_probe.py"
+      - "tests/test_calibrate_forward_maker.py"
       - "CMakeLists.txt"
       - ".github/workflows/forward-maker-research.yml"
   push:
@@ -22,12 +24,14 @@ on:
       - "scripts/forward_maker_probe.py"
       - "scripts/select_forward_candidates.py"
       - "scripts/finalize_forward_probe.py"
+      - "scripts/calibrate_forward_maker.py"
       - "scripts/apply_reward_payout_floor.py"
       - "src/rewards_scan.cpp"
       - "include/pm/rewards.hpp"
       - "tests/test_forward_maker_probe.py"
       - "tests/test_forward_candidate_selection.py"
       - "tests/test_finalize_forward_probe.py"
+      - "tests/test_calibrate_forward_maker.py"
       - "CMakeLists.txt"
       - ".github/workflows/forward-maker-research.yml"
   schedule:
@@ -62,10 +66,18 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           R=forward_maker
           mkdir -p "$R"
+
+          # Reuse the bounded public history so policy selection is based on
+          # repeated forward sessions rather than the current eight-minute run.
+          : > "$R/history_existing.jsonl"
+          history_endpoint="repos/${GITHUB_REPOSITORY}/contents/telemetry/forward-maker-history.jsonl"
+          gh api "${history_endpoint}?ref=telemetry" --jq .content 2>/dev/null \
+            | tr -d '\n' | base64 -d > "$R/history_existing.jsonl" 2>/dev/null || true
 
           DURATION=480
           MARKETS=15
@@ -131,6 +143,19 @@ jobs:
           )
           PY
 
+          cat "$R/history_existing.jsonl" "$R/forward_maker_history_line.jsonl" \
+            | tail -n 336 > "$R/forward-maker-history.jsonl"
+
+          python3 scripts/calibrate_forward_maker.py \
+            --history "$R/forward-maker-history.jsonl" \
+            --output "$R/forward_maker_calibration.json" \
+            --min-sessions 12 --min-probes 180 \
+            --min-any-fills 20 --min-pair-fills 10 \
+            --min-positive-active-session-rate 0.55 \
+            --max-one-sided-given-fill-upper 0.40 \
+            --bootstrap-reps 2000 --bootstrap-alpha 0.05 \
+            | tee "$R/forward_maker_calibration.log"
+
       - name: Publish experiment summary
         if: always()
         shell: bash
@@ -141,8 +166,10 @@ jobs:
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
           tail -n 5 "$R/forward_candidate_selection.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           tail -n 5 "$R/forward_maker_probe.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          tail -n 5 "$R/forward_maker_calibration.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           if test -s "$R/forward_maker_probe.json"; then
+            echo '### Current session' >> "$GITHUB_STEP_SUMMARY"
             echo '```json' >> "$GITHUB_STEP_SUMMARY"
             python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
@@ -150,6 +177,12 @@ jobs:
           p = json.loads(Path("forward_maker/forward_maker_probe.json").read_text())
           print(json.dumps(p.get("aggregate_by_policy", {}), indent=2, sort_keys=True))
           PY
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if test -s "$R/forward_maker_calibration.json"; then
+            echo '### Repeated-session calibration' >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat "$R/forward_maker_calibration.json" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -162,7 +195,8 @@ jobs:
           set -euo pipefail
           R=forward_maker
           test -s "$R/forward_maker_probe.json"
-          test -s "$R/forward_maker_history_line.jsonl"
+          test -s "$R/forward-maker-history.jsonl"
+          test -s "$R/forward_maker_calibration.json"
 
           publish_file() {
             local local_path="$1"
@@ -184,15 +218,13 @@ jobs:
             "telemetry/latest-forward-maker.json" \
             "Update latest forward maker experiment"
 
-          history_endpoint="repos/${GITHUB_REPOSITORY}/contents/telemetry/forward-maker-history.jsonl"
-          : > "$R/history_existing.jsonl"
-          gh api "${history_endpoint}?ref=telemetry" --jq .content 2>/dev/null \
-            | tr -d '\n' | base64 -d > "$R/history_existing.jsonl" 2>/dev/null || true
-          cat "$R/history_existing.jsonl" "$R/forward_maker_history_line.jsonl" \
-            | tail -n 336 > "$R/forward-maker-history.jsonl"
           publish_file "$R/forward-maker-history.jsonl" \
             "telemetry/forward-maker-history.jsonl" \
             "Append bounded forward maker evidence"
+
+          publish_file "$R/forward_maker_calibration.json" \
+            "telemetry/latest-forward-maker-calibration.json" \
+            "Update empirical forward maker policy gate"
 
       - name: Upload diagnostics
         if: always()
