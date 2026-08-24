@@ -5,5 +5,5 @@
   "config": "config/paper_v5.json",
   "run_root": "runs/paper_v5_live",
   "deployment_ref": "paper-validated",
-  "promotion_policy": "approved integration PR only"
+  "promotion_policy": "automatic validated integration"
 }

@@ -9,7 +9,7 @@ Select exactly one primary status.
 - [ ] Normal feature, bug fix, execution/risk, documentation or infrastructure change
 - [ ] Research/experiment/diagnostic only — evidence source; close without direct merge
 - [ ] Shadow-only instrumentation — requires `shadow-isolated`
-- [ ] Approved research integration into the single champion — requires an `integration/*` branch plus `approved-for-integration`, `single-model-reviewed` and `administrator-approved`
+- [ ] Automatic paper-champion integration — requires an `integration/*` branch and a numbered source research PR; no manual approval labels are required
 
 ## Research evidence
 
@@ -22,7 +22,7 @@ Required for research, shadow and integration work.
 - Common chronological sample / information set:
 - Executable-cost assumptions:
 - Normal and stressed result:
-- Decision: `REJECTED` / `MORE_EVIDENCE_REQUIRED` / `APPROVED_FOR_INTEGRATION` / `SHADOW_ONLY`
+- Decision: `REJECTED` / `MORE_EVIDENCE_REQUIRED` / `INTEGRATION_READY` / `SHADOW_ONLY`
 
 ## Change type
 
@@ -45,7 +45,7 @@ Required for research, shadow and integration work.
 
 ## Single champion and model semantics
 
-Required for every approved integration.
+Required for every integration candidate.
 
 - [ ] The candidate is connected to the existing expert/signal/intent interfaces rather than left as a second complete live stack
 - [ ] There remains one model orchestrator/registry, one live config, one portfolio/risk allocator and one execution broker
@@ -53,16 +53,19 @@ Required for every approved integration.
 - [ ] Structural, external-information and execution estimates retain their correct economic meaning
 - [ ] Duplicated or superseded implementation, configuration, state and telemetry paths are removed or given a documented deletion condition
 - [ ] Incremental alpha is shown with an ablation against the incumbent champion
-- [ ] `config/live_champion.json` is unchanged, or its promotion change is explicit, reviewed and rollback-safe
+- [ ] `config/live_champion.json` is unchanged, or its promotion change is explicit and rollback-safe
 - [ ] The previous `paper-validated` revision remains the rollback target until post-merge live smoke succeeds
 
-## Administrator approval
+## Automatic paper promotion
 
-Required only for a non-draft `integration/*` PR.
+For non-draft `integration/*` PRs, the scheduler is the promotion authority.
 
-- [ ] The project administrator reviewed this exact integrated diff, not only the source research result
-- [ ] The PR carries `administrator-approved` in addition to both integration labels
-- [ ] The administrator accepts the rollback, state-migration and live-behavior consequences
+- [ ] The PR links `Source research PR/branch/commit: #<number>`
+- [ ] The source research PR has green Release, Debug and research-policy checks
+- [ ] The integration PR has green Release, Debug, monitoring, research-policy and live-paper checks
+- [ ] No `administrator-approved`, `approved-for-integration` or `single-model-reviewed` label is required
+- [ ] If multiple candidates are eligible, one is promoted per scheduler cycle and the remainder stay queued
+- [ ] Automatic paper promotion does not authorize authenticated real-money execution
 
 ## Shadow isolation
 
@@ -72,7 +75,7 @@ Required when `shadow-isolated` is used.
 - [ ] Shadow code cannot emit production intents or authenticated orders
 - [ ] Shadow estimates and hypothetical fills are not booked as realized PnL
 - [ ] Production thresholds, sizing, exposure, drawdown, kill switch and OOS gates are unchanged
-- [ ] Failure is visible but cannot corrupt or block the production decision path
+- [ ] Failure is visible but cannot corrupt the production decision path
 - [ ] Deterministic tests enforce the isolation boundary
 
 ## Model and execution boundaries
@@ -80,22 +83,23 @@ Required when `shadow-isolated` is used.
 - [ ] Paper fills are not presented as real fills
 - [ ] No authenticated order submission, wallet secret or credential is introduced
 - [ ] State persistence, restart behavior, reconciliation and kill-switch effects are considered
-- [ ] Model approval and administrator approval do not implicitly authorize real-money execution
+- [ ] Automatic paper promotion does not implicitly authorize real-money execution
 
 ## Scheduler and authority boundaries
 
 - [ ] This change preserves one job and one bounded responsibility per workflow
-- [ ] Only the integration scheduler can merge an approved integration
+- [ ] Only the integration scheduler can merge an automatic paper integration
 - [ ] Only the post-merge scheduler can dispatch the validation bundle
 - [ ] Only the deployment scheduler can deploy `paper-validated`
 - [ ] The administrator supervisor remains read-only
+- [ ] The meta-supervisor may dispatch the integration scheduler but cannot merge directly
 
 ## Branch lifecycle and post-merge verification
 
-- [ ] Unapproved research is on `research/*`, `experiment/*` or `diagnostic/*`, not directly on `main`
-- [ ] Approved research is consolidated on a fresh `integration/*` branch based on current `main`
-- [ ] The integration PR links its source evidence and can be squash-merged as one coherent champion change
+- [ ] Research is on `research/*`, `experiment/*` or `diagnostic/*`, not directly on `main`
+- [ ] A live candidate is consolidated on a fresh `integration/*` branch based on current `main`
+- [ ] The integration PR links its numbered source evidence and can be squash-merged as one coherent champion change
 - [ ] Integration merge and post-merge validation are handled by separate schedulers
 - [ ] CI, monitoring and live-paper smoke are bound to the exact merged SHA
-- [ ] Promotion is complete only after `main == paper-validated == deployed HEAD`
+- [ ] Promotion is deployment-complete only after `main == paper-validated == deployed HEAD`
 - [ ] The head branch can be deleted after merge or closure

@@ -3,7 +3,7 @@ name: Polymarket Integration Merge
 on:
   workflow_dispatch:
   schedule:
-    - cron: "33 * * * *"
+    - cron: "3,18,33,48 * * * *"
 
 permissions:
   actions: read
@@ -25,53 +25,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Require a fully validated and healthy incumbent
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SERVER_DEPLOY_ENABLED: ${{ vars.POLYMARKET_SERVER_DEPLOY || 'false' }}
-        run: |
-          set -euo pipefail
-          git fetch --no-tags origin main paper-validated
-          main_sha="$(git rev-parse origin/main)"
-          validated_sha="$(git rev-parse origin/paper-validated)"
-          echo "BASE_MAIN_SHA=$main_sha" >> "$GITHUB_ENV"
-          echo "BASE_VALIDATED_SHA=$validated_sha" >> "$GITHUB_ENV"
-
-          gate_args=(
-            python3 scripts/incumbent_health_gate.py
-            --main-sha "$main_sha"
-            --validated-sha "$validated_sha"
-            --deploy-enabled "$SERVER_DEPLOY_ENABLED"
-            --max-age-seconds 7200
-            --output incumbent-gate-report.md
-          )
-
-          if [[ "$SERVER_DEPLOY_ENABLED" == "true" ]]; then
-            health_run_id="$(
-              gh run list --workflow server-health.yml --branch main --status success --limit 1 \
-                --json databaseId --jq '.[0].databaseId // empty'
-            )"
-            test -n "$health_run_id" || {
-              echo 'No successful paper-server-health run is available.' >&2
-              exit 1
-            }
-            mkdir -p incumbent-health-evidence
-            gh run download "$health_run_id" \
-              --name "paper-server-health-$health_run_id" \
-              --dir incumbent-health-evidence
-            health_file="$(find incumbent-health-evidence -type f -name server-health.txt -print -quit)"
-            test -n "$health_file" || {
-              echo "paper-server-health artifact $health_run_id has no server-health.txt" >&2
-              exit 1
-            }
-            echo "INCUMBENT_HEALTH_RUN_ID=$health_run_id" >> "$GITHUB_ENV"
-            gate_args+=(--server-health "$health_file")
-          fi
-
-          "${gate_args[@]}"
-
-      - name: Select one administrator-approved integration
+      - name: Build locally-green automatic promotion queue
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -80,38 +34,71 @@ jobs:
           gh pr list --state open --base main --limit 100 \
             --json number,title,url,headRefName,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
             > integration-prs.json
-          set +e
           python3 scripts/integration_gate.py select \
             --prs integration-prs.json \
             --env candidate.env \
             --report integration-merge-report.md
-          select_rc=$?
-          set -e
           cat candidate.env >> "$GITHUB_ENV"
-          if [[ "$select_rc" -eq 2 ]]; then
-            exit 1
-          fi
-          test "$select_rc" -eq 0
 
-      - name: Fetch and recheck candidate and source research
-        if: env.CANDIDATE_COUNT == '1'
+      - name: Scan numbered research sources and select first fully-green candidate
+        if: env.ELIGIBLE_COUNT != '0'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh pr view "$PR_NUMBER" \
-            --json number,title,url,headRefName,headRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
-            > candidate.json
-          gh pr view "$SOURCE_PR_NUMBER" \
-            --json number,headRefName,headRefOid,isDraft,labels,state,body \
-            > source-research.json
-          python3 scripts/integration_gate.py validate \
-            --candidate candidate.json \
-            --source-research source-research.json \
-            --report integration-gate-report.md
+          : > integration-gate-report.md
+          selected=0
+          IFS=',' read -r -a queue <<< "${QUEUE_NUMBERS:-}"
+          for candidate_number in "${queue[@]}"; do
+            [[ -n "$candidate_number" ]] || continue
+            gh pr view "$candidate_number" \
+              --json number,title,url,headRefName,headRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
+              > candidate-probe.json
+            source_number="$(python3 -c 'import json,re; b=json.load(open("candidate-probe.json"))["body"] or ""; m=re.search(r"source research pr/branch/commit:\s*#(\d+)\b", b, re.I); print(m.group(1) if m else "")')"
+            if [[ -z "$source_number" ]]; then
+              printf '\n## Skipped #%s\n- reason: numbered source research PR missing\n' "$candidate_number" >> integration-gate-report.md
+              continue
+            fi
+            if ! gh pr view "$source_number" \
+              --json number,headRefName,headRefOid,isDraft,labels,state,body,statusCheckRollup \
+              > source-probe.json 2>/dev/null; then
+              printf '\n## Skipped #%s\n- source: #%s\n- reason: source research PR unavailable\n' \
+                "$candidate_number" "$source_number" >> integration-gate-report.md
+              continue
+            fi
 
-      - name: Merge the unified champion change
+            set +e
+            python3 scripts/integration_gate.py validate \
+              --candidate candidate-probe.json \
+              --source-research source-probe.json \
+              --report candidate-probe-report.md
+            probe_rc=$?
+            set -e
+            {
+              echo
+              echo "## Probe candidate #$candidate_number / source #$source_number"
+              cat candidate-probe-report.md
+            } >> integration-gate-report.md
+            if [[ "$probe_rc" -ne 0 ]]; then
+              continue
+            fi
+
+            cp candidate-probe.json candidate.json
+            cp source-probe.json source-research.json
+            echo "PR_NUMBER=$candidate_number" >> "$GITHUB_ENV"
+            echo "SOURCE_PR_NUMBER=$source_number" >> "$GITHUB_ENV"
+            echo "CANDIDATE_COUNT=1" >> "$GITHUB_ENV"
+            selected=1
+            break
+          done
+          if [[ "$selected" -eq 0 ]]; then
+            echo "CANDIDATE_COUNT=0" >> "$GITHUB_ENV"
+            echo >> integration-gate-report.md
+            echo 'No fully-green candidate/source pair was available; unready entries were skipped without blocking the queue.' >> integration-gate-report.md
+          fi
+
+      - name: Automatically promote the first fully-green paper champion candidate
         if: env.CANDIDATE_COUNT == '1'
         shell: bash
         env:
@@ -123,26 +110,13 @@ jobs:
             --json number,title,url,headRefName,headRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
             > candidate-final.json
           gh pr view "$SOURCE_PR_NUMBER" \
-            --json number,headRefName,headRefOid,isDraft,labels,state,body \
+            --json number,headRefName,headRefOid,isDraft,labels,state,body,statusCheckRollup \
             > source-research-final.json
           python3 scripts/integration_gate.py validate \
             --candidate candidate-final.json \
             --source-research source-research-final.json \
             --report integration-final-gate-report.md
           expected_head="$(python3 -c 'import json; print(json.load(open("candidate-final.json"))["headRefOid"])')"
-
-          git fetch --no-tags origin main paper-validated
-          current_main_sha="$(git rev-parse origin/main)"
-          current_validated_sha="$(git rev-parse origin/paper-validated)"
-          test "$current_main_sha" = "$BASE_MAIN_SHA"
-          test "$current_validated_sha" = "$BASE_VALIDATED_SHA"
-          test "$current_main_sha" = "$current_validated_sha"
-
-          if [[ -n "${INCUMBENT_HEALTH_RUN_ID:-}" ]]; then
-            test -s incumbent-gate-report.md
-            grep -q '^PASS: incumbent is fully validated and, when enabled, deployed and healthy\.$' \
-              incumbent-gate-report.md
-          fi
 
           gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$expected_head" \
             | tee merge-result.txt
@@ -160,46 +134,45 @@ jobs:
               "client_payload": {
                   "sha": sys.argv[1],
                   "pr_number": int(sys.argv[2]),
+                  "automatic_promotion": True,
               },
           }))
           PY
           gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" --input integration-dispatch.json
           gh pr comment "$PR_NUMBER" --body \
-            "Administrator-approved integration merged at \`$merged_sha\`. Validation has been handed to the dedicated post-merge scheduler. The prior \`paper-validated\` revision remains live until that chain succeeds."
+            "Automatic paper-champion promotion merged at \`$merged_sha\`. Objective CI/research/live-paper gates passed; post-merge exact-SHA validation now owns the handoff to \`paper-validated\` and deployment. No manual approval label was required."
 
           {
             echo
-            echo '## Integration action'
-            echo "- incumbent revision: \`$BASE_MAIN_SHA\`"
-            echo "- incumbent health run: ${INCUMBENT_HEALTH_RUN_ID:-deployment-disabled}"
-            echo "- merged PR: #$PR_NUMBER"
-            echo "- approved source research PR: #$SOURCE_PR_NUMBER"
+            echo '## Automatic promotion action'
+            echo "- locally-green candidates at selection: ${ELIGIBLE_COUNT:-unknown}"
+            echo "- promoted PR: #$PR_NUMBER"
+            echo "- source research PR: #$SOURCE_PR_NUMBER"
             echo "- candidate head: \`$expected_head\`"
             echo "- merged main revision: \`$merged_sha\`"
-            echo '- merge mode: squash; no administrative bypass'
+            echo '- selection: first fully-green candidate/source pair; unready pairs are skipped'
+            echo '- merge mode: squash; at most one candidate per scheduler cycle'
+            echo '- manual approval labels: not required'
             echo '- handoff: repository dispatch `champion-integration-merged`'
+            echo '- real-money execution: unchanged/disabled'
           } >> integration-merge-report.md
 
-      - name: Publish integration report
+      - name: Publish automatic promotion report
         if: always()
         shell: bash
         run: |
-          cat incumbent-gate-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
-          printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat integration-merge-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat integration-gate-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat integration-final-gate-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
-      - name: Upload integration evidence
+      - name: Upload automatic promotion evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: integration-merge-${{ github.run_id }}
           path: |
-            incumbent-gate-report.md
-            incumbent-health-evidence/
             integration-merge-report.md
             integration-gate-report.md
             integration-final-gate-report.md
@@ -207,8 +180,11 @@ jobs:
             candidate.env
             candidate.json
             candidate-final.json
+            candidate-probe.json
+            candidate-probe-report.md
             source-research.json
             source-research-final.json
+            source-probe.json
             merge-result.txt
             integration-dispatch.json
           if-no-files-found: warn

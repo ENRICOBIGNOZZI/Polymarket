@@ -45,7 +45,7 @@ jobs:
       - name: Test research policy regressions
         run: python3 -m unittest tests/test_research_policy_cross_venue.py -v
 
-      - name: Ensure governance labels exist
+      - name: Ensure research-isolation labels exist
         if: github.event_name != 'pull_request'
         shell: bash
         env:
@@ -59,10 +59,7 @@ jobs:
                 -f name="$name" -f color="$color" -f description="$description" >/dev/null
             fi
           }
-          ensure_label research-approved 0e8a16 "Research evidence approved; integration into the champion is required"
-          ensure_label approved-for-integration 1d76db "Unified integration implementation approved for gated merge"
-          ensure_label single-model-reviewed 5319e7 "Reviewed for one orchestrator, config, risk and execution path"
-          ensure_label administrator-approved b60205 "Project administrator explicitly authorizes this unified integration"
+          ensure_label research-approved 0e8a16 "Optional research-evidence annotation; not a paper-promotion gate"
           ensure_label shadow-isolated fbca04 "Measurement-only code isolated from production decisions, PnL and risk"
 
       - name: Enforce pull-request lifecycle
@@ -90,7 +87,8 @@ jobs:
             echo '# Research pull-request policy'
             echo
             echo "- event: \`$GITHUB_EVENT_NAME\`"
-            echo '- policy scripts, labels and scheduler registry validated'
+            echo '- policy scripts and scheduler registry validated'
+            echo '- legacy manual paper-promotion labels are not provisioned or required'
             echo '- no pull request was evaluated in this run'
           } > research-policy-report.md
 
