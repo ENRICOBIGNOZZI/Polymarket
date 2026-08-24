@@ -45,6 +45,14 @@ class V4MonitoringContractTest(unittest.TestCase):
         advance_pos = smoke.index("- name: Advance paper validated ref")
         self.assertLess(snapshot_pos, advance_pos)
 
+    def test_shadow_tape_uses_same_market_universe_and_explicit_horizon(self):
+        smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
+        shadow_pos = smoke.index("- name: B1 shadow fillability diagnostic")
+        production_segment = smoke[:shadow_pos]
+        self.assertIn("polymarket_trade_recorder", production_segment)
+        self.assertIn("--markets 400 --batch 40 --min-liquidity 100 --lookback-seconds 900", production_segment)
+        self.assertIn("--trade-lookback-seconds 900", smoke)
+
     def test_pca_sparse_hedge_cap_matches_production_and_smoke(self):
         once = (ROOT / "scripts" / "paper_v4_once.sh").read_text(encoding="utf-8")
         loop = (ROOT / "scripts" / "paper_v4_loop.sh").read_text(encoding="utf-8")
