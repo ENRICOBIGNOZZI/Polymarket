@@ -6,7 +6,7 @@
       "experiment_id": "external-data-lineage-audit",
       "hypothesis_id": "external-point-in-time-contract-remains-valid",
       "family": "external_information_operations",
-      "status": "active",
+      "status": "planned",
       "priority": 10,
       "cadence_seconds": 900,
       "required_new_observations": 0,
