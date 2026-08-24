@@ -70,6 +70,18 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('apply_runtime_config_macos.sh', finish)
         self.assertIn('http://127.0.0.1:3000/api/search', updater)
 
+    def test_same_sha_repair_reapplies_runtime_config_before_restart(self):
+        updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
+        marker = 'if [[ "$OLD_SHA" == "$NEW_SHA" ]]; then'
+        self.assertIn(marker, updater)
+        repair = updater.split(marker, 1)[1].split('\nif git merge-base --is-ancestor', 1)[0]
+        apply = 'bash "$APP_DIR/ops/apply_runtime_config_macos.sh"'
+        restart = 'sudo -n /usr/local/sbin/polymarket-service-control restart'
+        self.assertIn(apply, repair)
+        self.assertIn(restart, repair)
+        self.assertLess(repair.index(apply), repair.index(restart))
+        self.assertIn('Runtime and Grafana configuration repaired', repair)
+
     def test_deployment_uses_validated_ref_and_v5_health(self):
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
         linux_updater = (ROOT / "ops" / "update_server.sh").read_text(encoding="utf-8")
