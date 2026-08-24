@@ -153,6 +153,32 @@
       "validation_dispatch_authority": false
     },
     {
+      "id": "alpha-factory",
+      "workflow": ".github/workflows/alpha-factory.yml",
+      "workflow_name": "Polymarket Alpha Factory",
+      "job": "evaluate",
+      "cadence": "hourly at minute 2, relevant changes and manual",
+      "responsibility": "evaluate paper-only alpha challengers under the shared architecture and publish durable evidence without mutating the live champion",
+      "context_profile": "research",
+      "critical": false,
+      "merge_authority": false,
+      "deploy_authority": false,
+      "validation_dispatch_authority": false
+    },
+    {
+      "id": "meta-supervisor",
+      "workflow": ".github/workflows/control-plane.yml",
+      "workflow_name": "Polymarket Meta-Supervisor",
+      "job": "coordinate",
+      "cadence": "hourly at minute 29, relevant changes and manual",
+      "responsibility": "coordinate bounded allowlisted research and validation remediation under the shared remote and quantitative contract without merge, deploy or champion mutation",
+      "context_profile": "supervisor",
+      "critical": true,
+      "merge_authority": false,
+      "deploy_authority": false,
+      "validation_dispatch_authority": false
+    },
+    {
       "id": "fast-arb-shadow-research",
       "workflow": ".github/workflows/fast-arb-hourly.yml",
       "workflow_name": "Fast Arbitrage Hourly Shadow",
