@@ -8,11 +8,45 @@ RECORDER_BATCH="${V4_RECORDER_BATCH:-20}"
 RECORDER_LOOKBACK_SECONDS="${V4_RECORDER_LOOKBACK_SECONDS:-300}"
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/terminal"
 
-python3 scripts/build_v4_intents.py --strategy B1 --input "$RUN_ROOT/stat_arb_pairs.csv" --output "$RUN_ROOT/b1_intents.csv" --config "$CONFIG" >/dev/null
-python3 scripts/build_v4_intents.py --strategy B2 --input "$RUN_ROOT/stat_arb_pca.csv" --output "$RUN_ROOT/b2_intents.csv" --config "$CONFIG" >/dev/null
-python3 scripts/merge_v4_intents.py \
-  --input "$RUN_ROOT/b1_intents.csv" --input "$RUN_ROOT/b2_intents.csv" \
-  --output "$RUN_ROOT/intents.csv" --max-bundles 20 >/dev/null
+filter_b2() {
+  python3 scripts/filter_coherent_hedges.py \
+    --input "$RUN_ROOT/stat_arb_pca_raw.csv" \
+    --output "$RUN_ROOT/stat_arb_pca.csv" \
+    --rejections "$RUN_ROOT/stat_arb_pca_rejected.csv" \
+    --cache "$RUN_ROOT/market_metadata_cache.json" \
+    >> "$RUN_ROOT/coherent_hedges.log" 2>&1
+}
+
+rebuild_intents() {
+  # Never allow an earlier intent file to survive a failed refresh.
+  rm -f "$RUN_ROOT/b1_intents.csv" "$RUN_ROOT/b2_intents.csv" "$RUN_ROOT/intents.csv"
+  python3 scripts/build_v4_intents.py \
+    --strategy B1 --input "$RUN_ROOT/stat_arb_pairs.csv" \
+    --output "$RUN_ROOT/b1_intents.csv" --config "$CONFIG" --min-edge 0.001 \
+    >> "$RUN_ROOT/intent_build.log" 2>&1
+  python3 scripts/build_v4_intents.py \
+    --strategy B2 --input "$RUN_ROOT/stat_arb_pca.csv" \
+    --output "$RUN_ROOT/b2_intents.csv" --config "$CONFIG" --min-edge 0.001 \
+    >> "$RUN_ROOT/intent_build.log" 2>&1
+  python3 scripts/merge_v4_intents.py \
+    --input "$RUN_ROOT/b1_intents.csv" --input "$RUN_ROOT/b2_intents.csv" \
+    --output "$RUN_ROOT/intents.csv" --min-edge 0.001 \
+    --max-age-seconds 600 --max-bundles 20 \
+    >> "$RUN_ROOT/intent_merge.log" 2>&1
+}
+
+# Restart is fail-closed. Scanner rows do not carry a trustworthy refresh time,
+# so an old alpha file must never be re-timestamped into a fresh broker intent.
+rm -f \
+  "$RUN_ROOT/stat_arb_pairs.csv" \
+  "$RUN_ROOT/stat_arb_pca_raw.csv" \
+  "$RUN_ROOT/stat_arb_pca.csv" \
+  "$RUN_ROOT/stat_arb_pca_rejected.csv" \
+  "$RUN_ROOT/b1_intents.csv" \
+  "$RUN_ROOT/b2_intents.csv" \
+  "$RUN_ROOT/intents.csv"
+filter_b2 || true
+rebuild_intents || true
 
 supervise_execution() {
   local rec_pid=0
@@ -133,6 +167,7 @@ last_structural=0
 last_rewards=0
 last_terminal=0
 last_oos=0
+last_report=0
 
 while true; do
   now=$(date +%s)
@@ -151,31 +186,30 @@ while true; do
     --adverse-selection-mult 0.50 --once >> "$RUN_ROOT/maker.log" 2>&1 || true
 
   if (( now - last_stat >= 900 )); then
+    # Remove old alpha before scanning: scanner failure must mean no new intent.
+    rm -f "$RUN_ROOT/stat_arb_pairs.csv" "$RUN_ROOT/stat_arb_pca_raw.csv"
     ./build/polymarket_stat_arb \
       --config "$CONFIG" --markets 600 --history-universe 160 \
-      --lookback-hours 336 --fidelity-minutes 30 --min-z 1.5 --max-half-life-hours 168 --top 60 \
+      --lookback-hours 336 --fidelity-minutes 30 --min-z 1.5 \
+      --max-half-life-hours 168 --top 60 \
       --csv "$RUN_ROOT/stat_arb_pairs.csv" \
-      > "$RUN_ROOT/stat_arb_pairs_latest.log" 2> "$RUN_ROOT/stat_arb_pairs_errors.log" || true
+      > "$RUN_ROOT/stat_arb_pairs_latest.log" \
+      2> "$RUN_ROOT/stat_arb_pairs_errors.log" || true
     ./build/polymarket_pca_stat_arb \
       --config "$CONFIG" --markets 600 --universe 120 \
-      --lookback-hours 336 --fidelity-minutes 30 --factors 3 --max-hedges 4 --min-z 1.5 --max-half-life-hours 168 --top 60 \
-      --csv "$RUN_ROOT/stat_arb_pca.csv" \
-      > "$RUN_ROOT/stat_arb_pca_latest.log" 2> "$RUN_ROOT/stat_arb_pca_errors.log" || true
-    python3 scripts/build_v4_intents.py \
-      --strategy B1 --input "$RUN_ROOT/stat_arb_pairs.csv" --output "$RUN_ROOT/b1_intents.csv" \
-      --config "$CONFIG" --min-edge 0.001 >> "$RUN_ROOT/intent_build.log" 2>&1 || true
-    python3 scripts/build_v4_intents.py \
-      --strategy B2 --input "$RUN_ROOT/stat_arb_pca.csv" --output "$RUN_ROOT/b2_intents.csv" \
-      --config "$CONFIG" --min-edge 0.001 >> "$RUN_ROOT/intent_build.log" 2>&1 || true
-    python3 scripts/merge_v4_intents.py \
-      --input "$RUN_ROOT/b1_intents.csv" --input "$RUN_ROOT/b2_intents.csv" \
-      --output "$RUN_ROOT/intents.csv" --min-edge 0.001 --max-age-seconds 600 --max-bundles 20 \
-      >> "$RUN_ROOT/intent_merge.log" 2>&1 || true
+      --lookback-hours 336 --fidelity-minutes 30 --factors 3 --max-hedges 4 \
+      --min-z 1.5 --max-half-life-hours 168 --top 60 \
+      --csv "$RUN_ROOT/stat_arb_pca_raw.csv" \
+      > "$RUN_ROOT/stat_arb_pca_latest.log" \
+      2> "$RUN_ROOT/stat_arb_pca_errors.log" || true
+    filter_b2 || true
+    rebuild_intents || true
     last_stat=$now
   fi
 
   if (( now - last_structural >= 300 )); then
-    ./build/polymarket_negrisk_arb --config "$CONFIG" --markets 600 --min-liquidity 100 --top 60 \
+    ./build/polymarket_negrisk_arb \
+      --config "$CONFIG" --markets 600 --min-liquidity 100 --top 60 \
       2> "$RUN_ROOT/structural_errors.log" \
       | tee "$RUN_ROOT/structural_latest.log" "$RUN_ROOT/structural_latest.csv" >/dev/null || true
     last_structural=$now
@@ -184,32 +218,51 @@ while true; do
   # B3 is diagnostic only. Rewards are not booked as paper PnL and no intent is
   # sent to the broker until estimated shares are validated against real earnings.
   if (( now - last_rewards >= 300 )); then
+    rm -f "$RUN_ROOT/reward_opportunities.csv"
     ./build/polymarket_rewards_scan \
       --config "$CONFIG" --markets 2000 --top 80 \
       --quote-shares 50 --max-notional 100 --improve-ticks 0 \
-      --competition-multiplier 2.0 --reward-haircut 0.25 --native-reward-unit-usd 1.0 \
-      --annual-capital-rate 0.20 --adverse-bps 50 --one-sided-fills-per-day 1.0 \
+      --competition-multiplier 2.0 --reward-haircut 0.25 \
+      --native-reward-unit-usd 1.0 --annual-capital-rate 0.20 \
+      --adverse-bps 50 --one-sided-fills-per-day 1.0 \
       --csv "$RUN_ROOT/reward_opportunities.csv" \
-      > "$RUN_ROOT/reward_latest.log" 2> "$RUN_ROOT/reward_errors.log" || true
+      > "$RUN_ROOT/reward_latest.log" \
+      2> "$RUN_ROOT/reward_errors.log" || true
     if [[ -s "$RUN_ROOT/reward_opportunities.csv" ]]; then
       python3 scripts/apply_reward_payout_floor.py \
         --csv "$RUN_ROOT/reward_opportunities.csv" --minimum-daily-payout-usd 1.0 \
-        >> "$RUN_ROOT/reward_latest.log" 2>> "$RUN_ROOT/reward_errors.log" || true
+        >> "$RUN_ROOT/reward_latest.log" \
+        2>> "$RUN_ROOT/reward_errors.log" || true
     fi
     last_rewards=$now
   fi
 
   if (( now - last_terminal >= 300 )); then
-    ./build/polymarket_engine --config "$CONFIG" --once --scan-only --markets 240 --min-liquidity 100 \
-      --run-dir "$RUN_ROOT/terminal" > "$RUN_ROOT/terminal_latest.log" 2> "$RUN_ROOT/terminal_errors.log" || true
+    ./build/polymarket_engine \
+      --config "$CONFIG" --once --scan-only --markets 240 --min-liquidity 100 \
+      --run-dir "$RUN_ROOT/terminal" \
+      > "$RUN_ROOT/terminal_latest.log" \
+      2> "$RUN_ROOT/terminal_errors.log" || true
     last_terminal=$now
   fi
 
   if (( now - last_oos >= 3600 )); then
-    python3 scripts/walk_forward_v4.py --ledger "$RUN_ROOT/bundle_ledger.csv" \
+    python3 scripts/walk_forward_v4.py \
+      --ledger "$RUN_ROOT/bundle_ledger.csv" \
       --output "$RUN_ROOT/walk_forward.json" --starting-capital 10000 \
       >> "$RUN_ROOT/walk_forward.log" 2>&1 || true
     last_oos=$now
+  fi
+
+  if (( now - last_report >= 300 )); then
+    python3 scripts/runtime_action_report.py \
+      --run-root "$RUN_ROOT" --external-signals data/external_signals.csv \
+      --window-seconds 3600 --production-edge 0.001 \
+      --output-json "$RUN_ROOT/action_report.json" \
+      --output-markdown "$RUN_ROOT/action_report.md" \
+      > "$RUN_ROOT/action_report_latest.log" \
+      2> "$RUN_ROOT/action_report_errors.log" || true
+    last_report=$now
   fi
 
   sleep 10

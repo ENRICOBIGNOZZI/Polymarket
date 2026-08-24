@@ -35,20 +35,30 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertNotIn('tiny_live_pilot.py', installer)
         self.assertNotIn('--execute', installer)
 
-    def test_grafana_passwordless_access_is_loopback_viewer_only(self):
+    def test_grafana_passwordless_access_is_tailnet_viewer_only(self):
         runtime = (ROOT / "ops" / "apply_runtime_config_macos.sh").read_text(encoding="utf-8")
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
         finish = (ROOT / "ops" / "finish_bootstrap_macos.sh").read_text(encoding="utf-8")
 
+        # Grafana itself remains loopback-only; Tailscale Serve is the sole remote route.
         self.assertIn('http_addr = 127.0.0.1', runtime)
         self.assertIn('root_url = http://127.0.0.1:3000/', runtime)
+        self.assertNotIn('http_addr = 0.0.0.0', runtime)
+        self.assertIn('find_tailscale()', runtime)
+        self.assertIn('/Applications/Tailscale.app/Contents/MacOS/Tailscale', runtime)
+        self.assertIn('serve --bg --http=3000 localhost:3000', runtime)
+        self.assertIn('exposure=tailscale-serve', runtime)
+
         self.assertIn('[auth]\ndisable_login_form = true', runtime)
         self.assertIn('disable_signout_menu = true', runtime)
         self.assertIn('[auth.basic]\nenabled = false', runtime)
         self.assertIn('[auth.anonymous]\nenabled = true', runtime)
         self.assertIn('org_role = Viewer', runtime)
         self.assertNotIn('org_role = Admin', runtime)
-        self.assertIn('default_home_dashboard_path = $APP_DIR/monitoring/grafana/dashboards/polymarket-latest.json', runtime)
+        self.assertIn(
+            'default_home_dashboard_path = $APP_DIR/monitoring/grafana/dashboards/polymarket-latest.json',
+            runtime,
+        )
         self.assertIn('reporting_enabled = false', runtime)
         self.assertIn('apply_runtime_config_macos.sh', updater)
         self.assertIn('apply_runtime_config_macos.sh', finish)
@@ -132,6 +142,12 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('workflows: ["deploy-paper-server"]', health)
         self.assertIn('types: [completed]\n    branches: [main]', health)
         self.assertIn("github.event.workflow_run.conclusion == 'success'", health)
+
+        # The operator route and explanatory action report are now contractual.
+        self.assertIn('http://$SERVER_HOST:3000/api/health', health)
+        self.assertIn('runtime_action_report.py', health)
+        self.assertIn('runtime-action-report.md', health)
+        self.assertIn('action_report.json', health)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,20 @@ STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
   exit 1
 }
 
+find_tailscale() {
+  local candidate
+  for candidate in \
+    /Applications/Tailscale.app/Contents/MacOS/Tailscale \
+    /opt/homebrew/bin/tailscale \
+    /usr/local/bin/tailscale; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  command -v tailscale 2>/dev/null || return 1
+}
+
 mkdir -p "$STATE_DIR/grafana/provisioning/datasources" \
   "$STATE_DIR/grafana/provisioning/dashboards"
 
@@ -79,4 +93,23 @@ providers:
       path: "$APP_DIR/monitoring/grafana/dashboards"
 EOF
 
-printf 'grafana_mode=anonymous_viewer_no_login bind=127.0.0.1:3000 dashboard=polymarket-latest\n'
+TAILSCALE_BIN="$(find_tailscale || true)"
+[[ -n "$TAILSCALE_BIN" ]] || {
+  echo "tailscale CLI not found; refusing to leave Grafana inaccessible" >&2
+  exit 1
+}
+serve_log="$(mktemp)"
+trap 'rm -f "$serve_log"' EXIT
+if "$TAILSCALE_BIN" serve --bg --http=3000 localhost:3000 >"$serve_log" 2>&1; then
+  :
+elif sudo -n "$TAILSCALE_BIN" serve --bg --http=3000 localhost:3000 >"$serve_log" 2>&1; then
+  :
+else
+  cat "$serve_log" >&2
+  echo "failed to configure Tailscale Serve for Grafana" >&2
+  exit 1
+fi
+
+tailnet_ip="$($TAILSCALE_BIN ip -4 2>/dev/null | head -n 1 || true)"
+[[ -n "$tailnet_ip" ]] || tailnet_ip="<tailscale-ip>"
+printf 'grafana_mode=anonymous_viewer_no_login backend=127.0.0.1:3000 exposure=tailscale-serve operator_url=http://%s:3000\n' "$tailnet_ip"

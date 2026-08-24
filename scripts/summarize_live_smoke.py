@@ -35,6 +35,7 @@ LOGS = {
     "rewards": "reward_latest.log",
     "b1": "stat_arb_pairs_latest.log",
     "b2": "stat_arb_pca_latest.log",
+    "b2_coherence": "coherent_hedges.log",
     "multileg": "multileg_latest.log",
     "maker": "maker_latest.log",
     "terminal": "terminal_latest.log",
@@ -47,7 +48,7 @@ def read_rows(path: Path) -> list[dict[str, str]]:
     try:
         with path.open(newline="", encoding="utf-8") as f:
             return list(csv.DictReader(f))
-    except OSError:
+    except (OSError, csv.Error):
         return []
 
 
@@ -56,10 +57,10 @@ def metric_snapshot(path: Path) -> dict:
     if not path.exists():
         return out
     for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        m = METRIC.match(raw.strip())
-        if not m:
+        match = METRIC.match(raw.strip())
+        if not match:
             continue
-        name, labels, value = m.groups()
+        name, labels, value = match.groups()
         if name == "polymarket_runtime_info":
             out[name] = {"labels": labels or "", "value": float(value)}
         elif name in SELECTED:
@@ -90,20 +91,56 @@ def inum(value: str | None, default: int = 0) -> int:
 
 def top_rows(path: Path, edge_key: str, limit: int = 8) -> list[dict[str, str]]:
     rows = read_rows(path)
-    rows.sort(key=lambda r: fnum(r.get(edge_key), float("-inf")), reverse=True)
+    rows.sort(key=lambda row: fnum(row.get(edge_key), float("-inf")), reverse=True)
     return rows[:limit]
+
+
+def positive_count(rows: list[dict[str, str]], key: str) -> int:
+    return sum(fnum(row.get(key), float("-inf")) > 0.0 for row in rows)
+
+
+def b2_coherence_summary(run_root: Path) -> dict:
+    coherent = read_rows(run_root / "stat_arb_pca.csv")
+    raw_path = run_root / "stat_arb_pca_raw.csv"
+    raw = read_rows(raw_path) if raw_path.exists() else list(coherent)
+    rejected = read_rows(run_root / "stat_arb_pca_rejected.csv")
+    return {
+        "raw_rows": len(raw),
+        "coherent_rows": len(coherent),
+        "rejected_rows": len(rejected),
+        "raw_positive": positive_count(raw, "raw_expected_edge"),
+        "coherent_raw_positive": positive_count(coherent, "raw_expected_edge"),
+        "rejected_raw_positive": positive_count(rejected, "raw_expected_edge"),
+        "coherent_maker_positive": positive_count(coherent, "maker_entry_net_edge"),
+        "top_raw": sorted(
+            raw,
+            key=lambda row: fnum(row.get("maker_entry_net_edge"), float("-inf")),
+            reverse=True,
+        )[:8],
+        "top_rejected": sorted(
+            rejected,
+            key=lambda row: fnum(row.get("maker_entry_net_edge"), float("-inf")),
+            reverse=True,
+        )[:8],
+    }
 
 
 def intent_summary(path: Path) -> dict:
     rows = read_rows(path)
-    bundles = {r.get("bundle_id", "") for r in rows if r.get("bundle_id")}
-    strategies = Counter(r.get("strategy", "UNKNOWN") for r in rows)
-    top = sorted(rows, key=lambda r: fnum(r.get("expected_edge"), float("-inf")), reverse=True)[:12]
+    bundles = {row.get("bundle_id", "") for row in rows if row.get("bundle_id")}
+    strategies = Counter(row.get("strategy", "UNKNOWN") for row in rows)
+    top = sorted(
+        rows,
+        key=lambda row: fnum(row.get("expected_edge"), float("-inf")),
+        reverse=True,
+    )[:12]
     return {
         "rows": len(rows),
         "bundles": len(bundles),
         "strategies": dict(sorted(strategies.items())),
-        "max_expected_edge": max((fnum(r.get("expected_edge")) for r in rows), default=0.0),
+        "max_expected_edge": max(
+            (fnum(row.get("expected_edge")) for row in rows), default=0.0
+        ),
         "top_legs": top,
     }
 
@@ -114,7 +151,7 @@ def shadow_fillability(run_root: Path, tape_window_seconds: int) -> dict:
     bundles = read_rows(shadow / "multileg_bundles.csv")
     tape = read_rows(run_root / "trade_tape.csv")
 
-    timestamps = [inum(r.get("timestamp")) for r in tape if inum(r.get("timestamp")) > 0]
+    timestamps = [inum(row.get("timestamp")) for row in tape if inum(row.get("timestamp")) > 0]
     observed_span_seconds = max(timestamps) - min(timestamps) if len(timestamps) >= 2 else 0
     window_seconds = max(1, tape_window_seconds)
     sell_flow: dict[str, list[tuple[float, float]]] = defaultdict(list)
@@ -134,38 +171,50 @@ def shadow_fillability(run_root: Path, tape_window_seconds: int) -> dict:
         limit_price = fnum(leg.get("limit_price"))
         queue = max(0.0, fnum(leg.get("queue_ahead")))
         target = max(0.0, fnum(leg.get("target_shares")))
-        compatible = sum(size for price, size in sell_flow.get(token, []) if price <= limit_price + 1e-12)
+        compatible = sum(
+            size
+            for price, size in sell_flow.get(token, [])
+            if price <= limit_price + 1e-12
+        )
         rate = compatible / window_seconds
         clear_seconds = (queue + target) / rate if rate > 1e-12 else None
         queue_to_flow = queue / compatible if compatible > 1e-12 else None
-        bid = leg.get("bundle_id", "")
-        bundle_clear[bid].append(clear_seconds)
-        leg_out.append({
-            "bundle_id": bid,
-            "market_id": leg.get("market_id", ""),
-            "side": leg.get("side", ""),
-            "token_id": token,
-            "limit_price": limit_price,
-            "queue_ahead_shares": queue,
-            "target_shares": target,
-            "compatible_sell_volume": compatible,
-            "compatible_sell_rate_per_second": rate,
-            "queue_to_recent_sell_volume": queue_to_flow,
-            "estimated_queue_plus_target_clear_seconds": clear_seconds,
-        })
+        bundle_id = leg.get("bundle_id", "")
+        bundle_clear[bundle_id].append(clear_seconds)
+        leg_out.append(
+            {
+                "bundle_id": bundle_id,
+                "market_id": leg.get("market_id", ""),
+                "side": leg.get("side", ""),
+                "token_id": token,
+                "limit_price": limit_price,
+                "queue_ahead_shares": queue,
+                "target_shares": target,
+                "compatible_sell_volume": compatible,
+                "compatible_sell_rate_per_second": rate,
+                "queue_to_recent_sell_volume": queue_to_flow,
+                "estimated_queue_plus_target_clear_seconds": clear_seconds,
+            }
+        )
 
     bundle_out = []
-    bundle_by_id = {r.get("bundle_id", ""): r for r in bundles}
-    for bid, values in sorted(bundle_clear.items()):
-        finite = [x for x in values if x is not None]
-        bundle = bundle_by_id.get(bid, {})
-        bundle_out.append({
-            "bundle_id": bid,
-            "strategy": bundle.get("strategy", ""),
-            "expected_edge": fnum(bundle.get("expected_edge")),
-            "all_legs_have_recent_compatible_flow": len(finite) == len(values) and bool(values),
-            "max_estimated_clear_seconds": max(finite) if len(finite) == len(values) and finite else None,
-        })
+    bundle_by_id = {row.get("bundle_id", ""): row for row in bundles}
+    for bundle_id, values in sorted(bundle_clear.items()):
+        finite = [value for value in values if value is not None]
+        bundle = bundle_by_id.get(bundle_id, {})
+        bundle_out.append(
+            {
+                "bundle_id": bundle_id,
+                "strategy": bundle.get("strategy", ""),
+                "expected_edge": fnum(bundle.get("expected_edge")),
+                "all_legs_have_recent_compatible_flow": (
+                    len(finite) == len(values) and bool(values)
+                ),
+                "max_estimated_clear_seconds": (
+                    max(finite) if len(finite) == len(values) and finite else None
+                ),
+            }
+        )
 
     return {
         "z_threshold": 1.25,
@@ -180,14 +229,14 @@ def shadow_fillability(run_root: Path, tape_window_seconds: int) -> dict:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--run-root", type=Path, required=True)
-    ap.add_argument("--output", type=Path, required=True)
-    ap.add_argument("--git-sha", default="")
-    ap.add_argument("--run-id", default="")
-    ap.add_argument("--tail-lines", type=int, default=12)
-    ap.add_argument("--trade-lookback-seconds", type=int, default=900)
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--run-root", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--git-sha", default="")
+    parser.add_argument("--run-id", default="")
+    parser.add_argument("--tail-lines", type=int, default=12)
+    parser.add_argument("--trade-lookback-seconds", type=int, default=900)
+    args = parser.parse_args()
 
     walk = {}
     walk_path = args.run_root / "walk_forward.json"
@@ -208,11 +257,20 @@ def main() -> int:
         "candidates": {
             "b1": top_rows(args.run_root / "stat_arb_pairs.csv", "maker_entry_net_edge"),
             "b2": top_rows(args.run_root / "stat_arb_pca.csv", "maker_entry_net_edge"),
-            "b3_rewards": top_rows(args.run_root / "reward_opportunities.csv", "conservative_daily_score"),
+            "b3_rewards": top_rows(
+                args.run_root / "reward_opportunities.csv",
+                "conservative_daily_score",
+            ),
         },
+        "b2_coherence": b2_coherence_summary(args.run_root),
         "intents": intent_summary(args.run_root / "intents.csv"),
-        "shadow_b1": shadow_fillability(args.run_root, args.trade_lookback_seconds),
-        "logs": {name: tail(args.run_root / rel, args.tail_lines) for name, rel in LOGS.items()},
+        "shadow_b1": shadow_fillability(
+            args.run_root, args.trade_lookback_seconds
+        ),
+        "logs": {
+            name: tail(args.run_root / relative, args.tail_lines)
+            for name, relative in LOGS.items()
+        },
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     tmp = args.output.with_suffix(args.output.suffix + ".tmp")

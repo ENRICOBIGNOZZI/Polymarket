@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Convert pure B1/B2 scanner CSVs into standardized V4 broker intents.
 
-The scanners remain alpha-only. This adapter owns the execution-facing schema,
-which avoids coupling statistical models to broker lifecycle semantics.
+The scanners remain alpha-only. This adapter owns the execution-facing schema.
+B2 additionally requires explicit coherence evidence from
+``filter_coherent_hedges.py``; a raw PCA row can never reach the broker.
 """
 from __future__ import annotations
 
@@ -64,9 +65,17 @@ def b1_rows(rows: list[dict[str, str]], now: int, min_edge: float, max_trade: fl
         ex, hold = deadlines(now, fnum(r, "half_life_h"))
         bundle = f"B1-{now}-{y}-{x}-{serial}"
         serial += 1
-        common = dict(bundle_id=bundle, strategy="B1", event_id=f"PAIR:{y}|{x}", created_ts=now,
-                      mode="MAKER", expected_edge=edge, max_notional=cap,
-                      execution_deadline_ts=ex, hold_deadline_ts=hold)
+        common = dict(
+            bundle_id=bundle,
+            strategy="B1",
+            event_id=f"PAIR:{y}|{x}",
+            created_ts=now,
+            mode="MAKER",
+            expected_edge=edge,
+            max_notional=cap,
+            execution_deadline_ts=ex,
+            hold_deadline_ts=hold,
+        )
         out.append({**common, "market_id": y, "side": ys, "weight": yw, "limit_price": yl})
         out.append({**common, "market_id": x, "side": xs, "weight": xw, "limit_price": xl})
     return out
@@ -89,10 +98,27 @@ def parse_pca_legs(raw: str):
     return legs
 
 
+def b2_coherence_valid(row: dict[str, str]) -> bool:
+    """Require a positive relation certificate for every non-target hedge leg."""
+    raw = (row.get("coherence_scope") or "").strip()
+    if not raw:
+        return False
+    scopes = [part.strip() for part in raw.split("|") if part.strip()]
+    return bool(scopes) and all(
+        scope == "same_event"
+        or scope == "semantic"
+        or scope.startswith("same_event:")
+        or scope.startswith("semantic:")
+        for scope in scopes
+    )
+
+
 def b2_rows(rows: list[dict[str, str]], now: int, min_edge: float, max_trade: float):
     out: list[dict[str, object]] = []
     serial = 0
     for r in rows:
+        if not b2_coherence_valid(r):
+            continue
         edge = fnum(r, "maker_entry_net_edge")
         executable = max(0.0, fnum(r, "executable_notional"))
         target = (r.get("market") or "").strip()
@@ -101,18 +127,36 @@ def b2_rows(rows: list[dict[str, str]], now: int, min_edge: float, max_trade: fl
             continue
         if len({(m, s) for m, s, _ in legs}) != len(legs):
             continue
+        if target not in {market for market, _, _ in legs}:
+            continue
         cap = min(max_trade, executable)
         if cap <= 0:
             continue
         ex, hold = deadlines(now, fnum(r, "half_life_h"))
         bundle = f"B2-{now}-{target}-{serial}"
         serial += 1
-        common = dict(bundle_id=bundle, strategy="B2", event_id=f"PCA:{target}", created_ts=now,
-                      mode="MAKER", expected_edge=edge, max_notional=cap,
-                      execution_deadline_ts=ex, hold_deadline_ts=hold)
+        common = dict(
+            bundle_id=bundle,
+            strategy="B2",
+            event_id=f"PCA:{target}",
+            created_ts=now,
+            mode="MAKER",
+            expected_edge=edge,
+            max_notional=cap,
+            execution_deadline_ts=ex,
+            hold_deadline_ts=hold,
+        )
         for market, side, weight in legs:
-            # Zero means the broker resolves the current passive best bid atomically at admission.
-            out.append({**common, "market_id": market, "side": side, "weight": weight, "limit_price": 0.0})
+            # Zero means the broker resolves the current passive best bid at admission.
+            out.append(
+                {
+                    **common,
+                    "market_id": market,
+                    "side": side,
+                    "weight": weight,
+                    "limit_price": 0.0,
+                }
+            )
     return out
 
 
@@ -121,9 +165,9 @@ def atomic_write(path: Path, rows: list[dict[str, object]]) -> None:
     fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=FIELDS)
-            w.writeheader()
-            w.writerows(rows)
+            writer = csv.DictWriter(f, fieldnames=FIELDS)
+            writer.writeheader()
+            writer.writerows(rows)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_name, path)
@@ -135,18 +179,22 @@ def atomic_write(path: Path, rows: list[dict[str, object]]) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--strategy", choices=["B1", "B2"], required=True)
-    ap.add_argument("--input", type=Path, required=True)
-    ap.add_argument("--output", type=Path, required=True)
-    ap.add_argument("--config", type=Path, default=Path("config/paper_v4.json"))
-    ap.add_argument("--min-edge", type=float, default=0.001)
-    ap.add_argument("--max-trade-usd", type=float, default=None)
-    ap.add_argument("--now", type=int, default=None)
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--strategy", choices=["B1", "B2"], required=True)
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--config", type=Path, default=Path("config/paper_v4.json"))
+    parser.add_argument("--min-edge", type=float, default=0.001)
+    parser.add_argument("--max-trade-usd", type=float, default=None)
+    parser.add_argument("--now", type=int, default=None)
+    args = parser.parse_args()
 
     cfg = load_config(args.config)
-    max_trade = args.max_trade_usd if args.max_trade_usd is not None else fnum(cfg, "max_trade_usd", 250.0)
+    max_trade = (
+        args.max_trade_usd
+        if args.max_trade_usd is not None
+        else fnum(cfg, "max_trade_usd", 250.0)
+    )
     max_trade = max(0.0, max_trade)
     now = int(time.time()) if args.now is None else args.now
     try:
@@ -155,10 +203,25 @@ def main() -> int:
     except FileNotFoundError:
         source = []
 
-    rows = b1_rows(source, now, args.min_edge, max_trade) if args.strategy == "B1" else b2_rows(source, now, args.min_edge, max_trade)
+    if args.strategy == "B1":
+        rows = b1_rows(source, now, args.min_edge, max_trade)
+        coherence_rejected = 0
+    else:
+        coherence_rejected = sum(not b2_coherence_valid(row) for row in source)
+        rows = b2_rows(source, now, args.min_edge, max_trade)
     atomic_write(args.output, rows)
-    print(json.dumps({"strategy": args.strategy, "scanner_rows": len(source), "intent_rows": len(rows),
-                      "bundles": len({r["bundle_id"] for r in rows})}, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "strategy": args.strategy,
+                "scanner_rows": len(source),
+                "coherence_rejected": coherence_rejected,
+                "intent_rows": len(rows),
+                "bundles": len({row["bundle_id"] for row in rows}),
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 
