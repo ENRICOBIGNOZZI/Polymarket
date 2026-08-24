@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "run_dir": "runs/cross_venue_live",
+  "credentials_file": "~/.config/polymarket/venues.env",
+  "pair_manifest": "config/cross_venue_pairs.csv",
+  "supervisor_gate_file": "runs/portfolio_supervisor/capital_limits.json",
+  "polymarket": {
+    "gamma_url": "https://gamma-api.polymarket.com",
+    "clob_url": "https://clob.polymarket.com",
+    "market_limit": 600,
+    "min_liquidity": 50.0
+  },
+  "limitless": {
+    "base_url": "https://api.limitless.exchange",
+    "market_limit": 200
+  },
+  "kalshi": {
+    "base_url": "https://api.elections.kalshi.com",
+    "market_limit": 200
+  },
+  "loop_interval_ms": 3000,
+  "starting_capital": 2500.0,
+  "paper_execution": true,
+  "authenticated_order_submission_compiled": false,
+  "policy": {
+    "min_net_edge": 0.0025,
+    "slippage_bps": 4.0,
+    "latency_reserve_bps": 3.0,
+    "max_bundle_notional": 25.0,
+    "min_executable_shares": 1.0,
+    "limitless_fee_reserve_per_share": 0.005,
+    "kalshi_fee_reserve_per_share": 0.01,
+    "polymarket_fee_reserve_per_share": 0.005,
+    "require_settlement_verification": true,
+    "require_supervisor_gate": true,
+    "supervisor_max_age_seconds": 30,
+    "max_candidate_close_time_diff_seconds": 86400,
+    "title_similarity_threshold": 0.88
+  }
+}
