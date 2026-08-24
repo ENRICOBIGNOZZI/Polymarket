@@ -1,0 +1,96 @@
+name: research-b1-z-cost
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-b1-z-cost
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    if: github.event_name != 'pull_request' || github.head_ref == 'research/b1-z-cost'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+
+      - name: Build Release
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+
+      - name: Compare B1 z gates on fresh public data
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p research-b1
+          for z in 0.75 1.00 1.25 1.50; do
+            tag="$(printf '%s' "$z" | tr '.' '_')"
+            ./build/polymarket_stat_arb \
+              --config config/paper_v4.json --markets 400 --history-universe 120 \
+              --lookback-hours 336 --fidelity-minutes 30 --min-z "$z" \
+              --max-half-life-hours 168 --top 100 \
+              --csv "research-b1/b1_z${tag}.csv" \
+              | tee "research-b1/b1_z${tag}.log"
+          done
+
+          python3 - <<'PY'
+          import csv
+          import json
+          from pathlib import Path
+
+          root = Path('research-b1')
+          result = {}
+          for z in ('0_75', '1_00', '1_25', '1_50'):
+              path = root / f'b1_z{z}.csv'
+              rows = list(csv.DictReader(path.open(newline='', encoding='utf-8'))) if path.exists() else []
+              maker = [r for r in rows if float(r.get('maker_entry_net_edge') or 0) > 0]
+              admitted = [r for r in rows if float(r.get('maker_entry_net_edge') or 0) >= 0.001]
+              best = max(rows, key=lambda r: float(r.get('maker_entry_net_edge') or -1e9), default=None)
+              log = root / f'b1_z{z}.log'
+              lines = log.read_text(encoding='utf-8', errors='replace').splitlines() if log.exists() else []
+              result[z] = {
+                  'rows': len(rows),
+                  'maker_positive': len(maker),
+                  'admission_edge_positive': len(admitted),
+                  'best_maker_edge': float(best.get('maker_entry_net_edge') or 0) if best else None,
+                  'best_raw_edge': float(best.get('raw_expected_edge') or 0) if best else None,
+                  'best_z': float(best.get('z') or 0) if best else None,
+                  'best_relation': best.get('relation') if best else None,
+                  'best_y_market': best.get('y_market') if best else None,
+                  'best_x_market': best.get('x_market') if best else None,
+                  'summary': lines[0] if lines else '',
+              }
+          (root / 'summary.json').write_text(json.dumps(result, indent=2, sort_keys=True), encoding='utf-8')
+          print(json.dumps(result, indent=2, sort_keys=True))
+          PY
+
+      - name: Publish comparison
+        if: always()
+        shell: bash
+        run: |
+          echo '## B1 z-gate live comparison' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat research-b1/summary.json >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload research artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-b1-z-cost-${{ github.run_id }}
+          path: research-b1/
+          if-no-files-found: warn
+          retention-days: 7
