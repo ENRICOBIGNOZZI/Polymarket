@@ -6,6 +6,7 @@ RUN_ROOT="${2:-runs/paper_v4_live}"
 RECORDER_MARKETS="${V4_RECORDER_MARKETS:-600}"
 RECORDER_BATCH="${V4_RECORDER_BATCH:-20}"
 RECORDER_LOOKBACK_SECONDS="${V4_RECORDER_LOOKBACK_SECONDS:-300}"
+TERMINAL_MARKETS="${V4_TERMINAL_MARKETS:-600}"
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/terminal"
 
 filter_b2() {
@@ -51,8 +52,10 @@ rebuild_intents || true
 supervise_execution() {
   local rec_pid=0
   local broker_pid=0
+  local terminal_pid=0
   local rec_restarts=0
   local broker_restarts=0
+  local terminal_restarts=0
 
   start_recorder() {
     ./build/polymarket_trade_recorder \
@@ -74,6 +77,16 @@ supervise_execution() {
     broker_pid=$!
   }
 
+  start_terminal() {
+    # Cost-aware taker paper execution. The C++ engine re-checks net edge after
+    # book walking, protocol fees, slippage and the uncertainty penalty before a fill.
+    ./build/polymarket_engine \
+      --config "$CONFIG" --paper --loop --markets "$TERMINAL_MARKETS" --min-liquidity 100 \
+      --run-dir "$RUN_ROOT/terminal" \
+      >> "$RUN_ROOT/terminal.log" 2>&1 &
+    terminal_pid=$!
+  }
+
   append_event() {
     local component="$1"
     local event="$2"
@@ -88,19 +101,23 @@ supervise_execution() {
   write_status() {
     local rec_alive=0
     local broker_alive=0
+    local terminal_alive=0
     if (( rec_pid > 0 )) && kill -0 "$rec_pid" 2>/dev/null; then rec_alive=1; fi
     if (( broker_pid > 0 )) && kill -0 "$broker_pid" 2>/dev/null; then broker_alive=1; fi
+    if (( terminal_pid > 0 )) && kill -0 "$terminal_pid" 2>/dev/null; then terminal_alive=1; fi
     local tmp="$RUN_ROOT/runtime_supervisor.csv.tmp"
-    printf 'timestamp,recorder_alive,broker_alive,recorder_restarts,broker_restarts,recorder_pid,broker_pid\n' > "$tmp"
-    printf '%s,%s,%s,%s,%s,%s,%s\n' "$(date +%s)" "$rec_alive" "$broker_alive" "$rec_restarts" "$broker_restarts" "$rec_pid" "$broker_pid" >> "$tmp"
+    printf 'timestamp,recorder_alive,broker_alive,terminal_alive,recorder_restarts,broker_restarts,terminal_restarts,recorder_pid,broker_pid,terminal_pid\n' > "$tmp"
+    printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$(date +%s)" "$rec_alive" "$broker_alive" "$terminal_alive" "$rec_restarts" "$broker_restarts" "$terminal_restarts" "$rec_pid" "$broker_pid" "$terminal_pid" >> "$tmp"
     mv "$tmp" "$RUN_ROOT/runtime_supervisor.csv"
   }
 
   child_cleanup() {
     if (( rec_pid > 0 )); then kill "$rec_pid" 2>/dev/null || true; fi
     if (( broker_pid > 0 )); then kill "$broker_pid" 2>/dev/null || true; fi
+    if (( terminal_pid > 0 )); then kill "$terminal_pid" 2>/dev/null || true; fi
     if (( rec_pid > 0 )); then wait "$rec_pid" 2>/dev/null || true; fi
     if (( broker_pid > 0 )); then wait "$broker_pid" 2>/dev/null || true; fi
+    if (( terminal_pid > 0 )); then wait "$terminal_pid" 2>/dev/null || true; fi
   }
 
   supervisor_shutdown() {
@@ -114,8 +131,10 @@ supervise_execution() {
 
   start_recorder
   start_broker
+  start_terminal
   append_event recorder start 0
   append_event broker start 0
+  append_event terminal start 0
   write_status
 
   while true; do
@@ -132,6 +151,13 @@ supervise_execution() {
       append_event broker restart "$broker_restarts"
       sleep 2
       start_broker
+    fi
+    if ! kill -0 "$terminal_pid" 2>/dev/null; then
+      wait "$terminal_pid" 2>/dev/null || true
+      terminal_restarts=$((terminal_restarts + 1))
+      append_event terminal restart "$terminal_restarts"
+      sleep 2
+      start_terminal
     fi
     write_status
     sleep 5
@@ -165,7 +191,6 @@ start_supervisor
 last_stat=0
 last_structural=0
 last_rewards=0
-last_terminal=0
 last_oos=0
 last_report=0
 
@@ -185,7 +210,9 @@ while true; do
     --min-edge 0.003 --max-order-usd 50 --ttl-seconds 300 --hold-seconds 180 \
     --adverse-selection-mult 0.50 --once >> "$RUN_ROOT/maker.log" 2>&1 || true
 
-  if (( now - last_stat >= 900 )); then
+  # Intent freshness is capped at 600 seconds, so refresh B1/B2 comfortably
+  # inside that window rather than leaving an execution gap between scans.
+  if (( now - last_stat >= 300 )); then
     # Remove old alpha before scanning: scanner failure must mean no new intent.
     rm -f "$RUN_ROOT/stat_arb_pairs.csv" "$RUN_ROOT/stat_arb_pca_raw.csv"
     ./build/polymarket_stat_arb \
@@ -235,15 +262,6 @@ while true; do
         2>> "$RUN_ROOT/reward_errors.log" || true
     fi
     last_rewards=$now
-  fi
-
-  if (( now - last_terminal >= 300 )); then
-    ./build/polymarket_engine \
-      --config "$CONFIG" --once --scan-only --markets 240 --min-liquidity 100 \
-      --run-dir "$RUN_ROOT/terminal" \
-      > "$RUN_ROOT/terminal_latest.log" \
-      2> "$RUN_ROOT/terminal_errors.log" || true
-    last_terminal=$now
   fi
 
   if (( now - last_oos >= 3600 )); then

@@ -6,7 +6,7 @@ from http.server import ThreadingHTTPServer
 
 from exporter import Collector, ExporterHandler, Metrics, _float, _last_csv_row, _mtime, _read_csv, _read_json, parse_args
 
-EXPORTER_V4_VERSION = "1.0.0"
+EXPORTER_V4_VERSION = "1.1.0"
 
 
 def _safe_ratio(a: float, b: float) -> float:
@@ -22,6 +22,7 @@ class V4Collector(Collector):
         metrics.sample("polymarket_v4_exporter_info", 1, help_text="Static information about the V4 execution/OOS exporter.", labels={"version": EXPORTER_V4_VERSION, "run_root": str(self.run_root)})
         self._trade_recorder_v4(metrics, now)
         self._multileg_v4(metrics, now, starting_capital, max_drawdown)
+        self._terminal_v4(metrics, now, starting_capital)
         self._oos_v4(metrics, now)
         return base + metrics.render()
 
@@ -99,6 +100,42 @@ class V4Collector(Collector):
         metrics.sample("polymarket_multileg_realized_net_pnl_usd_total", sum(_float(r.get("net_pnl")) for r in ledger), help_text="Cumulative realized V4 multi-leg paper net PnL.", metric_type="counter")
         metrics.sample("polymarket_multileg_realized_fees_usd_total", sum(max(0.0, _float(r.get("fees"))) for r in ledger), help_text="Cumulative realized V4 multi-leg paper fees.", metric_type="counter")
         metrics.sample("polymarket_multileg_realized_slippage_usd_total", sum(max(0.0, _float(r.get("slippage"))) for r in ledger), help_text="Cumulative realized V4 multi-leg paper slippage.", metric_type="counter")
+
+    def _terminal_v4(self, metrics: Metrics, now: float, starting_capital: float) -> None:
+        terminal = self.run_root / "terminal"
+        status_path = terminal / "status.json"
+        status = _read_json(status_path) or {}
+        modified = _mtime(status_path)
+        metrics.sample("polymarket_terminal_state_present", 1 if status else 0, help_text="Whether the continuous cost-aware taker paper engine has published a status snapshot.")
+        if status:
+            equity = _float(status.get("equity"), starting_capital)
+            ts = _float(status.get("timestamp"), modified or now)
+            fields = {
+                "polymarket_terminal_cash_usd": (_float(status.get("cash"), starting_capital), "Current taker paper cash."),
+                "polymarket_terminal_equity_usd": (equity, "Current taker paper marked equity."),
+                "polymarket_terminal_pnl_usd": (equity - starting_capital, "Current taker paper marked PnL versus starting capital."),
+                "polymarket_terminal_peak_equity_usd": (_float(status.get("peak_equity"), max(equity, starting_capital)), "Historical peak taker paper equity."),
+                "polymarket_terminal_drawdown_ratio": (_float(status.get("drawdown")), "Current taker paper drawdown ratio."),
+                "polymarket_terminal_gross_exposure_usd": (_float(status.get("gross_exposure")), "Current taker paper gross marked exposure."),
+                "polymarket_terminal_open_positions": (_float(status.get("open_positions")), "Current number of open taker paper positions."),
+                "polymarket_terminal_kill_switch": (1.0 if bool(status.get("killed")) else 0.0, "Taker paper kill-switch state; one means active."),
+                "polymarket_terminal_last_update_timestamp_seconds": (ts, "Unix timestamp of the latest taker paper status snapshot."),
+                "polymarket_terminal_staleness_seconds": (max(0.0, now - ts), "Age in seconds of the latest taker paper status snapshot."),
+            }
+            for name, (value, help_text) in fields.items():
+                metrics.sample(name, value, help_text=help_text)
+
+        fills = _read_csv(terminal / "fills.csv")
+        actions = Counter((row.get("action") or "UNKNOWN").upper() for row in fills)
+        metrics.sample("polymarket_terminal_fills_total", len(fills), help_text="Cumulative cost-aware taker paper fill events recorded by the terminal sleeve.", metric_type="counter")
+        metrics.sample("polymarket_terminal_buy_fills_total", actions.get("BUY", 0), help_text="Cumulative taker paper BUY fill events.", metric_type="counter")
+        metrics.sample("polymarket_terminal_sell_fills_total", actions.get("SELL", 0), help_text="Cumulative taker paper SELL fill events.", metric_type="counter")
+        metrics.sample("polymarket_terminal_settlements_total", actions.get("SETTLE", 0), help_text="Cumulative taker paper settlement events.", metric_type="counter")
+        last_fill = _last_csv_row(terminal / "fills.csv")
+        if last_fill:
+            fill_ts = _float(last_fill.get("timestamp"), _mtime(terminal / "fills.csv") or now)
+            metrics.sample("polymarket_terminal_last_fill_timestamp_seconds", fill_ts, help_text="Unix timestamp of the latest taker paper fill.")
+            metrics.sample("polymarket_terminal_last_fill_staleness_seconds", max(0.0, now - fill_ts), help_text="Age in seconds of the latest taker paper fill.")
 
     def _oos_v4(self, metrics: Metrics, now: float) -> None:
         path = self.run_root / "walk_forward.json"

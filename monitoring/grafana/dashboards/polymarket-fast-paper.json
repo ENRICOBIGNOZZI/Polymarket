@@ -1,0 +1,170 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Taker Marked PnL",
+      "gridPos": {"x": 0, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_terminal_pnl_usd or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []}
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Taker Equity",
+      "gridPos": {"x": 4, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_terminal_equity_usd or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []}
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Taker Open Positions",
+      "gridPos": {"x": 8, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_terminal_open_positions or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {}, "overrides": []}
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Taker Fill Events",
+      "gridPos": {"x": 12, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_terminal_fills_total or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {}, "overrides": []}
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Taker Gross Exposure",
+      "gridPos": {"x": 16, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_terminal_gross_exposure_usd or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []}
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Taker Data Staleness",
+      "gridPos": {"x": 20, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_terminal_staleness_seconds or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "s", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 30}, {"color": "red", "value": 60}]}}, "overrides": []}
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Taker Paper PnL",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_terminal_pnl_usd", "legendFormat": "marked PnL"}],
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineInterpolation": "linear", "lineWidth": 1, "fillOpacity": 8, "showPoints": "never"}, "unit": "currencyUSD"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "calcs": []}, "tooltip": {"mode": "multi", "sort": "none"}}
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Taker Equity / Exposure",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "polymarket_terminal_equity_usd", "legendFormat": "equity"},
+        {"refId": "B", "expr": "polymarket_terminal_gross_exposure_usd", "legendFormat": "gross exposure"}
+      ],
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineInterpolation": "linear", "lineWidth": 1, "fillOpacity": 8, "showPoints": "never"}, "unit": "currencyUSD"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "calcs": []}, "tooltip": {"mode": "multi", "sort": "none"}}
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Multi-leg Marked PnL",
+      "gridPos": {"x": 0, "y": 12, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_multileg_pnl_usd or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []}
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Multi-leg Realized PnL",
+      "gridPos": {"x": 4, "y": 12, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_multileg_realized_net_pnl_usd_total or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []}
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Maker Fill Events",
+      "gridPos": {"x": 8, "y": 12, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum(polymarket_maker_fills_total) or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {}, "overrides": []}
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Resting Hedge Bundles",
+      "gridPos": {"x": 12, "y": 12, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum(polymarket_multileg_bundles{status=\"RESTING\"}) or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {}, "overrides": []}
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "Taker Kill Switch",
+      "gridPos": {"x": 16, "y": 12, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_terminal_kill_switch or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []}
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "Last Taker Fill Age",
+      "gridPos": {"x": 20, "y": 12, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_terminal_last_fill_staleness_seconds or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "id": 15,
+      "type": "text",
+      "title": "Execution semantics",
+      "gridPos": {"x": 0, "y": 16, "w": 24, "h": 5},
+      "options": {"mode": "markdown", "content": "**Fast paper = live public market data + simulated taker execution.** A taker fill is created only after the engine walks the live ask book and the trade still clears the configured net-edge threshold after protocol fees, slippage and model-uncertainty penalty. This dashboard keeps taker, maker and multi-leg PnL/activity separate because they are distinct paper sleeves. No authenticated real-money order submission is enabled here."}
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["polymarket", "paper", "taker", "pnl", "execution"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "Polymarket — Fast Paper PnL",
+  "uid": "polymarket-fast-paper",
+  "version": 1
+}
