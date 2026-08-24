@@ -115,6 +115,8 @@
       "paper-server-deploy": "remote",
       "paper-server-health": "remote",
       "forward-maker-research": "research",
+      "alpha-factory": "research",
+      "meta-supervisor": "supervisor",
       "fast-arb-shadow-research": "research",
       "arb-theory-research": "research",
       "live-api-smoke": "api"
