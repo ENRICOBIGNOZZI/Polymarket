@@ -41,18 +41,22 @@ class MacOSOpsContractTest(unittest.TestCase):
         finish = (ROOT / "ops" / "finish_bootstrap_macos.sh").read_text(encoding="utf-8")
 
         # Grafana listens only on loopback. The canonical operator URL is the
-        # stable MagicDNS name exposed exclusively through Tailscale Serve.
+        # verified stable MagicDNS FQDN exposed exclusively through Tailscale Serve.
         self.assertIn('http_addr = 127.0.0.1', runtime)
         self.assertIn(
-            'POLYMARKET_GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-http://${TAILSCALE_HOSTNAME}}"',
+            'POLYMARKET_GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-http://${TAILSCALE_FQDN}}"',
             runtime,
         )
+        self.assertIn('TAILSCALE_FQDN="${POLYMARKET_TAILSCALE_FQDN:-', runtime)
+        self.assertIn('actual_dns=', runtime)
+        self.assertIn('tailscale DNS mismatch:', runtime)
         self.assertIn('root_url = ${POLYMARKET_GRAFANA_URL}/', runtime)
         self.assertNotIn('root_url = http://127.0.0.1:3000/', runtime)
         self.assertNotIn('http_addr = 0.0.0.0', runtime)
         self.assertIn('find_tailscale()', runtime)
         self.assertIn('/Applications/Tailscale.app/Contents/MacOS/Tailscale', runtime)
         self.assertIn('serve --bg --http=80 localhost:3000', runtime)
+        self.assertIn('http://${TAILSCALE_FQDN}', runtime)
         self.assertIn('exposure=tailscale-serve', runtime)
         self.assertIn('operator_url=%s', runtime)
 
