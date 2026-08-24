@@ -141,6 +141,7 @@ class AllMarketEngineTests(unittest.TestCase):
         self.assertIn('const bool unbounded = limit == 0;', source)
         self.assertNotIn('std::min<std::size_t>(limit, 2000)', source)
         self.assertNotIn('&offset=', source)
+        self.assertNotIn('order=liquidity_num', source)
 
     def test_policy_preserves_paper_only_boundary(self):
         policy = json.loads((ROOT / "config" / "all_market_engine.json").read_text(encoding="utf-8"))
