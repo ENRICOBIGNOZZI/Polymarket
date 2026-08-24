@@ -1,6 +1,7 @@
 #include "pm/api.hpp"
 #include "pm/engine.hpp"
 #include "pm/http.hpp"
+#include "pm/trade_identity.hpp"
 
 #include <boost/json.hpp>
 
@@ -137,11 +138,14 @@ struct Trade {
 };
 
 std::string trade_key(const Trade& t) {
-    std::ostringstream os;
-    if (!t.tx_hash.empty()) os << t.tx_hash;
-    else os << t.condition_id << '|' << t.asset_id << '|' << t.ts << '|' << std::setprecision(16)
-            << t.price << '|' << t.size << '|' << t.side;
-    return os.str();
+    return pm::public_trade_key(
+        t.tx_hash,
+        t.condition_id,
+        t.asset_id,
+        t.ts,
+        t.side,
+        t.price,
+        t.size);
 }
 
 class Recorder {
@@ -185,7 +189,6 @@ public:
         for (std::size_t lo = 0; lo < conditions.size(); lo += batch_size_) {
             const std::size_t hi = std::min(conditions.size(), lo + batch_size_);
             const auto market_query = join_conditions(conditions, lo, hi);
-            bool page_failed = false;
             for (std::size_t offset : {std::size_t{0}, page_limit}) {
                 std::ostringstream url;
                 url << data_url_ << "/trades?limit=" << page_limit << "&offset=" << offset
@@ -196,13 +199,11 @@ public:
                     const auto r = http_.get(url.str());
                     if (r.status < 200 || r.status >= 300) {
                         ++errors;
-                        page_failed = true;
                         break;
                     }
                     auto root = json::parse(r.body);
                     if (!root.is_array()) {
                         ++errors;
-                        page_failed = true;
                         break;
                     }
                     const auto page_size = root.as_array().size();
@@ -231,18 +232,17 @@ public:
                     if (offset == page_limit) ++truncated_batches;
                 } catch (const std::exception& e) {
                     ++errors;
-                    page_failed = true;
                     std::cerr << "trade recorder request failed: " << e.what() << '\n';
                     break;
                 }
             }
-            (void)page_failed;
         }
 
         std::sort(rows.begin(), rows.end(), [](const Trade& a, const Trade& b) {
             if (a.ts != b.ts) return a.ts < b.ts;
             if (a.condition_id != b.condition_id) return a.condition_id < b.condition_id;
-            return a.asset_id < b.asset_id;
+            if (a.asset_id != b.asset_id) return a.asset_id < b.asset_id;
+            return trade_key(a) < trade_key(b);
         });
 
         std::ofstream out(tape_path_, std::ios::app);
@@ -260,7 +260,7 @@ public:
         std::cout << "trade_recorder markets=" << markets.size() << " conditions=" << conditions.size()
                   << " requests=" << requests << " fetched=" << fetched << " new_trades=" << rows.size()
                   << " errors=" << errors << " truncated_batches=" << truncated_batches
-                  << " last_trade_ts=" << last_trade_ts_
+                  << " last_trade_ts=" << last_trade_ts_ << " seen=" << seen_.size()
                   << " elapsed_ms=" << (now_ms() - started_ms) << '\n';
     }
 
@@ -281,6 +281,7 @@ private:
         std::ifstream f(tape_path_);
         std::string line;
         std::getline(f, line);
+        const auto cutoff = now_s() - 2 * lookback_s_;
         while (std::getline(f, line)) {
             const auto x = split_csv(line);
             if (x.size() < 12) continue;
@@ -294,7 +295,7 @@ private:
                 t.price = std::stod(x[7]);
                 t.size = std::stod(x[8]);
                 t.tx_hash = x[9];
-                seen_.insert(trade_key(t));
+                if (t.ts >= cutoff) seen_.insert(trade_key(t));
                 last_trade_ts_ = std::max(last_trade_ts_, t.ts);
             } catch (...) {
             }
@@ -302,8 +303,9 @@ private:
     }
 
     void trim_seen() {
-        // The on-disk tape is the durable source of truth. In-memory dedupe only needs to
-        // cover the polling overlap; rebuild from recent rows if the process becomes long-lived.
+        // Overlap replay only needs keys from the recent polling horizon. Rebuild
+        // from disk once the in-memory set grows large; load_seen deliberately
+        // retains only recent rows, so this actually bounds memory.
         if (seen_.size() < 250000) return;
         seen_.clear();
         load_seen();
