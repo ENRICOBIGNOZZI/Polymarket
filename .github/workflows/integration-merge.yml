@@ -24,6 +24,17 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Load shared scheduler context
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_scheduler_context.py \
+            --context config/scheduler_context.json \
+            --scheduler-id integration-merge \
+            --output scheduler-context.md \
+            --output-json scheduler-context.json \
+            --github-env "$GITHUB_ENV"
+
       - name: Require a fully validated incumbent
         shell: bash
         run: |
@@ -37,6 +48,7 @@ jobs:
             {
               echo '# Integration merge'
               echo
+              echo "- scheduler context: \`$POLYMARKET_SCHEDULER_CONTEXT_SHA\`"
               echo "- main: \`$main_sha\`"
               echo "- paper-validated: \`$validated_sha\`"
               echo '- decision: blocked; validation/deployment chain for the incumbent is not complete'
@@ -91,9 +103,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Re-read labels, checks, merge state and head SHA immediately before
-          # the irreversible action. An earlier approval cannot survive a
-          # changed diff, removed label, failed check or advanced base branch.
           gh pr view "$PR_NUMBER" \
             --json number,title,url,headRefName,headRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
             > candidate-final.json
@@ -130,11 +139,12 @@ jobs:
           PY
           gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" --input integration-dispatch.json
           gh pr comment "$PR_NUMBER" --body \
-            "Administrator-approved integration merged at \`$merged_sha\`. Validation has been handed to the dedicated post-merge scheduler. The prior \`paper-validated\` revision remains live until that chain succeeds."
+            "Administrator-approved integration merged at \`$merged_sha\` under scheduler context \`$POLYMARKET_SCHEDULER_CONTEXT_SHA\`. Validation has been handed to the dedicated post-merge scheduler. The prior \`paper-validated\` revision remains live until that chain succeeds."
 
           {
             echo
             echo '## Integration action'
+            echo "- scheduler context: \`$POLYMARKET_SCHEDULER_CONTEXT_SHA\`"
             echo "- merged PR: #$PR_NUMBER"
             echo "- incumbent revision: \`$BASE_MAIN_SHA\`"
             echo "- candidate head: \`$expected_head\`"
@@ -147,6 +157,8 @@ jobs:
         if: always()
         shell: bash
         run: |
+          cat scheduler-context.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat integration-merge-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat integration-gate-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
@@ -159,6 +171,8 @@ jobs:
         with:
           name: integration-merge-${{ github.run_id }}
           path: |
+            scheduler-context.md
+            scheduler-context.json
             integration-merge-report.md
             integration-gate-report.md
             integration-final-gate-report.md
