@@ -43,22 +43,27 @@ write_status() {
 paper_runtime_healthy() {
   local supervisor="$APP_DIR/runs/paper_v4_live/runtime_supervisor.csv"
   [[ -s "$supervisor" ]] || return 1
-  local row ts recorder_alive broker_alive recorder_restarts broker_restarts recorder_pid broker_pid now
+  local row ts recorder_alive broker_alive terminal_alive recorder_restarts broker_restarts terminal_restarts recorder_pid broker_pid terminal_pid now
   row="$(tail -n 1 "$supervisor")"
-  IFS=, read -r ts recorder_alive broker_alive recorder_restarts broker_restarts recorder_pid broker_pid <<<"$row"
+  IFS=, read -r ts recorder_alive broker_alive terminal_alive recorder_restarts broker_restarts terminal_restarts recorder_pid broker_pid terminal_pid <<<"$row"
   now="$(date +%s)"
   [[ "$recorder_alive" == "1" ]] || return 1
   [[ "$broker_alive" == "1" ]] || return 1
+  [[ "$terminal_alive" == "1" ]] || return 1
   [[ "$ts" =~ ^[0-9]+$ ]] || return 1
   (( now - ts <= 60 )) || return 1
 }
 
 full_runtime_healthy() {
-  curl -fsS http://127.0.0.1:9108/healthz >/dev/null 2>&1 && \
-  curl -fsS http://127.0.0.1:9108/metrics 2>/dev/null | grep -q '^polymarket_runtime_info' && \
-  curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1 && \
-  curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 && \
-  curl -fsS http://127.0.0.1:3000/api/search >/dev/null 2>&1 && \
+  local metrics
+  curl -fsS http://127.0.0.1:9108/healthz >/dev/null 2>&1 || return 1
+  metrics="$(curl -fsS http://127.0.0.1:9108/metrics 2>/dev/null)" || return 1
+  grep -q '^polymarket_runtime_info' <<<"$metrics" || return 1
+  grep -q '^polymarket_terminal_state_present 1' <<<"$metrics" || return 1
+  grep -q '^polymarket_terminal_pnl_usd ' <<<"$metrics" || return 1
+  curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1 || return 1
+  curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 || return 1
+  curl -fsS http://127.0.0.1:3000/api/search >/dev/null 2>&1 || return 1
   paper_runtime_healthy
 }
 
@@ -131,7 +136,8 @@ JOBS="$(sysctl -n hw.logicalcpu 2>/dev/null || echo 2)"
 cmake --build build --parallel "$JOBS"
 ctest --test-dir build --output-on-failure
 "$PYTHON_BIN" -m unittest \
-  tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py tests/test_monitoring_latest_exporter.py -v
+  tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py \
+  tests/test_monitoring_latest_exporter.py tests/test_grafana_fast_paper_contract.py -v
 "$PYTHON_BIN" -m py_compile \
   monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_latest.py \
   scripts/build_v4_intents.py scripts/merge_v4_intents.py scripts/walk_forward_v4.py scripts/tiny_live_pilot.py
