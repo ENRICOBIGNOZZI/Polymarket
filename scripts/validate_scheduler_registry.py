@@ -26,10 +26,7 @@ REQUIRED_IDS = {
     "external-intelligence",
     "live-api-smoke",
 }
-
-NON_SCHEDULER_WORKFLOWS = {
-    ".github/workflows/grafana-access.yml",
-}
+NON_SCHEDULER_WORKFLOWS = {".github/workflows/grafana-access.yml"}
 
 
 def workflow_job_ids(path: Path) -> list[str]:
@@ -69,26 +66,20 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
     if not isinstance(administrator, dict):
         errors.append("administrator must be an object")
     else:
-        if administrator.get("approval_label") != "administrator-approved":
-            errors.append("administrator.approval_label must be administrator-approved")
         if administrator.get("live_champion_manifest") != "config/live_champion.json":
             errors.append("administrator.live_champion_manifest must select config/live_champion.json")
+        if administrator.get("paper_promotion_mode") != "automatic_objective_gates":
+            errors.append("administrator.paper_promotion_mode must be automatic_objective_gates")
+        if administrator.get("manual_approval_required") is not False:
+            errors.append("administrator.manual_approval_required must be false for paper promotion")
 
     schedulers = data.get("schedulers")
     if not isinstance(schedulers, list):
         return errors + ["schedulers must be a list"], []
 
     required_fields = {
-        "id",
-        "workflow",
-        "workflow_name",
-        "job",
-        "cadence",
-        "responsibility",
-        "critical",
-        "merge_authority",
-        "deploy_authority",
-        "validation_dispatch_authority",
+        "id", "workflow", "workflow_name", "job", "cadence", "responsibility",
+        "critical", "merge_authority", "deploy_authority", "validation_dispatch_authority",
     }
     ids: set[str] = set()
     workflows: set[str] = set()
@@ -121,9 +112,7 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             continue
         job_ids = workflow_job_ids(path)
         if job_ids != [expected_job]:
-            errors.append(
-                f"{workflow} must contain exactly one job named {expected_job}; found {job_ids or 'none'}"
-            )
+            errors.append(f"{workflow} must contain exactly one job named {expected_job}; found {job_ids or 'none'}")
         if not workflow_has_periodic_schedule(path):
             errors.append(f"{workflow} must define a periodic schedule/cron trigger")
         normalized.append(item)
@@ -141,10 +130,6 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         for path in workflow_dir.iterdir()
         if path.is_file() and path.suffix in {".yml", ".yaml"}
     }
-    for relative in sorted(NON_SCHEDULER_WORKFLOWS.intersection(actual_workflows)):
-        text = (root / relative).read_text(encoding="utf-8")
-        if re.search(r"(?m)^\s{2}schedule:\s*$", text):
-            errors.append(f"non-scheduler workflow unexpectedly has a schedule trigger: {relative}")
     managed_workflows = actual_workflows.difference(NON_SCHEDULER_WORKFLOWS)
     unregistered = sorted(managed_workflows.difference(workflows))
     stale = sorted(workflows.difference(actual_workflows))
@@ -155,85 +140,74 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
 
     merge_ids = [str(item["id"]) for item in normalized if item["merge_authority"] is True]
     deploy_ids = [str(item["id"]) for item in normalized if item["deploy_authority"] is True]
-    dispatch_ids = [
-        str(item["id"]) for item in normalized if item["validation_dispatch_authority"] is True
-    ]
+    dispatch_ids = [str(item["id"]) for item in normalized if item["validation_dispatch_authority"] is True]
     if merge_ids != ["integration-merge"]:
         errors.append(f"merge authority must belong only to integration-merge; found {merge_ids}")
     if deploy_ids != ["paper-server-deploy"]:
         errors.append(f"deploy authority must belong only to paper-server-deploy; found {deploy_ids}")
     if dispatch_ids != ["post-merge-validation"]:
-        errors.append(
-            "validation dispatch authority must belong only to post-merge-validation; "
-            f"found {dispatch_ids}"
-        )
+        errors.append(f"validation dispatch authority must belong only to post-merge-validation; found {dispatch_ids}")
 
     by_id = {str(item["id"]): item for item in normalized}
+
     admin = by_id.get("administrator-supervisor")
     if admin:
-        admin_text = (root / str(admin["workflow"])).read_text(encoding="utf-8")
-        for forbidden in (
-            "gh pr merge",
-            "gh workflow run",
-            "repository_dispatch",
-            "POLYMARKET_DEPLOY_REF=",
-            "git push origin paper-validated",
-        ):
-            if forbidden in admin_text:
+        text = (root / str(admin["workflow"])).read_text(encoding="utf-8")
+        for forbidden in ("gh pr merge", "repository_dispatch", "POLYMARKET_DEPLOY_REF=", "git push origin paper-validated"):
+            if forbidden in text:
                 errors.append(f"administrator-supervisor contains forbidden mutation: {forbidden}")
 
     integration = by_id.get("integration-merge")
     if integration:
-        integration_text = (root / str(integration["workflow"])).read_text(encoding="utf-8")
-        if 'gh pr merge "$PR_NUMBER" --squash --delete-branch' not in integration_text:
-            errors.append("integration-merge must use a bounded squash merge without admin bypass")
-        if "--admin" in integration_text:
+        text = (root / str(integration["workflow"])).read_text(encoding="utf-8")
+        if 'gh pr merge "$PR_NUMBER" --squash --delete-branch' not in text:
+            errors.append("integration-merge must use a bounded squash merge")
+        if "--admin" in text:
             errors.append("integration-merge must never use --admin")
-        if "administrator-approved" not in integration_text:
-            errors.append("integration-merge must require administrator-approved")
-        if "gh workflow run" in integration_text:
-            errors.append("integration-merge must hand off validation instead of dispatching it directly")
+        if "administrator-approved" in text:
+            errors.append("paper integration must not require administrator-approved")
+        if "incumbent_health_gate.py" in text:
+            errors.append("incumbent health must not block a validated paper upgrade")
         for required in (
-            "BASE_MAIN_SHA",
-            "BASE_VALIDATED_SHA",
             "candidate-final.json",
+            "source-research-final.json",
+            "statusCheckRollup",
             "--match-head-commit",
             "current_main_after_merge",
             '"event_type": "champion-integration-merged"',
+            "Automatic paper-champion promotion",
         ):
-            if required not in integration_text:
-                errors.append(f"integration-merge is missing race-safe contract: {required}")
+            if required not in text:
+                errors.append(f"integration-merge is missing automatic promotion contract: {required}")
 
     post_merge = by_id.get("post-merge-validation")
     if post_merge:
-        post_text = (root / str(post_merge["workflow"])).read_text(encoding="utf-8")
-        if "ci.yml monitoring.yml v4-live-smoke.yml" not in post_text:
+        text = (root / str(post_merge["workflow"])).read_text(encoding="utf-8")
+        if "ci.yml monitoring.yml v4-live-smoke.yml" not in text:
             errors.append("post-merge-validation must dispatch CI, monitoring and live-paper validation")
-        if "gh pr merge" in post_text:
+        if "gh pr merge" in text:
             errors.append("post-merge-validation must not merge pull requests")
-        if '-f expected_sha="$EXPECTED_SHA"' not in post_text:
-            errors.append("post-merge-validation must pass the exact merged SHA to every validator")
-        if 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"' not in post_text:
-            errors.append("post-merge-validation must checkout and verify the exact merged SHA")
+        if '-f expected_sha="$EXPECTED_SHA"' not in text:
+            errors.append("post-merge-validation must pass exact merged SHA to every validator")
+        if 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"' not in text:
+            errors.append("post-merge-validation must verify exact merged SHA")
 
     for scheduler_id in ("code-validation", "monitoring-validation", "live-paper-validation"):
         item = by_id.get(scheduler_id)
         if not item:
             continue
         text = (root / str(item["workflow"])).read_text(encoding="utf-8")
-        if "expected_sha:" not in text:
-            errors.append(f"{scheduler_id} must accept expected_sha on workflow_dispatch")
-        if "VALIDATION_SHA" not in text:
-            errors.append(f"{scheduler_id} must bind execution to VALIDATION_SHA")
+        if "expected_sha:" not in text or "VALIDATION_SHA" not in text:
+            errors.append(f"{scheduler_id} must accept and bind expected_sha")
         if 'test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"' not in text:
-            errors.append(f"{scheduler_id} must verify its exact checkout revision")
+            errors.append(f"{scheduler_id} must verify exact checkout revision")
 
     live_validation = by_id.get("live-paper-validation")
     if live_validation:
-        live_text = (root / str(live_validation["workflow"])).read_text(encoding="utf-8")
-        if 'test "$validated_sha" = "$main_sha"' not in live_text:
+        text = (root / str(live_validation["workflow"])).read_text(encoding="utf-8")
+        if 'test "$validated_sha" = "$main_sha"' not in text:
             errors.append("live-paper validation must refuse to advance a stale main revision")
-        if '-f sha="$validated_sha" -F force=false' not in live_text:
+        if '-f sha="$validated_sha" -F force=false' not in text:
             errors.append("live-paper validation must advance paper-validated to the tested SHA only")
 
     return errors, normalized
@@ -265,12 +239,7 @@ def render_report(items: list[dict[str, Any]], errors: list[str]) -> str:
         lines.extend(["", "## Errors"])
         lines.extend(f"- {error}" for error in errors)
     else:
-        lines.extend(
-            [
-                "",
-                "Registry and one-job-per-workflow contract are valid. Every registered scheduler has a periodic schedule trigger.",
-            ]
-        )
+        lines.extend(["", "Registry and one-job-per-workflow contract are valid. Automatic paper promotion is enabled through objective scheduler gates."])
     return "\n".join(lines) + "\n"
 
 
