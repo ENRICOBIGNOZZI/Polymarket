@@ -236,7 +236,7 @@ def trade_recorder_health(run_root: Path, now_ts: int, max_trade_age_seconds: in
     path = run_root / "trade_recorder_latest.log"
     if not path.exists():
         return {
-            "status": "not_evaluated",
+            "status": "unhealthy",
             "failures": ["missing_trade_recorder_log"],
         }
     try:
