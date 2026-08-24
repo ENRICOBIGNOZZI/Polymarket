@@ -26,6 +26,13 @@ inline bool bundle_has_live_risk(std::string_view status) {
     return status == "RESTING" || status == "COMPLETE" || status == "ABORTING";
 }
 
+// Unequal fills can continue to arrive during cancel latency after the bundle
+// first crosses its completion threshold. Keep the naked-leg risk gate active
+// for both RESTING and COMPLETE states; ABORTING is already committed to unwind.
+inline bool bundle_requires_unmatched_risk_check(std::string_view status) {
+    return status == "RESTING" || status == "COMPLETE";
+}
+
 // A passive order remains fillable during cancel latency. A trade at or after
 // the effective cancellation time must not fill it. The strict arrival check
 // preserves the existing conservative queue model for same-timestamp prints.
