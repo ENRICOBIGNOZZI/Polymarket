@@ -1,0 +1,4 @@
+pair_id,venue_a,market_a,venue_b,market_b,relation,settlement_verified,max_close_diff_seconds,notes
+# Add only reviewed pairs. market_a/market_b may be a venue market ID or slug.
+# Example (disabled until real identifiers and resolution rules are reviewed):
+# example-btc,polymarket,polymarket-market-id,limitless,limitless-market-slug,same_event,false,60,"review resolution source, threshold, clock and cancellation rules"

@@ -33,6 +33,13 @@ target_include_directories(pm_fast_arb PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/includ
 target_link_libraries(pm_fast_arb PUBLIC pm_core Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 target_compile_options(pm_fast_arb PRIVATE -Wall -Wextra -Wpedantic)
 
+add_library(pm_cross_venue
+    src/cross_venue.cpp
+)
+target_include_directories(pm_cross_venue PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(pm_cross_venue PUBLIC pm_core Threads::Threads OpenSSL::Crypto)
+target_compile_options(pm_cross_venue PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_engine src/main.cpp)
 target_link_libraries(polymarket_engine PRIVATE pm_core)
 
@@ -68,6 +75,14 @@ add_executable(polymarket_fast_arb_shadow src/fast_arb_main.cpp)
 target_link_libraries(polymarket_fast_arb_shadow PRIVATE pm_fast_arb)
 target_compile_options(polymarket_fast_arb_shadow PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(prediction_cross_venue_arb src/cross_venue_main.cpp)
+target_link_libraries(prediction_cross_venue_arb PRIVATE pm_cross_venue)
+target_compile_options(prediction_cross_venue_arb PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(prediction_cross_venue_auth_check src/cross_venue_auth_main.cpp)
+target_link_libraries(prediction_cross_venue_auth_check PRIVATE pm_cross_venue)
+target_compile_options(prediction_cross_venue_auth_check PRIVATE -Wall -Wextra -Wpedantic)
+
 include(CTest)
 if(BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -81,11 +96,15 @@ if(BUILD_TESTING)
     target_link_libraries(pm_market_relation_tests PRIVATE pm_core)
     add_executable(pm_fast_arb_tests tests/test_fast_arb.cpp)
     target_link_libraries(pm_fast_arb_tests PRIVATE pm_fast_arb)
+    add_executable(pm_cross_venue_tests tests/test_cross_venue.cpp)
+    target_link_libraries(pm_cross_venue_tests PRIVATE pm_cross_venue)
     add_test(NAME pm_tests COMMAND pm_tests)
     add_test(NAME pm_execution_tests COMMAND pm_execution_tests)
     add_test(NAME pm_reward_tests COMMAND pm_reward_tests)
     add_test(NAME pm_market_relation_tests COMMAND pm_market_relation_tests)
     add_test(NAME pm_fast_arb_tests COMMAND pm_fast_arb_tests)
+    add_test(NAME pm_cross_venue_tests COMMAND pm_cross_venue_tests)
+    add_test(NAME portfolio_supervisor_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_portfolio_supervisor.py)
     add_test(NAME v4_research_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v4_research.py)
     add_test(NAME runtime_supervisor_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_supervisor.py)
     add_test(NAME live_smoke_summary_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_live_smoke_summary.py)

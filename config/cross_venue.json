@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "polymarket_config": "config/paper_v4.json",
+  "pair_manifest": "config/cross_venue_pairs.csv",
+  "credentials_file": "~/.config/polymarket/venues.env",
+  "run_dir": "runs/cross_venue",
+  "limitless_base_url": "https://api.limitless.exchange",
+  "kalshi_production_base_url": "https://external-api.kalshi.com",
+  "kalshi_demo_base_url": "https://external-api.demo.kalshi.co",
+  "interval_ms": 3000,
+  "starting_capital": 2500.0,
+  "policy": {
+    "polymarket_market_limit": 1000,
+    "limitless_market_limit": 250,
+    "kalshi_market_limit": 1000,
+    "polymarket_min_liquidity": 0.0,
+    "min_net_edge_per_share": 0.0025,
+    "slippage_bps": 3.0,
+    "latency_reserve_bps": 5.0,
+    "max_bundle_usd": 25.0,
+    "max_open_capital_usd": 2500.0,
+    "min_shares": 1.0,
+    "auto_match_min_similarity": 0.88,
+    "auto_match_max_close_diff_seconds": 3600,
+    "pair_cooldown_seconds": 60,
+    "paper_trade_enabled": true,
+    "require_supervisor_gate": true,
+    "require_verified_settlement": true,
+    "supervisor_limits": "runs/supervisor/capital_limits.json",
+    "fee_reserve_bps": {
+      "polymarket": 10.0,
+      "limitless": 15.0,
+      "kalshi": 15.0
+    }
+  }
+}
