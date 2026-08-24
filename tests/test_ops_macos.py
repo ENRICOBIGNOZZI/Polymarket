@@ -59,6 +59,7 @@ class MacOSOpsContractTest(unittest.TestCase):
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
         health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(encoding="utf-8")
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
+        deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(encoding="utf-8")
 
         self.assertIn('${POLYMARKET_DEPLOY_REF:-paper-validated}', updater)
         self.assertIn('git fetch origin "$LOCAL_BRANCH" "$DEPLOY_REF"', updater)
@@ -87,6 +88,12 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('github.event_name != \'pull_request\'', smoke)
         self.assertNotIn("github.head_ref == 'implement/paper-live-oos-pilot-v4'", smoke)
         self.assertIn('group: v4-live-paper-smoke-${{ github.ref }}', smoke)
+
+        self.assertIn('git fetch origin main paper-validated', deploy)
+        self.assertIn('validated_sha="$(git rev-parse origin/paper-validated)"', deploy)
+        self.assertIn('test "$head_sha" = "$validated_sha"', deploy)
+        self.assertIn('git merge-base --is-ancestor "$validated_sha" "$main_sha"', deploy)
+        self.assertNotIn('test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"', deploy)
 
 
 if __name__ == "__main__":
