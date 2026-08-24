@@ -93,7 +93,7 @@ jobs:
           fi
           test "$select_rc" -eq 0
 
-      - name: Fetch and recheck candidate
+      - name: Fetch and recheck candidate and source research
         if: env.CANDIDATE_COUNT == '1'
         shell: bash
         env:
@@ -103,8 +103,12 @@ jobs:
           gh pr view "$PR_NUMBER" \
             --json number,title,url,headRefName,headRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
             > candidate.json
+          gh pr view "$SOURCE_PR_NUMBER" \
+            --json number,headRefName,headRefOid,isDraft,labels,state,body \
+            > source-research.json
           python3 scripts/integration_gate.py validate \
             --candidate candidate.json \
+            --source-research source-research.json \
             --report integration-gate-report.md
 
       - name: Merge the unified champion change
@@ -115,14 +119,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Re-read labels, checks, merge state and head SHA immediately before
-          # the irreversible action. An earlier approval cannot survive a
-          # changed diff, removed label, failed check or advanced base branch.
           gh pr view "$PR_NUMBER" \
             --json number,title,url,headRefName,headRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
             > candidate-final.json
+          gh pr view "$SOURCE_PR_NUMBER" \
+            --json number,headRefName,headRefOid,isDraft,labels,state,body \
+            > source-research-final.json
           python3 scripts/integration_gate.py validate \
             --candidate candidate-final.json \
+            --source-research source-research-final.json \
             --report integration-final-gate-report.md
           expected_head="$(python3 -c 'import json; print(json.load(open("candidate-final.json"))["headRefOid"])')"
 
@@ -168,6 +173,7 @@ jobs:
             echo "- incumbent revision: \`$BASE_MAIN_SHA\`"
             echo "- incumbent health run: ${INCUMBENT_HEALTH_RUN_ID:-deployment-disabled}"
             echo "- merged PR: #$PR_NUMBER"
+            echo "- approved source research PR: #$SOURCE_PR_NUMBER"
             echo "- candidate head: \`$expected_head\`"
             echo "- merged main revision: \`$merged_sha\`"
             echo '- merge mode: squash; no administrative bypass'
@@ -201,6 +207,8 @@ jobs:
             candidate.env
             candidate.json
             candidate-final.json
+            source-research.json
+            source-research-final.json
             merge-result.txt
             integration-dispatch.json
           if-no-files-found: warn
