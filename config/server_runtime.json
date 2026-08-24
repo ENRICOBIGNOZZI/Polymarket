@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "host_default": "100.104.183.109",
+  "user_default": "enrico",
+  "port_default": 22,
+  "repo_root_default": "/home/enrico/polymarket",
+  "deployment_ref": "paper-validated",
+  "tailscale_auth_secret": "TS_AUTHKEY",
+  "ssh_private_key_secret": "POLYMARKET_SERVER_SSH_KEY",
+  "ssh_identity_path": "~/.ssh/polymarket_deploy",
+  "health_endpoints": {
+    "runtime_exporter": "http://127.0.0.1:9108/healthz",
+    "prometheus": "http://127.0.0.1:9090/-/ready",
+    "grafana": "http://127.0.0.1:3000/api/health"
+  },
+  "notes": "Contains no credential values. GitHub Actions obtains the Tailscale auth key and SSH private key only from repository secrets at runtime."
+}
