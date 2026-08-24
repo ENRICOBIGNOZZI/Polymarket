@@ -26,14 +26,21 @@ class GrafanaPaperSimulationContractTest(unittest.TestCase):
         ):
             self.assertIn(title, self.panels)
 
-    def test_live_paper_panels_use_execution_metrics(self) -> None:
+    def test_live_paper_panels_use_execution_metrics_and_explicit_zero_states(self) -> None:
         self.assertEqual(
             self.panels["Maker Fill Events"]["targets"][0]["expr"],
-            "sum(polymarket_maker_fills_total)",
+            "sum(polymarket_maker_fills_total) or vector(0)",
+        )
+        resting = self.panels["Resting Hedge Bundles"]["targets"][0]["expr"]
+        self.assertIn('status="RESTING"', resting)
+        self.assertIn("or vector(0)", resting)
+        self.assertIn(
+            "or vector(0)",
+            self.panels["Closed / Unwound Baskets"]["targets"][0]["expr"],
         )
         self.assertIn(
-            'status="RESTING"',
-            self.panels["Resting Hedge Bundles"]["targets"][0]["expr"],
+            "or vector(0)",
+            self.panels["Best Multi-leg Completion"]["targets"][0]["expr"],
         )
         self.assertEqual(
             self.panels["OOS Trades — Validation"]["targets"][0]["expr"],
