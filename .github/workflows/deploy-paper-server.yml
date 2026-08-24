@@ -3,7 +3,7 @@ name: deploy-paper-server
 on:
   workflow_dispatch:
   schedule:
-    - cron: "12,42 * * * *"
+    - cron: "*/15 * * * *"
   workflow_run:
     workflows: ["v4-live-paper-smoke"]
     types: [completed]
@@ -64,7 +64,7 @@ jobs:
           done
           test -s ~/.ssh/known_hosts
 
-      - name: Determine whether reconciliation is required
+      - name: Determine whether code or runtime reconciliation is required
         shell: bash
         run: |
           set -euo pipefail
@@ -78,10 +78,37 @@ jobs:
               git fetch origin main paper-validated
               target_sha="$(git rev-parse origin/paper-validated)"
               head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+              runtime_ok=false
+              run_root="$HOME/polymarket/runs/paper_v5_live"
+
+              if [[ "$head_sha" == "$target_sha" ]] \
+                && curl -fsS http://127.0.0.1:9108/healthz >/dev/null 2>&1 \
+                && curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1 \
+                && curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 \
+                && [[ -s "$run_root/activity_status.json" ]] \
+                && python3 - "$run_root/activity_status.json" <<'PY'
+import json
+import sys
+import time
+from pathlib import Path
+status = json.loads(Path(sys.argv[1]).read_text())
+assert status.get('healthy') is True, status
+assert time.time() - float(status['timestamp']) <= 180, status
+assert int(status.get('models_alive', 0)) == 5, status
+assert int(status.get('models_fresh', 0)) == 5, status
+assert int(status.get('total_discovered', 0)) >= 500, status
+assert int(status.get('total_tradable', 0)) > 0, status
+assert int(status.get('total_candidates', 0)) > 0, status
+PY
+              then
+                runtime_ok=true
+              fi
+
               printf 'reconcile_event=periodic\n'
               printf 'server_head=%s\n' "${head_sha:-missing}"
               printf 'paper_validated=%s\n' "$target_sha"
-              if [[ "$head_sha" == "$target_sha" ]]; then
+              printf 'runtime_ok=%s\n' "$runtime_ok"
+              if [[ "$head_sha" == "$target_sha" && "$runtime_ok" == "true" ]]; then
                 printf 'need_deploy=false\n'
               else
                 printf 'need_deploy=true\n'
@@ -97,7 +124,7 @@ jobs:
           fi
           echo "NEED_DEPLOY=$need_deploy" >> "$GITHUB_ENV"
 
-      - name: Deploy validated paper ref
+      - name: Deploy or repair validated paper ref
         if: env.NEED_DEPLOY == 'true'
         shell: bash
         run: |
@@ -132,7 +159,7 @@ jobs:
           POLYMARKET_DEPLOY_REF=paper-validated bash "$updater"
           REMOTE
 
-      - name: Verify production paper services
+      - name: Verify aggressive production paper services
         if: env.NEED_DEPLOY == 'true'
         shell: bash
         run: |
@@ -151,6 +178,32 @@ jobs:
           if [[ -n "${EXPECTED_VALIDATED_SHA:-}" ]]; then
             test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
           fi
+
+          run_root="$HOME/polymarket/runs/paper_v5_live"
+          activity_ok=false
+          for _ in {1..90}; do
+            if [[ -s "$run_root/activity_status.json" ]] && python3 - "$run_root/activity_status.json" <<'PY'
+import json
+import sys
+import time
+from pathlib import Path
+status = json.loads(Path(sys.argv[1]).read_text())
+assert status.get('healthy') is True, status
+assert time.time() - float(status['timestamp']) <= 180, status
+assert int(status.get('models_alive', 0)) == 5, status
+assert int(status.get('models_fresh', 0)) == 5, status
+assert int(status.get('total_discovered', 0)) >= 500, status
+assert int(status.get('total_tradable', 0)) > 0, status
+assert int(status.get('total_candidates', 0)) > 0, status
+PY
+            then
+              activity_ok=true
+              break
+            fi
+            sleep 2
+          done
+          test "$activity_ok" = true
+
           curl -fsS http://127.0.0.1:9108/healthz >/dev/null
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
           grep -q '^polymarket_runtime_info{adapter="v5",run_root="paper_v5_live",version="v5"} 1$' <<<"$metrics"
@@ -158,6 +211,7 @@ jobs:
           grep -q '^polymarket_runtime_pnl_usd ' <<<"$metrics"
           grep -q '^polymarket_model_info{' <<<"$metrics"
           grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics"
+          grep -q '^polymarket_allocator_models_alive 5$' <<<"$metrics"
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
           grafana_search="$(curl -fsS http://127.0.0.1:3000/api/search)"
@@ -165,6 +219,9 @@ jobs:
           printf 'server_head=%s\n' "$head_sha"
           printf 'paper_validated=%s\n' "$validated_sha"
           printf 'origin_main=%s\n' "$main_sha"
+          printf '%s\n' 'activity_status_begin'
+          cat "$run_root/activity_status.json"
+          printf '%s\n' 'activity_status_end'
           case "$(uname -s)" in
             Darwin) sudo -n /usr/local/sbin/polymarket-service-control status ;;
             Linux)
@@ -179,7 +236,7 @@ jobs:
       - name: Record no-op reconciliation
         if: env.NEED_DEPLOY == 'false'
         shell: bash
-        run: echo 'reconciliation_result=already_current' | tee -a deploy-evidence.txt
+        run: echo 'reconciliation_result=code_current_runtime_active' | tee -a deploy-evidence.txt
 
       - name: Upload deployment evidence
         if: always()
