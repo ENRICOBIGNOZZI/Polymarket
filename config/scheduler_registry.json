@@ -188,6 +188,18 @@
       "validation_dispatch_authority": false
     },
     {
+      "id": "all-market-capacity-validation",
+      "workflow": ".github/workflows/all-market-capacity.yml",
+      "workflow_name": "all-market-capacity-smoke",
+      "job": "capacity",
+      "cadence": "every six hours at minute 41; relevant pull requests and manual",
+      "responsibility": "validate complete market inventory, 500-market event-driven coverage, 500-market universal scanning and a 1000-slot global opportunity frontier without submitting orders",
+      "critical": false,
+      "merge_authority": false,
+      "deploy_authority": false,
+      "validation_dispatch_authority": false
+    },
+    {
       "id": "live-api-smoke",
       "workflow": ".github/workflows/live-smoke.yml",
       "workflow_name": "live-api-smoke",
