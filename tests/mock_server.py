@@ -8,7 +8,8 @@ STATE=sys.argv[2] if len(sys.argv)>2 else ''
 def closed(): return bool(STATE and os.path.exists(STATE))
 def market_obj(is_closed=False):
     return {'id':'m1','conditionId':'c1','slug':'mock-market','question':'Will mock event happen?',
-            'liquidityNum':5000,'negRisk':False,'active':not is_closed,'closed':is_closed,'eventId':'e1',
+            'liquidityNum':5000,'negRisk':False,'active':not is_closed,'closed':is_closed,
+            'enableOrderBook':True,'acceptingOrders':not is_closed,'eventId':'e1',
             'clobTokenIds':json.dumps([YES,NO]),'outcomes':json.dumps(['Yes','No']),
             # Active markets can legitimately trade near 0/1; that must not be mistaken for resolution.
             'outcomePrices':json.dumps(['1.0','0.0'] if is_closed else ['0.999','0.001']),
@@ -20,6 +21,7 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         p=urlparse(self.path)
         if p.path=='/markets': self._send([] if closed() else [market_obj(False)])
+        elif p.path=='/markets/keyset': self._send({'markets':[] if closed() else [market_obj(False)],'next_cursor':''})
         elif p.path=='/markets/m1': self._send(market_obj(closed()))
         elif p.path=='/clob-markets/c1': self._send({'mos':1,'mts':0.01,'fd':{'r':0.0,'e':1,'to':True},'t':[{'t':YES,'o':'Yes'},{'t':NO,'o':'No'}]})
         elif p.path=='/fee-rate': self._send({'base_fee':0})
