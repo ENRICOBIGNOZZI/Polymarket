@@ -57,6 +57,7 @@ class MacOSOpsContractTest(unittest.TestCase):
 
     def test_autoupdate_deploys_only_live_smoke_validated_ref(self):
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
+        linux_updater = (ROOT / "ops" / "update_server.sh").read_text(encoding="utf-8")
         health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(encoding="utf-8")
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
         deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(encoding="utf-8")
@@ -75,6 +76,13 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('deploy_ref=%s', updater)
         self.assertIn('validated=%s', updater)
         self.assertIn('origin_main=%s', updater)
+
+        self.assertIn('${POLYMARKET_DEPLOY_REF:-paper-validated}', linux_updater)
+        self.assertIn('git fetch origin "$LOCAL_BRANCH" "$DEPLOY_REF"', linux_updater)
+        self.assertIn('NEW_SHA="$(git rev-parse "origin/$DEPLOY_REF")"', linux_updater)
+        self.assertIn('git merge-base --is-ancestor "$NEW_SHA" "$MAIN_SHA"', linux_updater)
+        self.assertIn('validated_ref=%s', linux_updater)
+        self.assertNotIn('NEW_SHA="$(git rev-parse "origin/$BRANCH")"', linux_updater)
 
         self.assertIn('git fetch -q origin main paper-validated', health)
         self.assertIn('origin/paper-validated', health)
@@ -111,6 +119,8 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"', deploy)
         self.assertIn('git fetch origin main paper-validated', deploy)
         self.assertIn('validated_sha="$(git rev-parse origin/paper-validated)"', deploy)
+        self.assertIn('git show "$validated_sha:$updater_path"', deploy)
+        self.assertIn('POLYMARKET_DEPLOY_REF=paper-validated bash "$updater"', deploy)
         self.assertIn('test "$head_sha" = "$validated_sha"', deploy)
         self.assertIn('git merge-base --is-ancestor "$validated_sha" "$main_sha"', deploy)
         self.assertIn('paper-server-deploy-${{ github.run_id }}', deploy)
