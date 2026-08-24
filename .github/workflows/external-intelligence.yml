@@ -13,7 +13,7 @@ on:
           - backfill
           - demo
   schedule:
-    - cron: "17,47 * * * *"
+    - cron: "7,22,37,52 * * * *"
   push:
     branches: [main]
     paths:
@@ -80,6 +80,8 @@ jobs:
           assert cfg["allow_authenticated_execution"] is False
           assert cfg["allow_direct_champion_mutation"] is False
           assert cfg["allow_production_signal_write"] is False
+          assert cfg["universe"]["max_markets"] >= 500
+          assert cfg["universe"]["min_liquidity"] <= 25
           assert {1.0, 1.5, 2.0}.issubset(
               {float(value) for value in cfg["backtest"]["cost_stress_multipliers"]}
           )
