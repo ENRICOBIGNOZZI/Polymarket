@@ -1,0 +1,172 @@
+name: Polymarket Integration Merge
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 * * * *"
+
+permissions:
+  checks: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: polymarket-integration-merge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Require a fully validated incumbent
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main paper-validated
+          main_sha="$(git rev-parse origin/main)"
+          validated_sha="$(git rev-parse origin/paper-validated)"
+          echo "BASE_MAIN_SHA=$main_sha" >> "$GITHUB_ENV"
+          echo "BASE_VALIDATED_SHA=$validated_sha" >> "$GITHUB_ENV"
+          if [[ "$main_sha" != "$validated_sha" ]]; then
+            {
+              echo '# Integration merge'
+              echo
+              echo "- main: \`$main_sha\`"
+              echo "- paper-validated: \`$validated_sha\`"
+              echo '- decision: blocked; validation/deployment chain for the incumbent is not complete'
+            } > integration-merge-report.md
+            echo 'INTEGRATION_BLOCKED=1' >> "$GITHUB_ENV"
+          else
+            echo 'INTEGRATION_BLOCKED=0' >> "$GITHUB_ENV"
+          fi
+
+      - name: Select one administrator-approved integration
+        if: env.INTEGRATION_BLOCKED == '0'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh pr list --state open --base main --limit 100 \
+            --json number,title,url,headRefName,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
+            > integration-prs.json
+          set +e
+          python3 scripts/integration_gate.py select \
+            --prs integration-prs.json \
+            --env candidate.env \
+            --report integration-merge-report.md
+          select_rc=$?
+          set -e
+          cat candidate.env >> "$GITHUB_ENV"
+          if [[ "$select_rc" -eq 2 ]]; then
+            exit 1
+          fi
+          test "$select_rc" -eq 0
+
+      - name: Fetch and recheck candidate
+        if: env.INTEGRATION_BLOCKED == '0' && env.CANDIDATE_COUNT == '1'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh pr view "$PR_NUMBER" \
+            --json number,title,url,headRefName,headRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
+            > candidate.json
+          python3 scripts/integration_gate.py validate \
+            --candidate candidate.json \
+            --report integration-gate-report.md
+
+      - name: Merge the unified champion change
+        if: env.INTEGRATION_BLOCKED == '0' && env.CANDIDATE_COUNT == '1'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Re-read labels, checks, merge state and head SHA immediately before
+          # the irreversible action. An earlier approval cannot survive a
+          # changed diff, removed label, failed check or advanced base branch.
+          gh pr view "$PR_NUMBER" \
+            --json number,title,url,headRefName,headRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
+            > candidate-final.json
+          python3 scripts/integration_gate.py validate \
+            --candidate candidate-final.json \
+            --report integration-final-gate-report.md
+          expected_head="$(python3 -c 'import json; print(json.load(open("candidate-final.json"))["headRefOid"])')"
+
+          git fetch --no-tags origin main paper-validated
+          current_main_sha="$(git rev-parse origin/main)"
+          current_validated_sha="$(git rev-parse origin/paper-validated)"
+          test "$current_main_sha" = "$BASE_MAIN_SHA"
+          test "$current_validated_sha" = "$BASE_VALIDATED_SHA"
+          test "$current_main_sha" = "$current_validated_sha"
+
+          gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$expected_head" \
+            | tee merge-result.txt
+          merged_sha="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq .mergeCommit.oid)"
+          [[ "$merged_sha" =~ ^[0-9a-f]{40}$ ]]
+          current_main_after_merge="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          test "$current_main_after_merge" = "$merged_sha"
+          echo "MERGED_SHA=$merged_sha" >> "$GITHUB_ENV"
+
+          python3 - "$merged_sha" "$PR_NUMBER" > integration-dispatch.json <<'PY'
+          import json
+          import sys
+          print(json.dumps({
+              "event_type": "champion-integration-merged",
+              "client_payload": {
+                  "sha": sys.argv[1],
+                  "pr_number": int(sys.argv[2]),
+              },
+          }))
+          PY
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" --input integration-dispatch.json
+          gh pr comment "$PR_NUMBER" --body \
+            "Administrator-approved integration merged at \`$merged_sha\`. Validation has been handed to the dedicated post-merge scheduler. The prior \`paper-validated\` revision remains live until that chain succeeds."
+
+          {
+            echo
+            echo '## Integration action'
+            echo "- merged PR: #$PR_NUMBER"
+            echo "- incumbent revision: \`$BASE_MAIN_SHA\`"
+            echo "- candidate head: \`$expected_head\`"
+            echo "- merged main revision: \`$merged_sha\`"
+            echo '- merge mode: squash; no administrative bypass'
+            echo '- handoff: repository dispatch `champion-integration-merged`'
+          } >> integration-merge-report.md
+
+      - name: Publish integration report
+        if: always()
+        shell: bash
+        run: |
+          cat integration-merge-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          cat integration-gate-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          cat integration-final-gate-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      - name: Upload integration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-merge-${{ github.run_id }}
+          path: |
+            integration-merge-report.md
+            integration-gate-report.md
+            integration-final-gate-report.md
+            integration-prs.json
+            candidate.env
+            candidate.json
+            candidate-final.json
+            merge-result.txt
+            integration-dispatch.json
+          if-no-files-found: warn
+          retention-days: 30

@@ -1,0 +1,85 @@
+name: Polymarket Post-Merge Validation
+
+on:
+  repository_dispatch:
+    types: [champion-integration-merged]
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact main SHA to validate
+        required: true
+        type: string
+      pr_number:
+        description: Source integration PR number
+        required: false
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: polymarket-post-merge-validation
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      EXPECTED_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || inputs.expected_sha }}
+      PR_NUMBER: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number || inputs.pr_number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || inputs.expected_sha }}
+          fetch-depth: 1
+
+      - name: Bind validation to exact main revision
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          test "$main_sha" = "$EXPECTED_SHA"
+          {
+            echo '# Post-merge validation dispatch'
+            echo
+            echo "- expected main revision: \`$EXPECTED_SHA\`"
+            echo "- source PR: ${PR_NUMBER:-not supplied}"
+          } > post-merge-validation-report.md
+
+      - name: Dispatch specialized validation schedulers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for workflow in ci.yml monitoring.yml v4-live-smoke.yml; do
+            current_main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+            test "$current_main_sha" = "$EXPECTED_SHA"
+            gh workflow run "$workflow" --ref main -f expected_sha="$EXPECTED_SHA"
+            echo "- dispatched \`$workflow\` for exact revision \`$EXPECTED_SHA\`" \
+              | tee -a post-merge-validation-report.md
+          done
+          if [[ -n "${PR_NUMBER:-}" ]]; then
+            gh pr comment "$PR_NUMBER" --body \
+              "Dedicated post-merge validation dispatched CI, monitoring and live-paper smoke for exact main revision \`$EXPECTED_SHA\`. Promotion remains incomplete until \`paper-validated\` and deployed HEAD reach this SHA."
+          fi
+
+      - name: Publish validation dispatch
+        if: always()
+        run: cat post-merge-validation-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      - name: Upload validation-dispatch evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-merge-validation-${{ github.run_id }}
+          path: post-merge-validation-report.md
+          if-no-files-found: warn
+          retention-days: 30

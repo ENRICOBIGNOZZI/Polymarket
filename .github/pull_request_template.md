@@ -9,7 +9,7 @@ Select exactly one primary status.
 - [ ] Normal feature, bug fix, execution/risk, documentation or infrastructure change
 - [ ] Research/experiment/diagnostic only — evidence source; close without direct merge
 - [ ] Shadow-only instrumentation — requires `shadow-isolated`
-- [ ] Approved research integration into the single champion — requires an `integration/*` branch plus `approved-for-integration` and `single-model-reviewed`
+- [ ] Approved research integration into the single champion — requires an `integration/*` branch plus `approved-for-integration`, `single-model-reviewed` and `administrator-approved`
 
 ## Research evidence
 
@@ -56,6 +56,14 @@ Required for every approved integration.
 - [ ] `config/live_champion.json` is unchanged, or its promotion change is explicit, reviewed and rollback-safe
 - [ ] The previous `paper-validated` revision remains the rollback target until post-merge live smoke succeeds
 
+## Administrator approval
+
+Required only for a non-draft `integration/*` PR.
+
+- [ ] The project administrator reviewed this exact integrated diff, not only the source research result
+- [ ] The PR carries `administrator-approved` in addition to both integration labels
+- [ ] The administrator accepts the rollback, state-migration and live-behavior consequences
+
 ## Shadow isolation
 
 Required when `shadow-isolated` is used.
@@ -72,13 +80,22 @@ Required when `shadow-isolated` is used.
 - [ ] Paper fills are not presented as real fills
 - [ ] No authenticated order submission, wallet secret or credential is introduced
 - [ ] State persistence, restart behavior, reconciliation and kill-switch effects are considered
-- [ ] Model approval does not implicitly authorize real-money execution
+- [ ] Model approval and administrator approval do not implicitly authorize real-money execution
+
+## Scheduler and authority boundaries
+
+- [ ] This change preserves one job and one bounded responsibility per workflow
+- [ ] Only the integration scheduler can merge an approved integration
+- [ ] Only the post-merge scheduler can dispatch the validation bundle
+- [ ] Only the deployment scheduler can deploy `paper-validated`
+- [ ] The administrator supervisor remains read-only
 
 ## Branch lifecycle and post-merge verification
 
 - [ ] Unapproved research is on `research/*`, `experiment/*` or `diagnostic/*`, not directly on `main`
 - [ ] Approved research is consolidated on a fresh `integration/*` branch based on current `main`
 - [ ] The integration PR links its source evidence and can be squash-merged as one coherent champion change
-- [ ] CI, monitoring and live-paper smoke will be dispatched after an automation-token merge
+- [ ] Integration merge and post-merge validation are handled by separate schedulers
+- [ ] CI, monitoring and live-paper smoke are bound to the exact merged SHA
 - [ ] Promotion is complete only after `main == paper-validated == deployed HEAD`
 - [ ] The head branch can be deleted after merge or closure
