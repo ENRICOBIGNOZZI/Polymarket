@@ -31,6 +31,8 @@ jobs:
           git fetch --no-tags origin main paper-validated
           main_sha="$(git rev-parse origin/main)"
           validated_sha="$(git rev-parse origin/paper-validated)"
+          echo "BASE_MAIN_SHA=$main_sha" >> "$GITHUB_ENV"
+          echo "BASE_VALIDATED_SHA=$validated_sha" >> "$GITHUB_ENV"
           if [[ "$main_sha" != "$validated_sha" ]]; then
             {
               echo '# Integration merge'
@@ -88,12 +90,31 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          expected_head="$(python3 -c 'import json; print(json.load(open("candidate.json"))["headRefOid"])')"
-          before_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+
+          # Re-read labels, checks, merge state and head SHA immediately before
+          # the irreversible action. An earlier approval cannot survive a
+          # changed diff, removed label, failed check or advanced base branch.
+          gh pr view "$PR_NUMBER" \
+            --json number,title,url,headRefName,headRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
+            > candidate-final.json
+          python3 scripts/integration_gate.py validate \
+            --candidate candidate-final.json \
+            --report integration-final-gate-report.md
+          expected_head="$(python3 -c 'import json; print(json.load(open("candidate-final.json"))["headRefOid"])')"
+
+          git fetch --no-tags origin main paper-validated
+          current_main_sha="$(git rev-parse origin/main)"
+          current_validated_sha="$(git rev-parse origin/paper-validated)"
+          test "$current_main_sha" = "$BASE_MAIN_SHA"
+          test "$current_validated_sha" = "$BASE_VALIDATED_SHA"
+          test "$current_main_sha" = "$current_validated_sha"
+
           gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$expected_head" \
             | tee merge-result.txt
-          merged_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
-          test "$merged_sha" != "$before_sha"
+          merged_sha="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq .mergeCommit.oid)"
+          [[ "$merged_sha" =~ ^[0-9a-f]{40}$ ]]
+          current_main_after_merge="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          test "$current_main_after_merge" = "$merged_sha"
           echo "MERGED_SHA=$merged_sha" >> "$GITHUB_ENV"
 
           python3 - "$merged_sha" "$PR_NUMBER" > integration-dispatch.json <<'PY'
@@ -115,7 +136,9 @@ jobs:
             echo
             echo '## Integration action'
             echo "- merged PR: #$PR_NUMBER"
-            echo "- main revision: \`$merged_sha\`"
+            echo "- incumbent revision: \`$BASE_MAIN_SHA\`"
+            echo "- candidate head: \`$expected_head\`"
+            echo "- merged main revision: \`$merged_sha\`"
             echo '- merge mode: squash; no administrative bypass'
             echo '- handoff: repository dispatch `champion-integration-merged`'
           } >> integration-merge-report.md
@@ -127,6 +150,8 @@ jobs:
           cat integration-merge-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat integration-gate-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          cat integration-final-gate-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
       - name: Upload integration evidence
         if: always()
@@ -136,9 +161,11 @@ jobs:
           path: |
             integration-merge-report.md
             integration-gate-report.md
+            integration-final-gate-report.md
             integration-prs.json
             candidate.env
             candidate.json
+            candidate-final.json
             merge-result.txt
             integration-dispatch.json
           if-no-files-found: warn
