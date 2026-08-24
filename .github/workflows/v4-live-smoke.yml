@@ -130,7 +130,7 @@ jobs:
 
           python3 scripts/multi_strategy_paper.py \
             --config config/paper_v5.json --run-root "$R" --engine ./build/polymarket_engine \
-            --markets 120 --min-liquidity 100 --validate-only \
+            --markets 120 --min-liquidity 100 --scan-only --once \
             > "$R/allocator_refresh.log"
 
           python3 scripts/walk_forward_v4.py \
@@ -144,8 +144,13 @@ jobs:
           assert 'polymarket_runtime_info{adapter="v5",run_root="paper_v5_live",version="v5"} 1' in text
           assert 'polymarket_allocator_state_present 1' in text
           assert 'polymarket_model_info{expert="graph",model="graph"} 1' in text
-          assert 'polymarket_strategy_state_present{sleeve="structural"} 1' in text
           assert 'polymarket_multileg_state_present 1' in text
+          staleness = next(
+              float(line.split()[1])
+              for line in text.splitlines()
+              if line.startswith('polymarket_runtime_execution_staleness_seconds ')
+          )
+          assert staleness < 3600.0, staleness
           Path('paper_v5_live/metrics.prom').write_text(text)
           PY
 

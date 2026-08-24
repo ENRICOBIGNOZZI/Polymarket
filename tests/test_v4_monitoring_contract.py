@@ -26,6 +26,15 @@ class LiveMonitoringContractTest(unittest.TestCase):
         self.assertIn('polymarket_model_info{expert=\"graph\",model=\"graph\"} 1', smoke)
         self.assertIn('polymarket_multileg_state_present 1', smoke)
 
+    def test_live_smoke_refreshes_runtime_from_real_scan_only_children(self):
+        smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
+        self.assertIn("--markets 120 --min-liquidity 100 --scan-only --once", smoke)
+        self.assertIn("if line.startswith('polymarket_runtime_execution_staleness_seconds ')", smoke)
+        self.assertIn("assert staleness < 3600.0, staleness", smoke)
+        refresh_pos = smoke.index('> "$R/allocator_refresh.log"')
+        metrics_pos = smoke.index("from exporter_latest import LatestCollector")
+        self.assertLess(refresh_pos, metrics_pos)
+
     def test_live_smoke_runs_after_main_merge_and_hourly(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
         self.assertIn("push:", smoke)
