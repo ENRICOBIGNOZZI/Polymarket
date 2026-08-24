@@ -98,7 +98,7 @@ jobs:
             if [[ ! -x "$TS" ]]; then TS="$(command -v tailscale)"; fi
             "$TS" status || true
             "$TS" serve status || true
-            REMOTE
+          REMOTE
           } 2>&1 | tee grafana-apply.log
 
       - name: Verify permanent operator URL from another tailnet node
