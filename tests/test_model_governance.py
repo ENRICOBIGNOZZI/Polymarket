@@ -76,11 +76,34 @@ class ModelGovernanceContractTest(unittest.TestCase):
             research_path = temp / "research-event.json"; research_path.write_text(json.dumps(research_event), encoding="utf-8")
             rejected = subprocess.run(["python3","scripts/research_pr_policy.py","--event",str(research_path),"--changed-files",str(changed),"--manifest-existed-on-base","true","--output",str(report)], cwd=ROOT, check=False, capture_output=True, text=True, timeout=10)
             self.assertNotEqual(rejected.returncode, 0); self.assertIn("must remain draft", rejected.stdout)
+
+            research_labeled_event = {"pull_request":{"head":{"ref":"research/new-alpha"},"draft":True,"body":"research","labels":[{"name":"autonomous-promotion-approved"}]}}
+            research_labeled_path = temp / "research-labeled-event.json"; research_labeled_path.write_text(json.dumps(research_labeled_event), encoding="utf-8")
+            research_labeled = subprocess.run(["python3","scripts/research_pr_policy.py","--event",str(research_labeled_path),"--changed-files",str(changed),"--manifest-existed-on-base","true","--output",str(report)], cwd=ROOT, check=False, capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(research_labeled.returncode, 0); self.assertIn("autonomous-promotion-approved", research_labeled.stdout)
+
+            feature_labeled_event = {"pull_request":{"head":{"ref":"fix/not-an-integration"},"draft":False,"body":"governance fix","labels":[{"name":"autonomous-promotion-approved"}]}}
+            feature_labeled_path = temp / "feature-labeled-event.json"; feature_labeled_path.write_text(json.dumps(feature_labeled_event), encoding="utf-8")
+            feature_labeled = subprocess.run(["python3","scripts/research_pr_policy.py","--event",str(feature_labeled_path),"--changed-files",str(changed),"--manifest-existed-on-base","true","--output",str(report)], cwd=ROOT, check=False, capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(feature_labeled.returncode, 0); self.assertIn("research/integration labels are valid only", feature_labeled.stdout)
+
             integration_event = {"pull_request":{"head":{"ref":"integration/new-alpha"},"draft":False,"body":"Source research PR/branch/commit: #123\n","labels":[{"name":"autonomous-promotion-approved"}]}}
             integration_path = temp / "integration-event.json"; integration_path.write_text(json.dumps(integration_event), encoding="utf-8")
             accepted = subprocess.run(["python3","scripts/research_pr_policy.py","--event",str(integration_path),"--changed-files",str(changed),"--manifest-existed-on-base","true","--output",str(report)], cwd=ROOT, check=False, capture_output=True, text=True, timeout=10)
             self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
             self.assertIn("manual_approval_labels_required: `False`", accepted.stdout)
+
+    def test_research_policy_runs_on_every_main_push_and_rejects_direct_pushes(self):
+        policy = (WORKFLOWS / "research-policy.yml").read_text(encoding="utf-8")
+        push_block = policy.split("  push:\n", 1)[1].split("  pull_request:\n", 1)[0]
+        self.assertIn("branches: [main]", push_block)
+        self.assertNotIn("paths:", push_block)
+        self.assertIn("Enforce pull-request provenance for main pushes", policy)
+        self.assertIn("if: github.event_name == 'push'", policy)
+        self.assertIn("commits/${GITHUB_SHA}/pulls", policy)
+        self.assertIn('.base.ref == "main"', policy)
+        self.assertIn('.merged_at != null', policy)
+        self.assertIn("has no merged pull-request provenance", policy)
 
     def test_post_merge_and_deployment_still_use_exact_validated_sha(self):
         post_merge = (WORKFLOWS / "post-merge-validation.yml").read_text(encoding="utf-8")
