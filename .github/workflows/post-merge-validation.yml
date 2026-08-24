@@ -51,6 +51,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          checked_out_sha="$(git rev-parse HEAD)"
           main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
           validated_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/paper-validated" --jq .sha)"
           dispatch_validation=false
@@ -59,26 +60,33 @@ jobs:
           case "$GITHUB_EVENT_NAME" in
             repository_dispatch|workflow_dispatch)
               [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+              test "$checked_out_sha" = "$EXPECTED_SHA"
               test "$main_sha" = "$EXPECTED_SHA"
               dispatch_validation=true
               decision=explicit_exact_sha_dispatch
               ;;
             schedule)
-              EXPECTED_SHA="$main_sha"
+              EXPECTED_SHA="$checked_out_sha"
               echo "EXPECTED_SHA=$EXPECTED_SHA" >> "$GITHUB_ENV"
-              if [[ "$main_sha" == "$validated_sha" ]]; then
+              if [[ "$checked_out_sha" != "$main_sha" ]]; then
+                decision=superseded_by_new_main
+              elif [[ "$main_sha" == "$validated_sha" ]]; then
                 decision=current_no_recovery_needed
               else
                 git fetch --no-tags origin main paper-validated
-                git merge-base --is-ancestor "$validated_sha" "$main_sha"
+                git merge-base --is-ancestor "$validated_sha" "$checked_out_sha"
                 dispatch_validation=true
                 decision=recover_pending_main_validation
               fi
               ;;
             push)
-              EXPECTED_SHA="$main_sha"
+              EXPECTED_SHA="$checked_out_sha"
               echo "EXPECTED_SHA=$EXPECTED_SHA" >> "$GITHUB_ENV"
-              decision=bootstrap_audit_after_cadence_change
+              if [[ "$checked_out_sha" != "$main_sha" ]]; then
+                decision=superseded_by_new_main
+              else
+                decision=bootstrap_audit_after_cadence_change
+              fi
               ;;
             *)
               echo "unsupported event: $GITHUB_EVENT_NAME" >&2
@@ -87,14 +95,18 @@ jobs:
           esac
 
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          test "$main_sha" = "$EXPECTED_SHA"
+          test "$checked_out_sha" = "$EXPECTED_SHA"
+          if [[ "$decision" != "superseded_by_new_main" ]]; then
+            test "$main_sha" = "$EXPECTED_SHA"
+          fi
           echo "DISPATCH_VALIDATION=$dispatch_validation" >> "$GITHUB_ENV"
           {
             echo '# Post-merge validation dispatch'
             echo
             echo "- event: \`$GITHUB_EVENT_NAME\`"
-            echo "- expected main revision: \`$EXPECTED_SHA\`"
+            echo "- checked-out revision: \`$checked_out_sha\`"
+            echo "- observed main revision: \`$main_sha\`"
+            echo "- expected validation revision: \`$EXPECTED_SHA\`"
             echo "- paper-validated revision: \`$validated_sha\`"
             echo "- source PR: ${PR_NUMBER:-not supplied}"
             echo "- decision: \`$decision\`"
@@ -110,7 +122,11 @@ jobs:
           set -euo pipefail
           for workflow in ci.yml monitoring.yml v4-live-smoke.yml; do
             current_main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
-            test "$current_main_sha" = "$EXPECTED_SHA"
+            if [[ "$current_main_sha" != "$EXPECTED_SHA" ]]; then
+              echo "- dispatch skipped because main advanced to \`$current_main_sha\`; a newer push or recovery cycle owns validation" \
+                | tee -a post-merge-validation-report.md
+              exit 0
+            fi
             gh workflow run "$workflow" --ref main -f expected_sha="$EXPECTED_SHA"
             echo "- dispatched \`$workflow\` for exact revision \`$EXPECTED_SHA\`" \
               | tee -a post-merge-validation-report.md
