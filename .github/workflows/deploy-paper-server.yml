@@ -72,13 +72,19 @@ jobs:
             -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
           cd ~/polymarket
-          git fetch origin main >/dev/null
-          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+          git fetch origin main paper-validated >/dev/null
+          head_sha="$(git rev-parse HEAD)"
+          main_sha="$(git rev-parse origin/main)"
+          validated_sha="$(git rev-parse origin/paper-validated)"
+          test "$head_sha" = "$validated_sha"
+          git merge-base --is-ancestor "$validated_sha" "$main_sha"
           curl -fsS http://127.0.0.1:9108/healthz
           curl -fsS http://127.0.0.1:9108/metrics | grep -q '^polymarket_runtime_info'
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
-          printf 'server_head=%s\n' "$(git rev-parse HEAD)"
+          printf 'server_head=%s\n' "$head_sha"
+          printf 'paper_validated=%s\n' "$validated_sha"
+          printf 'origin_main=%s\n' "$main_sha"
           case "$(uname -s)" in
             Darwin) sudo -n /usr/local/sbin/polymarket-service-control status ;;
             Linux)
