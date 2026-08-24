@@ -47,7 +47,7 @@ class ModelGovernanceContractTest(unittest.TestCase):
         required_phrases = (
             "one live champion",
             "research -> evidence -> approval -> integration -> validation -> single live champion",
-            "Unapproved research belongs",
+            "Keep unapproved research isolated",
             "Shadow-only exception",
             "integration/*",
             "approved-for-integration",
