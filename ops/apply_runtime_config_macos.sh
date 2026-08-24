@@ -3,7 +3,8 @@ set -euo pipefail
 
 APP_DIR="${POLYMARKET_APP_DIR:-$HOME/polymarket}"
 STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
-POLYMARKET_GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-http://100.104.183.109:3000}"
+TAILSCALE_HOSTNAME="${POLYMARKET_TAILSCALE_HOSTNAME:-polymarket}"
+POLYMARKET_GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-http://${TAILSCALE_HOSTNAME}}"
 
 [[ "$(uname -s)" == "Darwin" ]] || { echo "macOS only" >&2; exit 1; }
 [[ -d "$APP_DIR/monitoring/grafana/dashboards" ]] || {
@@ -99,11 +100,21 @@ TAILSCALE_BIN="$(find_tailscale || true)"
   echo "tailscale CLI not found; refusing to leave Grafana inaccessible" >&2
   exit 1
 }
+
+tailscale_admin() {
+  if "$TAILSCALE_BIN" "$@"; then
+    return 0
+  fi
+  sudo -n "$TAILSCALE_BIN" "$@"
+}
+
+# Give the paper server a permanent MagicDNS identity. This decouples the
+# operator URL from the node's 100.x address and from Grafana's backend port.
+tailscale_admin set --hostname="$TAILSCALE_HOSTNAME"
+
 serve_log="$(mktemp)"
 trap 'rm -f "$serve_log"' EXIT
-if "$TAILSCALE_BIN" serve --bg --http=3000 localhost:3000 >"$serve_log" 2>&1; then
-  :
-elif sudo -n "$TAILSCALE_BIN" serve --bg --http=3000 localhost:3000 >"$serve_log" 2>&1; then
+if tailscale_admin serve --bg --http=80 localhost:3000 >"$serve_log" 2>&1; then
   :
 else
   cat "$serve_log" >&2
@@ -111,4 +122,5 @@ else
   exit 1
 fi
 
-printf 'grafana_mode=anonymous_viewer_no_login backend=127.0.0.1:3000 exposure=tailscale-serve operator_url=%s\n' "$POLYMARKET_GRAFANA_URL"
+printf 'grafana_mode=anonymous_viewer_no_login backend=127.0.0.1:3000 exposure=tailscale-serve operator_url=%s tailscale_hostname=%s\n' \
+  "$POLYMARKET_GRAFANA_URL" "$TAILSCALE_HOSTNAME"
