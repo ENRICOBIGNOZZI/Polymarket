@@ -188,6 +188,18 @@
       "validation_dispatch_authority": false
     },
     {
+      "id": "external-intelligence",
+      "workflow": ".github/workflows/external-intelligence.yml",
+      "workflow_name": "Polymarket External Intelligence",
+      "job": "collect",
+      "cadence": "every 30 minutes at minutes 17 and 47; relevant changes and manual",
+      "responsibility": "collect, persist and chronologically backtest public external information, then publish research-only evidence to the Alpha Factory",
+      "critical": false,
+      "merge_authority": false,
+      "deploy_authority": false,
+      "validation_dispatch_authority": false
+    },
+    {
       "id": "live-api-smoke",
       "workflow": ".github/workflows/live-smoke.yml",
       "workflow_name": "live-api-smoke",
