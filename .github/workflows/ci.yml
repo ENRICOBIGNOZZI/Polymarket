@@ -63,9 +63,12 @@ jobs:
 
       - name: Deployment script syntax and contracts
         run: |
-          bash -n scripts/paper_latest_loop.sh \
+          bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh \
             ops/bootstrap_server.sh ops/update_server.sh \
             ops/bootstrap_macos.sh ops/update_server_macos.sh ops/macos_service_control.sh \
             ops/install_autoupdate_macos.sh ops/finish_bootstrap_macos.sh \
             ops/apply_runtime_config_macos.sh
+          python3 -m py_compile scripts/multi_strategy_paper.py monitoring/exporter_v5.py
+          python3 -m json.tool config/paper_v5.json >/dev/null
+          python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
           python3 -m unittest tests/test_ops_macos.py -v
