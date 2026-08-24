@@ -68,6 +68,7 @@ def main() -> int:
     parser.add_argument("--minimum-markets", type=int, default=100)
     parser.add_argument("--minimum-tradable-fraction", type=float, default=0.10)
     parser.add_argument("--max-model-staleness-seconds", type=float, default=180.0)
+    parser.add_argument("--allow-stopped", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--now", type=float, default=None)
     args = parser.parse_args()
@@ -99,9 +100,9 @@ def main() -> int:
 
         if alive:
             alive_models += 1
-        else:
+        elif not args.allow_stopped:
             failures.append(f"{name}:not_alive")
-        if status_age > args.max_model_staleness_seconds:
+        if not args.allow_stopped and status_age > args.max_model_staleness_seconds:
             failures.append(f"{name}:status_stale:{status_age:.1f}")
         if engine_age > args.max_model_staleness_seconds:
             failures.append(f"{name}:engine_log_stale:{engine_age:.1f}")
@@ -156,6 +157,7 @@ def main() -> int:
             "minimum_markets_per_model": args.minimum_markets,
             "minimum_tradable_fraction": args.minimum_tradable_fraction,
             "max_model_staleness_seconds": args.max_model_staleness_seconds,
+            "allow_stopped": args.allow_stopped,
         },
         "models_alive": alive_models,
         "models_fresh": fresh_models,
