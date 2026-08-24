@@ -19,6 +19,13 @@ filter_b2() {
     >> "$RUN_ROOT/coherent_hedges.log" 2>&1
 }
 
+alpha_gate_open() {
+  python3 scripts/apply_portfolio_gate.py \
+    --gate "$PORTFOLIO_GATE" --engine alpha \
+    --max-age-seconds "$PORTFOLIO_GATE_MAX_AGE" --check-only \
+    >> "$RUN_ROOT/portfolio_gate_checks.log" 2>&1
+}
+
 rebuild_intents() {
   # Never allow an earlier intent file to survive a failed refresh.
   rm -f "$RUN_ROOT/b1_intents.csv" "$RUN_ROOT/b2_intents.csv" "$RUN_ROOT/intents.csv"
@@ -191,10 +198,14 @@ while true; do
     start_supervisor
   fi
 
-  ./build/polymarket_maker_paper \
-    --config "$CONFIG" --run-dir "$RUN_ROOT/maker" --markets 240 --min-liquidity 100 \
-    --min-edge 0.003 --max-order-usd 50 --ttl-seconds 300 --hold-seconds 180 \
-    --adverse-selection-mult 0.50 --once >> "$RUN_ROOT/maker.log" 2>&1 || true
+  if alpha_gate_open; then
+    ./build/polymarket_maker_paper \
+      --config "$CONFIG" --run-dir "$RUN_ROOT/maker" --markets 240 --min-liquidity 100 \
+      --min-edge 0.003 --max-order-usd 50 --ttl-seconds 300 --hold-seconds 180 \
+      --adverse-selection-mult 0.50 --once >> "$RUN_ROOT/maker.log" 2>&1 || true
+  else
+    printf '%s maker_new_exposure_suppressed portfolio_gate_closed\n' "$now" >> "$RUN_ROOT/maker.log"
+  fi
 
   if (( now - last_stat >= 900 )); then
     # Remove old alpha before scanning: scanner failure must mean no new intent.
