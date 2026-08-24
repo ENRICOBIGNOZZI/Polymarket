@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class V4MonitoringContractTest(unittest.TestCase):
+class LiveMonitoringContractTest(unittest.TestCase):
     def test_strategy_a_producer_matches_exporter_filename(self):
         exporter = (ROOT / "monitoring" / "exporter.py").read_text(encoding="utf-8")
         once = (ROOT / "scripts" / "paper_v4_once.sh").read_text(encoding="utf-8")
@@ -17,13 +17,14 @@ class V4MonitoringContractTest(unittest.TestCase):
         for producer in (once, loop, smoke):
             self.assertIn("structural_latest.csv", producer)
 
-    def test_live_smoke_exercises_v4_adapter_not_base_fallback(self):
+    def test_live_smoke_exercises_v5_adapter_not_base_fallback(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
-        self.assertIn("R=paper_v4_live", smoke)
-        self.assertIn("'paper_v4_live', 'config/paper_v4.json'", smoke)
-        self.assertIn('adapter="v4"', smoke)
+        self.assertIn("R=paper_v5_live", smoke)
+        self.assertIn("'paper_v5_live', 'config/paper_v5.json'", smoke)
+        self.assertIn('adapter=\"v5\"', smoke)
+        self.assertIn('polymarket_allocator_state_present 1', smoke)
+        self.assertIn('polymarket_model_info{expert=\"graph\",model=\"graph\"} 1', smoke)
         self.assertIn('polymarket_multileg_state_present 1', smoke)
-        self.assertIn('polymarket_oos_state_present 1', smoke)
 
     def test_live_smoke_runs_after_main_merge_and_hourly(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
@@ -36,8 +37,8 @@ class V4MonitoringContractTest(unittest.TestCase):
         self.assertIn("scripts/summarize_live_smoke.py", smoke)
         self.assertIn("telemetry/latest-live-smoke.json", smoke)
         self.assertIn("branch=telemetry", smoke)
-        self.assertIn("github.event_name != 'pull_request'", smoke)
-        self.assertIn("continue-on-error: true", smoke)
+        self.assertIn("- name: Build public telemetry snapshot\n        if: always()", smoke)
+        self.assertIn("if: github.event_name != 'pull_request' && success()", smoke)
 
     def test_validated_ref_advances_only_after_telemetry_snapshot_builds(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
@@ -45,39 +46,28 @@ class V4MonitoringContractTest(unittest.TestCase):
         advance_pos = smoke.index("- name: Advance paper validated ref")
         self.assertLess(snapshot_pos, advance_pos)
 
-    def test_shadow_tape_uses_same_market_universe_and_explicit_horizon(self):
+    def test_multileg_uses_recorded_trade_tape_and_explicit_horizon(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
-        shadow_pos = smoke.index("- name: B1 shadow fillability diagnostic")
-        production_segment = smoke[:shadow_pos]
-        self.assertIn("polymarket_trade_recorder", production_segment)
-        self.assertIn("--markets 400 --batch 40 --min-liquidity 100 --lookback-seconds 900", production_segment)
+        self.assertIn("polymarket_trade_recorder", smoke)
+        self.assertIn("--markets 240 --batch 40 --min-liquidity 100 --lookback-seconds 900", smoke)
+        self.assertIn('--trade-tape "$R/trade_tape.csv"', smoke)
         self.assertIn("--trade-lookback-seconds 900", smoke)
 
-    def test_pca_sparse_hedge_cap_matches_production_and_smoke(self):
+    def test_pca_sparse_hedge_cap_matches_rollback_and_live_smoke(self):
         once = (ROOT / "scripts" / "paper_v4_once.sh").read_text(encoding="utf-8")
         loop = (ROOT / "scripts" / "paper_v4_loop.sh").read_text(encoding="utf-8")
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
         for producer in (once, loop, smoke):
             self.assertIn("--max-hedges 4", producer)
 
-    def test_b1_shadow_fillability_is_non_blocking_and_separate_from_production(self):
+    def test_v5_parent_is_fail_closed_and_children_are_single_expert(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
-        marker = "- name: B1 shadow fillability diagnostic"
-        snapshot = "- name: Build public telemetry snapshot"
-        shadow_pos = smoke.index(marker)
-        production_segment = smoke[:shadow_pos]
-        shadow_segment = smoke[shadow_pos:smoke.index(snapshot, shadow_pos)]
-
-        self.assertIn("B1 shadow fillability diagnostic", smoke)
-        self.assertIn('SH="$R/shadow_b1"', smoke)
-        self.assertIn("--min-z 1.25", shadow_segment)
-        self.assertIn('continue-on-error: true', smoke)
-        self.assertIn('paper_v4_live', smoke)
-        self.assertIn('shadow_b1', smoke)
-        self.assertIn("--min-z 1.5", production_segment)
-        self.assertEqual(production_segment.count("--min-edge 0.001"), 4)
-        self.assertNotIn("--min-edge 0.001", shadow_segment)
-        self.assertEqual(shadow_segment.count("--min-edge 0.0"), 3)
+        self.assertIn("assert len(manifest['strategies']) == 5", smoke)
+        self.assertIn("expected = {'micro', 'pca', 'graph', 'semantic', 'external'}", smoke)
+        self.assertIn("active = {name: weight for name, weight in child['expert_weights'].items() if weight > 0}", smoke)
+        self.assertIn("assert active == {item['expert']: 1.0}", smoke)
+        self.assertIn('--config "$R/generated_configs/graph.json"', smoke)
+        self.assertIn('--run-dir "$R/strategies/graph"', smoke)
 
 
 if __name__ == "__main__":
