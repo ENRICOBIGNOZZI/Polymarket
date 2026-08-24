@@ -39,6 +39,7 @@ class MacOSOpsContractTest(unittest.TestCase):
         runtime = (ROOT / "ops" / "apply_runtime_config_macos.sh").read_text(encoding="utf-8")
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
         finish = (ROOT / "ops" / "finish_bootstrap_macos.sh").read_text(encoding="utf-8")
+        compose = (ROOT / "docker-compose.monitoring.yml").read_text(encoding="utf-8")
 
         # Grafana listens only on loopback. The canonical operator URL is the
         # verified stable MagicDNS FQDN exposed exclusively through Tailscale Serve.
@@ -67,8 +68,12 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('org_role = Viewer', runtime)
         self.assertNotIn('org_role = Admin', runtime)
         self.assertIn(
-            'default_home_dashboard_path = $APP_DIR/monitoring/grafana/dashboards/polymarket-latest.json',
+            'default_home_dashboard_path = $APP_DIR/monitoring/grafana/dashboards/polymarket-fast-paper.json',
             runtime,
+        )
+        self.assertIn(
+            'GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/polymarket-fast-paper.json',
+            compose,
         )
         self.assertIn('reporting_enabled = false', runtime)
         self.assertIn('apply_runtime_config_macos.sh', updater)
@@ -94,6 +99,9 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('polymarket-service-control restart', updater)
         self.assertIn('recorder_alive', updater)
         self.assertIn('broker_alive', updater)
+        self.assertIn('terminal_alive', updater)
+        self.assertIn("polymarket_terminal_state_present 1", updater)
+        self.assertIn('polymarket_terminal_pnl_usd', updater)
         self.assertIn('deploy_ref=%s', updater)
         self.assertIn('validated=%s', updater)
         self.assertIn('origin_main=%s', updater)
@@ -103,6 +111,8 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('NEW_SHA="$(git rev-parse "origin/$DEPLOY_REF")"', linux_updater)
         self.assertIn('git merge-base --is-ancestor "$NEW_SHA" "$MAIN_SHA"', linux_updater)
         self.assertIn('validated_ref=%s', linux_updater)
+        self.assertIn('terminal_alive', linux_updater)
+        self.assertIn("polymarket_terminal_state_present 1", linux_updater)
         self.assertNotIn('NEW_SHA="$(git rev-parse "origin/$BRANCH")"', linux_updater)
 
         self.assertIn('git fetch -q origin main paper-validated', health)
@@ -112,6 +122,10 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('test "$status_ref" = "paper-validated"', health)
         self.assertIn('test "$status_validated" = "$validated_sha"', health)
         self.assertIn('up_to_date|deployed|repaired', health)
+        self.assertIn('test "$terminal_alive" = "1"', health)
+        self.assertIn("polymarket_terminal_state_present 1", health)
+        self.assertIn('polymarket_terminal_pnl_usd', health)
+        self.assertIn('polymarket-fast-paper', health)
 
         self.assertIn('Advance paper validated ref', smoke)
         self.assertIn('git/refs/heads/paper-validated', smoke)
@@ -155,6 +169,9 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('git merge-base --is-ancestor "$validated_sha" "$main_sha"', deploy)
         self.assertIn('paper-server-deploy-${{ github.run_id }}', deploy)
         self.assertNotIn('test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"', deploy)
+        self.assertIn("polymarket_terminal_state_present 1", deploy)
+        self.assertIn('polymarket_terminal_pnl_usd', deploy)
+        self.assertIn('polymarket-fast-paper', deploy)
 
         # Produce private health evidence immediately after deployment or a
         # successful Grafana access repair, as well as on the hourly schedule.
@@ -164,7 +181,7 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn("github.event.workflow_run.conclusion == 'success'", health)
         self.assertIn('push:\n    branches: [main]', health)
 
-        # The operator route and explanatory action report are now contractual.
+        # The operator route and explanatory action report are contractual.
         self.assertIn('http://$SERVER_HOST:3000/api/health', health)
         self.assertIn('runtime_action_report.py', health)
         self.assertIn('runtime-action-report.md', health)
