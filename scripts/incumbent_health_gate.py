@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import re
+import time
+from datetime import datetime
 from pathlib import Path
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -22,11 +24,17 @@ def parse_key_values(path: Path) -> dict[str, str]:
     return values
 
 
+def parse_timestamp(value: str) -> float:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+
+
 def validate(
     main_sha: str,
     validated_sha: str,
     deploy_enabled: bool,
     server_health: Path | None,
+    max_age_seconds: int,
+    now_epoch: float,
 ) -> tuple[list[str], dict[str, str]]:
     errors: list[str] = []
     state: dict[str, str] = {
@@ -47,6 +55,7 @@ def validate(
         return errors, state
 
     state["deployment_gate"] = "required"
+    state["max_health_age_seconds"] = str(max_age_seconds)
     if server_health is None:
         errors.append("server health evidence is required when deployment is enabled")
         return errors, state
@@ -55,11 +64,35 @@ def validate(
         return errors, state
 
     values = parse_key_values(server_health)
-    for key in ("head", "origin_main", "paper_validated", "recorder_alive", "broker_alive"):
+    required = (
+        "timestamp",
+        "head",
+        "origin_main",
+        "paper_validated",
+        "recorder_alive",
+        "broker_alive",
+    )
+    for key in required:
         if key not in values:
             errors.append(f"server health evidence is missing {key}")
         else:
             state[f"server_{key}"] = values[key]
+
+    timestamp = values.get("timestamp")
+    if timestamp is not None:
+        try:
+            health_epoch = parse_timestamp(timestamp)
+        except ValueError:
+            errors.append(f"server health timestamp is invalid: {timestamp}")
+        else:
+            age = int(now_epoch - health_epoch)
+            state["server_health_age_seconds"] = str(age)
+            if age < -300:
+                errors.append(f"server health timestamp is {abs(age)} seconds in the future")
+            elif age > max_age_seconds:
+                errors.append(
+                    f"server health evidence is stale: age {age}s exceeds {max_age_seconds}s"
+                )
 
     for key in ("head", "origin_main", "paper_validated"):
         value = values.get(key)
@@ -95,8 +128,13 @@ def main() -> int:
     parser.add_argument("--validated-sha", required=True)
     parser.add_argument("--deploy-enabled", choices=("true", "false"), required=True)
     parser.add_argument("--server-health")
+    parser.add_argument("--max-age-seconds", type=int, default=7200)
+    parser.add_argument("--now-epoch", type=float, default=None)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
+
+    if args.max_age_seconds <= 0:
+        raise SystemExit("--max-age-seconds must be positive")
 
     health_path = Path(args.server_health) if args.server_health else None
     errors, state = validate(
@@ -104,6 +142,8 @@ def main() -> int:
         args.validated_sha,
         args.deploy_enabled == "true",
         health_path,
+        args.max_age_seconds,
+        time.time() if args.now_epoch is None else args.now_epoch,
     )
     report = render(state, errors)
     Path(args.output).write_text(report, encoding="utf-8")
