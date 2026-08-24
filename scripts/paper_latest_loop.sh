@@ -91,7 +91,10 @@ if [[ "${1:-}" == "--print-champion" ]]; then
 fi
 
 fast_enabled="${POLYMARKET_FAST_ARB_ENABLED:-1}"
-fast_required="${POLYMARKET_FAST_ARB_REQUIRED:-1}"
+# Shadow instrumentation must never block the incumbent champion by default.
+# Operators may set REQUIRED=1 on a validated deployment to fail closed on a
+# packaging/configuration regression without turning research into execution.
+fast_required="${POLYMARKET_FAST_ARB_REQUIRED:-0}"
 fast_binary="$ROOT/build/polymarket_fast_arb_shadow"
 fast_policy="${POLYMARKET_FAST_ARB_POLICY:-$ROOT/config/fast_arb_policy.json}"
 fast_relations="${POLYMARKET_FAST_ARB_RELATIONS:-$ROOT/config/fast_arb_relations.csv}"
@@ -102,17 +105,24 @@ fast_shard_size="${POLYMARKET_FAST_ARB_SHARD_SIZE:-200}"
 fast_recycle_seconds="${POLYMARKET_FAST_ARB_RECYCLE_SECONDS:-900}"
 fast_snapshot_seconds="${POLYMARKET_FAST_ARB_SNAPSHOT_SECONDS:-30}"
 
-if [[ "$fast_enabled" == "1" ]]; then
-  if [[ ! -x "$fast_binary" ]]; then
-    if [[ "$fast_required" == "1" ]]; then
-      echo "fatal: required fast-arbitrage shadow binary missing: $fast_binary" >&2
-      exit 1
-    fi
-    echo "warning: fast-arbitrage shadow disabled because binary is missing" >&2
-    fast_enabled=0
+shadow_dependency_failure() {
+  local message="$1"
+  if [[ "$fast_required" == "1" ]]; then
+    echo "fatal: $message" >&2
+    exit 1
   fi
-  [[ -f "$fast_policy" ]] || { echo "fatal: fast policy missing: $fast_policy" >&2; exit 1; }
-  [[ -f "$fast_relations" ]] || { echo "fatal: relation manifest missing: $fast_relations" >&2; exit 1; }
+  echo "warning: $message; champion continues without fast shadow" >&2
+  fast_enabled=0
+}
+
+if [[ "$fast_enabled" == "1" && ! -x "$fast_binary" ]]; then
+  shadow_dependency_failure "fast-arbitrage shadow binary missing: $fast_binary"
+fi
+if [[ "$fast_enabled" == "1" && ! -f "$fast_policy" ]]; then
+  shadow_dependency_failure "fast-arbitrage policy missing: $fast_policy"
+fi
+if [[ "$fast_enabled" == "1" && ! -f "$fast_relations" ]]; then
+  shadow_dependency_failure "fast-arbitrage relation manifest missing: $fast_relations"
 fi
 
 mkdir -p "$fast_run_root"
