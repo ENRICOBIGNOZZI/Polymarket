@@ -56,8 +56,10 @@ def load_ledger(path: Path) -> list[Trade]:
             except (KeyError, ValueError, TypeError):
                 continue
             capital = max(0.0, fnum(r, "entry_cash"))
+            if capital <= 1e-9:
+                continue
             net = fnum(r, "net_pnl")
-            ret = fnum(r, "return_on_capital", net / capital if capital > 0 else 0.0)
+            ret = fnum(r, "return_on_capital", net / capital)
             out.append(Trade(
                 r.get("bundle_id", ""), r.get("strategy", "UNKNOWN"), created, closed, status,
                 fnum(r, "expected_edge"), capital, fnum(r, "gross_pnl"), fnum(r, "fees"),
@@ -103,7 +105,6 @@ def summarize(trades: list[Trade], starting_capital: float, cost_mult: float = 1
     if cost_mult == 1.0:
         pnls = [x.net_pnl for x in trades]
     else:
-        # net = gross - fees - slippage; scale only explicit execution costs.
         pnls = [x.gross_pnl - cost_mult * (x.fees + x.slippage) for x in trades]
     rets = [p / x.capital if x.capital > 0 else 0.0 for p, x in zip(pnls, trades)]
     pos = sum(p for p in pnls if p > 0)
@@ -170,7 +171,6 @@ def make_folds(trades: list[Trade], folds: int, train_frac: float, cal_frac: flo
         cal_n = max(1, int(len(historical) * cal_frac / max(train_frac + cal_frac, 1e-9)))
         train = historical[:-cal_n]
         cal = historical[-cal_n:]
-        # Purge calibration trades whose realization reaches into embargo/test.
         cal = [x for x in cal if x.closed_ts < test_start - embargo_seconds]
         test = [x for x in trades if test_start <= x.created_ts < test_end]
         result.append((train, cal, test, test_start, test_end))
@@ -207,9 +207,6 @@ def evaluate(trades: list[Trade], args) -> dict:
     for s in sorted({x.strategy for x in selected_oos}):
         by_strategy[s] = summarize([x for x in selected_oos if x.strategy == s], args.starting_capital)
 
-    # Once the OOS gate is computed, calibrate a forward production threshold only
-    # from the most recent CLOSED historical calibration slice. This threshold is
-    # for the *next* live pilot and never feeds back into the OOS metrics above.
     final_cal_n = max(1, int(len(trades) * args.cal_frac)) if trades else 0
     production_cal = trades[-final_cal_n:] if final_cal_n else []
     production_threshold, production_score = choose_threshold(production_cal, grid, args.min_cal_trades)
@@ -261,13 +258,14 @@ def main() -> int:
     ap.add_argument("--min-profit-factor", type=float, default=1.10)
     ap.add_argument("--max-bootstrap-pvalue", type=float, default=0.10)
     args = ap.parse_args()
+
     trades = load_ledger(args.ledger)
-    report = evaluate(trades, args)
+    result = evaluate(trades, args)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps({"input_trades": len(trades), "oos_trades": report["oos"]["trades"],
-                      "oos_net_pnl": report["oos"]["net_pnl"], "eligible_for_tiny_pilot": report["eligible_for_tiny_pilot"],
-                      "gate_failures": report["gate_failures"]}, sort_keys=True))
+    tmp = args.output.with_suffix(args.output.suffix + ".tmp")
+    tmp.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(args.output)
+    print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
 
