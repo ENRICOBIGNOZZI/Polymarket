@@ -62,14 +62,22 @@ class V4MonitoringContractTest(unittest.TestCase):
 
     def test_b1_shadow_fillability_is_non_blocking_and_separate_from_production(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
+        marker = "- name: B1 shadow fillability diagnostic"
+        snapshot = "- name: Build public telemetry snapshot"
+        shadow_pos = smoke.index(marker)
+        production_segment = smoke[:shadow_pos]
+        shadow_segment = smoke[shadow_pos:smoke.index(snapshot, shadow_pos)]
+
         self.assertIn("B1 shadow fillability diagnostic", smoke)
         self.assertIn('SH="$R/shadow_b1"', smoke)
-        self.assertIn("--min-z 1.25", smoke)
+        self.assertIn("--min-z 1.25", shadow_segment)
         self.assertIn('continue-on-error: true', smoke)
         self.assertIn('paper_v4_live', smoke)
         self.assertIn('shadow_b1', smoke)
-        production_segment = smoke.split("B1 shadow fillability diagnostic", 1)[0]
         self.assertIn("--min-z 1.5", production_segment)
+        self.assertEqual(production_segment.count("--min-edge 0.001"), 4)
+        self.assertNotIn("--min-edge 0.001", shadow_segment)
+        self.assertEqual(shadow_segment.count("--min-edge 0.0"), 3)
 
 
 if __name__ == "__main__":

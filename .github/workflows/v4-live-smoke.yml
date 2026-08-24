@@ -116,18 +116,18 @@ jobs:
 
           python3 scripts/build_v4_intents.py --strategy B1 \
             --input "$SH/stat_arb_pairs.csv" --output "$SH/b1_intents.csv" \
-            --config config/paper_v4.json --min-edge 0.001 \
+            --config config/paper_v4.json --min-edge 0.0 \
             > "$SH/intent_build.log" 2>&1 || true
 
           python3 scripts/merge_v4_intents.py \
             --input "$SH/b1_intents.csv" --output "$SH/intents.csv" \
-            --min-edge 0.001 --max-age-seconds 600 --max-bundles 10 \
+            --min-edge 0.0 --max-age-seconds 600 --max-bundles 10 \
             > "$SH/intent_merge.log" 2>&1 || true
 
           ./build/polymarket_multileg_paper \
             --config config/paper_v4.json --run-dir "$SH" \
             --intents "$SH/intents.csv" --trade-tape "$R/trade_tape.csv" \
-            --min-edge 0.001 --completion-threshold 0.95 --submit-latency-ms 250 --cancel-latency-ms 250 \
+            --min-edge 0.0 --completion-threshold 0.95 --submit-latency-ms 250 --cancel-latency-ms 250 \
             --max-replaces 3 --max-leg-risk-usd 5 --adverse-horizon-seconds 60 --once \
             > "$SH/multileg_latest.log" 2> "$SH/multileg_errors.log" || true
 
