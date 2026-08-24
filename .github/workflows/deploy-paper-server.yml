@@ -35,6 +35,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Load shared scheduler and remote context
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_scheduler_context.py \
+            --context config/scheduler_context.json \
+            --scheduler-id paper-server-deploy \
+            --server-host "$SERVER_HOST" \
+            --server-user "$SERVER_USER" \
+            --server-port "$SERVER_PORT" \
+            --output scheduler-context.md \
+            --output-json scheduler-context.json \
+            --github-env "$GITHUB_ENV"
+
       - name: Join private tailnet
         uses: tailscale/github-action@v4
         with:
@@ -67,16 +81,19 @@ jobs:
           ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
             -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
             -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
-            "EXPECTED_VALIDATED_SHA='$EXPECTED_VALIDATED_SHA' bash -s" <<'REMOTE' | tee deploy-evidence.txt
+            "REMOTE_REPO_REL='$POLYMARKET_REMOTE_REPO_REL' DEPLOYMENT_REF='$POLYMARKET_DEPLOYMENT_REF' SCHEDULER_CONTEXT_SHA='$POLYMARKET_SCHEDULER_CONTEXT_SHA' EXPECTED_VALIDATED_SHA='$EXPECTED_VALIDATED_SHA' bash -s" <<'REMOTE' | tee deploy-evidence.txt
           set -euo pipefail
-          cd ~/polymarket
-          git fetch origin main paper-validated
+          cd "$HOME/$REMOTE_REPO_REL"
+          git fetch origin main "$DEPLOYMENT_REF"
           main_sha="$(git rev-parse origin/main)"
-          validated_sha="$(git rev-parse origin/paper-validated)"
+          validated_sha="$(git rev-parse "origin/$DEPLOYMENT_REF")"
           git merge-base --is-ancestor "$validated_sha" "$main_sha"
           if [[ -n "${EXPECTED_VALIDATED_SHA:-}" ]]; then
             test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
           fi
+          printf 'scheduler_context_sha=%s\n' "$SCHEDULER_CONTEXT_SHA"
+          printf 'remote_repository=%s\n' "$HOME/$REMOTE_REPO_REL"
+          printf 'deployment_ref=%s\n' "$DEPLOYMENT_REF"
           printf 'predeploy_origin_main=%s\n' "$main_sha"
           printf 'predeploy_paper_validated=%s\n' "$validated_sha"
           printf 'trigger_expected_validated=%s\n' "${EXPECTED_VALIDATED_SHA:-manual}"
@@ -90,7 +107,7 @@ jobs:
           trap 'rm -f "$updater"' EXIT
           git show "$validated_sha:$updater_path" > "$updater"
           chmod 700 "$updater"
-          POLYMARKET_DEPLOY_REF=paper-validated bash "$updater"
+          POLYMARKET_DEPLOY_REF="$DEPLOYMENT_REF" bash "$updater"
           REMOTE
 
       - name: Verify production paper services
@@ -98,14 +115,15 @@ jobs:
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
             -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
-            "EXPECTED_VALIDATED_SHA='$EXPECTED_VALIDATED_SHA' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
+            "REMOTE_REPO_REL='$POLYMARKET_REMOTE_REPO_REL' DEPLOYMENT_REF='$POLYMARKET_DEPLOYMENT_REF' SCHEDULER_CONTEXT_SHA='$POLYMARKET_SCHEDULER_CONTEXT_SHA' EXPECTED_VALIDATED_SHA='$EXPECTED_VALIDATED_SHA' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
           set -euo pipefail
-          cd ~/polymarket
-          git fetch origin main paper-validated
+          cd "$HOME/$REMOTE_REPO_REL"
+          git fetch origin main "$DEPLOYMENT_REF"
           head_sha="$(git rev-parse HEAD)"
           main_sha="$(git rev-parse origin/main)"
-          validated_sha="$(git rev-parse origin/paper-validated)"
+          validated_sha="$(git rev-parse "origin/$DEPLOYMENT_REF")"
           test "$head_sha" = "$validated_sha"
           git merge-base --is-ancestor "$validated_sha" "$main_sha"
           if [[ -n "${EXPECTED_VALIDATED_SHA:-}" ]]; then
@@ -115,6 +133,8 @@ jobs:
           curl -fsS http://127.0.0.1:9108/metrics | grep -q '^polymarket_runtime_info'
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+          printf 'scheduler_context_sha=%s\n' "$SCHEDULER_CONTEXT_SHA"
+          printf 'remote_repository=%s\n' "$HOME/$REMOTE_REPO_REL"
           printf 'server_head=%s\n' "$head_sha"
           printf 'paper_validated=%s\n' "$validated_sha"
           printf 'origin_main=%s\n' "$main_sha"
@@ -129,11 +149,23 @@ jobs:
           esac
           REMOTE
 
+      - name: Publish deployment context
+        if: always()
+        shell: bash
+        run: |
+          cat scheduler-context.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          cat deploy-evidence.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload deployment evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: paper-server-deploy-${{ github.run_id }}
-          path: deploy-evidence.txt
+          path: |
+            scheduler-context.md
+            scheduler-context.json
+            deploy-evidence.txt
           if-no-files-found: warn
           retention-days: 7
