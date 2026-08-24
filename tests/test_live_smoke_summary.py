@@ -70,7 +70,22 @@ class LiveSmokeSummaryTest(unittest.TestCase):
             (run / "walk_forward.json").write_text(json.dumps({"eligible_for_tiny_pilot": False}), encoding="utf-8")
             out = td / "snapshot.json"
             subprocess.run(
-                [sys.executable, str(SCRIPT), "--run-root", str(run), "--output", str(out), "--git-sha", "abc", "--run-id", "42", "--tail-lines", "2"],
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--run-root",
+                    str(run),
+                    "--output",
+                    str(out),
+                    "--git-sha",
+                    "abc",
+                    "--run-id",
+                    "42",
+                    "--tail-lines",
+                    "2",
+                    "--trade-lookback-seconds",
+                    "400",
+                ],
                 check=True,
             )
             data = json.loads(out.read_text(encoding="utf-8"))
@@ -89,15 +104,16 @@ class LiveSmokeSummaryTest(unittest.TestCase):
 
             shadow_data = data["shadow_b1"]
             self.assertEqual(shadow_data["z_threshold"], 1.25)
-            self.assertEqual(shadow_data["tape_window_seconds"], 100)
+            self.assertEqual(shadow_data["tape_window_seconds"], 400)
+            self.assertEqual(shadow_data["tape_observed_span_seconds"], 100)
             self.assertEqual(shadow_data["candidates"][0]["y_market"], "shadow-y")
             self.assertEqual(shadow_data["intents"]["bundles"], 1)
             self.assertEqual(len(shadow_data["legs"]), 2)
             self.assertAlmostEqual(shadow_data["legs"][0]["compatible_sell_volume"], 30.0)
-            self.assertAlmostEqual(shadow_data["legs"][0]["estimated_queue_plus_target_clear_seconds"], 200.0)
-            self.assertAlmostEqual(shadow_data["legs"][1]["estimated_queue_plus_target_clear_seconds"], 250.0)
+            self.assertAlmostEqual(shadow_data["legs"][0]["estimated_queue_plus_target_clear_seconds"], 800.0)
+            self.assertAlmostEqual(shadow_data["legs"][1]["estimated_queue_plus_target_clear_seconds"], 1000.0)
             self.assertTrue(shadow_data["bundles"][0]["all_legs_have_recent_compatible_flow"])
-            self.assertAlmostEqual(shadow_data["bundles"][0]["max_estimated_clear_seconds"], 250.0)
+            self.assertAlmostEqual(shadow_data["bundles"][0]["max_estimated_clear_seconds"], 1000.0)
 
 
 if __name__ == "__main__":
