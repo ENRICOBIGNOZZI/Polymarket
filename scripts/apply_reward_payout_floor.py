@@ -4,6 +4,7 @@ import argparse
 import csv
 import math
 import os
+import sys
 from pathlib import Path
 
 
@@ -112,7 +113,22 @@ def main() -> int:
     parser.add_argument("--minimum-daily-payout-usd", type=float, default=1.0)
     args = parser.parse_args()
 
-    summary = apply_floor(args.csv, args.minimum_daily_payout_usd)
+    try:
+        summary = apply_floor(args.csv, args.minimum_daily_payout_usd)
+    except Exception as exc:
+        # The scanner writes the pre-floor score to this path. If validation or
+        # rewriting fails, remove that optimistic artifact rather than allowing
+        # monitoring to publish it as if the payout floor had been applied.
+        try:
+            args.csv.unlink(missing_ok=True)
+        except OSError as unlink_exc:
+            print(
+                f"reward_payout_floor_cleanup_failed csv={args.csv} error={unlink_exc}",
+                file=sys.stderr,
+            )
+        print(f"reward_payout_floor_failed csv={args.csv} error={exc}", file=sys.stderr)
+        raise
+
     print(
         "reward_payout_floor"
         f" rows={summary['rows']}"
