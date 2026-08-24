@@ -8,15 +8,20 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/research-policy.yml"
+      - ".github/workflows/promotion-controller.yml"
+      - ".github/workflows/integration-merge.yml"
       - ".github/actions/project-context/action.yml"
       - "config/scheduler_registry.json"
+      - "config/promotion_policy.json"
       - "config/project_context.json"
       - "ops/ssh_config_polymarket"
       - "scripts/project_context_snapshot.py"
       - "scripts/validate_project_context.py"
       - "scripts/research_pr_policy.py"
+      - "scripts/promotion_gate.py"
       - "scripts/validate_scheduler_registry.py"
       - "tests/test_model_governance.py"
+      - "tests/test_promotion_gate.py"
       - "tests/test_research_policy_cross_venue.py"
       - "tests/test_v5_allocator_policy.py"
   pull_request:
@@ -52,23 +57,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/validate_project_context.py \
-            --root . \
-            --output project-context-validation.md
+          python3 scripts/validate_project_context.py --root . --output project-context-validation.md
           python3 scripts/project_context_snapshot.py \
             --root . \
             --manifest config/project_context.json \
             --output-json project-context.json \
             --output-markdown project-context.md
 
-      - name: Test research policy regressions
+      - name: Test research and promotion policy regressions
         run: >-
           python3 -m unittest
           tests/test_research_policy_cross_venue.py
           tests/test_v5_allocator_policy.py
+          tests/test_promotion_gate.py
           -v
 
-      - name: Ensure governance labels exist
+      - name: Ensure research-isolation labels exist
         if: github.event_name != 'pull_request'
         shell: bash
         env:
@@ -82,10 +86,7 @@ jobs:
                 -f name="$name" -f color="$color" -f description="$description" >/dev/null
             fi
           }
-          ensure_label research-approved 0e8a16 "Research evidence approved for an integration candidate"
-          ensure_label approved-for-integration 1d76db "Integration candidate approved for gated paper promotion"
-          ensure_label single-model-reviewed 5319e7 "Reviewed for one champion, allocator, risk state and broker"
-          ensure_label administrator-approved b60205 "Project administrator approved this exact integration diff"
+          ensure_label research-approved 0e8a16 "Optional research-evidence annotation; not a paper-promotion gate"
           ensure_label shadow-isolated fbca04 "Measurement-only code isolated from production decisions, PnL and risk"
 
       - name: Enforce pull-request lifecycle
@@ -96,9 +97,7 @@ jobs:
           git fetch --no-tags origin main
           git diff --name-only origin/main...HEAD | sort -u > changed-files.txt
           manifest_existed=false
-          if git cat-file -e origin/main:config/live_champion.json 2>/dev/null; then
-            manifest_existed=true
-          fi
+          if git cat-file -e origin/main:config/live_champion.json 2>/dev/null; then manifest_existed=true; fi
           python3 scripts/research_pr_policy.py \
             --event "$GITHUB_EVENT_PATH" \
             --changed-files changed-files.txt \
@@ -113,8 +112,8 @@ jobs:
             echo '# Research pull-request policy'
             echo
             echo "- event: \`$GITHUB_EVENT_NAME\`"
-            echo '- policy scripts, approval labels, scheduler registry and full-project context validated'
-            echo '- research approval is separate from integration and administrator approval'
+            echo '- research, promotion policy, scheduler registry and full-project context validated'
+            echo '- legacy manual paper-promotion labels are not provisioned or required'
             echo '- no pull request was evaluated in this run'
           } > research-policy-report.md
 
