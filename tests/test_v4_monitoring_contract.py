@@ -46,6 +46,16 @@ class V4MonitoringContractTest(unittest.TestCase):
         for producer in (once, loop, smoke):
             self.assertIn("--max-hedges 4", producer)
 
+    def test_b1_shadow_fillability_is_non_blocking_and_separate_from_production(self):
+        smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
+        self.assertIn("B1 shadow fillability diagnostic", smoke)
+        self.assertIn('SH="$R/shadow_b1"', smoke)
+        self.assertIn("--min-z 1.25", smoke)
+        self.assertIn('continue-on-error: true', smoke)
+        self.assertIn('paper_v4_live/shadow_b1', smoke)
+        production_segment = smoke.split("B1 shadow fillability diagnostic", 1)[0]
+        self.assertIn("--min-z 1.5", production_segment)
+
 
 if __name__ == "__main__":
     unittest.main()
