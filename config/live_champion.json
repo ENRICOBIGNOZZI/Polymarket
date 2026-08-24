@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "version": 5,
-  "loop": "scripts/paper_v5_aggressive_loop.sh",
+  "loop": "scripts/paper_v5_loop.sh",
   "config": "config/paper_v5.json",
   "run_root": "runs/paper_v5_live",
   "deployment_ref": "paper-validated",
   "promotion_policy": "automatic validated integration",
-  "runtime_policy": "aggressive broad-universe paper hunting with five persistent experts and external-intelligence synchronization"
+  "runtime_policy": "aggressive broad-universe paper hunting with five persistent experts and bounded external-intelligence synchronization"
 }
