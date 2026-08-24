@@ -162,15 +162,29 @@ def terminal_strategy(experts: str) -> str:
     return "TERMINAL:" + "+".join(preferred or names or ["ensemble"])
 
 
-def terminal_rows(path: Path, max_trade: float) -> Iterable[dict[str, object]]:
-    """Expose the universal V4 fair-value engine as research candidates.
+def terminal_rows(path: Path, max_trade: float, now_ts: int, max_age_seconds: int) -> Iterable[dict[str, object]]:
+    """Expose fresh universal V4 fair-value signals as research candidates.
 
     `signals.csv` already evaluates executable ask, protocol fee, slippage,
     uncertainty and portfolio sizing. A terminal signal is marked eligible only
-    when the engine itself assigned positive desired notional; scan-only output
-    never bypasses the downstream broker.
+    when the engine itself assigned positive desired notional. The file is
+    append-only, so only the newest fresh row per market/side is retained.
     """
+    latest: dict[tuple[str, str], tuple[int, dict[str, str]]] = {}
     for row in read_csv(path):
+        ts = int(max(0.0, fnum(row, "timestamp")))
+        if ts <= 0 or now_ts - ts > max_age_seconds or ts - now_ts > 30:
+            continue
+        market = text(row, "market_id")
+        side = text(row, "side")
+        if not market or side not in {"YES", "NO"}:
+            continue
+        key = (market, side)
+        previous = latest.get(key)
+        if previous is None or ts >= previous[0]:
+            latest[key] = (ts, row)
+
+    for (_, _), (_, row) in latest.items():
         raw = fnum(row, "gross_edge")
         net = fnum(row, "net_edge")
         desired = max(0.0, fnum(row, "desired_notional"))
@@ -266,6 +280,7 @@ def main() -> int:
     parser.add_argument("--status", type=Path, default=None)
     parser.add_argument("--limit", type=int, default=1000)
     parser.add_argument("--max-trade-usd", type=float, default=250.0)
+    parser.add_argument("--terminal-max-age-seconds", type=int, default=600)
     args = parser.parse_args()
 
     output = args.output or args.run_root / "global_opportunities.csv"
@@ -273,11 +288,15 @@ def main() -> int:
     status_path = args.status or args.run_root / "global_opportunity_status.json"
     limit = max(1, args.limit)
     max_trade = max(0.0, args.max_trade_usd)
+    now_ts = int(time.time())
+    terminal_max_age = max(60, args.terminal_max_age_seconds)
 
     candidates = list(fast_rows(args.run_root / "fast" / "fast_arb_latest.csv"))
     candidates += list(b1_rows(args.run_root / "stat_arb_pairs.csv", max_trade))
     candidates += list(b2_rows(args.run_root / "stat_arb_pca.csv", max_trade))
-    candidates += list(terminal_rows(args.run_root / "terminal" / "signals.csv", max_trade))
+    candidates += list(terminal_rows(
+        args.run_root / "terminal" / "signals.csv", max_trade, now_ts, terminal_max_age
+    ))
     candidates = deduplicate(candidates)
     candidates.sort(
         key=lambda row: (
@@ -299,11 +318,12 @@ def main() -> int:
     atomic_csv(eligible_output, eligible)
     status = {
         "schema": "polymarket_global_opportunity_book_v2",
-        "generated_ts": int(time.time()),
+        "generated_ts": now_ts,
         "candidate_limit": limit,
         "research_candidates": len(selected),
         "eligible_candidates": len(eligible),
         "hard_arbitrage_candidates": sum(int(row["hard_arbitrage"]) for row in eligible),
+        "terminal_max_age_seconds": terminal_max_age,
         "sources": {
             source: sum(str(row["source"]) == source for row in selected)
             for source in sorted({str(row["source"]) for row in selected})
