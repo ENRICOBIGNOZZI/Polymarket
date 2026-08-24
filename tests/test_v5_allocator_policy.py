@@ -30,7 +30,13 @@ class V5AllocatorPolicyTest(unittest.TestCase):
         )
         self.assertTrue(errors)
         self.assertIn("scripts/multi_strategy_paper.py", summary["model_surface_files"])
-        self.assertTrue(any("unapproved model/runtime work" in error for error in errors))
+        self.assertTrue(
+            any(
+                "model/runtime work cannot change known live model/runtime/code surfaces"
+                in error
+                for error in errors
+            )
+        )
 
     def test_draft_research_may_measure_allocator_change_without_promotion(self):
         event = {
