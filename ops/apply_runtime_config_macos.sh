@@ -3,6 +3,7 @@ set -euo pipefail
 
 APP_DIR="${POLYMARKET_APP_DIR:-$HOME/polymarket}"
 STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
+POLYMARKET_GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-http://100.104.183.109:3000}"
 
 [[ "$(uname -s)" == "Darwin" ]] || { echo "macOS only" >&2; exit 1; }
 [[ -d "$APP_DIR/monitoring/grafana/dashboards" ]] || {
@@ -31,7 +32,7 @@ cat > "$STATE_DIR/grafana.ini" <<EOF
 [server]
 http_addr = 127.0.0.1
 http_port = 3000
-root_url = http://127.0.0.1:3000/
+root_url = ${POLYMARKET_GRAFANA_URL}/
 
 [users]
 allow_sign_up = false
@@ -110,6 +111,4 @@ else
   exit 1
 fi
 
-tailnet_ip="$($TAILSCALE_BIN ip -4 2>/dev/null | head -n 1 || true)"
-[[ -n "$tailnet_ip" ]] || tailnet_ip="<tailscale-ip>"
-printf 'grafana_mode=anonymous_viewer_no_login backend=127.0.0.1:3000 exposure=tailscale-serve operator_url=http://%s:3000\n' "$tailnet_ip"
+printf 'grafana_mode=anonymous_viewer_no_login backend=127.0.0.1:3000 exposure=tailscale-serve operator_url=%s\n' "$POLYMARKET_GRAFANA_URL"
