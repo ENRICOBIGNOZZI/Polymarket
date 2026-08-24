@@ -36,6 +36,17 @@ jobs:
           ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || inputs.expected_sha }}
           fetch-depth: 1
 
+      - name: Load shared scheduler context
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_scheduler_context.py \
+            --context config/scheduler_context.json \
+            --scheduler-id post-merge-validation \
+            --output scheduler-context.md \
+            --output-json scheduler-context.json \
+            --github-env "$GITHUB_ENV"
+
       - name: Bind validation to exact main revision
         shell: bash
         env:
@@ -49,8 +60,11 @@ jobs:
           {
             echo '# Post-merge validation dispatch'
             echo
+            echo "- scheduler context: \`$POLYMARKET_SCHEDULER_CONTEXT_SHA\`"
             echo "- expected main revision: \`$EXPECTED_SHA\`"
             echo "- source PR: ${PR_NUMBER:-not supplied}"
+            echo "- live champion manifest: \`$POLYMARKET_LIVE_CHAMPION_MANIFEST\`"
+            echo "- rollback/deployment ref: \`$POLYMARKET_DEPLOYMENT_REF\`"
           } > post-merge-validation-report.md
 
       - name: Dispatch specialized validation schedulers
@@ -63,23 +77,30 @@ jobs:
             current_main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
             test "$current_main_sha" = "$EXPECTED_SHA"
             gh workflow run "$workflow" --ref main -f expected_sha="$EXPECTED_SHA"
-            echo "- dispatched \`$workflow\` for exact revision \`$EXPECTED_SHA\`" \
+            echo "- dispatched \`$workflow\` for exact revision \`$EXPECTED_SHA\` under context \`$POLYMARKET_SCHEDULER_CONTEXT_SHA\`" \
               | tee -a post-merge-validation-report.md
           done
           if [[ -n "${PR_NUMBER:-}" ]]; then
             gh pr comment "$PR_NUMBER" --body \
-              "Dedicated post-merge validation dispatched CI, monitoring and live-paper smoke for exact main revision \`$EXPECTED_SHA\`. Promotion remains incomplete until \`paper-validated\` and deployed HEAD reach this SHA."
+              "Dedicated post-merge validation dispatched CI, monitoring and live-paper smoke for exact main revision \`$EXPECTED_SHA\` under scheduler context \`$POLYMARKET_SCHEDULER_CONTEXT_SHA\`. Promotion remains incomplete until \`paper-validated\` and deployed HEAD reach this SHA."
           fi
 
       - name: Publish validation dispatch
         if: always()
-        run: cat post-merge-validation-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+        shell: bash
+        run: |
+          cat scheduler-context.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          cat post-merge-validation-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
       - name: Upload validation-dispatch evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: post-merge-validation-${{ github.run_id }}
-          path: post-merge-validation-report.md
+          path: |
+            scheduler-context.md
+            scheduler-context.json
+            post-merge-validation-report.md
           if-no-files-found: warn
           retention-days: 30
