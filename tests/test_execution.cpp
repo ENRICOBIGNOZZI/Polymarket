@@ -20,5 +20,20 @@ int main() {
 
     std::vector<std::pair<double,double>> legs{{9.5,10.0},{19.0,20.0},{5.0,5.0}};
     assert(std::abs(pm::minimum_completion(legs)-0.95)<1e-12);
+
+    assert(pm::bundle_has_live_risk("RESTING"));
+    assert(pm::bundle_has_live_risk("COMPLETE"));
+    assert(pm::bundle_has_live_risk("ABORTING"));
+    assert(!pm::bundle_has_live_risk("CLOSED"));
+    assert(!pm::bundle_has_live_risk("UNWOUND"));
+
+    constexpr std::int64_t arrival = 1'000;
+    constexpr std::int64_t cancel_effective = 1'500;
+    assert(!pm::passive_buy_active_for_trade("RESTING", arrival, arrival, 0));
+    assert(pm::passive_buy_active_for_trade("RESTING", arrival + 1, arrival, 0));
+    assert(pm::passive_buy_active_for_trade("CANCEL_PENDING", cancel_effective - 1, arrival, cancel_effective));
+    assert(!pm::passive_buy_active_for_trade("CANCEL_PENDING", cancel_effective, arrival, cancel_effective));
+    assert(!pm::passive_buy_active_for_trade("CANCELLED", cancel_effective - 1, arrival, cancel_effective));
+
     std::cout << "execution tests passed\n";
 }
