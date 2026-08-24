@@ -5,12 +5,12 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "37 */6 * * *"
+    - cron: "37 * * * *"
   pull_request:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: v4-live-paper-smoke
@@ -100,6 +100,10 @@ jobs:
           Path('paper_v4_live/metrics.prom').write_text(text)
           PY
 
+          python3 scripts/summarize_live_smoke.py \
+            --run-root "$R" --output "$R/live_snapshot.json" \
+            --git-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID"
+
       - name: Publish live summary
         if: always()
         shell: bash
@@ -118,6 +122,24 @@ jobs:
             cat "$R/walk_forward.json" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Publish latest public telemetry
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -s paper_v4_live/live_snapshot.json
+          endpoint="repos/${GITHUB_REPOSITORY}/contents/telemetry/latest-live-smoke.json"
+          content="$(base64 -w0 paper_v4_live/live_snapshot.json)"
+          current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
+          args=("$endpoint" --method PUT -f message="Update public live smoke telemetry" -f content="$content" -f branch=telemetry)
+          if [[ -n "$current_sha" ]]; then
+            args+=(-f sha="$current_sha")
+          fi
+          gh api "${args[@]}" >/dev/null
 
       - name: Upload live diagnostics
         if: always()
