@@ -106,7 +106,7 @@ jobs:
               now="$(date +%s)"
               test -n "$checked_ts"
               test $(( now - checked_ts )) -le 900
-              case "$deploy_status" in up_to_date|deployed) ;; *) exit 1 ;; esac
+              case "$deploy_status" in up_to_date|deployed|repaired) ;; *) exit 1 ;; esac
               test "$status_ref" = "paper-validated"
               test "$status_head" = "$head_sha"
               test "$status_validated" = "$validated_sha"
