@@ -10,7 +10,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: polymarket-paper-server
@@ -152,12 +152,24 @@ REMOTE
             test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
           fi
           curl -fsS http://127.0.0.1:9108/healthz
-          curl -fsS http://127.0.0.1:9108/metrics | grep -q '^polymarket_runtime_info'
+          metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
+          grep -q '^polymarket_runtime_info' <<<"$metrics"
+          grep -q '^polymarket_terminal_state_present 1' <<<"$metrics"
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+          curl -fsS http://127.0.0.1:3000/api/search | grep -q 'polymarket-fast-paper'
+          supervisor="runs/paper_v4_live/runtime_supervisor.csv"
+          test -s "$supervisor"
+          IFS=, read -r supervisor_ts recorder_alive broker_alive terminal_alive recorder_restarts broker_restarts terminal_restarts recorder_pid broker_pid terminal_pid <<<"$(tail -n 1 "$supervisor")"
+          test "$recorder_alive" = "1"
+          test "$broker_alive" = "1"
+          test "$terminal_alive" = "1"
+          test $(( $(date +%s) - supervisor_ts )) -le 60
           printf 'server_head=%s\n' "$head_sha"
           printf 'paper_validated=%s\n' "$validated_sha"
           printf 'origin_main=%s\n' "$main_sha"
+          printf 'terminal_alive=%s\n' "$terminal_alive"
+          printf 'terminal_pid=%s\n' "$terminal_pid"
           case "$(uname -s)" in
             Darwin) sudo -n /usr/local/sbin/polymarket-service-control status ;;
             Linux)
@@ -174,11 +186,61 @@ REMOTE
         shell: bash
         run: echo 'reconciliation_result=already_current' | tee -a deploy-evidence.txt
 
+      - name: Publish latest verified paper deploy
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main paper-validated telemetry
+          main_sha="$(git rev-parse origin/main)"
+          validated_sha="$(git rev-parse origin/paper-validated)"
+          server_head="$(sed -n 's/^server_head=//p' deploy-evidence.txt | tail -n 1)"
+          [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$validated_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$server_head" =~ ^[0-9a-f]{40}$ ]]
+          test "$server_head" = "$validated_sha"
+          git merge-base --is-ancestor "$validated_sha" "$main_sha"
+          if [[ -n "$EXPECTED_VALIDATED_SHA" ]]; then
+            test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
+          fi
+          export main_sha validated_sha server_head
+          python3 - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          payload = {
+              "generated_at": datetime.now(timezone.utc).isoformat(),
+              "github_run_id": os.environ["GITHUB_RUN_ID"],
+              "event": os.environ["GITHUB_EVENT_NAME"],
+              "server_head": os.environ["server_head"],
+              "paper_validated": os.environ["validated_sha"],
+              "origin_main": os.environ["main_sha"],
+              "runtime_verified": True,
+              "terminal_verified": True,
+              "grafana_fast_paper_verified": True,
+          }
+          with open("latest-paper-deploy.json", "w", encoding="utf-8") as f:
+              json.dump(payload, f, indent=2, sort_keys=True)
+              f.write("\n")
+          PY
+          endpoint="repos/${GITHUB_REPOSITORY}/contents/telemetry/latest-paper-deploy.json"
+          content="$(base64 -w0 latest-paper-deploy.json)"
+          current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
+          args=("$endpoint" --method PUT -f message="Update verified paper deploy telemetry" -f content="$content" -f branch=telemetry)
+          if [[ -n "$current_sha" ]]; then
+            args+=(-f sha="$current_sha")
+          fi
+          gh api "${args[@]}" >/dev/null
+          cat latest-paper-deploy.json | tee -a deploy-evidence.txt
+
       - name: Upload deployment evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: paper-server-deploy-${{ github.run_id }}
-          path: deploy-evidence.txt
+          path: |
+            deploy-evidence.txt
+            latest-paper-deploy.json
           if-no-files-found: warn
           retention-days: 7
