@@ -1,3 +1,4 @@
+#include "pm/api.hpp"
 #include "pm/engine.hpp"
 #include "pm/market_data.hpp"
 #include <cassert>
@@ -5,6 +6,11 @@
 #include <iostream>
 
 int main(){
+    assert(pm::history_interval_for_range(0, 3'600) == "1h");
+    assert(pm::history_interval_for_range(0, 6 * 3'600) == "6h");
+    assert(pm::history_interval_for_range(0, 14 * 86'400) == "1m");
+    assert(pm::history_interval_for_range(0, 45 * 86'400) == "max");
+
     pm::Book b;
     b.tick_size=0.01;
     b.asks={{0.40,100},{0.41,100}};

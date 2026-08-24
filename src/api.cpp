@@ -237,6 +237,16 @@ std::string trade_id(const RecentTrade& t) {
 
 } // namespace
 
+std::string history_interval_for_range(std::int64_t start_ts, std::int64_t end_ts) {
+    const std::int64_t seconds = std::max<std::int64_t>(0, end_ts - start_ts);
+    if (seconds <= 60 * 60) return "1h";
+    if (seconds <= 6 * 60 * 60) return "6h";
+    if (seconds <= 24 * 60 * 60) return "1d";
+    if (seconds <= 7 * 24 * 60 * 60) return "1w";
+    if (seconds <= 31LL * 24 * 60 * 60) return "1m";
+    return "max";
+}
+
 PolymarketApi::PolymarketApi(Config cfg) : cfg_(std::move(cfg)) {}
 
 std::vector<Market> PolymarketApi::discover_markets(std::size_t limit, double min_liquidity) const {
@@ -350,6 +360,16 @@ std::unordered_map<std::string,std::vector<PricePoint>> PolymarketApi::fetch_pri
     std::int64_t end_ts,
     std::size_t fidelity_minutes) const {
     std::unordered_map<std::string,std::vector<PricePoint>> out;
+    if (token_ids.empty() || end_ts <= start_ts) return out;
+
+    const std::string interval = history_interval_for_range(start_ts, end_ts);
+    const auto fidelity = static_cast<std::int64_t>(std::max<std::size_t>(1, fidelity_minutes));
+    auto trim = [&](std::vector<PricePoint>& points) {
+        points.erase(std::remove_if(points.begin(), points.end(), [&](const PricePoint& point) {
+            return point.ts < start_ts || point.ts > end_ts;
+        }), points.end());
+    };
+
     constexpr std::size_t batch_size = 20;
     for (std::size_t pos = 0; pos < token_ids.size(); pos += batch_size) {
         const auto end = std::min(token_ids.size(), pos + batch_size);
@@ -357,38 +377,54 @@ std::unordered_map<std::string,std::vector<PricePoint>> PolymarketApi::fetch_pri
         for (std::size_t i = pos; i < end; ++i) ids.emplace_back(token_ids[i]);
         json::object req{
             {"markets", std::move(ids)},
-            {"start_ts", start_ts},
-            {"end_ts", end_ts},
-            {"fidelity", static_cast<std::int64_t>(std::max<std::size_t>(1, fidelity_minutes))}
+            {"interval", interval},
+            {"fidelity", fidelity}
         };
-        const auto r = http_.post_json(cfg_.clob_url + "/batch-prices-history", json::serialize(req));
-        if (r.status >= 200 && r.status < 300) {
-            const auto root = json::parse(r.body);
-            if (root.is_object()) {
-                auto hi = root.as_object().find("history");
-                if (hi != root.as_object().end() && hi->value().is_object()) {
-                    for (const auto& kv : hi->value().as_object()) {
-                        if (kv.value().is_array()) {
-                            parse_history_array(kv.value().as_array(), out[std::string(kv.key())]);
+
+        std::set<std::string> received;
+        try {
+            const auto r = http_.post_json(cfg_.clob_url + "/batch-prices-history", json::serialize(req));
+            if (r.status >= 200 && r.status < 300) {
+                const auto root = json::parse(r.body);
+                if (root.is_object()) {
+                    auto hi = root.as_object().find("history");
+                    if (hi != root.as_object().end() && hi->value().is_object()) {
+                        for (const auto& kv : hi->value().as_object()) {
+                            if (!kv.value().is_array()) continue;
+                            const std::string token(kv.key());
+                            auto& points = out[token];
+                            parse_history_array(kv.value().as_array(), points);
+                            trim(points);
+                            if (!points.empty()) received.insert(token);
                         }
                     }
-                    continue;
                 }
             }
+        } catch (...) {
+            // Per-token fallback below preserves availability and diagnostics in
+            // callers even when the batch endpoint changes or one batch fails.
         }
+
         for (std::size_t i = pos; i < end; ++i) {
+            const auto& token = token_ids[i];
+            if (received.count(token)) continue;
             std::ostringstream u;
-            u << cfg_.clob_url << "/prices-history?market=" << token_ids[i]
-              << "&startTs=" << start_ts << "&endTs=" << end_ts
-              << "&fidelity=" << std::max<std::size_t>(1, fidelity_minutes);
-            const auto one = http_.get(u.str());
-            if (one.status < 200 || one.status >= 300) continue;
-            const auto root = json::parse(one.body);
-            if (!root.is_object()) continue;
-            auto hi = root.as_object().find("history");
-            if (hi != root.as_object().end() && hi->value().is_array()) {
-                parse_history_array(hi->value().as_array(), out[token_ids[i]]);
-            }
+            u << cfg_.clob_url << "/prices-history?market=" << token
+              << "&interval=" << interval
+              << "&fidelity=" << fidelity;
+            try {
+                const auto one = http_.get(u.str());
+                if (one.status < 200 || one.status >= 300) continue;
+                const auto root = json::parse(one.body);
+                if (!root.is_object()) continue;
+                auto hi = root.as_object().find("history");
+                if (hi != root.as_object().end() && hi->value().is_array()) {
+                    auto& points = out[token];
+                    points.clear();
+                    parse_history_array(hi->value().as_array(), points);
+                    trim(points);
+                }
+            } catch (...) {}
         }
     }
     return out;

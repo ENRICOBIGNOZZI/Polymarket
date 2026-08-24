@@ -5,6 +5,9 @@
 #include <unordered_map>
 
 namespace pm {
+
+std::string history_interval_for_range(std::int64_t start_ts, std::int64_t end_ts);
+
 class PolymarketApi {
 public:
     explicit PolymarketApi(Config cfg);
