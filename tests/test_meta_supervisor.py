@@ -166,6 +166,25 @@ class MetaSupervisorTests(unittest.TestCase):
         self.assertFalse(report["invariants"]["deployment_dispatched_directly"])
         self.assertFalse(report["invariants"]["server_health_dispatched_directly"])
 
+    def test_skipped_private_health_is_not_accepted_as_healthy(self) -> None:
+        runs = self.healthy_runs()
+        for run in runs:
+            if run["workflowName"] == "paper-server-health":
+                run["conclusion"] = "skipped"
+        report = meta_supervisor.build_report(
+            self.config, self.snapshot(runs), self.now
+        )
+        health = report["workflow_status"]["server-health.yml"]
+        self.assertEqual(health["state"], "skipped")
+        self.assertFalse(health["dispatch_needed"])
+        self.assertEqual(report["status"], "DEGRADED")
+        codes = {alert["code"] for alert in report["alerts"]}
+        self.assertIn("WORKFLOW_SKIPPED", codes)
+        self.assertNotIn(
+            "server-health.yml",
+            [item["workflow_file"] for item in report["dispatch_plan"]],
+        )
+
     def test_diverged_validated_ref_is_critical_and_deploy_stays_blocked(self) -> None:
         report = meta_supervisor.build_report(
             self.config,
