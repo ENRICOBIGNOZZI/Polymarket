@@ -13,8 +13,12 @@ STRUCTURAL_INTERVAL_SECONDS="${V5_STRUCTURAL_INTERVAL_SECONDS:-60}"
 REWARD_INTERVAL_SECONDS="${V5_REWARD_INTERVAL_SECONDS:-300}"
 REPORT_INTERVAL_SECONDS="${V5_REPORT_INTERVAL_SECONDS:-60}"
 ACTIVITY_INTERVAL_SECONDS="${V5_ACTIVITY_INTERVAL_SECONDS:-60}"
+EXTERNAL_SYNC_INTERVAL_SECONDS="${V5_EXTERNAL_SYNC_INTERVAL_SECONDS:-300}"
 INTENT_MIN_EDGE="${V5_INTENT_MIN_EDGE:-0.00025}"
-mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/strategies"
+EXTERNAL_TELEMETRY_PATH="telemetry/latest-external-signals.jsonl"
+EXTERNAL_LOCAL_JSONL="$RUN_ROOT/latest_external_signals.jsonl"
+EXTERNAL_OUTPUT_CSV="data/external_signals.csv"
+mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/strategies" data
 
 COMPACTION_INTERVAL_SECONDS="$(python3 - "$CONFIG" <<'PY'
 import json
@@ -28,6 +32,34 @@ if value <= 0:
 print(value)
 PY
 )"
+
+sync_external_once() {
+  local temporary="$EXTERNAL_LOCAL_JSONL.tmp"
+  if GIT_TERMINAL_PROMPT=0 git fetch -q --no-tags origin telemetry:refs/remotes/origin/telemetry \
+    && git show "origin/telemetry:$EXTERNAL_TELEMETRY_PATH" > "$temporary" 2>/dev/null; then
+    mv "$temporary" "$EXTERNAL_LOCAL_JSONL"
+  else
+    rm -f "$temporary"
+  fi
+
+  python3 scripts/sync_external_signals.py \
+    --input "$EXTERNAL_LOCAL_JSONL" --output "$EXTERNAL_OUTPUT_CSV" \
+    --max-age-seconds 21600 --max-source-age-seconds 43200 \
+    --min-confidence 0.20 --min-mapping-score 0.50 \
+    --shrink-strength 1.35 --max-probability-gap 0.45 --max-signals 500 \
+    >> "$RUN_ROOT/external_signal_sync.log" 2>&1 || true
+}
+
+external_sync_loop() {
+  while true; do
+    sync_external_once
+    sleep "$EXTERNAL_SYNC_INTERVAL_SECONDS"
+  done
+}
+
+# Seed the external sleeve before any child engine starts. Only direct, fresh,
+# mapped probabilities are admitted; news and crypto feature rows stay research-only.
+sync_external_once
 
 # Materialise and validate all five generated child configs before starting the
 # persistent allocator. This is validation only; the allocator below runs them
@@ -205,14 +237,23 @@ supervise_execution() {
 
 SUPERVISOR_PID=0
 SUPERVISOR_RESTARTS=0
+EXTERNAL_SYNC_PID=0
+EXTERNAL_SYNC_RESTARTS=0
 
 start_supervisor() {
   supervise_execution >> "$RUN_ROOT/runtime_supervisor.log" 2>&1 &
   SUPERVISOR_PID=$!
 }
 
+start_external_sync() {
+  external_sync_loop >> "$RUN_ROOT/external_signal_supervisor.log" 2>&1 &
+  EXTERNAL_SYNC_PID=$!
+}
+
 cleanup() {
+  if (( EXTERNAL_SYNC_PID > 0 )); then kill "$EXTERNAL_SYNC_PID" 2>/dev/null || true; fi
   if (( SUPERVISOR_PID > 0 )); then kill "$SUPERVISOR_PID" 2>/dev/null || true; fi
+  if (( EXTERNAL_SYNC_PID > 0 )); then wait "$EXTERNAL_SYNC_PID" 2>/dev/null || true; fi
   if (( SUPERVISOR_PID > 0 )); then wait "$SUPERVISOR_PID" 2>/dev/null || true; fi
 }
 
@@ -224,6 +265,7 @@ parent_shutdown() {
 
 trap cleanup EXIT
 trap parent_shutdown INT TERM
+start_external_sync
 start_supervisor
 
 last_stat=0
@@ -236,6 +278,15 @@ last_activity=0
 
 while true; do
   now=$(date +%s)
+
+  if ! kill -0 "$EXTERNAL_SYNC_PID" 2>/dev/null; then
+    wait "$EXTERNAL_SYNC_PID" 2>/dev/null || true
+    EXTERNAL_SYNC_RESTARTS=$((EXTERNAL_SYNC_RESTARTS + 1))
+    printf '%s,external_sync,restart,%s\n' "$(date +%s)" "$EXTERNAL_SYNC_RESTARTS" \
+      >> "$RUN_ROOT/runtime_supervisor_events.csv"
+    sleep 1
+    start_external_sync
+  fi
 
   if ! kill -0 "$SUPERVISOR_PID" 2>/dev/null; then
     wait "$SUPERVISOR_PID" 2>/dev/null || true
