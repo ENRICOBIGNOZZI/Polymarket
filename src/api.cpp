@@ -361,33 +361,51 @@ std::unordered_map<std::string,std::vector<PricePoint>> PolymarketApi::fetch_pri
             {"end_ts", end_ts},
             {"fidelity", static_cast<std::int64_t>(std::max<std::size_t>(1, fidelity_minutes))}
         };
-        const auto r = http_.post_json(cfg_.clob_url + "/batch-prices-history", json::serialize(req));
-        if (r.status >= 200 && r.status < 300) {
-            const auto root = json::parse(r.body);
-            if (root.is_object()) {
-                auto hi = root.as_object().find("history");
-                if (hi != root.as_object().end() && hi->value().is_object()) {
-                    for (const auto& kv : hi->value().as_object()) {
-                        if (kv.value().is_array()) {
-                            parse_history_array(kv.value().as_array(), out[std::string(kv.key())]);
+
+        // The batch endpoint is an optimization, not an admission gate. It may
+        // legitimately return an empty or partial history object for a mixed
+        // group of assets. Parse whatever is present, then fall back per token
+        // only for the assets that still have no observations.
+        try {
+            const auto r = http_.post_json(cfg_.clob_url + "/batch-prices-history", json::serialize(req));
+            if (r.status >= 200 && r.status < 300) {
+                const auto root = json::parse(r.body);
+                if (root.is_object()) {
+                    auto hi = root.as_object().find("history");
+                    if (hi != root.as_object().end() && hi->value().is_object()) {
+                        for (const auto& kv : hi->value().as_object()) {
+                            if (kv.value().is_array()) {
+                                parse_history_array(kv.value().as_array(), out[std::string(kv.key())]);
+                            }
                         }
                     }
-                    continue;
                 }
             }
+        } catch (...) {
+            // A malformed or transient batch response must not suppress the
+            // documented single-market endpoint below.
         }
+
         for (std::size_t i = pos; i < end; ++i) {
+            auto existing = out.find(token_ids[i]);
+            if (existing != out.end() && !existing->second.empty()) continue;
+
             std::ostringstream u;
             u << cfg_.clob_url << "/prices-history?market=" << token_ids[i]
               << "&startTs=" << start_ts << "&endTs=" << end_ts
               << "&fidelity=" << std::max<std::size_t>(1, fidelity_minutes);
-            const auto one = http_.get(u.str());
-            if (one.status < 200 || one.status >= 300) continue;
-            const auto root = json::parse(one.body);
-            if (!root.is_object()) continue;
-            auto hi = root.as_object().find("history");
-            if (hi != root.as_object().end() && hi->value().is_array()) {
-                parse_history_array(hi->value().as_array(), out[token_ids[i]]);
+            try {
+                const auto one = http_.get(u.str());
+                if (one.status < 200 || one.status >= 300) continue;
+                const auto root = json::parse(one.body);
+                if (!root.is_object()) continue;
+                auto hi = root.as_object().find("history");
+                if (hi != root.as_object().end() && hi->value().is_array()) {
+                    parse_history_array(hi->value().as_array(), out[token_ids[i]]);
+                }
+            } catch (...) {
+                // Missing history for one asset should not discard the rest of
+                // the cross-section; callers enforce their own minimum panel.
             }
         }
     }
