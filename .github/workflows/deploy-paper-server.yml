@@ -2,6 +2,13 @@ name: deploy-paper-server
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "12,42 * * * *"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-paper-server.yml"
+      - "config/scheduler_registry.json"
   workflow_run:
     workflows: ["v4-live-paper-smoke"]
     types: [completed]
@@ -18,6 +25,10 @@ jobs:
   deploy:
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      (
+        (github.event_name == 'schedule' || github.event_name == 'push') &&
+        vars.POLYMARKET_SERVER_DEPLOY == 'true'
+      ) ||
       (
         github.event_name == 'workflow_run' &&
         github.event.workflow_run.conclusion == 'success' &&
@@ -59,7 +70,41 @@ jobs:
           done
           test -s ~/.ssh/known_hosts
 
+      - name: Determine whether reconciliation is required
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" || "$GITHUB_EVENT_NAME" == "push" ]]; then
+            state="$(
+              ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
+                -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+                -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "bash -s" <<'REMOTE'
+              set -euo pipefail
+              cd ~/polymarket
+              git fetch origin main paper-validated
+              target_sha="$(git rev-parse origin/paper-validated)"
+              head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+              printf 'reconcile_event=periodic\n'
+              printf 'server_head=%s\n' "${head_sha:-missing}"
+              printf 'paper_validated=%s\n' "$target_sha"
+              if [[ "$head_sha" == "$target_sha" ]]; then
+                printf 'need_deploy=false\n'
+              else
+                printf 'need_deploy=true\n'
+              fi
+REMOTE
+            )"
+            printf '%s\n' "$state" | tee deploy-evidence.txt
+            need_deploy="$(printf '%s\n' "$state" | sed -n 's/^need_deploy=//p' | tail -n 1)"
+            [[ "$need_deploy" == "true" || "$need_deploy" == "false" ]]
+          else
+            need_deploy=true
+            printf 'reconcile_event=%s\nneed_deploy=true\n' "$GITHUB_EVENT_NAME" | tee deploy-evidence.txt
+          fi
+          echo "NEED_DEPLOY=$need_deploy" >> "$GITHUB_ENV"
+
       - name: Deploy validated paper ref
+        if: env.NEED_DEPLOY == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -67,7 +112,7 @@ jobs:
           ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
             -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
             -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
-            "EXPECTED_VALIDATED_SHA='$EXPECTED_VALIDATED_SHA' bash -s" <<'REMOTE' | tee deploy-evidence.txt
+            "EXPECTED_VALIDATED_SHA='$EXPECTED_VALIDATED_SHA' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
           set -euo pipefail
           cd ~/polymarket
           git fetch origin main paper-validated
@@ -79,7 +124,7 @@ jobs:
           fi
           printf 'predeploy_origin_main=%s\n' "$main_sha"
           printf 'predeploy_paper_validated=%s\n' "$validated_sha"
-          printf 'trigger_expected_validated=%s\n' "${EXPECTED_VALIDATED_SHA:-manual}"
+          printf 'trigger_expected_validated=%s\n' "${EXPECTED_VALIDATED_SHA:-periodic-or-manual}"
 
           case "$(uname -s)" in
             Darwin) updater_path=ops/update_server_macos.sh ;;
@@ -94,6 +139,7 @@ jobs:
           REMOTE
 
       - name: Verify production paper services
+        if: env.NEED_DEPLOY == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -128,6 +174,11 @@ jobs:
               ;;
           esac
           REMOTE
+
+      - name: Record no-op reconciliation
+        if: env.NEED_DEPLOY == 'false'
+        shell: bash
+        run: echo 'reconciliation_result=already_current' | tee -a deploy-evidence.txt
 
       - name: Upload deployment evidence
         if: always()
