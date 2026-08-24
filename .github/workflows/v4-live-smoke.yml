@@ -59,7 +59,7 @@ jobs:
 
           ./build/polymarket_pca_stat_arb \
             --config config/paper_v4.json --markets 400 --universe 100 \
-            --lookback-hours 336 --fidelity-minutes 30 --factors 3 --min-z 1.5 \
+            --lookback-hours 336 --fidelity-minutes 30 --factors 3 --max-hedges 4 --min-z 1.5 \
             --max-half-life-hours 168 --top 80 --csv "$R/stat_arb_pca.csv" \
             | tee "$R/stat_arb_pca_latest.log"
 
