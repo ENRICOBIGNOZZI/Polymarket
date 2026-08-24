@@ -3,8 +3,9 @@ set -euo pipefail
 
 APP_DIR="${POLYMARKET_APP_DIR:-$HOME/polymarket}"
 STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
-TAILSCALE_HOSTNAME="${POLYMARKET_TAILSCALE_HOSTNAME:-polymarket}"
-POLYMARKET_GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-http://${TAILSCALE_HOSTNAME}}"
+TAILSCALE_HOSTNAME="${POLYMARKET_TAILSCALE_HOSTNAME:-mamma-portfolio}"
+TAILSCALE_FQDN="${POLYMARKET_TAILSCALE_FQDN:-mamma-portfolio.tail1bae85.ts.net}"
+POLYMARKET_GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-http://${TAILSCALE_FQDN}}"
 
 [[ "$(uname -s)" == "Darwin" ]] || { echo "macOS only" >&2; exit 1; }
 [[ -d "$APP_DIR/monitoring/grafana/dashboards" ]] || {
@@ -25,6 +26,56 @@ find_tailscale() {
   done
   command -v tailscale 2>/dev/null || return 1
 }
+
+TAILSCALE_BIN="$(find_tailscale || true)"
+[[ -n "$TAILSCALE_BIN" ]] || {
+  echo "tailscale CLI not found; refusing to leave Grafana inaccessible" >&2
+  exit 1
+}
+
+tailscale_admin() {
+  if "$TAILSCALE_BIN" "$@"; then
+    return 0
+  fi
+  sudo -n "$TAILSCALE_BIN" "$@"
+}
+
+# Pin the already-established server machine name rather than inventing a new
+# alias. Tailscale Serve is authoritative for the actual operator endpoint.
+tailscale_admin set --hostname="$TAILSCALE_HOSTNAME"
+
+# Wait for the control-plane/MagicDNS view to converge and verify that the
+# device really advertises the intended DNS name. Never print a canonical URL
+# merely because a local variable was set.
+actual_dns=""
+for _ in {1..20}; do
+  actual_dns="$("$TAILSCALE_BIN" status --json 2>/dev/null | \
+    /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin).get("Self",{}).get("DNSName", ""))' 2>/dev/null || true)"
+  [[ "$actual_dns" == "$TAILSCALE_FQDN" || "$actual_dns" == "$TAILSCALE_FQDN." ]] && break
+  sleep 1
+done
+if [[ "$actual_dns" != "$TAILSCALE_FQDN" && "$actual_dns" != "$TAILSCALE_FQDN." ]]; then
+  echo "tailscale DNS mismatch: expected=$TAILSCALE_FQDN actual=${actual_dns:-<empty>}" >&2
+  "$TAILSCALE_BIN" status || true
+  exit 1
+fi
+
+serve_log="$(mktemp)"
+trap 'rm -f "$serve_log"' EXIT
+if tailscale_admin serve --bg --http=80 localhost:3000 >"$serve_log" 2>&1; then
+  :
+else
+  cat "$serve_log" >&2
+  echo "failed to configure Tailscale Serve for Grafana" >&2
+  exit 1
+fi
+
+serve_status="$("$TAILSCALE_BIN" serve status 2>&1 || true)"
+printf '%s\n' "$serve_status"
+if ! grep -Fq "http://${TAILSCALE_FQDN}" <<<"$serve_status"; then
+  echo "Tailscale Serve did not publish expected URL http://${TAILSCALE_FQDN}" >&2
+  exit 1
+fi
 
 mkdir -p "$STATE_DIR/grafana/provisioning/datasources" \
   "$STATE_DIR/grafana/provisioning/dashboards"
@@ -95,32 +146,5 @@ providers:
       path: "$APP_DIR/monitoring/grafana/dashboards"
 EOF
 
-TAILSCALE_BIN="$(find_tailscale || true)"
-[[ -n "$TAILSCALE_BIN" ]] || {
-  echo "tailscale CLI not found; refusing to leave Grafana inaccessible" >&2
-  exit 1
-}
-
-tailscale_admin() {
-  if "$TAILSCALE_BIN" "$@"; then
-    return 0
-  fi
-  sudo -n "$TAILSCALE_BIN" "$@"
-}
-
-# Give the paper server a permanent MagicDNS identity. This decouples the
-# operator URL from the node's 100.x address and from Grafana's backend port.
-tailscale_admin set --hostname="$TAILSCALE_HOSTNAME"
-
-serve_log="$(mktemp)"
-trap 'rm -f "$serve_log"' EXIT
-if tailscale_admin serve --bg --http=80 localhost:3000 >"$serve_log" 2>&1; then
-  :
-else
-  cat "$serve_log" >&2
-  echo "failed to configure Tailscale Serve for Grafana" >&2
-  exit 1
-fi
-
-printf 'grafana_mode=anonymous_viewer_no_login backend=127.0.0.1:3000 exposure=tailscale-serve operator_url=%s tailscale_hostname=%s\n' \
-  "$POLYMARKET_GRAFANA_URL" "$TAILSCALE_HOSTNAME"
+printf 'grafana_mode=anonymous_viewer_no_login backend=127.0.0.1:3000 exposure=tailscale-serve operator_url=%s tailscale_hostname=%s tailscale_fqdn=%s\n' \
+  "$POLYMARKET_GRAFANA_URL" "$TAILSCALE_HOSTNAME" "$TAILSCALE_FQDN"
