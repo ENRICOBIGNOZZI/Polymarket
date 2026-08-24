@@ -23,6 +23,17 @@ jobs:
           ref: main
           fetch-depth: 1
 
+      - name: Load shared scheduler context
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_scheduler_context.py \
+            --context config/scheduler_context.json \
+            --scheduler-id research-queue \
+            --output scheduler-context.md \
+            --output-json scheduler-context.json \
+            --github-env "$GITHUB_ENV"
+
       - name: Collect research queue
         shell: bash
         env:
@@ -37,10 +48,21 @@ jobs:
             --prs research-prs.json \
             --branches research-branches.json \
             --output research-queue-report.md
+          {
+            echo
+            echo '## Shared decision contract'
+            echo "- context SHA256: \`$POLYMARKET_SCHEDULER_CONTEXT_SHA\`"
+            echo '- candidates must preserve the five-expert universal architecture and executable-edge rule'
+            echo '- research readiness is not production or real-money authorization'
+          } >> research-queue-report.md
 
       - name: Publish research queue
         if: always()
-        run: cat research-queue-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+        shell: bash
+        run: |
+          cat scheduler-context.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          cat research-queue-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
       - name: Upload research queue evidence
         if: always()
@@ -48,6 +70,8 @@ jobs:
         with:
           name: research-queue-${{ github.run_id }}
           path: |
+            scheduler-context.md
+            scheduler-context.json
             research-queue-report.md
             research-prs.json
             research-branches.json
