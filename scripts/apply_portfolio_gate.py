@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Apply the portfolio-champion new-exposure gate to an intent bundle file.
+"""Read or apply the portfolio-champion new-exposure gate.
 
-This script never changes live positions or broker state. It only admits or
-suppresses *new* intents before the existing broker reads them. Missing, stale,
-malformed or globally killed supervisor state fails closed.
+This script never changes live positions or broker state. Filtering mode admits
+or suppresses *new* complete intent bundles before the existing broker reads
+them. Check-only mode is used by other alpha sleeves before creating new paper
+orders. Missing, stale, malformed or globally killed supervisor state fails
+closed.
 """
 from __future__ import annotations
 
@@ -126,35 +128,42 @@ def apply_gate(rows: list[dict[str, str]], allowed: bool, capital_limit: float) 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--input", type=Path)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--gate", type=Path, default=Path("runs/supervisor/capital_limits.json"))
     parser.add_argument("--engine", default="alpha")
     parser.add_argument("--max-age-seconds", type=int, default=30)
     parser.add_argument("--now", type=int, default=None)
+    parser.add_argument("--check-only", action="store_true")
     args = parser.parse_args()
 
     now = int(time.time()) if args.now is None else args.now
-    rows = load_rows(args.input)
     allowed, capital_limit, reason = read_gate(
         args.gate, args.engine, now, max(1, args.max_age_seconds)
     )
+    summary: dict[str, Any] = {
+        "engine": args.engine,
+        "allowed": allowed,
+        "reason": reason,
+        "capital_limit_usd": capital_limit,
+    }
+    if args.check_only:
+        print(json.dumps(summary, sort_keys=True))
+        return 0 if allowed else 1
+
+    if args.input is None or args.output is None:
+        parser.error("--input and --output are required unless --check-only is used")
+    rows = load_rows(args.input)
     admitted, rejected = apply_gate(rows, allowed, capital_limit)
     atomic_write(args.output, admitted)
-    print(
-        json.dumps(
-            {
-                "engine": args.engine,
-                "allowed": allowed,
-                "reason": reason,
-                "capital_limit_usd": capital_limit,
-                "input_rows": len(rows),
-                "output_rows": len(admitted),
-                "rejected_bundles": rejected,
-            },
-            sort_keys=True,
-        )
+    summary.update(
+        {
+            "input_rows": len(rows),
+            "output_rows": len(admitted),
+            "rejected_bundles": rejected,
+        }
     )
+    print(json.dumps(summary, sort_keys=True))
     return 0
 
 
