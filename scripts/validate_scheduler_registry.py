@@ -11,6 +11,7 @@ REQUIRED_IDS = {
     "administrator-supervisor",
     "research-policy",
     "research-queue",
+    "promotion-controller",
     "integration-merge",
     "post-merge-validation",
     "code-validation",
@@ -157,6 +158,29 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             if forbidden in text:
                 errors.append(f"administrator-supervisor contains forbidden mutation: {forbidden}")
 
+    controller = by_id.get("promotion-controller")
+    if controller:
+        text = (root / str(controller["workflow"])).read_text(encoding="utf-8")
+        for required in (
+            "scripts/promotion_gate.py",
+            "config/promotion_policy.json",
+            "autonomous-promotion-approved",
+            "--add-label autonomous-promotion-approved",
+            "--remove-label autonomous-promotion-approved",
+            "source-match-files.txt",
+            "economic_source_content_mismatch",
+        ):
+            if required not in text:
+                errors.append(f"promotion-controller is missing decision contract: {required}")
+        for forbidden in (
+            "gh pr merge",
+            "POLYMARKET_DEPLOY_REF=",
+            "git push origin paper-validated",
+            "administrator-approved",
+        ):
+            if forbidden in text:
+                errors.append(f"promotion-controller contains forbidden authority: {forbidden}")
+
     integration = by_id.get("integration-merge")
     if integration:
         text = (root / str(integration["workflow"])).read_text(encoding="utf-8")
@@ -167,18 +191,28 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         if "administrator-approved" in text:
             errors.append("paper integration must not require administrator-approved")
         if "incumbent_health_gate.py" in text:
-            errors.append("incumbent health must not block a validated paper upgrade")
+            errors.append("incumbent health must not replace candidate promotion evidence")
         for required in (
+            "autonomous-promotion-approved",
+            "--require-approval-label",
+            "scripts/promotion_gate.py",
             "candidate-final.json",
-            "source-research-final.json",
-            "statusCheckRollup",
             "--match-head-commit",
-            "current_main_after_merge",
-            '"event_type": "champion-integration-merged"',
-            "Automatic paper-champion promotion",
+            "baseRefOid",
+            "source-match-files.txt",
+            "champion-integration-merged",
         ):
             if required not in text:
-                errors.append(f"integration-merge is missing automatic promotion contract: {required}")
+                errors.append(f"integration-merge is missing controller handoff contract: {required}")
+
+    meta = by_id.get("meta-supervisor")
+    if meta:
+        text = (root / str(meta["workflow"])).read_text(encoding="utf-8")
+        if "promotion-controller.yml" not in text:
+            errors.append("meta-supervisor must be able to dispatch the promotion decision controller")
+        case_match = re.search(r"case \"\$workflow\" in(?P<body>.*?)esac", text, re.S)
+        if case_match and "integration-merge.yml" in case_match.group("body"):
+            errors.append("meta-supervisor must not dispatch the merge authority directly")
 
     post_merge = by_id.get("post-merge-validation")
     if post_merge:
@@ -239,7 +273,10 @@ def render_report(items: list[dict[str, Any]], errors: list[str]) -> str:
         lines.extend(["", "## Errors"])
         lines.extend(f"- {error}" for error in errors)
     else:
-        lines.extend(["", "Registry and one-job-per-workflow contract are valid. Automatic paper promotion is enabled through objective scheduler gates."])
+        lines.extend([
+            "",
+            "Registry and one-job-per-workflow contract are valid. Automatic paper promotion uses a separate evidence decision controller and merge executor.",
+        ])
     return "\n".join(lines) + "\n"
 
 
