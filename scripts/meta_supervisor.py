@@ -161,7 +161,11 @@ def classify_workflow(
         state = "running"
         dispatch = False
         reason = f"latest run status={status}"
-    elif conclusion in {"success", "neutral", "skipped"}:
+    elif conclusion == "skipped":
+        state = "skipped"
+        dispatch = False
+        reason = "latest default-branch run was skipped and provides no health evidence"
+    elif conclusion in {"success", "neutral"}:
         if requires_main and head_sha and head_sha != main_sha:
             state = "outdated_revision"
             dispatch = bool(spec.get("dispatchable"))
@@ -245,7 +249,7 @@ def build_report(config: dict[str, Any], snapshot: dict[str, Any], now: int) -> 
         )
 
     for filename, state in workflow_status.items():
-        if state["state"] in {"failed", "missing", "stale", "outdated_revision"}:
+        if state["state"] in {"failed", "missing", "stale", "outdated_revision", "skipped"}:
             severity = "warning" if state.get("dispatchable") else "critical"
             alerts.append(
                 {
