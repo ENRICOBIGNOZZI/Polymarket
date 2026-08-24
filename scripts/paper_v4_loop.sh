@@ -11,81 +11,102 @@ python3 scripts/merge_v4_intents.py \
   --input "$RUN_ROOT/b1_intents.csv" --input "$RUN_ROOT/b2_intents.csv" \
   --output "$RUN_ROOT/intents.csv" --max-bundles 20 >/dev/null
 
-REC_PID=0
-BROKER_PID=0
-REC_RESTARTS=0
-BROKER_RESTARTS=0
+supervise_execution() {
+  local rec_pid=0
+  local broker_pid=0
+  local rec_restarts=0
+  local broker_restarts=0
 
-start_recorder() {
-  ./build/polymarket_trade_recorder \
-    --config "$CONFIG" --run-dir "$RUN_ROOT" \
-    --markets 400 --batch 40 --min-liquidity 100 --lookback-seconds 120 \
-    --interval 10 --loop >> "$RUN_ROOT/trade_recorder.log" 2>&1 &
-  REC_PID=$!
-}
+  start_recorder() {
+    ./build/polymarket_trade_recorder \
+      --config "$CONFIG" --run-dir "$RUN_ROOT" \
+      --markets 400 --batch 40 --min-liquidity 100 --lookback-seconds 120 \
+      --interval 10 --loop >> "$RUN_ROOT/trade_recorder.log" 2>&1 &
+    rec_pid=$!
+  }
 
-start_broker() {
-  ./build/polymarket_multileg_paper \
-    --config "$CONFIG" --run-dir "$RUN_ROOT" \
-    --intents "$RUN_ROOT/intents.csv" --trade-tape "$RUN_ROOT/trade_tape.csv" \
-    --min-edge 0.001 --completion-threshold 0.95 \
-    --submit-latency-ms 250 --cancel-latency-ms 250 --max-replaces 3 \
-    --max-leg-risk-usd 5 --adverse-horizon-seconds 60 --interval 3 --loop \
-    >> "$RUN_ROOT/multileg.log" 2>&1 &
-  BROKER_PID=$!
-}
+  start_broker() {
+    ./build/polymarket_multileg_paper \
+      --config "$CONFIG" --run-dir "$RUN_ROOT" \
+      --intents "$RUN_ROOT/intents.csv" --trade-tape "$RUN_ROOT/trade_tape.csv" \
+      --min-edge 0.001 --completion-threshold 0.95 \
+      --submit-latency-ms 250 --cancel-latency-ms 250 --max-replaces 3 \
+      --max-leg-risk-usd 5 --adverse-horizon-seconds 60 --interval 3 --loop \
+      >> "$RUN_ROOT/multileg.log" 2>&1 &
+    broker_pid=$!
+  }
 
-append_supervisor_event() {
-  local component="$1"
-  local event="$2"
-  local count="$3"
-  local path="$RUN_ROOT/runtime_supervisor_events.csv"
-  if [[ ! -s "$path" ]]; then
-    printf 'timestamp,component,event,restart_count\n' > "$path"
-  fi
-  printf '%s,%s,%s,%s\n' "$(date +%s)" "$component" "$event" "$count" >> "$path"
-}
+  append_event() {
+    local component="$1"
+    local event="$2"
+    local count="$3"
+    local path="$RUN_ROOT/runtime_supervisor_events.csv"
+    if [[ ! -s "$path" ]]; then
+      printf 'timestamp,component,event,restart_count\n' > "$path"
+    fi
+    printf '%s,%s,%s,%s\n' "$(date +%s)" "$component" "$event" "$count" >> "$path"
+  }
 
-write_supervisor_status() {
-  local rec_alive=0
-  local broker_alive=0
-  if (( REC_PID > 0 )) && kill -0 "$REC_PID" 2>/dev/null; then rec_alive=1; fi
-  if (( BROKER_PID > 0 )) && kill -0 "$BROKER_PID" 2>/dev/null; then broker_alive=1; fi
-  local tmp="$RUN_ROOT/runtime_supervisor.csv.tmp"
-  printf 'timestamp,recorder_alive,broker_alive,recorder_restarts,broker_restarts,recorder_pid,broker_pid\n' > "$tmp"
-  printf '%s,%s,%s,%s,%s,%s,%s\n' "$(date +%s)" "$rec_alive" "$broker_alive" "$REC_RESTARTS" "$BROKER_RESTARTS" "$REC_PID" "$BROKER_PID" >> "$tmp"
-  mv "$tmp" "$RUN_ROOT/runtime_supervisor.csv"
-}
+  write_status() {
+    local rec_alive=0
+    local broker_alive=0
+    if (( rec_pid > 0 )) && kill -0 "$rec_pid" 2>/dev/null; then rec_alive=1; fi
+    if (( broker_pid > 0 )) && kill -0 "$broker_pid" 2>/dev/null; then broker_alive=1; fi
+    local tmp="$RUN_ROOT/runtime_supervisor.csv.tmp"
+    printf 'timestamp,recorder_alive,broker_alive,recorder_restarts,broker_restarts,recorder_pid,broker_pid\n' > "$tmp"
+    printf '%s,%s,%s,%s,%s,%s,%s\n' "$(date +%s)" "$rec_alive" "$broker_alive" "$rec_restarts" "$broker_restarts" "$rec_pid" "$broker_pid" >> "$tmp"
+    mv "$tmp" "$RUN_ROOT/runtime_supervisor.csv"
+  }
 
-restart_recorder() {
-  if (( REC_PID > 0 )); then wait "$REC_PID" 2>/dev/null || true; fi
-  REC_RESTARTS=$((REC_RESTARTS + 1))
-  append_supervisor_event recorder restart "$REC_RESTARTS"
-  sleep 2
+  child_cleanup() {
+    if (( rec_pid > 0 )); then kill "$rec_pid" 2>/dev/null || true; fi
+    if (( broker_pid > 0 )); then kill "$broker_pid" 2>/dev/null || true; fi
+    if (( rec_pid > 0 )); then wait "$rec_pid" 2>/dev/null || true; fi
+    if (( broker_pid > 0 )); then wait "$broker_pid" 2>/dev/null || true; fi
+  }
+  trap child_cleanup EXIT INT TERM
+
   start_recorder
+  start_broker
+  append_event recorder start 0
+  append_event broker start 0
+  write_status
+
+  while true; do
+    if ! kill -0 "$rec_pid" 2>/dev/null; then
+      wait "$rec_pid" 2>/dev/null || true
+      rec_restarts=$((rec_restarts + 1))
+      append_event recorder restart "$rec_restarts"
+      sleep 2
+      start_recorder
+    fi
+    if ! kill -0 "$broker_pid" 2>/dev/null; then
+      wait "$broker_pid" 2>/dev/null || true
+      broker_restarts=$((broker_restarts + 1))
+      append_event broker restart "$broker_restarts"
+      sleep 2
+      start_broker
+    fi
+    write_status
+    sleep 5
+  done
 }
 
-restart_broker() {
-  if (( BROKER_PID > 0 )); then wait "$BROKER_PID" 2>/dev/null || true; fi
-  BROKER_RESTARTS=$((BROKER_RESTARTS + 1))
-  append_supervisor_event broker restart "$BROKER_RESTARTS"
-  sleep 2
-  start_broker
+SUPERVISOR_PID=0
+SUPERVISOR_RESTARTS=0
+
+start_supervisor() {
+  supervise_execution >> "$RUN_ROOT/runtime_supervisor.log" 2>&1 &
+  SUPERVISOR_PID=$!
 }
 
 cleanup() {
-  if (( REC_PID > 0 )); then kill "$REC_PID" 2>/dev/null || true; fi
-  if (( BROKER_PID > 0 )); then kill "$BROKER_PID" 2>/dev/null || true; fi
-  if (( REC_PID > 0 )); then wait "$REC_PID" 2>/dev/null || true; fi
-  if (( BROKER_PID > 0 )); then wait "$BROKER_PID" 2>/dev/null || true; fi
+  if (( SUPERVISOR_PID > 0 )); then kill "$SUPERVISOR_PID" 2>/dev/null || true; fi
+  if (( SUPERVISOR_PID > 0 )); then wait "$SUPERVISOR_PID" 2>/dev/null || true; fi
 }
 trap cleanup EXIT INT TERM
 
-start_recorder
-start_broker
-append_supervisor_event recorder start 0
-append_supervisor_event broker start 0
-write_supervisor_status
+start_supervisor
 
 last_stat=0
 last_structural=0
@@ -95,13 +116,13 @@ last_oos=0
 while true; do
   now=$(date +%s)
 
-  if ! kill -0 "$REC_PID" 2>/dev/null; then
-    restart_recorder
+  if ! kill -0 "$SUPERVISOR_PID" 2>/dev/null; then
+    wait "$SUPERVISOR_PID" 2>/dev/null || true
+    SUPERVISOR_RESTARTS=$((SUPERVISOR_RESTARTS + 1))
+    printf '%s,supervisor,restart,%s\n' "$(date +%s)" "$SUPERVISOR_RESTARTS" >> "$RUN_ROOT/runtime_supervisor_events.csv"
+    sleep 2
+    start_supervisor
   fi
-  if ! kill -0 "$BROKER_PID" 2>/dev/null; then
-    restart_broker
-  fi
-  write_supervisor_status
 
   ./build/polymarket_maker_paper \
     --config "$CONFIG" --run-dir "$RUN_ROOT/maker" --markets 240 --min-liquidity 100 \
