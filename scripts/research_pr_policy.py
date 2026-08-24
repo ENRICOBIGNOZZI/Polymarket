@@ -13,6 +13,9 @@ INTEGRATION_LABELS = {
     "single-model-reviewed",
     "administrator-approved",
 }
+SOURCE_RESEARCH_PR_PATTERN = re.compile(
+    r"source research pr/branch/commit:\s*#(\d+)\b", flags=re.IGNORECASE
+)
 
 MODEL_BODY_TERMS = (
     "alpha",
@@ -151,11 +154,11 @@ def evaluate(
             normalized = body.lower()
             if "[x] approved research integration into the single champion" not in normalized:
                 errors.append("integration PR must check the approved-research lifecycle box")
-            source = re.search(
-                r"source research pr/branch/commit:\s*(\S+)", body, flags=re.IGNORECASE
-            )
-            if source is None:
-                errors.append("integration PR must link a source research PR, branch or commit")
+            if SOURCE_RESEARCH_PR_PATTERN.search(body) is None:
+                errors.append(
+                    "integration PR must link a numbered source research PR as "
+                    "`Source research PR/branch/commit: #<number>`"
+                )
     else:
         misplaced = sorted(labels.intersection(INTEGRATION_LABELS | {"research-approved"}))
         if misplaced:
