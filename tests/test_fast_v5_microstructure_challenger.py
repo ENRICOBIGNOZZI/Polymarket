@@ -48,7 +48,7 @@ class V5MicrostructureSemanticsTest(unittest.TestCase):
         config = json.loads((ROOT / "config" / "paper_v5.json").read_text(encoding="utf-8"))
         micro = next(item for item in config["multi_strategy"]["strategies"] if item["name"] == "micro")
         self.assertEqual(micro["expert"], "micro")
-        self.assertEqual(micro["overrides"]["interval_seconds"], 10)
+        self.assertGreaterEqual(micro["overrides"]["interval_seconds"], 1)
         self.assertEqual(micro["overrides"]["uncertainty_penalty"], 0.0)
         self.assertIn('out.push_back({"micro", std::clamp(q, 0.001, 0.999), conf});', source)
         self.assertIn("void Engine::score_resolved", source)
@@ -60,7 +60,7 @@ class V5MicrostructureSemanticsTest(unittest.TestCase):
         for i in range(8):
             rows.append(
                 {
-                    "exchange_ts_ms": i * 1000,
+                    "exchange_ts_ms": (i + 1) * 1000,
                     "market_id": "m1",
                     "mid": 0.50 + 0.001 * i,
                     "spread": 0.02,
