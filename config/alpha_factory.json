@@ -30,8 +30,8 @@
     "min_consecutive_passes": 3
   },
   "coordination": {
-    "max_dispatches_per_cycle": 3,
-    "dispatch_cooldown_seconds": 1800,
+    "max_dispatches_per_cycle": 4,
+    "dispatch_cooldown_seconds": 900,
     "workflows": {
       "ci.yml": {
         "name": "ci",
@@ -91,6 +91,19 @@
           "ci.yml"
         ]
       },
+      "integration-merge.yml": {
+        "name": "Polymarket Integration Merge",
+        "requires_current_main": true,
+        "max_age_seconds": 1800,
+        "dispatchable": true,
+        "priority": 65,
+        "dependencies": [
+          "ci.yml",
+          "monitoring.yml",
+          "v4-live-smoke.yml",
+          "research-policy.yml"
+        ]
+      },
       "server-health.yml": {
         "name": "paper-server-health",
         "requires_current_main": false,
@@ -116,7 +129,8 @@
       "v4-live-smoke.yml",
       "forward-maker-research.yml",
       "alpha-factory.yml",
-      "research-policy.yml"
+      "research-policy.yml",
+      "integration-merge.yml"
     ],
     "forbidden_dispatches": [
       "deploy-paper-server.yml",

@@ -3,16 +3,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-INTEGRATION_LABELS = {
-    "approved-for-integration",
-    "single-model-reviewed",
-    "administrator-approved",
-}
 RESEARCH_PREFIXES = ("research/", "experiment/", "diagnostic/")
+SOURCE_RESEARCH_PR_PATTERN = re.compile(
+    r"source research pr/branch/commit:\s*#(\d+)\b", flags=re.IGNORECASE
+)
 
 
 def labels(pr: dict[str, Any]) -> set[str]:
@@ -20,14 +19,6 @@ def labels(pr: dict[str, Any]) -> set[str]:
 
 
 def latest_by_workflow(runs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Return the latest non-PR run for each workflow.
-
-    Failed candidate PR checks are evidence about that candidate, not evidence
-    that the deployed control plane is unhealthy. Production supervision uses
-    push, schedule, workflow-dispatch, repository-dispatch and workflow-run
-    executions only; PR policy and integration gates handle candidate checks.
-    """
-
     latest: dict[str, dict[str, Any]] = {}
     for run in runs:
         if str(run.get("event") or "").lower() == "pull_request":
@@ -51,6 +42,10 @@ def scheduler_state(run: dict[str, Any] | None) -> str:
     return conclusion or "completed"
 
 
+def has_numbered_source(pr: dict[str, Any]) -> bool:
+    return SOURCE_RESEARCH_PR_PATTERN.search(str(pr.get("body") or "")) is not None
+
+
 def render(
     registry: dict[str, Any],
     runs: list[dict[str, Any]],
@@ -68,20 +63,27 @@ def render(
     blockers: list[str] = []
 
     integration_prs = [pr for pr in prs if str(pr.get("headRefName", "")).startswith("integration/")]
-    eligible = [
-        pr
-        for pr in integration_prs
-        if not bool(pr.get("isDraft")) and INTEGRATION_LABELS.issubset(labels(pr))
-    ]
+    queued_for_automatic_promotion = sorted(
+        [
+            pr for pr in integration_prs
+            if not bool(pr.get("isDraft")) and has_numbered_source(pr)
+        ],
+        key=lambda pr: int(pr.get("number") or 0),
+    )
     research_prs = [pr for pr in prs if str(pr.get("headRefName", "")).startswith(RESEARCH_PREFIXES)]
-    approved_research = [pr for pr in research_prs if "research-approved" in labels(pr)]
+    research_with_evidence_label = [pr for pr in research_prs if "research-approved" in labels(pr)]
 
-    if len(eligible) > 1:
-        blockers.append("more than one administrator-approved integration candidate is active")
+    # Multiple candidates are a queue, not a control-plane blocker. The integration
+    # scheduler promotes at most one per cycle after objective check validation.
+    if len(queued_for_automatic_promotion) > 1:
+        warnings.append(
+            f"{len(queued_for_automatic_promotion)} automatic paper-promotion candidates are queued; "
+            "integration-merge will process one per cycle"
+        )
     if validation_relation == "diverged":
         blockers.append("paper-validated is not equal to or an ancestor of main")
     elif validation_relation == "pending_validation":
-        warnings.append("main is ahead of paper-validated; the incumbent validated revision remains live")
+        warnings.append("main is ahead of paper-validated; exact-SHA post-merge validation is pending")
 
     scheduler_rows: list[dict[str, Any]] = []
     for item in schedulers:
@@ -102,15 +104,13 @@ def render(
             }
         )
         if bool(item.get("critical")) and state in {
-            "failure",
-            "cancelled",
-            "timed_out",
-            "action_required",
+            "failure", "cancelled", "timed_out", "action_required",
         }:
             blockers.append(f"critical scheduler {item.get('id')} latest production state is {state}")
         elif run is None:
             warnings.append(f"no non-PR workflow run is visible yet for {item.get('id')}")
 
+    selected_next = queued_for_automatic_promotion[0].get("number") if queued_for_automatic_promotion else None
     lines = [
         "# Polymarket administrator supervisor",
         "",
@@ -122,11 +122,13 @@ def render(
         f"- champion loop: `{manifest.get('loop')}`",
         f"- champion config: `{manifest.get('config')}`",
         f"- champion run root: `{manifest.get('run_root')}`",
+        f"- promotion policy: `{manifest.get('promotion_policy')}`",
         f"- open PRs: {len(prs)}",
         f"- research PRs: {len(research_prs)}",
-        f"- approved research awaiting integration: {len(approved_research)}",
+        f"- research PRs carrying legacy evidence label: {len(research_with_evidence_label)}",
         f"- integration PRs: {len(integration_prs)}",
-        f"- eligible administrator-approved integrations: {len(eligible)}",
+        f"- automatic promotion queue: {len(queued_for_automatic_promotion)}",
+        f"- next deterministic candidate: {('#' + str(selected_next)) if selected_next else 'none'}",
         f"- branches observed: {len(branches)}",
         "",
         "## Scheduler health",
@@ -144,20 +146,15 @@ def render(
         lines.append(f"| {row['id']} | `{row['state']}` | {origin} | {latest_text} |")
 
     lines.extend(["", "## Control-plane blockers"])
-    if blockers:
-        lines.extend(f"- {item}" for item in sorted(set(blockers)))
-    else:
-        lines.append("- none")
+    lines.extend(f"- {item}" for item in sorted(set(blockers))) if blockers else lines.append("- none")
     lines.extend(["", "## Warnings"])
-    if warnings:
-        lines.extend(f"- {item}" for item in sorted(set(warnings)))
-    else:
-        lines.append("- none")
+    lines.extend(f"- {item}" for item in sorted(set(warnings))) if warnings else lines.append("- none")
 
-    lines.extend(["", "## Administrator boundary"])
+    lines.extend(["", "## Promotion boundary"])
     lines.append(
-        "The supervisor observes and coordinates only. It cannot approve research, merge a pull request, "
-        "dispatch post-merge validation, advance `paper-validated`, deploy, or submit orders."
+        "Paper champion promotion is automatic: integration-merge owns the merge after green objective checks and "
+        "numbered research provenance. The supervisor itself remains read-only. Exact-SHA validation and "
+        "paper-validated deployment remain separate. Authenticated real-money execution is not authorized."
     )
 
     payload = {
@@ -170,11 +167,12 @@ def render(
         "counts": {
             "open_prs": len(prs),
             "research_prs": len(research_prs),
-            "approved_research": len(approved_research),
+            "research_evidence_labeled": len(research_with_evidence_label),
             "integration_prs": len(integration_prs),
-            "eligible_integrations": len(eligible),
+            "automatic_promotion_queue": len(queued_for_automatic_promotion),
             "branches": len(branches),
         },
+        "next_automatic_promotion_pr": selected_next,
         "blockers": sorted(set(blockers)),
         "warnings": sorted(set(warnings)),
         "schedulers": scheduler_rows,
@@ -191,9 +189,7 @@ def main() -> int:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--main-sha", required=True)
     parser.add_argument("--validated-sha", required=True)
-    parser.add_argument(
-        "--validation-relation", choices=("current", "pending_validation", "diverged"), required=True
-    )
+    parser.add_argument("--validation-relation", choices=("current", "pending_validation", "diverged"), required=True)
     parser.add_argument("--markdown", required=True)
     parser.add_argument("--json-output", required=True)
     args = parser.parse_args()
@@ -207,14 +203,8 @@ def main() -> int:
         if not isinstance(value, list):
             raise SystemExit(f"{name} input must be a JSON array")
     report, payload = render(
-        registry,
-        runs,
-        prs,
-        branches,
-        manifest,
-        args.main_sha,
-        args.validated_sha,
-        args.validation_relation,
+        registry, runs, prs, branches, manifest,
+        args.main_sha, args.validated_sha, args.validation_relation,
     )
     Path(args.markdown).write_text(report, encoding="utf-8")
     Path(args.json_output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

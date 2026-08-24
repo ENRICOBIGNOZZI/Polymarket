@@ -4,9 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# The live runtime is selected explicitly. Merely committing a numerically newer
-# paper_vN implementation must never promote unapproved research into the live
-# process.
+# The live runtime is selected explicitly. A numerically newer paper_vN implementation
+# becomes live only through the validated integration pipeline; promotion may be
+# performed automatically by the scheduler once objective gates pass.
 manifest="${POLYMARKET_CHAMPION_MANIFEST:-$ROOT/config/live_champion.json}"
 [[ -f "$manifest" ]] || {
   echo "fatal: live champion manifest not found: $manifest" >&2
@@ -64,7 +64,7 @@ if run_root != expected_run_root:
     raise SystemExit(f"champion run_root must be {expected_run_root}")
 if deployment_ref != "paper-validated":
     raise SystemExit("live deployment_ref must remain paper-validated")
-if promotion_policy != "approved integration PR only":
+if promotion_policy != "automatic validated integration":
     raise SystemExit("unsupported live promotion policy")
 
 print("\t".join((str(version), loop, config, run_root, deployment_ref)))
