@@ -2,8 +2,9 @@
 """Combine all paper/shadow alpha sleeves into one ranked opportunity book.
 
 The book is intentionally larger than the portfolio. It ranks up to N research
-candidates while separately flagging the subset that is executable under each
-source's own cost model. Portfolio/risk gates remain downstream and unchanged.
+candidates while separately flagging the subset that is trade-eligible under
+each source's execution evidence. Portfolio/risk gates remain downstream and
+unchanged.
 """
 from __future__ import annotations
 
@@ -68,13 +69,29 @@ def read_csv(path: Path) -> list[dict[str, str]]:
 
 
 def fast_rows(path: Path) -> Iterable[dict[str, object]]:
+    """Expose fast-layer observations without promoting passive fill assumptions.
+
+    The fast engine uses ``executable`` for two different concepts:
+
+    * crossing hard-arbitrage baskets whose displayed depth can be walked now;
+    * passive two-sided maker definitions that can be posted now but whose
+      economics require both legs to fill later.
+
+    Only the first class is directly trade-eligible here. Passive maker rows
+    remain visible in the broad research frontier and must earn eligibility via
+    forward paired-fill evidence in the dedicated execution/maker research
+    path. This prevents a large post-only spread from masquerading as captured
+    PnL merely because both quotes are syntactically placeable.
+    """
     for row in read_csv(path):
         raw = fnum(row, "raw_edge_per_share")
         net = fnum(row, "net_edge_per_share")
         capital = max(0.0, fnum(row, "capital_required"))
         profit = fnum(row, "expected_profit", default=net * capital)
-        executable = yes(row.get("executable", "")) and net > 0.0 and capital > 0.0
-        if not executable and raw <= 0.0:
+        source_executable = yes(row.get("executable", ""))
+        hard = yes(row.get("hard_arbitrage", ""))
+        trade_eligible = source_executable and hard and net > 0.0 and capital > 0.0
+        if not source_executable and raw <= 0.0:
             continue
         yield {
             "source": "fast",
@@ -83,8 +100,8 @@ def fast_rows(path: Path) -> Iterable[dict[str, object]]:
             "event_id": text(row, "event_id"),
             "market_id": "",
             "side": "",
-            "eligible": int(executable),
-            "hard_arbitrage": int(yes(row.get("hard_arbitrage", ""))),
+            "eligible": int(trade_eligible),
+            "hard_arbitrage": int(hard),
             "raw_edge": raw,
             "net_edge": net,
             "capital_required": capital,
