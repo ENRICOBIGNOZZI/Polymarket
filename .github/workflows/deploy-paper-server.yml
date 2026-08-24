@@ -151,10 +151,15 @@ REMOTE
           if [[ -n "${EXPECTED_VALIDATED_SHA:-}" ]]; then
             test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
           fi
-          curl -fsS http://127.0.0.1:9108/healthz
-          curl -fsS http://127.0.0.1:9108/metrics | grep -q '^polymarket_runtime_info'
+          curl -fsS http://127.0.0.1:9108/healthz >/dev/null
+          metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
+          grep -q '^polymarket_runtime_info' <<<"$metrics"
+          grep -q '^polymarket_terminal_state_present 1' <<<"$metrics"
+          grep -q '^polymarket_terminal_pnl_usd ' <<<"$metrics"
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+          grafana_search="$(curl -fsS http://127.0.0.1:3000/api/search)"
+          grep -q 'polymarket-fast-paper' <<<"$grafana_search"
           printf 'server_head=%s\n' "$head_sha"
           printf 'paper_validated=%s\n' "$validated_sha"
           printf 'origin_main=%s\n' "$main_sha"

@@ -6,7 +6,7 @@ from http.server import ThreadingHTTPServer
 
 from exporter import Collector, ExporterHandler, Metrics, _float, _last_csv_row, _mtime, _read_csv, _read_json, parse_args
 
-EXPORTER_V4_VERSION = "1.1.0"
+EXPORTER_V4_VERSION = "1.2.0"
 
 
 def _safe_ratio(a: float, b: float) -> float:
@@ -106,36 +106,49 @@ class V4Collector(Collector):
         status_path = terminal / "status.json"
         status = _read_json(status_path) or {}
         modified = _mtime(status_path)
+        positions = _read_csv(terminal / "broker_state.csv")
+        open_cost_basis = sum(max(0.0, _float(row.get("cost_basis"))) for row in positions)
         metrics.sample("polymarket_terminal_state_present", 1 if status else 0, help_text="Whether the continuous cost-aware taker paper engine has published a status snapshot.")
         if status:
+            cash = _float(status.get("cash"), starting_capital)
             equity = _float(status.get("equity"), starting_capital)
             ts = _float(status.get("timestamp"), modified or now)
+            realized_pnl = cash + open_cost_basis - starting_capital
+            unrealized_pnl = equity - cash - open_cost_basis
             fields = {
-                "polymarket_terminal_cash_usd": (_float(status.get("cash"), starting_capital), "Current taker paper cash."),
-                "polymarket_terminal_equity_usd": (equity, "Current taker paper marked equity."),
-                "polymarket_terminal_pnl_usd": (equity - starting_capital, "Current taker paper marked PnL versus starting capital."),
-                "polymarket_terminal_peak_equity_usd": (_float(status.get("peak_equity"), max(equity, starting_capital)), "Historical peak taker paper equity."),
-                "polymarket_terminal_drawdown_ratio": (_float(status.get("drawdown")), "Current taker paper drawdown ratio."),
-                "polymarket_terminal_gross_exposure_usd": (_float(status.get("gross_exposure")), "Current taker paper gross marked exposure."),
-                "polymarket_terminal_open_positions": (_float(status.get("open_positions")), "Current number of open taker paper positions."),
-                "polymarket_terminal_kill_switch": (1.0 if bool(status.get("killed")) else 0.0, "Taker paper kill-switch state; one means active."),
-                "polymarket_terminal_last_update_timestamp_seconds": (ts, "Unix timestamp of the latest taker paper status snapshot."),
-                "polymarket_terminal_staleness_seconds": (max(0.0, now - ts), "Age in seconds of the latest taker paper status snapshot."),
+                "polymarket_terminal_cash_usd": (cash, "Current simulated-live taker cash."),
+                "polymarket_terminal_equity_usd": (equity, "Current simulated-live taker marked equity."),
+                "polymarket_terminal_pnl_usd": (equity - starting_capital, "Current simulated-live marked PnL versus starting capital."),
+                "polymarket_terminal_realized_pnl_usd": (realized_pnl, "Current simulated-live realized PnL, retaining open positions at entry cost."),
+                "polymarket_terminal_unrealized_pnl_usd": (unrealized_pnl, "Current simulated-live unrealized PnL marked to executable bid."),
+                "polymarket_terminal_open_cost_basis_usd": (open_cost_basis, "Entry cost including entry fees for currently open simulated-live positions."),
+                "polymarket_terminal_peak_equity_usd": (_float(status.get("peak_equity"), max(equity, starting_capital)), "Historical peak simulated-live equity."),
+                "polymarket_terminal_drawdown_ratio": (_float(status.get("drawdown")), "Current simulated-live drawdown ratio."),
+                "polymarket_terminal_gross_exposure_usd": (_float(status.get("gross_exposure")), "Current simulated-live gross marked exposure."),
+                "polymarket_terminal_open_positions": (_float(status.get("open_positions")), "Current number of open simulated-live positions."),
+                "polymarket_terminal_kill_switch": (1.0 if bool(status.get("killed")) else 0.0, "Simulated-live kill-switch state; one means active."),
+                "polymarket_terminal_last_update_timestamp_seconds": (ts, "Unix timestamp of the latest simulated-live status snapshot."),
+                "polymarket_terminal_staleness_seconds": (max(0.0, now - ts), "Age in seconds of the latest simulated-live status snapshot."),
             }
             for name, (value, help_text) in fields.items():
                 metrics.sample(name, value, help_text=help_text)
 
         fills = _read_csv(terminal / "fills.csv")
         actions = Counter((row.get("action") or "UNKNOWN").upper() for row in fills)
-        metrics.sample("polymarket_terminal_fills_total", len(fills), help_text="Cumulative cost-aware taker paper fill events recorded by the terminal sleeve.", metric_type="counter")
-        metrics.sample("polymarket_terminal_buy_fills_total", actions.get("BUY", 0), help_text="Cumulative taker paper BUY fill events.", metric_type="counter")
-        metrics.sample("polymarket_terminal_sell_fills_total", actions.get("SELL", 0), help_text="Cumulative taker paper SELL fill events.", metric_type="counter")
-        metrics.sample("polymarket_terminal_settlements_total", actions.get("SETTLE", 0), help_text="Cumulative taker paper settlement events.", metric_type="counter")
+        fees = sum(max(0.0, _float(row.get("fee"))) for row in fills)
+        turnover = sum(max(0.0, _float(row.get("notional"))) for row in fills)
+        metrics.sample("polymarket_terminal_fills_total", len(fills), help_text="Cumulative simulated-live fill events recorded by the taker paper sleeve.", metric_type="counter")
+        metrics.sample("polymarket_terminal_buy_fills_total", actions.get("BUY", 0), help_text="Cumulative simulated-live BUY fill events.", metric_type="counter")
+        metrics.sample("polymarket_terminal_sell_fills_total", actions.get("SELL", 0), help_text="Cumulative simulated-live SELL fill events.", metric_type="counter")
+        metrics.sample("polymarket_terminal_settlements_total", actions.get("SETTLE", 0), help_text="Cumulative simulated-live settlement events.", metric_type="counter")
+        metrics.sample("polymarket_terminal_closed_positions_total", actions.get("SELL", 0) + actions.get("SETTLE", 0), help_text="Cumulative simulated-live positions closed by sale or settlement.", metric_type="counter")
+        metrics.sample("polymarket_terminal_fees_usd_total", fees, help_text="Cumulative simulated-live protocol fees across entry and exit fills.", metric_type="counter")
+        metrics.sample("polymarket_terminal_turnover_usd_total", turnover, help_text="Cumulative simulated-live traded notional across entry and exit fills.", metric_type="counter")
         last_fill = _last_csv_row(terminal / "fills.csv")
         if last_fill:
             fill_ts = _float(last_fill.get("timestamp"), _mtime(terminal / "fills.csv") or now)
-            metrics.sample("polymarket_terminal_last_fill_timestamp_seconds", fill_ts, help_text="Unix timestamp of the latest taker paper fill.")
-            metrics.sample("polymarket_terminal_last_fill_staleness_seconds", max(0.0, now - fill_ts), help_text="Age in seconds of the latest taker paper fill.")
+            metrics.sample("polymarket_terminal_last_fill_timestamp_seconds", fill_ts, help_text="Unix timestamp of the latest simulated-live fill.")
+            metrics.sample("polymarket_terminal_last_fill_staleness_seconds", max(0.0, now - fill_ts), help_text="Age in seconds of the latest simulated-live fill.")
 
     def _oos_v4(self, metrics: Metrics, now: float) -> None:
         path = self.run_root / "walk_forward.json"

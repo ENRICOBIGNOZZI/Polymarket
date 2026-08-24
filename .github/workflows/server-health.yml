@@ -63,6 +63,12 @@ jobs:
             "http://$SERVER_HOST:3000/api/health" | tee grafana-health.json
           curl --fail --silent --show-error --retry 5 --retry-delay 2 --retry-all-errors \
             "http://$SERVER_HOST:3000/api/search" > grafana-search.json
+          python3 - <<'PY'
+          import json
+          with open("grafana-search.json", encoding="utf-8") as f:
+              dashboards = json.load(f)
+          assert any(item.get("uid") == "polymarket-fast-paper" for item in dashboards), dashboards
+          PY
 
       - name: Inspect server and write action report
         shell: bash
@@ -92,24 +98,31 @@ jobs:
 
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
           grep -q '^polymarket_runtime_info' <<<"$metrics"
-          printf '%s\n' "$metrics" | grep -E '^polymarket_(runtime_info|runtime_equity_usd|runtime_pnl_usd|runtime_drawdown_ratio|runtime_kill_switch|runtime_realized_pnl_usd_total|runtime_execution_imbalance_ratio|runtime_oos_net_pnl_usd|runtime_oos_stressed_net_pnl_usd|runtime_oos_eligible|trade_recorder_staleness_seconds|multileg_live_bundles)' || true
+          grep -q '^polymarket_terminal_state_present 1' <<<"$metrics"
+          grep -q '^polymarket_terminal_pnl_usd ' <<<"$metrics"
+          grep -q '^polymarket_terminal_staleness_seconds ' <<<"$metrics"
+          printf '%s\n' "$metrics" | grep -E '^polymarket_(runtime_info|runtime_equity_usd|runtime_pnl_usd|runtime_drawdown_ratio|runtime_kill_switch|runtime_realized_pnl_usd_total|runtime_execution_imbalance_ratio|runtime_oos_net_pnl_usd|runtime_oos_stressed_net_pnl_usd|runtime_oos_eligible|terminal_state_present|terminal_equity_usd|terminal_pnl_usd|terminal_realized_pnl_usd|terminal_unrealized_pnl_usd|terminal_open_positions|terminal_fills_total|terminal_staleness_seconds|trade_recorder_staleness_seconds|multileg_live_bundles)' || true
 
           run_root="$HOME/polymarket/runs/paper_v4_live"
           supervisor="$run_root/runtime_supervisor.csv"
           test -s "$supervisor"
           supervisor_row="$(tail -n 1 "$supervisor")"
-          IFS=, read -r supervisor_ts recorder_alive broker_alive recorder_restarts broker_restarts recorder_pid broker_pid <<<"$supervisor_row"
+          IFS=, read -r supervisor_ts recorder_alive broker_alive terminal_alive recorder_restarts broker_restarts terminal_restarts recorder_pid broker_pid terminal_pid <<<"$supervisor_row"
           now="$(date +%s)"
           test "$recorder_alive" = "1"
           test "$broker_alive" = "1"
+          test "$terminal_alive" = "1"
           test $(( now - supervisor_ts )) -le 60
           printf 'supervisor_timestamp=%s\n' "$supervisor_ts"
           printf 'recorder_alive=%s\n' "$recorder_alive"
           printf 'broker_alive=%s\n' "$broker_alive"
+          printf 'terminal_alive=%s\n' "$terminal_alive"
           printf 'recorder_restarts=%s\n' "$recorder_restarts"
           printf 'broker_restarts=%s\n' "$broker_restarts"
+          printf 'terminal_restarts=%s\n' "$terminal_restarts"
           printf 'recorder_pid=%s\n' "$recorder_pid"
           printf 'broker_pid=%s\n' "$broker_pid"
+          printf 'terminal_pid=%s\n' "$terminal_pid"
 
           python3 scripts/runtime_action_report.py \
             --run-root "$run_root" --external-signals data/external_signals.csv \
@@ -128,6 +141,9 @@ jobs:
           printf '%s\n' 'multileg_tail_begin'
           tail -n 20 "$run_root/multileg.log" 2>/dev/null || true
           printf '%s\n' 'multileg_tail_end'
+          printf '%s\n' 'simulated_live_tail_begin'
+          tail -n 20 "$run_root/terminal.log" 2>/dev/null || true
+          printf '%s\n' 'simulated_live_tail_end'
 
           case "$(uname -s)" in
             Darwin)

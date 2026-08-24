@@ -44,6 +44,12 @@ class V4ExporterTest(unittest.TestCase):
                 "open_positions": 2,
                 "killed": False,
             }), encoding="utf-8")
+            (terminal / "broker_state.csv").write_text(
+                "market_id,event_id,slug,side,token_id,shares,avg_price,cost_basis,fees_paid\n"
+                "m1,e1,s1,YES,t1,60,0.5,30,0.1\n"
+                "m3,e3,s3,NO,t3,50,0.6,30,0.1\n",
+                encoding="utf-8",
+            )
             (terminal / "fills.csv").write_text(
                 "timestamp,market_id,slug,action,side,shares,price,notional,fee\n"
                 "1,m1,s1,BUY,YES,10,0.5,5,0.01\n"
@@ -63,12 +69,19 @@ class V4ExporterTest(unittest.TestCase):
             self.assertIn("polymarket_multileg_equity_usd 10005", text)
             self.assertIn("polymarket_multileg_max_fill_imbalance_ratio 0.6", text)
             self.assertIn("polymarket_multileg_realized_net_pnl_usd_total 0.8", text)
+            self.assertIn("polymarket_terminal_state_present 1", text)
             self.assertIn("polymarket_terminal_equity_usd 10012", text)
             self.assertIn("polymarket_terminal_pnl_usd 12", text)
+            self.assertIn("polymarket_terminal_realized_pnl_usd 10", text)
+            self.assertIn("polymarket_terminal_unrealized_pnl_usd 2", text)
+            self.assertIn("polymarket_terminal_open_cost_basis_usd 60", text)
             self.assertIn("polymarket_terminal_open_positions 2", text)
             self.assertIn("polymarket_terminal_fills_total 2", text)
             self.assertIn("polymarket_terminal_buy_fills_total 1", text)
             self.assertIn("polymarket_terminal_sell_fills_total 1", text)
+            self.assertIn("polymarket_terminal_closed_positions_total 1", text)
+            self.assertIn("polymarket_terminal_fees_usd_total 0.02", text)
+            self.assertIn("polymarket_terminal_turnover_usd_total 9.8", text)
             self.assertIn("polymarket_oos_eligible_for_tiny_pilot 1", text)
             self.assertIn("polymarket_oos_stressed_net_pnl_usd 5", text)
             self.assertIn("polymarket_trade_recorder_rows 1", text)

@@ -133,7 +133,7 @@ check_for_plugin_updates = false
 news_feed_enabled = false
 
 [dashboards]
-default_home_dashboard_path = $APP_DIR/monitoring/grafana/dashboards/polymarket-latest.json
+default_home_dashboard_path = $APP_DIR/monitoring/grafana/dashboards/polymarket-fast-paper.json
 EOF
 
 cat > "$STATE_DIR/grafana/provisioning/datasources/prometheus.yml" <<'EOF'
