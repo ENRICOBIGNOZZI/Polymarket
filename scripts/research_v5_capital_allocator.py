@@ -1,41 +1,10 @@
 #!/usr/bin/env python3
-"""Research-only evidence-weighted capital allocation challenger for V5.
+"""Research-only V5 evidence-weighted capital allocation challenger.
 
-The live V5 allocator intentionally uses fixed capital fractions to collect clean
-forward evidence from independent paper books. This module does not modify those
-fractions. It evaluates a separate challenger that allocates only incremental
-capital to strategy sleeves whose existing OOS gates already pass, while keeping
-a small exploration floor for every enabled sleeve and sending unsupported
-capital to reserve.
-
-Evidence JSON schema used by the CLI:
-{
-  "windows": [
-    {
-      "timestamp": 1,
-      "hours": 1.0,
-      "strategies": {
-        "micro": {
-          "net_return": 0.001,
-          "stress_1_5_return": 0.0008,
-          "stress_2_0_return": 0.0006,
-          "trades": 40,
-          "active_folds": 3,
-          "profit_factor": 1.2,
-          "bootstrap_pvalue": 0.03,
-          "positive_fold_fraction": 0.67,
-          "max_drawdown": 0.02,
-          "eligible_for_tiny_pilot": true,
-          "production_threshold_present": true
-        }
-      }
-    }
-  ]
-}
-
-All returns must already be net of spread, fees, slippage and the execution model
-used by the originating sleeve. The allocator only consumes those realized OOS
-returns; it never reconstructs or relaxes source-model execution assumptions.
+The live V5 allocation remains unchanged. This module compares the fixed V5
+capital split with a fail-closed shadow allocator on strictly future windows.
+Source-strategy returns must already be net of spread, fees, slippage, queue/fill
+realism, latency and adverse selection where applicable.
 """
 from __future__ import annotations
 
@@ -85,15 +54,15 @@ def load_v5_baseline(config: Mapping[str, Any]) -> tuple[dict[str, float], float
     multi = config.get("multi_strategy")
     if not isinstance(multi, Mapping) or multi.get("paper_only") is not True:
         raise ValueError("V5 paper-only multi_strategy configuration is required")
-    strategies = multi.get("strategies")
-    if not isinstance(strategies, list) or not strategies:
+    raw = multi.get("strategies")
+    if not isinstance(raw, list) or not raw:
         raise ValueError("multi_strategy.strategies must be non-empty")
     baseline: dict[str, float] = {}
-    for raw in strategies:
-        if not isinstance(raw, Mapping) or not bool(raw.get("enabled", True)):
+    for item in raw:
+        if not isinstance(item, Mapping) or not bool(item.get("enabled", True)):
             continue
-        name = str(raw.get("name", ""))
-        fraction = _float(raw.get("capital_fraction"), -1.0)
+        name = str(item.get("name", ""))
+        fraction = _float(item.get("capital_fraction"), -1.0)
         if not name or fraction <= 0.0:
             raise ValueError("enabled strategies need names and positive capital_fraction")
         baseline[name] = fraction
@@ -134,21 +103,26 @@ def conservative_score(row: Mapping[str, Any], policy: AllocationPolicy) -> floa
     passed, _ = evidence_gate(row, policy)
     if not passed:
         return 0.0
-    robust_return = min(
+    robust = min(
         _float(row.get("net_return")),
         _float(row.get("stress_1_5_return")),
         _float(row.get("stress_2_0_return")),
     )
-    drawdown = max(0.0, _float(row.get("max_drawdown")))
-    drawdown_survival = max(0.0, 1.0 - drawdown / policy.max_drawdown)
-    inference_confidence = max(0.0, 1.0 - _float(row.get("bootstrap_pvalue"), 1.0))
-    fold_stability = min(1.0, max(0.0, _float(row.get("positive_fold_fraction"))))
-    return max(0.0, robust_return) * drawdown_survival * inference_confidence * fold_stability
+    drawdown_survival = max(0.0, 1.0 - _float(row.get("max_drawdown")) / policy.max_drawdown)
+    confidence = max(0.0, 1.0 - _float(row.get("bootstrap_pvalue"), 1.0))
+    stability = min(1.0, max(0.0, _float(row.get("positive_fold_fraction"))))
+    return max(0.0, robust) * drawdown_survival * confidence * stability
 
 
 def aggregate_training_rows(
     windows: Sequence[Mapping[str, Any]], strategy_names: Sequence[str]
 ) -> dict[str, dict[str, Any]]:
+    """Aggregate past returns while using the latest cumulative gate state.
+
+    OOS gate fields are cumulative diagnostics. Earlier windows may legitimately
+    be ineligible only because the sample had not matured; requiring every early
+    snapshot to pass would make future eligibility impossible.
+    """
     output: dict[str, dict[str, Any]] = {}
     for name in strategy_names:
         rows: list[Mapping[str, Any]] = []
@@ -159,49 +133,21 @@ def aggregate_training_rows(
         if not rows:
             output[name] = {}
             continue
+        latest = rows[-1]
         output[name] = {
             "net_return": sum(_float(row.get("net_return")) for row in rows) / len(rows),
             "stress_1_5_return": sum(_float(row.get("stress_1_5_return")) for row in rows) / len(rows),
             "stress_2_0_return": sum(_float(row.get("stress_2_0_return")) for row in rows) / len(rows),
-            "trades": sum(_int(row.get("trades")) for row in rows),
-            "active_folds": max((_int(row.get("active_folds")) for row in rows), default=0),
-            "profit_factor": min((_float(row.get("profit_factor")) for row in rows), default=0.0),
-            "bootstrap_pvalue": max((_float(row.get("bootstrap_pvalue"), 1.0) for row in rows), default=1.0),
-            "positive_fold_fraction": min(
-                (_float(row.get("positive_fold_fraction")) for row in rows), default=0.0
-            ),
-            "max_drawdown": max((_float(row.get("max_drawdown")) for row in rows), default=1.0),
-            "eligible_for_tiny_pilot": all(bool(row.get("eligible_for_tiny_pilot", False)) for row in rows),
-            "production_threshold_present": all(bool(row.get("production_threshold_present", False)) for row in rows),
+            "trades": _int(latest.get("trades")),
+            "active_folds": _int(latest.get("active_folds")),
+            "profit_factor": _float(latest.get("profit_factor")),
+            "bootstrap_pvalue": _float(latest.get("bootstrap_pvalue"), 1.0),
+            "positive_fold_fraction": _float(latest.get("positive_fold_fraction")),
+            "max_drawdown": _float(latest.get("max_drawdown"), 1.0),
+            "eligible_for_tiny_pilot": bool(latest.get("eligible_for_tiny_pilot", False)),
+            "production_threshold_present": bool(latest.get("production_threshold_present", False)),
         }
     return output
-
-
-def _distribute_capped(
-    names: Sequence[str], scores: Mapping[str, float], available: float, cap: float
-) -> tuple[dict[str, float], float]:
-    added = {name: 0.0 for name in names}
-    remaining = max(0.0, available)
-    active = {name for name in names if scores.get(name, 0.0) > 0.0}
-    while remaining > 1e-12 and active:
-        total_score = sum(scores[name] for name in active)
-        if total_score <= 0.0:
-            break
-        consumed = 0.0
-        saturated: set[str] = set()
-        for name in sorted(active):
-            share = remaining * scores[name] / total_score
-            room = max(0.0, cap - added[name])
-            grant = min(share, room)
-            added[name] += grant
-            consumed += grant
-            if room - grant <= 1e-12:
-                saturated.add(name)
-        if consumed <= 1e-12:
-            break
-        remaining -= consumed
-        active.difference_update(saturated)
-    return added, remaining
 
 
 def propose_allocation(
@@ -210,21 +156,42 @@ def propose_allocation(
     names = sorted(baseline)
     if not names:
         raise ValueError("at least one strategy is required")
-    exploration_total = policy.exploration_floor * len(names)
-    if exploration_total + policy.minimum_reserve > 1.0 + 1e-12:
-        raise ValueError("exploration floors plus minimum reserve exceed capital")
-    if policy.max_strategy_fraction + 1e-12 < policy.exploration_floor:
-        raise ValueError("max strategy fraction is below the exploration floor")
+    floor_total = policy.exploration_floor * len(names)
+    if floor_total + policy.minimum_reserve > 1.0 + 1e-12:
+        raise ValueError("exploration floors plus reserve exceed capital")
+    if policy.max_strategy_fraction < policy.exploration_floor:
+        raise ValueError("max_strategy_fraction is below exploration floor")
 
     allocations = {name: policy.exploration_floor for name in names}
     scores = {name: conservative_score(training_rows.get(name, {}), policy) for name in names}
-    extra_capacity = max(0.0, 1.0 - policy.minimum_reserve - exploration_total)
-    cap_for_extra = max(0.0, policy.max_strategy_fraction - policy.exploration_floor)
-    added, unused = _distribute_capped(names, scores, extra_capacity, cap_for_extra)
-    for name in names:
-        allocations[name] += added[name]
-    reserve = policy.minimum_reserve + unused
+    remaining = 1.0 - policy.minimum_reserve - floor_total
+    active = {name for name in names if scores[name] > 0.0}
+    extra_cap = policy.max_strategy_fraction - policy.exploration_floor
+    extra = {name: 0.0 for name in names}
 
+    while remaining > 1e-12 and active:
+        total_score = sum(scores[name] for name in active)
+        if total_score <= 0.0:
+            break
+        round_budget = remaining
+        consumed = 0.0
+        saturated: set[str] = set()
+        for name in sorted(active):
+            desired = round_budget * scores[name] / total_score
+            room = max(0.0, extra_cap - extra[name])
+            grant = min(desired, room)
+            extra[name] += grant
+            consumed += grant
+            if room - grant <= 1e-12:
+                saturated.add(name)
+        if consumed <= 1e-12:
+            break
+        remaining -= consumed
+        active.difference_update(saturated)
+
+    for name in names:
+        allocations[name] += extra[name]
+    reserve = policy.minimum_reserve + remaining
     details: dict[str, Any] = {}
     for name in names:
         passed, reasons = evidence_gate(training_rows.get(name, {}), policy)
@@ -239,7 +206,7 @@ def propose_allocation(
         "strategy_fractions": allocations,
         "reserve_fraction": reserve,
         "details": details,
-        "status": "EVIDENCE_WEIGHTED" if any(score > 0.0 for score in scores.values()) else "EXPLORATION_ONLY",
+        "status": "EVIDENCE_WEIGHTED" if any(scores.values()) else "EXPLORATION_ONLY",
     }
 
 
@@ -247,48 +214,42 @@ def portfolio_return(weights: Mapping[str, float], window: Mapping[str, Any], fi
     strategies = window.get("strategies")
     if not isinstance(strategies, Mapping):
         return 0.0
-    return sum(
-        _float(weight) * _float(strategies.get(name, {}).get(field))
-        for name, weight in weights.items()
-        if isinstance(strategies.get(name), Mapping)
-    )
+    total = 0.0
+    for name, weight in weights.items():
+        row = strategies.get(name)
+        if isinstance(row, Mapping):
+            total += _float(weight) * _float(row.get(field))
+    return total
 
 
 def chronological_ablation(
-    baseline: Mapping[str, float], windows: Sequence[Mapping[str, Any]], policy: AllocationPolicy, min_train_windows: int = 2
+    baseline: Mapping[str, float],
+    windows: Sequence[Mapping[str, Any]],
+    policy: AllocationPolicy,
+    min_train_windows: int = 2,
 ) -> dict[str, Any]:
     folds: list[dict[str, Any]] = []
     names = sorted(baseline)
     for index in range(min_train_windows, len(windows)):
-        training = windows[:index]
-        test = windows[index]
-        training_rows = aggregate_training_rows(training, names)
+        training_rows = aggregate_training_rows(windows[:index], names)
         proposal = propose_allocation(baseline, training_rows, policy)
         challenger = proposal["strategy_fractions"]
-        fold = {
-            "test_index": index,
-            "timestamp": test.get("timestamp"),
-            "challenger_status": proposal["status"],
-            "baseline_net_return": portfolio_return(baseline, test, "net_return"),
-            "challenger_net_return": portfolio_return(challenger, test, "net_return"),
-            "baseline_1_5x_return": portfolio_return(baseline, test, "stress_1_5_return"),
-            "challenger_1_5x_return": portfolio_return(challenger, test, "stress_1_5_return"),
-            "baseline_2_0x_return": portfolio_return(baseline, test, "stress_2_0_return"),
-            "challenger_2_0x_return": portfolio_return(challenger, test, "stress_2_0_return"),
-            "allocation": proposal,
-        }
-        fold["incremental_net_return"] = fold["challenger_net_return"] - fold["baseline_net_return"]
-        fold["incremental_1_5x_return"] = fold["challenger_1_5x_return"] - fold["baseline_1_5x_return"]
-        fold["incremental_2_0x_return"] = fold["challenger_2_0x_return"] - fold["baseline_2_0x_return"]
+        test = windows[index]
+        fold = {"test_index": index, "timestamp": test.get("timestamp"), "allocation": proposal}
+        for suffix, field in (("net", "net_return"), ("1_5x", "stress_1_5_return"), ("2_0x", "stress_2_0_return")):
+            base_value = portfolio_return(baseline, test, field)
+            challenge_value = portfolio_return(challenger, test, field)
+            fold[f"baseline_{suffix}_return"] = base_value
+            fold[f"challenger_{suffix}_return"] = challenge_value
+            fold[f"incremental_{suffix}_return"] = challenge_value - base_value
         folds.append(fold)
 
-    total = lambda key: sum(_float(fold[key]) for fold in folds)
     result = {
         "folds": folds,
         "test_folds": len(folds),
-        "incremental_net_return": total("incremental_net_return"),
-        "incremental_1_5x_return": total("incremental_1_5x_return"),
-        "incremental_2_0x_return": total("incremental_2_0x_return"),
+        "incremental_net_return": sum(_float(fold["incremental_net_return"]) for fold in folds),
+        "incremental_1_5x_return": sum(_float(fold["incremental_1_5x_return"]) for fold in folds),
+        "incremental_2_0x_return": sum(_float(fold["incremental_2_0x_return"]) for fold in folds),
     }
     result["evidence_ready"] = bool(
         len(folds) >= 2
@@ -304,9 +265,6 @@ def main() -> int:
     parser.add_argument("--config", default="config/paper_v5.json")
     parser.add_argument("--evidence", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--exploration-floor", type=float, default=0.02)
-    parser.add_argument("--minimum-reserve", type=float, default=0.10)
-    parser.add_argument("--max-strategy-fraction", type=float, default=0.30)
     args = parser.parse_args()
 
     config = _read_json(Path(args.config))
@@ -315,13 +273,8 @@ def main() -> int:
     windows = evidence.get("windows")
     if not isinstance(windows, list):
         raise ValueError("evidence.windows must be a list")
-    policy = AllocationPolicy(
-        exploration_floor=args.exploration_floor,
-        minimum_reserve=max(args.minimum_reserve, baseline_reserve),
-        max_strategy_fraction=args.max_strategy_fraction,
-    )
-    training_rows = aggregate_training_rows(windows, sorted(baseline))
-    proposal = propose_allocation(baseline, training_rows, policy)
+    policy = AllocationPolicy(minimum_reserve=max(0.10, baseline_reserve))
+    proposal = propose_allocation(baseline, aggregate_training_rows(windows, sorted(baseline)), policy)
     report = {
         "schema": "polymarket_v5_evidence_weighted_allocator_v1",
         "research_only": True,
@@ -330,7 +283,7 @@ def main() -> int:
         "baseline_reserve_fraction": baseline_reserve,
         "proposal": proposal,
         "chronological_ablation": chronological_ablation(baseline, windows, policy),
-        "promotion_rule": "require at least two strictly future folds with positive incremental net, 1.5x-cost and 2.0x-cost returns versus fixed V5 allocation",
+        "promotion_rule": "at least two future folds with positive incremental normal, 1.5x and 2.0x cost-stressed returns versus fixed V5",
     }
     Path(args.output).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(report, sort_keys=True))
