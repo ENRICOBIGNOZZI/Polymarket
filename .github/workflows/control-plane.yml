@@ -9,7 +9,9 @@ on:
     paths:
       - "config/alpha_factory.json"
       - "scripts/meta_supervisor.py"
+      - "scripts/meta_supervisor_v2.py"
       - "tests/test_meta_supervisor.py"
+      - "tests/test_autonomous_meta_supervisor.py"
       - ".github/workflows/control-plane.yml"
       - ".github/workflows/alpha-factory.yml"
       - ".github/workflows/research-policy.yml"
@@ -19,7 +21,9 @@ on:
     paths:
       - "config/alpha_factory.json"
       - "scripts/meta_supervisor.py"
+      - "scripts/meta_supervisor_v2.py"
       - "tests/test_meta_supervisor.py"
+      - "tests/test_autonomous_meta_supervisor.py"
       - ".github/workflows/control-plane.yml"
       - ".github/workflows/alpha-factory.yml"
       - ".github/workflows/research-policy.yml"
@@ -47,8 +51,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m unittest tests/test_meta_supervisor.py -v
-          python3 -m py_compile scripts/meta_supervisor.py
+          python3 -m unittest \
+            tests/test_meta_supervisor.py \
+            tests/test_autonomous_meta_supervisor.py -v
+          python3 -m py_compile scripts/meta_supervisor.py scripts/meta_supervisor_v2.py
           python3 -m json.tool config/alpha_factory.json >/dev/null
 
       - name: Capture workflow graph and validated-ref state
@@ -93,7 +99,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/meta_supervisor.py \
+          python3 scripts/meta_supervisor_v2.py \
             --config config/alpha_factory.json \
             --snapshot control_plane/snapshot.json \
             --output-json control_plane/latest-control-plane.json \
