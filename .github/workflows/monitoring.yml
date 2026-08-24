@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "4,19,34,49 * * * *"
   workflow_dispatch:
     inputs:
       expected_sha:
