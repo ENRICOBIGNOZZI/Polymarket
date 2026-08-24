@@ -5,7 +5,7 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "37 */6 * * *"
+    - cron: "37 * * * *"
   pull_request:
     branches: [main]
 
