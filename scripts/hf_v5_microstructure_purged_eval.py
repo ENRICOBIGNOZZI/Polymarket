@@ -77,7 +77,7 @@ def evaluate_purged(
         len(test) >= 100
         and challenger_mse < base_mse
         and all(
-            int(value["trades"]) >= 10 and float(value["net_markout_per_share"]) > 0.0
+            int(value["trades"]) >= 10 and float(value["mean_net_markout_per_share"]) > 0.0
             for value in stress.values()
         )
     )
@@ -101,6 +101,7 @@ def evaluate_purged(
             "mse_improvement_fraction": (base_mse - challenger_mse) / base_mse if base_mse > 0 else 0.0,
         },
         "cost_stress": stress,
+        "execution_cost_note": "Economic score includes half-spread plus configured slippage. It excludes protocol taker fees, so non-positive results are conservative rejections: adding a non-negative taker fee cannot improve them.",
         "promotion_note": "Purging prevents target overlap across the split; independent sessions and fill-conditioned evidence remain mandatory.",
     }
 
@@ -130,8 +131,11 @@ def render(result: Mapping[str, object], horizon_ms: int) -> str:
             for name, value in stress.items():
                 if isinstance(value, Mapping):
                     lines.append(
-                        f"- {name}x cost: trades `{value['trades']}`, net markout/share `{float(value['net_markout_per_share']):.8g}`"
+                        f"- {name}x cost: trades `{value['trades']}`, mean net markout/share `{float(value['mean_net_markout_per_share']):.8g}`"
                     )
+        note = result.get("execution_cost_note")
+        if note:
+            lines.append(f"- cost-model note: {note}")
     elif "reason" in result:
         lines.append(f"- blocker: `{result['reason']}`")
     lines += ["", "Research-only. No production or risk mutation is authorized."]
