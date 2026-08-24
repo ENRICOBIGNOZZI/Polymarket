@@ -25,7 +25,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Select one automation-eligible paper integration
+      - name: Build locally-green automatic promotion queue
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -40,25 +40,65 @@ jobs:
             --report integration-merge-report.md
           cat candidate.env >> "$GITHUB_ENV"
 
-      - name: Fetch and recheck candidate and source research
-        if: env.CANDIDATE_COUNT == '1'
+      - name: Scan numbered research sources and select first fully-green candidate
+        if: env.ELIGIBLE_COUNT != '0'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh pr view "$PR_NUMBER" \
-            --json number,title,url,headRefName,headRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
-            > candidate.json
-          gh pr view "$SOURCE_PR_NUMBER" \
-            --json number,headRefName,headRefOid,isDraft,labels,state,body,statusCheckRollup \
-            > source-research.json
-          python3 scripts/integration_gate.py validate \
-            --candidate candidate.json \
-            --source-research source-research.json \
-            --report integration-gate-report.md
+          : > integration-gate-report.md
+          selected=0
+          IFS=',' read -r -a queue <<< "${QUEUE_NUMBERS:-}"
+          for candidate_number in "${queue[@]}"; do
+            [[ -n "$candidate_number" ]] || continue
+            gh pr view "$candidate_number" \
+              --json number,title,url,headRefName,headRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
+              > candidate-probe.json
+            source_number="$(python3 -c 'import json,re; b=json.load(open("candidate-probe.json"))["body"] or ""; m=re.search(r"source research pr/branch/commit:\s*#(\d+)\b", b, re.I); print(m.group(1) if m else "")')"
+            if [[ -z "$source_number" ]]; then
+              printf '\n## Skipped #%s\n- reason: numbered source research PR missing\n' "$candidate_number" >> integration-gate-report.md
+              continue
+            fi
+            if ! gh pr view "$source_number" \
+              --json number,headRefName,headRefOid,isDraft,labels,state,body,statusCheckRollup \
+              > source-probe.json 2>/dev/null; then
+              printf '\n## Skipped #%s\n- source: #%s\n- reason: source research PR unavailable\n' \
+                "$candidate_number" "$source_number" >> integration-gate-report.md
+              continue
+            fi
 
-      - name: Automatically promote the paper champion
+            set +e
+            python3 scripts/integration_gate.py validate \
+              --candidate candidate-probe.json \
+              --source-research source-probe.json \
+              --report candidate-probe-report.md
+            probe_rc=$?
+            set -e
+            {
+              echo
+              echo "## Probe candidate #$candidate_number / source #$source_number"
+              cat candidate-probe-report.md
+            } >> integration-gate-report.md
+            if [[ "$probe_rc" -ne 0 ]]; then
+              continue
+            fi
+
+            cp candidate-probe.json candidate.json
+            cp source-probe.json source-research.json
+            echo "PR_NUMBER=$candidate_number" >> "$GITHUB_ENV"
+            echo "SOURCE_PR_NUMBER=$source_number" >> "$GITHUB_ENV"
+            echo "CANDIDATE_COUNT=1" >> "$GITHUB_ENV"
+            selected=1
+            break
+          done
+          if [[ "$selected" -eq 0 ]]; then
+            echo "CANDIDATE_COUNT=0" >> "$GITHUB_ENV"
+            echo >> integration-gate-report.md
+            echo 'No fully-green candidate/source pair was available; unready entries were skipped without blocking the queue.' >> integration-gate-report.md
+          fi
+
+      - name: Automatically promote the first fully-green paper champion candidate
         if: env.CANDIDATE_COUNT == '1'
         shell: bash
         env:
@@ -105,14 +145,14 @@ jobs:
           {
             echo
             echo '## Automatic promotion action'
-            echo "- eligible candidates at selection: ${ELIGIBLE_COUNT:-unknown}"
+            echo "- locally-green candidates at selection: ${ELIGIBLE_COUNT:-unknown}"
             echo "- promoted PR: #$PR_NUMBER"
             echo "- source research PR: #$SOURCE_PR_NUMBER"
             echo "- candidate head: \`$expected_head\`"
             echo "- merged main revision: \`$merged_sha\`"
-            echo '- merge mode: squash; one candidate per scheduler cycle'
+            echo '- selection: first fully-green candidate/source pair; unready pairs are skipped'
+            echo '- merge mode: squash; at most one candidate per scheduler cycle'
             echo '- manual approval labels: not required'
-            echo '- candidate authority: objective green checks + research provenance'
             echo '- handoff: repository dispatch `champion-integration-merged`'
             echo '- real-money execution: unchanged/disabled'
           } >> integration-merge-report.md
@@ -140,8 +180,11 @@ jobs:
             candidate.env
             candidate.json
             candidate-final.json
+            candidate-probe.json
+            candidate-probe-report.md
             source-research.json
             source-research-final.json
+            source-probe.json
             merge-result.txt
             integration-dispatch.json
           if-no-files-found: warn
