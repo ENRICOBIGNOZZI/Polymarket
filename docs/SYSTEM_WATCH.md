@@ -6,16 +6,34 @@ The project administrator owns the evolution of the live system. Specialized sch
 
 ## Non-negotiable invariant: one live champion
 
-At every point in time there is exactly **one live champion**:
+At every point in time there is exactly **one live champion**, interpreted at portfolio-system level:
 
 - `main` is the authoritative integrated code line;
-- `config/live_champion.json` selects the single live entry point, configuration and run root;
+- `config/portfolio_champion.json` selects the single portfolio supervisor and every admitted engine plane;
+- `config/live_champion.json` remains the explicit manifest for the incumbent Polymarket alpha plane inside that portfolio champion;
 - `paper-validated` is the exact `main` revision that passed public live-paper validation;
 - the private paper server deploys `paper-validated`, never a research branch or arbitrary `main` revision.
 
-A single champion does not collapse distinct economic objects. Structural constraints, terminal probabilities, mark-to-market relative value, external information and execution estimates retain their own semantics. They are combined through one shared model registry/orchestrator, one portfolio/risk allocator and one execution broker.
+The portfolio champion may contain operationally independent engine processes when their economics, venues and failure domains are genuinely different. This does **not** authorize independent capital. Every admitted engine must consume a fresh fail-closed allocation from the one authoritative portfolio supervisor. A missing, stale or closed gate forbids new exposure while existing positions remain managed by the relevant paper execution adapter.
 
-Creating `paper_v5`, `paper_v6` or a numerically newer experiment does not promote it. Promotion requires an explicit, rollback-safe integration decision.
+The current system-level decomposition is:
+
+```text
+                         Portfolio Champion
+                                  |
+                         Portfolio Supervisor
+                         /                  \
+                        /                    \
+          Polymarket Alpha Engine     Cross-Venue Arb Engine
+                                             |
+                            Polymarket / Limitless / Kalshi
+```
+
+Engine-local state and attribution subledgers are allowed only to preserve venue-specific reconciliation and independent failure recovery. They are subordinate to the global capital, drawdown and new-exposure state. They must never be interpreted as additional capital accounts. The supervisor computes combined equity and drawdown, publishes bounded engine allocations and may close new exposure for either or both planes.
+
+A single champion does not collapse distinct economic objects. Structural constraints, terminal probabilities, mark-to-market relative value, external information, cross-venue equivalence and execution estimates retain their own semantics. The original phrase **one shared model registry/orchestrator** now means one portfolio-level registry and promotion boundary, not that every venue adapter must run in one operating-system process.
+
+Creating `paper_v5`, `paper_v6`, another engine directory or a numerically newer experiment does not promote it. Promotion requires an explicit, rollback-safe integration decision and registration in the portfolio champion manifest.
 
 ## Distributed responsibility
 
@@ -37,7 +55,7 @@ The complete lifecycle remains:
 research -> evidence -> approval -> integration -> validation -> single live champion
 ```
 
-The difference is that no individual scheduler owns the entire chain.
+For a multi-plane system, `single live champion` means one versioned portfolio champion and one global promotion decision. The difference is that no individual scheduler owns the entire chain.
 
 ## Administrator authority
 
@@ -46,6 +64,8 @@ An integration can be merged automatically only when a non-draft `integration/*`
 - `approved-for-integration`;
 - `single-model-reviewed`;
 - `administrator-approved`.
+
+`single-model-reviewed` is retained as the compatibility label. For a multi-engine portfolio champion it certifies that there is still one portfolio manifest, one global capital/drawdown authority, explicit engine gates and no unregistered capital path.
 
 `administrator-approved` is the explicit production-evolution decision. It is valid only for the exact reviewed integration PR and can be removed at any time before merge. No scheduler uses `--admin`, bypasses failed checks or lowers economic/risk thresholds to manufacture eligibility.
 
@@ -57,7 +77,7 @@ An integration can be merged automatically only when a non-draft `integration/*`
 
 ### `research/*`
 
-Unapproved research belongs here: hypotheses, estimators, features, alpha sleeves and parameter studies. A research PR is an evidence source, not a production model. It normally remains draft or closes after a durable decision is recorded.
+Unapproved research belongs here: hypotheses, estimators, features, alpha sleeves, venue adapters and parameter studies. A research PR is an evidence source, not a production model. It normally remains draft or closes after a durable decision is recorded.
 
 ### `experiment/*` and `diagnostic/*`
 
@@ -69,7 +89,7 @@ This is the only branch class for approved research integration. It must start f
 
 ### Focused implementation branches
 
-`feat/*`, `fix/*`, `improve/*` and `ops/*` remain appropriate for bounded implementation, risk, execution and infrastructure changes that are not research promotion. They cannot change an existing `config/live_champion.json`; that remains an integration action.
+`feat/*`, `fix/*`, `improve/*` and `ops/*` remain appropriate for bounded implementation, risk, execution and infrastructure changes that are not research promotion. They cannot change an existing `config/live_champion.json` or `config/portfolio_champion.json`; that remains an integration action.
 
 ## Keep unapproved research isolated
 
@@ -81,7 +101,7 @@ Unapproved model logic must not alter:
 - drawdown budgets or kill switches;
 - OOS eligibility;
 - authenticated execution;
-- `config/live_champion.json`.
+- `config/live_champion.json` or `config/portfolio_champion.json`.
 
 ### Shadow-only exception
 
@@ -136,11 +156,11 @@ For every approved result:
 1. Create `integration/<research-slug>` from the latest `main`.
 2. Link the research PR, branch or commit.
 3. Port only reusable reviewed code and tests.
-4. Map the candidate into the existing semantic interface: structural, terminal, relative-value, external-information, execution or portfolio/risk input.
-5. Preserve one shared model registry/orchestrator, intent schema, allocator, risk state and broker.
+4. Map the candidate into an existing semantic interface or, for a genuinely distinct venue/failure domain, register a bounded engine plane in `config/portfolio_champion.json`.
+5. Preserve one portfolio champion, one global capital/drawdown authority, one promotion boundary and fail-closed new-exposure gates. Engine-local adapters, process state and attribution subledgers must remain subordinate to that authority.
 6. Remove duplicated or superseded implementation/config/state/telemetry, or document a short compatibility path with a deletion condition.
 7. Re-run integrated incumbent-versus-candidate evidence and ablations.
-8. Update `config/live_champion.json` only when the entry point/version deliberately changes.
+8. Update `config/live_champion.json` only when the incumbent alpha entry point/version deliberately changes; update `config/portfolio_champion.json` whenever an engine plane is admitted, removed or materially reconfigured.
 9. Open a non-draft integration PR with `approved-for-integration`, `single-model-reviewed` and `administrator-approved`.
 10. Require Release, Debug, deterministic tests, monitoring validation and live-paper smoke to succeed.
 11. Merge at most one administrator-approved integration PR at a time; no second integration starts while `main != paper-validated`.
@@ -148,9 +168,22 @@ For every approved result:
 13. Require `main == paper-validated == deployed HEAD` before the promotion is considered complete.
 14. Close source research and delete short-lived branches when safe.
 
+## Independent engine admission contract
+
+A new engine plane is eligible only when all of the following are proven:
+
+- its economic object or venue failure domain cannot be represented honestly as a small in-process expert;
+- it cannot allocate capital without a fresh portfolio-supervisor gate;
+- the incumbent plane is also gated for new exposure by the same supervisor;
+- global equity and drawdown include every engine's conservative paper state;
+- engine-local accounting is attribution only and cannot mint capital;
+- process failure is isolated, observable and fail-closed for that engine's new exposure;
+- no authenticated order submission is enabled by model integration;
+- deployment, rollback and health checks cover the complete portfolio champion.
+
 ## Fail-closed behavior
 
-A failed, missing, ambiguous or stale gate leaves the incumbent champion live. Integration, validation and deployment are separate state transitions:
+A failed, missing, ambiguous or stale gate leaves existing positions under management but forbids new exposure. Integration, validation and deployment are separate state transitions:
 
 ```text
 merged != validated != deployed != healthy
@@ -162,7 +195,7 @@ The supervisor reports these states but cannot repair them by bypassing the resp
 
 - `research-approved`: evidence is approved and requires semantic integration;
 - `approved-for-integration`: the consolidated implementation passed the research/integration review;
-- `single-model-reviewed`: one orchestrator/config/risk/execution path has been verified;
+- `single-model-reviewed`: one portfolio champion, global risk authority and registered engine set have been verified;
 - `administrator-approved`: the project administrator authorizes this exact integration;
 - `shadow-isolated`: measurement-only code cannot affect production decisions, PnL or risk.
 
@@ -173,7 +206,7 @@ Research labels belong on research evidence. Integration and administrator label
 The Administrator Supervisor publishes an hourly report containing:
 
 - current `main`, `paper-validated` and validation relation;
-- champion version, loop, config and run root;
+- portfolio champion version, supervisor, registered engines, configs and run roots;
 - latest state of every registered scheduler;
 - open research, approved-research and integration queues;
 - conflicting integration candidates;
