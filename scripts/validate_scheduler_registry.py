@@ -19,6 +19,8 @@ REQUIRED_IDS = {
     "paper-server-deploy",
     "paper-server-health",
     "forward-maker-research",
+    "alpha-factory",
+    "meta-supervisor",
     "fast-arb-shadow-research",
     "arb-theory-research",
     "live-api-smoke",
