@@ -126,7 +126,7 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('POLYMARKET_RUN_NAME=auto', linux)
         self.assertIn('paper_latest_loop.sh', mac)
         self.assertIn('config/live_champion.json', latest)
-        self.assertIn('approved integration PR only', latest)
+        self.assertIn('automatic validated integration', latest)
 
 
 if __name__ == "__main__":

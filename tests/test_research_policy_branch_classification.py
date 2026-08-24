@@ -54,7 +54,7 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
             ["scripts/paper_v4_loop.sh", "scripts/build_global_opportunity_book.py"],
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("unapproved model/runtime work", result.stdout)
+        self.assertIn("model/runtime work cannot change", result.stdout)
         self.assertIn("scripts/paper_v4_loop.sh", result.stdout)
 
     def test_feature_branch_cannot_modify_live_b2_filter(self):
@@ -64,7 +64,7 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
             ["scripts/filter_coherent_hedges.py"],
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("unapproved model/runtime work", result.stdout)
+        self.assertIn("model/runtime work cannot change", result.stdout)
         self.assertIn("scripts/filter_coherent_hedges.py", result.stdout)
 
     def test_feature_branch_cannot_hide_direct_model_source_change(self):
@@ -74,7 +74,7 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
             ["src/pca_stat_arb.cpp", "tests/test_v4_research.py"],
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("unapproved model/runtime work", result.stdout)
+        self.assertIn("model/runtime work cannot change", result.stdout)
         self.assertIn("src/pca_stat_arb.cpp", result.stdout)
 
     def test_feature_branch_cannot_hide_engine_strategy_change(self):
@@ -121,6 +121,18 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
         self.assertIn("shadow-isolated code cannot modify production", result.stdout)
         self.assertIn("scripts/walk_forward_v4.py", result.stdout)
         self.assertIn("scripts/runtime_action_report.py", result.stdout)
+
+    def test_label_free_integration_with_numbered_source_is_allowed_by_branch_policy(self):
+        result = self.run_policy(
+            "integration/automatic-alpha",
+            "Source research PR/branch/commit: #123",
+            ["config/paper_v5.json"],
+            labels=[],
+            draft=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("automatic_paper_promotion: `True`", result.stdout)
+        self.assertIn("manual_approval_labels_required: `False`", result.stdout)
 
     def test_data_transport_fix_is_not_misclassified_as_model_work(self):
         result = self.run_policy(

@@ -61,7 +61,7 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
         ]
         completed = self.run_policy("feature/cross-venue", changed)
         self.assertNotEqual(completed.returncode, 0)
-        self.assertIn("unapproved model/runtime work", completed.stdout)
+        self.assertIn("model/runtime work cannot change", completed.stdout)
         for path in changed:
             self.assertIn(path, completed.stdout)
 
