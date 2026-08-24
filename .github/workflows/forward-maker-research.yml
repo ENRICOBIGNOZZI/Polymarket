@@ -7,11 +7,13 @@ on:
     paths:
       - "scripts/forward_maker_probe.py"
       - "scripts/select_forward_candidates.py"
+      - "scripts/finalize_forward_probe.py"
       - "scripts/apply_reward_payout_floor.py"
       - "src/rewards_scan.cpp"
       - "include/pm/rewards.hpp"
       - "tests/test_forward_maker_probe.py"
       - "tests/test_forward_candidate_selection.py"
+      - "tests/test_finalize_forward_probe.py"
       - "CMakeLists.txt"
       - ".github/workflows/forward-maker-research.yml"
   push:
@@ -19,11 +21,13 @@ on:
     paths:
       - "scripts/forward_maker_probe.py"
       - "scripts/select_forward_candidates.py"
+      - "scripts/finalize_forward_probe.py"
       - "scripts/apply_reward_payout_floor.py"
       - "src/rewards_scan.cpp"
       - "include/pm/rewards.hpp"
       - "tests/test_forward_maker_probe.py"
       - "tests/test_forward_candidate_selection.py"
+      - "tests/test_finalize_forward_probe.py"
       - "CMakeLists.txt"
       - ".github/workflows/forward-maker-research.yml"
   schedule:
@@ -101,6 +105,11 @@ jobs:
             --exit-slippage-bps 10 \
             | tee "$R/forward_maker_probe.log"
 
+          python3 scripts/finalize_forward_probe.py \
+            --input "$R/forward_maker_probe.json" \
+            --csv "$R/forward_maker_probe.csv" \
+            | tee -a "$R/forward_maker_probe.log"
+
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -175,7 +184,7 @@ jobs:
             "telemetry/latest-forward-maker.json" \
             "Update latest forward maker experiment"
 
-          history_endpoint="repos/${GITHUB_REPOSITORY}/contents/telemetry/forward-maker-history.jsonl"
+          history_endpoint="repos/${GITHUB_REPOSITOＲY}/contents/telemetry/forward-maker-history.jsonl"
           : > "$R/history_existing.jsonl"
           gh api "${history_endpoint}?ref=telemetry" --jq .content 2>/dev/null \
             | tr -d '\n' | base64 -d > "$R/history_existing.jsonl" 2>/dev/null || true
