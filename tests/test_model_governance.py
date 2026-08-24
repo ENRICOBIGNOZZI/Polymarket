@@ -113,7 +113,10 @@ class ModelGovernanceContractTest(unittest.TestCase):
             timeout=15,
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
-        self.assertIn("Registry and one-job-per-workflow contract are valid", completed.stdout)
+        self.assertIn(
+            "Registry, shared context and one-job-per-workflow contracts are valid.",
+            completed.stdout,
+        )
 
         registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
         ids = {item["id"] for item in registry["schedulers"]}
@@ -186,7 +189,9 @@ class ModelGovernanceContractTest(unittest.TestCase):
         self.assertIn("ci.yml monitoring.yml v4-live-smoke.yml", post_merge)
         self.assertIn('-f expected_sha="$EXPECTED_SHA"', post_merge)
         self.assertNotIn("gh pr merge", post_merge)
-        self.assertIn("POLYMARKET_DEPLOY_REF=paper-validated", deploy)
+        self.assertIn("--scheduler-id paper-server-deploy", deploy)
+        self.assertIn("DEPLOYMENT_REF='$POLYMARKET_DEPLOYMENT_REF'", deploy)
+        self.assertIn('POLYMARKET_DEPLOY_REF="$DEPLOYMENT_REF"', deploy)
 
         for workflow in (ci, monitoring, live_validation):
             self.assertIn("expected_sha:", workflow)
@@ -382,6 +387,7 @@ class ModelGovernanceContractTest(unittest.TestCase):
     def test_scheduler_scripts_compile(self):
         for relative in (
             "scripts/validate_scheduler_registry.py",
+            "scripts/validate_scheduler_context.py",
             "scripts/research_pr_policy.py",
             "scripts/research_queue_report.py",
             "scripts/integration_gate.py",
