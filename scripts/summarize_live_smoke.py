@@ -107,14 +107,15 @@ def intent_summary(path: Path) -> dict:
     }
 
 
-def shadow_fillability(run_root: Path) -> dict:
+def shadow_fillability(run_root: Path, tape_window_seconds: int) -> dict:
     shadow = run_root / "shadow_b1"
     legs = read_rows(shadow / "multileg_legs.csv")
     bundles = read_rows(shadow / "multileg_bundles.csv")
     tape = read_rows(run_root / "trade_tape.csv")
 
     timestamps = [inum(r.get("timestamp")) for r in tape if inum(r.get("timestamp")) > 0]
-    window_seconds = max(1, max(timestamps) - min(timestamps)) if len(timestamps) >= 2 else 0
+    observed_span_seconds = max(timestamps) - min(timestamps) if len(timestamps) >= 2 else 0
+    window_seconds = max(1, tape_window_seconds)
     sell_flow: dict[str, list[tuple[float, float]]] = defaultdict(list)
     for row in tape:
         if (row.get("side") or "").upper() != "SELL":
@@ -133,7 +134,7 @@ def shadow_fillability(run_root: Path) -> dict:
         queue = max(0.0, fnum(leg.get("queue_ahead")))
         target = max(0.0, fnum(leg.get("target_shares")))
         compatible = sum(size for price, size in sell_flow.get(token, []) if price <= limit_price + 1e-12)
-        rate = compatible / window_seconds if window_seconds > 0 else 0.0
+        rate = compatible / window_seconds
         clear_seconds = (queue + target) / rate if rate > 1e-12 else None
         queue_to_flow = queue / compatible if compatible > 1e-12 else None
         bid = leg.get("bundle_id", "")
@@ -168,6 +169,7 @@ def shadow_fillability(run_root: Path) -> dict:
     return {
         "z_threshold": 1.25,
         "tape_window_seconds": window_seconds,
+        "tape_observed_span_seconds": observed_span_seconds,
         "candidates": top_rows(shadow / "stat_arb_pairs.csv", "maker_entry_net_edge"),
         "intents": intent_summary(shadow / "intents.csv"),
         "legs": leg_out,
@@ -183,6 +185,7 @@ def main() -> int:
     ap.add_argument("--git-sha", default="")
     ap.add_argument("--run-id", default="")
     ap.add_argument("--tail-lines", type=int, default=12)
+    ap.add_argument("--trade-lookback-seconds", type=int, default=900)
     args = ap.parse_args()
 
     walk = {}
@@ -206,7 +209,7 @@ def main() -> int:
             "b2": top_rows(args.run_root / "stat_arb_pca.csv", "maker_entry_net_edge"),
         },
         "intents": intent_summary(args.run_root / "intents.csv"),
-        "shadow_b1": shadow_fillability(args.run_root),
+        "shadow_b1": shadow_fillability(args.run_root, args.trade_lookback_seconds),
         "logs": {name: tail(args.run_root / rel, args.tail_lines) for name, rel in LOGS.items()},
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
