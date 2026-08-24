@@ -64,7 +64,15 @@ supervise_execution() {
     if (( rec_pid > 0 )); then wait "$rec_pid" 2>/dev/null || true; fi
     if (( broker_pid > 0 )); then wait "$broker_pid" 2>/dev/null || true; fi
   }
-  trap child_cleanup EXIT INT TERM
+
+  supervisor_shutdown() {
+    trap - EXIT INT TERM
+    child_cleanup
+    exit 0
+  }
+
+  trap child_cleanup EXIT
+  trap supervisor_shutdown INT TERM
 
   start_recorder
   start_broker
@@ -104,7 +112,15 @@ cleanup() {
   if (( SUPERVISOR_PID > 0 )); then kill "$SUPERVISOR_PID" 2>/dev/null || true; fi
   if (( SUPERVISOR_PID > 0 )); then wait "$SUPERVISOR_PID" 2>/dev/null || true; fi
 }
-trap cleanup EXIT INT TERM
+
+parent_shutdown() {
+  trap - EXIT INT TERM
+  cleanup
+  exit 0
+}
+
+trap cleanup EXIT
+trap parent_shutdown INT TERM
 
 start_supervisor
 
