@@ -1,0 +1,146 @@
+name: all-market-capacity-smoke
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/api.cpp"
+      - "src/fast_arb.cpp"
+      - "src/fast_ws.cpp"
+      - "src/fast_runtime/**"
+      - "scripts/all_market_universe.py"
+      - "scripts/all_market_sidecar.sh"
+      - "scripts/build_global_opportunity_book.py"
+      - "scripts/paper_v4_loop.sh"
+      - "config/all_market_engine.json"
+      - "config/fast_arb_policy.json"
+      - "monitoring/**"
+      - ".github/workflows/all-market-capacity.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: all-market-capacity-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capacity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+
+      - name: Build and deterministic tests
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+
+      - name: Inventory the complete active universe
+        shell: bash
+        run: |
+          set -euo pipefail
+          R=runs/paper_v4_live
+          mkdir -p "$R/all_market" "$R/fast" "$R/terminal"
+          python3 scripts/all_market_universe.py \
+            --output "$R/all_market/universe.csv" \
+            --status "$R/all_market/universe_status.json" \
+            --limit 0 \
+            --tier1-min-liquidity 20 \
+            --tier2-min-liquidity 100 \
+            | tee "$R/all_market/universe.log"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('runs/paper_v4_live/all_market/universe_status.json').read_text())
+          assert p['markets'] >= 100, p
+          assert p['tier1'] >= 50, p
+          print(json.dumps(p, sort_keys=True))
+          PY
+
+      - name: Exercise 500-market event-driven public feed
+        shell: bash
+        run: |
+          set -euo pipefail
+          R=runs/paper_v4_live
+          ./build/polymarket_fast_arb_shadow \
+            --config config/paper_v4.json \
+            --policy config/fast_arb_policy.json \
+            --relations config/fast_arb_relations.csv \
+            --external-signals data/external_signals.csv \
+            --run-dir "$R/fast" \
+            --markets 500 \
+            --min-liquidity 20 \
+            --shard-size 500 \
+            --snapshot-refresh-seconds 30 \
+            --status-interval-seconds 1 \
+            --duration-seconds 45 \
+            --recycle-seconds 0 \
+            | tee "$R/all_market/fast_capacity.log"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('runs/paper_v4_live/fast/fast_arb_status.json').read_text())
+          assert p['mode'] == 'shadow', p
+          assert p['real_order_submission'] is False, p
+          assert p['markets'] >= 100, p
+          assert p['ws_messages'] > 0, p
+          assert p['book_updates'] > 0, p
+          assert p['ws_connected_workers'] == p['ws_workers'], p
+          print(json.dumps(p, sort_keys=True))
+          PY
+
+      - name: Exercise 500-market universal terminal scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          R=runs/paper_v4_live
+          ./build/polymarket_engine \
+            --config config/paper_v4.json \
+            --once --scan-only --markets 500 --min-liquidity 20 \
+            --run-dir "$R/terminal" \
+            | tee "$R/all_market/terminal_capacity.log"
+          test -s "$R/terminal/signals.csv"
+
+      - name: Build 1000-slot global opportunity frontier
+        shell: bash
+        run: |
+          set -euo pipefail
+          R=runs/paper_v4_live
+          python3 scripts/build_global_opportunity_book.py \
+            --run-root "$R" --limit 1000 \
+            | tee "$R/all_market/global_book.log"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('runs/paper_v4_live/global_opportunity_status.json').read_text())
+          assert p['candidate_limit'] == 1000, p
+          assert p['research_candidates'] >= p['eligible_candidates'] >= 0, p
+          assert 'fast' in p['sources'] or 'terminal' in p['sources'], p
+          print(json.dumps(p, sort_keys=True))
+          PY
+
+      - name: Upload capacity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: all-market-capacity-${{ github.run_id }}
+          path: |
+            runs/paper_v4_live/all_market/
+            runs/paper_v4_live/fast/fast_arb_status.json
+            runs/paper_v4_live/fast/fast_arb_latest.csv
+            runs/paper_v4_live/terminal/signals.csv
+            runs/paper_v4_live/global_opportunities.csv
+            runs/paper_v4_live/global_trade_candidates.csv
+            runs/paper_v4_live/global_opportunity_status.json
+          if-no-files-found: warn
+          retention-days: 7
