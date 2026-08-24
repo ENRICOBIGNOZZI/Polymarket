@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_robust_opportunity_current_evidence_v3",
-  "captured_at_utc": "2026-08-24T19:15:00Z",
+  "captured_at_utc": "2026-08-24T19:18:00Z",
   "research_only": true,
   "live_champion_version": 4,
   "repository_state": {
@@ -29,7 +29,25 @@
     "b2_maker_positive": 0,
     "b2_best_raw_edge": 0.011648,
     "b2_best_maker_edge": -0.000837611,
-    "external_intelligence_status": "missing"
+    "external_intelligence_status_at_snapshot": "missing"
+  },
+  "fresh_external_intelligence": {
+    "generated_ts": 1787599010,
+    "generated_utc": "2026-08-24T19:16:50+00:00",
+    "accepted_signal_rows": 52,
+    "new_observations": 52,
+    "binance_rows": 48,
+    "gdelt_rows": 4,
+    "kalshi_markets": 2500,
+    "kalshi_matches": 0,
+    "polymarket_markets": 100,
+    "backtest_candidate_count": 0,
+    "backtest_passing_candidates": 0,
+    "source_error_summary": {
+      "gdelt_http_429_rate_limits": true,
+      "polymarket_prices_history_http_400": true
+    },
+    "alpha_factory_interpretation": "collection is now fresh, but it supplies no passing external-alpha candidate; matching and source/data reliability remain LF research issues rather than evidence for promotion"
   },
   "current_execution_bottleneck_examples": {
     "b1_best_maker_row": {
@@ -88,7 +106,7 @@
     "reason": "three independent forward sessions now provide 42 probes per policy with zero paired fills; even the deliberately permissive two-sided 95% upper bound remains far below the 71.8% break-even hurdle"
   },
   "promotion_state": "MORE_EVIDENCE_REQUIRED",
-  "current_conclusion": "current B1/B2 opportunities are execution-cost-bound, while the earlier positive-maker B2 sample is paired-fill-bound; realized OOS evidence is still absent",
+  "current_conclusion": "current B1/B2 opportunities are execution-cost-bound, the earlier positive-maker B2 sample is paired-fill-bound, fresh external collection has zero passing candidates, and realized OOS evidence is still absent",
   "next_required_evidence": [
     "candidate-class-specific paired fill evidence across independent sessions",
     "60s and 300s fill-conditioned markouts",
