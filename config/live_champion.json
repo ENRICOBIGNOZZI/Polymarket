@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "version": 4,
-  "loop": "scripts/paper_v4_loop.sh",
-  "config": "config/paper_v4.json",
-  "run_root": "runs/paper_v4_live",
+  "version": 5,
+  "loop": "scripts/paper_v5_loop.sh",
+  "config": "config/paper_v5.json",
+  "run_root": "runs/paper_v5_live",
   "deployment_ref": "paper-validated",
   "promotion_policy": "approved integration PR only"
 }
