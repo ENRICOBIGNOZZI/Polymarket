@@ -99,18 +99,6 @@ jobs:
           Path('paper_v4_live/metrics.prom').write_text(text)
           PY
 
-      - name: Advance paper validated ref
-        if: github.event_name != 'pull_request'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh api --method PATCH \
-            "repos/${GITHUB_REPOSITORY}/git/refs/heads/paper-validated" \
-            -f sha="$GITHUB_SHA" -F force=false >/dev/null
-          echo "paper_validated_sha=$GITHUB_SHA"
-
       - name: B1 shadow fillability diagnostic
         continue-on-error: true
         shell: bash
@@ -150,6 +138,18 @@ jobs:
           python3 scripts/summarize_live_smoke.py \
             --run-root paper_v4_live --output paper_v4_live/live_snapshot.json \
             --git-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID"
+
+      - name: Advance paper validated ref
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/git/refs/heads/paper-validated" \
+            -f sha="$GITHUB_SHA" -F force=false >/dev/null
+          echo "paper_validated_sha=$GITHUB_SHA"
 
       - name: Publish live summary
         if: always()
