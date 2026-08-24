@@ -1,0 +1,98 @@
+name: research-pca-hedge-cost
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-pca-hedge-cost
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    if: github.event_name != 'pull_request' || github.head_ref == 'research/pca-hedge-cost'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+
+      - name: Build Release
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+
+      - name: Compare sparse hedge counts on fresh public data
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p research-pca
+          for h in 3 4 5 6 8; do
+            ./build/polymarket_pca_stat_arb \
+              --config config/paper_v4.json --markets 400 --universe 100 \
+              --lookback-hours 336 --fidelity-minutes 30 --factors 3 --max-hedges "$h" \
+              --min-z 1.5 --max-half-life-hours 168 --top 100 \
+              --csv "research-pca/pca_h${h}.csv" \
+              | tee "research-pca/pca_h${h}.log"
+          done
+
+          python3 - <<'PY'
+          import csv
+          import json
+          import re
+          from pathlib import Path
+
+          root = Path('research-pca')
+          result = {}
+          for h in (3, 4, 5, 6, 8):
+              path = root / f'pca_h{h}.csv'
+              rows = list(csv.DictReader(path.open(newline='', encoding='utf-8'))) if path.exists() else []
+              maker = [r for r in rows if float(r.get('maker_entry_net_edge') or 0) > 0]
+              raw = [r for r in rows if float(r.get('raw_expected_edge') or 0) > 0]
+              best = max(rows, key=lambda r: float(r.get('maker_entry_net_edge') or -1e9), default=None)
+              summary_line = ''
+              log = root / f'pca_h{h}.log'
+              if log.exists():
+                  lines = log.read_text(encoding='utf-8', errors='replace').splitlines()
+                  summary_line = lines[0] if lines else ''
+              result[str(h)] = {
+                  'rows': len(rows),
+                  'raw_positive': len(raw),
+                  'maker_positive': len(maker),
+                  'best_maker_edge': float(best.get('maker_entry_net_edge') or 0) if best else None,
+                  'best_raw_edge': float(best.get('raw_expected_edge') or 0) if best else None,
+                  'best_hedge_error': float(best.get('hedge_error') or 0) if best else None,
+                  'best_hedges': int(best.get('hedges') or 0) if best else None,
+                  'best_market': best.get('market') if best else None,
+                  'summary': summary_line,
+              }
+          (root / 'summary.json').write_text(json.dumps(result, indent=2, sort_keys=True), encoding='utf-8')
+          print(json.dumps(result, indent=2, sort_keys=True))
+          PY
+
+      - name: Publish comparison
+        if: always()
+        shell: bash
+        run: |
+          echo '## PCA hedge-count live comparison' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat research-pca/summary.json >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload research artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-pca-hedge-cost-${{ github.run_id }}
+          path: research-pca/
+          if-no-files-found: warn
+          retention-days: 7
