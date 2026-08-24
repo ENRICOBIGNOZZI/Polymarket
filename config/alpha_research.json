@@ -1,0 +1,99 @@
+{
+  "schema": "polymarket_alpha_research_v1",
+  "cadence_seconds": 21600,
+  "max_challengers_per_cycle": 2,
+  "scanner_timeout_seconds": 600,
+  "screen": {
+    "per_opportunity_notional_cap": 250.0,
+    "min_rows": 1,
+    "min_maker_positive": 1,
+    "min_best_maker_edge": 0.0005,
+    "min_positive_executable_notional": 25.0,
+    "max_top1_notional_share": 0.90,
+    "min_score_improvement_ratio": 1.05,
+    "min_score_improvement": 0.0001
+  },
+  "promotion": {
+    "min_oos_trades": 30,
+    "min_incremental_mean_return": 0.0,
+    "min_incremental_stressed_mean_return": 0.0,
+    "max_drawdown_increase": 0.0,
+    "max_familywise_pvalue": 0.10,
+    "min_positive_active_folds": 2
+  },
+  "champions": {
+    "B1": {
+      "id": "b1_champion",
+      "hypothesis": "Current production pair-stat-arbitrage specification.",
+      "oos_report": "{run_root}/alpha_research/oos/b1_champion.json",
+      "execution_min_edge": 0.001,
+      "params": {
+        "markets": 600,
+        "history_universe": 160,
+        "lookback_hours": 336,
+        "fidelity_minutes": 30,
+        "min_z": 1.5,
+        "max_half_life_hours": 168,
+        "min_t_reversion": 1.75,
+        "top": 80
+      }
+    },
+    "B2": {
+      "id": "b2_champion",
+      "hypothesis": "Current production sparse PCA hedge specification.",
+      "oos_report": "{run_root}/alpha_research/oos/b2_champion.json",
+      "execution_min_edge": 0.001,
+      "params": {
+        "markets": 600,
+        "universe": 120,
+        "lookback_hours": 336,
+        "fidelity_minutes": 30,
+        "factors": 3,
+        "max_hedges": 4,
+        "min_z": 1.5,
+        "max_half_life_hours": 168,
+        "min_t_reversion": 1.75,
+        "max_factor_hedge_error": 0.2,
+        "top": 80
+      }
+    }
+  },
+  "challengers": [
+    {
+      "id": "b1_z125",
+      "family": "B1",
+      "hypothesis": "A lower residual gate may add executable candidates without relaxing the edge gate.",
+      "params": {"min_z": 1.25}
+    },
+    {
+      "id": "b1_fast_reversion",
+      "family": "B1",
+      "hypothesis": "Shorter half-life and stronger reversion may reduce adverse-selection and holding costs.",
+      "params": {"min_z": 1.25, "max_half_life_hours": 72, "min_t_reversion": 2.0}
+    },
+    {
+      "id": "b1_deeper_history",
+      "family": "B1",
+      "hypothesis": "A deeper history universe may uncover more stable semantic or latent-correlation pairs.",
+      "params": {"history_universe": 220, "min_z": 1.35}
+    },
+    {
+      "id": "b2_three_hedges",
+      "family": "B2",
+      "hypothesis": "One fewer hedge leg may improve net edge after execution costs.",
+      "params": {"max_hedges": 3}
+    },
+    {
+      "id": "b2_two_factor_sparse",
+      "family": "B2",
+      "hypothesis": "A two-factor, three-hedge basket may retain neutrality with lower execution drag.",
+      "params": {"factors": 2, "max_hedges": 3, "max_factor_hedge_error": 0.15}
+    },
+    {
+      "id": "b2_z125_strict_hedge",
+      "family": "B2",
+      "hypothesis": "A lower residual gate combined with tighter factor-neutrality may add cleaner baskets.",
+      "params": {"min_z": 1.25, "max_factor_hedge_error": 0.1}
+    }
+  ]
+}
