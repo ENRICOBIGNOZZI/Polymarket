@@ -75,6 +75,7 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('git/refs/heads/paper-validated', smoke)
         self.assertIn('github.event_name != \'pull_request\'', smoke)
         self.assertNotIn("github.head_ref == 'implement/paper-live-oos-pilot-v4'", smoke)
+        self.assertIn('group: v4-live-paper-smoke-${{ github.ref }}', smoke)
 
 
 if __name__ == "__main__":
