@@ -1,21 +1,33 @@
 #include "pm/fast_ws.hpp"
 
+#include <boost/asio/connect.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ssl/context.hpp>
+#include <boost/asio/ssl/error.hpp>
+#include <boost/asio/ssl/stream.hpp>
+#include <boost/asio/ssl/rfc2818_verification.hpp>
+#include <boost/beast/core.hpp>
+#include <boost/beast/ssl.hpp>
+#include <boost/beast/websocket.hpp>
 #include <boost/json.hpp>
-#include <curl/curl.h>
-#include <curl/websockets.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <mutex>
-#include <poll.h>
 #include <stdexcept>
 #include <thread>
 #include <utility>
 
 namespace pm::fast {
 namespace {
+namespace asio = boost::asio;
+namespace beast = boost::beast;
+namespace websocket = beast::websocket;
+namespace ssl = asio::ssl;
 namespace json = boost::json;
+using tcp = asio::ip::tcp;
 
 std::int64_t now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -23,13 +35,45 @@ std::int64_t now_ms() {
         .count();
 }
 
-void ensure_curl_global() {
-    static const int initialized = [] {
-        const auto rc = curl_global_init(CURL_GLOBAL_DEFAULT);
-        if (rc != CURLE_OK) throw std::runtime_error("curl_global_init failed");
-        return 1;
-    }();
-    (void)initialized;
+struct Endpoint {
+    std::string host;
+    std::string port = "443";
+    std::string target = "/";
+};
+
+Endpoint parse_wss_url(std::string url) {
+    constexpr std::string_view scheme = "wss://";
+    if (!url.starts_with(scheme)) {
+        throw std::runtime_error("fast market feed requires a wss:// URL");
+    }
+    url.erase(0, scheme.size());
+    const auto slash = url.find('/');
+    std::string authority = slash == std::string::npos ? url : url.substr(0, slash);
+    Endpoint endpoint;
+    endpoint.target = slash == std::string::npos ? "/" : url.substr(slash);
+    if (authority.empty()) throw std::runtime_error("WebSocket URL has no host");
+
+    if (authority.front() == '[') {
+        const auto closing = authority.find(']');
+        if (closing == std::string::npos) throw std::runtime_error("invalid IPv6 WebSocket URL");
+        endpoint.host = authority.substr(1, closing - 1);
+        if (closing + 1 < authority.size()) {
+            if (authority[closing + 1] != ':') throw std::runtime_error("invalid WebSocket authority");
+            endpoint.port = authority.substr(closing + 2);
+        }
+    } else {
+        const auto colon = authority.rfind(':');
+        if (colon != std::string::npos && authority.find(':') == colon) {
+            endpoint.host = authority.substr(0, colon);
+            endpoint.port = authority.substr(colon + 1);
+        } else {
+            endpoint.host = authority;
+        }
+    }
+    if (endpoint.host.empty() || endpoint.port.empty()) {
+        throw std::runtime_error("invalid WebSocket endpoint");
+    }
+    return endpoint;
 }
 
 std::string subscription(const std::vector<std::string>& ids) {
@@ -43,24 +87,18 @@ std::string subscription(const std::vector<std::string>& ids) {
     });
 }
 
-bool send_text(CURL* curl, std::string_view text) {
-    for (int attempt = 0; attempt < 50; ++attempt) {
-        std::size_t sent = 0;
-        const auto rc = curl_ws_send(curl, text.data(), text.size(), &sent,
-                                     static_cast<curl_off_t>(text.size()), CURLWS_TEXT);
-        if (rc == CURLE_AGAIN) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-            continue;
-        }
-        return rc == CURLE_OK && sent == text.size();
-    }
-    return false;
+std::string openssl_error() {
+    const auto code = ::ERR_get_error();
+    if (code == 0) return "unknown TLS error";
+    char buffer[256]{};
+    ::ERR_error_string_n(code, buffer, sizeof(buffer));
+    return buffer;
 }
 
 } // namespace
 
 struct MarketWebSocketFeed::Impl {
-    std::string url;
+    Endpoint endpoint;
     std::vector<std::vector<std::string>> shards;
     MessageHandler on_message;
     ErrorHandler on_error;
@@ -71,11 +109,10 @@ struct MarketWebSocketFeed::Impl {
     std::atomic<std::uint64_t> reconnects{0};
     std::atomic<std::uint64_t> errors{0};
 
-    Impl(std::string endpoint, std::vector<std::string> ids, std::size_t shard_size,
+    Impl(std::string url, std::vector<std::string> ids, std::size_t shard_size,
          MessageHandler message_handler, ErrorHandler error_handler)
-        : url(std::move(endpoint)), on_message(std::move(message_handler)),
+        : endpoint(parse_wss_url(std::move(url))), on_message(std::move(message_handler)),
           on_error(std::move(error_handler)) {
-        ensure_curl_global();
         ids.erase(std::remove_if(ids.begin(), ids.end(), [](const std::string& id) {
             return id.empty();
         }), ids.end());
@@ -101,103 +138,81 @@ struct MarketWebSocketFeed::Impl {
         while (!stop.stop_requested()) {
             if (!first_attempt) reconnects.fetch_add(1, std::memory_order_relaxed);
             first_attempt = false;
+            bool marked_connected = false;
+            try {
+                asio::io_context io;
+                ssl::context tls(ssl::context::tls_client);
+                tls.set_default_verify_paths();
+                tls.set_verify_mode(ssl::verify_peer);
 
-            CURL* curl = curl_easy_init();
-            if (curl == nullptr) {
-                report(shard_index, "curl_easy_init failed");
-                std::this_thread::sleep_for(std::chrono::seconds(backoff_seconds));
-                backoff_seconds = std::min(30, backoff_seconds * 2);
-                continue;
-            }
-            curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-            curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L);
-            curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 10000L);
-            curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 15000L);
-            curl_easy_setopt(curl, CURLOPT_USERAGENT, "polymarket-fast-arb-shadow/0.9");
-            curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
-            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-
-            const auto connect_rc = curl_easy_perform(curl);
-            if (connect_rc != CURLE_OK) {
-                report(shard_index, curl_easy_strerror(connect_rc));
-                curl_easy_cleanup(curl);
-                std::this_thread::sleep_for(std::chrono::seconds(backoff_seconds));
-                backoff_seconds = std::min(30, backoff_seconds * 2);
-                continue;
-            }
-            if (!send_text(curl, subscription(ids))) {
-                report(shard_index, "market subscription send failed");
-                curl_easy_cleanup(curl);
-                std::this_thread::sleep_for(std::chrono::seconds(backoff_seconds));
-                backoff_seconds = std::min(30, backoff_seconds * 2);
-                continue;
-            }
-
-            connected.fetch_add(1, std::memory_order_relaxed);
-            backoff_seconds = 1;
-            bool connection_ok = true;
-            std::string frame;
-            std::int64_t last_activity = now_ms();
-            std::int64_t last_ping = 0;
-            curl_socket_t socket_fd = CURL_SOCKET_BAD;
-            curl_easy_getinfo(curl, CURLINFO_ACTIVESOCKET, &socket_fd);
-
-            while (!stop.stop_requested() && connection_ok) {
-                const auto now = now_ms();
-                if (now - last_ping >= 10000) {
-                    if (!send_text(curl, "PING")) {
-                        connection_ok = false;
-                        break;
-                    }
-                    last_ping = now;
+                tcp::resolver resolver(io);
+                websocket::stream<beast::ssl_stream<beast::tcp_stream>> ws(io, tls);
+                if (!::SSL_set_tlsext_host_name(ws.next_layer().native_handle(),
+                                                endpoint.host.c_str())) {
+                    throw std::runtime_error("SNI setup failed: " + openssl_error());
                 }
-                if (now - last_activity > 45000) {
-                    report(shard_index, "stale websocket feed");
-                    connection_ok = false;
-                    break;
-                }
+                ws.next_layer().set_verify_callback(ssl::rfc2818_verification(endpoint.host));
 
-                if (socket_fd != CURL_SOCKET_BAD) {
-                    pollfd descriptor{socket_fd, POLLIN, 0};
-                    (void)::poll(&descriptor, 1, 250);
-                } else {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(25));
-                }
+                const auto resolved = resolver.resolve(endpoint.host, endpoint.port);
+                beast::get_lowest_layer(ws).expires_after(std::chrono::seconds(10));
+                beast::get_lowest_layer(ws).connect(resolved);
+                ws.next_layer().handshake(ssl::stream_base::client);
 
-                for (;;) {
-                    std::array<char, 65536> buffer{};
-                    std::size_t received = 0;
-                    const curl_ws_frame* metadata = nullptr;
-                    const auto rc = curl_ws_recv(curl, buffer.data(), buffer.size(),
-                                                 &received, &metadata);
-                    if (rc == CURLE_AGAIN) break;
-                    if (rc != CURLE_OK) {
-                        report(shard_index, curl_easy_strerror(rc));
-                        connection_ok = false;
-                        break;
-                    }
-                    last_activity = now_ms();
-                    if (metadata != nullptr && (metadata->flags & CURLWS_CLOSE)) {
-                        connection_ok = false;
-                        break;
-                    }
-                    if (received == 0 || metadata == nullptr) continue;
-                    if (metadata->flags & (CURLWS_TEXT | CURLWS_CONT)) {
-                        frame.append(buffer.data(), received);
-                        if (metadata->bytesleft == 0) {
-                            if (frame != "PONG" && !frame.empty()) {
-                                messages.fetch_add(1, std::memory_order_relaxed);
-                                on_message(frame, last_activity, shard_index);
-                            }
-                            frame.clear();
+                beast::get_lowest_layer(ws).expires_never();
+                websocket::stream_base::timeout timeouts{
+                    std::chrono::seconds(10),
+                    std::chrono::seconds(20),
+                    true,
+                };
+                ws.set_option(timeouts);
+                ws.set_option(websocket::stream_base::decorator([](websocket::request_type& request) {
+                    request.set(beast::http::field::user_agent,
+                                "polymarket-fast-arb-shadow/0.9");
+                }));
+                ws.handshake(endpoint.host, endpoint.target);
+                ws.text(true);
+                ws.write(asio::buffer(subscription(ids)));
+
+                connected.fetch_add(1, std::memory_order_relaxed);
+                marked_connected = true;
+                backoff_seconds = 1;
+                std::int64_t last_text_ping = now_ms();
+
+                std::stop_callback cancel_on_stop(stop, [&ws] {
+                    beast::error_code ignored;
+                    beast::get_lowest_layer(ws).socket().cancel(ignored);
+                    beast::get_lowest_layer(ws).socket().shutdown(tcp::socket::shutdown_both, ignored);
+                    beast::get_lowest_layer(ws).socket().close(ignored);
+                });
+
+                while (!stop.stop_requested()) {
+                    beast::flat_buffer buffer;
+                    beast::error_code error;
+                    ws.read(buffer, error);
+                    if (error) {
+                        if (!stop.stop_requested() && error != websocket::error::closed) {
+                            throw beast::system_error(error);
                         }
+                        break;
+                    }
+                    const auto received_ms = now_ms();
+                    std::string message = beast::buffers_to_string(buffer.data());
+                    if (message != "PONG" && !message.empty()) {
+                        messages.fetch_add(1, std::memory_order_relaxed);
+                        on_message(message, received_ms, shard_index);
+                    }
+                    if (received_ms - last_text_ping >= 10000) {
+                        ws.text(true);
+                        ws.write(asio::buffer(std::string_view{"PING"}), error);
+                        if (error) throw beast::system_error(error);
+                        last_text_ping = received_ms;
                     }
                 }
+            } catch (const std::exception& error) {
+                if (!stop.stop_requested()) report(shard_index, error.what());
             }
 
-            connected.fetch_sub(1, std::memory_order_relaxed);
-            curl_easy_cleanup(curl);
+            if (marked_connected) connected.fetch_sub(1, std::memory_order_relaxed);
             if (!stop.stop_requested()) {
                 std::this_thread::sleep_for(std::chrono::seconds(backoff_seconds));
                 backoff_seconds = std::min(30, backoff_seconds * 2);
