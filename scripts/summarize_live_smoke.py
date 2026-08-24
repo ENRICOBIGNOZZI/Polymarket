@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 import time
+from collections import Counter
 from pathlib import Path
 
 METRIC = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?\s+([-+0-9.eE]+)$")
@@ -61,6 +63,45 @@ def tail(path: Path, n: int) -> list[str]:
     return lines[-n:]
 
 
+def fnum(value: str | None, default: float = 0.0) -> float:
+    try:
+        return float(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def top_rows(path: Path, edge_key: str, limit: int = 8) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    try:
+        with path.open(newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+    except OSError:
+        return []
+    rows.sort(key=lambda r: fnum(r.get(edge_key), float("-inf")), reverse=True)
+    return rows[:limit]
+
+
+def intent_summary(path: Path) -> dict:
+    if not path.exists():
+        return {"rows": 0, "bundles": 0, "strategies": {}, "max_expected_edge": 0.0, "top_legs": []}
+    try:
+        with path.open(newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+    except OSError:
+        rows = []
+    bundles = {r.get("bundle_id", "") for r in rows if r.get("bundle_id")}
+    strategies = Counter(r.get("strategy", "UNKNOWN") for r in rows)
+    top = sorted(rows, key=lambda r: fnum(r.get("expected_edge"), float("-inf")), reverse=True)[:12]
+    return {
+        "rows": len(rows),
+        "bundles": len(bundles),
+        "strategies": dict(sorted(strategies.items())),
+        "max_expected_edge": max((fnum(r.get("expected_edge")) for r in rows), default=0.0),
+        "top_legs": top,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-root", type=Path, required=True)
@@ -86,6 +127,11 @@ def main() -> int:
         "run_root": args.run_root.name,
         "metrics": metric_snapshot(args.run_root / "metrics.prom"),
         "walk_forward": walk,
+        "candidates": {
+            "b1": top_rows(args.run_root / "stat_arb_pairs.csv", "maker_entry_net_edge"),
+            "b2": top_rows(args.run_root / "stat_arb_pca.csv", "maker_entry_net_edge"),
+        },
+        "intents": intent_summary(args.run_root / "intents.csv"),
         "logs": {name: tail(args.run_root / rel, args.tail_lines) for name, rel in LOGS.items()},
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
