@@ -49,22 +49,38 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('http://127.0.0.1:3000/api/search', updater)
         self.assertIn('http://127.0.0.1:3000/api/search', finish)
 
-    def test_autoupdate_heartbeat_proves_main_is_deployed(self):
+    def test_autoupdate_deploys_only_live_smoke_validated_ref(self):
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
         health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(encoding="utf-8")
+        smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
 
-        self.assertIn('autoupdate_status.env', updater)
-        self.assertIn('checked_ts=', updater)
-        self.assertIn('status=%s', updater)
-        self.assertIn('write_status up_to_date', updater)
-        self.assertIn('write_status deployed', updater)
-        self.assertIn('write_status rollback', updater)
-        self.assertIn('git fetch -q origin main', health)
-        self.assertIn('test "$head_sha" = "$origin_sha"', health)
-        self.assertIn('system/com.polymarket.autoupdate', health)
-        self.assertIn('autoupdate_status.env', health)
-        self.assertIn('now - checked_ts', health)
-        self.assertIn('up_to_date|deployed', health)
+        self.assertIn('${POLYMARKET_DEPLOY_REF:-paper-validated}', updater)
+        self.assertIn('git fetch origin "$LOCAL_BRANCH" "$DEPLOY_REF"', updater)
+        self.assertIn('origin/$DEPLOY_REF', updater)
+        self.assertIn('write_status awaiting_validation', updater)
+        self.assertIn('paper_runtime_healthy()', updater)
+        self.assertIn('full_runtime_healthy()', updater)
+        self.assertIn('wait_for_runtime_health()', updater)
+        self.assertIn('write_status repaired', updater)
+        self.assertIn('polymarket-service-control restart', updater)
+        self.assertIn('recorder_alive', updater)
+        self.assertIn('broker_alive', updater)
+        self.assertIn('deploy_ref=%s', updater)
+        self.assertIn('validated=%s', updater)
+        self.assertIn('origin_main=%s', updater)
+
+        self.assertIn('git fetch -q origin main paper-validated', health)
+        self.assertIn('origin/paper-validated', health)
+        self.assertIn('test "$head_sha" = "$validated_sha"', health)
+        self.assertIn('test "$status_ref" = "paper-validated"', health)
+        self.assertIn('test "$status_validated" = "$validated_sha"', health)
+        self.assertIn('up_to_date|deployed|repaired', health)
+
+        self.assertIn('Advance paper validated ref', smoke)
+        self.assertIn('git/refs/heads/paper-validated', smoke)
+        self.assertIn('github.event_name != \'pull_request\'', smoke)
+        self.assertNotIn("github.head_ref == 'implement/paper-live-oos-pilot-v4'", smoke)
+        self.assertIn('group: v4-live-paper-smoke-${{ github.ref }}', smoke)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,8 @@
 set -euo pipefail
 
 APP_DIR="${POLYMARKET_APP_DIR:-$HOME/polymarket}"
-BRANCH="${POLYMARKET_BRANCH:-main}"
+LOCAL_BRANCH="${POLYMARKET_BRANCH:-main}"
+DEPLOY_REF="${POLYMARKET_DEPLOY_REF:-paper-validated}"
 CACHE_DIR="${POLYMARKET_DEPLOY_CACHE:-$HOME/.cache/polymarket-deploy}"
 STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
 STATUS_FILE="$STATE_DIR/autoupdate_status.env"
@@ -23,7 +24,7 @@ find_brew() {
 }
 
 write_status() {
-  local status="$1" head_sha="$2" origin_sha="$3"
+  local status="$1" head_sha="$2" validated_sha="$3" main_sha="$4"
   mkdir -p "$STATE_DIR"
   local tmp
   tmp="$(mktemp "$STATE_DIR/autoupdate_status.XXXXXX")"
@@ -31,9 +32,46 @@ write_status() {
     printf 'checked_ts=%s\n' "$(date +%s)"
     printf 'status=%s\n' "$status"
     printf 'head=%s\n' "$head_sha"
-    printf 'origin=%s\n' "$origin_sha"
+    printf 'origin=%s\n' "$validated_sha"
+    printf 'deploy_ref=%s\n' "$DEPLOY_REF"
+    printf 'validated=%s\n' "$validated_sha"
+    printf 'origin_main=%s\n' "$main_sha"
   } > "$tmp"
   mv "$tmp" "$STATUS_FILE"
+}
+
+paper_runtime_healthy() {
+  local supervisor="$APP_DIR/runs/paper_v4_live/runtime_supervisor.csv"
+  [[ -s "$supervisor" ]] || return 1
+  local row ts recorder_alive broker_alive recorder_restarts broker_restarts recorder_pid broker_pid now
+  row="$(tail -n 1 "$supervisor")"
+  IFS=, read -r ts recorder_alive broker_alive recorder_restarts broker_restarts recorder_pid broker_pid <<<"$row"
+  now="$(date +%s)"
+  [[ "$recorder_alive" == "1" ]] || return 1
+  [[ "$broker_alive" == "1" ]] || return 1
+  [[ "$ts" =~ ^[0-9]+$ ]] || return 1
+  (( now - ts <= 60 )) || return 1
+}
+
+full_runtime_healthy() {
+  curl -fsS http://127.0.0.1:9108/healthz >/dev/null 2>&1 && \
+  curl -fsS http://127.0.0.1:9108/metrics 2>/dev/null | grep -q '^polymarket_runtime_info' && \
+  curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1 && \
+  curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 && \
+  curl -fsS http://127.0.0.1:3000/api/search >/dev/null 2>&1 && \
+  paper_runtime_healthy
+}
+
+wait_for_runtime_health() {
+  local attempts="${1:-60}"
+  local i
+  for ((i=0; i<attempts; ++i)); do
+    if full_runtime_healthy; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
 }
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "This updater is for macOS only"
@@ -48,12 +86,30 @@ PYTHON_BIN="$BREW_PREFIX/bin/python3"
 
 cd "$APP_DIR"
 OLD_SHA="$(git rev-parse HEAD)"
-git fetch origin "$BRANCH"
-NEW_SHA="$(git rev-parse "origin/$BRANCH")"
+git fetch origin "$LOCAL_BRANCH" "$DEPLOY_REF"
+MAIN_SHA="$(git rev-parse "origin/$LOCAL_BRANCH")"
+NEW_SHA="$(git rev-parse "origin/$DEPLOY_REF")"
 
 if [[ "$OLD_SHA" == "$NEW_SHA" ]]; then
-  write_status up_to_date "$OLD_SHA" "$NEW_SHA"
-  log "Already deployed at $NEW_SHA"
+  if full_runtime_healthy; then
+    write_status up_to_date "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
+    log "Already deployed at validated commit $NEW_SHA"
+    exit 0
+  fi
+  log "Validated code is current but runtime is unhealthy; attempting service repair"
+  sudo -n /usr/local/sbin/polymarket-service-control restart || true
+  if wait_for_runtime_health 60; then
+    write_status repaired "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
+    log "Runtime repaired at validated commit $NEW_SHA"
+    exit 0
+  fi
+  write_status unhealthy "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
+  fail "validated code is current and automatic service repair did not restore health"
+fi
+
+if git merge-base --is-ancestor "$NEW_SHA" "$OLD_SHA" 2>/dev/null; then
+  write_status awaiting_validation "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
+  log "Current checkout is ahead of validated ref; waiting for live-smoke validation"
   exit 0
 fi
 
@@ -67,7 +123,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-log "Validating candidate $NEW_SHA in isolated worktree"
+log "Validating candidate $NEW_SHA from $DEPLOY_REF in isolated worktree"
 git -C "$APP_DIR" worktree add --detach "$STAGE_SRC" "$NEW_SHA" >/dev/null
 cd "$STAGE_SRC"
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$BREW_PREFIX"
@@ -84,7 +140,7 @@ bash -n scripts/paper_latest_loop.sh scripts/paper_v4_once.sh scripts/paper_v4_l
 
 log "Candidate validation passed; staging production build"
 cd "$APP_DIR"
-git checkout "$BRANCH"
+git checkout "$LOCAL_BRANCH"
 git reset --hard "$NEW_SHA"
 rm -rf build.next
 cmake -S . -B build.next -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$BREW_PREFIX"
@@ -122,7 +178,7 @@ rollback() {
       cp "$CONFIG_BACKUP/$rel" "$STATE_DIR/$rel"
     fi
   done
-  write_status rollback "$OLD_SHA" "$NEW_SHA"
+  write_status rollback "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
   sudo -n /usr/local/sbin/polymarket-service-control restart || true
   exit 1
 }
@@ -138,22 +194,14 @@ log "Restarting latest-runtime services"
 sudo -n /usr/local/sbin/polymarket-service-control restart || rollback "service restart failed"
 
 log "Waiting for production health"
-healthy=0
-for _ in {1..45}; do
-  if curl -fsS http://127.0.0.1:9108/healthz >/dev/null 2>&1 && \
-     curl -fsS http://127.0.0.1:9108/metrics 2>/dev/null | grep -q '^polymarket_runtime_info' && \
-     curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1 && \
-     curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 && \
-     curl -fsS http://127.0.0.1:3000/api/search >/dev/null 2>&1; then
-    healthy=1
-    break
-  fi
-  sleep 2
-done
-[[ "$healthy" -eq 1 ]] || rollback "post-deploy health checks failed"
+if ! wait_for_runtime_health 60; then
+  rollback "post-deploy paper runtime health checks failed"
+fi
 
 rm -rf build.previous
-write_status deployed "$NEW_SHA" "$NEW_SHA"
+write_status deployed "$NEW_SHA" "$NEW_SHA" "$MAIN_SHA"
 printf 'deployed_sha=%s\n' "$NEW_SHA"
+printf 'validated_ref=%s\n' "$DEPLOY_REF"
+printf 'main_sha=%s\n' "$MAIN_SHA"
 printf 'previous_sha=%s\n' "$OLD_SHA"
 log "Deployment healthy"
