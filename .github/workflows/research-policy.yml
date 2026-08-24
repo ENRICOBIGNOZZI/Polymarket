@@ -2,14 +2,19 @@ name: Polymarket Research Policy
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "6,36 * * * *"
   push:
     branches: [main]
     paths:
       - ".github/workflows/research-policy.yml"
+      - ".github/workflows/control-plane.yml"
       - "config/scheduler_registry.json"
       - "scripts/research_pr_policy.py"
+      - "scripts/scheduler_meta_supervisor.py"
       - "scripts/validate_scheduler_registry.py"
       - "tests/test_model_governance.py"
+      - "tests/test_scheduler_periodicity.py"
   pull_request:
     branches: [main]
     types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft, labeled, unlabeled]
@@ -32,12 +37,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate scheduler registry
-        run: >-
-          python3 scripts/validate_scheduler_registry.py
-          --root .
-          --registry config/scheduler_registry.json
-          --output scheduler-registry-report.md
+      - name: Validate scheduler registry and periodicity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_scheduler_registry.py \
+            --root . \
+            --registry config/scheduler_registry.json \
+            --output scheduler-registry-report.md
+          python3 -m unittest tests/test_scheduler_periodicity.py -v
 
       - name: Ensure governance labels exist
         if: github.event_name != 'pull_request'
@@ -84,7 +92,7 @@ jobs:
             echo '# Research pull-request policy'
             echo
             echo "- event: \`$GITHUB_EVENT_NAME\`"
-            echo '- policy scripts, labels and scheduler registry validated'
+            echo '- policy scripts, labels, scheduler registry and periodic timers validated'
             echo '- no pull request was evaluated in this run'
           } > research-policy-report.md
 
