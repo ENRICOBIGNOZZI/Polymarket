@@ -38,26 +38,28 @@ The persistent V4 loop now defaults to:
 - scanner output: top 500;
 - broker candidate bundles: up to 500;
 - B1/B2 refresh: every 5 minutes;
-- direct maker scan: 1,000 markets;
+- direct microstructure maker scan: 1,000 markets;
 - structural scan: 3,000 markets;
 - rewards shadow scan: 5,000 markets;
-- terminal scan: 1,000 markets.
+- universal terminal scan: 1,000 markets.
 
 Every value is environment-configurable so the system can expand progressively without another code change. Candidate capacity is intentionally much larger than portfolio capacity.
 
 ## Global opportunity book
 
-`scripts/build_global_opportunity_book.py` combines fast structural opportunities, B1 and coherent B2 into a common ranked book. It writes up to 1,000 research candidates by default:
+`scripts/build_global_opportunity_book.py` combines the event-driven fast structural layer, B1 pair stat-arb, coherent B2 PCA hedges, and fresh universal terminal signals into a common ranked book. The terminal sleeve contributes the graph, semantic, external and other active V4 experts through the existing executable-price, fee, slippage, uncertainty and sizing calculations. Append-only terminal observations older than the freshness window are rejected.
+
+The book writes up to 1,000 research candidates by default:
 
 - `global_opportunities.csv`: positive-raw-edge research frontier, including non-executable diagnostics;
-- `global_trade_candidates.csv`: candidates that are positive after their source-specific executable cost model;
-- `global_opportunity_status.json`: counts and best-edge diagnostics.
+- `global_trade_candidates.csv`: candidates that are positive after their source-specific executable cost model and admission logic;
+- `global_opportunity_status.json`: counts, source mix and best-edge diagnostics.
 
 The opportunity book does not bypass the broker. The existing portfolio constraints, drawdown kill switch, market/event concentration limits, cash reservation, leg-risk controls and fill model remain authoritative.
 
 ## Account integration
 
-An account is not required for public market discovery, books, prices or the market WebSocket. `scripts/polymarket_account_readonly.py` adds an optional account-specific read path for open-order reconciliation using L2 authentication.
+An account is not required for public market discovery, books, prices or the market WebSocket. `scripts/polymarket_account_readonly.py` adds optional account-specific reconciliation using L2 authentication. It reads both open orders and authenticated trade-history evidence so future paper-fill calibration can be compared with exchange-confirmed account activity.
 
 Credentials are never committed. They are read only from:
 
