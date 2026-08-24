@@ -1,0 +1,112 @@
+{
+  "schema": "polymarket_robust_opportunity_current_evidence_v3",
+  "captured_at_utc": "2026-08-24T19:15:00Z",
+  "research_only": true,
+  "live_champion_version": 4,
+  "repository_state": {
+    "main_sha": "747d4ce56396f3fa5437b8b10f4ba482816ec683",
+    "paper_validated_sha": "12595836a4266cee819f75ca928f9ddcc7c49f20",
+    "live_champion_manifest_changed": false,
+    "note": "main contains newer infrastructure/governance changes; this research evidence does not promote, deploy or mutate the champion"
+  },
+  "latest_alpha_factory": {
+    "generated_ts": 1787597452,
+    "generated_utc": "2026-08-24T18:50:52+00:00",
+    "status": "RESEARCHING",
+    "paper_only": true,
+    "submitted_orders": 0,
+    "oos_trades": 0,
+    "oos_net_pnl_usd": 0.0,
+    "stressed_1_5x_net_pnl_usd": 0.0,
+    "stressed_2_0x_net_pnl_usd": 0.0,
+    "active_folds": 0,
+    "recommended_canary": null,
+    "b1_raw_positive": 2,
+    "b1_maker_positive": 0,
+    "b1_best_raw_edge": 0.014928,
+    "b1_best_maker_edge": -0.00262469,
+    "b2_raw_positive": 5,
+    "b2_maker_positive": 0,
+    "b2_best_raw_edge": 0.011648,
+    "b2_best_maker_edge": -0.000837611,
+    "external_intelligence_status": "missing"
+  },
+  "current_execution_bottleneck_examples": {
+    "b1_best_maker_row": {
+      "raw_expected_edge": 0.0053866,
+      "maker_entry_net_edge": -0.00262469,
+      "execution_cost_wedge": 0.00801129,
+      "execution_cost_fraction_of_raw": 1.4872628374113541,
+      "cost_reduction_fraction_to_break_even": 0.32762389078413084,
+      "classification": "execution_cost_bound"
+    },
+    "b2_best_maker_row": {
+      "raw_expected_edge": 0.00153308,
+      "maker_entry_net_edge": -0.000837611,
+      "execution_cost_wedge": 0.002370691,
+      "execution_cost_fraction_of_raw": 1.5463583113731836,
+      "cost_reduction_fraction_to_break_even": 0.35331934866247855,
+      "classification": "execution_cost_bound"
+    },
+    "interpretation": "the least-bad current B1/B2 maker rows are not blocked by a production threshold; their estimated execution wedge already exceeds their raw signal edge"
+  },
+  "recent_rejected_maker_sample": {
+    "source": "b2",
+    "market": "2176270",
+    "slug": "strait-of-hormuz-traffic-returns-to-normal-by-december-31",
+    "raw_expected_edge": 0.0129525,
+    "maker_entry_net_edge": 0.0130666,
+    "taker_net_edge": -0.0332757,
+    "executable_notional_usd": 8954.02,
+    "half_life_hours": 5.59332,
+    "hedge_error": 0.1627,
+    "stability": 0.967525
+  },
+  "forward_maker_calibration": {
+    "last_generated_ts": 1787597515,
+    "valid_sessions": 3,
+    "history_span_seconds": 2582,
+    "probes_per_policy": 42,
+    "join_pair_fills": 0,
+    "improve1_pair_fills": 0,
+    "fade1_pair_fills": 0,
+    "calibration_one_sided_95_pair_fill_upper": 0.060519193931140136,
+    "challenger_two_sided_95_pair_fill_upper": 0.08379879086570391,
+    "join_total_pnl_ex_rewards_usd": -0.13894351315407616,
+    "improve1_total_pnl_ex_rewards_usd": -0.13894351315407616,
+    "filled_share_weighted_markout_60_bid_per_share": -0.002,
+    "selected_policy_for_paper_shadow": null,
+    "eligible_for_paper_shadow": false
+  },
+  "paired_fill_feasibility_for_recent_sample": {
+    "model": "q * maker_entry_net_edge + (1-q) * taker_net_edge",
+    "assumption": "a failed paired maker entry is conservatively completed or rescued at current taker economics",
+    "required_pair_fill_probability": 0.7180416164066091,
+    "challenger_two_sided_95_wilson_pair_fill_upper_bound": 0.08379879086570391,
+    "optimistic_expected_edge_at_challenger_upper_bound": -0.02939227129406429,
+    "decision": "REJECT_CURRENT_MAKER_SAMPLE",
+    "reason": "three independent forward sessions now provide 42 probes per policy with zero paired fills; even the deliberately permissive two-sided 95% upper bound remains far below the 71.8% break-even hurdle"
+  },
+  "promotion_state": "MORE_EVIDENCE_REQUIRED",
+  "current_conclusion": "current B1/B2 opportunities are execution-cost-bound, while the earlier positive-maker B2 sample is paired-fill-bound; realized OOS evidence is still absent",
+  "next_required_evidence": [
+    "candidate-class-specific paired fill evidence across independent sessions",
+    "60s and 300s fill-conditioned markouts",
+    "realized adverse-selection and forced-completion costs",
+    "at least two purged realized OOS folds",
+    "positive incremental realized net PnL versus the net-edge baseline",
+    "positive survival under 1.5x and 2.0x execution-cost stress"
+  ],
+  "rollback_criteria": [
+    "revert research scorer changes if deterministic CI or research policy fails",
+    "reject any candidate when current data health is stale or incomplete",
+    "reject maker-dependent candidates when optimistic paired-fill feasibility is below break-even",
+    "keep incumbent V4 unchanged unless a future approved integration passes all existing promotion gates"
+  ],
+  "boundaries": {
+    "live_champion_changed": false,
+    "risk_or_oos_gates_changed": false,
+    "authenticated_execution": false,
+    "real_money_execution": false
+  }
+}
