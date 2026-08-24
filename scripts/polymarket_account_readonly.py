@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Read-only authenticated Polymarket account probe.
+"""Read-only authenticated Polymarket account reconciliation.
 
 Credentials are read exclusively from environment variables. The script never
-prints secret material and performs GET requests only. It is safe to leave
-installed while account integration is disabled.
+prints secret material and performs GET requests only. It inventories open
+orders and the first authenticated trade-history page so paper fill assumptions
+can later be compared with exchange-confirmed account evidence.
 """
 from __future__ import annotations
 
@@ -72,8 +73,9 @@ def credentials() -> dict[str, str] | None:
     return values
 
 
-def get_open_orders(base_url: str, creds: dict[str, str], timeout: float) -> Any:
-    path = "/data/orders"
+def authenticated_get(base_url: str, path: str, creds: dict[str, str], timeout: float) -> Any:
+    if not path.startswith("/") or "?" in path:
+        raise ValueError("read-only reconciliation requires a canonical query-free GET path")
     timestamp = str(int(time.time()))
     signature = l2_signature(creds["secret"], timestamp, "GET", path)
     request = urllib.request.Request(
@@ -85,22 +87,53 @@ def get_open_orders(base_url: str, creds: dict[str, str], timeout: float) -> Any
             "POLY_TIMESTAMP": timestamp,
             "POLY_API_KEY": creds["api_key"],
             "POLY_PASSPHRASE": creds["passphrase"],
-            "User-Agent": "polymarket-account-readonly/1.0",
+            "User-Agent": "polymarket-account-readonly/1.1",
         },
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
-def count_orders(payload: Any) -> int:
+def get_open_orders(base_url: str, creds: dict[str, str], timeout: float) -> Any:
+    return authenticated_get(base_url, "/data/orders", creds, timeout)
+
+
+def get_trades(base_url: str, creds: dict[str, str], timeout: float) -> Any:
+    return authenticated_get(base_url, "/trades", creds, timeout)
+
+
+def data_rows(payload: Any, *keys: str) -> list[dict[str, Any]]:
     if isinstance(payload, list):
-        return len(payload)
+        return [row for row in payload if isinstance(row, dict)]
     if isinstance(payload, dict):
-        for key in ("orders", "data"):
+        for key in keys:
             value = payload.get(key)
             if isinstance(value, list):
-                return len(value)
-    return 0
+                return [row for row in value if isinstance(row, dict)]
+    return []
+
+
+def count_orders(payload: Any) -> int:
+    return len(data_rows(payload, "orders", "data"))
+
+
+def trade_summary(payload: Any) -> tuple[int, int, int | None]:
+    rows = data_rows(payload, "trades", "data")
+    confirmed = 0
+    latest: int | None = None
+    for row in rows:
+        status = str(row.get("status") or "").upper()
+        if status in {"TRADE_STATUS_CONFIRMED", "CONFIRMED"}:
+            confirmed += 1
+        for key in ("match_time", "last_update", "timestamp"):
+            try:
+                ts = int(float(row.get(key)))
+            except (TypeError, ValueError):
+                continue
+            if ts > 0:
+                latest = ts if latest is None else max(latest, ts)
+                break
+    return len(rows), confirmed, latest
 
 
 def main() -> int:
@@ -114,12 +147,15 @@ def main() -> int:
     creds = credentials()
     if creds is None:
         status = {
-            "schema": "polymarket_account_readonly_v1",
+            "schema": "polymarket_account_readonly_v2",
             "generated_ts": generated,
             "configured": False,
             "read_only": True,
             "authenticated_execution": False,
             "open_orders": None,
+            "trade_page_count": None,
+            "confirmed_trade_page_count": None,
+            "latest_trade_ts": None,
             "status": "not_configured",
         }
         atomic_json(args.output, status)
@@ -127,25 +163,33 @@ def main() -> int:
         return 0
 
     try:
-        payload = get_open_orders(args.clob_url, creds, args.timeout)
+        orders = get_open_orders(args.clob_url, creds, args.timeout)
+        trades = get_trades(args.clob_url, creds, args.timeout)
+        trade_count, confirmed, latest_trade = trade_summary(trades)
         status = {
-            "schema": "polymarket_account_readonly_v1",
+            "schema": "polymarket_account_readonly_v2",
             "generated_ts": generated,
             "configured": True,
             "read_only": True,
             "authenticated_execution": False,
-            "open_orders": count_orders(payload),
+            "open_orders": count_orders(orders),
+            "trade_page_count": trade_count,
+            "confirmed_trade_page_count": confirmed,
+            "latest_trade_ts": latest_trade,
             "status": "healthy",
         }
         code = 0
     except (urllib.error.URLError, urllib.error.HTTPError, ValueError, RuntimeError, json.JSONDecodeError) as error:
         status = {
-            "schema": "polymarket_account_readonly_v1",
+            "schema": "polymarket_account_readonly_v2",
             "generated_ts": generated,
             "configured": True,
             "read_only": True,
             "authenticated_execution": False,
             "open_orders": None,
+            "trade_page_count": None,
+            "confirmed_trade_page_count": None,
+            "latest_trade_ts": None,
             "status": "error",
             "error_type": type(error).__name__,
         }
