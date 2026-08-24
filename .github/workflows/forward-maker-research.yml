@@ -41,7 +41,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: forward-maker-alpha-research
+  group: forward-maker-alpha-research-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
