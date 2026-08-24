@@ -12,7 +12,7 @@ on:
       - "tests/test_meta_supervisor.py"
       - ".github/workflows/control-plane.yml"
       - ".github/workflows/alpha-factory.yml"
-      - ".github/workflows/model-governance.yml"
+      - ".github/workflows/research-policy.yml"
       - "docs/ALPHA_FACTORY.md"
   pull_request:
     branches: [main]
@@ -22,7 +22,7 @@ on:
       - "tests/test_meta_supervisor.py"
       - ".github/workflows/control-plane.yml"
       - ".github/workflows/alpha-factory.yml"
-      - ".github/workflows/model-governance.yml"
+      - ".github/workflows/research-policy.yml"
       - "docs/ALPHA_FACTORY.md"
 
 permissions:
@@ -112,7 +112,7 @@ jobs:
           while IFS= read -r workflow; do
             [[ -n "$workflow" ]] || continue
             case "$workflow" in
-              ci.yml|monitoring.yml|v4-live-smoke.yml|forward-maker-research.yml|alpha-factory.yml|model-governance.yml)
+              ci.yml|monitoring.yml|v4-live-smoke.yml|forward-maker-research.yml|alpha-factory.yml|research-policy.yml)
                 gh workflow run "$workflow" --ref main
                 printf 'dispatched=%s ref=main\n' "$workflow" | tee -a control_plane/dispatch-results.txt
                 ;;
