@@ -173,8 +173,8 @@ def evaluate(
         if manifest_changed:
             errors.append("research and diagnostic branches may never change the live champion manifest")
     elif head.startswith("integration/"):
-        # Integration PRs are deliberately label-free: source provenance plus green
-        # automated checks are the complete paper-promotion authority.
+        # Integration PRs are deliberately free of human approval labels: source provenance,
+        # Promotion Controller authorization, and automated checks govern paper promotion.
         if not draft and SOURCE_RESEARCH_PR_PATTERN.search(body) is None:
             errors.append(
                 "integration PR must link a numbered source research PR as "
@@ -192,7 +192,7 @@ def evaluate(
 
         if model_surface_files:
             errors.append(
-                "model/runtime work cannot change known live model/runtime/code surfaces on normal "
+                "unapproved model/runtime work cannot change known live model/runtime/code surfaces on normal "
                 "feature/fix branches; use research/*, experiment/*, or diagnostic/* for evidence "
                 "and integration/* for automatic paper promotion. Sensitive change: "
                 + ", ".join(model_surface_files)
