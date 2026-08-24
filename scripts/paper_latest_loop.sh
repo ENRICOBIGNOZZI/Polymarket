@@ -90,4 +90,109 @@ if [[ "${1:-}" == "--print-champion" ]]; then
   exit 0
 fi
 
-exec /usr/bin/env bash "$loop" "$config" "$run_root"
+fast_enabled="${POLYMARKET_FAST_ARB_ENABLED:-1}"
+fast_required="${POLYMARKET_FAST_ARB_REQUIRED:-1}"
+fast_binary="$ROOT/build/polymarket_fast_arb_shadow"
+fast_policy="${POLYMARKET_FAST_ARB_POLICY:-$ROOT/config/fast_arb_policy.json}"
+fast_relations="${POLYMARKET_FAST_ARB_RELATIONS:-$ROOT/config/fast_arb_relations.csv}"
+fast_run_root="${POLYMARKET_FAST_ARB_RUN_ROOT:-$run_root/fast}"
+fast_markets="${POLYMARKET_FAST_ARB_MARKETS:-1000}"
+fast_min_liquidity="${POLYMARKET_FAST_ARB_MIN_LIQUIDITY:-50}"
+fast_shard_size="${POLYMARKET_FAST_ARB_SHARD_SIZE:-200}"
+fast_recycle_seconds="${POLYMARKET_FAST_ARB_RECYCLE_SECONDS:-900}"
+fast_snapshot_seconds="${POLYMARKET_FAST_ARB_SNAPSHOT_SECONDS:-30}"
+
+if [[ "$fast_enabled" == "1" ]]; then
+  if [[ ! -x "$fast_binary" ]]; then
+    if [[ "$fast_required" == "1" ]]; then
+      echo "fatal: required fast-arbitrage shadow binary missing: $fast_binary" >&2
+      exit 1
+    fi
+    echo "warning: fast-arbitrage shadow disabled because binary is missing" >&2
+    fast_enabled=0
+  fi
+  [[ -f "$fast_policy" ]] || { echo "fatal: fast policy missing: $fast_policy" >&2; exit 1; }
+  [[ -f "$fast_relations" ]] || { echo "fatal: relation manifest missing: $fast_relations" >&2; exit 1; }
+fi
+
+mkdir -p "$fast_run_root"
+champion_pid=0
+fast_pid=0
+fast_restarts=0
+
+start_champion() {
+  /usr/bin/env bash "$loop" "$config" "$run_root" &
+  champion_pid=$!
+}
+
+start_fast() {
+  "$fast_binary" \
+    --config "$config" \
+    --policy "$fast_policy" \
+    --relations "$fast_relations" \
+    --run-dir "$fast_run_root" \
+    --markets "$fast_markets" \
+    --min-liquidity "$fast_min_liquidity" \
+    --shard-size "$fast_shard_size" \
+    --snapshot-refresh-seconds "$fast_snapshot_seconds" \
+    --duration-seconds 0 \
+    --recycle-seconds "$fast_recycle_seconds" \
+    >> "$fast_run_root/fast_runtime.log" 2>&1 &
+  fast_pid=$!
+}
+
+write_plane_status() {
+  local champion_alive=0
+  local fast_alive=0
+  if (( champion_pid > 0 )) && kill -0 "$champion_pid" 2>/dev/null; then champion_alive=1; fi
+  if [[ "$fast_enabled" == "1" ]] && (( fast_pid > 0 )) && kill -0 "$fast_pid" 2>/dev/null; then fast_alive=1; fi
+  local path="$run_root/runtime_planes.csv"
+  local tmp="$path.tmp"
+  printf 'timestamp,champion_version,champion_alive,fast_enabled,fast_alive,fast_restarts,champion_pid,fast_pid\n' > "$tmp"
+  printf '%s,%s,%s,%s,%s,%s,%s,%s\n' "$(date +%s)" "$version" "$champion_alive" \
+    "$fast_enabled" "$fast_alive" "$fast_restarts" "$champion_pid" "$fast_pid" >> "$tmp"
+  mv "$tmp" "$path"
+}
+
+cleanup() {
+  if (( fast_pid > 0 )); then kill "$fast_pid" 2>/dev/null || true; fi
+  if (( champion_pid > 0 )); then kill "$champion_pid" 2>/dev/null || true; fi
+  if (( fast_pid > 0 )); then wait "$fast_pid" 2>/dev/null || true; fi
+  if (( champion_pid > 0 )); then wait "$champion_pid" 2>/dev/null || true; fi
+}
+
+shutdown() {
+  trap - EXIT INT TERM
+  cleanup
+  exit 0
+}
+
+trap cleanup EXIT
+trap shutdown INT TERM
+
+start_champion
+if [[ "$fast_enabled" == "1" ]]; then start_fast; fi
+write_plane_status
+
+while true; do
+  if ! kill -0 "$champion_pid" 2>/dev/null; then
+    set +e
+    wait "$champion_pid"
+    champion_rc=$?
+    set -e
+    echo "fatal: champion runtime exited rc=$champion_rc" >&2
+    exit "$champion_rc"
+  fi
+
+  if [[ "$fast_enabled" == "1" ]] && ! kill -0 "$fast_pid" 2>/dev/null; then
+    wait "$fast_pid" 2>/dev/null || true
+    fast_restarts=$((fast_restarts + 1))
+    printf '%s,fast_arb,restart,%s\n' "$(date +%s)" "$fast_restarts" \
+      >> "$run_root/runtime_plane_events.csv"
+    sleep 1
+    start_fast
+  fi
+
+  write_plane_status
+  sleep 5
+done
