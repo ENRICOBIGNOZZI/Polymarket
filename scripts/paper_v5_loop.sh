@@ -3,14 +3,12 @@ set -euo pipefail
 
 CONFIG="${1:-config/paper_v5.json}"
 RUN_ROOT="${2:-runs/paper_v5_live}"
-RECORDER_MARKETS="${V5_RECORDER_MARKETS:-${V4_RECORDER_MARKETS:-600}}"
-RECORDER_BATCH="${V5_RECORDER_BATCH:-${V4_RECORDER_BATCH:-20}}"
-RECORDER_LOOKBACK_SECONDS="${V5_RECORDER_LOOKBACK_SECONDS:-${V4_RECORDER_LOOKBACK_SECONDS:-300}}"
-MODEL_MARKETS="${V5_MODEL_MARKETS:-${V4_TERMINAL_MARKETS:-}}"
-MODEL_MARKET_ARGS=()
-if [[ -n "$MODEL_MARKETS" ]]; then
-  MODEL_MARKET_ARGS=(--markets "$MODEL_MARKETS")
-fi
+MIN_LIQUIDITY="${V5_MIN_LIQUIDITY:-25}"
+MODEL_MARKETS="${V5_MODEL_MARKETS:-500}"
+RECORDER_MARKETS="${V5_RECORDER_MARKETS:-1000}"
+RECORDER_BATCH="${V5_RECORDER_BATCH:-40}"
+RECORDER_LOOKBACK_SECONDS="${V5_RECORDER_LOOKBACK_SECONDS:-600}"
+MODEL_MARKET_ARGS=(--markets "$MODEL_MARKETS")
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/strategies"
 
 COMPACTION_INTERVAL_SECONDS="$(python3 - "$CONFIG" <<'PY'
@@ -28,7 +26,7 @@ PY
 
 python3 scripts/multi_strategy_paper.py \
   --config "$CONFIG" --run-root "$RUN_ROOT" --engine ./build/polymarket_engine \
-  "${MODEL_MARKET_ARGS[@]}" --min-liquidity 100 --validate-only \
+  "${MODEL_MARKET_ARGS[@]}" --min-liquidity "$MIN_LIQUIDITY" --validate-only \
   > "$RUN_ROOT/allocator_validate.log"
 
 # Compatibility surface for existing terminal diagnostics. V5 aggregate PnL is
@@ -44,6 +42,11 @@ filter_b2() {
     --output "$RUN_ROOT/stat_arb_pca.csv" \
     --rejections "$RUN_ROOT/stat_arb_pca_rejected.csv" \
     --cache "$RUN_ROOT/market_metadata_cache.json" \
+    --allow-latent-factor \
+    --max-latent-hedge-error 0.85 \
+    --min-latent-stability 0.20 \
+    --min-latent-z 0.65 \
+    --require-positive-maker-edge \
     >> "$RUN_ROOT/coherent_hedges.log" 2>&1
 }
 
@@ -51,16 +54,16 @@ rebuild_intents() {
   rm -f "$RUN_ROOT/b1_intents.csv" "$RUN_ROOT/b2_intents.csv" "$RUN_ROOT/intents.csv"
   python3 scripts/build_v4_intents.py \
     --strategy B1 --input "$RUN_ROOT/stat_arb_pairs.csv" \
-    --output "$RUN_ROOT/b1_intents.csv" --config "$CONFIG" --min-edge 0.001 \
+    --output "$RUN_ROOT/b1_intents.csv" --config "$CONFIG" --min-edge 0.00025 \
     >> "$RUN_ROOT/intent_build.log" 2>&1
   python3 scripts/build_v4_intents.py \
     --strategy B2 --input "$RUN_ROOT/stat_arb_pca.csv" \
-    --output "$RUN_ROOT/b2_intents.csv" --config "$CONFIG" --min-edge 0.001 \
+    --output "$RUN_ROOT/b2_intents.csv" --config "$CONFIG" --min-edge 0.00025 \
     >> "$RUN_ROOT/intent_build.log" 2>&1
   python3 scripts/merge_v4_intents.py \
     --input "$RUN_ROOT/b1_intents.csv" --input "$RUN_ROOT/b2_intents.csv" \
-    --output "$RUN_ROOT/intents.csv" --min-edge 0.001 \
-    --max-age-seconds 600 --max-bundles 20 \
+    --output "$RUN_ROOT/intents.csv" --min-edge 0.00025 \
+    --max-age-seconds 900 --max-bundles 50 \
     >> "$RUN_ROOT/intent_merge.log" 2>&1
 }
 
@@ -87,9 +90,9 @@ supervise_execution() {
   start_recorder() {
     ./build/polymarket_trade_recorder \
       --config "$CONFIG" --run-dir "$RUN_ROOT" \
-      --markets "$RECORDER_MARKETS" --batch "$RECORDER_BATCH" --min-liquidity 100 \
+      --markets "$RECORDER_MARKETS" --batch "$RECORDER_BATCH" --min-liquidity "$MIN_LIQUIDITY" \
       --lookback-seconds "$RECORDER_LOOKBACK_SECONDS" \
-      --interval 10 --loop >> "$RUN_ROOT/trade_recorder.log" 2>&1 &
+      --interval 5 --loop >> "$RUN_ROOT/trade_recorder.log" 2>&1 &
     rec_pid=$!
   }
 
@@ -97,9 +100,9 @@ supervise_execution() {
     ./build/polymarket_multileg_paper \
       --config "$CONFIG" --run-dir "$RUN_ROOT" \
       --intents "$RUN_ROOT/intents.csv" --trade-tape "$RUN_ROOT/trade_tape.csv" \
-      --min-edge 0.001 --completion-threshold 0.95 \
-      --submit-latency-ms 250 --cancel-latency-ms 250 --max-replaces 3 \
-      --max-leg-risk-usd 5 --adverse-horizon-seconds 60 --interval 3 --loop \
+      --min-edge 0.00025 --completion-threshold 0.85 \
+      --submit-latency-ms 150 --cancel-latency-ms 150 --max-replaces 5 \
+      --max-leg-risk-usd 10 --adverse-horizon-seconds 90 --interval 2 --loop \
       >> "$RUN_ROOT/multileg.log" 2>&1 &
     broker_pid=$!
   }
@@ -107,7 +110,7 @@ supervise_execution() {
   start_allocator() {
     python3 scripts/multi_strategy_paper.py \
       --config "$CONFIG" --run-root "$RUN_ROOT" --engine ./build/polymarket_engine \
-      "${MODEL_MARKET_ARGS[@]}" --min-liquidity 100 \
+      "${MODEL_MARKET_ARGS[@]}" --min-liquidity "$MIN_LIQUIDITY" \
       >> "$RUN_ROOT/allocator.log" 2>&1 &
     allocator_pid=$!
   }
@@ -170,25 +173,25 @@ supervise_execution() {
       wait "$rec_pid" 2>/dev/null || true
       rec_restarts=$((rec_restarts + 1))
       append_event recorder restart "$rec_restarts"
-      sleep 2
+      sleep 1
       start_recorder
     fi
     if ! kill -0 "$broker_pid" 2>/dev/null; then
       wait "$broker_pid" 2>/dev/null || true
       broker_restarts=$((broker_restarts + 1))
       append_event broker restart "$broker_restarts"
-      sleep 2
+      sleep 1
       start_broker
     fi
     if ! kill -0 "$allocator_pid" 2>/dev/null; then
       wait "$allocator_pid" 2>/dev/null || true
       allocator_restarts=$((allocator_restarts + 1))
       append_event allocator restart "$allocator_restarts"
-      sleep 2
+      sleep 1
       start_allocator
     fi
     write_status
-    sleep 5
+    sleep 3
   done
 }
 
@@ -221,6 +224,7 @@ last_rewards=0
 last_oos=0
 last_report=0
 last_compaction=0
+last_activity=0
 
 while true; do
   now=$(date +%s)
@@ -229,35 +233,36 @@ while true; do
     wait "$SUPERVISOR_PID" 2>/dev/null || true
     SUPERVISOR_RESTARTS=$((SUPERVISOR_RESTARTS + 1))
     printf '%s,supervisor,restart,%s\n' "$(date +%s)" "$SUPERVISOR_RESTARTS" >> "$RUN_ROOT/runtime_supervisor_events.csv"
-    sleep 2
+    sleep 1
     start_supervisor
   fi
 
   ./build/polymarket_maker_paper \
-    --config "$CONFIG" --run-dir "$RUN_ROOT/maker" --markets 240 --min-liquidity 100 \
-    --min-edge 0.003 --max-order-usd 50 --ttl-seconds 300 --hold-seconds 180 \
-    --adverse-selection-mult 0.50 --once >> "$RUN_ROOT/maker.log" 2>&1 || true
+    --config "$CONFIG" --run-dir "$RUN_ROOT/maker" --markets "$MODEL_MARKETS" --min-liquidity "$MIN_LIQUIDITY" \
+    --min-edge 0.00025 --max-order-usd 35 --ttl-seconds 180 --hold-seconds 300 \
+    --adverse-selection-mult 0.15 --once >> "$RUN_ROOT/maker.log" 2>&1 || true
 
-  if (( now - last_stat >= 300 )); then
+  if (( now - last_stat >= 120 )); then
     rm -f "$RUN_ROOT/stat_arb_pairs.csv" "$RUN_ROOT/stat_arb_pca_raw.csv"
     ./build/polymarket_stat_arb \
-      --config "$CONFIG" --markets 600 --history-universe 160 \
-      --lookback-hours 336 --fidelity-minutes 30 --min-z 1.5 \
-      --max-half-life-hours 168 --top 60 --csv "$RUN_ROOT/stat_arb_pairs.csv" \
+      --config "$CONFIG" --markets "$MODEL_MARKETS" --history-universe 320 \
+      --lookback-hours 336 --fidelity-minutes 15 --min-z 0.75 \
+      --min-t-reversion 0.50 --max-half-life-hours 336 --top 150 --csv "$RUN_ROOT/stat_arb_pairs.csv" \
       > "$RUN_ROOT/stat_arb_pairs_latest.log" 2> "$RUN_ROOT/stat_arb_pairs_errors.log" || true
     ./build/polymarket_pca_stat_arb \
-      --config "$CONFIG" --markets 600 --universe 120 \
-      --lookback-hours 336 --fidelity-minutes 30 --factors 3 --max-hedges 4 \
-      --min-z 1.5 --max-half-life-hours 168 --top 60 --csv "$RUN_ROOT/stat_arb_pca_raw.csv" \
+      --config "$CONFIG" --markets "$MODEL_MARKETS" --universe 300 \
+      --lookback-hours 336 --fidelity-minutes 15 --factors 4 --max-hedges 8 \
+      --min-z 0.65 --min-t-reversion 0.50 --max-half-life-hours 336 \
+      --max-factor-hedge-error 0.85 --top 150 --csv "$RUN_ROOT/stat_arb_pca_raw.csv" \
       > "$RUN_ROOT/stat_arb_pca_latest.log" 2> "$RUN_ROOT/stat_arb_pca_errors.log" || true
     filter_b2 || true
     rebuild_intents || true
     last_stat=$now
   fi
 
-  if (( now - last_structural >= 300 )); then
+  if (( now - last_structural >= 120 )); then
     ./build/polymarket_negrisk_arb \
-      --config "$CONFIG" --markets 600 --min-liquidity 100 --top 60 \
+      --config "$CONFIG" --markets "$MODEL_MARKETS" --min-liquidity "$MIN_LIQUIDITY" --top 150 \
       2> "$RUN_ROOT/structural_errors.log" \
       | tee "$RUN_ROOT/structural_latest.log" "$RUN_ROOT/structural_latest.csv" >/dev/null || true
     last_structural=$now
@@ -267,7 +272,7 @@ while true; do
   if (( now - last_rewards >= 300 )); then
     rm -f "$RUN_ROOT/reward_opportunities.csv"
     ./build/polymarket_rewards_scan \
-      --config "$CONFIG" --markets 2000 --top 80 \
+      --config "$CONFIG" --markets 2000 --top 120 \
       --quote-shares 50 --max-notional 100 --improve-ticks 0 \
       --competition-multiplier 2.0 --reward-haircut 0.25 \
       --native-reward-unit-usd 1.0 --annual-capital-rate 0.20 \
@@ -289,14 +294,23 @@ while true; do
     last_oos=$now
   fi
 
-  if (( now - last_report >= 300 )); then
+  if (( now - last_report >= 120 )); then
     python3 scripts/runtime_action_report.py \
       --run-root "$RUN_ROOT" --external-signals data/external_signals.csv \
-      --window-seconds 3600 --production-edge 0.001 \
+      --window-seconds 3600 --production-edge 0.00025 \
       --output-json "$RUN_ROOT/action_report.json" \
       --output-markdown "$RUN_ROOT/action_report.md" \
       > "$RUN_ROOT/action_report_latest.log" 2> "$RUN_ROOT/action_report_errors.log" || true
     last_report=$now
+  fi
+
+  if (( now - last_activity >= 60 )); then
+    python3 scripts/aggressive_activity_guard.py \
+      --run-root "$RUN_ROOT" --expected-models 5 --minimum-markets 100 \
+      --minimum-tradable-fraction 0.10 --max-model-staleness-seconds 180 \
+      --output "$RUN_ROOT/activity_status.json" \
+      >> "$RUN_ROOT/activity_guard.log" 2>&1 || true
+    last_activity=$now
   fi
 
   if (( now - last_compaction >= COMPACTION_INTERVAL_SECONDS )); then
@@ -306,5 +320,5 @@ while true; do
     last_compaction=$now
   fi
 
-  sleep 10
+  sleep 5
 done
