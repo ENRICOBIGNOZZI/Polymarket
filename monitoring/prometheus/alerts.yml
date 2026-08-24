@@ -36,6 +36,43 @@ groups:
           summary: Paper-maker kill switch is active
           description: New legacy maker risk is frozen by the persisted drawdown kill switch.
 
+  - name: polymarket-simulated-live
+    rules:
+      - alert: PolymarketSimulatedLiveDown
+        expr: polymarket_terminal_state_present == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Simulated live paper account is down
+          description: The primary live-data paper simulator state is missing; displayed zero PnL must not be treated as valid performance.
+
+      - alert: PolymarketSimulatedLiveDataStale
+        expr: polymarket_terminal_staleness_seconds > 60
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Simulated live paper telemetry is stale
+          description: The primary simulated-live account has not refreshed for more than 60 seconds; risk and PnL visibility are stale.
+
+      - alert: PolymarketSimulatedLiveDrawdownWarning
+        expr: polymarket_terminal_drawdown_ratio >= 0.10
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: Simulated live paper drawdown above 10%
+          description: The primary simulated-live account has crossed the pre-kill drawdown warning level.
+
+      - alert: PolymarketSimulatedLiveKillSwitchActive
+        expr: polymarket_terminal_kill_switch == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: Simulated live paper kill switch is active
+          description: The primary simulated-live account has frozen new risk through its persisted kill switch.
+
   - name: polymarket-latest-runtime
     rules:
       - alert: PolymarketLatestExecutionStale

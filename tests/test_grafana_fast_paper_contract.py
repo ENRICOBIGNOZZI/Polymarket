@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DASHBOARD = ROOT / "monitoring" / "grafana" / "dashboards" / "polymarket-fast-paper.json"
+ALERTS = ROOT / "monitoring" / "prometheus" / "alerts.yml"
 
 
 class GrafanaFastPaperContractTest(unittest.TestCase):
@@ -51,6 +52,20 @@ class GrafanaFastPaperContractTest(unittest.TestCase):
         self.assertIn("not added to the main account", text)
         self.assertIn("avoiding double-counting capital", text)
         self.assertIn("No authenticated real-money order submission", text)
+
+    def test_primary_simulator_has_prometheus_health_and_risk_alerts(self) -> None:
+        alerts = ALERTS.read_text(encoding="utf-8")
+        required = {
+            "PolymarketSimulatedLiveDown": "polymarket_terminal_state_present == 0",
+            "PolymarketSimulatedLiveDataStale": "polymarket_terminal_staleness_seconds > 60",
+            "PolymarketSimulatedLiveDrawdownWarning": "polymarket_terminal_drawdown_ratio >= 0.10",
+            "PolymarketSimulatedLiveKillSwitchActive": "polymarket_terminal_kill_switch == 1",
+        }
+        for alert, expr in required.items():
+            self.assertIn(f"- alert: {alert}", alerts)
+            self.assertIn(f"expr: {expr}", alerts)
+        self.assertIn("displayed zero PnL must not be treated as valid performance", alerts)
+        self.assertIn("risk and PnL visibility are stale", alerts)
 
 
 if __name__ == "__main__":
