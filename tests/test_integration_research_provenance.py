@@ -6,12 +6,18 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts" / "integration_gate.py"
 
-spec = importlib.util.spec_from_file_location("integration_gate", SCRIPT)
-assert spec and spec.loader
-integration_gate = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(integration_gate)
+
+def load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+integration_gate = load_module("integration_gate", ROOT / "scripts" / "integration_gate.py")
+research_pr_policy = load_module("research_pr_policy", ROOT / "scripts" / "research_pr_policy.py")
 
 
 class IntegrationResearchProvenanceTest(unittest.TestCase):
@@ -75,6 +81,25 @@ class IntegrationResearchProvenanceTest(unittest.TestCase):
         self.assertEqual(integration_gate.select_candidates([candidate]), [])
         errors = integration_gate.validate_candidate(candidate, self.source())
         self.assertTrue(any("numbered PR" in error for error in errors))
+
+    def test_policy_rejects_branch_only_integration_provenance(self):
+        candidate = self.candidate()
+        candidate["body"] = candidate["body"].replace("#123", "experiment/example")
+        event = {
+            "pull_request": {
+                "head": {"ref": candidate["headRefName"]},
+                "draft": candidate["isDraft"],
+                "body": candidate["body"],
+                "labels": candidate["labels"],
+            }
+        }
+        errors, summary = research_pr_policy.evaluate(
+            event,
+            {"config/paper_v4.json"},
+            manifest_existed_on_base=True,
+        )
+        self.assertEqual(summary["policy"], "fail")
+        self.assertTrue(any("numbered source research PR" in error for error in errors))
 
     def test_mismatched_source_number_is_rejected(self):
         source = self.source()
