@@ -92,7 +92,7 @@ def validate_candidate(pr: dict[str, Any]) -> list[str]:
         if typename == "CheckRun":
             if check.get("status") != "COMPLETED":
                 errors.append(f"check {name} is not complete")
-            elif check.get("conclusion") not in {"SUCCESS", "NEUTRAL", "SKIPPED"}:
+            elif check.get("conclusion") not in {"SUCCESS", "NEUTRAL"}:
                 errors.append(f"check {name} concluded {check.get('conclusion')}")
         else:
             if check.get("state") != "SUCCESS":
