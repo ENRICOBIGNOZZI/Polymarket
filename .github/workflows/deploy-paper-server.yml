@@ -80,11 +80,17 @@ jobs:
           printf 'predeploy_origin_main=%s\n' "$main_sha"
           printf 'predeploy_paper_validated=%s\n' "$validated_sha"
           printf 'trigger_expected_validated=%s\n' "${EXPECTED_VALIDATED_SHA:-manual}"
+
           case "$(uname -s)" in
-            Darwin) exec bash ops/update_server_macos.sh ;;
-            Linux)  exec bash ops/update_server.sh ;;
+            Darwin) updater_path=ops/update_server_macos.sh ;;
+            Linux)  updater_path=ops/update_server.sh ;;
             *) echo "unsupported server OS: $(uname -s)" >&2; exit 1 ;;
           esac
+          updater="$(mktemp)"
+          trap 'rm -f "$updater"' EXIT
+          git show "$validated_sha:$updater_path" > "$updater"
+          chmod 700 "$updater"
+          POLYMARKET_DEPLOY_REF=paper-validated bash "$updater"
           REMOTE
 
       - name: Verify production paper services
