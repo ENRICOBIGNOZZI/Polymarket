@@ -40,30 +40,75 @@ write_status() {
   mv "$tmp" "$STATUS_FILE"
 }
 
+champion_meta() {
+  "$PYTHON_BIN" - "$APP_DIR/config/live_champion.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+m = json.loads(Path(sys.argv[1]).read_text())
+print(f"{m['version']}\t{m['run_root']}\t{m['config']}\t{m['loop']}")
+PY
+}
+
 paper_runtime_healthy() {
-  local supervisor="$APP_DIR/runs/paper_v4_live/runtime_supervisor.csv"
+  local meta version run_root_rel config_rel loop_rel supervisor
+  meta="$(champion_meta 2>/dev/null)" || return 1
+  IFS=$'\t' read -r version run_root_rel config_rel loop_rel <<<"$meta"
+  [[ "$version" =~ ^[0-9]+$ ]] || return 1
+  supervisor="$APP_DIR/$run_root_rel/runtime_supervisor.csv"
   [[ -s "$supervisor" ]] || return 1
-  local row ts recorder_alive broker_alive terminal_alive recorder_restarts broker_restarts terminal_restarts recorder_pid broker_pid terminal_pid now
-  row="$(tail -n 1 "$supervisor")"
-  IFS=, read -r ts recorder_alive broker_alive terminal_alive recorder_restarts broker_restarts terminal_restarts recorder_pid broker_pid terminal_pid <<<"$row"
-  now="$(date +%s)"
-  [[ "$recorder_alive" == "1" ]] || return 1
-  [[ "$broker_alive" == "1" ]] || return 1
-  [[ "$terminal_alive" == "1" ]] || return 1
-  [[ "$ts" =~ ^[0-9]+$ ]] || return 1
-  (( now - ts <= 60 )) || return 1
+  "$PYTHON_BIN" - "$supervisor" "$version" "$APP_DIR/$run_root_rel" <<'PY'
+import csv
+import json
+import math
+import sys
+import time
+from pathlib import Path
+supervisor = Path(sys.argv[1])
+version = int(sys.argv[2])
+run_root = Path(sys.argv[3])
+with supervisor.open(newline='', encoding='utf-8') as handle:
+    rows = list(csv.DictReader(handle))
+assert rows
+row = rows[-1]
+assert row.get('recorder_alive') == '1'
+assert row.get('broker_alive') == '1'
+assert row.get('allocator_alive' if version >= 5 else 'terminal_alive') == '1'
+assert time.time() - float(row['timestamp']) <= 60
+if version >= 5:
+    allocator = json.loads((run_root / 'allocator_status.json').read_text())
+    with (run_root / 'strategy_status.csv').open(newline='', encoding='utf-8') as handle:
+        strategies = list(csv.DictReader(handle))
+    assert allocator.get('paper_only') is True
+    assert int(allocator.get('models_expected', 0)) == 5
+    assert int(allocator.get('models_alive', 0)) == 5
+    assert {item.get('name') for item in strategies} == {'micro', 'pca', 'graph', 'semantic', 'external'}
+    total = float(allocator.get('reserve_fraction', 0.0)) + sum(float(item['capital_fraction']) for item in strategies)
+    assert math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9)
+    assert all(float(item['status_age_seconds']) <= 120 for item in strategies)
+PY
 }
 
 full_runtime_healthy() {
-  local metrics
+  local meta version run_root_rel config_rel loop_rel run_name metrics grafana_search
+  meta="$(champion_meta 2>/dev/null)" || return 1
+  IFS=$'\t' read -r version run_root_rel config_rel loop_rel <<<"$meta"
+  run_name="$(basename "$run_root_rel")"
   curl -fsS http://127.0.0.1:9108/healthz >/dev/null 2>&1 || return 1
   metrics="$(curl -fsS http://127.0.0.1:9108/metrics 2>/dev/null)" || return 1
-  grep -q '^polymarket_runtime_info' <<<"$metrics" || return 1
-  grep -q '^polymarket_terminal_state_present 1' <<<"$metrics" || return 1
-  grep -q '^polymarket_terminal_pnl_usd ' <<<"$metrics" || return 1
+  grep -q "^polymarket_runtime_info{adapter=\"v$version\",run_root=\"$run_name\",version=\"v$version\"} 1$" <<<"$metrics" || return 1
+  grep -q '^polymarket_runtime_pnl_usd ' <<<"$metrics" || return 1
+  if (( version >= 5 )); then
+    grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics" || return 1
+    grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics" || return 1
+    grep -q '^polymarket_model_info{' <<<"$metrics" || return 1
+  fi
   curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1 || return 1
   curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 || return 1
-  curl -fsS http://127.0.0.1:3000/api/search >/dev/null 2>&1 || return 1
+  grafana_search="$(curl -fsS http://127.0.0.1:3000/api/search 2>/dev/null)" || return 1
+  if (( version >= 5 )); then
+    grep -q 'polymarket-multi-strategy-v5' <<<"$grafana_search" || return 1
+  fi
   paper_runtime_healthy
 }
 
@@ -98,7 +143,7 @@ NEW_SHA="$(git rev-parse "origin/$DEPLOY_REF")"
 if [[ "$OLD_SHA" == "$NEW_SHA" ]]; then
   if full_runtime_healthy; then
     write_status up_to_date "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
-    log "Already deployed at validated commit $NEW_SHA"
+    log "Already deployed and healthy at validated commit $NEW_SHA"
     exit 0
   fi
   log "Validated code is current but runtime is unhealthy; attempting service repair"
@@ -137,12 +182,16 @@ cmake --build build --parallel "$JOBS"
 ctest --test-dir build --output-on-failure
 "$PYTHON_BIN" -m unittest \
   tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py \
-  tests/test_monitoring_latest_exporter.py tests/test_grafana_fast_paper_contract.py -v
+  tests/test_monitoring_latest_exporter.py tests/test_monitoring_v5_exporter.py \
+  tests/test_grafana_fast_paper_contract.py tests/test_grafana_multi_strategy_contract.py \
+  tests/test_multi_strategy_paper.py -v
 "$PYTHON_BIN" -m py_compile \
-  monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_latest.py \
-  scripts/build_v4_intents.py scripts/merge_v4_intents.py scripts/walk_forward_v4.py scripts/tiny_live_pilot.py
-bash -n scripts/paper_latest_loop.sh scripts/paper_v4_once.sh scripts/paper_v4_loop.sh \
-  ops/apply_runtime_config_macos.sh
+  monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_v5.py monitoring/exporter_latest.py \
+  scripts/multi_strategy_paper.py scripts/build_v4_intents.py scripts/merge_v4_intents.py \
+  scripts/walk_forward_v4.py scripts/tiny_live_pilot.py
+bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh ops/apply_runtime_config_macos.sh
+"$PYTHON_BIN" -m json.tool config/paper_v5.json >/dev/null
+"$PYTHON_BIN" -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
 
 log "Candidate validation passed; staging production build"
 cd "$APP_DIR"
@@ -193,10 +242,10 @@ rm -rf build.previous
 if [[ -d build ]]; then mv build build.previous; fi
 mv build.next build
 
-log "Applying versioned runtime configuration"
+log "Applying V5-aware runtime configuration"
 bash "$APP_DIR/ops/apply_runtime_config_macos.sh" || rollback "runtime configuration failed"
 
-log "Restarting latest-runtime services"
+log "Restarting manifest-selected paper services"
 sudo -n /usr/local/sbin/polymarket-service-control restart || rollback "service restart failed"
 
 log "Waiting for production health"
@@ -206,8 +255,12 @@ fi
 
 rm -rf build.previous
 write_status deployed "$NEW_SHA" "$NEW_SHA" "$MAIN_SHA"
+meta="$(champion_meta)"
+IFS=$'\t' read -r version run_root_rel config_rel loop_rel <<<"$meta"
 printf 'deployed_sha=%s\n' "$NEW_SHA"
 printf 'validated_ref=%s\n' "$DEPLOY_REF"
 printf 'main_sha=%s\n' "$MAIN_SHA"
 printf 'previous_sha=%s\n' "$OLD_SHA"
+printf 'champion_version=%s\n' "$version"
+printf 'champion_run_root=%s\n' "$run_root_rel"
 log "Deployment healthy"
