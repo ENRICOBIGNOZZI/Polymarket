@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Fail-closed coherence gate for B2 PCA hedge baskets.
+"""Coherence gate for executable B2 PCA hedge baskets.
 
-The raw PCA file remains a research diagnostic. Only rows whose hedge legs belong
-to the same explicit event or a strong semantic cluster are written to the
-execution-facing CSV. Any metadata or filter failure leaves that CSV empty.
+The raw PCA file remains a research diagnostic. Execution rows are admitted when
+all hedge legs share an explicit event, a non-empty Polymarket category, or a
+meaningful text relation with the target. Metadata failures remain fail-closed:
+a stale executable file is cleared before input parsing or network access.
 """
 from __future__ import annotations
 
@@ -81,6 +82,10 @@ def tokens(meta: MarketMeta) -> set[str]:
     return out
 
 
+def normalized_category(value: str) -> str:
+    return " ".join(TOKEN_RE.findall(value.lower()))
+
+
 def relation(
     target: MarketMeta,
     hedge: MarketMeta,
@@ -89,10 +94,16 @@ def relation(
 ) -> tuple[str, float, int]:
     if target.event_id and target.event_id == hedge.event_id:
         return "same_event", 1.0, 0
+
     target_tokens, hedge_tokens = tokens(target), tokens(hedge)
     shared = len(target_tokens & hedge_tokens)
     union = len(target_tokens | hedge_tokens)
     score = shared / union if union else 0.0
+
+    target_category = normalized_category(target.category)
+    hedge_category = normalized_category(hedge.category)
+    if target_category and target_category == hedge_category:
+        return "same_category", max(0.50, score), shared
     if shared >= min_shared and score >= min_jaccard:
         return "semantic", score, shared
     return "unrelated", score, shared
@@ -107,6 +118,21 @@ def event_id_from_payload(payload: dict[str, Any]) -> str:
         for event in events:
             if isinstance(event, dict) and event.get("id") not in (None, ""):
                 return str(event["id"])
+    return ""
+
+
+def category_from_payload(payload: dict[str, Any]) -> str:
+    direct = payload.get("category") or payload.get("groupItemTitle")
+    if direct not in (None, ""):
+        return str(direct)
+    events = payload.get("events")
+    if isinstance(events, list):
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            value = event.get("category") or event.get("groupItemTitle")
+            if value not in (None, ""):
+                return str(value)
     return ""
 
 
@@ -154,7 +180,7 @@ def fetch_metadata(
 ) -> MarketMeta:
     url = gamma_url.rstrip("/") + "/markets/" + urllib.parse.quote(market_id, safe="")
     request = urllib.request.Request(
-        url, headers={"User-Agent": "polymarket-coherent-hedges/1"}
+        url, headers={"User-Agent": "polymarket-coherent-hedges/2"}
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = json.loads(response.read().decode("utf-8"))
@@ -165,7 +191,7 @@ def fetch_metadata(
         slug=str(payload.get("slug") or ""),
         question=str(payload.get("question") or ""),
         event_id=event_id_from_payload(payload),
-        category=str(payload.get("category") or ""),
+        category=category_from_payload(payload),
         fetched_ts=now,
     )
 
@@ -187,14 +213,12 @@ def main() -> int:
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--gamma-url", default="https://gamma-api.polymarket.com")
     parser.add_argument("--cache-ttl-seconds", type=int, default=21600)
-    parser.add_argument("--min-jaccard", type=float, default=0.25)
-    parser.add_argument("--min-shared-tokens", type=int, default=2)
+    parser.add_argument("--min-jaccard", type=float, default=0.08)
+    parser.add_argument("--min-shared-tokens", type=int, default=1)
     parser.add_argument("--timeout-seconds", type=float, default=8.0)
     parser.add_argument("--now", type=int, default=None)
     args = parser.parse_args()
 
-    # This happens before input parsing or network access. A crash can no longer
-    # leave an old production-facing B2 file behind.
     initialise_fail_closed(args.output, args.rejections)
 
     now = int(time.time()) if args.now is None else args.now

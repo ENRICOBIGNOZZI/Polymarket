@@ -57,8 +57,8 @@ inline double market_text_jaccard(
 inline MarketRelation market_relation(
     const Market& a,
     const Market& b,
-    double min_jaccard = 0.25,
-    std::size_t min_shared_tokens = 2) {
+    double min_jaccard = 0.08,
+    std::size_t min_shared_tokens = 1) {
     if (!a.event_id.empty() && a.event_id == b.event_id) return MarketRelation::same_event;
     std::size_t shared = 0;
     const double jaccard = market_text_jaccard(a, b, &shared);

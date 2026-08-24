@@ -24,7 +24,7 @@ concurrency:
 jobs:
   live-paper-smoke:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
       VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.sha }}
     steps:
@@ -51,87 +51,95 @@ jobs:
           cmake --build build --parallel 2
           ctest --test-dir build --output-on-failure
 
-      - name: Fresh public-data V5 independent-strategy smoke
+      - name: Fresh public-data aggressive V5 full-strategy smoke
         shell: bash
         run: |
           set -euo pipefail
           R=paper_v5_live
           mkdir -p "$R" "$R/maker" "$R/strategies"
 
+          # Execute every independent sleeve once against live public books. This
+          # is not a manifest-only check: each child engine must discover, score,
+          # write signals/status and simulate paper orders when its edge gate fires.
           python3 scripts/multi_strategy_paper.py \
             --config config/paper_v5.json --run-root "$R" --engine ./build/polymarket_engine \
-            --markets 120 --min-liquidity 100 --validate-only \
-            | tee "$R/allocator_validate.log"
+            --markets 180 --min-liquidity 25 --once \
+            | tee "$R/allocator_once.log"
 
           python3 - <<'PY'
+          import csv
           import json
           from pathlib import Path
+
           root = Path('paper_v5_live')
           manifest = json.loads((root / 'allocator_manifest.json').read_text())
           assert manifest['paper_only'] is True
           assert len(manifest['strategies']) == 5
           expected = {'micro', 'pca', 'graph', 'semantic', 'external'}
           assert {item['name'] for item in manifest['strategies']} == expected
+
           for item in manifest['strategies']:
               child = json.loads(Path(item['config']).read_text())
               active = {name: weight for name, weight in child['expert_weights'].items() if weight > 0}
               assert active == {item['expert']: 1.0}
+              run_dir = Path(item['run_dir'])
+              log = run_dir / 'engine.log'
+              assert log.exists() and 'discovered=' in log.read_text(errors='replace'), (item['name'], log)
+              assert (run_dir / 'signals.csv').exists()
+              assert (run_dir / 'fills.csv').exists()
+              assert (run_dir / 'status.json').exists()
+
+          rows = list(csv.DictReader((root / 'strategy_status.csv').open(newline='', encoding='utf-8')))
+          assert {row['name'] for row in rows} == expected
           PY
 
           ./build/polymarket_trade_recorder \
             --config config/paper_v5.json --run-dir "$R" \
-            --markets 240 --batch 40 --min-liquidity 100 --lookback-seconds 900 --once \
+            --markets 500 --batch 40 --min-liquidity 25 --lookback-seconds 900 --once \
             | tee "$R/trade_recorder_latest.log"
 
           ./build/polymarket_negrisk_arb \
-            --config config/paper_v5.json --markets 240 --min-liquidity 100 --top 60 \
+            --config config/paper_v5.json --markets 500 --min-liquidity 25 --top 200 \
             | tee "$R/structural_latest.log" "$R/structural_latest.csv"
 
           ./build/polymarket_stat_arb \
-            --config config/paper_v5.json --markets 240 --history-universe 100 \
-            --lookback-hours 336 --fidelity-minutes 30 --min-z 1.5 \
-            --max-half-life-hours 168 --top 60 --csv "$R/stat_arb_pairs.csv" \
+            --config config/paper_v5.json --markets 500 --history-universe 240 \
+            --lookback-hours 720 --fidelity-minutes 30 --min-z 0.75 --min-t-reversion 0.75 \
+            --max-half-life-hours 336 --top 200 --csv "$R/stat_arb_pairs.csv" \
             | tee "$R/stat_arb_pairs_latest.log"
 
           ./build/polymarket_pca_stat_arb \
-            --config config/paper_v5.json --markets 240 --universe 80 \
-            --lookback-hours 336 --fidelity-minutes 30 --factors 3 --max-hedges 4 --min-z 1.5 \
-            --max-half-life-hours 168 --top 60 --csv "$R/stat_arb_pca_raw.csv" \
+            --config config/paper_v5.json --markets 500 --universe 240 \
+            --lookback-hours 720 --fidelity-minutes 30 --factors 5 --max-hedges 8 \
+            --min-z 0.65 --min-t-reversion 0.60 --max-half-life-hours 336 \
+            --max-factor-hedge-error 0.80 --top 200 --csv "$R/stat_arb_pca_raw.csv" \
             | tee "$R/stat_arb_pca_latest.log"
           python3 scripts/filter_coherent_hedges.py \
             --input "$R/stat_arb_pca_raw.csv" --output "$R/stat_arb_pca.csv" \
             --rejections "$R/stat_arb_pca_rejected.csv" --cache "$R/market_metadata_cache.json" \
+            --min-jaccard 0.08 --min-shared-tokens 1 \
             | tee "$R/coherent_hedges.log"
 
           python3 scripts/build_v4_intents.py --strategy B1 \
             --input "$R/stat_arb_pairs.csv" --output "$R/b1_intents.csv" \
-            --config config/paper_v5.json --min-edge 0.001
+            --config config/paper_v5.json --min-edge 0.00025
           python3 scripts/build_v4_intents.py --strategy B2 \
             --input "$R/stat_arb_pca.csv" --output "$R/b2_intents.csv" \
-            --config config/paper_v5.json --min-edge 0.001
+            --config config/paper_v5.json --min-edge 0.00025
           python3 scripts/merge_v4_intents.py \
             --input "$R/b1_intents.csv" --input "$R/b2_intents.csv" --output "$R/intents.csv" \
-            --min-edge 0.001 --max-age-seconds 600 --max-bundles 20
+            --min-edge 0.00025 --max-age-seconds 240 --max-bundles 80
 
           ./build/polymarket_multileg_paper \
             --config config/paper_v5.json --run-dir "$R" --intents "$R/intents.csv" --trade-tape "$R/trade_tape.csv" \
-            --min-edge 0.001 --completion-threshold 0.95 --submit-latency-ms 250 --cancel-latency-ms 250 \
-            --max-replaces 3 --max-leg-risk-usd 5 --adverse-horizon-seconds 60 --once \
+            --min-edge 0.00025 --completion-threshold 0.75 --submit-latency-ms 100 --cancel-latency-ms 100 \
+            --max-replaces 6 --max-leg-risk-usd 12 --adverse-horizon-seconds 45 --once \
             | tee "$R/multileg_latest.log"
 
           ./build/polymarket_maker_paper \
-            --config config/paper_v5.json --run-dir "$R/maker" --markets 120 --min-liquidity 100 \
-            --min-edge 0.003 --max-order-usd 50 --ttl-seconds 300 --hold-seconds 180 \
-            --adverse-selection-mult 0.50 --once | tee "$R/maker_latest.log"
-
-          ./build/polymarket_engine \
-            --config "$R/generated_configs/graph.json" --once --scan-only --markets 120 --min-liquidity 100 \
-            --run-dir "$R/strategies/graph" | tee "$R/graph_latest.log"
-
-          python3 scripts/multi_strategy_paper.py \
-            --config config/paper_v5.json --run-root "$R" --engine ./build/polymarket_engine \
-            --markets 120 --min-liquidity 100 --scan-only --once \
-            > "$R/allocator_refresh.log"
+            --config config/paper_v5.json --run-dir "$R/maker" --markets 500 --min-liquidity 25 \
+            --min-edge 0.0005 --max-order-usd 25 --ttl-seconds 120 --hold-seconds 300 \
+            --adverse-selection-mult 0.20 --once | tee "$R/maker_latest.log"
 
           python3 scripts/walk_forward_v4.py \
             --ledger "$R/bundle_ledger.csv" --output "$R/walk_forward.json" --starting-capital 10000 || true
@@ -139,11 +147,13 @@ jobs:
           PYTHONPATH=monitoring python3 - <<'PY'
           from pathlib import Path
           from exporter_latest import LatestCollector
+
           c = LatestCollector(Path('.'), Path('config'), 'paper_v5_live', 'config/paper_v5.json', 20)
           text = c.collect()
           assert 'polymarket_runtime_info{adapter="v5",run_root="paper_v5_live",version="v5"} 1' in text
           assert 'polymarket_allocator_state_present 1' in text
-          assert 'polymarket_model_info{expert="graph",model="graph"} 1' in text
+          for model in ('micro', 'pca', 'graph', 'semantic', 'external'):
+              assert f'polymarket_model_info{{expert="{model}",model="{model}"}} 1' in text
           assert 'polymarket_multileg_state_present 1' in text
           staleness = next(
               float(line.split()[1])
@@ -174,8 +184,15 @@ jobs:
         shell: bash
         run: |
           R=paper_v5_live
-          echo '## V5 independent-strategy live paper smoke' >> "$GITHUB_STEP_SUMMARY"
-          for f in "$R/allocator_validate.log" "$R/graph_latest.log" "$R/trade_recorder_latest.log" "$R/structural_latest.log" "$R/stat_arb_pairs_latest.log" "$R/stat_arb_pca_latest.log" "$R/coherent_hedges.log" "$R/multileg_latest.log" "$R/maker_latest.log"; do
+          echo '## Aggressive V5 full-strategy live paper smoke' >> "$GITHUB_STEP_SUMMARY"
+          for model in micro pca graph semantic external; do
+            f="$R/strategies/$model/engine.log"
+            echo "### $model engine" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            tail -n 8 "$f" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          done
+          for f in "$R/trade_recorder_latest.log" "$R/structural_latest.log" "$R/stat_arb_pairs_latest.log" "$R/stat_arb_pca_latest.log" "$R/coherent_hedges.log" "$R/multileg_latest.log" "$R/maker_latest.log"; do
             echo "### $f" >> "$GITHUB_STEP_SUMMARY"
             echo '```text' >> "$GITHUB_STEP_SUMMARY"
             tail -n 8 "$f" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
@@ -199,7 +216,7 @@ jobs:
           publish_error="$(mktemp)"
           for attempt in 1 2 3 4 5; do
             current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
-            args=("$endpoint" --method PUT -f message="Update public V5 live smoke telemetry" -f content="$content" -f branch=telemetry)
+            args=("$endpoint" --method PUT -f message="Update public aggressive V5 live smoke telemetry" -f content="$content" -f branch=telemetry)
             if [[ -n "$current_sha" ]]; then
               args+=(-f sha="$current_sha")
             fi
