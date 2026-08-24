@@ -1,0 +1,216 @@
+name: Polymarket Meta-Supervisor
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "29 * * * *"
+  push:
+    branches: [main]
+    paths:
+      - "config/alpha_factory.json"
+      - "config/scheduler_context.json"
+      - "docs/SCHEDULER_CONTEXT.md"
+      - "scripts/meta_supervisor.py"
+      - "scripts/validate_scheduler_context.py"
+      - "tests/test_meta_supervisor.py"
+      - "tests/test_scheduler_context.py"
+      - ".github/workflows/control-plane.yml"
+      - ".github/workflows/alpha-factory.yml"
+      - ".github/workflows/research-policy.yml"
+      - "docs/ALPHA_FACTORY.md"
+  pull_request:
+    branches: [main]
+    paths:
+      - "config/alpha_factory.json"
+      - "config/scheduler_context.json"
+      - "docs/SCHEDULER_CONTEXT.md"
+      - "scripts/meta_supervisor.py"
+      - "scripts/validate_scheduler_context.py"
+      - "tests/test_meta_supervisor.py"
+      - "tests/test_scheduler_context.py"
+      - ".github/workflows/control-plane.yml"
+      - ".github/workflows/alpha-factory.yml"
+      - ".github/workflows/research-policy.yml"
+      - "docs/ALPHA_FACTORY.md"
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: polymarket-meta-supervisor
+  cancel-in-progress: false
+
+jobs:
+  coordinate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Load shared scheduler context
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p control_plane
+          python3 scripts/validate_scheduler_context.py \
+            --context config/scheduler_context.json \
+            --scheduler-id meta-supervisor \
+            --output control_plane/scheduler-context.md \
+            --output-json control_plane/scheduler-context.json \
+            --github-env "$GITHUB_ENV"
+
+      - name: Validate control-plane invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest tests/test_meta_supervisor.py -v
+          python3 -m py_compile scripts/meta_supervisor.py
+          python3 -m json.tool config/alpha_factory.json >/dev/null
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          context = json.loads(Path("control_plane/scheduler-context.json").read_text())
+          assert context["valid"] is True
+          assert context["scheduler_id"] == "meta-supervisor"
+          assert context["context_sha256"] == "${{ env.POLYMARKET_SCHEDULER_CONTEXT_SHA }}"
+          PY
+
+      - name: Capture workflow graph and validated-ref state
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main "$POLYMARKET_DEPLOYMENT_REF"
+          MAIN_SHA="$(git rev-parse origin/main)"
+          VALIDATED_SHA="$(git rev-parse "origin/$POLYMARKET_DEPLOYMENT_REF")"
+          VALIDATED_ANCESTOR=false
+          if git merge-base --is-ancestor "$VALIDATED_SHA" "$MAIN_SHA"; then
+            VALIDATED_ANCESTOR=true
+          fi
+
+          gh run list --limit 100 \
+            --json databaseId,workflowName,status,conclusion,headSha,headBranch,event,createdAt,updatedAt,url \
+            > control_plane/runs.json
+
+          MAIN_SHA="$MAIN_SHA" VALIDATED_SHA="$VALIDATED_SHA" \
+          VALIDATED_ANCESTOR="$VALIDATED_ANCESTOR" \
+          SCHEDULER_CONTEXT_SHA="$POLYMARKET_SCHEDULER_CONTEXT_SHA" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          runs = json.loads(Path("control_plane/runs.json").read_text(encoding="utf-8"))
+          snapshot = {
+              "main_sha": os.environ["MAIN_SHA"],
+              "paper_validated_sha": os.environ["VALIDATED_SHA"],
+              "paper_validated_is_ancestor": os.environ["VALIDATED_ANCESTOR"] == "true",
+              "scheduler_context_sha256": os.environ["SCHEDULER_CONTEXT_SHA"],
+              "runs": runs,
+          }
+          Path("control_plane/snapshot.json").write_text(
+              json.dumps(snapshot, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Coordinate System Watch, Alpha Factory, and validation chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/meta_supervisor.py \
+            --config config/alpha_factory.json \
+            --snapshot control_plane/snapshot.json \
+            --output-json control_plane/latest-control-plane.json \
+            --output-markdown control_plane/latest-control-plane.md \
+            --dispatch-file control_plane/dispatch-plan.txt \
+            | tee control_plane/meta-supervisor.log
+
+      - name: Execute bounded allowlisted remediation
+        if: github.event_name != 'pull_request' && success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          : > control_plane/dispatch-results.txt
+          while IFS= read -r workflow; do
+            [[ -n "$workflow" ]] || continue
+            case "$workflow" in
+              ci.yml|monitoring.yml|v4-live-smoke.yml|forward-maker-research.yml|alpha-factory.yml|research-policy.yml)
+                gh workflow run "$workflow" --ref main
+                printf 'dispatched=%s ref=main context=%s\n' "$workflow" "$POLYMARKET_SCHEDULER_CONTEXT_SHA" \
+                  | tee -a control_plane/dispatch-results.txt
+                ;;
+              *)
+                printf 'forbidden_dispatch=%s\n' "$workflow" >&2
+                exit 1
+                ;;
+            esac
+          done < control_plane/dispatch-plan.txt
+
+          if grep -Eq 'deploy-paper-server|server-health' control_plane/dispatch-results.txt; then
+            echo 'deployment or private health dispatch escaped the allowlist' >&2
+            exit 1
+          fi
+
+      - name: Publish coordination summary
+        if: always()
+        shell: bash
+        run: |
+          cat control_plane/scheduler-context.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '## Polymarket Meta-Supervisor' >> "$GITHUB_STEP_SUMMARY"
+          if test -s control_plane/latest-control-plane.md; then
+            cat control_plane/latest-control-plane.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Control-plane report is missing.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if test -s control_plane/dispatch-results.txt; then
+            echo '## Dispatch results' >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            cat control_plane/dispatch-results.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Publish latest coordination evidence to telemetry
+        if: github.event_name != 'pull_request' && success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          publish_file() {
+            local local_path="$1"
+            local remote_path="$2"
+            local message="$3"
+            local endpoint="repos/${GITHUB_REPOSITORY}/contents/${remote_path}"
+            local content current_sha
+            content="$(base64 -w0 "$local_path")"
+            current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
+            local args=("$endpoint" --method PUT -f message="$message" -f content="$content" -f branch=telemetry)
+            if [[ -n "$current_sha" ]]; then
+              args+=(-f sha="$current_sha")
+            fi
+            gh api "${args[@]}" >/dev/null
+          }
+
+          publish_file control_plane/latest-control-plane.json \
+            telemetry/latest-control-plane.json \
+            "Update Polymarket control-plane evidence"
+          publish_file control_plane/latest-control-plane.md \
+            telemetry/latest-control-plane.md \
+            "Update Polymarket control-plane report"
+
+      - name: Upload durable coordination evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: polymarket-control-plane-${{ github.run_id }}
+          path: control_plane/
+          if-no-files-found: error
+          retention-days: 30
