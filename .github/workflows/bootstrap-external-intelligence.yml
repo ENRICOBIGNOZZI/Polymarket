@@ -36,9 +36,7 @@ jobs:
             '/tmp/external-intelligence-payload.tar.gz' \
             | sha256sum --check -
           tar -xzf /tmp/external-intelligence-payload.tar.gz -C .
-          rm -f \
-            ops/external-intelligence-payload.part-* \
-            .github/workflows/bootstrap-external-intelligence.yml
+          rm -f ops/external-intelligence-payload.part-*
 
       - name: Validate scheduler, storage, backtest and safety contracts
         shell: bash
@@ -67,10 +65,15 @@ jobs:
           )
           PY
 
-      - name: Commit materialized implementation to the research branch
+      - name: Commit non-workflow implementation to the research branch
         shell: bash
         run: |
           set -euo pipefail
+          find scripts tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          git checkout HEAD -- \
+            .github/workflows/bootstrap-external-intelligence.yml \
+            .github/workflows/live-smoke.yml \
+            .github/workflows/alpha-factory.yml
           git config user.name 'polymarket-external-intelligence[bot]'
           git config user.email 'polymarket-external-intelligence[bot]@users.noreply.github.com'
           git add -A
