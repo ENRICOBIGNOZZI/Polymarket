@@ -128,18 +128,6 @@
       "validation_dispatch_authority": false
     },
     {
-      "id": "grafana-access",
-      "workflow": ".github/workflows/grafana-access.yml",
-      "workflow_name": "Grafana Permanent Access",
-      "job": "deploy-grafana-access",
-      "cadence": "manual and relevant main configuration changes",
-      "responsibility": "configure and verify the private operator Grafana route without changing trading code, champion selection or execution authority",
-      "critical": false,
-      "merge_authority": false,
-      "deploy_authority": false,
-      "validation_dispatch_authority": false
-    },
-    {
       "id": "forward-maker-research",
       "workflow": ".github/workflows/forward-maker-research.yml",
       "workflow_name": "forward-maker-alpha-research",
