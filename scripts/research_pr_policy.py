@@ -40,6 +40,7 @@ LIVE_MODEL_SURFACE_PATTERNS = (
     re.compile(r"^config/(?:cross_venue|portfolio_supervisor)\.json$"),
     re.compile(r"^config/cross_venue_pairs\.csv$"),
     re.compile(r"^scripts/paper_v\d+_(?:loop|once)\.sh$"),
+    re.compile(r"^scripts/multi_strategy_paper\.py$"),
     re.compile(r"^scripts/build_v\d+_intents\.py$"),
     re.compile(r"^scripts/merge_v\d+_intents\.py$"),
     re.compile(r"^scripts/build_global_opportunity_book\.py$"),
