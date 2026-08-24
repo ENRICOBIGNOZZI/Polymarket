@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 
@@ -53,12 +54,17 @@ class V4MonitoringContractTest(unittest.TestCase):
         self.assertIn("--markets 400 --batch 40 --min-liquidity 100 --lookback-seconds 900", production_segment)
         self.assertIn("--trade-lookback-seconds 900", smoke)
 
-    def test_pca_sparse_hedge_cap_matches_production_and_smoke(self):
+    def test_pca_sparse_hedge_cap_matches_versioned_champion_and_smoke(self):
         once = (ROOT / "scripts" / "paper_v4_once.sh").read_text(encoding="utf-8")
         loop = (ROOT / "scripts" / "paper_v4_loop.sh").read_text(encoding="utf-8")
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
-        for producer in (once, loop, smoke):
-            self.assertIn("--max-hedges 4", producer)
+        alpha_config = json.loads((ROOT / "config" / "alpha_research.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(alpha_config["champions"]["B2"]["params"]["max_hedges"], 4)
+        for producer in (once, loop):
+            self.assertIn("scripts/alpha_config_env.py", producer)
+            self.assertIn('--max-hedges "$B2_MAX_HEDGES"', producer)
+        self.assertIn("--max-hedges 4", smoke)
 
     def test_b1_shadow_fillability_is_non_blocking_and_separate_from_production(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
