@@ -10,6 +10,9 @@ SCRIPT = ROOT / "scripts" / "incumbent_health_gate.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "integration-merge.yml"
 SHA = "1" * 40
 OTHER_SHA = "2" * 40
+NOW_EPOCH = 1787577000
+CURRENT_TIMESTAMP = "2026-08-24T13:10:00Z"
+STALE_TIMESTAMP = "2026-08-24T10:10:00Z"
 
 
 class IncumbentHealthGateTest(unittest.TestCase):
@@ -20,6 +23,7 @@ class IncumbentHealthGateTest(unittest.TestCase):
         validated_sha: str = SHA,
         deploy_enabled: bool = True,
         health_text: str | None = None,
+        max_age_seconds: int = 7200,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
@@ -33,6 +37,10 @@ class IncumbentHealthGateTest(unittest.TestCase):
                 validated_sha,
                 "--deploy-enabled",
                 "true" if deploy_enabled else "false",
+                "--max-age-seconds",
+                str(max_age_seconds),
+                "--now-epoch",
+                str(NOW_EPOCH),
                 "--output",
                 str(output),
             ]
@@ -50,9 +58,14 @@ class IncumbentHealthGateTest(unittest.TestCase):
             )
 
     @staticmethod
-    def healthy_text(sha: str = SHA, recorder: str = "1", broker: str = "1") -> str:
+    def healthy_text(
+        sha: str = SHA,
+        recorder: str = "1",
+        broker: str = "1",
+        timestamp: str = CURRENT_TIMESTAMP,
+    ) -> str:
         return (
-            "timestamp=1787577000\n"
+            f"timestamp={timestamp}\n"
             "os=Darwin\n"
             f"head={sha}\n"
             f"origin_main={sha}\n"
@@ -66,6 +79,15 @@ class IncumbentHealthGateTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertIn("PASS: incumbent is fully validated", completed.stdout)
         self.assertIn(f"server_head: `{SHA}`", completed.stdout)
+        self.assertIn("server_health_age_seconds: `0`", completed.stdout)
+
+    def test_stale_health_evidence_fails(self):
+        completed = self.run_gate(
+            health_text=self.healthy_text(timestamp=STALE_TIMESTAMP),
+            max_age_seconds=7200,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("server health evidence is stale", completed.stdout)
 
     def test_stale_deployed_head_fails(self):
         completed = self.run_gate(health_text=self.healthy_text(OTHER_SHA))
@@ -95,14 +117,16 @@ class IncumbentHealthGateTest(unittest.TestCase):
         self.assertNotEqual(stale.returncode, 0)
         self.assertIn("main and paper-validated are not equal", stale.stdout)
 
-    def test_integration_workflow_downloads_current_health_artifact(self):
+    def test_integration_workflow_downloads_fresh_health_artifact_after_health_schedule(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn('cron: "33 * * * *"', workflow)
         self.assertIn("actions: read", workflow)
         self.assertIn("SERVER_DEPLOY_ENABLED", workflow)
         self.assertIn("gh run list --workflow server-health.yml", workflow)
         self.assertIn('paper-server-health-$health_run_id', workflow)
         self.assertIn("gh run download", workflow)
         self.assertIn("scripts/incumbent_health_gate.py", workflow)
+        self.assertIn("--max-age-seconds 7200", workflow)
         self.assertIn("incumbent-health-evidence", workflow)
         self.assertIn("deployed and healthy", workflow)
 
