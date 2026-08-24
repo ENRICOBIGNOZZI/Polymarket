@@ -42,6 +42,7 @@ jobs:
       - name: Validate latest exporter and total/per-strategy dashboards
         run: |
           python3 -m unittest \
+            tests/test_compact_strategy_logs.py \
             tests/test_monitoring_exporter.py \
             tests/test_monitoring_v4_exporter.py \
             tests/test_monitoring_latest_exporter.py \
@@ -50,6 +51,7 @@ jobs:
             tests/test_grafana_fast_paper_contract.py \
             tests/test_grafana_multi_strategy_contract.py -v
           python3 -m py_compile \
+            scripts/compact_strategy_logs.py \
             monitoring/exporter.py monitoring/exporter_v4.py \
             monitoring/exporter_v5.py monitoring/exporter_latest.py
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-latest.json >/dev/null
