@@ -172,6 +172,139 @@ def _canonical_fallback(root: Path, config: Path, now: float) -> CanonicalStatus
     )
 
 
+def _collect_all_market_metrics(metrics: Metrics, root: Path, now: float) -> None:
+    universe_path = root / "all_market" / "universe_status.json"
+    universe = _read_json(universe_path) or {}
+    metrics.sample(
+        "polymarket_all_market_universe_present",
+        1.0 if universe else 0.0,
+        help_text="Whether the complete active-market inventory is present.",
+    )
+    metrics.sample(
+        "polymarket_all_market_universe_markets",
+        _float(universe.get("markets")),
+        help_text="Number of active tradable markets in the all-market inventory.",
+    )
+    metrics.sample(
+        "polymarket_all_market_tier1_markets",
+        _float(universe.get("tier1")),
+        help_text="Markets admitted to the event-driven Tier-1 compute universe.",
+    )
+    metrics.sample(
+        "polymarket_all_market_tier2_markets",
+        _float(universe.get("tier2")),
+        help_text="Markets admitted to the historical/statistical Tier-2 compute universe.",
+    )
+    metrics.sample(
+        "polymarket_all_market_universe_staleness_seconds",
+        max(0.0, now - _float(universe.get("generated_ts"), now)) if universe else 0.0,
+        help_text="Age of the all-market universe inventory.",
+    )
+
+    book_path = root / "global_opportunity_status.json"
+    book = _read_json(book_path) or {}
+    metrics.sample(
+        "polymarket_global_opportunity_book_present",
+        1.0 if book else 0.0,
+        help_text="Whether the global ranked opportunity book is present.",
+    )
+    metrics.sample(
+        "polymarket_global_research_candidates",
+        _float(book.get("research_candidates")),
+        help_text="Number of ranked positive-raw-edge research candidates retained globally.",
+    )
+    metrics.sample(
+        "polymarket_global_eligible_candidates",
+        _float(book.get("eligible_candidates")),
+        help_text="Number of globally ranked candidates positive after their source-specific executable cost model.",
+    )
+    metrics.sample(
+        "polymarket_global_hard_arbitrage_candidates",
+        _float(book.get("hard_arbitrage_candidates")),
+        help_text="Number of currently eligible hard-arbitrage candidates in the global book.",
+    )
+    metrics.sample(
+        "polymarket_global_best_net_edge",
+        _float(book.get("best_net_edge")),
+        help_text="Best net edge in the globally eligible candidate book.",
+    )
+    metrics.sample(
+        "polymarket_global_best_expected_profit_usd",
+        _float(book.get("best_expected_profit")),
+        help_text="Best expected paper profit in the globally eligible candidate book.",
+    )
+    metrics.sample(
+        "polymarket_global_opportunity_staleness_seconds",
+        max(0.0, now - _float(book.get("generated_ts"), now)) if book else 0.0,
+        help_text="Age of the global opportunity ranking.",
+    )
+
+    fast_path = root / "fast" / "fast_arb_status.json"
+    fast = _read_json(fast_path) or {}
+    metrics.sample(
+        "polymarket_fast_feed_present",
+        1.0 if fast else 0.0,
+        help_text="Whether the event-driven all-market fast feed has a runtime status.",
+    )
+    metrics.sample(
+        "polymarket_fast_markets",
+        _float(fast.get("markets")),
+        help_text="Markets subscribed by the event-driven fast shadow engine.",
+    )
+    metrics.sample(
+        "polymarket_fast_current_executable",
+        _float(fast.get("current_executable")),
+        help_text="Current executable opportunities in the fast shadow engine.",
+    )
+    metrics.sample(
+        "polymarket_fast_current_hard_executable",
+        _float(fast.get("current_hard_executable")),
+        help_text="Current hard-arbitrage opportunities in the fast shadow engine.",
+    )
+    metrics.sample(
+        "polymarket_fast_best_net_edge",
+        _float(fast.get("best_net_edge_per_share")),
+        help_text="Best current fast-engine net edge per share.",
+    )
+    metrics.sample(
+        "polymarket_fast_feed_stale_ms",
+        _float(fast.get("feed_stale_ms"), -1.0),
+        help_text="Milliseconds since the last public market WebSocket message.",
+    )
+    metrics.sample(
+        "polymarket_fast_ws_workers",
+        _float(fast.get("ws_workers")),
+        help_text="Configured public market WebSocket shards.",
+    )
+    metrics.sample(
+        "polymarket_fast_ws_connected_workers",
+        _float(fast.get("ws_connected_workers")),
+        help_text="Connected public market WebSocket shards.",
+    )
+    metrics.sample(
+        "polymarket_fast_decision_latency_p95_us",
+        _float(fast.get("decision_latency_p95_us")),
+        help_text="95th percentile event-to-decision compute latency for the fast engine.",
+    )
+
+    account = _read_json(root / "account_readonly_status.json") or {}
+    metrics.sample(
+        "polymarket_account_readonly_configured",
+        1.0 if bool(account.get("configured")) else 0.0,
+        help_text="Whether optional read-only Polymarket account reconciliation is configured.",
+    )
+    metrics.sample(
+        "polymarket_account_readonly_healthy",
+        1.0 if account.get("status") == "healthy" else 0.0,
+        help_text="Whether optional GET-only Polymarket account reconciliation is healthy.",
+    )
+    metrics.sample(
+        "polymarket_account_open_orders",
+        _float(account.get("open_orders")),
+        help_text="Open orders reported by optional read-only account reconciliation.",
+    )
+
+
 class LatestCollector:
     def __init__(self, runs_base: Path, config_dir: Path, run_name: str, explicit_config: str | None, top_opportunities: int) -> None:
         self.runs_base = runs_base
@@ -227,6 +360,7 @@ class LatestCollector:
         }
         for name, (value, help_text) in fields.items():
             metrics.sample(name, value, help_text=help_text)
+        _collect_all_market_metrics(metrics, root, now)
         return detailed + metrics.render()
 
 
