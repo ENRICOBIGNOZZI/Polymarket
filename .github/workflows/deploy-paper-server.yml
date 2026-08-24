@@ -28,8 +28,7 @@ jobs:
         github.event_name == 'workflow_run' &&
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.head_branch == 'main' &&
-        github.event.workflow_run.event != 'pull_request' &&
-        vars.POLYMARKET_SERVER_DEPLOY == 'true'
+        github.event.workflow_run.event != 'pull_request'
       )
     runs-on: ubuntu-24.04
     timeout-minutes: 45
