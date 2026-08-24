@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import sys
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts" / "lf_aggressive_v5_reversion_audit.py"
-SPEC = importlib.util.spec_from_file_location("lf_aggressive_v5_reversion_audit", MODULE_PATH)
+MODULE_NAME = "lf_aggressive_v5_reversion_audit"
+SPEC = importlib.util.spec_from_file_location(MODULE_NAME, MODULE_PATH)
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
+sys.modules[MODULE_NAME] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
