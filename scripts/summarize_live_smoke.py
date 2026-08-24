@@ -8,6 +8,9 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from validate_trade_recorder_health import evaluate as evaluate_trade_recorder_health
+from validate_trade_recorder_health import parse_status_line as parse_trade_recorder_status
+
 METRIC = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?\s+([-+0-9.eE]+)$")
 SELECTED = {
     "polymarket_runtime_equity_usd",
@@ -228,6 +231,26 @@ def shadow_fillability(run_root: Path, tape_window_seconds: int) -> dict:
     }
 
 
+def trade_recorder_health(run_root: Path, now_ts: int, max_trade_age_seconds: int,
+                          max_future_skew_seconds: int) -> dict[str, object]:
+    path = run_root / "trade_recorder_latest.log"
+    if not path.exists():
+        return {
+            "status": "unhealthy",
+            "failures": ["missing_trade_recorder_log"],
+        }
+    try:
+        fields = parse_trade_recorder_status(path.read_text(encoding="utf-8", errors="replace"))
+        return evaluate_trade_recorder_health(
+            fields,
+            now_ts,
+            max_trade_age_seconds,
+            max_future_skew_seconds,
+        )
+    except (OSError, ValueError) as exc:
+        return {"status": "unhealthy", "failures": [str(exc)]}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-root", type=Path, required=True)
@@ -236,7 +259,17 @@ def main() -> int:
     parser.add_argument("--run-id", default="")
     parser.add_argument("--tail-lines", type=int, default=12)
     parser.add_argument("--trade-lookback-seconds", type=int, default=900)
+    parser.add_argument("--max-trade-age-seconds", type=int, default=1200)
+    parser.add_argument("--max-future-skew-seconds", type=int, default=30)
     args = parser.parse_args()
+
+    now_ts = int(time.time())
+    recorder_health = trade_recorder_health(
+        args.run_root,
+        now_ts,
+        max(1, args.max_trade_age_seconds),
+        max(0, args.max_future_skew_seconds),
+    )
 
     walk = {}
     walk_path = args.run_root / "walk_forward.json"
@@ -248,10 +281,11 @@ def main() -> int:
 
     snapshot = {
         "schema": "polymarket_public_live_smoke_v2",
-        "generated_ts": int(time.time()),
+        "generated_ts": now_ts,
         "git_sha": args.git_sha,
         "github_run_id": args.run_id,
         "run_root": args.run_root.name,
+        "data_health": {"trade_recorder": recorder_health},
         "metrics": metric_snapshot(args.run_root / "metrics.prom"),
         "walk_forward": walk,
         "candidates": {
@@ -276,6 +310,9 @@ def main() -> int:
     tmp = args.output.with_suffix(args.output.suffix + ".tmp")
     tmp.write_text(json.dumps(snapshot, indent=2, sort_keys=True), encoding="utf-8")
     tmp.replace(args.output)
+
+    if recorder_health.get("status") == "unhealthy":
+        return 1
     return 0
 
 
