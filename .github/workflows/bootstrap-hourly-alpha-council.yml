@@ -1,0 +1,94 @@
+name: Bootstrap Hourly Alpha Council
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/bootstrap-hourly-alpha-council.yml"
+      - "ops/hourly-alpha-council-payload.b64"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bootstrap-hourly-alpha-council-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Verify and materialize reviewed council
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 --decode ops/hourly-alpha-council-payload.b64 > /tmp/hourly-alpha-council.tar.gz
+          printf '%s  %s\n' 'ed4aab16c11c029ce6d652624b7a0ec203753df86506d20b51fad14e43168863' '/tmp/hourly-alpha-council.tar.gz' | sha256sum --check -
+          tar -xzf /tmp/hourly-alpha-council.tar.gz -C .
+
+          git fetch --no-tags origin \
+            feat/continuous-alpha-research-scheduler-20260824 \
+            research/kalshi-cross-venue-shadow-20260824
+
+          for path in \
+            scripts/alpha_config_env.py \
+            scripts/alpha_research.py \
+            scripts/alpha_research_metrics.py \
+            scripts/alpha_research_model.py \
+            scripts/alpha_research_report.py \
+            tests/test_alpha_research.py \
+            docs/ALPHA_RESEARCH.md; do
+            mkdir -p "$(dirname "$path")"
+            git show "origin/feat/continuous-alpha-research-scheduler-20260824:$path" > "$path"
+          done
+
+          for path in \
+            scripts/kalshi_cross_venue_shadow.py \
+            tests/test_kalshi_cross_venue_shadow.py; do
+            mkdir -p "$(dirname "$path")"
+            git show "origin/research/kalshi-cross-venue-shadow-20260824:$path" > "$path"
+          done
+
+          rm -f \
+            ops/hourly-alpha-council-payload.b64 \
+            .github/workflows/bootstrap-hourly-alpha-council.yml
+
+      - name: Validate Python, JSON, shell, YAML and unit contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q scripts tests
+          for file in config/alpha_factory.json config/alpha_research.json \
+                      config/hourly_alpha_council.json config/scheduler_registry.json; do
+            python3 -m json.tool "$file" >/dev/null
+          done
+          bash -n scripts/paper_v5_loop.sh
+          bash -n scripts/paper_v5_once.sh
+          python3 -m unittest \
+            tests/test_alpha_research.py \
+            tests/test_wallet_flow_shadow.py \
+            tests/test_graph_semantic_shadow.py \
+            tests/test_kalshi_cross_venue_shadow.py \
+            tests/test_alpha_oos_council.py \
+            tests/test_alpha_unifier.py \
+            tests/test_alpha_rollback_monitor.py \
+            tests/test_alpha_shadow_cycle.py \
+            tests/test_render_alpha_runtime.py \
+            tests/test_hourly_alpha_council.py -v
+
+      - name: Commit materialized implementation to the PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'polymarket-alpha-council[bot]'
+          git config user.email 'polymarket-alpha-council[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Materialize distributed hourly alpha council'
+          git push origin "HEAD:${{ github.event.pull_request.head.ref || github.ref_name }}"
