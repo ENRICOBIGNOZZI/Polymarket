@@ -156,17 +156,40 @@ class ModelGovernanceContractTest(unittest.TestCase):
         integration = (WORKFLOWS / "integration-merge.yml").read_text(encoding="utf-8")
         post_merge = (WORKFLOWS / "post-merge-validation.yml").read_text(encoding="utf-8")
         deploy = (WORKFLOWS / "deploy-paper-server.yml").read_text(encoding="utf-8")
+        ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        monitoring = (WORKFLOWS / "monitoring.yml").read_text(encoding="utf-8")
+        live_validation = (WORKFLOWS / "v4-live-smoke.yml").read_text(encoding="utf-8")
 
-        for forbidden in ("gh pr merge", "POLYMARKET_DEPLOY_REF=", "git push origin paper-validated"):
+        for forbidden in (
+            "gh pr merge",
+            "gh workflow run",
+            "repository_dispatch",
+            "POLYMARKET_DEPLOY_REF=",
+            "git push origin paper-validated",
+        ):
             self.assertNotIn(forbidden, admin)
         self.assertIn('gh pr merge "$PR_NUMBER" --squash --delete-branch', integration)
         self.assertNotIn("--admin", integration)
         self.assertIn("administrator-approved", integration)
         self.assertNotIn("gh workflow run", integration)
+        self.assertIn("BASE_MAIN_SHA", integration)
+        self.assertIn("BASE_VALIDATED_SHA", integration)
+        self.assertIn("candidate-final.json", integration)
+        self.assertIn("--match-head-commit", integration)
+        self.assertIn("current_main_after_merge", integration)
+
         self.assertIn("repository_dispatch", post_merge)
         self.assertIn("ci.yml monitoring.yml v4-live-smoke.yml", post_merge)
+        self.assertIn('-f expected_sha="$EXPECTED_SHA"', post_merge)
         self.assertNotIn("gh pr merge", post_merge)
         self.assertIn("POLYMARKET_DEPLOY_REF=paper-validated", deploy)
+
+        for workflow in (ci, monitoring, live_validation):
+            self.assertIn("expected_sha:", workflow)
+            self.assertIn("VALIDATION_SHA", workflow)
+            self.assertIn('test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"', workflow)
+        self.assertIn('test "$validated_sha" = "$main_sha"', live_validation)
+        self.assertIn('-f sha="$validated_sha" -F force=false', live_validation)
 
     def test_research_policy_rejects_unisolated_research_and_accepts_admin_integration(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -246,7 +269,7 @@ class ModelGovernanceContractTest(unittest.TestCase):
             self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
             self.assertIn("policy: `pass`", accepted.stdout)
 
-    def test_integration_gate_requires_all_labels_and_green_checks(self):
+    def test_integration_gate_requires_all_labels_and_green_non_skipped_checks(self):
         checks = [
             {
                 "__typename": "CheckRun",
@@ -307,7 +330,7 @@ class ModelGovernanceContractTest(unittest.TestCase):
                 {"name": "single-model-reviewed"},
             ]
             candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
-            rejected = subprocess.run(
+            rejected_label = subprocess.run(
                 [
                     "python3",
                     "scripts/integration_gate.py",
@@ -323,8 +346,34 @@ class ModelGovernanceContractTest(unittest.TestCase):
                 text=True,
                 timeout=10,
             )
-            self.assertNotEqual(rejected.returncode, 0)
-            self.assertIn("administrator-approved", rejected.stdout)
+            self.assertNotEqual(rejected_label.returncode, 0)
+            self.assertIn("administrator-approved", rejected_label.stdout)
+
+            candidate["labels"] = [
+                {"name": "approved-for-integration"},
+                {"name": "single-model-reviewed"},
+                {"name": "administrator-approved"},
+            ]
+            candidate["statusCheckRollup"][0]["conclusion"] = "SKIPPED"
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            rejected_skip = subprocess.run(
+                [
+                    "python3",
+                    "scripts/integration_gate.py",
+                    "validate",
+                    "--candidate",
+                    str(candidate_path),
+                    "--report",
+                    str(report),
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertNotEqual(rejected_skip.returncode, 0)
+            self.assertIn("concluded SKIPPED", rejected_skip.stdout)
 
     def test_scheduler_scripts_compile(self):
         for relative in (
