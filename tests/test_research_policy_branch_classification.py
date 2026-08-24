@@ -57,6 +57,16 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
         self.assertIn("unapproved model/runtime work", result.stdout)
         self.assertIn("scripts/paper_v4_loop.sh", result.stdout)
 
+    def test_feature_branch_cannot_modify_live_b2_filter(self):
+        result = self.run_policy(
+            "fix/coherent-hedge-selection",
+            "Change B2 hedge coherence filtering before intent generation.",
+            ["scripts/filter_coherent_hedges.py"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unapproved model/runtime work", result.stdout)
+        self.assertIn("scripts/filter_coherent_hedges.py", result.stdout)
+
     def test_feature_branch_cannot_hide_direct_model_source_change(self):
         result = self.run_policy(
             "feature/pca-residual-upgrade",
@@ -98,6 +108,19 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("shadow-isolated code cannot modify production", result.stdout)
+
+    def test_shadow_isolated_label_cannot_touch_oos_or_realized_pnl_evidence(self):
+        result = self.run_policy(
+            "research/shadow-oos-report",
+            "Measurement-only shadow instrumentation.",
+            ["scripts/walk_forward_v4.py", "scripts/runtime_action_report.py"],
+            labels=["shadow-isolated"],
+            draft=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("shadow-isolated code cannot modify production", result.stdout)
+        self.assertIn("scripts/walk_forward_v4.py", result.stdout)
+        self.assertIn("scripts/runtime_action_report.py", result.stdout)
 
     def test_data_transport_fix_is_not_misclassified_as_model_work(self):
         result = self.run_policy(
