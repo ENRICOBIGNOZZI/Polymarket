@@ -1,0 +1,156 @@
+name: Arbitrage Theory Hourly Research
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "37 * * * *"
+
+permissions:
+  actions: read
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: arbitrage-theory-hourly
+  cancel-in-progress: false
+
+jobs:
+  research-cycle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Download recent fast-shadow evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          gh run list \
+            --workflow fast-arb-hourly.yml \
+            --status success \
+            --limit 30 \
+            --json databaseId \
+            --jq '.[].databaseId' > evidence/run-ids.txt
+          while IFS= read -r run_id; do
+            [[ -n "$run_id" ]] || continue
+            mkdir -p "evidence/run-$run_id"
+            gh run download "$run_id" \
+              --name "fast-arb-evidence-$run_id" \
+              --dir "evidence/run-$run_id" || true
+          done < evidence/run-ids.txt
+
+      - name: Re-derive identities, stress costs and materialize candidate code
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p research-output/include/pm/generated research-output/config/candidates research-output/docs/generated
+          python3 scripts/arb_theory_scheduler.py \
+            --evidence-root evidence \
+            --base-policy config/fast_arb_policy.json \
+            --stress-bps 10 \
+            --output-json research-output/config/candidates/fast_arb_candidate.json \
+            --output-markdown research-output/docs/generated/fast_arb_theory_report.md \
+            --output-header research-output/include/pm/generated/fast_arb_candidate_policy.hpp
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("research-output/config/candidates/fast_arb_candidate.json").read_text())
+          assert report["real_order_submission"] is False
+          assert report["candidate_policy"]["real_order_submission"] is False
+          with Path("research-output/gates.env").open("w") as handle:
+              handle.write(f"RESEARCH_READY={str(report['research_ready']).lower()}\n")
+              handle.write(f"PROMOTION_READY={str(report['promotion_ready']).lower()}\n")
+          PY
+          cat research-output/gates.env >> "$GITHUB_ENV"
+          cat research-output/docs/generated/fast_arb_theory_report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Update one persistent research issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title="[System Watch] Hourly fast-arbitrage theory"
+          issue_number="$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')"
+          if [[ -z "$issue_number" ]]; then
+            gh issue create \
+              --title "$title" \
+              --body-file research-output/docs/generated/fast_arb_theory_report.md
+          else
+            gh issue edit "$issue_number" \
+              --body-file research-output/docs/generated/fast_arb_theory_report.md
+          fi
+
+      - name: Update research-only candidate branch and draft PR
+        if: env.RESEARCH_READY == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          branch="research/auto-fast-arb-policy"
+          git config user.name "polymarket-system-watch[bot]"
+          git config user.email "polymarket-system-watch[bot]@users.noreply.github.com"
+          git switch -C "$branch" origin/main
+          mkdir -p include/pm/generated config/candidates docs/generated
+          cp research-output/include/pm/generated/fast_arb_candidate_policy.hpp \
+            include/pm/generated/fast_arb_candidate_policy.hpp
+          cp research-output/config/candidates/fast_arb_candidate.json \
+            config/candidates/fast_arb_candidate.json
+          cp research-output/docs/generated/fast_arb_theory_report.md \
+            docs/generated/fast_arb_theory_report.md
+          git add include/pm/generated/fast_arb_candidate_policy.hpp \
+            config/candidates/fast_arb_candidate.json \
+            docs/generated/fast_arb_theory_report.md
+          if git diff --cached --quiet; then
+            echo "research candidate unchanged"
+          else
+            git commit -m "Refresh hourly fast-arbitrage research candidate"
+          fi
+          git push --force origin "HEAD:refs/heads/$branch"
+
+          gh label create shadow-isolated \
+            --color fbca04 \
+            --description "Measurement-only code isolated from production decisions, PnL and risk" \
+            --force
+          pr_number="$(gh pr list --state open --head "$branch" --base main --json number --jq '.[0].number // empty')"
+          cat > research-output/pr-body.md <<'EOF'
+          ## Automated research candidate
+
+          This draft is regenerated from hourly read-only/shadow evidence.
+
+          - It updates only generated candidate policy code, candidate evidence, and a research report.
+          - It cannot submit orders and does not change `config/live_champion.json`.
+          - It must remain a research PR until evidence is reviewed and a separate `integration/*` PR is approved.
+          - Promotion-ready in the generated report is evidence for review, not authorization to merge.
+
+          Source research PR/branch/commit: research/auto-fast-arb-policy
+          EOF
+          if [[ -z "$pr_number" ]]; then
+            gh pr create --draft \
+              --base main \
+              --head "$branch" \
+              --title "research: hourly fast-arbitrage candidate" \
+              --body-file research-output/pr-body.md \
+              --label shadow-isolated
+          else
+            gh pr edit "$pr_number" \
+              --body-file research-output/pr-body.md \
+              --add-label shadow-isolated
+          fi
+
+      - name: Upload theory-cycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arb-theory-cycle-${{ github.run_id }}
+          path: research-output
+          if-no-files-found: warn
+          retention-days: 30
