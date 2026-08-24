@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(polymarket_quant_engine VERSION 0.8.0 LANGUAGES CXX)
+project(polymarket_quant_engine VERSION 0.9.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -10,6 +10,7 @@ endif()
 
 find_package(PkgConfig REQUIRED)
 find_package(Boost REQUIRED)
+find_package(Threads REQUIRED)
 pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
 
 add_library(pm_core
@@ -22,6 +23,14 @@ add_library(pm_core
 target_include_directories(pm_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_core PUBLIC PkgConfig::LIBCURL)
 target_compile_options(pm_core PRIVATE -Wall -Wextra -Wpedantic)
+
+add_library(pm_fast_arb
+    src/fast_arb.cpp
+    src/fast_ws.cpp
+)
+target_include_directories(pm_fast_arb PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(pm_fast_arb PUBLIC pm_core Threads::Threads)
+target_compile_options(pm_fast_arb PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(polymarket_engine src/main.cpp)
 target_link_libraries(polymarket_engine PRIVATE pm_core)
@@ -54,6 +63,10 @@ add_executable(polymarket_rewards_scan src/rewards_scan.cpp)
 target_link_libraries(polymarket_rewards_scan PRIVATE pm_core)
 target_compile_options(polymarket_rewards_scan PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(polymarket_fast_arb_shadow src/fast_arb_main.cpp)
+target_link_libraries(polymarket_fast_arb_shadow PRIVATE pm_fast_arb)
+target_compile_options(polymarket_fast_arb_shadow PRIVATE -Wall -Wextra -Wpedantic)
+
 include(CTest)
 if(BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -65,10 +78,13 @@ if(BUILD_TESTING)
     target_link_libraries(pm_reward_tests PRIVATE pm_core)
     add_executable(pm_market_relation_tests tests/test_market_relation.cpp)
     target_link_libraries(pm_market_relation_tests PRIVATE pm_core)
+    add_executable(pm_fast_arb_tests tests/test_fast_arb.cpp)
+    target_link_libraries(pm_fast_arb_tests PRIVATE pm_fast_arb)
     add_test(NAME pm_tests COMMAND pm_tests)
     add_test(NAME pm_execution_tests COMMAND pm_execution_tests)
     add_test(NAME pm_reward_tests COMMAND pm_reward_tests)
     add_test(NAME pm_market_relation_tests COMMAND pm_market_relation_tests)
+    add_test(NAME pm_fast_arb_tests COMMAND pm_fast_arb_tests)
     add_test(NAME v4_research_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v4_research.py)
     add_test(NAME runtime_supervisor_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_supervisor.py)
     add_test(NAME live_smoke_summary_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_live_smoke_summary.py)
@@ -80,5 +96,7 @@ if(BUILD_TESTING)
     add_test(NAME finalize_forward_probe_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_finalize_forward_probe.py)
     add_test(NAME walk_forward_execution_filter_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_walk_forward_execution_filter.py)
     add_test(NAME model_governance_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_model_governance.py)
+    add_test(NAME arb_theory_scheduler_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_arb_theory_scheduler.py)
+    add_test(NAME fast_runtime_contract_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fast_runtime_contract.py)
     add_test(NAME mock_integration COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_mock.sh $<TARGET_FILE:polymarket_engine>)
 endif()
