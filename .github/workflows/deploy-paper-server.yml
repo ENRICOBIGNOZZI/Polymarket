@@ -5,6 +5,7 @@ on:
   workflow_run:
     workflows: ["v4-live-paper-smoke"]
     types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
