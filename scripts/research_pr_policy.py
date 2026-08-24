@@ -35,10 +35,14 @@ MODEL_BODY_TERMS = (
 LIVE_MODEL_SURFACE_PATTERNS = (
     re.compile(r"^config/live_champion\.json$"),
     re.compile(r"^config/paper_v\d+\.json$"),
+    re.compile(r"^config/(?:cross_venue|portfolio_supervisor)\.json$"),
+    re.compile(r"^config/cross_venue_pairs\.csv$"),
     re.compile(r"^scripts/paper_v\d+_(?:loop|once)\.sh$"),
     re.compile(r"^scripts/build_v\d+_intents\.py$"),
     re.compile(r"^scripts/merge_v\d+_intents\.py$"),
     re.compile(r"^scripts/build_global_opportunity_book\.py$"),
+    re.compile(r"^scripts/portfolio_supervisor\.py$"),
+    re.compile(r"^scripts/(?:cross_venue_loop|prediction_market_system_loop)\.sh$"),
 )
 
 MODEL_CODE_SURFACE_PATTERNS = (
@@ -49,6 +53,9 @@ MODEL_CODE_SURFACE_PATTERNS = (
     re.compile(
         r"^src/(?:engine|fast_arb|maker_paper|multileg_paper|negrisk_arb|"
         r"pca_stat_arb|stat_arb|rewards_scan)\.(?:cpp|cc|cxx|h|hpp)$"
+    ),
+    re.compile(
+        r"^(?:src|include)(?:/.*)?/cross_venue(?:\.(?:cpp|cc|cxx|h|hpp)|_runtime/.*\.inc)$"
     ),
 )
 
@@ -248,6 +255,7 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
+    root = Path(args.root).resolve()
     event = json.loads(Path(args.event).read_text(encoding="utf-8"))
     changed = {
         line.strip()
