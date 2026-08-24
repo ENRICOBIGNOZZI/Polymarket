@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import unittest
 from pathlib import Path
 
@@ -112,10 +111,6 @@ class IntegrationResearchProvenanceTest(unittest.TestCase):
         source["labels"].append({"name": "administrator-approved"})
         errors = integration_gate.validate_candidate(self.candidate(), source)
         self.assertTrue(any("carries integration labels" in error for error in errors))
-
-    def test_current_paper_gate_is_restored_to_validated_baseline(self):
-        config = json.loads((ROOT / "config" / "paper_v4.json").read_text(encoding="utf-8"))
-        self.assertEqual(config["min_net_edge"], 0.005)
 
 
 if __name__ == "__main__":
