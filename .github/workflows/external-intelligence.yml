@@ -19,8 +19,11 @@ on:
     paths:
       - "config/external_intelligence.json"
       - "scripts/external_intelligence.py"
+      - "scripts/external_request_policy.py"
+      - "scripts/run_external_intelligence.py"
       - "scripts/attach_external_evidence.py"
       - "tests/test_external_intelligence.py"
+      - "tests/test_external_request_policy.py"
       - "tests/test_attach_external_evidence.py"
       - ".github/workflows/external-intelligence.yml"
       - "docs/EXTERNAL_INTELLIGENCE.md"
@@ -29,8 +32,11 @@ on:
     paths:
       - "config/external_intelligence.json"
       - "scripts/external_intelligence.py"
+      - "scripts/external_request_policy.py"
+      - "scripts/run_external_intelligence.py"
       - "scripts/attach_external_evidence.py"
       - "tests/test_external_intelligence.py"
+      - "tests/test_external_request_policy.py"
       - "tests/test_attach_external_evidence.py"
       - ".github/workflows/external-intelligence.yml"
       - "docs/EXTERNAL_INTELLIGENCE.md"
@@ -58,9 +64,12 @@ jobs:
           set -euo pipefail
           python3 -m unittest \
             tests/test_external_intelligence.py \
+            tests/test_external_request_policy.py \
             tests/test_attach_external_evidence.py -v
           python3 -m py_compile \
             scripts/external_intelligence.py \
+            scripts/external_request_policy.py \
+            scripts/run_external_intelligence.py \
             scripts/attach_external_evidence.py
           python3 -m json.tool config/external_intelligence.json >/dev/null
           python3 - <<'PY'
@@ -125,7 +134,7 @@ jobs:
           esac
           case "$mode" in incremental|backfill|demo) ;; *) exit 2 ;; esac
 
-          python3 scripts/external_intelligence.py \
+          python3 scripts/run_external_intelligence.py \
             --config config/external_intelligence.json \
             --observations-in external_intelligence/input/observations.jsonl.gz \
             --prices-in external_intelligence/input/prices.jsonl.gz \
