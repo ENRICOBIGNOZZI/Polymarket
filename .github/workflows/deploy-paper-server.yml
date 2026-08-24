@@ -139,12 +139,14 @@ PY
           git fetch origin main paper-validated
           main_sha="$(git rev-parse origin/main)"
           validated_sha="$(git rev-parse origin/paper-validated)"
+          previous_head="$(git rev-parse HEAD 2>/dev/null || true)"
           git merge-base --is-ancestor "$validated_sha" "$main_sha"
           if [[ -n "${EXPECTED_VALIDATED_SHA:-}" ]]; then
             test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
           fi
           printf 'predeploy_origin_main=%s\n' "$main_sha"
           printf 'predeploy_paper_validated=%s\n' "$validated_sha"
+          printf 'predeploy_server_head=%s\n' "${previous_head:-missing}"
           printf 'trigger_expected_validated=%s\n' "${EXPECTED_VALIDATED_SHA:-periodic-or-manual}"
 
           case "$(uname -s)" in
@@ -157,6 +159,24 @@ PY
           git show "$validated_sha:$updater_path" > "$updater"
           chmod 700 "$updater"
           POLYMARKET_DEPLOY_REF=paper-validated bash "$updater"
+
+          # When the validated code is already checked out, reconciliation was
+          # triggered by a stalled activity SLA rather than a new commit. Force a
+          # bounded service restart so the scheduler actually repairs the runtime
+          # instead of declaring a code-only no-op.
+          if [[ "$previous_head" == "$validated_sha" ]]; then
+            case "$(uname -s)" in
+              Darwin)
+                sudo -n /usr/local/sbin/polymarket-service-control restart
+                ;;
+              Linux)
+                sudo systemctl restart polymarket-paper.service polymarket-monitoring.service
+                ;;
+            esac
+            printf 'runtime_repair_restart=true\n'
+          else
+            printf 'runtime_repair_restart=false\n'
+          fi
           REMOTE
 
       - name: Verify aggressive production paper services
@@ -181,7 +201,7 @@ PY
 
           run_root="$HOME/polymarket/runs/paper_v5_live"
           activity_ok=false
-          for _ in {1..90}; do
+          for _ in {1..150}; do
             if [[ -s "$run_root/activity_status.json" ]] && python3 - "$run_root/activity_status.json" <<'PY'
 import json
 import sys
