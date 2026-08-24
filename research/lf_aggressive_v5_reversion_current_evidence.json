@@ -1,0 +1,70 @@
+{
+  "schema": "polymarket_lf_aggressive_v5_reversion_current_evidence_v1",
+  "generated_utc": "2026-08-24T23:35:22Z",
+  "main_sha": "d1f0c31cad171f55cbc191ad6f950553349560f5",
+  "source_research_pr": 154,
+  "source_research_head": "8b39ceb5182432def738ffdee2d2c7ba8c5567f1",
+  "integration_pr": 156,
+  "source_change": {
+    "min_series": [24, 16],
+    "min_transitions": [20, 12],
+    "min_half": [24, 12],
+    "min_t": [1.75, 0.75],
+    "min_stability": [0.45, 0.25],
+    "max_half_life_hours": [168.0, 240.0]
+  },
+  "deterministic_unit_root_size_diagnostic": {
+    "paths_per_cell": 200,
+    "bucket_hours": 0.5,
+    "length_48": {
+      "iid": {
+        "incumbent_pass": 62,
+        "incumbent_rate": 0.31,
+        "aggressive_pass": 142,
+        "aggressive_rate": 0.71
+      },
+      "ar1_innovations_rho_0_65": {
+        "incumbent_pass": 19,
+        "incumbent_rate": 0.095,
+        "aggressive_pass": 69,
+        "aggressive_rate": 0.345
+      }
+    },
+    "length_672": {
+      "iid": {
+        "incumbent_pass": 79,
+        "incumbent_rate": 0.395,
+        "aggressive_pass": 157,
+        "aggressive_rate": 0.785
+      },
+      "ar1_innovations_rho_0_65": {
+        "incumbent_pass": 26,
+        "incumbent_rate": 0.13,
+        "aggressive_pass": 64,
+        "aggressive_rate": 0.32
+      }
+    },
+    "stationary_ar1_phi_0_90_length_672": {
+      "incumbent_pass": 200,
+      "aggressive_pass": 200
+    }
+  },
+  "live_context": {
+    "latest_main_live_smoke_generated_ts": 1787614304,
+    "latest_main_live_smoke_sha": "d1f0c31cad171f55cbc191ad6f950553349560f5",
+    "latest_main_b2_candidates": 0,
+    "latest_main_b2_maker_positive": 0,
+    "latest_main_oos_trades": 0,
+    "latest_main_realized_pnl_usd_total": -0.0000910089154047,
+    "latest_main_runtime_pnl_usd": -2.55323372168,
+    "latest_alpha_factory_generated_utc": "2026-08-24T23:27:59+00:00",
+    "latest_alpha_factory_b2_candidates": 1,
+    "latest_alpha_factory_b2_raw_positive": 1,
+    "latest_alpha_factory_b2_maker_positive": 0,
+    "latest_alpha_factory_best_raw_edge": 0.0000419995,
+    "latest_alpha_factory_best_maker_edge": -0.00176914,
+    "latest_alpha_factory_oos_trades": 0
+  },
+  "interpretation": "The proposed aggressive V5 reversion gate substantially increases admission of controlled unit-root paths relative to the already weak incumbent gate. This is a statistical-size diagnostic, not an estimate of the live Polymarket false-discovery rate and not a PnL result. The aggressive threshold relaxation should not be treated as LF alpha evidence without a robust unit-root/multiplicity gate and common-sample chronological incumbent ablation.",
+  "decision": "MORE_EVIDENCE_REQUIRED"
+}
