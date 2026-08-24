@@ -1,10 +1,10 @@
 {
   "schema": "polymarket_hf_b2_execution_state_v2",
-  "generated_utc": "2026-08-24T20:45:00Z",
+  "generated_utc": "2026-08-24T21:22:00Z",
   "evidence_state": "MORE_EVIDENCE_REQUIRED",
   "source_live_smoke": {
-    "git_sha": "f6db4c4f7eda73568a03e465505d66b7570c77b9",
-    "generated_ts": 1787602268,
+    "git_sha": "c5234ef85467689698a51d033c0d4edfdd394a63",
+    "generated_ts": 1787605610,
     "coherent_b2_raw_positive": 3,
     "coherent_b2_maker_positive": 0,
     "admitted_intent_bundles": 0,
@@ -14,38 +14,44 @@
     "rows": [
       {
         "market": "561237",
-        "raw_expected_edge": 0.000431948,
-        "maker_entry_net_edge": -0.00137746,
-        "taker_net_edge": -0.0054039,
-        "execution_cost_wedge_to_raw_ratio": 4.188948669747284,
+        "raw_expected_edge": 0.000443065,
+        "maker_entry_net_edge": -0.00145556,
+        "taker_net_edge": -0.00553158,
+        "execution_cost_wedge_to_raw_ratio": 4.285206459548825,
         "legs": 5
       },
       {
         "market": "561239",
-        "raw_expected_edge": 0.000920365,
-        "maker_entry_net_edge": -0.00151983,
-        "taker_net_edge": -0.00562803,
-        "execution_cost_wedge_to_raw_ratio": 2.6513339816268546,
+        "raw_expected_edge": 0.000453893,
+        "maker_entry_net_edge": -0.00183648,
+        "taker_net_edge": -0.00566278,
+        "execution_cost_wedge_to_raw_ratio": 5.046063719863492,
         "legs": 5
       },
       {
-        "market": "559660",
-        "raw_expected_edge": 0.00342284,
-        "maker_entry_net_edge": -0.0110329,
-        "taker_net_edge": -0.0401194,
-        "execution_cost_wedge_to_raw_ratio": 4.223317479052483,
+        "market": "561975",
+        "raw_expected_edge": 0.000402937,
+        "maker_entry_net_edge": -0.00236573,
+        "taker_net_edge": -0.00766707,
+        "execution_cost_wedge_to_raw_ratio": 6.871215599460957,
         "legs": 5
       }
     ]
   },
   "forward_complete_set_calibration": {
-    "valid_sessions": 6,
-    "history_span_seconds": 6744,
-    "probes_per_policy": 84,
+    "sample_decision": "REJECT_CURRENT_COMPLETE_SET_MAKER_SAMPLE",
+    "decision_scope": "current complete-set join/improve1/fade1 worker only; not transferable to B2 multi-leg completion probability",
+    "valid_sessions": 8,
+    "history_span_seconds": 10563,
+    "probes_per_policy": 112,
+    "pair_fill_confidence_note": "For zero paired fills in 112 probes, the one-sided 95% Wilson upper bound is 2.3587%; the upper endpoint of a two-sided 95% Wilson interval is 3.3161%. The calibration gate uses the one-sided bound. Neither statistic may be transferred across execution classes.",
     "join": {
       "any_fills": 1,
       "pair_fills": 0,
-      "pair_fill_rate_wilson_upper": 0.031203811732381456,
+      "one_sided_fills": 1,
+      "pair_fill_rate_wilson_upper": 0.02358685877442495,
+      "pair_fill_rate_wilson_one_sided_95_upper": 0.02358685877442495,
+      "pair_fill_rate_wilson_two_sided_95_upper_endpoint": 0.03316134706694388,
       "one_sided_given_any_fill_rate": 1.0,
       "total_pnl_ex_rewards_usd": -0.13894351315407616,
       "filled_share_weighted_markout_60_bid_per_share": -0.0020000000000000018,
@@ -54,7 +60,10 @@
     "improve1": {
       "any_fills": 1,
       "pair_fills": 0,
-      "pair_fill_rate_wilson_upper": 0.031203811732381456,
+      "one_sided_fills": 1,
+      "pair_fill_rate_wilson_upper": 0.02358685877442495,
+      "pair_fill_rate_wilson_one_sided_95_upper": 0.02358685877442495,
+      "pair_fill_rate_wilson_two_sided_95_upper_endpoint": 0.03316134706694388,
       "one_sided_given_any_fill_rate": 1.0,
       "total_pnl_ex_rewards_usd": -0.13894351315407616,
       "filled_share_weighted_markout_60_bid_per_share": -0.0020000000000000018,
@@ -63,35 +72,47 @@
     "fade1": {
       "any_fills": 0,
       "pair_fills": 0,
-      "pair_fill_rate_wilson_upper": 0.031203811732381456,
+      "one_sided_fills": 0,
+      "pair_fill_rate_wilson_upper": 0.02358685877442495,
+      "pair_fill_rate_wilson_one_sided_95_upper": 0.02358685877442495,
+      "pair_fill_rate_wilson_two_sided_95_upper_endpoint": 0.03316134706694388,
       "total_pnl_ex_rewards_usd": 0.0,
       "eligible_for_paper_shadow": false
     }
   },
-  "first_b2_forward_probe_pr_run": {
-    "workflow_run_id": 32774017050,
-    "duration_seconds": 120,
-    "candidate_count": 3,
-    "quote_definitions": 6,
-    "stress_rows": 24,
-    "full_completion_rows": 0,
-    "rows_with_any_fill": 0,
+  "latest_pr_worker_evidence": {
+    "forward_maker_workflow_run_id": 32776306331,
+    "complete_set_pr_duration_seconds": 180,
+    "complete_set_eligible_markets": 9,
+    "complete_set_quote_definitions": 27,
+    "complete_set_snapshots": 19,
+    "complete_set_any_fills": 0,
+    "complete_set_pair_fills": 0,
+    "complete_set_one_sided_fills": 0,
+    "b2_candidate_count": 3,
+    "b2_quote_definitions": 6,
+    "b2_stress_rows": 24,
+    "b2_full_completion_rows": 0,
+    "b2_rows_with_any_fill": 0,
     "telemetry_published": false,
-    "interpretation": "Direct B2 execution evidence is now collected on the correct five-leg strategy class, but this short PR window produced no fills and is not sufficient for a fill-probability estimate."
+    "interpretation": "The PR-specific complete-set worker added another zero-fill window, while the direct B2 worker again produced no fills under its short stress replay. The B2 result remains measurement-limited and is not a completion-probability estimate."
   },
-  "fast_shadow_reference": {
-    "observed_executable_maker_complete_set_rows": 92,
-    "hard_executable_rows": 0,
-    "completed_opportunity_lifetimes": 0,
-    "stress_bps": 10,
-    "stress_survival_rate": 0.98913,
-    "feed_latency_p99_ms_approx": 374.7,
-    "decision_latency_p99_us_approx": 86.6,
+  "fast_shadow_latest_worker_health": {
+    "workflow_run_id": 32776306290,
+    "ws_messages": 11916,
+    "book_updates": 11770,
+    "terminal_feed_stale_ms": 15,
+    "rest_resyncs": 3,
     "research_ready": false,
-    "promotion_ready": false
+    "promotion_ready": false,
+    "interpretation": "The fast shadow feed is healthy enough to serve as a read-only evidence worker, but it did not produce promotion-ready arbitrage evidence in this run."
   },
   "measurement_integrity": {
-    "requested_arrival_latencies_ms": [250, 500, 750],
+    "requested_arrival_latencies_ms": [
+      250,
+      500,
+      750
+    ],
     "rest_book_poll_seconds": 10.0,
     "trade_timestamp_resolution_ms_in_current_replay": 1000.0,
     "latency_scenarios_count_as_independent_evidence": false,
@@ -107,7 +128,8 @@
   "interpretation": {
     "complete_set_evidence_transfer_to_b2_allowed": false,
     "reason": "The existing forward-maker worker observes two-leg complete-set/reward quotes, while current B2 candidates are five-leg factor hedges. Fill, queue, latency and completion distributions must be measured on the actual B2 execution class.",
-    "current_b2_result": "The first direct B2 PR probe produced 0/24 full completions and 0/24 rows with any fill in a 120-second window. This is negative execution evidence but too short to estimate the completion probability.",
+    "current_complete_set_result": "Eight independent persisted sessions now provide 112 probes per policy with zero paired fills. The current complete-set passive maker sample is rejected as evidence of routinely achievable paired execution; this is not a permanent rejection of all maker strategies.",
+    "current_b2_result": "The current validated live frontier has three raw-positive B2 candidates but zero maker-positive candidates. The direct B2 PR probe has 0/24 full completions and 0/24 rows with any fill in a 120-second window. This is negative execution evidence but remains too short and too coarsely timestamped to estimate B2 completion probability.",
     "next_experiment": "Capture the actual B2 token books in event time with timestamp resolution finer than the 250/500/750 ms latency scenarios, compute strictly causal pre-arrival microprice/depth/imbalance/OFI, and replay the same legs under queue stress, partial/full completion, forced completion cost, and 60s/300s fill-conditioned markout."
   },
   "safety": {
