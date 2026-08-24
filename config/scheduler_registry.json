@@ -140,6 +140,30 @@
       "validation_dispatch_authority": false
     },
     {
+      "id": "fast-arb-shadow-research",
+      "workflow": ".github/workflows/fast-arb-hourly.yml",
+      "workflow_name": "Fast Arbitrage Hourly Shadow",
+      "job": "shadow-evidence",
+      "cadence": "hourly at minute 7, relevant pull requests and manual",
+      "responsibility": "collect read-only fast-arbitrage market-data and cost-stressed shadow evidence without submitting orders",
+      "critical": false,
+      "merge_authority": false,
+      "deploy_authority": false,
+      "validation_dispatch_authority": false
+    },
+    {
+      "id": "arb-theory-research",
+      "workflow": ".github/workflows/arb-theory-hourly.yml",
+      "workflow_name": "Arbitrage Theory Hourly Research",
+      "job": "research-cycle",
+      "cadence": "hourly at minute 37 and manual",
+      "responsibility": "re-derive arbitrage candidates from valid shadow evidence and materialize research-only proposals under cost stress",
+      "critical": false,
+      "merge_authority": false,
+      "deploy_authority": false,
+      "validation_dispatch_authority": false
+    },
+    {
       "id": "live-api-smoke",
       "workflow": ".github/workflows/live-smoke.yml",
       "workflow_name": "live-api-smoke",
