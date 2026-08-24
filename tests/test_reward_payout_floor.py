@@ -90,6 +90,24 @@ class RewardPayoutFloorTest(unittest.TestCase):
             self.assertEqual(rows[0]["market_id"], "payable")
             self.assertEqual(rows[1]["market_id"], "sub-floor")
 
+    def test_invalid_input_is_removed_instead_of_leaving_pre_floor_scores(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "rewards.csv"
+            path.write_text(
+                "market_id,estimated_native_daily_value,capital_charge_daily,conservative_daily_score\n"
+                "unsafe,0.50,0.01,0.49\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "--csv", str(path)],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("reward_payout_floor_failed", result.stderr)
+            self.assertFalse(path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
