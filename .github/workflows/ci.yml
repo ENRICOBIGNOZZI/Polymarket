@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact commit SHA to validate; defaults to the event SHA
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -17,6 +22,8 @@ jobs:
   build-test:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.sha }}
     strategy:
       fail-fast: false
       matrix:
@@ -24,6 +31,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.expected_sha || github.sha }}
+
+      - name: Verify exact validation revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
+          echo "validation_sha=$VALIDATION_SHA"
 
       - name: Install dependencies
         run: |
