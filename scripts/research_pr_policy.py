@@ -255,7 +255,6 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
-    root = Path(args.root).resolve()
     event = json.loads(Path(args.event).read_text(encoding="utf-8"))
     changed = {
         line.strip()
