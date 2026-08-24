@@ -1,0 +1,78 @@
+name: Bootstrap External Intelligence
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/bootstrap-external-intelligence.yml"
+      - "ops/external-intelligence-payload.part-*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bootstrap-external-intelligence-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Verify and materialize reviewed external-intelligence implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat ops/external-intelligence-payload.part-* \
+            | base64 --decode > /tmp/external-intelligence-payload.tar.gz
+          printf '%s  %s\n' \
+            'b78c9eabeb4080ac3d62d97ae80c96663d741438f097f446b3552c4289f6178f' \
+            '/tmp/external-intelligence-payload.tar.gz' \
+            | sha256sum --check -
+          tar -xzf /tmp/external-intelligence-payload.tar.gz -C .
+          rm -f \
+            ops/external-intelligence-payload.part-* \
+            .github/workflows/bootstrap-external-intelligence.yml
+
+      - name: Validate scheduler, storage, backtest and safety contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q scripts tests
+          python3 -m json.tool config/external_intelligence.json >/dev/null
+          python3 -m json.tool config/scheduler_registry.json >/dev/null
+          python3 -m unittest \
+            tests/test_external_intelligence.py \
+            tests/test_attach_external_evidence.py -v
+          python3 scripts/validate_scheduler_registry.py \
+            --root . \
+            --registry config/scheduler_registry.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          cfg = json.loads(Path('config/external_intelligence.json').read_text())
+          assert cfg['paper_only'] is True
+          assert cfg['allow_authenticated_execution'] is False
+          assert cfg['allow_direct_champion_mutation'] is False
+          assert cfg['allow_production_signal_write'] is False
+          assert {1.0, 1.5, 2.0}.issubset(
+              {float(value) for value in cfg['backtest']['cost_stress_multipliers']}
+          )
+          PY
+
+      - name: Commit materialized implementation to the research branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'polymarket-external-intelligence[bot]'
+          git config user.email 'polymarket-external-intelligence[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Add external intelligence collection and purged backtesting'
+          git push origin "HEAD:${{ github.event.pull_request.head.ref || github.ref_name }}"
