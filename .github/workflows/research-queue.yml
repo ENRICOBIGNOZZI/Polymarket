@@ -1,0 +1,55 @@
+name: Polymarket Research Queue
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "13 */2 * * *"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: polymarket-research-queue
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Collect research queue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh pr list --state open --base main --limit 100 \
+            --json number,title,url,headRefName,isDraft,labels,mergeStateStatus,statusCheckRollup,body,createdAt,updatedAt \
+            > research-prs.json
+          gh api "repos/${GITHUB_REPOSITORY}/branches?per_page=100" > research-branches.json
+          python3 scripts/research_queue_report.py \
+            --prs research-prs.json \
+            --branches research-branches.json \
+            --output research-queue-report.md
+
+      - name: Publish research queue
+        if: always()
+        run: cat research-queue-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      - name: Upload research queue evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-queue-${{ github.run_id }}
+          path: |
+            research-queue-report.md
+            research-prs.json
+            research-branches.json
+          if-no-files-found: warn
+          retention-days: 30
