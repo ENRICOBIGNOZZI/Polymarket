@@ -6,6 +6,8 @@ on:
     workflows: ["v4-live-paper-smoke"]
     types: [completed]
     branches: [main]
+  schedule:
+    - cron: "22,52 * * * *"
 
 permissions:
   contents: read
@@ -19,11 +21,16 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (
-        github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.head_branch == 'main' &&
-        github.event.workflow_run.event != 'pull_request' &&
-        vars.POLYMARKET_SERVER_DEPLOY == 'true'
+        vars.POLYMARKET_SERVER_DEPLOY == 'true' &&
+        (
+          github.event_name == 'schedule' ||
+          (
+            github.event_name == 'workflow_run' &&
+            github.event.workflow_run.conclusion == 'success' &&
+            github.event.workflow_run.head_branch == 'main' &&
+            github.event.workflow_run.event != 'pull_request'
+          )
+        )
       )
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -79,7 +86,7 @@ jobs:
           fi
           printf 'predeploy_origin_main=%s\n' "$main_sha"
           printf 'predeploy_paper_validated=%s\n' "$validated_sha"
-          printf 'trigger_expected_validated=%s\n' "${EXPECTED_VALIDATED_SHA:-manual}"
+          printf 'trigger_expected_validated=%s\n' "${EXPECTED_VALIDATED_SHA:-manual-or-scheduled}"
 
           case "$(uname -s)" in
             Darwin) updater_path=ops/update_server_macos.sh ;;
