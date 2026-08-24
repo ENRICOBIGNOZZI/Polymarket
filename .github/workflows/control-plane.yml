@@ -13,6 +13,7 @@ on:
       - ".github/workflows/control-plane.yml"
       - ".github/workflows/alpha-factory.yml"
       - ".github/workflows/research-policy.yml"
+      - ".github/workflows/integration-merge.yml"
       - "docs/ALPHA_FACTORY.md"
   pull_request:
     branches: [main]
@@ -23,6 +24,7 @@ on:
       - ".github/workflows/control-plane.yml"
       - ".github/workflows/alpha-factory.yml"
       - ".github/workflows/research-policy.yml"
+      - ".github/workflows/integration-merge.yml"
       - "docs/ALPHA_FACTORY.md"
 
 permissions:
@@ -89,7 +91,7 @@ jobs:
           )
           PY
 
-      - name: Coordinate System Watch, Alpha Factory, and validation chain
+      - name: Coordinate System Watch, Alpha Factory, validation, and automatic promotion
         shell: bash
         run: |
           set -euo pipefail
@@ -101,7 +103,7 @@ jobs:
             --dispatch-file control_plane/dispatch-plan.txt \
             | tee control_plane/meta-supervisor.log
 
-      - name: Execute bounded allowlisted remediation
+      - name: Execute bounded allowlisted remediation and promotion dispatch
         if: github.event_name != 'pull_request' && success()
         shell: bash
         env:
@@ -112,7 +114,7 @@ jobs:
           while IFS= read -r workflow; do
             [[ -n "$workflow" ]] || continue
             case "$workflow" in
-              ci.yml|monitoring.yml|v4-live-smoke.yml|forward-maker-research.yml|alpha-factory.yml|research-policy.yml)
+              ci.yml|monitoring.yml|v4-live-smoke.yml|forward-maker-research.yml|alpha-factory.yml|research-policy.yml|integration-merge.yml)
                 gh workflow run "$workflow" --ref main
                 printf 'dispatched=%s ref=main\n' "$workflow" | tee -a control_plane/dispatch-results.txt
                 ;;
