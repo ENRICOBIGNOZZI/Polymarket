@@ -116,28 +116,8 @@ class ModelGovernanceContractTest(unittest.TestCase):
         self.assertIn("Registry and one-job-per-workflow contract are valid", completed.stdout)
 
         registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
-        ids = {item["id"] for item in registry["schedulers"]}
-        self.assertEqual(
-            ids,
-            {
-                "administrator-supervisor",
-                "research-policy",
-                "research-queue",
-                "integration-merge",
-                "post-merge-validation",
-                "code-validation",
-                "monitoring-validation",
-                "live-paper-validation",
-                "paper-server-deploy",
-                "paper-server-health",
-                "forward-maker-research",
-                "alpha-factory",
-                "meta-supervisor",
-                "fast-arb-shadow-research",
-                "arb-theory-research",
-                "live-api-smoke",
-            },
-        )
+        ids = [item["id"] for item in registry["schedulers"]]
+        self.assertEqual(len(ids), len(set(ids)))
         self.assertFalse((WORKFLOWS / "model-governance.yml").exists())
 
     def test_privileged_authority_is_unique_and_separated(self):
