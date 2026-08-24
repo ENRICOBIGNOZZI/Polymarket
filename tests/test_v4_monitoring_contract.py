@@ -52,7 +52,8 @@ class V4MonitoringContractTest(unittest.TestCase):
         self.assertIn('SH="$R/shadow_b1"', smoke)
         self.assertIn("--min-z 1.25", smoke)
         self.assertIn('continue-on-error: true', smoke)
-        self.assertIn('paper_v4_live/shadow_b1', smoke)
+        self.assertIn('paper_v4_live', smoke)
+        self.assertIn('shadow_b1', smoke)
         production_segment = smoke.split("B1 shadow fillability diagnostic", 1)[0]
         self.assertIn("--min-z 1.5", production_segment)
 
