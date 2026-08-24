@@ -1,0 +1,73 @@
+{
+  "schema": "polymarket_lf_single_expert_confidence_evidence_v1",
+  "source_main_sha": "5c9fc0fe13f0ee40d41440dcc9ffa18b91fc9298",
+  "evidence_state": "MORE_EVIDENCE_REQUIRED",
+  "finding": "V5 single-expert books normalize away expert confidence in fair probability and have zero within-ensemble disagreement variance; uncertainty therefore falls back to half-spread.",
+  "production_changed": false,
+  "v5_lf_capital_fraction": 0.8,
+  "v5_lf_strategies": {
+    "pca": 0.2,
+    "graph": 0.3,
+    "semantic": 0.1,
+    "external": 0.2
+  },
+  "deterministic_fixture": {
+    "market_mid": 0.6,
+    "expert_q_yes": 0.62,
+    "spread": 0.02,
+    "confidence_high": 1.0,
+    "confidence_low": 0.02,
+    "incumbent_fair_high": 0.62,
+    "incumbent_fair_low": 0.62,
+    "incumbent_uncertainty_high": 0.01,
+    "incumbent_uncertainty_low": 0.01,
+    "confidence_effect_on_fair": 0.0,
+    "confidence_effect_on_uncertainty": 0.0,
+    "illustrative_shrink_edge_high": 0.02,
+    "illustrative_shrink_edge_low": 0.0004
+  },
+  "current_public_context": {
+    "live_smoke_generated_ts": 1787609959,
+    "b2_coherent_raw_positive": 1,
+    "b2_coherent_maker_positive": 0,
+    "b2_top_raw_expected_edge": 0.000153826,
+    "b2_top_maker_entry_net_edge": -0.00173828,
+    "external_report_generated_utc": "2026-08-24T21:59:50+00:00",
+    "external_status": "BACKTESTING",
+    "external_stored_observations": 370,
+    "external_stored_price_snapshots": 700,
+    "external_oos_predictions_per_candidate": 0,
+    "external_trades_per_candidate": 0
+  },
+  "required_next_experiment": {
+    "common_sample": true,
+    "chronological": true,
+    "challengers": [
+      "incumbent confidence-invariant singleton",
+      "monotone confidence shrink-to-market",
+      "confidence-dependent uncertainty inflation",
+      "calibrated confidence floor or abstention"
+    ],
+    "metrics": [
+      "time-to-resolution Brier score",
+      "time-to-resolution log loss",
+      "calibration error",
+      "executable OOS net PnL",
+      "1x cost-stressed PnL",
+      "1.5x cost-stressed PnL",
+      "2x cost-stressed PnL",
+      "turnover",
+      "portfolio drawdown",
+      "cross-strategy covariance"
+    ]
+  },
+  "safety": {
+    "research_only": true,
+    "live_champion_unchanged": true,
+    "risk_limits_unchanged": true,
+    "oos_gates_unchanged": true,
+    "credentials_unchanged": true,
+    "authenticated_execution": false,
+    "real_money_execution": false
+  }
+}
