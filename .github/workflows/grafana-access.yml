@@ -23,7 +23,9 @@ jobs:
       SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
       SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
       SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
-      GRAFANA_URL: http://polymarket
+      GRAFANA_HOSTNAME: mamma-portfolio
+      GRAFANA_FQDN: mamma-portfolio.tail1bae85.ts.net
+      GRAFANA_URL: http://mamma-portfolio.tail1bae85.ts.net
     steps:
       - uses: actions/checkout@v4
 
@@ -73,8 +75,9 @@ jobs:
               -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "bash -s" <<'REMOTE'
             set -euo pipefail
             chmod 700 /tmp/polymarket-apply-grafana.sh
-            POLYMARKET_TAILSCALE_HOSTNAME=polymarket \
-            POLYMARKET_GRAFANA_URL=http://polymarket \
+            POLYMARKET_TAILSCALE_HOSTNAME=mamma-portfolio \
+            POLYMARKET_TAILSCALE_FQDN=mamma-portfolio.tail1bae85.ts.net \
+            POLYMARKET_GRAFANA_URL=http://mamma-portfolio.tail1bae85.ts.net \
               bash /tmp/polymarket-apply-grafana.sh
             rm -f /tmp/polymarket-apply-grafana.sh
 
@@ -89,7 +92,7 @@ jobs:
             done
             curl -fsS http://127.0.0.1:3000/api/health
             curl -fsS http://127.0.0.1:3000/api/search >/dev/null
-            grep -F 'root_url = http://polymarket/' "$HOME/.config/polymarket/grafana.ini"
+            grep -F 'root_url = http://mamma-portfolio.tail1bae85.ts.net/' "$HOME/.config/polymarket/grafana.ini"
 
             TS=/Applications/Tailscale.app/Contents/MacOS/Tailscale
             if [[ ! -x "$TS" ]]; then TS="$(command -v tailscale)"; fi
@@ -105,8 +108,8 @@ jobs:
         run: |
           set -euo pipefail
           {
-            tailscale ping -c 3 polymarket
-            getent hosts polymarket
+            tailscale ping -c 3 "$GRAFANA_HOSTNAME"
+            getent hosts "$GRAFANA_FQDN"
             for i in {1..30}; do
               if curl -fsS --max-time 5 "$GRAFANA_URL/api/health" >/tmp/grafana-health.json 2>/dev/null; then
                 break
