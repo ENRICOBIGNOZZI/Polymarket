@@ -71,4 +71,4 @@ jobs:
           python3 -m py_compile scripts/multi_strategy_paper.py monitoring/exporter_v5.py
           python3 -m json.tool config/paper_v5.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
-          python3 -m unittest tests/test_ops_macos.py -v
+          python3 -m unittest tests/test_ops_macos.py tests/test_workflow_yaml_contracts.py -v
