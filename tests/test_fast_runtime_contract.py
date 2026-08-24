@@ -55,7 +55,7 @@ class FastRuntimeContractTest(unittest.TestCase):
         self.assertIn('status["ws_messages"] > 0', operational)
         self.assertIn('status["book_updates"] > 0', operational)
         self.assertIn("arb_theory_scheduler.py", operational)
-        self.assertIn('cron: "37 * * * *"', theory)
+        self.assertIn('cron: "27 * * * *"', theory)
         self.assertIn("research/auto-fast-arb-policy", theory)
         self.assertIn("gh pr create --draft", theory)
         self.assertNotIn("gh pr merge", theory)
