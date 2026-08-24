@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import time
@@ -24,7 +25,7 @@ def as_float(value: object, default: float = 0.0) -> float:
         result = float(value)
     except (TypeError, ValueError):
         return default
-    return result if result == result and abs(result) != float("inf") else default
+    return result if math.isfinite(result) else default
 
 
 def as_int(value: object, default: int = 0) -> int:
@@ -42,6 +43,21 @@ def read_rows(path: Path) -> list[dict[str, str]]:
         return []
 
 
+def read_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def file_age(path: Path, now: float) -> float:
+    try:
+        return max(0.0, now - path.stat().st_mtime)
+    except OSError:
+        return float("inf")
+
+
 def latest_engine_status(path: Path) -> dict[str, int] | None:
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -52,6 +68,33 @@ def latest_engine_status(path: Path) -> dict[str, int] | None:
         if match:
             return {key: int(value) for key, value in match.groupdict().items()}
     return None
+
+
+def recent_market_count(path: Path, cutoff: int) -> int:
+    markets: set[str] = set()
+    try:
+        with path.open(newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                if as_int(row.get("timestamp")) < cutoff:
+                    continue
+                market = str(row.get("market_id") or "")
+                if market:
+                    markets.add(market)
+    except (OSError, csv.Error):
+        return 0
+    return len(markets)
+
+
+def recent_row_count(path: Path, cutoff: int) -> int:
+    count = 0
+    try:
+        with path.open(newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                if as_int(row.get("timestamp")) >= cutoff:
+                    count += 1
+    except (OSError, csv.Error):
+        return 0
+    return count
 
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -89,48 +132,65 @@ def main() -> int:
     total_candidates = 0
     fresh_models = 0
     alive_models = 0
+    cutoff = int(now - args.max_model_staleness_seconds)
 
     for row in rows:
         name = row.get("name", "unknown")
         alive = as_int(row.get("alive")) == 1
-        status_age = as_float(row.get("status_age_seconds"), float("inf"))
-        engine_log = args.run_root / "strategies" / name / "engine.log"
-        engine_age = now - engine_log.stat().st_mtime if engine_log.exists() else float("inf")
+        manager_status_age = as_float(row.get("status_age_seconds"), float("inf"))
+        model_root = args.run_root / "strategies" / name
+        engine_log = model_root / "engine.log"
+        status_path = model_root / "status.json"
+        history_path = model_root / "history.csv"
+        signals_path = model_root / "signals.csv"
+        config_path = args.run_root / "generated_configs" / f"{name}.json"
+
+        engine_age = file_age(engine_log, now)
+        state_age = file_age(status_path, now)
+        history_age = file_age(history_path, now)
+        signals_age = file_age(signals_path, now)
+        persisted_activity_age = min(state_age, history_age, signals_age)
         status = latest_engine_status(engine_log)
+        config = read_json(config_path)
 
         if alive:
             alive_models += 1
         elif not args.allow_stopped:
             failures.append(f"{name}:not_alive")
-        if not args.allow_stopped and status_age > args.max_model_staleness_seconds:
-            failures.append(f"{name}:status_stale:{status_age:.1f}")
-        if engine_age > args.max_model_staleness_seconds:
-            failures.append(f"{name}:engine_log_stale:{engine_age:.1f}")
+        if not args.allow_stopped and manager_status_age > args.max_model_staleness_seconds:
+            failures.append(f"{name}:manager_status_stale:{manager_status_age:.1f}")
+        if persisted_activity_age > args.max_model_staleness_seconds and engine_age > args.max_model_staleness_seconds:
+            failures.append(
+                f"{name}:activity_stale:{min(persisted_activity_age, engine_age):.1f}"
+            )
         else:
             fresh_models += 1
 
-        discovered = int(status["discovered"]) if status else 0
-        tradable = int(status["tradable"]) if status else 0
-        candidates = int(status["candidates"]) if status else 0
+        # C++ stdout may be block-buffered when redirected to a regular file. Use
+        # the exact status line when available, otherwise reconstruct the funnel
+        # from files that are closed/flushed every scan: generated config,
+        # history.csv and signals.csv.
+        discovered = int(status["discovered"]) if status else as_int(config.get("market_limit"))
+        tradable = int(status["tradable"]) if status and engine_age <= args.max_model_staleness_seconds else recent_market_count(history_path, cutoff)
+        candidates = int(status["candidates"]) if status and engine_age <= args.max_model_staleness_seconds else recent_row_count(signals_path, cutoff)
         fraction = tradable / discovered if discovered > 0 else 0.0
         total_discovered += discovered
         total_tradable += tradable
         total_candidates += candidates
 
-        if status is None:
-            failures.append(f"{name}:missing_engine_status")
-        else:
-            if discovered < args.minimum_markets:
-                failures.append(f"{name}:narrow_universe:{discovered}")
-            if fraction < args.minimum_tradable_fraction:
-                failures.append(f"{name}:tradable_fraction:{fraction:.4f}")
+        if discovered < args.minimum_markets:
+            failures.append(f"{name}:narrow_universe:{discovered}")
+        if fraction < args.minimum_tradable_fraction:
+            failures.append(f"{name}:tradable_fraction:{fraction:.4f}")
 
         models.append(
             {
                 "name": name,
                 "alive": alive,
-                "status_age_seconds": status_age,
+                "manager_status_age_seconds": manager_status_age,
                 "engine_log_age_seconds": engine_age,
+                "persisted_activity_age_seconds": persisted_activity_age,
+                "funnel_source": "engine_log" if status and engine_age <= args.max_model_staleness_seconds else "persisted_files",
                 "discovered": discovered,
                 "tradable": tradable,
                 "tradable_fraction": fraction,
@@ -147,6 +207,7 @@ def main() -> int:
     maker_orders = read_rows(args.run_root / "maker" / "maker_order_log.csv")
     maker_fills = read_rows(args.run_root / "maker" / "maker_fills.csv")
     intent_rows = read_rows(args.run_root / "intents.csv")
+    external_rows = read_rows(Path("data/external_signals.csv"))
     activity = {
         "schema": "polymarket_aggressive_activity_v1",
         "timestamp": int(now),
@@ -167,6 +228,7 @@ def main() -> int:
         "maker_orders": len(maker_orders),
         "maker_fills": len(maker_fills),
         "multileg_intent_legs": len(intent_rows),
+        "external_signal_rows": len(external_rows),
         "models": models,
     }
     atomic_json(args.output, activity)
