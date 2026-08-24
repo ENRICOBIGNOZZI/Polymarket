@@ -59,6 +59,10 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('origin/$DEPLOY_REF', updater)
         self.assertIn('write_status awaiting_validation', updater)
         self.assertIn('paper_runtime_healthy()', updater)
+        self.assertIn('full_runtime_healthy()', updater)
+        self.assertIn('wait_for_runtime_health()', updater)
+        self.assertIn('write_status repaired', updater)
+        self.assertIn('polymarket-service-control restart', updater)
         self.assertIn('recorder_alive', updater)
         self.assertIn('broker_alive', updater)
         self.assertIn('deploy_ref=%s', updater)
@@ -70,6 +74,7 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('test "$head_sha" = "$validated_sha"', health)
         self.assertIn('test "$status_ref" = "paper-validated"', health)
         self.assertIn('test "$status_validated" = "$validated_sha"', health)
+        self.assertIn('up_to_date|deployed|repaired', health)
 
         self.assertIn('Advance paper validated ref', smoke)
         self.assertIn('git/refs/heads/paper-validated', smoke)
