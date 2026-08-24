@@ -34,179 +34,168 @@ jobs:
           validated_sha="$(git rev-parse origin/paper-validated)"
           test "$main_sha" = "$validated_sha"
           test "$(git rev-parse HEAD)" = "$main_sha"
-          echo "BASE_MAIN_SHA=$main_sha" >> "$GITHUB_ENV"
-          echo "BASE_VALIDATED_SHA=$validated_sha" >> "$GITHUB_ENV"
           echo "validated_base_sha=$main_sha"
 
-      - name: Build explicitly approved integration queue
+      - name: Select exactly one controller-authorized integration
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          mkdir -p integration-merge
           gh pr list --state open --base main --limit 100 \
-            --json number,title,url,headRefName,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
-            > integration-prs.json
-          python3 scripts/integration_gate.py select \
-            --prs integration-prs.json \
-            --env candidate.env \
-            --report integration-merge-report.md
-          cat candidate.env >> "$GITHUB_ENV"
-
-      - name: Recheck approved research sources and select one candidate
-        if: env.ELIGIBLE_COUNT != '0'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          : > integration-gate-report.md
-          selected=0
-          IFS=',' read -r -a queue <<< "${QUEUE_NUMBERS:-}"
-          for candidate_number in "${queue[@]}"; do
-            [[ -n "$candidate_number" ]] || continue
-            gh pr view "$candidate_number" \
-              --json number,title,url,headRefName,headRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
-              > candidate-probe.json
-            source_number="$(python3 -c 'import json,re; b=json.load(open("candidate-probe.json"))["body"] or ""; m=re.search(r"source research pr/branch/commit:\s*#(\d+)\b", b, re.I); print(m.group(1) if m else "")')"
-            if [[ -z "$source_number" ]]; then
-              printf '\n## Skipped #%s\n- reason: numbered source research PR missing\n' "$candidate_number" >> integration-gate-report.md
-              continue
-            fi
-            if ! gh pr view "$source_number" \
-              --json number,headRefName,headRefOid,isDraft,labels,state,body,statusCheckRollup \
-              > source-probe.json 2>/dev/null; then
-              printf '\n## Skipped #%s\n- source: #%s\n- reason: source research PR unavailable\n' \
-                "$candidate_number" "$source_number" >> integration-gate-report.md
-              continue
-            fi
-
-            set +e
-            python3 scripts/integration_gate.py validate \
-              --candidate candidate-probe.json \
-              --source-research source-probe.json \
-              --report candidate-probe-report.md
-            probe_rc=$?
-            set -e
-            {
-              echo
-              echo "## Probe candidate #$candidate_number / source #$source_number"
-              cat candidate-probe-report.md
-            } >> integration-gate-report.md
-            if [[ "$probe_rc" -ne 0 ]]; then
-              continue
-            fi
-
-            cp candidate-probe.json candidate.json
-            cp source-probe.json source-research.json
-            echo "PR_NUMBER=$candidate_number" >> "$GITHUB_ENV"
-            echo "SOURCE_PR_NUMBER=$source_number" >> "$GITHUB_ENV"
-            echo "CANDIDATE_COUNT=1" >> "$GITHUB_ENV"
-            selected=1
-            break
-          done
-          if [[ "$selected" -eq 0 ]]; then
-            echo "CANDIDATE_COUNT=0" >> "$GITHUB_ENV"
-            echo >> integration-gate-report.md
-            echo 'No fully approved candidate/source pair was available; the incumbent remains authoritative.' >> integration-gate-report.md
+            --label autonomous-promotion-approved \
+            --json number,title,url,headRefName,headRefOid,baseRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
+            > integration-merge/authorized.json
+          count="$(python3 -c 'import json; print(len(json.load(open("integration-merge/authorized.json"))))')"
+          echo "AUTHORIZED_COUNT=$count" >> "$GITHUB_ENV"
+          if [[ "$count" -gt 1 ]]; then
+            echo 'More than one controller authorization is active; fail closed.' >&2
+            exit 1
+          fi
+          if [[ "$count" -eq 1 ]]; then
+            number="$(python3 -c 'import json; print(json.load(open("integration-merge/authorized.json"))[0]["number"])')"
+            echo "PR_NUMBER=$number" >> "$GITHUB_ENV"
           fi
 
-      - name: Merge one approved paper champion integration
-        if: env.CANDIDATE_COUNT == '1'
+      - name: Revalidate authorization against current evidence and base
+        if: env.AUTHORIZED_COUNT == '1'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-
           gh pr view "$PR_NUMBER" \
-            --json number,title,url,headRefName,headRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
-            > candidate-final.json
-          gh pr view "$SOURCE_PR_NUMBER" \
-            --json number,headRefName,headRefOid,isDraft,labels,state,body,statusCheckRollup \
-            > source-research-final.json
-          python3 scripts/integration_gate.py validate \
-            --candidate candidate-final.json \
-            --source-research source-research-final.json \
-            --report integration-final-gate-report.md
-          expected_head="$(python3 -c 'import json; print(json.load(open("candidate-final.json"))["headRefOid"])')"
+            --json number,title,url,headRefName,headRefOid,baseRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
+            > integration-merge/candidate.json
+          source_number="$(python3 - <<'PY'
+          import json,re
+          body = json.load(open('integration-merge/candidate.json')).get('body') or ''
+          match = re.search(r'source research pr/branch/commit:\s*#(\d+)\b', body, re.I)
+          print(match.group(1) if match else '')
+          PY
+          )"
+          test -n "$source_number"
+          echo "SOURCE_PR_NUMBER=$source_number" >> "$GITHUB_ENV"
+          gh pr view "$source_number" \
+            --json number,headRefName,headRefOid,isDraft,labels,state,body,statusCheckRollup,comments,reviews \
+            > integration-merge/source.json
+          gh pr diff "$PR_NUMBER" --name-only > integration-merge/changed-files.txt
 
-          git fetch --no-tags origin main paper-validated
-          current_main_sha="$(git rev-parse origin/main)"
-          current_validated_sha="$(git rev-parse origin/paper-validated)"
-          test "$current_main_sha" = "$BASE_MAIN_SHA"
-          test "$current_validated_sha" = "$BASE_VALIDATED_SHA"
-          test "$current_main_sha" = "$current_validated_sha"
+          current_main="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          base_sha="$(python3 -c 'import json; print(json.load(open("integration-merge/candidate.json"))["baseRefOid"])')"
+          test "$base_sha" = "$current_main" || {
+            echo "Authorized PR base $base_sha is stale versus main $current_main; wait for fresh checks." >&2
+            exit 1
+          }
+
+          evidence_path="$(python3 - <<'PY'
+          import json,re
+          body = json.load(open('integration-merge/candidate.json')).get('body') or ''
+          match = re.search(r'promotion evidence file:\s*([^\s`]+\.json)\b', body, re.I)
+          print(match.group(1) if match else '')
+          PY
+          )"
+          gate_args=(
+            python3 scripts/promotion_gate.py
+            --candidate integration-merge/candidate.json
+            --source integration-merge/source.json
+            --changed-files integration-merge/changed-files.txt
+            --alpha-config config/alpha_factory.json
+            --policy config/promotion_policy.json
+            --report integration-merge/promotion-gate.md
+            --json-output integration-merge/promotion-gate.json
+            --require-approval-label
+          )
+          if [[ -n "$evidence_path" ]]; then
+            source_sha="$(python3 -c 'import json; print(json.load(open("integration-merge/source.json"))["headRefOid"])')"
+            gh api "repos/${GITHUB_REPOSITORY}/contents/${evidence_path}?ref=${source_sha}" \
+              --jq .content > integration-merge/evidence.b64
+            base64 -d integration-merge/evidence.b64 > integration-merge/evidence.json
+            gate_args+=(--evidence integration-merge/evidence.json)
+          fi
+          "${gate_args[@]}"
+
+          candidate_head="$(python3 -c 'import json; print(json.load(open("integration-merge/candidate.json"))["headRefOid"])')"
+          source_head="$(python3 -c 'import json; print(json.load(open("integration-merge/source.json"))["headRefOid"])')"
+          python3 - <<'PY' > integration-merge/source-match-files.txt
+          import json
+          for path in json.load(open('integration-merge/promotion-gate.json')).get('source_content_match_files', []):
+              print(path)
+          PY
+          : > integration-merge/provenance.tsv
+          while IFS= read -r path; do
+            [[ -n "$path" ]] || continue
+            candidate_blob="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${candidate_head}" --jq .sha 2>/dev/null || echo __missing__)"
+            source_blob="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${source_head}" --jq .sha 2>/dev/null || echo __missing__)"
+            printf '%s\t%s\t%s\n' "$path" "$candidate_blob" "$source_blob" >> integration-merge/provenance.tsv
+            test "$candidate_blob" = "$source_blob" || {
+              echo "Economic source-content mismatch: $path" >&2
+              exit 1
+            }
+          done < integration-merge/source-match-files.txt
+
+      - name: Merge controller-authorized automatic paper-champion promotion
+        if: env.AUTHORIZED_COUNT == '1'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh pr view "$PR_NUMBER" \
+            --json headRefOid,baseRefOid,mergeStateStatus,labels \
+            > integration-merge/candidate-final.json
+          expected_head="$(python3 -c 'import json; print(json.load(open("integration-merge/candidate-final.json"))["headRefOid"])')"
+          expected_base="$(python3 -c 'import json; print(json.load(open("integration-merge/candidate-final.json"))["baseRefOid"])')"
+          current_main="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          test "$expected_base" = "$current_main"
+          test "$(python3 -c 'import json; print(json.load(open("integration-merge/candidate-final.json"))["mergeStateStatus"])')" = CLEAN
+          python3 - <<'PY'
+          import json
+          labels = {x.get('name') for x in json.load(open('integration-merge/candidate-final.json')).get('labels', [])}
+          assert 'autonomous-promotion-approved' in labels
+          PY
 
           gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$expected_head" \
-            | tee merge-result.txt
+            | tee integration-merge/merge-result.txt
           merged_sha="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq .mergeCommit.oid)"
           [[ "$merged_sha" =~ ^[0-9a-f]{40}$ ]]
-          current_main_after_merge="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
-          test "$current_main_after_merge" = "$merged_sha"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$merged_sha"
           echo "MERGED_SHA=$merged_sha" >> "$GITHUB_ENV"
 
-          python3 - "$merged_sha" "$PR_NUMBER" > integration-dispatch.json <<'PY'
+          python3 - "$merged_sha" "$PR_NUMBER" > integration-merge/integration-dispatch.json <<'PY'
           import json
           import sys
           print(json.dumps({
-              "event_type": "champion-integration-merged",
-              "client_payload": {
-                  "sha": sys.argv[1],
-                  "pr_number": int(sys.argv[2]),
-                  "approval_gated": True,
+              'event_type': 'champion-integration-merged',
+              'client_payload': {
+                  'sha': sys.argv[1],
+                  'pr_number': int(sys.argv[2]),
+                  'automatic_promotion': True,
               },
           }))
           PY
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" --input integration-dispatch.json
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" \
+            --input integration-merge/integration-dispatch.json
           gh pr comment "$PR_NUMBER" --body \
-            "Approved paper-champion integration merged at \`$merged_sha\`. Research approval, exact integration approval and objective checks were revalidated; post-merge exact-SHA validation now owns the handoff to \`paper-validated\` and deployment."
+            "Automatically promoted at \`$merged_sha\` after Promotion Controller authorization and immediate fail-closed revalidation. Post-merge exact-SHA validation now owns \`paper-validated\` and deployment. Authenticated real-money execution remains disabled."
 
-          {
-            echo
-            echo '## Approved integration action'
-            echo "- approved candidates at selection: ${ELIGIBLE_COUNT:-unknown}"
-            echo "- merged PR: #$PR_NUMBER"
-            echo "- research-approved source PR: #$SOURCE_PR_NUMBER"
-            echo "- candidate head: \`$expected_head\`"
-            echo "- merged main revision: \`$merged_sha\`"
-            echo '- required integration labels: approved-for-integration, single-model-reviewed, administrator-approved'
-            echo '- base gate: current main must already equal paper-validated and remain unchanged through merge'
-            echo '- merge mode: squash; at most one candidate per scheduler cycle'
-            echo '- private server-health: deployment/health concern, not an integration approval substitute'
-            echo '- handoff: repository dispatch `champion-integration-merged`'
-            echo '- real-money execution: unchanged/disabled'
-          } >> integration-merge-report.md
-
-      - name: Publish approved integration report
+      - name: Publish integration action
         if: always()
         shell: bash
         run: |
-          cat integration-merge-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
-          printf '\n' >> "$GITHUB_STEP_SUMMARY"
-          cat integration-gate-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
-          printf '\n' >> "$GITHUB_STEP_SUMMARY"
-          cat integration-final-gate-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '## Automatic integration merge' >> "$GITHUB_STEP_SUMMARY"
+          echo "- controller-authorized candidates: ${AUTHORIZED_COUNT:-unknown}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- merged PR: ${PR_NUMBER:-none}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- source research PR: ${SOURCE_PR_NUMBER:-none}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- merged SHA: ${MERGED_SHA:-none}" >> "$GITHUB_STEP_SUMMARY"
+          cat integration-merge/promotion-gate.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
-      - name: Upload approved integration evidence
+      - name: Upload integration evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: integration-merge-${{ github.run_id }}
-          path: |
-            integration-merge-report.md
-            integration-gate-report.md
-            integration-final-gate-report.md
-            integration-prs.json
-            candidate.env
-            candidate.json
-            candidate-final.json
-            candidate-probe.json
-            candidate-probe-report.md
-            source-research.json
-            source-research-final.json
-            source-probe.json
-            merge-result.txt
-            integration-dispatch.json
+          path: integration-merge/
           if-no-files-found: warn
           retention-days: 30
