@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import unittest
 from pathlib import Path
 
@@ -9,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "lf_relation_aligned_factor_diagnostic.py"
 SPEC = importlib.util.spec_from_file_location("lf_relation_aligned_factor_diagnostic", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = MODULE
 assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
 
