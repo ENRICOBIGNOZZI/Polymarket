@@ -30,19 +30,23 @@ Then, independently:
 bash scripts/monitoring_up.sh
 ```
 
-On the server, `ops/apply_runtime_config_macos.sh` keeps Grafana bound to `127.0.0.1:3000` and publishes only a private tailnet route with Tailscale Serve. The operator URL is:
+On the paper server, `ops/apply_runtime_config_macos.sh` keeps the Grafana backend bound to `127.0.0.1:3000`, fixes the Tailscale MagicDNS machine name to `polymarket`, and publishes Grafana privately through Tailscale Serve on HTTP port 80.
+
+The canonical operator URL is permanently:
 
 ```text
-http://100.104.183.109:3000
+http://polymarket
 ```
 
-The machine opening the page must be connected to the same Tailscale tailnet. Grafana uses anonymous `Viewer` access: there is no login form and no editing/admin permission through this route. Prometheus and the exporter remain loopback-only.
+Do not bookmark `127.0.0.1`, the server's `100.x` Tailscale IP, or a Grafana dashboard-specific path. The root URL above is the single supported operator entrypoint; Grafana redirects from there to the current default dashboard. Because it uses MagicDNS rather than the node's numeric Tailscale address, the operator link is decoupled from IP changes.
 
-For a purely local installation, open `http://localhost:3000`. By default `POLYMARKET_RUN_NAME=auto`, which selects the numerically highest versioned `paper_v*` directory. Set `POLYMARKET_RUN_NAME` only when intentionally pinning an older/historical run.
+The machine opening the page must be connected to the same Tailscale tailnet with Tailscale DNS enabled. Grafana uses anonymous `Viewer` access: there is no login form and no editing/admin permission through this route. Prometheus and the exporter remain loopback-only.
+
+For a purely local development installation, `http://localhost:3000` remains available on the machine running the local stack, but it is not the operator URL for the paper server. By default `POLYMARKET_RUN_NAME=auto`, which selects the numerically highest versioned `paper_v*` directory. Set `POLYMARKET_RUN_NAME` only when intentionally pinning an older/historical run.
 
 ## Hourly operational explanation
 
-The `paper-server-health` workflow runs at minute 23 of every hour. It now verifies Grafana from a separate GitHub runner over the tailnet, not only from `localhost` on the server. It also generates and publishes:
+The `paper-server-health` workflow runs at minute 23 of every hour. It verifies Grafana from a separate GitHub runner over the tailnet, not only from `localhost` on the server. It also generates and publishes:
 
 ```text
 runs/paper_v4_live/action_report.md
