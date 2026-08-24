@@ -5,6 +5,7 @@ import json
 import math
 import pathlib
 import sys
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -16,6 +17,15 @@ assert SPEC and SPEC.loader
 mod = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = mod
 SPEC.loader.exec_module(mod)
+
+PURGED_SPEC = importlib.util.spec_from_file_location(
+    "hf_v5_microstructure_purged_eval",
+    ROOT / "scripts" / "hf_v5_microstructure_purged_eval.py",
+)
+assert PURGED_SPEC and PURGED_SPEC.loader
+purged = importlib.util.module_from_spec(PURGED_SPEC)
+sys.modules[PURGED_SPEC.name] = purged
+PURGED_SPEC.loader.exec_module(purged)
 
 
 class V5MicrostructureSemanticsTest(unittest.TestCase):
@@ -66,6 +76,60 @@ class V5MicrostructureSemanticsTest(unittest.TestCase):
         self.assertEqual(len(labeled), 6)
         self.assertAlmostEqual(labeled[0].future_move, 0.002, places=12)
         self.assertAlmostEqual(labeled[0].features[0], 0.001, places=12)
+
+    def test_capture_replay_preserves_receive_latency_and_prearrival_ofi(self) -> None:
+        book = {
+            "received_ts_ms": 1787613000050,
+            "shard": 0,
+            "payload": {
+                "event_type": "book",
+                "timestamp": 1787613000000,
+                "asset_id": "42",
+                "bids": [{"price": "0.49", "size": "100"}],
+                "asks": [{"price": "0.51", "size": "80"}],
+            },
+        }
+        change = {
+            "received_ts_ms": 1787613001055,
+            "shard": 0,
+            "payload": {
+                "event_type": "price_change",
+                "timestamp": 1787613001000,
+                "price_changes": [
+                    {"asset_id": "42", "price": "0.49", "size": "120", "side": "BUY"}
+                ],
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            capture = root / "capture.jsonl"
+            features = root / "features.csv"
+            capture.write_text(json.dumps(book) + "\n" + json.dumps(change) + "\n", encoding="utf-8")
+            rows = mod.replay_capture(capture, features)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0]["feed_latency_ms"], 50)
+            self.assertEqual(rows[1]["feed_latency_ms"], 55)
+            self.assertGreater(rows[1]["ofi_l1"], 0.0)
+            self.assertTrue(features.is_file())
+
+    def test_purged_split_embargoes_future_label_overlap(self) -> None:
+        labeled = []
+        for i in range(200):
+            labeled.append(
+                mod.LabeledRow(
+                    ts_ms=i * 1000,
+                    market_id="m1",
+                    mid=0.5,
+                    spread=0.002,
+                    features=(0.0, 0.1, 0.1, 0.1, 0.0, 0.002, 50.0),
+                    future_move=0.0,
+                )
+            )
+        train, test, cutoff = purged.purged_split(labeled, horizon_ms=5000, tolerance_ms=2500)
+        self.assertTrue(train)
+        self.assertTrue(test)
+        self.assertTrue(all(row.ts_ms + 7500 < cutoff for row in train))
+        self.assertTrue(all(row.ts_ms >= cutoff for row in test))
 
     def test_multifeature_challenger_beats_micro_displacement_fixture(self) -> None:
         labeled = []
