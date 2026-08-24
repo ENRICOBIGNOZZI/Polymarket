@@ -13,6 +13,19 @@ if [[ -n "$MODEL_MARKETS" ]]; then
 fi
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/strategies"
 
+COMPACTION_INTERVAL_SECONDS="$(python3 - "$CONFIG" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    config = json.load(handle)
+value = config.get("multi_strategy", {}).get("log_retention", {}).get("compaction_interval_seconds", 60)
+value = int(value)
+if value <= 0:
+    raise SystemExit("compaction_interval_seconds must be positive")
+print(value)
+PY
+)"
+
 python3 scripts/multi_strategy_paper.py \
   --config "$CONFIG" --run-root "$RUN_ROOT" --engine ./build/polymarket_engine \
   "${MODEL_MARKET_ARGS[@]}" --min-liquidity 100 --validate-only \
@@ -207,6 +220,7 @@ last_structural=0
 last_rewards=0
 last_oos=0
 last_report=0
+last_compaction=0
 
 while true; do
   now=$(date +%s)
@@ -283,6 +297,13 @@ while true; do
       --output-markdown "$RUN_ROOT/action_report.md" \
       > "$RUN_ROOT/action_report_latest.log" 2> "$RUN_ROOT/action_report_errors.log" || true
     last_report=$now
+  fi
+
+  if (( now - last_compaction >= COMPACTION_INTERVAL_SECONDS )); then
+    python3 scripts/compact_strategy_logs.py \
+      --config "$CONFIG" --run-root "$RUN_ROOT" \
+      >> "$RUN_ROOT/log_compaction.log" 2>&1 || true
+    last_compaction=$now
   fi
 
   sleep 10
