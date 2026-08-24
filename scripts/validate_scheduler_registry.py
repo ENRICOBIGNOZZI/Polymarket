@@ -68,10 +68,10 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
     else:
         if administrator.get("live_champion_manifest") != "config/live_champion.json":
             errors.append("administrator.live_champion_manifest must select config/live_champion.json")
-        if administrator.get("paper_promotion_mode") != "automatic_objective_gates":
-            errors.append("administrator.paper_promotion_mode must be automatic_objective_gates")
-        if administrator.get("manual_approval_required") is not False:
-            errors.append("administrator.manual_approval_required must be false for paper promotion")
+        if administrator.get("paper_promotion_mode") != "approval_gated_integration":
+            errors.append("administrator.paper_promotion_mode must be approval_gated_integration")
+        if administrator.get("manual_approval_required") is not True:
+            errors.append("administrator.manual_approval_required must be true for model integration")
 
     schedulers = data.get("schedulers")
     if not isinstance(schedulers, list):
@@ -149,7 +149,6 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         errors.append(f"validation dispatch authority must belong only to post-merge-validation; found {dispatch_ids}")
 
     by_id = {str(item["id"]): item for item in normalized}
-
     admin = by_id.get("administrator-supervisor")
     if admin:
         text = (root / str(admin["workflow"])).read_text(encoding="utf-8")
@@ -164,21 +163,23 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             errors.append("integration-merge must use a bounded squash merge")
         if "--admin" in text:
             errors.append("integration-merge must never use --admin")
-        if "administrator-approved" in text:
-            errors.append("paper integration must not require administrator-approved")
         if "incumbent_health_gate.py" in text:
-            errors.append("incumbent health must not block a validated paper upgrade")
+            errors.append("private incumbent health must remain a deploy/health concern, not an integration approval substitute")
         for required in (
+            "BASE_MAIN_SHA",
+            "BASE_VALIDATED_SHA",
             "candidate-final.json",
             "source-research-final.json",
-            "statusCheckRollup",
             "--match-head-commit",
             "current_main_after_merge",
             '"event_type": "champion-integration-merged"',
-            "Automatic paper-champion promotion",
+            "approved-for-integration",
+            "single-model-reviewed",
+            "administrator-approved",
+            "research-approved",
         ):
             if required not in text:
-                errors.append(f"integration-merge is missing automatic promotion contract: {required}")
+                errors.append(f"integration-merge is missing approval/race-safe contract: {required}")
 
     post_merge = by_id.get("post-merge-validation")
     if post_merge:
@@ -239,7 +240,7 @@ def render_report(items: list[dict[str, Any]], errors: list[str]) -> str:
         lines.extend(["", "## Errors"])
         lines.extend(f"- {error}" for error in errors)
     else:
-        lines.extend(["", "Registry and one-job-per-workflow contract are valid. Automatic paper promotion is enabled through objective scheduler gates."])
+        lines.extend(["", "Registry and one-job-per-workflow contract are valid."])
     return "\n".join(lines) + "\n"
 
 

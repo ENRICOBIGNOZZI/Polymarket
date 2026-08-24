@@ -118,16 +118,20 @@ class IncumbentHealthGateTest(unittest.TestCase):
         self.assertNotEqual(stale.returncode, 0)
         self.assertIn("main and paper-validated are not equal", stale.stdout)
 
-    def test_integration_workflow_uses_automatic_promotion_after_public_validation(self):
+    def test_integration_workflow_is_approval_gated_after_public_validation(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn('cron: "3,18,33,48 * * * *"', workflow)
         self.assertIn("actions: read", workflow)
         self.assertIn("Require current main to be publicly paper-validated", workflow)
-        self.assertIn("git fetch --no-tags origin main paper-validated", workflow)
-        self.assertIn('test "$main_sha" = "$validated_sha"', workflow)
-        self.assertIn("Build locally-green automatic promotion queue", workflow)
-        self.assertIn("Scan numbered research sources and select first fully-green candidate", workflow)
-        self.assertIn("Automatically promote the first fully-green paper champion candidate", workflow)
+        self.assertIn("BASE_MAIN_SHA", workflow)
+        self.assertIn("BASE_VALIDATED_SHA", workflow)
+        self.assertIn("Build explicitly approved integration queue", workflow)
+        self.assertIn("Recheck approved research sources and select one candidate", workflow)
+        self.assertIn("Merge one approved paper champion integration", workflow)
+        self.assertIn("approved-for-integration", workflow)
+        self.assertIn("single-model-reviewed", workflow)
+        self.assertIn("administrator-approved", workflow)
+        self.assertIn("research-approved", workflow)
         self.assertIn("scripts/integration_gate.py validate", workflow)
         self.assertIn("--match-head-commit", workflow)
         self.assertIn("champion-integration-merged", workflow)
@@ -136,7 +140,7 @@ class IncumbentHealthGateTest(unittest.TestCase):
         self.assertNotIn("gh run download", workflow)
         self.assertNotIn("scripts/incumbent_health_gate.py", workflow)
 
-    def test_private_health_is_not_disabled_with_automatic_deploy(self):
+    def test_private_health_remains_independently_enforced(self):
         workflow = SERVER_HEALTH_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn('cron: "23 * * * *"', workflow)
         self.assertIn('workflows: ["deploy-paper-server", "Grafana Permanent Access"]', workflow)

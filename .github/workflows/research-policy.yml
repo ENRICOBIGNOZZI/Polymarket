@@ -50,7 +50,7 @@ jobs:
           tests/test_v5_allocator_policy.py
           -v
 
-      - name: Ensure research-isolation labels exist
+      - name: Ensure governance labels exist
         if: github.event_name != 'pull_request'
         shell: bash
         env:
@@ -64,7 +64,10 @@ jobs:
                 -f name="$name" -f color="$color" -f description="$description" >/dev/null
             fi
           }
-          ensure_label research-approved 0e8a16 "Optional research-evidence annotation; not a paper-promotion gate"
+          ensure_label research-approved 0e8a16 "Research evidence approved for an integration candidate"
+          ensure_label approved-for-integration 1d76db "Integration candidate approved for gated paper promotion"
+          ensure_label single-model-reviewed 5319e7 "Reviewed for one champion, allocator, risk state and broker"
+          ensure_label administrator-approved b60205 "Project administrator approved this exact integration diff"
           ensure_label shadow-isolated fbca04 "Measurement-only code isolated from production decisions, PnL and risk"
 
       - name: Enforce pull-request lifecycle
@@ -92,8 +95,8 @@ jobs:
             echo '# Research pull-request policy'
             echo
             echo "- event: \`$GITHUB_EVENT_NAME\`"
-            echo '- policy scripts and scheduler registry validated'
-            echo '- legacy manual paper-promotion labels are not provisioned or required'
+            echo '- policy scripts, approval labels and scheduler registry validated'
+            echo '- research approval is separate from integration and administrator approval'
             echo '- no pull request was evaluated in this run'
           } > research-policy-report.md
 
