@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import unittest
 from pathlib import Path
 
@@ -11,6 +12,7 @@ SPEC = importlib.util.spec_from_file_location(
 )
 assert SPEC and SPEC.loader
 mod = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = mod
 SPEC.loader.exec_module(mod)
 
 
@@ -73,6 +75,23 @@ class V5CapitalAllocatorResearchTest(unittest.TestCase):
         self.assertFalse(proposal["details"]["micro"]["gate_pass"])
         self.assertIn("existing_oos_gate_not_passed", proposal["details"]["micro"]["reasons"])
         self.assertAlmostEqual(proposal["strategy_fractions"]["micro"], 0.02)
+
+    def test_training_gate_uses_latest_prior_cumulative_state(self) -> None:
+        early = self.good_row()
+        early["eligible_for_tiny_pilot"] = False
+        early["production_threshold_present"] = False
+        early["trades"] = 5
+        late = self.good_row()
+        rows = mod.aggregate_training_rows(
+            [
+                {"timestamp": 1, "strategies": {"micro": early}},
+                {"timestamp": 2, "strategies": {"micro": late}},
+            ],
+            ["micro"],
+        )
+        self.assertTrue(rows["micro"]["eligible_for_tiny_pilot"])
+        self.assertTrue(rows["micro"]["production_threshold_present"])
+        self.assertEqual(rows["micro"]["trades"], 40)
 
     def test_chronological_ablation_uses_only_prior_windows(self) -> None:
         empty = {
