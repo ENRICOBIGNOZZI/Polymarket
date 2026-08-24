@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "version": 1,
+  "name": "prediction-market-portfolio-champion",
+  "mode": "paper_only",
+  "deployment_ref": "paper-validated",
+  "promotion_policy": "approved integration PR only",
+  "supervisor": {
+    "entrypoint": "scripts/portfolio_supervisor.py",
+    "config": "config/portfolio_supervisor.json",
+    "run_root": "runs/supervisor",
+    "authoritative_for": [
+      "global_capital",
+      "engine_allocations",
+      "global_drawdown",
+      "new_exposure_gates"
+    ]
+  },
+  "engines": {
+    "alpha": {
+      "champion_manifest": "config/live_champion.json",
+      "process": "scripts/paper_latest_loop.sh",
+      "run_root": "runs/paper_v4_live",
+      "execution_state": "local_secondary_guard",
+      "gate": "engines.alpha"
+    },
+    "cross_venue": {
+      "config": "config/cross_venue.json",
+      "process": "scripts/cross_venue_loop.sh",
+      "run_root": "runs/cross_venue",
+      "venues": ["polymarket", "limitless", "kalshi"],
+      "execution_state": "paper_attribution_subledger",
+      "gate": "engines.cross_venue"
+    }
+  },
+  "invariants": {
+    "one_portfolio_champion": true,
+    "independent_failure_domains": true,
+    "global_new_exposure_fail_closed": true,
+    "authenticated_order_submission": false,
+    "maximum_drawdown": 0.15
+  }
+}
