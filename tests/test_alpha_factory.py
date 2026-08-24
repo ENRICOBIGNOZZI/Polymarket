@@ -144,23 +144,44 @@ class AlphaFactoryTests(unittest.TestCase):
         self.assertIsNone(state["active_canary"])
 
     def test_fdr_blocks_an_apparent_gate_pass(self) -> None:
-        live = self.passing_live()
-        live["walk_forward"]["bootstrap_one_sided_pvalue"] = 0.20
-        previous = {
-            "candidates": {
-                "portfolio:unified_bundle_engine": {"consecutive_passes": 10}
-            }
+        candidate = {
+            "candidate_id": "portfolio:unified_bundle_engine",
+            "family": "unified_portfolio",
+            "specification": "test",
+            "evidence_type": "test",
+            "observations": 50,
+            "latest_evidence_ts": self.now,
+            "metrics": {"incremental_utility": 0.02},
+            "raw_pvalue": 0.08,
+            "gate_pass_before_fdr": True,
+            "integration_evidence_pass": True,
+            "reasons": [],
+            "critical_failures": [],
         }
-        report, _ = alpha_factory.build_report(
-            self.config, self.champion, live, {}, [], previous, self.now
+        null_candidate = {
+            "candidate_id": "execution:null_control",
+            "family": "control",
+            "specification": "null",
+            "evidence_type": "test",
+            "observations": 50,
+            "latest_evidence_ts": self.now,
+            "metrics": {},
+            "raw_pvalue": 0.90,
+            "gate_pass_before_fdr": False,
+            "integration_evidence_pass": False,
+            "reasons": ["null_control"],
+            "critical_failures": [],
+        }
+        completed, state, _ = alpha_factory.finalize_candidates(
+            [candidate, null_candidate],
+            {"candidates": {candidate["candidate_id"]: {"consecutive_passes": 10}}},
+            self.config,
+            self.now,
         )
-        candidate = next(
-            x for x in report["candidates"]
-            if x["candidate_id"] == "portfolio:unified_bundle_engine"
-        )
-        self.assertEqual(candidate["decision"], "continue_shadow")
-        self.assertIn("fdr_gate", candidate["reasons"])
-        self.assertIsNone(report["recommended_canary"])
+        result = next(x for x in completed if x["candidate_id"] == candidate["candidate_id"])
+        self.assertEqual(result["decision"], "continue_shadow")
+        self.assertIn("fdr_gate", result["reasons"])
+        self.assertIsNone(state["recommended_canary"])
 
     def test_canary_regression_recommends_rollback_but_does_not_mutate_champion(self) -> None:
         identifier = "portfolio:unified_bundle_engine"
