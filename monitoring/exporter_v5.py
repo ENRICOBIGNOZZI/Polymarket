@@ -128,22 +128,45 @@ class V5Collector(V4Collector):
                 )
 
             signal_rows = _read_csv(self.run_root / "strategies" / row.get("name", "") / "signals.csv")
+            all_rows = len(signal_rows)
+            cost_positive = sum(1 for signal in signal_rows if _float(signal.get("cost_adjusted_edge")) > 0.0)
+            net_positive = sum(1 for signal in signal_rows if _float(signal.get("net_edge")) > 0.0)
             metrics.sample(
                 "polymarket_model_signal_window_rows",
-                len(signal_rows),
+                all_rows,
                 help_text="Rows in the bounded recent signal window for an independent V5 model.",
                 labels=labels,
             )
             metrics.sample(
                 "polymarket_model_cost_positive_signal_window_rows",
-                sum(1 for signal in signal_rows if _float(signal.get("cost_adjusted_edge")) > 0.0),
+                cost_positive,
                 help_text="Rows positive after fee and slippage in the bounded recent signal window.",
                 labels=labels,
             )
             metrics.sample(
                 "polymarket_model_net_positive_signal_window_rows",
-                sum(1 for signal in signal_rows if _float(signal.get("net_edge")) > 0.0),
+                net_positive,
                 help_text="Rows with positive final net edge in the bounded recent signal window.",
+                labels=labels,
+            )
+            # Deprecated compatibility names retained for the existing dashboard;
+            # they are gauges over a bounded recent window, not lifetime counters.
+            metrics.sample(
+                "polymarket_model_signals_total",
+                all_rows,
+                help_text="Deprecated alias for bounded recent signal-window rows.",
+                labels=labels,
+            )
+            metrics.sample(
+                "polymarket_model_cost_positive_signals_total",
+                cost_positive,
+                help_text="Deprecated alias for bounded recent cost-positive signal-window rows.",
+                labels=labels,
+            )
+            metrics.sample(
+                "polymarket_model_net_positive_signals_total",
+                net_positive,
+                help_text="Deprecated alias for bounded recent net-positive signal-window rows.",
                 labels=labels,
             )
             metrics.sample(
