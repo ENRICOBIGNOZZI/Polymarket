@@ -44,6 +44,21 @@ class WorkflowYamlContractTest(unittest.TestCase):
         self.assertNotIn("paper-validated", ci)
         self.assertNotIn("POLYMARKET_DEPLOY_REF", ci)
 
+    def test_live_telemetry_publish_retries_only_cas_conflicts(self) -> None:
+        smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("for attempt in 1 2 3 4 5; do", smoke)
+        self.assertIn('current_sha="$(gh api "${endpoint}?ref=telemetry"', smoke)
+        self.assertIn('if publish_output="$(gh api "${args[@]}" 2>&1)"; then', smoke)
+        self.assertIn("HTTP 409|expected .* but (is|was) at", smoke)
+        self.assertIn("telemetry publication exhausted conflict retries", smoke)
+        self.assertIn("sleep \"$attempt\"", smoke)
+        self.assertLess(
+            smoke.index("- name: Publish latest public telemetry"),
+            smoke.index("- name: Advance paper validated ref"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
