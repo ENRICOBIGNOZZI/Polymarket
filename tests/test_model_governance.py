@@ -89,7 +89,7 @@ class ModelGovernanceContractTest(unittest.TestCase):
         self.assertIn("shadow-isolated", workflow)
         self.assertIn('head.startswith("integration/")', workflow)
         self.assertIn("len(candidates) > 1", workflow)
-        self.assertIn("merge at most one coherent champion change per cycle", workflow)
+        self.assertIn("merges at most one coherent champion change per cycle", workflow)
         self.assertIn('gh pr merge "$PR_NUMBER" --squash --delete-branch', workflow)
         self.assertNotIn("--admin", workflow)
         self.assertIn("ci.yml monitoring.yml v4-live-smoke.yml", workflow)
