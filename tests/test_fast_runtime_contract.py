@@ -27,6 +27,11 @@ class FastRuntimeContractTest(unittest.TestCase):
         self.assertNotIn("--execute", source)
         self.assertNotIn("/order", source)
 
+        transport = (ROOT / "src" / "fast_ws.cpp").read_text(encoding="utf-8")
+        self.assertIn("boost/beast/websocket.hpp", transport)
+        self.assertIn("SSL_set_tlsext_host_name", transport)
+        self.assertNotIn("curl_ws_", transport)
+
     def test_runtime_selector_supervises_fast_and_champion_planes(self) -> None:
         selector = (ROOT / "scripts" / "paper_latest_loop.sh").read_text(encoding="utf-8")
         self.assertIn("polymarket_fast_arb_shadow", selector)
@@ -47,6 +52,8 @@ class FastRuntimeContractTest(unittest.TestCase):
         )
         self.assertIn('cron: "7 * * * *"', operational)
         self.assertIn("polymarket_fast_arb_shadow", operational)
+        self.assertIn('status["ws_messages"] > 0', operational)
+        self.assertIn('status["book_updates"] > 0', operational)
         self.assertIn("arb_theory_scheduler.py", operational)
         self.assertIn('cron: "37 * * * *"', theory)
         self.assertIn("research/auto-fast-arb-policy", theory)
