@@ -1,0 +1,113 @@
+{
+  "schema": "polymarket_v5_capital_allocator_current_evidence_v1",
+  "captured_at_utc": "2026-08-24T22:19:42Z",
+  "research_only": true,
+  "repository": {
+    "main_sha": "5c9fc0fe13f0ee40d41440dcc9ffa18b91fc9298",
+    "paper_validated_sha": "5c9fc0fe13f0ee40d41440dcc9ffa18b91fc9298",
+    "live_champion_version": 5,
+    "live_config_mutated": false
+  },
+  "incumbent": {
+    "design": "independent paper books combined only at capital/risk layer",
+    "fixed_strategy_fractions": {
+      "micro": 0.10,
+      "pca": 0.20,
+      "graph": 0.30,
+      "semantic": 0.10,
+      "external": 0.20
+    },
+    "reserve_fraction": 0.10,
+    "global_max_drawdown": 0.15,
+    "global_max_gross_fraction": 0.35,
+    "note": "fixed fractions were promoted to generate clean forward attribution; economic superiority of the allocation itself was not asserted"
+  },
+  "fresh_live_smoke": {
+    "generated_ts": 1787609959,
+    "git_sha": "5c9fc0fe13f0ee40d41440dcc9ffa18b91fc9298",
+    "runtime_adapter": "v5",
+    "runtime_equity_usd": 10000.0,
+    "runtime_realized_pnl_usd": 0.0,
+    "runtime_drawdown": 0.0,
+    "runtime_gross_exposure_usd": 0.0,
+    "oos_trades": 0,
+    "oos_net_pnl_usd": 0.0,
+    "oos_stressed_net_pnl_usd": 0.0,
+    "oos_active_folds": 0,
+    "oos_eligible": false,
+    "production_bundles": 0,
+    "b1_candidates": 0,
+    "b2_raw_positive": 1,
+    "b2_maker_positive": 0,
+    "b2_best_raw_edge": 0.000153826,
+    "b2_best_maker_edge": -0.00173828,
+    "b2_best_taker_edge": -0.00487437,
+    "interpretation": "latest exact-SHA public smoke remains execution-cost negative and provides no realized sleeve-level OOS evidence"
+  },
+  "latest_alpha_factory_before_fresh_smoke": {
+    "generated_utc": "2026-08-24T22:10:12Z",
+    "b1_raw_positive": 1,
+    "b1_maker_positive": 0,
+    "b1_best_raw_edge": 0.0158588,
+    "b1_best_maker_edge": -0.0155214,
+    "b2_raw_positive": 6,
+    "b2_maker_positive": 2,
+    "b2_best_raw_edge": 0.0239395,
+    "b2_best_maker_edge": 0.00167239,
+    "oos_trades": 0,
+    "oos_net_pnl_usd": 0.0,
+    "stressed_1_5x_net_pnl_usd": 0.0,
+    "stressed_2_0x_net_pnl_usd": 0.0,
+    "interpretation": "the temporary maker-positive B2 snapshot did not persist into the next fresh exact-SHA live smoke, so it is not promotable evidence"
+  },
+  "dedicated_research_coordination": {
+    "hf_b2_forward_execution_pr": 123,
+    "hf_state": "MORE_EVIDENCE_REQUIRED",
+    "lf_reversion_significance_pr": 124,
+    "lf_relation_aligned_factor_pr": 128,
+    "lf_states": "MORE_EVIDENCE_REQUIRED",
+    "external_validation_pr": 106,
+    "external_status": "BACKTESTING_WITH_ZERO_OOS_PREDICTIONS_AT_LAST_ALPHA_FACTORY_SNAPSHOT",
+    "alpha_factory_boundary": "do not duplicate HF/LF signal research; challenge only cross-sleeve capital allocation and common OOS utility"
+  },
+  "challenger": {
+    "hypothesis": "after enough sleeve-level forward OOS evidence exists, allocating only incremental capital to sleeves with positive conservative net utility after 1x/1.5x/2x execution-cost stress will outperform the fixed V5 fractions on common future windows while preserving a small exploration budget",
+    "exploration_floor_per_enabled_sleeve": 0.02,
+    "minimum_reserve_fraction": 0.10,
+    "max_strategy_fraction": 0.30,
+    "capital_above_exploration_requires_existing_oos_gate": true,
+    "current_state": "WAITING_FOR_SLEEVE_LEVEL_OOS_EVIDENCE",
+    "current_shadow_proposal_if_scored_now": {
+      "micro": 0.02,
+      "pca": 0.02,
+      "graph": 0.02,
+      "semantic": 0.02,
+      "external": 0.02,
+      "reserve": 0.90
+    },
+    "important": "the current shadow proposal is not a recommendation to change the live paper data-collection allocation; it is the fail-closed output of the promotion allocator when no sleeve has passed the existing OOS gates"
+  },
+  "chronological_oos_contract": {
+    "training": "only windows strictly before each test window",
+    "incumbent_ablation": "fixed V5 capital fractions on the identical future strategy returns",
+    "challenger_ablation": "evidence-weighted fractions computed from prior windows only",
+    "cost_assumption": "source strategy returns must already include spread, fees, slippage, queue/fill realism, latency and adverse selection where applicable",
+    "promotion_requires": [
+      "at least two strictly future test folds",
+      "positive incremental net return versus fixed V5 allocation",
+      "positive incremental return at 1.5x execution costs",
+      "positive incremental return at 2.0x execution costs",
+      "no bypass of existing per-sleeve OOS/tiny-pilot gates",
+      "max strategy fraction no greater than 30%",
+      "global drawdown and gross-risk limits unchanged"
+    ]
+  },
+  "rollback_criteria": [
+    "reject the challenger if common-window incremental net return is nonpositive",
+    "reject if either 1.5x or 2.0x cost-stressed incremental return is nonpositive",
+    "reject if performance depends on a sleeve that has not passed the existing OOS gate",
+    "reject if results require look-ahead, cross-window leakage or post-decision HF features",
+    "keep current V5 fixed allocation and reserve as the live paper data-collection baseline until a future approved integration passes all gates"
+  ],
+  "decision": "MORE_EVIDENCE_REQUIRED"
+}
