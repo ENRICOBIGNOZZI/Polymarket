@@ -53,6 +53,27 @@ paper_runtime_healthy() {
   (( now - ts <= 60 )) || return 1
 }
 
+full_runtime_healthy() {
+  curl -fsS http://127.0.0.1:9108/healthz >/dev/null 2>&1 && \
+  curl -fsS http://127.0.0.1:9108/metrics 2>/dev/null | grep -q '^polymarket_runtime_info' && \
+  curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1 && \
+  curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 && \
+  curl -fsS http://127.0.0.1:3000/api/search >/dev/null 2>&1 && \
+  paper_runtime_healthy
+}
+
+wait_for_runtime_health() {
+  local attempts="${1:-60}"
+  local i
+  for ((i=0; i<attempts; ++i)); do
+    if full_runtime_healthy; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
 [[ "$(uname -s)" == "Darwin" ]] || fail "This updater is for macOS only"
 [[ -d "$APP_DIR/.git" ]] || fail "$APP_DIR is not a git checkout"
 [[ -f "$APP_DIR/.server_bootstrapped_macos" ]] || fail "run ops/bootstrap_macos.sh interactively once first"
@@ -70,13 +91,20 @@ MAIN_SHA="$(git rev-parse "origin/$LOCAL_BRANCH")"
 NEW_SHA="$(git rev-parse "origin/$DEPLOY_REF")"
 
 if [[ "$OLD_SHA" == "$NEW_SHA" ]]; then
-  if paper_runtime_healthy; then
+  if full_runtime_healthy; then
     write_status up_to_date "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
     log "Already deployed at validated commit $NEW_SHA"
     exit 0
   fi
+  log "Validated code is current but runtime is unhealthy; attempting service repair"
+  sudo -n /usr/local/sbin/polymarket-service-control restart || true
+  if wait_for_runtime_health 60; then
+    write_status repaired "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
+    log "Runtime repaired at validated commit $NEW_SHA"
+    exit 0
+  fi
   write_status unhealthy "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
-  fail "validated code is current but paper runtime health is not fresh"
+  fail "validated code is current and automatic service repair did not restore health"
 fi
 
 if git merge-base --is-ancestor "$NEW_SHA" "$OLD_SHA" 2>/dev/null; then
@@ -166,20 +194,9 @@ log "Restarting latest-runtime services"
 sudo -n /usr/local/sbin/polymarket-service-control restart || rollback "service restart failed"
 
 log "Waiting for production health"
-healthy=0
-for _ in {1..60}; do
-  if curl -fsS http://127.0.0.1:9108/healthz >/dev/null 2>&1 && \
-     curl -fsS http://127.0.0.1:9108/metrics 2>/dev/null | grep -q '^polymarket_runtime_info' && \
-     curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1 && \
-     curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 && \
-     curl -fsS http://127.0.0.1:3000/api/search >/dev/null 2>&1 && \
-     paper_runtime_healthy; then
-    healthy=1
-    break
-  fi
-  sleep 2
-done
-[[ "$healthy" -eq 1 ]] || rollback "post-deploy paper runtime health checks failed"
+if ! wait_for_runtime_health 60; then
+  rollback "post-deploy paper runtime health checks failed"
+fi
 
 rm -rf build.previous
 write_status deployed "$NEW_SHA" "$NEW_SHA" "$MAIN_SHA"
