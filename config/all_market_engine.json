@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "mode": "paper_shadow",
+  "target_candidate_book": 1000,
+  "universe": {
+    "discovery_limit": 0,
+    "refresh_seconds": 300,
+    "tier0_min_liquidity": 0.0,
+    "tier1_min_liquidity": 20.0,
+    "tier2_min_liquidity": 100.0
+  },
+  "fast_event_driven": {
+    "enabled": true,
+    "markets": 0,
+    "min_liquidity": 20.0,
+    "websocket_shard_size": 1000,
+    "rest_resync_seconds": 30,
+    "status_interval_seconds": 1,
+    "recycle_seconds": 900
+  },
+  "slow_research": {
+    "refresh_seconds": 300,
+    "b1_history_universe": 800,
+    "b2_pca_universe": 400,
+    "max_candidate_bundles": 500,
+    "expansion_target_bundles": 1000
+  },
+  "account_adapter": {
+    "enabled": false,
+    "read_only": true,
+    "address_env": "POLYMARKET_ADDRESS",
+    "api_key_env": "POLYMARKET_API_KEY",
+    "api_secret_env": "POLYMARKET_API_SECRET",
+    "passphrase_env": "POLYMARKET_PASSPHRASE"
+  },
+  "safety": {
+    "authenticated_execution": false,
+    "real_order_submission": false,
+    "preserve_paper_risk_limits": true,
+    "candidate_count_does_not_override_portfolio_limits": true
+  }
+}
