@@ -8,7 +8,12 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/research-policy.yml"
+      - ".github/actions/project-context/action.yml"
       - "config/scheduler_registry.json"
+      - "config/project_context.json"
+      - "ops/ssh_config_polymarket"
+      - "scripts/project_context_snapshot.py"
+      - "scripts/validate_project_context.py"
       - "scripts/research_pr_policy.py"
       - "scripts/validate_scheduler_registry.py"
       - "tests/test_model_governance.py"
@@ -42,6 +47,19 @@ jobs:
           --root .
           --registry config/scheduler_registry.json
           --output scheduler-registry-report.md
+
+      - name: Validate complete scheduler project context
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_project_context.py \
+            --root . \
+            --output project-context-validation.md
+          python3 scripts/project_context_snapshot.py \
+            --root . \
+            --manifest config/project_context.json \
+            --output-json project-context.json \
+            --output-markdown project-context.md
 
       - name: Test research policy regressions
         run: >-
@@ -95,7 +113,7 @@ jobs:
             echo '# Research pull-request policy'
             echo
             echo "- event: \`$GITHUB_EVENT_NAME\`"
-            echo '- policy scripts, approval labels and scheduler registry validated'
+            echo '- policy scripts, approval labels, scheduler registry and full-project context validated'
             echo '- research approval is separate from integration and administrator approval'
             echo '- no pull request was evaluated in this run'
           } > research-policy-report.md
@@ -106,6 +124,10 @@ jobs:
         run: |
           cat scheduler-registry-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          cat project-context-validation.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          cat project-context.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat research-policy-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
       - name: Upload policy evidence
@@ -115,6 +137,9 @@ jobs:
           name: research-policy-${{ github.run_id }}
           path: |
             scheduler-registry-report.md
+            project-context-validation.md
+            project-context.md
+            project-context.json
             research-policy-report.md
             changed-files.txt
           if-no-files-found: warn
