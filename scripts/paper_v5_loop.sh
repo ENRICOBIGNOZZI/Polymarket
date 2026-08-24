@@ -6,12 +6,16 @@ RUN_ROOT="${2:-runs/paper_v5_live}"
 RECORDER_MARKETS="${V5_RECORDER_MARKETS:-${V4_RECORDER_MARKETS:-600}}"
 RECORDER_BATCH="${V5_RECORDER_BATCH:-${V4_RECORDER_BATCH:-20}}"
 RECORDER_LOOKBACK_SECONDS="${V5_RECORDER_LOOKBACK_SECONDS:-${V4_RECORDER_LOOKBACK_SECONDS:-300}}"
-MODEL_MARKETS="${V5_MODEL_MARKETS:-${V4_TERMINAL_MARKETS:-600}}"
+MODEL_MARKETS="${V5_MODEL_MARKETS:-${V4_TERMINAL_MARKETS:-}}"
+MODEL_MARKET_ARGS=()
+if [[ -n "$MODEL_MARKETS" ]]; then
+  MODEL_MARKET_ARGS=(--markets "$MODEL_MARKETS")
+fi
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/strategies"
 
 python3 scripts/multi_strategy_paper.py \
   --config "$CONFIG" --run-root "$RUN_ROOT" --engine ./build/polymarket_engine \
-  --markets "$MODEL_MARKETS" --min-liquidity 100 --validate-only \
+  "${MODEL_MARKET_ARGS[@]}" --min-liquidity 100 --validate-only \
   > "$RUN_ROOT/allocator_validate.log"
 
 # Compatibility surface for existing terminal diagnostics. V5 aggregate PnL is
@@ -90,7 +94,7 @@ supervise_execution() {
   start_allocator() {
     python3 scripts/multi_strategy_paper.py \
       --config "$CONFIG" --run-root "$RUN_ROOT" --engine ./build/polymarket_engine \
-      --markets "$MODEL_MARKETS" --min-liquidity 100 \
+      "${MODEL_MARKET_ARGS[@]}" --min-liquidity 100 \
       >> "$RUN_ROOT/allocator.log" 2>&1 &
     allocator_pid=$!
   }
