@@ -8,21 +8,25 @@ on:
     branches: [main]
     paths:
       - "config/alpha_factory.json"
+      - "config/scheduler_registry.json"
       - "scripts/meta_supervisor.py"
       - "tests/test_meta_supervisor.py"
       - ".github/workflows/control-plane.yml"
       - ".github/workflows/alpha-factory.yml"
-      - ".github/workflows/model-governance.yml"
+      - ".github/workflows/admin-supervisor.yml"
+      - ".github/workflows/research-queue.yml"
       - "docs/ALPHA_FACTORY.md"
   pull_request:
     branches: [main]
     paths:
       - "config/alpha_factory.json"
+      - "config/scheduler_registry.json"
       - "scripts/meta_supervisor.py"
       - "tests/test_meta_supervisor.py"
       - ".github/workflows/control-plane.yml"
       - ".github/workflows/alpha-factory.yml"
-      - ".github/workflows/model-governance.yml"
+      - ".github/workflows/admin-supervisor.yml"
+      - ".github/workflows/research-queue.yml"
       - "docs/ALPHA_FACTORY.md"
 
 permissions:
@@ -47,6 +51,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p control_plane
           python3 -m unittest tests/test_meta_supervisor.py -v
           python3 -m py_compile scripts/meta_supervisor.py
           python3 -m json.tool config/alpha_factory.json >/dev/null
@@ -66,7 +71,7 @@ jobs:
             VALIDATED_ANCESTOR=true
           fi
 
-          gh run list --limit 100 \
+          gh run list --limit 150 \
             --json databaseId,workflowName,status,conclusion,headSha,headBranch,event,createdAt,updatedAt,url \
             > control_plane/runs.json
 
@@ -89,7 +94,7 @@ jobs:
           )
           PY
 
-      - name: Coordinate System Watch, Alpha Factory, and validation chain
+      - name: Coordinate all research, validation, and paper-runtime schedulers
         shell: bash
         run: |
           set -euo pipefail
@@ -112,7 +117,7 @@ jobs:
           while IFS= read -r workflow; do
             [[ -n "$workflow" ]] || continue
             case "$workflow" in
-              ci.yml|monitoring.yml|v4-live-smoke.yml|forward-maker-research.yml|alpha-factory.yml|model-governance.yml)
+              ci.yml|monitoring.yml|v4-live-smoke.yml|forward-maker-research.yml|fast-arb-hourly.yml|arb-theory-hourly.yml|alpha-factory.yml|research-queue.yml|admin-supervisor.yml|live-smoke.yml)
                 gh workflow run "$workflow" --ref main
                 printf 'dispatched=%s ref=main\n' "$workflow" | tee -a control_plane/dispatch-results.txt
                 ;;
@@ -123,8 +128,8 @@ jobs:
             esac
           done < control_plane/dispatch-plan.txt
 
-          if grep -Eq 'deploy-paper-server|server-health' control_plane/dispatch-results.txt; then
-            echo 'deployment or private health dispatch escaped the allowlist' >&2
+          if grep -Eq 'deploy-paper-server|server-health|integration-merge|post-merge-validation|research-policy' control_plane/dispatch-results.txt; then
+            echo 'a privileged workflow escaped the remediation allowlist' >&2
             exit 1
           fi
 
@@ -181,5 +186,5 @@ jobs:
         with:
           name: polymarket-control-plane-${{ github.run_id }}
           path: control_plane/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
