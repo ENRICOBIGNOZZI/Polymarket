@@ -45,7 +45,7 @@ def pairwise_overlap_matrix(
         matrix[i][i] = 1.0
         counts[i][i] = len(z[names[i]])
         for j in range(i + 1, n):
-            common = sorted(set(z[names[i]]) & set(z[names[j]]))
+            common = set(z[names[i]]) & set(z[names[j]])
             counts[i][j] = counts[j][i] = len(common)
             if len(common) < min_common:
                 continue
@@ -56,7 +56,7 @@ def pairwise_overlap_matrix(
 
 
 def masked_gram_matrix(
-    series: dict[str, dict[int, float]], min_common: int = 24
+    series: dict[str, dict[int, float]],
 ) -> tuple[list[str], list[list[float]], list[list[int]]]:
     names, z = standardized_series(series)
     n = len(names)
@@ -67,13 +67,12 @@ def masked_gram_matrix(
     for i, name in enumerate(names):
         norms[i] = sum(value * value for value in z[name].values())
         counts[i][i] = len(z[name])
+        gram[i][i] = norms[i]
 
     for i in range(n):
         for j in range(i + 1, n):
             common = set(z[names[i]]) & set(z[names[j]])
             counts[i][j] = counts[j][i] = len(common)
-            if len(common) < min_common:
-                continue
             gram_ij = sum(z[names[i]][ts] * z[names[j]][ts] for ts in common)
             gram[i][j] = gram[j][i] = gram_ij
 
@@ -81,8 +80,6 @@ def masked_gram_matrix(
     for i in range(n):
         matrix[i][i] = 1.0
         for j in range(i + 1, n):
-            if counts[i][j] < min_common:
-                continue
             denom = math.sqrt(norms[i] * norms[j])
             value = gram[i][j] / denom if denom > 1e-12 else 0.0
             value = max(-1.0, min(1.0, value))
@@ -143,7 +140,7 @@ def load_long_csv(path: Path) -> dict[str, dict[int, float]]:
 
 def analyze(series: dict[str, dict[int, float]], min_common: int = 24) -> dict[str, object]:
     names, pairwise, counts = pairwise_overlap_matrix(series, min_common=min_common)
-    _, masked, _ = masked_gram_matrix(series, min_common=min_common)
+    _, masked, _ = masked_gram_matrix(series)
     pairwise_eigs = symmetric_eigenvalues(pairwise)
     masked_eigs = symmetric_eigenvalues(masked)
     tolerance = 1e-9
@@ -174,7 +171,7 @@ def analyze(series: dict[str, dict[int, float]], min_common: int = 24) -> dict[s
         },
         "pairwise_psd_defect": min(pairwise_eigs) < -tolerance,
         "masked_gram_psd": min(masked_eigs) >= -tolerance,
-        "production_change": false,
+        "production_change": False,
     }
 
 
