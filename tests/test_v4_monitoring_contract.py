@@ -17,23 +17,25 @@ class LiveMonitoringContractTest(unittest.TestCase):
         for producer in (once, loop, smoke):
             self.assertIn("structural_latest.csv", producer)
 
-    def test_live_smoke_exercises_v5_adapter_not_base_fallback(self):
+    def test_live_smoke_exercises_every_v5_adapter_not_base_fallback(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
         self.assertIn("R=paper_v5_live", smoke)
         self.assertIn("'paper_v5_live', 'config/paper_v5.json'", smoke)
         self.assertIn('adapter=\"v5\"', smoke)
+        self.assertIn("for model in ('micro', 'pca', 'graph', 'semantic', 'external')", smoke)
+        self.assertIn('polymarket_model_info{{expert=\"{model}\",model=\"{model}\"}} 1', smoke)
         self.assertIn('polymarket_allocator_state_present 1', smoke)
-        self.assertIn('polymarket_model_info{expert=\"graph\",model=\"graph\"} 1', smoke)
         self.assertIn('polymarket_multileg_state_present 1', smoke)
 
-    def test_live_smoke_refreshes_runtime_from_real_scan_only_children(self):
+    def test_live_smoke_runs_real_paper_children_before_export(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
-        self.assertIn("--markets 120 --min-liquidity 100 --scan-only --once", smoke)
+        self.assertIn("--markets 180 --min-liquidity 25 --once", smoke)
+        self.assertNotIn("--scan-only --once", smoke)
         self.assertIn("if line.startswith('polymarket_runtime_execution_staleness_seconds ')", smoke)
         self.assertIn("assert staleness < 3600.0, staleness", smoke)
-        refresh_pos = smoke.index('> "$R/allocator_refresh.log"')
+        run_pos = smoke.index('| tee "$R/allocator_once.log"')
         metrics_pos = smoke.index("from exporter_latest import LatestCollector")
-        self.assertLess(refresh_pos, metrics_pos)
+        self.assertLess(run_pos, metrics_pos)
 
     def test_live_smoke_runs_after_main_merge_and_hourly(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
@@ -55,28 +57,32 @@ class LiveMonitoringContractTest(unittest.TestCase):
         advance_pos = smoke.index("- name: Advance paper validated ref")
         self.assertLess(snapshot_pos, advance_pos)
 
-    def test_multileg_uses_recorded_trade_tape_and_explicit_horizon(self):
+    def test_multileg_uses_broad_recorded_trade_tape_and_explicit_horizon(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
         self.assertIn("polymarket_trade_recorder", smoke)
-        self.assertIn("--markets 240 --batch 40 --min-liquidity 100 --lookback-seconds 900", smoke)
+        self.assertIn("--markets 500 --batch 40 --min-liquidity 25 --lookback-seconds 900", smoke)
         self.assertIn('--trade-tape "$R/trade_tape.csv"', smoke)
         self.assertIn("--trade-lookback-seconds 900", smoke)
 
-    def test_pca_sparse_hedge_cap_matches_rollback_and_live_smoke(self):
-        once = (ROOT / "scripts" / "paper_v4_once.sh").read_text(encoding="utf-8")
-        loop = (ROOT / "scripts" / "paper_v4_loop.sh").read_text(encoding="utf-8")
+    def test_pca_hedge_cap_matches_each_runtime_generation(self):
+        v4_once = (ROOT / "scripts" / "paper_v4_once.sh").read_text(encoding="utf-8")
+        v4_loop = (ROOT / "scripts" / "paper_v4_loop.sh").read_text(encoding="utf-8")
+        v5_loop = (ROOT / "scripts" / "paper_v5_loop.sh").read_text(encoding="utf-8")
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
-        for producer in (once, loop, smoke):
+        for producer in (v4_once, v4_loop):
             self.assertIn("--max-hedges 4", producer)
+        for producer in (v5_loop, smoke):
+            self.assertIn("--max-hedges 8", producer)
 
-    def test_v5_parent_is_fail_closed_and_children_are_single_expert(self):
+    def test_v5_parent_is_fail_closed_and_all_children_are_executed(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
         self.assertIn("assert len(manifest['strategies']) == 5", smoke)
         self.assertIn("expected = {'micro', 'pca', 'graph', 'semantic', 'external'}", smoke)
         self.assertIn("active = {name: weight for name, weight in child['expert_weights'].items() if weight > 0}", smoke)
         self.assertIn("assert active == {item['expert']: 1.0}", smoke)
-        self.assertIn('--config "$R/generated_configs/graph.json"', smoke)
-        self.assertIn('--run-dir "$R/strategies/graph"', smoke)
+        self.assertIn("run_dir = Path(item['run_dir'])", smoke)
+        self.assertIn("log = run_dir / 'engine.log'", smoke)
+        self.assertIn("assert {row['name'] for row in rows} == expected", smoke)
 
 
 if __name__ == "__main__":
