@@ -1,0 +1,136 @@
+name: cross-venue-external-information-shadow
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/kalshi_cross_venue_shadow.py"
+      - "tests/test_kalshi_cross_venue_shadow.py"
+      - "CMakeLists.txt"
+      - ".github/workflows/cross-venue-shadow.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/kalshi_cross_venue_shadow.py"
+      - "tests/test_kalshi_cross_venue_shadow.py"
+      - "CMakeLists.txt"
+      - ".github/workflows/cross-venue-shadow.yml"
+  schedule:
+    - cron: "29 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cross-venue-external-information-shadow
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  collect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate deterministic matcher
+        run: python3 -m unittest tests/test_kalshi_cross_venue_shadow.py -v
+
+      - name: Collect public cross-venue shadow data
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          R=cross_venue
+          mkdir -p "$R"
+          PM_MARKETS=800
+          KALSHI_MARKETS=3000
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            PM_MARKETS=300
+            KALSHI_MARKETS=1200
+          fi
+          python3 scripts/kalshi_cross_venue_shadow.py \
+            --output "$R/cross_venue_matches.csv" \
+            --signals "$R/external_signals_shadow.csv" \
+            --summary "$R/cross_venue_summary.json" \
+            --pm-markets "$PM_MARKETS" \
+            --kalshi-markets "$KALSHI_MARKETS" \
+            --min-score 0.82 \
+            --min-margin 0.05 \
+            --max-kalshi-spread 0.08 \
+            --max-pm-spread 0.15 \
+            --min-confidence 0.45 \
+            | tee "$R/cross_venue.log"
+
+          python3 - <<'PY'
+          import csv
+          import json
+          from pathlib import Path
+
+          root = Path("cross_venue")
+          summary = json.loads((root / "cross_venue_summary.json").read_text(encoding="utf-8"))
+          signals = list(csv.DictReader((root / "external_signals_shadow.csv").open(newline="", encoding="utf-8")))
+          assert summary["production_external_signals_modified"] is False
+          assert summary["signal_rows"] == len(signals)
+          assert all(row["source"].startswith("kalshi:") for row in signals)
+          assert all(0.0 < float(row["q_yes"]) < 1.0 for row in signals)
+          assert all(float(row["confidence"]) >= 0.45 for row in signals)
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - name: Publish summary
+        if: always()
+        shell: bash
+        run: |
+          echo '## Cross-venue external-information shadow' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Read-only public data. The production external-signals file is not modified.' >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 5 cross_venue/cross_venue.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if test -s cross_venue/cross_venue_summary.json; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat cross_venue/cross_venue_summary.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Publish latest shadow evidence
+        if: github.event_name != 'pull_request' && success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          publish_file() {
+            local local_path="$1"
+            local remote_path="$2"
+            local message="$3"
+            local endpoint="repos/${GITHUB_REPOSITORY}/contents/${remote_path}"
+            local content
+            content="$(base64 -w0 "$local_path")"
+            local current_sha
+            current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
+            local args=("$endpoint" --method PUT -f message="$message" -f content="$content" -f branch=telemetry)
+            if [[ -n "$current_sha" ]]; then
+              args+=(-f sha="$current_sha")
+            fi
+            gh api "${args[@]}" >/dev/null
+          }
+          publish_file cross_venue/cross_venue_summary.json \
+            telemetry/latest-cross-venue-summary.json \
+            "Update cross-venue shadow summary"
+          publish_file cross_venue/cross_venue_matches.csv \
+            telemetry/latest-cross-venue-matches.csv \
+            "Update cross-venue shadow matches"
+          publish_file cross_venue/external_signals_shadow.csv \
+            telemetry/latest-external-signals-shadow.csv \
+            "Update cross-venue external signal shadow"
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-venue-shadow-${{ github.run_id }}
+          path: cross_venue/
+          if-no-files-found: error
+          retention-days: 14
