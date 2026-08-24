@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Sequence
 from http.server import ThreadingHTTPServer
 
-from exporter import ExporterHandler, Metrics, _float, _read_csv, _read_json, parse_args
+from exporter import ExporterHandler, Metrics, _float, _mtime, _read_csv, _read_json, parse_args
 from exporter_v4 import V4Collector
 
-EXPORTER_V5_VERSION = "1.0.0"
+EXPORTER_V5_VERSION = "1.1.0"
 
 
 class V5Collector(V4Collector):
@@ -61,6 +60,41 @@ class V5Collector(V4Collector):
             help_text="Configured V5 aggregate drawdown kill threshold.",
         )
 
+        compaction_path = self.run_root / "compaction_status.json"
+        compaction = _read_json(compaction_path) or {}
+        completed = _float(compaction.get("completed_timestamp"), _mtime(compaction_path) or now)
+        paused = compaction.get("paused_pids") if isinstance(compaction.get("paused_pids"), list) else []
+        metrics.sample(
+            "polymarket_log_compaction_state_present",
+            1 if compaction else 0,
+            help_text="Whether bounded V5 strategy-log compaction has published status.",
+        )
+        metrics.sample(
+            "polymarket_log_compaction_success",
+            1 if compaction.get("success") else 0,
+            help_text="Whether the latest bounded V5 strategy-log compaction completed successfully.",
+        )
+        metrics.sample(
+            "polymarket_log_compaction_staleness_seconds",
+            max(0.0, now - completed) if compaction else 0.0,
+            help_text="Age of the latest bounded V5 strategy-log compaction status.",
+        )
+        metrics.sample(
+            "polymarket_log_compaction_bytes_reclaimed",
+            _float(compaction.get("bytes_reclaimed")),
+            help_text="Bytes reclaimed by the latest bounded V5 strategy-log compaction.",
+        )
+        metrics.sample(
+            "polymarket_log_compaction_duration_seconds",
+            _float(compaction.get("duration_seconds")),
+            help_text="Duration of the latest bounded V5 strategy-log compaction.",
+        )
+        metrics.sample(
+            "polymarket_log_compaction_paused_processes",
+            len(paused),
+            help_text="Number of model processes paused during the latest atomic compaction.",
+        )
+
         for row in rows:
             labels = {"model": row.get("name", "unknown"), "expert": row.get("expert", "unknown")}
             fields = {
@@ -95,30 +129,27 @@ class V5Collector(V4Collector):
 
             signal_rows = _read_csv(self.run_root / "strategies" / row.get("name", "") / "signals.csv")
             metrics.sample(
-                "polymarket_model_signals_total",
+                "polymarket_model_signal_window_rows",
                 len(signal_rows),
-                help_text="Cumulative candidate signals logged by an independent V5 model.",
-                metric_type="counter",
+                help_text="Rows in the bounded recent signal window for an independent V5 model.",
                 labels=labels,
             )
             metrics.sample(
-                "polymarket_model_cost_positive_signals_total",
+                "polymarket_model_cost_positive_signal_window_rows",
                 sum(1 for signal in signal_rows if _float(signal.get("cost_adjusted_edge")) > 0.0),
-                help_text="Cumulative model signals positive after fee and slippage but before uncertainty penalty.",
-                metric_type="counter",
+                help_text="Rows positive after fee and slippage in the bounded recent signal window.",
                 labels=labels,
             )
             metrics.sample(
-                "polymarket_model_net_positive_signals_total",
+                "polymarket_model_net_positive_signal_window_rows",
                 sum(1 for signal in signal_rows if _float(signal.get("net_edge")) > 0.0),
-                help_text="Cumulative model signals with positive final net executable edge.",
-                metric_type="counter",
+                help_text="Rows with positive final net edge in the bounded recent signal window.",
                 labels=labels,
             )
             metrics.sample(
                 "polymarket_model_best_net_edge_ratio",
                 max((_float(signal.get("net_edge")) for signal in signal_rows), default=0.0),
-                help_text="Best logged net executable edge by independent V5 model.",
+                help_text="Best net executable edge in the bounded recent signal window.",
                 labels=labels,
             )
 
