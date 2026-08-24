@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Any
 
 RESEARCH_PREFIXES = ("research/", "experiment/", "diagnostic/")
-LEGACY_INTEGRATION_LABELS = {"approved-for-integration", "single-model-reviewed", "administrator-approved"}
+INTEGRATION_ONLY_LABELS = {
+    "approved-for-integration",
+    "single-model-reviewed",
+    "administrator-approved",
+    "autonomous-promotion-approved",
+}
 SOURCE_RESEARCH_PR_PATTERN = re.compile(r"source research pr/branch/commit:\s*#(\d+)\b", flags=re.IGNORECASE)
 MODEL_BODY_TERMS = ("alpha","model","strategy","signal","stat-arb","stat arb","pca","maker","opportunity","portfolio","paper champion","candidate bundle")
 LIVE_MODEL_SURFACE_PATTERNS = (
@@ -76,7 +81,7 @@ def evaluate(event: dict[str, Any], changed_files: set[str], manifest_existed_on
     errors: list[str] = []
 
     if head.startswith(RESEARCH_PREFIXES):
-        forbidden = sorted(labels.intersection(LEGACY_INTEGRATION_LABELS))
+        forbidden = sorted(labels.intersection(INTEGRATION_ONLY_LABELS))
         if forbidden: errors.append("research/experiment/diagnostic PRs cannot carry integration/administrator labels: " + ", ".join(forbidden))
         if not draft and "shadow-isolated" not in labels:
             errors.append("research PRs that are not shadow-isolated must remain draft; promotion happens through an integration/* candidate after objective validation")
@@ -85,7 +90,7 @@ def evaluate(event: dict[str, Any], changed_files: set[str], manifest_existed_on
         if not draft and SOURCE_RESEARCH_PR_PATTERN.search(body) is None:
             errors.append("integration PR must link a numbered source research PR as `Source research PR/branch/commit: #<number>`")
     else:
-        misplaced = sorted(labels.intersection(LEGACY_INTEGRATION_LABELS | {"research-approved"}))
+        misplaced = sorted(labels.intersection(INTEGRATION_ONLY_LABELS | {"research-approved"}))
         if misplaced: errors.append("research/integration labels are valid only on their dedicated branch classes: " + ", ".join(misplaced))
         if manifest_changed and manifest_existed_on_base: errors.append("an existing live champion manifest may change only on integration/*")
         if model_surface_files:

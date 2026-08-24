@@ -6,24 +6,6 @@ on:
     - cron: "9,24,39,54 * * * *"
   push:
     branches: [main]
-    paths:
-      - ".github/workflows/research-policy.yml"
-      - ".github/workflows/promotion-controller.yml"
-      - ".github/workflows/integration-merge.yml"
-      - ".github/actions/project-context/action.yml"
-      - "config/scheduler_registry.json"
-      - "config/promotion_policy.json"
-      - "config/project_context.json"
-      - "ops/ssh_config_polymarket"
-      - "scripts/project_context_snapshot.py"
-      - "scripts/validate_project_context.py"
-      - "scripts/research_pr_policy.py"
-      - "scripts/promotion_gate.py"
-      - "scripts/validate_scheduler_registry.py"
-      - "tests/test_model_governance.py"
-      - "tests/test_promotion_gate.py"
-      - "tests/test_research_policy_cross_venue.py"
-      - "tests/test_v5_allocator_policy.py"
   pull_request:
     branches: [main]
     types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft, labeled, unlabeled]
@@ -45,6 +27,31 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Enforce pull-request provenance for main pushes
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "main"
+          merged_pr=""
+          for attempt in {1..10}; do
+            merged_pr="$(
+              gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+                --jq '[.[] | select(.base.ref == "main" and .merged_at != null)] | first | .number // empty'
+            )"
+            if [[ -n "$merged_pr" ]]; then
+              break
+            fi
+            sleep 3
+          done
+          if [[ -z "$merged_pr" ]]; then
+            echo "::error::main commit $GITHUB_SHA has no merged pull-request provenance; direct pushes to main violate repository change policy"
+            exit 1
+          fi
+          echo "main_push_pr=$merged_pr"
 
       - name: Validate scheduler registry
         run: >-
@@ -113,6 +120,9 @@ jobs:
             echo
             echo "- event: \`$GITHUB_EVENT_NAME\`"
             echo '- research, promotion policy, scheduler registry and full-project context validated'
+            if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+              echo '- main push has merged pull-request provenance'
+            fi
             echo '- legacy manual paper-promotion labels are not provisioned or required'
             echo '- no pull request was evaluated in this run'
           } > research-policy-report.md
