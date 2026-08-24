@@ -12,6 +12,10 @@ POLYMARKET_GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-http://${TAILSCALE_FQDN}}"
   echo "missing Grafana dashboards under $APP_DIR" >&2
   exit 1
 }
+[[ -f "$APP_DIR/monitoring/grafana/dashboards/polymarket-fast-paper.json" ]] || {
+  echo "missing fast paper Grafana dashboard" >&2
+  exit 1
+}
 
 find_tailscale() {
   local candidate
@@ -133,7 +137,7 @@ check_for_plugin_updates = false
 news_feed_enabled = false
 
 [dashboards]
-default_home_dashboard_path = $APP_DIR/monitoring/grafana/dashboards/polymarket-latest.json
+default_home_dashboard_path = $APP_DIR/monitoring/grafana/dashboards/polymarket-fast-paper.json
 EOF
 
 cat > "$STATE_DIR/grafana/provisioning/datasources/prometheus.yml" <<'EOF'
@@ -165,5 +169,5 @@ providers:
       path: "$APP_DIR/monitoring/grafana/dashboards"
 EOF
 
-printf 'grafana_mode=anonymous_viewer_no_login backend=127.0.0.1:3000 exposure=tailscale-serve operator_url=%s tailscale_hostname=%s tailscale_fqdn=%s\n' \
+printf 'grafana_mode=anonymous_viewer_no_login backend=127.0.0.1:3000 exposure=tailscale-serve operator_url=%s tailscale_hostname=%s tailscale_fqdn=%s default_dashboard=polymarket-fast-paper\n' \
   "$POLYMARKET_GRAFANA_URL" "$TAILSCALE_HOSTNAME" "$TAILSCALE_FQDN"
