@@ -209,16 +209,18 @@ public:
         persist_state();
         append_equity(now, books);
 
-        std::size_t resting = 0, complete = 0, closed = 0, unwound = 0;
+        std::size_t resting = 0, complete = 0, aborting = 0, closed = 0, unwound = 0;
         for (const auto& [id,b] : bundles_) {
             (void)id;
             if (b.status == "RESTING") ++resting;
             else if (b.status == "COMPLETE") ++complete;
+            else if (b.status == "ABORTING") ++aborting;
             else if (b.status == "CLOSED") ++closed;
             else if (b.status == "UNWOUND") ++unwound;
         }
         std::cout << "multileg_tick bundles=" << bundles_.size() << " resting=" << resting
-                  << " complete=" << complete << " closed=" << closed << " unwound=" << unwound
+                  << " complete=" << complete << " aborting=" << aborting
+                  << " closed=" << closed << " unwound=" << unwound
                   << " trades_processed=" << trades.size() << " tape_cursor=" << tape_cursor_
                   << " reserved=" << reserved_cash() << " cash=" << cash_ << " equity=" << equity(books)
                   << " drawdown=" << drawdown(books) << " killed=" << killed_ << '\n';
@@ -393,7 +395,7 @@ private:
     std::unordered_set<std::string> live_signatures() const {
         std::unordered_set<std::string> out;
         for (const auto& [id,b] : bundles_) {
-            if (b.status != "RESTING" && b.status != "COMPLETE") continue;
+            if (!pm::bundle_has_live_risk(b.status)) continue;
             std::vector<std::string> ids;
             for (const auto& l : legs_) if (l.bundle_id==id) ids.push_back(l.market_id+":"+l.side);
             std::sort(ids.begin(), ids.end());
@@ -423,6 +425,7 @@ private:
     }
 
     void load_new_intents(std::int64_t now) {
+        if (killed_) return;
         const auto all=read_intents();
         std::map<std::string,std::vector<IntentLeg>> grouped;
         for (const auto& x:all) grouped[x.bundle_id].push_back(x);
@@ -439,7 +442,7 @@ private:
             bool ok=true;
             for (const auto& q:v) {
                 auto* m=market_for(q.market_id);
-                if (!m || !m->active || m->closed || !m->accepting_orders) { ok=false; break; }
+                if (!m || !m->active || m->closed || !m->enable_order_book || !m->accepting_orders) { ok=false; break; }
                 ms.push_back(m);
                 tokens.push_back(q.side=="YES"?m->yes_token:m->no_token);
             }
@@ -510,7 +513,7 @@ private:
         std::unordered_set<std::string> uniq;
         for (auto& l:legs_) {
             auto bit=bundles_.find(l.bundle_id);
-            if (bit==bundles_.end() || (bit->second.status!="RESTING"&&bit->second.status!="COMPLETE")) continue;
+            if (bit==bundles_.end() || !pm::bundle_has_live_risk(bit->second.status)) continue;
             auto* m=market_for(l.market_id);
             if (!m) continue;
             markets[l.market_id]=*m;
@@ -547,11 +550,12 @@ private:
         (void)books; (void)markets; (void)nowm;
         for (const auto& t:trades) {
             if (t.side!="SELL") continue; // taker sell can consume our resting bid
+            const auto trade_ms=t.ts*1000;
             for (auto& l:legs_) {
                 auto bit=bundles_.find(l.bundle_id);
-                if (bit==bundles_.end()||bit->second.status!="RESTING") continue;
-                if (l.order_state!="RESTING"&&l.order_state!="CANCEL_PENDING") continue;
-                if (l.token_id!=t.asset_id || t.ts*1000<=l.arrival_ms) continue;
+                if (bit==bundles_.end() || !pm::bundle_has_live_risk(bit->second.status)) continue;
+                if (l.token_id!=t.asset_id) continue;
+                if (!pm::passive_buy_active_for_trade(l.order_state,trade_ms,l.arrival_ms,l.cancel_effective_ms)) continue;
                 if (t.price>l.limit_price+1e-9) continue;
                 const auto qfill=pm::consume_passive_buy(l.queue_ahead,l.remaining(),l.limit_price,t.price,t.size,true);
                 l.queue_ahead=qfill.queue_ahead;
@@ -583,34 +587,44 @@ private:
     void manage_orders(const std::unordered_map<std::string,pm::Book>& books,
                        const std::unordered_map<std::string,pm::Market>& markets,
                        std::int64_t nowm) {
+        (void)markets;
         const auto now=nowm/1000;
         for (auto& l:legs_) {
             auto bit=bundles_.find(l.bundle_id);
             if (bit==bundles_.end()) continue;
             auto& b=bit->second;
-            if (b.status!="RESTING") {
-                if (l.order_state=="RESTING") request_cancel(l,nowm,"bundle_not_resting");
+
+            if (b.status!="RESTING" && l.order_state=="RESTING") {
+                request_cancel(l,nowm,"bundle_not_resting");
             }
-            auto bk=books.find(l.token_id);
-            if (bk==books.end()) continue;
-            if (killed_||now>=b.execution_deadline_ts) request_cancel(l,nowm,killed_?"kill":"execution_deadline");
-            if (l.order_state=="RESTING") {
+            if ((killed_||now>=b.execution_deadline_ts) && l.order_state=="RESTING") {
+                request_cancel(l,nowm,killed_?"kill":"execution_deadline");
+            }
+
+            const auto bk=books.find(l.token_id);
+            if (l.order_state=="RESTING" && bk!=books.end()) {
                 const double bb=bk->second.best_bid();
                 const double tick=std::max(1e-6,bk->second.tick_size);
                 if (std::isfinite(bb)&&std::abs(bb-l.limit_price)>=0.75*tick) request_cancel(l,nowm,"reprice");
             }
+
             if (l.order_state=="CANCEL_PENDING"&&nowm>=l.cancel_effective_ms) {
                 append_event("CANCEL_EFFECTIVE",l.bundle_id,&l,0.0,l.limit_price,"remaining="+std::to_string(l.remaining()));
-                if (b.status=="RESTING"&&!killed_&&now<b.execution_deadline_ts&&l.remaining()>1e-9&&l.replace_count<max_replaces_) {
+                const bool may_replace=b.status=="RESTING"&&!killed_&&now<b.execution_deadline_ts&&
+                    l.remaining()>1e-9&&l.replace_count<max_replaces_;
+                if (may_replace && bk!=books.end()) {
                     const double bb=bk->second.best_bid(), ask=bk->second.best_ask();
                     if (std::isfinite(bb)&&std::isfinite(ask)&&bb>0.0&&bb<ask-1e-12) {
                         l.limit_price=bb; l.queue_ahead=touch_size_at(bk->second,bb,true);
                         l.arrival_ms=nowm+submit_latency_ms_; l.cancel_effective_ms=0; ++l.replace_count; l.order_state="RESTING";
                         append_event("REPLACE",l.bundle_id,&l,0.0,l.limit_price,"priority_reset");
-                    } else l.order_state="CANCELLED";
-                } else l.order_state="CANCELLED";
+                    } else {
+                        l.order_state="CANCELLED";
+                    }
+                } else {
+                    l.order_state="CANCELLED";
+                }
             }
-            (void)markets;
         }
     }
 
@@ -795,7 +809,7 @@ private:
         if(killed_) for(auto&[id,b]:bundles_) if(b.status=="RESTING"||b.status=="COMPLETE") abort_bundle(id,"drawdown_kill");
     }
     void append_equity(std::int64_t ts,const std::unordered_map<std::string,pm::Book>&books) const{
-        std::size_t live=0;for(const auto&[id,b]:bundles_){(void)id;if(b.status=="RESTING"||b.status=="COMPLETE"||b.status=="ABORTING")++live;}
+        std::size_t live=0;for(const auto&[id,b]:bundles_){(void)id;if(pm::bundle_has_live_risk(b.status))++live;}
         std::ofstream f(p("multileg_equity.csv"),std::ios::app);
         f<<ts<<','<<cash_<<','<<equity(books)<<','<<reserved_cash()<<','<<gross_entry_cash()<<','<<peak_equity_<<','<<drawdown(books)<<','<<(killed_?1:0)<<','<<live<<'\n';
     }
