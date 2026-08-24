@@ -148,7 +148,13 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
     admin = by_id.get("administrator-supervisor")
     if admin:
         admin_text = (root / str(admin["workflow"])).read_text(encoding="utf-8")
-        for forbidden in ("gh pr merge", "POLYMARKET_DEPLOY_REF=", "git push origin paper-validated"):
+        for forbidden in (
+            "gh pr merge",
+            "gh workflow run",
+            "repository_dispatch",
+            "POLYMARKET_DEPLOY_REF=",
+            "git push origin paper-validated",
+        ):
             if forbidden in admin_text:
                 errors.append(f"administrator-supervisor contains forbidden mutation: {forbidden}")
 
@@ -163,6 +169,16 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             errors.append("integration-merge must require administrator-approved")
         if "gh workflow run" in integration_text:
             errors.append("integration-merge must hand off validation instead of dispatching it directly")
+        for required in (
+            "BASE_MAIN_SHA",
+            "BASE_VALIDATED_SHA",
+            "candidate-final.json",
+            "--match-head-commit",
+            "current_main_after_merge",
+            '"event_type": "champion-integration-merged"',
+        ):
+            if required not in integration_text:
+                errors.append(f"integration-merge is missing race-safe contract: {required}")
 
     post_merge = by_id.get("post-merge-validation")
     if post_merge:
@@ -171,6 +187,30 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             errors.append("post-merge-validation must dispatch CI, monitoring and live-paper validation")
         if "gh pr merge" in post_text:
             errors.append("post-merge-validation must not merge pull requests")
+        if '-f expected_sha="$EXPECTED_SHA"' not in post_text:
+            errors.append("post-merge-validation must pass the exact merged SHA to every validator")
+        if 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"' not in post_text:
+            errors.append("post-merge-validation must checkout and verify the exact merged SHA")
+
+    for scheduler_id in ("code-validation", "monitoring-validation", "live-paper-validation"):
+        item = by_id.get(scheduler_id)
+        if not item:
+            continue
+        text = (root / str(item["workflow"])).read_text(encoding="utf-8")
+        if "expected_sha:" not in text:
+            errors.append(f"{scheduler_id} must accept expected_sha on workflow_dispatch")
+        if "VALIDATION_SHA" not in text:
+            errors.append(f"{scheduler_id} must bind execution to VALIDATION_SHA")
+        if 'test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"' not in text:
+            errors.append(f"{scheduler_id} must verify its exact checkout revision")
+
+    live_validation = by_id.get("live-paper-validation")
+    if live_validation:
+        live_text = (root / str(live_validation["workflow"])).read_text(encoding="utf-8")
+        if 'test "$validated_sha" = "$main_sha"' not in live_text:
+            errors.append("live-paper validation must refuse to advance a stale main revision")
+        if '-f sha="$validated_sha" -F force=false' not in live_text:
+            errors.append("live-paper validation must advance paper-validated to the tested SHA only")
 
     return errors, normalized
 
