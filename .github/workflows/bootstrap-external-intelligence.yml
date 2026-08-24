@@ -36,7 +36,9 @@ jobs:
             '/tmp/external-intelligence-payload.tar.gz' \
             | sha256sum --check -
           tar -xzf /tmp/external-intelligence-payload.tar.gz -C .
-          rm -f ops/external-intelligence-payload.part-*
+          rm -f \
+            ops/external-intelligence-payload.part-* \
+            .github/workflows/bootstrap-external-intelligence.yml
 
       - name: Validate scheduler, storage, backtest and safety contracts
         shell: bash
