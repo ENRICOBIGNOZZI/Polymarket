@@ -1,7 +1,7 @@
 # Polymarket Quant Engine
 
 [![CI](https://github.com/ENRICOBIGNOZZI/Polymarket/actions/workflows/ci.yml/badge.svg)](https://github.com/ENRICOBIGNOZZI/Polymarket/actions/workflows/ci.yml)
-[![Live API smoke](https://github.com/ENRICOBIGNOZZI/Polymarket/actions/workflows/live-smoke.yml/badge.svg)](https://github.com/ENRICOBIGNOZZI/Polymarket/actions/workflows/live-smoke.yml)
+[![External intelligence](https://github.com/ENRICOBIGNOZZI/Polymarket/actions/workflows/live-smoke.yml/badge.svg)](https://github.com/ENRICOBIGNOZZI/Polymarket/actions/workflows/live-smoke.yml)
 
 C++20 live-data **paper-trading, structural-arbitrage and statistical-arbitrage research engine** for Polymarket.
 
@@ -21,7 +21,7 @@ The core runtime is paper/read-only. An isolated Python tiny-live pilot exists f
 | Live champion selector | Explicit `config/live_champion.json`; never highest-version-by-name |
 | Grafana/Prometheus | Version-agnostic; auto-selects latest `paper_v*` runtime |
 | Tiny real-money pilot | Opt-in, <= $10 total / <= $5 per leg; never automatic |
-| External fundamental/news alpha | Intentionally deferred |
+| External fundamental/news alpha | Scheduled free/public collection, point-in-time storage and purged backtesting; research-only |
 
 The design keeps economically different objects separate:
 
@@ -41,6 +41,21 @@ Short-horizon relative-value signals are never silently reinterpreted as `P(YES)
 Unapproved work stays on `research/*`, `experiment/*` or `diagnostic/*`. A strictly isolated shadow diagnostic may enter `main` only when tests prove that it cannot emit production intents, book PnL or change risk. Once research is approved, System Watch creates a fresh `integration/*` branch from current `main`, consolidates the reusable improvement into the incumbent, removes superseded paths and merges only after the complete champion passes its gates.
 
 The hourly governance workflow reports the research/integration queue and may merge at most one non-draft, fully green `integration/*` PR carrying `approved-for-integration` and `single-model-reviewed`. Post-merge CI, monitoring and live-paper smoke are explicitly dispatched; the server remains on the previous `paper-validated` revision until the new revision passes. See [`docs/SYSTEM_WATCH.md`](docs/SYSTEM_WATCH.md).
+
+## External intelligence
+
+`live-smoke.yml` now runs every 30 minutes as the external-information research worker. It retains read-only Gamma/CLOB health checks and adds:
+
+- conservative Kalshi-to-Polymarket cross-venue mapping;
+- Binance spot return/volatility features for crypto contracts;
+- rotating GDELT news intensity/tone features;
+- point-in-time provenance and stale/mapping validation;
+- bounded historical CLOB/Binance bootstrap;
+- purged chronological backtests at 1h/6h/24h;
+- normal, 1.5x and 2x cost stress, fold stability and block bootstrap;
+- durable compressed history and standardized Alpha Factory evidence.
+
+No source is treated as truth and no passing proxy backtest can mutate the champion. Exact executable replay and incumbent ablation remain mandatory. See [`docs/EXTERNAL_INTELLIGENCE.md`](docs/EXTERNAL_INTELLIGENCE.md).
 
 ## Strategy A — structural arbitrage
 
@@ -63,7 +78,7 @@ Timed sports markets inherit the current pre-game safety gate from `main`; in-pl
 
 `polymarket_pca_stat_arb` builds a sparse timestamp-aware factor model. A signal is a **factor-neutral basket**, not a directional single-market residual. Every hedge leg is costed and the basket is rejected if factor-neutralization error is too large. Timed sports use the same pre-game safety gate as B1.
 
-## Scanner → adapter → broker
+## Scanner -> adapter -> broker
 
 B1/B2 remain pure alpha scanners and write diagnostic CSVs. They do not know about broker state.
 
@@ -187,8 +202,9 @@ Real submission is additionally gated by the OOS report, hard source-code caps, 
 
 - Paper fills are evidence under the documented queue model, not proof a live order would have filled.
 - REST-polled public trades are not a colocation-grade latency feed.
+- Historical CLOB price histories used by the external worker are executable proxies with conservative synthetic spread, not full historical order books.
 - On-chain NegRisk conversion is not automatically executed.
 - The 15% drawdown setting is an operating kill constraint, not a mathematical guarantee against gaps, outages or software defects.
 - Real capital should not be scaled until realized paper/OOS evidence survives cost stress and a tiny forward execution pilot.
 
-Detailed documents: [`docs/SYSTEM_WATCH.md`](docs/SYSTEM_WATCH.md), [`docs/EXECUTION_V4.md`](docs/EXECUTION_V4.md), [`docs/OOS_V4.md`](docs/OOS_V4.md), [`docs/MONITORING.md`](docs/MONITORING.md), [`docs/HOTFIX_INPLAY_QUEUE.md`](docs/HOTFIX_INPLAY_QUEUE.md).
+Detailed documents: [`docs/SYSTEM_WATCH.md`](docs/SYSTEM_WATCH.md), [`docs/EXECUTION_V4.md`](docs/EXECUTION_V4.md), [`docs/OOS_V4.md`](docs/OOS_V4.md), [`docs/MONITORING.md`](docs/MONITORING.md), [`docs/EXTERNAL_INTELLIGENCE.md`](docs/EXTERNAL_INTELLIGENCE.md), [`docs/HOTFIX_INPLAY_QUEUE.md`](docs/HOTFIX_INPLAY_QUEUE.md).

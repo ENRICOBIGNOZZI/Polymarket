@@ -1,0 +1,74 @@
+{
+  "schema": "polymarket_external_intelligence_config_v1",
+  "paper_only": true,
+  "allow_authenticated_execution": false,
+  "allow_direct_champion_mutation": false,
+  "allow_production_signal_write": false,
+  "universe": {
+    "max_markets": 400,
+    "page_size": 500,
+    "min_liquidity": 100.0,
+    "min_volume_24h": 0.0
+  },
+  "sources": {
+    "kalshi": {
+      "enabled": true,
+      "max_markets": 2500,
+      "page_size": 1000,
+      "max_spread": 0.12,
+      "spread_scale": 0.05,
+      "min_match_score": 0.68,
+      "min_match_margin": 0.04,
+      "min_confidence": 0.35,
+      "max_expiry_difference_days": 14.0,
+      "freshness_half_life_seconds": 21600
+    },
+    "binance": {
+      "enabled": true,
+      "kline_limit": 289,
+      "max_markets_per_asset": 20,
+      "base_confidence": 0.60
+    },
+    "gdelt": {
+      "enabled": true,
+      "markets_per_run": 8,
+      "max_records": 50,
+      "timespan": "1d",
+      "base_confidence": 0.35
+    }
+  },
+  "storage": {
+    "retention_days": 180,
+    "max_observation_rows": 250000,
+    "max_price_rows": 250000
+  },
+  "backfill": {
+    "enabled": true,
+    "lookback_days": 30,
+    "max_markets_per_run": 2,
+    "manual_max_markets_per_run": 20,
+    "historical_half_spread": 0.015
+  },
+  "backtest": {
+    "horizons_seconds": [3600, 21600, 86400],
+    "future_price_tolerance_seconds": 7200,
+    "min_train_observations": 30,
+    "ridge": 0.00001,
+    "extra_cost_bps": 20.0,
+    "cost_stress_multipliers": [1.0, 1.5, 2.0],
+    "folds": 4,
+    "bootstrap_block": 5,
+    "bootstrap_reps": 1000
+  },
+  "gates": {
+    "min_oos_predictions": 40,
+    "min_trades": 20,
+    "max_bootstrap_pvalue": 0.10,
+    "min_positive_fold_fraction": 0.50,
+    "min_signal_confidence": 0.35
+  },
+  "reliability": {
+    "prior_score": 0.50,
+    "prior_weight": 20.0
+  }
+}
