@@ -26,6 +26,10 @@ REQUIRED_IDS = {
     "live-api-smoke",
 }
 
+NON_SCHEDULER_WORKFLOWS = {
+    ".github/workflows/grafana-access.yml",
+}
+
 
 def workflow_job_ids(path: Path) -> list[str]:
     text = path.read_text(encoding="utf-8")
@@ -126,7 +130,12 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         for path in workflow_dir.iterdir()
         if path.is_file() and path.suffix in {".yml", ".yaml"}
     }
-    unregistered = sorted(actual_workflows.difference(workflows))
+    for relative in sorted(NON_SCHEDULER_WORKFLOWS.intersection(actual_workflows)):
+        text = (root / relative).read_text(encoding="utf-8")
+        if re.search(r"(?m)^\s{2}schedule:\s*$", text):
+            errors.append(f"non-scheduler workflow unexpectedly has a schedule trigger: {relative}")
+    managed_workflows = actual_workflows.difference(NON_SCHEDULER_WORKFLOWS)
+    unregistered = sorted(managed_workflows.difference(workflows))
     stale = sorted(workflows.difference(actual_workflows))
     if unregistered:
         errors.append("unregistered workflows: " + ", ".join(unregistered))
