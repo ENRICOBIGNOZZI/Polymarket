@@ -8,10 +8,15 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/research-policy.yml"
+      - ".github/workflows/promotion-controller.yml"
+      - ".github/workflows/integration-merge.yml"
       - "config/scheduler_registry.json"
+      - "config/promotion_policy.json"
       - "scripts/research_pr_policy.py"
+      - "scripts/promotion_gate.py"
       - "scripts/validate_scheduler_registry.py"
       - "tests/test_model_governance.py"
+      - "tests/test_promotion_gate.py"
       - "tests/test_research_policy_cross_venue.py"
       - "tests/test_v5_allocator_policy.py"
   pull_request:
@@ -43,11 +48,12 @@ jobs:
           --registry config/scheduler_registry.json
           --output scheduler-registry-report.md
 
-      - name: Test research policy regressions
+      - name: Test research and promotion policy regressions
         run: >-
           python3 -m unittest
           tests/test_research_policy_cross_venue.py
           tests/test_v5_allocator_policy.py
+          tests/test_promotion_gate.py
           -v
 
       - name: Ensure research-isolation labels exist
@@ -92,7 +98,7 @@ jobs:
             echo '# Research pull-request policy'
             echo
             echo "- event: \`$GITHUB_EVENT_NAME\`"
-            echo '- policy scripts and scheduler registry validated'
+            echo '- research, promotion policy, and scheduler registry validated'
             echo '- legacy manual paper-promotion labels are not provisioned or required'
             echo '- no pull request was evaluated in this run'
           } > research-policy-report.md

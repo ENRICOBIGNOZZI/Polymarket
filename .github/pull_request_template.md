@@ -16,6 +16,8 @@ Select exactly one primary status.
 Required for research, shadow and integration work.
 
 - Source research PR/branch/commit:
+- Promotion candidate:
+- Promotion evidence file: `research/promotion_evidence/<candidate-id>.json` (required for economic/model/risk/execution promotion; may be omitted for operational-only changes)
 - Hypothesis or measurement question:
 - Current champion baseline:
 - Candidate specification:
@@ -23,6 +25,8 @@ Required for research, shadow and integration work.
 - Executable-cost assumptions:
 - Normal and stressed result:
 - Decision: `REJECTED` / `MORE_EVIDENCE_REQUIRED` / `INTEGRATION_READY` / `SHADOW_ONLY`
+
+For economic promotion, the evidence JSON is bound to the exact source-research head SHA and must report unique evidence IDs, non-overlapping chronological test windows, OOS trades/PnL, 1.5x and 2x cost stress, drawdown, profit factor, bootstrap/FDR evidence, fold stability, incremental utility versus the incumbent, single-model compatibility and data health. Economically sensitive candidate files must also be byte-identical to their tested source-research versions; only the production `live_champion` selector is excluded from this content match.
 
 ## Change type
 
@@ -58,13 +62,15 @@ Required for every integration candidate.
 
 ## Automatic paper promotion
 
-For non-draft `integration/*` PRs, the scheduler is the promotion authority.
+For non-draft `integration/*` PRs, the Promotion Controller is the decision authority and the Integration Merge scheduler is only the merge executor.
 
 - [ ] The PR links `Source research PR/branch/commit: #<number>`
 - [ ] The source research PR has green Release, Debug and research-policy checks
 - [ ] The integration PR has green Release, Debug, monitoring, research-policy and live-paper checks
+- [ ] Economic changes provide fresh machine-readable promotion evidence from the exact source head
+- [ ] A latest `MORE_EVIDENCE_REQUIRED` or `REJECTED` research verdict blocks promotion
 - [ ] No `administrator-approved`, `approved-for-integration` or `single-model-reviewed` label is required
-- [ ] If multiple candidates are eligible, one is promoted per scheduler cycle and the remainder stay queued
+- [ ] The controller issues at most one ephemeral `autonomous-promotion-approved` authorization per cycle
 - [ ] Automatic paper promotion does not authorize authenticated real-money execution
 
 ## Shadow isolation
@@ -88,18 +94,19 @@ Required when `shadow-isolated` is used.
 ## Scheduler and authority boundaries
 
 - [ ] This change preserves one job and one bounded responsibility per workflow
-- [ ] Only the integration scheduler can merge an automatic paper integration
-- [ ] Only the post-merge scheduler can dispatch the validation bundle
-- [ ] Only the deployment scheduler can deploy `paper-validated`
+- [ ] Only the Promotion Controller can authorize a paper promotion
+- [ ] Only the Integration Merge scheduler can merge a controller-authorized integration
+- [ ] Only the Post-Merge Validation scheduler can dispatch the validation bundle
+- [ ] Only the Deployment scheduler can deploy `paper-validated`
 - [ ] The administrator supervisor remains read-only
-- [ ] The meta-supervisor may dispatch the integration scheduler but cannot merge directly
+- [ ] The meta-supervisor may dispatch the Promotion Controller but cannot dispatch or perform the merge directly
 
 ## Branch lifecycle and post-merge verification
 
 - [ ] Research is on `research/*`, `experiment/*` or `diagnostic/*`, not directly on `main`
 - [ ] A live candidate is consolidated on a fresh `integration/*` branch based on current `main`
 - [ ] The integration PR links its numbered source evidence and can be squash-merged as one coherent champion change
-- [ ] Integration merge and post-merge validation are handled by separate schedulers
+- [ ] Promotion decision, integration merge and post-merge validation are handled by separate schedulers
 - [ ] CI, monitoring and live-paper smoke are bound to the exact merged SHA
 - [ ] Promotion is deployment-complete only after `main == paper-validated == deployed HEAD`
 - [ ] The head branch can be deleted after merge or closure

@@ -12,24 +12,6 @@ REGISTRY = ROOT / "config" / "scheduler_registry.json"
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 
-def green_checks() -> list[dict]:
-    return [
-        {
-            "__typename": "CheckRun",
-            "name": name,
-            "status": "COMPLETED",
-            "conclusion": "SUCCESS",
-        }
-        for name in (
-            "build-test (Release)",
-            "build-test (Debug)",
-            "live-paper-smoke",
-            "validate",
-            "enforce",
-        )
-    ]
-
-
 class ModelGovernanceContractTest(unittest.TestCase):
     def test_live_runtime_uses_automatic_validated_promotion_policy(self):
         manifest = json.loads((ROOT / "config" / "live_champion.json").read_text(encoding="utf-8"))
@@ -77,6 +59,7 @@ class ModelGovernanceContractTest(unittest.TestCase):
         registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
         schedulers = registry["schedulers"]
         ids = [item["id"] for item in schedulers]
+        self.assertIn("promotion-controller", ids)
         self.assertEqual(len(ids), len(set(ids)))
         self.assertEqual([item["id"] for item in schedulers if item["merge_authority"]], ["integration-merge"])
         self.assertEqual([item["id"] for item in schedulers if item["deploy_authority"]], ["paper-server-deploy"])
@@ -85,21 +68,38 @@ class ModelGovernanceContractTest(unittest.TestCase):
             ["post-merge-validation"],
         )
 
-    def test_integration_scheduler_can_promote_without_manual_labels(self):
+    def test_promotion_controller_decides_and_integration_scheduler_only_executes(self):
+        controller = (WORKFLOWS / "promotion-controller.yml").read_text(encoding="utf-8")
         integration = (WORKFLOWS / "integration-merge.yml").read_text(encoding="utf-8")
+        meta = (WORKFLOWS / "control-plane.yml").read_text(encoding="utf-8")
+
+        self.assertIn('cron: "1,16,31,46 * * * *"', controller)
+        self.assertIn("scripts/promotion_gate.py", controller)
+        self.assertIn("--add-label autonomous-promotion-approved", controller)
+        self.assertIn("--remove-label autonomous-promotion-approved", controller)
+        self.assertIn("source-match-files.txt", controller)
+        self.assertIn("economic_source_content_mismatch", controller)
+        self.assertNotIn("gh pr merge", controller)
+        self.assertNotIn("administrator-approved", controller)
+
         self.assertIn('cron: "3,18,33,48 * * * *"', integration)
+        self.assertIn('--label autonomous-promotion-approved', integration)
+        self.assertIn("--require-approval-label", integration)
+        self.assertIn("scripts/promotion_gate.py", integration)
         self.assertIn('gh pr merge "$PR_NUMBER" --squash --delete-branch', integration)
         self.assertIn("--match-head-commit", integration)
-        self.assertIn("statusCheckRollup", integration)
-        self.assertIn("Automatic paper-champion promotion", integration)
+        self.assertIn("baseRefOid", integration)
+        self.assertIn("source-match-files.txt", integration)
         self.assertIn("champion-integration-merged", integration)
         self.assertNotIn("administrator-approved", integration)
-        self.assertNotIn("BASE_MAIN_SHA", integration)
-        self.assertNotIn("BASE_VALIDATED_SHA", integration)
         self.assertNotIn("incumbent_health_gate.py", integration)
         self.assertNotIn("--admin", integration)
 
-    def test_research_policy_keeps_research_isolated_but_integration_label_free(self):
+        self.assertIn("promotion-controller.yml", meta)
+        dispatch_case = meta.split('case "$workflow" in', 1)[1].split("esac", 1)[0]
+        self.assertNotIn("integration-merge.yml", dispatch_case)
+
+    def test_research_policy_keeps_research_isolated_and_allows_machine_label_on_integration(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             changed = temp / "changed.txt"
@@ -143,7 +143,7 @@ class ModelGovernanceContractTest(unittest.TestCase):
                     "head": {"ref": "integration/new-alpha"},
                     "draft": False,
                     "body": "Source research PR/branch/commit: #123\n",
-                    "labels": [],
+                    "labels": [{"name": "autonomous-promotion-approved"}],
                 }
             }
             integration_path = temp / "integration-event.json"
@@ -170,61 +170,6 @@ class ModelGovernanceContractTest(unittest.TestCase):
             self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
             self.assertIn("manual_approval_labels_required: `False`", accepted.stdout)
 
-    def test_integration_gate_uses_objective_checks_not_labels(self):
-        candidate = {
-            "number": 123,
-            "headRefName": "integration/new-alpha",
-            "isDraft": False,
-            "labels": [],
-            "mergeStateStatus": "CLEAN",
-            "statusCheckRollup": green_checks(),
-            "body": "Source research PR/branch/commit: #100\n",
-        }
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp = Path(temp_dir)
-            candidate_path = temp / "candidate.json"
-            report = temp / "gate.md"
-            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
-            completed = subprocess.run(
-                [
-                    "python3",
-                    "scripts/integration_gate.py",
-                    "validate",
-                    "--candidate",
-                    str(candidate_path),
-                    "--report",
-                    str(report),
-                ],
-                cwd=ROOT,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
-            self.assertIn("manual approval labels required: `false`", completed.stdout)
-
-            candidate["statusCheckRollup"][0]["conclusion"] = "SKIPPED"
-            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
-            rejected = subprocess.run(
-                [
-                    "python3",
-                    "scripts/integration_gate.py",
-                    "validate",
-                    "--candidate",
-                    str(candidate_path),
-                    "--report",
-                    str(report),
-                ],
-                cwd=ROOT,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            self.assertNotEqual(rejected.returncode, 0)
-            self.assertIn("concluded SKIPPED", rejected.stdout)
-
     def test_post_merge_and_deployment_still_use_exact_validated_sha(self):
         post_merge = (WORKFLOWS / "post-merge-validation.yml").read_text(encoding="utf-8")
         deploy = (WORKFLOWS / "deploy-paper-server.yml").read_text(encoding="utf-8")
@@ -243,6 +188,7 @@ class ModelGovernanceContractTest(unittest.TestCase):
             "scripts/research_pr_policy.py",
             "scripts/research_queue_report.py",
             "scripts/integration_gate.py",
+            "scripts/promotion_gate.py",
             "scripts/admin_supervisor_report.py",
         ):
             py_compile.compile(str(ROOT / relative), doraise=True)
