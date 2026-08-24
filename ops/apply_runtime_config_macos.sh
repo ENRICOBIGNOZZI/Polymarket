@@ -12,6 +12,10 @@ POLYMARKET_GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-http://${TAILSCALE_FQDN}}"
   echo "missing Grafana dashboards under $APP_DIR" >&2
   exit 1
 }
+[[ -f "$APP_DIR/monitoring/grafana/dashboards/polymarket-multi-strategy.json" ]] || {
+  echo "missing V5 multi-strategy Grafana dashboard" >&2
+  exit 1
+}
 
 find_tailscale() {
   local candidate
@@ -59,13 +63,8 @@ tailscale_admin() {
   sudo -n "$TAILSCALE_BIN" "$@"
 }
 
-# Pin the server to the already-established Tailscale machine name. The FQDN
-# returned by Tailscale is the canonical operator identity; do not invent a
-# second alias for Grafana.
 tailscale_admin set --hostname="$TAILSCALE_HOSTNAME"
 
-# Wait for the control-plane/MagicDNS view to converge and verify the actual
-# DNS identity before writing Grafana root_url.
 actual_dns=""
 for _ in {1..20}; do
   actual_dns="$("$TAILSCALE_BIN" status --json 2>/dev/null | \
@@ -133,7 +132,7 @@ check_for_plugin_updates = false
 news_feed_enabled = false
 
 [dashboards]
-default_home_dashboard_path = $APP_DIR/monitoring/grafana/dashboards/polymarket-fast-paper.json
+default_home_dashboard_path = $APP_DIR/monitoring/grafana/dashboards/polymarket-multi-strategy.json
 EOF
 
 cat > "$STATE_DIR/grafana/provisioning/datasources/prometheus.yml" <<'EOF'
@@ -165,5 +164,5 @@ providers:
       path: "$APP_DIR/monitoring/grafana/dashboards"
 EOF
 
-printf 'grafana_mode=anonymous_viewer_no_login backend=127.0.0.1:3000 exposure=tailscale-serve operator_url=%s tailscale_hostname=%s tailscale_fqdn=%s\n' \
+printf 'grafana_mode=anonymous_viewer_no_login backend=127.0.0.1:3000 exposure=tailscale-serve operator_url=%s tailscale_hostname=%s tailscale_fqdn=%s dashboard=polymarket-multi-strategy-v5\n' \
   "$POLYMARKET_GRAFANA_URL" "$TAILSCALE_HOSTNAME" "$TAILSCALE_FQDN"
