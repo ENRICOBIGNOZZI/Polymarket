@@ -146,15 +146,19 @@ if [[ "$OLD_SHA" == "$NEW_SHA" ]]; then
     log "Already deployed and healthy at validated commit $NEW_SHA"
     exit 0
   fi
-  log "Validated code is current but runtime is unhealthy; attempting service repair"
+  log "Validated code is current but runtime is unhealthy; reapplying runtime configuration before service repair"
+  if ! bash "$APP_DIR/ops/apply_runtime_config_macos.sh"; then
+    write_status unhealthy "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
+    fail "validated code is current but runtime configuration repair failed"
+  fi
   sudo -n /usr/local/sbin/polymarket-service-control restart || true
   if wait_for_runtime_health 60; then
     write_status repaired "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
-    log "Runtime repaired at validated commit $NEW_SHA"
+    log "Runtime and Grafana configuration repaired at validated commit $NEW_SHA"
     exit 0
   fi
   write_status unhealthy "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
-  fail "validated code is current and automatic service repair did not restore health"
+  fail "validated code is current and automatic configuration/service repair did not restore health"
 fi
 
 if git merge-base --is-ancestor "$NEW_SHA" "$OLD_SHA" 2>/dev/null; then
