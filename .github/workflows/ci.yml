@@ -64,8 +64,11 @@ jobs:
       - name: Deployment script syntax and contracts
         run: |
           bash -n scripts/paper_latest_loop.sh \
+            scripts/cross_venue_loop.sh scripts/prediction_market_system_loop.sh \
+            scripts/install_cross_venue_credentials.sh \
             ops/bootstrap_server.sh ops/update_server.sh \
             ops/bootstrap_macos.sh ops/update_server_macos.sh ops/macos_service_control.sh \
             ops/install_autoupdate_macos.sh ops/finish_bootstrap_macos.sh \
-            ops/apply_runtime_config_macos.sh
+            ops/apply_runtime_config_macos.sh ops/install_cross_venue_macos.sh
+          python3 -m py_compile scripts/portfolio_supervisor.py
           python3 -m unittest tests/test_ops_macos.py -v
