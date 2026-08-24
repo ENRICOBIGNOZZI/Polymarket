@@ -18,6 +18,18 @@ class SchedulerPeriodicityTest(unittest.TestCase):
     def registry(self) -> dict:
         return json.loads(REGISTRY.read_text(encoding="utf-8"))
 
+    def test_alpha_factory_and_meta_supervisor_are_distinct_schedulers(self):
+        by_id = {item["id"]: item for item in self.registry()["schedulers"]}
+        alpha = by_id["alpha-factory"]
+        meta = by_id["meta-supervisor"]
+        self.assertEqual(alpha["workflow"], ".github/workflows/alpha-factory.yml")
+        self.assertEqual(alpha["workflow_name"], "Polymarket Alpha Factory")
+        self.assertEqual(alpha["job"], "evaluate")
+        self.assertEqual(meta["workflow"], ".github/workflows/control-plane.yml")
+        self.assertEqual(meta["workflow_name"], "Polymarket Meta-Supervisor")
+        self.assertEqual(meta["job"], "coordinate")
+        self.assertNotEqual(alpha["workflow"], meta["workflow"])
+
     def test_every_registered_scheduler_has_an_explicit_timer(self):
         registry = self.registry()
         for scheduler in registry["schedulers"]:
@@ -42,14 +54,33 @@ class SchedulerPeriodicityTest(unittest.TestCase):
         ]
         self.assertEqual(owners, ["meta-supervisor"])
 
-        meta = (ROOT / ".github" / "workflows" / "meta-supervisor.yml").read_text(
-            encoding="utf-8"
-        )
+        meta_item = next(item for item in registry["schedulers"] if item["id"] == "meta-supervisor")
+        meta = (ROOT / meta_item["workflow"]).read_text(encoding="utf-8")
         self.assertIn('cron: "*/5 * * * *"', meta)
         self.assertIn("gh workflow run", meta)
+        self.assertIn("scripts/scheduler_meta_supervisor.py", meta)
         self.assertNotIn("gh pr merge", meta)
         self.assertNotIn("git/refs/heads/paper-validated", meta)
         self.assertNotIn("POLYMARKET_DEPLOY_REF=", meta)
+        self.assertIn("integration-merge.yml", meta)
+        self.assertIn("deploy-paper-server.yml", meta)
+        self.assertIn("server-health.yml", meta)
+        self.assertIn("forbidden", meta)
+
+    def test_reconciliation_only_workflows_are_periodic_and_fail_closed(self):
+        post_merge = (ROOT / ".github" / "workflows" / "post-merge-validation.yml").read_text(
+            encoding="utf-8"
+        )
+        deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('cron: "1,11,21,31,41,51 * * * *"', post_merge)
+        self.assertIn("required: false", post_merge)
+        self.assertIn("VALIDATION_REQUIRED", post_merge)
+        self.assertIn("no_unvalidated_main_revision", post_merge)
+        self.assertIn('cron: "22,52 * * * *"', deploy)
+        self.assertIn("github.event_name == 'schedule'", deploy)
+        self.assertIn("vars.POLYMARKET_SERVER_DEPLOY == 'true'", deploy)
 
     def run_planner(
         self,
