@@ -1,0 +1,51 @@
+{
+  "schema": "polymarket_lf_relation_aligned_factor_current_evidence_v1",
+  "main_sha": "68eb255a1e761be5abb04a012b1aa49fb6452a0b",
+  "live_smoke_source": {
+    "ref": "telemetry",
+    "path": "telemetry/latest-live-smoke.json",
+    "blob_sha": "7b54ead03b18b95df55e5f900d072323ddf8e18a"
+  },
+  "b2": {
+    "coherent_raw_positive": 3,
+    "coherent_maker_positive": 0,
+    "global_explained_share": 0.618582,
+    "top_raw": [
+      {
+        "slug": "will-andy-beshear-win-the-2028-us-presidential-election",
+        "raw_expected_edge": 0.000443065,
+        "maker_entry_net_edge": -0.00145556,
+        "taker_net_edge": -0.00553158,
+        "t_reversion": -2.03892,
+        "half_life_h": 23.481
+      },
+      {
+        "slug": "will-kamala-harris-win-the-2028-us-presidential-election",
+        "raw_expected_edge": 0.000453893,
+        "maker_entry_net_edge": -0.00183648,
+        "taker_net_edge": -0.00566278,
+        "t_reversion": -3.9014,
+        "half_life_h": 7.29237
+      },
+      {
+        "slug": "will-marco-rubio-win-the-2028-republican-presidential-nomination",
+        "raw_expected_edge": 0.000402937,
+        "maker_entry_net_edge": -0.00236573,
+        "taker_net_edge": -0.00766707,
+        "t_reversion": -3.03093,
+        "half_life_h": 11.7933
+      }
+    ]
+  },
+  "external_information": {
+    "generated_utc": "2026-08-24T21:09:00+00:00",
+    "status": "BACKTESTING",
+    "stored_observations": 252,
+    "stored_price_snapshots": 500,
+    "candidate_count": 6,
+    "oos_predictions": 0,
+    "trades": 0
+  },
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "next_common_sample_test": "Compare global-K3, PSD-safe global-K3, relation-local factors, and PSD-safe relation-local factors on identical chronological panels, then combine only with the robust reversion gate from PR 124 in a separate joint ablation."
+}
