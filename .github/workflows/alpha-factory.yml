@@ -9,8 +9,12 @@ on:
     paths:
       - "config/alpha_factory.json"
       - "config/live_champion.json"
+      - "config/scheduler_context.json"
+      - "docs/SCHEDULER_CONTEXT.md"
       - "scripts/alpha_factory.py"
+      - "scripts/validate_scheduler_context.py"
       - "tests/test_alpha_factory.py"
+      - "tests/test_scheduler_context.py"
       - ".github/workflows/alpha-factory.yml"
       - "docs/ALPHA_FACTORY.md"
   pull_request:
@@ -18,8 +22,12 @@ on:
     paths:
       - "config/alpha_factory.json"
       - "config/live_champion.json"
+      - "config/scheduler_context.json"
+      - "docs/SCHEDULER_CONTEXT.md"
       - "scripts/alpha_factory.py"
+      - "scripts/validate_scheduler_context.py"
       - "tests/test_alpha_factory.py"
+      - "tests/test_scheduler_context.py"
       - ".github/workflows/alpha-factory.yml"
       - "docs/ALPHA_FACTORY.md"
 
@@ -41,6 +49,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Load shared scheduler context
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p alpha_factory
+          python3 scripts/validate_scheduler_context.py \
+            --context config/scheduler_context.json \
+            --scheduler-id alpha-factory \
+            --output alpha_factory/scheduler-context.md \
+            --output-json alpha_factory/scheduler-context.json \
+            --github-env "$GITHUB_ENV"
+
       - name: Validate Alpha Factory invariants
         shell: bash
         run: |
@@ -52,10 +72,14 @@ jobs:
           import json
           from pathlib import Path
           cfg = json.loads(Path("config/alpha_factory.json").read_text())
+          context = json.loads(Path("alpha_factory/scheduler-context.json").read_text())
           assert cfg["paper_only"] is True
           assert cfg["allow_authenticated_execution"] is False
           assert cfg["allow_direct_champion_mutation"] is False
           assert "deploy-paper-server.yml" not in cfg["coordination"]["allowlisted_dispatches"]
+          assert context["valid"] is True
+          assert context["scheduler_id"] == "alpha-factory"
+          assert context["context_sha256"] == "${{ env.POLYMARKET_SCHEDULER_CONTEXT_SHA }}"
           PY
 
       - name: Materialize latest empirical evidence
@@ -90,7 +114,7 @@ jobs:
           set -euo pipefail
           python3 scripts/alpha_factory.py \
             --config config/alpha_factory.json \
-            --champion config/live_champion.json \
+            --champion "$POLYMARKET_LIVE_CHAMPION_MANIFEST" \
             --live-smoke alpha_factory/input/latest-live-smoke.json \
             --forward-maker alpha_factory/input/latest-forward-maker.json \
             --forward-history alpha_factory/input/forward-maker-history.jsonl \
@@ -104,6 +128,7 @@ jobs:
         if: always()
         shell: bash
         run: |
+          cat alpha_factory/scheduler-context.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           echo '## Polymarket Alpha Factory' >> "$GITHUB_STEP_SUMMARY"
           if test -s alpha_factory/output/latest-alpha-factory.md; then
             cat alpha_factory/output/latest-alpha-factory.md >> "$GITHUB_STEP_SUMMARY"

@@ -8,8 +8,12 @@ on:
     branches: [main]
     paths:
       - "config/alpha_factory.json"
+      - "config/scheduler_context.json"
+      - "docs/SCHEDULER_CONTEXT.md"
       - "scripts/meta_supervisor.py"
+      - "scripts/validate_scheduler_context.py"
       - "tests/test_meta_supervisor.py"
+      - "tests/test_scheduler_context.py"
       - ".github/workflows/control-plane.yml"
       - ".github/workflows/alpha-factory.yml"
       - ".github/workflows/research-policy.yml"
@@ -18,8 +22,12 @@ on:
     branches: [main]
     paths:
       - "config/alpha_factory.json"
+      - "config/scheduler_context.json"
+      - "docs/SCHEDULER_CONTEXT.md"
       - "scripts/meta_supervisor.py"
+      - "scripts/validate_scheduler_context.py"
       - "tests/test_meta_supervisor.py"
+      - "tests/test_scheduler_context.py"
       - ".github/workflows/control-plane.yml"
       - ".github/workflows/alpha-factory.yml"
       - ".github/workflows/research-policy.yml"
@@ -43,6 +51,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Load shared scheduler context
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p control_plane
+          python3 scripts/validate_scheduler_context.py \
+            --context config/scheduler_context.json \
+            --scheduler-id meta-supervisor \
+            --output control_plane/scheduler-context.md \
+            --output-json control_plane/scheduler-context.json \
+            --github-env "$GITHUB_ENV"
+
       - name: Validate control-plane invariants
         shell: bash
         run: |
@@ -50,6 +70,14 @@ jobs:
           python3 -m unittest tests/test_meta_supervisor.py -v
           python3 -m py_compile scripts/meta_supervisor.py
           python3 -m json.tool config/alpha_factory.json >/dev/null
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          context = json.loads(Path("control_plane/scheduler-context.json").read_text())
+          assert context["valid"] is True
+          assert context["scheduler_id"] == "meta-supervisor"
+          assert context["context_sha256"] == "${{ env.POLYMARKET_SCHEDULER_CONTEXT_SHA }}"
+          PY
 
       - name: Capture workflow graph and validated-ref state
         shell: bash
@@ -57,10 +85,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p control_plane
-          git fetch --no-tags origin main paper-validated
+          git fetch --no-tags origin main "$POLYMARKET_DEPLOYMENT_REF"
           MAIN_SHA="$(git rev-parse origin/main)"
-          VALIDATED_SHA="$(git rev-parse origin/paper-validated)"
+          VALIDATED_SHA="$(git rev-parse "origin/$POLYMARKET_DEPLOYMENT_REF")"
           VALIDATED_ANCESTOR=false
           if git merge-base --is-ancestor "$VALIDATED_SHA" "$MAIN_SHA"; then
             VALIDATED_ANCESTOR=true
@@ -71,7 +98,8 @@ jobs:
             > control_plane/runs.json
 
           MAIN_SHA="$MAIN_SHA" VALIDATED_SHA="$VALIDATED_SHA" \
-          VALIDATED_ANCESTOR="$VALIDATED_ANCESTOR" python3 - <<'PY'
+          VALIDATED_ANCESTOR="$VALIDATED_ANCESTOR" \
+          SCHEDULER_CONTEXT_SHA="$POLYMARKET_SCHEDULER_CONTEXT_SHA" python3 - <<'PY'
           import json
           import os
           from pathlib import Path
@@ -81,6 +109,7 @@ jobs:
               "main_sha": os.environ["MAIN_SHA"],
               "paper_validated_sha": os.environ["VALIDATED_SHA"],
               "paper_validated_is_ancestor": os.environ["VALIDATED_ANCESTOR"] == "true",
+              "scheduler_context_sha256": os.environ["SCHEDULER_CONTEXT_SHA"],
               "runs": runs,
           }
           Path("control_plane/snapshot.json").write_text(
@@ -114,7 +143,8 @@ jobs:
             case "$workflow" in
               ci.yml|monitoring.yml|v4-live-smoke.yml|forward-maker-research.yml|alpha-factory.yml|research-policy.yml)
                 gh workflow run "$workflow" --ref main
-                printf 'dispatched=%s ref=main\n' "$workflow" | tee -a control_plane/dispatch-results.txt
+                printf 'dispatched=%s ref=main context=%s\n' "$workflow" "$POLYMARKET_SCHEDULER_CONTEXT_SHA" \
+                  | tee -a control_plane/dispatch-results.txt
                 ;;
               *)
                 printf 'forbidden_dispatch=%s\n' "$workflow" >&2
@@ -132,6 +162,7 @@ jobs:
         if: always()
         shell: bash
         run: |
+          cat control_plane/scheduler-context.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           echo '## Polymarket Meta-Supervisor' >> "$GITHUB_STEP_SUMMARY"
           if test -s control_plane/latest-control-plane.md; then
             cat control_plane/latest-control-plane.md >> "$GITHUB_STEP_SUMMARY"

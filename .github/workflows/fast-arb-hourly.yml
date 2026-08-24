@@ -15,10 +15,14 @@ on:
       - "src/fast_arb_main.cpp"
       - "src/fast_runtime/**"
       - "config/fast_arb_*"
+      - "config/scheduler_context.json"
+      - "docs/SCHEDULER_CONTEXT.md"
       - "scripts/arb_theory_scheduler.py"
+      - "scripts/validate_scheduler_context.py"
       - "scripts/paper_latest_loop.sh"
       - "tests/test_fast_*"
       - "tests/test_arb_theory_scheduler.py"
+      - "tests/test_scheduler_context.py"
       - ".github/workflows/fast-arb-hourly.yml"
       - ".github/workflows/arb-theory-hourly.yml"
       - "CMakeLists.txt"
@@ -37,6 +41,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Load shared scheduler context
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p runs/hourly-fast
+          python3 scripts/validate_scheduler_context.py \
+            --context config/scheduler_context.json \
+            --scheduler-id fast-arb-shadow-research \
+            --output runs/hourly-fast/scheduler-context.md \
+            --output-json runs/hourly-fast/scheduler-context.json \
+            --github-env "$GITHUB_ENV"
+
       - name: Install native dependencies
         run: |
           sudo apt-get update
@@ -52,7 +68,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p runs/hourly-fast
           duration=180
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then duration=45; fi
           ./build/polymarket_fast_arb_shadow \
@@ -86,7 +101,11 @@ jobs:
           status = json.loads(Path("runs/hourly-fast/fast_arb_status.json").read_text())
           candidate = json.loads(Path("runs/hourly-fast/fast_arb_candidate.json").read_text())
           base_policy = json.loads(Path("config/fast_arb_policy.json").read_text())
+          context = json.loads(Path("runs/hourly-fast/scheduler-context.json").read_text())
           errors = Path("runs/hourly-fast/fast_arb_errors.csv").read_text()
+          assert context["valid"] is True
+          assert context["scheduler_id"] == "fast-arb-shadow-research"
+          assert context["context_sha256"] == "${{ env.POLYMARKET_SCHEDULER_CONTEXT_SHA }}"
           assert status["mode"] == "shadow"
           assert status["real_order_submission"] is False
           assert status["ws_workers"] > 0
@@ -97,6 +116,8 @@ jobs:
           assert candidate["real_order_submission"] is False
           assert candidate["candidate_policy"]["min_net_edge"] >= base_policy["min_net_edge"]
           PY
+          cat runs/hourly-fast/scheduler-context.md >> "$GITHUB_STEP_SUMMARY"
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat runs/hourly-fast/fast_arb_theory_report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload hourly evidence

@@ -37,6 +37,25 @@ jobs:
       SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
       SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Load shared scheduler and remote context
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_scheduler_context.py \
+            --context config/scheduler_context.json \
+            --scheduler-id paper-server-health \
+            --server-host "$SERVER_HOST" \
+            --server-user "$SERVER_USER" \
+            --server-port "$SERVER_PORT" \
+            --output scheduler-context.md \
+            --output-json scheduler-context.json \
+            --github-env "$GITHUB_ENV"
+
       - name: Join private tailnet
         uses: tailscale/github-action@v4
         with:
@@ -69,15 +88,20 @@ jobs:
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
-            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE' | tee server-health.txt
+            -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            "REMOTE_REPO_REL='$POLYMARKET_REMOTE_REPO_REL' DEPLOYMENT_REF='$POLYMARKET_DEPLOYMENT_REF' SCHEDULER_CONTEXT_SHA='$POLYMARKET_SCHEDULER_CONTEXT_SHA' bash -s" <<'REMOTE' | tee server-health.txt
           set -euo pipefail
-          cd ~/polymarket
+          cd "$HOME/$REMOTE_REPO_REL"
           printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           printf 'os=%s\n' "$(uname -s)"
+          printf 'scheduler_context_sha=%s\n' "$SCHEDULER_CONTEXT_SHA"
+          printf 'remote_repository=%s\n' "$HOME/$REMOTE_REPO_REL"
+          printf 'deployment_ref=%s\n' "$DEPLOYMENT_REF"
           head_sha="$(git rev-parse HEAD)"
-          git fetch -q origin main paper-validated
+          git fetch -q origin main "$DEPLOYMENT_REF"
           main_sha="$(git rev-parse origin/main)"
-          validated_sha="$(git rev-parse origin/paper-validated)"
+          validated_sha="$(git rev-parse "origin/$DEPLOYMENT_REF")"
           printf 'head=%s\n' "$head_sha"
           printf 'origin_main=%s\n' "$main_sha"
           printf 'paper_validated=%s\n' "$validated_sha"
@@ -94,7 +118,7 @@ jobs:
           grep -q '^polymarket_runtime_info' <<<"$metrics"
           printf '%s\n' "$metrics" | grep -E '^polymarket_(runtime_info|runtime_equity_usd|runtime_pnl_usd|runtime_drawdown_ratio|runtime_kill_switch|runtime_realized_pnl_usd_total|runtime_execution_imbalance_ratio|runtime_oos_net_pnl_usd|runtime_oos_stressed_net_pnl_usd|runtime_oos_eligible|trade_recorder_staleness_seconds|multileg_live_bundles)' || true
 
-          run_root="$HOME/polymarket/runs/paper_v4_live"
+          run_root="$HOME/$REMOTE_REPO_REL/runs/paper_v4_live"
           supervisor="$run_root/runtime_supervisor.csv"
           test -s "$supervisor"
           supervisor_row="$(tail -n 1 "$supervisor")"
@@ -145,7 +169,7 @@ jobs:
               test -n "$checked_ts"
               test $(( now - checked_ts )) -le 900
               case "$deploy_status" in up_to_date|deployed|repaired) ;; *) exit 1 ;; esac
-              test "$status_ref" = "paper-validated"
+              test "$status_ref" = "$DEPLOYMENT_REF"
               test "$status_head" = "$head_sha"
               test "$status_validated" = "$validated_sha"
               ;;
@@ -162,17 +186,18 @@ jobs:
           set -euo pipefail
           scp -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
             -P "$SERVER_PORT" \
-            "$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v4_live/action_report.md" \
+            "$SERVER_USER@$SERVER_HOST:$POLYMARKET_REMOTE_REPO_REL/runs/paper_v4_live/action_report.md" \
             runtime-action-report.md
           scp -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
             -P "$SERVER_PORT" \
-            "$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v4_live/action_report.json" \
+            "$SERVER_USER@$SERVER_HOST:$POLYMARKET_REMOTE_REPO_REL/runs/paper_v4_live/action_report.json" \
             runtime-action-report.json
 
       - name: Publish health summary
         if: always()
         shell: bash
         run: |
+          cat scheduler-context.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           echo '## Polymarket private paper server' >> "$GITHUB_STEP_SUMMARY"
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
           cat server-health.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo 'health output missing' >> "$GITHUB_STEP_SUMMARY"
@@ -186,6 +211,8 @@ jobs:
         with:
           name: paper-server-health-${{ github.run_id }}
           path: |
+            scheduler-context.md
+            scheduler-context.json
             server-health.txt
             runtime-action-report.md
             runtime-action-report.json

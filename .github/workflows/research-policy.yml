@@ -7,9 +7,13 @@ on:
     paths:
       - ".github/workflows/research-policy.yml"
       - "config/scheduler_registry.json"
+      - "config/scheduler_context.json"
+      - "docs/SCHEDULER_CONTEXT.md"
       - "scripts/research_pr_policy.py"
       - "scripts/validate_scheduler_registry.py"
+      - "scripts/validate_scheduler_context.py"
       - "tests/test_model_governance.py"
+      - "tests/test_scheduler_context.py"
   pull_request:
     branches: [main]
     types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft, labeled, unlabeled]
@@ -31,6 +35,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Load shared scheduler context
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_scheduler_context.py \
+            --context config/scheduler_context.json \
+            --scheduler-id research-policy \
+            --output scheduler-context.md \
+            --output-json scheduler-context.json \
+            --github-env "$GITHUB_ENV"
 
       - name: Validate scheduler registry
         run: >-
@@ -84,7 +99,8 @@ jobs:
             echo '# Research pull-request policy'
             echo
             echo "- event: \`$GITHUB_EVENT_NAME\`"
-            echo '- policy scripts, labels and scheduler registry validated'
+            echo "- scheduler context: \`$POLYMARKET_SCHEDULER_CONTEXT_SHA\`"
+            echo '- policy scripts, labels, shared architecture and scheduler registry validated'
             echo '- no pull request was evaluated in this run'
           } > research-policy-report.md
 
@@ -92,6 +108,8 @@ jobs:
         if: always()
         shell: bash
         run: |
+          cat scheduler-context.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat scheduler-registry-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat research-policy-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
@@ -102,6 +120,8 @@ jobs:
         with:
           name: research-policy-${{ github.run_id }}
           path: |
+            scheduler-context.md
+            scheduler-context.json
             scheduler-registry-report.md
             research-policy-report.md
             changed-files.txt

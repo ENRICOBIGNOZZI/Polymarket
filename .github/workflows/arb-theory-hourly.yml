@@ -25,6 +25,18 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Load shared scheduler context
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p research-output
+          python3 scripts/validate_scheduler_context.py \
+            --context config/scheduler_context.json \
+            --scheduler-id arb-theory-research \
+            --output research-output/scheduler-context.md \
+            --output-json research-output/scheduler-context.json \
+            --github-env "$GITHUB_ENV"
+
       - name: Download recent fast-shadow evidence
         shell: bash
         env:
@@ -50,23 +62,29 @@ jobs:
           import shutil
           from pathlib import Path
 
+          expected_context = "${{ env.POLYMARKET_SCHEDULER_CONTEXT_SHA }}"
           valid = 0
           for status_path in list(Path("evidence").rglob("fast_arb_status.json")):
+              run_root = status_path.parent
               try:
                   status = json.loads(status_path.read_text())
+                  context = json.loads((run_root / "scheduler-context.json").read_text())
               except (OSError, json.JSONDecodeError):
                   status = {}
+                  context = {}
               is_valid = (
                   status.get("mode") == "shadow"
                   and status.get("real_order_submission") is False
                   and int(status.get("ws_messages", 0)) > 0
                   and int(status.get("book_updates", 0)) > 0
+                  and context.get("valid") is True
+                  and context.get("context_sha256") == expected_context
               )
               if is_valid:
                   valid += 1
               else:
-                  shutil.rmtree(status_path.parent, ignore_errors=True)
-          print(f"valid fast-shadow evidence runs: {valid}")
+                  shutil.rmtree(run_root, ignore_errors=True)
+          print(f"valid fast-shadow evidence runs under current scheduler context: {valid}")
           PY
 
       - name: Re-derive identities, stress costs and materialize candidate code
@@ -86,6 +104,10 @@ jobs:
           from pathlib import Path
           report = json.loads(Path("research-output/config/candidates/fast_arb_candidate.json").read_text())
           base_policy = json.loads(Path("config/fast_arb_policy.json").read_text())
+          context = json.loads(Path("research-output/scheduler-context.json").read_text())
+          assert context["valid"] is True
+          assert context["scheduler_id"] == "arb-theory-research"
+          assert context["context_sha256"] == "${{ env.POLYMARKET_SCHEDULER_CONTEXT_SHA }}"
           assert report["real_order_submission"] is False
           assert report["candidate_policy"]["real_order_submission"] is False
           assert report["candidate_policy"]["min_net_edge"] >= base_policy["min_net_edge"]
@@ -94,7 +116,12 @@ jobs:
               handle.write(f"PROMOTION_READY={str(report['promotion_ready']).lower()}\n")
           PY
           cat research-output/gates.env >> "$GITHUB_ENV"
-          cat research-output/docs/generated/fast_arb_theory_report.md >> "$GITHUB_STEP_SUMMARY"
+          {
+            cat research-output/scheduler-context.md
+            printf '\n'
+            cat research-output/docs/generated/fast_arb_theory_report.md
+          } > research-output/combined-report.md
+          cat research-output/combined-report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Update one persistent research issue
         shell: bash
@@ -107,10 +134,10 @@ jobs:
           if [[ -z "$issue_number" ]]; then
             gh issue create \
               --title "$title" \
-              --body-file research-output/docs/generated/fast_arb_theory_report.md
+              --body-file research-output/combined-report.md
           else
             gh issue edit "$issue_number" \
-              --body-file research-output/docs/generated/fast_arb_theory_report.md
+              --body-file research-output/combined-report.md
           fi
 
       - name: Update research-only candidate branch and draft PR
@@ -131,9 +158,15 @@ jobs:
             config/candidates/fast_arb_candidate.json
           cp research-output/docs/generated/fast_arb_theory_report.md \
             docs/generated/fast_arb_theory_report.md
+          cp research-output/scheduler-context.md \
+            docs/generated/scheduler_context.md
+          cp research-output/scheduler-context.json \
+            config/candidates/scheduler_context.json
           git add include/pm/generated/fast_arb_candidate_policy.hpp \
             config/candidates/fast_arb_candidate.json \
-            docs/generated/fast_arb_theory_report.md
+            config/candidates/scheduler_context.json \
+            docs/generated/fast_arb_theory_report.md \
+            docs/generated/scheduler_context.md
           if git diff --cached --quiet; then
             echo "research candidate unchanged"
           else
@@ -146,15 +179,17 @@ jobs:
             --description "Measurement-only code isolated from production decisions, PnL and risk" \
             --force
           pr_number="$(gh pr list --state open --head "$branch" --base main --json number --jq '.[0].number // empty')"
-          cat > research-output/pr-body.md <<'EOF'
+          cat > research-output/pr-body.md <<EOF
           ## Automated research candidate
 
-          This draft is regenerated from hourly read-only/shadow evidence.
+          This draft is regenerated from hourly read-only/shadow evidence under scheduler context \`$POLYMARKET_SCHEDULER_CONTEXT_SHA\`.
 
-          - It updates only generated candidate policy code, candidate evidence, and a research report.
-          - It cannot submit orders and does not change `config/live_champion.json`.
-          - It must remain a research PR until evidence is reviewed and a separate `integration/*` PR is approved.
-          - Promotion-ready in the generated report is evidence for review, not authorization to merge.
+          - It preserves the category-agnostic five-expert architecture, executable-edge rule and probability/decision/risk/execution separation.
+          - It records the existing GitHub Actions -> Tailscale -> SSH remote contract, but it cannot deploy or connect with credentials.
+          - It updates only generated candidate policy code, candidate evidence, and research reports.
+          - It cannot submit orders and does not change \`config/live_champion.json\`.
+          - It must remain a research PR until evidence is reviewed and a separate \`integration/*\` PR is approved.
+          - Promotion-ready in the generated report is evidence for review, not authorization to merge or trade real money.
 
           Source research PR/branch/commit: research/auto-fast-arb-policy
           EOF
