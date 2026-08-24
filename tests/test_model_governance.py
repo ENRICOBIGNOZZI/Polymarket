@@ -135,6 +135,7 @@ class ModelGovernanceContractTest(unittest.TestCase):
                 "meta-supervisor",
                 "fast-arb-shadow-research",
                 "arb-theory-research",
+                "all-market-capacity-validation",
                 "live-api-smoke",
             },
         )
