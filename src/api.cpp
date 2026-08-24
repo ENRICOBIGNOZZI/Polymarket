@@ -149,7 +149,9 @@ std::optional<int> resolution_from_market(
     return std::nullopt;
 }
 
-std::optional<Market> parse_market_object(const json::object& o, double min_liquidity) {
+std::optional<Market> parse_market_object(const json::object& o,
+                                          double min_liquidity,
+                                          bool require_tradable = true) {
     Market m;
     if (auto it = o.find("id"); it != o.end()) m.id = as_string(it->value());
     if (auto it = o.find("conditionId"); it != o.end()) m.condition_id = as_string(it->value());
@@ -205,7 +207,7 @@ std::optional<Market> parse_market_object(const json::object& o, double min_liqu
     }
 
     if (m.id.empty() || m.condition_id.empty() || m.yes_token.empty() || m.no_token.empty()) return std::nullopt;
-    if (!m.active || m.closed || !m.enable_order_book || !m.accepting_orders) return std::nullopt;
+    if (require_tradable && (!m.active || m.closed || !m.enable_order_book || !m.accepting_orders)) return std::nullopt;
     if (m.liquidity + 1e-12 < min_liquidity) return std::nullopt;
     return m;
 }
@@ -284,33 +286,7 @@ std::optional<Market> PolymarketApi::fetch_market_by_id(const std::string& id) c
     }
     const auto root = json::parse(r.body);
     if (!root.is_object()) return std::nullopt;
-    const auto& o = root.as_object();
-
-    Market m;
-    if (auto it = o.find("id"); it != o.end()) m.id = as_string(it->value());
-    if (auto it = o.find("conditionId"); it != o.end()) m.condition_id = as_string(it->value());
-    if (auto it = o.find("slug"); it != o.end()) m.slug = as_string(it->value());
-    if (auto it = o.find("question"); it != o.end()) m.question = as_string(it->value());
-    if (auto it = o.find("closed"); it != o.end()) m.closed = as_bool(it->value());
-    if (auto it = o.find("active"); it != o.end()) m.active = as_bool(it->value(), !m.closed);
-    const auto tokens = string_array(o, "clobTokenIds");
-    const auto outcomes = string_array(o, "outcomes");
-    if (tokens.size() < 2) return std::nullopt;
-    int yi = 0, ni = 1;
-    for (std::size_t i = 0; i < outcomes.size() && i < tokens.size(); ++i) {
-        auto s = outcomes[i];
-        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
-            return static_cast<char>(std::tolower(c));
-        });
-        if (s == "yes") yi = static_cast<int>(i);
-        else if (s == "no") ni = static_cast<int>(i);
-    }
-    m.yes_token = tokens[static_cast<std::size_t>(yi)];
-    m.no_token = tokens[static_cast<std::size_t>(ni)];
-    if (auto it = o.find("eventId"); it != o.end()) m.event_id = as_string(it->value());
-    if (m.event_id.empty()) m.event_id = m.condition_id;
-    m.resolved_yes = m.closed ? resolution_from_market(o, outcomes) : std::nullopt;
-    return m;
+    return parse_market_object(root.as_object(), 0.0, false);
 }
 
 std::optional<MarketTiming> PolymarketApi::fetch_market_timing(const std::string& id) const {
