@@ -72,12 +72,15 @@ jobs:
           R=forward_maker
           mkdir -p "$R"
 
-          # Reuse the bounded public history so policy selection is based on
-          # repeated forward sessions rather than the current eight-minute run.
+          # Reuse bounded public sufficient statistics. The raw per-market probe
+          # stays in the current run artifact; only compact policy/session totals
+          # are carried forward for inference.
           : > "$R/history_existing.jsonl"
           history_endpoint="repos/${GITHUB_REPOSITORY}/contents/telemetry/forward-maker-history.jsonl"
-          gh api "${history_endpoint}?ref=telemetry" --jq .content 2>/dev/null \
-            | tr -d '\n' | base64 -d > "$R/history_existing.jsonl" 2>/dev/null || true
+          history_url="$(gh api "${history_endpoint}?ref=telemetry" --jq .download_url 2>/dev/null || true)"
+          if [[ -n "$history_url" && "$history_url" != "null" ]]; then
+            curl -fsSL "$history_url" > "$R/history_existing.jsonl" || true
+          fi
 
           DURATION=480
           MARKETS=15
@@ -124,36 +127,46 @@ jobs:
 
           python3 - <<'PY'
           import json
+          import sys
           from pathlib import Path
 
           root = Path("forward_maker")
+          sys.path.insert(0, str(Path("scripts").resolve()))
+          from calibrate_forward_maker import compact_session
+
           payload = json.loads((root / "forward_maker_probe.json").read_text(encoding="utf-8"))
-          compact = {
-              "schema": payload.get("schema"),
-              "generated_ts": payload.get("generated_ts"),
-              "git_sha": "${{ github.sha }}",
-              "github_run_id": "${{ github.run_id }}",
-              "eligible_markets": payload.get("eligible_markets", 0),
-              "quote_definitions": payload.get("quote_definitions", 0),
-              "aggregate_by_policy": payload.get("aggregate_by_policy", {}),
-              "results": payload.get("results", []),
-          }
+          payload["git_sha"] = "${{ github.sha }}"
+          payload["github_run_id"] = "${{ github.run_id }}"
+          compact = compact_session(payload)
           (root / "forward_maker_history_line.jsonl").write_text(
-              json.dumps(compact, separators=(",", ":")) + "\n", encoding="utf-8"
+              json.dumps(compact, separators=(",", ":")) + "\n",
+              encoding="utf-8",
           )
           PY
 
           cat "$R/history_existing.jsonl" "$R/forward_maker_history_line.jsonl" \
             | tail -n 336 > "$R/forward-maker-history.jsonl"
 
+          # Keep the GitHub contents object below 900 kB even if schemas grow.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("forward_maker/forward-maker-history.jsonl")
+          lines = path.read_bytes().splitlines()
+          while len(lines) > 1 and sum(len(line) + 1 for line in lines) > 900_000:
+              lines.pop(0)
+          path.write_bytes((b"\n".join(lines) + b"\n") if lines else b"")
+          PY
+
           python3 scripts/calibrate_forward_maker.py \
             --history "$R/forward-maker-history.jsonl" \
             --output "$R/forward_maker_calibration.json" \
-            --min-sessions 12 --min-probes 180 \
-            --min-any-fills 20 --min-pair-fills 10 \
+            --min-sessions 12 --min-history-span-seconds 18000 \
+            --min-probes 180 --min-any-fills 20 --min-pair-fills 10 \
             --min-positive-active-session-rate 0.55 \
             --max-one-sided-given-fill-upper 0.40 \
             --bootstrap-reps 2000 --bootstrap-alpha 0.05 \
+            --bootstrap-block-sessions 4 \
             | tee "$R/forward_maker_calibration.log"
 
       - name: Publish experiment summary
