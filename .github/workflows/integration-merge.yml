@@ -3,9 +3,10 @@ name: Polymarket Integration Merge
 on:
   workflow_dispatch:
   schedule:
-    - cron: "23 * * * *"
+    - cron: "33 * * * *"
 
 permissions:
+  actions: read
   checks: read
   contents: write
   pull-requests: write
@@ -24,8 +25,11 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Require a fully validated incumbent
+      - name: Require a fully validated and healthy incumbent
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVER_DEPLOY_ENABLED: ${{ vars.POLYMARKET_SERVER_DEPLOY || 'false' }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin main paper-validated
@@ -33,21 +37,41 @@ jobs:
           validated_sha="$(git rev-parse origin/paper-validated)"
           echo "BASE_MAIN_SHA=$main_sha" >> "$GITHUB_ENV"
           echo "BASE_VALIDATED_SHA=$validated_sha" >> "$GITHUB_ENV"
-          if [[ "$main_sha" != "$validated_sha" ]]; then
-            {
-              echo '# Integration merge'
-              echo
-              echo "- main: \`$main_sha\`"
-              echo "- paper-validated: \`$validated_sha\`"
-              echo '- decision: blocked; validation/deployment chain for the incumbent is not complete'
-            } > integration-merge-report.md
-            echo 'INTEGRATION_BLOCKED=1' >> "$GITHUB_ENV"
-          else
-            echo 'INTEGRATION_BLOCKED=0' >> "$GITHUB_ENV"
+
+          gate_args=(
+            python3 scripts/incumbent_health_gate.py
+            --main-sha "$main_sha"
+            --validated-sha "$validated_sha"
+            --deploy-enabled "$SERVER_DEPLOY_ENABLED"
+            --max-age-seconds 7200
+            --output incumbent-gate-report.md
+          )
+
+          if [[ "$SERVER_DEPLOY_ENABLED" == "true" ]]; then
+            health_run_id="$(
+              gh run list --workflow server-health.yml --branch main --status success --limit 1 \
+                --json databaseId --jq '.[0].databaseId // empty'
+            )"
+            test -n "$health_run_id" || {
+              echo 'No successful paper-server-health run is available.' >&2
+              exit 1
+            }
+            mkdir -p incumbent-health-evidence
+            gh run download "$health_run_id" \
+              --name "paper-server-health-$health_run_id" \
+              --dir incumbent-health-evidence
+            health_file="$(find incumbent-health-evidence -type f -name server-health.txt -print -quit)"
+            test -n "$health_file" || {
+              echo "paper-server-health artifact $health_run_id has no server-health.txt" >&2
+              exit 1
+            }
+            echo "INCUMBENT_HEALTH_RUN_ID=$health_run_id" >> "$GITHUB_ENV"
+            gate_args+=(--server-health "$health_file")
           fi
 
+          "${gate_args[@]}"
+
       - name: Select one administrator-approved integration
-        if: env.INTEGRATION_BLOCKED == '0'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -70,7 +94,7 @@ jobs:
           test "$select_rc" -eq 0
 
       - name: Fetch and recheck candidate
-        if: env.INTEGRATION_BLOCKED == '0' && env.CANDIDATE_COUNT == '1'
+        if: env.CANDIDATE_COUNT == '1'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -84,7 +108,7 @@ jobs:
             --report integration-gate-report.md
 
       - name: Merge the unified champion change
-        if: env.INTEGRATION_BLOCKED == '0' && env.CANDIDATE_COUNT == '1'
+        if: env.CANDIDATE_COUNT == '1'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -108,6 +132,12 @@ jobs:
           test "$current_main_sha" = "$BASE_MAIN_SHA"
           test "$current_validated_sha" = "$BASE_VALIDATED_SHA"
           test "$current_main_sha" = "$current_validated_sha"
+
+          if [[ -n "${INCUMBENT_HEALTH_RUN_ID:-}" ]]; then
+            test -s incumbent-gate-report.md
+            grep -q '^PASS: incumbent is fully validated and, when enabled, deployed and healthy\.$' \
+              incumbent-gate-report.md
+          fi
 
           gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$expected_head" \
             | tee merge-result.txt
@@ -135,8 +165,9 @@ jobs:
           {
             echo
             echo '## Integration action'
-            echo "- merged PR: #$PR_NUMBER"
             echo "- incumbent revision: \`$BASE_MAIN_SHA\`"
+            echo "- incumbent health run: ${INCUMBENT_HEALTH_RUN_ID:-deployment-disabled}"
+            echo "- merged PR: #$PR_NUMBER"
             echo "- candidate head: \`$expected_head\`"
             echo "- merged main revision: \`$merged_sha\`"
             echo '- merge mode: squash; no administrative bypass'
@@ -147,6 +178,8 @@ jobs:
         if: always()
         shell: bash
         run: |
+          cat incumbent-gate-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat integration-merge-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat integration-gate-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
@@ -159,6 +192,8 @@ jobs:
         with:
           name: integration-merge-${{ github.run_id }}
           path: |
+            incumbent-gate-report.md
+            incumbent-health-evidence/
             integration-merge-report.md
             integration-gate-report.md
             integration-final-gate-report.md
