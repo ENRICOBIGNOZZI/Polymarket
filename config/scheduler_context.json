@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "project": "Polymarket",
+  "source": {
+    "title": "A Universal Quantitative Architecture for Polymarket",
+    "date": "2026-08-23",
+    "status": "project architecture contract"
+  },
+  "remote_runtime": {
+    "access_path": "GitHub Actions -> Tailscale -> SSH",
+    "host_variable": "POLYMARKET_SERVER_HOST",
+    "default_host": "100.104.183.109",
+    "user_variable": "POLYMARKET_SERVER_USER",
+    "default_user": "enrico",
+    "port_variable": "POLYMARKET_SERVER_PORT",
+    "default_port": 22,
+    "home_relative_repository_path": "polymarket",
+    "ssh_key_secret": "POLYMARKET_SERVER_SSH_KEY",
+    "tailscale_auth_secret": "TS_AUTHKEY",
+    "server_alive_interval_seconds": 30,
+    "server_alive_count_max": 3,
+    "batch_mode": true,
+    "deployment_ref": "paper-validated",
+    "live_champion_manifest": "config/live_champion.json",
+    "rules": [
+      "Never store or print the SSH private key or Tailscale auth key.",
+      "Use the configured GitHub Actions, Tailscale and SSH channel for remote deploy and health duties.",
+      "Deploy only the exact paper-validated revision, never an unvalidated main revision.",
+      "Operate in $HOME/polymarket on the remote host.",
+      "Treat a missing secret, unreachable tailnet host, SHA mismatch or stale service as a fail-closed blocker."
+    ]
+  },
+  "quantitative_architecture": {
+    "objective": "Category-agnostic quantitative operation over all sufficiently liquid Polymarket markets.",
+    "universal_state": [
+      "market_microstructure",
+      "contract_characteristics",
+      "cross_market_information",
+      "external_information"
+    ],
+    "alpha_engines": [
+      "microstructure_fair_value",
+      "pca_statistical_arbitrage",
+      "event_graph_and_logical_consistency",
+      "semantic_relative_value",
+      "external_information"
+    ],
+    "ensemble": {
+      "type": "adaptive_mixture_of_experts",
+      "outputs": [
+        "fair_probability",
+        "uncertainty"
+      ],
+      "quality_update": "resolved-market forecast quality such as Brier loss"
+    },
+    "decision_contract": {
+      "raw_alpha": "fair_probability - market_probability",
+      "net_edge": "fair_side_probability - executable_price - fees - slippage - uncertainty_penalty",
+      "rank_by": "net_edge / max(epsilon, uncertainty)",
+      "spread_rule": "Do not subtract half-spread again when executable price is already the bid or ask."
+    },
+    "separation": [
+      "probability_estimation",
+      "trade_decision",
+      "portfolio_construction_and_risk",
+      "execution_and_reconciliation"
+    ],
+    "portfolio_and_risk": {
+      "fractional_kelly": true,
+      "gross_exposure_limit": true,
+      "market_concentration_limit": true,
+      "event_concentration_limit": true,
+      "open_loss_budget": true,
+      "maximum_drawdown_ratio": 0.15,
+      "drawdown_is_not_a_mathematical_guarantee": true
+    },
+    "operating_mode": {
+      "research_engine": "live-data paper and shadow",
+      "authenticated_order_submission": false,
+      "real_money_requires_separate_approval": true
+    },
+    "research_frontier": [
+      "dynamic_factor_model",
+      "learned_semantic_representation",
+      "automatic_external_information_retrieval",
+      "hierarchical_calibration",
+      "constrained_graph_projection",
+      "joint_portfolio_optimization"
+    ]
+  },
+  "scheduler_contract": {
+    "all": [
+      "Load and validate this context before autonomous work.",
+      "Record the context SHA256 in scheduler evidence.",
+      "Preserve one explicit live champion and one portfolio, risk and execution authority.",
+      "Do not convert research readiness into production or real-money authorization.",
+      "Keep structural, relative-value, terminal-probability and external-information semantics distinct.",
+      "Fail closed on stale data, incomplete evidence, cost uncertainty, SHA mismatch or missing remote access."
+    ],
+    "profiles": {
+      "supervisor": "Observe every scheduler, remote runtime and champion relation without mutating production.",
+      "policy": "Enforce lifecycle, isolation, context and approval rules.",
+      "research": "Generate evidence and research-only candidates under chronological and cost stress.",
+      "integration": "Merge at most one fully approved unified champion change.",
+      "validation": "Validate an exact revision and preserve the previous paper-validated rollback target until success.",
+      "remote": "Use Tailscale and SSH to deploy or inspect the exact paper-validated revision on $HOME/polymarket.",
+      "api": "Check public read-only data connectivity without changing trading state."
+    },
+    "assignments": {
+      "administrator-supervisor": "supervisor",
+      "research-policy": "policy",
+      "research-queue": "research",
+      "integration-merge": "integration",
+      "post-merge-validation": "validation",
+      "code-validation": "validation",
+      "monitoring-validation": "validation",
+      "live-paper-validation": "validation",
+      "paper-server-deploy": "remote",
+      "paper-server-health": "remote",
+      "forward-maker-research": "research",
+      "fast-arb-shadow-research": "research",
+      "arb-theory-research": "research",
+      "live-api-smoke": "api"
+    }
+  }
+}
