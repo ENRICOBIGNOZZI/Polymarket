@@ -75,8 +75,8 @@ class V4MonitoringContractTest(unittest.TestCase):
         self.assertIn('paper_v4_live', smoke)
         self.assertIn('shadow_b1', smoke)
         self.assertIn("--min-z 1.5", production_segment)
-        self.assertIn("--min-edge 0.001", production_segment)
-        self.assertNotIn("--min-edge 0.0", production_segment)
+        self.assertEqual(production_segment.count("--min-edge 0.001"), 4)
+        self.assertNotIn("--min-edge 0.001", shadow_segment)
         self.assertEqual(shadow_segment.count("--min-edge 0.0"), 3)
 
 
