@@ -69,6 +69,14 @@ def workflow_job_ids(path: Path) -> list[str]:
     return re.findall(r"(?m)^  ([A-Za-z0-9_-]+):\s*$", tail)
 
 
+def workflow_has_periodic_schedule(path: Path) -> bool:
+    text = path.read_text(encoding="utf-8")
+    return bool(
+        re.search(r"(?m)^  schedule:\s*$", text)
+        and re.search(r"(?m)^    - cron:\s*['\"]?[^'\"\n]+['\"]?\s*$", text)
+    )
+
+
 def load_registry(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
@@ -123,8 +131,8 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
                     f"scheduler context: {error}"
                     for error in module.validate_context(context_data)
                 )
-                raw_assignments = (
-                    context_data.get("scheduler_contract", {}).get("assignments", {})
+                raw_assignments = context_data.get("scheduler_contract", {}).get(
+                    "assignments", {}
                 )
                 if isinstance(raw_assignments, dict):
                     context_assignments = {
@@ -183,7 +191,9 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
                 f"scheduler context profile mismatch for {scheduler_id}: "
                 f"registry={context_profile!r} context={context_assignments.get(scheduler_id)!r}"
             )
-        if not workflow.startswith(".github/workflows/") or not workflow.endswith((".yml", ".yaml")):
+        if not workflow.startswith(".github/workflows/") or not workflow.endswith(
+            (".yml", ".yaml")
+        ):
             errors.append(f"invalid workflow path for {scheduler_id}: {workflow}")
             continue
         path = root / workflow
@@ -196,6 +206,8 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
                 f"{workflow} must contain exactly one job named {expected_job}; "
                 f"found {job_ids or 'none'}"
             )
+        if not workflow_has_periodic_schedule(path):
+            errors.append(f"{workflow} must define a periodic schedule/cron trigger")
         if scheduler_id in CONTEXT_ACTIVE_IDS:
             text = path.read_text(encoding="utf-8")
             if "scripts/validate_scheduler_context.py" not in text:
@@ -277,7 +289,9 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
 
     integration = by_id.get("integration-merge")
     if integration:
-        integration_text = (root / str(integration["workflow"])).read_text(encoding="utf-8")
+        integration_text = (root / str(integration["workflow"])).read_text(
+            encoding="utf-8"
+        )
         if 'gh pr merge "$PR_NUMBER" --squash --delete-branch' not in integration_text:
             errors.append("integration-merge must use a bounded squash merge without admin bypass")
         if "--admin" in integration_text:
@@ -378,7 +392,10 @@ def render_report(items: list[dict[str, Any]], errors: list[str]) -> str:
         lines.extend(f"- {error}" for error in errors)
     else:
         lines.extend(
-            ["", "Registry, shared context and one-job-per-workflow contracts are valid."]
+            [
+                "",
+                "Registry, shared context and one-job-per-workflow contracts are valid. Every registered scheduler has a periodic schedule trigger.",
+            ]
         )
     return "\n".join(lines) + "\n"
 
