@@ -2,6 +2,8 @@ name: v4-live-paper-smoke
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
   schedule:
     - cron: "37 */6 * * *"
   pull_request:

@@ -25,6 +25,11 @@ class V4MonitoringContractTest(unittest.TestCase):
         self.assertIn('polymarket_multileg_state_present 1', smoke)
         self.assertIn('polymarket_oos_state_present 1', smoke)
 
+    def test_live_smoke_runs_after_main_merge(self):
+        smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
+        self.assertIn("push:", smoke)
+        self.assertIn("branches: [main]", smoke)
+
 
 if __name__ == "__main__":
     unittest.main()
