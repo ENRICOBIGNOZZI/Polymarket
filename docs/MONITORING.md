@@ -30,15 +30,17 @@ Then, independently:
 bash scripts/monitoring_up.sh
 ```
 
-On the paper server, `ops/apply_runtime_config_macos.sh` keeps the Grafana backend bound to `127.0.0.1:3000`, fixes the Tailscale MagicDNS machine name to `polymarket`, and publishes Grafana privately through Tailscale Serve on HTTP port 80.
+On the paper server, `ops/apply_runtime_config_macos.sh` keeps the Grafana backend bound to `127.0.0.1:3000`, pins the established Tailscale machine name `mamma-portfolio`, and publishes Grafana privately through Tailscale Serve on HTTP port 80.
 
-The canonical operator URL is permanently:
+The single canonical operator URL is:
 
 ```text
-http://polymarket
+http://mamma-portfolio.tail1bae85.ts.net
 ```
 
-Do not bookmark `127.0.0.1`, the server's `100.x` Tailscale IP, or a Grafana dashboard-specific path. The root URL above is the single supported operator entrypoint; Grafana redirects from there to the current default dashboard. Because it uses MagicDNS rather than the node's numeric Tailscale address, the operator link is decoupled from IP changes.
+This exact FQDN is taken from the server's own `tailscale serve status`; it is not inferred from the SSH alias or from Grafana configuration. The runtime configuration verifies the actual Tailscale `Self.DNSName` and Serve URL before writing Grafana's `root_url`, so a DNS/Serve mismatch fails closed rather than publishing a dead bookmark.
+
+Do not bookmark `127.0.0.1`, the server's `100.x` Tailscale IP, `http://polymarket`, or a Grafana dashboard-specific path. The FQDN above is the supported operator entrypoint and is independent of the node's numeric Tailscale address.
 
 The machine opening the page must be connected to the same Tailscale tailnet with Tailscale DNS enabled. Grafana uses anonymous `Viewer` access: there is no login form and no editing/admin permission through this route. Prometheus and the exporter remain loopback-only.
 
