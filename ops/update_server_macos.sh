@@ -43,12 +43,13 @@ write_status() {
 paper_runtime_healthy() {
   local supervisor="$APP_DIR/runs/paper_v4_live/runtime_supervisor.csv"
   [[ -s "$supervisor" ]] || return 1
-  local row ts recorder_alive broker_alive recorder_restarts broker_restarts recorder_pid broker_pid now
+  local row ts recorder_alive broker_alive terminal_alive recorder_restarts broker_restarts terminal_restarts recorder_pid broker_pid terminal_pid now
   row="$(tail -n 1 "$supervisor")"
-  IFS=, read -r ts recorder_alive broker_alive recorder_restarts broker_restarts recorder_pid broker_pid <<<"$row"
+  IFS=, read -r ts recorder_alive broker_alive terminal_alive recorder_restarts broker_restarts terminal_restarts recorder_pid broker_pid terminal_pid <<<"$row"
   now="$(date +%s)"
   [[ "$recorder_alive" == "1" ]] || return 1
   [[ "$broker_alive" == "1" ]] || return 1
+  [[ "$terminal_alive" == "1" ]] || return 1
   [[ "$ts" =~ ^[0-9]+$ ]] || return 1
   (( now - ts <= 60 )) || return 1
 }
