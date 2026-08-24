@@ -58,6 +58,7 @@ SHADOW_FORBIDDEN_TOKENS = (
     "execution",
     "risk",
     "pnl",
+    "realized",
     "drawdown",
     "oos",
     "kill",
@@ -65,6 +66,18 @@ SHADOW_FORBIDDEN_TOKENS = (
     "auth",
     "account",
     "order",
+    "portfolio",
+    "supervisor",
+    "allocation",
+    "allocator",
+    "capital",
+    "sizing",
+    "position",
+    "exposure",
+    "wallet",
+    "secret",
+    "private_key",
+    "submit",
 )
 
 
@@ -105,10 +118,10 @@ def shadow_forbidden_files(changed_files: set[str]) -> list[str]:
     forbidden: list[str] = []
     for path in sorted(changed_files):
         lowered = path.lower()
-        if is_live_model_surface(path):
+        if is_sensitive_model_surface(path):
             forbidden.append(path)
             continue
-        if not lowered.startswith(("config/", "scripts/", "src/", "include/")):
+        if not lowered.startswith(("config/", "scripts/", "src/", "include/", "ops/")):
             continue
         if any(token in lowered for token in SHADOW_FORBIDDEN_TOKENS):
             forbidden.append(path)
@@ -169,18 +182,25 @@ def evaluate(
         if manifest_changed and manifest_existed_on_base:
             errors.append("an existing live champion manifest may change only on integration/*")
 
-        if has_model_intent(body) and (model_surface_files or opaque_model_bootstrap):
-            details = model_surface_files or ["opaque bootstrap payload"]
+        if model_surface_files:
             errors.append(
-                "unapproved model/runtime work must use research/*, experiment/*, or diagnostic/*; "
-                "approved champion integration must use integration/*. Sensitive change: "
-                + ", ".join(details)
+                "known live model/runtime/code surfaces may not change on normal feature/fix branches; "
+                "use research/*, experiment/*, or diagnostic/* for evidence and integration/* for "
+                "an approved champion change. Sensitive change: "
+                + ", ".join(model_surface_files)
+            )
+        elif opaque_model_bootstrap:
+            errors.append(
+                "unapproved opaque model/runtime bootstrap work must use research/*, experiment/*, "
+                "or diagnostic/*; approved champion integration must use integration/*. Sensitive "
+                "change: opaque bootstrap payload"
             )
 
     if forbidden_shadow_files:
         errors.append(
-            "shadow-isolated code cannot modify production decision, execution, PnL, risk, OOS, "
-            "credential, account, or order surfaces: " + ", ".join(forbidden_shadow_files)
+            "shadow-isolated code cannot modify production decision, model, execution, PnL, risk, OOS, "
+            "credential, account, order, portfolio-allocation, sizing, exposure, or kill surfaces: "
+            + ", ".join(forbidden_shadow_files)
         )
 
     summary = {
