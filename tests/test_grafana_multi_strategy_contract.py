@@ -73,6 +73,27 @@ class GrafanaMultiStrategyContractTests(unittest.TestCase):
         for metric in model_metrics:
             self.assertIn(metric, exporter)
 
+    def test_prometheus_alerts_cover_allocator_and_each_model(self) -> None:
+        alerts = (ROOT / "monitoring" / "prometheus" / "alerts.yml").read_text(encoding="utf-8")
+        for alert in (
+            "PolymarketV5AllocatorDown",
+            "PolymarketV5ModelProcessMissing",
+            "PolymarketV5ModelStateStale",
+            "PolymarketV5ModelKillSwitchActive",
+            "PolymarketV5GrossLimitBreach",
+        ):
+            self.assertIn(f"alert: {alert}", alerts)
+        self.assertIn(
+            "polymarket_allocator_models_alive < polymarket_allocator_models_expected",
+            alerts,
+        )
+        self.assertIn("max(polymarket_model_status_age_seconds) > 60", alerts)
+        self.assertIn("max(polymarket_model_kill_switch) == 1", alerts)
+        self.assertIn(
+            "polymarket_allocator_global_gross_fraction > polymarket_allocator_global_max_gross_fraction",
+            alerts,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
