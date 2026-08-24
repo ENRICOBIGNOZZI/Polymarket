@@ -1,0 +1,69 @@
+{
+  "schema": "polymarket_hf_execution_coverage_evidence_v1",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "live": {
+    "git_sha": "747d4ce56396f3fa5437b8b10f4ba482816ec683",
+    "generated_ts": 1787598964,
+    "b2_coherent_maker_positive": 1,
+    "best_b2_maker_entry_net_edge": 0.0222359,
+    "best_b2_taker_net_edge": -0.0238305,
+    "best_b2_break_even_pair_completion_probability": 0.5173076255144747,
+    "intent_bundles": 1,
+    "multileg_resting": 1,
+    "multileg_complete": 0,
+    "multileg_reserved_cash_usd": 250.0,
+    "realized_pnl_usd": 0.0
+  },
+  "forward_maker_calibration": {
+    "last_generated_ts": 1787599094,
+    "sessions": 4,
+    "probes_per_policy": 56,
+    "join": {
+      "any_fills": 1,
+      "pair_fills": 0,
+      "one_sided_only": 1,
+      "pair_fill_rate_wilson_upper": 0.04608667759307948,
+      "pnl_ex_rewards_usd": -0.13894351315407616,
+      "filled_share_weighted_markout_60_bid_per_share": -0.0020000000000000018
+    },
+    "improve1": {
+      "any_fills": 1,
+      "pair_fills": 0,
+      "one_sided_only": 1,
+      "pair_fill_rate_wilson_upper": 0.04608667759307948,
+      "pnl_ex_rewards_usd": -0.13894351315407616,
+      "filled_share_weighted_markout_60_bid_per_share": -0.0020000000000000018
+    },
+    "fade1": {
+      "any_fills": 0,
+      "pair_fills": 0,
+      "one_sided_only": 0,
+      "pair_fill_rate_wilson_upper": 0.04608667759307948,
+      "pnl_ex_rewards_usd": 0.0
+    }
+  },
+  "finding": {
+    "live_execution_class": "B2_multi_leg",
+    "forward_probe_class": "two_leg_complete_set_reward",
+    "execution_evidence_class_mismatch": true,
+    "cross_class_pair_fill_transfer_valid": false,
+    "reason": "The active paper bundle is a B2 multi-leg maker bundle, while repeated forward-maker calibration measures two-leg complete-set/reward quote policies on a different candidate class. Its pair-fill frequency therefore cannot validate the active B2 execution policy."
+  },
+  "missing_microstructure": [
+    "microprice",
+    "L1/L3/L5 imbalance",
+    "near-touch depth",
+    "snapshot and event-time OFI",
+    "B2-leg-specific queue ahead",
+    "fill-conditioned 60s/300s bundle markout",
+    "submit/cancel latency stress",
+    "forced-completion inventory cost"
+  ],
+  "safety": {
+    "research_only": true,
+    "live_champion_changed": false,
+    "risk_or_oos_gate_changed": false,
+    "credentials_changed": false,
+    "authenticated_execution_enabled": false
+  }
+}
