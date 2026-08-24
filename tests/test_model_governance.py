@@ -133,6 +133,8 @@ class ModelGovernanceContractTest(unittest.TestCase):
                 "forward-maker-research",
                 "fast-arb-shadow-research",
                 "arb-theory-research",
+                "alpha-factory",
+                "meta-supervisor",
                 "live-api-smoke",
             },
         )
@@ -155,6 +157,7 @@ class ModelGovernanceContractTest(unittest.TestCase):
         )
 
         admin = (WORKFLOWS / "admin-supervisor.yml").read_text(encoding="utf-8")
+        meta = (WORKFLOWS / "control-plane.yml").read_text(encoding="utf-8")
         integration = (WORKFLOWS / "integration-merge.yml").read_text(encoding="utf-8")
         post_merge = (WORKFLOWS / "post-merge-validation.yml").read_text(encoding="utf-8")
         deploy = (WORKFLOWS / "deploy-paper-server.yml").read_text(encoding="utf-8")
@@ -170,6 +173,13 @@ class ModelGovernanceContractTest(unittest.TestCase):
             "git push origin paper-validated",
         ):
             self.assertNotIn(forbidden, admin)
+        for forbidden in (
+            "gh pr merge",
+            "POLYMARKET_DEPLOY_REF=",
+            "git push origin paper-validated",
+        ):
+            self.assertNotIn(forbidden, meta)
+        self.assertIn("max_dispatches_per_cycle", (ROOT / "config" / "alpha_factory.json").read_text(encoding="utf-8"))
         self.assertIn('gh pr merge "$PR_NUMBER" --squash --delete-branch', integration)
         self.assertNotIn("--admin", integration)
         self.assertIn("administrator-approved", integration)
@@ -384,6 +394,8 @@ class ModelGovernanceContractTest(unittest.TestCase):
             "scripts/research_queue_report.py",
             "scripts/integration_gate.py",
             "scripts/admin_supervisor_report.py",
+            "scripts/alpha_factory.py",
+            "scripts/meta_supervisor.py",
         ):
             py_compile.compile(str(ROOT / relative), doraise=True)
 

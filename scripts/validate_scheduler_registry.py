@@ -21,6 +21,8 @@ REQUIRED_IDS = {
     "forward-maker-research",
     "fast-arb-shadow-research",
     "arb-theory-research",
+    "alpha-factory",
+    "meta-supervisor",
     "live-api-smoke",
 }
 
@@ -159,6 +161,22 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         ):
             if forbidden in admin_text:
                 errors.append(f"administrator-supervisor contains forbidden mutation: {forbidden}")
+
+    meta = by_id.get("meta-supervisor")
+    if meta:
+        meta_text = (root / str(meta["workflow"])).read_text(encoding="utf-8")
+        for forbidden in (
+            "gh pr merge",
+            "POLYMARKET_DEPLOY_REF=",
+            "git push origin paper-validated",
+            "deploy-paper-server.yml|server-health.yml)",
+        ):
+            if forbidden in meta_text:
+                errors.append(f"meta-supervisor contains forbidden authority: {forbidden}")
+        if "max_dispatches_per_cycle" not in (
+            root / "config" / "alpha_factory.json"
+        ).read_text(encoding="utf-8"):
+            errors.append("meta-supervisor must use a bounded dispatch budget")
 
     integration = by_id.get("integration-merge")
     if integration:

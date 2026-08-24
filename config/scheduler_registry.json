@@ -164,6 +164,30 @@
       "validation_dispatch_authority": false
     },
     {
+      "id": "alpha-factory",
+      "workflow": ".github/workflows/alpha-factory.yml",
+      "workflow_name": "Polymarket Alpha Factory",
+      "job": "evaluate",
+      "cadence": "hourly at minute 2, relevant pull requests and manual",
+      "responsibility": "diagnose the signal-to-PnL funnel, evaluate paper-only challengers and publish evidence without mutating the champion",
+      "critical": false,
+      "merge_authority": false,
+      "deploy_authority": false,
+      "validation_dispatch_authority": false
+    },
+    {
+      "id": "meta-supervisor",
+      "workflow": ".github/workflows/control-plane.yml",
+      "workflow_name": "Polymarket Meta-Supervisor",
+      "job": "coordinate",
+      "cadence": "hourly at minute 29, relevant pull requests and manual",
+      "responsibility": "coordinate scheduler dependencies and bounded allowlisted remediation without merge, deployment or champion authority",
+      "critical": true,
+      "merge_authority": false,
+      "deploy_authority": false,
+      "validation_dispatch_authority": false
+    },
+    {
       "id": "live-api-smoke",
       "workflow": ".github/workflows/live-smoke.yml",
       "workflow_name": "live-api-smoke",
