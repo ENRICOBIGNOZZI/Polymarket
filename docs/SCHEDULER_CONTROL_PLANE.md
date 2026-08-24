@@ -107,7 +107,7 @@ Integration Merge -- repository_dispatch --> Post-Merge Validation
                                                              Runtime Health
 
 Meta-Supervisor watches scheduler freshness and may relaunch bounded workers.
-Administrator Supervisor observes project state and reports blockers; it mutates none of them.
+Administrator Supervisor observes every node and reports blockers; it mutates none of them.
 ```
 
 ## Incumbent completion gate
