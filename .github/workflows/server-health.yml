@@ -11,7 +11,7 @@ on:
     types: [completed]
     branches: [main]
   schedule:
-    - cron: "23 * * * *"
+    - cron: "8,23,38,53 * * * *"
 
 permissions:
   contents: read
@@ -70,7 +70,7 @@ jobs:
           assert any(item.get("uid") == "polymarket-multi-strategy-v5" for item in dashboards), dashboards
           PY
 
-      - name: Inspect V5 server and write action report
+      - name: Inspect aggressive V5 server and write action report
         shell: bash
         run: |
           set -euo pipefail
@@ -102,6 +102,7 @@ jobs:
           grep -q '^polymarket_runtime_pnl_usd ' <<<"$metrics"
           grep -q '^polymarket_runtime_equity_usd ' <<<"$metrics"
           grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics"
+          grep -q '^polymarket_allocator_models_alive 5$' <<<"$metrics"
           grep -q '^polymarket_model_info{' <<<"$metrics"
           printf '%s\n' "$metrics" | grep -E '^polymarket_(runtime_info|runtime_equity_usd|runtime_pnl_usd|runtime_drawdown_ratio|runtime_kill_switch|runtime_realized_pnl_usd_total|runtime_execution_staleness_seconds|allocator_models_alive|allocator_models_expected|allocator_global_gross_fraction|model_pnl_usd|model_equity_usd|model_drawdown_ratio|model_gross_exposure_usd|model_open_positions|model_fills_total|model_status_age_seconds|trade_recorder_staleness_seconds|multileg_live_bundles)' || true
 
@@ -109,6 +110,7 @@ jobs:
           test -s "$run_root/runtime_status.json"
           test -s "$run_root/allocator_status.json"
           test -s "$run_root/strategy_status.csv"
+          test -s "$run_root/activity_status.json"
           supervisor="$run_root/runtime_supervisor.csv"
           test -s "$supervisor"
           supervisor_row="$(tail -n 1 "$supervisor")"
@@ -135,8 +137,10 @@ jobs:
           import math
           import pathlib
           import sys
+          import time
           root = pathlib.Path(sys.argv[1])
           allocator = json.loads((root / 'allocator_status.json').read_text())
+          activity = json.loads((root / 'activity_status.json').read_text())
           rows = list(csv.DictReader((root / 'strategy_status.csv').open()))
           assert allocator['paper_only'] is True
           assert allocator['models_expected'] == 5
@@ -145,11 +149,23 @@ jobs:
           assert math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9), total
           assert int(allocator['models_alive']) == 5
           assert all(float(row['status_age_seconds']) <= 120 for row in rows)
+          assert activity['healthy'] is True, activity
+          assert time.time() - float(activity['timestamp']) <= 180, activity
+          assert int(activity['models_alive']) == 5, activity
+          assert int(activity['models_fresh']) == 5, activity
+          assert int(activity['total_discovered']) >= 500, activity
+          assert int(activity['total_tradable']) > 0, activity
+          assert int(activity['total_candidates']) > 0, activity
           PY
+
+          printf '%s\n' 'activity_status_begin'
+          cat "$run_root/activity_status.json"
+          printf '%s\n' 'activity_status_end'
+          printf 'external_signal_rows=%s\n' "$(awk 'END{print NR>0 ? NR-1 : 0}' data/external_signals.csv 2>/dev/null || echo 0)"
 
           python3 scripts/runtime_action_report.py \
             --run-root "$run_root" --external-signals data/external_signals.csv \
-            --window-seconds 3600 --production-edge 0.001 \
+            --window-seconds 3600 --production-edge 0.00025 \
             --output-json "$run_root/action_report.json" \
             --output-markdown "$run_root/action_report.md" >/dev/null
           test -s "$run_root/action_report.json"
@@ -212,12 +228,16 @@ jobs:
             -P "$SERVER_PORT" \
             "$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v5_live/action_report.json" \
             runtime-action-report.json
+          scp -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
+            -P "$SERVER_PORT" \
+            "$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v5_live/activity_status.json" \
+            runtime-activity-status.json
 
       - name: Publish health summary
         if: always()
         shell: bash
         run: |
-          echo '## Polymarket V5 private paper server' >> "$GITHUB_STEP_SUMMARY"
+          echo '## Polymarket aggressive V5 private paper server' >> "$GITHUB_STEP_SUMMARY"
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
           cat server-health.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo 'health output missing' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
@@ -233,6 +253,7 @@ jobs:
             server-health.txt
             runtime-action-report.md
             runtime-action-report.json
+            runtime-activity-status.json
             grafana-health.json
             grafana-search.json
           if-no-files-found: warn
