@@ -39,6 +39,13 @@ class V4MonitoringContractTest(unittest.TestCase):
         self.assertIn("github.event_name != 'pull_request'", smoke)
         self.assertIn("continue-on-error: true", smoke)
 
+    def test_pca_sparse_hedge_cap_matches_production_and_smoke(self):
+        once = (ROOT / "scripts" / "paper_v4_once.sh").read_text(encoding="utf-8")
+        loop = (ROOT / "scripts" / "paper_v4_loop.sh").read_text(encoding="utf-8")
+        smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
+        for producer in (once, loop, smoke):
+            self.assertIn("--max-hedges 4", producer)
+
 
 if __name__ == "__main__":
     unittest.main()

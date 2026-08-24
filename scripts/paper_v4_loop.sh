@@ -153,7 +153,7 @@ while true; do
       > "$RUN_ROOT/stat_arb_pairs_latest.log" 2> "$RUN_ROOT/stat_arb_pairs_errors.log" || true
     ./build/polymarket_pca_stat_arb \
       --config "$CONFIG" --markets 600 --universe 120 \
-      --lookback-hours 336 --fidelity-minutes 30 --factors 3 --min-z 1.5 --max-half-life-hours 168 --top 60 \
+      --lookback-hours 336 --fidelity-minutes 30 --factors 3 --max-hedges 4 --min-z 1.5 --max-half-life-hours 168 --top 60 \
       --csv "$RUN_ROOT/stat_arb_pca.csv" \
       > "$RUN_ROOT/stat_arb_pca_latest.log" 2> "$RUN_ROOT/stat_arb_pca_errors.log" || true
     python3 scripts/build_v4_intents.py \
