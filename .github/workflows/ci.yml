@@ -71,4 +71,7 @@ jobs:
             ops/install_autoupdate_macos.sh ops/finish_bootstrap_macos.sh \
             ops/apply_runtime_config_macos.sh ops/install_cross_venue_macos.sh
           python3 -m py_compile scripts/portfolio_supervisor.py scripts/apply_portfolio_gate.py
-          python3 -m unittest tests/test_ops_macos.py tests/test_portfolio_gate.py -v
+          python3 -m unittest \
+            tests/test_ops_macos.py \
+            tests/test_portfolio_gate.py \
+            tests/test_portfolio_champion_contract.py -v
