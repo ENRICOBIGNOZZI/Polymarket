@@ -1,0 +1,149 @@
+name: Apply external probability fix
+
+on:
+  push:
+    branches: [research/aggressive-v5-execution]
+    paths:
+      - ops/fix_external_probability_model.py
+      - .github/workflows/apply-external-probability-fix.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-external-probability-fix
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/aggressive-v5-execution
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+
+      - name: Apply direct probability model
+        run: |
+          set -euo pipefail
+          python3 -m py_compile ops/fix_external_probability_model.py
+          python3 ops/fix_external_probability_model.py
+          python3 -m py_compile \
+            scripts/external_intelligence.py \
+            scripts/materialize_external_signals.py \
+            tests/test_external_intelligence.py
+          python3 -m json.tool config/external_intelligence.json >/dev/null
+
+      - name: Build and test
+        run: |
+          set -euo pipefail
+          # Keep the one-shot workflow outside the permanent scheduler inventory.
+          mv .github/workflows/apply-external-probability-fix.yml /tmp/apply-external-probability-fix.yml
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+
+      - name: Live Binance probability and external sleeve validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          E=/tmp/external-live
+          V=/tmp/v5-external
+          mkdir -p "$E" "$V"
+          python3 - <<'PY'
+          import gzip, json
+          from pathlib import Path
+
+          root = Path('/tmp/external-live')
+          empty = gzip.compress(b'', compresslevel=9, mtime=0)
+          (root / 'observations-in.jsonl.gz').write_bytes(empty)
+          (root / 'prices-in.jsonl.gz').write_bytes(empty)
+          (root / 'state-in.json').write_text('{}\n')
+
+          config = json.loads(Path('config/external_intelligence.json').read_text())
+          config['sources']['kalshi']['enabled'] = False
+          config['sources']['gdelt']['enabled'] = False
+          config['backfill']['enabled'] = False
+          (root / 'config.json').write_text(json.dumps(config, indent=2) + '\n')
+          PY
+
+          python3 scripts/external_intelligence.py \
+            --config "$E/config.json" \
+            --observations-in "$E/observations-in.jsonl.gz" \
+            --prices-in "$E/prices-in.jsonl.gz" \
+            --state-in "$E/state-in.json" \
+            --observations-out "$E/observations-out.jsonl.gz" \
+            --prices-out "$E/prices-out.jsonl.gz" \
+            --state-out "$E/state-out.json" \
+            --signals-out "$E/signals.jsonl" \
+            --report-json "$E/report.json" \
+            --report-markdown "$E/report.md" \
+            --mode incremental | tee "$E/collector.log"
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('/tmp/external-live')
+          rows = [json.loads(line) for line in (root / 'signals.jsonl').read_text().splitlines() if line.strip()]
+          direct = [row for row in rows if row.get('q_external') is not None]
+          assert direct, 'no direct external probability was produced'
+          assert all(0.0 < float(row['q_external']) < 1.0 for row in direct)
+          assert all(float(row.get('confidence', 0.0)) >= 0.35 for row in direct)
+          report = json.loads((root / 'report.json').read_text())
+          assert report['collection']['direct_probability_rows'] >= len(direct) > 0
+          print('direct_probability_rows', len(direct))
+          for row in direct[:10]:
+              print(row['market_id'], row['question'], row['q_external'], row['pm_mid'], row['confidence'])
+          PY
+
+          python3 scripts/materialize_external_signals.py \
+            --input "$E/signals.jsonl" --output data/external_signals.csv \
+            --min-confidence 0.35 --max-age-seconds 21600 \
+            | tee "$E/materializer.log"
+
+          python3 scripts/multi_strategy_paper.py \
+            --config config/paper_v5.json --run-root "$V" --engine ./build/polymarket_engine \
+            --markets 500 --min-liquidity 25 --validate-only >/dev/null
+
+          ./build/polymarket_engine \
+            --config "$V/generated_configs/external.json" --once --paper \
+            --markets 500 --min-liquidity 25 --run-dir "$V/strategies/external" \
+            | tee "$E/external-engine.log"
+
+          python3 - <<'PY'
+          import csv, re
+          from pathlib import Path
+
+          root = Path('/tmp/external-live')
+          text = (root / 'external-engine.log').read_text()
+          values = {key: int(value) for key, value in re.findall(
+              r'(discovered|tradable|candidates|no_terminal_evidence|net_pos)=([0-9]+)', text
+          )}
+          assert values.get('tradable', 0) > 0, values
+          assert values.get('candidates', 0) > 0, values
+          assert values.get('no_terminal_evidence', values['tradable']) < values['tradable'], values
+          assert values.get('net_pos', 0) > 0, values
+          fills = list(csv.DictReader(Path('/tmp/v5-external/strategies/external/fills.csv').open()))
+          assert any(row.get('action') == 'BUY' for row in fills), fills[:5]
+          print('external_engine_funnel', values, 'fills', len(fills))
+          PY
+
+      - name: Commit validated code
+        run: |
+          set -euo pipefail
+          cp /tmp/apply-external-probability-fix.yml .github/workflows/apply-external-probability-fix.yml
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f -name '*.pyc' -delete
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          test -n "$(git status --porcelain)"
+          git commit -m "Add direct Binance probability signals for crypto thresholds"
+          git push origin HEAD:research/aggressive-v5-execution
