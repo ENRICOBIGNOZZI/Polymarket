@@ -25,6 +25,17 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Load shared scheduler context
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_scheduler_context.py \
+            --context config/scheduler_context.json \
+            --scheduler-id integration-merge \
+            --output scheduler-context.md \
+            --output-json scheduler-context.json \
+            --github-env "$GITHUB_ENV"
+
       - name: Require a fully validated and healthy incumbent
         shell: bash
         env:
@@ -70,6 +81,11 @@ jobs:
           fi
 
           "${gate_args[@]}"
+          {
+            echo
+            echo "- scheduler context: \`$POLYMARKET_SCHEDULER_CONTEXT_SHA\`"
+            echo '- architecture gate: five experts, executable edge, one portfolio/risk/execution authority'
+          } >> incumbent-gate-report.md
 
       - name: Select one administrator-approved integration
         shell: bash
@@ -160,11 +176,12 @@ jobs:
           PY
           gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" --input integration-dispatch.json
           gh pr comment "$PR_NUMBER" --body \
-            "Administrator-approved integration merged at \`$merged_sha\`. Validation has been handed to the dedicated post-merge scheduler. The prior \`paper-validated\` revision remains live until that chain succeeds."
+            "Administrator-approved integration merged at \`$merged_sha\` under scheduler context \`$POLYMARKET_SCHEDULER_CONTEXT_SHA\`. Validation has been handed to the dedicated post-merge scheduler. The prior \`paper-validated\` revision remains live until that chain succeeds."
 
           {
             echo
             echo '## Integration action'
+            echo "- scheduler context: \`$POLYMARKET_SCHEDULER_CONTEXT_SHA\`"
             echo "- incumbent revision: \`$BASE_MAIN_SHA\`"
             echo "- incumbent health run: ${INCUMBENT_HEALTH_RUN_ID:-deployment-disabled}"
             echo "- merged PR: #$PR_NUMBER"
@@ -178,6 +195,8 @@ jobs:
         if: always()
         shell: bash
         run: |
+          cat scheduler-context.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat incumbent-gate-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat integration-merge-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
@@ -192,6 +211,8 @@ jobs:
         with:
           name: integration-merge-${{ github.run_id }}
           path: |
+            scheduler-context.md
+            scheduler-context.json
             incumbent-gate-report.md
             incumbent-health-evidence/
             integration-merge-report.md
