@@ -3,7 +3,7 @@ name: paper-server-health
 on:
   workflow_dispatch:
   workflow_run:
-    workflows: ["deploy-paper-server"]
+    workflows: ["deploy-paper-server", "Grafana Permanent Access"]
     types: [completed]
     branches: [main]
   schedule:
@@ -20,15 +20,10 @@ jobs:
   health:
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
       (
-        vars.POLYMARKET_SERVER_DEPLOY == 'true' &&
-        (
-          github.event_name == 'schedule' ||
-          (
-            github.event_name == 'workflow_run' &&
-            github.event.workflow_run.conclusion == 'success'
-          )
-        )
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success'
       )
     runs-on: ubuntu-24.04
     timeout-minutes: 10
