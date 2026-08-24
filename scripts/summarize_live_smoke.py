@@ -305,6 +305,11 @@ def main() -> int:
             name: tail(args.run_root / relative, args.tail_lines)
             for name, relative in LOGS.items()
         },
+        "models": {
+            path.name: tail(path / "engine.log", args.tail_lines)
+            for path in sorted((args.run_root / "strategies").glob("*"))
+            if path.is_dir()
+        },
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     tmp = args.output.with_suffix(args.output.suffix + ".tmp")

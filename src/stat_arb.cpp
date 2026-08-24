@@ -31,7 +31,8 @@ struct Fit {
     double phi = 1.0;
     double t_reversion = 0.0;
     double r2 = 0.0;
-    bool ok = false;
+    bool regression_ok = false;
+    bool mean_reverting = false;
 };
 
 struct Opportunity {
@@ -114,7 +115,7 @@ double corr(const std::vector<double>& a, const std::vector<double>& b) {
 
 Fit fit_pair(const std::vector<double>& x, const std::vector<double>& y) {
     Fit f;
-    if (x.size() != y.size() || x.size() < 24) return f;
+    if (x.size() != y.size() || x.size() < 12) return f;
     const double mx = mean(x), my = mean(y);
     double sxx = 0.0, sxy = 0.0, syy = 0.0;
     for (std::size_t i = 0; i < x.size(); ++i) {
@@ -124,7 +125,7 @@ Fit fit_pair(const std::vector<double>& x, const std::vector<double>& y) {
     if (sxx < 1e-8 || syy < 1e-8) return f;
     f.beta = sxy / sxx;
     f.alpha = my - f.beta * mx;
-    if (std::abs(f.beta) < 0.10 || std::abs(f.beta) > 8.0) return f;
+    if (std::abs(f.beta) < 0.03 || std::abs(f.beta) > 20.0) return f;
 
     std::vector<double> r(x.size());
     double rss_level = 0.0;
@@ -134,16 +135,17 @@ Fit fit_pair(const std::vector<double>& x, const std::vector<double>& y) {
     }
     f.resid_mean = mean(r);
     f.resid_sd = sd(r, f.resid_mean);
-    if (f.resid_sd < 1e-4) return f;
+    if (f.resid_sd < 5e-5) return f;
     f.r2 = std::clamp(1.0 - rss_level / syy, -1.0, 1.0);
+    f.regression_ok = true;
 
-    // ADF-style one-lag mean-reversion screen: Δr_t = c + gamma r_{t-1} + eps_t.
     std::vector<double> lag, dr;
     lag.reserve(r.size() - 1); dr.reserve(r.size() - 1);
     for (std::size_t t = 1; t < r.size(); ++t) {
         lag.push_back(r[t - 1]);
         dr.push_back(r[t] - r[t - 1]);
     }
+    if (lag.size() < 8) return f;
     const double ml = mean(lag), md = mean(dr);
     double lxx = 0.0, lxy = 0.0;
     for (std::size_t i = 0; i < lag.size(); ++i) {
@@ -162,7 +164,7 @@ Fit fit_pair(const std::vector<double>& x, const std::vector<double>& y) {
     const double se = std::sqrt(std::max(0.0, sigma2) / lxx);
     f.t_reversion = se > 1e-12 ? gamma / se : 0.0;
     f.phi = 1.0 + gamma;
-    f.ok = gamma < 0.0 && f.phi > 0.02 && f.phi < 0.999 && std::isfinite(f.t_reversion);
+    f.mean_reverting = gamma < 0.0 && f.phi > 0.05 && f.phi < 0.999 && std::isfinite(f.t_reversion);
     return f;
 }
 
@@ -176,18 +178,33 @@ std::map<std::int64_t,double> bucketize(const std::vector<pm::PricePoint>& v, st
     return out;
 }
 
+std::optional<double> asof_level(const std::map<std::int64_t,double>& values,
+                                 std::int64_t ts,
+                                 std::int64_t max_age) {
+    auto it = values.upper_bound(ts);
+    if (it == values.begin()) return std::nullopt;
+    --it;
+    if (ts - it->first > max_age) return std::nullopt;
+    return it->second;
+}
+
 std::pair<std::vector<double>,std::vector<double>> align_levels(
     const std::map<std::int64_t,double>& a,
-    const std::map<std::int64_t,double>& b) {
+    const std::map<std::int64_t,double>& b,
+    std::int64_t bucket_s,
+    std::size_t max_stale_buckets = 3) {
     std::vector<double> x, y;
-    auto ia = a.begin(), ib = b.begin();
-    while (ia != a.end() && ib != b.end()) {
-        if (ia->first == ib->first) {
-            x.push_back(pm::logit(ia->second));
-            y.push_back(pm::logit(ib->second));
-            ++ia; ++ib;
-        } else if (ia->first < ib->first) ++ia;
-        else ++ib;
+    if (a.empty() || b.empty() || bucket_s <= 0) return {x, y};
+    std::int64_t start = std::max(a.begin()->first, b.begin()->first);
+    const std::int64_t end = std::min(a.rbegin()->first, b.rbegin()->first);
+    start = ((start + bucket_s - 1) / bucket_s) * bucket_s;
+    const std::int64_t max_age = static_cast<std::int64_t>(max_stale_buckets) * bucket_s;
+    for (std::int64_t ts = start; ts <= end; ts += bucket_s) {
+        auto av = asof_level(a, ts, max_age);
+        auto bv = asof_level(b, ts, max_age);
+        if (!av || !bv) continue;
+        x.push_back(pm::logit(*av));
+        y.push_back(pm::logit(*bv));
     }
     return {std::move(x), std::move(y)};
 }
@@ -264,8 +281,8 @@ int main(int argc, char** argv) {
         std::string config = "config/paper.example.json";
         std::size_t market_limit = 600, history_universe = 160, top = 40;
         std::size_t lookback_hours = 336, fidelity_minutes = 30;
-        double min_liquidity = 100.0, min_z = 1.50, max_half_life_hours = 168.0;
-        double min_t_reversion = 1.75;
+        double min_liquidity = 25.0, min_z = 0.90, max_half_life_hours = 240.0;
+        double min_t_reversion = 0.75;
         std::string csv_path;
 
         for (int i = 1; i < argc; ++i) {
@@ -309,13 +326,14 @@ int main(int argc, char** argv) {
                     pm::MarketTiming{m.timed_sports, m.game_start_ts, m.seconds_delay}, now)) continue;
             auto y = books.find(m.yes_token), n = books.find(m.no_token);
             if (y == books.end() || n == books.end()) continue;
-            const double p = y->second.midpoint();
-            if (!std::isfinite(p) || p <= cfg.min_mid || p >= cfg.max_mid) continue;
-            if (y->second.spread() > cfg.max_spread || n->second.spread() > cfg.max_spread) continue;
-            if (!std::isfinite(y->second.best_ask()) || !std::isfinite(n->second.best_ask())) continue;
+            if (!pm::model_market_eligible(y->second, n->second, cfg.min_mid, cfg.max_mid, cfg.max_spread)) continue;
             universe.push_back(&m);
         }
-        std::sort(universe.begin(), universe.end(), [](auto* a, auto* b) { return a->liquidity > b->liquidity; });
+        std::sort(universe.begin(), universe.end(), [](auto* a, auto* b) {
+            const double sa = a->liquidity + 0.20 * a->volume24h;
+            const double sb = b->liquidity + 0.20 * b->volume24h;
+            return sa > sb;
+        });
         if (universe.size() > history_universe) universe.resize(history_universe);
 
         std::vector<std::string> yes_tokens;
@@ -332,10 +350,10 @@ int main(int argc, char** argv) {
             auto b = bucketize(it->second, bucket_s);
             const double cur = books.at(m->yes_token).midpoint();
             if (std::isfinite(cur)) b[(now / bucket_s) * bucket_s] = cur;
-            if (b.size() >= 25) series[m->id] = std::move(b);
+            if (b.size() >= 16) series[m->id] = std::move(b);
         }
 
-        const std::vector<std::size_t> windows{48, 96, 192, 336, 672};
+        const std::vector<std::size_t> windows{24, 48, 96, 192, 336, 672};
         std::vector<Opportunity> opportunities;
         std::size_t pairs_tested = 0, model_fits = 0, mr_pass = 0;
 
@@ -347,26 +365,27 @@ int main(int argc, char** argv) {
                 if (sj == series.end()) continue;
                 ++pairs_tested;
 
-                auto [lx_full, ly_full] = align_levels(si->second, sj->second);
-                if (lx_full.size() < 30) continue;
+                auto [lx_full, ly_full] = align_levels(si->second, sj->second, bucket_s);
+                if (lx_full.size() < 24) continue;
                 auto rx_full = changes(lx_full), ry_full = changes(ly_full);
                 const double rc_full = corr(rx_full, ry_full);
                 const double sim = jaccard(universe[i]->question, universe[j]->question);
                 const bool same_event = !universe[i]->event_id.empty() && universe[i]->event_id == universe[j]->event_id;
-                const double corr_gate = same_event ? 0.20 : (sim >= 0.15 ? 0.35 : 0.75);
+                const double corr_gate = same_event ? 0.10 : (sim >= 0.15 ? 0.20 : 0.50);
                 if (std::abs(rc_full) < corr_gate) continue;
 
                 Opportunity best;
                 bool have = false;
                 for (std::size_t w0 : windows) {
-                    if (lx_full.size() < std::min<std::size_t>(w0, 36)) continue;
+                    if (lx_full.size() < std::min<std::size_t>(w0, 24)) continue;
                     const std::size_t w = std::min(w0, lx_full.size());
-                    if (w < 30) continue;
+                    if (w < 24) continue;
                     std::vector<double> x(lx_full.end() - static_cast<std::ptrdiff_t>(w), lx_full.end());
                     std::vector<double> y(ly_full.end() - static_cast<std::ptrdiff_t>(w), ly_full.end());
                     auto f = fit_pair(x, y);
-                    if (!f.ok) continue;
+                    if (!f.regression_ok) continue;
                     ++model_fits;
+                    if (!f.mean_reverting) continue;
 
                     const std::size_t cut = w / 2;
                     std::vector<double> x1(x.begin(), x.begin() + static_cast<std::ptrdiff_t>(cut));
@@ -374,15 +393,16 @@ int main(int argc, char** argv) {
                     std::vector<double> x2(x.begin() + static_cast<std::ptrdiff_t>(cut), x.end());
                     std::vector<double> y2(y.begin() + static_cast<std::ptrdiff_t>(cut), y.end());
                     auto f1 = fit_pair(x1, y1), f2 = fit_pair(x2, y2);
-                    if (!f1.ok || !f2.ok) continue;
+                    if (!f1.regression_ok || !f2.regression_ok) continue;
                     const double beta_stability = std::exp(-std::abs(std::log(std::max(1e-6, std::abs(f1.beta)) /
                                                                              std::max(1e-6, std::abs(f2.beta)))));
                     const double phi_stability = std::exp(-4.0 * std::abs(f1.phi - f2.phi));
                     const double sign_stability = f1.beta * f2.beta > 0.0 ? 1.0 : 0.0;
-                    const double stability = beta_stability * phi_stability * sign_stability;
-                    if (stability < 0.45) continue;
+                    const double directional_stability = (f1.phi < 1.0 && f2.phi < 1.0) ? 1.0 : 0.50;
+                    const double stability = beta_stability * phi_stability * sign_stability * directional_stability;
+                    if (stability < 0.25) continue;
 
-                    const double t_gate = (same_event || sim >= 0.15) ? min_t_reversion : std::max(2.25, min_t_reversion);
+                    const double t_gate = (same_event || sim >= 0.15) ? min_t_reversion : std::max(1.25, min_t_reversion);
                     if (f.t_reversion > -t_gate) continue;
                     const double bucket_hours = static_cast<double>(fidelity_minutes) / 60.0;
                     const double half_life = -std::log(2.0) / std::log(f.phi) * bucket_hours;

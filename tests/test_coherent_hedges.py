@@ -107,6 +107,31 @@ class CoherentHedgeFilterTest(unittest.TestCase):
             self.assertEqual(rejected[0]["unrelated_market_ids"], "4")
             self.assertIn("kept=1 rejected=1", completed.stdout)
 
+    def test_factor_mode_keeps_low_error_stable_pca_basket(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw.csv"
+            raw.write_text(
+                "market,slug,residual_z,stability,hedge_error,maker_entry_net_edge,legs\n"
+                "1,target,1.4,0.60,0.30,0.003,1:YES:1|2:NO:0.5\n",
+                encoding="utf-8",
+            )
+            cache = root / "cache.json"
+            cache.write_text(json.dumps({"markets": {
+                "1": {"market_id": "1", "slug": "election-target", "question": "", "event_id": "a", "category": "", "fetched_ts": 1000},
+                "2": {"market_id": "2", "slug": "crypto-hedge", "question": "", "event_id": "b", "category": "", "fetched_ts": 1000},
+            }}), encoding="utf-8")
+            output = root / "coherent.csv"
+            rejections = root / "rejected.csv"
+            subprocess.run([
+                sys.executable, str(SCRIPT), "--input", str(raw), "--output", str(output),
+                "--rejections", str(rejections), "--cache", str(cache), "--now", "1000",
+                "--allow-factor-hedges", "--max-factor-hedge-error", "0.65",
+            ], check=True, capture_output=True, text=True)
+            kept = list(csv.DictReader(output.open(newline="", encoding="utf-8")))
+            self.assertEqual(len(kept), 1)
+            self.assertIn("pca_factor", kept[0]["coherence_scope"])
+
     def test_same_event_dominates_low_text_similarity(self):
         module = load_filter_module()
         target = module.MarketMeta("1", "alpha", "", "event-7", "", 1)

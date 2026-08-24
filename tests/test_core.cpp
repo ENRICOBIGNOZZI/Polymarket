@@ -24,6 +24,20 @@ int main(){
     assert(micro>=b.best_bid()&&micro<=b.best_ask());
     assert(micro>mid);
 
+    pm::Book y_pressure;
+    y_pressure.tick_size=0.01;
+    y_pressure.bids={{0.49,1000}};
+    y_pressure.asks={{0.51,50}};
+    pm::Book n_pressure;
+    n_pressure.tick_size=0.01;
+    n_pressure.bids={{0.49,50}};
+    n_pressure.asks={{0.51,1000}};
+    const auto pressure=pm::micro_forecast(y_pressure,n_pressure,2.5,0.75);
+    assert(pressure.q_yes>y_pressure.midpoint());
+    assert(pressure.confidence>0.0);
+    n_pressure.asks={{0.80,1000}};
+    assert(pm::model_market_eligible(y_pressure,n_pressure,0.01,0.99,0.35));
+
     pm::FeeDetails fd{0.04,1.0,true};
     double fee=pm::Engine::protocol_fee(100,0.5,fd);
     assert(std::abs(fee-1.0)<1e-12);

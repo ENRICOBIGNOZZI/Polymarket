@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Coherence gate for executable B2 PCA hedge baskets.
 
-The raw PCA file remains a research diagnostic. Execution rows are admitted when
-all hedge legs share an explicit event, a non-empty Polymarket category, or a
-meaningful text relation with the target. Metadata failures remain fail-closed:
-a stale executable file is cleared before input parsing or network access.
+Explicit event, category and semantic hedges remain preferred. In opt-in paper
+mode, a regularized PCA-factor basket may also pass when aggregate hedge error,
+stability, residual extremeness and maker economics satisfy explicit thresholds.
+Metadata failures remain fail-closed.
 """
 from __future__ import annotations
 
@@ -196,6 +196,13 @@ def fetch_metadata(
     )
 
 
+def fnum(value: str | None, default: float = 0.0) -> float:
+    try:
+        return float(value if value not in (None, "") else default)
+    except (TypeError, ValueError):
+        return default
+
+
 def parse_leg_ids(spec: str) -> list[str]:
     out: list[str] = []
     for raw in spec.split("|"):
@@ -215,6 +222,11 @@ def main() -> int:
     parser.add_argument("--cache-ttl-seconds", type=int, default=21600)
     parser.add_argument("--min-jaccard", type=float, default=0.08)
     parser.add_argument("--min-shared-tokens", type=int, default=1)
+    parser.add_argument("--allow-factor-hedges", action="store_true")
+    parser.add_argument("--max-factor-hedge-error", type=float, default=0.80)
+    parser.add_argument("--min-factor-stability", type=float, default=0.20)
+    parser.add_argument("--min-factor-z", type=float, default=0.65)
+    parser.add_argument("--min-factor-maker-edge", type=float, default=0.0)
     parser.add_argument("--timeout-seconds", type=float, default=8.0)
     parser.add_argument("--now", type=int, default=None)
     args = parser.parse_args()
@@ -267,6 +279,13 @@ def main() -> int:
         unrelated: list[str] = []
         scopes: list[str] = []
         similarities: list[float] = []
+        factor_evidence = (
+            args.allow_factor_hedges
+            and fnum(row.get("hedge_error"), 1.0) <= args.max_factor_hedge_error
+            and fnum(row.get("stability"), 0.0) >= args.min_factor_stability
+            and abs(fnum(row.get("residual_z"), 0.0)) >= args.min_factor_z
+            and fnum(row.get("maker_entry_net_edge"), -1.0) > args.min_factor_maker_edge
+        )
 
         target = get_meta(target_id) if target_id else None
         if not target:
@@ -284,10 +303,17 @@ def main() -> int:
                     target, hedge, args.min_jaccard, args.min_shared_tokens
                 )
                 similarities.append(similarity)
-                relation_counts[scope] += 1
-                scopes.append(f"{scope}:{similarity:.4f}:{shared}")
-                if scope == "unrelated":
-                    unrelated.append(hedge_id)
+                if scope == "unrelated" and factor_evidence:
+                    relation_counts["pca_factor"] += 1
+                    scopes.append(
+                        f"pca_factor:{similarity:.4f}:{shared}:"
+                        f"error={fnum(row.get('hedge_error'), 1.0):.4f}"
+                    )
+                else:
+                    relation_counts[scope] += 1
+                    scopes.append(f"{scope}:{similarity:.4f}:{shared}")
+                    if scope == "unrelated":
+                        unrelated.append(hedge_id)
             if unrelated:
                 reason = "unrelated_or_unknown_hedge_legs"
 

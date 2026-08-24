@@ -28,6 +28,19 @@ print(value)
 PY
 )"
 
+refresh_external_signals() {
+  local input="$RUN_ROOT/latest-external-signals.jsonl"
+  git fetch --no-tags origin telemetry:refs/remotes/origin/telemetry >/dev/null 2>&1 || true
+  git show origin/telemetry:telemetry/latest-external-signals.jsonl > "$input.tmp" 2>/dev/null || : > "$input.tmp"
+  mv "$input.tmp" "$input"
+  python3 scripts/materialize_external_signals.py \
+    --input "$input" --output data/external_signals.csv \
+    --min-confidence 0.35 --max-age-seconds 21600 \
+    >> "$RUN_ROOT/external_signal_materializer.log" 2>&1
+}
+
+refresh_external_signals || true
+
 # Materialise and validate all five generated child configs before starting the
 # persistent allocator. This is validation only; the allocator below runs them
 # continuously in paper mode against live Polymarket books.
@@ -49,6 +62,8 @@ filter_b2() {
     --rejections "$RUN_ROOT/stat_arb_pca_rejected.csv" \
     --cache "$RUN_ROOT/market_metadata_cache.json" \
     --min-jaccard 0.08 --min-shared-tokens 1 \
+    --allow-factor-hedges --max-factor-hedge-error 0.80 \
+    --min-factor-stability 0.20 --min-factor-z 0.65 \
     >> "$RUN_ROOT/coherent_hedges.log" 2>&1
 }
 
@@ -226,6 +241,7 @@ last_rewards=0
 last_oos=0
 last_report=0
 last_compaction=0
+last_external=0
 
 while true; do
   now=$(date +%s)
@@ -236,6 +252,11 @@ while true; do
     printf '%s,supervisor,restart,%s\n' "$(date +%s)" "$SUPERVISOR_RESTARTS" >> "$RUN_ROOT/runtime_supervisor_events.csv"
     sleep 1
     start_supervisor
+  fi
+
+  if (( now - last_external >= 300 )); then
+    refresh_external_signals || true
+    last_external=$now
   fi
 
   # The passive microstructure sleeve is deliberately frequent and small. The
