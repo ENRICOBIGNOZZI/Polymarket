@@ -11,6 +11,7 @@ endif()
 find_package(PkgConfig REQUIRED)
 find_package(Boost REQUIRED)
 find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED)
 pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
 
 add_library(pm_core
@@ -29,7 +30,7 @@ add_library(pm_fast_arb
     src/fast_ws.cpp
 )
 target_include_directories(pm_fast_arb PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(pm_fast_arb PUBLIC pm_core Threads::Threads)
+target_link_libraries(pm_fast_arb PUBLIC pm_core Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 target_compile_options(pm_fast_arb PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(polymarket_engine src/main.cpp)
