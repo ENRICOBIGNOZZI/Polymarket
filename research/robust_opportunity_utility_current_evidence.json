@@ -1,13 +1,13 @@
 {
   "schema": "polymarket_robust_opportunity_current_evidence_v4",
-  "captured_at_utc": "2026-08-24T20:18:11Z",
+  "captured_at_utc": "2026-08-24T20:20:15Z",
   "research_only": true,
   "live_champion_version": 4,
   "repository_state": {
-    "main_sha": "9873e72e97386973caebb05edb751f9219740754",
+    "main_sha": "c5234ef85467689698a51d033c0d4edfdd394a63",
     "paper_validated_sha": "f6db4c4f7eda73568a03e465505d66b7570c77b9",
     "live_champion_manifest_changed": false,
-    "validation_note": "main is one governance-only commit ahead of paper-validated; the latest executable live-smoke evidence is bound to f6db4c4f7eda73568a03e465505d66b7570c77b9",
+    "validation_note": "main contains governance and public-data request-contract fixes newer than the latest validation-bound live-smoke SHA; the latest executable alpha evidence remains bound to f6db4c4f7eda73568a03e465505d66b7570c77b9",
     "research_branch_current_main_relation": "behind_current_main",
     "note": "this branch remains research-only and is not eligible for integration while current executable evidence is absent"
   },
@@ -74,7 +74,8 @@
     "backtest_candidate_count": 0,
     "backtest_passing_candidates": 0,
     "data_repair_pr": 122,
-    "alpha_factory_interpretation": "no external-alpha candidate is evidence-ready; source-contract and history-integrity work remains owned by LF research and the focused data-fix PR"
+    "data_repair_status": "merged_to_main_at_c5234ef85467689698a51d033c0d4edfdd394a63",
+    "alpha_factory_interpretation": "no external-alpha candidate is evidence-ready yet; the request-contract repair is now on main, so the next LF collection cycles should rebuild cleaner history before model evaluation resumes"
   },
   "recent_rejected_maker_sample": {
     "source": "b2",
@@ -123,7 +124,7 @@
     "reason": "the dedicated research branch already owns cross-venue matching, settlement verification and cost-aware evaluation; synchronized live/replay, one-sided-fill stress and incremental portfolio utility are still missing, so duplicating that research here would reduce evidence quality"
   },
   "promotion_state": "MORE_EVIDENCE_REQUIRED",
-  "current_conclusion": "there is no stable executable alpha to promote: the apparent positive B2 maker window did not persist into the next fresh live smoke, paired maker execution remains 0/84 with negative one-sided evidence, external intelligence has no chronologically labeled candidate, and realized OOS evidence is still absent",
+  "current_conclusion": "there is no stable executable alpha to promote: the apparent positive B2 maker window did not persist into the next fresh live smoke, paired maker execution remains 0/84 with negative one-sided evidence, external intelligence has no chronologically labeled candidate yet, and realized OOS evidence is still absent",
   "next_required_evidence": [
     "candidate-level cross-window persistence on common identifiers rather than family-level snapshot positivity",
     "candidate-class-specific paired fill evidence across independent sessions",
@@ -131,7 +132,8 @@
     "realized adverse-selection and forced-completion costs",
     "at least two purged realized OOS folds",
     "positive incremental realized net PnL versus the net-edge baseline",
-    "positive survival under 1.5x and 2.0x execution-cost stress"
+    "positive survival under 1.5x and 2.0x execution-cost stress",
+    "new external-intelligence history collected after the merged request-contract repair"
   ],
   "rollback_criteria": [
     "revert research scorer changes if deterministic CI or research policy fails",
