@@ -1,17 +1,19 @@
 {
-  "schema": "polymarket_robust_opportunity_current_evidence_v3",
-  "captured_at_utc": "2026-08-24T19:18:00Z",
+  "schema": "polymarket_robust_opportunity_current_evidence_v4",
+  "captured_at_utc": "2026-08-24T20:18:11Z",
   "research_only": true,
   "live_champion_version": 4,
   "repository_state": {
-    "main_sha": "747d4ce56396f3fa5437b8b10f4ba482816ec683",
-    "paper_validated_sha": "12595836a4266cee819f75ca928f9ddcc7c49f20",
+    "main_sha": "9873e72e97386973caebb05edb751f9219740754",
+    "paper_validated_sha": "f6db4c4f7eda73568a03e465505d66b7570c77b9",
     "live_champion_manifest_changed": false,
-    "note": "main contains newer infrastructure/governance changes; this research evidence does not promote, deploy or mutate the champion"
+    "validation_note": "main is one governance-only commit ahead of paper-validated; the latest executable live-smoke evidence is bound to f6db4c4f7eda73568a03e465505d66b7570c77b9",
+    "research_branch_current_main_relation": "behind_current_main",
+    "note": "this branch remains research-only and is not eligible for integration while current executable evidence is absent"
   },
   "latest_alpha_factory": {
-    "generated_ts": 1787597452,
-    "generated_utc": "2026-08-24T18:50:52+00:00",
+    "generated_ts": 1787600134,
+    "generated_utc": "2026-08-24T19:35:34+00:00",
     "status": "RESEARCHING",
     "paper_only": true,
     "submitted_orders": 0,
@@ -21,52 +23,58 @@
     "stressed_2_0x_net_pnl_usd": 0.0,
     "active_folds": 0,
     "recommended_canary": null,
-    "b1_raw_positive": 2,
+    "b1_raw_positive": 0,
     "b1_maker_positive": 0,
-    "b1_best_raw_edge": 0.014928,
-    "b1_best_maker_edge": -0.00262469,
-    "b2_raw_positive": 5,
+    "b1_best_raw_edge": 0.0,
+    "b1_best_maker_edge": 0.0,
+    "b2_raw_positive": 7,
+    "b2_maker_positive": 1,
+    "b2_best_raw_edge": 0.0270392,
+    "b2_best_maker_edge": 0.027791,
+    "external_intelligence_status_at_snapshot": "COLLECTING_HISTORY"
+  },
+  "latest_live_smoke": {
+    "generated_ts": 1787602268,
+    "git_sha": "f6db4c4f7eda73568a03e465505d66b7570c77b9",
+    "submitted_or_production_bundles": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_net_pnl_usd": 0.0,
+    "oos_stressed_net_pnl_usd": 0.0,
+    "oos_eligible": false,
+    "b2_raw_positive": 3,
     "b2_maker_positive": 0,
-    "b2_best_raw_edge": 0.011648,
-    "b2_best_maker_edge": -0.000837611,
-    "external_intelligence_status_at_snapshot": "missing"
+    "b2_top_maker_edges": [
+      -0.00137746,
+      -0.00151983,
+      -0.0110329
+    ],
+    "terminal_tradable_markets": 1,
+    "terminal_candidates": 0,
+    "terminal_net_positive": 0
+  },
+  "cross_window_execution_stability": {
+    "family": "b2",
+    "older_window_generated_utc": "2026-08-24T19:35:34+00:00",
+    "older_window_maker_positive": 1,
+    "older_window_candidates": 7,
+    "newer_window_generated_ts": 1787602268,
+    "newer_window_maker_positive": 0,
+    "newer_window_candidates": 3,
+    "decision": "NOT_EVIDENCE_READY",
+    "interpretation": "a positive maker snapshot was not reproduced by the next fresh executable window; family-level opportunity presence is transient and cannot be treated as persistent alpha without candidate-level chronological survival and fills"
   },
   "fresh_external_intelligence": {
-    "generated_ts": 1787599010,
-    "generated_utc": "2026-08-24T19:16:50+00:00",
-    "accepted_signal_rows": 52,
-    "new_observations": 52,
-    "binance_rows": 48,
-    "gdelt_rows": 4,
-    "kalshi_markets": 2500,
-    "kalshi_matches": 0,
-    "polymarket_markets": 100,
+    "generated_utc": "2026-08-24T20:03:34+00:00",
+    "status": "COLLECTING_HISTORY",
+    "active_polymarket_markets": 100,
+    "new_observations": 50,
+    "stored_observations": 156,
+    "stored_price_snapshots": 300,
     "backtest_candidate_count": 0,
     "backtest_passing_candidates": 0,
-    "source_error_summary": {
-      "gdelt_http_429_rate_limits": true,
-      "polymarket_prices_history_http_400": true
-    },
-    "alpha_factory_interpretation": "collection is now fresh, but it supplies no passing external-alpha candidate; matching and source/data reliability remain LF research issues rather than evidence for promotion"
-  },
-  "current_execution_bottleneck_examples": {
-    "b1_best_maker_row": {
-      "raw_expected_edge": 0.0053866,
-      "maker_entry_net_edge": -0.00262469,
-      "execution_cost_wedge": 0.00801129,
-      "execution_cost_fraction_of_raw": 1.4872628374113541,
-      "cost_reduction_fraction_to_break_even": 0.32762389078413084,
-      "classification": "execution_cost_bound"
-    },
-    "b2_best_maker_row": {
-      "raw_expected_edge": 0.00153308,
-      "maker_entry_net_edge": -0.000837611,
-      "execution_cost_wedge": 0.002370691,
-      "execution_cost_fraction_of_raw": 1.5463583113731836,
-      "cost_reduction_fraction_to_break_even": 0.35331934866247855,
-      "classification": "execution_cost_bound"
-    },
-    "interpretation": "the least-bad current B1/B2 maker rows are not blocked by a production threshold; their estimated execution wedge already exceeds their raw signal edge"
+    "data_repair_pr": 122,
+    "alpha_factory_interpretation": "no external-alpha candidate is evidence-ready; source-contract and history-integrity work remains owned by LF research and the focused data-fix PR"
   },
   "recent_rejected_maker_sample": {
     "source": "b2",
@@ -81,18 +89,21 @@
     "stability": 0.967525
   },
   "forward_maker_calibration": {
-    "last_generated_ts": 1787597515,
-    "valid_sessions": 3,
-    "history_span_seconds": 2582,
-    "probes_per_policy": 42,
+    "last_generated_ts": 1787601677,
+    "valid_sessions": 6,
+    "history_span_seconds": 6744,
+    "probes_per_policy": 84,
     "join_pair_fills": 0,
     "improve1_pair_fills": 0,
     "fade1_pair_fills": 0,
-    "calibration_one_sided_95_pair_fill_upper": 0.060519193931140136,
-    "challenger_two_sided_95_pair_fill_upper": 0.08379879086570391,
+    "challenger_two_sided_95_pair_fill_upper": 0.04373172841465989,
+    "join_any_fills": 1,
+    "improve1_any_fills": 1,
+    "fade1_any_fills": 0,
     "join_total_pnl_ex_rewards_usd": -0.13894351315407616,
     "improve1_total_pnl_ex_rewards_usd": -0.13894351315407616,
-    "filled_share_weighted_markout_60_bid_per_share": -0.002,
+    "filled_share_weighted_markout_60_bid_per_share": -0.0020000000000000018,
+    "filled_share_weighted_markout_300_bid_per_share": null,
     "selected_policy_for_paper_shadow": null,
     "eligible_for_paper_shadow": false
   },
@@ -100,14 +111,21 @@
     "model": "q * maker_entry_net_edge + (1-q) * taker_net_edge",
     "assumption": "a failed paired maker entry is conservatively completed or rescued at current taker economics",
     "required_pair_fill_probability": 0.7180416164066091,
-    "challenger_two_sided_95_wilson_pair_fill_upper_bound": 0.08379879086570391,
-    "optimistic_expected_edge_at_challenger_upper_bound": -0.02939227129406429,
+    "challenger_two_sided_95_wilson_pair_fill_upper_bound": 0.04373172841465989,
+    "optimistic_expected_edge_at_challenger_upper_bound": -0.031249071122289303,
     "decision": "REJECT_CURRENT_MAKER_SAMPLE",
-    "reason": "three independent forward sessions now provide 42 probes per policy with zero paired fills; even the deliberately permissive two-sided 95% upper bound remains far below the 71.8% break-even hurdle"
+    "reason": "six independent forward sessions now provide 84 probes per policy with zero paired fills; even the deliberately permissive two-sided 95% upper bound is 4.37%, far below the 71.8% break-even hurdle"
+  },
+  "cross_venue_challenger": {
+    "research_pr": 120,
+    "state": "MORE_EVIDENCE_REQUIRED",
+    "alpha_factory_action": "observe_only",
+    "reason": "the dedicated research branch already owns cross-venue matching, settlement verification and cost-aware evaluation; synchronized live/replay, one-sided-fill stress and incremental portfolio utility are still missing, so duplicating that research here would reduce evidence quality"
   },
   "promotion_state": "MORE_EVIDENCE_REQUIRED",
-  "current_conclusion": "current B1/B2 opportunities are execution-cost-bound, the earlier positive-maker B2 sample is paired-fill-bound, fresh external collection has zero passing candidates, and realized OOS evidence is still absent",
+  "current_conclusion": "there is no stable executable alpha to promote: the apparent positive B2 maker window did not persist into the next fresh live smoke, paired maker execution remains 0/84 with negative one-sided evidence, external intelligence has no chronologically labeled candidate, and realized OOS evidence is still absent",
   "next_required_evidence": [
+    "candidate-level cross-window persistence on common identifiers rather than family-level snapshot positivity",
     "candidate-class-specific paired fill evidence across independent sessions",
     "60s and 300s fill-conditioned markouts",
     "realized adverse-selection and forced-completion costs",
@@ -119,6 +137,7 @@
     "revert research scorer changes if deterministic CI or research policy fails",
     "reject any candidate when current data health is stale or incomplete",
     "reject maker-dependent candidates when optimistic paired-fill feasibility is below break-even",
+    "reject snapshot-only positive maker edges that do not survive subsequent fresh executable windows",
     "keep incumbent V4 unchanged unless a future approved integration passes all existing promotion gates"
   ],
   "boundaries": {
