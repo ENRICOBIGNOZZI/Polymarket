@@ -14,8 +14,11 @@ on:
       - "scripts/paper_v4_loop.sh"
       - "config/all_market_engine.json"
       - "config/fast_arb_policy.json"
+      - "config/scheduler_registry.json"
       - "monitoring/**"
       - ".github/workflows/all-market-capacity.yml"
+  schedule:
+    - cron: "41 */6 * * *"
   workflow_dispatch:
 
 permissions:
