@@ -3,11 +3,14 @@ name: Polymarket Post-Merge Validation
 on:
   repository_dispatch:
     types: [champion-integration-merged]
+  schedule:
+    - cron: "1,11,21,31,41,51 * * * *"
   workflow_dispatch:
     inputs:
       expected_sha:
-        description: Exact main SHA to validate
-        required: true
+        description: Exact main SHA to validate; empty means reconcile current main
+        required: false
+        default: ""
         type: string
       pr_number:
         description: Source integration PR number
@@ -28,32 +31,71 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      EXPECTED_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || inputs.expected_sha }}
-      PR_NUMBER: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number || inputs.pr_number }}
+      REQUESTED_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || github.event_name == 'workflow_dispatch' && inputs.expected_sha || '' }}
+      PR_NUMBER: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number || github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || inputs.expected_sha }}
-          fetch-depth: 1
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve exact validation target
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main paper-validated
+          main_sha="$(git rev-parse origin/main)"
+          validated_sha="$(git rev-parse origin/paper-validated)"
+          expected_sha="${REQUESTED_SHA:-}"
+          validation_required=1
+          decision=explicit_dispatch
+
+          if [[ -z "$expected_sha" ]]; then
+            expected_sha="$main_sha"
+            if [[ "$main_sha" == "$validated_sha" ]]; then
+              validation_required=0
+              decision=no_unvalidated_main_revision
+            elif git merge-base --is-ancestor "$validated_sha" "$main_sha"; then
+              decision=scheduled_reconciliation
+            else
+              echo 'main and paper-validated have diverged' >&2
+              exit 1
+            fi
+          fi
+
+          [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]]
+          test "$main_sha" = "$expected_sha"
+          {
+            echo "EXPECTED_SHA=$expected_sha"
+            echo "VALIDATION_REQUIRED=$validation_required"
+          } >> "$GITHUB_ENV"
+
+          {
+            echo '# Post-merge validation reconciliation'
+            echo
+            echo "- event: \`$GITHUB_EVENT_NAME\`"
+            echo "- current main: \`$main_sha\`"
+            echo "- paper-validated: \`$validated_sha\`"
+            echo "- target revision: \`$expected_sha\`"
+            echo "- source PR: ${PR_NUMBER:-not supplied}"
+            echo "- decision: \`$decision\`"
+          } > post-merge-validation-report.md
 
       - name: Bind validation to exact main revision
+        if: env.VALIDATION_REQUIRED == '1'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --depth=1 origin "$EXPECTED_SHA"
+          git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
           test "$main_sha" = "$EXPECTED_SHA"
-          {
-            echo '# Post-merge validation dispatch'
-            echo
-            echo "- expected main revision: \`$EXPECTED_SHA\`"
-            echo "- source PR: ${PR_NUMBER:-not supplied}"
-          } > post-merge-validation-report.md
 
       - name: Dispatch specialized validation schedulers
+        if: env.VALIDATION_REQUIRED == '1'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -70,6 +112,12 @@ jobs:
             gh pr comment "$PR_NUMBER" --body \
               "Dedicated post-merge validation dispatched CI, monitoring and live-paper smoke for exact main revision \`$EXPECTED_SHA\`. Promotion remains incomplete until \`paper-validated\` and deployed HEAD reach this SHA."
           fi
+
+      - name: Record no-op reconciliation
+        if: env.VALIDATION_REQUIRED == '0'
+        shell: bash
+        run: |
+          echo '- no dispatch: current main is already paper-validated' >> post-merge-validation-report.md
 
       - name: Publish validation dispatch
         if: always()
