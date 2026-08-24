@@ -67,9 +67,10 @@ jobs:
             --config config/paper_v4.json --markets 400 --min-liquidity 100 --top 80 \
             | tee "$R/structural_latest.log" "$R/structural_latest.csv"
 
-          # B3 remains shadow-only: no intents, no reward accrual in PnL. The
-          # public reward endpoint is occasionally transient, so retry a bounded
-          # number of times but never hide a persistent failure.
+          # B3 remains shadow-only: it creates no broker intents and estimated
+          # rewards are never booked into paper PnL. Retry the public endpoint,
+          # but do not let a rewards-only outage block validation of the core
+          # recorder, alpha scanners, broker, risk and telemetry chain.
           : > "$R/reward_latest.log"
           reward_scan_ok=0
           for attempt in 1 2 3; do
@@ -88,12 +89,17 @@ jobs:
             printf 'reward_scan_retry=%s\n' "$attempt" | tee -a "$R/reward_latest.log"
             sleep $((attempt * 5))
           done
+          if [[ "$reward_scan_ok" == 1 && -s "$R/reward_opportunities.csv" ]]; then
+            python3 scripts/apply_reward_payout_floor.py \
+              --csv "$R/reward_opportunities.csv" --minimum-daily-payout-usd 1.0 \
+              | tee -a "$R/reward_latest.log"
+            printf 'reward_scan_status=available\n' | tee -a "$R/reward_latest.log"
+          else
+            : > "$R/reward_opportunities.csv"
+            printf 'reward_scan_status=unavailable_nonblocking sleeve=shadow_only intents=0 booked_pnl=0\n' \
+              | tee -a "$R/reward_latest.log"
+          fi
           cat "$R/reward_latest.log"
-          test "$reward_scan_ok" = 1
-          test -s "$R/reward_opportunities.csv"
-          python3 scripts/apply_reward_payout_floor.py \
-            --csv "$R/reward_opportunities.csv" --minimum-daily-payout-usd 1.0 \
-            | tee -a "$R/reward_latest.log"
 
           ./build/polymarket_stat_arb \
             --config config/paper_v4.json --markets 400 --history-universe 120 \
