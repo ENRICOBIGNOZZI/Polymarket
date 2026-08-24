@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Inventory the complete active Polymarket universe using keyset pagination.
+"""Inventory the active Polymarket universe with event-aware keyset pagination.
 
-This is deliberately public-data only. It creates a cheap Tier-0 inventory and
-liquidity-based Tier-1/Tier-2 views that downstream engines can refine with
-live spread/depth and model-specific requirements.
+The fast path uses ``/events/keyset`` because the endpoint returns up to 500
+open events per page and always includes their nested markets.  A bounded
+``/markets/keyset`` reconciliation sample remains available as an independent
+coverage check/fallback.  All data are public and this script never submits
+orders.
 """
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ import argparse
 import csv
 import json
 import os
+import sys
 import tempfile
 import time
 import urllib.parse
@@ -70,7 +73,7 @@ def string_list(value: Any) -> list[str]:
     return []
 
 
-def event_id(market: dict[str, Any]) -> str:
+def market_event_id(market: dict[str, Any], inherited_event_id: str = "") -> str:
     direct = str(market.get("eventId") or "")
     if direct:
         return direct
@@ -79,10 +82,17 @@ def event_id(market: dict[str, Any]) -> str:
         value = events[0].get("id")
         if value is not None:
             return str(value)
+    if inherited_event_id:
+        return inherited_event_id
     return str(market.get("conditionId") or market.get("id") or "")
 
 
-def normalized_market(market: dict[str, Any], tier1: float, tier2: float) -> dict[str, Any] | None:
+def normalized_market(
+    market: dict[str, Any],
+    tier1: float,
+    tier2: float,
+    inherited_event_id: str = "",
+) -> dict[str, Any] | None:
     active = truth(market.get("active"), True)
     closed = truth(market.get("closed"), False)
     enabled = truth(market.get("enableOrderBook"), True)
@@ -109,7 +119,7 @@ def normalized_market(market: dict[str, Any], tier1: float, tier2: float) -> dic
     return {
         "market_id": str(market.get("id") or ""),
         "condition_id": str(market.get("conditionId") or ""),
-        "event_id": event_id(market),
+        "event_id": market_event_id(market, inherited_event_id),
         "slug": str(market.get("slug") or ""),
         "question": str(market.get("question") or ""),
         "liquidity": liquidity,
@@ -126,7 +136,10 @@ def normalized_market(market: dict[str, Any], tier1: float, tier2: float) -> dic
 
 
 def fetch_json(url: str, timeout: float) -> dict[str, Any]:
-    request = urllib.request.Request(url, headers={"User-Agent": "polymarket-all-market-universe/1.0"})
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "polymarket-all-market-universe/2.0"},
+    )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = json.loads(response.read().decode("utf-8"))
     if not isinstance(payload, dict):
@@ -134,36 +147,53 @@ def fetch_json(url: str, timeout: float) -> dict[str, Any]:
     return payload
 
 
-def discover(base_url: str, page_size: int, tier1: float, tier2: float, limit: int, timeout: float) -> list[dict[str, Any]]:
+def _append_market(
+    rows: list[dict[str, Any]],
+    seen_markets: set[str],
+    market: dict[str, Any],
+    tier1: float,
+    tier2: float,
+    limit: int,
+    inherited_event_id: str = "",
+) -> bool:
+    row = normalized_market(market, tier1, tier2, inherited_event_id)
+    if not row or not row["market_id"] or row["market_id"] in seen_markets:
+        return False
+    seen_markets.add(str(row["market_id"]))
+    rows.append(row)
+    return limit > 0 and len(rows) >= limit
+
+
+def discover_markets_keyset(
+    base_url: str,
+    page_size: int,
+    tier1: float,
+    tier2: float,
+    limit: int,
+    timeout: float,
+) -> tuple[list[dict[str, Any]], int]:
     rows: list[dict[str, Any]] = []
     seen_markets: set[str] = set()
     seen_cursors: set[str] = set()
     cursor = ""
+    pages = 0
     while limit <= 0 or len(rows) < limit:
-        # Keep the cursor request deliberately minimal. Tradability is filtered
-        # below from the returned market object so API filter drift cannot shrink
-        # the research universe silently.
-        query = {
-            "closed": "false",
-            "limit": str(max(1, min(100, page_size))),
-        }
+        query = {"closed": "false", "limit": str(max(1, min(100, page_size)))}
         if cursor:
             query["after_cursor"] = cursor
         url = base_url.rstrip("/") + "/markets/keyset?" + urllib.parse.urlencode(query)
         payload = fetch_json(url, timeout)
+        pages += 1
         markets = payload.get("markets")
         if not isinstance(markets, list):
-            raise RuntimeError("keyset response has no markets array")
+            raise RuntimeError("markets keyset response has no markets array")
         for market in markets:
-            if not isinstance(market, dict):
-                continue
-            row = normalized_market(market, tier1, tier2)
-            if not row or not row["market_id"] or row["market_id"] in seen_markets:
-                continue
-            seen_markets.add(str(row["market_id"]))
-            rows.append(row)
-            if limit > 0 and len(rows) >= limit:
+            if isinstance(market, dict) and _append_market(
+                rows, seen_markets, market, tier1, tier2, limit
+            ):
                 break
+        if limit > 0 and len(rows) >= limit:
+            break
         next_cursor = str(payload.get("next_cursor") or "")
         if not next_cursor or next_cursor == cursor or next_cursor in seen_cursors:
             break
@@ -171,8 +201,153 @@ def discover(base_url: str, page_size: int, tier1: float, tier2: float, limit: i
         cursor = next_cursor
         if not markets:
             break
-    rows.sort(key=lambda row: (-int(row["tier"]), -float(row["liquidity"]), -float(row["volume24h"]), str(row["market_id"])))
-    return rows
+        if pages % 25 == 0:
+            print(
+                f"market_keyset_progress pages={pages} tradable_markets={len(rows)}",
+                file=sys.stderr,
+                flush=True,
+            )
+    return rows, pages
+
+
+def discover_events_keyset(
+    base_url: str,
+    page_size: int,
+    tier1: float,
+    tier2: float,
+    limit: int,
+    timeout: float,
+) -> tuple[list[dict[str, Any]], int, int]:
+    rows: list[dict[str, Any]] = []
+    seen_markets: set[str] = set()
+    seen_cursors: set[str] = set()
+    cursor = ""
+    pages = 0
+    events_seen = 0
+    while limit <= 0 or len(rows) < limit:
+        query = {"closed": "false", "limit": str(max(1, min(500, page_size)))}
+        if cursor:
+            query["after_cursor"] = cursor
+        url = base_url.rstrip("/") + "/events/keyset?" + urllib.parse.urlencode(query)
+        payload = fetch_json(url, timeout)
+        pages += 1
+        events = payload.get("events")
+        if not isinstance(events, list):
+            raise RuntimeError("events keyset response has no events array")
+        stop = False
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            events_seen += 1
+            inherited_event_id = str(event.get("id") or "")
+            markets = event.get("markets")
+            if not isinstance(markets, list):
+                continue
+            for market in markets:
+                if not isinstance(market, dict):
+                    continue
+                if _append_market(
+                    rows,
+                    seen_markets,
+                    market,
+                    tier1,
+                    tier2,
+                    limit,
+                    inherited_event_id,
+                ):
+                    stop = True
+                    break
+            if stop:
+                break
+        if stop:
+            break
+        next_cursor = str(payload.get("next_cursor") or "")
+        if not next_cursor or next_cursor == cursor or next_cursor in seen_cursors:
+            break
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+        if not events:
+            break
+        if pages % 5 == 0:
+            print(
+                f"event_keyset_progress pages={pages} events={events_seen} tradable_markets={len(rows)}",
+                file=sys.stderr,
+                flush=True,
+            )
+    return rows, pages, events_seen
+
+
+def discover(
+    base_url: str,
+    event_page_size: int,
+    market_page_size: int,
+    tier1: float,
+    tier2: float,
+    limit: int,
+    timeout: float,
+    source: str = "events",
+    reconcile_market_limit: int = 0,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if source == "markets":
+        rows, market_pages = discover_markets_keyset(
+            base_url, market_page_size, tier1, tier2, limit, timeout
+        )
+        return rows, {
+            "source": "markets_keyset",
+            "event_pages": 0,
+            "events_seen": 0,
+            "market_pages": market_pages,
+            "reconcile_markets": 0,
+            "reconcile_missing": 0,
+        }
+
+    rows, event_pages, events_seen = discover_events_keyset(
+        base_url, event_page_size, tier1, tier2, limit, timeout
+    )
+    if not rows:
+        fallback, market_pages = discover_markets_keyset(
+            base_url, market_page_size, tier1, tier2, limit, timeout
+        )
+        return fallback, {
+            "source": "markets_keyset_fallback",
+            "event_pages": event_pages,
+            "events_seen": events_seen,
+            "market_pages": market_pages,
+            "reconcile_markets": 0,
+            "reconcile_missing": 0,
+        }
+
+    market_pages = 0
+    reconcile_count = 0
+    reconcile_missing = 0
+    if reconcile_market_limit > 0:
+        sample, market_pages = discover_markets_keyset(
+            base_url,
+            market_page_size,
+            tier1,
+            tier2,
+            reconcile_market_limit,
+            timeout,
+        )
+        by_id = {str(row["market_id"]): row for row in rows}
+        reconcile_count = len(sample)
+        for row in sample:
+            market_id = str(row["market_id"])
+            if market_id not in by_id:
+                rows.append(row)
+                by_id[market_id] = row
+                reconcile_missing += 1
+
+    if limit > 0:
+        rows = rows[:limit]
+    return rows, {
+        "source": "events_keyset",
+        "event_pages": event_pages,
+        "events_seen": events_seen,
+        "market_pages": market_pages,
+        "reconcile_markets": reconcile_count,
+        "reconcile_missing": reconcile_missing,
+    }
 
 
 def atomic_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -215,7 +390,10 @@ def main() -> int:
     parser.add_argument("--gamma-url", default="https://gamma-api.polymarket.com")
     parser.add_argument("--output", type=Path, default=Path("runs/paper_v4_live/all_market/universe.csv"))
     parser.add_argument("--status", type=Path, default=Path("runs/paper_v4_live/all_market/universe_status.json"))
-    parser.add_argument("--page-size", type=int, default=100)
+    parser.add_argument("--source", choices=("events", "markets"), default="events")
+    parser.add_argument("--event-page-size", type=int, default=500)
+    parser.add_argument("--market-page-size", type=int, default=100)
+    parser.add_argument("--reconcile-market-limit", type=int, default=500)
     parser.add_argument("--tier1-min-liquidity", type=float, default=20.0)
     parser.add_argument("--tier2-min-liquidity", type=float, default=100.0)
     parser.add_argument("--limit", type=int, default=0, help="0 means all active tradable markets")
@@ -223,25 +401,38 @@ def main() -> int:
     args = parser.parse_args()
 
     generated = int(time.time())
-    rows = discover(
+    rows, discovery = discover(
         args.gamma_url,
-        args.page_size,
+        args.event_page_size,
+        args.market_page_size,
         args.tier1_min_liquidity,
         args.tier2_min_liquidity,
         args.limit,
         args.timeout,
+        source=args.source,
+        reconcile_market_limit=max(0, args.reconcile_market_limit),
+    )
+    rows.sort(
+        key=lambda row: (
+            -int(row["tier"]),
+            -float(row["liquidity"]),
+            -float(row["volume24h"]),
+            str(row["market_id"]),
+        )
     )
     atomic_csv(args.output, rows)
     counts = {str(tier): sum(int(row["tier"]) == tier for row in rows) for tier in range(3)}
     status = {
-        "schema": "polymarket_all_market_universe_v1",
+        "schema": "polymarket_all_market_universe_v2",
         "generated_ts": generated,
         "markets": len(rows),
         "tier0_only": counts["0"],
         "tier1": counts["1"] + counts["2"],
         "tier2": counts["2"],
         "limit": args.limit,
-        "page_size": max(1, min(100, args.page_size)),
+        "event_page_size": max(1, min(500, args.event_page_size)),
+        "market_page_size": max(1, min(100, args.market_page_size)),
+        **discovery,
     }
     atomic_json(args.status, status)
     print(json.dumps(status, sort_keys=True))
