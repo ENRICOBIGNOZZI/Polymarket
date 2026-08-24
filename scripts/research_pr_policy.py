@@ -41,6 +41,9 @@ LIVE_MODEL_SURFACE_PATTERNS = (
     re.compile(r"^scripts/build_v\d+_intents\.py$"),
     re.compile(r"^scripts/merge_v\d+_intents\.py$"),
     re.compile(r"^scripts/build_global_opportunity_book\.py$"),
+    re.compile(r"^scripts/filter_coherent_hedges\.py$"),
+    re.compile(r"^scripts/walk_forward_v\d+\.py$"),
+    re.compile(r"^scripts/runtime_action_report\.py$"),
     re.compile(r"^scripts/portfolio_supervisor\.py$"),
     re.compile(r"^scripts/(?:cross_venue_loop|prediction_market_system_loop)\.sh$"),
 )
