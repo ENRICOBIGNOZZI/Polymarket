@@ -53,6 +53,38 @@ def incumbent_fit(values: Sequence[float]) -> ReversionFit:
     return ReversionFit(gamma=gamma, phi=1.0 + gamma, iid_t=iid_t, observations=len(values))
 
 
+def _shape_ok(fit: ReversionFit) -> bool:
+    return fit.gamma < 0.0 and 0.02 < fit.phi < 0.999 and math.isfinite(fit.iid_t)
+
+
+def incumbent_mean_reversion_gate(
+    values: Sequence[float],
+    *,
+    min_iid_t: float = 1.75,
+    bucket_hours: float = 0.5,
+    max_half_life_hours: float = 168.0,
+    min_stability: float = 0.45,
+) -> bool:
+    """Reproduce the production B2 mean-reversion/stability gate on contiguous data."""
+    fit = incumbent_fit(values)
+    if not _shape_ok(fit) or fit.iid_t > -abs(min_iid_t):
+        return False
+
+    cut = len(values) // 2
+    if cut < 24 or len(values) - cut < 24:
+        return False
+    first = incumbent_fit(values[:cut])
+    second = incumbent_fit(values[cut:])
+    if not _shape_ok(first) or not _shape_ok(second):
+        return False
+    stability = math.exp(-4.0 * abs(first.phi - second.phi))
+    if stability < min_stability:
+        return False
+
+    half_life = -math.log(2.0) / math.log(fit.phi) * bucket_hours
+    return math.isfinite(half_life) and 0.0 < half_life <= max_half_life_hours
+
+
 def _default_block_length(n_differences: int) -> int:
     return max(4, min(32, int(round(max(1, n_differences) ** (1.0 / 3.0))) * 2))
 
@@ -118,7 +150,7 @@ def diagnose_reversion(
         block_length=block_length,
         seed=seed,
     )
-    shape_ok = fit.gamma < 0.0 and 0.02 < fit.phi < 0.999
+    shape_ok = _shape_ok(fit)
     incumbent_pass = shape_ok and fit.iid_t <= -abs(min_iid_t)
     bootstrap_pass = shape_ok and fit.iid_t <= critical
     return ReversionDiagnostic(
@@ -135,7 +167,7 @@ def diagnose_reversion(
 
 
 def synthetic_unit_root(*, seed: int = 51, n: int = 672, innovation_rho: float = 0.65) -> list[float]:
-    """Deterministic integrated fixture with serially correlated innovations."""
+    """Deterministic integrated fixture with optionally serially correlated innovations."""
     rng = random.Random(seed)
     innovation = 0.0
     values = [0.0]
@@ -152,6 +184,26 @@ def synthetic_stationary(*, seed: int = 1, n: int = 672, phi: float = 0.90) -> l
     for _ in range(1, n):
         values.append(phi * values[-1] + rng.gauss(0.0, 1.0))
     return values
+
+
+def unit_root_gate_false_positive_rate(
+    *, paths: int = 200, n: int = 672, innovation_rho: float = 0.65
+) -> dict[str, float | int]:
+    """Measure how often the full incumbent MR gate admits deterministic unit-root fixtures."""
+    if paths < 1:
+        raise ValueError("paths must be positive")
+    passed = 0
+    for seed in range(paths):
+        if incumbent_mean_reversion_gate(
+            synthetic_unit_root(seed=seed, n=n, innovation_rho=innovation_rho)
+        ):
+            passed += 1
+    return {
+        "paths": paths,
+        "passed": passed,
+        "rate": passed / paths,
+        "innovation_rho": innovation_rho,
+    }
 
 
 def main() -> int:
@@ -175,6 +227,8 @@ def main() -> int:
         block_length=args.block_length,
         seed=args.seed,
     )
+    serial_null_ensemble = unit_root_gate_false_positive_rate(innovation_rho=0.65)
+    iid_null_ensemble = unit_root_gate_false_positive_rate(innovation_rho=0.0)
     payload = {
         "research_state": "MORE_EVIDENCE_REQUIRED",
         "production_contract": {
@@ -187,6 +241,15 @@ def main() -> int:
         },
         "unit_root_fixture": asdict(unit_root),
         "stationary_positive_control": asdict(stationary),
+        "full_incumbent_gate_unit_root_ensemble": {
+            "serial_innovations": serial_null_ensemble,
+            "iid_innovations": iid_null_ensemble,
+            "interpretation": (
+                "These deterministic Monte Carlo fixtures include the incumbent full-sample t cutoff, "
+                "half-sample sign/stability filter and 168h half-life bound. They diagnose test-size risk; "
+                "they are not a calibrated estimate of live Polymarket false discoveries."
+            ),
+        },
         "required_next_evidence": [
             "run the incumbent and a robust unit-root/stationarity gate on identical chronological B2 residual histories",
             "use event/time-clustered or block-resampled inference and correct for the candidate search multiplicity",
