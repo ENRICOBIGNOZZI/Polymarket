@@ -1,0 +1,111 @@
+{
+  "schema": "polymarket_alpha_factory_config_v1",
+  "paper_only": true,
+  "allow_authenticated_execution": false,
+  "allow_direct_champion_mutation": false,
+  "champion_manifest": "config/live_champion.json",
+  "telemetry": {
+    "live_smoke": "telemetry/latest-live-smoke.json",
+    "forward_maker": "telemetry/latest-forward-maker.json",
+    "forward_maker_history": "telemetry/forward-maker-history.jsonl",
+    "max_live_smoke_age_seconds": 10800,
+    "max_forward_age_seconds": 10800
+  },
+  "gates": {
+    "min_oos_trades": 30,
+    "max_drawdown": 0.10,
+    "min_profit_factor": 1.10,
+    "max_bootstrap_pvalue": 0.10,
+    "fdr_q": 0.10,
+    "min_active_folds": 2,
+    "min_positive_fold_fraction": 0.50,
+    "cost_stress_multipliers": [1.5, 2.0],
+    "min_shadow_runs": 24,
+    "min_shadow_pair_fills": 20,
+    "max_one_sided_fill_rate": 0.25,
+    "min_incremental_utility": 0.0,
+    "min_consecutive_passes": 3
+  },
+  "coordination": {
+    "max_dispatches_per_cycle": 3,
+    "dispatch_cooldown_seconds": 1800,
+    "workflows": {
+      "ci.yml": {
+        "name": "ci",
+        "requires_current_main": true,
+        "max_age_seconds": 0,
+        "dispatchable": true,
+        "priority": 10,
+        "dependencies": []
+      },
+      "monitoring.yml": {
+        "name": "monitoring",
+        "requires_current_main": true,
+        "max_age_seconds": 0,
+        "dispatchable": true,
+        "priority": 20,
+        "dependencies": []
+      },
+      "v4-live-smoke.yml": {
+        "name": "v4-live-paper-smoke",
+        "requires_current_main": true,
+        "max_age_seconds": 7200,
+        "dispatchable": true,
+        "priority": 30,
+        "dependencies": ["ci.yml", "monitoring.yml"]
+      },
+      "forward-maker-research.yml": {
+        "name": "forward-maker-alpha-research",
+        "requires_current_main": true,
+        "max_age_seconds": 5400,
+        "dispatchable": true,
+        "priority": 40,
+        "dependencies": ["ci.yml"]
+      },
+      "alpha-factory.yml": {
+        "name": "Polymarket Alpha Factory",
+        "requires_current_main": true,
+        "max_age_seconds": 10800,
+        "dispatchable": true,
+        "priority": 50,
+        "dependencies": ["v4-live-smoke.yml", "forward-maker-research.yml"]
+      },
+      "model-governance.yml": {
+        "name": "Polymarket System Watch - Model Governance",
+        "requires_current_main": true,
+        "max_age_seconds": 7200,
+        "dispatchable": true,
+        "priority": 60,
+        "dependencies": ["ci.yml", "monitoring.yml", "v4-live-smoke.yml"]
+      },
+      "server-health.yml": {
+        "name": "paper-server-health",
+        "requires_current_main": false,
+        "max_age_seconds": 7200,
+        "dispatchable": false,
+        "priority": 70,
+        "dependencies": []
+      },
+      "deploy-paper-server.yml": {
+        "name": "deploy-paper-server",
+        "requires_current_main": false,
+        "max_age_seconds": 0,
+        "dispatchable": false,
+        "priority": 80,
+        "dependencies": ["v4-live-smoke.yml"]
+      }
+    },
+    "allowlisted_dispatches": [
+      "ci.yml",
+      "monitoring.yml",
+      "v4-live-smoke.yml",
+      "forward-maker-research.yml",
+      "alpha-factory.yml",
+      "model-governance.yml"
+    ],
+    "forbidden_dispatches": [
+      "deploy-paper-server.yml",
+      "server-health.yml"
+    ]
+  }
+}
