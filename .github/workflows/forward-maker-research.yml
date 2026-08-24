@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - "scripts/forward_maker_probe.py"
+      - "scripts/hf_multileg_forward_probe.py"
       - "scripts/select_forward_candidates.py"
       - "scripts/finalize_forward_probe.py"
       - "scripts/calibrate_forward_maker.py"
@@ -14,6 +15,7 @@ on:
       - "src/rewards_scan.cpp"
       - "include/pm/rewards.hpp"
       - "tests/test_forward_maker_probe.py"
+      - "tests/test_hf_multileg_forward_probe.py"
       - "tests/test_forward_candidate_selection.py"
       - "tests/test_finalize_forward_probe.py"
       - "tests/test_calibrate_forward_maker.py"
@@ -24,6 +26,7 @@ on:
     branches: [main]
     paths:
       - "scripts/forward_maker_probe.py"
+      - "scripts/hf_multileg_forward_probe.py"
       - "scripts/select_forward_candidates.py"
       - "scripts/finalize_forward_probe.py"
       - "scripts/calibrate_forward_maker.py"
@@ -32,6 +35,7 @@ on:
       - "src/rewards_scan.cpp"
       - "include/pm/rewards.hpp"
       - "tests/test_forward_maker_probe.py"
+      - "tests/test_hf_multileg_forward_probe.py"
       - "tests/test_forward_candidate_selection.py"
       - "tests/test_finalize_forward_probe.py"
       - "tests/test_calibrate_forward_maker.py"
@@ -185,6 +189,50 @@ jobs:
             --bootstrap-block-sessions 4 \
             | tee "$R/forward_maker_calibration.log"
 
+      - name: Run B2 multi-leg forward execution experiment
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          R=forward_maker
+          live_endpoint="repos/${GITHUB_REPOSITORY}/contents/telemetry/latest-live-smoke.json"
+          gh api "${live_endpoint}?ref=telemetry" --jq .content \
+            | tr -d '\n' | base64 -d > "$R/latest-live-smoke.json"
+          test -s "$R/latest-live-smoke.json"
+
+          : > "$R/b2_history_existing.jsonl"
+          b2_history_endpoint="repos/${GITHUB_REPOSITORY}/contents/telemetry/forward-b2-multileg-history.jsonl"
+          gh api "${b2_history_endpoint}?ref=telemetry" --jq .content 2>/dev/null \
+            | tr -d '\n' | base64 -d > "$R/b2_history_existing.jsonl" 2>/dev/null || true
+
+          B2_DURATION=300
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then B2_DURATION=120; fi
+
+          python3 scripts/hf_multileg_forward_probe.py \
+            --live-smoke "$R/latest-live-smoke.json" \
+            --output "$R/b2_multileg_forward_probe.json" \
+            --csv "$R/b2_multileg_forward_probe.csv" \
+            --history-line "$R/b2_multileg_forward_history_line.jsonl" \
+            --candidates 3 --duration-seconds "$B2_DURATION" --poll-seconds 10 \
+            --policies join,improve1 \
+            --arrival-latencies-ms 250,500,750 \
+            --queue-multipliers 1,1.25,1.5,2 \
+            --max-notional 250 --max-leg-shares 100 \
+            | tee "$R/b2_multileg_forward_probe.log"
+
+          cat "$R/b2_history_existing.jsonl" "$R/b2_multileg_forward_history_line.jsonl" \
+            | tail -n 120 > "$R/forward-b2-multileg-history.jsonl"
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("forward_maker/forward-b2-multileg-history.jsonl")
+          lines = path.read_bytes().splitlines()
+          while len(lines) > 1 and sum(len(line) + 1 for line in lines) > 900_000:
+              lines.pop(0)
+          path.write_bytes((b"\n".join(lines) + b"\n") if lines else b"")
+          PY
+
       - name: Publish experiment summary
         if: always()
         shell: bash
@@ -196,9 +244,10 @@ jobs:
           tail -n 5 "$R/forward_candidate_selection.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           tail -n 5 "$R/forward_maker_probe.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           tail -n 5 "$R/forward_maker_calibration.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          tail -n 5 "$R/b2_multileg_forward_probe.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           if test -s "$R/forward_maker_probe.json"; then
-            echo '### Current session' >> "$GITHUB_STEP_SUMMARY"
+            echo '### Current complete-set session' >> "$GITHUB_STEP_SUMMARY"
             echo '```json' >> "$GITHUB_STEP_SUMMARY"
             python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
@@ -208,8 +257,29 @@ jobs:
           PY
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
+          if test -s "$R/b2_multileg_forward_probe.json"; then
+            echo '### Current B2 multi-leg execution session' >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          p = json.loads(Path("forward_maker/b2_multileg_forward_probe.json").read_text())
+          rows = p.get("results", [])
+          summary = {
+              "candidate_count": p.get("candidate_count"),
+              "definition_count": p.get("definition_count"),
+              "rows": len(rows),
+              "rows_with_any_fill": sum(int(x.get("filled_legs", 0)) > 0 for x in rows),
+              "full_completion_rows": sum(bool(x.get("full_completion")) for x in rows),
+              "best_completion": max((float(x.get("bundle_completion_fraction", 0.0)) for x in rows), default=0.0),
+              "max_forced_completion_cost_usd": max((float(x.get("force_completion_cost_usd", 0.0)) for x in rows), default=0.0),
+          }
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
           if test -s "$R/forward_maker_calibration.json"; then
-            echo '### Repeated-session calibration' >> "$GITHUB_STEP_SUMMARY"
+            echo '### Repeated-session complete-set calibration' >> "$GITHUB_STEP_SUMMARY"
             echo '```json' >> "$GITHUB_STEP_SUMMARY"
             cat "$R/forward_maker_calibration.json" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
@@ -226,6 +296,8 @@ jobs:
           test -s "$R/forward_maker_probe.json"
           test -s "$R/forward-maker-history.jsonl"
           test -s "$R/forward_maker_calibration.json"
+          test -s "$R/b2_multileg_forward_probe.json"
+          test -s "$R/forward-b2-multileg-history.jsonl"
 
           publish_file() {
             local local_path="$1"
@@ -260,6 +332,14 @@ jobs:
           publish_file "$R/forward_maker_calibration.json" \
             "telemetry/latest-forward-maker-calibration.json" \
             "Update empirical forward maker policy gate"
+
+          publish_file "$R/b2_multileg_forward_probe.json" \
+            "telemetry/latest-forward-b2-multileg.json" \
+            "Update latest B2 multi-leg forward execution evidence"
+
+          publish_file "$R/forward-b2-multileg-history.jsonl" \
+            "telemetry/forward-b2-multileg-history.jsonl" \
+            "Append bounded B2 multi-leg execution evidence"
 
       - name: Upload diagnostics
         if: always()
