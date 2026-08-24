@@ -5,6 +5,7 @@ on:
   workflow_run:
     workflows: ["deploy-paper-server"]
     types: [completed]
+    branches: [main]
   schedule:
     - cron: "23 * * * *"
 
