@@ -5,6 +5,7 @@
 #include <cctype>
 #include <ctime>
 #include <iomanip>
+#include <limits>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -63,6 +64,19 @@ std::vector<std::string> string_array(const json::object& o, const char* key) {
         for (const auto& x : v.as_array()) out.push_back(as_string(x));
     }
     return out;
+}
+
+std::string url_encode(const std::string& raw) {
+    std::ostringstream out;
+    out << std::uppercase << std::hex;
+    for (const unsigned char c : raw) {
+        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            out << static_cast<char>(c);
+        } else {
+            out << '%' << std::setw(2) << std::setfill('0') << static_cast<int>(c);
+        }
+    }
+    return out.str();
 }
 
 std::int64_t parse_time_value(const json::value& v) {
@@ -240,40 +254,48 @@ std::string trade_id(const RecentTrade& t) {
 PolymarketApi::PolymarketApi(Config cfg) : cfg_(std::move(cfg)) {}
 
 std::vector<Market> PolymarketApi::discover_markets(std::size_t limit, double min_liquidity) const {
-    const std::size_t requested = std::min<std::size_t>(limit, 2000);
+    const bool unbounded = limit == 0;
+    const std::size_t requested = unbounded ? std::numeric_limits<std::size_t>::max() : limit;
     const std::size_t page_size = std::clamp<std::size_t>(cfg_.gamma_page_size, 1, 100);
     std::vector<Market> out;
-    out.reserve(requested);
+    out.reserve(unbounded ? 4096 : requested);
     std::unordered_set<std::string> seen;
-    std::size_t offset = 0;
+    std::unordered_set<std::string> seen_cursors;
+    std::string cursor;
 
-    while (out.size() < requested && offset < 10000) {
+    while (out.size() < requested) {
         std::ostringstream u;
-        u << cfg_.gamma_url << "/markets?active=true&closed=false&limit=" << page_size
-          << "&offset=" << offset << "&order=liquidityNum&ascending=false"
+        u << cfg_.gamma_url << "/markets/keyset?closed=false&limit=" << page_size
+          << "&order=liquidity_num&ascending=false"
           << "&liquidity_num_min=" << std::setprecision(12) << min_liquidity;
+        if (!cursor.empty()) u << "&after_cursor=" << url_encode(cursor);
         const auto r = http_.get(u.str());
         if (r.status < 200 || r.status >= 300) {
-            throw std::runtime_error("Gamma markets HTTP " + std::to_string(r.status) + ": " + r.body.substr(0, 300));
+            throw std::runtime_error("Gamma markets keyset HTTP " + std::to_string(r.status) + ": " + r.body.substr(0, 300));
         }
         const auto root = json::parse(r.body);
-        const json::array* arr = nullptr;
-        if (root.is_array()) arr = &root.as_array();
-        else if (root.is_object()) {
-            auto it = root.as_object().find("markets");
-            if (it != root.as_object().end() && it->value().is_array()) arr = &it->value().as_array();
+        if (!root.is_object()) throw std::runtime_error("Unexpected Gamma markets keyset response");
+        const auto& object = root.as_object();
+        const auto markets_it = object.find("markets");
+        if (markets_it == object.end() || !markets_it->value().is_array()) {
+            throw std::runtime_error("Gamma markets keyset response has no markets array");
         }
-        if (!arr) throw std::runtime_error("Unexpected Gamma markets response");
-
-        for (const auto& v : *arr) {
+        const auto& arr = markets_it->value().as_array();
+        for (const auto& v : arr) {
             if (!v.is_object()) continue;
             if (auto m = parse_market_object(v.as_object(), min_liquidity)) {
                 if (seen.insert(m->id).second) out.push_back(std::move(*m));
                 if (out.size() >= requested) break;
             }
         }
-        if (arr->size() < page_size) break;
-        offset += page_size;
+        if (out.size() >= requested) break;
+        std::string next_cursor;
+        if (const auto cursor_it = object.find("next_cursor"); cursor_it != object.end()) {
+            next_cursor = as_string(cursor_it->value());
+        }
+        if (next_cursor.empty() || next_cursor == cursor || !seen_cursors.insert(next_cursor).second) break;
+        cursor = std::move(next_cursor);
+        if (arr.empty()) break;
     }
     return out;
 }
