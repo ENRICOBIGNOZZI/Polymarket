@@ -1,6 +1,28 @@
 ## What changes
 
-Describe the implementation and the economic/statistical object it estimates.
+Describe the implementation and the economic/statistical object it estimates or controls.
+
+## Lifecycle status
+
+Select exactly one primary status.
+
+- [ ] Normal feature, bug fix, execution/risk, documentation or infrastructure change
+- [ ] Research/experiment/diagnostic only — evidence source; close without direct merge
+- [ ] Shadow-only instrumentation — requires `shadow-isolated`
+- [ ] Approved research integration into the single champion — requires an `integration/*` branch plus `approved-for-integration` and `single-model-reviewed`
+
+## Research evidence
+
+Required for research, shadow and integration work.
+
+- Source research PR/branch/commit:
+- Hypothesis or measurement question:
+- Current champion baseline:
+- Candidate specification:
+- Common chronological sample / information set:
+- Executable-cost assumptions:
+- Normal and stressed result:
+- Decision: `REJECTED` / `MORE_EVIDENCE_REQUIRED` / `APPROVED_FOR_INTEGRATION` / `SHADOW_ONLY`
 
 ## Change type
 
@@ -17,16 +39,46 @@ Describe the implementation and the economic/statistical object it estimates.
 - [ ] Deterministic unit and mock integration tests pass
 - [ ] New behavior is covered by tests, or the limitation is documented
 - [ ] Live-data evidence is clearly separated from deterministic CI
-- [ ] Costs, spread, slippage, depth and uncertainty are handled at executable prices where relevant
+- [ ] Costs, spread, slippage, depth, queue/fill probability, latency, adverse selection, uncertainty and capital usage are handled at executable prices where relevant
+- [ ] Candidate and incumbent are compared on common chronological data without look-ahead or resolution leakage
+- [ ] Walk-forward/OOS and cost stress are reported when the change claims economic improvement
+
+## Single champion and model semantics
+
+Required for every approved integration.
+
+- [ ] The candidate is connected to the existing expert/signal/intent interfaces rather than left as a second complete live stack
+- [ ] There remains one model orchestrator/registry, one live config, one portfolio/risk allocator and one execution broker
+- [ ] Terminal probabilities are not confused with mark-to-market relative-value signals
+- [ ] Structural, external-information and execution estimates retain their correct economic meaning
+- [ ] Duplicated or superseded implementation, configuration, state and telemetry paths are removed or given a documented deletion condition
+- [ ] Incremental alpha is shown with an ablation against the incumbent champion
+- [ ] `config/live_champion.json` is unchanged, or its promotion change is explicit, reviewed and rollback-safe
+- [ ] The previous `paper-validated` revision remains the rollback target until post-merge live smoke succeeds
+
+## Shadow isolation
+
+Required when `shadow-isolated` is used.
+
+- [ ] Shadow outputs use separate files/state/telemetry
+- [ ] Shadow code cannot emit production intents or authenticated orders
+- [ ] Shadow estimates and hypothetical fills are not booked as realized PnL
+- [ ] Production thresholds, sizing, exposure, drawdown, kill switch and OOS gates are unchanged
+- [ ] Failure is visible but cannot corrupt or block the production decision path
+- [ ] Deterministic tests enforce the isolation boundary
 
 ## Model and execution boundaries
 
-- [ ] Terminal probabilities are not confused with mark-to-market relative-value signals
 - [ ] Paper fills are not presented as real fills
 - [ ] No authenticated order submission, wallet secret or credential is introduced
-- [ ] State persistence, restart behavior and kill-switch effects are considered
+- [ ] State persistence, restart behavior, reconciliation and kill-switch effects are considered
+- [ ] Model approval does not implicitly authorize real-money execution
 
-## Branch lifecycle
+## Branch lifecycle and post-merge verification
 
-- [ ] Reusable code should be merged; temporary experiments should record their result and close without merge
+- [ ] Unapproved research is on `research/*`, `experiment/*` or `diagnostic/*`, not directly on `main`
+- [ ] Approved research is consolidated on a fresh `integration/*` branch based on current `main`
+- [ ] The integration PR links its source evidence and can be squash-merged as one coherent champion change
+- [ ] CI, monitoring and live-paper smoke will be dispatched after an automation-token merge
+- [ ] Promotion is complete only after `main == paper-validated == deployed HEAD`
 - [ ] The head branch can be deleted after merge or closure
