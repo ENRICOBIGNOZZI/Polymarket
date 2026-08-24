@@ -1,0 +1,99 @@
+name: Polymarket Administrator Supervisor
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "3 * * * *"
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: polymarket-administrator-supervisor
+  cancel-in-progress: true
+
+jobs:
+  supervise:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate scheduler registry
+        run: >-
+          python3 scripts/validate_scheduler_registry.py
+          --root .
+          --registry config/scheduler_registry.json
+          --output scheduler-registry-report.md
+
+      - name: Collect control-plane state
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main paper-validated
+          main_sha="$(git rev-parse origin/main)"
+          validated_sha="$(git rev-parse origin/paper-validated)"
+          relation=diverged
+          if [[ "$main_sha" == "$validated_sha" ]]; then
+            relation=current
+          elif git merge-base --is-ancestor "$validated_sha" "$main_sha"; then
+            relation=pending_validation
+          fi
+
+          gh run list --limit 200 \
+            --json databaseId,workflowName,status,conclusion,headSha,event,createdAt,updatedAt,url \
+            > scheduler-runs.json
+          gh pr list --state open --base main --limit 100 \
+            --json number,title,url,headRefName,isDraft,labels,mergeStateStatus,statusCheckRollup,createdAt,updatedAt \
+            > scheduler-prs.json
+          gh api "repos/${GITHUB_REPOSITORY}/branches?per_page=100" > scheduler-branches.json
+
+          set +e
+          python3 scripts/admin_supervisor_report.py \
+            --registry config/scheduler_registry.json \
+            --runs scheduler-runs.json \
+            --prs scheduler-prs.json \
+            --branches scheduler-branches.json \
+            --manifest config/live_champion.json \
+            --main-sha "$main_sha" \
+            --validated-sha "$validated_sha" \
+            --validation-relation "$relation" \
+            --markdown administrator-report.md \
+            --json-output administrator-status.json
+          supervisor_rc=$?
+          set -e
+          echo "SUPERVISOR_RC=$supervisor_rc" >> "$GITHUB_ENV"
+
+      - name: Publish administrator report
+        if: always()
+        shell: bash
+        run: |
+          cat scheduler-registry-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          cat administrator-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      - name: Upload administrator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: administrator-supervisor-${{ github.run_id }}
+          path: |
+            scheduler-registry-report.md
+            administrator-report.md
+            administrator-status.json
+            scheduler-runs.json
+            scheduler-prs.json
+            scheduler-branches.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Fail on control-plane blocker
+        if: always() && env.SUPERVISOR_RC != '0'
+        run: exit 1
