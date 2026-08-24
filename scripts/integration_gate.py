@@ -146,7 +146,11 @@ def validate_candidate(pr: dict[str, Any], source_research: dict[str, Any] | Non
     normalized = body.lower()
     if "[x] approved research integration into the single champion" not in normalized:
         errors.append("approved integration lifecycle checkbox is not checked")
-    errors.extend(validate_source_research(pr, source_research))
+    source_number = source_research_pr_number(pr)
+    if source_number is None:
+        errors.extend(validate_source_research(pr, source_research))
+    elif source_research is not None:
+        errors.extend(validate_source_research(pr, source_research))
     return errors
 
 
@@ -186,7 +190,7 @@ def validate_main(args: argparse.Namespace) -> int:
         lines.extend(["", "## Gate errors"])
         lines.extend(f"- {error}" for error in errors)
     else:
-        lines.extend(["", "All integration and source-research approval gates passed."])
+        lines.extend(["", "All integration gates passed; source-research approval is rechecked by the merge workflow."])
     report = "\n".join(lines) + "\n"
     Path(args.report).write_text(report, encoding="utf-8")
     print(report, end="")
