@@ -152,6 +152,52 @@ def b2_rows(path: Path, max_trade: float) -> Iterable[dict[str, object]]:
         }
 
 
+def terminal_strategy(experts: str) -> str:
+    names: list[str] = []
+    for item in experts.split("|"):
+        name = item.split(":", 1)[0].strip().lower()
+        if name and name not in names:
+            names.append(name)
+    preferred = [name for name in ("external", "graph", "semantic", "pca", "micro") if name in names]
+    return "TERMINAL:" + "+".join(preferred or names or ["ensemble"])
+
+
+def terminal_rows(path: Path, max_trade: float) -> Iterable[dict[str, object]]:
+    """Expose the universal V4 fair-value engine as research candidates.
+
+    `signals.csv` already evaluates executable ask, protocol fee, slippage,
+    uncertainty and portfolio sizing. A terminal signal is marked eligible only
+    when the engine itself assigned positive desired notional; scan-only output
+    never bypasses the downstream broker.
+    """
+    for row in read_csv(path):
+        raw = fnum(row, "gross_edge")
+        net = fnum(row, "net_edge")
+        desired = max(0.0, fnum(row, "desired_notional"))
+        capital = min(max_trade, desired)
+        if raw <= 0.0 and net <= 0.0:
+            continue
+        market = text(row, "market_id")
+        side = text(row, "side")
+        experts = text(row, "experts")
+        eligible = net > 0.0 and capital > 0.0
+        yield {
+            "source": "terminal",
+            "strategy": terminal_strategy(experts),
+            "source_id": f"TERMINAL:{market}:{side}",
+            "event_id": f"TERMINAL:{market}",
+            "market_id": market,
+            "side": side,
+            "eligible": int(eligible),
+            "hard_arbitrage": 0,
+            "raw_edge": raw,
+            "net_edge": net,
+            "capital_required": capital,
+            "expected_profit": net * capital,
+            "legs": f"{market}:{side}:1",
+        }
+
+
 def score(candidate: dict[str, object]) -> float:
     net = float(candidate["net_edge"])
     raw = float(candidate["raw_edge"])
@@ -231,6 +277,7 @@ def main() -> int:
     candidates = list(fast_rows(args.run_root / "fast" / "fast_arb_latest.csv"))
     candidates += list(b1_rows(args.run_root / "stat_arb_pairs.csv", max_trade))
     candidates += list(b2_rows(args.run_root / "stat_arb_pca.csv", max_trade))
+    candidates += list(terminal_rows(args.run_root / "terminal" / "signals.csv", max_trade))
     candidates = deduplicate(candidates)
     candidates.sort(
         key=lambda row: (
@@ -251,7 +298,7 @@ def main() -> int:
     atomic_csv(output, selected)
     atomic_csv(eligible_output, eligible)
     status = {
-        "schema": "polymarket_global_opportunity_book_v1",
+        "schema": "polymarket_global_opportunity_book_v2",
         "generated_ts": int(time.time()),
         "candidate_limit": limit,
         "research_candidates": len(selected),
