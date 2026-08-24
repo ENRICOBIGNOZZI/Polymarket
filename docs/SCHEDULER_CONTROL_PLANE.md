@@ -144,7 +144,7 @@ When private deployment is explicitly disabled, the server evidence requirement 
 
 The trading architecture already separates probability estimation, executable trade decisions, portfolio/risk allocation and execution. The control plane mirrors that separation. Research evidence cannot become a trade merely because it compiles; integration cannot become production merely because it merges; deployment cannot select a different model; runtime supervision cannot rewrite the system it monitors.
 
-This design keeps the long-run objective intact: one powerful live champion containing complementary experts, with a single portfolio/risk layer and execution path, while each research and operational function evolves independently behind explicit interfaces. This matches the universal architecture's separation of probability estimation, trade decision, portfolio construction and execution. fileciteturn111file0
+This design keeps the long-run objective intact: one powerful live champion containing complementary experts, with a single portfolio/risk layer and execution path, while each research and operational function evolves independently behind explicit interfaces. This matches the universal architecture's separation of probability estimation, trade decision, portfolio construction and execution.
 
 ## Adding a scheduler
 
