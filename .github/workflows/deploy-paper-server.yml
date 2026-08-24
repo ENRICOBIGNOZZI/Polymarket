@@ -86,7 +86,7 @@ jobs:
               else
                 printf 'need_deploy=true\n'
               fi
-REMOTE
+          REMOTE
             )"
             printf '%s\n' "$state" | tee deploy-evidence.txt
             need_deploy="$(printf '%s\n' "$state" | sed -n 's/^need_deploy=//p' | tail -n 1)"
