@@ -34,6 +34,14 @@ class LFReversionSignificanceTests(unittest.TestCase):
         self.assertTrue(result.bootstrap_pass)
         self.assertLessEqual(result.iid_t, result.bootstrap_critical_5pct)
 
+    def test_full_incumbent_gate_has_material_unit_root_false_positive_rate(self) -> None:
+        serial = lf.unit_root_gate_false_positive_rate(paths=200, innovation_rho=0.65)
+        iid = lf.unit_root_gate_false_positive_rate(paths=200, innovation_rho=0.0)
+        self.assertEqual(serial["passed"], 29)
+        self.assertAlmostEqual(serial["rate"], 0.145)
+        self.assertEqual(iid["passed"], 83)
+        self.assertAlmostEqual(iid["rate"], 0.415)
+
     def test_bootstrap_is_deterministic(self) -> None:
         values = lf.synthetic_unit_root(seed=42)
         first = lf.diagnose_reversion(values, reps=199, block_length=12, seed=123)
