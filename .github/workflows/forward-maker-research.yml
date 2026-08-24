@@ -6,20 +6,24 @@ on:
     branches: [main]
     paths:
       - "scripts/forward_maker_probe.py"
+      - "scripts/select_forward_candidates.py"
       - "scripts/apply_reward_payout_floor.py"
       - "src/rewards_scan.cpp"
       - "include/pm/rewards.hpp"
       - "tests/test_forward_maker_probe.py"
+      - "tests/test_forward_candidate_selection.py"
       - "CMakeLists.txt"
       - ".github/workflows/forward-maker-research.yml"
   push:
     branches: [main]
     paths:
       - "scripts/forward_maker_probe.py"
+      - "scripts/select_forward_candidates.py"
       - "scripts/apply_reward_payout_floor.py"
       - "src/rewards_scan.cpp"
       - "include/pm/rewards.hpp"
       - "tests/test_forward_maker_probe.py"
+      - "tests/test_forward_candidate_selection.py"
       - "CMakeLists.txt"
       - ".github/workflows/forward-maker-research.yml"
   schedule:
@@ -59,12 +63,12 @@ jobs:
           R=forward_maker
           mkdir -p "$R"
 
-          DURATION=360
-          MARKETS=12
+          DURATION=480
+          MARKETS=15
           POLL=10
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            DURATION=90
-            MARKETS=6
+            DURATION=180
+            MARKETS=9
             POLL=10
           fi
 
@@ -81,8 +85,14 @@ jobs:
             --csv "$R/reward_opportunities.csv" --minimum-daily-payout-usd 1.0 \
             | tee -a "$R/reward_scan.log"
 
+          python3 scripts/select_forward_candidates.py \
+            --input "$R/reward_opportunities.csv" \
+            --output "$R/forward_candidates.csv" \
+            --markets "$MARKETS" \
+            | tee "$R/forward_candidate_selection.log"
+
           python3 scripts/forward_maker_probe.py \
-            --opportunities "$R/reward_opportunities.csv" \
+            --opportunities "$R/forward_candidates.csv" \
             --output "$R/forward_maker_probe.json" \
             --csv "$R/forward_maker_probe.csv" \
             --markets "$MARKETS" --duration-seconds "$DURATION" --poll-seconds "$POLL" \
@@ -120,6 +130,7 @@ jobs:
           echo '## Forward maker alpha experiment' >> "$GITHUB_STEP_SUMMARY"
           echo 'No orders are submitted. All policies are read-only counterfactuals.' >> "$GITHUB_STEP_SUMMARY"
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 5 "$R/forward_candidate_selection.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           tail -n 5 "$R/forward_maker_probe.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           if test -s "$R/forward_maker_probe.json"; then
