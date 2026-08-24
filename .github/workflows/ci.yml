@@ -68,7 +68,12 @@ jobs:
             ops/bootstrap_macos.sh ops/update_server_macos.sh ops/macos_service_control.sh \
             ops/install_autoupdate_macos.sh ops/finish_bootstrap_macos.sh \
             ops/apply_runtime_config_macos.sh
-          python3 -m py_compile scripts/multi_strategy_paper.py monitoring/exporter_v5.py
+          python3 -m py_compile \
+            scripts/multi_strategy_paper.py scripts/compact_strategy_logs.py \
+            monitoring/exporter_v5.py
           python3 -m json.tool config/paper_v5.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
-          python3 -m unittest tests/test_ops_macos.py tests/test_workflow_yaml_contracts.py -v
+          python3 -m unittest \
+            tests/test_compact_strategy_logs.py \
+            tests/test_ops_macos.py \
+            tests/test_workflow_yaml_contracts.py -v
