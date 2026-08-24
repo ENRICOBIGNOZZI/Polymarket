@@ -3,10 +3,20 @@ set -euo pipefail
 
 CONFIG="${1:-config/paper_v4.json}"
 RUN_ROOT="${2:-runs/paper_v4_live}"
-RECORDER_MARKETS="${V4_RECORDER_MARKETS:-600}"
+RECORDER_MARKETS="${V4_RECORDER_MARKETS:-1200}"
 RECORDER_BATCH="${V4_RECORDER_BATCH:-20}"
 RECORDER_LOOKBACK_SECONDS="${V4_RECORDER_LOOKBACK_SECONDS:-300}"
-mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/terminal"
+DISCOVERY_MARKETS="${V4_DISCOVERY_MARKETS:-3000}"
+B1_HISTORY_UNIVERSE="${V4_B1_HISTORY_UNIVERSE:-800}"
+B2_PCA_UNIVERSE="${V4_B2_PCA_UNIVERSE:-400}"
+SCANNER_TOP="${V4_SCANNER_TOP:-500}"
+MAX_CANDIDATE_BUNDLES="${V4_MAX_CANDIDATE_BUNDLES:-500}"
+STAT_INTERVAL_SECONDS="${V4_STAT_INTERVAL_SECONDS:-300}"
+MAKER_MARKETS="${V4_MAKER_MARKETS:-1000}"
+STRUCTURAL_MARKETS="${V4_STRUCTURAL_MARKETS:-3000}"
+REWARD_MARKETS="${V4_REWARD_MARKETS:-5000}"
+TERMINAL_MARKETS="${V4_TERMINAL_MARKETS:-1000}"
+mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/terminal" "$RUN_ROOT/all_market"
 
 filter_b2() {
   python3 scripts/filter_coherent_hedges.py \
@@ -18,7 +28,6 @@ filter_b2() {
 }
 
 rebuild_intents() {
-  # Never allow an earlier intent file to survive a failed refresh.
   rm -f "$RUN_ROOT/b1_intents.csv" "$RUN_ROOT/b2_intents.csv" "$RUN_ROOT/intents.csv"
   python3 scripts/build_v4_intents.py \
     --strategy B1 --input "$RUN_ROOT/stat_arb_pairs.csv" \
@@ -31,12 +40,10 @@ rebuild_intents() {
   python3 scripts/merge_v4_intents.py \
     --input "$RUN_ROOT/b1_intents.csv" --input "$RUN_ROOT/b2_intents.csv" \
     --output "$RUN_ROOT/intents.csv" --min-edge 0.001 \
-    --max-age-seconds 600 --max-bundles 20 \
+    --max-age-seconds 600 --max-bundles "$MAX_CANDIDATE_BUNDLES" \
     >> "$RUN_ROOT/intent_merge.log" 2>&1
 }
 
-# Restart is fail-closed. Scanner rows do not carry a trustworthy refresh time,
-# so an old alpha file must never be re-timestamped into a fresh broker intent.
 rm -f \
   "$RUN_ROOT/stat_arb_pairs.csv" \
   "$RUN_ROOT/stat_arb_pca_raw.csv" \
@@ -140,14 +147,24 @@ supervise_execution() {
 
 SUPERVISOR_PID=0
 SUPERVISOR_RESTARTS=0
+SIDECAR_PID=0
+SIDECAR_RESTARTS=0
 
 start_supervisor() {
   supervise_execution >> "$RUN_ROOT/runtime_supervisor.log" 2>&1 &
   SUPERVISOR_PID=$!
 }
 
+start_sidecar() {
+  bash scripts/all_market_sidecar.sh "$CONFIG" "$RUN_ROOT" \
+    >> "$RUN_ROOT/all_market/sidecar.log" 2>&1 &
+  SIDECAR_PID=$!
+}
+
 cleanup() {
+  if (( SIDECAR_PID > 0 )); then kill "$SIDECAR_PID" 2>/dev/null || true; fi
   if (( SUPERVISOR_PID > 0 )); then kill "$SUPERVISOR_PID" 2>/dev/null || true; fi
+  if (( SIDECAR_PID > 0 )); then wait "$SIDECAR_PID" 2>/dev/null || true; fi
   if (( SUPERVISOR_PID > 0 )); then wait "$SUPERVISOR_PID" 2>/dev/null || true; fi
 }
 
@@ -161,6 +178,7 @@ trap cleanup EXIT
 trap parent_shutdown INT TERM
 
 start_supervisor
+start_sidecar
 
 last_stat=0
 last_structural=0
@@ -180,25 +198,32 @@ while true; do
     start_supervisor
   fi
 
+  if ! kill -0 "$SIDECAR_PID" 2>/dev/null; then
+    wait "$SIDECAR_PID" 2>/dev/null || true
+    SIDECAR_RESTARTS=$((SIDECAR_RESTARTS + 1))
+    printf '%s,all_market_sidecar,restart,%s\n' "$(date +%s)" "$SIDECAR_RESTARTS" >> "$RUN_ROOT/runtime_supervisor_events.csv"
+    sleep 2
+    start_sidecar
+  fi
+
   ./build/polymarket_maker_paper \
-    --config "$CONFIG" --run-dir "$RUN_ROOT/maker" --markets 240 --min-liquidity 100 \
+    --config "$CONFIG" --run-dir "$RUN_ROOT/maker" --markets "$MAKER_MARKETS" --min-liquidity 100 \
     --min-edge 0.003 --max-order-usd 50 --ttl-seconds 300 --hold-seconds 180 \
     --adverse-selection-mult 0.50 --once >> "$RUN_ROOT/maker.log" 2>&1 || true
 
-  if (( now - last_stat >= 900 )); then
-    # Remove old alpha before scanning: scanner failure must mean no new intent.
+  if (( now - last_stat >= STAT_INTERVAL_SECONDS )); then
     rm -f "$RUN_ROOT/stat_arb_pairs.csv" "$RUN_ROOT/stat_arb_pca_raw.csv"
     ./build/polymarket_stat_arb \
-      --config "$CONFIG" --markets 600 --history-universe 160 \
+      --config "$CONFIG" --markets "$DISCOVERY_MARKETS" --history-universe "$B1_HISTORY_UNIVERSE" \
       --lookback-hours 336 --fidelity-minutes 30 --min-z 1.5 \
-      --max-half-life-hours 168 --top 60 \
+      --max-half-life-hours 168 --top "$SCANNER_TOP" \
       --csv "$RUN_ROOT/stat_arb_pairs.csv" \
       > "$RUN_ROOT/stat_arb_pairs_latest.log" \
       2> "$RUN_ROOT/stat_arb_pairs_errors.log" || true
     ./build/polymarket_pca_stat_arb \
-      --config "$CONFIG" --markets 600 --universe 120 \
+      --config "$CONFIG" --markets "$DISCOVERY_MARKETS" --universe "$B2_PCA_UNIVERSE" \
       --lookback-hours 336 --fidelity-minutes 30 --factors 3 --max-hedges 4 \
-      --min-z 1.5 --max-half-life-hours 168 --top 60 \
+      --min-z 1.5 --max-half-life-hours 168 --top "$SCANNER_TOP" \
       --csv "$RUN_ROOT/stat_arb_pca_raw.csv" \
       > "$RUN_ROOT/stat_arb_pca_latest.log" \
       2> "$RUN_ROOT/stat_arb_pca_errors.log" || true
@@ -209,18 +234,16 @@ while true; do
 
   if (( now - last_structural >= 300 )); then
     ./build/polymarket_negrisk_arb \
-      --config "$CONFIG" --markets 600 --min-liquidity 100 --top 60 \
+      --config "$CONFIG" --markets "$STRUCTURAL_MARKETS" --min-liquidity 20 --top "$SCANNER_TOP" \
       2> "$RUN_ROOT/structural_errors.log" \
       | tee "$RUN_ROOT/structural_latest.log" "$RUN_ROOT/structural_latest.csv" >/dev/null || true
     last_structural=$now
   fi
 
-  # B3 is diagnostic only. Rewards are not booked as paper PnL and no intent is
-  # sent to the broker until estimated shares are validated against real earnings.
   if (( now - last_rewards >= 300 )); then
     rm -f "$RUN_ROOT/reward_opportunities.csv"
     ./build/polymarket_rewards_scan \
-      --config "$CONFIG" --markets 2000 --top 80 \
+      --config "$CONFIG" --markets "$REWARD_MARKETS" --top 500 \
       --quote-shares 50 --max-notional 100 --improve-ticks 0 \
       --competition-multiplier 2.0 --reward-haircut 0.25 \
       --native-reward-unit-usd 1.0 --annual-capital-rate 0.20 \
@@ -239,7 +262,7 @@ while true; do
 
   if (( now - last_terminal >= 300 )); then
     ./build/polymarket_engine \
-      --config "$CONFIG" --once --scan-only --markets 240 --min-liquidity 100 \
+      --config "$CONFIG" --once --scan-only --markets "$TERMINAL_MARKETS" --min-liquidity 20 \
       --run-dir "$RUN_ROOT/terminal" \
       > "$RUN_ROOT/terminal_latest.log" \
       2> "$RUN_ROOT/terminal_errors.log" || true
