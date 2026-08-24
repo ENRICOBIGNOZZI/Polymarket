@@ -202,6 +202,17 @@ class AllMarketEngineTests(unittest.TestCase):
             self.assertEqual(rows[0]["eligible"], 1)
             self.assertAlmostEqual(float(rows[0]["net_edge"]), 0.015)
 
+    def test_terminal_strategy_only_names_active_experts(self):
+        experts = "micro:0.47:0.98|graph:0.44:0.0|semantic:0.52:0.13"
+        self.assertEqual(
+            book.terminal_strategy(experts, {"graph", "semantic", "external"}),
+            "TERMINAL:graph+semantic",
+        )
+        self.assertEqual(
+            book.terminal_strategy("micro:0.47:0.98|semantic:0.52:0.13", {"semantic"}),
+            "TERMINAL:semantic",
+        )
+
     def test_cpp_discovery_contract_is_keyset_and_unbounded_capable(self):
         source = (ROOT / "src" / "api.cpp").read_text(encoding="utf-8")
         self.assertIn('/markets/keyset?', source)
