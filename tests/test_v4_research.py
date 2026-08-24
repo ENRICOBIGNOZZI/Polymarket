@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "scripts" / "build_v4_intents.py"
 MERGE = ROOT / "scripts" / "merge_v4_intents.py"
 WF = ROOT / "scripts" / "walk_forward_v4.py"
+LF_DIAG = ROOT / "scripts" / "lf_sparse_factor_diagnostic.py"
 
 FIELDS = ["bundle_id","strategy","event_id","created_ts","mode","expected_edge","max_notional","market_id","side","weight","limit_price","execution_deadline_ts","hold_deadline_ts"]
 LEDGER = ["bundle_id","strategy","event_id","created_ts","closed_ts","status","expected_edge","max_notional","entry_cash","gross_pnl","fees","slippage","net_pnl","return_on_capital","fill_fraction","adverse_mark_pnl","abort_reason"]
@@ -45,7 +46,6 @@ class V4ResearchTests(unittest.TestCase):
                 w.writerow(dict(market="t",half_life_h=1.5,maker_entry_net_edge=.006,executable_notional=20,
                                 legs="t:NO:1|h1:YES:0.4|h2:NO:0.2",
                                 coherence_scope="same_event:1.0000:0|semantic:0.5000:3"))
-                # A profitable raw PCA row without a coherence certificate must never become an intent.
                 w.writerow(dict(market="raw",half_life_h=1.5,maker_entry_net_edge=.02,executable_notional=100,
                                 legs="raw:NO:1|unrelated:YES:0.4",coherence_scope=""))
             completed = subprocess.run([sys.executable, str(BUILD), "--strategy", "B2", "--input", str(b2_scan), "--output", str(b2_out),
@@ -72,6 +72,35 @@ class V4ResearchTests(unittest.TestCase):
                             "--now", "1800000000"], check=True, capture_output=True, text=True)
             self.assertEqual(list(csv.DictReader(out.open())), [])
 
+    def test_sparse_pairwise_factor_matrix_can_be_indefinite(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            panel, report = td / "panel.csv", td / "report.json"
+            with panel.open("w", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=["timestamp", "series", "value"])
+                w.writeheader()
+                ts = 0
+                for left, right, sign in (("A", "B", 1.0), ("A", "C", 1.0), ("B", "C", -1.0)):
+                    for i in range(30):
+                        value = 1.0 if i % 2 == 0 else -1.0
+                        w.writerow({"timestamp": ts, "series": left, "value": value})
+                        w.writerow({"timestamp": ts, "series": right, "value": sign * value})
+                        ts += 1
+            subprocess.run(
+                [sys.executable, str(LF_DIAG), "--input", str(panel), "--output", str(report), "--min-common", "24"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            result = json.loads(report.read_text(encoding="utf-8"))
+            self.assertTrue(result["pairwise_psd_defect"])
+            self.assertLess(result["pairwise_overlap"]["min_eigenvalue"], -0.90)
+            self.assertEqual(result["pairwise_overlap"]["negative_eigenvalues"], 1)
+            self.assertTrue(result["masked_gram_psd"])
+            self.assertGreaterEqual(result["masked_gram"]["min_eigenvalue"], -1e-9)
+            self.assertEqual(result["masked_gram"]["negative_eigenvalues"], 0)
+            self.assertFalse(result["production_change"])
+
     def test_merge_preserves_only_complete_fresh_bundles(self):
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
@@ -81,7 +110,6 @@ class V4ResearchTests(unittest.TestCase):
                 w = csv.DictWriter(f, fieldnames=FIELDS); w.writeheader()
                 for market, side in [("m1","YES"),("m2","NO")]:
                     w.writerow(dict(bundle_id="good",strategy="B1",event_id="e",created_ts=now-10,mode="MAKER",expected_edge=.004,max_notional=50,market_id=market,side=side,weight=1,limit_price=.4,execution_deadline_ts=now+100,hold_deadline_ts=now+500))
-                # Single-leg/malformed bundle must be rejected as incomplete.
                 w.writerow(dict(bundle_id="bad",strategy="B1",event_id="e",created_ts=now-10,mode="MAKER",expected_edge=.010,max_notional=50,market_id="m3",side="YES",weight=1,limit_price=.4,execution_deadline_ts=now+100,hold_deadline_ts=now+500))
             with b.open("w", newline="") as f:
                 csv.DictWriter(f, fieldnames=FIELDS).writeheader()
@@ -96,7 +124,6 @@ class V4ResearchTests(unittest.TestCase):
             w = csv.DictWriter(f, fieldnames=LEDGER); w.writeheader()
             for i in range(160):
                 capital = 100.0
-                # Deterministic but non-constant returns so SE/bootstrap are meaningful.
                 if positive:
                     net = 0.80 + (i % 5) * 0.08
                     gross, fees, slip = net + 0.20, 0.10, 0.10
