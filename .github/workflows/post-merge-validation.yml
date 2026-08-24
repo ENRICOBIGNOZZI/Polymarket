@@ -96,6 +96,7 @@ jobs:
 
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$checked_out_sha" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           if [[ "$decision" != "superseded_by_new_main" ]]; then
             test "$main_sha" = "$EXPECTED_SHA"
           fi
