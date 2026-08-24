@@ -23,6 +23,7 @@ REQUIRED_IDS = {
     "meta-supervisor",
     "fast-arb-shadow-research",
     "arb-theory-research",
+    "external-intelligence",
     "live-api-smoke",
 }
 
