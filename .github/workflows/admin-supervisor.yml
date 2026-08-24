@@ -31,6 +31,19 @@ jobs:
           --registry config/scheduler_registry.json
           --output scheduler-registry-report.md
 
+      - name: Validate and snapshot complete project context
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_project_context.py \
+            --root . \
+            --output project-context-validation.md
+          python3 scripts/project_context_snapshot.py \
+            --root . \
+            --manifest config/project_context.json \
+            --output-json project-context.json \
+            --output-markdown project-context.md
+
       - name: Collect control-plane state
         shell: bash
         env:
@@ -77,6 +90,10 @@ jobs:
         run: |
           cat scheduler-registry-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          cat project-context-validation.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          cat project-context.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat administrator-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
       - name: Upload administrator evidence
@@ -86,6 +103,9 @@ jobs:
           name: administrator-supervisor-${{ github.run_id }}
           path: |
             scheduler-registry-report.md
+            project-context-validation.md
+            project-context.md
+            project-context.json
             administrator-report.md
             administrator-status.json
             scheduler-runs.json
