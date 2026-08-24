@@ -6,6 +6,8 @@ RUN_ROOT="${2:-runs/paper_v4_live}"
 RECORDER_MARKETS="${V4_RECORDER_MARKETS:-600}"
 RECORDER_BATCH="${V4_RECORDER_BATCH:-20}"
 RECORDER_LOOKBACK_SECONDS="${V4_RECORDER_LOOKBACK_SECONDS:-300}"
+PORTFOLIO_GATE="${PORTFOLIO_GATE_FILE:-runs/supervisor/capital_limits.json}"
+PORTFOLIO_GATE_MAX_AGE="${PORTFOLIO_GATE_MAX_AGE_SECONDS:-30}"
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/terminal"
 
 filter_b2() {
@@ -33,6 +35,15 @@ rebuild_intents() {
     --output "$RUN_ROOT/intents.csv" --min-edge 0.001 \
     --max-age-seconds 600 --max-bundles 20 \
     >> "$RUN_ROOT/intent_merge.log" 2>&1
+
+  # The portfolio champion is authoritative for new exposure across engines.
+  # Missing/stale/malformed supervisor state atomically empties the intent file;
+  # existing broker positions remain managed by the incumbent execution loop.
+  python3 scripts/apply_portfolio_gate.py \
+    --input "$RUN_ROOT/intents.csv" --output "$RUN_ROOT/intents.csv" \
+    --gate "$PORTFOLIO_GATE" --engine alpha \
+    --max-age-seconds "$PORTFOLIO_GATE_MAX_AGE" \
+    >> "$RUN_ROOT/portfolio_gate.log" 2>&1
 }
 
 # Restart is fail-closed. Scanner rows do not carry a trustworthy refresh time,
