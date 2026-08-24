@@ -2,7 +2,8 @@
 set -euo pipefail
 
 APP_DIR="${POLYMARKET_APP_DIR:-$HOME/polymarket}"
-BRANCH="${POLYMARKET_BRANCH:-main}"
+LOCAL_BRANCH="${POLYMARKET_BRANCH:-main}"
+DEPLOY_REF="${POLYMARKET_DEPLOY_REF:-paper-validated}"
 
 log() { printf '[deploy] %s\n' "$*"; }
 fail() { printf '[deploy] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -13,19 +14,22 @@ fail() { printf '[deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 cd "$APP_DIR"
 OLD_SHA="$(git rev-parse HEAD)"
 
-log "Fetching origin/$BRANCH"
-git fetch origin "$BRANCH"
-NEW_SHA="$(git rev-parse "origin/$BRANCH")"
+log "Fetching origin/$LOCAL_BRANCH and validated ref origin/$DEPLOY_REF"
+git fetch origin "$LOCAL_BRANCH" "$DEPLOY_REF"
+MAIN_SHA="$(git rev-parse "origin/$LOCAL_BRANCH")"
+NEW_SHA="$(git rev-parse "origin/$DEPLOY_REF")"
+git merge-base --is-ancestor "$NEW_SHA" "$MAIN_SHA" || \
+  fail "$DEPLOY_REF ($NEW_SHA) is not an ancestor of $LOCAL_BRANCH ($MAIN_SHA)"
 
 if [[ "$OLD_SHA" == "$NEW_SHA" ]]; then
-  log "Already at $NEW_SHA"
+  log "Already at validated commit $NEW_SHA"
 else
-  log "Updating $OLD_SHA -> $NEW_SHA"
-  git checkout "$BRANCH"
+  log "Updating $OLD_SHA -> validated commit $NEW_SHA"
+  git checkout "$LOCAL_BRANCH"
   git reset --hard "$NEW_SHA"
 fi
 
-log "Building and validating new main"
+log "Building and validating paper-validated"
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel "$(nproc)"
 ctest --test-dir build --output-on-failure
@@ -46,4 +50,6 @@ curl -fsS http://127.0.0.1:9108/healthz >/dev/null
 curl -fsS http://127.0.0.1:9108/metrics | grep -q '^polymarket_runtime_info'
 
 printf 'deployed_sha=%s\n' "$NEW_SHA"
+printf 'validated_ref=%s\n' "$DEPLOY_REF"
+printf 'main_sha=%s\n' "$MAIN_SHA"
 printf 'previous_sha=%s\n' "$OLD_SHA"
