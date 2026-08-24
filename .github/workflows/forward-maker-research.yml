@@ -10,12 +10,16 @@ on:
       - "scripts/finalize_forward_probe.py"
       - "scripts/calibrate_forward_maker.py"
       - "scripts/apply_reward_payout_floor.py"
+      - "scripts/validate_scheduler_context.py"
+      - "config/scheduler_context.json"
+      - "docs/SCHEDULER_CONTEXT.md"
       - "src/rewards_scan.cpp"
       - "include/pm/rewards.hpp"
       - "tests/test_forward_maker_probe.py"
       - "tests/test_forward_candidate_selection.py"
       - "tests/test_finalize_forward_probe.py"
       - "tests/test_calibrate_forward_maker.py"
+      - "tests/test_scheduler_context.py"
       - "CMakeLists.txt"
       - ".github/workflows/forward-maker-research.yml"
   push:
@@ -26,12 +30,16 @@ on:
       - "scripts/finalize_forward_probe.py"
       - "scripts/calibrate_forward_maker.py"
       - "scripts/apply_reward_payout_floor.py"
+      - "scripts/validate_scheduler_context.py"
+      - "config/scheduler_context.json"
+      - "docs/SCHEDULER_CONTEXT.md"
       - "src/rewards_scan.cpp"
       - "include/pm/rewards.hpp"
       - "tests/test_forward_maker_probe.py"
       - "tests/test_forward_candidate_selection.py"
       - "tests/test_finalize_forward_probe.py"
       - "tests/test_calibrate_forward_maker.py"
+      - "tests/test_scheduler_context.py"
       - "CMakeLists.txt"
       - ".github/workflows/forward-maker-research.yml"
   schedule:
@@ -50,6 +58,17 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
+      - name: Load shared scheduler context
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_scheduler_context.py \
+            --context config/scheduler_context.json \
+            --scheduler-id forward-maker-research \
+            --output scheduler-context.md \
+            --output-json scheduler-context.json \
+            --github-env "$GITHUB_ENV"
 
       - name: Install dependencies
         run: |
@@ -71,10 +90,9 @@ jobs:
           set -euo pipefail
           R=forward_maker
           mkdir -p "$R"
+          cp scheduler-context.md "$R/scheduler-context.md"
+          cp scheduler-context.json "$R/scheduler-context.json"
 
-          # Reuse bounded public sufficient statistics. The raw per-market probe
-          # stays in the current run artifact; only compact policy/session totals
-          # are carried forward for inference.
           : > "$R/history_existing.jsonl"
           history_endpoint="repos/${GITHUB_REPOSITORY}/contents/telemetry/forward-maker-history.jsonl"
           gh api "${history_endpoint}?ref=telemetry" --jq .content 2>/dev/null \
@@ -147,9 +165,13 @@ jobs:
           from calibrate_forward_maker import compact_session
 
           payload = json.loads((root / "forward_maker_probe.json").read_text(encoding="utf-8"))
+          context = json.loads((root / "scheduler-context.json").read_text(encoding="utf-8"))
+          assert context["valid"] is True
+          assert context["scheduler_id"] == "forward-maker-research"
           payload["git_sha"] = "${{ github.sha }}"
           payload["github_run_id"] = "${{ github.run_id }}"
           compact = compact_session(payload)
+          compact["scheduler_context_sha256"] = context.get("context_sha256")
           (root / "forward_maker_history_line.jsonl").write_text(
               json.dumps(compact, separators=(",", ":")) + "\n",
               encoding="utf-8",
@@ -159,7 +181,6 @@ jobs:
           cat "$R/history_existing.jsonl" "$R/forward_maker_history_line.jsonl" \
             | tail -n 336 > "$R/forward-maker-history.jsonl"
 
-          # Keep the GitHub contents object below 900 kB even if schemas grow.
           python3 - <<'PY'
           from pathlib import Path
 
@@ -186,8 +207,10 @@ jobs:
         shell: bash
         run: |
           R=forward_maker
+          cat scheduler-context.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           echo '## Forward maker alpha experiment' >> "$GITHUB_STEP_SUMMARY"
           echo 'No orders are submitted. All policies are read-only counterfactuals.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'The maker sleeve is a microstructure/relative-value expert, not a terminal probability oracle.' >> "$GITHUB_STEP_SUMMARY"
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
           tail -n 5 "$R/forward_candidate_selection.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           tail -n 5 "$R/forward_maker_probe.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
