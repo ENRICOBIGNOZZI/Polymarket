@@ -1,0 +1,94 @@
+name: Finalize PR68 scheduler registry
+
+on:
+  push:
+    branches: [feature/alpha-factory-control-plane-v5-clean]
+    paths:
+      - ".github/workflows/pr68-finalize-registry.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr68-finalize-registry
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/alpha-factory-control-plane-v5-clean
+          fetch-depth: 0
+
+      - name: Synchronize validator and governance tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          validator_path = Path('scripts/validate_scheduler_registry.py')
+          validator = validator_path.read_text(encoding='utf-8')
+          marker = '    "paper-server-health",\n'
+          replacement = marker + '    "grafana-access",\n'
+          if '    "grafana-access",\n' not in validator:
+              if marker not in validator:
+                  raise SystemExit('validator insertion marker missing')
+              validator = validator.replace(marker, replacement, 1)
+          validator_path.write_text(validator, encoding='utf-8')
+
+          test_path = Path('tests/test_model_governance.py')
+          test = test_path.read_text(encoding='utf-8')
+          test_marker = '                "paper-server-health",\n'
+          test_replacement = test_marker + '                "grafana-access",\n'
+          if '                "grafana-access",\n' not in test:
+              if test_marker not in test:
+                  raise SystemExit('governance test insertion marker missing')
+              test = test.replace(test_marker, test_replacement, 1)
+          test_path.write_text(test, encoding='utf-8')
+
+          factory_path = Path('.github/workflows/alpha-factory.yml')
+          factory = factory_path.read_text(encoding='utf-8')
+          invariant = '          assert "deploy-paper-server.yml" not in cfg["coordination"]["allowlisted_dispatches"]\n'
+          extra = (
+              '          assert "model-governance.yml" not in cfg["coordination"]["workflows"]\n'
+              '          assert "research-policy.yml" in cfg["coordination"]["allowlisted_dispatches"]\n'
+          )
+          if extra not in factory:
+              if invariant not in factory:
+                  raise SystemExit('Alpha Factory invariant insertion marker missing')
+              factory = factory.replace(invariant, invariant + extra, 1)
+          factory_path.write_text(factory, encoding='utf-8')
+
+          Path('.github/workflows/pr68-finalize-registry.yml').unlink()
+          PY
+
+      - name: Validate complete control plane
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_scheduler_registry.py --root . --registry config/scheduler_registry.json
+          python3 -m unittest \
+            tests/test_model_governance.py \
+            tests/test_meta_supervisor.py \
+            tests/test_alpha_factory.py -v
+          python3 -m py_compile \
+            scripts/validate_scheduler_registry.py \
+            scripts/meta_supervisor.py \
+            scripts/alpha_factory.py
+          python3 -m json.tool config/scheduler_registry.json >/dev/null
+          python3 -m json.tool config/alpha_factory.json >/dev/null
+
+      - name: Commit synchronized contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Synchronize Grafana and Alpha Factory scheduler contracts"
+          git push origin HEAD:feature/alpha-factory-control-plane-v5-clean
