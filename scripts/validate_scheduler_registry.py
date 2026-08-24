@@ -43,6 +43,14 @@ def workflow_job_ids(path: Path) -> list[str]:
     return re.findall(r"(?m)^  ([A-Za-z0-9_-]+):\s*$", tail)
 
 
+def workflow_has_periodic_schedule(path: Path) -> bool:
+    text = path.read_text(encoding="utf-8")
+    return bool(
+        re.search(r"(?m)^  schedule:\s*$", text)
+        and re.search(r"(?m)^    - cron:\s*['\"]?[^'\"\n]+['\"]?\s*$", text)
+    )
+
+
 def load_registry(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
@@ -115,6 +123,8 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             errors.append(
                 f"{workflow} must contain exactly one job named {expected_job}; found {job_ids or 'none'}"
             )
+        if not workflow_has_periodic_schedule(path):
+            errors.append(f"{workflow} must define a periodic schedule/cron trigger")
         normalized.append(item)
 
     missing_ids = sorted(REQUIRED_IDS.difference(ids))
@@ -254,7 +264,12 @@ def render_report(items: list[dict[str, Any]], errors: list[str]) -> str:
         lines.extend(["", "## Errors"])
         lines.extend(f"- {error}" for error in errors)
     else:
-        lines.extend(["", "Registry and one-job-per-workflow contract are valid."])
+        lines.extend(
+            [
+                "",
+                "Registry and one-job-per-workflow contract are valid. Every registered scheduler has a periodic schedule trigger.",
+            ]
+        )
     return "\n".join(lines) + "\n"
 
 
