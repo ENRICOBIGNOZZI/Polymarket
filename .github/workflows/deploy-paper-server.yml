@@ -4,11 +4,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "12,42 * * * *"
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/deploy-paper-server.yml"
-      - "config/scheduler_registry.json"
   workflow_run:
     workflows: ["v4-live-paper-smoke"]
     types: [completed]
@@ -26,7 +21,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (
-        (github.event_name == 'schedule' || github.event_name == 'push') &&
+        github.event_name == 'schedule' &&
         vars.POLYMARKET_SERVER_DEPLOY == 'true'
       ) ||
       (
@@ -74,7 +69,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == "schedule" || "$GITHUB_EVENT_NAME" == "push" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
             state="$(
               ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
                 -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
