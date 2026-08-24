@@ -135,6 +135,38 @@ class AllMarketEngineTests(unittest.TestCase):
             self.assertEqual(candidates[0]["source_id"], "fast-1")
             self.assertTrue(all(float(row["raw_edge"]) > 0 for row in candidates))
 
+    def test_terminal_candidates_are_fresh_and_use_universal_experts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "signals.csv"
+            fields = [
+                "timestamp", "market_id", "slug", "side", "mid", "exec_price", "fair_side",
+                "fair_yes", "uncertainty", "fee_per_share", "slippage_per_share", "gross_edge",
+                "cost_adjusted_edge", "net_edge", "score", "desired_notional", "experts",
+            ]
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fields)
+                writer.writeheader()
+                writer.writerow({
+                    "timestamp": "900", "market_id": "old", "side": "YES", "gross_edge": "0.2",
+                    "net_edge": "0.1", "desired_notional": "100", "experts": "external:0.8:1",
+                })
+                writer.writerow({
+                    "timestamp": "1990", "market_id": "fresh", "side": "NO", "gross_edge": "0.02",
+                    "net_edge": "0.01", "desired_notional": "50",
+                    "experts": "micro:0.4:0.2|graph:0.45:0.9|semantic:0.43:0.3|external:0.42:0.7",
+                })
+                writer.writerow({
+                    "timestamp": "1995", "market_id": "fresh", "side": "NO", "gross_edge": "0.03",
+                    "net_edge": "0.015", "desired_notional": "60",
+                    "experts": "micro:0.4:0.2|graph:0.46:0.9|semantic:0.44:0.3|external:0.43:0.7",
+                })
+            rows = list(book.terminal_rows(path, 250.0, now_ts=2000, max_age_seconds=600))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["market_id"], "fresh")
+            self.assertEqual(rows[0]["strategy"], "TERMINAL:external+graph+semantic+micro")
+            self.assertEqual(rows[0]["eligible"], 1)
+            self.assertAlmostEqual(float(rows[0]["net_edge"]), 0.015)
+
     def test_cpp_discovery_contract_is_keyset_and_unbounded_capable(self):
         source = (ROOT / "src" / "api.cpp").read_text(encoding="utf-8")
         self.assertIn('/markets/keyset?', source)
