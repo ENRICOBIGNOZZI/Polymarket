@@ -28,6 +28,11 @@ int main() {
     assert(!pm::bundle_has_live_risk("CLOSED"));
     assert(!pm::bundle_has_live_risk("UNWOUND"));
 
+    assert(pm::bundle_requires_unmatched_risk_check("RESTING"));
+    assert(pm::bundle_requires_unmatched_risk_check("COMPLETE"));
+    assert(!pm::bundle_requires_unmatched_risk_check("ABORTING"));
+    assert(!pm::bundle_requires_unmatched_risk_check("CLOSED"));
+
     constexpr std::int64_t arrival = 1'000;
     constexpr std::int64_t cancel_effective = 1'500;
     assert(!pm::passive_buy_active_for_trade("RESTING", arrival, arrival, 0));
