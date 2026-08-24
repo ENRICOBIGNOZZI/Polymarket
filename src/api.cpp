@@ -266,7 +266,6 @@ std::vector<Market> PolymarketApi::discover_markets(std::size_t limit, double mi
     while (out.size() < requested) {
         std::ostringstream u;
         u << cfg_.gamma_url << "/markets/keyset?closed=false&limit=" << page_size
-          << "&order=liquidity_num&ascending=false"
           << "&liquidity_num_min=" << std::setprecision(12) << min_liquidity;
         if (!cursor.empty()) u << "&after_cursor=" << url_encode(cursor);
         const auto r = http_.get(u.str());
