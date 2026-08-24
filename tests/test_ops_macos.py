@@ -67,6 +67,11 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('org_role = Viewer', runtime)
         self.assertNotIn('org_role = Admin', runtime)
         self.assertIn(
+            'default_home_dashboard_path = $APP_DIR/monitoring/grafana/dashboards/polymarket-fast-paper.json',
+            runtime,
+        )
+        self.assertIn('missing fast paper Grafana dashboard', runtime)
+        self.assertNotIn(
             'default_home_dashboard_path = $APP_DIR/monitoring/grafana/dashboards/polymarket-latest.json',
             runtime,
         )
@@ -94,6 +99,10 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('polymarket-service-control restart', updater)
         self.assertIn('recorder_alive', updater)
         self.assertIn('broker_alive', updater)
+        self.assertIn('terminal_alive', updater)
+        self.assertIn('terminal_restarts', updater)
+        self.assertIn('terminal_pid', updater)
+        self.assertIn('[[ "$terminal_alive" == "1" ]] || return 1', updater)
         self.assertIn('deploy_ref=%s', updater)
         self.assertIn('validated=%s', updater)
         self.assertIn('origin_main=%s', updater)
@@ -112,6 +121,16 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('test "$status_ref" = "paper-validated"', health)
         self.assertIn('test "$status_validated" = "$validated_sha"', health)
         self.assertIn('up_to_date|deployed|repaired', health)
+        self.assertIn('terminal_alive', health)
+        self.assertIn('terminal_restarts', health)
+        self.assertIn('terminal_pid', health)
+        self.assertIn('test "$terminal_alive" = "1"', health)
+        self.assertIn('polymarket_terminal_state_present 1', health)
+        self.assertIn('terminal_pnl_usd', health)
+        self.assertIn('terminal_open_positions', health)
+        self.assertIn('terminal_fills_total', health)
+        self.assertIn('terminal_staleness_seconds', health)
+        self.assertIn("row.get('uid') == 'polymarket-fast-paper'", health)
 
         self.assertIn('Advance paper validated ref', smoke)
         self.assertIn('git/refs/heads/paper-validated', smoke)
@@ -155,6 +174,16 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('git merge-base --is-ancestor "$validated_sha" "$main_sha"', deploy)
         self.assertIn('paper-server-deploy-${{ github.run_id }}', deploy)
         self.assertNotIn('test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"', deploy)
+        self.assertIn('contents: write', deploy)
+        self.assertIn('Publish latest verified paper deploy', deploy)
+        self.assertIn('telemetry/latest-paper-deploy.json', deploy)
+        self.assertIn('runtime_verified', deploy)
+        self.assertIn('terminal_verified', deploy)
+        self.assertIn('grafana_fast_paper_verified', deploy)
+        self.assertIn('test "$server_head" = "$validated_sha"', deploy)
+        self.assertIn("grep -q '^polymarket_terminal_state_present 1'", deploy)
+        self.assertIn("grep -q 'polymarket-fast-paper'", deploy)
+        self.assertIn('test "$terminal_alive" = "1"', deploy)
 
         # Produce private health evidence immediately after deployment or a
         # successful Grafana access repair, as well as on the hourly schedule.
