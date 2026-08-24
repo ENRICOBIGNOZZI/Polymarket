@@ -5,6 +5,10 @@
   "universe": {
     "discovery_limit": 0,
     "refresh_seconds": 300,
+    "inventory_source": "events_keyset",
+    "event_page_size": 500,
+    "market_reconciliation_sample": 500,
+    "market_keyset_fallback": true,
     "tier0_min_liquidity": 0.0,
     "tier1_min_liquidity": 20.0,
     "tier2_min_liquidity": 100.0
