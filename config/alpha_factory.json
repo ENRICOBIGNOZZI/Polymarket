@@ -62,6 +62,22 @@
         "priority": 40,
         "dependencies": ["ci.yml"]
       },
+      "fast-arb-hourly.yml": {
+        "name": "Fast Arbitrage Hourly Shadow",
+        "requires_current_main": true,
+        "max_age_seconds": 7200,
+        "dispatchable": true,
+        "priority": 42,
+        "dependencies": ["ci.yml"]
+      },
+      "arb-theory-hourly.yml": {
+        "name": "Arbitrage Theory Hourly Research",
+        "requires_current_main": true,
+        "max_age_seconds": 7200,
+        "dispatchable": true,
+        "priority": 44,
+        "dependencies": ["fast-arb-hourly.yml"]
+      },
       "alpha-factory.yml": {
         "name": "Polymarket Alpha Factory",
         "requires_current_main": true,
@@ -70,20 +86,44 @@
         "priority": 50,
         "dependencies": ["v4-live-smoke.yml", "forward-maker-research.yml"]
       },
-      "model-governance.yml": {
-        "name": "Polymarket System Watch - Model Governance",
+      "research-queue.yml": {
+        "name": "Polymarket Research Queue",
+        "requires_current_main": true,
+        "max_age_seconds": 10800,
+        "dispatchable": true,
+        "priority": 55,
+        "dependencies": ["alpha-factory.yml"]
+      },
+      "admin-supervisor.yml": {
+        "name": "Polymarket Administrator Supervisor",
         "requires_current_main": true,
         "max_age_seconds": 7200,
         "dispatchable": true,
         "priority": 60,
-        "dependencies": ["ci.yml", "monitoring.yml", "v4-live-smoke.yml"]
+        "dependencies": ["ci.yml", "monitoring.yml", "v4-live-smoke.yml", "alpha-factory.yml"]
+      },
+      "integration-merge.yml": {
+        "name": "Polymarket Integration Merge",
+        "requires_current_main": true,
+        "max_age_seconds": 7200,
+        "dispatchable": false,
+        "priority": 70,
+        "dependencies": ["admin-supervisor.yml", "server-health.yml"]
+      },
+      "live-smoke.yml": {
+        "name": "live-api-smoke",
+        "requires_current_main": true,
+        "max_age_seconds": 28800,
+        "dispatchable": true,
+        "priority": 75,
+        "dependencies": []
       },
       "server-health.yml": {
         "name": "paper-server-health",
         "requires_current_main": false,
         "max_age_seconds": 7200,
         "dispatchable": false,
-        "priority": 70,
+        "priority": 80,
         "dependencies": []
       },
       "deploy-paper-server.yml": {
@@ -91,7 +131,7 @@
         "requires_current_main": false,
         "max_age_seconds": 0,
         "dispatchable": false,
-        "priority": 80,
+        "priority": 90,
         "dependencies": ["v4-live-smoke.yml"]
       }
     },
@@ -100,12 +140,19 @@
       "monitoring.yml",
       "v4-live-smoke.yml",
       "forward-maker-research.yml",
+      "fast-arb-hourly.yml",
+      "arb-theory-hourly.yml",
       "alpha-factory.yml",
-      "model-governance.yml"
+      "research-queue.yml",
+      "admin-supervisor.yml",
+      "live-smoke.yml"
     ],
     "forbidden_dispatches": [
       "deploy-paper-server.yml",
-      "server-health.yml"
+      "server-health.yml",
+      "integration-merge.yml",
+      "post-merge-validation.yml",
+      "research-policy.yml"
     ]
   }
 }
