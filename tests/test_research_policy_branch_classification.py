@@ -57,6 +57,25 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
         self.assertIn("unapproved model/runtime work", result.stdout)
         self.assertIn("scripts/paper_v4_loop.sh", result.stdout)
 
+    def test_feature_branch_cannot_hide_direct_model_source_change(self):
+        result = self.run_policy(
+            "feature/pca-residual-upgrade",
+            "Improve PCA stat-arb alpha and residual model signals.",
+            ["src/pca_stat_arb.cpp", "tests/test_v4_research.py"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unapproved model/runtime work", result.stdout)
+        self.assertIn("src/pca_stat_arb.cpp", result.stdout)
+
+    def test_feature_branch_cannot_hide_engine_strategy_change(self):
+        result = self.run_policy(
+            "feature/engine-opportunity-ranking",
+            "Change strategy opportunity ranking inside the portfolio engine.",
+            ["src/engine.cpp"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("src/engine.cpp", result.stdout)
+
     def test_opaque_alpha_bootstrap_cannot_hide_on_feature_branch(self):
         result = self.run_policy(
             "feature/hourly-alpha-council",
@@ -79,6 +98,15 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("shadow-isolated code cannot modify production", result.stdout)
+
+    def test_data_transport_fix_is_not_misclassified_as_model_work(self):
+        result = self.run_policy(
+            "fix/api-data-freshness",
+            "Fail stale shadow market data before accepting research evidence.",
+            ["src/http.cpp", "scripts/validate_fast_data_health.py"],
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("policy: `pass`", result.stdout)
 
     def test_normal_infrastructure_change_remains_allowed(self):
         result = self.run_policy(
