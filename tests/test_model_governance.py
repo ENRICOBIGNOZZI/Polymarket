@@ -131,6 +131,8 @@ class ModelGovernanceContractTest(unittest.TestCase):
                 "paper-server-deploy",
                 "paper-server-health",
                 "forward-maker-research",
+                "fast-arb-shadow-research",
+                "arb-theory-research",
                 "live-api-smoke",
             },
         )
