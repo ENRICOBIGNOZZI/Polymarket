@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Coherence gate for B2 PCA hedge baskets.
+"""Coherence gate for executable B2 PCA hedge baskets.
 
-The default mode remains fail-closed and only accepts same-event or strongly
-semantic hedge legs. The live aggressive paper runtime may explicitly enable a
-second, risk-controlled latent-factor lane. That lane never bypasses missing
-metadata and only admits baskets with bounded PCA hedge error, stable residual
-mean reversion, a material residual displacement, and (optionally) positive
-maker-entry economics.
+Rows are admitted when all hedge legs share an explicit event, a non-empty
+Polymarket category, or a meaningful text relation. The aggressive paper runtime
+may explicitly enable a second risk-controlled latent-factor lane. That lane
+never bypasses missing metadata and requires bounded hedge error, stable residual
+mean reversion, a material residual displacement and optional positive maker
+entry economics. Metadata failures remain fail-closed.
 """
 from __future__ import annotations
 
@@ -70,7 +70,6 @@ def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> 
 
 
 def initialise_fail_closed(output: Path, rejections: Path) -> None:
-    """Remove any previously executable B2 rows before touching external metadata."""
     write_csv(output, PCA_FIELDS + COHERENCE_FIELDS, [])
     write_csv(rejections, PCA_FIELDS + COHERENCE_FIELDS + REJECTION_FIELDS, [])
 
@@ -84,6 +83,10 @@ def tokens(meta: MarketMeta) -> set[str]:
     return out
 
 
+def normalized_category(value: str) -> str:
+    return " ".join(TOKEN_RE.findall(value.lower()))
+
+
 def relation(
     target: MarketMeta,
     hedge: MarketMeta,
@@ -92,10 +95,16 @@ def relation(
 ) -> tuple[str, float, int]:
     if target.event_id and target.event_id == hedge.event_id:
         return "same_event", 1.0, 0
+
     target_tokens, hedge_tokens = tokens(target), tokens(hedge)
     shared = len(target_tokens & hedge_tokens)
     union = len(target_tokens | hedge_tokens)
     score = shared / union if union else 0.0
+
+    target_category = normalized_category(target.category)
+    hedge_category = normalized_category(hedge.category)
+    if target_category and target_category == hedge_category:
+        return "same_category", max(0.50, score), shared
     if shared >= min_shared and score >= min_jaccard:
         return "semantic", score, shared
     return "unrelated", score, shared
@@ -110,6 +119,21 @@ def event_id_from_payload(payload: dict[str, Any]) -> str:
         for event in events:
             if isinstance(event, dict) and event.get("id") not in (None, ""):
                 return str(event["id"])
+    return ""
+
+
+def category_from_payload(payload: dict[str, Any]) -> str:
+    direct = payload.get("category") or payload.get("groupItemTitle")
+    if direct not in (None, ""):
+        return str(direct)
+    events = payload.get("events")
+    if isinstance(events, list):
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            value = event.get("category") or event.get("groupItemTitle")
+            if value not in (None, ""):
+                return str(value)
     return ""
 
 
@@ -157,7 +181,7 @@ def fetch_metadata(
 ) -> MarketMeta:
     url = gamma_url.rstrip("/") + "/markets/" + urllib.parse.quote(market_id, safe="")
     request = urllib.request.Request(
-        url, headers={"User-Agent": "polymarket-coherent-hedges/2"}
+        url, headers={"User-Agent": "polymarket-coherent-hedges/3"}
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = json.loads(response.read().decode("utf-8"))
@@ -168,7 +192,7 @@ def fetch_metadata(
         slug=str(payload.get("slug") or ""),
         question=str(payload.get("question") or ""),
         event_id=event_id_from_payload(payload),
-        category=str(payload.get("category") or ""),
+        category=category_from_payload(payload),
         fetched_ts=now,
     )
 
@@ -198,8 +222,8 @@ def main() -> int:
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--gamma-url", default="https://gamma-api.polymarket.com")
     parser.add_argument("--cache-ttl-seconds", type=int, default=21600)
-    parser.add_argument("--min-jaccard", type=float, default=0.25)
-    parser.add_argument("--min-shared-tokens", type=int, default=2)
+    parser.add_argument("--min-jaccard", type=float, default=0.08)
+    parser.add_argument("--min-shared-tokens", type=int, default=1)
     parser.add_argument("--timeout-seconds", type=float, default=8.0)
     parser.add_argument("--now", type=int, default=None)
     parser.add_argument("--allow-latent-factor", action="store_true")
