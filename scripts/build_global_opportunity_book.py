@@ -68,6 +68,30 @@ def read_csv(path: Path) -> list[dict[str, str]]:
         return []
 
 
+def active_experts_from_config(path: Path) -> set[str] | None:
+    """Return experts with positive base ensemble weight.
+
+    ``None`` means the config could not be read and preserves the diagnostic
+    labels rather than pretending to know which experts were active.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    weights = payload.get("expert_weights")
+    if not isinstance(weights, dict):
+        return None
+    active: set[str] = set()
+    for name, value in weights.items():
+        try:
+            weight = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(weight) and weight > 0.0:
+            active.add(str(name).strip().lower())
+    return active
+
+
 def fast_rows(path: Path) -> Iterable[dict[str, object]]:
     """Expose fast-layer observations without promoting passive fill assumptions.
 
@@ -169,17 +193,27 @@ def b2_rows(path: Path, max_trade: float) -> Iterable[dict[str, object]]:
         }
 
 
-def terminal_strategy(experts: str) -> str:
+def terminal_strategy(experts: str, active_experts: set[str] | None = None) -> str:
     names: list[str] = []
     for item in experts.split("|"):
         name = item.split(":", 1)[0].strip().lower()
-        if name and name not in names:
+        if not name:
+            continue
+        if active_experts is not None and name not in active_experts:
+            continue
+        if name not in names:
             names.append(name)
     preferred = [name for name in ("external", "graph", "semantic", "pca", "micro") if name in names]
     return "TERMINAL:" + "+".join(preferred or names or ["ensemble"])
 
 
-def terminal_rows(path: Path, max_trade: float, now_ts: int, max_age_seconds: int) -> Iterable[dict[str, object]]:
+def terminal_rows(
+    path: Path,
+    max_trade: float,
+    now_ts: int,
+    max_age_seconds: int,
+    active_experts: set[str] | None = None,
+) -> Iterable[dict[str, object]]:
     """Expose fresh universal V4 fair-value signals as research candidates.
 
     `signals.csv` already evaluates executable ask, protocol fee, slippage,
@@ -214,7 +248,7 @@ def terminal_rows(path: Path, max_trade: float, now_ts: int, max_age_seconds: in
         eligible = net > 0.0 and capital > 0.0
         yield {
             "source": "terminal",
-            "strategy": terminal_strategy(experts),
+            "strategy": terminal_strategy(experts, active_experts),
             "source_id": f"TERMINAL:{market}:{side}",
             "event_id": f"TERMINAL:{market}",
             "market_id": market,
@@ -292,6 +326,7 @@ def atomic_json(path: Path, payload: dict[str, object]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-root", type=Path, default=Path("runs/paper_v4_live"))
+    parser.add_argument("--config", type=Path, default=Path("config/paper_v4.json"))
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--eligible-output", type=Path, default=None)
     parser.add_argument("--status", type=Path, default=None)
@@ -307,12 +342,17 @@ def main() -> int:
     max_trade = max(0.0, args.max_trade_usd)
     now_ts = int(time.time())
     terminal_max_age = max(60, args.terminal_max_age_seconds)
+    active_experts = active_experts_from_config(args.config)
 
     candidates = list(fast_rows(args.run_root / "fast" / "fast_arb_latest.csv"))
     candidates += list(b1_rows(args.run_root / "stat_arb_pairs.csv", max_trade))
     candidates += list(b2_rows(args.run_root / "stat_arb_pca.csv", max_trade))
     candidates += list(terminal_rows(
-        args.run_root / "terminal" / "signals.csv", max_trade, now_ts, terminal_max_age
+        args.run_root / "terminal" / "signals.csv",
+        max_trade,
+        now_ts,
+        terminal_max_age,
+        active_experts,
     ))
     candidates = deduplicate(candidates)
     candidates.sort(
@@ -341,6 +381,7 @@ def main() -> int:
         "eligible_candidates": len(eligible),
         "hard_arbitrage_candidates": sum(int(row["hard_arbitrage"]) for row in eligible),
         "terminal_max_age_seconds": terminal_max_age,
+        "active_experts": sorted(active_experts) if active_experts is not None else [],
         "sources": {
             source: sum(str(row["source"]) == source for row in selected)
             for source in sorted({str(row["source"]) for row in selected})
