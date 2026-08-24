@@ -1,0 +1,95 @@
+{
+  "schema": "polymarket_hf_b2_execution_state_v1",
+  "generated_utc": "2026-08-24T20:11:08Z",
+  "evidence_state": "MORE_EVIDENCE_REQUIRED",
+  "source_live_smoke": {
+    "git_sha": "f6db4c4f7eda73568a03e465505d66b7570c77b9",
+    "generated_ts": 1787602268,
+    "coherent_b2_raw_positive": 3,
+    "coherent_b2_maker_positive": 0,
+    "admitted_intent_bundles": 0,
+    "runtime_multileg_bundles": 0,
+    "runtime_multileg_completed": 0,
+    "runtime_reserved_cash_usd": 0.0,
+    "rows": [
+      {
+        "market": "561237",
+        "raw_expected_edge": 0.000431948,
+        "maker_entry_net_edge": -0.00137746,
+        "taker_net_edge": -0.0054039,
+        "execution_cost_wedge_to_raw_ratio": 4.188948669747284,
+        "legs": 5
+      },
+      {
+        "market": "561239",
+        "raw_expected_edge": 0.000920365,
+        "maker_entry_net_edge": -0.00151983,
+        "taker_net_edge": -0.00562803,
+        "execution_cost_wedge_to_raw_ratio": 2.6513339816268546,
+        "legs": 5
+      },
+      {
+        "market": "559660",
+        "raw_expected_edge": 0.00342284,
+        "maker_entry_net_edge": -0.0110329,
+        "taker_net_edge": -0.0401194,
+        "execution_cost_wedge_to_raw_ratio": 4.223317479052483,
+        "legs": 5
+      }
+    ]
+  },
+  "forward_complete_set_calibration": {
+    "valid_sessions": 6,
+    "history_span_seconds": 6744,
+    "probes_per_policy": 84,
+    "join": {
+      "any_fills": 1,
+      "pair_fills": 0,
+      "pair_fill_rate_wilson_upper": 0.031203811732381456,
+      "one_sided_given_any_fill_rate": 1.0,
+      "total_pnl_ex_rewards_usd": -0.13894351315407616,
+      "filled_share_weighted_markout_60_bid_per_share": -0.0020000000000000018,
+      "eligible_for_paper_shadow": false
+    },
+    "improve1": {
+      "any_fills": 1,
+      "pair_fills": 0,
+      "pair_fill_rate_wilson_upper": 0.031203811732381456,
+      "one_sided_given_any_fill_rate": 1.0,
+      "total_pnl_ex_rewards_usd": -0.13894351315407616,
+      "filled_share_weighted_markout_60_bid_per_share": -0.0020000000000000018,
+      "eligible_for_paper_shadow": false
+    },
+    "fade1": {
+      "any_fills": 0,
+      "pair_fills": 0,
+      "pair_fill_rate_wilson_upper": 0.031203811732381456,
+      "total_pnl_ex_rewards_usd": 0.0,
+      "eligible_for_paper_shadow": false
+    }
+  },
+  "fast_shadow_reference": {
+    "observed_executable_maker_complete_set_rows": 92,
+    "hard_executable_rows": 0,
+    "completed_opportunity_lifetimes": 0,
+    "stress_bps": 10,
+    "stress_survival_rate": 0.98913,
+    "feed_latency_p99_ms_approx": 374.7,
+    "decision_latency_p99_us_approx": 86.6,
+    "research_ready": false,
+    "promotion_ready": false
+  },
+  "interpretation": {
+    "complete_set_evidence_transfer_to_b2_allowed": false,
+    "reason": "The existing forward-maker worker observes two-leg complete-set/reward quotes, while current B2 candidates are five-leg factor hedges. Fill, queue, latency and completion distributions must be measured on the actual B2 execution class.",
+    "next_experiment": "Forward-probe actual B2 legs on common chronological windows under 250/500/750ms arrival latency and 1x/1.25x/1.5x/2x queue stress while recording microprice, near-touch depth/imbalance, snapshot OFI, partial/full completion, forced-completion cost and 60s/300s markout."
+  },
+  "safety": {
+    "read_only": true,
+    "submitted_orders": 0,
+    "live_champion_changed": false,
+    "production_risk_changed": false,
+    "credentials_changed": false,
+    "real_money_execution_enabled": false
+  }
+}
