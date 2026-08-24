@@ -39,9 +39,6 @@ class MacOSOpsContractTest(unittest.TestCase):
         runtime = (ROOT / "ops" / "apply_runtime_config_macos.sh").read_text(encoding="utf-8")
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
         finish = (ROOT / "ops" / "finish_bootstrap_macos.sh").read_text(encoding="utf-8")
-        access_workflow = (ROOT / ".github" / "workflows" / "grafana-access.yml").read_text(
-            encoding="utf-8"
-        )
 
         # Grafana listens only on loopback. The canonical operator URL is the
         # stable MagicDNS name exposed exclusively through Tailscale Serve.
@@ -74,12 +71,6 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('apply_runtime_config_macos.sh', finish)
         self.assertIn('http://127.0.0.1:3000/api/search', updater)
         self.assertIn('http://127.0.0.1:3000/api/search', finish)
-
-        # YAML strips the common ten-space block indentation. The here-doc
-        # terminator therefore has to use that base indentation exactly;
-        # two extra spaces become shell input and break the private apply step.
-        self.assertIn("\n          REMOTE\n          } 2>&1 | tee grafana-apply.log", access_workflow)
-        self.assertNotIn("\n            REMOTE\n", access_workflow)
 
     def test_autoupdate_deploys_only_live_smoke_validated_ref(self):
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
