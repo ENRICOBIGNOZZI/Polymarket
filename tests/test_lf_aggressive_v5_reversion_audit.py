@@ -26,6 +26,8 @@ class AggressiveV5ReversionAuditTest(unittest.TestCase):
         self.assertLess(aggressive.min_transitions, incumbent.min_transitions)
         self.assertLess(aggressive.min_half, incumbent.min_half)
         self.assertGreater(aggressive.max_half_life_hours, incumbent.max_half_life_hours)
+        self.assertEqual(aggressive.min_t, 0.60)
+        self.assertEqual(aggressive.max_half_life_hours, 336.0)
 
     def test_unit_root_false_admission_rises_materially_at_48_points(self) -> None:
         rows = MODULE.summarize(200)["experiments"]
@@ -38,11 +40,11 @@ class AggressiveV5ReversionAuditTest(unittest.TestCase):
             if row["process"] == "unit_root" and row["length"] == 48 and row["innovation_rho"] == 0.65
         )
         self.assertEqual(iid["incumbent_pass"], 62)
-        self.assertEqual(iid["aggressive_pass"], 142)
+        self.assertEqual(iid["aggressive_pass"], 148)
         self.assertEqual(serial["incumbent_pass"], 19)
-        self.assertEqual(serial["aggressive_pass"], 69)
+        self.assertEqual(serial["aggressive_pass"], 77)
         self.assertGreater(iid["aggressive_rate"], 0.70)
-        self.assertGreater(serial["aggressive_rate"], 0.30)
+        self.assertGreater(serial["aggressive_rate"], 0.35)
 
     def test_relaxation_remains_large_on_long_paths(self) -> None:
         rows = MODULE.summarize(200)["experiments"]
@@ -59,9 +61,9 @@ class AggressiveV5ReversionAuditTest(unittest.TestCase):
             if row["process"] == "stationary_ar1" and row["length"] == 672
         )
         self.assertEqual(iid["incumbent_pass"], 79)
-        self.assertEqual(iid["aggressive_pass"], 157)
+        self.assertEqual(iid["aggressive_pass"], 163)
         self.assertEqual(serial["incumbent_pass"], 26)
-        self.assertEqual(serial["aggressive_pass"], 64)
+        self.assertEqual(serial["aggressive_pass"], 68)
         self.assertEqual(stationary["incumbent_pass"], 200)
         self.assertEqual(stationary["aggressive_pass"], 200)
 
