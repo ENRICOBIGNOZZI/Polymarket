@@ -106,16 +106,21 @@ jobs:
         run: |
           set -euo pipefail
           bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh \
+            scripts/paper_v5_aggressive_loop.sh \
             ops/bootstrap_server.sh ops/update_server.sh \
             ops/bootstrap_macos.sh ops/update_server_macos.sh ops/macos_service_control.sh \
             ops/install_autoupdate_macos.sh ops/finish_bootstrap_macos.sh \
             ops/apply_runtime_config_macos.sh
           python3 -m py_compile \
             scripts/multi_strategy_paper.py scripts/compact_strategy_logs.py \
+            scripts/aggressive_activity_guard.py scripts/sync_external_signals.py \
+            scripts/filter_coherent_hedges.py \
             scripts/project_context_snapshot.py scripts/validate_project_context.py \
             scripts/validate_scheduler_registry.py \
             monitoring/exporter_v5.py
           python3 -m json.tool config/paper_v5.json >/dev/null
+          python3 -m json.tool config/live_champion.json >/dev/null
+          python3 -m json.tool config/external_intelligence.json >/dev/null
           python3 -m json.tool config/project_context.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
           python3 scripts/validate_scheduler_registry.py \
