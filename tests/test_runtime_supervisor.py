@@ -19,13 +19,33 @@ class RuntimeSupervisorContractTest(unittest.TestCase):
         script = (ROOT / "scripts" / "paper_v4_loop.sh").read_text(encoding="utf-8")
         self.assertIn("start_recorder()", script)
         self.assertIn("start_broker()", script)
+        self.assertIn("start_terminal()", script)
         self.assertIn("runtime_supervisor.csv", script)
         self.assertIn("runtime_supervisor_events.csv", script)
         self.assertIn("recorder_alive", script)
         self.assertIn("broker_alive", script)
+        self.assertIn("terminal_alive", script)
         self.assertIn("recorder_restarts", script)
         self.assertIn("broker_restarts", script)
+        self.assertIn("terminal_restarts", script)
         self.assertIn('sleep 5', script)
+
+    def test_terminal_is_continuous_cost_aware_paper_not_scan_only(self):
+        script = (ROOT / "scripts" / "paper_v4_loop.sh").read_text(encoding="utf-8")
+        terminal = re.search(r"start_terminal\(\) \{(?P<body>.*?)\n  \}", script, re.DOTALL)
+        self.assertIsNotNone(terminal)
+        body = terminal.group("body")
+        self.assertIn("polymarket_engine", body)
+        self.assertIn("--paper", body)
+        self.assertIn("--loop", body)
+        self.assertNotIn("--scan-only", body)
+        self.assertNotIn("last_terminal", script)
+
+    def test_stat_arb_refresh_stays_inside_intent_freshness_window(self):
+        script = (ROOT / "scripts" / "paper_v4_loop.sh").read_text(encoding="utf-8")
+        self.assertIn("--max-age-seconds 600", script)
+        self.assertIn("now - last_stat >= 300", script)
+        self.assertNotIn("now - last_stat >= 900", script)
 
     def test_sigterm_handlers_cleanup_and_exit(self):
         script = (ROOT / "scripts" / "paper_v4_loop.sh").read_text(encoding="utf-8")
