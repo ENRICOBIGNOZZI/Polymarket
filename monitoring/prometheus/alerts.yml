@@ -164,3 +164,12 @@ groups:
         annotations:
           summary: V5 aggregate gross exposure exceeds its configured cap
           description: The capital-level allocator has breached the aggregate paper gross limit; new risk must remain blocked.
+
+      - alert: PolymarketV5LogCompactionStale
+        expr: (polymarket_log_compaction_state_present == 0) or (polymarket_log_compaction_success == 0) or (polymarket_log_compaction_staleness_seconds > 300)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: V5 bounded strategy-log compaction is missing, failed, or stale
+          description: Signal, arbitrage, and PCA-history retention has not completed successfully within five minutes; disk and Grafana performance require review.
