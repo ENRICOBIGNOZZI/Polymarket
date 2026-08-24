@@ -27,15 +27,37 @@ EXPECTED_SEPARATION = [
     "execution_and_reconciliation",
 ]
 EXPECTED_SCHEDULERS = {
-    "administrator-supervisor", "research-policy", "research-queue", "integration-merge",
-    "post-merge-validation", "code-validation", "monitoring-validation", "live-paper-validation",
-    "paper-server-deploy", "paper-server-health", "forward-maker-research",
-    "fast-arb-shadow-research", "arb-theory-research", "live-api-smoke",
+    "administrator-supervisor",
+    "research-policy",
+    "research-queue",
+    "integration-merge",
+    "post-merge-validation",
+    "code-validation",
+    "monitoring-validation",
+    "live-paper-validation",
+    "paper-server-deploy",
+    "paper-server-health",
+    "forward-maker-research",
+    "alpha-factory",
+    "meta-supervisor",
+    "fast-arb-shadow-research",
+    "arb-theory-research",
+    "live-api-smoke",
 }
-ALLOWED_PROFILES = {"supervisor", "policy", "research", "integration", "validation", "remote", "api"}
+ALLOWED_PROFILES = {
+    "supervisor",
+    "policy",
+    "research",
+    "integration",
+    "validation",
+    "remote",
+    "api",
+}
 
 
-def require_object(root: dict[str, Any], key: str, errors: list[str]) -> dict[str, Any]:
+def require_object(
+    root: dict[str, Any], key: str, errors: list[str]
+) -> dict[str, Any]:
     value = root.get(key)
     if not isinstance(value, dict):
         errors.append(f"{key} must be an object")
@@ -43,7 +65,12 @@ def require_object(root: dict[str, Any], key: str, errors: list[str]) -> dict[st
     return value
 
 
-def require_string(root: dict[str, Any], key: str, errors: list[str], expected: str | None = None) -> str:
+def require_string(
+    root: dict[str, Any],
+    key: str,
+    errors: list[str],
+    expected: str | None = None,
+) -> str:
     value = root.get(key)
     if not isinstance(value, str) or not value.strip():
         errors.append(f"{key} must be a non-empty string")
@@ -54,23 +81,37 @@ def require_string(root: dict[str, Any], key: str, errors: list[str], expected: 
 
 
 def canonical_json_bytes(data: dict[str, Any]) -> bytes:
-    return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return json.dumps(
+        data, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
 
 
-def validate_context(data: dict[str, Any], *, scheduler_id: str | None = None,
-                     server_host: str | None = None, server_user: str | None = None,
-                     server_port: str | None = None) -> list[str]:
+def validate_context(
+    data: dict[str, Any],
+    *,
+    scheduler_id: str | None = None,
+    server_host: str | None = None,
+    server_user: str | None = None,
+    server_port: str | None = None,
+) -> list[str]:
     errors: list[str] = []
     if data.get("schema_version") != 1:
         errors.append("schema_version must equal 1")
     require_string(data, "project", errors, "Polymarket")
 
     source = require_object(data, "source", errors)
-    require_string(source, "title", errors, "A Universal Quantitative Architecture for Polymarket")
+    require_string(
+        source,
+        "title",
+        errors,
+        "A Universal Quantitative Architecture for Polymarket",
+    )
     require_string(source, "date", errors, "2026-08-23")
 
     remote = require_object(data, "remote_runtime", errors)
-    require_string(remote, "access_path", errors, "GitHub Actions -> Tailscale -> SSH")
+    require_string(
+        remote, "access_path", errors, "GitHub Actions -> Tailscale -> SSH"
+    )
     require_string(remote, "host_variable", errors, "POLYMARKET_SERVER_HOST")
     require_string(remote, "default_host", errors, "100.104.183.109")
     require_string(remote, "user_variable", errors, "POLYMARKET_SERVER_USER")
@@ -78,11 +119,17 @@ def validate_context(data: dict[str, Any], *, scheduler_id: str | None = None,
     if remote.get("default_port") != 22:
         errors.append("remote_runtime.default_port must equal 22")
     require_string(remote, "port_variable", errors, "POLYMARKET_SERVER_PORT")
-    require_string(remote, "home_relative_repository_path", errors, "polymarket")
-    require_string(remote, "ssh_key_secret", errors, "POLYMARKET_SERVER_SSH_KEY")
+    require_string(
+        remote, "home_relative_repository_path", errors, "polymarket"
+    )
+    require_string(
+        remote, "ssh_key_secret", errors, "POLYMARKET_SERVER_SSH_KEY"
+    )
     require_string(remote, "tailscale_auth_secret", errors, "TS_AUTHKEY")
     require_string(remote, "deployment_ref", errors, "paper-validated")
-    require_string(remote, "live_champion_manifest", errors, "config/live_champion.json")
+    require_string(
+        remote, "live_champion_manifest", errors, "config/live_champion.json"
+    )
     if remote.get("server_alive_interval_seconds") != 30:
         errors.append("remote_runtime.server_alive_interval_seconds must equal 30")
     if remote.get("server_alive_count_max") != 3:
@@ -103,14 +150,24 @@ def validate_context(data: dict[str, Any], *, scheduler_id: str | None = None,
                 errors.append(f"resolved server port is outside 1..65535: {parsed_port}")
 
     architecture = require_object(data, "quantitative_architecture", errors)
-    require_string(architecture, "objective", errors,
-                   "Category-agnostic quantitative operation over all sufficiently liquid Polymarket markets.")
+    require_string(
+        architecture,
+        "objective",
+        errors,
+        "Category-agnostic quantitative operation over all sufficiently liquid Polymarket markets.",
+    )
     if set(architecture.get("universal_state", [])) != EXPECTED_STATE:
-        errors.append("quantitative_architecture.universal_state must contain the four canonical state blocks")
+        errors.append(
+            "quantitative_architecture.universal_state must contain the four canonical state blocks"
+        )
     if set(architecture.get("alpha_engines", [])) != EXPECTED_ENGINES:
-        errors.append("quantitative_architecture.alpha_engines must contain the five canonical experts")
+        errors.append(
+            "quantitative_architecture.alpha_engines must contain the five canonical experts"
+        )
     if architecture.get("separation") != EXPECTED_SEPARATION:
-        errors.append("quantitative_architecture.separation must preserve estimation, decision, risk and execution")
+        errors.append(
+            "quantitative_architecture.separation must preserve estimation, decision, risk and execution"
+        )
     ensemble = require_object(architecture, "ensemble", errors)
     require_string(ensemble, "type", errors, "adaptive_mixture_of_experts")
     if set(ensemble.get("outputs", [])) != {"fair_probability", "uncertainty"}:
@@ -121,9 +178,14 @@ def validate_context(data: dict[str, Any], *, scheduler_id: str | None = None,
     risk = require_object(architecture, "portfolio_and_risk", errors)
     if risk.get("maximum_drawdown_ratio") != 0.15:
         errors.append("portfolio_and_risk.maximum_drawdown_ratio must equal 0.15")
-    for flag in ("fractional_kelly", "gross_exposure_limit", "market_concentration_limit",
-                 "event_concentration_limit", "open_loss_budget",
-                 "drawdown_is_not_a_mathematical_guarantee"):
+    for flag in (
+        "fractional_kelly",
+        "gross_exposure_limit",
+        "market_concentration_limit",
+        "event_concentration_limit",
+        "open_loss_budget",
+        "drawdown_is_not_a_mathematical_guarantee",
+    ):
         if risk.get(flag) is not True:
             errors.append(f"portfolio_and_risk.{flag} must be true")
     mode = require_object(architecture, "operating_mode", errors)
@@ -145,21 +207,42 @@ def validate_context(data: dict[str, Any], *, scheduler_id: str | None = None,
             errors.append("scheduler_context has unknown assignments: " + ", ".join(extra))
     for item_id, profile in assignments.items():
         if profile not in ALLOWED_PROFILES:
-            errors.append(f"scheduler {item_id} has unsupported context profile {profile!r}")
+            errors.append(
+                f"scheduler {item_id} has unsupported context profile {profile!r}"
+            )
         if profile not in profiles:
             errors.append(f"missing scheduler profile description: {profile}")
-    if assignments.get("paper-server-deploy") != "remote" or assignments.get("paper-server-health") != "remote":
+    if (
+        assignments.get("paper-server-deploy") != "remote"
+        or assignments.get("paper-server-health") != "remote"
+    ):
         errors.append("deploy and health schedulers must use the remote profile")
+    if assignments.get("alpha-factory") != "research":
+        errors.append("alpha-factory must use the research profile")
+    if assignments.get("meta-supervisor") != "supervisor":
+        errors.append("meta-supervisor must use the supervisor profile")
     all_rules = contract.get("all")
-    if not isinstance(all_rules, list) or len(all_rules) < 6 or not all(isinstance(x, str) and x for x in all_rules):
+    if (
+        not isinstance(all_rules, list)
+        or len(all_rules) < 6
+        or not all(isinstance(item, str) and item for item in all_rules)
+    ):
         errors.append("scheduler_contract.all must contain the shared fail-closed rules")
     if scheduler_id is not None and scheduler_id not in assignments:
         errors.append(f"scheduler id is not assigned in context: {scheduler_id}")
 
     serialized = canonical_json_bytes(data).decode("utf-8")
-    for fragment in ("BEGIN OPENSSH PRIVATE KEY", "BEGIN RSA PRIVATE KEY", "BEGIN PRIVATE KEY", "ghp_", "github_pat_"):
+    for fragment in (
+        "BEGIN OPENSSH PRIVATE KEY",
+        "BEGIN RSA PRIVATE KEY",
+        "BEGIN PRIVATE KEY",
+        "ghp_",
+        "github_pat_",
+    ):
         if fragment in serialized:
-            errors.append(f"scheduler context contains forbidden credential material: {fragment}")
+            errors.append(
+                f"scheduler context contains forbidden credential material: {fragment}"
+            )
     return errors
 
 
@@ -174,16 +257,29 @@ def context_sha256(data: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_json_bytes(data)).hexdigest()
 
 
-def render_markdown(data: dict[str, Any], scheduler_id: str | None, errors: list[str]) -> str:
+def render_markdown(
+    data: dict[str, Any], scheduler_id: str | None, errors: list[str]
+) -> str:
     remote = data.get("remote_runtime", {}) if isinstance(data, dict) else {}
-    architecture = data.get("quantitative_architecture", {}) if isinstance(data, dict) else {}
+    architecture = (
+        data.get("quantitative_architecture", {}) if isinstance(data, dict) else {}
+    )
     contract = data.get("scheduler_contract", {}) if isinstance(data, dict) else {}
     assignments = contract.get("assignments", {}) if isinstance(contract, dict) else {}
     profile = assignments.get(scheduler_id, "not-selected") if scheduler_id else "not-selected"
-    mode = architecture.get("operating_mode", {}) if isinstance(architecture.get("operating_mode"), dict) else {}
-    risk = architecture.get("portfolio_and_risk", {}) if isinstance(architecture.get("portfolio_and_risk"), dict) else {}
+    mode = (
+        architecture.get("operating_mode", {})
+        if isinstance(architecture.get("operating_mode"), dict)
+        else {}
+    )
+    risk = (
+        architecture.get("portfolio_and_risk", {})
+        if isinstance(architecture.get("portfolio_and_risk"), dict)
+        else {}
+    )
     lines = [
-        "# Shared scheduler context", "",
+        "# Shared scheduler context",
+        "",
         f"- scheduler: `{scheduler_id or 'registry-wide'}`",
         f"- profile: `{profile}`",
         f"- context SHA256: `{context_sha256(data) if data else 'unavailable'}`",
@@ -193,7 +289,8 @@ def render_markdown(data: dict[str, Any], scheduler_id: str | None, errors: list
         f"- deployment ref: `{remote.get('deployment_ref', '?')}`",
         f"- live champion manifest: `{remote.get('live_champion_manifest', '?')}`",
         f"- research mode: `{mode.get('research_engine', '?')}`",
-        f"- maximum drawdown operating ratio: `{risk.get('maximum_drawdown_ratio', '?')}`", "",
+        f"- maximum drawdown operating ratio: `{risk.get('maximum_drawdown_ratio', '?')}`",
+        "",
         "The scheduler must preserve the universal state, five-expert architecture, executable-edge decision rule, portfolio/risk separation and paper-versus-authenticated-execution boundary.",
     ]
     if errors:
@@ -203,14 +300,18 @@ def render_markdown(data: dict[str, Any], scheduler_id: str | None, errors: list
     return "\n".join(lines) + "\n"
 
 
-def write_github_env(path: Path, data: dict[str, Any], scheduler_id: str | None) -> None:
+def write_github_env(
+    path: Path, data: dict[str, Any], scheduler_id: str | None
+) -> None:
     remote = data["remote_runtime"]
     architecture = data["quantitative_architecture"]
     assignments = data["scheduler_contract"]["assignments"]
     values = {
         "POLYMARKET_SCHEDULER_ID": scheduler_id or "registry-wide",
         "POLYMARKET_SCHEDULER_CONTEXT_SHA": context_sha256(data),
-        "POLYMARKET_SCHEDULER_CONTEXT_PROFILE": assignments.get(scheduler_id, "registry-wide"),
+        "POLYMARKET_SCHEDULER_CONTEXT_PROFILE": assignments.get(
+            scheduler_id, "registry-wide"
+        ),
         "POLYMARKET_REMOTE_REPO_REL": remote["home_relative_repository_path"],
         "POLYMARKET_DEPLOYMENT_REF": remote["deployment_ref"],
         "POLYMARKET_LIVE_CHAMPION_MANIFEST": remote["live_champion_manifest"],
@@ -218,7 +319,9 @@ def write_github_env(path: Path, data: dict[str, Any], scheduler_id: str | None)
         "POLYMARKET_REMOTE_USER_DEFAULT": remote["default_user"],
         "POLYMARKET_REMOTE_PORT_DEFAULT": str(remote["default_port"]),
         "POLYMARKET_RESEARCH_MODE": architecture["operating_mode"]["research_engine"],
-        "POLYMARKET_MAX_DRAWDOWN_RATIO": str(architecture["portfolio_and_risk"]["maximum_drawdown_ratio"]),
+        "POLYMARKET_MAX_DRAWDOWN_RATIO": str(
+            architecture["portfolio_and_risk"]["maximum_drawdown_ratio"]
+        ),
         "POLYMARKET_AUTHENTICATED_ORDER_SUBMISSION": "false",
     }
     with path.open("a", encoding="utf-8") as handle:
@@ -227,7 +330,9 @@ def write_github_env(path: Path, data: dict[str, Any], scheduler_id: str | None)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate and expose the shared Polymarket scheduler context")
+    parser = argparse.ArgumentParser(
+        description="Validate and expose the shared Polymarket scheduler context"
+    )
     parser.add_argument("--context", default="config/scheduler_context.json")
     parser.add_argument("--scheduler-id")
     parser.add_argument("--server-host")
@@ -239,8 +344,13 @@ def main() -> int:
     args = parser.parse_args()
     try:
         data = load_context(Path(args.context))
-        errors = validate_context(data, scheduler_id=args.scheduler_id, server_host=args.server_host,
-                                  server_user=args.server_user, server_port=args.server_port)
+        errors = validate_context(
+            data,
+            scheduler_id=args.scheduler_id,
+            server_host=args.server_host,
+            server_user=args.server_user,
+            server_port=args.server_port,
+        )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         data, errors = {}, [str(exc)]
     markdown = render_markdown(data, args.scheduler_id, errors)
@@ -251,16 +361,26 @@ def main() -> int:
         snapshot = {
             "schema_version": 1,
             "scheduler_id": args.scheduler_id or "registry-wide",
-            "profile": data.get("scheduler_contract", {}).get("assignments", {}).get(args.scheduler_id, "registry-wide") if data else "invalid",
+            "profile": (
+                data.get("scheduler_contract", {})
+                .get("assignments", {})
+                .get(args.scheduler_id, "registry-wide")
+                if data
+                else "invalid"
+            ),
             "context_sha256": context_sha256(data) if data else None,
             "valid": not errors,
             "errors": errors,
             "remote_runtime": data.get("remote_runtime", {}) if data else {},
-            "quantitative_architecture": data.get("quantitative_architecture", {}) if data else {},
+            "quantitative_architecture": (
+                data.get("quantitative_architecture", {}) if data else {}
+            ),
         }
         output_json = Path(args.output_json)
         output_json.parent.mkdir(parents=True, exist_ok=True)
-        output_json.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        output_json.write_text(
+            json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
     if args.github_env and data and not errors:
         write_github_env(Path(args.github_env), data, args.scheduler_id)
     print(markdown, end="")
