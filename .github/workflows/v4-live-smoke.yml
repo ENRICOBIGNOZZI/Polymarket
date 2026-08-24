@@ -43,7 +43,7 @@ jobs:
 
           ./build/polymarket_trade_recorder \
             --config config/paper_v4.json --run-dir "$R" \
-            --markets 240 --batch 40 --min-liquidity 100 --lookback-seconds 180 --once \
+            --markets 240 --batch 40 --min-liquidity 100 --lookback-seconds 900 --once \
             | tee "$R/trade_recorder_latest.log"
 
           ./build/polymarket_negrisk_arb \
@@ -99,10 +99,6 @@ jobs:
           Path('paper_v4_live/metrics.prom').write_text(text)
           PY
 
-          python3 scripts/summarize_live_smoke.py \
-            --run-root "$R" --output "$R/live_snapshot.json" \
-            --git-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID"
-
       - name: Advance paper validated ref
         if: github.event_name != 'pull_request'
         shell: bash
@@ -115,13 +111,53 @@ jobs:
             -f sha="$GITHUB_SHA" -F force=false >/dev/null
           echo "paper_validated_sha=$GITHUB_SHA"
 
+      - name: B1 shadow fillability diagnostic
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+          R=paper_v4_live
+          SH="$R/shadow_b1"
+          mkdir -p "$SH"
+
+          ./build/polymarket_stat_arb \
+            --config config/paper_v4.json --markets 400 --history-universe 120 \
+            --lookback-hours 336 --fidelity-minutes 30 --min-z 1.25 \
+            --max-half-life-hours 168 --top 80 --csv "$SH/stat_arb_pairs.csv" \
+            > "$SH/stat_arb_pairs_latest.log" 2> "$SH/stat_arb_pairs_errors.log" || true
+
+          python3 scripts/build_v4_intents.py --strategy B1 \
+            --input "$SH/stat_arb_pairs.csv" --output "$SH/b1_intents.csv" \
+            --config config/paper_v4.json --min-edge 0.001 \
+            > "$SH/intent_build.log" 2>&1 || true
+
+          python3 scripts/merge_v4_intents.py \
+            --input "$SH/b1_intents.csv" --output "$SH/intents.csv" \
+            --min-edge 0.001 --max-age-seconds 600 --max-bundles 10 \
+            > "$SH/intent_merge.log" 2>&1 || true
+
+          ./build/polymarket_multileg_paper \
+            --config config/paper_v4.json --run-dir "$SH" \
+            --intents "$SH/intents.csv" --trade-tape "$R/trade_tape.csv" \
+            --min-edge 0.001 --completion-threshold 0.95 --submit-latency-ms 250 --cancel-latency-ms 250 \
+            --max-replaces 3 --max-leg-risk-usd 5 --adverse-horizon-seconds 60 --once \
+            > "$SH/multileg_latest.log" 2> "$SH/multileg_errors.log" || true
+
+      - name: Build public telemetry snapshot
+        if: always()
+        shell: bash
+        run: |
+          python3 scripts/summarize_live_smoke.py \
+            --run-root paper_v4_live --output paper_v4_live/live_snapshot.json \
+            --git-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID"
+
       - name: Publish live summary
         if: always()
         shell: bash
         run: |
           R=paper_v4_live
           echo '## V4 live paper smoke' >> "$GITHUB_STEP_SUMMARY"
-          for f in "$R/trade_recorder_latest.log" "$R/structural_latest.log" "$R/stat_arb_pairs_latest.log" "$R/stat_arb_pca_latest.log" "$R/multileg_latest.log" "$R/maker_latest.log" "$R/terminal_latest.log"; do
+          for f in "$R/trade_recorder_latest.log" "$R/structural_latest.log" "$R/stat_arb_pairs_latest.log" "$R/stat_arb_pca_latest.log" "$R/multileg_latest.log" "$R/maker_latest.log" "$R/terminal_latest.log" "$R/shadow_b1/stat_arb_pairs_latest.log" "$R/shadow_b1/multileg_latest.log"; do
             echo "### $f" >> "$GITHUB_STEP_SUMMARY"
             echo '```text' >> "$GITHUB_STEP_SUMMARY"
             tail -n 8 "$f" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
