@@ -101,9 +101,10 @@ validate_install() {
   [[ -f "$CROSS_CONFIG" ]] || fail "cross-venue config missing: $CROSS_CONFIG"
   [[ -x "$APP_DIR/build/prediction_cross_venue_arb" ]] || fail "cross-venue binary is not built"
   [[ -x "$APP_DIR/build/prediction_cross_venue_auth_check" ]] || fail "auth-check binary is not built"
-  [[ -x "$APP_DIR/scripts/cross_venue_loop.sh" ]] || fail "cross-venue loop is not executable"
+  [[ -f "$APP_DIR/scripts/cross_venue_loop.sh" ]] || fail "cross-venue loop is missing"
   [[ -f "$APP_DIR/scripts/portfolio_supervisor.py" ]] || fail "portfolio supervisor is missing"
 
+  mkdir -p "$LOG_DIR" "$APP_DIR/runs/cross_venue" "$APP_DIR/runs/supervisor"
   "$APP_DIR/build/prediction_cross_venue_auth_check" \
     --config "$CROSS_CONFIG" --credentials "$CREDENTIALS" \
     > "$APP_DIR/runs/cross_venue/auth_check.install.json"
@@ -111,7 +112,6 @@ validate_install() {
 
 install_services() {
   validate_install
-  mkdir -p "$LOG_DIR" "$APP_DIR/runs/cross_venue" "$APP_DIR/runs/supervisor"
 
   write_plist "$SUPERVISOR_LABEL" "$PYTHON_BIN" \
     "$LOG_DIR/portfolio-supervisor.out.log" "$LOG_DIR/portfolio-supervisor.err.log" \
