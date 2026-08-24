@@ -12,6 +12,7 @@ on:
       - "scripts/research_pr_policy.py"
       - "scripts/validate_scheduler_registry.py"
       - "tests/test_model_governance.py"
+      - "tests/test_research_policy_cross_venue.py"
   pull_request:
     branches: [main]
     types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft, labeled, unlabeled]
@@ -40,6 +41,9 @@ jobs:
           --root .
           --registry config/scheduler_registry.json
           --output scheduler-registry-report.md
+
+      - name: Test research policy regressions
+        run: python3 -m unittest tests/test_research_policy_cross_venue.py -v
 
       - name: Ensure governance labels exist
         if: github.event_name != 'pull_request'
