@@ -3,7 +3,7 @@ name: live-api-smoke
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 */6 * * *"
+    - cron: "57 */6 * * *"
 
 permissions:
   contents: read
