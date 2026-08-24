@@ -14,9 +14,83 @@ INTEGRATION_LABELS = {
     "administrator-approved",
 }
 
+MODEL_BODY_TERMS = (
+    "alpha",
+    "model",
+    "strategy",
+    "signal",
+    "stat-arb",
+    "stat arb",
+    "pca",
+    "maker",
+    "opportunity",
+    "portfolio",
+    "paper champion",
+    "candidate bundle",
+)
+
+LIVE_MODEL_SURFACE_PATTERNS = (
+    re.compile(r"^config/live_champion\.json$"),
+    re.compile(r"^config/paper_v\d+\.json$"),
+    re.compile(r"^scripts/paper_v\d+_(?:loop|once)\.sh$"),
+    re.compile(r"^scripts/build_v\d+_intents\.py$"),
+    re.compile(r"^scripts/merge_v\d+_intents\.py$"),
+    re.compile(r"^scripts/build_global_opportunity_book\.py$"),
+)
+
+SHADOW_FORBIDDEN_TOKENS = (
+    "intent",
+    "broker",
+    "execution",
+    "risk",
+    "pnl",
+    "drawdown",
+    "oos",
+    "kill",
+    "credential",
+    "auth",
+    "account",
+    "order",
+)
+
 
 def label_names(pr: dict[str, Any]) -> set[str]:
     return {str(item.get("name")) for item in pr.get("labels", []) if item.get("name")}
+
+
+def has_model_intent(body: str) -> bool:
+    normalized = body.lower()
+    return any(term in normalized for term in MODEL_BODY_TERMS)
+
+
+def is_live_model_surface(path: str) -> bool:
+    return any(pattern.search(path) for pattern in LIVE_MODEL_SURFACE_PATTERNS)
+
+
+def is_opaque_model_bootstrap(changed_files: set[str], body: str) -> bool:
+    bootstrap_workflow = any(
+        path.startswith(".github/workflows/bootstrap-") and path.endswith((".yml", ".yaml"))
+        for path in changed_files
+    )
+    opaque_payload = any(
+        path.startswith("ops/") and path.endswith((".b64", ".tar.gz", ".tgz", ".zip"))
+        for path in changed_files
+    )
+    return bootstrap_workflow and opaque_payload and has_model_intent(body)
+
+
+def shadow_forbidden_files(changed_files: set[str]) -> list[str]:
+    forbidden: list[str] = []
+    for path in sorted(changed_files):
+        lowered = path.lower()
+        if is_live_model_surface(path):
+            forbidden.append(path)
+            continue
+        if not lowered.startswith(("config/", "scripts/", "src/", "include/")):
+            continue
+        if any(token in lowered for token in SHADOW_FORBIDDEN_TOKENS):
+            forbidden.append(path)
+    return forbidden
 
 
 def evaluate(
@@ -31,6 +105,9 @@ def evaluate(
     draft = bool(pr.get("draft"))
     labels = label_names(pr)
     manifest_changed = "config/live_champion.json" in changed_files
+    model_surface_files = sorted(path for path in changed_files if is_live_model_surface(path))
+    opaque_model_bootstrap = is_opaque_model_bootstrap(changed_files, body)
+    forbidden_shadow_files = shadow_forbidden_files(changed_files) if "shadow-isolated" in labels else []
     errors: list[str] = []
 
     if head.startswith(RESEARCH_PREFIXES):
@@ -70,11 +147,28 @@ def evaluate(
         if manifest_changed and manifest_existed_on_base:
             errors.append("an existing live champion manifest may change only on integration/*")
 
+        if has_model_intent(body) and (model_surface_files or opaque_model_bootstrap):
+            details = model_surface_files or ["opaque bootstrap payload"]
+            errors.append(
+                "unapproved model/runtime work must use research/*, experiment/*, or diagnostic/*; "
+                "approved champion integration must use integration/*. Sensitive change: "
+                + ", ".join(details)
+            )
+
+    if forbidden_shadow_files:
+        errors.append(
+            "shadow-isolated code cannot modify production decision, execution, PnL, risk, OOS, "
+            "credential, account, or order surfaces: " + ", ".join(forbidden_shadow_files)
+        )
+
     summary = {
         "branch": head,
         "draft": draft,
         "labels": sorted(labels),
         "manifest_changed": manifest_changed,
+        "model_surface_files": model_surface_files,
+        "opaque_model_bootstrap": opaque_model_bootstrap,
+        "shadow_forbidden_files": forbidden_shadow_files,
         "changed_files": len(changed_files),
         "policy": "pass" if not errors else "fail",
     }
@@ -83,7 +177,17 @@ def evaluate(
 
 def render(summary: dict[str, Any], errors: list[str]) -> str:
     lines = ["# Research pull-request policy", ""]
-    for key in ("branch", "draft", "labels", "manifest_changed", "changed_files", "policy"):
+    for key in (
+        "branch",
+        "draft",
+        "labels",
+        "manifest_changed",
+        "model_surface_files",
+        "opaque_model_bootstrap",
+        "shadow_forbidden_files",
+        "changed_files",
+        "policy",
+    ):
         value = summary.get(key, "unknown")
         if isinstance(value, list):
             value = ", ".join(str(item) for item in value) or "none"
