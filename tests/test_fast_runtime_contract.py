@@ -30,7 +30,9 @@ class FastRuntimeContractTest(unittest.TestCase):
     def test_runtime_selector_supervises_fast_and_champion_planes(self) -> None:
         selector = (ROOT / "scripts" / "paper_latest_loop.sh").read_text(encoding="utf-8")
         self.assertIn("polymarket_fast_arb_shadow", selector)
-        self.assertIn("POLYMARKET_FAST_ARB_REQUIRED", selector)
+        self.assertIn('POLYMARKET_FAST_ARB_REQUIRED:-0', selector)
+        self.assertIn("shadow_dependency_failure", selector)
+        self.assertIn("champion continues without fast shadow", selector)
         self.assertIn("runtime_planes.csv", selector)
         self.assertIn("start_champion", selector)
         self.assertIn("start_fast", selector)
