@@ -34,9 +34,11 @@ jobs:
           validated_sha="$(git rev-parse origin/paper-validated)"
           test "$main_sha" = "$validated_sha"
           test "$(git rev-parse HEAD)" = "$main_sha"
+          echo "BASE_MAIN_SHA=$main_sha" >> "$GITHUB_ENV"
+          echo "BASE_VALIDATED_SHA=$validated_sha" >> "$GITHUB_ENV"
           echo "validated_base_sha=$main_sha"
 
-      - name: Build locally-green automatic promotion queue
+      - name: Build explicitly approved integration queue
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -51,7 +53,7 @@ jobs:
             --report integration-merge-report.md
           cat candidate.env >> "$GITHUB_ENV"
 
-      - name: Scan numbered research sources and select first fully-green candidate
+      - name: Recheck approved research sources and select one candidate
         if: env.ELIGIBLE_COUNT != '0'
         shell: bash
         env:
@@ -106,10 +108,10 @@ jobs:
           if [[ "$selected" -eq 0 ]]; then
             echo "CANDIDATE_COUNT=0" >> "$GITHUB_ENV"
             echo >> integration-gate-report.md
-            echo 'No fully-green candidate/source pair was available; unready entries were skipped without blocking the queue.' >> integration-gate-report.md
+            echo 'No fully approved candidate/source pair was available; the incumbent remains authoritative.' >> integration-gate-report.md
           fi
 
-      - name: Automatically promote the first fully-green paper champion candidate
+      - name: Merge one approved paper champion integration
         if: env.CANDIDATE_COUNT == '1'
         shell: bash
         env:
@@ -129,6 +131,13 @@ jobs:
             --report integration-final-gate-report.md
           expected_head="$(python3 -c 'import json; print(json.load(open("candidate-final.json"))["headRefOid"])')"
 
+          git fetch --no-tags origin main paper-validated
+          current_main_sha="$(git rev-parse origin/main)"
+          current_validated_sha="$(git rev-parse origin/paper-validated)"
+          test "$current_main_sha" = "$BASE_MAIN_SHA"
+          test "$current_validated_sha" = "$BASE_VALIDATED_SHA"
+          test "$current_main_sha" = "$current_validated_sha"
+
           gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$expected_head" \
             | tee merge-result.txt
           merged_sha="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq .mergeCommit.oid)"
@@ -145,32 +154,31 @@ jobs:
               "client_payload": {
                   "sha": sys.argv[1],
                   "pr_number": int(sys.argv[2]),
-                  "automatic_promotion": True,
+                  "approval_gated": True,
               },
           }))
           PY
           gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" --input integration-dispatch.json
           gh pr comment "$PR_NUMBER" --body \
-            "Automatic paper-champion promotion merged at \`$merged_sha\`. Objective CI/research/live-paper gates passed; post-merge exact-SHA validation now owns the handoff to \`paper-validated\` and deployment. No manual approval label was required."
+            "Approved paper-champion integration merged at \`$merged_sha\`. Research approval, exact integration approval and objective checks were revalidated; post-merge exact-SHA validation now owns the handoff to \`paper-validated\` and deployment."
 
           {
             echo
-            echo '## Automatic promotion action'
-            echo "- locally-green candidates at selection: ${ELIGIBLE_COUNT:-unknown}"
-            echo "- promoted PR: #$PR_NUMBER"
-            echo "- source research PR: #$SOURCE_PR_NUMBER"
+            echo '## Approved integration action'
+            echo "- approved candidates at selection: ${ELIGIBLE_COUNT:-unknown}"
+            echo "- merged PR: #$PR_NUMBER"
+            echo "- research-approved source PR: #$SOURCE_PR_NUMBER"
             echo "- candidate head: \`$expected_head\`"
             echo "- merged main revision: \`$merged_sha\`"
-            echo '- selection: first fully-green candidate/source pair; unready pairs are skipped'
+            echo '- required integration labels: approved-for-integration, single-model-reviewed, administrator-approved'
+            echo '- base gate: current main must already equal paper-validated and remain unchanged through merge'
             echo '- merge mode: squash; at most one candidate per scheduler cycle'
-            echo '- base gate: current main must already equal paper-validated'
-            echo '- private server-health: not an integration precondition'
-            echo '- manual approval labels: not required'
+            echo '- private server-health: deployment/health concern, not an integration approval substitute'
             echo '- handoff: repository dispatch `champion-integration-merged`'
             echo '- real-money execution: unchanged/disabled'
           } >> integration-merge-report.md
 
-      - name: Publish automatic promotion report
+      - name: Publish approved integration report
         if: always()
         shell: bash
         run: |
@@ -180,7 +188,7 @@ jobs:
           printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat integration-final-gate-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
-      - name: Upload automatic promotion evidence
+      - name: Upload approved integration evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:

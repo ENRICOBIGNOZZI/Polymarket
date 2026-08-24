@@ -122,17 +122,31 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
         self.assertIn("scripts/walk_forward_v4.py", result.stdout)
         self.assertIn("scripts/runtime_action_report.py", result.stdout)
 
-    def test_label_free_integration_with_numbered_source_is_allowed_by_branch_policy(self):
-        result = self.run_policy(
-            "integration/automatic-alpha",
-            "Source research PR/branch/commit: #123",
+    def test_non_draft_integration_requires_exact_approval_labels(self):
+        body = (
+            "Source research PR/branch/commit: #123\n"
+            "- [x] Approved research integration into the single champion\n"
+        )
+        rejected = self.run_policy(
+            "integration/approved-alpha",
+            body,
             ["config/paper_v5.json"],
             labels=[],
             draft=False,
         )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("automatic_paper_promotion: `True`", result.stdout)
-        self.assertIn("manual_approval_labels_required: `False`", result.stdout)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("missing labels", rejected.stdout)
+
+        accepted = self.run_policy(
+            "integration/approved-alpha",
+            body,
+            ["config/paper_v5.json"],
+            labels=["approved-for-integration", "single-model-reviewed", "administrator-approved"],
+            draft=False,
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+        self.assertIn("approval_gated_integration: `True`", accepted.stdout)
+        self.assertIn("manual_approval_labels_required: `True`", accepted.stdout)
 
     def test_data_transport_fix_is_not_misclassified_as_model_work(self):
         result = self.run_policy(

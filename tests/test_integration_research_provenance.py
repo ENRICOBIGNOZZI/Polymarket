@@ -37,10 +37,13 @@ class IntegrationResearchProvenanceTest(unittest.TestCase):
             "number": 200,
             "headRefName": "integration/example",
             "isDraft": False,
-            "labels": [],
+            "labels": [{"name": name} for name in sorted(integration_gate.REQUIRED_LABELS)],
             "mergeStateStatus": "CLEAN",
             "statusCheckRollup": successful_checks(integration_gate.REQUIRED_CHECK_FRAGMENTS),
-            "body": "Source research PR/branch/commit: #123\n",
+            "body": (
+                "Source research PR/branch/commit: #123\n"
+                "- [x] Approved research integration into the single champion\n"
+            ),
         }
 
     def source(self) -> dict:
@@ -49,15 +52,24 @@ class IntegrationResearchProvenanceTest(unittest.TestCase):
             "headRefName": "research/example",
             "isDraft": True,
             "state": "OPEN",
-            "labels": [],
+            "labels": [{"name": "research-approved"}],
             "statusCheckRollup": successful_checks(integration_gate.SOURCE_REQUIRED_CHECK_FRAGMENTS),
         }
 
-    def test_numbered_source_with_green_automated_checks_passes_without_labels(self):
-        self.assertEqual(
-            integration_gate.validate_candidate(self.candidate(), self.source()),
-            [],
-        )
+    def test_approved_numbered_source_with_green_checks_passes(self):
+        self.assertEqual(integration_gate.validate_candidate(self.candidate(), self.source()), [])
+
+    def test_missing_integration_approval_is_rejected(self):
+        candidate = self.candidate()
+        candidate["labels"] = []
+        errors = integration_gate.validate_candidate(candidate, self.source())
+        self.assertTrue(any("candidate is missing labels" in error for error in errors))
+
+    def test_missing_research_approval_is_rejected(self):
+        source = self.source()
+        source["labels"] = []
+        errors = integration_gate.validate_candidate(self.candidate(), source)
+        self.assertIn("source research PR is not research-approved", errors)
 
     def test_source_failed_or_skipped_check_is_rejected(self):
         source = self.source()
@@ -97,7 +109,7 @@ class IntegrationResearchProvenanceTest(unittest.TestCase):
         errors = integration_gate.validate_candidate(self.candidate(), source)
         self.assertTrue(any("expected #123" in error for error in errors))
 
-    def test_multiple_candidates_do_not_block_and_are_selected_deterministically(self):
+    def test_multiple_approved_candidates_are_selected_deterministically(self):
         first = self.candidate()
         first["number"] = 201
         second = self.candidate()
@@ -105,7 +117,7 @@ class IntegrationResearchProvenanceTest(unittest.TestCase):
         selected = integration_gate.select_candidates([first, second])
         self.assertEqual([item["number"] for item in selected], [199, 201])
 
-    def test_research_branch_still_rejects_legacy_integration_labels(self):
+    def test_research_branch_rejects_integration_labels(self):
         event = {
             "pull_request": {
                 "head": {"ref": "research/example"},
@@ -115,7 +127,7 @@ class IntegrationResearchProvenanceTest(unittest.TestCase):
             }
         }
         errors, _ = research_pr_policy.evaluate(event, {"docs/research.md"}, True)
-        self.assertTrue(any("cannot carry integration/administrator labels" in error for error in errors))
+        self.assertTrue(any("cannot carry integration or administrator labels" in error for error in errors))
 
 
 if __name__ == "__main__":

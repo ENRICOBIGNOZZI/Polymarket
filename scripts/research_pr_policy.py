@@ -8,9 +8,7 @@ from pathlib import Path
 from typing import Any
 
 RESEARCH_PREFIXES = ("research/", "experiment/", "diagnostic/")
-# Legacy labels are still recognized so they cannot leak onto research branches,
-# but integration eligibility no longer depends on any human approval label.
-LEGACY_INTEGRATION_LABELS = {
+INTEGRATION_LABELS = {
     "approved-for-integration",
     "single-model-reviewed",
     "administrator-approved",
@@ -159,32 +157,37 @@ def evaluate(
     errors: list[str] = []
 
     if head.startswith(RESEARCH_PREFIXES):
-        forbidden = sorted(labels.intersection(LEGACY_INTEGRATION_LABELS))
+        forbidden = sorted(labels.intersection(INTEGRATION_LABELS))
         if forbidden:
             errors.append(
-                "research/experiment/diagnostic PRs cannot carry integration/administrator labels: "
+                "research/experiment/diagnostic PRs cannot carry integration or administrator labels: "
                 + ", ".join(forbidden)
             )
         if not draft and "shadow-isolated" not in labels:
             errors.append(
-                "research PRs that are not shadow-isolated must remain draft; "
-                "promotion happens through an integration/* candidate after objective validation"
+                "research PRs must remain draft unless they are tested shadow-isolated instrumentation; "
+                "research approval is recorded with research-approved and consumed only by integration/*"
             )
         if manifest_changed:
             errors.append("research and diagnostic branches may never change the live champion manifest")
     elif head.startswith("integration/"):
-        # Integration PRs are deliberately label-free: source provenance plus green
-        # automated checks are the complete paper-promotion authority.
-        if not draft and SOURCE_RESEARCH_PR_PATTERN.search(body) is None:
-            errors.append(
-                "integration PR must link a numbered source research PR as "
-                "`Source research PR/branch/commit: #<number>`"
-            )
+        if not draft:
+            missing = sorted(INTEGRATION_LABELS.difference(labels))
+            if missing:
+                errors.append("non-draft integration PR is missing labels: " + ", ".join(missing))
+            normalized = body.lower()
+            if "[x] approved research integration into the single champion" not in normalized:
+                errors.append("integration PR must check the approved-research lifecycle box")
+            if SOURCE_RESEARCH_PR_PATTERN.search(body) is None:
+                errors.append(
+                    "integration PR must link a numbered source research PR as "
+                    "`Source research PR/branch/commit: #<number>`"
+                )
     else:
-        misplaced = sorted(labels.intersection(LEGACY_INTEGRATION_LABELS | {"research-approved"}))
+        misplaced = sorted(labels.intersection(INTEGRATION_LABELS | {"research-approved"}))
         if misplaced:
             errors.append(
-                "research/integration labels are valid only on their dedicated branch classes: "
+                "research/integration approval labels are valid only on their dedicated branch classes: "
                 + ", ".join(misplaced)
             )
         if manifest_changed and manifest_existed_on_base:
@@ -192,15 +195,16 @@ def evaluate(
 
         if model_surface_files:
             errors.append(
-                "model/runtime work cannot change known live model/runtime/code surfaces on normal "
-                "feature/fix branches; use research/*, experiment/*, or diagnostic/* for evidence "
-                "and integration/* for automatic paper promotion. Sensitive change: "
+                "unapproved model/runtime work cannot change known live model/runtime/code surfaces on normal "
+                "feature/fix branches; use research/*, experiment/*, or diagnostic/* for evidence and "
+                "integration/* for an approved champion change. Sensitive change: "
                 + ", ".join(model_surface_files)
             )
         elif opaque_model_bootstrap:
             errors.append(
-                "opaque model/runtime bootstrap work must use research/*, experiment/*, or diagnostic/*; "
-                "paper champion integration must use integration/*. Sensitive change: opaque bootstrap payload"
+                "unapproved opaque model/runtime bootstrap work must use research/*, experiment/*, or "
+                "diagnostic/*; approved champion integration must use integration/*. Sensitive change: "
+                "opaque bootstrap payload"
             )
 
     if forbidden_shadow_files:
@@ -219,8 +223,8 @@ def evaluate(
         "opaque_model_bootstrap": opaque_model_bootstrap,
         "shadow_forbidden_files": forbidden_shadow_files,
         "changed_files": len(changed_files),
-        "automatic_paper_promotion": head.startswith("integration/"),
-        "manual_approval_labels_required": False,
+        "approval_gated_integration": head.startswith("integration/"),
+        "manual_approval_labels_required": head.startswith("integration/") and not draft,
         "policy": "pass" if not errors else "fail",
     }
     return errors, summary
@@ -237,7 +241,7 @@ def render(summary: dict[str, Any], errors: list[str]) -> str:
         "opaque_model_bootstrap",
         "shadow_forbidden_files",
         "changed_files",
-        "automatic_paper_promotion",
+        "approval_gated_integration",
         "manual_approval_labels_required",
         "policy",
     ):

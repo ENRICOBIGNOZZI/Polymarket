@@ -31,7 +31,7 @@ def green_checks() -> list[dict]:
 
 
 class ModelGovernanceContractTest(unittest.TestCase):
-    def test_live_runtime_uses_automatic_validated_promotion_policy(self):
+    def test_live_runtime_keeps_single_v5_paper_validated_target(self):
         manifest = json.loads((ROOT / "config" / "live_champion.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["schema_version"], 1)
         self.assertEqual(manifest["version"], 5)
@@ -41,9 +41,6 @@ class ModelGovernanceContractTest(unittest.TestCase):
         self.assertEqual(manifest["deployment_ref"], "paper-validated")
         self.assertEqual(manifest["promotion_policy"], "automatic validated integration")
 
-        selector = (ROOT / "scripts" / "paper_latest_loop.sh").read_text(encoding="utf-8")
-        self.assertIn("automatic validated integration", selector)
-        self.assertIn("--print-champion", selector)
         completed = subprocess.run(
             ["bash", "scripts/paper_latest_loop.sh", "--print-champion"],
             cwd=ROOT,
@@ -75,6 +72,8 @@ class ModelGovernanceContractTest(unittest.TestCase):
         self.assertIn("Registry and one-job-per-workflow contract are valid", completed.stdout)
 
         registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
+        self.assertEqual(registry["administrator"]["paper_promotion_mode"], "approval_gated_integration")
+        self.assertTrue(registry["administrator"]["manual_approval_required"])
         schedulers = registry["schedulers"]
         ids = [item["id"] for item in schedulers]
         self.assertEqual(len(ids), len(set(ids)))
@@ -85,43 +84,47 @@ class ModelGovernanceContractTest(unittest.TestCase):
             ["post-merge-validation"],
         )
 
-    def test_integration_scheduler_can_promote_without_manual_labels(self):
+    def test_integration_scheduler_requires_approval_and_exact_base(self):
         integration = (WORKFLOWS / "integration-merge.yml").read_text(encoding="utf-8")
         self.assertIn('cron: "3,18,33,48 * * * *"', integration)
         self.assertIn('gh pr merge "$PR_NUMBER" --squash --delete-branch', integration)
         self.assertIn("--match-head-commit", integration)
-        self.assertIn("statusCheckRollup", integration)
-        self.assertIn("Automatic paper-champion promotion", integration)
+        self.assertIn("BASE_MAIN_SHA", integration)
+        self.assertIn("BASE_VALIDATED_SHA", integration)
+        self.assertIn("approved-for-integration", integration)
+        self.assertIn("single-model-reviewed", integration)
+        self.assertIn("administrator-approved", integration)
+        self.assertIn("research-approved", integration)
         self.assertIn("champion-integration-merged", integration)
-        self.assertNotIn("administrator-approved", integration)
-        self.assertNotIn("BASE_MAIN_SHA", integration)
-        self.assertNotIn("BASE_VALIDATED_SHA", integration)
-        self.assertNotIn("incumbent_health_gate.py", integration)
         self.assertNotIn("--admin", integration)
+        self.assertNotIn("incumbent_health_gate.py", integration)
 
-    def test_research_policy_keeps_research_isolated_but_integration_label_free(self):
+    def test_research_policy_requires_labels_on_non_draft_integration(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             changed = temp / "changed.txt"
             changed.write_text("src/engine.cpp\n", encoding="utf-8")
             report = temp / "report.md"
 
-            research_event = {
+            integration_event = {
                 "pull_request": {
-                    "head": {"ref": "research/new-alpha"},
+                    "head": {"ref": "integration/new-alpha"},
                     "draft": False,
-                    "body": "research",
+                    "body": (
+                        "Source research PR/branch/commit: #123\n"
+                        "- [x] Approved research integration into the single champion\n"
+                    ),
                     "labels": [],
                 }
             }
-            research_path = temp / "research-event.json"
-            research_path.write_text(json.dumps(research_event), encoding="utf-8")
+            event_path = temp / "event.json"
+            event_path.write_text(json.dumps(integration_event), encoding="utf-8")
             rejected = subprocess.run(
                 [
                     "python3",
                     "scripts/research_pr_policy.py",
                     "--event",
-                    str(research_path),
+                    str(event_path),
                     "--changed-files",
                     str(changed),
                     "--manifest-existed-on-base",
@@ -136,24 +139,20 @@ class ModelGovernanceContractTest(unittest.TestCase):
                 timeout=10,
             )
             self.assertNotEqual(rejected.returncode, 0)
-            self.assertIn("must remain draft", rejected.stdout)
+            self.assertIn("missing labels", rejected.stdout)
 
-            integration_event = {
-                "pull_request": {
-                    "head": {"ref": "integration/new-alpha"},
-                    "draft": False,
-                    "body": "Source research PR/branch/commit: #123\n",
-                    "labels": [],
-                }
-            }
-            integration_path = temp / "integration-event.json"
-            integration_path.write_text(json.dumps(integration_event), encoding="utf-8")
+            integration_event["pull_request"]["labels"] = [
+                {"name": "approved-for-integration"},
+                {"name": "single-model-reviewed"},
+                {"name": "administrator-approved"},
+            ]
+            event_path.write_text(json.dumps(integration_event), encoding="utf-8")
             accepted = subprocess.run(
                 [
                     "python3",
                     "scripts/research_pr_policy.py",
                     "--event",
-                    str(integration_path),
+                    str(event_path),
                     "--changed-files",
                     str(changed),
                     "--manifest-existed-on-base",
@@ -168,44 +167,39 @@ class ModelGovernanceContractTest(unittest.TestCase):
                 timeout=10,
             )
             self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
-            self.assertIn("manual_approval_labels_required: `False`", accepted.stdout)
+            self.assertIn("manual_approval_labels_required: `True`", accepted.stdout)
 
-    def test_integration_gate_uses_objective_checks_not_labels(self):
+    def test_integration_gate_requires_source_research_approval(self):
         candidate = {
             "number": 123,
             "headRefName": "integration/new-alpha",
             "isDraft": False,
-            "labels": [],
+            "labels": [
+                {"name": "approved-for-integration"},
+                {"name": "single-model-reviewed"},
+                {"name": "administrator-approved"},
+            ],
             "mergeStateStatus": "CLEAN",
             "statusCheckRollup": green_checks(),
-            "body": "Source research PR/branch/commit: #100\n",
+            "body": (
+                "Source research PR/branch/commit: #100\n"
+                "- [x] Approved research integration into the single champion\n"
+            ),
+        }
+        source = {
+            "number": 100,
+            "headRefName": "research/new-alpha",
+            "isDraft": True,
+            "labels": [],
+            "statusCheckRollup": green_checks(),
         }
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             candidate_path = temp / "candidate.json"
+            source_path = temp / "source.json"
             report = temp / "gate.md"
             candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
-            completed = subprocess.run(
-                [
-                    "python3",
-                    "scripts/integration_gate.py",
-                    "validate",
-                    "--candidate",
-                    str(candidate_path),
-                    "--report",
-                    str(report),
-                ],
-                cwd=ROOT,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
-            self.assertIn("manual approval labels required: `false`", completed.stdout)
-
-            candidate["statusCheckRollup"][0]["conclusion"] = "SKIPPED"
-            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            source_path.write_text(json.dumps(source), encoding="utf-8")
             rejected = subprocess.run(
                 [
                     "python3",
@@ -213,6 +207,8 @@ class ModelGovernanceContractTest(unittest.TestCase):
                     "validate",
                     "--candidate",
                     str(candidate_path),
+                    "--source-research",
+                    str(source_path),
                     "--report",
                     str(report),
                 ],
@@ -223,7 +219,30 @@ class ModelGovernanceContractTest(unittest.TestCase):
                 timeout=10,
             )
             self.assertNotEqual(rejected.returncode, 0)
-            self.assertIn("concluded SKIPPED", rejected.stdout)
+            self.assertIn("source research PR is not research-approved", rejected.stdout)
+
+            source["labels"] = [{"name": "research-approved"}]
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+            accepted = subprocess.run(
+                [
+                    "python3",
+                    "scripts/integration_gate.py",
+                    "validate",
+                    "--candidate",
+                    str(candidate_path),
+                    "--source-research",
+                    str(source_path),
+                    "--report",
+                    str(report),
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+            self.assertIn("administrator approval required: `true`", accepted.stdout)
 
     def test_post_merge_and_deployment_still_use_exact_validated_sha(self):
         post_merge = (WORKFLOWS / "post-merge-validation.yml").read_text(encoding="utf-8")

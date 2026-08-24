@@ -7,6 +7,11 @@ import re
 from pathlib import Path
 from typing import Any
 
+REQUIRED_LABELS = {
+    "approved-for-integration",
+    "single-model-reviewed",
+    "administrator-approved",
+}
 REQUIRED_CHECK_FRAGMENTS = (
     "build-test (Release)",
     "build-test (Debug)",
@@ -23,6 +28,10 @@ RESEARCH_PREFIXES = ("research/", "experiment/", "diagnostic/")
 SOURCE_RESEARCH_PR_PATTERN = re.compile(
     r"source research pr/branch/commit:\s*#(\d+)\b", flags=re.IGNORECASE
 )
+
+
+def labels(pr: dict[str, Any]) -> set[str]:
+    return {str(item.get("name")) for item in pr.get("labels", []) if item.get("name")}
 
 
 def source_research_pr_number(pr: dict[str, Any]) -> int | None:
@@ -61,8 +70,13 @@ def candidate_local_errors(pr: dict[str, Any]) -> list[str]:
         errors.append("candidate branch is not integration/*")
     if bool(pr.get("isDraft")):
         errors.append("candidate is still draft")
+    missing = sorted(REQUIRED_LABELS.difference(labels(pr)))
+    if missing:
+        errors.append("candidate is missing labels: " + ", ".join(missing))
     if source_research_pr_number(pr) is None:
         errors.append("candidate has no numbered source research PR")
+    if "[x] approved research integration into the single champion" not in str(pr.get("body") or "").lower():
+        errors.append("approved integration lifecycle checkbox is not checked")
     if pr.get("mergeStateStatus") != "CLEAN":
         errors.append(f"merge state is {pr.get('mergeStateStatus')}, not CLEAN")
     errors.extend(_check_errors(pr.get("statusCheckRollup") or [], REQUIRED_CHECK_FRAGMENTS))
@@ -70,9 +84,6 @@ def candidate_local_errors(pr: dict[str, Any]) -> list[str]:
 
 
 def select_candidates(prs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    # Only candidates whose own integration checks are already green enter the
-    # source-research probe queue. An in-progress/failed candidate therefore
-    # cannot starve another ready candidate.
     candidates = [pr for pr in prs if not candidate_local_errors(pr)]
     return sorted(candidates, key=lambda pr: int(pr.get("number") or 0))
 
@@ -81,11 +92,11 @@ def render_selection(prs: list[dict[str, Any]], candidates: list[dict[str, Any]]
     integrations = [pr for pr in prs if str(pr.get("headRefName", "")).startswith("integration/")]
     ready_numbers = {int(pr.get("number") or 0) for pr in candidates}
     lines = [
-        "# Automatic paper-promotion candidate queue",
+        "# Approval-gated paper integration queue",
         "",
         f"- open integration PRs: {len(integrations)}",
-        f"- locally green candidates queued for source validation: {len(candidates)}",
-        "- source validation policy: scan queue in deterministic PR-number order and skip unready sources",
+        f"- fully approved candidates queued for source validation: {len(candidates)}",
+        "- source validation policy: research-approved provenance plus green source checks",
         "",
         "## Integration queue",
     ]
@@ -94,7 +105,7 @@ def render_selection(prs: list[dict[str, Any]], candidates: list[dict[str, Any]]
     for pr in sorted(integrations, key=lambda item: int(item.get("number") or 0)):
         number = int(pr.get("number") or 0)
         errors = candidate_local_errors(pr)
-        reason = "; ".join(errors) if errors else "candidate-local gates green"
+        reason = "; ".join(errors) if errors else "candidate approval and local gates green"
         lines.append(
             f"- #{number} `{pr.get('headRefName')}` source=#{source_research_pr_number(pr) or 'missing'} "
             f"queue={'yes' if number in ready_numbers else 'no'} — {reason}"
@@ -102,11 +113,11 @@ def render_selection(prs: list[dict[str, Any]], candidates: list[dict[str, Any]]
     lines.extend(["", "## Decision"])
     if candidates:
         lines.append(
-            "Probe queued candidates in order and promote the first whose numbered source research PR is also green. "
-            "A failed or in-progress source is skipped rather than blocking later candidates."
+            "Probe approved candidates in deterministic PR-number order and merge at most one whose numbered "
+            "source research PR is research-approved and green."
         )
     else:
-        lines.append("No candidate is locally ready for automatic paper promotion in this cycle.")
+        lines.append("No approved integration is ready. The incumbent champion remains authoritative.")
     return "\n".join(lines) + "\n"
 
 
@@ -126,6 +137,12 @@ def validate_source_research(candidate: dict[str, Any], source: dict[str, Any] |
     source_head = str(source.get("headRefName", ""))
     if not source_head.startswith(RESEARCH_PREFIXES):
         errors.append("source research branch is not research/*, experiment/*, or diagnostic/*")
+    source_labels = labels(source)
+    if "research-approved" not in source_labels:
+        errors.append("source research PR is not research-approved")
+    misplaced = sorted(source_labels.intersection(REQUIRED_LABELS))
+    if misplaced:
+        errors.append("source research PR carries integration labels: " + ", ".join(misplaced))
     errors.extend(
         _check_errors(
             source.get("statusCheckRollup") or [],
@@ -169,18 +186,19 @@ def validate_main(args: argparse.Namespace) -> int:
             raise SystemExit("--source-research must contain a JSON object")
     errors = validate_candidate(pr, source)
     lines = [
-        "# Automatic paper-promotion gate",
+        "# Approval-gated paper integration",
         "",
         f"- PR: #{pr.get('number')}",
         f"- branch: `{pr.get('headRefName')}`",
         f"- source research PR: `{source_research_pr_number(pr) or 'missing'}`",
-        "- manual approval labels required: `false`",
+        "- research approval required: `true`",
+        "- administrator approval required: `true`",
     ]
     if errors:
         lines.extend(["", "## Gate errors"])
         lines.extend(f"- {error}" for error in errors)
     else:
-        lines.extend(["", "All objective paper-promotion gates passed; the merge scheduler may promote automatically."])
+        lines.extend(["", "All research, administrator, CI and live-paper integration gates passed."])
     report = "\n".join(lines) + "\n"
     Path(args.report).write_text(report, encoding="utf-8")
     print(report, end="")
@@ -190,7 +208,7 @@ def validate_main(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Select and validate automatic paper champion integrations")
+    parser = argparse.ArgumentParser(description="Select and validate approval-gated paper champion integrations")
     sub = parser.add_subparsers(dest="command", required=True)
     select_parser = sub.add_parser("select")
     select_parser.add_argument("--prs", required=True)
