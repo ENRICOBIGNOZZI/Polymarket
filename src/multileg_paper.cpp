@@ -766,10 +766,20 @@ private:
         auto ls=bundle_legs(id);
         struct R {LegState* l; SellResult r;};
         std::vector<R> sells;
+        bool pending_settlement=false;
         for (auto* l:ls) {
             if (l->filled_shares<=1e-12||l->exited) continue;
-            auto bk=books.find(l->token_id); auto mi=markets.find(l->market_id);
-            if (bk==books.end()||mi==markets.end()) return false;
+            auto mi=markets.find(l->market_id);
+            if (mi==markets.end()) return false;
+            if (mi->second.closed) {
+                // Closed legs have no reliable executable book. Leave their
+                // payout receivable open while immediately unwinding every
+                // still-tradable leg below.
+                pending_settlement=true;
+                continue;
+            }
+            auto bk=books.find(l->token_id);
+            if (bk==books.end()) return false;
             auto r=sell_all(bk->second,l->filled_shares,cfg_.slippage_bps,fee_for(mi->second));
             if (!r) return false;
             sells.push_back({l,*r});
@@ -785,6 +795,7 @@ private:
             s.l->order_state="DONE";
             append_event("EXIT_TAKER",id,s.l,s.r.shares,s.r.slipped_avg,final_status);
         }
+        if (pending_settlement) return false;
         auto bit=bundles_.find(id);
         if(bit!=bundles_.end()) bit->second.status=final_status;
         write_ledger_if_final(id);
@@ -801,17 +812,18 @@ private:
             if(handle_closed_legs(id,markets) && (b.status=="RESTING"||b.status=="COMPLETE")) {
                 abort_bundle(id,"market_closed");
             }
+            if (pm::bundle_requires_unmatched_risk_check(b.status) && max_leg_risk_usd_>0.0 &&
+                bundle_leg_risk(id)>max_leg_risk_usd_) {
+                abort_bundle(id,"unmatched_leg_risk");
+            }
             if(b.status=="RESTING"){
                 const double c=completion(id);
                 if(c>=completion_threshold_){
                     b.status="COMPLETE";
                     append_event("BUNDLE_COMPLETE",id,nullptr,0.0,0.0,"completion="+std::to_string(c));
                     for(auto*l:bundle_legs(id)) if(l->order_state=="RESTING") request_cancel(*l,nowm,"completion_residual");
-                } else {
-                    const double leg_risk=bundle_leg_risk(id);
-                    if((max_leg_risk_usd_>0.0&&leg_risk>max_leg_risk_usd_)||now>=b.execution_deadline_ts||killed_){
-                        abort_bundle(id,killed_?"drawdown_kill":(now>=b.execution_deadline_ts?"execution_timeout":"unmatched_leg_risk"));
-                    }
+                } else if(now>=b.execution_deadline_ts||killed_){
+                    abort_bundle(id,killed_?"drawdown_kill":"execution_timeout");
                 }
             }
             if(b.status=="ABORTING"){
