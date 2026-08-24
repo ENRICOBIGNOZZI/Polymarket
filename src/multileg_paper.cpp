@@ -123,6 +123,8 @@ struct LegState {
     double adverse_mark_pnl = 0.0;
     bool adverse_recorded = false;
     std::string order_state = "RESTING";
+    double max_limit_price = 0.0;
+    bool exited = false;
 
     double remaining() const { return std::max(0.0, target_shares - filled_shares); }
     double fill_fraction() const {
@@ -191,13 +193,26 @@ public:
     void tick() {
         const auto now = now_s();
         const auto nowm = now_ms();
-        load_new_intents(now);
 
         std::unordered_map<std::string,pm::Market> markets;
         std::unordered_map<std::string,std::string> token_market;
         std::vector<std::string> tokens;
         resolve_live_markets(markets, token_market, tokens);
         auto books = tokens.empty() ? std::unordered_map<std::string,pm::Book>{} : api_.fetch_books(tokens);
+
+        // Mark and enforce risk before admitting fresh bundles. Otherwise a
+        // portfolio already through its drawdown budget could reserve capital
+        // using cost-basis equity and only be killed later in the same tick.
+        update_risk(books);
+        const auto legs_before = legs_.size();
+        load_new_intents(now, equity(books));
+        if (legs_.size() != legs_before) {
+            markets.clear();
+            token_market.clear();
+            tokens.clear();
+            resolve_live_markets(markets, token_market, tokens);
+            books = tokens.empty() ? std::unordered_map<std::string,pm::Book>{} : api_.fetch_books(tokens);
+        }
 
         update_risk(books);
         const auto trades = read_new_tape();
@@ -246,6 +261,7 @@ private:
     std::unordered_map<std::string,BundleState> bundles_;
     std::vector<LegState> legs_;
     std::unordered_map<std::string,pm::Market> market_cache_;
+    std::unordered_map<std::string,std::int64_t> market_cache_ts_;
     std::unordered_map<std::string,pm::FeeDetails> fee_cache_;
 
     fs::path p(const std::string& name) const { return fs::path(run_dir_) / name; }
@@ -272,6 +288,7 @@ private:
     }
 
     void load_state() {
+        bool risk_state_loaded = false;
         {
             std::ifstream f(p("multileg_risk.csv"));
             std::string line;
@@ -283,7 +300,9 @@ private:
                     if (x.size() > 1) peak_equity_ = std::stod(x[1]);
                     if (x.size() > 2) killed_ = std::stoi(x[2]) != 0;
                     if (x.size() > 3) tape_cursor_ = static_cast<std::size_t>(std::stoull(x[3]));
+                    risk_state_loaded = !x.empty();
                 } catch (...) {
+                    risk_state_loaded = false;
                 }
             }
         }
@@ -323,23 +342,45 @@ private:
                     l.exit_fee=std::stod(x[i++]); l.slippage_cost=std::stod(x[i++]); l.first_fill_ts=std::stoll(x[i++]);
                     l.last_fill_ts=std::stoll(x[i++]); l.adverse_mark_pnl=std::stod(x[i++]);
                     l.adverse_recorded=std::stoi(x[i++])!=0; l.order_state=x[i++];
+                    l.max_limit_price = i<x.size() ? std::stod(x[i++]) : l.limit_price;
+                    l.exited = i<x.size() ? std::stoi(x[i++])!=0 : l.order_state=="DONE";
+                    if (!std::isfinite(l.max_limit_price) || l.max_limit_price<=0.0) l.max_limit_price=l.limit_price;
                     legs_.push_back(std::move(l));
                 } catch (...) {
                 }
             }
         }
-        if (cash_ <= 0.0 && legs_.empty()) cash_ = cfg_.starting_capital;
-        if (peak_equity_ <= 0.0) peak_equity_ = std::max(cash_, cfg_.starting_capital);
+        if (!risk_state_loaded) cash_ = cfg_.starting_capital;
+        if (!risk_state_loaded || peak_equity_ <= 0.0) peak_equity_ = std::max(cash_, cfg_.starting_capital);
     }
 
     void persist_state() const {
-        {
-            std::ofstream f(p("multileg_risk.csv"));
+        auto atomic_replace = [](const fs::path& path, const auto& writer) {
+            auto tmp = path;
+            tmp += ".tmp";
+            {
+                std::ofstream f(tmp, std::ios::trunc);
+                if (!f) throw std::runtime_error("Cannot write state file: " + tmp.string());
+                writer(f);
+                f.flush();
+                if (!f) throw std::runtime_error("Failed writing state file: " + tmp.string());
+            }
+            std::error_code ec;
+            fs::rename(tmp, path, ec);
+            if (ec) {
+                std::error_code ignored;
+                fs::remove(path, ignored);
+                ec.clear();
+                fs::rename(tmp, path, ec);
+                if (ec) throw std::runtime_error("Cannot replace state file: " + path.string());
+            }
+        };
+
+        atomic_replace(p("multileg_risk.csv"), [&](std::ostream& f) {
             f << "cash,peak_equity,killed,tape_cursor\n" << std::setprecision(15) << cash_ << ',' << peak_equity_ << ','
               << (killed_?1:0) << ',' << tape_cursor_ << '\n';
-        }
-        {
-            std::ofstream f(p("multileg_bundles.csv"));
+        });
+        atomic_replace(p("multileg_bundles.csv"), [&](std::ostream& f) {
             f << "bundle_id,strategy,event_id,status,created_ts,expected_edge,max_notional,execution_deadline_ts,hold_deadline_ts,ledger_written,abort_reason\n";
             for (const auto& [id,b] : bundles_) {
                 (void)id;
@@ -347,18 +388,18 @@ private:
                   << b.created_ts << ',' << b.expected_edge << ',' << b.max_notional << ',' << b.execution_deadline_ts << ','
                   << b.hold_deadline_ts << ',' << (b.ledger_written?1:0) << ',' << csv_escape(b.abort_reason) << '\n';
             }
-        }
-        {
-            std::ofstream f(p("multileg_legs.csv"));
-            f << "bundle_id,market_id,event_id,side,token_id,weight,target_shares,filled_shares,limit_price,queue_ahead,arrival_ms,cancel_effective_ms,replace_count,entry_cash,entry_fee,exit_cash,exit_fee,slippage_cost,first_fill_ts,last_fill_ts,adverse_mark_pnl,adverse_recorded,order_state\n";
+        });
+        atomic_replace(p("multileg_legs.csv"), [&](std::ostream& f) {
+            f << "bundle_id,market_id,event_id,side,token_id,weight,target_shares,filled_shares,limit_price,queue_ahead,arrival_ms,cancel_effective_ms,replace_count,entry_cash,entry_fee,exit_cash,exit_fee,slippage_cost,first_fill_ts,last_fill_ts,adverse_mark_pnl,adverse_recorded,order_state,max_limit_price,exited\n";
             for (const auto& l : legs_) {
                 f << csv_escape(l.bundle_id) << ',' << l.market_id << ',' << csv_escape(l.event_id) << ',' << l.side << ',' << l.token_id << ','
                   << l.weight << ',' << l.target_shares << ',' << l.filled_shares << ',' << l.limit_price << ',' << l.queue_ahead << ','
                   << l.arrival_ms << ',' << l.cancel_effective_ms << ',' << l.replace_count << ',' << l.entry_cash << ',' << l.entry_fee << ','
                   << l.exit_cash << ',' << l.exit_fee << ',' << l.slippage_cost << ',' << l.first_fill_ts << ',' << l.last_fill_ts << ','
-                  << l.adverse_mark_pnl << ',' << (l.adverse_recorded?1:0) << ',' << l.order_state << '\n';
+                  << l.adverse_mark_pnl << ',' << (l.adverse_recorded?1:0) << ',' << l.order_state << ','
+                  << l.max_limit_price << ',' << (l.exited?1:0) << '\n';
             }
-        }
+        });
     }
 
     std::vector<IntentLeg> read_intents() const {
@@ -375,7 +416,8 @@ private:
                 q.expected_edge=std::stod(x[5]); q.max_notional=std::stod(x[6]); q.market_id=x[7]; q.side=x[8];
                 q.weight=std::stod(x[9]); q.limit_price=std::stod(x[10]); q.execution_deadline_ts=std::stoll(x[11]);
                 q.hold_deadline_ts=std::stoll(x[12]);
-                if (!q.bundle_id.empty() && q.weight>0.0 && (q.side=="YES" || q.side=="NO")) out.push_back(std::move(q));
+                if (!q.bundle_id.empty() && std::isfinite(q.weight) && q.weight>0.0 &&
+                    (q.side=="YES" || q.side=="NO")) out.push_back(std::move(q));
             } catch (...) {
             }
         }
@@ -405,15 +447,23 @@ private:
         return out;
     }
 
-    pm::Market* market_for(const std::string& market_id) {
+    pm::Market* market_for(const std::string& market_id, bool force_refresh=false) {
+        constexpr std::int64_t ttl_s = 30;
+        const auto now=now_s();
         auto it=market_cache_.find(market_id);
-        if (it!=market_cache_.end()) return &it->second;
+        auto ti=market_cache_ts_.find(market_id);
+        if (!force_refresh && it!=market_cache_.end() && ti!=market_cache_ts_.end() && now-ti->second<=ttl_s) {
+            return &it->second;
+        }
         try {
             auto m=api_.fetch_market_by_id(market_id);
-            if (!m) return nullptr;
+            if (!m) return force_refresh ? nullptr : (it!=market_cache_.end()?&it->second:nullptr);
             market_cache_[market_id]=*m;
+            market_cache_ts_[market_id]=now;
             return &market_cache_[market_id];
-        } catch (...) { return nullptr; }
+        } catch (...) {
+            return force_refresh ? nullptr : (it!=market_cache_.end()?&it->second:nullptr);
+        }
     }
 
     pm::FeeDetails fee_for(const pm::Market& m) {
@@ -424,7 +474,7 @@ private:
         return fd;
     }
 
-    void load_new_intents(std::int64_t now) {
+    void load_new_intents(std::int64_t now, double risk_equity) {
         if (killed_) return;
         const auto all=read_intents();
         std::map<std::string,std::vector<IntentLeg>> grouped;
@@ -433,21 +483,31 @@ private:
         for (auto& [id,v]:grouped) {
             if (bundles_.count(id) || v.empty()) continue;
             const auto& h=v.front();
-            if (h.mode!="MAKER" || h.expected_edge<=min_edge_ || h.max_notional<=0.0 || h.execution_deadline_ts<=now) continue;
+            if (h.mode!="MAKER" || !std::isfinite(h.expected_edge) || h.expected_edge<=min_edge_ ||
+                !std::isfinite(h.max_notional) || h.max_notional<=0.0 || h.execution_deadline_ts<=now ||
+                h.hold_deadline_ts<=now) continue;
+            bool ok=true;
+            for (const auto& q:v) {
+                if (q.strategy!=h.strategy || q.event_id!=h.event_id || q.mode!=h.mode ||
+                    q.created_ts!=h.created_ts || q.execution_deadline_ts!=h.execution_deadline_ts ||
+                    q.hold_deadline_ts!=h.hold_deadline_ts || !std::isfinite(q.weight) || q.weight<=0.0 ||
+                    !std::isfinite(q.limit_price)) { ok=false; break; }
+            }
+            if (!ok) continue;
             const auto sig=bundle_signature(h.strategy,v);
             if (sigs.count(sig)) continue;
 
-            std::vector<pm::Market*> ms;
+            std::vector<pm::Market> ms;
             std::vector<std::string> tokens;
-            bool ok=true;
             for (const auto& q:v) {
-                auto* m=market_for(q.market_id);
+                auto* m=market_for(q.market_id,true);
                 if (!m || !m->active || m->closed || !m->enable_order_book || !m->accepting_orders) { ok=false; break; }
-                ms.push_back(m);
+                ms.push_back(*m);
                 tokens.push_back(q.side=="YES"?m->yes_token:m->no_token);
             }
             if (!ok) continue;
-            auto books=api_.fetch_books(tokens);
+            std::unordered_map<std::string,pm::Book> books;
+            try { books=api_.fetch_books(tokens); } catch (...) { continue; }
             double capital_per_unit=0.0;
             std::vector<double> limits;
             limits.reserve(v.size());
@@ -461,7 +521,7 @@ private:
                 capital_per_unit += v[i].weight*limit;
             }
             if (!ok||capital_per_unit<=1e-9) continue;
-            const double eq=std::max(1.0,cash_+gross_entry_cash());
+            const double eq=std::max(1.0,risk_equity);
             const double current_dd=std::max(0.0,peak_equity_-eq);
             const double loss_room=cfg_.max_drawdown*std::max(peak_equity_,eq)-current_dd-gross_entry_cash()-reserved_cash();
             const double max_bundle=std::min({h.max_notional,cfg_.max_trade_usd,
@@ -470,20 +530,20 @@ private:
             double units=max_bundle/capital_per_unit;
             std::unordered_map<std::string,double> event_per_unit;
             for (std::size_t i=0;i<v.size();++i) {
-                const auto& b=books.at(tokens[i]);
+                const auto& book=books.at(tokens[i]);
                 const double leg_per_unit=v[i].weight*limits[i];
                 const double market_room=cfg_.max_market_fraction*eq-market_committed(v[i].market_id);
                 if(leg_per_unit>1e-12) units=std::min(units,std::max(0.0,market_room)/leg_per_unit);
-                event_per_unit[ms[i]->event_id]+=leg_per_unit;
-                units=std::min(units,std::max(0.0,0.25*std::max(1.0,touch_size_at(b,limits[i],true))/v[i].weight));
+                event_per_unit[ms[i].event_id]+=leg_per_unit;
+                units=std::min(units,std::max(0.0,0.25*std::max(1.0,touch_size_at(book,limits[i],true))/v[i].weight));
             }
             for(const auto&[event,per_unit]:event_per_unit){
                 const double room=cfg_.max_event_fraction*eq-event_committed(event);
                 if(per_unit>1e-12) units=std::min(units,std::max(0.0,room)/per_unit);
             }
             for (std::size_t i=0;i<v.size();++i) {
-                const auto& b=books.at(tokens[i]);
-                if (units*v[i].weight + 1e-9 < b.min_order_size) {ok=false;break;}
+                const auto& book=books.at(tokens[i]);
+                if (units*v[i].weight + 1e-9 < book.min_order_size) {ok=false;break;}
             }
             if (!ok||units<=0.0) continue;
             const double reserved=units*capital_per_unit;
@@ -496,8 +556,8 @@ private:
             bundles_[id]=b;
             for (std::size_t i=0;i<v.size();++i) {
                 LegState l;
-                l.bundle_id=id; l.market_id=v[i].market_id; l.event_id=ms[i]->event_id; l.side=v[i].side; l.token_id=tokens[i];
-                l.weight=v[i].weight; l.target_shares=units*v[i].weight; l.limit_price=limits[i];
+                l.bundle_id=id; l.market_id=v[i].market_id; l.event_id=ms[i].event_id; l.side=v[i].side; l.token_id=tokens[i];
+                l.weight=v[i].weight; l.target_shares=units*v[i].weight; l.limit_price=limits[i]; l.max_limit_price=limits[i];
                 l.queue_ahead=touch_size_at(books.at(tokens[i]),l.limit_price,true);
                 l.arrival_ms=now_ms()+submit_latency_ms_; l.order_state="RESTING";
                 legs_.push_back(l);
@@ -518,7 +578,7 @@ private:
             if (!m) continue;
             markets[l.market_id]=*m;
             token_market[l.token_id]=l.market_id;
-            if (uniq.insert(l.token_id).second) tokens.push_back(l.token_id);
+            if (!m->closed && m->enable_order_book && uniq.insert(l.token_id).second) tokens.push_back(l.token_id);
         }
     }
 
@@ -549,11 +609,11 @@ private:
                       std::int64_t nowm) {
         (void)books; (void)markets; (void)nowm;
         for (const auto& t:trades) {
-            if (t.side!="SELL") continue; // taker sell can consume our resting bid
+            if (t.side!="SELL") continue;
             const auto trade_ms=t.ts*1000;
             for (auto& l:legs_) {
                 auto bit=bundles_.find(l.bundle_id);
-                if (bit==bundles_.end() || !pm::bundle_has_live_risk(bit->second.status)) continue;
+                if (bit==bundles_.end() || !pm::bundle_has_live_risk(bit->second.status) || l.exited) continue;
                 if (l.token_id!=t.asset_id) continue;
                 if (!pm::passive_buy_active_for_trade(l.order_state,trade_ms,l.arrival_ms,l.cancel_effective_ms)) continue;
                 if (t.price>l.limit_price+1e-9) continue;
@@ -591,12 +651,10 @@ private:
         const auto now=nowm/1000;
         for (auto& l:legs_) {
             auto bit=bundles_.find(l.bundle_id);
-            if (bit==bundles_.end()) continue;
+            if (bit==bundles_.end() || l.exited) continue;
             auto& b=bit->second;
 
-            if (b.status!="RESTING" && l.order_state=="RESTING") {
-                request_cancel(l,nowm,"bundle_not_resting");
-            }
+            if (b.status!="RESTING" && l.order_state=="RESTING") request_cancel(l,nowm,"bundle_not_resting");
             if ((killed_||now>=b.execution_deadline_ts) && l.order_state=="RESTING") {
                 request_cancel(l,nowm,killed_?"kill":"execution_deadline");
             }
@@ -605,7 +663,12 @@ private:
             if (l.order_state=="RESTING" && bk!=books.end()) {
                 const double bb=bk->second.best_bid();
                 const double tick=std::max(1e-6,bk->second.tick_size);
-                if (std::isfinite(bb)&&std::abs(bb-l.limit_price)>=0.75*tick) request_cancel(l,nowm,"reprice");
+                if (std::isfinite(bb) && bb>l.max_limit_price+0.25*tick) {
+                    abort_bundle(l.bundle_id,"market_above_entry_cap");
+                    request_cancel(l,nowm,"market_above_entry_cap");
+                } else if (std::isfinite(bb)&&std::abs(bb-l.limit_price)>=0.75*tick) {
+                    request_cancel(l,nowm,"reprice_within_cap");
+                }
             }
 
             if (l.order_state=="CANCEL_PENDING"&&nowm>=l.cancel_effective_ms) {
@@ -614,12 +677,16 @@ private:
                     l.remaining()>1e-9&&l.replace_count<max_replaces_;
                 if (may_replace && bk!=books.end()) {
                     const double bb=bk->second.best_bid(), ask=bk->second.best_ask();
-                    if (std::isfinite(bb)&&std::isfinite(ask)&&bb>0.0&&bb<ask-1e-12) {
-                        l.limit_price=bb; l.queue_ahead=touch_size_at(bk->second,bb,true);
+                    const double tick=std::max(1e-6,bk->second.tick_size);
+                    const double new_limit=std::min(bb,l.max_limit_price);
+                    if (std::isfinite(bb)&&std::isfinite(ask)&&bb<=l.max_limit_price+0.25*tick&&
+                        new_limit>0.0&&new_limit<ask-1e-12) {
+                        l.limit_price=new_limit; l.queue_ahead=touch_size_at(bk->second,new_limit,true);
                         l.arrival_ms=nowm+submit_latency_ms_; l.cancel_effective_ms=0; ++l.replace_count; l.order_state="RESTING";
-                        append_event("REPLACE",l.bundle_id,&l,0.0,l.limit_price,"priority_reset");
+                        append_event("REPLACE",l.bundle_id,&l,0.0,l.limit_price,"priority_reset_within_cap");
                     } else {
                         l.order_state="CANCELLED";
+                        if (std::isfinite(bb)&&bb>l.max_limit_price+0.25*tick) abort_bundle(l.bundle_id,"market_above_entry_cap");
                     }
                 } else {
                     l.order_state="CANCELLED";
@@ -642,26 +709,22 @@ private:
         return pm::minimum_completion(ft);
     }
 
-    double bundle_leg_risk(const std::string& id, const std::unordered_map<std::string,pm::Book>& books,
-                           const std::unordered_map<std::string,pm::Market>& markets) {
-        double loss=0.0;
+    double bundle_leg_risk(const std::string& id) {
+        std::vector<pm::FilledLegExposure> exposure;
         for (auto* l:bundle_legs(id)) {
-            if (l->filled_shares<=1e-12) continue;
-            auto bk=books.find(l->token_id); auto mi=markets.find(l->market_id);
-            if (bk==books.end()||mi==markets.end()) { loss+=l->entry_cash; continue; }
-            const double bid=bk->second.best_bid();
-            if (!std::isfinite(bid)) {loss+=l->entry_cash;continue;}
-            auto fd=fee_for(mi->second);
-            const double px=bid*(1.0-cfg_.slippage_bps/10000.0);
-            const double proceeds=l->filled_shares*px-pm::Engine::protocol_fee(l->filled_shares,px,fd);
-            loss+=std::max(0.0,l->entry_cash-proceeds);
+            if (l->exited) continue;
+            exposure.push_back({l->filled_shares,l->target_shares,l->entry_avg()});
         }
-        return loss;
+        return pm::unmatched_entry_risk(exposure);
     }
 
     void abort_bundle(const std::string& id, const std::string& reason) {
         auto it=bundles_.find(id); if(it==bundles_.end()) return;
         if(it->second.status=="CLOSED"||it->second.status=="UNWOUND") return;
+        if(it->second.status=="ABORTING") {
+            if(it->second.abort_reason.empty()) it->second.abort_reason=reason;
+            return;
+        }
         it->second.status="ABORTING"; it->second.abort_reason=reason;
         append_event("ABORT",id,nullptr,0.0,0.0,reason);
     }
@@ -671,21 +734,45 @@ private:
         return true;
     }
 
+    bool handle_closed_legs(const std::string& id,
+                            const std::unordered_map<std::string,pm::Market>& markets) {
+        bool any_closed=false;
+        for (auto* l:bundle_legs(id)) {
+            auto mi=markets.find(l->market_id);
+            if (mi==markets.end() || !mi->second.closed) continue;
+            any_closed=true;
+            if (l->order_state=="RESTING" || l->order_state=="CANCEL_PENDING") {
+                l->order_state="CANCELLED";
+                l->cancel_effective_ms=0;
+                append_event("MARKET_CLOSED_CANCEL",id,l,0.0,l->limit_price,"market_closed");
+            }
+            if (l->exited || !mi->second.resolved_yes.has_value()) continue;
+            const bool wins=(l->side=="YES"&&*mi->second.resolved_yes==1)||
+                            (l->side=="NO"&&*mi->second.resolved_yes==0);
+            const double payout=wins?l->filled_shares:0.0;
+            l->exit_cash=payout;
+            l->exit_fee=0.0;
+            l->slippage_cost=0.0;
+            l->exited=true;
+            l->order_state="DONE";
+            cash_+=payout;
+            append_event("SETTLE",id,l,l->filled_shares,wins?1.0:0.0,wins?"winner":"loser");
+        }
+        return any_closed;
+    }
+
     bool exit_bundle(const std::string& id, const std::unordered_map<std::string,pm::Book>& books,
                      const std::unordered_map<std::string,pm::Market>& markets, const std::string& final_status) {
         auto ls=bundle_legs(id);
         struct R {LegState* l; SellResult r;};
         std::vector<R> sells;
         for (auto* l:ls) {
-            const double open=std::max(0.0,l->filled_shares-(l->exit_cash>0.0?l->filled_shares:0.0));
-            // Each leg exits exactly once. exit_cash > 0 is the durable marker.
-            if (l->filled_shares<=1e-12||l->exit_cash>0.0) continue;
+            if (l->filled_shares<=1e-12||l->exited) continue;
             auto bk=books.find(l->token_id); auto mi=markets.find(l->market_id);
             if (bk==books.end()||mi==markets.end()) return false;
             auto r=sell_all(bk->second,l->filled_shares,cfg_.slippage_bps,fee_for(mi->second));
             if (!r) return false;
             sells.push_back({l,*r});
-            (void)open;
         }
         for (auto& s:sells) {
             const double raw_cash=s.r.shares*s.r.raw_avg;
@@ -693,6 +780,7 @@ private:
             s.l->exit_cash=slipped_cash-s.r.fee;
             s.l->exit_fee=s.r.fee;
             s.l->slippage_cost=raw_cash-slipped_cash;
+            s.l->exited=true;
             cash_+=s.l->exit_cash;
             s.l->order_state="DONE";
             append_event("EXIT_TAKER",id,s.l,s.r.shares,s.r.slipped_avg,final_status);
@@ -710,6 +798,9 @@ private:
         for(const auto&id:ids){
             auto& b=bundles_.at(id);
             if(b.status=="CLOSED"||b.status=="UNWOUND"||b.status=="CANCELLED") continue;
+            if(handle_closed_legs(id,markets) && (b.status=="RESTING"||b.status=="COMPLETE")) {
+                abort_bundle(id,"market_closed");
+            }
             if(b.status=="RESTING"){
                 const double c=completion(id);
                 if(c>=completion_threshold_){
@@ -717,9 +808,9 @@ private:
                     append_event("BUNDLE_COMPLETE",id,nullptr,0.0,0.0,"completion="+std::to_string(c));
                     for(auto*l:bundle_legs(id)) if(l->order_state=="RESTING") request_cancel(*l,nowm,"completion_residual");
                 } else {
-                    const double leg_risk=bundle_leg_risk(id,books,markets);
+                    const double leg_risk=bundle_leg_risk(id);
                     if((max_leg_risk_usd_>0.0&&leg_risk>max_leg_risk_usd_)||now>=b.execution_deadline_ts||killed_){
-                        abort_bundle(id,killed_?"drawdown_kill":(now>=b.execution_deadline_ts?"execution_timeout":"leg_risk"));
+                        abort_bundle(id,killed_?"drawdown_kill":(now>=b.execution_deadline_ts?"execution_timeout":"unmatched_leg_risk"));
                     }
                 }
             }
@@ -735,7 +826,7 @@ private:
 
     void measure_adverse_selection(const std::unordered_map<std::string,pm::Book>& books,std::int64_t now){
         for(auto&l:legs_){
-            if(l.adverse_recorded||l.filled_shares<=1e-12||l.last_fill_ts<=0||now-l.last_fill_ts<adverse_horizon_s_) continue;
+            if(l.exited||l.adverse_recorded||l.filled_shares<=1e-12||l.last_fill_ts<=0||now-l.last_fill_ts<adverse_horizon_s_) continue;
             auto bk=books.find(l.token_id); if(bk==books.end()) continue;
             const double bid=bk->second.best_bid(); if(!std::isfinite(bid)) continue;
             l.adverse_mark_pnl=l.filled_shares*(bid-l.entry_avg()); l.adverse_recorded=true;
@@ -764,7 +855,7 @@ private:
     double market_committed(const std::string& market_id) const{
         double x=0.0;
         for(const auto&l:legs_){
-            if(l.market_id!=market_id) continue;
+            if(l.market_id!=market_id||l.exited) continue;
             auto it=bundles_.find(l.bundle_id);
             if(it==bundles_.end()||it->second.status=="CLOSED"||it->second.status=="UNWOUND"||it->second.status=="CANCELLED") continue;
             x+=l.entry_cash;
@@ -775,7 +866,7 @@ private:
     double event_committed(const std::string& event_id) const{
         double x=0.0;
         for(const auto&l:legs_){
-            if(l.event_id!=event_id) continue;
+            if(l.event_id!=event_id||l.exited) continue;
             auto it=bundles_.find(l.bundle_id);
             if(it==bundles_.end()||it->second.status=="CLOSED"||it->second.status=="UNWOUND"||it->second.status=="CANCELLED") continue;
             x+=l.entry_cash;
@@ -787,17 +878,18 @@ private:
     double reserved_cash() const{
         double x=0.0;
         for(const auto&l:legs_){
+            if(l.exited) continue;
             auto it=bundles_.find(l.bundle_id);
             if(it==bundles_.end()||it->second.status=="CLOSED"||it->second.status=="UNWOUND"||it->second.status=="CANCELLED") continue;
             if(l.order_state=="RESTING"||l.order_state=="CANCEL_PENDING") x+=l.remaining()*l.limit_price;
         }
         return x;
     }
-    double gross_entry_cash() const{double x=0.0;for(const auto&l:legs_) if(l.exit_cash<=0.0)x+=l.entry_cash;return x;}
+    double gross_entry_cash() const{double x=0.0;for(const auto&l:legs_) if(!l.exited)x+=l.entry_cash;return x;}
     double equity(const std::unordered_map<std::string,pm::Book>& books) const{
         double e=cash_;
         for(const auto&l:legs_){
-            if(l.filled_shares<=1e-12||l.exit_cash>0.0) continue;
+            if(l.filled_shares<=1e-12||l.exited) continue;
             auto it=books.find(l.token_id); const double bid=it!=books.end()?it->second.best_bid():l.entry_avg();
             e+=l.filled_shares*(std::isfinite(bid)?bid:l.entry_avg());
         }

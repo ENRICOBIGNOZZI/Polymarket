@@ -13,6 +13,12 @@ struct QueueFillResult {
     double fill_shares = 0.0;
 };
 
+struct FilledLegExposure {
+    double filled_shares = 0.0;
+    double target_shares = 0.0;
+    double average_entry_price = 0.0;
+};
+
 // A bundle still has execution/market risk while it is resting, holding a
 // completed position, or aborting. ABORTING must remain live until every
 // outstanding order is cancelled and every filled leg is unwound.
@@ -66,6 +72,31 @@ inline double minimum_completion(const std::vector<std::pair<double,double>>& fi
         c = std::min(c, std::clamp(filled / target, 0.0, 1.0));
     }
     return c;
+}
+
+// Worst-case capital at risk solely because legs filled at different rates.
+// The common completed fraction is treated as the hedged bundle; every share
+// above that fraction is naked and can lose its full entry cost. This is the
+// quantity a max-leg-risk gate must control, not the current liquidation loss.
+inline double unmatched_entry_risk(const std::vector<FilledLegExposure>& legs) {
+    if (legs.empty()) return 0.0;
+    std::vector<std::pair<double,double>> completion_inputs;
+    completion_inputs.reserve(legs.size());
+    for (const auto& leg : legs) {
+        completion_inputs.push_back({
+            std::max(0.0, leg.filled_shares),
+            std::max(0.0, leg.target_shares)
+        });
+    }
+    const double common = minimum_completion(completion_inputs);
+    double risk = 0.0;
+    for (const auto& leg : legs) {
+        const double filled = std::max(0.0, leg.filled_shares);
+        const double target = std::max(0.0, leg.target_shares);
+        const double naked = std::max(0.0, filled - common * target);
+        risk += naked * std::max(0.0, leg.average_entry_price);
+    }
+    return risk;
 }
 
 } // namespace pm
