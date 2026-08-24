@@ -13,21 +13,38 @@ STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
 mkdir -p "$STATE_DIR/grafana/provisioning/datasources" \
   "$STATE_DIR/grafana/provisioning/dashboards"
 
-# Grafana remains bound to loopback only. Anonymous Viewer access therefore
-# removes the login prompt without exposing the dashboard on a public socket.
 cat > "$STATE_DIR/grafana.ini" <<EOF
 [server]
 http_addr = 127.0.0.1
 http_port = 3000
+root_url = http://127.0.0.1:3000/
 
 [users]
 allow_sign_up = false
+auto_assign_org = true
+auto_assign_org_id = 1
+auto_assign_org_role = Viewer
+
+[auth]
+disable_login_form = true
+disable_signout_menu = true
+
+[auth.basic]
+enabled = false
 
 [auth.anonymous]
 enabled = true
 org_name = Main Org.
 org_role = Viewer
 hide_version = true
+
+[analytics]
+reporting_enabled = false
+check_for_updates = false
+check_for_plugin_updates = false
+
+[news]
+news_feed_enabled = false
 
 [dashboards]
 default_home_dashboard_path = $APP_DIR/monitoring/grafana/dashboards/polymarket-latest.json
@@ -62,4 +79,4 @@ providers:
       path: "$APP_DIR/monitoring/grafana/dashboards"
 EOF
 
-printf 'grafana_mode=anonymous_viewer bind=127.0.0.1:3000\n'
+printf 'grafana_mode=anonymous_viewer_no_login bind=127.0.0.1:3000 dashboard=polymarket-latest\n'
