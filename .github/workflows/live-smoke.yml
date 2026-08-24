@@ -1,62 +1,224 @@
-name: live-api-smoke
+name: Polymarket External Intelligence
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Collection mode; backfill expands the bounded historical bootstrap
+        required: false
+        default: incremental
+        type: choice
+        options:
+          - incremental
+          - backfill
+          - demo
   schedule:
-    - cron: "17 */6 * * *"
+    - cron: "17,47 * * * *"
+  push:
+    branches: [main]
+    paths:
+      - "config/external_intelligence.json"
+      - "scripts/external_intelligence.py"
+      - "scripts/attach_external_evidence.py"
+      - "tests/test_external_intelligence.py"
+      - "tests/test_attach_external_evidence.py"
+      - ".github/workflows/live-smoke.yml"
+      - "docs/EXTERNAL_INTELLIGENCE.md"
+  pull_request:
+    branches: [main]
+    paths:
+      - "config/external_intelligence.json"
+      - "scripts/external_intelligence.py"
+      - "scripts/attach_external_evidence.py"
+      - "tests/test_external_intelligence.py"
+      - "tests/test_attach_external_evidence.py"
+      - ".github/workflows/live-smoke.yml"
+      - "docs/EXTERNAL_INTELLIGENCE.md"
 
 permissions:
-  contents: read
+  contents: write
+  actions: read
 
 concurrency:
-  group: live-api-smoke
-  cancel-in-progress: true
+  group: polymarket-external-intelligence
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
   live-api-smoke:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Install dependencies
+      - name: Validate external-intelligence contracts
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+          set -euo pipefail
+          python3 -m unittest \
+            tests/test_external_intelligence.py \
+            tests/test_attach_external_evidence.py -v
+          python3 -m py_compile \
+            scripts/external_intelligence.py \
+            scripts/attach_external_evidence.py
+          python3 -m json.tool config/external_intelligence.json >/dev/null
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
 
-      - name: Build Release engine
+          cfg = json.loads(Path("config/external_intelligence.json").read_text())
+          assert cfg["paper_only"] is True
+          assert cfg["allow_authenticated_execution"] is False
+          assert cfg["allow_direct_champion_mutation"] is False
+          assert cfg["allow_production_signal_write"] is False
+          assert {1.0, 1.5, 2.0}.issubset(
+              {float(value) for value in cfg["backtest"]["cost_stress_multipliers"]}
+          )
+          PY
+
+      - name: Restore point-in-time history from telemetry
+        shell: bash
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --parallel 2
+          set -euo pipefail
+          mkdir -p external_intelligence/input external_intelligence/output
+          git fetch --no-tags origin telemetry:refs/remotes/origin/telemetry || true
 
-      - name: Read-only Gamma and CLOB scan
+          extract_or_empty() {
+            local remote_path="$1"
+            local local_path="$2"
+            if git show "origin/telemetry:${remote_path}" > "$local_path" 2>/dev/null; then
+              test -s "$local_path" || rm -f "$local_path"
+            fi
+          }
+
+          extract_or_empty telemetry/external-intelligence-observations.jsonl.gz \
+            external_intelligence/input/observations.jsonl.gz
+          extract_or_empty telemetry/external-intelligence-prices.jsonl.gz \
+            external_intelligence/input/prices.jsonl.gz
+          extract_or_empty telemetry/external-intelligence-state.json \
+            external_intelligence/input/state.json
+
+          python3 - <<'PY'
+          import gzip
+          from pathlib import Path
+
+          for name in ("observations.jsonl.gz", "prices.jsonl.gz"):
+              path = Path("external_intelligence/input") / name
+              if not path.exists():
+                  path.write_bytes(gzip.compress(b"", compresslevel=9, mtime=0))
+          state = Path("external_intelligence/input/state.json")
+          if not state.exists():
+              state.write_text("{}\n", encoding="utf-8")
+          PY
+
+      - name: Collect, persist and backtest public external information
+        shell: bash
+        env:
+          REQUESTED_MODE: ${{ inputs.mode }}
         run: |
-          mkdir -p live-smoke-output
-          ./build/polymarket_engine \
-            --config config/paper.example.json \
-            --once --scan-only --markets 10 --min-liquidity 100 \
-            --run-dir live-smoke-output
-          test -s live-smoke-output/status.json
-          test -s live-smoke-output/signals.csv
+          set -euo pipefail
+          mode=incremental
+          case "$GITHUB_EVENT_NAME" in
+            pull_request|push) mode=demo ;;
+            workflow_dispatch) mode="${REQUESTED_MODE:-incremental}" ;;
+            schedule) mode=incremental ;;
+            *) echo "unsupported event: $GITHUB_EVENT_NAME" >&2; exit 1 ;;
+          esac
+          case "$mode" in incremental|backfill|demo) ;; *) exit 2 ;; esac
 
-      - name: Publish status summary
+          python3 scripts/external_intelligence.py \
+            --config config/external_intelligence.json \
+            --observations-in external_intelligence/input/observations.jsonl.gz \
+            --prices-in external_intelligence/input/prices.jsonl.gz \
+            --state-in external_intelligence/input/state.json \
+            --observations-out external_intelligence/output/observations.jsonl.gz \
+            --prices-out external_intelligence/output/prices.jsonl.gz \
+            --state-out external_intelligence/output/state.json \
+            --signals-out external_intelligence/output/latest-signals.jsonl \
+            --report-json external_intelligence/output/latest-external-intelligence.json \
+            --report-markdown external_intelligence/output/latest-external-intelligence.md \
+            --mode "$mode" \
+            | tee external_intelligence/output/external-intelligence.log
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(
+              Path("external_intelligence/output/latest-external-intelligence.json").read_text()
+          )
+          assert report["paper_only"] is True
+          assert report["submitted_orders"] == 0
+          assert report["authenticated_execution"] is False
+          assert report["direct_champion_mutation"] is False
+          assert report["production_signal_write"] is False
+          assert report["safety"]["lookahead_rejected"] is True
+          assert Path("external_intelligence/output/observations.jsonl.gz").stat().st_size > 0
+          assert Path("external_intelligence/output/prices.jsonl.gz").stat().st_size > 0
+          PY
+
+      - name: Publish external-intelligence summary
         if: always()
+        shell: bash
         run: |
-          echo "## Read-only live API smoke" >> "$GITHUB_STEP_SUMMARY"
-          echo '```json' >> "$GITHUB_STEP_SUMMARY"
-          if test -s live-smoke-output/status.json; then
-            python3 -m json.tool live-smoke-output/status.json >> "$GITHUB_STEP_SUMMARY" || cat live-smoke-output/status.json >> "$GITHUB_STEP_SUMMARY"
+          echo '## Polymarket External Intelligence' >> "$GITHUB_STEP_SUMMARY"
+          if test -s external_intelligence/output/latest-external-intelligence.md; then
+            cat external_intelligence/output/latest-external-intelligence.md >> "$GITHUB_STEP_SUMMARY"
           else
-            echo '{"status":"missing"}' >> "$GITHUB_STEP_SUMMARY"
+            echo 'External-intelligence report is missing.' >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload smoke diagnostics
+      - name: Publish durable point-in-time history and evidence
+        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! git ls-remote --exit-code origin refs/heads/telemetry >/dev/null 2>&1; then
+            git push origin "HEAD:refs/heads/telemetry"
+          fi
+
+          publish_file() {
+            local local_path="$1"
+            local remote_path="$2"
+            local message="$3"
+            local endpoint="repos/${GITHUB_REPOSITORY}/contents/${remote_path}"
+            local content current_sha
+            content="$(base64 -w0 "$local_path")"
+            current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
+            local args=("$endpoint" --method PUT -f message="$message" -f content="$content" -f branch=telemetry)
+            if [[ -n "$current_sha" ]]; then
+              args+=(-f sha="$current_sha")
+            fi
+            gh api "${args[@]}" >/dev/null
+          }
+
+          publish_file external_intelligence/output/observations.jsonl.gz \
+            telemetry/external-intelligence-observations.jsonl.gz \
+            "Update external-intelligence point-in-time observations"
+          publish_file external_intelligence/output/prices.jsonl.gz \
+            telemetry/external-intelligence-prices.jsonl.gz \
+            "Update external-intelligence Polymarket prices"
+          publish_file external_intelligence/output/state.json \
+            telemetry/external-intelligence-state.json \
+            "Update external-intelligence source and backfill state"
+          publish_file external_intelligence/output/latest-signals.jsonl \
+            telemetry/latest-external-signals.jsonl \
+            "Update latest external-information shadow signals"
+          publish_file external_intelligence/output/latest-external-intelligence.json \
+            telemetry/latest-external-intelligence.json \
+            "Update external-intelligence backtest evidence"
+          publish_file external_intelligence/output/latest-external-intelligence.md \
+            telemetry/latest-external-intelligence.md \
+            "Update external-intelligence human report"
+
+      - name: Upload durable external-intelligence evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: live-smoke-${{ github.run_id }}
-          path: live-smoke-output/
-          if-no-files-found: warn
-          retention-days: 7
+          name: external-intelligence-${{ github.run_id }}
+          path: external_intelligence/
+          if-no-files-found: error
+          retention-days: 30
