@@ -118,10 +118,13 @@ class IncumbentHealthGateTest(unittest.TestCase):
         self.assertNotEqual(stale.returncode, 0)
         self.assertIn("main and paper-validated are not equal", stale.stdout)
 
-    def test_integration_workflow_uses_automatic_promotion_without_private_health_precondition(self):
+    def test_integration_workflow_uses_automatic_promotion_after_public_validation(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn('cron: "3,18,33,48 * * * *"', workflow)
         self.assertIn("actions: read", workflow)
+        self.assertIn("Require current main to be publicly paper-validated", workflow)
+        self.assertIn("git fetch --no-tags origin main paper-validated", workflow)
+        self.assertIn('test "$main_sha" = "$validated_sha"', workflow)
         self.assertIn("Build locally-green automatic promotion queue", workflow)
         self.assertIn("Scan numbered research sources and select first fully-green candidate", workflow)
         self.assertIn("Automatically promote the first fully-green paper champion candidate", workflow)
