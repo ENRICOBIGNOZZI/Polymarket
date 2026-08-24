@@ -118,18 +118,20 @@ class IncumbentHealthGateTest(unittest.TestCase):
         self.assertNotEqual(stale.returncode, 0)
         self.assertIn("main and paper-validated are not equal", stale.stdout)
 
-    def test_integration_workflow_downloads_fresh_health_artifact_after_health_schedule(self):
+    def test_integration_workflow_uses_automatic_promotion_without_private_health_precondition(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn('cron: "33 * * * *"', workflow)
+        self.assertIn('cron: "3,18,33,48 * * * *"', workflow)
         self.assertIn("actions: read", workflow)
-        self.assertIn("SERVER_DEPLOY_ENABLED", workflow)
-        self.assertIn("gh run list --workflow server-health.yml", workflow)
-        self.assertIn('paper-server-health-$health_run_id', workflow)
-        self.assertIn("gh run download", workflow)
-        self.assertIn("scripts/incumbent_health_gate.py", workflow)
-        self.assertIn("--max-age-seconds 7200", workflow)
-        self.assertIn("incumbent-health-evidence", workflow)
-        self.assertIn("deployed and healthy", workflow)
+        self.assertIn("Build locally-green automatic promotion queue", workflow)
+        self.assertIn("Scan numbered research sources and select first fully-green candidate", workflow)
+        self.assertIn("Automatically promote the first fully-green paper champion candidate", workflow)
+        self.assertIn("scripts/integration_gate.py validate", workflow)
+        self.assertIn("--match-head-commit", workflow)
+        self.assertIn("champion-integration-merged", workflow)
+        self.assertNotIn("SERVER_DEPLOY_ENABLED", workflow)
+        self.assertNotIn("gh run list --workflow server-health.yml", workflow)
+        self.assertNotIn("gh run download", workflow)
+        self.assertNotIn("scripts/incumbent_health_gate.py", workflow)
 
     def test_private_health_is_not_disabled_with_automatic_deploy(self):
         workflow = SERVER_HEALTH_WORKFLOW.read_text(encoding="utf-8")
