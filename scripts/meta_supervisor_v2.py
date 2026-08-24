@@ -36,6 +36,36 @@ def classify_workflow(
     return result
 
 
+def _surface_failure_cooldowns(report: dict[str, Any]) -> None:
+    alerts = report.setdefault("alerts", [])
+    existing = {
+        (str(alert.get("code")), str(alert.get("detail")))
+        for alert in alerts
+        if isinstance(alert, dict)
+    }
+    critical = False
+    for filename, state in (report.get("workflow_status") or {}).items():
+        if not isinstance(state, dict) or state.get("state") != "failure_cooldown":
+            continue
+        severity = "warning" if state.get("dispatchable") else "critical"
+        detail = f"{filename}: {state.get('reason') or 'recent workflow failure is inside retry cooldown'}"
+        key = ("WORKFLOW_FAILURE_COOLDOWN", detail)
+        if key not in existing:
+            alerts.append(
+                {
+                    "severity": severity,
+                    "code": "WORKFLOW_FAILURE_COOLDOWN",
+                    "detail": detail,
+                }
+            )
+            existing.add(key)
+        if severity == "critical":
+            critical = True
+    if critical:
+        report["status"] = "DEGRADED"
+    report.setdefault("invariants", {})["failure_cooldown_is_health_evidence"] = False
+
+
 def _autonomous_product_health(config: dict[str, Any], snapshot: dict[str, Any], now: int) -> dict[str, Any]:
     payload = ((snapshot.get("products") or {}).get("autonomous_research") or {})
     generated = legacy.parse_timestamp(payload.get("generated_ts")) if isinstance(payload, dict) else 0
@@ -74,6 +104,7 @@ def _autonomous_product_health(config: dict[str, Any], snapshot: dict[str, Any],
 
 def build_report(config: dict[str, Any], snapshot: dict[str, Any], now: int) -> dict[str, Any]:
     report = _original_build_report(config, snapshot, now)
+    _surface_failure_cooldowns(report)
     product = _autonomous_product_health(config, snapshot, now)
     report["product_health"] = {"autonomous_research": product}
     if product["healthy"]:
