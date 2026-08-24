@@ -17,7 +17,7 @@ LEDGER = ["bundle_id","strategy","event_id","created_ts","closed_ts","status","e
 
 
 class V4ResearchTests(unittest.TestCase):
-    def test_scanner_adapter_builds_complete_b1_and_b2_bundles(self):
+    def test_scanner_adapter_builds_complete_b1_and_coherent_b2_bundles(self):
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
             cfg = td / "cfg.json"
@@ -40,17 +40,37 @@ class V4ResearchTests(unittest.TestCase):
 
             b2_scan, b2_out = td / "b2_scan.csv", td / "b2.csv"
             with b2_scan.open("w", newline="") as f:
-                fields = ["market","half_life_h","maker_entry_net_edge","executable_notional","legs"]
+                fields = ["market","half_life_h","maker_entry_net_edge","executable_notional","legs","coherence_scope"]
                 w = csv.DictWriter(f, fieldnames=fields); w.writeheader()
                 w.writerow(dict(market="t",half_life_h=1.5,maker_entry_net_edge=.006,executable_notional=20,
-                                legs="t:NO:1|h1:YES:0.4|h2:NO:0.2"))
-            subprocess.run([sys.executable, str(BUILD), "--strategy", "B2", "--input", str(b2_scan), "--output", str(b2_out),
-                            "--config", str(cfg), "--now", "1800000000"], check=True, capture_output=True, text=True)
+                                legs="t:NO:1|h1:YES:0.4|h2:NO:0.2",
+                                coherence_scope="same_event:1.0000:0|semantic:0.5000:3"))
+                # A profitable raw PCA row without a coherence certificate must never become an intent.
+                w.writerow(dict(market="raw",half_life_h=1.5,maker_entry_net_edge=.02,executable_notional=100,
+                                legs="raw:NO:1|unrelated:YES:0.4",coherence_scope=""))
+            completed = subprocess.run([sys.executable, str(BUILD), "--strategy", "B2", "--input", str(b2_scan), "--output", str(b2_out),
+                                        "--config", str(cfg), "--now", "1800000000"], check=True, capture_output=True, text=True)
             b2 = list(csv.DictReader(b2_out.open()))
             self.assertEqual(len(b2), 3)
             self.assertEqual({r["market_id"] for r in b2}, {"t", "h1", "h2"})
             self.assertEqual({r["strategy"] for r in b2}, {"B2"})
             self.assertTrue(all(float(r["limit_price"]) == 0.0 for r in b2))
+            self.assertEqual(json.loads(completed.stdout)["coherence_rejected"], 1)
+
+    def test_b2_rejects_unrelated_or_missing_target_certificate(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            scan, out = td / "scan.csv", td / "out.csv"
+            with scan.open("w", newline="") as f:
+                fields = ["market","maker_entry_net_edge","executable_notional","legs","coherence_scope"]
+                w = csv.DictWriter(f, fieldnames=fields); w.writeheader()
+                w.writerow(dict(market="t",maker_entry_net_edge=.02,executable_notional=100,
+                                legs="other:NO:1|h:YES:1",coherence_scope="semantic:0.5:3"))
+                w.writerow(dict(market="t",maker_entry_net_edge=.02,executable_notional=100,
+                                legs="t:NO:1|h:YES:1",coherence_scope="unrelated:0.0:0"))
+            subprocess.run([sys.executable, str(BUILD), "--strategy", "B2", "--input", str(scan), "--output", str(out),
+                            "--now", "1800000000"], check=True, capture_output=True, text=True)
+            self.assertEqual(list(csv.DictReader(out.open())), [])
 
     def test_merge_preserves_only_complete_fresh_bundles(self):
         with tempfile.TemporaryDirectory() as td:

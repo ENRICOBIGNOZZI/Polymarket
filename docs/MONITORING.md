@@ -10,6 +10,7 @@ Grafana is deliberately version-agnostic. The monitoring stack auto-selects the 
 - `docs/TELEMETRY_CONTRACT.md`: the small `runtime_status.json` contract future versions should publish.
 - Prometheus: five-second scraping, local risk rules.
 - Grafana: `Polymarket — Latest Runtime` is the stable home dashboard.
+- `scripts/runtime_action_report.py`: explains the candidate funnel, hedge filtering, broker actions and abstention reasons in JSON and Markdown.
 
 If a future runtime publishes `runtime_status.json`, the default dashboard works immediately even if all internal execution files changed. Version-specific exporters/dashboards are optional detail, not a dependency.
 
@@ -29,7 +30,56 @@ Then, independently:
 bash scripts/monitoring_up.sh
 ```
 
-Open `http://localhost:3000`. By default `POLYMARKET_RUN_NAME=auto`, which selects the numerically highest versioned `paper_v*` directory. Set `POLYMARKET_RUN_NAME` only when intentionally pinning an older/historical run.
+On the server, `ops/apply_runtime_config_macos.sh` keeps Grafana bound to `127.0.0.1:3000` and publishes only a private tailnet route with Tailscale Serve. The operator URL is:
+
+```text
+http://100.104.183.109:3000
+```
+
+The machine opening the page must be connected to the same Tailscale tailnet. Grafana uses anonymous `Viewer` access: there is no login form and no editing/admin permission through this route. Prometheus and the exporter remain loopback-only.
+
+For a purely local installation, open `http://localhost:3000`. By default `POLYMARKET_RUN_NAME=auto`, which selects the numerically highest versioned `paper_v*` directory. Set `POLYMARKET_RUN_NAME` only when intentionally pinning an older/historical run.
+
+## Hourly operational explanation
+
+The `paper-server-health` workflow runs at minute 23 of every hour. It now verifies Grafana from a separate GitHub runner over the tailnet, not only from `localhost` on the server. It also generates and publishes:
+
+```text
+runs/paper_v4_live/action_report.md
+runs/paper_v4_live/action_report.json
+```
+
+The report states:
+
+- what B1, raw B2, coherent B2, NegRisk, rewards and the external expert found;
+- how many PCA baskets were rejected as economically incoherent;
+- which bundles passed the executable-edge gate;
+- whether the broker posted, waited, partially filled, closed, unwound or abstained;
+- the concrete blocking reason, such as costs, queue/fillability, missing external signals, conversion risk or broker-admission gaps.
+
+The workflow embeds the Markdown report in the GitHub Actions summary and uploads both formats as health evidence. A zero-trade hour is therefore no longer reported merely as “healthy”: it must include the reason for abstention.
+
+## B2 hedge coherence telemetry
+
+Global PCA remains available as a research diagnostic in:
+
+```text
+stat_arb_pca_raw.csv
+```
+
+Before any B2 row reaches the intent adapter, `scripts/filter_coherent_hedges.py` checks every hedge leg against public Gamma metadata. Only same-event or sufficiently strong semantic relations enter:
+
+```text
+stat_arb_pca.csv
+```
+
+Rejected cross-domain or metadata-unknown baskets are retained for diagnosis in:
+
+```text
+stat_arb_pca_rejected.csv
+```
+
+The filter and intent adapter are both fail-closed. A scanner, metadata or filter failure produces an empty execution-facing B2 set; it never reuses a stale CSV. Public live telemetry exposes `raw_rows`, `coherent_rows`, `rejected_rows` and the corresponding positive-edge counts.
 
 ## Stable home-dashboard metrics
 
@@ -63,7 +113,7 @@ Critical/warning rules follow the auto-selected runtime rather than a version nu
 
 ## Security
 
-Grafana, Prometheus and the exporter bind to localhost by default. Change the default Grafana password before exposing the interface beyond a private machine. No Alertmanager credentials are stored in the repository.
+Grafana, Prometheus and the exporter bind to localhost. Remote Grafana access is proxied only through Tailscale Serve and receives Viewer permissions. No Grafana admin password, wallet credential, Alertmanager credential or authenticated Polymarket execution key is stored in the repository.
 
 ## Stop / reset
 
@@ -82,10 +132,20 @@ This does not delete paper-run state under `runs/`.
 ## Validation
 
 ```bash
-python3 -m unittest tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py tests/test_monitoring_latest_exporter.py -v
-python3 -m py_compile monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_latest.py
+python3 -m unittest \
+  tests/test_monitoring_exporter.py \
+  tests/test_monitoring_v4_exporter.py \
+  tests/test_monitoring_latest_exporter.py \
+  tests/test_runtime_action_report.py \
+  tests/test_coherent_hedges.py -v
+python3 -m py_compile \
+  monitoring/exporter.py \
+  monitoring/exporter_v4.py \
+  monitoring/exporter_latest.py \
+  scripts/runtime_action_report.py \
+  scripts/filter_coherent_hedges.py
 python3 -m json.tool monitoring/grafana/dashboards/polymarket-latest.json >/dev/null
-bash -n scripts/monitoring_up.sh scripts/monitoring_down.sh
+bash -n scripts/monitoring_up.sh scripts/monitoring_down.sh scripts/paper_v4_loop.sh
 ```
 
-The same contract is checked in CI.
+The same contract is checked in CI and in the hourly private-server health workflow.

@@ -26,12 +26,24 @@ class LiveSmokeSummaryTest(unittest.TestCase):
             )
             (run / "stat_arb_pairs_latest.log").write_text("a\nb\nc\n", encoding="utf-8")
             (run / "reward_latest.log").write_text("reward-a\nreward-b\n", encoding="utf-8")
+            (run / "coherent_hedges.log").write_text(
+                "coherent_hedges input=3 kept=2 rejected=1\n", encoding="utf-8"
+            )
             (run / "stat_arb_pairs.csv").write_text(
                 "y_market,x_market,maker_entry_net_edge\nlow,x,0.001\nhigh,y,0.009\n",
                 encoding="utf-8",
             )
+            (run / "stat_arb_pca_raw.csv").write_text(
+                "market,raw_expected_edge,maker_entry_net_edge\np1,0.001,-0.002\np2,0.006,0.004\np3,0.02,0.01\n",
+                encoding="utf-8",
+            )
             (run / "stat_arb_pca.csv").write_text(
-                "market,maker_entry_net_edge\np1,-0.002\np2,0.004\n",
+                "market,raw_expected_edge,maker_entry_net_edge,coherence_scope\np1,0.001,-0.002,semantic:0.5:3\np2,0.006,0.004,same_event:1:0\n",
+                encoding="utf-8",
+            )
+            (run / "stat_arb_pca_rejected.csv").write_text(
+                "market,raw_expected_edge,maker_entry_net_edge,coherence_reason,unrelated_market_ids\n"
+                "p3,0.02,0.01,unrelated_or_unknown_hedge_legs,h9\n",
                 encoding="utf-8",
             )
             (run / "reward_opportunities.csv").write_text(
@@ -103,6 +115,7 @@ class LiveSmokeSummaryTest(unittest.TestCase):
             self.assertNotIn("unrelated_metric", data["metrics"])
             self.assertEqual(data["logs"]["b1"], ["b", "c"])
             self.assertEqual(data["logs"]["rewards"], ["reward-a", "reward-b"])
+            self.assertEqual(data["logs"]["b2_coherence"], ["coherent_hedges input=3 kept=2 rejected=1"])
             self.assertFalse(data["walk_forward"]["eligible_for_tiny_pilot"])
             self.assertEqual(data["candidates"]["b1"][0]["y_market"], "high")
             self.assertEqual(data["candidates"]["b2"][0]["market"], "p2")
@@ -111,6 +124,17 @@ class LiveSmokeSummaryTest(unittest.TestCase):
             self.assertEqual(data["intents"]["bundles"], 1)
             self.assertEqual(data["intents"]["strategies"], {"B1": 2})
             self.assertEqual(data["intents"]["max_expected_edge"], 0.006)
+
+            coherence = data["b2_coherence"]
+            self.assertEqual(coherence["raw_rows"], 3)
+            self.assertEqual(coherence["coherent_rows"], 2)
+            self.assertEqual(coherence["rejected_rows"], 1)
+            self.assertEqual(coherence["raw_positive"], 3)
+            self.assertEqual(coherence["coherent_raw_positive"], 2)
+            self.assertEqual(coherence["rejected_raw_positive"], 1)
+            self.assertEqual(coherence["coherent_maker_positive"], 1)
+            self.assertEqual(coherence["top_raw"][0]["market"], "p3")
+            self.assertEqual(coherence["top_rejected"][0]["market"], "p3")
 
             shadow_data = data["shadow_b1"]
             self.assertEqual(shadow_data["z_threshold"], 1.25)

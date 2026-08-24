@@ -1,5 +1,6 @@
 #include "pm/api.hpp"
 #include "pm/engine.hpp"
+#include "pm/market_relation.hpp"
 #include "pm/types.hpp"
 
 #include <algorithm>
@@ -455,7 +456,7 @@ int main(int argc, char** argv) {
         }
 
         std::vector<Opportunity> opportunities;
-        std::size_t mr_pass = 0, hedge_pass = 0;
+        std::size_t mr_pass = 0, relation_pass = 0, hedge_pass = 0;
         for (std::size_t j = 0; j < N; ++j) {
             auto fit = fit_residual(residuals[j], bucket_s);
             if (!fit.ok || fit.t_reversion > -min_t) continue;
@@ -479,11 +480,15 @@ int main(int argc, char** argv) {
             const double z = (residual_now - fit.mean) / fit.sd;
             if (std::abs(z) < min_z) continue;
 
-            // Construct a minimum-norm hedge against the estimated common factors.
+            // Construct a minimum-norm hedge only from contracts that belong to
+            // the same explicit event or a strong semantic cluster. A global PCA
+            // loading match is not, by itself, an economically valid hedge.
             struct HC { std::size_t index; double score; };
             std::vector<HC> candidates;
             for (std::size_t i = 0; i < N; ++i) {
                 if (i == j || !current_observed[i]) continue;
+                if (pm::market_relation(*s[j].market, *s[i].market) == pm::MarketRelation::none) continue;
+                ++relation_pass;
                 double loading_norm = 0.0;
                 for (const auto& v : vecs) loading_norm += v[i] * v[i];
                 loading_norm = std::sqrt(loading_norm);
@@ -493,7 +498,7 @@ int main(int argc, char** argv) {
             }
             std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) { return a.score > b.score; });
             if (candidates.size() > max_hedges) candidates.resize(max_hedges);
-            if (candidates.size() < vecs.size()) continue;
+            if (candidates.empty()) continue;
 
             const std::size_t K = vecs.size();
             std::vector<std::vector<double>> A(K, std::vector<double>(K, 0.0));
@@ -608,6 +613,7 @@ int main(int argc, char** argv) {
                   << " factors=" << vecs.size()
                   << " explained=" << explained
                   << " mr_pass=" << mr_pass
+                  << " relation_pass=" << relation_pass
                   << " hedge_pass=" << hedge_pass
                   << " opportunities=" << opportunities.size()
                   << " raw_positive=" << raw_positive

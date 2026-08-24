@@ -55,7 +55,16 @@ jobs:
           chmod 600 ~/.ssh/polymarket_deploy
           ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
 
-      - name: Inspect server
+      - name: Verify operator Grafana route
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 10 --retry-delay 2 --retry-all-errors \
+            "http://$SERVER_HOST:3000/api/health" | tee grafana-health.json
+          curl --fail --silent --show-error --retry 5 --retry-delay 2 --retry-all-errors \
+            "http://$SERVER_HOST:3000/api/search" > grafana-search.json
+
+      - name: Inspect server and write action report
         shell: bash
         run: |
           set -euo pipefail
@@ -85,7 +94,8 @@ jobs:
           grep -q '^polymarket_runtime_info' <<<"$metrics"
           printf '%s\n' "$metrics" | grep -E '^polymarket_(runtime_info|runtime_equity_usd|runtime_pnl_usd|runtime_drawdown_ratio|runtime_kill_switch|runtime_realized_pnl_usd_total|runtime_execution_imbalance_ratio|runtime_oos_net_pnl_usd|runtime_oos_stressed_net_pnl_usd|runtime_oos_eligible|trade_recorder_staleness_seconds|multileg_live_bundles)' || true
 
-          supervisor="$HOME/polymarket/runs/paper_v4_live/runtime_supervisor.csv"
+          run_root="$HOME/polymarket/runs/paper_v4_live"
+          supervisor="$run_root/runtime_supervisor.csv"
           test -s "$supervisor"
           supervisor_row="$(tail -n 1 "$supervisor")"
           IFS=, read -r supervisor_ts recorder_alive broker_alive recorder_restarts broker_restarts recorder_pid broker_pid <<<"$supervisor_row"
@@ -100,11 +110,23 @@ jobs:
           printf 'broker_restarts=%s\n' "$broker_restarts"
           printf 'recorder_pid=%s\n' "$recorder_pid"
           printf 'broker_pid=%s\n' "$broker_pid"
+
+          python3 scripts/runtime_action_report.py \
+            --run-root "$run_root" --external-signals data/external_signals.csv \
+            --window-seconds 3600 --production-edge 0.001 \
+            --output-json "$run_root/action_report.json" \
+            --output-markdown "$run_root/action_report.md" >/dev/null
+          test -s "$run_root/action_report.json"
+          test -s "$run_root/action_report.md"
+          printf '%s\n' 'action_report_begin'
+          cat "$run_root/action_report.md"
+          printf '%s\n' 'action_report_end'
+
           printf '%s\n' 'trade_recorder_tail_begin'
-          tail -n 20 "$HOME/polymarket/runs/paper_v4_live/trade_recorder.log" 2>/dev/null || true
+          tail -n 20 "$run_root/trade_recorder.log" 2>/dev/null || true
           printf '%s\n' 'trade_recorder_tail_end'
           printf '%s\n' 'multileg_tail_begin'
-          tail -n 20 "$HOME/polymarket/runs/paper_v4_live/multileg.log" 2>/dev/null || true
+          tail -n 20 "$run_root/multileg.log" 2>/dev/null || true
           printf '%s\n' 'multileg_tail_end'
 
           case "$(uname -s)" in
@@ -134,6 +156,19 @@ jobs:
           esac
           REMOTE
 
+      - name: Fetch structured action report
+        shell: bash
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
+            -P "$SERVER_PORT" \
+            "$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v4_live/action_report.md" \
+            runtime-action-report.md
+          scp -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
+            -P "$SERVER_PORT" \
+            "$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v4_live/action_report.json" \
+            runtime-action-report.json
+
       - name: Publish health summary
         if: always()
         shell: bash
@@ -142,12 +177,19 @@ jobs:
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
           cat server-health.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo 'health output missing' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo '## What the system did and why' >> "$GITHUB_STEP_SUMMARY"
+          cat runtime-action-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo 'action report missing' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload health evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: paper-server-health-${{ github.run_id }}
-          path: server-health.txt
+          path: |
+            server-health.txt
+            runtime-action-report.md
+            runtime-action-report.json
+            grafana-health.json
+            grafana-search.json
           if-no-files-found: warn
           retention-days: 7
