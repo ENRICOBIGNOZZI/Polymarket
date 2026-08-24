@@ -140,11 +140,12 @@ def discover(base_url: str, page_size: int, tier1: float, tier2: float, limit: i
     seen_cursors: set[str] = set()
     cursor = ""
     while limit <= 0 or len(rows) < limit:
+        # Keep the cursor request deliberately minimal. Tradability is filtered
+        # below from the returned market object so API filter drift cannot shrink
+        # the research universe silently.
         query = {
-            "active": "true",
             "closed": "false",
             "limit": str(max(1, min(100, page_size))),
-            "ascending": "true",
         }
         if cursor:
             query["after_cursor"] = cursor
