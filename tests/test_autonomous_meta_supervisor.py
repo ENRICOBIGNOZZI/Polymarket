@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -18,6 +19,50 @@ SPEC.loader.exec_module(module)
 
 
 class AutonomousMetaSupervisorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.config = json.loads((ROOT / "config" / "alpha_factory.json").read_text(encoding="utf-8"))
+        self.now = 1_800_000_000
+        self.main = "a" * 40
+
+    def workflow_run(
+        self,
+        workflow_name: str,
+        *,
+        age: int = 60,
+        conclusion: str = "success",
+        run_id: int = 1,
+    ) -> dict:
+        return {
+            "databaseId": run_id,
+            "workflowName": workflow_name,
+            "status": "completed",
+            "conclusion": conclusion,
+            "headSha": self.main,
+            "headBranch": "main",
+            "event": "schedule",
+            "createdAt": self.now - age - 10,
+            "updatedAt": self.now - age,
+            "url": f"https://example.invalid/run/{run_id}",
+        }
+
+    def healthy_runs(self) -> list[dict]:
+        specs = self.config["coordination"]["workflows"]
+        return [
+            self.workflow_run(spec["name"], run_id=index + 1)
+            for index, spec in enumerate(specs.values())
+        ]
+
+    def healthy_product(self) -> dict:
+        return {
+            "generated_ts": self.now - 60,
+            "status": "HEALTHY",
+            "invariants": {
+                "append_only_external_store": True,
+                "bounded_allowlisted_research": True,
+                "real_order_submission": False,
+            },
+        }
+
     def test_skipped_dispatchable_worker_requires_recovery(self) -> None:
         spec = {"dispatchable": True, "requires_current_main": False, "max_age_seconds": 0}
         latest = {
@@ -73,6 +118,36 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
         self.assertTrue(
             any(reason.startswith("autonomous_research_reported_status") for reason in health["reasons"]),
             health,
+        )
+
+    def test_private_health_failure_cooldown_is_critical_and_degraded(self) -> None:
+        runs = self.healthy_runs()
+        for run in runs:
+            if run["workflowName"] == "paper-server-health":
+                run["conclusion"] = "failure"
+                run["updatedAt"] = self.now - 60
+        snapshot = {
+            "main_sha": self.main,
+            "paper_validated_sha": self.main,
+            "paper_validated_is_ancestor": True,
+            "server_deploy_enabled": True,
+            "runs": runs,
+            "products": {"autonomous_research": self.healthy_product()},
+        }
+        report = module.build_report(self.config, snapshot, self.now)
+        state = report["workflow_status"]["server-health.yml"]
+        self.assertEqual(state["state"], "failure_cooldown")
+        self.assertEqual(report["status"], "DEGRADED")
+        self.assertFalse(report["invariants"]["failure_cooldown_is_health_evidence"])
+        alerts = [
+            alert for alert in report["alerts"]
+            if alert.get("code") == "WORKFLOW_FAILURE_COOLDOWN"
+        ]
+        self.assertTrue(alerts, report["alerts"])
+        self.assertTrue(any(alert.get("severity") == "critical" for alert in alerts))
+        self.assertNotIn(
+            "server-health.yml",
+            [item["workflow_file"] for item in report["dispatch_plan"]],
         )
 
 
