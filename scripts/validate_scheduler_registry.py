@@ -26,6 +26,14 @@ REQUIRED_IDS = {
     "live-api-smoke",
 }
 
+# These are bounded operational actions rather than schedulers. They are still
+# audited here: each must exist, expose exactly one job, and must not acquire a
+# periodic schedule trigger. Keeping this list explicit prevents the scheduler
+# registry from silently ignoring arbitrary new workflows.
+NON_SCHEDULER_WORKFLOWS = {
+    ".github/workflows/grafana-access.yml",
+}
+
 
 def workflow_job_ids(path: Path) -> list[str]:
     text = path.read_text(encoding="utf-8")
@@ -126,12 +134,32 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         for path in workflow_dir.iterdir()
         if path.is_file() and path.suffix in {".yml", ".yaml"}
     }
-    unregistered = sorted(actual_workflows.difference(workflows))
+    unregistered = sorted(
+        actual_workflows.difference(workflows).difference(NON_SCHEDULER_WORKFLOWS)
+    )
     stale = sorted(workflows.difference(actual_workflows))
+    missing_non_scheduler = sorted(NON_SCHEDULER_WORKFLOWS.difference(actual_workflows))
     if unregistered:
         errors.append("unregistered workflows: " + ", ".join(unregistered))
     if stale:
         errors.append("registry references missing workflows: " + ", ".join(stale))
+    if missing_non_scheduler:
+        errors.append(
+            "declared non-scheduler workflows are missing: " + ", ".join(missing_non_scheduler)
+        )
+
+    for workflow in sorted(NON_SCHEDULER_WORKFLOWS.intersection(actual_workflows)):
+        path = root / workflow
+        text = path.read_text(encoding="utf-8")
+        jobs = workflow_job_ids(path)
+        if len(jobs) != 1:
+            errors.append(
+                f"non-scheduler workflow {workflow} must contain exactly one job; found {jobs or 'none'}"
+            )
+        if re.search(r"(?m)^  schedule:\s*$", text):
+            errors.append(
+                f"non-scheduler workflow {workflow} acquired a periodic schedule and must be registered"
+            )
 
     merge_ids = [str(item["id"]) for item in normalized if item["merge_authority"] is True]
     deploy_ids = [str(item["id"]) for item in normalized if item["deploy_authority"] is True]
@@ -240,6 +268,7 @@ def render_report(items: list[dict[str, Any]], errors: list[str]) -> str:
         "# Scheduler registry validation",
         "",
         f"- schedulers: {len(items)}",
+        f"- explicit non-scheduler workflows: {len(NON_SCHEDULER_WORKFLOWS)}",
         f"- errors: {len(errors)}",
         "",
         "| Scheduler | Job | Cadence | Responsibility | Merge | Deploy | Validation dispatch |",
