@@ -38,6 +38,17 @@ LIVE_MODEL_SURFACE_PATTERNS = (
     re.compile(r"^scripts/build_global_opportunity_book\.py$"),
 )
 
+MODEL_CODE_SURFACE_PATTERNS = (
+    re.compile(
+        r"^(?:src|include)(?:/.*)?/(?:engine|fast_arb|maker_paper|multileg_paper|"
+        r"negrisk_arb|pca_stat_arb|stat_arb|rewards_scan)\.(?:cpp|cc|cxx|h|hpp)$"
+    ),
+    re.compile(
+        r"^src/(?:engine|fast_arb|maker_paper|multileg_paper|negrisk_arb|"
+        r"pca_stat_arb|stat_arb|rewards_scan)\.(?:cpp|cc|cxx|h|hpp)$"
+    ),
+)
+
 SHADOW_FORBIDDEN_TOKENS = (
     "intent",
     "broker",
@@ -65,6 +76,14 @@ def has_model_intent(body: str) -> bool:
 
 def is_live_model_surface(path: str) -> bool:
     return any(pattern.search(path) for pattern in LIVE_MODEL_SURFACE_PATTERNS)
+
+
+def is_model_code_surface(path: str) -> bool:
+    return any(pattern.search(path) for pattern in MODEL_CODE_SURFACE_PATTERNS)
+
+
+def is_sensitive_model_surface(path: str) -> bool:
+    return is_live_model_surface(path) or is_model_code_surface(path)
 
 
 def is_opaque_model_bootstrap(changed_files: set[str], body: str) -> bool:
@@ -105,7 +124,7 @@ def evaluate(
     draft = bool(pr.get("draft"))
     labels = label_names(pr)
     manifest_changed = "config/live_champion.json" in changed_files
-    model_surface_files = sorted(path for path in changed_files if is_live_model_surface(path))
+    model_surface_files = sorted(path for path in changed_files if is_sensitive_model_surface(path))
     opaque_model_bootstrap = is_opaque_model_bootstrap(changed_files, body)
     forbidden_shadow_files = shadow_forbidden_files(changed_files) if "shadow-isolated" in labels else []
     errors: list[str] = []
