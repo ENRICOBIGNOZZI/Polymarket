@@ -18,6 +18,7 @@ The core runtime is paper/read-only. An isolated Python tiny-live pilot exists f
 | Single-market maker paper simulator | Queue/taker-tape driven, partial-fill aware |
 | Multi-leg paper broker | Partial fills, leg risk, cancel/replace, unwind, persistence |
 | Walk-forward/OOS gate | Implemented with embargo, cost stress and block bootstrap |
+| Live champion selector | Explicit `config/live_champion.json`; never highest-version-by-name |
 | Grafana/Prometheus | Version-agnostic; auto-selects latest `paper_v*` runtime |
 | Tiny real-money pilot | Opt-in, <= $10 total / <= $5 per leg; never automatic |
 | External fundamental/news alpha | Intentionally deferred |
@@ -32,6 +33,14 @@ Execution: fill / queue / leg-risk realization
 ```
 
 Short-horizon relative-value signals are never silently reinterpreted as `P(YES)` or passed to binary Kelly sizing.
+
+## Single live champion and research integration
+
+`main` contains one integrated paper champion. Specialized alpha experts may coexist inside it, but there is one model orchestrator, one live configuration, one portfolio/risk allocator and one execution path. `config/live_champion.json` explicitly selects the loop, config and run root; adding a numerically newer `paper_vN` implementation does not promote it.
+
+Unapproved work stays on `research/*`, `experiment/*` or `diagnostic/*`. A strictly isolated shadow diagnostic may enter `main` only when tests prove that it cannot emit production intents, book PnL or change risk. Once research is approved, System Watch creates a fresh `integration/*` branch from current `main`, consolidates the reusable improvement into the incumbent, removes superseded paths and merges only after the complete champion passes its gates.
+
+The hourly governance workflow reports the research/integration queue and may merge at most one non-draft, fully green `integration/*` PR carrying `approved-for-integration` and `single-model-reviewed`. Post-merge CI, monitoring and live-paper smoke are explicitly dispatched; the server remains on the previous `paper-validated` revision until the new revision passes. See [`docs/SYSTEM_WATCH.md`](docs/SYSTEM_WATCH.md).
 
 ## Strategy A — structural arbitrage
 
@@ -108,19 +117,19 @@ polymarket_multileg_paper
 
 ## Paper-live
 
-One full read-only/paper cycle:
+One full read-only/paper V4 cycle:
 
 ```bash
 bash scripts/paper_v4_once.sh config/paper_v4.json runs/paper_v4
 ```
 
-Continuous paper process:
+Continuous champion process:
 
 ```bash
-bash scripts/paper_v4_loop.sh config/paper_v4.json runs/paper_v4_live
+bash scripts/paper_latest_loop.sh
 ```
 
-The loop keeps the trade recorder and multi-leg broker alive, updates the single-market maker sleeve frequently, refits B1/B2 every 15 minutes, refreshes structural/terminal scans and writes a walk-forward report hourly.
+`paper_latest_loop.sh` reads `config/live_champion.json`; it does not infer approval from the largest version number. The selected loop keeps the trade recorder and multi-leg broker alive, updates the single-market maker sleeve frequently, refits B1/B2 every 15 minutes, refreshes structural/terminal scans and writes a walk-forward report hourly.
 
 ## Realized paper PnL
 
@@ -160,7 +169,7 @@ bash scripts/monitoring_up.sh
 
 `monitoring/exporter_latest.py` auto-selects the numerically highest `runs/paper_v*` runtime and exposes stable `polymarket_runtime_*` metrics. The home dashboard is `Polymarket — Latest Runtime`.
 
-Future V5/V6/... engines can change internal files freely and immediately reuse the same dashboard by publishing the atomic `runtime_status.json` contract in [`docs/TELEMETRY_CONTRACT.md`](docs/TELEMETRY_CONTRACT.md).
+Future V5/V6/... engines can change internal files freely and immediately reuse the same dashboard by publishing the atomic `runtime_status.json` contract in [`docs/TELEMETRY_CONTRACT.md`](docs/TELEMETRY_CONTRACT.md). They become live only through an explicit champion-manifest promotion after approved integration.
 
 ## Tiny real-money pilot
 
@@ -182,4 +191,4 @@ Real submission is additionally gated by the OOS report, hard source-code caps, 
 - The 15% drawdown setting is an operating kill constraint, not a mathematical guarantee against gaps, outages or software defects.
 - Real capital should not be scaled until realized paper/OOS evidence survives cost stress and a tiny forward execution pilot.
 
-Detailed documents: [`docs/EXECUTION_V4.md`](docs/EXECUTION_V4.md), [`docs/OOS_V4.md`](docs/OOS_V4.md), [`docs/MONITORING.md`](docs/MONITORING.md), [`docs/HOTFIX_INPLAY_QUEUE.md`](docs/HOTFIX_INPLAY_QUEUE.md).
+Detailed documents: [`docs/SYSTEM_WATCH.md`](docs/SYSTEM_WATCH.md), [`docs/EXECUTION_V4.md`](docs/EXECUTION_V4.md), [`docs/OOS_V4.md`](docs/OOS_V4.md), [`docs/MONITORING.md`](docs/MONITORING.md), [`docs/HOTFIX_INPLAY_QUEUE.md`](docs/HOTFIX_INPLAY_QUEUE.md).
