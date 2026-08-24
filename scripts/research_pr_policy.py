@@ -184,9 +184,9 @@ def evaluate(
 
         if model_surface_files:
             errors.append(
-                "known live model/runtime/code surfaces may not change on normal feature/fix branches; "
-                "use research/*, experiment/*, or diagnostic/* for evidence and integration/* for "
-                "an approved champion change. Sensitive change: "
+                "unapproved model/runtime work cannot change known live model/runtime/code surfaces "
+                "on normal feature/fix branches; use research/*, experiment/*, or diagnostic/* for "
+                "evidence and integration/* for an approved champion change. Sensitive change: "
                 + ", ".join(model_surface_files)
             )
         elif opaque_model_bootstrap:
