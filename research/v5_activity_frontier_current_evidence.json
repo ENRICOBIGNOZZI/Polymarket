@@ -1,0 +1,66 @@
+{
+  "schema": "polymarket_v5_activity_frontier_evidence_v1",
+  "source": {
+    "telemetry_ref": "telemetry/latest-live-smoke.json",
+    "git_sha": "079c5ce498f9e26fd17bb7d513a6e892b20fb4cd",
+    "generated_ts": 1787612858,
+    "trade_recorder_status": "healthy",
+    "trade_age_seconds": 26
+  },
+  "incumbent": {
+    "version": 5,
+    "config": "config/paper_v5.json",
+    "market_limit": 300,
+    "min_liquidity": 100.0,
+    "paper_only": true
+  },
+  "funnel": {
+    "b1": {
+      "discovered": 240,
+      "usable_series": 34,
+      "pairs_tested": 561,
+      "model_fits": 0,
+      "opportunities": 0,
+      "raw_positive": 0,
+      "maker_entry_positive": 0
+    },
+    "b2": {
+      "discovered": 240,
+      "panel_series": 31,
+      "mr_pass": 28,
+      "relation_pass": 11,
+      "hedge_pass": 1,
+      "opportunities": 1,
+      "raw_positive": 1,
+      "maker_entry_positive": 0,
+      "taker_positive": 0
+    }
+  },
+  "top_b2": {
+    "market": "559655",
+    "side": "NO",
+    "raw_edge": 0.0000419995,
+    "maker_edge": -0.00176914,
+    "taker_edge": -0.00515719,
+    "raw_edge_bps": 0.419995,
+    "maker_edge_bps": -17.6914,
+    "taker_edge_bps": -51.5719,
+    "maker_cost_wedge_bps": 18.111395,
+    "taker_cost_wedge_bps": 51.991895,
+    "maker_required_raw_multiple_approx": 43.12,
+    "taker_required_raw_multiple_approx": 123.79,
+    "executable_notional": 710.616,
+    "hedges": 4,
+    "hedge_error": 0.00182458
+  },
+  "walk_forward": {
+    "oos_trades": 0,
+    "active_folds": 0,
+    "oos_net_pnl_usd": 0.0,
+    "oos_stressed_net_pnl_usd": 0.0,
+    "eligible_for_tiny_pilot": false
+  },
+  "decision": "REJECT_THRESHOLD_RELAXATION_CURRENT_SAMPLE",
+  "interpretation": "The current raw-positive B2 row is already negative at both maker and taker executable prices. Lowering an admission threshold cannot change that sign. The rational first ablation is wider/continuous model coverage with economic admission gates unchanged, followed by model-specific common-sample tests.",
+  "rollback": "No production change is made by this research branch. Reject any future activity variant whose incremental realized net paper PnL is non-positive or becomes non-positive at 1.5x or 2.0x execution costs."
+}
