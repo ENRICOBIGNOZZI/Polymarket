@@ -79,6 +79,7 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('git fetch -q origin main paper-validated', health)
         self.assertIn('origin/paper-validated', health)
         self.assertIn('test "$head_sha" = "$validated_sha"', health)
+        self.assertIn('git merge-base --is-ancestor "$validated_sha" "$main_sha"', health)
         self.assertIn('test "$status_ref" = "paper-validated"', health)
         self.assertIn('test "$status_validated" = "$validated_sha"', health)
         self.assertIn('up_to_date|deployed|repaired', health)
@@ -89,11 +90,28 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertNotIn("github.head_ref == 'implement/paper-live-oos-pilot-v4'", smoke)
         self.assertIn('group: v4-live-paper-smoke-${{ github.ref }}', smoke)
 
+        # Deployment must follow the successful validation workflow, not the
+        # earlier main push where paper-validated can still point to old code.
+        self.assertIn('workflow_run:', deploy)
+        self.assertIn('workflows: ["v4-live-paper-smoke"]', deploy)
+        self.assertIn("github.event.workflow_run.conclusion == 'success'", deploy)
+        self.assertIn("github.event.workflow_run.head_branch == 'main'", deploy)
+        self.assertIn("github.event.workflow_run.event != 'pull_request'", deploy)
+        self.assertNotIn('push:\n    branches: [main]', deploy)
+        self.assertIn('EXPECTED_VALIDATED_SHA', deploy)
+        self.assertIn('test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"', deploy)
         self.assertIn('git fetch origin main paper-validated', deploy)
         self.assertIn('validated_sha="$(git rev-parse origin/paper-validated)"', deploy)
         self.assertIn('test "$head_sha" = "$validated_sha"', deploy)
         self.assertIn('git merge-base --is-ancestor "$validated_sha" "$main_sha"', deploy)
+        self.assertIn('paper-server-deploy-${{ github.run_id }}', deploy)
         self.assertNotIn('test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"', deploy)
+
+        # Produce private health evidence immediately after deployment as well
+        # as on the existing hourly schedule.
+        self.assertIn('workflow_run:', health)
+        self.assertIn('workflows: ["deploy-paper-server"]', health)
+        self.assertIn("github.event.workflow_run.conclusion == 'success'", health)
 
 
 if __name__ == "__main__":
