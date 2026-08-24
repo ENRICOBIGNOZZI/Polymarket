@@ -86,9 +86,17 @@ class MacOSOpsContractTest(unittest.TestCase):
 
         self.assertIn('Advance paper validated ref', smoke)
         self.assertIn('git/refs/heads/paper-validated', smoke)
-        self.assertIn('github.event_name != \'pull_request\'', smoke)
+        self.assertIn("github.event_name != 'pull_request' && success()", smoke)
         self.assertNotIn("github.head_ref == 'implement/paper-live-oos-pilot-v4'", smoke)
         self.assertIn('group: v4-live-paper-smoke-${{ github.ref }}', smoke)
+
+        telemetry_pos = smoke.index('- name: Publish latest public telemetry')
+        artifact_pos = smoke.index('- name: Upload live diagnostics')
+        advance_pos = smoke.index('- name: Advance paper validated ref')
+        self.assertLess(telemetry_pos, artifact_pos)
+        self.assertLess(artifact_pos, advance_pos)
+        self.assertNotIn('continue-on-error: true', smoke[telemetry_pos:artifact_pos])
+        self.assertIn('if-no-files-found: error', smoke[artifact_pos:advance_pos])
 
         # Deployment must follow the successful validation workflow, not the
         # earlier main push where paper-validated can still point to old code.
