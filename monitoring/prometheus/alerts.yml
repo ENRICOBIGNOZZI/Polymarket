@@ -45,7 +45,7 @@ groups:
           severity: critical
         annotations:
           summary: Simulated live paper account is down
-          description: The primary live-data paper simulator state is missing; displayed zero PnL must not be treated as valid performance.
+          description: The legacy primary live-data paper simulator state is missing; displayed zero PnL must not be treated as valid performance.
 
       - alert: PolymarketSimulatedLiveDataStale
         expr: polymarket_terminal_staleness_seconds > 60
@@ -54,7 +54,7 @@ groups:
           severity: critical
         annotations:
           summary: Simulated live paper telemetry is stale
-          description: The primary simulated-live account has not refreshed for more than 60 seconds; risk and PnL visibility are stale.
+          description: The legacy simulated-live account has not refreshed for more than 60 seconds; risk and PnL visibility are stale.
 
       - alert: PolymarketSimulatedLiveDrawdownWarning
         expr: polymarket_terminal_drawdown_ratio >= 0.10
@@ -63,7 +63,7 @@ groups:
           severity: warning
         annotations:
           summary: Simulated live paper drawdown above 10%
-          description: The primary simulated-live account has crossed the pre-kill drawdown warning level.
+          description: The legacy simulated-live account has crossed the pre-kill drawdown warning level.
 
       - alert: PolymarketSimulatedLiveKillSwitchActive
         expr: polymarket_terminal_kill_switch == 1
@@ -71,7 +71,7 @@ groups:
           severity: critical
         annotations:
           summary: Simulated live paper kill switch is active
-          description: The primary simulated-live account has frozen new risk through its persisted kill switch.
+          description: The legacy simulated-live account has frozen new risk through its persisted kill switch.
 
   - name: polymarket-latest-runtime
     rules:
@@ -118,3 +118,58 @@ groups:
         annotations:
           summary: Latest Polymarket OOS report is stale
           description: The auto-selected runtime's walk-forward gate is more than two hours old.
+
+  - name: polymarket-v5-independent-models
+    rules:
+      - alert: PolymarketV5AllocatorDown
+        expr: polymarket_allocator_state_present == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: V5 paper allocator state is missing
+          description: Aggregate and per-strategy PnL cannot be trusted while the independent-model allocator state is absent.
+
+      - alert: PolymarketV5ModelProcessMissing
+        expr: polymarket_allocator_models_alive < polymarket_allocator_models_expected
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: One or more V5 model processes are unavailable
+          description: At least one independent micro, PCA, graph, semantic, or external paper book is not running.
+
+      - alert: PolymarketV5ModelStateStale
+        expr: max(polymarket_model_status_age_seconds) > 60
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: An independent V5 model state is stale
+          description: At least one model book has not refreshed its paper state for more than 60 seconds.
+
+      - alert: PolymarketV5ModelKillSwitchActive
+        expr: max(polymarket_model_kill_switch) == 1
+        labels:
+          severity: warning
+        annotations:
+          summary: A V5 model-local kill switch is active
+          description: One independent paper strategy has frozen new risk and requires attribution review.
+
+      - alert: PolymarketV5GrossLimitBreach
+        expr: polymarket_allocator_global_gross_fraction > polymarket_allocator_global_max_gross_fraction
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: V5 aggregate gross exposure exceeds its configured cap
+          description: The capital-level allocator has breached the aggregate paper gross limit; new risk must remain blocked.
+
+      - alert: PolymarketV5LogCompactionStale
+        expr: (polymarket_log_compaction_state_present == 0) or (polymarket_log_compaction_success == 0) or (polymarket_log_compaction_staleness_seconds > 300)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: V5 bounded strategy-log compaction is missing, failed, or stale
+          description: Signal, arbitrage, and PCA-history retention has not completed successfully within five minutes; disk and Grafana performance require review.

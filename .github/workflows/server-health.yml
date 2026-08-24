@@ -67,10 +67,10 @@ jobs:
           import json
           with open("grafana-search.json", encoding="utf-8") as f:
               dashboards = json.load(f)
-          assert any(item.get("uid") == "polymarket-fast-paper" for item in dashboards), dashboards
+          assert any(item.get("uid") == "polymarket-multi-strategy-v5" for item in dashboards), dashboards
           PY
 
-      - name: Inspect server and write action report
+      - name: Inspect V5 server and write action report
         shell: bash
         run: |
           set -euo pipefail
@@ -97,32 +97,55 @@ jobs:
           curl -fsS http://127.0.0.1:3000/api/search >/dev/null
 
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
-          grep -q '^polymarket_runtime_info' <<<"$metrics"
-          grep -q '^polymarket_terminal_state_present 1' <<<"$metrics"
-          grep -q '^polymarket_terminal_pnl_usd ' <<<"$metrics"
-          grep -q '^polymarket_terminal_staleness_seconds ' <<<"$metrics"
-          printf '%s\n' "$metrics" | grep -E '^polymarket_(runtime_info|runtime_equity_usd|runtime_pnl_usd|runtime_drawdown_ratio|runtime_kill_switch|runtime_realized_pnl_usd_total|runtime_execution_imbalance_ratio|runtime_oos_net_pnl_usd|runtime_oos_stressed_net_pnl_usd|runtime_oos_eligible|terminal_state_present|terminal_equity_usd|terminal_pnl_usd|terminal_realized_pnl_usd|terminal_unrealized_pnl_usd|terminal_open_positions|terminal_fills_total|terminal_staleness_seconds|trade_recorder_staleness_seconds|multileg_live_bundles)' || true
+          grep -q '^polymarket_runtime_info{adapter="v5",run_root="paper_v5_live",version="v5"} 1$' <<<"$metrics"
+          grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics"
+          grep -q '^polymarket_runtime_pnl_usd ' <<<"$metrics"
+          grep -q '^polymarket_runtime_equity_usd ' <<<"$metrics"
+          grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics"
+          grep -q '^polymarket_model_info{' <<<"$metrics"
+          printf '%s\n' "$metrics" | grep -E '^polymarket_(runtime_info|runtime_equity_usd|runtime_pnl_usd|runtime_drawdown_ratio|runtime_kill_switch|runtime_realized_pnl_usd_total|runtime_execution_staleness_seconds|allocator_models_alive|allocator_models_expected|allocator_global_gross_fraction|model_pnl_usd|model_equity_usd|model_drawdown_ratio|model_gross_exposure_usd|model_open_positions|model_fills_total|model_status_age_seconds|trade_recorder_staleness_seconds|multileg_live_bundles)' || true
 
-          run_root="$HOME/polymarket/runs/paper_v4_live"
+          run_root="$HOME/polymarket/runs/paper_v5_live"
+          test -s "$run_root/runtime_status.json"
+          test -s "$run_root/allocator_status.json"
+          test -s "$run_root/strategy_status.csv"
           supervisor="$run_root/runtime_supervisor.csv"
           test -s "$supervisor"
           supervisor_row="$(tail -n 1 "$supervisor")"
-          IFS=, read -r supervisor_ts recorder_alive broker_alive terminal_alive recorder_restarts broker_restarts terminal_restarts recorder_pid broker_pid terminal_pid <<<"$supervisor_row"
+          IFS=, read -r supervisor_ts recorder_alive broker_alive allocator_alive recorder_restarts broker_restarts allocator_restarts recorder_pid broker_pid allocator_pid <<<"$supervisor_row"
           now="$(date +%s)"
           test "$recorder_alive" = "1"
           test "$broker_alive" = "1"
-          test "$terminal_alive" = "1"
+          test "$allocator_alive" = "1"
           test $(( now - supervisor_ts )) -le 60
           printf 'supervisor_timestamp=%s\n' "$supervisor_ts"
           printf 'recorder_alive=%s\n' "$recorder_alive"
           printf 'broker_alive=%s\n' "$broker_alive"
-          printf 'terminal_alive=%s\n' "$terminal_alive"
+          printf 'allocator_alive=%s\n' "$allocator_alive"
           printf 'recorder_restarts=%s\n' "$recorder_restarts"
           printf 'broker_restarts=%s\n' "$broker_restarts"
-          printf 'terminal_restarts=%s\n' "$terminal_restarts"
+          printf 'allocator_restarts=%s\n' "$allocator_restarts"
           printf 'recorder_pid=%s\n' "$recorder_pid"
           printf 'broker_pid=%s\n' "$broker_pid"
-          printf 'terminal_pid=%s\n' "$terminal_pid"
+          printf 'allocator_pid=%s\n' "$allocator_pid"
+
+          python3 - "$run_root" <<'PY'
+          import csv
+          import json
+          import math
+          import pathlib
+          import sys
+          root = pathlib.Path(sys.argv[1])
+          allocator = json.loads((root / 'allocator_status.json').read_text())
+          rows = list(csv.DictReader((root / 'strategy_status.csv').open()))
+          assert allocator['paper_only'] is True
+          assert allocator['models_expected'] == 5
+          assert {row['name'] for row in rows} == {'micro', 'pca', 'graph', 'semantic', 'external'}
+          total = sum(float(row['capital_fraction']) for row in rows) + float(allocator['reserve_fraction'])
+          assert math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9), total
+          assert int(allocator['models_alive']) == 5
+          assert all(float(row['status_age_seconds']) <= 120 for row in rows)
+          PY
 
           python3 scripts/runtime_action_report.py \
             --run-root "$run_root" --external-signals data/external_signals.csv \
@@ -141,9 +164,14 @@ jobs:
           printf '%s\n' 'multileg_tail_begin'
           tail -n 20 "$run_root/multileg.log" 2>/dev/null || true
           printf '%s\n' 'multileg_tail_end'
-          printf '%s\n' 'simulated_live_tail_begin'
-          tail -n 20 "$run_root/terminal.log" 2>/dev/null || true
-          printf '%s\n' 'simulated_live_tail_end'
+          printf '%s\n' 'allocator_tail_begin'
+          tail -n 30 "$run_root/allocator.log" 2>/dev/null || true
+          printf '%s\n' 'allocator_tail_end'
+          for model in micro pca graph semantic external; do
+            printf '%s\n' "model_${model}_tail_begin"
+            tail -n 12 "$run_root/strategies/$model/engine.log" 2>/dev/null || true
+            printf '%s\n' "model_${model}_tail_end"
+          done
 
           case "$(uname -s)" in
             Darwin)
@@ -178,18 +206,18 @@ jobs:
           set -euo pipefail
           scp -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
             -P "$SERVER_PORT" \
-            "$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v4_live/action_report.md" \
+            "$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v5_live/action_report.md" \
             runtime-action-report.md
           scp -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
             -P "$SERVER_PORT" \
-            "$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v4_live/action_report.json" \
+            "$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v5_live/action_report.json" \
             runtime-action-report.json
 
       - name: Publish health summary
         if: always()
         shell: bash
         run: |
-          echo '## Polymarket private paper server' >> "$GITHUB_STEP_SUMMARY"
+          echo '## Polymarket V5 private paper server' >> "$GITHUB_STEP_SUMMARY"
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
           cat server-health.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo 'health output missing' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"

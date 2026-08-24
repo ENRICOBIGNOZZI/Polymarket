@@ -153,13 +153,15 @@ jobs:
           fi
           curl -fsS http://127.0.0.1:9108/healthz >/dev/null
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
-          grep -q '^polymarket_runtime_info' <<<"$metrics"
-          grep -q '^polymarket_terminal_state_present 1' <<<"$metrics"
-          grep -q '^polymarket_terminal_pnl_usd ' <<<"$metrics"
+          grep -q '^polymarket_runtime_info{adapter="v5",run_root="paper_v5_live",version="v5"} 1$' <<<"$metrics"
+          grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics"
+          grep -q '^polymarket_runtime_pnl_usd ' <<<"$metrics"
+          grep -q '^polymarket_model_info{' <<<"$metrics"
+          grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics"
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
           grafana_search="$(curl -fsS http://127.0.0.1:3000/api/search)"
-          grep -q 'polymarket-fast-paper' <<<"$grafana_search"
+          grep -q 'polymarket-multi-strategy-v5' <<<"$grafana_search"
           printf 'server_head=%s\n' "$head_sha"
           printf 'paper_validated=%s\n' "$validated_sha"
           printf 'origin_main=%s\n' "$main_sha"

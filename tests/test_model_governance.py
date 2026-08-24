@@ -18,10 +18,10 @@ class ModelGovernanceContractTest(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
         self.assertEqual(manifest["schema_version"], 1)
-        self.assertEqual(manifest["version"], 4)
-        self.assertEqual(manifest["loop"], "scripts/paper_v4_loop.sh")
-        self.assertEqual(manifest["config"], "config/paper_v4.json")
-        self.assertEqual(manifest["run_root"], "runs/paper_v4_live")
+        self.assertEqual(manifest["version"], 5)
+        self.assertEqual(manifest["loop"], "scripts/paper_v5_loop.sh")
+        self.assertEqual(manifest["config"], "config/paper_v5.json")
+        self.assertEqual(manifest["run_root"], "runs/paper_v5_live")
         self.assertEqual(manifest["deployment_ref"], "paper-validated")
         self.assertEqual(manifest["promotion_policy"], "approved integration PR only")
 
@@ -40,9 +40,9 @@ class ModelGovernanceContractTest(unittest.TestCase):
             text=True,
             timeout=10,
         )
-        self.assertIn("paper_champion version=4", completed.stdout)
-        self.assertIn("loop=scripts/paper_v4_loop.sh", completed.stdout)
-        self.assertIn("config/paper_v4.json", completed.stdout)
+        self.assertIn("paper_champion version=5", completed.stdout)
+        self.assertIn("loop=scripts/paper_v5_loop.sh", completed.stdout)
+        self.assertIn("config/paper_v5.json", completed.stdout)
         self.assertIn("run_root=", completed.stdout)
         self.assertIn("deploy_ref=paper-validated", completed.stdout)
 
