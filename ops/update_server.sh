@@ -33,7 +33,9 @@ log "Building and validating paper-validated"
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel "$(nproc)"
 ctest --test-dir build --output-on-failure
-python3 -m unittest tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py tests/test_monitoring_latest_exporter.py -v
+python3 -m unittest \
+  tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py \
+  tests/test_monitoring_latest_exporter.py tests/test_grafana_fast_paper_contract.py -v
 python3 -m py_compile monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_latest.py \
   scripts/build_v4_intents.py scripts/merge_v4_intents.py scripts/walk_forward_v4.py scripts/tiny_live_pilot.py
 bash -n scripts/paper_v4_once.sh scripts/paper_v4_loop.sh scripts/monitoring_up.sh scripts/monitoring_down.sh
@@ -47,7 +49,20 @@ sleep 3
 sudo systemctl is-active --quiet polymarket-paper.service
 sudo systemctl is-active --quiet polymarket-monitoring.service
 curl -fsS http://127.0.0.1:9108/healthz >/dev/null
-curl -fsS http://127.0.0.1:9108/metrics | grep -q '^polymarket_runtime_info'
+metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
+grep -q '^polymarket_runtime_info' <<<"$metrics"
+grep -q '^polymarket_terminal_state_present 1' <<<"$metrics"
+grep -q '^polymarket_terminal_pnl_usd ' <<<"$metrics"
+
+supervisor="$APP_DIR/runs/paper_v4_live/runtime_supervisor.csv"
+test -s "$supervisor"
+row="$(tail -n 1 "$supervisor")"
+IFS=, read -r ts recorder_alive broker_alive terminal_alive recorder_restarts broker_restarts terminal_restarts recorder_pid broker_pid terminal_pid <<<"$row"
+now="$(date +%s)"
+test "$recorder_alive" = "1"
+test "$broker_alive" = "1"
+test "$terminal_alive" = "1"
+test $(( now - ts )) -le 60
 
 printf 'deployed_sha=%s\n' "$NEW_SHA"
 printf 'validated_ref=%s\n' "$DEPLOY_REF"
