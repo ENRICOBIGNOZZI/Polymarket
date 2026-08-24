@@ -132,6 +132,7 @@ jobs:
           python3 - "$run_root" <<'PY'
           import csv
           import json
+          import math
           import pathlib
           import sys
           root = pathlib.Path(sys.argv[1])
@@ -140,7 +141,8 @@ jobs:
           assert allocator['paper_only'] is True
           assert allocator['models_expected'] == 5
           assert {row['name'] for row in rows} == {'micro', 'pca', 'graph', 'semantic', 'external'}
-          assert sum(float(row['capital_fraction']) for row in rows) + float(allocator['reserve_fraction']) == 1.0
+          total = sum(float(row['capital_fraction']) for row in rows) + float(allocator['reserve_fraction'])
+          assert math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9), total
           assert int(allocator['models_alive']) == 5
           assert all(float(row['status_age_seconds']) <= 120 for row in rows)
           PY
