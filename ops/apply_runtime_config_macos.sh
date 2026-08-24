@@ -27,9 +27,28 @@ find_tailscale() {
   command -v tailscale 2>/dev/null || return 1
 }
 
+find_python() {
+  local candidate
+  for candidate in \
+    /opt/homebrew/bin/python3 \
+    /usr/local/bin/python3 \
+    /usr/bin/python3; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  command -v python3 2>/dev/null || return 1
+}
+
 TAILSCALE_BIN="$(find_tailscale || true)"
 [[ -n "$TAILSCALE_BIN" ]] || {
   echo "tailscale CLI not found; refusing to leave Grafana inaccessible" >&2
+  exit 1
+}
+PYTHON_BIN="$(find_python || true)"
+[[ -n "$PYTHON_BIN" ]] || {
+  echo "python3 not found; cannot verify Tailscale DNS identity" >&2
   exit 1
 }
 
@@ -40,17 +59,17 @@ tailscale_admin() {
   sudo -n "$TAILSCALE_BIN" "$@"
 }
 
-# Pin the already-established server machine name rather than inventing a new
-# alias. Tailscale Serve is authoritative for the actual operator endpoint.
+# Pin the server to the already-established Tailscale machine name. The FQDN
+# returned by Tailscale is the canonical operator identity; do not invent a
+# second alias for Grafana.
 tailscale_admin set --hostname="$TAILSCALE_HOSTNAME"
 
-# Wait for the control-plane/MagicDNS view to converge and verify that the
-# device really advertises the intended DNS name. Never print a canonical URL
-# merely because a local variable was set.
+# Wait for the control-plane/MagicDNS view to converge and verify the actual
+# DNS identity before writing Grafana root_url.
 actual_dns=""
 for _ in {1..20}; do
   actual_dns="$("$TAILSCALE_BIN" status --json 2>/dev/null | \
-    /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin).get("Self",{}).get("DNSName", ""))' 2>/dev/null || true)"
+    "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin).get("Self",{}).get("DNSName", ""))' 2>/dev/null || true)"
   [[ "$actual_dns" == "$TAILSCALE_FQDN" || "$actual_dns" == "$TAILSCALE_FQDN." ]] && break
   sleep 1
 done
