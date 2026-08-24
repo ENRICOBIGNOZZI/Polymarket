@@ -24,6 +24,26 @@ class WorkflowYamlContractTest(unittest.TestCase):
         self.assertNotIn("\nREMOTE\n", deploy)
         self.assertEqual(deploy.count("\n          REMOTE\n"), 3)
 
+    def test_scheduled_ci_backfills_api_updated_pr_heads_exactly_once(self) -> None:
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        self.assertIn("  actions: write\n", ci)
+        self.assertIn("  pull-requests: read\n", ci)
+        self.assertIn(
+            "if: github.event_name == 'schedule' && matrix.build_type == 'Release'",
+            ci,
+        )
+        self.assertIn("actions/workflows/ci.yml/runs?head_sha=${head_sha}&per_page=1", ci)
+        self.assertIn("(( run_count == 0 )) || continue", ci)
+        self.assertIn("repos/${repo}/pulls/${pr_number}", ci)
+        self.assertIn("[[ \"$current_sha\" == \"$head_sha\" ]] || continue", ci)
+        self.assertIn(
+            'gh workflow run ci.yml --ref "$head_ref" -f expected_sha="$head_sha"',
+            ci,
+        )
+        self.assertNotIn("gh pr merge", ci)
+        self.assertNotIn("paper-validated", ci)
+        self.assertNotIn("POLYMARKET_DEPLOY_REF", ci)
+
 
 if __name__ == "__main__":
     unittest.main()
