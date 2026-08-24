@@ -10,12 +10,14 @@ on:
       - "scripts/finalize_forward_probe.py"
       - "scripts/calibrate_forward_maker.py"
       - "scripts/apply_reward_payout_floor.py"
+      - "scripts/build_github_contents_request.py"
       - "src/rewards_scan.cpp"
       - "include/pm/rewards.hpp"
       - "tests/test_forward_maker_probe.py"
       - "tests/test_forward_candidate_selection.py"
       - "tests/test_finalize_forward_probe.py"
       - "tests/test_calibrate_forward_maker.py"
+      - "tests/test_github_contents_request.py"
       - "CMakeLists.txt"
       - ".github/workflows/forward-maker-research.yml"
   push:
@@ -26,12 +28,14 @@ on:
       - "scripts/finalize_forward_probe.py"
       - "scripts/calibrate_forward_maker.py"
       - "scripts/apply_reward_payout_floor.py"
+      - "scripts/build_github_contents_request.py"
       - "src/rewards_scan.cpp"
       - "include/pm/rewards.hpp"
       - "tests/test_forward_maker_probe.py"
       - "tests/test_forward_candidate_selection.py"
       - "tests/test_finalize_forward_probe.py"
       - "tests/test_calibrate_forward_maker.py"
+      - "tests/test_github_contents_request.py"
       - "CMakeLists.txt"
       - ".github/workflows/forward-maker-research.yml"
   schedule:
@@ -228,15 +232,21 @@ jobs:
             local remote_path="$2"
             local message="$3"
             local endpoint="repos/${GITHUB_REPOSITORY}/contents/${remote_path}"
-            local content
-            content="$(base64 -w0 "$local_path")"
-            local current_sha
+            local current_sha request_path
             current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
-            local args=("$endpoint" --method PUT -f message="$message" -f content="$content" -f branch=telemetry)
+            request_path="$(mktemp)"
+            local payload_args=(
+              --input "$local_path"
+              --message "$message"
+              --branch telemetry
+              --output "$request_path"
+            )
             if [[ -n "$current_sha" ]]; then
-              args+=(-f sha="$current_sha")
+              payload_args+=(--sha "$current_sha")
             fi
-            gh api "${args[@]}" >/dev/null
+            python3 scripts/build_github_contents_request.py "${payload_args[@]}"
+            gh api "$endpoint" --method PUT --input "$request_path" >/dev/null
+            rm -f "$request_path"
           }
 
           publish_file "$R/forward_maker_probe.json" \
