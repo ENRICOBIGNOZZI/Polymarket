@@ -32,15 +32,19 @@ INCUMBENT = GateConfig(
     max_half_life_hours=168.0,
 )
 
+# Effective B2 mean-reversion admission in the proposed persistent paper loop:
+# pca_stat_arb receives --min-t-reversion 0.60 and --max-half-life-hours 336,
+# while the source implementation itself uses the relaxed 16/12/12 sample
+# requirements, phi floor 0.05 and stability cutoff 0.25.
 AGGRESSIVE_V5 = GateConfig(
-    name="aggressive_v5_pr154",
+    name="aggressive_v5_pr154_paper_loop",
     min_series=16,
     min_transitions=12,
     min_half=12,
     phi_floor=0.05,
-    min_t=0.75,
+    min_t=0.60,
     min_stability=0.25,
-    max_half_life_hours=240.0,
+    max_half_life_hours=336.0,
 )
 
 
@@ -196,9 +200,9 @@ def summarize(count: int = 200) -> dict[str, object]:
         "aggressive_v5": asdict(AGGRESSIVE_V5),
         "experiments": experiments,
         "interpretation": (
-            "The relaxed V5 gate materially increases the probability that deterministic unit-root "
-            "paths pass the full mean-reversion admission rule. These controlled fixtures diagnose "
-            "statistical size, not live Polymarket false-discovery rates or trading PnL."
+            "The relaxed V5 paper-loop gate materially increases the probability that deterministic unit-root "
+            "paths pass the mean-reversion admission rule. These controlled fixtures diagnose statistical size, "
+            "not live Polymarket false-discovery rates or trading PnL."
         ),
         "decision": "MORE_EVIDENCE_REQUIRED",
     }
