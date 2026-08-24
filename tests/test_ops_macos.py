@@ -57,6 +57,7 @@ class MacOSOpsContractTest(unittest.TestCase):
 
     def test_autoupdate_deploys_only_live_smoke_validated_ref(self):
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
+        linux_updater = (ROOT / "ops" / "update_server.sh").read_text(encoding="utf-8")
         health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(encoding="utf-8")
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
         deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(encoding="utf-8")
@@ -76,24 +77,61 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('validated=%s', updater)
         self.assertIn('origin_main=%s', updater)
 
+        self.assertIn('${POLYMARKET_DEPLOY_REF:-paper-validated}', linux_updater)
+        self.assertIn('git fetch origin "$LOCAL_BRANCH" "$DEPLOY_REF"', linux_updater)
+        self.assertIn('NEW_SHA="$(git rev-parse "origin/$DEPLOY_REF")"', linux_updater)
+        self.assertIn('git merge-base --is-ancestor "$NEW_SHA" "$MAIN_SHA"', linux_updater)
+        self.assertIn('validated_ref=%s', linux_updater)
+        self.assertNotIn('NEW_SHA="$(git rev-parse "origin/$BRANCH")"', linux_updater)
+
         self.assertIn('git fetch -q origin main paper-validated', health)
         self.assertIn('origin/paper-validated', health)
         self.assertIn('test "$head_sha" = "$validated_sha"', health)
+        self.assertIn('git merge-base --is-ancestor "$validated_sha" "$main_sha"', health)
         self.assertIn('test "$status_ref" = "paper-validated"', health)
         self.assertIn('test "$status_validated" = "$validated_sha"', health)
         self.assertIn('up_to_date|deployed|repaired', health)
 
         self.assertIn('Advance paper validated ref', smoke)
         self.assertIn('git/refs/heads/paper-validated', smoke)
-        self.assertIn('github.event_name != \'pull_request\'', smoke)
+        self.assertIn("github.event_name != 'pull_request' && success()", smoke)
         self.assertNotIn("github.head_ref == 'implement/paper-live-oos-pilot-v4'", smoke)
         self.assertIn('group: v4-live-paper-smoke-${{ github.ref }}', smoke)
 
-        self.assertIn('git fetch origin main paper-validated', deploy)
+        telemetry_pos = smoke.index('- name: Publish latest public telemetry')
+        artifact_pos = smoke.index('- name: Upload live diagnostics')
+        advance_pos = smoke.index('- name: Advance paper validated ref')
+        self.assertLess(telemetry_pos, artifact_pos)
+        self.assertLess(artifact_pos, advance_pos)
+        self.assertNotIn('continue-on-error: true', smoke[telemetry_pos:artifact_pos])
+        self.assertIn('if-no-files-found: error', smoke[artifact_pos:advance_pos])
+
+        # Deployment must follow the successful validation workflow, not the
+        # earlier main push where paper-validated can still point to old code.
+        self.assertIn('workflow_run:', deploy)
+        self.assertIn('workflows: ["v4-live-paper-smoke"]', deploy)
+        self.assertIn('types: [completed]\n    branches: [main]', deploy)
+        self.assertIn("github.event.workflow_run.conclusion == 'success'", deploy)
+        self.assertIn("github.event.workflow_run.head_branch == 'main'", deploy)
+        self.assertIn("github.event.workflow_run.event != 'pull_request'", deploy)
+        self.assertNotIn('push:\n    branches: [main]', deploy)
+        self.assertIn('EXPECTED_VALIDATED_SHA', deploy)
+        self.assertIn('test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"', deploy)
+        self.assertRegex(deploy, r'git fetch(?: -q)? origin main paper-validated')
         self.assertIn('validated_sha="$(git rev-parse origin/paper-validated)"', deploy)
+        self.assertIn('git show "$validated_sha:$updater_path"', deploy)
+        self.assertIn('POLYMARKET_DEPLOY_REF=paper-validated bash "$updater"', deploy)
         self.assertIn('test "$head_sha" = "$validated_sha"', deploy)
         self.assertIn('git merge-base --is-ancestor "$validated_sha" "$main_sha"', deploy)
+        self.assertIn('paper-server-deploy-${{ github.run_id }}', deploy)
         self.assertNotIn('test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"', deploy)
+
+        # Produce private health evidence immediately after deployment as well
+        # as on the existing hourly schedule, and only from the main chain.
+        self.assertIn('workflow_run:', health)
+        self.assertIn('workflows: ["deploy-paper-server"]', health)
+        self.assertIn('types: [completed]\n    branches: [main]', health)
+        self.assertIn("github.event.workflow_run.conclusion == 'success'", health)
 
 
 if __name__ == "__main__":

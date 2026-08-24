@@ -152,18 +152,6 @@ jobs:
             --git-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
             --trade-lookback-seconds 900
 
-      - name: Advance paper validated ref
-        if: github.event_name != 'pull_request'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh api --method PATCH \
-            "repos/${GITHUB_REPOSITORY}/git/refs/heads/paper-validated" \
-            -f sha="$GITHUB_SHA" -F force=false >/dev/null
-          echo "paper_validated_sha=$GITHUB_SHA"
-
       - name: Publish live summary
         if: always()
         shell: bash
@@ -184,8 +172,7 @@ jobs:
           fi
 
       - name: Publish latest public telemetry
-        if: github.event_name != 'pull_request'
-        continue-on-error: true
+        if: github.event_name != 'pull_request' && success()
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -207,5 +194,17 @@ jobs:
         with:
           name: v4-live-paper-smoke-${{ github.run_id }}
           path: paper_v4_live/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 7
+
+      - name: Advance paper validated ref
+        if: github.event_name != 'pull_request' && success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/git/refs/heads/paper-validated" \
+            -f sha="$GITHUB_SHA" -F force=false >/dev/null
+          echo "paper_validated_sha=$GITHUB_SHA"

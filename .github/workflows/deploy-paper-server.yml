@@ -2,7 +2,9 @@ name: deploy-paper-server
 
 on:
   workflow_dispatch:
-  push:
+  workflow_run:
+    workflows: ["v4-live-paper-smoke"]
+    types: [completed]
     branches: [main]
 
 permissions:
@@ -14,13 +16,22 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.event_name == 'workflow_dispatch' || vars.POLYMARKET_SERVER_DEPLOY == 'true'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.event != 'pull_request' &&
+        vars.POLYMARKET_SERVER_DEPLOY == 'true'
+      )
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
       SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
       SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+      EXPECTED_VALIDATED_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -48,20 +59,38 @@ jobs:
           done
           test -s ~/.ssh/known_hosts
 
-      - name: Deploy validated main
+      - name: Deploy validated paper ref
         shell: bash
         run: |
           set -euo pipefail
+          [[ -z "$EXPECTED_VALIDATED_SHA" || "$EXPECTED_VALIDATED_SHA" =~ ^[0-9a-f]{40}$ ]]
           ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
             -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE'
+            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            "EXPECTED_VALIDATED_SHA='$EXPECTED_VALIDATED_SHA' bash -s" <<'REMOTE' | tee deploy-evidence.txt
           set -euo pipefail
           cd ~/polymarket
+          git fetch origin main paper-validated
+          main_sha="$(git rev-parse origin/main)"
+          validated_sha="$(git rev-parse origin/paper-validated)"
+          git merge-base --is-ancestor "$validated_sha" "$main_sha"
+          if [[ -n "${EXPECTED_VALIDATED_SHA:-}" ]]; then
+            test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
+          fi
+          printf 'predeploy_origin_main=%s\n' "$main_sha"
+          printf 'predeploy_paper_validated=%s\n' "$validated_sha"
+          printf 'trigger_expected_validated=%s\n' "${EXPECTED_VALIDATED_SHA:-manual}"
+
           case "$(uname -s)" in
-            Darwin) exec bash ops/update_server_macos.sh ;;
-            Linux)  exec bash ops/update_server.sh ;;
+            Darwin) updater_path=ops/update_server_macos.sh ;;
+            Linux)  updater_path=ops/update_server.sh ;;
             *) echo "unsupported server OS: $(uname -s)" >&2; exit 1 ;;
           esac
+          updater="$(mktemp)"
+          trap 'rm -f "$updater"' EXIT
+          git show "$validated_sha:$updater_path" > "$updater"
+          chmod 700 "$updater"
+          POLYMARKET_DEPLOY_REF=paper-validated bash "$updater"
           REMOTE
 
       - name: Verify production paper services
@@ -69,15 +98,19 @@ jobs:
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
-            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE'
+            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            "EXPECTED_VALIDATED_SHA='$EXPECTED_VALIDATED_SHA' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
           set -euo pipefail
           cd ~/polymarket
-          git fetch origin main paper-validated >/dev/null
+          git fetch origin main paper-validated
           head_sha="$(git rev-parse HEAD)"
           main_sha="$(git rev-parse origin/main)"
           validated_sha="$(git rev-parse origin/paper-validated)"
           test "$head_sha" = "$validated_sha"
           git merge-base --is-ancestor "$validated_sha" "$main_sha"
+          if [[ -n "${EXPECTED_VALIDATED_SHA:-}" ]]; then
+            test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
+          fi
           curl -fsS http://127.0.0.1:9108/healthz
           curl -fsS http://127.0.0.1:9108/metrics | grep -q '^polymarket_runtime_info'
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
@@ -95,3 +128,12 @@ jobs:
               ;;
           esac
           REMOTE
+
+      - name: Upload deployment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-server-deploy-${{ github.run_id }}
+          path: deploy-evidence.txt
+          if-no-files-found: warn
+          retention-days: 7
