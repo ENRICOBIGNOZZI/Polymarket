@@ -263,7 +263,7 @@ MarketWebSocketFeed::MarketWebSocketFeed(std::string url,
                                          MessageHandler on_message,
                                          ErrorHandler on_error)
     : impl_(std::make_unique<Impl>(std::move(url), std::move(asset_ids), shard_size,
-                                   std::move(message_handler), std::move(error_handler))) {}
+                                   std::move(on_message), std::move(on_error))) {}
 
 MarketWebSocketFeed::~MarketWebSocketFeed() { stop(); }
 
