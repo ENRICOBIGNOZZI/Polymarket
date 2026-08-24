@@ -21,7 +21,7 @@ class MetaSupervisorTests(unittest.TestCase):
         self.main = "a" * 40
         self.validated = self.main
 
-    def run(
+    def make_run(
         self,
         workflow_name: str,
         *,
@@ -48,7 +48,7 @@ class MetaSupervisorTests(unittest.TestCase):
     def healthy_runs(self) -> list[dict]:
         specs = self.config["coordination"]["workflows"]
         return [
-            self.run(spec["name"], run_id=index + 1)
+            self.make_run(spec["name"], run_id=index + 1)
             for index, spec in enumerate(specs.values())
         ]
 
@@ -181,8 +181,8 @@ class MetaSupervisorTests(unittest.TestCase):
         )
 
     def test_pr_runs_do_not_mask_main_workflow_state(self) -> None:
-        main_run = self.run("ci", age=100, run_id=1)
-        pr_run = self.run(
+        main_run = self.make_run("ci", age=100, run_id=1)
+        pr_run = self.make_run(
             "ci", age=10, sha="d" * 40, run_id=2, branch="feature/example"
         )
         latest = meta_supervisor.latest_main_runs([main_run, pr_run])
