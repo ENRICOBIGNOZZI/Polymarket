@@ -1,0 +1,433 @@
+name: Polymarket System Watch - Model Governance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "11 * * * *"
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft, labeled, unlabeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+  checks: read
+
+concurrency:
+  group: polymarket-model-governance
+  cancel-in-progress: false
+
+jobs:
+  policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate explicit live champion
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest tests/test_model_governance.py -v
+          bash scripts/paper_latest_loop.sh --print-champion | tee champion.txt
+
+      - name: Create governance labels
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ensure_label() {
+            local name="$1" color="$2" description="$3"
+            if ! gh api "repos/${GITHUB_REPOSITORY}/labels/${name}" >/dev/null 2>&1; then
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/labels" \
+                -f name="$name" -f color="$color" -f description="$description" >/dev/null
+            fi
+          }
+          ensure_label research-approved 0e8a16 "Research evidence approved; integration into the champion is required"
+          ensure_label approved-for-integration 1d76db "Unified integration implementation approved for gated merge"
+          ensure_label single-model-reviewed 5319e7 "Reviewed for one orchestrator, config, risk and execution path"
+          ensure_label shadow-isolated fbca04 "Measurement-only code isolated from production decisions, PnL and risk"
+
+      - name: Enforce pull-request lifecycle
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          git diff --name-only origin/main...HEAD | sort -u > changed-files.txt
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
+          pr = event["pull_request"]
+          head = os.environ["HEAD_REF"]
+          draft = bool(pr.get("draft"))
+          body = pr.get("body") or ""
+          labels = {item["name"] for item in pr.get("labels", [])}
+          changed = set(Path("changed-files.txt").read_text(encoding="utf-8").splitlines())
+
+          research_prefixes = ("research/", "experiment/", "diagnostic/")
+          integration_labels = {"approved-for-integration", "single-model-reviewed"}
+          errors: list[str] = []
+
+          manifest_changed = "config/live_champion.json" in changed
+          manifest_existed_on_base = subprocess.run(
+              ["git", "cat-file", "-e", "origin/main:config/live_champion.json"],
+              check=False,
+              stdout=subprocess.DEVNULL,
+              stderr=subprocess.DEVNULL,
+          ).returncode == 0
+
+          if head.startswith(research_prefixes):
+              forbidden = sorted(labels.intersection(integration_labels))
+              if forbidden:
+                  errors.append(
+                      "research/experiment/diagnostic PRs cannot carry integration labels: "
+                      + ", ".join(forbidden)
+                  )
+              if not draft and "shadow-isolated" not in labels:
+                  errors.append(
+                      "unapproved research PRs must remain draft/close-without-merge; "
+                      "only tested shadow-isolated instrumentation may be non-draft"
+                  )
+              if manifest_changed:
+                  errors.append("research and diagnostic branches may never change the live champion manifest")
+          elif head.startswith("integration/"):
+              if not draft:
+                  missing = sorted(integration_labels.difference(labels))
+                  if missing:
+                      errors.append("non-draft integration PR is missing labels: " + ", ".join(missing))
+                  normalized = body.lower()
+                  if "[x] approved research integration into the single champion" not in normalized:
+                      errors.append("integration PR must check the approved-research lifecycle box")
+                  source = re.search(
+                      r"source research pr/branch/commit:\s*(\S+)", body, flags=re.IGNORECASE
+                  )
+                  if source is None:
+                      errors.append("integration PR must link a source research PR, branch or commit")
+          else:
+              misplaced = sorted(labels.intersection(integration_labels))
+              if misplaced:
+                  errors.append(
+                      "integration approval labels are valid only on integration/* branches: "
+                      + ", ".join(misplaced)
+                  )
+              if manifest_changed and manifest_existed_on_base:
+                  errors.append("an existing live champion manifest may change only on integration/*")
+
+          if errors:
+              for error in errors:
+                  print(f"::error::{error}")
+              raise SystemExit(1)
+
+          print(f"branch={head}")
+          print(f"draft={str(draft).lower()}")
+          print(f"labels={','.join(sorted(labels)) or 'none'}")
+          print(f"manifest_changed={str(manifest_changed).lower()}")
+          print(f"changed_files={len(changed)}")
+          PY
+
+      - name: Write policy report
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '# Model governance policy run'
+            echo
+            echo "- event: $GITHUB_EVENT_NAME"
+            echo "- repository: $GITHUB_REPOSITORY"
+            echo "- revision: $GITHUB_SHA"
+            if test -s champion.txt; then
+              echo '- champion:'
+              echo '```text'
+              cat champion.txt
+              echo '```'
+            fi
+            if test -s changed-files.txt; then
+              echo '- pull-request changes:'
+              echo '```text'
+              cat changed-files.txt
+              echo '```'
+            fi
+          } > model-governance-policy-report.md
+          cat model-governance-policy-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload policy evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-governance-policy-${{ github.run_id }}
+          path: model-governance-policy-report.md
+          if-no-files-found: warn
+          retention-days: 14
+
+  integrate-approved-research:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Audit champion and research queue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main paper-validated
+          main_sha="$(git rev-parse origin/main)"
+          validated_sha="$(git rev-parse origin/paper-validated)"
+          validated_relation=diverged
+          if [[ "$main_sha" == "$validated_sha" ]]; then
+            validated_relation=current
+          elif git merge-base --is-ancestor "$validated_sha" "$main_sha"; then
+            validated_relation=pending_validation
+          fi
+
+          gh pr list --state open --base main --limit 100 \
+            --json number,title,url,headRefName,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
+            > governance-open-prs.json
+
+          MAIN_SHA="$main_sha" VALIDATED_SHA="$validated_sha" VALIDATED_RELATION="$validated_relation" \
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+
+          prs = json.loads(Path("governance-open-prs.json").read_text(encoding="utf-8"))
+          required = {"approved-for-integration", "single-model-reviewed"}
+
+          def labels(pr: dict) -> set[str]:
+              return {item["name"] for item in pr.get("labels", [])}
+
+          approved_research = [
+              pr for pr in prs
+              if pr["headRefName"].startswith(("research/", "experiment/", "diagnostic/"))
+              and "research-approved" in labels(pr)
+          ]
+          candidates = [
+              pr for pr in prs
+              if pr["headRefName"].startswith("integration/")
+              and not pr["isDraft"]
+              and required.issubset(labels(pr))
+          ]
+
+          lines = [
+              "# Hourly model-governance report",
+              "",
+              f"- main: `{os.environ['MAIN_SHA']}`",
+              f"- paper-validated: `{os.environ['VALIDATED_SHA']}`",
+              f"- validation relation: `{os.environ['VALIDATED_RELATION']}`",
+              f"- open PRs to main: {len(prs)}",
+              f"- approved research awaiting/under integration: {len(approved_research)}",
+              f"- merge-eligible integration candidates before check review: {len(candidates)}",
+              "",
+              "## Approved research queue",
+          ]
+          if approved_research:
+              lines.extend(
+                  f"- #{pr['number']} `{pr['headRefName']}` — {pr['title']}" for pr in approved_research
+              )
+          else:
+              lines.append("- none")
+          lines.extend(["", "## Integration queue"])
+          integrations = [pr for pr in prs if pr["headRefName"].startswith("integration/")]
+          if integrations:
+              for pr in integrations:
+                  lines.append(
+                      f"- #{pr['number']} `{pr['headRefName']}` draft={pr['isDraft']} "
+                      f"merge_state={pr['mergeStateStatus']} labels={','.join(sorted(labels(pr))) or 'none'}"
+                  )
+          else:
+              lines.append("- none")
+
+          if len(candidates) > 1:
+              lines.extend([
+                  "",
+                  "## Decision",
+                  "BLOCKED: more than one approved integration candidate is active. "
+                  "System Watch merges at most one coherent champion change per cycle.",
+              ])
+              Path("candidate.env").write_text("CANDIDATE_COUNT=2\n", encoding="utf-8")
+          elif len(candidates) == 1:
+              candidate = candidates[0]
+              lines.extend([
+                  "",
+                  "## Decision",
+                  f"Review checks and merge readiness for integration PR #{candidate['number']}.",
+              ])
+              Path("candidate.env").write_text(
+                  f"CANDIDATE_COUNT=1\nPR_NUMBER={candidate['number']}\n",
+                  encoding="utf-8",
+              )
+          else:
+              lines.extend([
+                  "",
+                  "## Decision",
+                  "No integration PR is eligible for automatic merge. The incumbent champion remains live.",
+              ])
+              if approved_research:
+                  lines.append(
+                      "Approved research exists: the semantic next action is to create/rebase an integration/* "
+                      "branch, unify it with the incumbent, and attach the required evidence."
+                  )
+              Path("candidate.env").write_text("CANDIDATE_COUNT=0\n", encoding="utf-8")
+
+          Path("model-governance-report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+          cat candidate.env >> "$GITHUB_ENV"
+          cat model-governance-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Refuse competing integration candidates
+        if: env.CANDIDATE_COUNT != '0' && env.CANDIDATE_COUNT != '1'
+        run: |
+          echo 'More than one approved integration candidate is active.' >&2
+          exit 1
+
+      - name: Recheck approved integration gates
+        if: env.CANDIDATE_COUNT == '1'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh pr view "$PR_NUMBER" \
+            --json number,title,url,headRefName,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
+            > candidate.json
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          from pathlib import Path
+
+          pr = json.loads(Path("candidate.json").read_text(encoding="utf-8"))
+          labels = {item["name"] for item in pr.get("labels", [])}
+          required_labels = {"approved-for-integration", "single-model-reviewed"}
+          errors: list[str] = []
+
+          if not pr["headRefName"].startswith("integration/"):
+              errors.append("candidate branch is not integration/*")
+          if pr["isDraft"]:
+              errors.append("candidate is still draft")
+          if not required_labels.issubset(labels):
+              errors.append("candidate lost one or more integration approval labels")
+          if pr["mergeStateStatus"] != "CLEAN":
+              errors.append(f"merge state is {pr['mergeStateStatus']}, not CLEAN")
+
+          checks = pr.get("statusCheckRollup") or []
+          names: list[str] = []
+          for check in checks:
+              name = check.get("name") or check.get("context") or check.get("__typename", "unknown")
+              names.append(name)
+              typename = check.get("__typename")
+              if typename == "CheckRun":
+                  if check.get("status") != "COMPLETED":
+                      errors.append(f"check {name} is not complete")
+                  elif check.get("conclusion") not in {"SUCCESS", "NEUTRAL", "SKIPPED"}:
+                      errors.append(f"check {name} concluded {check.get('conclusion')}")
+              else:
+                  if check.get("state") != "SUCCESS":
+                      errors.append(f"status {name} is {check.get('state')}")
+
+          required_check_fragments = (
+              "build-test (Release)",
+              "build-test (Debug)",
+              "live-paper-smoke",
+              "validate",
+              "policy",
+          )
+          for fragment in required_check_fragments:
+              if not any(fragment in name for name in names):
+                  errors.append(f"required check matching {fragment!r} is missing")
+
+          body = (pr.get("body") or "").lower()
+          if "[x] approved research integration into the single champion" not in body:
+              errors.append("approved integration lifecycle checkbox is not checked")
+
+          if errors:
+              Path("gate-errors.txt").write_text("\n".join(errors) + "\n", encoding="utf-8")
+              for error in errors:
+                  print(f"::error::{error}")
+              raise SystemExit(1)
+
+          Path("gate-errors.txt").write_text("all integration gates passed\n", encoding="utf-8")
+          print("all integration gates passed")
+          PY
+
+      - name: Merge one unified champion change
+        if: env.CANDIDATE_COUNT == '1'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_NUMBER" --squash --delete-branch | tee merge-result.txt
+          merged_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          echo "MERGED_SHA=$merged_sha" >> "$GITHUB_ENV"
+          {
+            echo
+            echo '## Integration action'
+            echo "- merged PR: #$PR_NUMBER"
+            echo "- merged main revision: \`$merged_sha\`"
+            echo '- merge mode: squash, no administrative bypass'
+            echo '- deployment state: pending required post-merge validation'
+          } | tee -a model-governance-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dispatch post-merge validation chain
+        if: env.CANDIDATE_COUNT == '1'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for workflow in ci.yml monitoring.yml v4-live-smoke.yml; do
+            gh workflow run "$workflow" --ref main
+            echo "dispatched=$workflow ref=main sha=$MERGED_SHA" | tee -a dispatches.txt
+          done
+          gh pr comment "$PR_NUMBER" --body \
+            "System Watch merged this approved single-champion integration at \`$MERGED_SHA\` and explicitly dispatched CI, monitoring, and live-paper smoke. The prior \`paper-validated\` revision remains live until the new smoke/deploy/health chain succeeds."
+          {
+            echo
+            echo '## Post-merge dispatches'
+            echo '```text'
+            cat dispatches.txt
+            echo '```'
+          } | tee -a model-governance-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload hourly governance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-governance-hourly-${{ github.run_id }}
+          path: |
+            model-governance-report.md
+            governance-open-prs.json
+            candidate.json
+            gate-errors.txt
+            merge-result.txt
+            dispatches.txt
+          if-no-files-found: warn
+          retention-days: 30
