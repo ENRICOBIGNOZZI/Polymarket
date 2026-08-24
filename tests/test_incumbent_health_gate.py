@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "incumbent_health_gate.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "integration-merge.yml"
+SERVER_HEALTH_WORKFLOW = ROOT / ".github" / "workflows" / "server-health.yml"
 SHA = "1" * 40
 OTHER_SHA = "2" * 40
 NOW_EPOCH = 1787577000
@@ -129,6 +130,14 @@ class IncumbentHealthGateTest(unittest.TestCase):
         self.assertIn("--max-age-seconds 7200", workflow)
         self.assertIn("incumbent-health-evidence", workflow)
         self.assertIn("deployed and healthy", workflow)
+
+    def test_private_health_is_not_disabled_with_automatic_deploy(self):
+        workflow = SERVER_HEALTH_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn('cron: "23 * * * *"', workflow)
+        self.assertIn('workflows: ["deploy-paper-server", "Grafana Permanent Access"]', workflow)
+        self.assertIn("github.event_name == 'schedule'", workflow)
+        self.assertIn("github.event.workflow_run.conclusion == 'success'", workflow)
+        self.assertNotIn("vars.POLYMARKET_SERVER_DEPLOY", workflow)
 
 
 if __name__ == "__main__":

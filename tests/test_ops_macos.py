@@ -147,12 +147,13 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('paper-server-deploy-${{ github.run_id }}', deploy)
         self.assertNotIn('test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"', deploy)
 
-        # Produce private health evidence immediately after deployment as well
-        # as on the existing hourly schedule, and only from the main chain.
+        # Produce private health evidence immediately after deployment or a
+        # successful Grafana access repair, as well as on the hourly schedule.
         self.assertIn('workflow_run:', health)
-        self.assertIn('workflows: ["deploy-paper-server"]', health)
+        self.assertIn('workflows: ["deploy-paper-server", "Grafana Permanent Access"]', health)
         self.assertIn('types: [completed]\n    branches: [main]', health)
         self.assertIn("github.event.workflow_run.conclusion == 'success'", health)
+        self.assertIn('push:\n    branches: [main]', health)
 
         # The operator route and explanatory action report are now contractual.
         self.assertIn('http://$SERVER_HOST:3000/api/health', health)
