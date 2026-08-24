@@ -1,0 +1,179 @@
+name: Polymarket Alpha Factory
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "2 * * * *"
+  push:
+    branches: [main]
+    paths:
+      - "config/alpha_factory.json"
+      - "config/live_champion.json"
+      - "config/scheduler_context.json"
+      - "docs/SCHEDULER_CONTEXT.md"
+      - "scripts/alpha_factory.py"
+      - "scripts/validate_scheduler_context.py"
+      - "tests/test_alpha_factory.py"
+      - "tests/test_scheduler_context.py"
+      - ".github/workflows/alpha-factory.yml"
+      - "docs/ALPHA_FACTORY.md"
+  pull_request:
+    branches: [main]
+    paths:
+      - "config/alpha_factory.json"
+      - "config/live_champion.json"
+      - "config/scheduler_context.json"
+      - "docs/SCHEDULER_CONTEXT.md"
+      - "scripts/alpha_factory.py"
+      - "scripts/validate_scheduler_context.py"
+      - "tests/test_alpha_factory.py"
+      - "tests/test_scheduler_context.py"
+      - ".github/workflows/alpha-factory.yml"
+      - "docs/ALPHA_FACTORY.md"
+
+permissions:
+  contents: write
+  actions: read
+  pull-requests: read
+
+concurrency:
+  group: polymarket-alpha-factory
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Load shared scheduler context
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p alpha_factory
+          python3 scripts/validate_scheduler_context.py \
+            --context config/scheduler_context.json \
+            --scheduler-id alpha-factory \
+            --output alpha_factory/scheduler-context.md \
+            --output-json alpha_factory/scheduler-context.json \
+            --github-env "$GITHUB_ENV"
+
+      - name: Validate Alpha Factory invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest tests/test_alpha_factory.py -v
+          python3 -m py_compile scripts/alpha_factory.py
+          python3 -m json.tool config/alpha_factory.json >/dev/null
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          cfg = json.loads(Path("config/alpha_factory.json").read_text())
+          context = json.loads(Path("alpha_factory/scheduler-context.json").read_text())
+          assert cfg["paper_only"] is True
+          assert cfg["allow_authenticated_execution"] is False
+          assert cfg["allow_direct_champion_mutation"] is False
+          assert "deploy-paper-server.yml" not in cfg["coordination"]["allowlisted_dispatches"]
+          assert context["valid"] is True
+          assert context["scheduler_id"] == "alpha-factory"
+          assert context["context_sha256"] == "${{ env.POLYMARKET_SCHEDULER_CONTEXT_SHA }}"
+          PY
+
+      - name: Materialize latest empirical evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p alpha_factory/input alpha_factory/output
+          git fetch --no-tags origin telemetry:refs/remotes/origin/telemetry || true
+
+          extract_or_empty() {
+            local remote_path="$1"
+            local local_path="$2"
+            if git show "origin/telemetry:${remote_path}" > "$local_path" 2>/dev/null; then
+              test -s "$local_path" || : > "$local_path"
+            else
+              : > "$local_path"
+            fi
+          }
+
+          extract_or_empty telemetry/latest-live-smoke.json \
+            alpha_factory/input/latest-live-smoke.json
+          extract_or_empty telemetry/latest-forward-maker.json \
+            alpha_factory/input/latest-forward-maker.json
+          extract_or_empty telemetry/forward-maker-history.jsonl \
+            alpha_factory/input/forward-maker-history.jsonl
+          extract_or_empty telemetry/alpha-factory-state.json \
+            alpha_factory/input/alpha-factory-state.json
+
+      - name: Diagnose bottlenecks and evaluate challengers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/alpha_factory.py \
+            --config config/alpha_factory.json \
+            --champion "$POLYMARKET_LIVE_CHAMPION_MANIFEST" \
+            --live-smoke alpha_factory/input/latest-live-smoke.json \
+            --forward-maker alpha_factory/input/latest-forward-maker.json \
+            --forward-history alpha_factory/input/forward-maker-history.jsonl \
+            --state-in alpha_factory/input/alpha-factory-state.json \
+            --state-out alpha_factory/output/alpha-factory-state.json \
+            --output-json alpha_factory/output/latest-alpha-factory.json \
+            --output-markdown alpha_factory/output/latest-alpha-factory.md \
+            | tee alpha_factory/output/alpha-factory.log
+
+      - name: Publish Alpha Factory summary
+        if: always()
+        shell: bash
+        run: |
+          cat alpha_factory/scheduler-context.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '## Polymarket Alpha Factory' >> "$GITHUB_STEP_SUMMARY"
+          if test -s alpha_factory/output/latest-alpha-factory.md; then
+            cat alpha_factory/output/latest-alpha-factory.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Alpha Factory report is missing.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Publish latest registry and evidence to telemetry
+        if: github.event_name != 'pull_request' && success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          publish_file() {
+            local local_path="$1"
+            local remote_path="$2"
+            local message="$3"
+            local endpoint="repos/${GITHUB_REPOSITORY}/contents/${remote_path}"
+            local content current_sha
+            content="$(base64 -w0 "$local_path")"
+            current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
+            local args=("$endpoint" --method PUT -f message="$message" -f content="$content" -f branch=telemetry)
+            if [[ -n "$current_sha" ]]; then
+              args+=(-f sha="$current_sha")
+            fi
+            gh api "${args[@]}" >/dev/null
+          }
+
+          publish_file alpha_factory/output/latest-alpha-factory.json \
+            telemetry/latest-alpha-factory.json \
+            "Update Alpha Factory evidence report"
+          publish_file alpha_factory/output/latest-alpha-factory.md \
+            telemetry/latest-alpha-factory.md \
+            "Update Alpha Factory human report"
+          publish_file alpha_factory/output/alpha-factory-state.json \
+            telemetry/alpha-factory-state.json \
+            "Update Alpha Factory candidate registry"
+
+      - name: Upload durable Alpha Factory evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha-factory-${{ github.run_id }}
+          path: alpha_factory/
+          if-no-files-found: error
+          retention-days: 30
