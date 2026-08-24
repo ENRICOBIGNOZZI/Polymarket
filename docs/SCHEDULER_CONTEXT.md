@@ -86,4 +86,6 @@ The research engine may consume public live data, estimate fair values, generate
 - `remote`: deploy or inspect `paper-validated` through Tailscale and SSH;
 - `api`: check read-only public connectivity.
 
+The Alpha Factory is a `research` scheduler: it evaluates challengers but cannot directly mutate the champion or authorize execution. The Meta-Supervisor is a `supervisor` scheduler: it may coordinate only the allowlisted research and validation workflows and may never dispatch private deploy/health jobs or bypass approval gates.
+
 Every run records the SHA256 of `config/scheduler_context.json`, so evidence generated under different system assumptions cannot be silently pooled.
