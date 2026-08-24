@@ -30,6 +30,13 @@ class V4MonitoringContractTest(unittest.TestCase):
         self.assertIn("push:", smoke)
         self.assertIn("branches: [main]", smoke)
 
+    def test_live_smoke_publishes_public_telemetry_checkpoint(self):
+        smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
+        self.assertIn("scripts/summarize_live_smoke.py", smoke)
+        self.assertIn("telemetry/latest-live-smoke.json", smoke)
+        self.assertIn("branch=telemetry", smoke)
+        self.assertIn("github.event_name != 'pull_request'", smoke)
+
 
 if __name__ == "__main__":
     unittest.main()
