@@ -35,5 +35,23 @@ int main() {
     assert(!pm::passive_buy_active_for_trade("CANCEL_PENDING", cancel_effective, arrival, cancel_effective));
     assert(!pm::passive_buy_active_for_trade("CANCELLED", cancel_effective - 1, arrival, cancel_effective));
 
+    std::vector<pm::FilledLegExposure> balanced{
+        {5.0, 10.0, 0.40},
+        {10.0, 20.0, 0.60}
+    };
+    assert(std::abs(pm::unmatched_entry_risk(balanced)) < 1e-12);
+
+    std::vector<pm::FilledLegExposure> one_sided{
+        {10.0, 10.0, 0.40},
+        {0.0, 10.0, 0.60}
+    };
+    assert(std::abs(pm::unmatched_entry_risk(one_sided) - 4.0) < 1e-12);
+
+    std::vector<pm::FilledLegExposure> imbalanced{
+        {10.0, 10.0, 0.40},
+        {5.0, 10.0, 0.60}
+    };
+    assert(std::abs(pm::unmatched_entry_risk(imbalanced) - 2.0) < 1e-12);
+
     std::cout << "execution tests passed\n";
 }
