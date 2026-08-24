@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -17,6 +18,12 @@ class LiveSmokeSummaryTest(unittest.TestCase):
             run.mkdir()
             shadow = run / "shadow_b1"
             shadow.mkdir()
+            now_ts = int(time.time())
+            (run / "trade_recorder_latest.log").write_text(
+                "trade_recorder markets=2 conditions=2 requests=1 fetched=2 new_trades=2 "
+                f"errors=0 truncated_batches=0 last_trade_ts={now_ts} seen=2 elapsed_ms=1\n",
+                encoding="utf-8",
+            )
             (run / "metrics.prom").write_text(
                 'polymarket_runtime_info{adapter="v4",run_root="paper_v4_live",version="v4"} 1\n'
                 'polymarket_runtime_equity_usd 10001\n'
@@ -111,6 +118,7 @@ class LiveSmokeSummaryTest(unittest.TestCase):
             self.assertEqual(data["schema"], "polymarket_public_live_smoke_v2")
             self.assertEqual(data["git_sha"], "abc")
             self.assertEqual(data["github_run_id"], "42")
+            self.assertEqual(data["data_health"]["trade_recorder"]["status"], "healthy")
             self.assertEqual(data["metrics"]["polymarket_runtime_equity_usd"], 10001.0)
             self.assertNotIn("unrelated_metric", data["metrics"])
             self.assertEqual(data["logs"]["b1"], ["b", "c"])
@@ -148,6 +156,29 @@ class LiveSmokeSummaryTest(unittest.TestCase):
             self.assertAlmostEqual(shadow_data["legs"][1]["estimated_queue_plus_target_clear_seconds"], 1000.0)
             self.assertTrue(shadow_data["bundles"][0]["all_legs_have_recent_compatible_flow"])
             self.assertAlmostEqual(shadow_data["bundles"][0]["max_estimated_clear_seconds"], 1000.0)
+
+    def test_missing_trade_recorder_log_fails_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            run = td / "paper_v5_live"
+            run.mkdir()
+            out = td / "snapshot.json"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--run-root",
+                    str(run),
+                    "--output",
+                    str(out),
+                ],
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            data = json.loads(out.read_text(encoding="utf-8"))
+            recorder = data["data_health"]["trade_recorder"]
+            self.assertEqual(recorder["status"], "unhealthy")
+            self.assertIn("missing_trade_recorder_log", recorder["failures"])
 
 
 if __name__ == "__main__":
