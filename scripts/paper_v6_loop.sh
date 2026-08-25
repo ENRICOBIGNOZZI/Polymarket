@@ -107,6 +107,10 @@ while true;do
   fi
 
   if ((now-last_report>=60));then
+    # Record the full micro execution frontier even when no signal crosses the
+    # trading threshold. This prevents best_edge=0 from hiding whether the
+    # blocker is forecast strength, spread/slippage, fee, or the final min-edge gate.
+    python3 scripts/v6_micro_edge_diagnostics.py --config "$RUN_ROOT/micro_taker_config.json" --run-dir "$RUN_ROOT/micro_taker" --output "$RUN_ROOT/micro_edge_diagnostics.json" --markets 500 --min-liquidity 25 --min-edge 0.00030 --slippage-bps 5 >"$RUN_ROOT/micro_edge_diagnostics.log" 2>&1||true
     python3 scripts/v6_execution_diagnostics.py --run-root "$RUN_ROOT" --output "$RUN_ROOT/execution_diagnostics.json" >"$RUN_ROOT/execution_diagnostics.log" 2>&1||true
     python3 scripts/v6_runtime_status.py --config "$CONFIG" --run-root "$RUN_ROOT" >"$RUN_ROOT/runtime_status.log" 2>&1||true
     python3 scripts/runtime_action_report.py --run-root "$RUN_ROOT" --external-signals "$RUN_ROOT/external_signals.csv" --window-seconds 3600 --production-edge "$INTENT_MIN_EDGE" --output-json "$RUN_ROOT/action_report.json" --output-markdown "$RUN_ROOT/action_report.md" >"$RUN_ROOT/action_report_latest.log" 2>&1||true
