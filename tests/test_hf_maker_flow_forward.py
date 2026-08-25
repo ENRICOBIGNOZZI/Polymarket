@@ -10,7 +10,7 @@ from scripts.hf_maker_flow_admission import evaluate
 from scripts.hf_maker_forward_audit import audit, realized_roundtrip_pnl
 from scripts.v6_market_common import TapeFlow
 from scripts.v6_micro_maker import replayable_trade_timestamp
-from scripts.v6_micro_maker_v2 import enforce_total_gross_cap
+from scripts.v6_micro_maker_v2 import enforce_total_gross_cap, gate_inside_fill_probability
 
 
 def write_csv(path: Path, fields: list[str], rows: list[dict[str, object]]) -> None:
@@ -32,6 +32,30 @@ class HFMakerFlowForwardTest(unittest.TestCase):
         self.assertAlmostEqual(result.queue_clearance_ratio, 2.0)
         self.assertAlmostEqual(result.fill_probability_proxy, 1.0)
         self.assertAlmostEqual(result.expected_filled_edge, 0.001)
+
+    def test_low_confidence_inside_spread_fill_uplift_is_removed(self) -> None:
+        self.assertEqual(
+            gate_inside_fill_probability(
+                0.42, queue_ahead=0.0, confidence=0.60, min_inside_confidence=0.80
+            ),
+            0.0,
+        )
+
+    def test_low_confidence_at_touch_fill_probability_is_unchanged(self) -> None:
+        self.assertAlmostEqual(
+            gate_inside_fill_probability(
+                0.42, queue_ahead=25.0, confidence=0.60, min_inside_confidence=0.80
+            ),
+            0.42,
+        )
+
+    def test_high_confidence_inside_spread_fill_probability_is_allowed(self) -> None:
+        self.assertAlmostEqual(
+            gate_inside_fill_probability(
+                0.42, queue_ahead=0.0, confidence=0.90, min_inside_confidence=0.80
+            ),
+            0.42,
+        )
 
     def test_roundtrip_pnl_is_fill_conditioned(self) -> None:
         rows = [
@@ -110,14 +134,19 @@ class HFMakerFlowForwardTest(unittest.TestCase):
             self.assertEqual(post["future_compatible_sell_shares"], 15.0)
             self.assertEqual(result["decision"], "ZERO_FILL_DESPITE_CAUSAL_FLOW")
 
-    def test_research_workflow_runs_flow_aware_engine_not_posthoc_only(self) -> None:
+    def test_research_workflow_runs_three_flow_policy_arms(self) -> None:
         workflow = Path(".github/workflows/v6-research-smoke.yml").read_text(encoding="utf-8")
         self.assertIn("scripts/v6_micro_maker_v2.py", workflow)
         self.assertIn("root=v6_evidence/maker_ab", workflow)
-        self.assertIn('baseline="$root/baseline"', workflow)
         self.assertIn('flow="$root/flow"', workflow)
+        self.assertIn('touch="$root/touch"', workflow)
+        self.assertIn('confidence="$root/confidence"', workflow)
         self.assertIn('--run-dir "$flow"', workflow)
+        self.assertIn('--run-dir "$touch"', workflow)
+        self.assertIn('--run-dir "$confidence"', workflow)
         self.assertIn("--min-fill-probability 0.005", workflow)
+        self.assertIn("--max-improve-ticks 0", workflow)
+        self.assertIn("--min-inside-confidence 0.80", workflow)
         self.assertIn("V6_MAKER_DEAD_FLOW_CANCEL_SECONDS", workflow)
 
     def test_research_workflow_accepts_authorized_paper_ceiling(self) -> None:
