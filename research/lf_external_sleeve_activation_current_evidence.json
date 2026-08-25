@@ -1,0 +1,71 @@
+{
+  "schema": "polymarket_lf_external_sleeve_activation_evidence_v1",
+  "base_main_sha": "a046e525f30721a7afac28c2750a2fbd0e33cd30",
+  "evidence_state": "MORE_EVIDENCE_REQUIRED",
+  "finding": "The enabled V5 external child receives a dedicated 10% capital account, but its configured repository signal CSV contains only the header while the external-intelligence worker is explicitly forbidden from writing production signals.",
+  "paper_v5": {
+    "starting_capital_usd": 10000.0,
+    "reserve_fraction": 0.05,
+    "external_enabled": true,
+    "external_capital_fraction": 0.10,
+    "external_child_starting_capital_usd": 1000.0,
+    "external_signals_file": "data/external_signals.csv",
+    "repository_signal_rows": 0
+  },
+  "external_intelligence": {
+    "allow_production_signal_write": false,
+    "latest_report_generated_utc": "2026-08-25T01:50:26+00:00",
+    "status": "BACKTESTING",
+    "stored_observations": 658,
+    "stored_price_snapshots": 1099,
+    "gate_passes": 0,
+    "most_mature_candidate": {
+      "name": "external:binance:return_1h:3600s",
+      "oos_predictions": 61,
+      "trades": 1,
+      "normal_pnl_per_share": -0.005,
+      "gate_pass": false
+    }
+  },
+  "latest_public_live_smoke": {
+    "git_sha": "97a7de6807612d209f80903007d416236cfbb28d",
+    "generated_ts": 1787624676,
+    "oos_trades": 0,
+    "oos_net_pnl_usd": 0.0,
+    "oos_stressed_net_pnl_usd": 0.0,
+    "production_bundles": 0,
+    "b2_coherent_rows": 0
+  },
+  "interpretation": [
+    "This is a capital/readiness plumbing defect, not evidence that external information has alpha.",
+    "The research worker must remain research-only until its existing OOS gates pass; this PR does not add a production handoff.",
+    "Before any external sleeve can receive non-exploration capital, an approved integration needs an explicit, point-in-time, validated signal handoff and common-sample OOS evidence.",
+    "Until then, fixed external capital is structurally unable to express the external research signal through the repository-defined V5 input path."
+  ],
+  "required_next_experiment": {
+    "common_sample": true,
+    "chronological": true,
+    "comparisons": [
+      "fixed enabled external sleeve with no approved signal feed",
+      "reserve/exploration-only external sleeve before evidence readiness",
+      "approved point-in-time external signal handoff only after OOS gate pass"
+    ],
+    "metrics": [
+      "Brier score",
+      "log loss",
+      "calibration by time-to-resolution",
+      "incremental executable OOS net PnL",
+      "1x/1.5x/2x cost stress",
+      "portfolio drawdown",
+      "capital utilization"
+    ]
+  },
+  "safety": {
+    "research_only": true,
+    "live_champion_changed": false,
+    "production_signal_write_enabled": false,
+    "risk_or_oos_gate_changed": false,
+    "credentials_changed": false,
+    "real_money_execution_enabled": false
+  }
+}
