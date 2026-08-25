@@ -17,11 +17,12 @@ def read_json(path:Path):
     try:
         v=json.loads(path.read_text(encoding='utf-8'));return v if isinstance(v,dict) else None
     except Exception:return None
-def read_last_csv(path:Path):
+def read_csv(path:Path):
     try:
-        with path.open(newline='',encoding='utf-8') as h:rows=list(csv.DictReader(h))
-        return rows[-1] if rows else None
-    except Exception:return None
+        with path.open(newline='',encoding='utf-8') as h:return list(csv.DictReader(h))
+    except Exception:return []
+def read_last_csv(path:Path):
+    rows=read_csv(path);return rows[-1] if rows else None
 
 @dataclass(frozen=True)
 class SleeveRisk:
@@ -32,6 +33,18 @@ def _json_sleeve(name,path,now,stale_seconds,fallback):
     if r is None:return None
     ts=int(finite(r.get('timestamp'),0));eq=finite(r.get('equity'),finite(r.get('cash'),fallback));gross=max(0,finite(r.get('gross_exposure'),0));stale=ts<=0 or now-ts>stale_seconds or ts>now+30
     return SleeveRisk(name,eq,gross,bool(r.get('killed',False)),ts,stale,str(path))
+
+def _external_engine_sleeve(root:Path,alloc:Mapping[str,float],total:float,now:int,stale_seconds:int):
+    risk_path=root/'external'/'risk_state.csv';risk=read_last_csv(risk_path)
+    if risk is None:return None
+    ts=int(risk_path.stat().st_mtime) if risk_path.exists() else 0;cash=finite(risk.get('cash'),total*alloc.get('external',0));gross=0.0
+    for row in read_csv(root/'external'/'broker_state.csv'):
+        gross+=max(0,finite(row.get('cost_basis'),finite(row.get('shares'),0)*finite(row.get('avg_price'),0)))
+    # Engine has no independent live mark in its durable risk_state; use a
+    # conservative 2% haircut on open cost basis until the global observer has
+    # an executable mark. This can only reduce equity, never inflate it.
+    equity=max(0,cash+.98*gross);killed=str(risk.get('killed','0')) in {'1','true','True'};stale=ts<=0 or now-ts>stale_seconds or ts>now+30
+    return SleeveRisk('external',equity,gross,killed,ts,stale,str(risk_path))
 
 def load_sleeves(root:Path,alloc:Mapping[str,float],total:float,now:int,stale_seconds:int):
     out={};r=read_last_csv(root/'maker'/'maker_equity.csv')
@@ -44,12 +57,7 @@ def load_sleeves(root:Path,alloc:Mapping[str,float],total:float,now:int,stale_se
     else:out['broker']=None
     out['micro_taker']=_json_sleeve('micro_taker',root/'micro_taker'/'status.json',now,stale_seconds,total*alloc.get('micro_taker',0))
     out['hard_arb']=_json_sleeve('hard_arb',root/'hard_arb'/'status.json',now,stale_seconds,total*alloc.get('hard_arb',0))
-    ext=_json_sleeve('external',root/'external'/'status.json',now,stale_seconds,total*alloc.get('external',0))
-    if ext is None:
-        r=read_last_csv(root/'external'/'broker_state.csv')
-        if r:
-            ts=int(finite(r.get('timestamp'),0));ext=SleeveRisk('external',finite(r.get('equity'),finite(r.get('cash'),total*alloc.get('external',0))),max(0,finite(r.get('gross_exposure'),finite(r.get('open_notional'),0))),str(r.get('killed',r.get('kill_switch','0'))) in {'1','true','True'},ts,ts<=0 or now-ts>stale_seconds or ts>now+30,str(root/'external'/'broker_state.csv'))
-    out['external']=ext;return out
+    out['external']=_external_engine_sleeve(root,alloc,total,now,stale_seconds);return out
 
 def evaluate_global_risk(*,total_capital:float,reserve_fraction:float,expected_allocations:Mapping[str,float],sleeves:Mapping[str,SleeveRisk|None],shock_multipliers:Mapping[str,float],previous_peak:float,max_drawdown:float,max_gross_fraction:float,max_scenario_loss_fraction:float,within_startup_grace:bool):
     total=max(1,total_capital);missing=sorted(k for k,v in sleeves.items() if v is None);stale=sorted(k for k,v in sleeves.items() if v is not None and v.stale);child=sorted(k for k,v in sleeves.items() if v is not None and v.killed);observed=sum(max(0,v.equity) for v in sleeves.values() if v is not None)
