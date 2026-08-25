@@ -100,6 +100,7 @@ jobs:
             python3 scripts/v6_micro_taker.py --config config/paper_v6.json --run-dir v6_evidence/micro_taker --markets 160 --min-liquidity 25 --horizon-seconds 5 --max-target-staleness-seconds 3 --max-trade-usd 15 --min-edge 0.0003 --slippage-bps 5 --max-positions 10 >> v6_evidence/micro_taker.log 2>&1 || true
             sleep 2
           done
+          python3 scripts/v6_micro_edge_diagnostics.py --config config/paper_v6.json --run-dir v6_evidence/micro_taker --output v6_evidence/micro_edge_diagnostics.json --markets 160 --min-liquidity 25 --min-edge 0.0003 --slippage-bps 5 > v6_evidence/micro_edge_diagnostics.log 2>&1 || true
       - name: Summarize V6 evidence
         if: always()
         shell: bash
@@ -114,7 +115,7 @@ jobs:
               except Exception:return {}
           hard=(root/'graph_hard_taker_scan.csv').read_text(errors='ignore') if (root/'graph_hard_taker_scan.csv').exists() else ''
           m=re.search(r'net_positive_pre_gas=(\d+)',hard)
-          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'relation_queue':js('relation_queue_status.json'),'local_factor':js('local_factor_status.json'),'local_factor_queue':js('local_factor_queue_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0}
+          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'relation_queue':js('relation_queue_status.json'),'local_factor':js('local_factor_status.json'),'local_factor_queue':js('local_factor_queue_status.json'),'hard_arb':js('hard_arb/status.json'),'micro_edge_diagnostics':js('micro_edge_diagnostics.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0}
           state=root/'micro_taker/state.json'
           if state.exists():
               try:
@@ -132,6 +133,7 @@ jobs:
                   summary['micro_taker_best_edge_last_tick']=float(s.get('best_edge') or 0.0)
                   summary['micro_taker_realized_pnl_total']=float(s.get('realized_pnl_total') or 0.0)
                   summary['micro_taker_label_stats_last_tick']=s.get('label_stats_last_tick') or {}
+                  summary['micro_taker_fee_stats']=s.get('fee_stats') or {}
                   if bad: raise RuntimeError('micro taker used a post-horizon target observation')
               except Exception as exc:
                   summary['micro_taker_summary_error']=f'{type(exc).__name__}:{exc}'
