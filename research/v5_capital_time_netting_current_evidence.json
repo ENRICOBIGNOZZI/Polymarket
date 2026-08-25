@@ -1,0 +1,74 @@
+{
+  "schema": "polymarket_v5_capital_time_netting_research_v1",
+  "status": "MORE_EVIDENCE_REQUIRED",
+  "hypothesis": "When independently generated V5 sleeve opportunities compete for finite portfolio capital, ranking only by one-times-cost edge can waste capital on slow or cost-fragile trades; a fail-closed selector using two-times-cost robust edge per expected capital-hour may improve incremental realized paper PnL without changing any expert or execution model.",
+  "incumbent": {
+    "validated_sha": "d6513fdbdf5ad8c8b7926b53fb7bba5acdab1257",
+    "version": 5,
+    "deployment_ref": "paper-validated",
+    "architecture": "five independent paper sleeves aggregated at capital level"
+  },
+  "current_main_observed_sha": "43ee9338921440a74bc841373d31acfbe3b33a5b",
+  "current_main_validation_status": "ahead_of_paper_validated; excluded from economic evidence until exact-SHA validation completes",
+  "latest_validated_public_smoke": {
+    "git_sha": "d6513fdbdf5ad8c8b7926b53fb7bba5acdab1257",
+    "github_run_id": "32791188082",
+    "trade_recorder_status": "healthy",
+    "trade_recorder_markets": 500,
+    "trade_recorder_new_trades": 3510,
+    "b1_usable_series": 0,
+    "b1_pairs_tested": 0,
+    "b1_model_fits": 0,
+    "b2_status": "insufficient_series",
+    "production_bundles": 0,
+    "oos_trades": 0,
+    "active_folds": 0,
+    "oos_net_pnl_usd": 0.0,
+    "oos_stressed_net_pnl_usd": 0.0,
+    "runtime_pnl_usd": -2.44419734008,
+    "realized_pnl_usd_total": 0.0000974777346983,
+    "runtime_gross_exposure_usd": 222.595976882,
+    "kill_switch": false
+  },
+  "external_information": {
+    "status": "BACKTESTING",
+    "candidate_count": 6,
+    "passing_candidates": 0,
+    "best_observed_candidate": "external:binance:return_1h:3600s",
+    "best_candidate_oos_predictions": 29,
+    "best_candidate_trades": 0,
+    "best_candidate_net_pnl_per_share": 0.0
+  },
+  "known_blockers": [
+    "No finalized OOS production bundles exist, so there is no realized cross-sleeve capital competition sample to score.",
+    "B1/B2 historical research is data-blocked in the latest validated smoke: zero usable B1 series and B2 insufficient_series.",
+    "Open data-acquisition repair PR #166 is the appropriate owner for CLOB history coverage; this challenger must not duplicate it.",
+    "HF causal/execution evidence remains owned by dedicated HF research PRs; this challenger does not alter their signals, fill assumptions, queue model, latency model, or maker policy.",
+    "LF factor/reversion/calibration evidence remains owned by dedicated LF research PRs; this challenger does not relax their statistical gates.",
+    "Current unvalidated main contains aggressive V5 bootstrap workflows and is not used as economic evidence until paper-validated catches up."
+  ],
+  "challenger_contract": {
+    "scope": "offline portfolio admission ablation only",
+    "selection_information": "point-in-time forecast fields only",
+    "incumbent_score": "net_edge_1x",
+    "challenger_score": "min(net_edge under 1x, 1.5x, 2x costs) / expected_holding_hours",
+    "two_x_cost_gate": "required positive before challenger admission",
+    "capital_budget": "identical between incumbent and challenger within each decision window",
+    "risk_limits": "unchanged",
+    "live_champion_manifest": "unchanged",
+    "authenticated_execution": false
+  },
+  "promotion_requirements": [
+    "At least two chronological future OOS folds with point-in-time expected holding time available before selection.",
+    "Positive incremental realized net paper PnL versus the incumbent selector at 1x, 1.5x, and 2x execution costs.",
+    "At least 50% of OOS folds positive at 2x costs.",
+    "Challenger drawdown no worse than incumbent under every tested cost stress.",
+    "No use of future realized PnL, resolution outcome, or post-decision holding duration in selection.",
+    "No weakening of existing strategy-level OOS, drawdown, concentration, or kill-switch gates."
+  ],
+  "rollback": {
+    "condition": "Any negative incremental OOS PnL at a required cost stress, worse drawdown, leakage, or capital-budget violation.",
+    "action": "Discard the challenger and retain the incumbent V5 paper selector unchanged."
+  },
+  "decision": "Implement the evaluator and tests, but do not claim alpha or request integration until future OOS capital-competition evidence exists."
+}
