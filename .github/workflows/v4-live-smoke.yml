@@ -114,6 +114,29 @@ jobs:
             --min-z 0.65 --min-t-reversion 0.60 --max-half-life-hours 336 \
             --max-factor-hedge-error 0.80 --top 200 --csv "$R/stat_arb_pca_raw.csv" \
             | tee "$R/stat_arb_pca_latest.log"
+
+          # Research-only B2 ablation: keep every economic/statistical gate fixed
+          # and vary only the maximum hedge-candidate count. This tests whether
+          # the current 5-8-leg baskets are consuming their raw edge in execution
+          # costs. The incumbent k=8 path below remains the only path feeding
+          # intents; sparse scans are diagnostics only.
+          for k in 1 2 3 4; do
+            ./build/polymarket_pca_stat_arb \
+              --config config/paper_v5.json --markets 500 --universe 240 \
+              --lookback-hours 720 --fidelity-minutes 30 --factors 5 --max-hedges "$k" \
+              --min-z 0.65 --min-t-reversion 0.60 --max-half-life-hours 336 \
+              --max-factor-hedge-error 0.80 --top 200 --csv "$R/stat_arb_pca_k${k}.csv" \
+              | tee "$R/stat_arb_pca_k${k}.log"
+          done
+          python3 scripts/b2_sparse_hedge_frontier.py \
+            --input "8:$R/stat_arb_pca_raw.csv" \
+            --input "4:$R/stat_arb_pca_k4.csv" \
+            --input "3:$R/stat_arb_pca_k3.csv" \
+            --input "2:$R/stat_arb_pca_k2.csv" \
+            --input "1:$R/stat_arb_pca_k1.csv" \
+            --output-json "$R/b2_sparse_hedge_frontier.json" \
+            --output-markdown "$R/b2_sparse_hedge_frontier.md"
+
           python3 scripts/filter_coherent_hedges.py \
             --input "$R/stat_arb_pca_raw.csv" --output "$R/stat_arb_pca.csv" \
             --rejections "$R/stat_arb_pca_rejected.csv" --cache "$R/market_metadata_cache.json" \
@@ -167,7 +190,9 @@ jobs:
           test -s "$R/runtime_status.json"
           test -s "$R/strategy_status.csv"
           test -s "$R/allocator_status.json"
+          test -s "$R/b2_sparse_hedge_frontier.json"
           python3 -m json.tool "$R/runtime_status.json" >/dev/null
+          python3 -m json.tool "$R/b2_sparse_hedge_frontier.json" >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
 
       - name: Build public telemetry snapshot
@@ -198,6 +223,9 @@ jobs:
             tail -n 8 "$f" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           done
+          if test -s "$R/b2_sparse_hedge_frontier.md"; then
+            cat "$R/b2_sparse_hedge_frontier.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo '### allocator status' >> "$GITHUB_STEP_SUMMARY"
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
           cat "$R/allocator_status.json" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
