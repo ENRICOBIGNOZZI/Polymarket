@@ -22,8 +22,13 @@ class ModelGovernanceContractTest(unittest.TestCase):
         self.assertEqual(manifest["run_root"], "runs/paper_v5_live")
         self.assertEqual(manifest["deployment_ref"], "paper-validated")
         self.assertEqual(manifest["promotion_policy"], "automatic validated integration")
+        live_loop = (ROOT / manifest["loop"]).read_text(encoding="utf-8")
+        self.assertGreaterEqual(live_loop.count("multi_strategy_paper_safe.py"), 2)
+        self.assertIn("v5_stale_watchdog.py", live_loop)
+        self.assertIn("model_operability_report.py", live_loop)
         completed = subprocess.run(["bash", "scripts/paper_latest_loop.sh", "--print-champion"], cwd=ROOT, check=True, capture_output=True, text=True, timeout=10)
         self.assertIn("paper_champion version=5", completed.stdout)
+        self.assertIn("loop=scripts/paper_v5_loop.sh", completed.stdout)
         self.assertIn("deploy_ref=paper-validated", completed.stdout)
 
     def test_registry_covers_workflows_and_preserves_separate_authorities(self):

@@ -28,10 +28,34 @@ print(value)
 PY
 )"
 
+read -r CHILD_STALE_SECONDS CHILD_GRACE_SECONDS BACKEND_STALE_SECONDS BACKEND_GRACE_SECONDS OPERABILITY_REPORT_INTERVAL_SECONDS <<EOF
+$(python3 - "$CONFIG" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    config = json.load(handle)
+operability = config.get("multi_strategy", {}).get("operability", {})
+if not bool(operability.get("generic_children_scan_only", False)):
+    raise SystemExit("multi_strategy.operability.generic_children_scan_only must be true")
+values = (
+    float(operability.get("child_stale_seconds", 600.0)),
+    float(operability.get("child_watchdog_grace_seconds", operability.get("watchdog_grace_seconds", 180.0))),
+    float(operability.get("backend_stale_seconds", 900.0)),
+    float(operability.get("backend_watchdog_grace_seconds", 900.0)),
+    float(operability.get("report_interval_seconds", 30.0)),
+)
+if values[0] <= 0 or values[1] < 0 or values[2] <= 0 or values[3] < 0 or values[4] <= 0:
+    raise SystemExit("invalid V5 operability timing")
+print(*values)
+PY
+)
+EOF
+
 # Materialise and validate all five generated child configs before starting the
-# persistent allocator. This is validation only; the allocator below runs them
-# continuously in paper mode against live Polymarket books.
-python3 scripts/multi_strategy_paper.py \
+# persistent allocator. Generic children are explicitly scan-only: they keep
+# research signals, exits and settlement alive, but cannot open a new position
+# through the generic terminal-probability execution path.
+python3 scripts/multi_strategy_paper_safe.py \
   --config "$CONFIG" --run-root "$RUN_ROOT" --engine ./build/polymarket_engine \
   --markets "$MODEL_MARKETS" --min-liquidity "$MIN_LIQUIDITY" --validate-only \
   > "$RUN_ROOT/allocator_validate.log"
@@ -110,7 +134,7 @@ supervise_execution() {
   }
 
   start_allocator() {
-    python3 scripts/multi_strategy_paper.py \
+    python3 scripts/multi_strategy_paper_safe.py \
       --config "$CONFIG" --run-root "$RUN_ROOT" --engine ./build/polymarket_engine \
       --markets "$MODEL_MARKETS" --min-liquidity "$MIN_LIQUIDITY" \
       >> "$RUN_ROOT/allocator.log" 2>&1 &
@@ -199,26 +223,76 @@ supervise_execution() {
 
 SUPERVISOR_PID=0
 SUPERVISOR_RESTARTS=0
+WATCHDOG_PID=0
+WATCHDOG_RESTARTS=0
+OPERABILITY_PID=0
+OPERABILITY_RESTARTS=0
 
 start_supervisor() {
   supervise_execution >> "$RUN_ROOT/runtime_supervisor.log" 2>&1 &
   SUPERVISOR_PID=$!
 }
 
+start_watchdog() {
+  python3 scripts/v5_stale_watchdog.py \
+    --run-root "$RUN_ROOT" --main-pid "$$" \
+    --stale-seconds "$CHILD_STALE_SECONDS" --grace-seconds "$CHILD_GRACE_SECONDS" \
+    --backend-stale-seconds "$BACKEND_STALE_SECONDS" --backend-grace-seconds "$BACKEND_GRACE_SECONDS" \
+    --interval-seconds 5 >> "$RUN_ROOT/stale_watchdog.log" 2>&1 &
+  WATCHDOG_PID=$!
+}
+
+start_operability_report() {
+  python3 scripts/model_operability_report.py \
+    --config "$CONFIG" --run-root "$RUN_ROOT" \
+    --window-seconds 3600 --stale-seconds "$CHILD_STALE_SECONDS" \
+    --interval-seconds "$OPERABILITY_REPORT_INTERVAL_SECONDS" --loop \
+    >> "$RUN_ROOT/model_operability.log" 2>&1 &
+  OPERABILITY_PID=$!
+}
+
+append_top_event() {
+  local component="$1"
+  local event="$2"
+  local count="$3"
+  local path="$RUN_ROOT/runtime_supervisor_events.csv"
+  if [[ ! -s "$path" ]]; then
+    printf 'timestamp,component,event,restart_count\n' > "$path"
+  fi
+  printf '%s,%s,%s,%s\n' "$(date +%s)" "$component" "$event" "$count" >> "$path"
+}
+
 cleanup() {
+  if (( OPERABILITY_PID > 0 )); then kill "$OPERABILITY_PID" 2>/dev/null || true; fi
+  if (( WATCHDOG_PID > 0 )); then kill "$WATCHDOG_PID" 2>/dev/null || true; fi
   if (( SUPERVISOR_PID > 0 )); then kill "$SUPERVISOR_PID" 2>/dev/null || true; fi
+  if (( OPERABILITY_PID > 0 )); then wait "$OPERABILITY_PID" 2>/dev/null || true; fi
+  if (( WATCHDOG_PID > 0 )); then wait "$WATCHDOG_PID" 2>/dev/null || true; fi
   if (( SUPERVISOR_PID > 0 )); then wait "$SUPERVISOR_PID" 2>/dev/null || true; fi
 }
 
 parent_shutdown() {
-  trap - EXIT INT TERM
+  trap - EXIT INT TERM USR1
   cleanup
   exit 0
 }
 
+watchdog_reexec() {
+  trap - EXIT INT TERM USR1
+  append_top_event champion watchdog_reexec 1
+  cleanup
+  exec /usr/bin/env bash "$0" "$CONFIG" "$RUN_ROOT"
+}
+
 trap cleanup EXIT
 trap parent_shutdown INT TERM
+trap watchdog_reexec USR1
 start_supervisor
+start_watchdog
+start_operability_report
+append_top_event supervisor start 0
+append_top_event stale_watchdog start 0
+append_top_event model_operability start 0
 
 last_stat=0
 last_structural=0
@@ -233,9 +307,23 @@ while true; do
   if ! kill -0 "$SUPERVISOR_PID" 2>/dev/null; then
     wait "$SUPERVISOR_PID" 2>/dev/null || true
     SUPERVISOR_RESTARTS=$((SUPERVISOR_RESTARTS + 1))
-    printf '%s,supervisor,restart,%s\n' "$(date +%s)" "$SUPERVISOR_RESTARTS" >> "$RUN_ROOT/runtime_supervisor_events.csv"
+    append_top_event supervisor restart "$SUPERVISOR_RESTARTS"
     sleep 1
     start_supervisor
+  fi
+  if ! kill -0 "$WATCHDOG_PID" 2>/dev/null; then
+    wait "$WATCHDOG_PID" 2>/dev/null || true
+    WATCHDOG_RESTARTS=$((WATCHDOG_RESTARTS + 1))
+    append_top_event stale_watchdog restart "$WATCHDOG_RESTARTS"
+    sleep 1
+    start_watchdog
+  fi
+  if ! kill -0 "$OPERABILITY_PID" 2>/dev/null; then
+    wait "$OPERABILITY_PID" 2>/dev/null || true
+    OPERABILITY_RESTARTS=$((OPERABILITY_RESTARTS + 1))
+    append_top_event model_operability restart "$OPERABILITY_RESTARTS"
+    sleep 1
+    start_operability_report
   fi
 
   # The passive microstructure sleeve is deliberately frequent and small. The

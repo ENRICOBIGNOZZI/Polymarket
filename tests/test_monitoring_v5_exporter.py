@@ -100,6 +100,45 @@ class MonitoringV5ExporterTests(unittest.TestCase):
                 writer.writerow({"cost_adjusted_edge": 0.012, "net_edge": 0.010})
                 writer.writerow({"cost_adjusted_edge": -0.001, "net_edge": -0.002})
 
+            (run / "model_operability.json").write_text(
+                json.dumps(
+                    {
+                        "timestamp": now,
+                        "generic_children_scan_only": True,
+                        "models": [
+                            {
+                                "name": "graph",
+                                "backend": "negrisk_basket_scan",
+                                "state": "SHADOW_NO_POST_COST_EDGE",
+                                "entry_enabled": False,
+                                "process_alive": True,
+                                "status_age_seconds": 2,
+                                "signals": 4,
+                                "gross_positive": 1,
+                                "cost_positive": 0,
+                                "net_positive": 0,
+                                "orders": 0,
+                                "fills": 0,
+                                "positions": 0,
+                                "best_net_edge": -0.001,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run / "stale_watchdog_status.json").write_text(
+                json.dumps(
+                    {
+                        "timestamp": now,
+                        "state": "HEALTHY",
+                        "reason": "",
+                        "restart_requests": 0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
             collector = LatestCollector(runs, config_dir, "paper_v5_live", str(config_path), 20)
             text = collector.collect()
             self.assertIn('adapter="v5"', text)
@@ -110,6 +149,16 @@ class MonitoringV5ExporterTests(unittest.TestCase):
             self.assertIn('polymarket_model_fills_total{action="all",expert="graph",model="graph"} 3', text)
             self.assertIn('polymarket_model_cost_positive_signals_total{expert="graph",model="graph"} 1', text)
             self.assertIn('polymarket_model_best_net_edge_ratio{expert="graph",model="graph"} 0.01', text)
+            self.assertIn('polymarket_generic_children_scan_only 1', text)
+            self.assertIn(
+                'polymarket_model_operability_info{backend="negrisk_basket_scan",model="graph",state="SHADOW_NO_POST_COST_EDGE"} 1',
+                text,
+            )
+            self.assertIn(
+                'polymarket_model_entry_enabled{backend="negrisk_basket_scan",model="graph"} 0',
+                text,
+            )
+            self.assertIn('polymarket_stale_watchdog_info{reason="",state="HEALTHY"} 1', text)
 
 
 if __name__ == "__main__":
