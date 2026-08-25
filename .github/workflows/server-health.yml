@@ -17,8 +17,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: polymarket-paper-server-health
-  cancel-in-progress: true
+  group: polymarket-paper-server
+  cancel-in-progress: false
 
 jobs:
   health:
@@ -202,7 +202,7 @@ jobs:
           case "$(uname -s)" in
             Darwin)
               sudo -n /usr/local/sbin/polymarket-service-control status
-              sudo -n launchctl print system/com.polymarket.autoupdate >/dev/null
+              /bin/launchctl print system/com.polymarket.autoupdate >/dev/null
               status_file="$HOME/.config/polymarket/autoupdate_status.env"
               test -s "$status_file"
               cat "$status_file"
