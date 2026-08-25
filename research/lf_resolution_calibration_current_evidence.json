@@ -1,0 +1,46 @@
+{
+  "schema": "polymarket_lf_resolution_calibration_current_evidence_v1",
+  "source_main_sha": "d6513fdbdf5ad8c8b7926b53fb7bba5acdab1257",
+  "finding": "Terminal expert-score updates are resolution-inventoried through active discovery plus open positions, not through the full unresolved forecast set. Non-position forecasts can therefore remain unscored after closure, and forecast_state stores no timestamp or time-to-resolution horizon.",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "current_public_context": {
+    "live_smoke_generated_ts": 1787615784,
+    "live_smoke_git_sha": "d6513fdbdf5ad8c8b7926b53fb7bba5acdab1257",
+    "oos_trades": 0,
+    "oos_net_pnl_usd": 0.0,
+    "b2_coherent_rows": 0,
+    "b2_maker_positive": 0,
+    "external_generated": "2026-08-24T23:33:26+00:00",
+    "external_status": "BACKTESTING",
+    "external_stored_observations": 574,
+    "external_stored_price_snapshots": 999,
+    "external_max_oos_predictions_per_candidate": 29,
+    "external_max_trades_per_candidate": 4,
+    "external_gate_passes": 0
+  },
+  "deterministic_fixture": {
+    "description": "Two forecasted markets close after leaving active discovery. Only one has an open position. The position-selected incumbent lookup scores only that market; a forecast-inventory lookup scores both.",
+    "incumbent_scored_forecasts": 1,
+    "all_forecast_scored_forecasts": 2,
+    "incumbent_mean_brier": 0.01,
+    "all_forecast_mean_brier": 0.41,
+    "interpretation": "The Brier difference is an illustrative deterministic selection-bias counterexample, not an estimate of live calibration error."
+  },
+  "required_next_experiment": [
+    "persist unresolved forecasts independently of positions with forecast timestamp and time-to-resolution bucket",
+    "backfill terminal outcomes for every matured forecast using read-only Gamma resolution lookup",
+    "score all forecast origins, not only the last forecast before closure",
+    "fit calibration mappings only on prior resolved forecasts with event/time clustering",
+    "compare uncalibrated versus horizon-calibrated probabilities on common chronological rows using Brier, log-loss and calibration error",
+    "for trading decisions, compare executable OOS net PnL at 1x, 1.5x and 2x costs plus drawdown and turnover",
+    "do not integrate a production calibration change until enough independent resolved events exist"
+  ],
+  "safety": {
+    "research_only": true,
+    "live_champion_changed": false,
+    "production_thresholds_changed": false,
+    "risk_or_oos_gates_changed": false,
+    "credentials_or_execution_changed": false,
+    "real_money_execution": false
+  }
+}
