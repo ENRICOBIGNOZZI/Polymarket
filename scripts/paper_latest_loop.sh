@@ -171,7 +171,7 @@ write_plane_status() {
   local path="$run_root/runtime_planes.csv"
   # macOS ships Bash 3.2, which has no BASHPID. The singleton lock already
   # excludes a second runtime; the shell PID is a portable per-wrapper suffix.
-  local tmp="$path.tmp.${BASHPID:-$}"
+  local tmp="$path.tmp.${BASHPID:-$$}"
   printf 'timestamp,champion_version,champion_alive,fast_enabled,fast_alive,fast_restarts,champion_pid,fast_pid\n' > "$tmp"
   printf '%s,%s,%s,%s,%s,%s,%s,%s\n' "$(date +%s)" "$version" "$champion_alive" \
     "$fast_enabled" "$fast_alive" "$fast_restarts" "$champion_pid" "$fast_pid" >> "$tmp"
