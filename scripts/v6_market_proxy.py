@@ -19,8 +19,13 @@ from pathlib import Path
 from typing import Any
 
 END = {"", "LTE=", "-1"}
-FRESH_CACHE_SECONDS = 30.0
-STALE_CACHE_SECONDS = 900.0
+# The relay cache contains discovery metadata, never live order-book payloads.
+# Hosted GitHub schedules are best-effort and can be delayed well beyond their
+# five-minute cadence, so preserve a bounded verified catalogue while upstream
+# Gamma/CLOB access from the private runtime is degraded. Fresh relay data is
+# used for five minutes; the one-hour fallback remains fail-closed afterwards.
+FRESH_CACHE_SECONDS = 300.0
+STALE_CACHE_SECONDS = 3600.0
 FALLBACK_MARKETS = 300
 GAMMA_TIMEOUT_SECONDS = 1.5
 GAMMA_LEGACY_TIMEOUT_SECONDS = 8.0

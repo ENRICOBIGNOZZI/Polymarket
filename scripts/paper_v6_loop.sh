@@ -8,6 +8,7 @@ MIN_LIQUIDITY="${V6_MIN_LIQUIDITY:-10}"
 MARKETS="${V6_MARKETS:-700}"
 RECORDER_MARKETS="${V6_RECORDER_MARKETS:-1200}"
 INTENT_MIN_EDGE="${V6_INTENT_MIN_EDGE:-0.00020}"
+RUNTIME_PARENT_PID="${POLYMARKET_RUNTIME_PARENT_PID:-}"
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/micro_taker" "$RUN_ROOT/hard_arb" "$RUN_ROOT/external"
 
 # V6 market discovery is routed through a local read-only resilience proxy. It
@@ -75,6 +76,7 @@ write_supervisor(){
 }
 cleanup(){ for p in "$rec_pid" "$broker_pid" "$external_pid" "$proxy_pid";do if ((p>0));then kill "$p" 2>/dev/null||true;fi;done;for p in "$rec_pid" "$broker_pid" "$external_pid" "$proxy_pid";do if ((p>0));then wait "$p" 2>/dev/null||true;fi;done; }
 shutdown(){ trap - EXIT INT TERM; cleanup; exit 0; }
+parent_runtime_alive(){ [[ -z "$RUNTIME_PARENT_PID" ]] || kill -0 "$RUNTIME_PARENT_PID" 2>/dev/null; }
 trap cleanup EXIT
 trap shutdown INT TERM
 start_proxy
@@ -98,6 +100,10 @@ last_factor=0;last_relation=0;last_external=0;last_report=0;last_micro_taker=0;l
 rebuild_intents(){ python3 scripts/merge_v4_intents.py --input "$RUN_ROOT/local_factor_intents.csv" --input "$RUN_ROOT/relation_intents.csv" --output "$RUN_ROOT/intents.csv" --min-edge "$INTENT_MIN_EDGE" --max-age-seconds 240 --max-bundles 120 >>"$RUN_ROOT/intent_merge.log" 2>&1||true; }
 
 while true;do
+  if ! parent_runtime_alive;then
+    echo "runtime_parent_lost=1; exiting V6 children for a clean runtime handoff" >&2
+    exit 0
+  fi
   now="$(date +%s)"
   if ! kill -0 "$proxy_pid" 2>/dev/null;then wait "$proxy_pid" 2>/dev/null||true;proxy_restarts=$((proxy_restarts+1));start_proxy;sleep 1;fi
   if ! kill -0 "$rec_pid" 2>/dev/null;then wait "$rec_pid" 2>/dev/null||true;rec_restarts=$((rec_restarts+1));start_recorder;fi

@@ -143,7 +143,9 @@ fast_pid=0
 fast_restarts=0
 
 start_champion() {
-  /usr/bin/env bash "$loop" "$config" "$run_root" &
+  # Let the V6 child notice an abrupt launchd-wrapper death and retire its
+  # broker/proxy children before a replacement runtime is allowed to own them.
+  POLYMARKET_RUNTIME_PARENT_PID="$$" /usr/bin/env bash "$loop" "$config" "$run_root" &
   champion_pid=$!
 }
 
