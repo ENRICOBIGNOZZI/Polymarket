@@ -130,6 +130,32 @@ class ExternalIntelligenceTests(unittest.TestCase):
         assert evidence is not None
         self.assertFalse(evidence["integration_evidence_pass"])
 
+    def test_midpoint_delta_hurdle_omits_horizon_exit_spread(self) -> None:
+        completed = subprocess.run(
+            ["python3", str(ROOT / "scripts" / "lf_external_executable_target_audit.py")],
+            cwd=ROOT, capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        payload = json.loads(completed.stdout)
+        by_name = {row["name"]: row for row in payload["fixtures"]}
+        long_case = by_name["long_midpoint_signal_does_not_cover_exit_spread"]
+        short_case = by_name["short_midpoint_signal_does_not_cover_exit_spread"]
+        control = by_name["large_signal_survives_roundtrip_hurdle"]
+        self.assertEqual(long_case["incumbent_side"], 1)
+        self.assertLess(long_case["incumbent_realized_executable_pnl"], 0.0)
+        self.assertEqual(long_case["causal_roundtrip_side"], 0)
+        self.assertEqual(short_case["incumbent_side"], -1)
+        self.assertLess(short_case["incumbent_realized_executable_pnl"], 0.0)
+        self.assertEqual(short_case["causal_roundtrip_side"], 0)
+        self.assertEqual(control["incumbent_side"], 1)
+        self.assertEqual(control["causal_roundtrip_side"], 1)
+        self.assertGreater(control["incumbent_realized_executable_pnl"], 0.0)
+        source = (ROOT / "scripts" / "external_intelligence.py").read_text(encoding="utf-8")
+        self.assertIn('"target_delta": future_mid - current_mid', source)
+        self.assertIn('threshold = 0.5 * max(0.0, ask - bid) + extra_cost', source)
+        self.assertIn('return future_bid - ask - extra_cost, 1', source)
+        self.assertIn('return bid - future_ask - extra_cost, -1', source)
+
     def test_storage_is_deterministic_and_deduplicated(self) -> None:
         row = {"observation_id": "same", "observed_ts": self.now, "retrieved_ts": self.now,
                "market_id": "pm-1", "source": "kalshi", "feature_name": "external_probability"}
