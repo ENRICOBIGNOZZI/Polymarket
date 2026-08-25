@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import gzip
+import json
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from scripts import v6_market_proxy as proxy
@@ -49,13 +52,39 @@ class V6MarketProxyDeadlineTests(unittest.TestCase):
         self.assertEqual(end, [])
 
     def test_upstream_deadlines_fit_inside_cpp_client_deadline(self) -> None:
-        # The C++ HttpClient has a 30 second request deadline. A proxy must not
-        # spend most of that deadline retrying one unavailable upstream.
+        # The C++ HttpClient has a 30 second request deadline. The proxy leaves
+        # at least five seconds outside the bounded Gamma/discovery/book budget.
         self.assertLessEqual(proxy.GAMMA_TIMEOUT_SECONDS, 2.0)
-        self.assertLessEqual(proxy.CLOB_TIMEOUT_SECONDS, 3.0)
-        self.assertLessEqual(proxy.CLOB_DISCOVERY_BUDGET_SECONDS, 8.0)
+        self.assertLessEqual(proxy.CLOB_TIMEOUT_SECONDS, 6.0)
+        self.assertLessEqual(proxy.CLOB_DISCOVERY_BUDGET_SECONDS, 14.0)
+        self.assertLessEqual(
+            proxy.GAMMA_TIMEOUT_SECONDS
+            + proxy.CLOB_DISCOVERY_BUDGET_SECONDS
+            + proxy.CLOB_TIMEOUT_SECONDS,
+            25.0,
+        )
         self.assertLessEqual(proxy.FALLBACK_MARKETS, 300)
         self.assertGreaterEqual(proxy.BOOK_WORKERS, 4)
+
+    def test_req_advertises_and_decodes_gzip(self) -> None:
+        class Response:
+            headers = {"Content-Encoding": "gzip"}
+
+            def __enter__(self) -> "Response":
+                return self
+
+            def __exit__(self, *args: object) -> bool:
+                return False
+
+            @staticmethod
+            def read() -> bytes:
+                return gzip.compress(json.dumps({"ok": True}).encode())
+
+        with mock.patch("scripts.v6_market_proxy.urllib.request.urlopen", return_value=Response()) as open_url:
+            self.assertEqual(proxy.req("https://clob.invalid/sampling-markets"), {"ok": True})
+
+        request = open_url.call_args.args[0]
+        self.assertEqual(request.get_header("Accept-encoding"), "gzip")
 
     def test_known_cached_market_skips_gamma(self) -> None:
         p = self.make_proxy()
