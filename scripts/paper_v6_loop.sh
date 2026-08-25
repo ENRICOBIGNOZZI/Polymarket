@@ -45,8 +45,8 @@ for name,frac in alloc:
     child={k:x for k,x in cfg.items() if k not in {'v6','multi_strategy'}}
     child['starting_capital']=total*float(frac); child['run_dir']=str(root/name)
     child['expert_weights']={'micro':0.0,'pca':0.0,'graph':0.0,'semantic':0.0,'external':0.0}
-    # Preserve the latest-main maker fix: the global $/trade ceiling remains
-    # reachable inside the smaller maker sleeve without exceeding that sleeve NAV.
+    # Global $/trade is a ceiling, not a mandatory maker size. Keep maker target
+    # sizing fill-aware while allowing the sleeve to use its full local room.
     if name=='maker' and child['starting_capital']>0:
         trade_cap=min(float(cfg.get('max_trade_usd',125.0)),60.0)
         child['max_market_fraction']=max(float(child.get('max_market_fraction',0.0)),min(1.0,trade_cap/child['starting_capital']))
@@ -98,9 +98,11 @@ while true;do
   if ! kill -0 "$external_pid" 2>/dev/null;then wait "$external_pid" 2>/dev/null||true;external_restarts=$((external_restarts+1));start_external;fi
   write_supervisor
 
-  # Flow/queue-aware maker. It may improve inside the spread only when the
-  # post-cost edge pays for the improvement and estimated fill probability rises.
+  # Flow/queue-aware maker. Initial placement is conservative about queue, then
+  # the active repricer recycles dead queues and may cross only when the same
+  # signal remains positive after displayed depth, fees, slippage and adverse risk.
   python3 scripts/v6_micro_maker.py --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --trade-tape "$RUN_ROOT/trade_tape.csv" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge 0.00005 --max-order-usd 60 --ttl-seconds 60 --hold-seconds 180 --adverse-selection-mult 0.15 --flow-lookback-seconds 900 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 3 --slippage-bps 5 >>"$RUN_ROOT/maker.log" 2>&1||true
+  python3 scripts/v6_maker_reprice.py --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --trade-tape "$RUN_ROOT/trade_tape.csv" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge 0.00005 --taker-min-edge 0.00005 --reprice-after-seconds 10 --dead-queue-cancel-seconds 30 --max-reprices 5 --max-improve-ticks 8 --target-fill-probability 0.10 --dead-fill-probability 0.001 --flow-lookback-seconds 900 --fill-horizon-seconds 90 --hold-seconds 180 --adverse-selection-mult 0.15 --slippage-bps 5 >>"$RUN_ROOT/maker_reprice.log" 2>&1||true
 
   # Causal flow-aware taker. Flat/no-alpha targets remain unable to manufacture
   # a fill because final admission is still positive executable edge after costs.
@@ -118,8 +120,6 @@ while true;do
   if ((now-last_factor>=30));then
     rm -f "$RUN_ROOT/local_factor_intents.csv" "$RUN_ROOT/stat_arb_pairs_diagnostic.csv"
     ./build/polymarket_stat_arb --config "$RUN_ROOT/broker_config.json" --markets 600 --history-universe 500 --lookback-hours 720 --fidelity-minutes 30 --min-z 0.90 --min-t-reversion 1.75 --max-half-life-hours 168 --top 250 --csv "$RUN_ROOT/stat_arb_pairs_diagnostic.csv" >"$RUN_ROOT/stat_arb_pairs_diagnostic.log" 2>"$RUN_ROOT/stat_arb_pairs_errors.log"||true
-    # Aggressive discovery only after fixing self-inclusion, unit-root inference,
-    # horizon mismatch and time-to-resolution validity.
     python3 scripts/v6_local_factor_v3.py --config "$CONFIG" --output "$RUN_ROOT/local_factor_intents.csv" --status "$RUN_ROOT/local_factor_status.json" --trade-tape "$RUN_ROOT/trade_tape.csv" --markets 700 --min-liquidity "$MIN_LIQUIDITY" --lookback-hours 336 --fidelity-minutes 60 --max-clusters 30 --min-common-points 36 --min-z 0.75 --fdr 0.15 --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 100 --slippage-bps 5 --flow-lookback-seconds 900 --min-fill-probability 0.01 --exit-buffer-seconds 900 >"$RUN_ROOT/local_factor_latest.log" 2>"$RUN_ROOT/local_factor_errors.log"||true
     rebuild_intents;last_factor=$now
   fi
@@ -127,7 +127,6 @@ while true;do
   if ((now-last_relation>=15));then
     python3 scripts/v6_relation_intents.py --config "$CONFIG" --output "$RUN_ROOT/relation_intents_raw.csv" --status "$RUN_ROOT/relation_status.json" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 125 --max-events 150 >"$RUN_ROOT/relation_latest.log" 2>"$RUN_ROOT/relation_errors.log"||true
     python3 scripts/v6_intent_guard.py --input "$RUN_ROOT/relation_intents_raw.csv" --output "$RUN_ROOT/relation_guarded.csv" --status "$RUN_ROOT/relation_guard_status.json" --min-edge "$INTENT_MIN_EDGE" --stress-bps 5 --max-age-seconds 180 >>"$RUN_ROOT/relation_guard.log" 2>&1||true
-    # Estimate per-leg/joint completion and spend only bounded edge on quote improvement.
     python3 scripts/v6_queue_filter.py --config "$CONFIG" --input "$RUN_ROOT/relation_guarded.csv" --output "$RUN_ROOT/relation_intents.csv" --status "$RUN_ROOT/queue_filter_status.json" --trade-tape "$RUN_ROOT/trade_tape.csv" --min-edge "$INTENT_MIN_EDGE" --reserve-bps 5 --flow-lookback-seconds 900 --horizon-seconds 180 --min-leg-fill-probability 0.005 --min-joint-fill-probability 0.000001 --target-leg-fill-probability 0.10 --max-improve-ticks-per-leg 4 >>"$RUN_ROOT/queue_filter.log" 2>&1||true
     rebuild_intents;last_relation=$now
   fi
