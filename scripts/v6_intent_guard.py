@@ -6,6 +6,7 @@ import csv
 import json
 import math
 import os
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -27,7 +28,7 @@ def finite(x, default=math.nan):
 
 def atomic_csv(path: Path, rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}.{threading.get_ident()}")
     with tmp.open("w", newline="", encoding="utf-8") as h:
         w = csv.DictWriter(h, fieldnames=FIELDS)
         w.writeheader()
@@ -144,7 +145,9 @@ def main() -> int:
         "best_edge": max((finite(r.get("expected_edge"), 0.0) for r in accepted), default=0.0),
     }
     args.status.parent.mkdir(parents=True, exist_ok=True)
-    tmp = args.status.with_suffix(args.status.suffix + ".tmp")
+    tmp = args.status.with_name(
+        args.status.name + f".tmp.{os.getpid()}.{threading.get_ident()}"
+    )
     tmp.write_text(json.dumps(status, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(tmp, args.status)
     print(json.dumps(status, sort_keys=True))
