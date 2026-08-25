@@ -79,6 +79,7 @@ jobs:
           tests/test_v5_allocator_policy.py
           tests/test_promotion_gate.py
           tests/test_hard_safety_policy.py
+          tests/test_validated_recovery_policy.py
           -v
 
       - name: Ensure research-isolation labels exist
@@ -117,7 +118,60 @@ jobs:
             --output hard-safety-policy-report.md
 
           source_args=()
+          policy_changed_files="changed-files.txt"
           head_ref="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["ref"])')"
+          body="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"].get("body") or "")')"
+          base_sha="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["base"]["sha"])')"
+          validated_recovery=false
+
+          if grep -Fq 'Validated rollback recovery: true' <<<"$body"; then
+            git fetch --no-tags origin main paper-validated
+            validated_sha="$(git rev-parse origin/paper-validated)"
+            current_main_sha="$(git rev-parse origin/main)"
+            test "$current_main_sha" = "$base_sha"
+
+            unprovenanced_commit=""
+            if git merge-base --is-ancestor "$validated_sha" "$base_sha" && [[ "$validated_sha" != "$base_sha" ]]; then
+              while IFS= read -r candidate_sha; do
+                [[ -n "$candidate_sha" ]] || continue
+                candidate_pr="$(
+                  gh api "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/pulls" \
+                    --jq '[.[] | select(.base.ref == "main" and .merged_at != null)] | first | .number // empty'
+                )"
+                if [[ -z "$candidate_pr" ]]; then
+                  unprovenanced_commit="$candidate_sha"
+                  break
+                fi
+              done < <(git rev-list --reverse "${validated_sha}..${base_sha}")
+            fi
+
+            recovery_match=true
+            [[ -n "$unprovenanced_commit" ]] || recovery_match=false
+            [[ -s changed-files.txt ]] || recovery_match=false
+            while IFS= read -r path; do
+              [[ -n "$path" ]] || continue
+              [[ "$path" != "config/live_champion.json" ]] || recovery_match=false
+              git diff --quiet "$validated_sha" HEAD -- "$path" || recovery_match=false
+            done < changed-files.txt
+
+            if [[ "$recovery_match" == "true" ]]; then
+              validated_recovery=true
+              : > validated-recovery-empty-files.txt
+              policy_changed_files="validated-recovery-empty-files.txt"
+              {
+                echo '# Validated direct-push recovery'
+                echo
+                echo "- validated recovery: true"
+                echo "- validated SHA: \`$validated_sha\`"
+                echo "- affected base SHA: \`$base_sha\`"
+                echo "- unprovenanced main commit: \`$unprovenanced_commit\`"
+                echo '- every PR-changed path exactly matches the existing paper-validated revision'
+                echo '- live champion manifest is unchanged'
+                echo '- hard-safety policy was evaluated on the real changed-file set before this recovery exception'
+              } > validated-recovery-report.md
+            fi
+          fi
+
           if [[ "$head_ref" == integration/* ]]; then
             source_number="$(python3 - <<'PY'
           import json, os, re
@@ -162,10 +216,15 @@ jobs:
 
           python3 scripts/research_pr_policy.py \
             --event "$GITHUB_EVENT_PATH" \
-            --changed-files changed-files.txt \
+            --changed-files "$policy_changed_files" \
             --manifest-existed-on-base "$manifest_existed" \
             --output research-policy-report.md \
             "${source_args[@]}"
+
+          if [[ "$validated_recovery" == "true" ]]; then
+            printf '\n' >> research-policy-report.md
+            cat validated-recovery-report.md >> research-policy-report.md
+          fi
 
       - name: Write non-PR policy report
         if: github.event_name != 'pull_request'
@@ -209,7 +268,9 @@ jobs:
             project-context.json
             hard-safety-policy-report.md
             research-policy-report.md
+            validated-recovery-report.md
             changed-files.txt
+            validated-recovery-empty-files.txt
             source-pr.json
             source-comments-pages.json
             source-reviews-pages.json
