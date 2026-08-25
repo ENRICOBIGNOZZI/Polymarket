@@ -27,12 +27,12 @@ LIVE_MODEL_SURFACE_PATTERNS = (
     re.compile(r"^config/live_champion\.json$"), re.compile(r"^config/paper_v\d+\.json$"),
     re.compile(r"^config/v\d+_model_architecture\.json$"),
     re.compile(r"^config/(?:cross_venue|portfolio_supervisor)\.json$"), re.compile(r"^config/cross_venue_pairs\.csv$"),
-    re.compile(r"^scripts/paper_v\d+_(?:loop|once)\.sh$"), re.compile(r"^scripts/multi_strategy_paper\.py$"),
+    re.compile(r"^scripts/paper_v\d+_(?:loop|once)(?:_v\d+)?\.sh$"), re.compile(r"^scripts/multi_strategy_paper\.py$"),
     re.compile(r"^scripts/build_v\d+_intents\.py$"), re.compile(r"^scripts/merge_v\d+_intents\.py$"),
     re.compile(r"^scripts/build_global_opportunity_book\.py$"), re.compile(r"^scripts/filter_coherent_hedges\.py$"),
     re.compile(r"^scripts/walk_forward_v\d+\.py$"), re.compile(r"^scripts/runtime_action_report\.py$"),
     re.compile(r"^scripts/portfolio_supervisor\.py$"), re.compile(r"^scripts/(?:cross_venue_loop|prediction_market_system_loop)\.sh$"),
-    re.compile(r"^scripts/v\d+_(?:dynamic_factor_intents|execution_model|external_bridge|global_risk|hard_arb_paper|intent_guard|intent_queue_filter|local_factor_intents|materialize_configs|micro_taker|micro_taker_institutional|queue_filter|relation_intents)\.py$"),
+    re.compile(r"^scripts/v\d+_(?:dynamic_factor_intents|execution_model|external_bridge|global_risk|hard_arb_paper|intent_guard|intent_queue_filter|local_factor_intents|local_factor|market_common|materialize_configs|micro_maker|micro_taker|micro_taker_institutional|queue_filter|relation_intents|runtime_status|typed_structural)(?:_v\d+)?\.py$"),
 )
 MODEL_CODE_SURFACE_PATTERNS = (
     re.compile(r"^(?:src|include)(?:/.*)?/(?:engine|fast_arb|maker_paper|multileg_paper|negrisk_arb|pca_stat_arb|stat_arb|rewards_scan)\.(?:cpp|cc|cxx|h|hpp)$"),
