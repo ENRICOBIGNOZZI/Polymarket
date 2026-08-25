@@ -11,14 +11,27 @@ POLICY = ROOT / "scripts" / "research_pr_policy.py"
 
 
 class ResearchPolicyBranchClassificationTest(unittest.TestCase):
-    def run_policy(self, branch: str, body: str, changed_files: list[str], labels: list[str] | None = None, draft: bool = False):
+    def run_policy(
+        self,
+        branch: str,
+        body: str,
+        changed_files: list[str],
+        labels: list[str] | None = None,
+        draft: bool = False,
+        source_research: dict | None = None,
+    ):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             event = {"pull_request":{"head":{"ref":branch},"draft":draft,"body":body,"labels":[{"name":label} for label in (labels or [])]}}
             event_path = temp / "event.json"; changed_path = temp / "changed.txt"; report_path = temp / "report.md"
             event_path.write_text(json.dumps(event), encoding="utf-8")
             changed_path.write_text("\n".join(changed_files) + "\n", encoding="utf-8")
-            return subprocess.run(["python3",str(POLICY),"--event",str(event_path),"--changed-files",str(changed_path),"--manifest-existed-on-base","true","--output",str(report_path)], cwd=ROOT, check=False, capture_output=True, text=True, timeout=10)
+            command = ["python3",str(POLICY),"--event",str(event_path),"--changed-files",str(changed_path),"--manifest-existed-on-base","true","--output",str(report_path)]
+            if source_research is not None:
+                source_path = temp / "source-research.json"
+                source_path.write_text(json.dumps(source_research), encoding="utf-8")
+                command.extend(["--source-research-json", str(source_path)])
+            return subprocess.run(command, cwd=ROOT, check=False, capture_output=True, text=True, timeout=10)
 
     def test_feature_branch_cannot_modify_live_model_runtime(self):
         result = self.run_policy("feature/all-market-engine","Expand alpha opportunity scanning and candidate bundle capacity for the paper champion.",["scripts/paper_v4_loop.sh","scripts/build_global_opportunity_book.py"])
@@ -48,12 +61,22 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
         result = self.run_policy("research/shadow-oos-report","Measurement-only shadow instrumentation.",["scripts/walk_forward_v4.py","scripts/runtime_action_report.py"],labels=["shadow-isolated"],draft=False)
         self.assertNotEqual(result.returncode, 0); self.assertIn("scripts/walk_forward_v4.py", result.stdout); self.assertIn("scripts/runtime_action_report.py", result.stdout)
 
-    def test_non_draft_integration_requires_numbered_source_not_manual_labels(self):
+    def test_non_draft_integration_requires_numbered_and_approved_source(self):
         rejected = self.run_policy("integration/alpha","No numbered provenance yet.",["config/paper_v5.json"],labels=[],draft=False)
         self.assertNotEqual(rejected.returncode, 0); self.assertIn("numbered source research PR", rejected.stdout)
         body = "Source research PR/branch/commit: #123\n"
-        accepted = self.run_policy("integration/alpha",body,["config/paper_v5.json"],labels=["autonomous-promotion-approved"],draft=False)
+        missing_source = self.run_policy("integration/alpha",body,["config/paper_v5.json"],labels=["autonomous-promotion-approved"],draft=False)
+        self.assertNotEqual(missing_source.returncode, 0); self.assertIn("source research metadata", missing_source.stdout)
+        approved_source = {
+            "number": 123,
+            "headRefName": "research/alpha",
+            "body": "research candidate",
+            "comments": [{"createdAt":"2026-08-25T00:00:00Z","body":"Research Governance — APPROVED_FOR_INTEGRATION"}],
+            "reviews": [],
+        }
+        accepted = self.run_policy("integration/alpha",body,["config/paper_v5.json"],labels=["autonomous-promotion-approved"],draft=False,source_research=approved_source)
         self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+        self.assertIn("source_research_verdict: `APPROVED_FOR_INTEGRATION`", accepted.stdout)
         self.assertIn("automatic_paper_promotion: `True`", accepted.stdout)
         self.assertIn("manual_approval_labels_required: `False`", accepted.stdout)
 
