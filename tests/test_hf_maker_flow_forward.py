@@ -9,6 +9,7 @@ from pathlib import Path
 from scripts.hf_maker_flow_admission import evaluate
 from scripts.hf_maker_forward_audit import audit, realized_roundtrip_pnl
 from scripts.v6_market_common import TapeFlow
+from scripts.v6_micro_maker import replayable_trade_timestamp
 from scripts.v6_micro_maker_v2 import enforce_total_gross_cap
 
 
@@ -54,6 +55,34 @@ class HFMakerFlowForwardTest(unittest.TestCase):
             flow = TapeFlow.from_csv(tape, lookback_seconds=120, now=1000)
             self.assertEqual(flow.compatible_sell_volume("t", 0.41, lookback_seconds=120), 30.0)
             self.assertEqual(flow.compatible_sell_count("t", 0.41, lookback_seconds=120), 1)
+
+    def test_delayed_tape_row_inside_live_ttl_remains_replayable(self) -> None:
+        order = {"created_ts": 100}
+        row = {"timestamp": "150", "received_ms": "165000"}
+        self.assertEqual(replayable_trade_timestamp(row, order, now=170, ttl_seconds=60), 150)
+
+    def test_replay_rejects_trade_after_order_expiry(self) -> None:
+        order = {"created_ts": 100}
+        row = {"timestamp": "161", "received_ms": "165000"}
+        self.assertIsNone(replayable_trade_timestamp(row, order, now=170, ttl_seconds=60))
+
+    def test_replay_rejects_trade_not_received_by_processing_time(self) -> None:
+        order = {"created_ts": 100}
+        row = {"timestamp": "150", "received_ms": "171000"}
+        self.assertIsNone(replayable_trade_timestamp(row, order, now=170, ttl_seconds=60))
+
+    def test_replay_rejects_future_event_timestamp(self) -> None:
+        order = {"created_ts": 100}
+        row = {"timestamp": "171", "received_ms": "169000"}
+        self.assertIsNone(replayable_trade_timestamp(row, order, now=170, ttl_seconds=90))
+
+    def test_fill_loop_replays_event_time_before_ttl_cancel(self) -> None:
+        source = Path("scripts/v6_micro_maker.py").read_text(encoding="utf-8")
+        loop = source.split("for market_id, order in list(orders.items()):", 1)[1].split("    slip =", 1)[0]
+        self.assertLess(loop.index("for row in tape_rows:"), loop.index("if expired:"))
+        self.assertIn('"entry_ts": trade_ts', loop)
+        self.assertIn('"timestamp": trade_ts', loop)
+        self.assertIn("received_ms > now * 1000", source)
 
     def test_total_gross_cap_accounts_for_open_position_cost(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
