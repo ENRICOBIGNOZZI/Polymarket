@@ -99,17 +99,42 @@ jobs:
       - name: Enforce pull-request lifecycle
         if: github.event_name == 'pull_request'
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
           git diff --name-only origin/main...HEAD | sort -u > changed-files.txt
           manifest_existed=false
           if git cat-file -e origin/main:config/live_champion.json 2>/dev/null; then manifest_existed=true; fi
+
+          source_args=()
+          head_ref="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["ref"])')"
+          draft="$(python3 -c 'import json,os; print(str(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"].get("draft", False)).lower())')"
+          if [[ "$head_ref" == integration/* && "$draft" == "false" ]]; then
+            source_number="$(python3 - <<'PY'
+          import json, os, re
+          event = json.load(open(os.environ['GITHUB_EVENT_PATH']))
+          body = event['pull_request'].get('body') or ''
+          match = re.search(r'source research pr/branch/commit:\s*#(\d+)\b', body, re.I)
+          print(match.group(1) if match else '')
+          PY
+            )"
+            if [[ -n "$source_number" ]]; then
+              if gh pr view "$source_number" \
+                --json number,headRefName,headRefOid,isDraft,labels,state,body,statusCheckRollup,comments,reviews \
+                > source-research.json 2>/dev/null; then
+                source_args=(--source-research-json source-research.json)
+              fi
+            fi
+          fi
+
           python3 scripts/research_pr_policy.py \
             --event "$GITHUB_EVENT_PATH" \
             --changed-files changed-files.txt \
             --manifest-existed-on-base "$manifest_existed" \
-            --output research-policy-report.md
+            --output research-policy-report.md \
+            "${source_args[@]}"
 
       - name: Write non-PR policy report
         if: github.event_name != 'pull_request'
@@ -151,5 +176,6 @@ jobs:
             project-context.json
             research-policy-report.md
             changed-files.txt
+            source-research.json
           if-no-files-found: warn
           retention-days: 14
