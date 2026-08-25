@@ -184,17 +184,22 @@ jobs:
             test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
           fi
 
-          readarray -t champion < <(python3 - <<'PY'
+          version="$(python3 - <<'PY'
           import json
           from pathlib import Path
           m=json.loads(Path('config/live_champion.json').read_text())
           print(int(m['version']))
+          PY
+          )"
+          run_name="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path('config/live_champion.json').read_text())
           print(Path(m['run_root']).name)
           PY
-          )
-          version="${champion[0]}"
-          run_name="${champion[1]}"
+          )"
           [[ "$version" == "5" || "$version" == "6" ]]
+          test -n "$run_name"
 
           curl -fsS http://127.0.0.1:9108/healthz >/dev/null
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
