@@ -17,9 +17,11 @@ class V5PcaHorizonSemanticsAuditTest(unittest.TestCase):
     def test_source_contract_routes_one_step_pca_into_terminal_path(self) -> None:
         contract = mod.source_contract(ROOT)
         self.assertTrue(contract["engine_contract_present"])
+        self.assertTrue(contract["history_is_price_only_contract_present"])
         self.assertTrue(contract["manager_singleton_contract_present"])
         self.assertEqual(contract["pca_capital_fraction"], 0.25)
         self.assertEqual(contract["pca_interval_seconds"], 15)
+        self.assertEqual(contract["history_fidelity_minutes"], 30)
         self.assertEqual(contract["pca_fractional_kelly"], 0.12)
         self.assertEqual(contract["pca_child_starting_capital"], 2500.0)
 
@@ -43,6 +45,20 @@ class V5PcaHorizonSemanticsAuditTest(unittest.TestCase):
         self.assertLess(rows[1]["terminal_ev_per_share"], 0.0)
         self.assertGreater(rows[2]["terminal_ev_per_share"], 0.0)
 
+    def test_price_only_window_changes_horizon_composition_after_bootstrap(self) -> None:
+        one_hour = mod.mixed_horizon_window(live_elapsed_seconds=3600)
+        two_hours = mod.mixed_horizon_window(live_elapsed_seconds=7200)
+        three_hours = mod.mixed_horizon_window(live_elapsed_seconds=10800)
+        self.assertEqual(one_hour["bootstrap_fidelity_seconds"], 1800)
+        self.assertEqual(one_hour["configured_live_sleep_seconds"], 15)
+        self.assertEqual(one_hour["approx_live_returns"], 240)
+        self.assertEqual(one_hour["approx_bootstrap_returns"], 480)
+        self.assertAlmostEqual(one_hour["approx_live_fraction"], 1.0 / 3.0, places=12)
+        self.assertEqual(two_hours["approx_live_returns"], 480)
+        self.assertEqual(two_hours["approx_bootstrap_returns"], 240)
+        self.assertEqual(three_hours["approx_live_returns"], 720)
+        self.assertEqual(three_hours["approx_bootstrap_returns"], 0)
+
     def test_summary_requires_separate_markout_and_terminal_evaluation(self) -> None:
         summary = mod.summarize(ROOT)
         self.assertEqual(summary["decision"], "MORE_EVIDENCE_REQUIRED")
@@ -52,6 +68,7 @@ class V5PcaHorizonSemanticsAuditTest(unittest.TestCase):
         self.assertIn("Brier", experiment)
         self.assertIn("1x/1.5x/2x", experiment)
         self.assertTrue(summary["counterexample"]["sign_reversal"])
+        self.assertEqual(summary["target_horizon_mix"][-1]["approx_live_fraction"], 1.0)
 
 
 if __name__ == "__main__":
