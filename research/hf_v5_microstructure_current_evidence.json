@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "generated_date": "2026-08-25",
-  "base_main_sha": "c8142c4867ede952b73de906d8d9286bbe9596eb",
+  "base_main_sha": "d6513fdbdf5ad8c8b7926b53fb7bba5acdab1257",
   "active_champion": {
     "version": 5,
     "run_root": "runs/paper_v5_live",
@@ -18,46 +18,86 @@
     "coherent_binary_book_result": "with complement-mirrored YES/NO books, the incumbent micro fair equals the YES microprice and remains inside the spread, so taker gross edge is non-positive before fees and slippage",
     "interpretation": "positive incumbent micro entries require cross-side parity/asymmetry or book incoherence; that is not the same object as directional short-horizon microstructure alpha"
   },
-  "latest_public_live_smoke": {
-    "generated_ts": 1787609959,
-    "git_sha": "5c9fc0fe13f0ee40d41440dcc9ffa18b91fc9298",
-    "b2_coherent_raw_positive": 1,
-    "b2_coherent_maker_positive": 0,
-    "b2_top_raw_expected_edge": 0.000153826,
-    "b2_top_maker_entry_net_edge": -0.00173828,
-    "b2_top_taker_net_edge": -0.00487437,
-    "admitted_intent_bundles": 0,
-    "oos_trades": 0,
-    "oos_net_pnl_usd": 0.0,
-    "runtime_pnl_usd": 0.0,
-    "trade_recorder_new_trades": 555,
-    "trade_recorder_errors": 0,
-    "trade_recorder_truncated_batches": 0
+  "first_live_event_time_evaluation": {
+    "github_run_id": 32790670881,
+    "worker": "Fast Arbitrage Hourly Shadow",
+    "source_head_before_receive_clock_fix": "7fc7f814d825e59263c98ff38aef4334d86df208",
+    "data_health": {
+      "ws_messages": 91238,
+      "book_updates": 89611,
+      "feed_stale_ms": 18,
+      "rest_resyncs": 15
+    },
+    "cost_model": "half-spread plus 2 bps configured slippage; protocol taker fee excluded",
+    "horizons": {
+      "1000": {
+        "labeled_rows": 13870,
+        "test_rows": 5550,
+        "baseline_mse": 8.025911263e-07,
+        "causal_feature_mse": 8.007086459e-07,
+        "mse_improvement_pct": 0.23,
+        "sign_accuracy_pct": 80.00,
+        "stress": {
+          "1.0": {"trades": 10, "mean_net_markout_per_share": -0.005068},
+          "1.5": {"trades": 2, "mean_net_markout_per_share": -0.00515},
+          "2.0": {"trades": 2, "mean_net_markout_per_share": -0.0052}
+        }
+      },
+      "5000": {
+        "labeled_rows": 14770,
+        "test_rows": 5909,
+        "baseline_mse": 8.089042625e-07,
+        "causal_feature_mse": 8.061787198e-07,
+        "mse_improvement_pct": 0.34,
+        "sign_accuracy_pct": 65.43,
+        "stress": {
+          "1.0": {"trades": 14, "mean_net_markout_per_share": -0.003763},
+          "1.5": {"trades": 10, "mean_net_markout_per_share": -0.005102},
+          "2.0": {"trades": 3, "mean_net_markout_per_share": -0.0051733333}
+        }
+      },
+      "30000": {
+        "labeled_rows": 17797,
+        "test_rows": 7122,
+        "baseline_mse": 2.239531786e-06,
+        "causal_feature_mse": 2.587015375e-06,
+        "mse_improvement_pct": -15.52,
+        "sign_accuracy_pct": 30.19,
+        "stress": {
+          "1.0": {"trades": 85, "mean_net_markout_per_share": -0.00073860353},
+          "1.5": {"trades": 9, "mean_net_markout_per_share": -0.00105005},
+          "2.0": {"trades": 8, "mean_net_markout_per_share": -0.00145}
+        }
+      },
+      "60000": {
+        "labeled_rows": 16265,
+        "test_rows": 6507,
+        "baseline_mse": 4.46684608e-06,
+        "causal_feature_mse": 5.712214395e-06,
+        "mse_improvement_pct": -27.88,
+        "sign_accuracy_pct": 26.67,
+        "stress": {
+          "1.0": {"trades": 242, "mean_net_markout_per_share": -0.00085870744},
+          "1.5": {"trades": 188, "mean_net_markout_per_share": -0.0013908694},
+          "2.0": {"trades": 27, "mean_net_markout_per_share": -0.0011926148}
+        }
+      }
+    },
+    "economic_interpretation": "the current single-window taker challenger is rejected: every evaluated horizon has negative mean net markout at every cost stress, even before adding protocol taker fees",
+    "statistical_interpretation": "the multifeature ridge only marginally improves MSE at 1s/5s and materially worsens it at 30s/60s; one window cannot establish absence of all HF alpha"
   },
-  "recent_fast_shadow_evidence": {
-    "source_pr": 123,
-    "source_head_sha": "76afa3cb26828eb1daedd899cdce7b789df59bd4",
-    "github_run_id": 32779435281,
-    "markets": 546,
-    "tokens": 1092,
-    "ws_messages": 12274,
-    "book_updates": 12156,
-    "rest_resyncs": 3,
-    "feed_stale_ms": 13,
-    "feed_latency_p50_ms": 54.0,
-    "feed_latency_p95_ms": 62.0,
-    "feed_latency_p99_ms": 135.0,
-    "decision_latency_p50_us": 23.0,
-    "decision_latency_p95_us": 59.0,
-    "decision_latency_p99_us": 98.0,
-    "executable_observations": 7925,
-    "hard_executable_observations": 0,
-    "current_executable": 114,
-    "best_net_edge_per_share": 0.015,
-    "candidate_research_ready": false,
-    "candidate_promotion_ready": false,
-    "completed_lifetime_samples": 1,
-    "interpretation": "the event-time WebSocket path is sufficiently instrumented for low-latency feature capture; decision computation is negligible relative to feed latency, but current output logs opportunities rather than causal feature/forward-markout rows"
+  "methodology_defect_and_fix": {
+    "state": "CORRECTED_ON_RESEARCH_BRANCH_REQUIRES_RERUN",
+    "defect": "the first purged evaluator ordered predictor rows and future targets by exchange timestamp; variable feed latency can reorder messages, allowing an exchange-time future update that was already received before the predictor row to contaminate decision-time chronology",
+    "correct_decision_clock": "received_ts_ms when available; exchange_ts_ms retained for feed-latency measurement",
+    "fix_commit": "bd6012b4f6412060267ce512ee4a4ed20beec169",
+    "regression_commit": "0c95b9ac1edfa5ba5866c20c6423ab3e4230d483",
+    "rule": "do not treat the exact pre-fix markout statistics as final causal estimates until the receive-time rerun completes"
+  },
+  "aggressive_micro_forecast_warning": {
+    "source_research_pr": 154,
+    "state": "NO_HF_ECONOMIC_VALIDATION_FROM_CURRENT_EVIDENCE",
+    "reason": "the proposed extrapolative micro forecast uses contemporaneous microprice displacement and depth imbalance with fixed multipliers; the first live causal challenger using richer microprice/imbalance/OFI/spread/latency features is cost-negative at all tested horizons and stress levels, so current HF evidence does not justify interpreting the aggressive forecast as validated short-horizon alpha"
   },
   "forward_maker_context": {
     "class": "two-leg complete-set maker",
@@ -74,7 +114,7 @@
     "transfer_rule": "do not transfer this fill rate to B2 or to the V5 micro sleeve"
   },
   "next_required_live_dataset": {
-    "unit": "market-event-time snapshot",
+    "unit": "market-event-time snapshot ordered on local receive time",
     "predictor_safe_fields": [
       "exchange_ts_ms",
       "received_ts_ms",
