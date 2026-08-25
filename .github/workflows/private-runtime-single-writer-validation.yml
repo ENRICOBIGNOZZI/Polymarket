@@ -154,12 +154,13 @@ jobs:
           orphan_owner_pid=0
           orphan_child_pid=0
           stale_pid=0
+          stale_proxy_pid=0
           resistant_pid=0
           failed_runtime_pid=0
 
           cleanup() {
             set +e
-            for pid in "$failed_runtime_pid" "$resistant_pid" "$restart_pid" "$first_pid" "$stale_pid" "$orphan_child_pid" "$orphan_owner_pid" "$stale_owner_child_pid" "$stale_owner_pid"; do
+            for pid in "$failed_runtime_pid" "$resistant_pid" "$restart_pid" "$first_pid" "$stale_proxy_pid" "$stale_pid" "$orphan_child_pid" "$orphan_owner_pid" "$stale_owner_child_pid" "$stale_owner_pid"; do
               if [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 0 )); then
                 kill "$pid" 2>/dev/null || true
                 for _ in {1..20}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
@@ -272,6 +273,19 @@ jobs:
             state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
             [[ "$state" == Z* ]]
           }
+          # Simulate the exact lingering component that an older V6 loop can
+          # leave behind: it is a genuine same-repository proxy bound to the
+          # future runtime's port, but is outside the singleton owner tree.
+          start_stale_proxy_listener() {
+            (
+              cd "$source_dir"
+              exec env PYTHONUNBUFFERED=1 python3 scripts/v6_market_proxy.py \
+                --host 127.0.0.1 --port "$port" \
+                --gamma http://127.0.0.1:9 --clob http://127.0.0.1:9 \
+                --cache "$root/stale-proxy-cache.json" --status "$root/stale-proxy-status.json"
+            ) >"$evidence/stale-proxy.log" 2>&1 &
+            STALE_PROXY_PID=$!
+          }
           start_simulated_v6_loop(){
             local mode="$1" log="$2"
             (
@@ -371,6 +385,20 @@ jobs:
           fi
           printf 'relative_stale_loop_pid=%s\n' "$stale_pid"
 
+          start_stale_proxy_listener
+          stale_proxy_pid="$STALE_PROXY_PID"
+          for _ in {1..40}; do
+            lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | grep -qx "$stale_proxy_pid" && break
+            kill -0 "$stale_proxy_pid" 2>/dev/null || { cat "$evidence/stale-proxy.log" >&2; exit 1; }
+            sleep 0.1
+          done
+          if ! lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | grep -qx "$stale_proxy_pid"; then
+            echo "stale V6 proxy did not bind validation port $port" >&2
+            cat "$evidence/stale-proxy.log" >&2 || true
+            exit 1
+          fi
+          printf 'stale_v6_proxy_listener_pid=%s\n' "$stale_proxy_pid"
+
           "${runtime_env[@]}" /usr/bin/env bash scripts/paper_latest_loop.sh \
             >"$evidence/first-runtime.log" 2>&1 &
           first_pid=$!
@@ -430,6 +458,18 @@ jobs:
           grep -q "stale_v6_loop_reaped=$stale_pid" "$evidence/first-runtime.log"
           wait "$stale_pid" 2>/dev/null || true
           stale_pid=0
+          for _ in {1..40}; do
+            stopped_or_zombie "$stale_proxy_pid" && break
+            sleep 0.25
+          done
+          if ! stopped_or_zombie "$stale_proxy_pid"; then
+            echo "stale proxy listener was not reaped within deadline: pid=$stale_proxy_pid" >&2
+            cat "$evidence/first-runtime.log" >&2 || true
+            exit 1
+          fi
+          grep -q "stale_v6_proxy_listener_reaped=$stale_proxy_pid" "$evidence/first-runtime.log"
+          wait "$stale_proxy_pid" 2>/dev/null || true
+          stale_proxy_pid=0
           active_v6_pid=""
           while IFS= read -r candidate; do
             if pid_descends_from "$candidate" "$first_pid"; then
@@ -442,7 +482,22 @@ jobs:
             cat "$evidence/first-runtime.log" >&2 || true
             exit 1
           fi
-          printf 'graceful_stale_loop_reaped=1\nactive_v6_descendant_pid=%s\n' "$active_v6_pid"
+          active_proxy_pid=""
+          for _ in {1..80}; do
+            candidate_proxy_pid="$(lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -n 1 || true)"
+            if [[ "$candidate_proxy_pid" =~ ^[1-9][0-9]*$ ]] && pid_descends_from "$candidate_proxy_pid" "$first_pid"; then
+              active_proxy_pid="$candidate_proxy_pid"
+              break
+            fi
+            kill -0 "$first_pid" 2>/dev/null || { cat "$evidence/first-runtime.log" >&2; exit 1; }
+            sleep 0.25
+          done
+          if [[ ! "$active_proxy_pid" =~ ^[1-9][0-9]*$ ]]; then
+            echo "new V6 proxy does not own the validation port: pid=${active_proxy_pid:-empty}" >&2
+            cat "$evidence/first-runtime.log" >&2 || true
+            exit 1
+          fi
+          printf 'graceful_stale_loop_reaped=1\nactive_v6_descendant_pid=%s\nstale_v6_proxy_listener_reaped=1\nactive_v6_proxy_pid=%s\n' "$active_v6_pid" "$active_proxy_pid"
 
           set +e
           "${runtime_env[@]}" /usr/bin/env bash scripts/paper_latest_loop.sh \
