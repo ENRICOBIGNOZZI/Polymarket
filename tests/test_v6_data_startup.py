@@ -13,7 +13,8 @@ class V6DataStartupContractTest(unittest.TestCase):
         consumers = "start_recorder;start_broker;start_external;write_supervisor"
         self.assertIn("seed_market_proxy_cache(){", loop)
         self.assertIn("polymarket_v6_market_proxy_cache_v1", loop)
-        self.assertIn("age <= 300", loop)
+        self.assertIn("age <= 3600", loop)
+        self.assertIn("one-hour bounded stale-cache contract", loop)
         self.assertIn("warm_market_proxy(){", loop)
         self.assertIn("/markets?active=true&closed=false&limit=100", loop)
         self.assertIn("liquidity_num_min=0", loop)
