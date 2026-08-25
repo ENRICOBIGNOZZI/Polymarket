@@ -7,6 +7,7 @@ DEPLOY_REF="${POLYMARKET_DEPLOY_REF:-paper-validated}"
 CACHE_DIR="${POLYMARKET_DEPLOY_CACHE:-$HOME/.cache/polymarket-deploy}"
 STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
 STATUS_FILE="$STATE_DIR/autoupdate_status.env"
+RUNTIME_HEALTH_ATTEMPTS="${POLYMARKET_RUNTIME_HEALTH_ATTEMPTS:-180}"
 
 log() { printf '[mac-deploy] %s\n' "$*"; }
 fail() { printf '[mac-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -69,23 +70,28 @@ version = int(sys.argv[2])
 run_root = Path(sys.argv[3])
 with supervisor.open(newline='', encoding='utf-8') as handle:
     rows = list(csv.DictReader(handle))
-assert rows
+assert rows, 'empty runtime supervisor'
 row = rows[-1]
-assert row.get('recorder_alive') == '1'
-assert row.get('broker_alive') == '1'
-assert row.get('allocator_alive' if version >= 5 else 'terminal_alive') == '1'
-assert time.time() - float(row['timestamp']) <= 60
+assert row.get('recorder_alive') == '1', row
+assert row.get('broker_alive') == '1', row
+assert row.get('allocator_alive' if version >= 5 else 'terminal_alive') == '1', row
+assert time.time() - float(row['timestamp']) <= 60, row
 if version >= 5:
     allocator = json.loads((run_root / 'allocator_status.json').read_text())
     with (run_root / 'strategy_status.csv').open(newline='', encoding='utf-8') as handle:
         strategies = list(csv.DictReader(handle))
-    assert allocator.get('paper_only') is True
-    assert int(allocator.get('models_expected', 0)) == 5
-    assert int(allocator.get('models_alive', 0)) == 5
-    assert {item.get('name') for item in strategies} == {'micro', 'pca', 'graph', 'semantic', 'external'}
+    assert allocator.get('paper_only') is True, allocator
+    assert int(allocator.get('models_expected', 0)) == 5, allocator
+    assert int(allocator.get('models_alive', 0)) == 5, allocator
+    assert {item.get('name') for item in strategies} == {'micro', 'pca', 'graph', 'semantic', 'external'}, strategies
     total = float(allocator.get('reserve_fraction', 0.0)) + sum(float(item['capital_fraction']) for item in strategies)
-    assert math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9)
-    assert all(float(item['status_age_seconds']) <= 120 for item in strategies)
+    assert math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9), (total, strategies)
+    stale = {
+        str(item.get('name')): float(item['status_age_seconds'])
+        for item in strategies
+        if float(item['status_age_seconds']) > 120
+    }
+    assert not stale, f'stale strategy status: {stale}'
 PY
 }
 
@@ -113,7 +119,7 @@ full_runtime_healthy() {
 }
 
 wait_for_runtime_health() {
-  local attempts="${1:-60}"
+  local attempts="${1:-$RUNTIME_HEALTH_ATTEMPTS}"
   local i
   for ((i=0; i<attempts; ++i)); do
     if full_runtime_healthy; then
@@ -133,6 +139,7 @@ BREW_PREFIX="$("$BREW_BIN" --prefix)"
 export PATH="$BREW_PREFIX/bin:$BREW_PREFIX/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PKG_CONFIG_PATH="$("$BREW_BIN" --prefix curl)/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 PYTHON_BIN="$BREW_PREFIX/bin/python3"
+[[ "$RUNTIME_HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS must be a positive integer"
 
 cd "$APP_DIR"
 OLD_SHA="$(git rev-parse HEAD)"
@@ -152,7 +159,7 @@ if [[ "$OLD_SHA" == "$NEW_SHA" ]]; then
     fail "validated code is current but runtime configuration repair failed"
   fi
   sudo -n /usr/local/sbin/polymarket-service-control restart || true
-  if wait_for_runtime_health 60; then
+  if wait_for_runtime_health; then
     write_status repaired "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
     log "Runtime and Grafana configuration repaired at validated commit $NEW_SHA"
     exit 0
@@ -252,8 +259,8 @@ bash "$APP_DIR/ops/apply_runtime_config_macos.sh" || rollback "runtime configura
 log "Restarting manifest-selected paper services"
 sudo -n /usr/local/sbin/polymarket-service-control restart || rollback "service restart failed"
 
-log "Waiting for production health"
-if ! wait_for_runtime_health 60; then
+log "Waiting for production health (up to $((RUNTIME_HEALTH_ATTEMPTS * 2)) seconds for cold-start model refresh)"
+if ! wait_for_runtime_health; then
   rollback "post-deploy paper runtime health checks failed"
 fi
 
