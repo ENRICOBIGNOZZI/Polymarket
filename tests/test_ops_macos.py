@@ -155,6 +155,14 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn(shared_lock, health)
         self.assertIn(shared_lock, deploy)
         self.assertNotIn("group: polymarket-paper-server-health", health)
+        self.assertIn(
+            "/bin/launchctl print system/com.polymarket.autoupdate >/dev/null",
+            health,
+        )
+        self.assertNotIn(
+            "sudo -n launchctl print system/com.polymarket.autoupdate",
+            health,
+        )
 
     def test_bootstrap_services_follow_the_champion_manifest(self):
         linux = (ROOT / "ops" / "bootstrap_server.sh").read_text(encoding="utf-8")
