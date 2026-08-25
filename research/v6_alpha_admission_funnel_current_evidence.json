@@ -1,0 +1,84 @@
+{
+  "schema": "polymarket_v6_alpha_admission_evidence_v1",
+  "base_sha": "e889193ea83e6e4eb778fb50937ad8a7d26eed17",
+  "github_run_id": "32842447198",
+  "champion_version": 6,
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "trade_recorder": {
+    "markets": 220,
+    "new_trades": 138,
+    "errors": 0,
+    "trade_age_seconds": 52,
+    "status": "healthy"
+  },
+  "micro": {
+    "signals": 12,
+    "posted": 8,
+    "resting": 8,
+    "positions": 0,
+    "reserved_usd": 180.0,
+    "bottleneck": "QUEUE_FILLABILITY_BOUND"
+  },
+  "local_factor": {
+    "histories": 98,
+    "reversion_tests": 3,
+    "fdr": 0.1,
+    "bh_pvalue_cutoff": 0.024227120750172304,
+    "fdr_eligible_signals": 1,
+    "bundles": 0,
+    "intent_rows": 0,
+    "best_edge": 0.0,
+    "canonical_min_edge": 0.0002
+  },
+  "relation_raw": {
+    "bundles": 1,
+    "intent_rows": 5,
+    "best_edge": 0.0010000000000000009,
+    "graph_hard_bundles": 1,
+    "graph_events_complete": 1,
+    "graph_events_considered": 12
+  },
+  "relation_guard": {
+    "input_rows": 5,
+    "accepted_rows": 0,
+    "best_edge": 0.0,
+    "rejections": {
+      "stress_edge": 5
+    },
+    "relabeled_graph_hard_to_rv": 5
+  },
+  "multileg": {
+    "trades_processed": 138,
+    "bundles": 0,
+    "complete": 0
+  },
+  "hard_arb": {
+    "positive_candidates": 0,
+    "best_edge": 0.0
+  },
+  "external": {
+    "passing_direct_models": 0,
+    "materialized_signals": 0,
+    "report_status": "BACKTESTING"
+  },
+  "forward_maker_calibration": {
+    "sessions": 26,
+    "probes_per_policy": 382,
+    "paired_fills_all_policies": 0,
+    "improve1_ex_reward_pnl_usd": -2.456809,
+    "join_ex_reward_pnl_usd": -0.1389435
+  },
+  "interpretation": {
+    "current_relation_stress_relaxation": "REJECT_CURRENT_SAMPLE",
+    "micro_more_signal_admission": "NOT_FIRST_LEVER",
+    "local_factor_lower_post_cost_floor": "TEST_IN_COMMON_SAMPLE_FRONTIER",
+    "external_promotion": "REJECT_CURRENT_SAMPLE"
+  },
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "max_drawdown_unchanged": true,
+    "kill_switch_unchanged": true,
+    "concentration_controls_unchanged": true
+  }
+}
