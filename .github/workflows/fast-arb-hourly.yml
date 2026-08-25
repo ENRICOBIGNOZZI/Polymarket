@@ -48,7 +48,7 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j2
           ctest --test-dir build --output-on-failure
-          python3 -m unittest tests/test_fast_data_health.py -v
+          python3 -m unittest tests/test_fast_data_health.py tests/test_fast_coverage_ablation.py -v
 
       - name: Run read-only fast shadow probe
         shell: bash
@@ -56,17 +56,26 @@ jobs:
           set -euo pipefail
           mkdir -p runs/hourly-fast
           duration=180
-          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then duration=45; fi
+          markets=600
+          min_liquidity=100
+          snapshot_refresh_seconds=20
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            duration=90
+            markets=1000
+            min_liquidity=25
+            snapshot_refresh_seconds=10
+          fi
+          echo "coverage_ablation_policy=config/fast_arb_policy.json markets=$markets min_liquidity=$min_liquidity snapshot_refresh_seconds=$snapshot_refresh_seconds duration=$duration"
           ./build/polymarket_fast_arb_shadow \
             --config config/paper_v4.json \
             --policy config/fast_arb_policy.json \
             --relations config/fast_arb_relations.csv \
             --external-signals data/external_signals.csv \
             --run-dir runs/hourly-fast \
-            --markets 600 \
-            --min-liquidity 100 \
+            --markets "$markets" \
+            --min-liquidity "$min_liquidity" \
             --shard-size 200 \
-            --snapshot-refresh-seconds 20 \
+            --snapshot-refresh-seconds "$snapshot_refresh_seconds" \
             --duration-seconds "$duration" \
             --recycle-seconds 0
 
