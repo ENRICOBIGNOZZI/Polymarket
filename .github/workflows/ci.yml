@@ -65,21 +65,15 @@ jobs:
               row_count=$((row_count + 1))
               [[ "$head_repo" == "$repo" ]] || continue
               [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || continue
-
-              run_count="$(gh api \
-                "repos/${repo}/actions/workflows/ci.yml/runs?head_sha=${head_sha}&per_page=1" \
-                --jq '.total_count')"
+              run_count="$(gh api "repos/${repo}/actions/workflows/ci.yml/runs?head_sha=${head_sha}&per_page=1" --jq '.total_count')"
               [[ "$run_count" =~ ^[0-9]+$ ]]
               (( run_count == 0 )) || continue
-
               current_sha="$(gh api "repos/${repo}/pulls/${pr_number}" --jq '.head.sha')"
               [[ "$current_sha" == "$head_sha" ]] || continue
-
               gh workflow run ci.yml --ref "$head_ref" -f expected_sha="$head_sha"
               printf 'backfilled_pr=%s head=%s sha=%s\n' "$pr_number" "$head_ref" "$head_sha"
               dispatched=$((dispatched + 1))
             done <<< "$page_rows"
-
             (( row_count == 100 )) || break
             page=$((page + 1))
           done
@@ -102,10 +96,10 @@ jobs:
       - name: Unit and mock integration tests (${{ matrix.build_type }})
         run: ctest --test-dir build-${{ matrix.build_type }} --output-on-failure
 
-      - name: Deployment, scheduler context, and runtime contracts
+      - name: Deployment, scheduler context, and V6 runtime contracts
         run: |
           set -euo pipefail
-          bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh \
+          bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh \
             ops/bootstrap_server.sh ops/update_server.sh \
             ops/bootstrap_macos.sh ops/update_server_macos.sh ops/macos_service_control.sh \
             ops/install_autoupdate_macos.sh ops/finish_bootstrap_macos.sh \
@@ -114,8 +108,14 @@ jobs:
             scripts/multi_strategy_paper.py scripts/compact_strategy_logs.py \
             scripts/project_context_snapshot.py scripts/validate_project_context.py \
             scripts/validate_scheduler_registry.py \
-            monitoring/exporter_v5.py
+            scripts/v6_external_bridge.py scripts/v6_relation_intents.py \
+            scripts/v6_local_factor_intents.py scripts/v6_micro_taker.py \
+            scripts/v6_runtime_status.py \
+            monitoring/exporter_v5.py monitoring/exporter_v6.py monitoring/exporter_latest.py
           python3 -m json.tool config/paper_v5.json >/dev/null
+          python3 -m json.tool config/paper_v6.json >/dev/null
+          python3 -m json.tool config/v6_model_architecture.json >/dev/null
+          python3 -m json.tool config/live_champion.json >/dev/null
           python3 -m json.tool config/project_context.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
           python3 scripts/validate_scheduler_registry.py \
@@ -133,6 +133,7 @@ jobs:
           test -s /tmp/project-context.json
           test -s /tmp/project-context.md
           python3 -m unittest \
+            tests/test_v6_runtime_contract.py \
             tests/test_compact_strategy_logs.py \
             tests/test_ops_macos.py \
             tests/test_workflow_yaml_contracts.py -v
