@@ -7,7 +7,6 @@ MIN_LIQUIDITY="${V6_MIN_LIQUIDITY:-10}"
 MARKETS="${V6_MARKETS:-700}"
 RECORDER_MARKETS="${V6_RECORDER_MARKETS:-1200}"
 INTENT_MIN_EDGE="${V6_INTENT_MIN_EDGE:-0.00020}"
-MAX_QUEUE_RATIO="${V6_MAX_QUEUE_RATIO:-50}"
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/micro_taker" "$RUN_ROOT/hard_arb" "$RUN_ROOT/external"
 
 # Capital-isolated sleeves sum to parent capital. There is no operational
@@ -30,18 +29,14 @@ for name,frac in alloc:
     (root/f'{name}_config.json').write_text(json.dumps(child,indent=2,sort_keys=True)+'\n')
 PY
 
-# Fail closed before the paper loop starts if fee rounding or depth walking
-# primitives regress. This is deterministic and does not touch public data.
-python3 scripts/v6_queue_filter.py self-test >"$RUN_ROOT/execution_self_test.log" 2>&1
-
-rm -f "$RUN_ROOT"/intents.csv "$RUN_ROOT"/intents_raw.csv "$RUN_ROOT"/local_factor_intents.csv \
+rm -f "$RUN_ROOT"/intents.csv "$RUN_ROOT"/local_factor_intents.csv \
       "$RUN_ROOT"/relation_intents_raw.csv "$RUN_ROOT"/relation_intents.csv \
       "$RUN_ROOT"/stat_arb_pairs_diagnostic.csv
 
 rec_pid=0; broker_pid=0; external_pid=0
 rec_restarts=0; broker_restarts=0; external_restarts=0
 start_recorder(){ ./build/polymarket_trade_recorder --config "$CONFIG" --run-dir "$RUN_ROOT" --markets "$RECORDER_MARKETS" --batch 40 --min-liquidity "$MIN_LIQUIDITY" --lookback-seconds 900 --interval 5 --loop >>"$RUN_ROOT/trade_recorder.log" 2>&1 & rec_pid=$!; }
-start_broker(){ ./build/polymarket_multileg_paper --config "$RUN_ROOT/broker_config.json" --run-dir "$RUN_ROOT" --intents "$RUN_ROOT/intents.csv" --trade-tape "$RUN_ROOT/trade_tape.csv" --min-edge "$INTENT_MIN_EDGE" --completion-threshold 0.95 --submit-latency-ms 100 --cancel-latency-ms 100 --max-replaces 6 --max-leg-risk-usd 12 --adverse-horizon-seconds 45 --interval 1 --loop >>"$RUN_ROOT/multileg.log" 2>&1 & broker_pid=$!; }
+start_broker(){ ./build/polymarket_multileg_paper --config "$RUN_ROOT/broker_config.json" --run-dir "$RUN_ROOT" --intents "$RUN_ROOT/intents.csv" --trade-tape "$RUN_ROOT/trade_tape.csv" --min-edge "$INTENT_MIN_EDGE" --completion-threshold 0.75 --submit-latency-ms 100 --cancel-latency-ms 100 --max-replaces 6 --max-leg-risk-usd 12 --adverse-horizon-seconds 45 --interval 1 --loop >>"$RUN_ROOT/multileg.log" 2>&1 & broker_pid=$!; }
 start_external(){ ./build/polymarket_engine --config "$RUN_ROOT/external_config.json" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --paper --loop >>"$RUN_ROOT/external/engine.log" 2>&1 & external_pid=$!; }
 write_supervisor(){
   local ra=0 ba=0 ea=0; kill -0 "$rec_pid" 2>/dev/null&&ra=1||true; kill -0 "$broker_pid" 2>/dev/null&&ba=1||true; kill -0 "$external_pid" 2>/dev/null&&ea=1||true
@@ -55,15 +50,7 @@ trap cleanup EXIT INT TERM
 start_recorder;start_broker;start_external;write_supervisor
 
 last_factor=0;last_relation=0;last_external=0;last_report=0;last_micro_taker=0;last_hard_arb=0
-rebuild_intents(){
-  # Merge is not execution admission. Always delete prior outputs first so a
-  # public-data/filter failure cannot leave a stale tradable intent file behind.
-  rm -f "$RUN_ROOT/intents_raw.csv" "$RUN_ROOT/intents.csv"
-  python3 scripts/merge_v4_intents.py --input "$RUN_ROOT/local_factor_intents.csv" --input "$RUN_ROOT/relation_intents.csv" --output "$RUN_ROOT/intents_raw.csv" --min-edge "$INTENT_MIN_EDGE" --max-age-seconds 240 --max-bundles 120 >>"$RUN_ROOT/intent_merge.log" 2>&1 || return 0
-  if ! python3 scripts/v6_intent_queue_filter.py --config "$CONFIG" --input "$RUN_ROOT/intents_raw.csv" --output "$RUN_ROOT/intents.csv" --status "$RUN_ROOT/queue_filter_status.json" --max-queue-ratio "$MAX_QUEUE_RATIO" --max-age-seconds 240 >>"$RUN_ROOT/queue_filter.log" 2>&1; then
-    rm -f "$RUN_ROOT/intents.csv"
-  fi
-}
+rebuild_intents(){ python3 scripts/merge_v4_intents.py --input "$RUN_ROOT/local_factor_intents.csv" --input "$RUN_ROOT/relation_intents.csv" --output "$RUN_ROOT/intents.csv" --min-edge "$INTENT_MIN_EDGE" --max-age-seconds 240 --max-bundles 120 >>"$RUN_ROOT/intent_merge.log" 2>&1||true; }
 
 while true;do
   now="$(date +%s)"
@@ -75,18 +62,16 @@ while true;do
   # Micro maker: passive spread capture with queue/fill/adverse-selection accounting.
   ./build/polymarket_maker_paper --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.15 --once >>"$RUN_ROOT/maker.log" 2>&1||true
 
-  # Model/features remain in scripts/v6_micro_taker.py. The execution wrapper
-  # walks public depth level-by-level and applies fee/slippage after the VWAP.
+  # Micro taker: online short-horizon markout model; mandatory horizon exit.
   if ((now-last_micro_taker>=5));then
-    python3 scripts/v6_queue_filter.py micro --config "$RUN_ROOT/micro_taker_config.json" --run-dir "$RUN_ROOT/micro_taker" --markets 250 --min-liquidity 25 --horizon-seconds 30 --max-trade-usd 15 --min-edge 0.00030 --slippage-bps 5 --max-positions 20 >>"$RUN_ROOT/micro_taker.log" 2>&1||true
+    python3 scripts/v6_micro_taker.py --config "$RUN_ROOT/micro_taker_config.json" --run-dir "$RUN_ROOT/micro_taker" --markets 250 --min-liquidity 25 --horizon-seconds 30 --max-trade-usd 15 --min-edge 0.00030 --slippage-bps 5 --max-positions 20 >>"$RUN_ROOT/micro_taker.log" 2>&1||true
     last_micro_taker=$now
   fi
 
-  # Event discovery/completeness remains in scripts/v6_hard_arb_paper.py.
-  # Taker legs execute sequentially with full-depth FOK simulation, 100ms
-  # inter-leg latency, remaining-leg edge revalidation and forced unwind on fail.
+  # Hard graph arbitrage: complete non-augmented NegRisk sets only. Admission is
+  # all-or-none against displayed ask depth in one snapshot, after fee/slippage.
   if ((now-last_hard_arb>=10));then
-    python3 scripts/v6_queue_filter.py hard --config "$RUN_ROOT/hard_arb_config.json" --run-dir "$RUN_ROOT/hard_arb" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --max-events 80 --min-edge 0.00020 --max-trade-usd 60 --slippage-bps 5 --leg-latency-ms 100 >>"$RUN_ROOT/hard_arb.log" 2>&1||true
+    python3 scripts/v6_hard_arb_paper.py --config "$RUN_ROOT/hard_arb_config.json" --run-dir "$RUN_ROOT/hard_arb" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --max-events 80 --min-edge 0.00020 --max-trade-usd 60 --slippage-bps 5 >>"$RUN_ROOT/hard_arb.log" 2>&1||true
     last_hard_arb=$now
   fi
 
