@@ -23,10 +23,21 @@ maker_once() {
   python3 scripts/v6_micro_maker.py \
     --config "$R/maker_config.json" --run-dir "$R/maker" --trade-tape "$R/trade_tape.csv" \
     --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$EDGE" \
-    --max-order-usd 60 --ttl-seconds 60 --hold-seconds 180 --adverse-selection-mult 0.15 \
+    --max-order-usd 60 --ttl-seconds 60 --hold-seconds 45 --adverse-selection-mult 0.15 \
     --flow-lookback-seconds 900 --min-fill-probability 0.005 --target-fill-probability 0.10 \
     --max-improve-ticks 3 --slippage-bps 5 \
     | tee -a "$R/maker_latest.log"
+}
+
+maker_reprice_once() {
+  python3 scripts/v6_maker_reprice.py \
+    --config "$R/maker_config.json" --run-dir "$R/maker" --trade-tape "$R/trade_tape.csv" \
+    --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$EDGE" \
+    --taker-min-edge "$EDGE" --reprice-after-seconds 10 --dead-queue-cancel-seconds 30 \
+    --max-reprices 5 --max-improve-ticks 8 --target-fill-probability 0.10 \
+    --dead-fill-probability 0.001 --flow-lookback-seconds 900 --fill-horizon-seconds 90 \
+    --hold-seconds 45 --adverse-selection-mult 0.15 --slippage-bps 5 \
+    | tee -a "$R/maker_reprice.log"
 }
 
 micro_once() {
@@ -74,7 +85,7 @@ python3 scripts/v6_local_factor_v3.py \
   | tee "$R/local_factor_latest.log" || true
 
 # Graph/RV first proves logical/event structure, then passes a separate
-# queue/completion gate that may spend only bounded edge on price improvement.
+# queue/completion gate that spends only edge which remains after the safety floor.
 python3 scripts/v6_relation_intents.py \
   --config "$CONFIG" --output "$R/relation_intents_raw.csv" \
   --status "$R/relation_status.json" --markets "$MARKETS" \
@@ -88,9 +99,9 @@ python3 scripts/v6_intent_guard.py \
 python3 scripts/v6_queue_filter.py \
   --config "$CONFIG" --input "$R/relation_guarded.csv" --output "$R/relation_intents.csv" \
   --status "$R/queue_filter_status.json" --trade-tape "$R/trade_tape.csv" \
-  --min-edge "$EDGE" --reserve-bps 5 --flow-lookback-seconds 900 --horizon-seconds 180 \
-  --min-leg-fill-probability 0.005 --min-joint-fill-probability 0.000001 \
-  --target-leg-fill-probability 0.10 --max-improve-ticks-per-leg 4 \
+  --min-edge "$EDGE" --reserve-bps 2 --flow-lookback-seconds 900 --horizon-seconds 180 \
+  --min-leg-fill-probability 0.002 --min-joint-fill-probability 0.0000001 \
+  --target-leg-fill-probability 0.10 --max-improve-ticks-per-leg 12 \
   | tee "$R/queue_filter.log" || true
 
 python3 scripts/merge_v4_intents.py \
@@ -99,18 +110,28 @@ python3 scripts/merge_v4_intents.py \
   | tee "$R/intent_merge.log"
 broker_once
 
-# Crucial fill validation: after orders are posted, collect genuinely later public
-# trades and re-run the paper executors. This makes a smoke capable of observing
-# FIFO depletion/partial fills/completions instead of being structurally zero-fill.
+# Forward execution evidence: collect genuinely later public trades, process them,
+# then actively reprice/cancel stale maker queues. A stale maker may convert to a
+# taker only if depth-VWAP + entry/exit fees + 5bp slippage + adverse selection
+# still leaves strictly positive edge. Smoke hold is 45s solely to expose markout.
 for ((cycle=1; cycle<=FLOW_CYCLES; cycle++)); do
   sleep "$FLOW_SLEEP"
   record_once
   maker_once
+  maker_reprice_once
   micro_once
   broker_once
   python3 scripts/v6_runtime_status.py --config "$CONFIG" --run-root "$R" \
     > "$R/runtime_status.log" 2>&1 || true
 done
+
+# One final delayed cycle lets a 45s smoke-local maker position realize/mark out
+# without changing the 180s production holding contract.
+sleep "$FLOW_SLEEP"
+record_once
+maker_once
+maker_reprice_once
+broker_once
 
 # External information stays fail-closed: lower confidence may broaden approved
 # direct probabilities, but raw telemetry is never fabricated into q_external.
@@ -127,7 +148,7 @@ python3 scripts/v6_runtime_status.py --config "$CONFIG" --run-root "$R" \
 
 PYTHONPATH=monitoring python3 - "$R" "$CONFIG" <<'PY'
 from pathlib import Path
-import csv, json, sys
+import csv, json, os, sys
 from exporter_latest import LatestCollector
 root=Path(sys.argv[1]); config=sys.argv[2]
 c=LatestCollector(Path('.'), Path('config'), root.name, config, 20)
@@ -144,21 +165,32 @@ assert (root/'hard_arb/status.json').exists()
 assert (root/'local_factor_status.json').exists()
 assert (root/'relation_guard_status.json').exists()
 assert (root/'queue_filter_status.json').exists()
-# Emit an explicit execution evidence record even when the chronological sample
-# happens to have zero fills; validation must distinguish zero opportunity from
-# a smoke that was incapable of observing post-order flow.
+
 def count_rows(path):
     try:
         with path.open(newline='',encoding='utf-8') as h:return sum(1 for _ in csv.DictReader(h))
     except Exception:return 0
+
+def count_events(path, names):
+    try:
+        with path.open(newline='',encoding='utf-8') as h:
+            return sum(1 for row in csv.DictReader(h) if str(row.get('event') or '') in names)
+    except Exception:return 0
 fills=count_rows(root/'maker'/'maker_fills.csv')
 bundle_rows=count_rows(root/'bundle_ledger.csv')
 maker_orders=count_rows(root/'maker'/'maker_orders.csv')
+reprice={}
+try: reprice=json.loads((root/'maker'/'maker_reprice_status.json').read_text())
+except Exception: pass
 q=json.loads((root/'queue_filter_status.json').read_text())
 evidence={
-    'post_order_flow_cycles': int(__import__('os').environ.get('V6_SMOKE_FLOW_CYCLES','3')),
+    'post_order_flow_cycles': int(os.environ.get('V6_SMOKE_FLOW_CYCLES','3')) + 1,
     'maker_orders_open': maker_orders,
     'maker_fill_rows': fills,
+    'maker_reprice': reprice,
+    'maker_reprice_events': count_events(root/'maker'/'maker_order_log.csv', {'REPRICE'}),
+    'maker_taker_conversions': count_events(root/'maker'/'maker_order_log.csv', {'TAKER_CONVERT'}),
+    'maker_dead_queue_cancels': count_events(root/'maker'/'maker_order_log.csv', {'CANCEL_DEAD_QUEUE','CANCEL_REPRICE_LIMIT'}),
     'closed_bundle_rows': bundle_rows,
     'queue_filter': q,
     'realized_pnl': float(status.get('realized_pnl',0.0)),
@@ -175,5 +207,7 @@ import json,sys
 r=Path(sys.argv[1])
 for p in ('runtime_status.json','allocator_status.json','local_factor_status.json','relation_status.json','relation_guard_status.json','queue_filter_status.json','hard_arb/status.json','execution_evidence.json'):
     json.loads((r/p).read_text())
+reprice=r/'maker'/'maker_reprice_status.json'
+if reprice.exists(): json.loads(reprice.read_text())
 print('v6_live_smoke_ok')
 PY
