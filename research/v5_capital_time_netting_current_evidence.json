@@ -1,5 +1,5 @@
 {
-  "schema": "polymarket_v5_capital_time_netting_research_v1",
+  "schema": "polymarket_v5_capital_time_netting_research_v2",
   "status": "MORE_EVIDENCE_REQUIRED",
   "hypothesis": "When independently generated V5 sleeve opportunities compete for finite portfolio capital, the exact incumbent allocation may waste capital on slow or cost-fragile trades; a fail-closed counterfactual using two-times-cost robust edge per expected capital-hour may improve incremental realized paper PnL without changing any expert or execution model.",
   "incumbent": {
@@ -28,7 +28,19 @@
     "runtime_pnl_usd": -2.44419734008,
     "realized_pnl_usd_total": 0.0000974777346983,
     "runtime_gross_exposure_usd": 222.595976882,
+    "runtime_reserved_cash_usd": 500.0,
+    "runtime_live_units": 11,
     "kill_switch": false
+  },
+  "capital_occupancy_finding": {
+    "finding": "The validated runtime can carry nonzero gross exposure and reserved cash even while the unified bundle/OOS ledger reports zero bundles and zero OOS trades. Candidate-only capital parity is therefore incomplete unless point-in-time background portfolio occupancy is included.",
+    "observed_runtime_gross_exposure_usd": 222.595976882,
+    "observed_runtime_reserved_cash_usd": 500.0,
+    "observed_runtime_live_units": 11,
+    "observed_production_bundles": 0,
+    "observed_oos_trades": 0,
+    "challenger_change": "Every decision-window replay row may now carry background_reserved_capital representing capital already occupied outside the candidate rows. All rows in a window must agree on it; incumbent-selected candidate capital plus background occupancy may not exceed the declared global budget; background occupancy never creates challenger budget.",
+    "interpretation": "This is a research-methodology correction, not evidence of profitable allocation alpha."
   },
   "external_information": {
     "status": "BACKTESTING",
@@ -41,6 +53,7 @@
   },
   "known_blockers": [
     "No finalized OOS production bundles exist, so there is no realized cross-sleeve capital competition sample to score.",
+    "The current validated runtime has nonzero portfolio occupancy outside the bundle/OOS candidate ledger, so future replay extraction must provide point-in-time background_reserved_capital before this challenger can claim complete capital-budget parity.",
     "B1/B2 historical research is data-blocked in the latest validated smoke: zero usable B1 series and B2 insufficient_series.",
     "Open data-acquisition repair PR #166 is the appropriate owner for CLOB history coverage; this challenger must not duplicate it.",
     "HF causal/execution evidence remains owned by dedicated HF research PRs; this challenger does not alter their signals, fill assumptions, queue model, latency model, or maker policy.",
@@ -49,12 +62,13 @@
   ],
   "challenger_contract": {
     "scope": "offline portfolio admission ablation only",
-    "selection_information": "point-in-time forecast fields only",
+    "selection_information": "point-in-time forecast fields and point-in-time background capital occupancy only",
     "incumbent_selection": "exact incumbent_selected flags from the point-in-time decision/replay ledger; never reconstructed from a guessed score",
     "challenger_score": "min(net_edge under 1x, 1.5x, 2x costs) / expected_holding_hours",
     "two_x_cost_gate": "required positive before challenger admission",
-    "capital_budget": "challenger capital in each decision window may not exceed the actual incumbent capital used in that same window or the declared global cap",
-    "zero_activity_rule": "if incumbent used zero capital in a window, challenger must also use zero",
+    "background_capital": "point-in-time capital already occupied by positions/resting orders outside candidate rows; identical within each decision window; never creates challenger budget",
+    "capital_budget": "challenger candidate capital in each decision window may not exceed actual incumbent candidate capital; background plus challenger capital may not exceed the declared global cap",
+    "zero_activity_rule": "if incumbent used zero candidate capital in a window, challenger must also use zero candidate capital even when background portfolio exposure is nonzero",
     "risk_limits": "unchanged",
     "live_champion_manifest": "unchanged",
     "authenticated_execution": false
@@ -62,16 +76,17 @@
   "promotion_requirements": [
     "At least two chronological future OOS folds with point-in-time expected holding time available before selection.",
     "Exact incumbent decision flags and identical replay rows for incumbent/challenger comparison.",
+    "Point-in-time background portfolio occupancy for every decision window so direct positions/resting-order reservations outside the candidate rows are included in capital parity.",
     "Positive incremental realized net paper PnL versus the exact incumbent at 1x, 1.5x, and 2x execution costs.",
     "At least 50% of OOS folds positive at 2x costs.",
     "Challenger drawdown no worse than incumbent under every tested cost stress.",
     "No use of future realized PnL, resolution outcome, or post-decision realized holding duration in selection.",
-    "No increase in capital used relative to the incumbent in any decision window.",
+    "No increase in total portfolio capital used relative to the incumbent or the global cap in any decision window.",
     "No weakening of existing strategy-level OOS, drawdown, concentration, or kill-switch gates."
   ],
   "rollback": {
-    "condition": "Any non-positive incremental OOS PnL at a required cost stress, worse drawdown, leakage, or capital-budget violation.",
+    "condition": "Any non-positive incremental OOS PnL at a required cost stress, worse drawdown, leakage, incomplete background-capital accounting, or capital-budget violation.",
     "action": "Discard the challenger and retain the incumbent V5 paper selector unchanged."
   },
-  "decision": "Implement the evaluator and tests, but do not claim alpha or request integration until future OOS capital-competition evidence exists."
+  "decision": "Keep MORE_EVIDENCE_REQUIRED. The evaluator now closes a real capital-accounting hole revealed by the validated runtime, but no economic superiority claim is allowed until future OOS candidate and background-occupancy replay evidence exists."
 }
