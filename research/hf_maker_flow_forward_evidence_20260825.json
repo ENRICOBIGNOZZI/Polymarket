@@ -1,11 +1,22 @@
 {
-  "schema_version": 1,
-  "research_state": "STRONG_CHALLENGER_MORE_EVIDENCE_REQUIRED",
+  "schema_version": 2,
+  "research_state": "WEAKENED_CHALLENGER_MORE_EVIDENCE_REQUIRED",
   "source": {
     "pull_request": 338,
-    "head_sha": "b28c877d1d29c026c2d00c69081f71321d76c620",
+    "head_sha_before_evidence_update": "b28c877d1d29c026c2d00c69081f71321d76c620",
     "workflow_run_id": 32873037953,
-    "artifact": "v6-research-smoke-32873037953"
+    "independent_artifacts": [
+      {
+        "artifact_id": 9573144454,
+        "created_at": "2026-08-25T16:46:52Z",
+        "name": "v6-research-smoke-32873037953"
+      },
+      {
+        "artifact_id": 9577230798,
+        "created_at": "2026-08-25T18:39:23Z",
+        "name": "v6-research-smoke-32873037953"
+      }
+    ]
   },
   "paper_envelope": {
     "markets": 1000,
@@ -19,87 +30,154 @@
     "max_drawdown": 0.15,
     "authenticated_execution": false
   },
-  "common_sample_seconds": 360,
-  "baseline": {
-    "posted_orders": 100,
-    "maker_buy_events": 0,
-    "maker_buy_shares": 0.0,
-    "closed_round_trips": 0,
-    "realized_closed_pnl_usd": 0.0,
-    "flow_active_posts": 0,
-    "posts_with_future_compatible_flow": 0,
-    "order_actions": {
-      "POST": 100,
-      "CANCEL_TTL": 82,
-      "SKIP_QUEUE": 2281
+  "window_1": {
+    "common_sample_seconds": 360,
+    "baseline": {
+      "posted_orders": 100,
+      "maker_buy_events": 0,
+      "maker_buy_shares": 0.0,
+      "closed_round_trips": 0,
+      "realized_closed_pnl_usd": 0.0,
+      "order_actions": {
+        "POST": 100,
+        "CANCEL_TTL": 82,
+        "SKIP_QUEUE": 2281
+      },
+      "decision": "ZERO_FILL_DEAD_FLOW"
     },
-    "decision": "ZERO_FILL_DEAD_FLOW"
-  },
-  "flow_gated_challenger": {
-    "posted_orders": 13,
-    "flow_active_posts": 13,
-    "posts_with_positive_projected_clearance": 13,
-    "posts_with_future_compatible_flow": 1,
-    "maker_buy_events": 1,
-    "maker_buy_shares": 128.8659793814433,
-    "taker_exit_events": 1,
-    "taker_exit_shares": 128.8659793814433,
-    "closed_round_trips": 1,
-    "realized_closed_pnl_usd": 1.366178589439453,
-    "fill_conditioned_pnl_per_closed_share": 0.010601545854050154,
-    "unmatched_sell_shares": 0.0,
-    "open_maker_shares_at_audit": 0.0,
-    "order_actions": {
-      "POST": 13,
-      "CANCEL_ZERO_CAUSAL_FLOW": 10
+    "flow_gated": {
+      "posted_orders": 13,
+      "flow_active_posts": 13,
+      "posts_with_positive_projected_clearance": 13,
+      "posts_with_future_compatible_flow": 1,
+      "maker_buy_events": 1,
+      "maker_buy_shares": 128.8659793814433,
+      "taker_exit_events": 1,
+      "taker_exit_shares": 128.8659793814433,
+      "closed_round_trips": 1,
+      "realized_closed_pnl_usd": 1.366178589439453,
+      "fill_conditioned_pnl_per_closed_share": 0.010601545854050154,
+      "open_maker_shares_at_audit": 0.0,
+      "order_actions": {
+        "POST": 13,
+        "CANCEL_ZERO_CAUSAL_FLOW": 10
+      },
+      "decision": "POSITIVE_FILL_CONDITIONED_PNL"
     },
-    "decision": "POSITIVE_FILL_CONDITIONED_PNL"
+    "causal_fill": {
+      "market_id": "3825712",
+      "slug": "atp-ofner-nishiko-2026-08-25",
+      "side": "NO",
+      "order_created_ts": 1787676049,
+      "limit_price": 0.97,
+      "initial_queue_ahead_shares": 21129.8,
+      "signal_edge": 0.0012791541093008817,
+      "confidence": 0.904186313769181,
+      "fill_probability_proxy": 0.20801498479385203,
+      "prior_compatible_sell_rate_per_second": 93.0565309219595,
+      "fill_event_ts": 1787676066,
+      "fill_trade_price": 0.95756,
+      "fill_trade_size": 148787.87,
+      "filled_shares": 128.8659793814433,
+      "exit_processing_ts": 1787676147,
+      "exit_price_after_slippage": 0.981509,
+      "exit_fee_usd": 0.1169399672615975,
+      "realized_pnl_usd": 1.366178589439453
+    }
   },
-  "first_causal_fill": {
-    "market_id": "3825712",
-    "slug": "atp-ofner-nishiko-2026-08-25",
-    "side": "NO",
-    "order_created_ts": 1787676049,
-    "limit_price": 0.97,
-    "initial_queue_ahead_shares": 21129.8,
-    "fill_event_ts": 1787676066,
-    "fill_received_ms": 1787676077540,
-    "fill_trade_price": 0.95756,
-    "fill_trade_size": 148787.87,
-    "filled_shares": 128.8659793814433,
-    "exit_processing_ts": 1787676147,
-    "exit_price_after_slippage": 0.981509,
-    "exit_fee_usd": 0.11694,
-    "realized_pnl_usd": 1.366178589439453,
-    "causal_interpretation": "The public SELL trade occurred strictly after queue entry and before the 60-second order TTL, but arrived on the local tape about 11.54 seconds later. Replay-before-TTL-cancel correctly preserves this fill; the trade size was far larger than the modeled queue ahead plus our order size."
+  "window_2": {
+    "common_sample_seconds": 360,
+    "baseline": {
+      "posted_orders": 56,
+      "maker_buy_events": 1,
+      "maker_buy_shares": 27.91,
+      "taker_exit_events": 1,
+      "taker_exit_shares": 27.91,
+      "closed_round_trips": 1,
+      "realized_closed_pnl_usd": -0.07649237500000008,
+      "fill_conditioned_pnl_per_closed_share": -0.002740679863848086,
+      "order_actions": {
+        "POST": 56,
+        "PARTIAL_FILL": 1,
+        "CANCEL_TTL": 45,
+        "SKIP_QUEUE": 2424
+      },
+      "decision": "FILLS_NEGATIVE_PNL"
+    },
+    "flow_gated": {
+      "posted_orders": 18,
+      "flow_active_posts": 18,
+      "posts_with_positive_projected_clearance": 18,
+      "posts_with_future_compatible_flow": 3,
+      "maker_buy_events": 3,
+      "maker_buy_shares": 27.0,
+      "taker_exit_events": 1,
+      "taker_exit_shares": 27.0,
+      "closed_round_trips": 1,
+      "realized_closed_pnl_usd": -0.48025047281624966,
+      "fill_conditioned_pnl_per_closed_share": -0.017787054548749986,
+      "open_maker_shares_at_audit": 0.0,
+      "order_actions": {
+        "POST": 18,
+        "CANCEL_ZERO_CAUSAL_FLOW": 16,
+        "CANCEL_TTL": 1
+      },
+      "decision": "FILLS_NEGATIVE_PNL"
+    },
+    "adverse_fill": {
+      "market_id": "3524601",
+      "slug": "spl-ett-nsr-2026-08-25-nsr",
+      "side": "YES",
+      "order_created_ts": 1787682951,
+      "limit_price": 0.2,
+      "initial_queue_ahead_shares": 0.0,
+      "inside_spread_inferred_from_zero_touch_queue": true,
+      "signal_edge": 0.0037301504639107915,
+      "confidence": 0.6036330405348235,
+      "fill_probability_proxy": 0.42022136457609294,
+      "prior_compatible_sell_rate_per_second": 4.596102692376818,
+      "fill_events": [
+        {"event_ts": 1787682960, "shares": 9.0, "limit_price": 0.2},
+        {"event_ts": 1787682972, "shares": 9.0, "limit_price": 0.2},
+        {"event_ts": 1787682972, "shares": 9.0, "limit_price": 0.2}
+      ],
+      "distinct_transaction_hashes_verified": true,
+      "total_filled_shares": 27.0,
+      "exit_processing_ts": 1787683034,
+      "exit_price_after_slippage": 0.18990500000000002,
+      "exit_fee_usd": 0.20768547281625002,
+      "realized_pnl_usd": -0.48025047281624966,
+      "realized_pnl_per_share": -0.017787054548749986,
+      "pre_fee_price_markout_per_share_at_exit": -0.010094999999999993
+    }
   },
-  "micro_taker_control": {
-    "samples": 540,
-    "labeled": 360,
-    "post_horizon_labels": 0,
-    "max_target_staleness_seconds": 2,
-    "signals_last_tick": 0,
-    "opened_last_tick": 0,
-    "realized_pnl_usd": 0.0,
-    "decision": "DO_NOT_FORCE_TAKER_FROM_FLAT_OR_NON_EXECUTABLE_TARGETS"
+  "two_window_aggregate": {
+    "flow_gated_closed_round_trips": 2,
+    "flow_gated_positive_round_trips": 1,
+    "flow_gated_negative_round_trips": 1,
+    "flow_gated_closed_shares": 155.8659793814433,
+    "flow_gated_realized_closed_pnl_usd": 0.8859281166232033,
+    "flow_gated_pnl_per_closed_share": 0.005683909472349409,
+    "baseline_closed_round_trips": 1,
+    "baseline_realized_closed_pnl_usd": -0.07649237500000008,
+    "interpretation": "Aggregate PnL remains positive only because the first profitable fill was much larger. The independent replicate produced adverse-selection loss, so positive expected fill-conditioned PnL is not established."
   },
-  "hard_arb_control": {
-    "scanned_events": 8,
-    "positive_candidates": 0,
-    "entered": 0,
-    "realized_pnl_usd": 0.0,
-    "sequential_leg_revalidation": true,
-    "atomic_snapshot_assumption": false
-  },
-  "interpretation": {
-    "material_result": "The causal flow gate eliminated most dead postings and produced the first completed positive-PnL maker round trip on the common chronological public-data window, while the baseline posted much more often and still produced zero fills.",
-    "not_yet_proven": "One closed fill is insufficient to establish stable positive expected fill-conditioned PnL or adverse-selection robustness.",
+  "microstructure_diagnosis": {
+    "material_result": "The flow gate reproducibly creates actual paper fills, but it does not yet separate benign contra-flow from toxic flow. In the independent replicate, the flow-gated fill occurred on an inferred inside-spread quote with materially lower microstructure confidence and lost 1.779 cents/share after the taker exit and verified fee.",
+    "inside_spread_hypothesis": "The first profitable fill remained at the public touch with confidence 0.9042. The adverse replicate had zero touch queue at its selected limit, implying inside-spread improvement, and confidence 0.6036. A next challenger should gate inside-spread improvement on stronger book/microprice confidence and forward adverse-selection evidence rather than fill probability alone.",
+    "not_yet_proven": "Two round trips are insufficient for stable expected-PnL inference; the current aggregate is dominated by one large profitable fill.",
     "next_required_evidence": [
-      "independent-window recurrence of actual maker fills",
+      "A/B current flow gate versus an at-touch/no-improve control and a confidence-gated inside-spread challenger",
       "executable post-fill markouts at 45s, 60s and 300s",
-      "fill-hazard calibration by queue ahead, causal contra-flow, microprice, imbalance and OFI",
+      "fill-hazard plus adverse-selection calibration by queue ahead, causal contra-flow, microprice, imbalance and OFI",
       "cost stress and cancel-latency sensitivity",
       "rebase onto current main before any integration consideration"
     ]
+  },
+  "hard_safety": {
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "state_integrity_required": true,
+    "authenticated_real_money_execution": false
   }
 }
