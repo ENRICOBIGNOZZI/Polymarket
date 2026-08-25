@@ -64,28 +64,73 @@ import math
 import sys
 import time
 from pathlib import Path
+
+
+def require(condition: bool, message: str) -> None:
+    if condition:
+        return
+    print(f"[mac-deploy] health failure: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
 supervisor = Path(sys.argv[1])
 version = int(sys.argv[2])
 run_root = Path(sys.argv[3])
 with supervisor.open(newline='', encoding='utf-8') as handle:
     rows = list(csv.DictReader(handle))
-assert rows
+require(bool(rows), "runtime supervisor has no data rows")
 row = rows[-1]
-assert row.get('recorder_alive') == '1'
-assert row.get('broker_alive') == '1'
-assert row.get('allocator_alive' if version >= 5 else 'terminal_alive') == '1'
-assert time.time() - float(row['timestamp']) <= 60
+require(row.get('recorder_alive') == '1', f"recorder_alive={row.get('recorder_alive')!r}")
+require(row.get('broker_alive') == '1', f"broker_alive={row.get('broker_alive')!r}")
+manager_key = 'allocator_alive' if version >= 5 else 'terminal_alive'
+require(row.get(manager_key) == '1', f"{manager_key}={row.get(manager_key)!r}")
+try:
+    supervisor_age = time.time() - float(row['timestamp'])
+except (KeyError, TypeError, ValueError):
+    require(False, f"invalid supervisor timestamp={row.get('timestamp')!r}")
+require(supervisor_age <= 60, f"runtime supervisor stale age_seconds={supervisor_age:.1f} limit=60")
 if version >= 5:
-    allocator = json.loads((run_root / 'allocator_status.json').read_text())
-    with (run_root / 'strategy_status.csv').open(newline='', encoding='utf-8') as handle:
+    allocator_path = run_root / 'allocator_status.json'
+    strategy_path = run_root / 'strategy_status.csv'
+    require(allocator_path.is_file(), f"missing {allocator_path}")
+    require(strategy_path.is_file(), f"missing {strategy_path}")
+    allocator = json.loads(allocator_path.read_text())
+    with strategy_path.open(newline='', encoding='utf-8') as handle:
         strategies = list(csv.DictReader(handle))
-    assert allocator.get('paper_only') is True
-    assert int(allocator.get('models_expected', 0)) == 5
-    assert int(allocator.get('models_alive', 0)) == 5
-    assert {item.get('name') for item in strategies} == {'micro', 'pca', 'graph', 'semantic', 'external'}
-    total = float(allocator.get('reserve_fraction', 0.0)) + sum(float(item['capital_fraction']) for item in strategies)
-    assert math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9)
-    assert all(float(item['status_age_seconds']) <= 120 for item in strategies)
+    require(allocator.get('paper_only') is True, f"allocator paper_only={allocator.get('paper_only')!r}")
+    require(int(allocator.get('models_expected', 0)) == 5,
+            f"allocator models_expected={allocator.get('models_expected')!r} expected=5")
+    require(int(allocator.get('models_alive', 0)) == 5,
+            f"allocator models_alive={allocator.get('models_alive')!r} expected=5")
+    expected_names = {'micro', 'pca', 'graph', 'semantic', 'external'}
+    actual_names = {item.get('name') for item in strategies}
+    require(actual_names == expected_names,
+            f"strategy names={sorted(str(x) for x in actual_names)} expected={sorted(expected_names)}")
+    try:
+        total = float(allocator.get('reserve_fraction', 0.0)) + sum(
+            float(item['capital_fraction']) for item in strategies
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        require(False, f"invalid capital fractions: {exc}")
+    require(math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9),
+            f"capital fractions plus reserve={total:.12f} expected=1")
+    stale = []
+    for item in strategies:
+        try:
+            age = float(item['status_age_seconds'])
+        except (KeyError, TypeError, ValueError):
+            stale.append((str(item.get('name', 'unknown')), float('inf'), str(item.get('status_age_seconds'))))
+            continue
+        if age > 120:
+            stale.append((str(item.get('name', 'unknown')), age, None))
+    if stale:
+        details = []
+        for name, age, raw in stale:
+            if raw is None:
+                details.append(f"{name}={age:.1f}s")
+            else:
+                details.append(f"{name}=invalid({raw!r})")
+        require(False, "stale model status: " + ", ".join(details) + "; limit=120s")
 PY
 }
 
