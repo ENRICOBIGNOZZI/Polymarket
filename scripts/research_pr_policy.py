@@ -145,11 +145,11 @@ def evaluate(
             errors.append("research PRs that are not shadow-isolated must remain draft; promotion happens through an integration/* candidate after objective validation")
         if manifest_changed: errors.append("research and diagnostic branches may never change the live champion manifest")
     elif head.startswith("integration/"):
-        if not draft and linked_source_number is None:
-            errors.append("integration PR must link a numbered source research PR as `Source research PR/branch/commit: #<number>`")
-        if not draft and model_surface_files:
+        if model_surface_files:
+            if linked_source_number is None:
+                errors.append("sensitive integration PR must link a numbered source research PR as `Source research PR/branch/commit: #<number>`")
             if source_research is None:
-                errors.append("sensitive integration PRs must provide source research metadata to Change Policy before leaving draft")
+                errors.append("sensitive integration PRs must provide approved source research metadata before model/runtime work may move onto integration/*")
             else:
                 actual_source_number = source_number(source_research)
                 actual_source_branch = source_branch(source_research)
@@ -162,6 +162,8 @@ def evaluate(
                         "unapproved model/runtime work must remain in research until the latest source verdict is APPROVED_FOR_INTEGRATION or INTEGRATION_READY; "
                         f"latest source verdict: {latest_source_verdict or 'none'}"
                     )
+        elif not draft and linked_source_number is None:
+            errors.append("integration PR must link a numbered source research PR as `Source research PR/branch/commit: #<number>`")
     else:
         misplaced = sorted(labels.intersection(INTEGRATION_ONLY_LABELS | {"research-approved"}))
         if misplaced: errors.append("research/integration labels are valid only on their dedicated branch classes: " + ", ".join(misplaced))
