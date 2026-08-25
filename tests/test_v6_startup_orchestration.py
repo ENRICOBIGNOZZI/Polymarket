@@ -36,7 +36,10 @@ class V6StartupOrchestrationTests(unittest.TestCase):
         external = loop.index("start_external;write_supervisor", gap)
         self.assertLess(recorder, gap)
         self.assertLess(gap, external)
-        self.assertIn("if ((now-startup_epoch>=MAKER_STARTUP_DELAY_SECONDS));then", loop)
+        self.assertIn(
+            "if ((now-startup_epoch>=MAKER_STARTUP_DELAY_SECONDS && now-last_maker>=MAKER_INTERVAL_SECONDS));then",
+            loop,
+        )
         self.assertIn("last_factor=$((startup_epoch-60+FACTOR_STARTUP_DELAY_SECONDS))", loop)
         self.assertNotIn('V6_RECORDER_MARKETS:-1200', loop)
 
