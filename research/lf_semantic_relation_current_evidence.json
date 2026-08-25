@@ -10,8 +10,12 @@
     "current_semantic_min_similarity": 0.18,
     "current_semantic_shrink": 0.5,
     "opposite_polarity_fixture": {
+      "questions": [
+        "Will Alice win the 2026 mayor election?",
+        "Will Alice not win the 2026 mayor election?"
+      ],
       "market_probabilities": [0.8, 0.2],
-      "lexical_similarity": 0.7142857142857143,
+      "lexical_similarity": 0.875,
       "semantic_probabilities": [0.5, 0.5],
       "absolute_probability_shift_each_side": 0.3
     },
@@ -39,7 +43,7 @@
   },
   "interpretation": [
     "The deterministic fixtures are counterexamples to the semantic model contract, not estimates of live mispricing frequency or expected PnL.",
-    "Lexical similarity is not sufficient to establish probability exchangeability: opposite-polarity propositions require complement logic and threshold families require order constraints.",
+    "Lexical similarity is not sufficient to establish probability exchangeability: exact negations require complement logic and threshold families require order constraints.",
     "The current validated public sample contains no OOS production bundles, so no profitable semantic challenger is claimed.",
     "A relation-aware semantic challenger must be evaluated on common chronological rows with purged terminal scoring and executable cost stress before integration."
   ],
