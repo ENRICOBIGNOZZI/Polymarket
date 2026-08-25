@@ -68,6 +68,8 @@ struct Opportunity {
     std::int64_t exchange_ts_ms = 0;
     std::int64_t received_ts_ms = 0;
     std::int64_t decision_ts_ms = 0;
+    std::int64_t max_leg_book_age_ms = -1;
+    std::int64_t leg_book_skew_ms = -1;
     std::vector<FilledLeg> legs;
 };
 
