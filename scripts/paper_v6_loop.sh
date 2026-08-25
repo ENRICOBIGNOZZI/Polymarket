@@ -62,7 +62,9 @@ write_supervisor() {
   kill -0 "$broker_pid" 2>/dev/null && ba=1 || true
   kill -0 "$external_pid" 2>/dev/null && ea=1 || true
   local tmp="$RUN_ROOT/runtime_supervisor.csv.tmp"
-  printf 'timestamp,recorder_alive,broker_alive,external_alive,recorder_restarts,broker_restarts,external_restarts,recorder_pid,broker_pid,external_pid\n' > "$tmp"
+  # allocator_alive is a transitional field name expected by the already-deployed
+  # health gate. In V6 it means the independent directional/external process is alive.
+  printf 'timestamp,recorder_alive,broker_alive,allocator_alive,recorder_restarts,broker_restarts,allocator_restarts,recorder_pid,broker_pid,allocator_pid\n' > "$tmp"
   printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$(date +%s)" "$ra" "$ba" "$ea" "$rec_restarts" "$broker_restarts" "$external_restarts" "$rec_pid" "$broker_pid" "$external_pid" >> "$tmp"
   mv "$tmp" "$RUN_ROOT/runtime_supervisor.csv"
 }
