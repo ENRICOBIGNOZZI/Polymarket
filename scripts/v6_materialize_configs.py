@@ -16,6 +16,12 @@ def main() -> int:
     manifest={"schema":"polymarket_v6_sleeves_v1","paper_only":True,"starting_capital":total,"reserve_fraction":float(v["reserve_fraction"]),"sleeves":[]}
     for name,frac in alloc:
         child={k:x for k,x in cfg.items() if k not in {"v6","multi_strategy"}};child["starting_capital"]=total*float(frac);child["run_dir"]=str(root/name);child["expert_weights"]={"micro":0.0,"pca":0.0,"graph":0.0,"semantic":0.0,"external":0.0}
+        # The maker sleeve is only 12% of parent capital in V6. If the parent's
+        # max_market_fraction is copied unchanged, it silently turns a $60/trade
+        # cap into roughly $30/market. Raise only the child market-fraction cap
+        # enough to make the parent's explicit dollar trade cap reachable.
+        if name=="maker" and child["starting_capital"]>0:
+            trade_cap=float(cfg.get("max_trade_usd",60.0));child["max_market_fraction"]=max(float(child.get("max_market_fraction",0.0)),min(1.0,trade_cap/child["starting_capital"]))
         if name=="external":child["external_signals_file"]=str(root/"external_signals.csv");child["expert_weights"]["external"]=1.0;child["uncertainty_penalty"]=0.0
         path=root/f"{name}_config.json";path.write_text(json.dumps(child,indent=2,sort_keys=True)+"\n",encoding="utf-8");manifest["sleeves"].append({"name":name,"capital_fraction":float(frac),"starting_capital":child["starting_capital"],"config":str(path)})
     (root/"v6_sleeves.json").write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n",encoding="utf-8");print(json.dumps(manifest,sort_keys=True));return 0
