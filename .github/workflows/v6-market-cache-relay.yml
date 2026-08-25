@@ -219,6 +219,45 @@ jobs:
           print(f'http://127.0.0.1:{parsed.port}')
           PY
           )"
+          proxy_port="${proxy_url##*:}"
+          proxy_diagnostics() {
+            # The relay remains read-only with respect to the service.  When a
+            # consumption proof fails, capture just enough local provenance to
+            # distinguish a stale listener from a stale cache or an HTTP stall.
+            local health_probe response_probe pid command_line
+            health_probe="$(curl --silent --show-error --max-time 3 "$proxy_url/healthz" 2>&1 || true)"
+            response_probe="$(curl --silent --show-error --max-time 5 "$proxy_url/markets?active=true&closed=false&limit=1&offset=0&order=liquidityNum&ascending=false&liquidity_num_min=10" 2>&1 || true)"
+            printf 'relay_proxy_port=%s\n' "$proxy_port"
+            printf 'relay_proxy_health_probe=%s\n' "$(printf '%s' "$health_probe" | tr '\n' ' ' | cut -c1-512)"
+            printf 'relay_proxy_markets_probe_bytes=%s\n' "${#response_probe}"
+            python3 - "$RUN_ROOT_REL/market_proxy_status.json" "$RUN_ROOT_REL/market_proxy_cache.json" <<'PY'
+          import json, os, sys
+          for label, path in (("status", sys.argv[1]), ("cache", sys.argv[2])):
+              try:
+                  stat = os.stat(path)
+                  value = json.load(open(path, encoding="utf-8"))
+                  if not isinstance(value, dict):
+                      raise ValueError("not an object")
+                  summary = {key: value.get(key) for key in (
+                      "schema", "timestamp", "source", "markets", "cache_age_seconds", "failures", "last_error"
+                  )}
+                  summary["mtime"] = int(stat.st_mtime)
+                  summary["bytes"] = stat.st_size
+              except Exception as exc:
+                  summary = {"error": str(exc)}
+              print("relay_proxy_" + label + "=" + json.dumps(summary, sort_keys=True))
+          PY
+            if command -v lsof >/dev/null 2>&1; then
+              while IFS= read -r pid; do
+                [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
+                command_line="$(/bin/ps -o pid=,ppid=,comm= -p "$pid" 2>/dev/null | tr -s '[:space:]' ' ' | sed 's/^ //')"
+                printf 'relay_proxy_listener_pid=%s command=%s\n' "$pid" "${command_line:-unavailable}"
+              done < <(lsof -nP -t -iTCP:"$proxy_port" -sTCP:LISTEN 2>/dev/null || true)
+            fi
+            printf '%s\n' 'relay_proxy_log_tail_begin'
+            tail -n 20 "$RUN_ROOT_REL/market_proxy.log" 2>/dev/null || true
+            printf '%s\n' 'relay_proxy_log_tail_end'
+          }
           # A successful live-paper smoke can trigger deploy at the same minute as
           # this scheduled relay. Deployment intentionally restarts the paper
           # runtime, so a single immediate localhost probe can observe the planned
@@ -256,6 +295,9 @@ jobs:
               break
             fi
             printf 'relay_verify_retry=%s\n' "$attempt"
+            if (( attempt == 1 || attempt == 18 )); then
+              proxy_diagnostics
+            fi
             sleep 5
           done
           test "$verified" = true
