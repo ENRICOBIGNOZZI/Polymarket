@@ -35,7 +35,7 @@ for name, frac in alloc:
 PY
 
 rm -f "$RUN_ROOT"/intents.csv "$RUN_ROOT"/b1_intents.csv "$RUN_ROOT"/local_factor_intents.csv \
-      "$RUN_ROOT"/relation_intents.csv "$RUN_ROOT"/stat_arb_pairs.csv
+      "$RUN_ROOT"/relation_intents_raw.csv "$RUN_ROOT"/relation_intents.csv "$RUN_ROOT"/stat_arb_pairs.csv
 
 rec_pid=0; broker_pid=0; external_pid=0
 rec_restarts=0; broker_restarts=0; external_restarts=0
@@ -117,9 +117,21 @@ while true; do
   fi
 
   if (( now - last_relation >= 30 )); then
-    python3 scripts/v6_relation_intents.py --config "$CONFIG" --output "$RUN_ROOT/relation_intents.csv" --status "$RUN_ROOT/relation_status.json" \
+    # Relation discovery may emit maker graph dislocations. They are explicitly
+    # downgraded to GRAPH_RV unless a future scanner supplies a true TAKER hard-arb
+    # intent. This prevents partial-fill maker bundles from being mislabeled as
+    # deterministic arbitrage.
+    python3 scripts/v6_relation_intents.py --config "$CONFIG" --output "$RUN_ROOT/relation_intents_raw.csv" --status "$RUN_ROOT/relation_status.json" \
       --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 --max-events 80 \
       > "$RUN_ROOT/relation_latest.log" 2> "$RUN_ROOT/relation_errors.log" || true
+    python3 scripts/v6_intent_guard.py --input "$RUN_ROOT/relation_intents_raw.csv" --output "$RUN_ROOT/relation_intents.csv" \
+      --status "$RUN_ROOT/relation_guard_status.json" --min-edge "$INTENT_MIN_EDGE" --stress-bps 10 --max-age-seconds 240 \
+      >> "$RUN_ROOT/relation_guard.log" 2>&1 || true
+    # Independent executable-book NegRisk diagnostic: asks, taker fees, slippage,
+    # complete-event metadata and displayed depth. It remains diagnostic until the
+    # multi-leg broker has a true immediate-taker/atomic execution path.
+    ./build/polymarket_negrisk_arb --config "$CONFIG" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --top 100 \
+      > "$RUN_ROOT/graph_hard_taker_scan.csv" 2> "$RUN_ROOT/graph_hard_taker_errors.log" || true
     rebuild_intents; last_relation=$now
   fi
 
