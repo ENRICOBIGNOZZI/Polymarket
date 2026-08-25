@@ -76,18 +76,24 @@ jobs:
         run: cmake --build build-${{ matrix.build_type }} --parallel 2
       - name: Unit and mock integration tests (${{ matrix.build_type }})
         run: ctest --test-dir build-${{ matrix.build_type }} --output-on-failure
-      - name: Deployment, scheduler context, and V6 runtime contracts
+      - name: Production execution, V7 evidence, and V6 frontier contracts
         run: |
           set -euo pipefail
-          bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh \
+          bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh scripts/v6_frontier_once.sh \
             ops/bootstrap_server.sh ops/update_server.sh ops/bootstrap_macos.sh ops/update_server_macos.sh \
             ops/macos_service_control.sh ops/install_autoupdate_macos.sh ops/finish_bootstrap_macos.sh ops/apply_runtime_config_macos.sh
           python3 -m py_compile \
             scripts/multi_strategy_paper.py scripts/compact_strategy_logs.py scripts/project_context_snapshot.py \
-            scripts/validate_project_context.py scripts/validate_scheduler_registry.py \
+            scripts/validate_project_context.py scripts/validate_scheduler_registry.py scripts/v7_execution_evidence.py \
             scripts/v6_external_bridge.py scripts/v6_relation_intents.py scripts/v6_intent_guard.py \
-            scripts/v6_local_factor_intents.py scripts/v6_micro_taker.py scripts/v6_hard_arb_paper.py \
-            scripts/v6_runtime_status.py scripts/v7_execution_evidence.py monitoring/exporter_v5.py monitoring/exporter_v6.py monitoring/exporter_latest.py
+            scripts/v6_local_factor_intents.py scripts/v6_micro_taker.py scripts/v6_hard_arb_paper.py scripts/v6_runtime_status.py \
+            scripts/v6_queue_filter.py monitoring/exporter_v5.py monitoring/exporter_v6.py monitoring/exporter_latest.py \
+            scripts/v6_market_common.py scripts/v6_micro_maker.py scripts/v6_micro_maker_v2.py \
+            scripts/v6_micro_taker_v2.py scripts/v6_micro_taker_v3.py scripts/v6_micro_taker_v4.py \
+            scripts/v6_local_factor_v3.py scripts/v6_local_factor_v4.py scripts/v6_relation_intents_v2.py \
+            scripts/v6_structural_curve.py scripts/v6_bundle_quote_optimizer.py scripts/v6_bundle_state_guard.py \
+            scripts/v6_hard_arb_paper_v2.py scripts/v6_hard_arb_paper_v3.py scripts/v6_hard_arb_paper_v4.py scripts/external_intelligence_v2.py
+          python3 scripts/v6_queue_filter.py self-test
           python3 -m json.tool config/paper_v5.json >/dev/null
           python3 -m json.tool config/paper_v6.json >/dev/null
           python3 -m json.tool config/v6_model_architecture.json >/dev/null
@@ -99,5 +105,7 @@ jobs:
           python3 scripts/validate_project_context.py --root . --output /tmp/project-context-validation.md
           python3 scripts/project_context_snapshot.py --root . --manifest config/project_context.json --output-json /tmp/project-context.json --output-markdown /tmp/project-context.md
           test -s /tmp/project-context.json; test -s /tmp/project-context.md
-          python3 -m unittest tests/test_v6_runtime_contract.py tests/test_v6_model_contracts.py tests/test_v7_execution_evidence.py \
+          python3 -m unittest \
+            tests/test_v6_runtime_contract.py tests/test_v6_model_contracts.py tests/test_v6_execution_costs.py tests/test_v7_execution_evidence.py \
+            tests/test_v6_frontier_models.py tests/test_v6_fill_hazard.py tests/test_v6_hard_arb_v4.py tests/test_v6_micro_structural_v4.py \
             tests/test_compact_strategy_logs.py tests/test_ops_macos.py tests/test_workflow_yaml_contracts.py -v
