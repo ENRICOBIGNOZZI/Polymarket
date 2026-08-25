@@ -54,6 +54,40 @@ class V6ModelContracts(unittest.TestCase):
         self.assertIn("v6_intent_guard.py",loop);self.assertIn("relation_intents_raw.csv",loop);self.assertIn("v6_micro_taker.py",loop);self.assertIn("v6_local_factor_intents.py",loop);self.assertIn("v6_hard_arb_paper.py",loop);self.assertIn("polymarket_maker_paper",loop)
         self.assertNotIn("polymarket_pca_stat_arb",loop);self.assertNotIn("build_v4_intents.py --strategy B1",loop)
 
+    def test_micro_target_uses_last_pre_horizon_observation(self):
+        target=load_script("v6_micro_target_test","scripts/v6_micro_target.py")
+        samples=[
+            {"ts":100,"market_id":"m","mid":0.50,"x":[1,0,0,0,0,0],"y":None},
+            {"ts":102,"market_id":"m","mid":0.51,"x":[1,0,0,0,0,0],"y":None},
+            {"ts":104,"market_id":"m","mid":0.52,"x":[1,0,0,0,0,0],"y":None},
+            {"ts":106,"market_id":"m","mid":0.80,"x":[1,0,0,0,0,0],"y":None},
+        ]
+        report=target.label_matured_samples(samples,now=106,horizon_seconds=5,max_target_staleness_seconds=2)
+        self.assertAlmostEqual(samples[0]["y"],0.02,places=12)
+        self.assertEqual(samples[0]["target_observation_ts"],104)
+        self.assertEqual(samples[0]["target_staleness_seconds"],1)
+        self.assertNotAlmostEqual(samples[0]["y"],0.30,places=12)
+        self.assertEqual(report["newly_labeled"],1)
+
+    def test_micro_target_requires_post_origin_observation_and_staleness_bound(self):
+        target=load_script("v6_micro_target_stale_test","scripts/v6_micro_target.py")
+        no_future=[{"ts":100,"market_id":"m","mid":0.50,"x":[1,0,0,0,0,0],"y":None}]
+        report=target.label_matured_samples(no_future,now=106,horizon_seconds=5,max_target_staleness_seconds=5)
+        self.assertIsNone(no_future[0]["y"]);self.assertEqual(report["missing_pre_horizon_observation"],1)
+        stale=[
+            {"ts":100,"market_id":"m","mid":0.50,"x":[1,0,0,0,0,0],"y":None},
+            {"ts":101,"market_id":"m","mid":0.51,"x":[1,0,0,0,0,0],"y":None},
+        ]
+        report=target.label_matured_samples(stale,now=106,horizon_seconds=5,max_target_staleness_seconds=2)
+        self.assertIsNone(stale[0]["y"]);self.assertEqual(report["stale_pre_horizon_observation"],1)
+
+    def test_micro_runtime_no_longer_uses_first_post_horizon_mark(self):
+        text=(ROOT/"scripts/v6_micro_taker.py").read_text()
+        self.assertIn("label_matured_samples",text)
+        self.assertIn("max-target-staleness-seconds",text)
+        self.assertNotIn("first observable mark after the forecast horizon",text)
+        self.assertIn("realized_pnl_total",text)
+
     def test_maker_graph_hard_is_demoted_and_stressed(self):
         now=int(time.time())
         with tempfile.TemporaryDirectory() as td:
