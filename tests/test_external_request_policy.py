@@ -55,7 +55,7 @@ class ExternalRequestPolicyTests(unittest.TestCase):
             "https://clob.polymarket.com/prices-history?"
             f"market=123&startTs={start}&endTs={end}&interval=1h&fidelity=60"
         )
-        self.assertEqual(len(seen), 3)
+        self.assertEqual(len(seen), 5)
         for url in seen:
             query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))
             self.assertNotIn("interval", query)
@@ -119,6 +119,7 @@ class ExternalRequestPolicyTests(unittest.TestCase):
         request = policy.wrap_request_json(
             delegate,
             gdelt_min_interval_seconds=1.25,
+            gdelt_rate_limit_backoff_seconds=0,
             monotonic=monotonic,
             sleep=sleep,
         )
@@ -128,8 +129,40 @@ class ExternalRequestPolicyTests(unittest.TestCase):
         self.assertEqual(len(seen), 2)
         self.assertEqual(sleeps, [1.25])
 
-    def test_default_gdelt_pacing_is_conservative(self) -> None:
-        self.assertGreaterEqual(policy.wrap_request_json.__kwdefaults__["gdelt_min_interval_seconds"], 5.0)
+    def test_gdelt_429_gets_one_long_backoff_retry(self) -> None:
+        clock = [100.0]
+        sleeps: list[float] = []
+        attempts = [0]
+
+        def monotonic() -> float:
+            return clock[0]
+
+        def sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            clock[0] += seconds
+
+        def delegate(url: str, *, timeout: float, retries: int):
+            attempts[0] += 1
+            if attempts[0] == 1:
+                raise RuntimeError("HTTP Error 429: Too Many Requests")
+            return {"ok": True}
+
+        request = policy.wrap_request_json(
+            delegate,
+            gdelt_min_interval_seconds=0,
+            gdelt_rate_limit_backoff_seconds=17.0,
+            monotonic=monotonic,
+            sleep=sleep,
+        )
+        payload = request("https://api.gdeltproject.org/api/v2/doc/doc?query=test&format=json")
+        self.assertEqual(payload, {"ok": True})
+        self.assertEqual(attempts[0], 2)
+        self.assertEqual(sleeps, [17.0])
+
+    def test_default_gdelt_pacing_and_clob_window_are_conservative(self) -> None:
+        self.assertGreaterEqual(policy.wrap_request_json.__kwdefaults__["gdelt_min_interval_seconds"], 10.0)
+        self.assertGreaterEqual(policy.wrap_request_json.__kwdefaults__["gdelt_rate_limit_backoff_seconds"], 30.0)
+        self.assertLessEqual(policy.DEFAULT_CLOB_HISTORY_WINDOW_SECONDS, 7 * 86400)
 
     def test_non_target_url_is_unchanged(self) -> None:
         url = "https://gamma-api.polymarket.com/markets?active=true&closed=false"

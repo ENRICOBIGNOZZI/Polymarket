@@ -9,7 +9,7 @@ from typing import Any
 PM_CLOB_HOST = "clob.polymarket.com"
 KALSHI_HOST = "external-api.kalshi.com"
 GDELT_HOST = "api.gdeltproject.org"
-DEFAULT_CLOB_HISTORY_WINDOW_SECONDS = 14 * 86400
+DEFAULT_CLOB_HISTORY_WINDOW_SECONDS = 7 * 86400
 
 
 def _query_pairs(url: str) -> tuple[urllib.parse.SplitResult, list[tuple[str, str]]]:
@@ -92,7 +92,8 @@ def _merge_history_payloads(payloads: list[Any]) -> dict[str, Any]:
 def wrap_request_json(
     delegate: Callable[..., Any],
     *,
-    gdelt_min_interval_seconds: float = 5.0,
+    gdelt_min_interval_seconds: float = 10.0,
+    gdelt_rate_limit_backoff_seconds: float = 30.0,
     clob_history_window_seconds: int = DEFAULT_CLOB_HISTORY_WINDOW_SECONDS,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
@@ -120,14 +121,24 @@ def wrap_request_json(
                     cursor = chunk_end
                 return _merge_history_payloads(payloads)
 
-        if host == GDELT_HOST and gdelt_min_interval_seconds > 0:
-            now = monotonic()
-            if last_gdelt_request is not None:
-                remaining = gdelt_min_interval_seconds - (now - last_gdelt_request)
-                if remaining > 0:
-                    sleep(remaining)
+        if host == GDELT_HOST:
+            if gdelt_min_interval_seconds > 0:
+                now = monotonic()
+                if last_gdelt_request is not None:
+                    remaining = gdelt_min_interval_seconds - (now - last_gdelt_request)
+                    if remaining > 0:
+                        sleep(remaining)
             try:
-                return delegate(normalized, timeout=timeout, retries=retries)
+                try:
+                    return delegate(normalized, timeout=timeout, retries=retries)
+                except RuntimeError as exc:
+                    text = str(exc).lower()
+                    if gdelt_rate_limit_backoff_seconds <= 0 or not (
+                        "429" in text or "too many requests" in text
+                    ):
+                        raise
+                    sleep(gdelt_rate_limit_backoff_seconds)
+                    return delegate(normalized, timeout=timeout, retries=retries)
             finally:
                 last_gdelt_request = monotonic()
         return delegate(normalized, timeout=timeout, retries=retries)
