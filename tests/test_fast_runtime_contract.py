@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -61,9 +64,30 @@ class FastRuntimeContractTest(unittest.TestCase):
         self.assertIn("runtime_singleton_launcher.py", selector)
         self.assertIn("runtime_owner.lock", selector)
         self.assertIn("POLYMARKET_RUNTIME_SINGLETON_HELD", selector)
+        self.assertIn("runtime_handoff.request", selector)
         self.assertLess(selector.index("runtime_singleton_launcher.py"), selector.index("start_champion()"))
         # The private macOS server uses Bash 3.2, which does not provide BASHPID.
         self.assertIn('tmp="$path.tmp.${BASHPID:-$$}"', selector)
+
+    def test_explicit_deploy_handoff_retires_only_verified_stale_runtime_owner(self) -> None:
+        selector = (ROOT / "scripts" / "paper_latest_loop.sh").read_text(encoding="utf-8")
+        updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
+        self.assertIn('handoff_marker="$run_root/runtime_handoff.request"', selector)
+        self.assertIn('reap_requested_stale_runtime_owner()', selector)
+        self.assertIn('same_repository_runtime_owner()', selector)
+        self.assertIn('same_repository_runtime_lock_holder()', selector)
+        self.assertIn('runtime_tree_pids()', selector)
+        self.assertIn('runtime_lock_is_free()', selector)
+        self.assertIn('stale_runtime_owner_reaped=', selector)
+        self.assertIn('stale_runtime_orphan_lock_holder_reaped=', selector)
+        self.assertIn('stale_runtime_owner_killed=', selector)
+        self.assertIn('runtime handoff refused unknown lock owner', selector)
+        self.assertIn('runtime handoff refused unknown lock holder', selector)
+        self.assertIn('runtime handoff refused unknown orphan lock holder', selector)
+        self.assertIn('request_runtime_handoff()', updater)
+        self.assertIn('clear_runtime_handoff()', updater)
+        self.assertIn('runtime_handoff.request', updater)
+        self.assertIn('request_runtime_handoff "$NEW_SHA"', updater)
 
     def test_v6_child_retires_when_the_runtime_wrapper_disappears(self) -> None:
         selector = (ROOT / "scripts" / "paper_latest_loop.sh").read_text(encoding="utf-8")
@@ -94,6 +118,13 @@ class FastRuntimeContractTest(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn('start_simulated_v6_loop(){', workflow)
+        self.assertIn('start_simulated_legacy_runtime_owner()', workflow)
+        self.assertIn('legacy_inherited_lock_child_pid=', workflow)
+        self.assertIn('stale_runtime_owner_reaped=$stale_owner_pid', workflow)
+        self.assertIn('private_orphan_lock_handoff', workflow)
+        self.assertIn('stale_runtime_orphan_lock_holder_reaped=$orphan_child_pid', workflow)
+        self.assertIn('singleton lock leaked after orphan handoff', workflow)
+        self.assertIn('singleton lock leaked into descendants', workflow)
         self.assertIn('stale_v6_loop_reaped=$stale_pid', workflow)
         self.assertIn("historical relative `scripts/paper_v6_loop.sh` argv form", workflow)
         self.assertIn('fatal: stale V6 loop did not exit before startup', workflow)
@@ -102,6 +133,12 @@ class FastRuntimeContractTest(unittest.TestCase):
 
     def test_runtime_singleton_launcher_excludes_competing_owner(self) -> None:
         launcher = ROOT / "scripts" / "runtime_singleton_launcher.py"
+        launcher_source = launcher.read_text(encoding="utf-8")
+        self.assertIn("subprocess.Popen(", launcher_source)
+        self.assertIn("close_fds=True", launcher_source)
+        self.assertIn("start_new_session=True", launcher_source)
+        self.assertIn("os.set_inheritable(fd, False)", launcher_source)
+        self.assertIn("os.killpg(child.pid, signum)", launcher_source)
         with tempfile.TemporaryDirectory() as tmpdir:
             lock = Path(tmpdir) / "runtime.lock"
             first = subprocess.Popen(
@@ -176,6 +213,84 @@ class FastRuntimeContractTest(unittest.TestCase):
             )
             self.assertEqual(third.returncode, 0, third)
             self.assertEqual(third.stdout.strip(), "reacquired")
+
+    def test_runtime_singleton_supervisor_does_not_leak_lock_to_descendants(self) -> None:
+        launcher = ROOT / "scripts" / "runtime_singleton_launcher.py"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock = Path(tmpdir) / "runtime.lock"
+            child_pid_file = Path(tmpdir) / "legacy-child.pid"
+            child_code = (
+                "import os,signal,sys,time; "
+                "open(sys.argv[1], 'w', encoding='utf-8').write(str(os.getpid())); "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"
+            )
+            shell_command = (
+                f"{shlex.quote(sys.executable)} -c {shlex.quote(child_code)} "
+                f"{shlex.quote(str(child_pid_file))} & wait"
+            )
+            first = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(launcher),
+                    "--lock",
+                    str(lock),
+                    "--",
+                    "/usr/bin/env",
+                    "bash",
+                    "-c",
+                    shell_command,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            child_pid = 0
+            try:
+                for _ in range(100):
+                    if lock.exists() and lock.read_text(encoding="utf-8").strip() and child_pid_file.exists():
+                        break
+                    if first.poll() is not None:
+                        self.fail(f"singleton supervisor exited early rc={first.returncode}")
+                    time.sleep(0.02)
+                else:
+                    self.fail("singleton lock or child marker was not materialized")
+                child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+
+                # SIGKILL cannot be forwarded by the supervisor.  The legacy
+                # shell child remains alive, so reacquisition proves that its
+                # descriptor was not inherited from the singleton owner.
+                first.kill()
+                first.wait(timeout=5)
+                reacquired = subprocess.run(
+                    [
+                        sys.executable,
+                        str(launcher),
+                        "--lock",
+                        str(lock),
+                        "--",
+                        sys.executable,
+                        "-c",
+                        "print('reacquired-after-supervisor-kill')",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                self.assertEqual(reacquired.returncode, 0, reacquired)
+                self.assertEqual(reacquired.stdout.strip(), "reacquired-after-supervisor-kill")
+            finally:
+                if first.poll() is None:
+                    first.kill()
+                    first.wait(timeout=5)
+                if child_pid:
+                    try:
+                        os.kill(child_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                for stream in (first.stdout, first.stderr):
+                    if stream is not None:
+                        stream.close()
 
     def test_v6_runtime_writers_use_unique_atomic_temp_paths(self) -> None:
         writers = [
