@@ -1,0 +1,89 @@
+{
+  "schema": "polymarket_lf_v5_pca_horizon_semantics_evidence_v1",
+  "generated_date": "2026-08-25",
+  "source_main_sha": "810c98da0661826bc19aae032b9893e867f238c7",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "finding": "The V5 PCA sleeve predicts a next standardized idiosyncratic return, converts it into a price-like q_yes, and then routes that q_yes through terminal binary Kelly sizing and resolved-outcome Brier scoring. A short-horizon mark-to-market forecast does not identify terminal payout probability.",
+  "current_v5_pca": {
+    "capital_fraction": 0.25,
+    "child_starting_capital_usd": 2500.0,
+    "interval_seconds": 15,
+    "pca_window": 720,
+    "pca_min_history": 24,
+    "pca_universe": 350,
+    "pca_fractional_kelly": 0.12,
+    "pca_max_trade_usd": 75.0
+  },
+  "deterministic_counterexample": {
+    "current_mid": 0.50,
+    "one_step_fair": 0.55,
+    "executable_price": 0.51,
+    "terminal_probability": 0.50,
+    "engine_interpreted_gross_edge": 0.04,
+    "actual_terminal_ev_per_share": -0.01,
+    "engine_full_kelly": 0.0816326530612245,
+    "engine_fractional_kelly_fraction": 0.00979591836734694,
+    "engine_fractional_kelly_dollars_before_other_caps": 24.4897959183673,
+    "interpretation": "Identification counterexample only; not a live PnL estimate. The same one-step price forecast can coexist with terminal probabilities that imply either negative or positive terminal EV."
+  },
+  "latest_alpha_factory": {
+    "generated_utc": "2026-08-25T05:20:03+00:00",
+    "champion_version": 5,
+    "b1_candidates": 1,
+    "b1_raw_positive": 1,
+    "b1_maker_positive": 0,
+    "b1_best_raw_edge": 0.0058054,
+    "b1_best_maker_edge": -0.0172768,
+    "b2_candidates": 8,
+    "b2_raw_positive": 8,
+    "b2_maker_positive": 0,
+    "b2_best_raw_edge": 0.000797517,
+    "b2_best_maker_edge": -0.000136623,
+    "oos_trades": 0,
+    "tiny_pilot_eligible": false,
+    "recommended_canary": "none"
+  },
+  "latest_external_intelligence": {
+    "generated_utc": "2026-08-25T04:51:52+00:00",
+    "status": "BACKTESTING",
+    "stored_observations": 940,
+    "stored_price_snapshots": 1399,
+    "gate_passes": 0,
+    "binance_return_1h_3600s": {
+      "oos_predictions": 105,
+      "trades": 1,
+      "normal_pnl_per_share": -0.005
+    },
+    "binance_return_5m_3600s": {
+      "oos_predictions": 105,
+      "trades": 9,
+      "normal_pnl_per_share": -0.026
+    }
+  },
+  "distinct_from_existing_research": [
+    "#174 timestamp alignment of V5 PCA history",
+    "#184 overlapping-state finite-sample reversion bias",
+    "#141 singleton confidence cancellation",
+    "#165 resolution-complete terminal calibration inventory",
+    "#124 and #157 residual/unit-root significance",
+    "#91 sparse covariance PSD integrity",
+    "#128 relation-aligned factor capacity"
+  ],
+  "required_common_sample_experiment": [
+    "timestamp-align the PCA panel first",
+    "evaluate PCA as an explicit mark-to-market model at fixed future horizons such as 15m, 30m, 1h and 6h using purged chronological event/time-clustered rows",
+    "compare bounded cost-aware markout sizing against the incumbent terminal-binary Kelly interpretation",
+    "if PCA state is used for terminal probability, fit a separate time-to-resolution calibration/decoder only on prior resolved events and report Brier, log-loss and calibration error",
+    "compare incumbent and separated-semantics variants on identical rows with executable OOS PnL, turnover, capital occupancy and drawdown at 1x, 1.5x and 2x costs",
+    "control the timestamp, residual-inference and singleton-confidence defects jointly before attributing incremental utility to the horizon-semantics change"
+  ],
+  "safety": {
+    "research_branch_only": true,
+    "production_code_changed": false,
+    "live_champion_changed": false,
+    "risk_or_oos_gate_changed": false,
+    "credentials_changed": false,
+    "authenticated_execution_changed": false,
+    "real_money_execution": false
+  }
+}
