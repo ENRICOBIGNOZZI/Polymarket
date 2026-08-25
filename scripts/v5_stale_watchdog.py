@@ -4,9 +4,10 @@
 The allocator has its own child-status surface. The maker and periodic scanners
 run in the champion shell, so their file publication cadence is the liveness
 surface. The watchdog waits through separate startup grace periods, restarts
-only the allocator for stale generic children, and terminates the champion shell
-for a frozen executable backend. The outer live supervisor then restarts the
-paper champion from persisted state.
+only the allocator for stale generic children, and signals the champion shell
+to re-exec itself for a frozen executable backend. The outer live supervisor
+therefore keeps the same validated process while persisted paper state is
+reloaded.
 """
 from __future__ import annotations
 
@@ -80,7 +81,10 @@ def _newest_age(paths: Iterable[Path], current: int) -> float:
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.write_text(
+        json.dumps(value, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     os.replace(temporary, path)
 
 
@@ -105,9 +109,15 @@ class WatchState:
 
 
 def _backend_ages(run_root: Path, current: int) -> dict[str, float]:
+    # Logs are included for periodic scanners because the output CSV is removed
+    # immediately before a scan. A fresh log proves the champion loop is making
+    # progress while the operability report separately validates output freshness.
     groups = {
         "runtime_supervisor": [run_root / "runtime_supervisor.csv"],
-        "maker": [run_root / "maker" / "maker_equity.csv", run_root / "maker.log"],
+        "maker": [
+            run_root / "maker" / "maker_equity.csv",
+            run_root / "maker.log",
+        ],
         "pair_scanner": [
             run_root / "stat_arb_pairs.csv",
             run_root / "stat_arb_pairs_latest.log",
@@ -130,7 +140,10 @@ def _backend_ages(run_root: Path, current: int) -> dict[str, float]:
             run_root / "action_report_errors.log",
         ],
     }
-    return {name: _newest_age(paths, current) for name, paths in groups.items()}
+    return {
+        name: _newest_age(paths, current)
+        for name, paths in groups.items()
+    }
 
 
 def evaluate(
@@ -147,7 +160,10 @@ def evaluate(
     current = _now() if now is None else int(now)
     supervisor = _read_last_csv(run_root / "runtime_supervisor.csv")
     allocator_pid = _int(supervisor.get("allocator_pid"))
-    allocator_alive = _int(supervisor.get("allocator_alive")) == 1 and allocator_pid > 0
+    allocator_alive = (
+        _int(supervisor.get("allocator_alive")) == 1
+        and allocator_pid > 0
+    )
 
     if allocator_pid != state.allocator_pid:
         state.allocator_pid = allocator_pid
@@ -189,7 +205,11 @@ def evaluate(
     status_path = run_root / "strategy_status.csv"
     status_file_age = _file_age(status_path, current)
     result["status_file_age_seconds"] = status_file_age
-    if allocator_alive and not global_kill and allocator_age >= grace_seconds:
+    if (
+        allocator_alive
+        and not global_kill
+        and allocator_age >= grace_seconds
+    ):
         rows = _read_csv(status_path)
         if not rows:
             allocator_issue = "strategy_status_missing"
@@ -201,7 +221,11 @@ def evaluate(
                     str(row.get("name", "unknown"))
                     for row in rows
                     if _int(row.get("killed")) != 1
-                    and _float(row.get("status_age_seconds"), 1e12) > stale_seconds
+                    and _float(
+                        row.get("status_age_seconds"),
+                        1e12,
+                    )
+                    > stale_seconds
                 }
             )
             result["stale_models"] = stale_models
@@ -211,14 +235,18 @@ def evaluate(
     backend_issue = ""
     if state.main_pid > 0 and main_age >= backend_grace_seconds:
         ages = _backend_ages(run_root, current)
-        stale_backends = sorted(name for name, age in ages.items() if age > backend_stale_seconds)
+        stale_backends = sorted(
+            name
+            for name, age in ages.items()
+            if age > backend_stale_seconds
+        )
         result["backend_age_seconds"] = ages
         result["stale_backends"] = stale_backends
         if stale_backends:
             backend_issue = "backend_output_stale"
 
-    # A frozen champion shell is the broader failure and restarts every persisted
-    # component. Otherwise restart only the generic allocator process.
+    # A frozen champion shell is the broader failure and re-execs every
+    # persisted component. Otherwise restart only the generic allocator.
     if backend_issue:
         result.update(
             state="STALE",
@@ -239,36 +267,56 @@ def evaluate(
         result["state"] = "WAITING_FOR_ALLOCATOR"
     elif global_kill:
         result["state"] = "GLOBAL_KILL_ACTIVE"
-    elif allocator_age < grace_seconds or (state.main_pid > 0 and main_age < backend_grace_seconds):
+    elif (
+        allocator_age < grace_seconds
+        or (
+            state.main_pid > 0
+            and main_age < backend_grace_seconds
+        )
+    ):
         result["state"] = "STARTUP_GRACE"
     else:
         result["state"] = "HEALTHY"
     return result
 
 
-def request_restart(run_root: Path, state: WatchState, decision: dict[str, Any]) -> bool:
+def request_restart(
+    run_root: Path,
+    state: WatchState,
+    decision: dict[str, Any],
+) -> bool:
     pid = _int(decision.get("restart_target_pid"))
     target = str(decision.get("restart_target", ""))
-    if not bool(decision.get("restart_required")) or pid <= 0 or target not in {"allocator", "main"}:
+    if (
+        not bool(decision.get("restart_required"))
+        or pid <= 0
+        or target not in {"allocator", "main"}
+    ):
         return False
 
+    if target == "main" and hasattr(signal, "SIGUSR1"):
+        restart_signal = signal.SIGUSR1
+    else:
+        restart_signal = signal.SIGTERM
+    signal_name = getattr(
+        signal.Signals(restart_signal),
+        "name",
+        str(int(restart_signal)),
+    )
     details = "|".join(
         str(value)
-        for value in (decision.get("stale_models", []) or decision.get("stale_backends", []))
+        for value in (
+            decision.get("stale_models", [])
+            or decision.get("stale_backends", [])
+        )
     )
-    _append_event(
-        run_root / "stale_watchdog_events.csv",
-        {
-            "timestamp": _now(),
-            "target": target,
-            "target_pid": pid,
-            "event": "restart_requested",
-            "reason": decision.get("reason", ""),
-            "details": details,
-        },
-    )
+    if details:
+        details = f"signal={signal_name}|{details}"
+    else:
+        details = f"signal={signal_name}"
+
     try:
-        os.kill(pid, signal.SIGTERM)
+        os.kill(pid, restart_signal)
     except ProcessLookupError:
         return False
     except PermissionError as exc:
@@ -286,6 +334,17 @@ def request_restart(run_root: Path, state: WatchState, decision: dict[str, Any])
         return False
 
     state.restart_requests += 1
+    _append_event(
+        run_root / "stale_watchdog_events.csv",
+        {
+            "timestamp": _now(),
+            "target": target,
+            "target_pid": pid,
+            "event": "restart_requested",
+            "reason": decision.get("reason", ""),
+            "details": details,
+        },
+    )
     if target == "allocator":
         state.allocator_pid = 0
         state.allocator_first_seen = _now()
@@ -301,8 +360,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--main-pid", type=int, default=0)
     parser.add_argument("--stale-seconds", type=float, default=600.0)
     parser.add_argument("--grace-seconds", type=float, default=180.0)
-    parser.add_argument("--backend-stale-seconds", type=float, default=900.0)
-    parser.add_argument("--backend-grace-seconds", type=float, default=900.0)
+    parser.add_argument(
+        "--backend-stale-seconds",
+        type=float,
+        default=900.0,
+    )
+    parser.add_argument(
+        "--backend-grace-seconds",
+        type=float,
+        default=900.0,
+    )
     parser.add_argument("--interval-seconds", type=float, default=5.0)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -332,11 +399,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 backend_stale_seconds=args.backend_stale_seconds,
                 backend_grace_seconds=args.backend_grace_seconds,
             )
-            if bool(decision.get("restart_required")) and not args.dry_run:
+            if (
+                bool(decision.get("restart_required"))
+                and not args.dry_run
+            ):
                 request_restart(args.run_root, state, decision)
                 decision["restart_requests"] = state.restart_requests
-            _atomic_json(args.run_root / "stale_watchdog_status.json", decision)
-        except Exception as exc:  # keep the safety monitor alive and visible
+            _atomic_json(
+                args.run_root / "stale_watchdog_status.json",
+                decision,
+            )
+        except Exception as exc:  # keep the monitor alive and visible
             _atomic_json(
                 args.run_root / "stale_watchdog_status.json",
                 {
