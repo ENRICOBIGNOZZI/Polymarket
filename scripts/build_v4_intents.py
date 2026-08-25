@@ -4,6 +4,9 @@
 The scanners remain alpha-only. This adapter owns the execution-facing schema.
 B2 additionally requires explicit coherence evidence from
 ``filter_coherent_hedges.py``; a raw PCA row can never reach the broker.
+B1 semantic relations must also contain a shared proposition-specific anchor;
+generic question-template overlap is not enough to relax admission into a
+maker bundle.
 """
 from __future__ import annotations
 
@@ -12,6 +15,7 @@ import csv
 import json
 import math
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -21,6 +25,15 @@ FIELDS = [
     "max_notional", "market_id", "side", "weight", "limit_price",
     "execution_deadline_ts", "hold_deadline_ts",
 ]
+
+B1_GENERIC_RELATION_TOKENS = {
+    "after", "above", "april", "august", "before", "below", "between",
+    "december", "dip", "drop", "election", "exact", "fall", "february",
+    "happen", "hit", "january", "july", "june", "march", "market", "may",
+    "more", "most", "next", "nomination", "november", "october", "over",
+    "presidential", "price", "primary", "rate", "reach", "rise", "score",
+    "september", "than", "under", "will", "win", "winner",
+}
 
 
 def fnum(row: dict[str, str], key: str, default: float = 0.0) -> float:
@@ -45,10 +58,38 @@ def deadlines(now: int, half_life_hours: float) -> tuple[int, int]:
     return execution, execution + hold_seconds
 
 
+def b1_anchor_tokens(text: str) -> set[str]:
+    out: set[str] = set()
+    for token in re.findall(r"[a-z0-9]+", (text or "").lower()):
+        if len(token) < 3 or token in B1_GENERIC_RELATION_TOKENS:
+            continue
+        # Calendar years and threshold tokens such as 60k/57pt5k describe a
+        # proposition boundary, not a shared economic entity.
+        if any(char.isdigit() for char in token):
+            continue
+        out.add(token)
+    return out
+
+
+def b1_relation_valid(row: dict[str, str]) -> bool:
+    relation = (row.get("relation") or "").strip()
+    if relation in {"same_event", "latent_corr"}:
+        return True
+    if relation != "semantic":
+        return False
+    y_slug = (row.get("y_slug") or "").strip()
+    x_slug = (row.get("x_slug") or "").strip()
+    if not y_slug or not x_slug:
+        return False
+    return bool(b1_anchor_tokens(y_slug) & b1_anchor_tokens(x_slug))
+
+
 def b1_rows(rows: list[dict[str, str]], now: int, min_edge: float, max_trade: float):
     out: list[dict[str, object]] = []
     serial = 0
     for r in rows:
+        if not b1_relation_valid(r):
+            continue
         edge = fnum(r, "maker_entry_net_edge")
         executable = max(0.0, fnum(r, "executable_notional"))
         y, x = (r.get("y_market") or "").strip(), (r.get("x_market") or "").strip()
@@ -204,8 +245,8 @@ def main() -> int:
         source = []
 
     if args.strategy == "B1":
+        coherence_rejected = sum(not b1_relation_valid(row) for row in source)
         rows = b1_rows(source, now, args.min_edge, max_trade)
-        coherence_rejected = 0
     else:
         coherence_rejected = sum(not b2_coherence_valid(row) for row in source)
         rows = b2_rows(source, now, args.min_edge, max_trade)
