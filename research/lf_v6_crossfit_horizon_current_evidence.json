@@ -1,0 +1,94 @@
+{
+  "schema": "lf_v6_crossfit_horizon_current_evidence_v1",
+  "captured_at": "2026-08-25T10:24:00Z",
+  "base_main_sha": "957d654fedd7b7e353b75c85f708e61c4f1c46a8",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "incumbent_contract": {
+    "factor_definition": "cross-sectional mean of all standardized markets in the local cluster, including the target market",
+    "loading_floor": 0.05,
+    "forecast_horizon_bars": 1,
+    "hold_rule": "two estimated half-lives, capped at 24 one-hour bars",
+    "live_markets": 400,
+    "live_min_liquidity": 10.0,
+    "live_max_clusters": 15,
+    "live_min_common_points": 48,
+    "live_min_abs_residual_z": 1.0,
+    "live_fdr": 0.1,
+    "live_min_edge": 0.0002
+  },
+  "deterministic_self_inclusion_counterexample": {
+    "design": "five mutually orthogonal standardized market histories with no common factor",
+    "inclusive_factor_loadings": [1.0, 1.0, 1.0, 1.0, 1.0],
+    "leave_one_out_factor_loadings": [0.0, 0.0, 0.0, 0.0, 0.0],
+    "finding": "the incumbent loading floor does not establish shared factor exposure because target self-inclusion mechanically creates a loading"
+  },
+  "hold_horizon_mismatch": [
+    {
+      "phi": 0.9,
+      "half_life_hours": 6.578813478960585,
+      "hold_hours": 13.15762695792117,
+      "one_step_reversion_fraction": 0.09999999999999998,
+      "hold_horizon_reversion_fraction": 0.75,
+      "ratio": 7.500000000000002
+    },
+    {
+      "phi": 0.95,
+      "half_life_hours": 13.513407333964874,
+      "hold_hours": 24.0,
+      "one_step_reversion_fraction": 0.050000000000000044,
+      "hold_horizon_reversion_fraction": 0.7080109756612276,
+      "ratio": 14.16021951322454
+    },
+    {
+      "phi": 0.98,
+      "half_life_hours": 34.309618491520645,
+      "hold_hours": 24.0,
+      "one_step_reversion_fraction": 0.020000000000000018,
+      "hold_horizon_reversion_fraction": 0.38421966349092174,
+      "ratio": 19.21098317454607
+    }
+  ],
+  "fresh_public_paper_snapshot": {
+    "git_sha": "957d654fedd7b7e353b75c85f708e61c4f1c46a8",
+    "trade_recorder_status": "healthy",
+    "trade_recorder_markets": 220,
+    "trade_recorder_new_trades": 122,
+    "combined_intent_bundles": 1,
+    "combined_intent_strategies": {
+      "GRAPH_RV": 5
+    },
+    "local_factor_rows_in_combined_intents": 0,
+    "oos_trades": 0,
+    "oos_net_pnl_usd": 0.0,
+    "runtime_kill_switch": 0.0,
+    "runtime_drawdown_ratio": 0.0
+  },
+  "paper_only_successor_to_test": {
+    "required_preconditions": [
+      "leave-one-out or cross-fitted factor per target market",
+      "dependence-aware unit-root p-values before multiplicity control",
+      "hold-horizon-matched residual forecast",
+      "same chronological panels and executable-cost model as incumbent"
+    ],
+    "aggressive_discovery": {
+      "markets": 700,
+      "min_liquidity": 5.0,
+      "max_clusters": 30,
+      "min_common_points": 36,
+      "min_abs_residual_z": 0.75
+    },
+    "unchanged_execution_economics": {
+      "min_edge": 0.0002,
+      "max_trade_usd": 60.0,
+      "slippage_bps": 5.0
+    }
+  },
+  "safety": {
+    "max_drawdown": 0.15,
+    "max_market_fraction": 0.025,
+    "max_event_fraction": 0.08,
+    "completion_threshold": 0.75,
+    "max_leg_risk_usd": 12.0,
+    "authenticated_real_money_execution": false
+  }
+}
