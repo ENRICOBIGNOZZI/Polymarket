@@ -16,6 +16,7 @@ on:
       - "tests/test_v6_runtime_contract.py"
       - "tests/test_v6_execution_costs.py"
       - "tests/test_hf_maker_flow_forward.py"
+      - "tests/test_hf_maker_toxicity.py"
       - ".github/workflows/v6-research-smoke.yml"
 
 permissions:
@@ -33,6 +34,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: Enforce isolated paper-only contract
         shell: bash
         run: |
@@ -42,9 +44,16 @@ jobs:
           from pathlib import Path
           sys.path.insert(0, str(Path('scripts').resolve()))
           from hard_safety_policy import V6_AUTHORIZED_CEILINGS, V6_AUTHORIZED_FLOORS
-          cfg=json.loads(Path('config/paper_v6.json').read_text());arch=json.loads(Path('config/v6_model_architecture.json').read_text());live=json.loads(Path('config/live_champion.json').read_text())
-          assert cfg['v6']['paper_only'] is True;assert cfg['multi_strategy']['paper_only'] is True;assert arch['paper_only'] is True;assert arch['allow_authenticated_execution'] is False
-          event='${{ github.event_name }}'; head='${{ github.head_ref }}'; base_sha='${{ github.event.pull_request.base.sha }}'
+          cfg=json.loads(Path('config/paper_v6.json').read_text())
+          arch=json.loads(Path('config/v6_model_architecture.json').read_text())
+          live=json.loads(Path('config/live_champion.json').read_text())
+          assert cfg['v6']['paper_only'] is True
+          assert cfg['multi_strategy']['paper_only'] is True
+          assert arch['paper_only'] is True
+          assert arch['allow_authenticated_execution'] is False
+          event='${{ github.event_name }}'
+          head='${{ github.head_ref }}'
+          base_sha='${{ github.event.pull_request.base.sha }}'
           if event == 'pull_request':
               if head.startswith('integration/'):
                   assert live['version'] == 6, 'V6 integration smoke requires the V6 live selector'
@@ -62,24 +71,41 @@ jobs:
           assert float(cfg['min_liquidity']) >= V6_AUTHORIZED_FLOORS['min_liquidity']
           assert float(cfg['min_net_edge']) >= V6_AUTHORIZED_FLOORS['min_net_edge']
           assert float(cfg['uncertainty_penalty']) >= V6_AUTHORIZED_FLOORS['uncertainty_penalty']
-          v=cfg['v6']; total=sum(float(v[k]) for k in ('micro_maker_capital_fraction','micro_taker_capital_fraction','relative_value_capital_fraction','hard_arb_capital_fraction','external_capital_fraction','reserve_fraction'));assert abs(total-1.0)<1e-9
+          v=cfg['v6']
+          total=sum(float(v[k]) for k in ('micro_maker_capital_fraction','micro_taker_capital_fraction','relative_value_capital_fraction','hard_arb_capital_fraction','external_capital_fraction','reserve_fraction'))
+          assert abs(total-1.0)<1e-9
           assert float(v['intent_min_edge']) >= V6_AUTHORIZED_FLOORS['intent_min_edge']
           assert float(v['hard_arb_min_net_edge']) >= V6_AUTHORIZED_FLOORS['hard_arb_min_net_edge']
           assert float(v['hard_arb_max_trade_usd']) <= V6_AUTHORIZED_CEILINGS['hard_arb_max_trade_usd']
           PY
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev
+
       - name: Build V6 dependencies and deterministic contracts
         shell: bash
         run: |
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
-          python3 -m py_compile scripts/v6_queue_filter.py scripts/v6_market_common.py scripts/v6_micro_maker.py scripts/v6_micro_maker_v2.py scripts/hf_maker_flow_admission.py scripts/hf_maker_forward_audit.py
+          python3 -m py_compile \
+            scripts/v6_queue_filter.py \
+            scripts/v6_market_common.py \
+            scripts/v6_micro_maker.py \
+            scripts/v6_micro_maker_v2.py \
+            scripts/v6_micro_maker_v3.py \
+            scripts/hf_maker_flow_admission.py \
+            scripts/hf_maker_forward_audit.py
           python3 scripts/v6_queue_filter.py self-test
-          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py tests/test_v6_execution_costs.py tests/test_hf_maker_flow_forward.py -v
+          python3 -m unittest \
+            tests/test_v6_model_contracts.py \
+            tests/test_v6_runtime_contract.py \
+            tests/test_v6_execution_costs.py \
+            tests/test_hf_maker_flow_forward.py \
+            tests/test_hf_maker_toxicity.py -v
+
       - name: Live public-data relation probes
         shell: bash
         run: |
@@ -88,6 +114,7 @@ jobs:
           python3 scripts/v6_relation_intents.py --config config/paper_v6.json --output v6_evidence/relation_raw.csv --status v6_evidence/relation_status.json --markets 300 --min-liquidity 10 --min-edge 0.0002 --max-trade-usd 60 --max-events 50 > v6_evidence/relation.log 2>&1 || true
           python3 scripts/v6_intent_guard.py --input v6_evidence/relation_raw.csv --output v6_evidence/relation_guarded.csv --status v6_evidence/relation_guard_status.json --min-edge 0.0002 --stress-bps 10 --max-age-seconds 240 > v6_evidence/relation_guard.log 2>&1 || true
           ./build/polymarket_negrisk_arb --config config/paper_v6.json --markets 300 --min-liquidity 10 --top 100 > v6_evidence/graph_hard_taker_scan.csv 2> v6_evidence/graph_hard_taker_errors.log || true
+
       - name: Live public-data executable hard-arb paper probe
         shell: bash
         run: |
@@ -96,15 +123,20 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          cfg=json.loads(Path('config/paper_v6.json').read_text()); cfg['starting_capital']=1500.0; cfg['run_dir']='v6_evidence/hard_arb'; Path('v6_evidence/hard_arb_config.json').write_text(json.dumps(cfg,indent=2,sort_keys=True)+'\n')
+          cfg=json.loads(Path('config/paper_v6.json').read_text())
+          cfg['starting_capital']=1500.0
+          cfg['run_dir']='v6_evidence/hard_arb'
+          Path('v6_evidence/hard_arb_config.json').write_text(json.dumps(cfg,indent=2,sort_keys=True)+'\n')
           PY
-          python3 scripts/v6_queue_filter.py hard --config v6_evidence/hard_arb_config.json --run-dir v6_evidence/hard_arb --markets 300 --min-liquidity 10 --max-events 50 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 --leg-latency-ms 100 > v6_evidence/hard_arb.log 2>&1 || true
+          python3 scripts/v6_queue_filter.py hard --config v6_evidence/hard_arb_config.json --run-dir v6_evidence/hard_arb --markets 1000 --min-liquidity 2 --max-events 120 --min-edge 0.00005 --max-trade-usd 125 --slippage-bps 5 --leg-latency-ms 100 > v6_evidence/hard_arb.log 2>&1 || true
+
       - name: Live public-data FDR local-factor probe
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/v6_local_factor_intents.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/local_factor.log 2>&1 || true
-      - name: Common-sample maker policy A-B-C under authorized paper envelope
+
+      - name: Common-sample maker policy A-B-C-D under authorized paper envelope
         shell: bash
         env:
           V6_MAKER_DEAD_FLOW_CANCEL_SECONDS: "20"
@@ -115,7 +147,8 @@ jobs:
           flow="$root/flow"
           touch="$root/touch"
           confidence="$root/confidence"
-          mkdir -p "$shared" "$flow" "$touch" "$confidence"
+          toxicity="$root/toxicity"
+          mkdir -p "$shared" "$flow" "$touch" "$confidence" "$toxicity"
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -136,32 +169,36 @@ jobs:
           Path('v6_evidence/maker_ab/paper_envelope.json').write_text(json.dumps(cfg,indent=2,sort_keys=True)+'\n')
           PY
           cfg="$root/paper_envelope.json"
-          ./build/polymarket_trade_recorder --config "$cfg" --run-dir "$shared" --markets 1000 --min-liquidity 2 --batch 40 --lookback-seconds 300 --once > "$shared/recorder-bootstrap.log" 2>&1 || true
-          ./build/polymarket_trade_recorder --config "$cfg" --run-dir "$shared" --markets 1000 --min-liquidity 2 --batch 40 --lookback-seconds 300 --interval 10 --loop > "$shared/recorder.log" 2>&1 &
+          ./build/polymarket_trade_recorder --config "$cfg" --run-dir "$shared" --markets 1000 --min-liquidity 2 --batch 40 --lookback-seconds 360 --once > "$shared/recorder-bootstrap.log" 2>&1 || true
+          ./build/polymarket_trade_recorder --config "$cfg" --run-dir "$shared" --markets 1000 --min-liquidity 2 --batch 40 --lookback-seconds 360 --interval 10 --loop > "$shared/recorder.log" 2>&1 &
           recorder_pid=$!
           cleanup() { kill "$recorder_pid" 2>/dev/null || true; wait "$recorder_pid" 2>/dev/null || true; }
           trap cleanup EXIT
-          deadline=$((SECONDS + 360))
-          tick=0
+          deadline=$((SECONDS + 600))
           while (( SECONDS < deadline )); do
-            tick=$((tick + 1))
             python3 scripts/v6_micro_maker_v2.py --config "$cfg" --run-dir "$flow" --trade-tape "$shared/trade_tape.csv" --markets 1000 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 60 --adverse-selection-mult 0.10 --flow-lookback-seconds 120 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 3 --slippage-bps 5 >> "$flow/maker.log" 2>&1 || true
             python3 scripts/v6_micro_maker_v2.py --config "$cfg" --run-dir "$touch" --trade-tape "$shared/trade_tape.csv" --markets 1000 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 60 --adverse-selection-mult 0.10 --flow-lookback-seconds 120 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 0 --slippage-bps 5 >> "$touch/maker.log" 2>&1 || true
             python3 scripts/v6_micro_maker_v2.py --config "$cfg" --run-dir "$confidence" --trade-tape "$shared/trade_tape.csv" --markets 1000 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 60 --adverse-selection-mult 0.10 --flow-lookback-seconds 120 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 3 --min-inside-confidence 0.80 --slippage-bps 5 >> "$confidence/maker.log" 2>&1 || true
+            python3 scripts/v6_micro_maker_v3.py --config "$cfg" --run-dir "$toxicity" --trade-tape "$shared/trade_tape.csv" --markets 1000 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 60 --adverse-selection-mult 0.10 --flow-lookback-seconds 120 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 3 --min-inside-confidence 0.80 --toxicity-short-seconds 30 --toxicity-long-seconds 120 --max-toxicity 0.55 --toxicity-discount-strength 1.5 --slippage-bps 5 >> "$toxicity/maker.log" 2>&1 || true
             sleep 5
           done
           cleanup
           trap - EXIT
-          for policy in flow touch confidence; do
-            python3 scripts/hf_maker_forward_audit.py --order-log "$root/$policy/maker_order_log.csv" --trade-tape "$shared/trade_tape.csv" --fills "$root/$policy/maker_fills.csv" --prior-lookback-seconds 120 --forward-horizon-seconds 60 --min-edge 0.00005 --output "$root/$policy/forward_audit.json" > "$root/$policy/forward_audit.log"
+          for policy in flow touch confidence toxicity; do
+            for horizon in 45 60 300; do
+              python3 scripts/hf_maker_forward_audit.py --order-log "$root/$policy/maker_order_log.csv" --trade-tape "$shared/trade_tape.csv" --fills "$root/$policy/maker_fills.csv" --prior-lookback-seconds 120 --forward-horizon-seconds "$horizon" --min-edge 0.00005 --output "$root/$policy/forward_audit_${horizon}.json" > "$root/$policy/forward_audit_${horizon}.log"
+            done
           done
           python3 - <<'PY'
-          import json
+          import csv,json
           from pathlib import Path
           root=Path('v6_evidence/maker_ab')
           def read(path):
               try:return json.loads(path.read_text())
               except Exception:return {}
+          def markouts(path):
+              if not path.exists() or path.stat().st_size == 0:return []
+              with path.open(newline='',encoding='utf-8') as h:return list(csv.DictReader(h))
           comparison={
               'paper_only':True,
               'authenticated_execution':False,
@@ -171,24 +208,34 @@ jobs:
                   'max_market_fraction':0.05,'max_event_fraction':0.15,
                   'max_gross_fraction':0.70,'max_drawdown':0.15,
               },
-              'current_flow_gate':read(root/'flow/forward_audit.json'),
-              'at_touch_no_improve':read(root/'touch/forward_audit.json'),
-              'confidence_gated_inside':read(root/'confidence/forward_audit.json'),
+              'current_flow_gate':read(root/'flow/forward_audit_60.json'),
+              'at_touch_no_improve':read(root/'touch/forward_audit_60.json'),
+              'confidence_gated_inside':read(root/'confidence/forward_audit_60.json'),
+              'toxicity_adjusted':read(root/'toxicity/forward_audit_60.json'),
+              'toxicity_status':read(root/'toxicity/toxicity_status.json'),
+              'toxicity_markouts':markouts(root/'toxicity/maker_markouts.csv'),
+              'forward_flow_audits':{
+                  p:{str(h):read(root/f'{p}/forward_audit_{h}.json') for h in (45,60,300)}
+                  for p in ('flow','touch','confidence','toxicity')
+              },
               'inside_confidence_floor':0.80,
+              'toxicity_hard_block_threshold':0.55,
               'primary_metric':'fill_conditioned_pnl_per_closed_share',
           }
           (root/'comparison.json').write_text(json.dumps(comparison,indent=2,sort_keys=True)+'\n')
           print(json.dumps(comparison,indent=2,sort_keys=True))
           PY
-      - name: Live public-data micro-taker causal warmup/markout probe
+
+      - name: Live public-data micro-taker causal warmup and executable-edge probe
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p v6_evidence/micro_taker
-          for i in 1 2 3 4 5 6; do
-            python3 scripts/v6_queue_filter.py micro --config config/paper_v6.json --run-dir v6_evidence/micro_taker --markets 120 --min-liquidity 25 --horizon-seconds 5 --max-target-staleness-seconds 3 --max-trade-usd 15 --min-edge 0.0003 --slippage-bps 5 --max-positions 10 >> v6_evidence/micro_taker.log 2>&1 || true
+          for i in 1 2 3 4 5 6 7 8; do
+            python3 scripts/v6_queue_filter.py micro --config config/paper_v6.json --run-dir v6_evidence/micro_taker --markets 300 --min-liquidity 2 --horizon-seconds 5 --max-target-staleness-seconds 3 --max-trade-usd 125 --min-edge 0.00005 --slippage-bps 5 --max-positions 10 >> v6_evidence/micro_taker.log 2>&1 || true
             sleep 2
           done
+
       - name: Summarize V6 evidence
         if: always()
         shell: bash
@@ -203,11 +250,20 @@ jobs:
               except Exception:return {}
           hard=(root/'graph_hard_taker_scan.csv').read_text(errors='ignore') if (root/'graph_hard_taker_scan.csv').exists() else ''
           m=re.search(r'net_positive_pre_gas=(\d+)',hard)
-          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'local_factor':js('local_factor_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0,'maker_ab':js('maker_ab/comparison.json')}
+          summary={
+              'paper_only':True,
+              'authenticated_execution':False,
+              'relation':js('relation_status.json'),
+              'relation_guard':js('relation_guard_status.json'),
+              'local_factor':js('local_factor_status.json'),
+              'hard_arb':js('hard_arb/status.json'),
+              'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0,
+              'maker_ab':js('maker_ab/comparison.json'),
+          }
           state=root/'micro_taker/state.json'
           if state.exists():
               try:
-                  s=json.loads(state.read_text());samples=s.get('samples') or []
+                  s=json.loads(state.read_text()); samples=s.get('samples') or []
                   labeled=[x for x in samples if isinstance(x,dict) and x.get('y') is not None]
                   bad=[x for x in labeled if int(x.get('target_observation_ts') or 0)>int(x.get('ts') or 0)+5]
                   lags=[int(x['target_staleness_seconds']) for x in labeled if x.get('target_staleness_seconds') is not None]
@@ -236,13 +292,16 @@ jobs:
                   summary['micro_taker_closed_fill_pnl']=sum(float(r.get('pnl') or 0.0) for r in rows if (r.get('action') or '').upper() in {'SELL','SELL_PARTIAL'})
               except Exception as exc:
                   summary['micro_taker_fills_summary_error']=f'{type(exc).__name__}:{exc}'
-          (root/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n');print(json.dumps(summary,indent=2,sort_keys=True))
-          if summary.get('micro_taker_post_horizon_labels',0): raise SystemExit('causal micro target contract failed')
+          (root/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          if summary.get('micro_taker_post_horizon_labels',0):
+              raise SystemExit('causal micro target contract failed')
           PY
           echo '## V6 live-data research smoke' >> "$GITHUB_STEP_SUMMARY"
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
           cat v6_evidence/summary.json >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload V6 research evidence
         if: always()
         uses: actions/upload-artifact@v4
