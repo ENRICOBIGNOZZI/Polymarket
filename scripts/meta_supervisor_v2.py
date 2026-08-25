@@ -113,6 +113,51 @@ def _surface_failure_cooldowns(report: dict[str, Any]) -> None:
     report.setdefault("invariants", {})["failure_cooldown_is_health_evidence"] = False
 
 
+def _surface_repository_governance(report: dict[str, Any], snapshot: dict[str, Any]) -> bool:
+    """Surface repository settings that workflows can observe but cannot repair.
+
+    `main_branch_protected` is deliberately tri-state. Older/offline snapshots may
+    not contain it and therefore do not create a false incident. Once the control
+    plane explicitly observes `false`, the repository is not considered fully
+    healthy even when all workflow-level provenance guards are green.
+    """
+    observed = snapshot.get("main_branch_protected")
+    invariants = report.setdefault("invariants", {})
+    invariants["main_branch_protection_observed"] = observed in {True, False}
+    invariants["main_branch_protection_enforced"] = observed if observed in {True, False} else None
+    if observed is not False:
+        return False
+
+    alerts = report.setdefault("alerts", [])
+    if not any(
+        isinstance(alert, dict) and alert.get("code") == "MAIN_BRANCH_UNPROTECTED"
+        for alert in alerts
+    ):
+        alerts.append(
+            {
+                "severity": "critical",
+                "code": "MAIN_BRANCH_UNPROTECTED",
+                "detail": (
+                    "GitHub reports main as unprotected; workflow provenance gates remain fail-closed, "
+                    "but repository settings still permit direct pushes and require administrator-side branch protection"
+                ),
+            }
+        )
+    blocked = report.setdefault("blocked_actions", [])
+    if not any(
+        isinstance(action, dict) and action.get("workflow_file") == "repository-settings/main-branch-protection"
+        for action in blocked
+    ):
+        blocked.append(
+            {
+                "workflow_file": "repository-settings/main-branch-protection",
+                "reason": "requires GitHub repository branch-protection/ruleset settings; no workflow may self-grant this authority",
+            }
+        )
+    report["status"] = "DEGRADED"
+    return True
+
+
 def _autonomous_product_channel_wired(snapshot: dict[str, Any]) -> bool:
     products = snapshot.get("products")
     return isinstance(products, dict) and "autonomous_research" in products
@@ -141,6 +186,17 @@ def _autonomous_product_health(config: dict[str, Any], snapshot: dict[str, Any],
             reasons.append("bounded_research_not_certified")
         if invariants.get("real_order_submission") is not False:
             reasons.append("real_order_submission_boundary_violation")
+
+    economic = payload.get("economic_progress") if isinstance(payload, dict) else {}
+    economic = economic if isinstance(economic, dict) else {}
+    economic_state = str(economic.get("state") or "").upper()
+    seconds_since_progress = legacy.integer(economic.get("seconds_since_progress"), 0)
+    if economic_state == "STAGNANT":
+        reasons.append(
+            "autonomous_research_economic_stagnation"
+            + (f":{seconds_since_progress}s" if seconds_since_progress else "")
+        )
+
     return {
         "present": bool(generated),
         "generated_ts": generated,
@@ -149,6 +205,8 @@ def _autonomous_product_health(config: dict[str, Any], snapshot: dict[str, Any],
         "reported_status": reported,
         "server_deploy_enabled": deploy_enabled,
         "acceptable_statuses": sorted(acceptable),
+        "economic_state": economic_state or "UNREPORTED",
+        "seconds_since_economic_progress": seconds_since_progress,
         "healthy": not reasons,
         "reasons": reasons,
     }
@@ -159,6 +217,7 @@ def build_report(config: dict[str, Any], snapshot: dict[str, Any], now: int) -> 
     report = _original_build_report(config, evidence_snapshot, now)
     report.setdefault("invariants", {})["expected_scheduled_skips_ignored"] = ignored_scheduled_skips
     _surface_failure_cooldowns(report)
+    governance_blocked = _surface_repository_governance(report, snapshot)
     wired = _autonomous_product_channel_wired(snapshot)
     report.setdefault("invariants", {})["autonomous_research_product_channel_wired"] = wired
     if not wired:
@@ -167,6 +226,7 @@ def build_report(config: dict[str, Any], snapshot: dict[str, Any], now: int) -> 
                 "wired": False,
                 "healthy": True,
                 "reported_status": "NOT_WIRED",
+                "economic_state": "NOT_WIRED",
                 "reasons": [],
             }
         }
@@ -211,7 +271,7 @@ def build_report(config: dict[str, Any], snapshot: dict[str, Any], now: int) -> 
         plan.append(
             {
                 "workflow_file": "research-queue.yml",
-                "workflow_name": queue_state.get("workflow_name") or "Polymarket Research Queue",
+                "workflow_name": queue_state.get("workflow_name") or "Polymarket Research Director",
                 "reason": "; ".join(product["reasons"]),
                 "priority": queue_state.get("priority", 35),
             }
@@ -231,10 +291,13 @@ def build_report(config: dict[str, Any], snapshot: dict[str, Any], now: int) -> 
 
     report["invariants"]["product_health_checked"] = True
     report["invariants"]["scheduler_success_without_product_is_healthy"] = False
+    report["invariants"]["economic_stagnation_is_health_evidence"] = False
     report["invariants"]["actual_dispatches"] = len(plan)
     report["status"] = "REMEDIATING" if any(
         action.get("workflow_file") == "research-queue.yml" for action in plan if isinstance(action, dict)
     ) else "DEGRADED"
+    if governance_blocked:
+        report["status"] = "DEGRADED"
     return report
 
 

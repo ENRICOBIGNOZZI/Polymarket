@@ -184,7 +184,7 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
         snapshot["products"] = {"autonomous_research": {}}
         self.assertTrue(module._autonomous_product_channel_wired(snapshot))
         report = module.build_report(self.config, snapshot, self.now)
-        self.assertEqual(report["status"], "DEGRADED", report)
+        self.assertEqual(report["status"], "REMEDIATING", report)
         self.assertTrue(report["invariants"]["autonomous_research_product_channel_wired"])
         self.assertTrue(
             any(
@@ -192,6 +192,55 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
                 for alert in report["alerts"]
             ),
             report["alerts"],
+        )
+        self.assertIn(
+            "research-queue.yml",
+            [item["workflow_file"] for item in report["dispatch_plan"]],
+            report["dispatch_plan"],
+        )
+        self.assertEqual(
+            report["workflow_status"]["research-queue.yml"]["state"],
+            "product_degraded",
+        )
+
+    def test_economic_stagnation_triggers_research_remediation(self) -> None:
+        product = self.healthy_product()
+        product["economic_progress"] = {
+            "state": "STAGNANT",
+            "seconds_since_progress": 7_500,
+        }
+        snapshot = self.healthy_snapshot()
+        snapshot["products"] = {"autonomous_research": product}
+        report = module.build_report(self.config, snapshot, self.now)
+        self.assertEqual(report["status"], "REMEDIATING", report)
+        health = report["product_health"]["autonomous_research"]
+        self.assertFalse(health["healthy"], health)
+        self.assertEqual(health["economic_state"], "STAGNANT")
+        self.assertTrue(
+            any(reason.startswith("autonomous_research_economic_stagnation") for reason in health["reasons"]),
+            health,
+        )
+        self.assertIn(
+            "research-queue.yml",
+            [item["workflow_file"] for item in report["dispatch_plan"]],
+            report["dispatch_plan"],
+        )
+        self.assertFalse(report["invariants"]["economic_stagnation_is_health_evidence"])
+
+    def test_explicit_unprotected_main_is_critical_external_blocker(self) -> None:
+        snapshot = self.healthy_snapshot()
+        snapshot["main_branch_protected"] = False
+        report = module.build_report(self.config, snapshot, self.now)
+        self.assertEqual(report["status"], "DEGRADED", report)
+        self.assertFalse(report["invariants"]["main_branch_protection_enforced"])
+        self.assertTrue(
+            any(alert.get("code") == "MAIN_BRANCH_UNPROTECTED" for alert in report["alerts"]),
+            report["alerts"],
+        )
+        self.assertIn(
+            "repository-settings/main-branch-protection",
+            [item["workflow_file"] for item in report["blocked_actions"]],
+            report["blocked_actions"],
         )
 
     def test_waiting_runtime_is_acceptable_when_server_deploy_is_disabled(self) -> None:
