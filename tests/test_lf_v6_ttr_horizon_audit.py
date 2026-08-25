@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import math
+import sys
 import unittest
 from pathlib import Path
 
@@ -13,6 +14,7 @@ SPEC = importlib.util.spec_from_file_location(
 )
 assert SPEC is not None and SPEC.loader is not None
 MOD = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = MOD
 SPEC.loader.exec_module(MOD)
 
 
