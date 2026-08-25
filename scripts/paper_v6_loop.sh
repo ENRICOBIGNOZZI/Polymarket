@@ -65,6 +65,25 @@ proxy_restarts=0; rec_restarts=0; broker_restarts=0; external_restarts=0
 start_proxy(){ PYTHONUNBUFFERED=1 python3 scripts/v6_market_proxy.py --host 127.0.0.1 --port "$MARKET_PROXY_PORT" --gamma "$GAMMA_URL" --clob "$CLOB_URL" --cache "$RUN_ROOT/market_proxy_cache.json" --status "$RUN_ROOT/market_proxy_status.json" >>"$RUN_ROOT/market_proxy.log" 2>&1 & proxy_pid=$!; }
 start_recorder(){ ./build/polymarket_trade_recorder --config "$CONFIG" --run-dir "$RUN_ROOT" --markets "$RECORDER_MARKETS" --batch 40 --min-liquidity "$MIN_LIQUIDITY" --lookback-seconds 900 --interval 5 --loop >>"$RUN_ROOT/trade_recorder.log" 2>&1 & rec_pid=$!; }
 start_broker(){ python3 scripts/v6_multileg_launcher.py --lock "$RUN_ROOT/multileg.lock" -- ./build/polymarket_multileg_paper --config "$RUN_ROOT/broker_config.json" --run-dir "$RUN_ROOT" --intents "$RUN_ROOT/intents.csv" --trade-tape "$RUN_ROOT/trade_tape.csv" --min-edge "$INTENT_MIN_EDGE" --completion-threshold 0.75 --submit-latency-ms 100 --cancel-latency-ms 100 --max-replaces 6 --max-leg-risk-usd 12 --adverse-horizon-seconds 45 --interval 1 --loop >>"$RUN_ROOT/multileg.log" 2>&1 & broker_pid=$!; }
+refresh_external_feed(){
+  python3 scripts/v6_external_bridge.py --output "$RUN_ROOT/external_signals.csv" --status "$RUN_ROOT/external_bridge_status.json" --max-age-seconds 21600 --min-confidence 0.35 >"$RUN_ROOT/external_bridge.log" 2>&1 || true
+  if [[ ! -s "$RUN_ROOT/external_signals.csv" ]]; then
+    local tmp="$RUN_ROOT/external_signals.csv.tmp"
+    printf 'market_key,q_yes,confidence,source,timestamp\n' >"$tmp"
+    mv "$tmp" "$RUN_ROOT/external_signals.csv"
+  fi
+}
+warm_market_proxy(){
+  local url="http://127.0.0.1:${MARKET_PROXY_PORT}/markets?active=true&closed=false&limit=100&offset=0&order=liquidityNum&ascending=false&liquidity_num_min=${MIN_LIQUIDITY}"
+  for _ in {1..4}; do
+    if curl -fsS --max-time 25 "$url" | python3 -c 'import json,sys; rows=json.load(sys.stdin); assert isinstance(rows,list) and len(rows)>0' >/dev/null 2>&1; then
+      return 0
+    fi
+    kill -0 "$proxy_pid" 2>/dev/null || return 1
+    sleep 2
+  done
+  return 1
+}
 start_external(){ ./build/polymarket_engine --config "$RUN_ROOT/external_config.json" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --paper --loop >>"$RUN_ROOT/external/engine.log" 2>&1 & external_pid=$!; }
 write_supervisor(){
   local ra=0 ba=0 ea=0; kill -0 "$rec_pid" 2>/dev/null&&ra=1||true; kill -0 "$broker_pid" 2>/dev/null&&ba=1||true; kill -0 "$external_pid" 2>/dev/null&&ea=1||true
@@ -83,6 +102,8 @@ for _ in {1..50};do
   sleep 0.1
 done
 ((proxy_ready==1))||{ echo "fatal: V6 market proxy failed to start" >&2; exit 1; }
+warm_market_proxy || { echo "fatal: V6 market proxy has no usable public market data" >&2; exit 1; }
+refresh_external_feed
 start_recorder;start_broker;start_external;write_supervisor
 
 # Backward-safe deployment: new queue-aware flags are used as soon as the rebuilt
@@ -92,7 +113,7 @@ if ./build/polymarket_maker_paper --help 2>&1 | grep -q -- '--improve-ticks'; th
   MAKER_QUEUE_ARGS=(--improve-ticks 1 --max-queue-multiple 6)
 fi
 
-last_factor=0;last_relation=0;last_external=0;last_report=0;last_micro_taker=0;last_hard_arb=0
+last_factor=0;last_relation=0;last_external="$(date +%s)";last_report=0;last_micro_taker=0;last_hard_arb=0
 rebuild_intents(){ python3 scripts/merge_v4_intents.py --input "$RUN_ROOT/local_factor_intents.csv" --input "$RUN_ROOT/relation_intents.csv" --output "$RUN_ROOT/intents.csv" --min-edge "$INTENT_MIN_EDGE" --max-age-seconds 240 --max-bundles 120 >>"$RUN_ROOT/intent_merge.log" 2>&1||true; }
 
 while true;do
@@ -137,7 +158,7 @@ while true;do
   fi
 
   if ((now-last_external>=60));then
-    python3 scripts/v6_external_bridge.py --output "$RUN_ROOT/external_signals.csv" --status "$RUN_ROOT/external_bridge_status.json" --max-age-seconds 21600 --min-confidence 0.35 >"$RUN_ROOT/external_bridge.log" 2>&1||true
+    refresh_external_feed
     last_external=$now
   fi
 
