@@ -155,6 +155,14 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('hard_arb/status.json', deploy)
         self.assertIn('polymarket-multi-strategy-v5', deploy)
 
+    def test_deploy_verification_is_compatible_with_macos_bash3(self):
+        deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(encoding="utf-8")
+        self.assertNotIn('readarray', deploy)
+        self.assertNotIn('mapfile', deploy)
+        self.assertIn('version="$(python3 - <<\'PY\'', deploy)
+        self.assertIn('run_name="$(python3 - <<\'PY\'', deploy)
+        self.assertIn('test -n "$run_name"', deploy)
+
     def test_server_health_serializes_with_paper_deploy(self):
         health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(encoding="utf-8")
         deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(encoding="utf-8")
