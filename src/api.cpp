@@ -381,7 +381,6 @@ std::unordered_map<std::string,std::vector<PricePoint>> PolymarketApi::fetch_pri
             {"fidelity", fidelity}
         };
 
-        std::set<std::string> received;
         try {
             const auto r = http_.post_json(cfg_.clob_url + "/batch-prices-history", json::serialize(req));
             if (r.status >= 200 && r.status < 300) {
@@ -395,19 +394,19 @@ std::unordered_map<std::string,std::vector<PricePoint>> PolymarketApi::fetch_pri
                             auto& points = out[token];
                             parse_history_array(kv.value().as_array(), points);
                             trim(points);
-                            if (!points.empty()) received.insert(token);
                         }
                     }
                 }
             }
         } catch (...) {
-            // Per-token fallback below preserves availability and diagnostics in
-            // callers even when the batch endpoint changes or one batch fails.
+            // A malformed or transient batch response must not suppress the
+            // per-token fallback below.
         }
 
         for (std::size_t i = pos; i < end; ++i) {
+            auto existing = out.find(token_ids[i]);
+            if (existing != out.end() && !existing->second.empty()) continue;
             const auto& token = token_ids[i];
-            if (received.count(token)) continue;
             std::ostringstream u;
             u << cfg_.clob_url << "/prices-history?market=" << token
               << "&interval=" << interval
@@ -424,7 +423,9 @@ std::unordered_map<std::string,std::vector<PricePoint>> PolymarketApi::fetch_pri
                     parse_history_array(hi->value().as_array(), points);
                     trim(points);
                 }
-            } catch (...) {}
+            } catch (...) {
+                // Missing history for one asset is isolated from the rest of the batch.
+            }
         }
     }
     return out;
