@@ -231,15 +231,17 @@ private:
         const auto no = books_.find(market.no_token);
         if (yes == books_.end() || no == books_.end()) return;
         const auto fee_it = fees_.find(market.condition_id);
-        const pm::FeeDetails fee = fee_it == fees_.end() ? pm::FeeDetails{} : fee_it->second;
         const auto decision = now_ms();
-        record_locked(pm::fast::evaluate_binary(
-            market, yes->second, no->second, fee, policy_, exchange_ms, received_ms, decision));
+        if (fee_it != fees_.end()) {
+            record_locked(pm::fast::evaluate_binary(
+                market, yes->second, no->second, fee_it->second, policy_, exchange_ms, received_ms, decision));
+        }
         record_locked(pm::fast::evaluate_maker_complete_set(
             market, yes->second, no->second, policy_, exchange_ms, received_ms, decision));
-        if (const auto external_it = external_.find(market.id); external_it != external_.end()) {
+        if (const auto external_it = external_.find(market.id);
+            external_it != external_.end() && fee_it != fees_.end()) {
             record_locked(pm::fast::evaluate_external_latency(
-                market, yes->second, no->second, fee, external_it->second, decision, policy_,
+                market, yes->second, no->second, fee_it->second, external_it->second, decision, policy_,
                 exchange_ms, received_ms, decision));
         }
     }
@@ -252,7 +254,10 @@ private:
         if (group == event_members_.end()) return;
         for (const auto& id : group->second) {
             const auto member = markets_.find(id);
-            if (member != markets_.end()) members.push_back(&member->second);
+            if (member != markets_.end()) {
+                if (!fees_.count(member->second.condition_id)) return;
+                members.push_back(&member->second);
+            }
         }
         const auto decision = now_ms();
         record_locked(pm::fast::evaluate_negrisk_complete_set(
@@ -271,6 +276,7 @@ private:
         const auto left = markets_.find(relation.antecedent_market_id);
         const auto right = markets_.find(relation.consequent_market_id);
         if (left == markets_.end() || right == markets_.end()) return;
+        if (!fees_.count(left->second.condition_id) || !fees_.count(right->second.condition_id)) return;
         const auto decision = now_ms();
         if (spec.type == RelationType::Implication) {
             record_locked(pm::fast::evaluate_implication(
@@ -350,4 +356,3 @@ private:
         while (decision_latency_us_.size() > limit) decision_latency_us_.pop_front();
     }
 };
-

@@ -62,16 +62,19 @@ public:
             tokens_.push_back(market.yes_token);
             tokens_.push_back(market.no_token);
             pm::FeeDetails fee;
+            bool fee_known = false;
             if (market.fee_rate >= 0.0) {
                 fee = {market.fee_rate, market.fee_exponent, market.fee_taker_only};
+                fee_known = true;
             } else {
                 try {
                     fee = api_.fetch_fee_details(market);
+                    fee_known = true;
                 } catch (const std::exception& error) {
                     append_error("fee", market.id + ": " + error.what());
                 }
             }
-            fees_[market.condition_id] = fee;
+            if (fee_known) fees_[market.condition_id] = fee;
         }
         std::sort(tokens_.begin(), tokens_.end());
         tokens_.erase(std::unique(tokens_.begin(), tokens_.end()), tokens_.end());
@@ -259,4 +262,3 @@ public:
         };
         atomic_write(run_dir_ / "fast_arb_status.json", json::serialize(status) + "\n");
     }
-

@@ -6,12 +6,18 @@ import math
 import os
 import sys
 import time
-import urllib.parse
 from collections import Counter
 from pathlib import Path
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Iterable, Sequence
+
+from polymarket_fees import (
+    FeeDetails,
+    FeeScheduleUnavailable,
+    parse_fee_details,
+    resolve_fee_details,
+)
 
 Q = Decimal("0.00001")
 
@@ -19,14 +25,6 @@ def finite(v: Any, d: float = math.nan) -> float:
     try: x=float(v)
     except (TypeError,ValueError,OverflowError): return d
     return x if math.isfinite(x) else d
-
-@dataclass(frozen=True)
-class FeeDetails:
-    enabled: bool
-    rate: float
-    exponent: float = 1.0
-    taker_only: bool = True
-    source: str = "unknown"
 
 @dataclass(frozen=True)
 class BookFill:
@@ -40,53 +38,6 @@ class BookFill:
     all_in_unit_price: float
     slippage_cost: float
     complete: bool
-
-def _bool(v: Any, d: bool=False) -> bool:
-    if isinstance(v,bool): return v
-    if isinstance(v,(int,float)): return bool(v)
-    if isinstance(v,str):
-        x=v.strip().lower()
-        if x in {"true","1","yes"}: return True
-        if x in {"false","0","no"}: return False
-    return d
-
-def _from_obj(o: dict[str,Any], source: str, hint: bool|None=None) -> FeeDetails|None:
-    s=o.get("feeSchedule") if isinstance(o.get("feeSchedule"),dict) else None
-    if s is None and isinstance(o.get("fd"),dict): s=o["fd"]
-    if s is None and any(k in o for k in ("rate","feeRate","exponent","takerOnly")): s=o
-    if s is None: return None
-    r=finite(s.get("rate",s.get("feeRate")))
-    if not math.isfinite(r): return None
-    e=max(0.0,finite(s.get("exponent"),1.0))
-    t=_bool(s.get("takerOnly"),True)
-    enabled=(r>0.0) if hint is None else bool(hint and r>0.0)
-    return FeeDetails(enabled,max(0.0,r),e,t,source)
-
-def parse_fee_details(raw: dict[str,Any]) -> FeeDetails|None:
-    if raw.get("feesEnabled") is False:
-        return FeeDetails(False,0.0,1.0,True,"market:fees_disabled")
-    hint=_bool(raw.get("feesEnabled"),False) if "feesEnabled" in raw else None
-    return _from_obj(raw,"market:fee_schedule",hint)
-
-def resolve_fee_details(raw: dict[str,Any], clob: str, request_json: Callable[...,Any],
-                        fallback_rate: float=.07, fallback_exponent: float=1.0) -> FeeDetails:
-    d=parse_fee_details(raw)
-    if d is not None: return d
-    cid=str(raw.get("conditionId") or raw.get("condition_id") or "")
-    if cid:
-        try:
-            url=clob.rstrip("/")+"/clob-markets/"+urllib.parse.quote(cid,safe="")
-            try: x=request_json(url,None,10)
-            except TypeError: x=request_json(url)
-            if isinstance(x,dict):
-                if x.get("feesEnabled") is False:
-                    return FeeDetails(False,0.0,1.0,True,"clob:fees_disabled")
-                hint=_bool(x.get("feesEnabled"),True) if "feesEnabled" in x else None
-                d=_from_obj(x,"clob:fee_schedule",hint)
-                if d is not None: return d
-        except Exception: pass
-    r=max(0.0,finite(fallback_rate,.07)); e=max(0.0,finite(fallback_exponent,1.0))
-    return FeeDetails(r>0.0,r,e,True,"fallback:conservative")
 
 def round_fee_usdc(x: float) -> float:
     if not math.isfinite(x) or x<=0: return 0.0
@@ -141,11 +92,8 @@ import v6_micro_taker as micro_legacy
 import v6_hard_arb_paper as hard_legacy
 
 def _micro_fee(m: Any, clob: str, cfg: dict[str,Any], sources: Counter[str]) -> FeeDetails:
-    v6=cfg.get("v6") if isinstance(cfg.get("v6"),dict) else {}
-    raw={"conditionId":m.condition}
-    d=resolve_fee_details(raw,clob,micro_legacy.request_json,
-                          float(v6.get("assumed_fee_rate",cfg.get("assumed_fee_rate",.07))),
-                          float(v6.get("assumed_fee_exponent",cfg.get("assumed_fee_exponent",1.0))))
+    raw=m.raw if isinstance(getattr(m,"raw",None),dict) else {"conditionId":m.condition}
+    d=resolve_fee_details(raw,clob,micro_legacy.request_json)
     sources[d.source]+=1
     return d
 
@@ -313,10 +261,7 @@ def books(clob: str, tokens: list[str]) -> dict[str,dict[str,Any]]:
     return out
 
 def _hard_fee(raw: dict[str,Any], clob: str, cfg: dict[str,Any], sources: Counter[str]) -> FeeDetails:
-    v6=cfg.get("v6") if isinstance(cfg.get("v6"),dict) else {}
-    d=resolve_fee_details(raw,clob,hard_legacy.get_json,
-                          float(v6.get("assumed_fee_rate",cfg.get("assumed_fee_rate",.07))),
-                          float(v6.get("assumed_fee_exponent",cfg.get("assumed_fee_exponent",1.0))))
+    d=resolve_fee_details(raw,clob,hard_legacy.get_json)
     sources[d.source]+=1; return d
 
 def _plan(live: dict[str,dict[str,Any]], tokens: list[str], fees: dict[str,FeeDetails],

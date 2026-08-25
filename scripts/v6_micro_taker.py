@@ -6,12 +6,19 @@ import csv
 import json
 import math
 import os
+import sys
 import time
 import urllib.parse
 import urllib.request
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from polymarket_fees import FeeDetails, fee_per_share, parse_fee_details, resolve_fee_details
 from v6_micro_target import label_matured_samples
 
 
@@ -63,12 +70,6 @@ def append_csv(path: Path, fields: list[str], row: dict[str, Any]) -> None:
         w.writerow({k: row.get(k, "") for k in fields})
 
 
-def fee_per_share(price: float, rate: float, exponent: float) -> float:
-    if not 0.0 < price < 1.0 or rate <= 0:
-        return 0.0
-    return rate * (price * (1.0 - price)) ** max(0.0, exponent)
-
-
 class Market:
     def __init__(self, raw: dict[str, Any]):
         ids = [str(x) for x in parse_array(raw.get("clobTokenIds"))]
@@ -91,9 +92,8 @@ class Market:
         self.yes = ids[yi]
         self.no = ids[ni]
         self.liq = max(0.0, finite(raw.get("liquidityNum"), 0.0))
-        fs = raw.get("feeSchedule") if isinstance(raw.get("feeSchedule"), dict) else {}
-        self.fee_rate = max(0.0, finite(fs.get("rate"), 0.07))
-        self.fee_exp = max(0.0, finite(fs.get("exponent"), 1.0))
+        self.raw = raw
+        self.fee: FeeDetails | None = parse_fee_details(raw)
 
 
 class Book:
@@ -290,8 +290,21 @@ def main() -> int:
     samples = state.get("samples") if isinstance(state.get("samples"), list) else []
     realized_total = finite(state.get("realized_pnl_total"), 0.0)
     failures: list[str] = []
+    fee_sources: Counter[str] = Counter()
+    fee_unavailable = 0
     try:
         markets = discover(gamma, args.markets, args.min_liquidity)
+        fee_ready: list[Market] = []
+        for market in markets:
+            try:
+                market.fee = market.fee or resolve_fee_details(market.raw, clob, request_json)
+                fee_sources[market.fee.source] += 1
+                fee_ready.append(market)
+            except Exception as exc:
+                fee_unavailable += 1
+                if len(failures) < 20:
+                    failures.append(f"fee:{market.id}:{type(exc).__name__}")
+        markets = fee_ready
         books = fetch_books(clob, markets)
     except Exception as exc:
         markets = []
@@ -336,7 +349,8 @@ def main() -> int:
         flip = (side == "YES" and fair <= z[1]) or (side == "NO" and fair >= z[1])
         if now - int(p["entry_ts"]) >= args.horizon_seconds or flip:
             px = max(1e-6, bid * (1 - slip))
-            fee = fee_per_share(px, m.fee_rate, m.fee_exp) * float(p["shares"])
+            assert m.fee is not None
+            fee = fee_per_share(px, m.fee) * float(p["shares"])
             proceeds = px * float(p["shares"]) - fee
             pnl = proceeds - float(p["cost"])
             cash += proceeds
@@ -388,7 +402,8 @@ def main() -> int:
                 if not math.isfinite(ask):
                     continue
                 entry = min(0.999999, ask * (1 + slip))
-                fee = fee_per_share(entry, m.fee_rate, m.fee_exp)
+                assert m.fee is not None
+                fee = fee_per_share(entry, m.fee)
                 edge = q - entry - fee
                 if edge > args.min_edge:
                     ranked.append((edge, m, side, book, q, entry, fee))
@@ -472,6 +487,8 @@ def main() -> int:
         "best_edge": best_edge,
         "realized_pnl_last_tick": realized,
         "realized_pnl_total": realized_total,
+        "fee_sources_last_tick": dict(fee_sources),
+        "fee_unavailable_last_tick": fee_unavailable,
         "failures": failures,
     }
     atomic_json(state_path, state)
@@ -493,6 +510,8 @@ def main() -> int:
             "labeled_samples": labeled_samples,
             "target_staleness_max_seconds": state["target_staleness_max_seconds"],
             "label_stats_last_tick": label_stats,
+            "fee_sources_last_tick": dict(fee_sources),
+            "fee_unavailable_last_tick": fee_unavailable,
         },
     )
     append_csv(
@@ -536,6 +555,8 @@ def main() -> int:
                 "realized_pnl_total": realized_total,
                 "best_edge": best_edge,
                 "target_staleness_max_seconds": state["target_staleness_max_seconds"],
+                "fee_sources": dict(fee_sources),
+                "fee_unavailable": fee_unavailable,
                 "killed": killed,
             },
             sort_keys=True,

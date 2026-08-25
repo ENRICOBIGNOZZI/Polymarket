@@ -11,10 +11,18 @@ import statistics
 import time
 import urllib.parse
 import urllib.request
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import sys
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from polymarket_fees import FeeDetails, fee_per_share, parse_fee_details, resolve_fee_details
 
 FIELDS = [
     "bundle_id", "strategy", "event_id", "created_ts", "mode", "expected_edge",
@@ -63,12 +71,6 @@ def logit(p: float) -> float:
     p = min(1.0 - 1e-6, max(1e-6, p)); return math.log(p / (1.0 - p))
 
 
-def fee_per_share(price: float, rate: float, exponent: float) -> float:
-    if not 0.0 < price < 1.0 or rate <= 0.0:
-        return 0.0
-    return rate * (price * (1.0 - price)) ** max(0.0, exponent)
-
-
 @dataclass
 class Market:
     market_id: str
@@ -77,6 +79,8 @@ class Market:
     yes: str
     no: str
     liquidity: float
+    condition_id: str
+    fee: FeeDetails | None
 
 
 @dataclass
@@ -127,12 +131,16 @@ def parse_market(raw: dict[str, Any]) -> Market | None:
     events = raw.get("events")
     if not event and isinstance(events, list) and events and isinstance(events[0], dict):
         event = str(events[0].get("id") or "")
+    condition_id = str(raw.get("conditionId") or "")
     return Market(
-        market_id,
-        event or str(raw.get("conditionId") or market_id),
-        question,
-        ids[yi], ids[ni],
-        max(0.0, finite(raw.get("liquidityNum"), 0.0)),
+        market_id=market_id,
+        event_id=event or condition_id or market_id,
+        question=question,
+        yes=ids[yi],
+        no=ids[ni],
+        liquidity=max(0.0, finite(raw.get("liquidityNum"), 0.0)),
+        condition_id=condition_id,
+        fee=parse_fee_details(raw),
     )
 
 
@@ -344,7 +352,7 @@ def local_candidates(key: str, ms: list[Market], series: dict[str,dict[int,float
     return out
 
 
-def build_pair_intent(key: str, signals: list[Candidate], books: dict[str,Book], now: int, min_edge: float, max_trade: float, fee_rate: float, fee_exp: float, slip_bps: float, serial: int) -> list[dict[str,Any]]:
+def build_pair_intent(key: str, signals: list[Candidate], books: dict[str,Book], now: int, min_edge: float, max_trade: float, slip_bps: float, serial: int) -> list[dict[str,Any]]:
     best: tuple[float, Candidate, Candidate] | None = None
     for i, a in enumerate(signals):
         for b in signals[i+1:]:
@@ -386,7 +394,9 @@ def build_pair_intent(key: str, signals: list[Candidate], books: dict[str,Book],
         future_yes = logistic(logit(yes_mid) + yes_logit_move)
         future_side = future_yes if side == "YES" else 1.0 - future_yes
         exit_px = max(0.001, min(0.999, future_side - 0.5 * side_book.spread)) * (1.0 - slip)
-        fee = fee_per_share(exit_px, fee_rate, fee_exp)
+        if sig.market.fee is None:
+            return []
+        fee = fee_per_share(exit_px, sig.market.fee)
         pnl_per_share = exit_px - fee - side_book.bid
         if pnl_per_share <= 0.0:
             return []
@@ -433,9 +443,17 @@ def main() -> int:
     ap.add_argument("--max-clusters",type=int,default=15); ap.add_argument("--min-common-points",type=int,default=48); ap.add_argument("--min-z",type=float,default=1.0); ap.add_argument("--fdr",type=float,default=.10)
     ap.add_argument("--min-edge",type=float,default=.0002); ap.add_argument("--max-trade-usd",type=float,default=60); ap.add_argument("--slippage-bps",type=float,default=5); args=ap.parse_args()
     cfg=json.loads(args.config.read_text()); gamma,clob=cfg["gamma_url"],cfg["clob_url"]; now=int(time.time()); failures: list[str]=[]; rows: list[dict[str,Any]]=[]; serial=0
-    fee_rate=max(0.0,finite((cfg.get("v6") or {}).get("assumed_fee_rate"),.07)); fee_exp=max(0.0,finite((cfg.get("v6") or {}).get("assumed_fee_exponent"),1.0))
+    fee_sources: Counter[str]=Counter(); fee_unavailable=0
     try:
-        ms=discover(gamma,args.markets,args.min_liquidity); cs=clusters(ms,args.max_clusters); selected={m.market_id:m for _,group in cs for m in group}; books=fetch_books(clob,list(selected.values()))
+        discovered=discover(gamma,args.markets,args.min_liquidity); ms=[]
+        for market in discovered:
+            try:
+                market.fee=market.fee or resolve_fee_details({"id":market.market_id,"conditionId":market.condition_id},clob,request_json)
+                fee_sources[market.fee.source]+=1; ms.append(market)
+            except Exception as exc:
+                fee_unavailable+=1
+                if len(failures)<20: failures.append(f"fee:{market.market_id}:{type(exc).__name__}")
+        cs=clusters(ms,args.max_clusters); selected={m.market_id:m for _,group in cs for m in group}; books=fetch_books(clob,list(selected.values()))
     except Exception as exc:
         ms=[]; cs=[]; selected={}; books={}; failures.append(f"market_data:{type(exc).__name__}:{exc}")
     start=now-args.lookback_hours*3600
@@ -450,14 +468,15 @@ def main() -> int:
     eligible={id(c) for c in all_candidates if cutoff>0.0 and c.pvalue<=cutoff}
     for key,cands in by_cluster.items():
         selected_cands=[c for c in cands if id(c) in eligible]
-        intent=build_pair_intent(key,selected_cands,books,now,args.min_edge,args.max_trade_usd,fee_rate,fee_exp,args.slippage_bps,serial)
+        intent=build_pair_intent(key,selected_cands,books,now,args.min_edge,args.max_trade_usd,args.slippage_bps,serial)
         if intent:
             rows.extend(intent); serial+=1
     atomic_csv(args.output,rows)
     status={
         "timestamp":now,"paper_only":True,"markets":len(ms),"clusters":len(cs),"histories":len(series),"common_sample_min":args.min_common_points,
         "reversion_tests":len(all_candidates),"fdr":args.fdr,"bh_pvalue_cutoff":cutoff,"fdr_eligible_signals":len(eligible),
-        "bundles":serial,"intent_rows":len(rows),"best_edge":max((float(r["expected_edge"]) for r in rows),default=0.0),"failures":failures,
+        "bundles":serial,"intent_rows":len(rows),"best_edge":max((float(r["expected_edge"]) for r in rows),default=0.0),
+        "fee_sources":dict(fee_sources),"fee_unavailable":fee_unavailable,"failures":failures,
     }
     args.status.parent.mkdir(parents=True,exist_ok=True); tmp=args.status.with_suffix(args.status.suffix+".tmp"); tmp.write_text(json.dumps(status,indent=2,sort_keys=True)+"\n"); os.replace(tmp,args.status)
     print(json.dumps(status,sort_keys=True)); return 0
