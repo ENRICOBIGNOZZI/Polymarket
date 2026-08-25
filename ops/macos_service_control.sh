@@ -35,6 +35,13 @@ wait_monitoring() {
   wait_http http://127.0.0.1:3000/api/search grafana_anonymous
 }
 
+print_safe_status() {
+  local label="$1"
+  /bin/launchctl print "system/$label" | /usr/bin/awk '
+    /^[[:space:]]*(active count|path|state|program|pid|last exit code) = / { print }
+  '
+}
+
 [[ $# -eq 1 ]] || usage
 action="$1"
 
@@ -48,7 +55,7 @@ case "$action" in
   status)
     for label in "${labels[@]}"; do
       echo "===== $label ====="
-      /bin/launchctl print "system/$label" | sed -n '1,30p'
+      print_safe_status "$label"
     done
     ;;
   stop)
