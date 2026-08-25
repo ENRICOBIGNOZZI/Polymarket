@@ -203,6 +203,14 @@ jobs:
           grep -q '^polymarket_model_info{' <<<"$metrics"
           if [[ "$version" == "6" ]]; then
             grep -q '^polymarket_v6_exporter_info{' <<<"$metrics"
+            # Grafana's V6 strategy panels depend on this exact Prometheus schema.
+            # Fail deployment rather than silently provisioning a dashboard whose
+            # fill/health panels resolve to empty vectors.
+            grep -q '^polymarket_model_fills_total{action="all",' <<<"$metrics"
+            grep -q '^polymarket_model_gross_exposure_usd{' <<<"$metrics"
+            grep -q '^polymarket_model_drawdown_ratio{' <<<"$metrics"
+            grep -q '^polymarket_model_alive{' <<<"$metrics"
+            grep -q '^polymarket_model_alert_staleness_seconds{' <<<"$metrics"
             test -s "runs/${run_name}/hard_arb/status.json"
             test -s "runs/${run_name}/local_factor_status.json"
             test -s "runs/${run_name}/runtime_status.json"
