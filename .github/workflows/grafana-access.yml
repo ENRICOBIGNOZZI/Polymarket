@@ -29,13 +29,64 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Join private tailnet
-        id: tailnet
+      - name: Select existing Tailscale credential mode
+        id: tailscale_auth
+        continue-on-error: true
+        shell: bash
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${TS_AUTHKEY:-}" ]]; then
+            mode=authkey
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
+            test -n "${TS_TAGS:-}" || { echo "OAuth credentials are visible but TS_TAGS is empty" >&2; exit 1; }
+            mode=oauth
+          else
+            echo "No visible Tailscale credential set. Expected TS_AUTHKEY or TS_OAUTH_CLIENT_ID + TS_OAUTH_SECRET." >&2
+            exit 1
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "tailscale_credential_mode=$mode"
+
+      - name: Join private tailnet with auth key
+        id: tailnet_authkey
+        if: steps.tailscale_auth.outputs.mode == 'authkey'
         continue-on-error: true
         uses: tailscale/github-action@v4
         with:
           authkey: ${{ secrets.TS_AUTHKEY }}
           ping: ${{ env.SERVER_HOST }}
+
+      - name: Join private tailnet with OAuth
+        id: tailnet_oauth
+        if: steps.tailscale_auth.outputs.mode == 'oauth'
+        continue-on-error: true
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Normalize tailnet outcome
+        id: tailnet
+        continue-on-error: true
+        shell: bash
+        env:
+          MODE: ${{ steps.tailscale_auth.outputs.mode }}
+          AUTHKEY_OUTCOME: ${{ steps.tailnet_authkey.outcome }}
+          OAUTH_OUTCOME: ${{ steps.tailnet_oauth.outcome }}
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            authkey) test "$AUTHKEY_OUTCOME" = success ;;
+            oauth) test "$OAUTH_OUTCOME" = success ;;
+            *) exit 1 ;;
+          esac
 
       - name: Configure SSH identity
         id: ssh
