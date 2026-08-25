@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts" / "lf_v6_pair_completion_state_audit.py"
-SPEC = importlib.util.spec_from_file_location("lf_pair_completion_audit", MODULE_PATH)
+MODULE_NAME = "lf_pair_completion_audit"
+SPEC = importlib.util.spec_from_file_location(MODULE_NAME, MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
+sys.modules[MODULE_NAME] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
