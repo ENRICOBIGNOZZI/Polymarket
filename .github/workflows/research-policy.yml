@@ -79,6 +79,7 @@ jobs:
           tests/test_v5_allocator_policy.py
           tests/test_promotion_gate.py
           tests/test_hard_safety_policy.py
+          tests/test_v6_effective_caps.py
           -v
 
       - name: Ensure research-isolation labels exist
