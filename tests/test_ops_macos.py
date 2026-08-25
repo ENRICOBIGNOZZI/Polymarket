@@ -181,10 +181,13 @@ class MacOSOpsContractTest(unittest.TestCase):
 
     def test_service_status_redacts_launchd_environment(self):
         control = (ROOT / "ops" / "macos_service_control.sh").read_text(encoding="utf-8")
+        deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(encoding="utf-8")
         self.assertIn("print_safe_status()", control)
         self.assertIn("/usr/bin/awk", control)
         self.assertIn("active count|path|state|program|pid|last exit code", control)
         self.assertNotIn("sed -n '1,30p'", control)
+        self.assertIn("Darwin) bash ops/macos_service_control.sh status ;;", deploy)
+        self.assertNotIn("Darwin) sudo -n /usr/local/sbin/polymarket-service-control status ;;", deploy)
 
     def test_bootstrap_services_follow_the_champion_manifest(self):
         linux = (ROOT / "ops" / "bootstrap_server.sh").read_text(encoding="utf-8")
