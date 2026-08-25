@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
 CONFIG="${1:-config/paper_v6.json}"
 BASE_CONFIG="$CONFIG"
 RUN_ROOT="${2:-runs/paper_v6_live}"
