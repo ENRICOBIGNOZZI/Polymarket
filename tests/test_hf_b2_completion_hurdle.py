@@ -11,6 +11,7 @@ from hf_b2_completion_hurdle import (
     break_even_completion_probability,
     broker_semantics,
     expected_edge_at_completion,
+    frontier_transition,
     iid_per_leg_fill_floor,
 )
 
@@ -36,6 +37,7 @@ class HFB2CompletionHurdleTest(unittest.TestCase):
                 "top_raw": [
                     {
                         "market": "2774057",
+                        "side": "NO",
                         "slug": "strait-of-hormuz-traffic-returns-to-normal-by-september-30-20260702154339440",
                         "legs": "2774057:NO:1|3501950:YES:0.0554494|2034729:YES:0.921788|3215074:NO:0.31782|2176270:YES:0.242498|2774056:YES:3.32159|2737255:YES:0.246966",
                         "maker_entry_net_edge": "0.00222302",
@@ -44,6 +46,7 @@ class HFB2CompletionHurdleTest(unittest.TestCase):
                     },
                     {
                         "market": "608565",
+                        "side": "NO",
                         "slug": "will-lionel-messi-win-the-2026-ballon-dor",
                         "legs": "608565:NO:1|608543:NO:2.91863|608541:YES:2.06712|608547:NO:0.132367",
                         "maker_entry_net_edge": "0.000480047",
@@ -60,6 +63,7 @@ class HFB2CompletionHurdleTest(unittest.TestCase):
 
         first, second = result["rows"]
         self.assertEqual(first["market"], "2774057")
+        self.assertEqual(first["side"], "NO")
         self.assertEqual(first["legs"], 7)
         self.assertAlmostEqual(
             first["hypothetical_binary_taker_fallback_break_even_probability"],
@@ -86,6 +90,54 @@ class HFB2CompletionHurdleTest(unittest.TestCase):
             places=9,
         )
         self.assertLess(second["binary_scenario_expected_edge_if_completion_75pct"], 0.0)
+
+    def test_next_window_without_maker_positive_rows_marks_prior_frontier_transient(self) -> None:
+        previous = {
+            "maker_positive_b2": [
+                {
+                    "market": "2774057",
+                    "side": "NO",
+                    "leg_spec": "2774057:NO:1|3501950:YES:0.05|2774056:YES:3.32",
+                    "maker_entry_net_edge": 0.00222302,
+                },
+                {
+                    "market": "608565",
+                    "side": "NO",
+                    "leg_spec": "608565:NO:1|608543:NO:2.91|608541:YES:2.06|608547:NO:0.13",
+                    "maker_entry_net_edge": 0.000480047,
+                },
+            ]
+        }
+        current = {
+            "b2_coherence": {
+                "coherent_raw_positive": 39,
+                "coherent_maker_positive": 0,
+                "top_raw": [
+                    {
+                        "market": "2633430",
+                        "side": "NO",
+                        "legs": "2633430:NO:1|665374:YES:0.02",
+                        "maker_entry_net_edge": "-0.000136623",
+                        "taker_net_edge": "-0.00329039",
+                    },
+                    {
+                        "market": "2696747",
+                        "side": "NO",
+                        "legs": "2696747:NO:1|1633611:NO:0.18",
+                        "maker_entry_net_edge": "-0.000153115",
+                        "taker_net_edge": "-0.00884751",
+                    },
+                ],
+            }
+        }
+        transition = frontier_transition(previous, current)
+        self.assertEqual(transition["state"], "TRANSIENT_IN_NEXT_WINDOW")
+        self.assertEqual(transition["previous_maker_positive_candidates"], 2)
+        self.assertEqual(transition["current_maker_positive_candidates"], 0)
+        self.assertEqual(transition["repeated_market_side_candidates"], [])
+        self.assertEqual(transition["repeated_exact_leg_sets"], [])
+        self.assertEqual(transition["previous_market_side_survival_rate"], 0.0)
+        self.assertEqual(transition["previous_exact_leg_set_survival_rate"], 0.0)
 
     def test_runtime_broker_contract_is_partial_completion_then_unwind_not_forced_taker_completion(self) -> None:
         broker_source = (ROOT / "src" / "multileg_paper.cpp").read_text(encoding="utf-8")
