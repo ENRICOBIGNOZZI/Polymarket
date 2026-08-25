@@ -149,30 +149,28 @@ jobs:
           sys.path.insert(0, str(source))
           from scripts.v6_market_proxy import Proxy
 
-          probe = evidence / "forced-clob-sampling"
+          probe = evidence / "forced-gamma-legacy"
           proxy = Proxy(
+              "https://gamma-api.polymarket.com",
               "http://127.0.0.1:9",
-              "https://clob.polymarket.com",
               probe / "cache.json",
               probe / "status.json",
           )
           rows = proxy.markets({"limit": ["5"], "offset": ["0"], "liquidity_num_min": ["1"]})
           status = json.loads((probe / "status.json").read_text(encoding="utf-8"))
-          assert proxy.clob_source == "clob_sampling", proxy.clob_source
-          assert str(status.get("source") or "").startswith("clob_sampling"), status
+          assert proxy.source.startswith("gamma_legacy"), proxy.source
+          assert str(status.get("source") or "").startswith("gamma_legacy"), status
           assert len(rows) == 5, len(rows)
           assert all(float(row.get("liquidityNum") or 0.0) >= 1.0 for row in rows)
-          assert all(len(row.get("clobTokenIds") or []) >= 2 for row in rows)
           summary = {
               "source": proxy.source,
-              "clob_source": proxy.clob_source,
               "markets": len(rows),
               "min_liquidity": min(float(row["liquidityNum"]) for row in rows),
           }
-          (evidence / "forced-clob-sampling.json").write_text(
+          (evidence / "forced-gamma-legacy.json").write_text(
               json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
           )
-          print("forced_clob_sampling=PASS " + json.dumps(summary, sort_keys=True))
+          print("forced_gamma_legacy=PASS " + json.dumps(summary, sort_keys=True))
           PY
 
           python3 - "$source_dir/config/paper_v6.json" "$root/probe_config.json" <<'PY'
