@@ -1,0 +1,74 @@
+{
+  "schema": "lf_v6_joint_completion_dependence_audit_v1",
+  "generated_utc": "2026-08-25T14:22:22Z",
+  "base_main_sha": "600e7872917887aede259b5cedbbd5d8cf2997b6",
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "finding": {
+    "type": "structural_execution_model_defect",
+    "summary": "V6 bundle-risk research currently multiplies marginal per-leg fill probabilities to model joint completion and derives incomplete-state probabilities from the same independence assumption. Marginal probabilities alone do not identify same-window multi-leg completion or partial-fill state frequencies.",
+    "affected_paths": [
+      "research/v6-aggressive-fill-20260825:scripts/v6_bundle_risk_guard.py"
+    ]
+  },
+  "latest_completed_aggressive_forward_evidence": {
+    "source": "PR #302 completed forward smoke before this audit",
+    "maker_public_tape_rows": 1972,
+    "maker_ticks": 5,
+    "maker_signals": 183,
+    "maker_resting_orders": 3,
+    "maker_fills": 0,
+    "maker_realized_pnl_usd": 0.0,
+    "maker_best_raw_edge_bps": 79.18,
+    "maker_best_edge_times_modeled_fill_bps": 3.10,
+    "graph_complete_baskets": 11,
+    "graph_rows": 65,
+    "graph_best_raw_quote_edge": 0.079,
+    "graph_queue_accepted_baskets": 0,
+    "graph_best_reported_joint_fill_probability": 8.25e-11,
+    "local_factor_candidates": 41,
+    "local_factor_fdr_cutoff": 0.0,
+    "local_factor_fdr_survivors": 0,
+    "hard_arb_positive_candidates": 0,
+    "external_direct_terminal_signals": 0
+  },
+  "identification_counterexample": {
+    "legs": 5,
+    "marginal_fill_probability_each": 0.02,
+    "independence_joint_probability": 3.2e-09,
+    "frechet_joint_lower": 0.0,
+    "frechet_joint_upper": 0.02,
+    "upper_to_independence_ratio": 6250000.0,
+    "common_shock_process_joint_probability": 0.02,
+    "mutually_exclusive_flow_process_joint_probability": 0.0,
+    "note": "Both processes have identical 2% marginal leg-fill probabilities. Joint completion can therefore differ from zero to 2%; multiplying marginals is an unvalidated dependence assumption, not execution evidence."
+  },
+  "successor_experiment": {
+    "primary_metric": "fill-conditioned bundle PnL after completion and incomplete-state unwind",
+    "requirements": [
+      "Partition public post-entry tape into common chronological windows equal to the candidate fill horizon.",
+      "Within each window and leg, require compatible sell flow to clear queue_ahead plus actual target shares.",
+      "Record the full fill-state bitmask for all legs in the same window.",
+      "Estimate full-completion and every partial-fill state frequency directly from common windows; do not multiply marginal fill probabilities.",
+      "Use block/bootstrap uncertainty over chronological windows and fail closed when independent-window support is insufficient.",
+      "Price every partial state using candidate-specific displayed unwind depth, verified fees, slippage and latency/adverse-selection stress at 1x, 1.5x and 2x.",
+      "Compare empirical state-based EV against the current independence proxy on identical candidates and chronology."
+    ]
+  },
+  "safety": {
+    "max_drawdown": 0.15,
+    "kill_switch_required": true,
+    "paper_only": true,
+    "authenticated_execution": false,
+    "real_money_execution": false,
+    "authorized_paper_envelope": {
+      "markets_approx": 1000,
+      "min_liquidity_usd": 2.0,
+      "post_cost_min_edge": 0.00005,
+      "fractional_kelly": 0.25,
+      "max_trade_usd": 125.0,
+      "market_fraction": 0.05,
+      "event_fraction": 0.15,
+      "gross_fraction": 0.70
+    }
+  }
+}
