@@ -7,7 +7,15 @@ MIN_LIQUIDITY="${V6_MIN_LIQUIDITY:-10}"
 MARKETS="${V6_MARKETS:-700}"
 RECORDER_MARKETS="${V6_RECORDER_MARKETS:-1200}"
 INTENT_MIN_EDGE="${V6_INTENT_MIN_EDGE:-0.00020}"
+MAKER_MAX_QUEUE_RATIO="${V6_MAKER_MAX_QUEUE_RATIO:-50}"
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/micro_taker" "$RUN_ROOT/hard_arb" "$RUN_ROOT/external"
+
+# A global kill is deliberately sticky. Only the administrator clears the
+# persisted flag after investigating the reason; restarts cannot self-heal it.
+if [[ -f "$RUN_ROOT/global_kill.flag" ]]; then
+  echo "v6_global_kill_present path=$RUN_ROOT/global_kill.flag" >&2
+  exit 2
+fi
 
 # Capital-isolated sleeves sum to parent capital. There is no operational
 # mixture-of-experts: every sleeve has one economic task and its own execution.
@@ -59,12 +67,14 @@ while true;do
   if ! kill -0 "$external_pid" 2>/dev/null;then wait "$external_pid" 2>/dev/null||true;external_restarts=$((external_restarts+1));start_external;fi
   write_supervisor
 
-  # Micro maker: passive spread capture with queue/fill/adverse-selection accounting.
-  ./build/polymarket_maker_paper --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.15 --once >>"$RUN_ROOT/maker.log" 2>&1||true
+  # Micro maker: passive spread capture with explicit queue admission before
+  # posting, then public-tape fills and adverse-selection accounting.
+  ./build/polymarket_maker_paper --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.15 --max-queue-ratio "$MAKER_MAX_QUEUE_RATIO" --once >>"$RUN_ROOT/maker.log" 2>&1||true
 
-  # Micro taker: online short-horizon markout model; mandatory horizon exit.
+  # Micro taker: causal robust L2 state, full depth VWAP, market fee, dynamic
+  # slippage, uncertainty lower bound and mean-variance short-horizon sizing.
   if ((now-last_micro_taker>=5));then
-    python3 scripts/v6_micro_taker.py --config "$RUN_ROOT/micro_taker_config.json" --run-dir "$RUN_ROOT/micro_taker" --markets 250 --min-liquidity 25 --horizon-seconds 30 --max-trade-usd 15 --min-edge 0.00030 --slippage-bps 5 --max-positions 20 >>"$RUN_ROOT/micro_taker.log" 2>&1||true
+    python3 scripts/v6_micro_taker_institutional.py --config "$RUN_ROOT/micro_taker_config.json" --run-dir "$RUN_ROOT/micro_taker" --markets 250 --min-liquidity 25 --horizon-seconds 30 --max-target-staleness-seconds 10 --max-trade-usd 15 --min-edge 0.00030 --base-slippage-bps 2 --uncertainty-z 0.50 --risk-budget-fraction 0.003 --max-positions 20 >>"$RUN_ROOT/micro_taker.log" 2>&1||true
     last_micro_taker=$now
   fi
 
@@ -79,8 +89,9 @@ while true;do
     rm -f "$RUN_ROOT/local_factor_intents.csv" "$RUN_ROOT/stat_arb_pairs_diagnostic.csv"
     # Legacy B1 is diagnostic only under strict gates and cannot generate V6 intents.
     ./build/polymarket_stat_arb --config "$RUN_ROOT/broker_config.json" --markets "$MARKETS" --history-universe 300 --lookback-hours 720 --fidelity-minutes 30 --min-z 1.25 --min-t-reversion 2.00 --max-half-life-hours 168 --top 150 --csv "$RUN_ROOT/stat_arb_pairs_diagnostic.csv" >"$RUN_ROOT/stat_arb_pairs_diagnostic.log" 2>"$RUN_ROOT/stat_arb_pairs_errors.log"||true
-    # Production mean reversion: local panel, common sample and BH-FDR controlled.
-    python3 scripts/v6_local_factor_intents.py --config "$CONFIG" --output "$RUN_ROOT/local_factor_intents.csv" --status "$RUN_ROOT/local_factor_status.json" --markets 400 --min-liquidity "$MIN_LIQUIDITY" --lookback-hours 336 --fidelity-minutes 60 --max-clusters 15 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 --slippage-bps 5 >"$RUN_ROOT/local_factor_latest.log" 2>"$RUN_ROOT/local_factor_errors.log"||true
+    # Dynamic local factor: EW factor estimated on aligned logit returns rather
+    # than levels, with FDR-controlled residual mean reversion and costed exits.
+    python3 scripts/v6_dynamic_factor_intents.py --config "$CONFIG" --output "$RUN_ROOT/local_factor_intents.csv" --status "$RUN_ROOT/local_factor_status.json" --markets 400 --min-liquidity "$MIN_LIQUIDITY" --lookback-hours 336 --fidelity-minutes 60 --max-clusters 15 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 --slippage-bps 2 >"$RUN_ROOT/local_factor_latest.log" 2>"$RUN_ROOT/local_factor_errors.log"||true
     rebuild_intents;last_factor=$now
   fi
 
@@ -94,6 +105,15 @@ while true;do
   if ((now-last_external>=60));then
     python3 scripts/v6_external_bridge.py --output "$RUN_ROOT/external_signals.csv" --status "$RUN_ROOT/external_bridge_status.json" --max-age-seconds 21600 --min-confidence 0.35 >"$RUN_ROOT/external_bridge.log" 2>&1||true
     last_external=$now
+  fi
+
+  # Global scenario risk is above every sleeve. Missing/stale marks become
+  # fail-closed after startup grace; any kill persists across process restarts.
+  if ! python3 scripts/v6_global_risk.py --config "$CONFIG" --run-root "$RUN_ROOT" >>"$RUN_ROOT/global_risk.log" 2>&1; then
+    if [[ -f "$RUN_ROOT/global_kill.flag" ]]; then
+      echo "v6_global_risk_kill path=$RUN_ROOT/global_kill.flag" >&2
+      exit 2
+    fi
   fi
 
   if ((now-last_report>=60));then
