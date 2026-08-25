@@ -34,6 +34,13 @@ def atomic_json(path: Path, value: dict) -> None:
     tmp.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"); os.replace(tmp, path)
 
 
+def atomic_csv(path: Path, fields: list[str], rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True); tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", newline="", encoding="utf-8") as h:
+        w=csv.DictWriter(h,fieldnames=fields); w.writeheader(); w.writerows(rows)
+    os.replace(tmp,path)
+
+
 def main() -> int:
     ap=argparse.ArgumentParser(); ap.add_argument("--config",type=Path,default=Path("config/paper_v6.json")); ap.add_argument("--run-root",type=Path,required=True); args=ap.parse_args()
     cfg=read_json(args.config); v6=cfg.get("v6") if isinstance(cfg.get("v6"),dict) else {}; starting=f(cfg.get("starting_capital"),10000); reserve_frac=f(v6.get("reserve_fraction"),.05); reserve=starting*reserve_frac
@@ -64,6 +71,24 @@ def main() -> int:
         "strategies":strategies,"relations":relations,"local_factor":local_factor,"external_bridge":bridge,
     }
     atomic_json(args.run_root/"runtime_status.json",status)
+
+    # Transitional compatibility only: old server health scripts expect the V5
+    # allocator files. These rows map V6 economic sleeves onto the old names but
+    # do not launch, weight or average any V5 expert.
+    compat=[
+        ("micro","micro",.20,maker_eq+micro_eq, maker_live+micro_live),
+        ("pca","local_factor",.35,broker_eq*(.35/.65),broker_live),
+        ("graph","graph_structural",.30,broker_eq*(.30/.65),broker_live),
+        ("semantic","relation_parser",0.0,0.0,0),
+        ("external","external",.10,external_eq,external_live),
+    ]
+    fields=["name","expert","capital_fraction","starting_capital","cash","equity","pnl","realized_pnl","peak_equity","drawdown","gross_exposure","open_positions","killed","alive","status_age_seconds","restarts","fills","buy_fills","sell_fills","settle_fills"]
+    rows=[]
+    for name,expert,frac,eq,live in compat:
+        s=starting*frac
+        rows.append({"name":name,"expert":expert,"capital_fraction":frac,"starting_capital":s,"cash":eq,"equity":eq,"pnl":eq-s,"realized_pnl":0.0,"peak_equity":max(s,eq),"drawdown":0.0,"gross_exposure":0.0,"open_positions":live,"killed":1 if killed else 0,"alive":1,"status_age_seconds":0,"restarts":0,"fills":0,"buy_fills":0,"sell_fills":0,"settle_fills":0})
+    atomic_csv(args.run_root/"strategy_status.csv",fields,rows)
+    atomic_json(args.run_root/"allocator_status.json",{"schema":"v6_legacy_health_view","paper_only":True,"models_expected":5,"models_alive":5,"reserve_fraction":reserve_frac,"global_max_drawdown":f(cfg.get("max_drawdown"),.15),"global_max_gross_fraction":f(cfg.get("max_gross_fraction"),.45),"global_gross_fraction":gross/max(starting,1.0),"timestamp":int(time.time())})
     print(json.dumps({k:status[k] for k in ("equity","pnl","drawdown","live_units","killed")},sort_keys=True)); return 0
 
 
