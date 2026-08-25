@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import sys
 import unittest
+from pathlib import Path
 
-try:
-    from scripts.lf_v6_point_in_time_completion_audit import Window, audit, current_state_replay_fill, point_in_time_fill
-except ModuleNotFoundError:
-    from lf_v6_point_in_time_completion_audit import Window, audit, current_state_replay_fill, point_in_time_fill
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.lf_v6_point_in_time_completion_audit import (  # noqa: E402
+    Window,
+    audit,
+    current_state_replay_fill,
+    point_in_time_fill,
+)
 
 
 class PointInTimeCompletionAuditTest(unittest.TestCase):
