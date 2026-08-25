@@ -79,9 +79,10 @@ def route_observations(
     output: list[dict[str, object]] = []
 
     for obs in ordered:
-        # Only outcomes known at decision time are eligible. This prevents both
-        # future-price look-ahead and overlapping-horizon leakage.
-        eligible = [x for x in completed if x.outcome_ts <= obs.decision_ts]
+        # Fail closed on timestamp ties: only outcomes completed strictly before
+        # the current decision are eligible. This prevents future-price,
+        # overlapping-horizon, and same-timestamp ordering leakage.
+        eligible = [x for x in completed if x.outcome_ts < obs.decision_ts]
         stress_values = [x.stressed_markout(require_stress_multiplier) for x in eligible]
         lcb = one_sided_lower_bound(stress_values)
         mean = statistics.fmean(stress_values) if stress_values else float("-inf")
@@ -140,7 +141,7 @@ def summarize(rows: Iterable[Observation], decisions: Iterable[dict[str, object]
         "cost_stress": stressed,
         "policy": {
             "taker_requires_positive_predicted_edge": True,
-            "taker_requires_causal_forward_history": True,
+            "taker_requires_strictly_prior_causal_forward_history": True,
             "taker_requires_positive_one_sided_95pct_lcb_at_2x_cost": True,
             "fallback_for_unproven_positive_edge": "MAKER_SHADOW",
             "maker_shadow_is_not_a_fill_claim": True,
