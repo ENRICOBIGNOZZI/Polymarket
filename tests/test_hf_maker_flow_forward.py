@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 from scripts.hf_maker_flow_admission import evaluate
 from scripts.hf_maker_forward_audit import audit, realized_roundtrip_pnl
 from scripts.v6_market_common import TapeFlow
+from scripts.v6_micro_maker_v2 import enforce_total_gross_cap
 
 
 def write_csv(path: Path, fields: list[str], rows: list[dict[str, object]]) -> None:
@@ -64,13 +66,24 @@ class HFMakerFlowForwardTest(unittest.TestCase):
                 fields,
                 [
                     {"timestamp": 995, "received_ms": 999000, "asset_id": "t", "side": "SELL", "price": 0.40, "size": 30},
-                    # Event happened earlier, but it was not known at decision time 1000.
                     {"timestamp": 990, "received_ms": 1001000, "asset_id": "t", "side": "SELL", "price": 0.40, "size": 100},
                 ],
             )
             flow = TapeFlow.from_csv(tape, lookback_seconds=120, now=1000)
             self.assertEqual(flow.compatible_sell_volume("t", 0.41, lookback_seconds=120), 30.0)
             self.assertEqual(flow.compatible_sell_count("t", 0.41, lookback_seconds=120), 1)
+
+    def test_total_gross_cap_accounts_for_open_position_cost(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "config.json"
+            config.write_text(json.dumps({"starting_capital": 1000.0, "max_gross_fraction": 0.70}), encoding="utf-8")
+            (root / "state.json").write_text(
+                json.dumps({"equity": 1000.0, "positions": {"m": {"cost": 400.0}}}), encoding="utf-8"
+            )
+            tick = enforce_total_gross_cap(config, root)
+            cfg = json.loads(tick.read_text(encoding="utf-8"))
+            self.assertAlmostEqual(cfg["max_gross_fraction"], 0.30)
 
     def test_audit_uses_receive_time_for_prior_flow_and_event_time_forward(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
