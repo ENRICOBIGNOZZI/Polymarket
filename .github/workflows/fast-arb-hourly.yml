@@ -50,23 +50,23 @@ jobs:
           ctest --test-dir build --output-on-failure
           python3 -m unittest tests/test_fast_data_health.py -v
 
-      - name: Run read-only fast shadow probe
+      - name: Run broadened read-only fast shadow probe
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p runs/hourly-fast
           duration=180
-          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then duration=45; fi
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then duration=75; fi
           ./build/polymarket_fast_arb_shadow \
             --config config/paper_v4.json \
             --policy config/fast_arb_policy.json \
             --relations config/fast_arb_relations.csv \
             --external-signals data/external_signals.csv \
             --run-dir runs/hourly-fast \
-            --markets 600 \
-            --min-liquidity 100 \
-            --shard-size 200 \
-            --snapshot-refresh-seconds 20 \
+            --markets 1000 \
+            --min-liquidity 2 \
+            --shard-size 250 \
+            --snapshot-refresh-seconds 10 \
             --duration-seconds "$duration" \
             --recycle-seconds 0
 
