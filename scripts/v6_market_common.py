@@ -137,6 +137,7 @@ def fee_per_share(price: float, details: FeeDetails, *, taker: bool = True) -> f
 @dataclass(frozen=True)
 class TapeTrade:
     ts: int
+    received_ms: int
     asset_id: str
     side: str
     price: float
@@ -144,13 +145,21 @@ class TapeTrade:
 
 
 class TapeFlow:
+    """Causal public-flow view keyed to local receive time.
+
+    Exchange/event timestamps remain attached to each trade for queue replay, but
+    a trade can influence a posting decision only after the recorder actually
+    observed it. This prevents delayed Data API records from leaking into the
+    pre-order fill-hazard estimate.
+    """
+
     def __init__(self, trades: list[TapeTrade], now: int | None = None):
         self.now = int(time.time()) if now is None else int(now)
         self.by_asset: dict[str, list[TapeTrade]] = {}
         for trade in trades:
             self.by_asset.setdefault(trade.asset_id, []).append(trade)
         for values in self.by_asset.values():
-            values.sort(key=lambda x: x.ts)
+            values.sort(key=lambda x: (x.received_ms, x.ts))
 
     @classmethod
     def from_csv(
@@ -161,29 +170,35 @@ class TapeFlow:
         now: int | None = None,
     ) -> "TapeFlow":
         current = int(time.time()) if now is None else int(now)
-        cutoff = current - max(1, int(lookback_seconds))
+        cutoff_ms = (current - max(1, int(lookback_seconds))) * 1000
+        decision_ms = current * 1000
         trades: list[TapeTrade] = []
         try:
             with path.open(newline="", encoding="utf-8") as handle:
                 for row in csv.DictReader(handle):
                     ts = int(finite(row.get("timestamp"), 0.0))
+                    received_ms = int(finite(row.get("received_ms"), ts * 1000.0))
                     asset = str(row.get("asset_id") or "")
                     side = str(row.get("side") or "").strip().upper()
                     price = finite(row.get("price"))
                     size = finite(row.get("size"), 0.0)
-                    if ts < cutoff or ts > current + 30:
+                    if received_ms < cutoff_ms or received_ms > decision_ms:
+                        continue
+                    if ts <= 0 or ts > current + 30:
                         continue
                     if asset and side in {"BUY", "SELL"} and math.isfinite(price) and 0 < price < 1 and size > 0:
-                        trades.append(TapeTrade(ts, asset, side, price, size))
+                        trades.append(TapeTrade(ts, received_ms, asset, side, price, size))
         except OSError:
             pass
         return cls(trades, now=current)
 
     def compatible_sell_trades(self, token_id: str, limit_price: float, *, lookback_seconds: int) -> list[TapeTrade]:
-        cutoff = self.now - max(1, int(lookback_seconds))
+        cutoff_ms = (self.now - max(1, int(lookback_seconds))) * 1000
+        decision_ms = self.now * 1000
         return [
             trade for trade in self.by_asset.get(token_id, [])
-            if trade.ts >= cutoff and trade.side == "SELL" and trade.price <= limit_price + 1e-12
+            if cutoff_ms <= trade.received_ms <= decision_ms
+            and trade.side == "SELL" and trade.price <= limit_price + 1e-12
         ]
 
     def compatible_sell_volume(self, token_id: str, limit_price: float, *, lookback_seconds: int) -> float:
@@ -194,33 +209,31 @@ class TapeFlow:
 
     def compatible_sell_recency(self, token_id: str, limit_price: float, *, lookback_seconds: int) -> float:
         rows = self.compatible_sell_trades(token_id, limit_price, lookback_seconds=lookback_seconds)
-        return float(self.now - rows[-1].ts) if rows else math.inf
+        return float(self.now - rows[-1].received_ms / 1000.0) if rows else math.inf
 
     def compatible_sell_rate(self, token_id: str, limit_price: float, *, lookback_seconds: int) -> float:
-        """Recency-weighted compatible volume hazard in shares/second.
-
-        A stale trade at the beginning of a long lookback should not imply the
-        same fill hazard as identical flow observed seconds ago. The exponential
-        kernel uses a half-life of one third of the requested window and divides
-        by its exact effective exposure time, retaining rate units.
-        """
+        """Recency-weighted compatible volume hazard in shares/second."""
         window = max(1.0, float(lookback_seconds))
         rows = self.compatible_sell_trades(token_id, limit_price, lookback_seconds=int(window))
         if not rows:
             return 0.0
         half_life = max(5.0, window / 3.0)
         decay = math.log(2.0) / half_life
-        weighted_volume = sum(trade.size * math.exp(-decay * max(0.0, self.now - trade.ts)) for trade in rows)
+        weighted_volume = sum(
+            trade.size * math.exp(-decay * max(0.0, self.now - trade.received_ms / 1000.0))
+            for trade in rows
+        )
         effective_seconds = (1.0 - math.exp(-decay * window)) / decay
         return weighted_volume / max(effective_seconds, 1e-9)
 
     def side_volume(self, token_id: str, side: str, *, lookback_seconds: int) -> float:
-        cutoff = self.now - max(1, int(lookback_seconds))
+        cutoff_ms = (self.now - max(1, int(lookback_seconds))) * 1000
+        decision_ms = self.now * 1000
         want = side.strip().upper()
         return sum(
             trade.size
             for trade in self.by_asset.get(token_id, [])
-            if trade.ts >= cutoff and trade.side == want
+            if cutoff_ms <= trade.received_ms <= decision_ms and trade.side == want
         )
 
     def signed_flow(self, token_id: str, *, lookback_seconds: int) -> float:
