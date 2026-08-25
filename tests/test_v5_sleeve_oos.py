@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import csv
 import importlib.util
-import math
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +13,7 @@ MODULE_PATH = ROOT / "scripts" / "research_v5_sleeve_oos.py"
 SPEC = importlib.util.spec_from_file_location("research_v5_sleeve_oos", MODULE_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
+sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
