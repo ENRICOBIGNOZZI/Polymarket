@@ -10,6 +10,7 @@ on:
       - "config/paper_v6.json"
       - "scripts/v6_market_proxy.py"
       - "scripts/v6_market_snapshot.py"
+      - "tests/test_v6_market_cache_relay_contract.py"
   schedule:
     - cron: "*/5 * * * *"
 
@@ -193,6 +194,55 @@ jobs:
           printf 'relay_cache_installed=%s\n' "$target"
           REMOTE
 
+      - name: Verify running proxy consumes installed cache
+        if: steps.target.outputs.active == 'true'
+        shell: bash
+        env:
+          RUN_ROOT_REL: ${{ steps.target.outputs.run_root }}
+        run: |
+          set -euo pipefail
+          mkdir -p relay-evidence
+          ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            "RUN_ROOT_REL='$RUN_ROOT_REL' bash -s" <<'REMOTE' | tee relay-evidence/live-proxy-consumption.txt
+          set -euo pipefail
+          cd ~/polymarket
+          [[ "$RUN_ROOT_REL" =~ ^runs/[A-Za-z0-9._-]+$ ]]
+          proxy_url="$(python3 - "$RUN_ROOT_REL/runtime_config.json" <<'PY'
+          import json,sys,urllib.parse
+          cfg=json.load(open(sys.argv[1],encoding='utf-8'))
+          url=str(cfg.get('gamma_url') or '')
+          parsed=urllib.parse.urlsplit(url)
+          assert parsed.scheme == 'http', url
+          assert parsed.hostname in {'127.0.0.1','localhost'}, url
+          assert parsed.port is not None, url
+          print(f'http://127.0.0.1:{parsed.port}')
+          PY
+          )"
+          health="$(curl -fsS --max-time 3 "$proxy_url/healthz")"
+          printf 'proxy_health=%s\n' "$health"
+          response="$(curl -fsS --max-time 5 "$proxy_url/markets?active=true&closed=false&limit=1&offset=0&order=liquidityNum&ascending=false&liquidity_num_min=10")"
+          python3 - "$response" "$RUN_ROOT_REL/market_proxy_status.json" <<'PY'
+          import json,sys,time
+          rows=json.loads(sys.argv[1])
+          assert isinstance(rows,list) and rows, rows
+          row=rows[0]
+          assert isinstance(row,dict)
+          assert str(row.get('id') or '') and str(row.get('conditionId') or '')
+          assert float(row.get('liquidityNum')) >= 10.0
+          status=json.load(open(sys.argv[2],encoding='utf-8'))
+          assert status.get('schema') == 'polymarket_v6_market_proxy_status_v1'
+          assert str(status.get('source') or '').endswith('_cache'), status
+          assert int(status.get('markets') or 0) >= 1, status
+          assert float(status.get('cache_age_seconds') or 0.0) <= 180.0, status
+          assert time.time()-float(status.get('timestamp') or 0) <= 30.0, status
+          print('live_proxy_cache_consumed=true')
+          print('live_proxy_source='+str(status.get('source')))
+          print('live_proxy_markets='+str(status.get('markets')))
+          print('live_proxy_cache_age_seconds='+str(status.get('cache_age_seconds')))
+          PY
+          REMOTE
+
       - name: Publish relay summary
         if: always()
         shell: bash
@@ -203,6 +253,11 @@ jobs:
           elif [[ -s relay-evidence/snapshot-summary.json ]]; then
             echo '```json' >> "$GITHUB_STEP_SUMMARY"
             cat relay-evidence/snapshot-summary.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -s relay-evidence/live-proxy-consumption.txt ]]; then
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            cat relay-evidence/live-proxy-consumption.txt >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
 
