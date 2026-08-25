@@ -15,6 +15,11 @@ INTEGRATION_ONLY_LABELS = {
     "autonomous-promotion-approved",
 }
 SOURCE_RESEARCH_PR_PATTERN = re.compile(r"source research pr/branch/commit:\s*#(\d+)\b", flags=re.IGNORECASE)
+RESEARCH_VERDICT_PATTERN = re.compile(
+    r"\b(INTEGRATION_READY|APPROVED_FOR_INTEGRATION|MORE_EVIDENCE_REQUIRED|REJECTED|SHADOW_ONLY)\b",
+    flags=re.IGNORECASE,
+)
+APPROVED_RESEARCH_VERDICTS = {"INTEGRATION_READY", "APPROVED_FOR_INTEGRATION"}
 MODEL_BODY_TERMS = ("alpha","model","strategy","signal","stat-arb","stat arb","pca","maker","opportunity","portfolio","paper champion","candidate bundle")
 LIVE_MODEL_SURFACE_PATTERNS = (
     re.compile(r"^config/live_champion\.json$"), re.compile(r"^config/paper_v\d+\.json$"),
@@ -69,7 +74,57 @@ def shadow_forbidden_files(changed_files: set[str]) -> list[str]:
     return forbidden
 
 
-def evaluate(event: dict[str, Any], changed_files: set[str], manifest_existed_on_base: bool) -> tuple[list[str], dict[str, Any]]:
+def research_verdict(source: dict[str, Any] | None) -> str | None:
+    if not isinstance(source, dict):
+        return None
+    events: list[tuple[str, int, str]] = []
+    body = str(source.get("body") or "")
+    if body:
+        events.append(("", 0, body))
+    ordinal = 1
+    for key, timestamp_key in (("comments", "createdAt"), ("reviews", "submittedAt")):
+        for item in source.get(key) or []:
+            if not isinstance(item, dict):
+                continue
+            snake = timestamp_key.replace("At", "_at")
+            timestamp = str(item.get(timestamp_key) or item.get(snake) or "")
+            events.append((timestamp, ordinal, str(item.get("body") or "")))
+            ordinal += 1
+    verdicts: list[tuple[str, int, int, str]] = []
+    for timestamp, event_order, text in events:
+        for match_order, match in enumerate(RESEARCH_VERDICT_PATTERN.finditer(text)):
+            verdicts.append((timestamp, event_order, match_order, match.group(1).upper()))
+    if not verdicts:
+        return None
+    verdicts.sort(key=lambda item: (item[0], item[1], item[2]))
+    return verdicts[-1][3]
+
+
+def source_branch(source: dict[str, Any] | None) -> str:
+    if not isinstance(source, dict):
+        return ""
+    direct = str(source.get("headRefName") or "")
+    if direct:
+        return direct
+    head = source.get("head")
+    return str(head.get("ref") or "") if isinstance(head, dict) else ""
+
+
+def source_number(source: dict[str, Any] | None) -> int | None:
+    if not isinstance(source, dict):
+        return None
+    try:
+        return int(source.get("number"))
+    except (TypeError, ValueError):
+        return None
+
+
+def evaluate(
+    event: dict[str, Any],
+    changed_files: set[str],
+    manifest_existed_on_base: bool,
+    source_research: dict[str, Any] | None = None,
+) -> tuple[list[str], dict[str, Any]]:
     pr = event.get("pull_request")
     if not isinstance(pr, dict): return ["event does not contain pull_request metadata"], {}
     head = str(pr.get("head", {}).get("ref") or pr.get("headRefName") or "")
@@ -79,6 +134,9 @@ def evaluate(event: dict[str, Any], changed_files: set[str], manifest_existed_on
     opaque_model_bootstrap = is_opaque_model_bootstrap(changed_files, body)
     forbidden_shadow_files = shadow_forbidden_files(changed_files) if "shadow-isolated" in labels else []
     errors: list[str] = []
+    linked_source_match = SOURCE_RESEARCH_PR_PATTERN.search(body)
+    linked_source_number = int(linked_source_match.group(1)) if linked_source_match else None
+    latest_source_verdict = research_verdict(source_research)
 
     if head.startswith(RESEARCH_PREFIXES):
         forbidden = sorted(labels.intersection(INTEGRATION_ONLY_LABELS))
@@ -87,8 +145,23 @@ def evaluate(event: dict[str, Any], changed_files: set[str], manifest_existed_on
             errors.append("research PRs that are not shadow-isolated must remain draft; promotion happens through an integration/* candidate after objective validation")
         if manifest_changed: errors.append("research and diagnostic branches may never change the live champion manifest")
     elif head.startswith("integration/"):
-        if not draft and SOURCE_RESEARCH_PR_PATTERN.search(body) is None:
+        if not draft and linked_source_number is None:
             errors.append("integration PR must link a numbered source research PR as `Source research PR/branch/commit: #<number>`")
+        if not draft and model_surface_files:
+            if source_research is None:
+                errors.append("sensitive integration PRs must provide source research metadata to Change Policy before leaving draft")
+            else:
+                actual_source_number = source_number(source_research)
+                actual_source_branch = source_branch(source_research)
+                if linked_source_number is not None and actual_source_number != linked_source_number:
+                    errors.append("sensitive integration source research PR does not match the numbered source in the candidate body")
+                if not actual_source_branch.startswith(RESEARCH_PREFIXES):
+                    errors.append("sensitive integration source must come from research/*, experiment/*, or diagnostic/*")
+                if latest_source_verdict not in APPROVED_RESEARCH_VERDICTS:
+                    errors.append(
+                        "unapproved model/runtime work must remain in research until the latest source verdict is APPROVED_FOR_INTEGRATION or INTEGRATION_READY; "
+                        f"latest source verdict: {latest_source_verdict or 'none'}"
+                    )
     else:
         misplaced = sorted(labels.intersection(INTEGRATION_ONLY_LABELS | {"research-approved"}))
         if misplaced: errors.append("research/integration labels are valid only on their dedicated branch classes: " + ", ".join(misplaced))
@@ -105,6 +178,8 @@ def evaluate(event: dict[str, Any], changed_files: set[str], manifest_existed_on
         "branch": head, "draft": draft, "labels": sorted(labels), "manifest_changed": manifest_changed,
         "model_surface_files": model_surface_files, "opaque_model_bootstrap": opaque_model_bootstrap,
         "shadow_forbidden_files": forbidden_shadow_files, "changed_files": len(changed_files),
+        "source_research_pr": linked_source_number if linked_source_number is not None else "none",
+        "source_research_verdict": latest_source_verdict or "none",
         "automatic_paper_promotion": head.startswith("integration/"), "manual_approval_labels_required": False,
         "policy": "pass" if not errors else "fail",
     }
@@ -113,7 +188,7 @@ def evaluate(event: dict[str, Any], changed_files: set[str], manifest_existed_on
 
 def render(summary: dict[str, Any], errors: list[str]) -> str:
     lines = ["# Research pull-request policy", ""]
-    for key in ("branch","draft","labels","manifest_changed","model_surface_files","opaque_model_bootstrap","shadow_forbidden_files","changed_files","automatic_paper_promotion","manual_approval_labels_required","policy"):
+    for key in ("branch","draft","labels","manifest_changed","model_surface_files","opaque_model_bootstrap","shadow_forbidden_files","changed_files","source_research_pr","source_research_verdict","automatic_paper_promotion","manual_approval_labels_required","policy"):
         value = summary.get(key, "unknown")
         if isinstance(value, list): value = ", ".join(str(item) for item in value) or "none"
         lines.append(f"- {key}: `{value}`")
@@ -125,10 +200,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Enforce Polymarket research/integration PR policy")
     parser.add_argument("--event", required=True); parser.add_argument("--changed-files", required=True)
     parser.add_argument("--manifest-existed-on-base", choices=("true", "false"), required=True); parser.add_argument("--output", required=True)
+    parser.add_argument("--source-research-json")
     args = parser.parse_args()
+
+    source_research = None
+    if args.source_research_json:
+        source_research = json.loads(Path(args.source_research_json).read_text(encoding="utf-8"))
+
     event = json.loads(Path(args.event).read_text(encoding="utf-8"))
     changed = {line.strip() for line in Path(args.changed_files).read_text(encoding="utf-8").splitlines() if line.strip()}
-    errors, summary = evaluate(event, changed, manifest_existed_on_base=args.manifest_existed_on_base == "true")
+    errors, summary = evaluate(
+        event,
+        changed,
+        manifest_existed_on_base=args.manifest_existed_on_base == "true",
+        source_research=source_research,
+    )
     report = render(summary, errors); Path(args.output).write_text(report, encoding="utf-8"); print(report, end="")
     for error in errors: print(f"::error::{error}")
     return 1 if errors else 0
