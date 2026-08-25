@@ -71,13 +71,14 @@ jobs:
             --output-json project-context.json \
             --output-markdown project-context.md
 
-      - name: Test research and promotion policy regressions
+      - name: Test research, promotion and hard-safety policy regressions
         run: >-
           python3 -m unittest
           tests/test_research_policy_cross_venue.py
           tests/test_research_verdict_provenance.py
           tests/test_v5_allocator_policy.py
           tests/test_promotion_gate.py
+          tests/test_hard_safety_policy.py
           -v
 
       - name: Ensure research-isolation labels exist
@@ -108,6 +109,12 @@ jobs:
           git diff --name-only origin/main...HEAD | sort -u > changed-files.txt
           manifest_existed=false
           if git cat-file -e origin/main:config/live_champion.json 2>/dev/null; then manifest_existed=true; fi
+
+          python3 scripts/hard_safety_policy.py \
+            --base-ref origin/main \
+            --changed-files changed-files.txt \
+            --root . \
+            --output hard-safety-policy-report.md
 
           source_args=()
           head_ref="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["ref"])')"
@@ -186,6 +193,8 @@ jobs:
           printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat project-context.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          cat hard-safety-policy-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat research-policy-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
       - name: Upload policy evidence
@@ -198,6 +207,7 @@ jobs:
             project-context-validation.md
             project-context.md
             project-context.json
+            hard-safety-policy-report.md
             research-policy-report.md
             changed-files.txt
             source-pr.json
