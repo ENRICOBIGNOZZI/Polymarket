@@ -22,7 +22,6 @@ def main() -> int:
             if not isinstance(alpha,dict) or alpha.get("paper_only") is not True:raise SystemExit("micro taker alpha must remain paper-only")
             if not isinstance(exploration,dict) or exploration.get("paper_only") is not True:raise SystemExit("micro taker exploration must remain paper-only")
             child["v6"]={
-                "paper_only":True,
                 "assumed_fee_rate":v.get("assumed_fee_rate",.07),
                 "assumed_fee_exponent":v.get("assumed_fee_exponent",1.0),
                 "micro_taker_alpha":alpha,

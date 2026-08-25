@@ -218,7 +218,8 @@ class V6RuntimeContractTest(unittest.TestCase):
                 text=True,
             )
             child = json.loads((run_root / "micro_taker_config.json").read_text(encoding="utf-8"))
-        self.assertTrue(child["v6"]["paper_only"])
+        self.assertTrue(child["v6"]["micro_taker_alpha"]["paper_only"])
+        self.assertTrue(child["v6"]["micro_taker_exploration"]["paper_only"])
         self.assertEqual(child["v6"]["micro_taker_alpha"], cfg["v6"]["micro_taker_alpha"])
         self.assertEqual(child["v6"]["micro_taker_exploration"], cfg["v6"]["micro_taker_exploration"])
         loop = (ROOT / "scripts/paper_v6_loop.sh").read_text(encoding="utf-8")

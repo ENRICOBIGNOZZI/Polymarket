@@ -77,7 +77,6 @@ for name,frac in alloc:
         assert isinstance(alpha,dict) and alpha.get('paper_only') is True
         assert isinstance(exploration,dict) and exploration.get('paper_only') is True
         child['v6']={
-            'paper_only':True,
             'assumed_fee_rate':v.get('assumed_fee_rate',.07),
             'assumed_fee_exponent':v.get('assumed_fee_exponent',1.0),
             'micro_taker_alpha':alpha,
