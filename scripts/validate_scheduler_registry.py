@@ -14,7 +14,11 @@ REQUIRED_IDS = {
     "v6-live-data-research", "alpha-factory", "meta-supervisor", "fast-arb-shadow-research",
     "arb-theory-research", "external-intelligence", "live-api-smoke",
 }
-NON_SCHEDULER_WORKFLOWS = {".github/workflows/grafana-access.yml"}
+NON_SCHEDULER_WORKFLOWS = {
+    ".github/workflows/grafana-access.yml",
+    # This is an exact-head PR/private-node proof, not an autonomous scheduler.
+    ".github/workflows/private-runtime-single-writer-validation.yml",
+}
 
 
 def workflow_job_ids(path: Path) -> list[str]:
