@@ -75,6 +75,7 @@ jobs:
         run: >-
           python3 -m unittest
           tests/test_research_policy_cross_venue.py
+          tests/test_research_verdict_provenance.py
           tests/test_v5_allocator_policy.py
           tests/test_promotion_gate.py
           -v
@@ -120,9 +121,33 @@ jobs:
           PY
             )"
             if [[ -n "$source_number" ]]; then
-              if gh pr view "$source_number" \
-                --json number,headRefName,headRefOid,isDraft,labels,state,body,statusCheckRollup,comments,reviews \
-                > source-research.json 2>/dev/null; then
+              if gh api "repos/${GITHUB_REPOSITORY}/pulls/${source_number}" > source-pr.json 2>/dev/null; then
+                gh api --paginate --slurp \
+                  "repos/${GITHUB_REPOSITORY}/issues/${source_number}/comments?per_page=100" \
+                  > source-comments-pages.json
+                gh api --paginate --slurp \
+                  "repos/${GITHUB_REPOSITORY}/pulls/${source_number}/reviews?per_page=100" \
+                  > source-reviews-pages.json
+                python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          def flatten(path: str) -> list[dict]:
+              raw = json.loads(Path(path).read_text(encoding='utf-8'))
+              if not isinstance(raw, list):
+                  return []
+              if raw and all(isinstance(page, list) for page in raw):
+                  return [item for page in raw for item in page if isinstance(item, dict)]
+              return [item for item in raw if isinstance(item, dict)]
+
+          source = json.loads(Path('source-pr.json').read_text(encoding='utf-8'))
+          source['comments'] = flatten('source-comments-pages.json')
+          source['reviews'] = flatten('source-reviews-pages.json')
+          Path('source-research.json').write_text(
+              json.dumps(source, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
                 source_args=(--source-research-json source-research.json)
               fi
             fi
@@ -175,6 +200,9 @@ jobs:
             project-context.json
             research-policy-report.md
             changed-files.txt
+            source-pr.json
+            source-comments-pages.json
+            source-reviews-pages.json
             source-research.json
           if-no-files-found: warn
           retention-days: 14
