@@ -70,7 +70,9 @@ def broker_semantics(broker_source: str, runtime_loop_source: str) -> dict[str, 
     threshold = _numeric_arg(runtime_loop_source, "--completion-threshold")
     submit_latency = _numeric_arg(runtime_loop_source, "--submit-latency-ms")
     cancel_latency = _numeric_arg(runtime_loop_source, "--cancel-latency-ms")
+    max_replaces = _numeric_arg(runtime_loop_source, "--max-replaces")
     max_leg_risk = _numeric_arg(runtime_loop_source, "--max-leg-risk-usd")
+    adverse_horizon = _numeric_arg(runtime_loop_source, "--adverse-horizon-seconds")
 
     minimum_leg_fraction = (
         _flag(broker_source, "return pm::minimum_completion(ft);")
@@ -91,7 +93,9 @@ def broker_semantics(broker_source: str, runtime_loop_source: str) -> dict[str, 
         "runtime_completion_threshold_min_leg_fraction": threshold,
         "runtime_submit_latency_ms": submit_latency,
         "runtime_cancel_latency_ms": cancel_latency,
+        "runtime_max_replaces": max_replaces,
         "runtime_max_unmatched_leg_risk_usd": max_leg_risk,
+        "runtime_adverse_mark_horizon_seconds": adverse_horizon,
         "completion_is_minimum_leg_fill_fraction": minimum_leg_fraction,
         "timeout_transitions_to_abort": timeout_aborts,
         "abort_unwinds_only_filled_inventory": abort_unwinds and filled_only_exit,
