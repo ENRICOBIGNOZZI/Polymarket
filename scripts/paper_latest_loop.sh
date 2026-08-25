@@ -94,13 +94,172 @@ fi
 # lock.  Child-level locks remain useful, but they are too late to prevent two
 # wrappers from launching competing recorder/model writers.  Re-exec through a
 # tiny fcntl launcher so the lock fd survives for this process lifetime.
+singleton_lock="$run_root/runtime_owner.lock"
+handoff_marker="$run_root/runtime_handoff.request"
+
+runtime_tree_pids() {
+  python3 - "$1" <<'PY'
+import subprocess
+import sys
+
+root = int(sys.argv[1])
+rows = []
+for line in subprocess.check_output(["/bin/ps", "-axo", "pid=,ppid="], text=True).splitlines():
+    fields = line.split()
+    if len(fields) != 2:
+        continue
+    try:
+        rows.append((int(fields[0]), int(fields[1])))
+    except ValueError:
+        continue
+children = {}
+for pid, parent in rows:
+    children.setdefault(parent, []).append(pid)
+out, stack, seen = [], [root], {root}
+while stack:
+    parent = stack.pop()
+    for child in children.get(parent, []):
+        if child in seen:
+            continue
+        seen.add(child)
+        out.append(child)
+        stack.append(child)
+print("\\n".join(str(pid) for pid in out + [root]))
+PY
+}
+
+same_repository_runtime_owner() {
+  local pid="$1" command_line cwd
+  [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" != "$$" ]] || return 1
+  command_line="$(/bin/ps -o command= -p "$pid" 2>/dev/null || true)"
+  [[ "$command_line" == *"paper_latest_loop.sh"* || "$command_line" == *"runtime_singleton_launcher.py"* ]] || return 1
+  [[ "$command_line" == *"$ROOT/scripts/paper_latest_loop.sh"* || "$command_line" == *"$ROOT/scripts/runtime_singleton_launcher.py"* ]] && return 0
+  command -v lsof >/dev/null 2>&1 || return 1
+  cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | /usr/bin/sed -n 's/^n//p' | /usr/bin/head -n 1)"
+  [[ "$cwd" == "$ROOT" ]]
+}
+
+same_repository_runtime_lock_holder() {
+  local pid="$1" cwd
+  [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" != "$$" ]] || return 1
+  command -v lsof >/dev/null 2>&1 || return 1
+  cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | /usr/bin/sed -n 's/^n//p' | /usr/bin/head -n 1)"
+  [[ "$cwd" == "$ROOT" ]]
+}
+
+runtime_lock_is_free() {
+  python3 - "$singleton_lock" <<'PY'
+import fcntl
+import os
+import sys
+
+fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o600)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    raise SystemExit(1)
+finally:
+    os.close(fd)
+PY
+}
+
+wait_for_runtime_lock_to_release() {
+  local attempts="$1" attempt
+  for ((attempt=1; attempt<=attempts; ++attempt)); do
+    runtime_lock_is_free && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+reap_requested_stale_runtime_owner() {
+  [[ -f "$handoff_marker" ]] || return 0
+  command -v lsof >/dev/null 2>&1 || { echo "fatal: runtime handoff requires lsof" >&2; return 1; }
+  runtime_lock_is_free && return 0
+  local owner pid target
+  owner="$(/usr/bin/tr -dc '0-9' < "$singleton_lock" 2>/dev/null || true)"
+  [[ "$owner" =~ ^[1-9][0-9]*$ && "$owner" != "$$" ]] || {
+    echo "fatal: runtime handoff found a lock without a usable owner pid" >&2
+    return 1
+  }
+  local holders=()
+  while IFS= read -r pid; do
+    [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" != "$$" ]] && holders+=("$pid")
+  done < <(lsof -t "$singleton_lock" 2>/dev/null || true)
+  ((${#holders[@]})) || {
+    echo "fatal: runtime handoff lock owner disappeared before ownership could be verified" >&2
+    return 1
+  }
+  local owner_holds_lock=0 owner_is_alive=0
+  for pid in "${holders[@]}"; do
+    [[ "$pid" == "$owner" ]] && owner_holds_lock=1
+  done
+  kill -0 "$owner" 2>/dev/null && owner_is_alive=1
+  if (( owner_holds_lock == 1 )); then
+    same_repository_runtime_owner "$owner" || {
+      echo "fatal: runtime handoff refused unknown lock owner pid=$owner" >&2
+      return 1
+    }
+    echo "stale_runtime_owner_reaped=$owner" >&2
+    while IFS= read -r target; do
+      [[ "$target" =~ ^[1-9][0-9]*$ ]] && kill -TERM "$target" 2>/dev/null || true
+    done < <(runtime_tree_pids "$owner")
+  elif (( owner_is_alive == 0 )); then
+    # A legacy wrapper can die while a child retains its inherited fd.  A dead
+    # recorded owner plus actual lsof holders is sufficient only after every
+    # holder proves the same repository cwd; never infer ownership by name.
+    for pid in "${holders[@]}"; do
+      same_repository_runtime_lock_holder "$pid" || {
+        echo "fatal: runtime handoff refused unknown orphan lock holder pid=$pid" >&2
+        return 1
+      }
+    done
+    for pid in "${holders[@]}"; do
+      echo "stale_runtime_orphan_lock_holder_reaped=$pid" >&2
+      kill -TERM "$pid" 2>/dev/null || true
+    done
+  else
+    echo "fatal: runtime handoff owner pid=$owner is alive but no longer holds the singleton lock" >&2
+    return 1
+  fi
+  wait_for_runtime_lock_to_release 25 && return 0
+
+  # Older wrappers deliberately inherited the singleton descriptor.  If one
+  # resistant descendant retained it after the verified owner's tree received
+  # TERM, terminate only lock holders whose cwd proves they belong to this
+  # repository.  Anything else leaves startup fail-closed.
+  holders=()
+  while IFS= read -r pid; do
+    [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" != "$$" ]] && holders+=("$pid")
+  done < <(lsof -t "$singleton_lock" 2>/dev/null || true)
+  ((${#holders[@]})) || {
+    echo "fatal: requested paper runtime handoff retained an unverifiable lock" >&2
+    return 1
+  }
+  for pid in "${holders[@]}"; do
+    same_repository_runtime_lock_holder "$pid" || {
+      echo "fatal: runtime handoff refused unknown lock holder pid=$pid" >&2
+      return 1
+    }
+  done
+  echo "stale_runtime_owner_killed=$owner" >&2
+  for pid in "${holders[@]}"; do
+    kill -KILL "$pid" 2>/dev/null || true
+  done
+  wait_for_runtime_lock_to_release 25 || {
+    echo "fatal: requested paper runtime handoff retained stale lock ownership" >&2
+    return 1
+  }
+}
+
 if [[ "${POLYMARKET_RUNTIME_SINGLETON_HELD:-0}" != "1" ]]; then
-  singleton_lock="$run_root/runtime_owner.lock"
+  reap_requested_stale_runtime_owner || exit 1
   exec python3 "$ROOT/scripts/runtime_singleton_launcher.py" \
     --lock "$singleton_lock" -- \
     env POLYMARKET_RUNTIME_SINGLETON_HELD=1 \
     /usr/bin/env bash "$ROOT/scripts/paper_latest_loop.sh" "$@"
 fi
+rm -f "$handoff_marker"
 
 fast_enabled="${POLYMARKET_FAST_ARB_ENABLED:-1}"
 # Shadow instrumentation must never block the incumbent champion by default.
