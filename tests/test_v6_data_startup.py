@@ -23,7 +23,8 @@ class V6DataStartupContractTest(unittest.TestCase):
         self.assertIn("market_proxy_status.json", loop)
         self.assertIn(warm_call, loop)
         self.assertIn(consumers, loop)
-        self.assertLess(loop.index("seed_market_proxy_cache\nstart_proxy"), loop.index(warm_call))
+        self.assertIn("seed_market_proxy_cache\nreap_orphan_v6_loops\nstart_proxy", loop)
+        self.assertLess(loop.index("seed_market_proxy_cache\nreap_orphan_v6_loops\nstart_proxy"), loop.index(warm_call))
         self.assertLess(loop.index(warm_call), loop.index(consumers))
 
     def test_external_feed_is_materialized_before_external_engine(self) -> None:
@@ -42,6 +43,7 @@ class V6DataStartupContractTest(unittest.TestCase):
         loop = (ROOT / "scripts" / "paper_v6_loop.sh").read_text(encoding="utf-8")
         self.assertIn('ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"', loop)
         self.assertIn('pgrep -f "$ROOT/scripts/paper_v6_loop.sh"', loop)
+        self.assertIn("reap_orphan_v6_loops\nstart_proxy", loop)
 
 
 if __name__ == "__main__":
