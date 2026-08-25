@@ -217,7 +217,7 @@ jobs:
           printf 'champion_version=%s\n' "$version"
           printf 'champion_run_root=%s\n' "$run_name"
           case "$(uname -s)" in
-            Darwin) sudo -n /usr/local/sbin/polymarket-service-control status ;;
+            Darwin) bash ops/macos_service_control.sh status ;;
             Linux)
               systemctl is-active --quiet polymarket-paper.service
               systemctl is-active --quiet polymarket-monitoring.service
