@@ -1,6 +1,6 @@
 {
   "schema": "lf_v6_crossfit_horizon_current_evidence_v1",
-  "captured_at": "2026-08-25T10:24:00Z",
+  "captured_at": "2026-08-25T10:34:00Z",
   "base_main_sha": "957d654fedd7b7e353b75c85f708e61c4f1c46a8",
   "decision": "MORE_EVIDENCE_REQUIRED",
   "incumbent_contract": {
@@ -50,9 +50,38 @@
   ],
   "fresh_public_paper_snapshot": {
     "git_sha": "957d654fedd7b7e353b75c85f708e61c4f1c46a8",
+    "github_run_id": 32836432126,
     "trade_recorder_status": "healthy",
     "trade_recorder_markets": 220,
     "trade_recorder_new_trades": 122,
+    "local_factor": {
+      "markets": 220,
+      "clusters": 8,
+      "histories": 95,
+      "reversion_tests": 3,
+      "fdr": 0.1,
+      "bh_pvalue_cutoff": 0.00006860387270579693,
+      "fdr_eligible_signals": 1,
+      "bundles": 0,
+      "intent_rows": 0,
+      "best_edge": 0.0,
+      "failures": []
+    },
+    "relation_graph": {
+      "events_considered": 12,
+      "events_complete": 1,
+      "bundles": 1,
+      "intent_rows": 5,
+      "best_edge": 0.010000000000000009,
+      "guard_accepted_rows": 5,
+      "structural_enabled": false
+    },
+    "external_bridge": {
+      "report_status": "BACKTESTING",
+      "passing_direct_models": 0,
+      "materialized_signals": 0,
+      "failures": []
+    },
     "combined_intent_bundles": 1,
     "combined_intent_strategies": {
       "GRAPH_RV": 5
