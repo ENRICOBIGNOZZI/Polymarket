@@ -17,6 +17,7 @@ on:
       - "config/fast_arb_*"
       - "scripts/arb_theory_scheduler.py"
       - "scripts/validate_fast_data_health.py"
+      - "scripts/validate_fast_hard_freshness.py"
       - "scripts/paper_latest_loop.sh"
       - "tests/test_fast_*"
       - "tests/test_arb_theory_scheduler.py"
@@ -48,7 +49,10 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j2
           ctest --test-dir build --output-on-failure
-          python3 -m unittest tests/test_fast_data_health.py tests/test_fast_coverage_ablation.py -v
+          python3 -m unittest \
+            tests/test_fast_data_health.py \
+            tests/test_fast_coverage_ablation.py \
+            tests/test_fast_hard_freshness.py -v
 
       - name: Run read-only fast shadow probe
         shell: bash
@@ -91,6 +95,13 @@ jobs:
             --output-json runs/hourly-fast/fast_arb_candidate.json \
             --output-markdown runs/hourly-fast/fast_arb_theory_report.md \
             --output-header runs/hourly-fast/fast_arb_candidate_policy.hpp
+          python3 scripts/validate_fast_hard_freshness.py \
+            --opportunities runs/hourly-fast/fast_arb_opportunities.csv \
+            --candidate runs/hourly-fast/fast_arb_candidate.json \
+            --output-json runs/hourly-fast/fast_arb_hard_freshness.json \
+            --output-markdown runs/hourly-fast/fast_arb_hard_freshness.md \
+            --max-leg-age-ms 2000 \
+            --max-leg-skew-ms 1000
           python3 scripts/validate_fast_data_health.py \
             --status runs/hourly-fast/fast_arb_status.json \
             --errors runs/hourly-fast/fast_arb_errors.csv \
@@ -101,14 +112,23 @@ jobs:
           from pathlib import Path
           status = json.loads(Path("runs/hourly-fast/fast_arb_status.json").read_text())
           candidate = json.loads(Path("runs/hourly-fast/fast_arb_candidate.json").read_text())
+          freshness = json.loads(Path("runs/hourly-fast/fast_arb_hard_freshness.json").read_text())
           base_policy = json.loads(Path("config/fast_arb_policy.json").read_text())
           assert status["mode"] == "shadow"
           assert status["real_order_submission"] is False
           assert candidate["mode"] == "research_only"
           assert candidate["real_order_submission"] is False
           assert candidate["candidate_policy"]["min_net_edge"] >= base_policy["min_net_edge"]
+          assert freshness["mode"] == "research_only"
+          assert freshness["real_order_submission"] is False
+          assert candidate["hard_executable_observations_freshness_qualified"] == freshness["freshness_qualified_hard_executable_observations"]
+          if freshness["raw_hard_executable_observations"] > freshness["freshness_qualified_hard_executable_observations"]:
+              assert candidate["promotion_ready"] is False
+              assert candidate["candidate_policy"]["promotion_ready"] is False
           PY
           cat runs/hourly-fast/fast_arb_theory_report.md >> "$GITHUB_STEP_SUMMARY"
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          cat runs/hourly-fast/fast_arb_hard_freshness.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload hourly evidence
         if: always()
