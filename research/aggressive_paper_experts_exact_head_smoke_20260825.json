@@ -1,0 +1,124 @@
+{
+  "schema": "polymarket_alpha_factory_aggressive_v5_smoke_v1",
+  "source_pr": 192,
+  "source_head": "f79477355fd18c9ff05cf2f361589acbc86a4d0a",
+  "workflow_run_id": 32814991374,
+  "workflow_conclusion": "success",
+  "economic_decision": "REJECT_CURRENT_AGGRESSIVE_ENTRY_PROFILE",
+  "reason": "The exact-head public paper smoke materially increased activity but produced negative aggregate mark-to-market economics and exposed semantic proposition-collapse failures. Increased trade count is not alpha.",
+  "portfolio": {
+    "starting_equity": 10000.0,
+    "ending_equity": 9975.37936887264,
+    "mark_to_market_pnl": -24.620631127359957,
+    "realized_pnl": -0.00007162537340832387,
+    "gross_exposure": 233.5688681395244,
+    "live_units": 184,
+    "reserved_cash": 500.0
+  },
+  "sleeves": {
+    "micro": {
+      "starting_capital": 2000.0,
+      "ending_equity": 1989.3702247185765,
+      "mark_to_market_pnl": -10.6297752814235,
+      "gross_exposure": 61.66315285710891,
+      "signals": 574,
+      "positive_net_signals": 133,
+      "buy_fills": 129,
+      "max_net_edge": 0.014087,
+      "decision": "REJECT_FIXED_PRESSURE_EXTRAPOLATION_AS_ALPHA_EVIDENCE",
+      "owner_for_followup": "HF research / PR #147"
+    },
+    "pca": {
+      "starting_capital": 2500.0,
+      "ending_equity": 2500.0,
+      "mark_to_market_pnl": 0.0,
+      "gross_exposure": 0.0,
+      "signals": 100,
+      "positive_net_signals": 0,
+      "buy_fills": 0,
+      "max_net_edge": -0.000150545,
+      "decision": "MORE_EVIDENCE_REQUIRED_DO_NOT_USE_RELAXED_T_GATE_AS_ALPHA",
+      "owner_for_followup": "LF research / PRs #157 #174 #184 #187"
+    },
+    "graph": {
+      "starting_capital": 2500.0,
+      "ending_equity": 2499.1122639319733,
+      "mark_to_market_pnl": -0.8877360680267,
+      "gross_exposure": 34.95173610058895,
+      "signals": 468,
+      "positive_net_signals": 8,
+      "buy_fills": 7,
+      "max_net_edge": 0.0113086,
+      "decision": "REJECT_SINGLE_LEG_GRAPH_PROJECTION_AS_ALPHA_EVIDENCE",
+      "owner_for_followup": "LF graph basket semantics / PR #180"
+    },
+    "semantic": {
+      "starting_capital": 1000.0,
+      "ending_equity": 986.8968802220903,
+      "mark_to_market_pnl": -13.1031197779097,
+      "gross_exposure": 136.95397918182653,
+      "signals": 516,
+      "positive_net_signals": 208,
+      "buy_fills": 48,
+      "max_net_edge": 0.0942301,
+      "decision": "REJECT_CURRENT_LEXICAL_PEER_CONSTRUCTION",
+      "owner_for_followup": "LF relation-aware semantic research / PR #171"
+    },
+    "external": {
+      "starting_capital": 1500.0,
+      "ending_equity": 1500.0,
+      "mark_to_market_pnl": 0.0,
+      "gross_exposure": 0.0,
+      "signals": 0,
+      "positive_net_signals": 0,
+      "buy_fills": 0,
+      "decision": "BLOCKED_NO_APPROVED_DIRECT_Q_EXTERNAL",
+      "owner_for_followup": "external feed/validation / PRs #198 #106"
+    }
+  },
+  "b2_discovery": {
+    "coherent_raw_positive": 127,
+    "coherent_maker_positive": 10,
+    "decision": "DISCOVERY_GAIN_ONLY_NOT_ALPHA_EVIDENCE",
+    "caveats": [
+      "The same profile relaxed reversion significance to 0.20, while existing LF null diagnostics show severe false-admission inflation under aggressive reversion gates.",
+      "The same profile relaxed B2 relation admission to one shared token and Jaccard 0.03, while existing relation-quality research shows one-token low-similarity hedges can manufacture attractive baskets.",
+      "No realized OOS bundle evidence is present."
+    ]
+  },
+  "semantic_counterexample_from_exact_head_smoke": {
+    "market_id": "616902",
+    "slug": "will-no-fed-rate-cuts-happen-in-2026",
+    "market_mid": 0.866,
+    "semantic_q_yes": 0.764861,
+    "observed_net_edge_on_no_side": 0.0942301,
+    "related_ladder_markets": [
+      "will-1-fed-rate-cut-happen-in-2026",
+      "will-3-fed-rate-cuts-happen-in-2026",
+      "will-4-fed-rate-cuts-happen-in-2026",
+      "will-5-fed-rate-cuts-happen-in-2026"
+    ],
+    "failure": "The current tokenizer drops the two-character token 'no' and one-digit numeric thresholds from semantic content tokens, and same-event similarity bonus can further encourage pooling of mutually exclusive/numeric ladder propositions. The apparent semantic edge is therefore not admissible alpha evidence."
+  },
+  "surviving_bounded_experiment": {
+    "keep": [
+      "wider paper research universe",
+      "lower discovery-only liquidity floor",
+      "shorter historical fidelity where timestamps are aligned",
+      "zero-but-never-negative executable-edge floor only after valid model semantics and actual VWAP/fees/slippage checks"
+    ],
+    "reject_or_defer": [
+      "fixed micropressure extrapolation without causal forward markout evidence",
+      "relaxed unit-root/reversion significance as a substitute for alpha",
+      "single-leg graph projection interpreted as terminal directional probability",
+      "lexical semantic averaging without polarity/numeric/expiry relation guards",
+      "external entry without an approved direct q_external handoff"
+    ],
+    "required_evidence": [
+      "common chronological incumbent/challenger rows",
+      "per-sleeve realized paper attribution",
+      "positive incremental net PnL at 1x 1.5x and 2x costs",
+      "existing drawdown kill concentration and paper-only boundaries unchanged"
+    ]
+  }
+}
