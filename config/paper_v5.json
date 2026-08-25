@@ -3,7 +3,6 @@
   "clob_url": "https://clob.polymarket.com",
   "run_dir": "runs/paper_v5_live",
   "external_signals_file": "data/external_signals.csv",
-
   "market_limit": 500,
   "gamma_page_size": 100,
   "books_batch_size": 80,
@@ -13,18 +12,16 @@
   "min_volume24h": 0.0,
   "min_mid": 0.002,
   "max_mid": 0.998,
-  "max_spread": 0.60,
-
+  "max_spread": 0.6,
   "min_net_edge": 0.00025,
   "uncertainty_penalty": 0.01,
   "slippage_bps": 5.0,
-  "fractional_kelly": 0.10,
+  "fractional_kelly": 0.1,
   "max_trade_usd": 75.0,
   "max_market_fraction": 0.025,
   "max_event_fraction": 0.08,
   "max_gross_fraction": 0.45,
   "max_drawdown": 0.15,
-
   "history_bootstrap": true,
   "bootstrap_market_limit": 500,
   "history_lookback_hours": 720,
@@ -33,13 +30,11 @@
   "pca_min_history": 24,
   "pca_universe": 350,
   "pca_mr_strength": 0.65,
-  "pca_min_residual_z": 0.60,
-
+  "pca_min_residual_z": 0.6,
   "graph_max_sum_error": 0.35,
   "semantic_min_similarity": 0.18,
-  "semantic_shrink": 0.50,
+  "semantic_shrink": 0.5,
   "scan_only": false,
-
   "expert_weights": {
     "micro": 0.0,
     "pca": 0.0,
@@ -47,11 +42,10 @@
     "semantic": 0.0,
     "external": 0.0
   },
-
   "multi_strategy": {
     "schema_version": 1,
     "paper_only": true,
-    "description": "Aggressive independent paper books: broad universe, low positive-edge gates, small diversified sizing and global risk control.",
+    "description": "Execution-aware paper system: generic one-expert books are shadow/exit-only; passive maker and B1/B2 use their own executable backends; graph, semantic and external remain fail-closed pending identification and evidence.",
     "reserve_fraction": 0.05,
     "global_max_drawdown": 0.15,
     "global_max_gross_fraction": 0.45,
@@ -63,11 +57,55 @@
       "arbitrage_rows_per_model": 5000,
       "pca_history_rows_per_market": 722
     },
+    "operability": {
+      "generic_children_scan_only": true,
+      "child_stale_seconds": 600,
+      "watchdog_grace_seconds": 180,
+      "report_interval_seconds": 30,
+      "execution_routing": {
+        "micro": {
+          "backend": "maker_paper",
+          "entry_enabled": true,
+          "target": "short_horizon_passive_markout",
+          "reason": "generic taker execution is not a terminal-probability contract"
+        },
+        "pca": {
+          "backend": "multileg_b2",
+          "entry_enabled": true,
+          "target": "hedged_short_horizon_markout",
+          "reason": "generic binary Kelly execution mismatches the PCA forecast horizon"
+        },
+        "stat_arb_pairs": {
+          "backend": "multileg_b1",
+          "entry_enabled": true,
+          "target": "hedged_pair_markout",
+          "reason": "pair alpha must be executed as a coherent multi-leg bundle"
+        },
+        "graph": {
+          "backend": "negrisk_basket_scan",
+          "entry_enabled": false,
+          "target": "complete_event_basket",
+          "reason": "a probability-sum constraint identifies a basket, not a single directional leg"
+        },
+        "semantic": {
+          "backend": "shadow_only",
+          "entry_enabled": false,
+          "target": "relation_conditioned_relative_value",
+          "reason": "polarity, threshold, horizon and event relation are not identified"
+        },
+        "external": {
+          "backend": "shadow_only",
+          "entry_enabled": false,
+          "target": "terminal_probability",
+          "reason": "no fresh approved terminal-probability feed is configured"
+        }
+      }
+    },
     "strategies": [
       {
         "name": "micro",
         "expert": "micro",
-        "capital_fraction": 0.20,
+        "capital_fraction": 0.2,
         "enabled": true,
         "overrides": {
           "market_limit": 500,
@@ -75,12 +113,12 @@
           "history_bootstrap": false,
           "pca_universe": 0,
           "pca_min_history": 100000,
-          "max_spread": 0.20,
-          "min_net_edge": 0.00005,
+          "max_spread": 0.2,
+          "min_net_edge": 5e-05,
           "uncertainty_penalty": 0.0,
           "fractional_kelly": 0.12,
           "max_trade_usd": 25.0,
-          "max_gross_fraction": 0.40,
+          "max_gross_fraction": 0.4,
           "max_drawdown": 0.15
         }
       },
@@ -99,9 +137,9 @@
           "pca_min_history": 24,
           "pca_universe": 350,
           "pca_mr_strength": 0.75,
-          "pca_min_residual_z": 0.60,
+          "pca_min_residual_z": 0.6,
           "max_spread": 0.35,
-          "min_net_edge": 0.00020,
+          "min_net_edge": 0.0002,
           "uncertainty_penalty": 0.005,
           "fractional_kelly": 0.12,
           "max_trade_usd": 75.0,
@@ -121,7 +159,7 @@
           "pca_universe": 0,
           "pca_min_history": 100000,
           "graph_max_sum_error": 0.35,
-          "max_spread": 0.60,
+          "max_spread": 0.6,
           "min_net_edge": 0.00015,
           "uncertainty_penalty": 0.005,
           "fractional_kelly": 0.12,
@@ -142,11 +180,11 @@
           "pca_universe": 0,
           "pca_min_history": 100000,
           "semantic_min_similarity": 0.18,
-          "semantic_shrink": 0.50,
+          "semantic_shrink": 0.5,
           "max_spread": 0.45,
           "min_net_edge": 0.00015,
           "uncertainty_penalty": 0.005,
-          "fractional_kelly": 0.10,
+          "fractional_kelly": 0.1,
           "max_trade_usd": 45.0,
           "max_gross_fraction": 0.45,
           "max_drawdown": 0.15
@@ -155,7 +193,7 @@
       {
         "name": "external",
         "expert": "external",
-        "capital_fraction": 0.10,
+        "capital_fraction": 0.1,
         "enabled": true,
         "overrides": {
           "market_limit": 500,
@@ -164,7 +202,7 @@
           "pca_universe": 0,
           "pca_min_history": 100000,
           "max_spread": 0.45,
-          "min_net_edge": 0.00050,
+          "min_net_edge": 0.0005,
           "uncertainty_penalty": 0.02,
           "fractional_kelly": 0.12,
           "max_trade_usd": 50.0,
