@@ -190,7 +190,26 @@ jobs:
               for row in value["markets"]
           )
           PY
+          previous_mtime_ns="$(python3 - "$target" <<'PY'
+          import os,sys
+          try:
+              print(os.stat(sys.argv[1]).st_mtime_ns)
+          except FileNotFoundError:
+              print(0)
+          PY
+          )"
           mv "$incoming" "$target"
+          # The currently deployed proxy reloads a relay cache only when mtime
+          # advances. Atomic replacement can preserve/regress the incoming file
+          # mtime, so force this verified install strictly past the previous file.
+          python3 - "$target" "$previous_mtime_ns" <<'PY'
+          import os,sys,time
+          path=sys.argv[1]
+          previous=int(sys.argv[2])
+          stat=os.stat(path)
+          refreshed=max(time.time_ns(), previous+1, stat.st_mtime_ns+1)
+          os.utime(path, ns=(stat.st_atime_ns, refreshed))
+          PY
           printf 'relay_cache_installed=%s\n' "$target"
           REMOTE
 
