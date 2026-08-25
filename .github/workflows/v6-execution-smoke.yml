@@ -1,0 +1,61 @@
+name: V6 execution-cost smoke
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/v6_queue_filter.py"
+      - "scripts/paper_v6_loop.sh"
+      - "tests/test_v6_execution_costs.py"
+      - ".github/workflows/v6-execution-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v6-execution-cost-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  execution-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deterministic execution contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/v6_queue_filter.py
+          python3 scripts/v6_queue_filter.py self-test
+          python3 -m unittest tests/test_v6_execution_costs.py -v
+          bash -n scripts/paper_v6_loop.sh
+      - name: Public-data paper execution probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p v6_execution_smoke/micro v6_execution_smoke/hard
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          cfg=json.loads(Path('config/paper_v6.json').read_text())
+          for name,capital in [('micro',800.0),('hard',1200.0)]:
+              child=dict(cfg); child['starting_capital']=capital; child['run_dir']=f'v6_execution_smoke/{name}'
+              Path(f'v6_execution_smoke/{name}.json').write_text(json.dumps(child,indent=2,sort_keys=True)+'\n')
+          PY
+          python3 scripts/v6_queue_filter.py micro --config v6_execution_smoke/micro.json --run-dir v6_execution_smoke/micro --markets 80 --min-liquidity 25 --horizon-seconds 5 --max-target-staleness-seconds 3 --max-trade-usd 10 --min-edge 0.0003 --slippage-bps 5 --max-positions 5
+          python3 scripts/v6_queue_filter.py hard --config v6_execution_smoke/hard.json --run-dir v6_execution_smoke/hard --markets 120 --min-liquidity 10 --max-events 25 --min-edge 0.0002 --max-trade-usd 25 --slippage-bps 5 --leg-latency-ms 100
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          micro=json.loads(Path('v6_execution_smoke/micro/status.json').read_text())
+          hard=json.loads(Path('v6_execution_smoke/hard/status.json').read_text())
+          assert micro['paper_only'] is True
+          assert micro['execution_model']=='depth_vwap_plus_latency_stress'
+          assert hard['paper_only'] is True
+          assert hard['atomic_snapshot_assumption'] is False
+          assert hard['sequential_leg_revalidation'] is True
+          assert hard['leg_latency_ms']==100
+          print(json.dumps({'micro':{k:micro.get(k) for k in ('markets','signals','opened','best_edge','depth_rejections_last_tick','fee_sources_last_tick','failures')},'hard':{k:hard.get(k) for k in ('scanned_events','positive_candidates','entered','sequential_aborts','best_edge','aborting_bundles','fee_sources_last_tick','failures')}},indent=2,sort_keys=True))
+          PY
