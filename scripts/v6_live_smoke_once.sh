@@ -74,6 +74,19 @@ python3 scripts/v6_external_bridge.py \
   --output "$R/external_signals.csv" --status "$R/external_bridge_status.json" \
   --max-age-seconds 21600 --min-confidence 0.35 \
   | tee "$R/external_bridge.log" || true
+
+# Research-only admission frontier. It reuses the same V6 local-factor model and
+# executable-price accounting, sweeps only non-negative post-cost edge floors,
+# and never writes canonical intents or champion state.
+python3 scripts/v6_alpha_admission_frontier.py \
+  --config "$CONFIG" --run-root "$R" --status "$R/alpha_frontier_status.json" \
+  --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" \
+  --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 \
+  --min-common-points 48 --min-z 1.00 --fdr 0.10 \
+  --canonical-min-edge "$EDGE" --frontier-min-edges "0,0.00005,0.00010" \
+  --max-trade-usd 60 --slippage-bps 5 \
+  | tee "$R/alpha_frontier.log" || true
+
 ./build/polymarket_engine \
   --config "$R/external_config.json" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" \
   --paper --once | tee "$R/external/engine.log"
@@ -107,5 +120,8 @@ import json,sys
 r=Path(sys.argv[1])
 for p in ('runtime_status.json','allocator_status.json','local_factor_status.json','relation_status.json','relation_guard_status.json','hard_arb/status.json'):
     json.loads((r/p).read_text())
+frontier=r/'alpha_frontier_status.json'
+if frontier.exists():
+    json.loads(frontier.read_text())
 print('v6_live_smoke_ok')
 PY
