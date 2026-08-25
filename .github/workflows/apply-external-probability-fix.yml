@@ -5,6 +5,7 @@ on:
     branches: [research/aggressive-v5-execution]
     paths:
       - ops/fix_external_probability_model.py
+      - ops/fix_external_pagination.py
       - .github/workflows/apply-external-probability-fix.yml
 
 permissions:
@@ -17,7 +18,7 @@ concurrency:
 jobs:
   apply:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,8 +33,11 @@ jobs:
       - name: Apply direct probability model
         run: |
           set -euo pipefail
-          python3 -m py_compile ops/fix_external_probability_model.py
+          python3 -m py_compile \
+            ops/fix_external_probability_model.py \
+            ops/fix_external_pagination.py
           python3 ops/fix_external_probability_model.py
+          python3 ops/fix_external_pagination.py
           python3 -m py_compile \
             scripts/external_intelligence.py \
             scripts/materialize_external_signals.py \
@@ -67,6 +71,8 @@ jobs:
           (root / 'state-in.json').write_text('{}\n')
 
           config = json.loads(Path('config/external_intelligence.json').read_text())
+          assert config['universe']['max_markets'] >= 500
+          assert config['universe']['page_size'] == 100
           config['sources']['kalshi']['enabled'] = False
           config['sources']['gdelt']['enabled'] = False
           config['backfill']['enabled'] = False
@@ -93,12 +99,13 @@ jobs:
           root = Path('/tmp/external-live')
           rows = [json.loads(line) for line in (root / 'signals.jsonl').read_text().splitlines() if line.strip()]
           direct = [row for row in rows if row.get('q_external') is not None]
+          report = json.loads((root / 'report.json').read_text())
+          assert report['collection']['polymarket_markets'] >= 450, report['collection']
           assert direct, 'no direct external probability was produced'
           assert all(0.0 < float(row['q_external']) < 1.0 for row in direct)
           assert all(float(row.get('confidence', 0.0)) >= 0.35 for row in direct)
-          report = json.loads((root / 'report.json').read_text())
           assert report['collection']['direct_probability_rows'] >= len(direct) > 0
-          print('direct_probability_rows', len(direct))
+          print('direct_probability_rows', len(direct), 'markets', report['collection']['polymarket_markets'])
           for row in direct[:10]:
               print(row['market_id'], row['question'], row['q_external'], row['pm_mid'], row['confidence'])
           PY
@@ -126,6 +133,7 @@ jobs:
           values = {key: int(value) for key, value in re.findall(
               r'(discovered|tradable|candidates|no_terminal_evidence|net_pos)=([0-9]+)', text
           )}
+          assert values.get('discovered', 0) >= 450, values
           assert values.get('tradable', 0) > 0, values
           assert values.get('candidates', 0) > 0, values
           assert values.get('no_terminal_evidence', values['tradable']) < values['tradable'], values
