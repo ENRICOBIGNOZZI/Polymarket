@@ -187,10 +187,20 @@ jobs:
                   summary['micro_taker_opened_last_tick']=int(s.get('opened') or 0)
                   summary['micro_taker_best_edge_last_tick']=float(s.get('best_edge') or 0.0)
                   summary['micro_taker_realized_pnl_total']=float(s.get('realized_pnl_total') or 0.0)
+                  summary['micro_taker_equity']=float(s.get('equity') or 0.0)
+                  summary['micro_taker_drawdown']=float(s.get('drawdown') or 0.0)
                   summary['micro_taker_label_stats_last_tick']=s.get('label_stats_last_tick') or {}
                   summary['micro_taker_execution_model']=s.get('execution_model')
                   summary['micro_taker_depth_rejections_last_tick']=int(s.get('depth_rejections_last_tick') or 0)
                   summary['micro_taker_fee_sources_last_tick']=s.get('fee_sources_last_tick') or {}
+                  alpha=s.get('alpha') if isinstance(s.get('alpha'),dict) else {}
+                  summary['micro_taker_alpha_training']=alpha.get('training') or {}
+                  summary['micro_taker_alpha_training_ready']=alpha.get('training_ready') is True
+                  summary['micro_taker_alpha_training_rejections']=alpha.get('training_rejections_hour') or {}
+                  summary['micro_taker_alpha_economic_rejections']=alpha.get('economic_rejections_hour') or {}
+                  summary['micro_taker_alpha_fee_sources']=alpha.get('fee_sources_hour') or {}
+                  summary['micro_taker_alpha_best_round_trip_cost_fraction']=alpha.get('best_round_trip_cost_fraction_hour')
+                  summary['micro_taker_alpha_best_expected_net_edge']=alpha.get('best_expected_net_edge_hour')
                   exploration=s.get('exploration') if isinstance(s.get('exploration'),dict) else {}
                   summary['micro_taker_exploration_hourly_opens']=int(exploration.get('hourly_opens') or 0)
                   summary['micro_taker_exploration_active_positions']=int(exploration.get('active_positions') or 0)
@@ -217,6 +227,17 @@ jobs:
                   summary['micro_taker_exploration_fill_pnl']=sum(float(r.get('pnl') or 0.0) for r in rows if (r.get('action') or '').upper() in {'SELL_EXPLORATION','SELL_PARTIAL_EXPLORATION'})
               except Exception as exc:
                   summary['micro_taker_fills_summary_error']=f'{type(exc).__name__}:{exc}'
+          markouts=root/'micro_taker/markouts.csv'
+          if markouts.exists():
+              try:
+                  rows=list(csv.DictReader(markouts.open(newline='',encoding='utf-8')))
+                  grouped={}
+                  for row in rows:
+                      key=f"{(row.get('experiment_kind') or 'UNKNOWN').upper()}:{int(float(row.get('horizon_seconds') or 0))}s"
+                      grouped.setdefault(key,[]).append(float(row.get('markout_pnl') or 0.0))
+                  summary['micro_taker_markouts']={key:{'count':len(values),'sum':sum(values),'mean':sum(values)/len(values)} for key,values in sorted(grouped.items())}
+              except Exception as exc:
+                  summary['micro_taker_markouts_summary_error']=f'{type(exc).__name__}:{exc}'
           (root/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n');print(json.dumps(summary,indent=2,sort_keys=True))
           if summary.get('micro_taker_post_horizon_labels',0): raise SystemExit('causal micro target contract failed')
           PY

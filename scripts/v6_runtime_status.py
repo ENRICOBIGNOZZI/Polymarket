@@ -304,6 +304,7 @@ def main() -> int:
             "signals": int(f(micro.get("signals"))),
             "best_edge": f(micro.get("best_edge")),
             "labeled_samples": int(f(micro.get("labeled_samples"))),
+            "alpha": micro.get("alpha") if isinstance(micro.get("alpha"), dict) else {},
             "exploration": micro.get("exploration") if isinstance(micro.get("exploration"), dict) else {},
             "realized_pnl": micro_realized,
             **micro_fills,

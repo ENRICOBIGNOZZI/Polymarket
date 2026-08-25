@@ -79,9 +79,13 @@ class FastRuntimeContractTest(unittest.TestCase):
         self.assertIn('ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"', v6_loop)
         self.assertIn('is_current_runtime_descendant(){', v6_loop)
         self.assertIn('is_stale_v6_loop(){', v6_loop)
+        self.assertIn('is_same_repository_v6_loop(){', v6_loop)
         self.assertIn('/bin/ps -o ppid=', v6_loop)
+        self.assertIn('/bin/ps -o command=', v6_loop)
         self.assertIn('[[ "$pid" == "$RUNTIME_PARENT_PID" ]]', v6_loop)
-        self.assertIn('pgrep -f "$ROOT/scripts/paper_v6_loop.sh"', v6_loop)
+        self.assertIn("pgrep -f 'paper_v6_loop\\.sh'", v6_loop)
+        self.assertIn('lsof -a -p "$pid" -d cwd -Fn', v6_loop)
+        self.assertIn('[[ "$cwd" == "$ROOT" ]]', v6_loop)
         self.assertIn('stale_v6_loop_reaped=', v6_loop)
         self.assertIn('reap_stale_v6_loops\nstart_proxy', v6_loop)
 
@@ -91,9 +95,18 @@ class FastRuntimeContractTest(unittest.TestCase):
         )
         self.assertIn('start_simulated_v6_loop(){', workflow)
         self.assertIn('stale_v6_loop_reaped=$stale_pid', workflow)
+        self.assertIn("historical relative `scripts/paper_v6_loop.sh` argv form", workflow)
         self.assertIn('fatal: stale V6 loop did not exit before startup', workflow)
         self.assertIn('resistant stale loop did not force fail-closed startup', workflow)
         self.assertIn('restart_accounting_identity=stable', workflow)
+
+    def test_private_runtime_snapshot_preserves_each_descendants_parent(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "private-runtime-single-writer-validation.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("children.setdefault(ppid,[]).append((pid,ppid,cmd))", workflow)
+        self.assertIn("for pid,ppid,cmd in children.get(parent,[]):", workflow)
+        self.assertNotIn("children.setdefault(ppid,[]).append((pid,cmd))", workflow)
 
     def test_runtime_singleton_launcher_excludes_competing_owner(self) -> None:
         launcher = ROOT / "scripts" / "runtime_singleton_launcher.py"

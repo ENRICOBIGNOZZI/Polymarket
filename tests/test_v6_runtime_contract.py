@@ -4,7 +4,9 @@ import importlib.util
 import json
 import math
 import re
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -172,9 +174,21 @@ class V6RuntimeContractTest(unittest.TestCase):
     def test_graph_is_research_only_and_micro_exploration_stays_tiny(self) -> None:
         cfg = json.loads((ROOT / "config/paper_v6.json").read_text())
         graph = cfg["v6"]["graph"]
+        alpha = cfg["v6"]["micro_taker_alpha"]
         exploration = cfg["v6"]["micro_taker_exploration"]
         self.assertEqual(graph["mode"], "research_only")
         self.assertIs(graph["broker_routing_enabled"], False)
+        self.assertTrue(alpha["paper_only"])
+        self.assertGreaterEqual(int(alpha["min_independent_blocks"]), 30)
+        self.assertGreaterEqual(int(alpha["min_nonzero_blocks"]), 30)
+        self.assertGreaterEqual(int(alpha["min_oos_blocks"]), 10)
+        self.assertLessEqual(int(alpha["min_oos_blocks"]), 16)
+        self.assertGreaterEqual(float(alpha["oos_error_quantile"]), 0.90)
+        self.assertGreaterEqual(int(alpha["min_activity_trades_60s"]), 1)
+        self.assertGreater(float(alpha["min_entry_price"]), 0.0)
+        self.assertLess(float(alpha["min_entry_price"]), float(alpha["max_entry_price"]))
+        self.assertLess(float(alpha["max_entry_price"]), 1.0)
+        self.assertLessEqual(float(alpha["max_round_trip_cost_fraction"]), 0.03)
         self.assertTrue(exploration["paper_only"])
         self.assertTrue(exploration["enabled"])
         self.assertLessEqual(float(exploration["max_trade_usd"]), 5.0)
@@ -187,6 +201,29 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertLess(float(exploration["max_entry_price"]), 1.0)
         self.assertGreater(float(exploration["max_round_trip_cost_fraction"]), 0.0)
         self.assertLessEqual(float(exploration["max_round_trip_cost_fraction"]), 0.03)
+
+    def test_micro_taker_child_preserves_paper_alpha_config(self) -> None:
+        cfg = json.loads((ROOT / "config/paper_v6.json").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as temporary:
+            run_root = Path(temporary) / "run"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/v6_materialize_configs.py"),
+                    "--config", str(ROOT / "config/paper_v6.json"),
+                    "--run-root", str(run_root),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            child = json.loads((run_root / "micro_taker_config.json").read_text(encoding="utf-8"))
+        self.assertTrue(child["v6"]["paper_only"])
+        self.assertEqual(child["v6"]["micro_taker_alpha"], cfg["v6"]["micro_taker_alpha"])
+        self.assertEqual(child["v6"]["micro_taker_exploration"], cfg["v6"]["micro_taker_exploration"])
+        loop = (ROOT / "scripts/paper_v6_loop.sh").read_text(encoding="utf-8")
+        self.assertIn("'micro_taker_alpha':alpha", loop)
+        self.assertIn("'micro_taker_exploration':exploration", loop)
 
     def test_v6_research_smoke_preserves_base_live_selector(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "v6-research-smoke.yml").read_text()

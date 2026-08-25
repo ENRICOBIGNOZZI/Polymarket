@@ -15,6 +15,10 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Callable, Iterable, Sequence
 
 Q = Decimal("0.00001")
+MICRO_SAMPLE_BUFFER_ROWS = 50_000
+MIN_CAUSAL_OOS_TRAINING_ROWS = 40
+MAX_CAUSAL_OOS_EVALUATION_BLOCKS = 16
+NONZERO_TARGET_EPSILON = 1e-6
 
 def finite(v: Any, d: float = math.nan) -> float:
     try: x=float(v)
@@ -174,6 +178,106 @@ def paper_round_trip_for_cash(asks: Sequence[tuple[float,float]], bids: Sequence
 
 def exploration_price_allowed(price: float, minimum: float, maximum: float) -> bool:
     return math.isfinite(price) and 0.0<minimum<=price<=maximum<1.0
+
+
+def _upper_quantile(values: Sequence[float], quantile: float) -> float | None:
+    clean=sorted(value for value in values if math.isfinite(value) and value>=0.0)
+    if not clean: return None
+    rank=max(0,min(len(clean)-1,math.ceil(quantile*len(clean))-1))
+    return clean[rank]
+
+
+def _sample_prediction(row: dict[str,Any], beta: Sequence[float]) -> float | None:
+    raw_x=row.get("x")
+    if not isinstance(raw_x,list) or len(raw_x)!=len(beta): return None
+    x=[finite(value) for value in raw_x]
+    if not all(math.isfinite(value) for value in x): return None
+    prediction=sum(weight*value for weight,value in zip(beta,x))
+    spread=finite(row.get("spread"))
+    if math.isfinite(spread) and spread>0.0:
+        prediction=max(-2*spread,min(2*spread,prediction))
+    return prediction if math.isfinite(prediction) else None
+
+
+def alpha_training_evidence(samples: Sequence[dict[str,Any]], *, horizon_seconds: int,
+                            min_independent_blocks: int, min_nonzero_blocks: int,
+                            min_oos_blocks: int, oos_error_quantile: float) -> dict[str,Any]:
+    """Measure independent support and causal walk-forward forecast error.
+
+    Cross-sectional rows at one timestamp are one time block.  Each OOS block is
+    scored only with labels whose target observation was already public before
+    that block's forecast origin.  The upper-quantile block RMSE is an explicit
+    per-share error buffer; missing causal OOS evidence is fail-closed.
+    """
+    labeled=[]
+    by_origin: dict[int,list[dict[str,Any]]]={}
+    for row in samples:
+        y=finite(row.get("y")); ts=int(finite(row.get("ts"),0.0))
+        if ts<=0 or not math.isfinite(y): continue
+        labeled.append(row); by_origin.setdefault(ts,[]).append(row)
+    origins=sorted(by_origin)
+    independent=[]
+    for ts in origins:
+        if not independent or ts-independent[-1]>=horizon_seconds:
+            independent.append(ts)
+    independent_nonzero=sum(
+        any(abs(finite(row.get("y"),0.0))>=NONZERO_TARGET_EPSILON for row in by_origin[ts])
+        for ts in independent
+    )
+    nonzero_rows=sum(abs(finite(row.get("y"),0.0))>=NONZERO_TARGET_EPSILON for row in labeled)
+
+    oos_block_errors=[]
+    oos_evaluation_origins=independent[-MAX_CAUSAL_OOS_EVALUATION_BLOCKS:]
+    for evaluation_ts in oos_evaluation_origins:
+        causal_training=[]
+        for row in labeled:
+            origin_ts=int(finite(row.get("ts"),0.0))
+            target_ts=int(finite(row.get("target_observation_ts"),0.0))
+            if origin_ts<evaluation_ts and 0<target_ts<=evaluation_ts:
+                causal_training.append(row)
+        if len(causal_training)<MIN_CAUSAL_OOS_TRAINING_ROWS: continue
+        beta=micro_legacy.solve_ridge(causal_training[-10000:],1e-2)
+        errors=[]
+        for row in by_origin[evaluation_ts]:
+            target_ts=int(finite(row.get("target_observation_ts"),0.0))
+            if target_ts<=evaluation_ts: continue
+            prediction=_sample_prediction(row,beta)
+            if prediction is None: continue
+            errors.append(abs(prediction-finite(row.get("y"),0.0)))
+        if errors:
+            oos_block_errors.append(math.sqrt(sum(error*error for error in errors)/len(errors)))
+    error_buffer=_upper_quantile(oos_block_errors,oos_error_quantile)
+    ready=(
+        len(independent)>=min_independent_blocks
+        and independent_nonzero>=min_nonzero_blocks
+        and len(oos_block_errors)>=min_oos_blocks
+        and error_buffer is not None
+    )
+    return {
+        "labeled_rows":len(labeled),
+        "origin_blocks":len(origins),
+        "independent_blocks":len(independent),
+        "nonzero_rows":nonzero_rows,
+        "independent_nonzero_blocks":independent_nonzero,
+        "causal_oos_blocks":len(oos_block_errors),
+        "oos_evaluation_block_cap":MAX_CAUSAL_OOS_EVALUATION_BLOCKS,
+        "oos_error_buffer":error_buffer,
+        "oos_error_quantile":oos_error_quantile,
+        "oos_error_method":"upper_quantile_of_causal_block_rmse",
+        "min_independent_blocks":min_independent_blocks,
+        "min_nonzero_blocks":min_nonzero_blocks,
+        "min_oos_blocks":min_oos_blocks,
+        "ready":ready,
+    }
+
+
+def forecast_net_edge_after_round_trip(directional_move: float, round_trip: RoundTripCost,
+                                       error_buffer: float=0.0) -> float:
+    """Conservative per-share move less current round trip and causal OOS error."""
+    shares=round_trip.entry.filled_shares
+    move=finite(directional_move); error=finite(error_buffer)
+    if shares<=1e-12 or not math.isfinite(move) or not math.isfinite(error) or error<0.0: return -math.inf
+    return move-round_trip.predictable_loss/shares-error
 
 
 SCRIPT_DIR=Path(__file__).resolve().parent
@@ -336,6 +440,14 @@ def _micro_main() -> int:
     ap.add_argument("--max-trade-usd",type=float,default=15); ap.add_argument("--min-edge",type=float,default=.0003)
     ap.add_argument("--slippage-bps",type=float,default=5); ap.add_argument("--max-positions",type=int,default=20)
     ap.add_argument("--trade-tape",type=Path)
+    ap.add_argument("--alpha-min-entry-price",type=float)
+    ap.add_argument("--alpha-max-entry-price",type=float)
+    ap.add_argument("--alpha-max-round-trip-cost-fraction",type=float)
+    ap.add_argument("--alpha-min-activity",type=int)
+    ap.add_argument("--alpha-min-independent-blocks",type=int)
+    ap.add_argument("--alpha-min-nonzero-blocks",type=int)
+    ap.add_argument("--alpha-min-oos-blocks",type=int)
+    ap.add_argument("--alpha-oos-error-quantile",type=float)
     ap.add_argument("--exploration-enabled",action="store_true")
     ap.add_argument("--exploration-max-trade-usd",type=float,default=5)
     ap.add_argument("--exploration-max-opens-per-hour",type=int,default=6)
@@ -354,7 +466,35 @@ def _micro_main() -> int:
 
     cfg=json.loads(a.config.read_text()); gamma,clob=cfg["gamma_url"],cfg["clob_url"]
     v6_cfg=cfg.get("v6") if isinstance(cfg.get("v6"),dict) else {}
+    alpha_cfg=v6_cfg.get("micro_taker_alpha") if isinstance(v6_cfg.get("micro_taker_alpha"),dict) else {}
     exploration_cfg=v6_cfg.get("micro_taker_exploration") if isinstance(v6_cfg.get("micro_taker_exploration"),dict) else {}
+    if alpha_cfg and alpha_cfg.get("paper_only") is not True:
+        raise SystemExit("micro alpha must remain paper-only")
+    if a.alpha_min_entry_price is None:
+        a.alpha_min_entry_price=finite(alpha_cfg.get("min_entry_price"),.05)
+    if a.alpha_max_entry_price is None:
+        a.alpha_max_entry_price=finite(alpha_cfg.get("max_entry_price"),.95)
+    if a.alpha_max_round_trip_cost_fraction is None:
+        a.alpha_max_round_trip_cost_fraction=finite(alpha_cfg.get("max_round_trip_cost_fraction"),.03)
+    if a.alpha_min_activity is None:
+        a.alpha_min_activity=int(finite(alpha_cfg.get("min_activity_trades_60s"),1.0))
+    if a.alpha_min_independent_blocks is None:
+        a.alpha_min_independent_blocks=int(finite(alpha_cfg.get("min_independent_blocks"),30.0))
+    if a.alpha_min_nonzero_blocks is None:
+        a.alpha_min_nonzero_blocks=int(finite(alpha_cfg.get("min_nonzero_blocks"),30.0))
+    if a.alpha_min_oos_blocks is None:
+        a.alpha_min_oos_blocks=int(finite(alpha_cfg.get("min_oos_blocks"),10.0))
+    if a.alpha_oos_error_quantile is None:
+        a.alpha_oos_error_quantile=finite(alpha_cfg.get("oos_error_quantile"),.90)
+    if not (
+        0.0<a.alpha_min_entry_price<a.alpha_max_entry_price<1.0
+        and 0.0<a.alpha_max_round_trip_cost_fraction<=1.0
+        and a.alpha_min_activity>=1 and a.alpha_min_independent_blocks>=1
+        and a.alpha_min_nonzero_blocks>=1
+        and 1<=a.alpha_min_oos_blocks<=MAX_CAUSAL_OOS_EVALUATION_BLOCKS
+        and .5<=a.alpha_oos_error_quantile<=1.0
+    ):
+        raise SystemExit("invalid micro alpha evidence/economic guard")
     if a.exploration_min_entry_price is None:
         a.exploration_min_entry_price=finite(exploration_cfg.get("min_entry_price"),.05)
     if a.exploration_max_entry_price is None:
@@ -381,6 +521,11 @@ def _micro_main() -> int:
     raw_probe_history=state.get("exploration_probe_history") if isinstance(state.get("exploration_probe_history"),list) else []
     exploration_probe_history=[
         item for item in raw_probe_history
+        if isinstance(item,dict) and now-int(finite(item.get("timestamp"),0.0))<3600
+    ][-720:]
+    raw_alpha_probe_history=state.get("alpha_probe_history") if isinstance(state.get("alpha_probe_history"),list) else []
+    alpha_probe_history=[
+        item for item in raw_alpha_probe_history
         if isinstance(item,dict) and now-int(finite(item.get("timestamp"),0.0))<3600
     ][-720:]
 
@@ -447,34 +592,85 @@ def _micro_main() -> int:
     event_cost=Counter()
     for p in positions.values(): event_cost[str(p.get("event") or "")]+=max(0.0,finite(p.get("cost"),0.0))
 
+    activity=_recent_trade_activity(a.trade_tape,now)
+    training=alpha_training_evidence(
+        samples,horizon_seconds=a.horizon_seconds,
+        min_independent_blocks=a.alpha_min_independent_blocks,
+        min_nonzero_blocks=a.alpha_min_nonzero_blocks,
+        min_oos_blocks=a.alpha_min_oos_blocks,
+        oos_error_quantile=a.alpha_oos_error_quantile,
+    )
+    alpha_training_rejections: Counter[str]=Counter()
+    if training["independent_blocks"]<a.alpha_min_independent_blocks:
+        alpha_training_rejections["insufficient_independent_training_blocks"]+=1
+    if training["independent_nonzero_blocks"]<a.alpha_min_nonzero_blocks:
+        alpha_training_rejections["insufficient_independent_nonzero_blocks"]+=1
+    if training["causal_oos_blocks"]<a.alpha_min_oos_blocks:
+        alpha_training_rejections["insufficient_causal_oos_blocks"]+=1
     ranked=[]
-    if not killed:
+    if not killed and training["ready"]:
         for mid,(m,y,n,z) in current.items():
             if mid in positions: continue
             pred=max(-2*z[2],min(2*z[2],sum(x*b for x,b in zip(beta,z[0])))); q=max(.001,min(.999,z[1]+pred))
             for side,book,fair in (("YES",y,q),("NO",n,1-q)):
                 ask=book.ask()
-                if math.isfinite(ask) and fair-ask>a.min_edge: ranked.append((fair-ask,m,side,fair))
-    ranked.sort(reverse=True,key=lambda r:r[0]); signals=opened=depth_rej=0; best_edge=0.0
+                if math.isfinite(ask) and fair-ask>a.min_edge:
+                    ranked.append((fair-ask,m,side,fair,fair-book.mid()))
+    ranked.sort(reverse=True,key=lambda r:r[0])
+    signals=opened=depth_rej=alpha_economic_probes=0; best_edge=0.0
+    alpha_economic_rejections: Counter[str]=Counter()
+    alpha_fee_sources: Counter[str]=Counter()
+    alpha_best_round_trip_cost_fraction=math.inf
+    alpha_best_expected_net_edge=-math.inf
 
-    for _,m,side,fair in ranked:
-        if killed or len(positions)>=a.max_positions or m.id in positions: break
+    for gross_entry_edge,m,side,fair,directional_move in ranked:
+        if killed or len(positions)>=a.max_positions: break
+        if m.id in positions: continue
         _,y,n,_=current[m.id]; book=y if side=="YES" else n; equity=_equity(cash,positions,current)
+        token=m.yes if side=="YES" else m.no
+        trade_count=max(0.0,finite((activity.get(token) or {}).get("trades"),0.0))
+        if trade_count<a.alpha_min_activity:
+            alpha_economic_rejections["no_recent_public_trade_activity"]+=1; continue
+        ask=book.ask()
+        if not exploration_price_allowed(ask,a.alpha_min_entry_price,a.alpha_max_entry_price):
+            alpha_economic_rejections["entry_price_band"]+=1; continue
+        if not book.bids:
+            alpha_economic_rejections["missing_exit_depth"]+=1; depth_rej+=1; continue
         current_dd=max(0.0,peak-equity); dd_room=max(0.0,max_dd*peak-current_dd-gross)
         room=min(a.max_trade_usd,max(0.0,max_market*equity),max(0.0,max_event*equity-event_cost[m.event]),
                  max(0.0,max_gross*equity-gross),dd_room,cash)
         if room<=0: continue
-        d=_micro_fee(m,clob,cfg,sources); f=max_buy_for_cash(book.asks,room,d,slippage_bps=a.slippage_bps)
-        if f is None or f.filled_shares+1e-12<book.min_order: depth_rej+=1; continue
-        edge=fair-f.all_in_unit_price; best_edge=max(best_edge,edge)
-        if edge<=a.min_edge: continue
-        signals+=1; cost=f.stressed_cash+f.fee
+        d=_micro_fee(m,clob,cfg,sources); alpha_fee_sources[d.source]+=1
+        round_trip=paper_round_trip_for_cash(book.asks,book.bids,room,d,slippage_bps=a.slippage_bps)
+        alpha_economic_probes+=1
+        if round_trip is None:
+            alpha_economic_rejections["incomplete_round_trip_depth"]+=1; depth_rej+=1; continue
+        f=round_trip.entry
+        if f.filled_shares+1e-12<book.min_order:
+            alpha_economic_rejections["minimum_order_size"]+=1; depth_rej+=1; continue
+        if not exploration_price_allowed(f.stressed_vwap,a.alpha_min_entry_price,a.alpha_max_entry_price):
+            alpha_economic_rejections["entry_price_band"]+=1; continue
+        alpha_best_round_trip_cost_fraction=min(alpha_best_round_trip_cost_fraction,round_trip.cost_fraction)
+        if round_trip.cost_fraction>a.alpha_max_round_trip_cost_fraction+1e-12:
+            alpha_economic_rejections["round_trip_cost"]+=1; continue
+        oos_error_buffer=finite(training.get("oos_error_buffer"),math.inf)
+        edge=forecast_net_edge_after_round_trip(directional_move,round_trip,oos_error_buffer)
+        alpha_best_expected_net_edge=max(alpha_best_expected_net_edge,edge)
+        best_edge=max(best_edge,edge)
+        if edge<=a.min_edge:
+            alpha_economic_rejections["net_ev_after_round_trip"]+=1; continue
+        signals+=1; cost=round_trip.entry_cost
         if cost>cash+1e-9: continue
         cash-=cost; gross+=cost; event_cost[m.event]+=cost
         position={"position_id":f"micro_taker:alpha:{m.id}:{side}:{now}","experiment_kind":"ALPHA",
                   "side":side,"shares":f.filled_shares,"entry_price":f.stressed_vwap,"entry_ts":now,
                   "exit_horizon_seconds":a.horizon_seconds,"cost":cost,"entry_fee":f.fee,"event":m.event,
-                  "fee_source":d.source,"markouts":{},"markout_values":{}}
+                  "fee_source":d.source,"markouts":{},"markout_values":{},
+                  "alpha_gross_entry_edge":gross_entry_edge,"alpha_directional_move":directional_move,
+                  "alpha_oos_error_buffer":oos_error_buffer,"alpha_expected_net_edge":edge,
+                  "alpha_expected_round_trip_loss":round_trip.predictable_loss,
+                  "alpha_expected_round_trip_cost_fraction":round_trip.cost_fraction,
+                  "alpha_expected_round_trip_fee_fraction":round_trip.fee_fraction}
         positions[m.id]=position
         opened+=1
         _append_micro_fill(a.run_dir,now=now,market=m,action="BUY",side=side,shares=f.filled_shares,price=f.stressed_vwap,fee=f.fee,pnl=0.0)
@@ -484,7 +680,6 @@ def _micro_main() -> int:
     # It does not call a wallet, a signing API, or a live order endpoint.  The
     # best-ask displayed quantity is logged as a queue-pressure proxy because a
     # taker has no queue-ahead position of its own.
-    activity=_recent_trade_activity(a.trade_tape,now)
     exploration_opened=exploration_candidates=exploration_activity_candidates=0
     exploration_depth_rejections=exploration_economic_probes=0
     exploration_economic_rejections: Counter[str]=Counter()
@@ -599,12 +794,38 @@ def _micro_main() -> int:
         probe_cost=finite(probe.get("best_round_trip_cost_fraction"),math.nan)
         if math.isfinite(probe_cost): exploration_costs_hour.append(probe_cost)
 
-    for mid,(_,_,_,z) in current.items(): samples.append({"ts":now,"market_id":mid,"mid":z[1],"x":z[0],"y":None})
-    if len(samples)>20000: samples=samples[-20000:]
+    alpha_probe_history.append({
+        "timestamp":now,"training":training,"training_rejections":dict(sorted(alpha_training_rejections.items())),
+        "gross_model_candidates":len(ranked),"economic_probes":alpha_economic_probes,
+        "economic_rejections":dict(sorted(alpha_economic_rejections.items())),
+        "fee_sources":dict(sorted(alpha_fee_sources.items())),
+        "best_round_trip_cost_fraction":None if not math.isfinite(alpha_best_round_trip_cost_fraction) else alpha_best_round_trip_cost_fraction,
+        "best_expected_net_edge":None if not math.isfinite(alpha_best_expected_net_edge) else alpha_best_expected_net_edge,
+        "opened":opened,
+    })
+    alpha_probe_history=alpha_probe_history[-720:]
+    alpha_training_rejections_hour: Counter[str]=Counter()
+    alpha_economic_rejections_hour: Counter[str]=Counter()
+    alpha_fee_sources_hour: Counter[str]=Counter()
+    alpha_costs_hour: list[float]=[]
+    alpha_edges_hour: list[float]=[]
+    for probe in alpha_probe_history:
+        alpha_training_rejections_hour.update(probe.get("training_rejections") or {})
+        alpha_economic_rejections_hour.update(probe.get("economic_rejections") or {})
+        alpha_fee_sources_hour.update(probe.get("fee_sources") or {})
+        probe_cost=finite(probe.get("best_round_trip_cost_fraction"),math.nan)
+        probe_edge=finite(probe.get("best_expected_net_edge"),math.nan)
+        if math.isfinite(probe_cost): alpha_costs_hour.append(probe_cost)
+        if math.isfinite(probe_edge): alpha_edges_hour.append(probe_edge)
+
+    for mid,(_,_,_,z) in current.items():
+        samples.append({"ts":now,"market_id":mid,"mid":z[1],"spread":z[2],"x":z[0],"y":None})
+    if len(samples)>MICRO_SAMPLE_BUFFER_ROWS: samples=samples[-MICRO_SAMPLE_BUFFER_ROWS:]
     realized_total+=realized; exploration_realized_total+=exploration_realized; equity=_equity(cash,positions,current); peak=max(peak,equity)
     dd=max(0.0,1-equity/peak) if peak else 0.0; killed=killed or dd>=max_dd
     out={"timestamp":now,"cash":cash,"equity":equity,"peak":peak,"drawdown":dd,"killed":killed,
          "positions":positions,"samples":samples,"markets":len(markets),"books":len(books),"signals":signals,"opened":opened,
+         "labeled_samples":training["labeled_rows"],"sample_buffer_rows":MICRO_SAMPLE_BUFFER_ROWS,
          "best_edge":best_edge,"realized_pnl_last_tick":realized,"realized_pnl_total":realized_total,
          "label_stats_last_tick":labels,"target_staleness_max_seconds":labels.get("max_target_staleness_seconds"),
          "partial_exits_last_tick":partial_exits,"depth_rejections_last_tick":depth_rej,
@@ -612,8 +833,27 @@ def _micro_main() -> int:
          "execution_model":"depth_vwap_plus_latency_stress","open_positions":len(positions),
          "gross_exposure":gross,"realized_pnl":realized_total,
          "exploration_realized_pnl_total":exploration_realized_total,
+         "alpha_probe_history":alpha_probe_history,
          "exploration_open_history":exploration_history,
          "exploration_probe_history":exploration_probe_history,
+         "alpha":{"paper_only":True,"training":training,"training_ready":bool(training["ready"]),
+                  "min_entry_price":a.alpha_min_entry_price,"max_entry_price":a.alpha_max_entry_price,
+                  "max_round_trip_cost_fraction":a.alpha_max_round_trip_cost_fraction,
+                  "min_activity_trades_60s":a.alpha_min_activity,
+                  "gross_model_candidates_last_tick":len(ranked),"economic_probes_last_tick":alpha_economic_probes,
+                  "training_rejections_last_tick":dict(sorted(alpha_training_rejections.items())),
+                  "training_rejections_hour":dict(sorted(alpha_training_rejections_hour.items())),
+                  "economic_rejections_last_tick":dict(sorted(alpha_economic_rejections.items())),
+                  "economic_rejections_hour":dict(sorted(alpha_economic_rejections_hour.items())),
+                  "fee_sources_last_tick":dict(sorted(alpha_fee_sources.items())),
+                  "fee_sources_hour":dict(sorted(alpha_fee_sources_hour.items())),
+                  "probe_ticks_hour":len(alpha_probe_history),
+                  "best_round_trip_cost_fraction_last_tick":None if not math.isfinite(alpha_best_round_trip_cost_fraction) else alpha_best_round_trip_cost_fraction,
+                  "best_round_trip_cost_fraction_hour":min(alpha_costs_hour) if alpha_costs_hour else None,
+                  "best_expected_net_edge_last_tick":None if not math.isfinite(alpha_best_expected_net_edge) else alpha_best_expected_net_edge,
+                  "best_expected_net_edge_hour":max(alpha_edges_hour) if alpha_edges_hour else None,
+                  "opened_last_tick":opened,
+                  "admission":"independent_nonzero_blocks+causal_oos_error_lcb+recent_activity+full_round_trip_depth+fees+slippage+net_forecast_ev"},
          "exploration":{"enabled":bool(a.exploration_enabled),"paper_only":True,"hold_seconds":a.exploration_hold_seconds,
                         "max_trade_usd":a.exploration_max_trade_usd,"max_opens_per_hour":a.exploration_max_opens_per_hour,
                         "max_positions":a.exploration_max_positions,"opened_last_tick":exploration_opened,

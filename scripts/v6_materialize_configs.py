@@ -16,6 +16,18 @@ def main() -> int:
     manifest={"schema":"polymarket_v6_sleeves_v1","paper_only":True,"starting_capital":total,"reserve_fraction":float(v["reserve_fraction"]),"sleeves":[]}
     for name,frac in alloc:
         child={k:x for k,x in cfg.items() if k not in {"v6","multi_strategy"}};child["starting_capital"]=total*float(frac);child["run_dir"]=str(root/name);child["expert_weights"]={"micro":0.0,"pca":0.0,"graph":0.0,"semantic":0.0,"external":0.0}
+        if name=="micro_taker":
+            alpha=v.get("micro_taker_alpha")
+            exploration=v.get("micro_taker_exploration")
+            if not isinstance(alpha,dict) or alpha.get("paper_only") is not True:raise SystemExit("micro taker alpha must remain paper-only")
+            if not isinstance(exploration,dict) or exploration.get("paper_only") is not True:raise SystemExit("micro taker exploration must remain paper-only")
+            child["v6"]={
+                "paper_only":True,
+                "assumed_fee_rate":v.get("assumed_fee_rate",.07),
+                "assumed_fee_exponent":v.get("assumed_fee_exponent",1.0),
+                "micro_taker_alpha":alpha,
+                "micro_taker_exploration":exploration,
+            }
         # The maker sleeve is only 12% of parent capital in V6. If the parent's
         # max_market_fraction is copied unchanged, it silently turns a $60/trade
         # cap into roughly $30/market. Raise only the child market-fraction cap

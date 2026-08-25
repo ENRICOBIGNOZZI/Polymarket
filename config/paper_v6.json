@@ -78,6 +78,17 @@
       "cost_quantile": 0.75,
       "broker_routing_enabled": false
     },
+    "micro_taker_alpha": {
+      "paper_only": true,
+      "min_independent_blocks": 30,
+      "min_nonzero_blocks": 30,
+      "min_oos_blocks": 10,
+      "oos_error_quantile": 0.90,
+      "min_activity_trades_60s": 1,
+      "min_entry_price": 0.05,
+      "max_entry_price": 0.95,
+      "max_round_trip_cost_fraction": 0.03
+    },
     "micro_taker_exploration": {
       "paper_only": true,
       "enabled": true,
