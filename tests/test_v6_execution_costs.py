@@ -1,47 +1,43 @@
 from __future__ import annotations
 
-import importlib.util
+import json
 import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(SCRIPTS))
 
-spec = importlib.util.spec_from_file_location("v6_queue_filter_test", SCRIPTS / "v6_queue_filter.py")
-assert spec and spec.loader
-qf = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = qf
-spec.loader.exec_module(qf)
+import v6_queue_filter as qf
 
 
 class V6ExecutionMeasurementTest(unittest.TestCase):
+    def test_taker_fee_is_level_specific_and_maker_fee_is_zero(self) -> None:
+        details = qf.FeeDetails(True, 0.25, 1.0, True, "test")
+        self.assertEqual(qf.fee_amount(10.0, 0.50, details, maker=True), 0.0)
+        fee_mid = qf.fee_amount(10.0, 0.50, details)
+        fee_tail = qf.fee_amount(10.0, 0.05, details)
+        self.assertGreater(fee_mid, fee_tail)
+        self.assertGreater(fee_tail, 0.0)
+
     def test_explicit_fee_disabled_never_falls_back(self) -> None:
-        details = qf.resolve_fee_details(
-            {"conditionId": "abc", "feesEnabled": False},
-            "https://clob.test",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("no lookup expected")),
-        )
+        raw = {"feesEnabled": False}
+        details = qf.resolve_fee_details(raw, "https://clob.polymarket.com", "condition", "token")
+        self.assertTrue(details.verified)
         self.assertFalse(details.enabled)
-        self.assertEqual(qf.fee_amount(100.0, 0.5, details, taker=True), 0.0)
+        self.assertEqual(details.source, "market:feesEnabled=false")
 
     def test_clob_fee_descriptor_beats_conservative_fallback(self) -> None:
-        calls = []
+        raw = {"feesEnabled": True, "feeRateBps": 25}
+        details = qf.resolve_fee_details(raw, "https://clob.polymarket.com", "condition", "token")
+        self.assertTrue(details.verified)
+        self.assertTrue(details.enabled)
+        self.assertEqual(details.fee_rate_bps, 25.0)
+        self.assertNotIn("fallback", details.source)
 
-        def request(url, *_args):
-            calls.append(url)
-            return {"feesEnabled": True, "fd": {"rate": 0.04, "exponent": 1.0, "takerOnly": True}}
-
-        details = qf.resolve_fee_details({"conditionId": "abc"}, "https://clob.test", request)
-        self.assertEqual(details.source, "clob:fee_schedule")
-        self.assertAlmostEqual(details.rate, 0.04)
-        self.assertEqual(calls, ["https://clob.test/clob-markets/abc"])
-
-    def test_taker_fee_is_level_specific_and_maker_fee_is_zero(self) -> None:
-        details = qf.FeeDetails(True, 0.07, 1.0, True, "test")
-        self.assertEqual(qf.fee_amount(100.0, 0.5, details, taker=False), 0.0)
+    def test_depth_walk_charges_each_level_at_its_own_price(self) -> None:
+        details = qf.FeeDetails(True, 25.0, 1.0, True, "test")
         fill = qf.walk_book_for_shares(
             [(0.50, 5.0), (0.60, 5.0)],
             8.0,
@@ -68,6 +64,7 @@ class V6ExecutionMeasurementTest(unittest.TestCase):
     def test_measurement_branch_does_not_route_live_v6(self) -> None:
         loop = (SCRIPTS / "paper_v6_loop.sh").read_text()
         self.assertNotIn("scripts/v6_queue_filter.py", loop)
+        self.assertNotIn("scripts/v6_hard_arb_guard.py", loop)
         self.assertIn("scripts/v6_micro_taker.py", loop)
         self.assertIn("scripts/v6_hard_arb_paper.py", loop)
         self.assertIn("--completion-threshold 0.75", loop)
@@ -75,9 +72,12 @@ class V6ExecutionMeasurementTest(unittest.TestCase):
     def test_registered_smoke_uses_realistic_execution_probe(self) -> None:
         workflow = (ROOT / ".github/workflows/v6-research-smoke.yml").read_text()
         self.assertIn("scripts/v6_queue_filter.py self-test", workflow)
-        self.assertIn("scripts/v6_queue_filter.py hard", workflow)
+        self.assertIn("scripts/v6_hard_arb_guard.py self-test", workflow)
+        self.assertIn("scripts/v6_hard_arb_guard.py --config", workflow)
         self.assertIn("scripts/v6_queue_filter.py micro", workflow)
         self.assertIn("--leg-latency-ms 100", workflow)
+        self.assertIn("--max-leg-age-ms 2000", workflow)
+        self.assertIn("--max-cross-leg-skew-ms 1000", workflow)
 
 
 if __name__ == "__main__":
