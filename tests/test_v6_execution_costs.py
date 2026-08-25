@@ -16,6 +16,57 @@ qf = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = qf
 spec.loader.exec_module(qf)
 
+intent_spec = importlib.util.spec_from_file_location("v6_intent_queue_filter_test", SCRIPTS / "v6_intent_queue_filter.py")
+assert intent_spec and intent_spec.loader
+iqf = importlib.util.module_from_spec(intent_spec)
+sys.modules[intent_spec.name] = iqf
+intent_spec.loader.exec_module(iqf)
+
+
+def graph_rows() -> list[dict[str, str]]:
+    prices = [0.33, 0.36, 0.29]
+    markets = ["3535881", "3535883", "3535882"]
+    return [
+        {
+            "bundle_id": "GRAPH_RV-test",
+            "strategy": "GRAPH_RV",
+            "event_id": "837321",
+            "created_ts": "1",
+            "mode": "MAKER",
+            "expected_edge": "0.02",
+            "max_notional": "60",
+            "market_id": market,
+            "side": "YES",
+            "weight": "1",
+            "limit_price": str(price),
+            "execution_deadline_ts": "9999999999",
+            "hold_deadline_ts": "9999999999",
+        }
+        for market, price in zip(markets, prices)
+    ]
+
+
+def graph_tokens() -> dict[tuple[str, str], str]:
+    return {
+        ("3535881", "YES"): "t1",
+        ("3535883", "YES"): "t2",
+        ("3535882", "YES"): "t3",
+    }
+
+
+def graph_books(queue_sizes: list[float]) -> dict[str, dict]:
+    prices = [0.33, 0.36, 0.29]
+    return {
+        f"t{i + 1}": {
+            "bids": [(price, queue_sizes[i])],
+            "asks": [(price + 0.02, 1000.0)],
+            "best_bid": price,
+            "best_ask": price + 0.02,
+            "min_order": 5.0,
+        }
+        for i, price in enumerate(prices)
+    }
+
 
 class V6ExecutionCostsTest(unittest.TestCase):
     def test_explicit_fee_disabled_never_falls_back(self) -> None:
@@ -65,14 +116,43 @@ class V6ExecutionCostsTest(unittest.TestCase):
         self.assertEqual(partial.filled_shares, 2.0)
         self.assertFalse(partial.complete)
 
-    def test_v6_loop_routes_execution_through_queue_filter(self) -> None:
+    def test_extreme_graph_rv_queue_is_rejected(self) -> None:
+        ok, reason, ratio, diagnostics = iqf.evaluate_bundle(
+            graph_rows(), graph_tokens(), graph_books([30849.0, 40035.5, 38851.4]), 50.0
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "queue_ratio")
+        self.assertGreater(ratio, 500.0)
+        self.assertEqual(len(diagnostics), 3)
+
+    def test_manageable_graph_rv_queue_is_accepted(self) -> None:
+        ok, reason, ratio, diagnostics = iqf.evaluate_bundle(
+            graph_rows(), graph_tokens(), graph_books([300.0, 250.0, 200.0]), 50.0
+        )
+        self.assertTrue(ok)
+        self.assertEqual(reason, "accepted")
+        self.assertLess(ratio, 50.0)
+        self.assertEqual(len(diagnostics), 3)
+
+    def test_stale_maker_limit_is_rejected(self) -> None:
+        books = graph_books([10.0, 10.0, 10.0])
+        books["t1"]["best_bid"] = 0.34
+        books["t1"]["bids"] = [(0.34, 10.0), (0.33, 10.0)]
+        ok, reason, _, _ = iqf.evaluate_bundle(graph_rows(), graph_tokens(), books, 50.0)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "stale_limit")
+
+    def test_v6_loop_routes_execution_through_queue_filters(self) -> None:
         loop = (SCRIPTS / "paper_v6_loop.sh").read_text()
         self.assertIn("scripts/v6_queue_filter.py self-test", loop)
         self.assertIn("scripts/v6_queue_filter.py micro", loop)
         self.assertIn("scripts/v6_queue_filter.py hard", loop)
+        self.assertIn("scripts/v6_intent_queue_filter.py", loop)
+        self.assertIn('V6_MAX_QUEUE_RATIO:-50', loop)
         self.assertIn("--leg-latency-ms 100", loop)
         self.assertIn("--completion-threshold 0.95", loop)
         self.assertNotIn("--completion-threshold 0.75", loop)
+        self.assertIn('rm -f "$RUN_ROOT/intents_raw.csv" "$RUN_ROOT/intents.csv"', loop)
 
 
 if __name__ == "__main__":
