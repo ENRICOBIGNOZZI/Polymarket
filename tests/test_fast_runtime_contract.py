@@ -61,8 +61,12 @@ class FastRuntimeContractTest(unittest.TestCase):
         self.assertIn("runtime_owner.lock", selector)
         self.assertIn("POLYMARKET_RUNTIME_SINGLETON_HELD", selector)
         self.assertLess(selector.index("runtime_singleton_launcher.py"), selector.index("start_champion()"))
-        # The private macOS server uses Bash 3.2, which does not provide BASHPID.
         self.assertIn('tmp="$path.tmp.${BASHPID:-$$}"', selector)
+
+    def test_v6_status_atomic_writers_use_pid_unique_temp_paths(self) -> None:
+        status = (ROOT / "scripts" / "v6_runtime_status.py").read_text(encoding="utf-8")
+        self.assertGreaterEqual(status.count('path.name + f".tmp.{os.getpid()}"'), 2)
+        self.assertNotIn('with_suffix(path.suffix + ".tmp")', status)
 
     def test_runtime_singleton_launcher_excludes_competing_owner(self) -> None:
         launcher = ROOT / "scripts" / "runtime_singleton_launcher.py"
