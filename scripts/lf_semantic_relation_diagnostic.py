@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import re
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -75,14 +74,14 @@ def run_diagnostic(engine_source: str, config: dict[str, Any]) -> dict[str, Any]
     minimum_similarity = float(config.get("semantic_min_similarity", 0.18))
     shrink = float(config.get("semantic_shrink", 0.50))
 
-    above = "Will Bitcoin be above 100000 by December 31 2026?"
-    below = "Will Bitcoin be below 100000 by December 31 2026?"
-    above_q, above_peers = semantic_adjustment(
-        above, 0.80, [(below, 0.20, 10_000.0)],
+    positive = "Will Alice win the 2026 mayor election?"
+    negative = "Will Alice not win the 2026 mayor election?"
+    positive_q, positive_peers = semantic_adjustment(
+        positive, 0.80, [(negative, 0.20, 10_000.0)],
         minimum_similarity=minimum_similarity, shrink=shrink,
     )
-    below_q, below_peers = semantic_adjustment(
-        below, 0.20, [(above, 0.80, 10_000.0)],
+    negative_q, negative_peers = semantic_adjustment(
+        negative, 0.20, [(positive, 0.80, 10_000.0)],
         minimum_similarity=minimum_similarity, shrink=shrink,
     )
 
@@ -97,7 +96,7 @@ def run_diagnostic(engine_source: str, config: dict[str, Any]) -> dict[str, Any]
         minimum_similarity=minimum_similarity, shrink=shrink,
     )
 
-    polarity_similarity = jaccard(above, below)
+    polarity_similarity = jaccard(positive, negative)
     threshold_similarity = jaccard(low_strike, high_strike)
     source = semantic_source_contract(engine_source)
     material = (
@@ -107,7 +106,7 @@ def run_diagnostic(engine_source: str, config: dict[str, Any]) -> dict[str, Any]
         and not source["explicit_threshold_guard"]
         and polarity_similarity >= minimum_similarity
         and threshold_similarity >= minimum_similarity
-        and abs(above_q - 0.80) >= 0.10
+        and abs(positive_q - 0.80) >= 0.10
         and abs(low_q - 0.75) >= 0.10
     )
 
@@ -122,14 +121,14 @@ def run_diagnostic(engine_source: str, config: dict[str, Any]) -> dict[str, Any]
         },
         "counterexamples": {
             "opposite_polarity": {
-                "questions": [above, below],
+                "questions": [positive, negative],
                 "market_probabilities": [0.80, 0.20],
                 "lexical_similarity": polarity_similarity,
                 "passes_similarity_gate": polarity_similarity >= minimum_similarity,
-                "semantic_probabilities": [above_q, below_q],
-                "absolute_probability_shifts": [abs(above_q - 0.80), abs(below_q - 0.20)],
-                "accepted_peer_counts": [len(above_peers), len(below_peers)],
-                "interpretation": "Lexically similar opposite-polarity propositions are treated as exchangeable probability peers instead of a logical relation.",
+                "semantic_probabilities": [positive_q, negative_q],
+                "absolute_probability_shifts": [abs(positive_q - 0.80), abs(negative_q - 0.20)],
+                "accepted_peer_counts": [len(positive_peers), len(negative_peers)],
+                "interpretation": "An exact logical negation pair is treated as exchangeable probability peers instead of a complement relation.",
             },
             "ordered_thresholds": {
                 "questions": [low_strike, high_strike],
