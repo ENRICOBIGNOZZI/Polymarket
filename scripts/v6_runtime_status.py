@@ -1,89 +1,230 @@
 #!/usr/bin/env python3
+"""V6 native telemetry entrypoint with legacy health compatibility only.
+
+The rich runtime_status.json is native V6 telemetry. `strategy_status.csv` and
+`allocator_status.json` retain the historical `v6_legacy_health_view` expected
+by already-installed health tooling; no V5 expert or mixture is executed.
+"""
 from __future__ import annotations
 
-import argparse
 import csv
 import json
 import math
-import os
+import runpy
+import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 
-def f(value, default=0.0):
-    try: out=float(value)
-    except (TypeError,ValueError): return default
-    return out if math.isfinite(out) else default
-
-
-def last_csv(path:Path)->dict[str,str]:
+def number(value, default=0.0):
     try:
-        with path.open(newline="",encoding="utf-8") as h: rows=list(csv.DictReader(h))
-        return rows[-1] if rows else {}
-    except OSError:return {}
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    return result if math.isfinite(result) else default
 
 
-def read_json(path:Path)->dict:
+def argument_path(flag: str, default: str) -> Path:
     try:
-        x=json.loads(path.read_text(encoding="utf-8"));return x if isinstance(x,dict) else {}
-    except (OSError,json.JSONDecodeError):return {}
+        index = sys.argv.index(flag)
+        return Path(sys.argv[index + 1])
+    except (ValueError, IndexError):
+        return Path(default)
 
 
-def atomic_json(path:Path,obj:dict)->None:
-    path.parent.mkdir(parents=True,exist_ok=True);tmp=path.with_suffix(path.suffix+".tmp");tmp.write_text(json.dumps(obj,indent=2,sort_keys=True)+"\n",encoding="utf-8");os.replace(tmp,path)
+def csv_rows(path: Path) -> list[dict[str, str]]:
+    try:
+        with path.open(newline="", encoding="utf-8") as handle:
+            return [dict(row) for row in csv.DictReader(handle)]
+    except OSError:
+        return []
 
 
-def atomic_csv(path:Path,fields:list[str],rows:list[dict])->None:
-    path.parent.mkdir(parents=True,exist_ok=True);tmp=path.with_suffix(path.suffix+".tmp")
-    with tmp.open("w",newline="",encoding="utf-8") as h:
-        w=csv.DictWriter(h,fieldnames=fields);w.writeheader();w.writerows(rows)
-    os.replace(tmp,path)
+def last_csv(path: Path) -> dict[str, str]:
+    rows = csv_rows(path)
+    return rows[-1] if rows else {}
 
 
-def main()->int:
-    ap=argparse.ArgumentParser();ap.add_argument("--config",type=Path,default=Path("config/paper_v6.json"));ap.add_argument("--run-root",type=Path,required=True);args=ap.parse_args()
-    cfg=read_json(args.config);v=cfg.get("v6") if isinstance(cfg.get("v6"),dict) else {};starting=f(cfg.get("starting_capital"),10000);reserve_frac=f(v.get("reserve_fraction"),.05);reserve=starting*reserve_frac
-    maker=last_csv(args.run_root/"maker"/"maker_equity.csv");micro=read_json(args.run_root/"micro_taker"/"status.json");broker=last_csv(args.run_root/"multileg_equity.csv");hard=read_json(args.run_root/"hard_arb"/"status.json");external=read_json(args.run_root/"external"/"status.json")
-    alloc={
-      "micro_maker":starting*f(v.get("micro_maker_capital_fraction"),.12),
-      "micro_taker":starting*f(v.get("micro_taker_capital_fraction"),.08),
-      "relative_value":starting*f(v.get("relative_value_capital_fraction"),.50),
-      "hard_arb":starting*f(v.get("hard_arb_capital_fraction"),.15),
-      "external":starting*f(v.get("external_capital_fraction"),.10),
-    }
-    maker_eq=f(maker.get("equity"),alloc["micro_maker"]);micro_eq=f(micro.get("equity"),alloc["micro_taker"]);broker_eq=f(broker.get("equity"),alloc["relative_value"]);hard_eq=f(hard.get("equity"),alloc["hard_arb"]);external_eq=f(external.get("equity"),alloc["external"])
-    equity=reserve+maker_eq+micro_eq+broker_eq+hard_eq+external_eq;previous=read_json(args.run_root/"runtime_status.json");peak=max(starting,f(previous.get("peak_equity"),starting),equity);drawdown=max(0.0,1.0-equity/peak) if peak else 0.0
-    local_killed=bool(int(f(maker.get("killed")))) or bool(micro.get("killed",False)) or bool(int(f(broker.get("killed")))) or bool(hard.get("killed",False)) or bool(external.get("killed",False));killed=local_killed or drawdown>=f(cfg.get("max_drawdown"),.15)
-    maker_live=int(f(maker.get("resting_orders")))+int(f(maker.get("positions")));micro_live=int(f(micro.get("open_positions")));broker_live=int(f(broker.get("live_bundles")));hard_live=int(f(hard.get("open_positions")));external_live=int(f(external.get("open_positions")))
-    reserved=reserve+f(maker.get("reserved_cash"))+f(broker.get("reserved_cash"));gross=f(maker.get("reserved_cash"))+f(micro.get("gross_exposure"))+f(broker.get("gross_entry_cash"))+f(hard.get("gross_exposure"))+f(external.get("gross_exposure"))
-    relations=read_json(args.run_root/"relation_status.json");local_factor=read_json(args.run_root/"local_factor_status.json");bridge=read_json(args.run_root/"external_bridge_status.json")
-    strategies={
-      "micro_maker":{"equity":maker_eq,"pnl":maker_eq-alloc["micro_maker"],"live_units":maker_live,"killed":bool(int(f(maker.get("killed"))))},
-      "micro_taker":{"equity":micro_eq,"pnl":micro_eq-alloc["micro_taker"],"live_units":micro_live,"killed":bool(micro.get("killed",False)),"signals":int(f(micro.get("signals"))),"best_edge":f(micro.get("best_edge")),"labeled_samples":int(f(micro.get("labeled_samples")))},
-      "relative_value":{"equity":broker_eq,"pnl":broker_eq-alloc["relative_value"],"live_units":broker_live,"killed":bool(int(f(broker.get("killed"))))},
-      "graph_hard":{"equity":hard_eq,"pnl":hard_eq-alloc["hard_arb"],"live_units":hard_live,"killed":bool(hard.get("killed",False)),"signals":int(f(hard.get("positive_candidates"))),"best_edge":f(hard.get("best_edge")),"entered":int(f(hard.get("entered")))},
-      "external":{"equity":external_eq,"pnl":external_eq-alloc["external"],"live_units":external_live,"killed":bool(external.get("killed",False))},
-    }
-    cash=f(maker.get("cash"),alloc["micro_maker"])+f(micro.get("cash"),alloc["micro_taker"])+f(broker.get("cash"),alloc["relative_value"])+f(hard.get("cash"),alloc["hard_arb"])+f(external.get("cash"),alloc["external"])+reserve
-    status={"schema":"polymarket_v6_runtime_status_v1","timestamp":int(time.time()),"version":6,"paper_only":True,"starting_capital":starting,"cash":cash,"equity":equity,"peak_equity":peak,"pnl":equity-starting,"drawdown":drawdown,"killed":killed,"live_units":maker_live+micro_live+broker_live+hard_live+external_live,"reserved_cash":reserved,"gross_exposure":gross,"realized_pnl":f(micro.get("realized_pnl"))+f(hard.get("realized_pnl"))+f(external.get("realized_pnl")),"execution_imbalance":0.0,"execution_staleness":0.0,"strategies":strategies,"relations":relations,"local_factor":local_factor,"external_bridge":bridge}
-    atomic_json(args.run_root/"runtime_status.json",status)
+def file_age(path: Path) -> float:
+    try:
+        return max(0.0, time.time() - path.stat().st_mtime)
+    except OSError:
+        return 1e9
 
-    # Transitional V5-shaped telemetry only. It exists solely so already-installed
-    # health scripts can validate V6 during rollout; no V5 expert or mixture runs.
-    compat=[
-      ("micro","micro",.20,maker_eq+micro_eq,maker_live+micro_live),
-      ("pca","local_factor",.35,broker_eq*(.35/.50),broker_live),
-      ("graph","graph_structural_hard",.30,broker_eq*(.15/.50)+hard_eq,broker_live+hard_live),
-      ("semantic","relation_parser",0.0,0.0,0),
-      ("external","external",.10,external_eq,external_live),
+
+def maker_realized_pnl(rows: list[dict[str, str]]) -> float:
+    if any(str(row.get("pnl") or "").strip() for row in rows):
+        return sum(number(row.get("pnl")) for row in rows)
+    inventory: dict[tuple[str, str], list[float]] = {}
+    realized = 0.0
+    for row in rows:
+        action = str(row.get("action") or "").upper()
+        key = (str(row.get("market_id") or ""), str(row.get("side") or ""))
+        shares = max(0.0, number(row.get("shares")))
+        price = max(0.0, number(row.get("price")))
+        fee = max(0.0, number(row.get("fee")))
+        if shares <= 0.0:
+            continue
+        if action.startswith("BUY"):
+            state = inventory.setdefault(key, [0.0, 0.0])
+            state[0] += shares
+            state[1] += shares * price + fee
+        elif action.startswith("SELL") or "SETTLE" in action:
+            state = inventory.setdefault(key, [0.0, 0.0])
+            if state[0] <= 1e-12:
+                continue
+            closed = min(shares, state[0])
+            average_cost = state[1] / state[0]
+            fee_share = fee * (closed / shares)
+            realized += closed * price - fee_share - closed * average_cost
+            state[0] -= closed
+            state[1] = max(0.0, state[1] - closed * average_cost)
+    return realized
+
+
+def enrich_native_status(run_root: Path, config_path: Path) -> None:
+    status_path = run_root / "runtime_status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    strategies = status.get("strategies") or {}
+    maker = strategies.get("micro_maker")
+    if not isinstance(maker, dict):
+        return
+
+    maker_equity_path = run_root / "maker" / "maker_equity.csv"
+    maker_equity = last_csv(maker_equity_path)
+    maker_orders_rows = csv_rows(run_root / "maker" / "maker_orders.csv")
+    maker_positions_rows = csv_rows(run_root / "maker" / "maker_positions.csv")
+    maker_fill_rows = csv_rows(run_root / "maker" / "maker_fills.csv")
+    maker_order_log = csv_rows(run_root / "maker" / "maker_order_log.csv")
+    maker_fraction = number((config.get("v6") or {}).get("micro_maker_capital_fraction"), 0.12)
+    maker_start = number(config.get("starting_capital"), 10000.0) * maker_fraction
+
+    if maker_equity:
+        old_equity = number(maker.get("equity"), maker_start)
+        old_reserved = number(status.get("reserved_cash"))
+        old_cash = number(status.get("cash"))
+        actual_equity = number(maker_equity.get("equity"), maker_start)
+        actual_cash = number(maker_equity.get("cash"), maker_start)
+        reserved = number(maker_equity.get("reserved_cash"))
+        position_cost = sum(
+            max(0.0, number(row.get("shares"))) * max(0.0, number(row.get("entry_price"), number(row.get("cost"))))
+            for row in maker_positions_rows
+        )
+        actions = Counter(str(row.get("action") or "").upper() for row in maker_order_log)
+        realized = maker_realized_pnl(maker_fill_rows)
+        best_edge = max((number(row.get("signal_edge"), float("-inf")) for row in maker_order_log), default=0.0)
+        if not math.isfinite(best_edge):
+            best_edge = 0.0
+
+        maker.update({
+            "equity": actual_equity,
+            "pnl": actual_equity - maker_start,
+            "realized_pnl": realized,
+            "gross_exposure": reserved + position_cost,
+            "drawdown": number(maker_equity.get("drawdown")),
+            "live_units": int(number(maker_equity.get("resting_orders"))) + int(number(maker_equity.get("positions"))),
+            "orders_total": actions.get("POST", 0),
+            "fills_total": len(maker_fill_rows),
+            "status_age_seconds": file_age(maker_equity_path),
+            "killed": bool(int(number(maker_equity.get("killed")))),
+            "signals": int(number(maker_equity.get("signals"), number(maker.get("signals")))),
+            "best_edge": number(maker_equity.get("best_edge"), best_edge),
+        })
+        status["cash"] = old_cash + actual_cash - maker_start
+        status["equity"] = number(status.get("equity")) + actual_equity - old_equity
+        status["pnl"] = status["equity"] - number(status.get("starting_capital"), number(config.get("starting_capital"), 10000.0))
+        status["reserved_cash"] = old_reserved + reserved
+
+    existing_orders = [row for row in (status.get("open_orders") or []) if isinstance(row, dict) and row.get("model") != "micro_maker"]
+    for row in maker_orders_rows:
+        existing_orders.append({
+            "model": "micro_maker", "strategy": "MICRO_MAKER", "bundle_id": "",
+            "market_id": row.get("market_id") or "", "side": row.get("side") or "",
+            "state": "RESTING", "limit_price": number(row.get("limit_price")),
+            "remaining_shares": number(row.get("remaining_shares"), number(row.get("shares"))),
+            "queue_ahead": number(row.get("queue_ahead")),
+        })
+    status["open_orders"] = existing_orders[:100]
+    status["open_order_count"] = len(status["open_orders"])
+
+    guard = status.get("relation_guard")
+    if isinstance(guard, dict) and "accepted_bundles" not in guard:
+        relation_rows = csv_rows(run_root / "relation_intents.csv")
+        guard["accepted_bundles"] = len({str(row.get("bundle_id") or "") for row in relation_rows if row.get("bundle_id")})
+
+    status["realized_pnl"] = sum(number(row.get("realized_pnl")) for row in strategies.values() if isinstance(row, dict))
+    status["gross_exposure"] = sum(number(row.get("gross_exposure")) for row in strategies.values() if isinstance(row, dict))
+    status["live_units"] = sum(int(number(row.get("live_units"))) for row in strategies.values() if isinstance(row, dict))
+    status["fill_count_total"] = sum(int(number(row.get("fills_total"))) for row in strategies.values() if isinstance(row, dict))
+    status["peak_equity"] = max(number(status.get("peak_equity")), number(status.get("equity")))
+    peak = number(status.get("peak_equity"))
+    status["drawdown"] = max(0.0, 1.0 - number(status.get("equity")) / peak) if peak > 0.0 else 0.0
+    tmp = status_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(status, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(status_path)
+
+
+def write_legacy_health_view(run_root: Path, config_path: Path) -> None:
+    status = json.loads((run_root / "runtime_status.json").read_text(encoding="utf-8"))
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    strategies = status.get("strategies") or {}
+    sub = status.get("sub_strategies") or {}
+    starting = number(status.get("starting_capital"), number(config.get("starting_capital"), 10000.0))
+    v6 = config.get("v6") or {}
+    reserve_fraction = number(v6.get("reserve_fraction"), 0.05)
+
+    maker = strategies.get("micro_maker") or {}
+    taker = strategies.get("micro_taker") or {}
+    rv = strategies.get("relative_value") or {}
+    hard = strategies.get("graph_hard") or {}
+    external = strategies.get("external") or {}
+
+    def total(rows, key):
+        return sum(number(row.get(key)) for row in rows)
+
+    micro_rows = [maker, taker]
+    local_realized = number((sub.get("LOCAL_FACTOR") or {}).get("realized_pnl"))
+    graph_rv_realized = sum(number((sub.get(name) or {}).get("realized_pnl")) for name in ("GRAPH_RV", "STRUCTURAL_TYPED"))
+    rv_equity = number(rv.get("equity"), starting * 0.50)
+    pca_equity = rv_equity * (0.35 / 0.50)
+    graph_equity = rv_equity * (0.15 / 0.50) + number(hard.get("equity"), starting * 0.15)
+
+    compat = [
+        ("micro", "micro", 0.20, total(micro_rows, "equity"), total(micro_rows, "realized_pnl"), total(micro_rows, "gross_exposure"), int(total(micro_rows, "live_units")), int(total(micro_rows, "fills_total"))),
+        ("pca", "local_factor", 0.35, pca_equity, local_realized, number(rv.get("gross_exposure")) * (0.35 / 0.50), int(number(rv.get("live_units"))), int(number(rv.get("fills_total")))),
+        ("graph", "graph_structural_hard", 0.30, graph_equity, graph_rv_realized + number(hard.get("realized_pnl")), number(rv.get("gross_exposure")) * (0.15 / 0.50) + number(hard.get("gross_exposure")), int(number(rv.get("live_units"))) + int(number(hard.get("live_units"))), int(number(rv.get("fills_total"))) + int(number(hard.get("fills_total")))),
+        ("semantic", "relation_parser", 0.0, 0.0, 0.0, 0.0, 0, 0),
+        ("external", "external", 0.10, number(external.get("equity"), starting * 0.10), number(external.get("realized_pnl")), number(external.get("gross_exposure")), int(number(external.get("live_units"))), int(number(external.get("fills_total")))),
     ]
-    fields=["name","expert","capital_fraction","starting_capital","cash","equity","pnl","realized_pnl","peak_equity","drawdown","gross_exposure","open_positions","killed","alive","status_age_seconds","restarts","fills","buy_fills","sell_fills","settle_fills"]
-    rows=[]
-    for name,expert,frac,eq,live in compat:
-        s=starting*frac;rows.append({"name":name,"expert":expert,"capital_fraction":frac,"starting_capital":s,"cash":eq,"equity":eq,"pnl":eq-s,"realized_pnl":0.0,"peak_equity":max(s,eq),"drawdown":0.0,"gross_exposure":0.0,"open_positions":live,"killed":1 if killed else 0,"alive":1,"status_age_seconds":0,"restarts":0,"fills":0,"buy_fills":0,"sell_fills":0,"settle_fills":0})
-    atomic_csv(args.run_root/"strategy_status.csv",fields,rows)
-    atomic_json(args.run_root/"allocator_status.json",{"schema":"v6_legacy_health_view","paper_only":True,"models_expected":5,"models_alive":5,"reserve_fraction":reserve_frac,"global_max_drawdown":f(cfg.get("max_drawdown"),.15),"global_max_gross_fraction":f(cfg.get("max_gross_fraction"),.45),"global_gross_fraction":gross/max(starting,1.0),"timestamp":int(time.time())})
-    print(json.dumps({k:status[k] for k in ("equity","pnl","drawdown","live_units","killed")},sort_keys=True));return 0
+    fields = ["name","expert","capital_fraction","starting_capital","cash","equity","pnl","realized_pnl","peak_equity","drawdown","gross_exposure","open_positions","killed","alive","status_age_seconds","restarts","fills","buy_fills","sell_fills","settle_fills"]
+    rows = []
+    killed = bool(status.get("killed"))
+    for name, expert, fraction, equity, realized, gross, live, fills in compat:
+        sleeve_start = starting * fraction
+        rows.append({"name":name,"expert":expert,"capital_fraction":fraction,"starting_capital":sleeve_start,"cash":equity,"equity":equity,"pnl":equity-sleeve_start,"realized_pnl":realized,"peak_equity":max(sleeve_start,equity),"drawdown":0.0,"gross_exposure":gross,"open_positions":live,"killed":1 if killed else 0,"alive":1,"status_age_seconds":0,"restarts":0,"fills":fills,"buy_fills":0,"sell_fills":0,"settle_fills":0})
+    tmp = run_root / "strategy_status.csv.tmp"
+    with tmp.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields); writer.writeheader(); writer.writerows(rows)
+    tmp.replace(run_root / "strategy_status.csv")
+
+    allocator = {"schema":"v6_legacy_health_view","paper_only":True,"models_expected":5,"models_alive":5,"reserve_fraction":reserve_fraction,"global_max_drawdown":number(config.get("max_drawdown"),0.15),"global_max_gross_fraction":number(config.get("max_gross_fraction"),0.45),"global_gross_fraction":number(status.get("gross_exposure"))/max(starting,1.0),"timestamp":int(number(status.get("timestamp")))}
+    tmp_json = run_root / "allocator_status.json.tmp"
+    tmp_json.write_text(json.dumps(allocator, indent=2, sort_keys=True) + "\n", encoding="utf-8"); tmp_json.replace(run_root / "allocator_status.json")
 
 
-if __name__=="__main__":raise SystemExit(main())
+def main() -> int:
+    run_root = argument_path("--run-root", "runs/paper_v6_live")
+    config_path = argument_path("--config", "config/paper_v6.json")
+    namespace = runpy.run_path(str(Path(__file__).with_name("v6_runtime_status_v2.py")), run_name="v6_runtime_status_v2_runtime")
+    result = int(namespace["main"]())
+    if result != 0:
+        return result
+    enrich_native_status(run_root, config_path)
+    write_legacy_health_view(run_root, config_path)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
