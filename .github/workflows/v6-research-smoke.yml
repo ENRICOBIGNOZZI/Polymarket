@@ -37,7 +37,12 @@ jobs:
           from pathlib import Path
           cfg=json.loads(Path('config/paper_v6.json').read_text());arch=json.loads(Path('config/v6_model_architecture.json').read_text());live=json.loads(Path('config/live_champion.json').read_text())
           assert cfg['v6']['paper_only'] is True;assert cfg['multi_strategy']['paper_only'] is True;assert arch['paper_only'] is True;assert arch['allow_authenticated_execution'] is False
-          if '${{ github.event_name }}' == 'pull_request': assert live['version'] == 5, 'research smoke must not switch the live selector'
+          event='${{ github.event_name }}'; head='${{ github.head_ref }}'
+          if event == 'pull_request':
+              if head.startswith('integration/'):
+                  assert live['version'] == 6, 'V6 integration smoke requires the V6 live selector'
+              else:
+                  assert live['version'] == 5, 'non-integration research smoke must not switch the live selector'
           assert float(cfg['max_drawdown']) <= .15;assert float(cfg['max_market_fraction']) <= .025;assert float(cfg['max_event_fraction']) <= .08;assert float(cfg['max_gross_fraction']) <= .45
           v=cfg['v6']; total=sum(float(v[k]) for k in ('micro_maker_capital_fraction','micro_taker_capital_fraction','relative_value_capital_fraction','hard_arb_capital_fraction','external_capital_fraction','reserve_fraction'));assert abs(total-1.0)<1e-9
           PY
@@ -98,7 +103,7 @@ jobs:
           python3 - <<'PY'
           import csv,json,re
           from pathlib import Path
-          root=Path('v6_evidence')
+          root=Path('v6_evidence'); root.mkdir(parents=True,exist_ok=True)
           def js(name):
               p=root/name
               try:return json.loads(p.read_text())
