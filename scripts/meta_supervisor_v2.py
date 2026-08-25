@@ -3,8 +3,7 @@
 
 A scheduler run is not healthy merely because GitHub marked it skipped or
 successful. The wrapper also evaluates the latest autonomous-research product
-and schedules a bounded recovery run when the product is missing, stale or
-runtime-degraded.
+once that product channel is explicitly present in the runtime snapshot.
 """
 from __future__ import annotations
 
@@ -66,6 +65,11 @@ def _surface_failure_cooldowns(report: dict[str, Any]) -> None:
     report.setdefault("invariants", {})["failure_cooldown_is_health_evidence"] = False
 
 
+def _autonomous_product_channel_wired(snapshot: dict[str, Any]) -> bool:
+    products = snapshot.get("products")
+    return isinstance(products, dict) and "autonomous_research" in products
+
+
 def _autonomous_product_health(config: dict[str, Any], snapshot: dict[str, Any], now: int) -> dict[str, Any]:
     payload = ((snapshot.get("products") or {}).get("autonomous_research") or {})
     generated = legacy.parse_timestamp(payload.get("generated_ts")) if isinstance(payload, dict) else 0
@@ -105,7 +109,21 @@ def _autonomous_product_health(config: dict[str, Any], snapshot: dict[str, Any],
 def build_report(config: dict[str, Any], snapshot: dict[str, Any], now: int) -> dict[str, Any]:
     report = _original_build_report(config, snapshot, now)
     _surface_failure_cooldowns(report)
+    wired = _autonomous_product_channel_wired(snapshot)
+    report.setdefault("invariants", {})["autonomous_research_product_channel_wired"] = wired
+    if not wired:
+        report["product_health"] = {
+            "autonomous_research": {
+                "wired": False,
+                "healthy": True,
+                "reported_status": "NOT_WIRED",
+                "reasons": [],
+            }
+        }
+        return report
+
     product = _autonomous_product_health(config, snapshot, now)
+    product["wired"] = True
     report["product_health"] = {"autonomous_research": product}
     if product["healthy"]:
         return report
