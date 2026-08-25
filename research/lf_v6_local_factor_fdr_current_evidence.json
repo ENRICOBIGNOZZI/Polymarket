@@ -1,0 +1,49 @@
+{
+  "schema": "lf_v6_local_factor_fdr_current_evidence_v1",
+  "source_v6_pr": 215,
+  "source_v6_head": "319da3cdf027cb3142a8e860fb37dcecd8c8fd60",
+  "source_main": "429be256efe12b4138a9fe30418d12257827f824",
+  "nominal_bh_q": 0.1,
+  "current_contract": {
+    "residual_test": "OLS gamma/se from delta r_t = c + gamma r_{t-1} + error_t",
+    "pvalue": "two-sided standard-normal tail probability",
+    "multiplicity": "Benjamini-Hochberg over candidate p-values",
+    "paper_invocation": {
+      "min_common_points": 48,
+      "min_residual_z": 1.0,
+      "fdr": 0.1,
+      "max_clusters": 15,
+      "lookback_hours": 336,
+      "fidelity_minutes": 60
+    }
+  },
+  "all_null_diagnostic": {
+    "design": "five-market local clusters with I(1) logit levels; V6 cross-sectional mean factor; no stationary residual alpha; 200 deterministic clusters per cell",
+    "iid_innovations": [
+      {"points": 48, "clusters_with_any_bh_rejection": 122, "all_null_fdr": 0.61, "pairable_false_signal_clusters": 39, "pairable_rate": 0.195, "eligible_signals": 216},
+      {"points": 96, "clusters_with_any_bh_rejection": 123, "all_null_fdr": 0.615, "pairable_false_signal_clusters": 48, "pairable_rate": 0.24, "eligible_signals": 239},
+      {"points": 336, "clusters_with_any_bh_rejection": 138, "all_null_fdr": 0.69, "pairable_false_signal_clusters": 53, "pairable_rate": 0.265, "eligible_signals": 237}
+    ],
+    "ar1_innovations_rho_0_5": [
+      {"points": 48, "clusters_with_any_bh_rejection": 43, "all_null_fdr": 0.215, "pairable_false_signal_clusters": 3, "pairable_rate": 0.015, "eligible_signals": 56},
+      {"points": 96, "clusters_with_any_bh_rejection": 30, "all_null_fdr": 0.15, "pairable_false_signal_clusters": 4, "pairable_rate": 0.02, "eligible_signals": 39},
+      {"points": 336, "clusters_with_any_bh_rejection": 35, "all_null_fdr": 0.175, "pairable_false_signal_clusters": 1, "pairable_rate": 0.005, "eligible_signals": 40}
+    ]
+  },
+  "interpretation": "When all residual signals are null, FDR equals the probability of any rejection. The current V6 standard-normal p-values are not valid unit-root p-values, so BH at q=0.10 does not provide 10% FDR control in this controlled diagnostic. Pairability can also arise under the null, so downstream opposite-residual/hedge-sign logic does not repair the inference defect.",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "required_next_experiment": [
+    "keep broad local clusters and low paper-only discovery thresholds",
+    "calibrate residual mean-reversion under a unit-root null with dependence-aware inference before multiplicity control",
+    "compare incumbent standard-normal-plus-BH against robust unit-root/FDR alternatives on identical chronological local panels",
+    "report candidate survival, factor and hedge stability, maker executable edge, partial-fill and unwind economics, and realized OOS PnL at 1x/1.5x/2x costs",
+    "do not interpret more FDR-eligible candidates as alpha without common-sample executable utility"
+  ],
+  "safety": {
+    "paper_only": true,
+    "live_champion_changed": false,
+    "risk_limits_changed": false,
+    "drawdown_kill_changed": false,
+    "authenticated_execution": false
+  }
+}
