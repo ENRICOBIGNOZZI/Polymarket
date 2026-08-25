@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "version": 5,
-  "loop": "scripts/aggressive_paper_v5_loop.sh",
+  "loop": "scripts/paper_v5_loop.sh",
   "config": "config/paper_v5.json",
   "run_root": "runs/paper_v5_live",
   "deployment_ref": "paper-validated",
