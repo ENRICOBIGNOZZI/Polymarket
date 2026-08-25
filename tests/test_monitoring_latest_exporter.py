@@ -4,12 +4,29 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "monitoring"))
 
-from exporter_latest import LatestCollector, detect_run_root
+from exporter_latest import LatestCollector, detect_run_root, v6_runtime_data_health
+
+
+class _ProxyResponse:
+    status = 200
+
+    def __init__(self, payload: object):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")
 
 
 class LatestExporterTest(unittest.TestCase):
@@ -94,6 +111,38 @@ class LatestExporterTest(unittest.TestCase):
             self.assertIn("polymarket_runtime_execution_imbalance_ratio 0.5", text)
             self.assertIn("polymarket_runtime_realized_pnl_usd_total 2.5", text)
             self.assertIn("polymarket_runtime_oos_stressed_net_pnl_usd -1", text)
+
+    def test_v6_data_health_rejects_unreachable_proxy(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "trade_recorder.log").write_text("trade_recorder markets=1 trades=1\n", encoding="utf-8")
+            with mock.patch("exporter_latest.urllib.request.urlopen", side_effect=OSError("down")):
+                healthy, reason = v6_runtime_data_health(root, proxy_port=9120)
+            self.assertFalse(healthy)
+            self.assertEqual(reason, "v6_market_proxy_unhealthy")
+
+    def test_v6_data_health_rejects_all_failure_recorder_tail_and_recovers(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            log = root / "trade_recorder.log"
+            log.write_text(
+                "\n".join(
+                    f"fatal: HTTP request failed: timeout {i}" for i in range(5)
+                ) + "\n",
+                encoding="utf-8",
+            )
+            response = _ProxyResponse([{"id": "market"}])
+            with mock.patch("exporter_latest.urllib.request.urlopen", return_value=response):
+                healthy, reason = v6_runtime_data_health(root, proxy_port=9120)
+            self.assertFalse(healthy)
+            self.assertEqual(reason, "v6_recorder_data_path_unhealthy")
+
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write("trade_recorder markets=1 trades=1\n")
+            with mock.patch("exporter_latest.urllib.request.urlopen", return_value=response):
+                healthy, reason = v6_runtime_data_health(root, proxy_port=9120)
+            self.assertTrue(healthy)
+            self.assertEqual(reason, "ok")
 
 
 if __name__ == "__main__":

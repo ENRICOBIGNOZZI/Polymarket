@@ -3,8 +3,11 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
 import re
 import time
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -13,6 +16,10 @@ from typing import Sequence
 from exporter import Collector, ExporterHandler, Metrics, _float, _last_csv_row, _mtime, _read_json
 
 _VERSION_RE = re.compile(r"paper_v(\d+(?:[._-]\d+)*)", re.IGNORECASE)
+_RECORDER_FAILURE_PREFIXES = (
+    "fatal: HTTP request failed:",
+    "fatal: Gamma markets HTTP 503:",
+)
 
 
 def _version_tuple(text: str) -> tuple[int, ...]:
@@ -65,6 +72,61 @@ def collector_class(version: tuple[int, ...]):
         if cls is not None:
             return cls, f"v{v}"
     return Collector, "base"
+
+
+def _recent_nonempty_lines(path: Path, limit: int = 20) -> list[str]:
+    try:
+        lines = [line.strip() for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
+    except OSError:
+        return []
+    return lines[-max(1, limit):]
+
+
+def v6_runtime_data_health(root: Path, *, proxy_port: int | None = None) -> tuple[bool, str]:
+    """Fail closed when the live V6 discovery path cannot serve a market row.
+
+    The updater, deploy verifier and server-health workflow all depend on the
+    latest exporter `/healthz`.  V6 therefore cannot be reported healthy merely
+    because its processes are alive while the recorder is receiving only data
+    failures.  This check is read-only and bounded; it never changes trading
+    admission, execution costs or portfolio risk.
+    """
+
+    if proxy_port is None:
+        try:
+            proxy_port = int(os.environ.get("V6_MARKET_PROXY_PORT", "9120"))
+        except ValueError:
+            return False, "invalid_v6_market_proxy_port"
+    query = urllib.parse.urlencode(
+        {
+            "active": "true",
+            "closed": "false",
+            "limit": "1",
+            "offset": "0",
+            "liquidity_num_min": "0",
+        }
+    )
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{proxy_port}/markets?{query}",
+        headers={"Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=2.0) as response:
+            if getattr(response, "status", 200) != 200:
+                return False, "v6_market_proxy_http_failure"
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return False, "v6_market_proxy_unhealthy"
+    if not isinstance(payload, list) or not payload or not isinstance(payload[0], dict):
+        return False, "v6_market_proxy_empty"
+
+    recorder_tail = _recent_nonempty_lines(root / "trade_recorder.log")
+    if len(recorder_tail) >= 5:
+        successes = sum(line.startswith("trade_recorder markets=") for line in recorder_tail)
+        failures = sum(line.startswith(_RECORDER_FAILURE_PREFIXES) for line in recorder_tail)
+        if successes == 0 and failures == len(recorder_tail):
+            return False, "v6_recorder_data_path_unhealthy"
+    return True, "ok"
 
 
 @dataclass
@@ -194,6 +256,12 @@ class LatestCollector:
             self._adapter = adapter
         return root, version, config
 
+    def health(self) -> tuple[bool, str]:
+        root, version, _ = self._resolve()
+        if version and version[0] >= 6:
+            return v6_runtime_data_health(root)
+        return True, "ok"
+
     def collect(self) -> str:
         root, version, config = self._resolve()
         now = time.time()
@@ -230,6 +298,25 @@ class LatestCollector:
         return detailed + metrics.render()
 
 
+class LatestExporterHandler(ExporterHandler):
+    collector: LatestCollector
+
+    def do_GET(self) -> None:
+        if self.path == "/healthz":
+            try:
+                healthy, detail = self.collector.health()
+            except Exception:
+                healthy, detail = False, "runtime_health_check_failed"
+            body = (detail + "\n").encode("utf-8")
+            self.send_response(200 if healthy else 503)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        super().do_GET()
+
+
 def parse_latest_args(argv: Sequence[str] | None = None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs-base", type=Path, default=Path("runs"))
@@ -245,8 +332,8 @@ def parse_latest_args(argv: Sequence[str] | None = None):
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_latest_args(argv)
     collector = LatestCollector(args.runs_base, args.config_dir, args.run_name, args.config, args.top_opportunities)
-    ExporterHandler.collector = collector
-    server = ThreadingHTTPServer((args.host, args.port), ExporterHandler)
+    LatestExporterHandler.collector = collector
+    server = ThreadingHTTPServer((args.host, args.port), LatestExporterHandler)
     print(f"polymarket latest-version exporter listening on http://{args.host}:{args.port}/metrics", flush=True)
     try:
         server.serve_forever()
