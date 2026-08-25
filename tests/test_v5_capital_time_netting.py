@@ -31,8 +31,21 @@ def opp(
     incumbent: bool = False,
     cost: float = 0.001,
     notional: float = 50.0,
+    background: float = 0.0,
 ) -> Opportunity:
-    return Opportunity(ts, strategy, market, "YES", notional, hours, edge, cost, realized, incumbent)
+    return Opportunity(
+        ts,
+        strategy,
+        market,
+        "YES",
+        notional,
+        hours,
+        edge,
+        cost,
+        realized,
+        incumbent,
+        background,
+    )
 
 
 class CapitalTimeNettingTest(unittest.TestCase):
@@ -78,6 +91,22 @@ class CapitalTimeNettingTest(unittest.TestCase):
         selected = select_challenger(rows, global_capital_budget=50.0, window_seconds=60)
         self.assertEqual(selected, set())
 
+    def test_background_occupancy_does_not_create_challenger_budget(self) -> None:
+        rows = [
+            opp(
+                120,
+                "graph",
+                "fast",
+                edge=0.10,
+                hours=0.5,
+                realized=100.0,
+                incumbent=False,
+                background=40.0,
+            )
+        ]
+        selected = select_challenger(rows, global_capital_budget=50.0, window_seconds=60)
+        self.assertEqual(selected, set())
+
     def test_challenger_cannot_use_more_than_incumbent_capital(self) -> None:
         rows = [
             opp(120, "pca", "inc", edge=0.01, hours=10.0, realized=0.0, incumbent=True, notional=40.0),
@@ -87,6 +116,52 @@ class CapitalTimeNettingTest(unittest.TestCase):
         selected = select_challenger(rows, global_capital_budget=100.0, window_seconds=60)
         self.assertEqual(len(selected), 1)
         self.assertLessEqual(sum(rows[i].notional for i in selected), 40.0)
+
+    def test_background_occupancy_is_included_in_global_cap_check(self) -> None:
+        rows = [
+            opp(
+                120,
+                "pca",
+                "inc",
+                edge=0.01,
+                hours=10.0,
+                realized=0.0,
+                incumbent=True,
+                notional=40.0,
+                background=20.0,
+            ),
+            opp(
+                120,
+                "graph",
+                "alt",
+                edge=0.02,
+                hours=1.0,
+                realized=1.0,
+                notional=40.0,
+                background=20.0,
+            ),
+        ]
+        with self.assertRaises(ValueError):
+            select_challenger(rows, global_capital_budget=50.0, window_seconds=60)
+
+    def test_background_occupancy_must_be_consistent_within_window(self) -> None:
+        rows = [
+            opp(120, "pca", "inc", edge=0.01, hours=10.0, realized=0.0, incumbent=True, notional=20.0, background=10.0),
+            opp(120, "graph", "alt", edge=0.02, hours=1.0, realized=1.0, notional=20.0, background=11.0),
+        ]
+        with self.assertRaises(ValueError):
+            select_challenger(rows, global_capital_budget=50.0, window_seconds=60)
+
+    def test_report_exposes_background_and_total_capital(self) -> None:
+        rows = [
+            opp(120, "pca", "inc", edge=0.01, hours=10.0, realized=0.0, incumbent=True, notional=20.0, background=10.0),
+            opp(120, "graph", "alt", edge=0.02, hours=1.0, realized=1.0, notional=20.0, background=10.0),
+        ]
+        report = evaluate(rows, global_capital_budget=50.0, window_seconds=60, fold_seconds=1000)
+        window = report["capital_windows"][0]
+        self.assertEqual(window["background_reserved_capital"], 10.0)
+        self.assertEqual(window["incumbent_total_capital"], 30.0)
+        self.assertEqual(window["challenger_total_capital"], 30.0)
 
     def test_decision_windows_do_not_share_capital(self) -> None:
         rows = [
