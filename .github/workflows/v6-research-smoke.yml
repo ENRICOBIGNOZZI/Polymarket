@@ -75,7 +75,7 @@ jobs:
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
-          python3 -m py_compile scripts/v6_queue_filter.py
+          python3 -m py_compile scripts/v6_queue_filter.py scripts/v6_market_common.py scripts/v6_local_factor_v3.py
           python3 scripts/v6_queue_filter.py self-test
           python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py tests/test_v6_execution_costs.py -v
       - name: Live public-data relation probes
@@ -97,11 +97,23 @@ jobs:
           cfg=json.loads(Path('config/paper_v6.json').read_text()); cfg['starting_capital']=1500.0; cfg['run_dir']='v6_evidence/hard_arb'; Path('v6_evidence/hard_arb_config.json').write_text(json.dumps(cfg,indent=2,sort_keys=True)+'\n')
           PY
           python3 scripts/v6_queue_filter.py hard --config v6_evidence/hard_arb_config.json --run-dir v6_evidence/hard_arb --markets 300 --min-liquidity 10 --max-events 50 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 --leg-latency-ms 100 > v6_evidence/hard_arb.log 2>&1 || true
-      - name: Live public-data FDR local-factor probe
+      - name: Seed causal public trade tape
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/v6_local_factor_intents.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/local_factor.log 2>&1 || true
+          mkdir -p v6_evidence
+          ./build/polymarket_trade_recorder --config config/paper_v6.json --run-dir v6_evidence --markets 500 --batch 40 --min-liquidity 2 --lookback-seconds 900 --once > v6_evidence/trade_recorder.log 2>&1 || true
+      - name: Live public-data incumbent and repaired local-factor common sample
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/v6_local_factor_intents.py --config config/paper_v6.json --output v6_evidence/local_factor_incumbent_intents.csv --status v6_evidence/local_factor_incumbent_status.json --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/local_factor_incumbent.log 2>&1 || true
+          python3 scripts/v6_local_factor_v3.py --config config/paper_v6.json --output v6_evidence/local_factor_repaired_common_intents.csv --status v6_evidence/local_factor_repaired_common_status.json --trade-tape v6_evidence/trade_tape.csv --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --bootstrap-reps 200 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 --min-fill-probability 0.0 > v6_evidence/local_factor_repaired_common.log 2>&1 || true
+      - name: Live public-data repaired local-factor aggressive frontier
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/v6_local_factor_v3.py --config config/paper_v6.json --output v6_evidence/local_factor_repaired_aggressive_intents.csv --status v6_evidence/local_factor_repaired_aggressive_status.json --trade-tape v6_evidence/trade_tape.csv --markets 500 --min-liquidity 2 --lookback-hours 336 --fidelity-minutes 60 --max-clusters 25 --min-common-points 36 --min-z 0.75 --fdr 0.15 --bootstrap-reps 200 --min-edge 0.00005 --max-trade-usd 125 --slippage-bps 5 --min-fill-probability 0.005 > v6_evidence/local_factor_repaired_aggressive.log 2>&1 || true
       - name: Live public-data maker economics probe
         shell: bash
         run: |
@@ -129,9 +141,25 @@ jobs:
               p=root/name
               try:return json.loads(p.read_text())
               except Exception:return {}
+          def count_rows(name):
+              p=root/name
+              try:
+                  with p.open(newline='',encoding='utf-8') as h:return sum(1 for _ in csv.DictReader(h))
+              except Exception:return 0
           hard=(root/'graph_hard_taker_scan.csv').read_text(errors='ignore') if (root/'graph_hard_taker_scan.csv').exists() else ''
           m=re.search(r'net_positive_pre_gas=(\d+)',hard)
-          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'local_factor':js('local_factor_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0}
+          summary={
+              'paper_only':True,
+              'authenticated_execution':False,
+              'relation':js('relation_status.json'),
+              'relation_guard':js('relation_guard_status.json'),
+              'local_factor_incumbent':js('local_factor_incumbent_status.json'),
+              'local_factor_repaired_common':js('local_factor_repaired_common_status.json'),
+              'local_factor_repaired_aggressive':js('local_factor_repaired_aggressive_status.json'),
+              'trade_tape_rows':count_rows('trade_tape.csv'),
+              'hard_arb':js('hard_arb/status.json'),
+              'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0,
+          }
           state=root/'micro_taker/state.json'
           if state.exists():
               try:
