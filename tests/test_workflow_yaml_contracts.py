@@ -24,6 +24,22 @@ class WorkflowYamlContractTest(unittest.TestCase):
         self.assertNotIn("\nREMOTE\n", deploy)
         self.assertEqual(deploy.count("\n          REMOTE\n"), 3)
 
+    def test_deploy_accepts_existing_authkey_or_oauth_credentials_without_printing_them(self) -> None:
+        deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("id: tailscale_auth", deploy)
+        self.assertIn("TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}", deploy)
+        self.assertIn("TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}", deploy)
+        self.assertIn("TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}", deploy)
+        self.assertIn("if: steps.tailscale_auth.outputs.mode == 'authkey'", deploy)
+        self.assertIn("if: steps.tailscale_auth.outputs.mode == 'oauth'", deploy)
+        self.assertIn("oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}", deploy)
+        self.assertIn("oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}", deploy)
+        self.assertIn("tags: ${{ vars.TS_TAGS || 'tag:ci' }}", deploy)
+        self.assertNotIn('echo "$TS_AUTHKEY"', deploy)
+        self.assertNotIn('echo "$TS_OAUTH_SECRET"', deploy)
+
     def test_scheduled_ci_backfills_api_updated_pr_heads_exactly_once(self) -> None:
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("  actions: write\n", ci)
