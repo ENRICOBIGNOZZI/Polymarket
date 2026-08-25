@@ -17,6 +17,12 @@ def score_statistic(levels: list[float]) -> float:
     )
 
 
+def iid_unit_root_score_expectation(innovation_variance: float) -> float:
+    if innovation_variance < 0.0 or not math.isfinite(innovation_variance):
+        raise ValueError("innovation variance must be finite and nonnegative")
+    return -0.5 * innovation_variance
+
+
 def circular_block_sample(values: list[float], size: int, block: int, rng: random.Random) -> list[float]:
     out: list[float] = []
     while len(out) < size:
@@ -134,6 +140,7 @@ def run_experiment(paths: int, reps: int) -> dict[str, object]:
         "alpha": 0.10,
         "paths_per_cell": paths,
         "bootstrap_reps": reps,
+        "analytic_iid_unit_root_score_expectation_variance_1": iid_unit_root_score_expectation(1.0),
         "null_results": null_rows,
         "stationary_power_check": {
             "points": 336,
@@ -146,8 +153,10 @@ def run_experiment(paths: int, reps: int) -> dict[str, object]:
             ),
         },
         "interpretation": (
-            "Resampling the centered score sequence does not impose the unit-root null on levels. "
-            "A null-preserving bootstrap must reconstruct level paths under gamma=0 before multiplicity control."
+            "For an iid random walk the sample-mean score has expectation -innovation_variance/2, "
+            "so a negative score is mechanically present under the unit-root null. Resampling the centered score sequence "
+            "does not impose the unit-root null on levels. A null-preserving bootstrap must reconstruct level paths "
+            "under gamma=0 before multiplicity control."
         ),
     }
 
