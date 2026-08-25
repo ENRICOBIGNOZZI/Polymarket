@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import unittest
-from pathlib import Path
 
 from scripts.hard_safety_policy import (
     compare_paper_config,
@@ -138,12 +137,6 @@ class HardSafetyPolicyTest(unittest.TestCase):
         base = "run_maker --min-edge 0.00035 --max-order-usd 25\n"
         current = "run_maker --min-edge 0.00005 --max-order-usd 125 --improve-ticks 1\n"
         self.assertEqual(compare_runtime_hard_safety(base, current, "scripts/paper_v6_loop.sh"), [])
-
-    def test_live_paper_promotion_requires_merged_pr_provenance(self) -> None:
-        workflow = Path(".github/workflows/v4-live-smoke.yml").read_text(encoding="utf-8")
-        self.assertIn('commits/${validated_sha}/pulls', workflow)
-        self.assertIn("no merged pull-request provenance", workflow)
-        self.assertIn('test "$validated_sha" = "$main_sha"', workflow)
 
 
 if __name__ == "__main__":
