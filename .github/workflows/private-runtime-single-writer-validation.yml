@@ -148,10 +148,13 @@ jobs:
           evidence="$root/evidence"
           first_pid=0
           restart_pid=0
+          stale_pid=0
+          resistant_pid=0
+          failed_runtime_pid=0
 
           cleanup() {
             set +e
-            for pid in "$restart_pid" "$first_pid"; do
+            for pid in "$failed_runtime_pid" "$resistant_pid" "$restart_pid" "$first_pid" "$stale_pid"; do
               if [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 0 )); then
                 kill "$pid" 2>/dev/null || true
                 for _ in {1..20}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
@@ -236,6 +239,57 @@ jobs:
           )
 
           cd "$source_dir"
+          # This is an isolated process-tree canary.  The simulated process has
+          # the exact same-repository V6 loop path in its argv (which is what the
+          # production reaper matches), but it never starts a proxy, recorder or
+          # model writer.  It therefore exercises process selection/termination
+          # without introducing another paper runtime into the validation node.
+          simulated_v6_visible() {
+            local pid="$1"
+            pgrep -f "$source_dir/scripts/paper_v6_loop.sh" 2>/dev/null | grep -qx "$pid"
+          }
+          pid_descends_from() {
+            local pid="$1" ancestor="$2" parent=""
+            for _ in {1..64}; do
+              [[ "$pid" == "$ancestor" ]] && return 0
+              parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+              [[ "$parent" =~ ^[1-9][0-9]*$ && "$parent" != "$pid" ]] || return 1
+              pid="$parent"
+            done
+            return 1
+          }
+          stopped_or_zombie() {
+            local pid="$1"
+            local state=""
+            if ! kill -0 "$pid" 2>/dev/null; then return 0; fi
+            state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+            [[ "$state" == Z* ]]
+          }
+          start_simulated_v6_loop(){
+            local mode="$1" log="$2"
+            if [[ "$mode" == "resistant" ]]; then
+              /usr/bin/env bash -c 'trap "" TERM; while :; do sleep 1; done' \
+                "$source_dir/scripts/paper_v6_loop.sh" >"$log" 2>&1 &
+            else
+              /usr/bin/env bash -c 'trap "exit 0" TERM INT; while :; do sleep 1; done' \
+                "$source_dir/scripts/paper_v6_loop.sh" >"$log" 2>&1 &
+            fi
+            SIMULATED_V6_PID=$!
+          }
+
+          start_simulated_v6_loop graceful "$evidence/stale-graceful.log"
+          stale_pid="$SIMULATED_V6_PID"
+          for _ in {1..40}; do
+            simulated_v6_visible "$stale_pid" && break
+            kill -0 "$stale_pid" 2>/dev/null || { echo 'graceful stale-loop simulator exited early' >&2; exit 1; }
+            sleep 0.1
+          done
+          if ! simulated_v6_visible "$stale_pid"; then
+            echo "graceful stale-loop simulator is not visible to the production matcher: pid=$stale_pid" >&2
+            exit 1
+          fi
+          printf 'graceful_stale_loop_pid=%s\n' "$stale_pid"
+
           "${runtime_env[@]}" /usr/bin/env bash scripts/paper_latest_loop.sh \
             >"$evidence/first-runtime.log" 2>&1 &
           first_pid=$!
@@ -250,6 +304,31 @@ jobs:
           test "$owner_pid" = "$first_pid"
           kill -0 "$owner_pid"
           printf 'source_sha=%s\nfirst_owner_pid=%s\nproxy_port=%s\n' "$SOURCE_SHA" "$owner_pid" "$port"
+
+          for _ in {1..40}; do
+            stopped_or_zombie "$stale_pid" && break
+            sleep 0.25
+          done
+          if ! stopped_or_zombie "$stale_pid"; then
+            echo "graceful stale loop was not reaped within deadline: pid=$stale_pid" >&2
+            exit 1
+          fi
+          grep -q "stale_v6_loop_reaped=$stale_pid" "$evidence/first-runtime.log"
+          wait "$stale_pid" 2>/dev/null || true
+          stale_pid=0
+          active_v6_pid=""
+          while IFS= read -r candidate; do
+            if pid_descends_from "$candidate" "$first_pid"; then
+              active_v6_pid="$candidate"
+              break
+            fi
+          done < <(pgrep -f "$source_dir/scripts/paper_v6_loop.sh" 2>/dev/null || true)
+          if [[ ! "$active_v6_pid" =~ ^[1-9][0-9]*$ ]] || ! kill -0 "$first_pid" 2>/dev/null; then
+            echo "active runtime or V6 descendant was disturbed by stale-loop handoff" >&2
+            cat "$evidence/first-runtime.log" >&2 || true
+            exit 1
+          fi
+          printf 'graceful_stale_loop_reaped=1\nactive_v6_descendant_pid=%s\n' "$active_v6_pid"
 
           set +e
           "${runtime_env[@]}" /usr/bin/env bash scripts/paper_latest_loop.sh \
@@ -291,10 +370,13 @@ jobs:
           payload={'owner':owner,'label':label,'descendants':desc,'counts':counts,'duplicates':bad}
           open(f'{out}/process-{label}.json','w',encoding='utf-8').write(json.dumps(payload,indent=2,sort_keys=True)+'\n')
           print(json.dumps({'label':label,'counts':counts,'duplicates':bad},sort_keys=True))
+          if counts['paper_v6_loop.sh'] != 1:
+              raise SystemExit(f"expected exactly one active V6 loop descendant, got {counts['paper_v6_loop.sh']}")
           if bad: raise SystemExit(1)
           PY
           }
 
+          snapshot_tree "after-stale-handoff"
           for i in 1 2 3; do
             sleep 10
             kill -0 "$first_pid"
@@ -307,14 +389,6 @@ jobs:
             echo 'temporary state files remain before restart' >&2
             exit 1
           fi
-
-          stopped_or_zombie() {
-            local pid="$1"
-            local state=""
-            if ! kill -0 "$pid" 2>/dev/null; then return 0; fi
-            state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
-            [[ "$state" == Z* ]]
-          }
 
           kill "$first_pid"
           for _ in {1..40}; do
@@ -389,6 +463,90 @@ jobs:
             exit 1
           fi
           test -z "$(grep -R -E 'Cannot replace state file|another V6 multi-leg broker already owns|FileNotFoundError.*\.tmp' "$run_root" --include='*.log' 2>/dev/null || true)"
+
+          # Stop the valid handoff runtime before starting the resistant case:
+          # otherwise a correct reaper would also see that independent runtime.
+          kill "$restart_pid"
+          for _ in {1..40}; do
+            stopped_or_zombie "$restart_pid" && break
+            sleep 0.25
+          done
+          if ! stopped_or_zombie "$restart_pid"; then
+            echo 'restarted runtime did not stop cleanly before resistant canary' >&2
+            exit 1
+          fi
+          wait "$restart_pid" 2>/dev/null || true
+          restart_pid=0
+
+          resistant_run_root="$root/resistant-run"
+          port3="$(python3 - <<'PY'
+          import socket
+          s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()
+          PY
+          )"
+          runtime_env3=(
+            env
+            POLYMARKET_RUN_ROOT="$resistant_run_root"
+            POLYMARKET_CONFIG="$root/probe_config.json"
+            POLYMARKET_FAST_ARB_ENABLED=0
+            V6_MARKET_PROXY_PORT="$port3"
+            V6_MARKETS=1
+            V6_RECORDER_MARKETS=1
+          )
+          start_simulated_v6_loop resistant "$evidence/stale-resistant.log"
+          resistant_pid="$SIMULATED_V6_PID"
+          for _ in {1..40}; do
+            simulated_v6_visible "$resistant_pid" && break
+            kill -0 "$resistant_pid" 2>/dev/null || { echo 'resistant stale-loop simulator exited early' >&2; exit 1; }
+            sleep 0.1
+          done
+          if ! simulated_v6_visible "$resistant_pid"; then
+            echo "resistant stale-loop simulator is not visible to the production matcher: pid=$resistant_pid" >&2
+            exit 1
+          fi
+          "${runtime_env3[@]}" /usr/bin/env bash scripts/paper_latest_loop.sh \
+            >"$evidence/resistant-runtime.log" 2>&1 &
+          failed_runtime_pid=$!
+          for _ in {1..48}; do
+            stopped_or_zombie "$failed_runtime_pid" && break
+            sleep 0.25
+          done
+          if ! stopped_or_zombie "$failed_runtime_pid"; then
+            echo 'resistant stale loop did not force fail-closed startup' >&2
+            exit 1
+          fi
+          set +e
+          wait "$failed_runtime_pid"
+          resistant_rc=$?
+          set -e
+          failed_runtime_pid=0
+          if [[ "$resistant_rc" -eq 0 ]]; then
+            echo 'resistant stale loop unexpectedly allowed startup' >&2
+            exit 1
+          fi
+          grep -q "stale_v6_loop_reaped=$resistant_pid" "$evidence/resistant-runtime.log"
+          grep -q 'fatal: stale V6 loop did not exit before startup' "$evidence/resistant-runtime.log"
+          if ! kill -0 "$resistant_pid" 2>/dev/null; then
+            echo 'resistant stale-loop simulator did not survive TERM as expected' >&2
+            exit 1
+          fi
+          python3 - "$resistant_run_root/runtime_owner.lock" <<'PY'
+          import fcntl,os,sys
+          fd=os.open(sys.argv[1],os.O_CREAT|os.O_RDWR,0o600)
+          try:
+              fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+              print('resistant_fail_closed_lock_released=1')
+          finally:
+              os.close(fd)
+          PY
+          if find "$resistant_run_root" -type f \( -name '*.tmp' -o -name '*.tmp.*' \) -print | tee "$evidence/temp-files-resistant.txt" | grep -q .; then
+            echo 'temporary state files remain after resistant fail-closed startup' >&2
+            exit 1
+          fi
+          kill -9 "$resistant_pid" 2>/dev/null || true
+          wait "$resistant_pid" 2>/dev/null || true
+          resistant_pid=0
+          printf 'resistant_stale_loop_fail_closed=1\n'
 
           printf 'private_single_writer_validation=PASS\n'
           REMOTE
