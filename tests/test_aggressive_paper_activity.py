@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config" / "paper_v5.json"
 CHAMPION = ROOT / "config" / "live_champion.json"
+LAUNCHER = ROOT / "scripts" / "aggressive_paper_v5_loop.sh"
 
 
 class AggressivePaperActivityContractTest(unittest.TestCase):
@@ -44,13 +45,15 @@ class AggressivePaperActivityContractTest(unittest.TestCase):
             )
         self.assertLessEqual(weighted_gross, float(multi["global_max_gross_fraction"]))
 
-    def test_parent_stays_fail_closed_and_execution_stays_paper_only(self) -> None:
+    def test_parent_stays_fail_closed_and_research_does_not_move_live_selector(self) -> None:
         config = json.loads(CONFIG.read_text(encoding="utf-8"))
         self.assertTrue(config["multi_strategy"]["paper_only"])
         self.assertTrue(all(float(value) == 0.0 for value in config["expert_weights"].values()))
         champion = json.loads(CHAMPION.read_text(encoding="utf-8"))
-        self.assertEqual(champion["loop"], "scripts/aggressive_paper_v5_loop.sh")
+        self.assertEqual(champion["loop"], "scripts/paper_v5_loop.sh")
         self.assertEqual(champion["deployment_ref"], "paper-validated")
+        self.assertTrue(LAUNCHER.exists())
+        self.assertTrue(LAUNCHER.stat().st_mode & 0o111)
 
 
 if __name__ == "__main__":
