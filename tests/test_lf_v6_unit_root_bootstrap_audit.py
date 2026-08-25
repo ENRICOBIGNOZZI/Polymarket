@@ -30,6 +30,10 @@ class LFV6UnitRootBootstrapAuditTest(unittest.TestCase):
                 robust_rejections += 1
         return candidate_rejections / paths, robust_rejections / paths
 
+    def test_iid_unit_root_score_has_mechanical_negative_expectation(self) -> None:
+        self.assertAlmostEqual(MODULE.iid_unit_root_score_expectation(1.0), -0.5)
+        self.assertAlmostEqual(MODULE.iid_unit_root_score_expectation(4.0), -2.0)
+
     def test_score_centered_bootstrap_is_not_unit_root_calibrated(self) -> None:
         candidate_rate, robust_rate = self._null_rates(96, 0.0)
         self.assertGreater(candidate_rate, 0.50)
@@ -56,6 +60,7 @@ class LFV6UnitRootBootstrapAuditTest(unittest.TestCase):
         self.assertEqual(result["decision"], "MORE_EVIDENCE_REQUIRED")
         self.assertEqual(len(result["null_results"]), 6)
         self.assertEqual(result["alpha"], 0.10)
+        self.assertEqual(result["analytic_iid_unit_root_score_expectation_variance_1"], -0.5)
 
 
 if __name__ == "__main__":
