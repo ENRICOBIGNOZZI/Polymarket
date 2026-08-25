@@ -186,7 +186,7 @@ class V6MarketProxyDeadlineTests(unittest.TestCase):
     def test_newer_relay_cache_is_reloaded_without_upstream(self) -> None:
         p = self.make_proxy()
         p.cache.write_text(
-            __import__("json").dumps(
+            json.dumps(
                 {
                     "schema": "polymarket_v6_market_proxy_cache_v1",
                     "timestamp": int(time.time()),
