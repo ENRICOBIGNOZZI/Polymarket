@@ -168,23 +168,39 @@ class Proxy:
         self.error = ""
         self.source = "startup"
         self.clob_source = "startup"
+        self.cache_mtime_ns = 0
         self.load()
 
-    def load(self) -> None:
+    def load(self) -> bool:
         try:
+            metadata = self.cache.stat()
+            if metadata.st_mtime_ns <= self.cache_mtime_ns:
+                return False
             value = json.loads(self.cache.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return
+            return False
         if not isinstance(value, dict):
-            return
+            return False
         markets = value.get("markets")
-        if isinstance(markets, list):
-            self.rows = [row for row in markets if isinstance(row, dict)]
-            self.ts = f(value.get("timestamp"), 0.0)
+        timestamp = f(value.get("timestamp"), 0.0)
+        if not isinstance(markets, list) or timestamp <= 0.0:
+            return False
+        rows = [row for row in markets if isinstance(row, dict)]
+        if not rows:
+            return False
         mapping = value.get("gamma_to_condition")
-        if isinstance(mapping, dict):
-            self.idmap = {str(k): str(v) for k, v in mapping.items() if k and v}
-
+        with self.state_lock:
+            # Cache timestamps are integer seconds, so accept a newer atomic file
+            # written in the same second but never roll state back materially.
+            if timestamp + 1.0 < self.ts:
+                self.cache_mtime_ns = metadata.st_mtime_ns
+                return False
+            self.rows = rows
+            self.ts = timestamp
+            if isinstance(mapping, dict):
+                self.idmap.update({str(k): str(v) for k, v in mapping.items() if k and v})
+            self.cache_mtime_ns = metadata.st_mtime_ns
+        return True
     def stat(self, source: str, n: int, upstream_ok: bool, age: float = 0.0) -> None:
         self.source = source
         atomic(
@@ -222,8 +238,13 @@ class Proxy:
                 "gamma_to_condition": mapping,
             },
         )
+        try:
+            self.cache_mtime_ns = self.cache.stat().st_mtime_ns
+        except OSError:
+            pass
 
     def cached_page(self, limit: int, offset: int, min_liquidity: float, max_age: float) -> list[dict[str, Any]] | None:
+        self.load()
         now = time.time()
         with self.state_lock:
             if not self.rows or now - self.ts > max_age:
