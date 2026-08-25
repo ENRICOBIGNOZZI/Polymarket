@@ -7,17 +7,22 @@ MIN_LIQUIDITY="${V6_MIN_LIQUIDITY:-10}"
 MARKETS="${V6_MARKETS:-700}"
 RECORDER_MARKETS="${V6_RECORDER_MARKETS:-1200}"
 INTENT_MIN_EDGE="${V6_INTENT_MIN_EDGE:-0.00020}"
-mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/external"
+mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/micro_taker" "$RUN_ROOT/external"
 
-# Capital-isolated sleeves sum to the parent paper capital. There is no fair-value
-# mixture: micro, multi-leg relative-value and external probability trading are
-# independent economic models sharing only the global capital budget by allocation.
+# Capital-isolated sleeves sum to parent capital. There is no operational
+# mixture-of-experts: every sleeve has one economic task and its own execution.
 python3 - "$CONFIG" "$RUN_ROOT" <<'PY'
 import json, sys
 from pathlib import Path
-cfg = json.loads(Path(sys.argv[1]).read_text())
-root = Path(sys.argv[2]); v6 = cfg['v6']; total = float(cfg['starting_capital'])
-for name, frac in [('maker', v6['micro_capital_fraction']), ('broker', v6['multileg_capital_fraction']), ('external', v6['external_capital_fraction'])]:
+cfg = json.loads(Path(sys.argv[1]).read_text()); root = Path(sys.argv[2]); v6 = cfg['v6']; total = float(cfg['starting_capital'])
+alloc = [
+    ('maker', v6['micro_maker_capital_fraction']),
+    ('micro_taker', v6['micro_taker_capital_fraction']),
+    ('broker', v6['multileg_capital_fraction']),
+    ('external', v6['external_capital_fraction']),
+]
+assert abs(sum(float(x[1]) for x in alloc) + float(v6['reserve_fraction']) - 1.0) < 1e-9
+for name, frac in alloc:
     child = {k: v for k, v in cfg.items() if k != 'v6'}
     child['starting_capital'] = total * float(frac)
     child['run_dir'] = str(root / name)
@@ -52,17 +57,23 @@ start_external() {
     --min-liquidity "$MIN_LIQUIDITY" --paper --loop >> "$RUN_ROOT/external/engine.log" 2>&1 & external_pid=$!
 }
 write_supervisor() {
-  local ra=0 ba=0 ea=0; kill -0 "$rec_pid" 2>/dev/null && ra=1 || true; kill -0 "$broker_pid" 2>/dev/null && ba=1 || true; kill -0 "$external_pid" 2>/dev/null && ea=1 || true
+  local ra=0 ba=0 ea=0
+  kill -0 "$rec_pid" 2>/dev/null && ra=1 || true
+  kill -0 "$broker_pid" 2>/dev/null && ba=1 || true
+  kill -0 "$external_pid" 2>/dev/null && ea=1 || true
   local tmp="$RUN_ROOT/runtime_supervisor.csv.tmp"
   printf 'timestamp,recorder_alive,broker_alive,external_alive,recorder_restarts,broker_restarts,external_restarts,recorder_pid,broker_pid,external_pid\n' > "$tmp"
   printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$(date +%s)" "$ra" "$ba" "$ea" "$rec_restarts" "$broker_restarts" "$external_restarts" "$rec_pid" "$broker_pid" "$external_pid" >> "$tmp"
   mv "$tmp" "$RUN_ROOT/runtime_supervisor.csv"
 }
-cleanup() { for p in "$rec_pid" "$broker_pid" "$external_pid"; do if (( p > 0 )); then kill "$p" 2>/dev/null || true; fi; done; for p in "$rec_pid" "$broker_pid" "$external_pid"; do if (( p > 0 )); then wait "$p" 2>/dev/null || true; fi; done; }
+cleanup() {
+  for p in "$rec_pid" "$broker_pid" "$external_pid"; do if (( p > 0 )); then kill "$p" 2>/dev/null || true; fi; done
+  for p in "$rec_pid" "$broker_pid" "$external_pid"; do if (( p > 0 )); then wait "$p" 2>/dev/null || true; fi; done
+}
 trap cleanup EXIT INT TERM
 start_recorder; start_broker; start_external; write_supervisor
 
-last_factor=0; last_relation=0; last_external=0; last_report=0
+last_factor=0; last_relation=0; last_external=0; last_report=0; last_micro_taker=0
 
 rebuild_intents() {
   python3 scripts/build_v4_intents.py --strategy B1 --input "$RUN_ROOT/stat_arb_pairs.csv" --output "$RUN_ROOT/b1_intents.csv" \
@@ -78,18 +89,26 @@ while true; do
   if ! kill -0 "$external_pid" 2>/dev/null; then wait "$external_pid" 2>/dev/null || true; external_restarts=$((external_restarts+1)); start_external; fi
   write_supervisor
 
-  # MICRO MAKER: dedicated passive execution model, not an event-probability oracle.
+  # MICRO MAKER: spread capture with fill/adverse-selection accounting.
   ./build/polymarket_maker_paper --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --markets "$MARKETS" \
     --min-liquidity "$MIN_LIQUIDITY" --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 90 --hold-seconds 240 \
     --adverse-selection-mult 0.15 --once >> "$RUN_ROOT/maker.log" 2>&1 || true
 
+  # MICRO TAKER: pooled online forward-markout regression. Positions are forced
+  # out after the forecast horizon so they cannot become terminal event bets.
+  if (( now - last_micro_taker >= 5 )); then
+    python3 scripts/v6_micro_taker.py --config "$RUN_ROOT/micro_taker_config.json" --run-dir "$RUN_ROOT/micro_taker" \
+      --markets 250 --min-liquidity 25 --horizon-seconds 30 --max-trade-usd 15 --min-edge 0.00030 \
+      --slippage-bps 5 --max-positions 20 >> "$RUN_ROOT/micro_taker.log" 2>&1 || true
+    last_micro_taker=$now
+  fi
+
   if (( now - last_factor >= 60 )); then
     rm -f "$RUN_ROOT/stat_arb_pairs.csv" "$RUN_ROOT/local_factor_intents.csv"
-    # Pair RV remains a separate empirical sleeve; local-factor replaces the old
-    # heterogeneous global PCA and is estimated only inside event/payoff clusters.
     ./build/polymarket_stat_arb --config "$RUN_ROOT/broker_config.json" --markets "$MARKETS" --history-universe 350 \
       --lookback-hours 720 --fidelity-minutes 30 --min-z 0.65 --min-t-reversion 0.60 --max-half-life-hours 336 \
       --top 250 --csv "$RUN_ROOT/stat_arb_pairs.csv" > "$RUN_ROOT/stat_arb_pairs_latest.log" 2> "$RUN_ROOT/stat_arb_pairs_errors.log" || true
+    # Unlike V5 global PCA, this engine constructs many event/payoff-local panels.
     python3 scripts/v6_local_factor_intents.py --config "$CONFIG" --output "$RUN_ROOT/local_factor_intents.csv" \
       --status "$RUN_ROOT/local_factor_status.json" --markets 500 --min-liquidity "$MIN_LIQUIDITY" --lookback-hours 336 \
       --fidelity-minutes 60 --max-clusters 30 --min-z 0.65 --min-t 0.75 --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 \
