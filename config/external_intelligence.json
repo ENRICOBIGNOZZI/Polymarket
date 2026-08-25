@@ -32,10 +32,14 @@
     },
     "gdelt": {
       "enabled": true,
+      "transport": "webngrams",
       "markets_per_run": 8,
       "max_records": 50,
       "timespan": "1d",
-      "base_confidence": 0.35
+      "base_confidence": 0.35,
+      "webngrams_min_age_minutes": 5,
+      "webngrams_lookback_minutes": 40,
+      "webngrams_min_token_matches": 2
     }
   },
   "storage": {

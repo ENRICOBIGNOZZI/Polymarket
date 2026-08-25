@@ -20,11 +20,13 @@ on:
       - "config/external_intelligence.json"
       - "scripts/external_intelligence.py"
       - "scripts/external_request_policy.py"
+      - "scripts/gdelt_webngrams.py"
       - "scripts/run_external_intelligence.py"
       - "scripts/attach_external_evidence.py"
       - "scripts/build_github_contents_request.py"
       - "tests/test_external_intelligence.py"
       - "tests/test_external_request_policy.py"
+      - "tests/test_gdelt_webngrams.py"
       - "tests/test_attach_external_evidence.py"
       - "tests/test_github_contents_request.py"
       - ".github/workflows/external-intelligence.yml"
@@ -35,11 +37,13 @@ on:
       - "config/external_intelligence.json"
       - "scripts/external_intelligence.py"
       - "scripts/external_request_policy.py"
+      - "scripts/gdelt_webngrams.py"
       - "scripts/run_external_intelligence.py"
       - "scripts/attach_external_evidence.py"
       - "scripts/build_github_contents_request.py"
       - "tests/test_external_intelligence.py"
       - "tests/test_external_request_policy.py"
+      - "tests/test_gdelt_webngrams.py"
       - "tests/test_attach_external_evidence.py"
       - "tests/test_github_contents_request.py"
       - ".github/workflows/external-intelligence.yml"
@@ -69,11 +73,13 @@ jobs:
           python3 -m unittest \
             tests/test_external_intelligence.py \
             tests/test_external_request_policy.py \
+            tests/test_gdelt_webngrams.py \
             tests/test_attach_external_evidence.py \
             tests/test_github_contents_request.py -v
           python3 -m py_compile \
             scripts/external_intelligence.py \
             scripts/external_request_policy.py \
+            scripts/gdelt_webngrams.py \
             scripts/run_external_intelligence.py \
             scripts/attach_external_evidence.py \
             scripts/build_github_contents_request.py
@@ -88,6 +94,59 @@ jobs:
           assert cfg["allow_production_signal_write"] is False
           assert {1.0, 1.5, 2.0}.issubset(
               {float(value) for value in cfg["backtest"]["cost_stress_multipliers"]}
+          )
+          PY
+
+      - name: Live GDELT Web NGrams transport smoke
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import sys
+          import time
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path("scripts").resolve()))
+          import external_intelligence as ext
+          from gdelt_webngrams import collect_gdelt_webngrams
+
+          cfg = json.loads(Path("config/external_intelligence.json").read_text())
+          if str(cfg.get("sources", {}).get("gdelt", {}).get("transport", "")).lower() != "webngrams":
+              raise SystemExit("GDELT transport is not webngrams")
+          now = int(time.time())
+          market = ext.PmMarket(
+              market_id="gdelt-transport-smoke",
+              condition_id="",
+              event_id="gdelt-transport-smoke",
+              question="Bitcoin price",
+              description="read-only transport health probe",
+              category="diagnostic",
+              end_ts=now + 86400,
+              liquidity=0.0,
+              volume24h=0.0,
+              bid=0.49,
+              ask=0.51,
+              mid=0.50,
+              yes_token="",
+              no_token="",
+              resolved_outcome=None,
+          )
+          observations, health, errors = collect_gdelt_webngrams([market], cfg, now, ext)
+          assert not errors, errors
+          assert observations
+          transport = health.get("_transport", {})
+          assert transport.get("status") == "ok", transport
+          assert transport.get("transport") == "webngrams", transport
+          dataset_ts = int(transport.get("dataset_ts") or 0)
+          age = now - dataset_ts
+          assert 120 <= age <= 3600, (now, dataset_ts, age)
+          print(
+              "gdelt_webngrams_status=ok",
+              f"dataset_age_seconds={age}",
+              f"documents={health[market.market_id]['documents']}",
+              f"mentions={health[market.market_id]['mentions']}",
           )
           PY
 
