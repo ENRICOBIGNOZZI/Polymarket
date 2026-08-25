@@ -131,8 +131,8 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("maker_tick()", workflow)
         self.assertIn("for delay in 15 15 15 15", workflow)
         self.assertIn("--hold-seconds 45", workflow)
-        self.assertIn("'trade_tape_rows':tape_rows", workflow)
-        self.assertIn("'maker_fill_rows':fill_rows", workflow)
+        self.assertIn("'trade_tape_rows':len(tape)", workflow)
+        self.assertIn("'maker_fill_rows':len(fills)", workflow)
 
 
 if __name__ == "__main__":
