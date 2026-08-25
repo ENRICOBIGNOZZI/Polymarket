@@ -11,8 +11,10 @@ on:
       - "config/v6_model_architecture.json"
       - "scripts/paper_v6_loop.sh"
       - "scripts/v6_*.py"
+      - "scripts/hf_maker_*.py"
       - "tests/test_v6_model_contracts.py"
       - "tests/test_v6_runtime_contract.py"
+      - "tests/test_hf_maker_flow_forward.py"
       - ".github/workflows/v6-research-smoke.yml"
 
 permissions:
@@ -60,7 +62,7 @@ jobs:
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
-          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py -v
+          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py tests/test_hf_maker_flow_forward.py -v
       - name: Live public-data relation probes
         shell: bash
         run: |
@@ -85,12 +87,26 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/v6_local_factor_intents.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/local_factor.log 2>&1 || true
-      - name: Live public-data maker economics probe
+      - name: Live forward maker fill and causal-flow probe
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p v6_evidence/maker
-          ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once > v6_evidence/maker.log 2>&1 || true
+          ./build/polymarket_trade_recorder --config config/paper_v6.json --run-dir v6_evidence/maker --markets 1000 --min-liquidity 2 --batch 40 --lookback-seconds 300 --once > v6_evidence/maker/recorder-bootstrap.log 2>&1 || true
+          ./build/polymarket_trade_recorder --config config/paper_v6.json --run-dir v6_evidence/maker --markets 1000 --min-liquidity 2 --batch 40 --lookback-seconds 300 --interval 10 --loop > v6_evidence/maker/recorder.log 2>&1 &
+          recorder_pid=$!
+          cleanup() { kill "$recorder_pid" 2>/dev/null || true; wait "$recorder_pid" 2>/dev/null || true; }
+          trap cleanup EXIT
+          deadline=$((SECONDS + 360))
+          tick=0
+          while (( SECONDS < deadline )); do
+            tick=$((tick + 1))
+            ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 1000 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 60 --adverse-selection-mult 0.10 --improve-ticks 3 --max-queue-multiple 2 --once >> v6_evidence/maker/maker.log 2>&1 || true
+            sleep 5
+          done
+          cleanup
+          trap - EXIT
+          python3 scripts/hf_maker_forward_audit.py --order-log v6_evidence/maker/maker_order_log.csv --trade-tape v6_evidence/maker/trade_tape.csv --fills v6_evidence/maker/maker_fills.csv --prior-lookback-seconds 120 --forward-horizon-seconds 60 --min-edge 0.00005 --output v6_evidence/maker/forward_audit.json > v6_evidence/maker/forward_audit.log
       - name: Live public-data micro-taker causal warmup/markout probe
         shell: bash
         run: |
@@ -114,7 +130,7 @@ jobs:
               except Exception:return {}
           hard=(root/'graph_hard_taker_scan.csv').read_text(errors='ignore') if (root/'graph_hard_taker_scan.csv').exists() else ''
           m=re.search(r'net_positive_pre_gas=(\d+)',hard)
-          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'local_factor':js('local_factor_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0}
+          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'local_factor':js('local_factor_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0,'maker_forward':js('maker/forward_audit.json')}
           state=root/'micro_taker/state.json'
           if state.exists():
               try:
