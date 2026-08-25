@@ -65,8 +65,8 @@ struct Order {
     std::int64_t created_ts = 0;
     std::int64_t game_start_ts = 0;
     bool timed_sports = false;
-    std::int64_t last_trade_ts = 0;
-    std::string last_trade_keys = "|";
+    std::int64_t last_trade_ts = 0; // Diagnostic max timestamp only; never an admission watermark.
+    std::string last_trade_keys = "|"; // All trade ids seen during this short-lived order.
     double fee_rate = 0.07;
     double fee_exponent = 1.0;
     bool fee_taker_only = true;
@@ -121,13 +121,8 @@ bool cursor_contains(const Order& o, const std::string& trade_id) {
 }
 
 void cursor_remember(Order& o, const pm::RecentTrade& trade) {
-    if (trade.ts > o.last_trade_ts) {
-        o.last_trade_ts = trade.ts;
-        o.last_trade_keys = "|";
-    }
-    if (trade.ts == o.last_trade_ts && !cursor_contains(o, trade.id)) {
-        o.last_trade_keys += trade.id + '|';
-    }
+    o.last_trade_ts = std::max(o.last_trade_ts, trade.ts);
+    if (!cursor_contains(o, trade.id)) o.last_trade_keys += trade.id + '|';
 }
 
 pm::MarketTiming order_timing(const Order& o) {
@@ -386,8 +381,11 @@ private:
             std::getline(f, line);
             while (std::getline(f, line)) {
                 const auto x = split(line);
-                // Old V3 orders are deliberately not restored: they lack a tape cursor and game clock.
-                if (x.size() < 17) continue;
+                // replay_v2 persists every seen trade id; older 17-column cursors
+                // only remembered the latest timestamp bucket and cannot be replayed
+                // without a double-count risk. Drop those short-lived resting orders
+                // on deployment and let the next tick quote them again safely.
+                if (x.size() < 18 || x[17] != "replay_v2") continue;
                 try {
                     Order o;
                     o.market_id = x[0]; o.event_id = x[1]; o.condition_id = x[2]; o.slug = x[3];
@@ -438,14 +436,14 @@ private:
         {
             std::ofstream f(fs::path(run_dir_) / "maker_orders.csv");
             f << "market_id,event_id,condition_id,slug,side,token_id,limit_price,remaining_shares,queue_ahead,"
-                 "created_ts,game_start_ts,timed_sports,last_trade_ts,last_trade_keys,fee_rate,fee_exponent,fee_taker_only\n";
+                 "created_ts,game_start_ts,timed_sports,last_trade_ts,last_trade_keys,fee_rate,fee_exponent,fee_taker_only,cursor_schema\n";
             for (const auto& [id, o] : orders_) {
                 (void)id;
                 f << o.market_id << ',' << o.event_id << ',' << o.condition_id << ',' << o.slug << ',' << o.side << ','
                   << o.token_id << ',' << o.limit_price << ',' << o.shares << ',' << o.queue_ahead << ','
                   << o.created_ts << ',' << o.game_start_ts << ',' << (o.timed_sports ? 1 : 0) << ','
                   << o.last_trade_ts << ',' << o.last_trade_keys << ',' << o.fee_rate << ',' << o.fee_exponent << ','
-                  << (o.fee_taker_only ? 1 : 0) << '\n';
+                  << (o.fee_taker_only ? 1 : 0) << ",replay_v2\n";
             }
         }
         {
@@ -550,8 +548,10 @@ private:
             // Fill eligibility is an event-time property. Public trade records can
             // arrive after the order's TTL in wall-clock time, so consume trades
             // that occurred while the order was actually active before cancelling
-            // the unfilled remainder. Otherwise reporting/indexing latency creates
-            // false non-fills in the paper engine.
+            // the unfilled remainder. Re-read the entire short active window on
+            // each tick and deduplicate by immutable trade id. This deliberately
+            // does not use last_trade_ts as a watermark: Data API indexing can be
+            // out of order across requests.
             std::int64_t active_until = o.created_ts + std::max<std::int64_t>(0, ttl_);
             if (o.timed_sports && o.game_start_ts > 0) {
                 active_until = std::min(active_until, o.game_start_ts);
@@ -561,7 +561,7 @@ private:
             if (tape_until >= o.created_ts) {
                 try {
                     trades = api_.fetch_recent_trades(
-                        {o.condition_id}, std::max(o.created_ts, o.last_trade_ts), tape_until, 1000);
+                        {o.condition_id}, o.created_ts, tape_until, 10000);
                 } catch (const std::exception& e) {
                     // Tape failure is fail-closed: no synthetic fill is created.
                     std::cerr << "maker_trade_tape_error market=" << o.market_id << " error=" << e.what() << '\n';
@@ -570,10 +570,9 @@ private:
 
             bool completed = false;
             for (const auto& trade : trades) {
-                if (trade.ts < o.last_trade_ts) continue;
-                if (trade.ts == o.last_trade_ts && cursor_contains(o, trade.id)) continue;
-                cursor_remember(o, trade);
+                if (cursor_contains(o, trade.id)) continue;
                 if (trade.ts < o.created_ts || trade.ts > active_until) continue;
+                cursor_remember(o, trade);
                 if (trade.token_id != o.token_id) continue;
 
                 auto consumed = pm::consume_passive_bid_trade(
