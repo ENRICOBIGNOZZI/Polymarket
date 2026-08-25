@@ -1,0 +1,88 @@
+{
+  "schema": "polymarket_lf_v5_pca_state_bias_current_evidence_v1",
+  "captured_at_utc": "2026-08-25T04:22:00Z",
+  "main_sha": "2771249f2b23ada3e7c0be044876686e4d7eb6e7",
+  "paper_validated_sha": "2771249f2b23ada3e7c0be044876686e4d7eb6e7",
+  "v5_pca_contract": {
+    "capital_fraction": 0.25,
+    "pca_min_history": 24,
+    "pca_window": 720,
+    "pca_universe": 350,
+    "pca_min_residual_z": 0.6,
+    "reversion_t_gate": 0.75,
+    "rolling_state_max_h": 12
+  },
+  "deterministic_iid_null": {
+    "paths_per_cell": 400,
+    "description": "Independent standardized residual returns with no mean-reversion predictability; the exact incumbent V5 PCA rolling-state adjustment gate is reproduced.",
+    "cells": [
+      {
+        "T": 23,
+        "H": 5,
+        "admitted": 125,
+        "admission_rate": 0.3125
+      },
+      {
+        "T": 48,
+        "H": 12,
+        "admitted": 123,
+        "admission_rate": 0.3075
+      },
+      {
+        "T": 96,
+        "H": 12,
+        "admitted": 86,
+        "admission_rate": 0.215
+      },
+      {
+        "T": 720,
+        "H": 12,
+        "admitted": 68,
+        "admission_rate": 0.17
+      }
+    ],
+    "interpretation": "These are deterministic model-size diagnostics, not estimates of the live Polymarket false-discovery rate and not PnL backtests. The overlapping rolling-state design plus full-sample demeaning induces a finite-sample negative beta bias under the iid null; the low t_reversion gate and search multiplicity then make spurious adjustments economically relevant to test."
+  },
+  "latest_exact_main_public_smoke": {
+    "generated_ts": 1787631733,
+    "git_sha": "2771249f2b23ada3e7c0be044876686e4d7eb6e7",
+    "runtime_equity_usd": 9983.19116766,
+    "runtime_pnl_usd": -16.8088323353,
+    "runtime_gross_exposure_usd": 208.3211457,
+    "runtime_live_units": 9,
+    "runtime_oos_trades": 0,
+    "runtime_oos_net_pnl_usd": 0,
+    "b2_coherent_rows": 35,
+    "b2_coherent_maker_positive": 0,
+    "production_intent_bundles": 0
+  },
+  "latest_external_intelligence": {
+    "generated_at_utc": "2026-08-25T03:57:32Z",
+    "status": "BACKTESTING",
+    "stored_observations": 848,
+    "stored_price_snapshots": 1299,
+    "best_mature_candidate": "external:binance:return_1h:3600s",
+    "best_mature_candidate_oos_predictions": 82,
+    "best_mature_candidate_trades": 1,
+    "best_mature_candidate_normal_pnl_per_share": -0.005,
+    "gate_passes": 0
+  },
+  "required_common_sample_experiment": [
+    "timestamp-align V5 PCA residual returns before inference, consistent with research PR #174",
+    "compare the incumbent overlapping rolling-state regression with purged/non-overlapping and block-bootstrap calibrated alternatives on identical chronological residual histories",
+    "control multiplicity across market, event and time clusters for the searched PCA universe",
+    "jointly ablate the confidence-aware singleton decision issue tracked by research PR #141",
+    "report terminal Brier/log-loss/calibration where appropriate and executable OOS net PnL/drawdown at 1x, 1.5x and 2x costs"
+  ],
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "safety": {
+    "research_only": true,
+    "live_champion_changed": false,
+    "production_threshold_changed": false,
+    "risk_or_oos_gate_changed": false,
+    "deployment_changed": false,
+    "credentials_changed": false,
+    "authenticated_execution_changed": false,
+    "real_money_execution": false
+  }
+}
