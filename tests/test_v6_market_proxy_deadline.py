@@ -86,6 +86,20 @@ class V6MarketProxyDeadlineTests(unittest.TestCase):
         request = open_url.call_args.args[0]
         self.assertEqual(request.get_header("Accept-encoding"), "gzip")
 
+    def test_clob_req_prefers_curl_and_falls_back_to_urllib(self) -> None:
+        with mock.patch("scripts.v6_market_proxy.curl_req", return_value={"transport": "curl"}) as curl, mock.patch(
+            "scripts.v6_market_proxy.req"
+        ) as urllib:
+            self.assertEqual(proxy.clob_req("https://clob.invalid/markets"), {"transport": "curl"})
+            curl.assert_called_once()
+            urllib.assert_not_called()
+
+        with mock.patch("scripts.v6_market_proxy.curl_req", side_effect=RuntimeError("curl down")), mock.patch(
+            "scripts.v6_market_proxy.req", return_value={"transport": "urllib"}
+        ) as urllib:
+            self.assertEqual(proxy.clob_req("https://clob.invalid/markets"), {"transport": "urllib"})
+            urllib.assert_called_once()
+
     def test_known_cached_market_skips_gamma(self) -> None:
         p = self.make_proxy()
         p.rows = [{"id": "m1", "conditionId": "c1", "liquidityNum": 10.0}]
