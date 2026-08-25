@@ -32,12 +32,16 @@ def label_receive_time_markout(
     horizon_ms: int,
     max_lag_ms: int | None = None,
 ) -> list[object]:
-    """Label future midpoint moves on the local receive-time information clock.
+    """Label the midpoint state *as of* the local receive-time horizon.
 
-    Exchange timestamps are retained for feed-latency measurement, but they are
-    not a valid decision chronology when messages can arrive out of order. A
-    future target must never use a book update that was already received before
-    the predictor row became observable.
+    The predictor clock is local receive time.  At t+h the correct event-driven
+    book state is the last update received at or before t+h, not the first
+    update after t+h.  Using the latter predicts a variable-horizon next update
+    and leaks price information from beyond the requested markout horizon.
+
+    ``max_lag_ms`` is a staleness filter on the as-of target state.  Rows whose
+    last update at t+h is too old are excluded instead of silently stretching
+    the horizon forward.
     """
     if horizon_ms <= 0:
         raise ValueError("horizon_ms must be positive")
@@ -45,6 +49,7 @@ def label_receive_time_markout(
     by_market: dict[str, list[Mapping[str, object]]] = {}
     for row in snapshots:
         by_market.setdefault(str(row["market_id"]), []).append(row)
+    capture_end = max((_decision_ts_ms(row) for row in snapshots), default=0)
 
     labeled: list[object] = []
     for market_id, rows in by_market.items():
@@ -61,13 +66,13 @@ def label_receive_time_markout(
             if ts <= 0:
                 continue
             target = ts + horizon_ms
-            j = max(j, i + 1)
-            while j < len(rows) and _decision_ts_ms(rows[j]) < target:
-                j += 1
-            if j >= len(rows):
+            if target > capture_end:
                 break
+            j = max(j, i)
+            while j + 1 < len(rows) and _decision_ts_ms(rows[j + 1]) <= target:
+                j += 1
             future_ts = _decision_ts_ms(rows[j])
-            if future_ts - target > tolerance:
+            if future_ts < ts or target - future_ts > tolerance:
                 continue
             mid = float(row["mid"])
             future_mid = float(rows[j]["mid"])
@@ -131,6 +136,7 @@ def evaluate_purged(
             "cutoff_ts_ms": cutoff,
             "embargo_ms": horizon_ms + max(0, tolerance_ms),
             "decision_clock": "received_ts_ms_when_available",
+            "target_clock": "last_book_state_at_or_before_t_plus_h",
         }
 
     y_train = [float(row.future_move) for row in train]
@@ -163,6 +169,7 @@ def evaluate_purged(
         "cutoff_ts_ms": cutoff,
         "embargo_ms": horizon_ms + max(0, tolerance_ms),
         "decision_clock": "received_ts_ms_when_available",
+        "target_clock": "last_book_state_at_or_before_t_plus_h",
         "features": list(base.FEATURES),
         "baseline": {
             "name": "microprice_displacement_only",
@@ -187,6 +194,7 @@ def render(result: Mapping[str, object], horizon_ms: int) -> str:
         "",
         f"- evidence state: `{result.get('evidence_state', 'MORE_EVIDENCE_REQUIRED')}`",
         f"- decision clock: `{result.get('decision_clock', 'unknown')}`",
+        f"- target clock: `{result.get('target_clock', 'unknown')}`",
         f"- labeled rows: `{result.get('rows', 0)}`",
         f"- train rows after purge: `{result.get('train_rows', 0)}`",
         f"- test rows: `{result.get('test_rows', 0)}`",
@@ -251,7 +259,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         slippage_bps=args.slippage_bps,
     )
     result["feature_rows"] = len(snapshots)
-    payload = {"schema_version": 2, "horizon_ms": args.horizon_ms, "evaluation": result}
+    payload = {"schema_version": 3, "horizon_ms": args.horizon_ms, "evaluation": result}
     report = render(result, args.horizon_ms)
     if args.output_json:
         args.output_json.parent.mkdir(parents=True, exist_ok=True)
