@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import sys
 import unittest
+from pathlib import Path
 
-from scripts.v6_hard_arb_guard import book_freshness
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+
+from v6_hard_arb_guard import book_freshness
 
 
 class HardArbFreshnessGuardTest(unittest.TestCase):
