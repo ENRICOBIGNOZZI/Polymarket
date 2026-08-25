@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config" / "paper_v5.json"
 CHAMPION = ROOT / "config" / "live_champion.json"
 LAUNCHER = ROOT / "scripts" / "aggressive_paper_v5_loop.sh"
+SIGNALS = ROOT / "data" / "external_signals.csv"
 INCUMBENT_EDGE_FLOORS = {
     "micro": 0.00005,
     "pca": 0.00020,
@@ -54,6 +55,22 @@ class AggressivePaperActivityContractTest(unittest.TestCase):
                 overrides["max_gross_fraction"]
             )
         self.assertLessEqual(weighted_gross, float(multi["global_max_gross_fraction"]))
+
+    def test_external_runs_but_remains_exploration_only_without_approved_feed(self) -> None:
+        config = json.loads(CONFIG.read_text(encoding="utf-8"))
+        external = next(
+            row
+            for row in config["multi_strategy"]["strategies"]
+            if row["expert"] == "external"
+        )
+        self.assertTrue(external["enabled"])
+        self.assertLessEqual(float(external["capital_fraction"]), 0.02)
+        self.assertLessEqual(float(external["overrides"]["max_trade_usd"]), 20.0)
+        self.assertEqual(
+            SIGNALS.read_text(encoding="utf-8").strip(),
+            "market_key,q_yes,confidence,source,timestamp",
+        )
+        self.assertNotIn("materialize_external_signals", LAUNCHER.read_text(encoding="utf-8"))
 
     def test_parent_stays_fail_closed_and_research_does_not_move_live_selector(self) -> None:
         config = json.loads(CONFIG.read_text(encoding="utf-8"))
