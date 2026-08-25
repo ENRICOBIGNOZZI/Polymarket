@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "research_state": "REJECT_HAZARD_RETENTION_AS_STANDALONE_MORE_EVIDENCE_REQUIRED_FOR_TOXICITY_GATE",
+  "source": {
+    "pull_request": 386,
+    "evaluated_head_sha": "9b60800e4100ba35e8c62bda00567828bd4c4bc4",
+    "evidence_type": "common_sample_forward_public_paper",
+    "common_sample_seconds": 360
+  },
+  "paper_envelope": {
+    "markets": 1000,
+    "min_liquidity_usd": 2.0,
+    "post_cost_min_edge": 0.00005,
+    "fractional_kelly": 0.25,
+    "max_trade_usd": 125.0,
+    "max_market_fraction": 0.05,
+    "max_event_fraction": 0.15,
+    "max_gross_fraction": 0.70,
+    "max_drawdown": 0.15,
+    "authenticated_execution": false
+  },
+  "arms": {
+    "current_flow_gate": {
+      "decision": "FILLS_NEGATIVE_PNL",
+      "posted_orders": 32,
+      "flow_active_posts": 32,
+      "posts_with_future_compatible_flow": 6,
+      "maker_buy_events": 2,
+      "maker_buy_shares": 55.535,
+      "taker_exit_events": 1,
+      "taker_exit_shares": 48.695,
+      "open_maker_shares": 6.84,
+      "realized_closed_pnl_usd": -0.985343325,
+      "fill_conditioned_pnl_per_closed_share": -0.020235,
+      "order_actions": {
+        "POST": 32,
+        "CANCEL_TTL": 4,
+        "CANCEL_ZERO_CAUSAL_FLOW": 21
+      }
+    },
+    "at_touch_no_improve": {
+      "decision": "FILLS_NEGATIVE_PNL",
+      "posted_orders": 32,
+      "flow_active_posts": 32,
+      "posts_with_future_compatible_flow": 8,
+      "maker_buy_events": 2,
+      "maker_buy_shares": 48.795,
+      "taker_exit_events": 2,
+      "taker_exit_shares": 48.795,
+      "open_maker_shares": 0.0,
+      "realized_closed_pnl_usd": -1.47305235,
+      "fill_conditioned_pnl_per_closed_share": -0.0301885921,
+      "order_actions": {
+        "POST": 32,
+        "CANCEL_TTL": 7,
+        "CANCEL_ZERO_CAUSAL_FLOW": 18
+      }
+    },
+    "confidence_gated_inside": {
+      "inside_confidence_floor": 0.80,
+      "decision": "ZERO_FILL_DESPITE_CAUSAL_FLOW",
+      "posted_orders": 30,
+      "flow_active_posts": 30,
+      "posts_with_future_compatible_flow": 3,
+      "maker_buy_events": 0,
+      "maker_buy_shares": 0.0,
+      "taker_exit_events": 0,
+      "taker_exit_shares": 0.0,
+      "open_maker_shares": 0.0,
+      "realized_closed_pnl_usd": 0.0,
+      "fill_conditioned_pnl_per_closed_share": null,
+      "order_actions": {
+        "POST": 30,
+        "CANCEL_TTL": 5,
+        "CANCEL_ZERO_CAUSAL_FLOW": 20
+      }
+    }
+  },
+  "representative_adverse_fill": {
+    "market_id": "3128887",
+    "side": "NO",
+    "maker_limit_price": 0.49,
+    "at_touch_exit_price": 0.45977,
+    "at_touch_closed_shares": 48.695,
+    "at_touch_realized_pnl_usd": -1.47204985,
+    "current_flow_exit_price": 0.469765,
+    "current_flow_closed_shares": 48.695,
+    "current_flow_realized_pnl_usd": -0.985343325,
+    "diagnosis": "A causal maker fill occurred in both fill-producing arms, but the executable taker exit moved materially against the maker entry. Queue retention and at-touch quoting therefore improved fill realization without establishing positive fill-conditioned economics."
+  },
+  "interpretation": {
+    "rejected_hypothesis": "At-touch-only quoting or hazard-aware queue retention is sufficient to turn causal flow into positive maker PnL.",
+    "supported_hypothesis": "The remaining bottleneck is pre-entry adverse-selection/toxicity discrimination, not additional signal count or a lower post-cost edge threshold.",
+    "confidence_gate_result": "Suppressing lower-confidence inside-spread improvement prevented fills in this window but did not create positive realized evidence.",
+    "promotion": "not_eligible"
+  },
+  "next_bounded_experiment": {
+    "design": "Hold quote location at the public touch and compare the same causal-flow/queue gate with versus without a pre-entry toxicity gate. Do not increase aggressiveness or lower the 0.5 bp post-cost floor.",
+    "candidate_features": [
+      "recent signed trade-flow burst and acceleration",
+      "book imbalance and microprice displacement",
+      "spread state and short-horizon quote movement",
+      "queue-ahead normalized by causal compatible flow",
+      "event-time/receive-time freshness"
+    ],
+    "required_metrics": [
+      "actual fill rate",
+      "time-to-first-fill",
+      "filled notional per capital-hour",
+      "executable 45s/60s/300s markout",
+      "fill-conditioned realized PnL",
+      "1x/1.5x/2x cost stress"
+    ],
+    "success_condition": "Positive fill-conditioned PnL and executable markout on independent chronological windows without increasing drawdown or violating existing caps."
+  },
+  "hard_safety": {
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "state_integrity_required": true,
+    "authenticated_real_money_execution": false
+  }
+}
