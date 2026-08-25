@@ -7,6 +7,7 @@ from pathlib import Path
 
 from scripts.hf_maker_flow_admission import evaluate
 from scripts.hf_maker_forward_audit import audit, realized_roundtrip_pnl
+from scripts.v6_market_common import TapeFlow
 
 
 def write_csv(path: Path, fields: list[str], rows: list[dict[str, object]]) -> None:
@@ -54,6 +55,23 @@ class HFMakerFlowForwardTest(unittest.TestCase):
         self.assertEqual(result["maker_buy_events"], 1)
         self.assertEqual(result["taker_exit_events"], 1)
 
+    def test_tape_flow_uses_local_receive_time_not_exchange_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tape = Path(tmp) / "trade_tape.csv"
+            fields = ["timestamp", "received_ms", "asset_id", "side", "price", "size"]
+            write_csv(
+                tape,
+                fields,
+                [
+                    {"timestamp": 995, "received_ms": 999000, "asset_id": "t", "side": "SELL", "price": 0.40, "size": 30},
+                    # Event happened earlier, but it was not known at decision time 1000.
+                    {"timestamp": 990, "received_ms": 1001000, "asset_id": "t", "side": "SELL", "price": 0.40, "size": 100},
+                ],
+            )
+            flow = TapeFlow.from_csv(tape, lookback_seconds=120, now=1000)
+            self.assertEqual(flow.compatible_sell_volume("t", 0.41, lookback_seconds=120), 30.0)
+            self.assertEqual(flow.compatible_sell_count("t", 0.41, lookback_seconds=120), 1)
+
     def test_audit_uses_receive_time_for_prior_flow_and_event_time_forward(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -80,6 +98,14 @@ class HFMakerFlowForwardTest(unittest.TestCase):
             self.assertEqual(post["prior_compatible_sell_shares"], 30.0)
             self.assertEqual(post["future_compatible_sell_shares"], 15.0)
             self.assertEqual(result["decision"], "ZERO_FILL_DESPITE_CAUSAL_FLOW")
+
+    def test_research_workflow_runs_flow_aware_engine_not_posthoc_only(self) -> None:
+        workflow = Path(".github/workflows/v6-research-smoke.yml").read_text(encoding="utf-8")
+        self.assertIn("scripts/v6_micro_maker_v2.py", workflow)
+        self.assertIn("maker_ab/flow", workflow)
+        self.assertIn("maker_ab/baseline", workflow)
+        self.assertIn("--min-fill-probability 0.005", workflow)
+        self.assertIn("V6_MAKER_DEAD_FLOW_CANCEL_SECONDS", workflow)
 
 
 if __name__ == "__main__":
