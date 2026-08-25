@@ -90,7 +90,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/v6_local_factor_intents.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/local_factor.log 2>&1 || true
-      - name: Common-sample maker A-B under authorized paper envelope
+      - name: Common-sample maker policy A-B-C under authorized paper envelope
         shell: bash
         env:
           V6_MAKER_DEAD_FLOW_CANCEL_SECONDS: "20"
@@ -98,9 +98,10 @@ jobs:
           set -euo pipefail
           root=v6_evidence/maker_ab
           shared="$root/shared"
-          baseline="$root/baseline"
           flow="$root/flow"
-          mkdir -p "$shared" "$baseline" "$flow"
+          touch="$root/touch"
+          confidence="$root/confidence"
+          mkdir -p "$shared" "$flow" "$touch" "$confidence"
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -130,14 +131,16 @@ jobs:
           tick=0
           while (( SECONDS < deadline )); do
             tick=$((tick + 1))
-            ./build/polymarket_maker_paper --config "$cfg" --run-dir "$baseline" --markets 1000 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 60 --adverse-selection-mult 0.10 --improve-ticks 3 --max-queue-multiple 2 --once >> "$baseline/maker.log" 2>&1 || true
             python3 scripts/v6_micro_maker_v2.py --config "$cfg" --run-dir "$flow" --trade-tape "$shared/trade_tape.csv" --markets 1000 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 60 --adverse-selection-mult 0.10 --flow-lookback-seconds 120 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 3 --slippage-bps 5 >> "$flow/maker.log" 2>&1 || true
+            python3 scripts/v6_micro_maker_v2.py --config "$cfg" --run-dir "$touch" --trade-tape "$shared/trade_tape.csv" --markets 1000 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 60 --adverse-selection-mult 0.10 --flow-lookback-seconds 120 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 0 --slippage-bps 5 >> "$touch/maker.log" 2>&1 || true
+            python3 scripts/v6_micro_maker_v2.py --config "$cfg" --run-dir "$confidence" --trade-tape "$shared/trade_tape.csv" --markets 1000 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 60 --adverse-selection-mult 0.10 --flow-lookback-seconds 120 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 3 --min-inside-confidence 0.80 --slippage-bps 5 >> "$confidence/maker.log" 2>&1 || true
             sleep 5
           done
           cleanup
           trap - EXIT
-          python3 scripts/hf_maker_forward_audit.py --order-log "$baseline/maker_order_log.csv" --trade-tape "$shared/trade_tape.csv" --fills "$baseline/maker_fills.csv" --prior-lookback-seconds 120 --forward-horizon-seconds 60 --min-edge 0.00005 --output "$baseline/forward_audit.json" > "$baseline/forward_audit.log"
-          python3 scripts/hf_maker_forward_audit.py --order-log "$flow/maker_order_log.csv" --trade-tape "$shared/trade_tape.csv" --fills "$flow/maker_fills.csv" --prior-lookback-seconds 120 --forward-horizon-seconds 60 --min-edge 0.00005 --output "$flow/forward_audit.json" > "$flow/forward_audit.log"
+          for policy in flow touch confidence; do
+            python3 scripts/hf_maker_forward_audit.py --order-log "$root/$policy/maker_order_log.csv" --trade-tape "$shared/trade_tape.csv" --fills "$root/$policy/maker_fills.csv" --prior-lookback-seconds 120 --forward-horizon-seconds 60 --min-edge 0.00005 --output "$root/$policy/forward_audit.json" > "$root/$policy/forward_audit.log"
+          done
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -145,9 +148,26 @@ jobs:
           def read(path):
               try:return json.loads(path.read_text())
               except Exception:return {}
-          b=read(root/'baseline/forward_audit.json'); f=read(root/'flow/forward_audit.json')
-          comparison={'paper_only':True,'authenticated_execution':False,'envelope':{'markets':1000,'min_liquidity':2.0,'min_edge':0.00005,'fractional_kelly':0.25,'max_trade_usd':125.0,'max_market_fraction':0.05,'max_event_fraction':0.15,'max_gross_fraction':0.70,'max_drawdown':0.15},'baseline':b,'flow_gated':f,'flow_gate_wired':True,'primary_metric':'realized_closed_pnl'}
-          (root/'comparison.json').write_text(json.dumps(comparison,indent=2,sort_keys=True)+'\n'); print(json.dumps(comparison,indent=2,sort_keys=True))
+          f=read(root/'flow/forward_audit.json')
+          t=read(root/'touch/forward_audit.json')
+          c=read(root/'confidence/forward_audit.json')
+          comparison={
+              'paper_only':True,
+              'authenticated_execution':False,
+              'envelope':{
+                  'markets':1000,'min_liquidity':2.0,'min_edge':0.00005,
+                  'fractional_kelly':0.25,'max_trade_usd':125.0,
+                  'max_market_fraction':0.05,'max_event_fraction':0.15,
+                  'max_gross_fraction':0.70,'max_drawdown':0.15,
+              },
+              'current_flow_gate':f,
+              'at_touch_no_improve':t,
+              'confidence_gated_inside':c,
+              'inside_confidence_floor':0.80,
+              'primary_metric':'fill_conditioned_pnl_per_closed_share',
+          }
+          (root/'comparison.json').write_text(json.dumps(comparison,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(comparison,indent=2,sort_keys=True))
           PY
       - name: Live public-data micro-taker causal warmup/markout probe
         shell: bash
