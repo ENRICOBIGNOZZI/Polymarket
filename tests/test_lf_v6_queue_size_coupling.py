@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import sys
 import unittest
 
 
@@ -11,6 +12,7 @@ SCRIPT = ROOT / "scripts" / "lf_v6_queue_size_coupling_audit.py"
 SPEC = importlib.util.spec_from_file_location("lf_v6_queue_size_coupling_audit", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
+sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
