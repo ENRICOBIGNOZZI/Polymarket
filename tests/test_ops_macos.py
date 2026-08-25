@@ -82,6 +82,18 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertLess(repair.index(apply), repair.index(restart))
         self.assertIn('Runtime and Grafana configuration repaired', repair)
 
+    def test_v5_cold_start_wait_preserves_freshness_gate(self):
+        updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
+        self.assertIn(
+            'RUNTIME_HEALTH_ATTEMPTS="${POLYMARKET_RUNTIME_HEALTH_ATTEMPTS:-180}"',
+            updater,
+        )
+        self.assertIn('local attempts="${1:-$RUNTIME_HEALTH_ATTEMPTS}"', updater)
+        self.assertNotIn('wait_for_runtime_health 60', updater)
+        self.assertIn("if float(item['status_age_seconds']) > 120", updater)
+        self.assertIn("assert not stale, f'stale strategy status: {stale}'", updater)
+        self.assertIn('POLYMARKET_RUNTIME_HEALTH_ATTEMPTS must be a positive integer', updater)
+
     def test_deployment_uses_validated_ref_and_v5_health(self):
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
         linux_updater = (ROOT / "ops" / "update_server.sh").read_text(encoding="utf-8")
