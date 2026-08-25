@@ -1,5 +1,5 @@
 {
-  "generated_utc": "2026-08-25T12:25:00Z",
+  "generated_utc": "2026-08-25T12:37:00Z",
   "decision": "MORE_EVIDENCE_REQUIRED",
   "main_sha": "0deba1b7b3e0749a6fe43a6702dd6d0625d3e6cb",
   "candidate_under_audit": {
@@ -7,6 +7,13 @@
     "head_sha": "b7592614e21e34c1009470593b15dc4b9c353fee",
     "file": "scripts/v6_local_factor_v2.py",
     "test_contract": "circular-block bootstrap of the centered negative-reversion score"
+  },
+  "analytic_null_result": {
+    "model": "r_t = r_{t-1} + epsilon_t with iid zero-mean innovations of variance sigma2",
+    "score": "mean_t[(r_{t-1} - sample_mean(r)) * Delta r_t]",
+    "expectation": "-sigma2/2",
+    "unit_variance_value": -0.5,
+    "implication": "the proposed negative-reversion score is mechanically negative under the unit-root null before any bootstrap is applied"
   },
   "controlled_null_experiment": {
     "alpha": 0.1,
@@ -66,6 +73,7 @@
     "external_approved_signal_rows": 0
   },
   "interpretation": [
+    "The sample-mean score itself has a negative null expectation for an iid random walk, so negative score does not identify stationarity or alpha.",
     "Centering and resampling the score sequence does not impose the unit-root null on the residual level process.",
     "The score-centered circular-block test therefore remains strongly oversized under an I(1) null even though it is dependence-aware at the score level.",
     "A null-preserving bootstrap that reconstructs level paths under gamma=0 before computing an ADF-style statistic is near the nominal 10% size in these controlled cells and retains strong power with 336 observations for phi=0.90.",
