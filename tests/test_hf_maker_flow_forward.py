@@ -151,10 +151,18 @@ class HFMakerFlowForwardTest(unittest.TestCase):
 
     def test_research_workflow_accepts_authorized_paper_ceiling(self) -> None:
         workflow = Path(".github/workflows/v6-research-smoke.yml").read_text(encoding="utf-8")
-        self.assertIn("float(cfg['max_market_fraction']) <= .05", workflow)
-        self.assertIn("float(cfg['max_event_fraction']) <= .15", workflow)
-        self.assertIn("float(cfg['max_gross_fraction']) <= .70", workflow)
-        self.assertIn("float(cfg['max_drawdown']) <= .15", workflow)
+        self.assertIn(
+            "from hard_safety_policy import V6_AUTHORIZED_CEILINGS, V6_AUTHORIZED_FLOORS",
+            workflow,
+        )
+        self.assertIn("V6_AUTHORIZED_CEILINGS['max_market_fraction']", workflow)
+        self.assertIn("V6_AUTHORIZED_CEILINGS['max_event_fraction']", workflow)
+        self.assertIn("V6_AUTHORIZED_CEILINGS['max_gross_fraction']", workflow)
+        self.assertIn("V6_AUTHORIZED_CEILINGS['max_drawdown']", workflow)
+        self.assertIn("V6_AUTHORIZED_CEILINGS['fractional_kelly']", workflow)
+        self.assertIn("V6_AUTHORIZED_CEILINGS['max_trade_usd']", workflow)
+        self.assertIn("V6_AUTHORIZED_FLOORS['min_liquidity']", workflow)
+        self.assertIn("V6_AUTHORIZED_FLOORS['min_net_edge']", workflow)
         self.assertNotIn("float(cfg['max_market_fraction']) <= .025", workflow)
         self.assertNotIn("float(cfg['max_event_fraction']) <= .08", workflow)
         self.assertNotIn("float(cfg['max_gross_fraction']) <= .45", workflow)
