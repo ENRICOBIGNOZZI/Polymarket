@@ -74,14 +74,15 @@ class FastRuntimeContractTest(unittest.TestCase):
         self.assertIn('runtime_parent_lost=1', v6_loop)
         self.assertLess(v6_loop.index('parent_runtime_alive(){'), v6_loop.index('while true;do'))
 
-    def test_v6_startup_reaps_only_launchd_orphaned_prior_loop(self) -> None:
+    def test_v6_startup_reaps_only_loop_outside_current_runtime_ancestry(self) -> None:
         v6_loop = (ROOT / "scripts" / "paper_v6_loop.sh").read_text(encoding="utf-8")
-        self.assertIn('is_orphan_v6_loop(){', v6_loop)
+        self.assertIn('is_current_runtime_descendant(){', v6_loop)
+        self.assertIn('is_stale_v6_loop(){', v6_loop)
         self.assertIn('/bin/ps -o ppid=', v6_loop)
-        self.assertIn('[[ "$parent" == "1" ]]', v6_loop)
+        self.assertIn('[[ "$pid" == "$RUNTIME_PARENT_PID" ]]', v6_loop)
         self.assertIn('pgrep -f "$ROOT/scripts/paper_v6_loop.sh"', v6_loop)
-        self.assertIn('orphan_v6_loop_reaped=', v6_loop)
-        self.assertIn('reap_orphan_v6_loops\nstart_proxy', v6_loop)
+        self.assertIn('stale_v6_loop_reaped=', v6_loop)
+        self.assertIn('reap_stale_v6_loops\nstart_proxy', v6_loop)
 
     def test_runtime_singleton_launcher_excludes_competing_owner(self) -> None:
         launcher = ROOT / "scripts" / "runtime_singleton_launcher.py"
