@@ -96,6 +96,19 @@ is_stale_v6_loop(){
   [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" != "$$" ]] || return 1
   ! is_current_runtime_descendant "$pid"
 }
+is_same_repository_v6_loop(){
+  local pid="$1" command_line cwd
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  command_line="$(/bin/ps -o command= -p "$pid" 2>/dev/null || true)"
+  [[ "$command_line" == *"paper_v6_loop.sh"* ]] || return 1
+  # Current launchers use an absolute script path.  Older macOS launchd
+  # instances can retain `bash scripts/paper_v6_loop.sh`; accept that form
+  # only after the process working directory proves it is this repository.
+  [[ "$command_line" == *"$ROOT/scripts/paper_v6_loop.sh"* ]] && return 0
+  command -v lsof >/dev/null 2>&1 || return 1
+  cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | /usr/bin/sed -n 's/^n//p' | /usr/bin/head -n 1)"
+  [[ "$cwd" == "$ROOT" ]]
+}
 reap_stale_v6_loops(){
   # A pre-handoff loop from an older deployment cannot know about the parent
   # liveness contract above. Retire only a same-repository V6 loop outside the
@@ -106,14 +119,14 @@ reap_stale_v6_loops(){
   for ((attempt=1; attempt<=25; ++attempt)); do
     remaining=0
     while IFS= read -r pid; do
-      if is_stale_v6_loop "$pid"; then
+      if is_same_repository_v6_loop "$pid" && is_stale_v6_loop "$pid"; then
         remaining=1
         if (( attempt == 1 )); then
           echo "stale_v6_loop_reaped=$pid" >&2
           kill -TERM "$pid" 2>/dev/null || true
         fi
       fi
-    done < <(pgrep -f "$ROOT/scripts/paper_v6_loop.sh" 2>/dev/null || true)
+    done < <(pgrep -f 'paper_v6_loop\.sh' 2>/dev/null || true)
     (( remaining == 0 )) && return 0
     sleep 0.2
   done
