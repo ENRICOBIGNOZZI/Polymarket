@@ -21,8 +21,7 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
         source_research: dict | None = None,
     ):
         with tempfile.TemporaryDirectory() as temp_dir:
-            temp = Path(temp_dir)
-            event = {"pull_request":{"head":{"ref":branch},"draft":draft,"body":body,"labels":[{"name":label} for label in (labels or [])]}}
+            temp = Path(temp_dir); event = {"pull_request":{"head":{"ref":branch},"draft":draft,"body":body,"labels":[{"name":label} for label in (labels or [])]}}
             event_path = temp / "event.json"; changed_path = temp / "changed.txt"; report_path = temp / "report.md"
             event_path.write_text(json.dumps(event), encoding="utf-8")
             changed_path.write_text("\n".join(changed_files) + "\n", encoding="utf-8")
@@ -41,6 +40,10 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
         result = self.run_policy("fix/coherent-hedge-selection","Change B2 hedge coherence filtering before intent generation.",["scripts/filter_coherent_hedges.py"])
         self.assertNotEqual(result.returncode, 0); self.assertIn("model/runtime work cannot change", result.stdout)
 
+    def test_feature_branch_cannot_modify_v6_queue_filter(self):
+        result = self.run_policy("fix/v6-queue-admission","Adjust passive queue admission before broker intents.",["scripts/v6_queue_filter.py"])
+        self.assertNotEqual(result.returncode, 0); self.assertIn("model/runtime work cannot change", result.stdout); self.assertIn("scripts/v6_queue_filter.py", result.stdout)
+
     def test_feature_branch_cannot_hide_direct_model_source_change(self):
         result = self.run_policy("feature/pca-residual-upgrade","Improve PCA stat-arb alpha and residual model signals.",["src/pca_stat_arb.cpp","tests/test_v4_research.py"])
         self.assertNotEqual(result.returncode, 0); self.assertIn("src/pca_stat_arb.cpp", result.stdout)
@@ -56,6 +59,10 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
     def test_shadow_isolated_label_cannot_touch_production_surfaces(self):
         result = self.run_policy("research/shadow-probe","Measurement-only shadow instrumentation.",["scripts/build_v4_intents.py","src/execution.cpp"],labels=["shadow-isolated"],draft=False)
         self.assertNotEqual(result.returncode, 0); self.assertIn("shadow-isolated code cannot modify production", result.stdout)
+
+    def test_shadow_isolated_label_cannot_touch_v6_queue_filter(self):
+        result = self.run_policy("research/v6-queue-shadow","Measurement-only queue research.",["scripts/v6_queue_filter.py"],labels=["shadow-isolated"],draft=True)
+        self.assertNotEqual(result.returncode, 0); self.assertIn("shadow-isolated code cannot modify production", result.stdout); self.assertIn("scripts/v6_queue_filter.py", result.stdout)
 
     def test_shadow_isolated_label_cannot_touch_oos_or_realized_pnl_evidence(self):
         result = self.run_policy("research/shadow-oos-report","Measurement-only shadow instrumentation.",["scripts/walk_forward_v4.py","scripts/runtime_action_report.py"],labels=["shadow-isolated"],draft=False)
