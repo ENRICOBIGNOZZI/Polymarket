@@ -1,0 +1,77 @@
+{
+  "schema": "b2_relation_quality_current_evidence_v1",
+  "generated_utc": "2026-08-25T04:18:20Z",
+  "current_main_sha": "2771249f2b23ada3e7c0be044876686e4d7eb6e7",
+  "validated_economic_source_sha": "6d2d6d287ebad1ab9dcfc72186f25739992c78f6",
+  "champion": "V5",
+  "evidence_state": "MORE_EVIDENCE_REQUIRED",
+  "hypothesis": "B2 maker-positive rows whose hedge coherence depends on one-token low-Jaccard semantic links are more likely to be structurally spurious than rows supported by same-event or multi-token semantic relations.",
+  "research_policy": {
+    "same_event": "always strong",
+    "semantic_min_score": 0.2,
+    "semantic_min_shared_tokens": 2,
+    "same_category": "prior_only_not_execution_authority"
+  },
+  "latest_live_snapshot": {
+    "coherent_b2_rows": 42,
+    "coherent_maker_positive": 2,
+    "oos_trades": 0,
+    "realized_oos_pnl_usd": 0.0,
+    "production_evidence_ready": false
+  },
+  "maker_positive_rows": [
+    {
+      "market": "2774057",
+      "slug": "strait-of-hormuz-traffic-returns-to-normal-by-september-30-20260702154339440",
+      "raw_expected_edge": 0.00302568,
+      "maker_entry_net_edge": 0.00222302,
+      "taker_net_edge": -0.0132019,
+      "executable_notional": 229.266,
+      "coherence_scope": "semantic:0.7143:5|semantic:0.1000:1|semantic:0.0833:1|semantic:0.7143:5|semantic:0.7143:5|semantic:0.1111:1",
+      "strong_relation_pass": false,
+      "weak_relation_count": 3,
+      "scenario_full_bundle_completion_hurdle": 0.8558812622691073,
+      "decision": "REJECT_CURRENT_RELATION_QUALITY_SAMPLE"
+    },
+    {
+      "market": "608565",
+      "slug": "will-lionel-messi-win-the-2026-ballon-dor",
+      "raw_expected_edge": 0.00181837,
+      "maker_entry_net_edge": 0.000480047,
+      "taker_net_edge": -0.00268639,
+      "executable_notional": 390.523,
+      "coherence_scope": "semantic:0.2857:2|semantic:0.3333:2|semantic:0.3333:2",
+      "strong_relation_pass": true,
+      "weak_relation_count": 0,
+      "scenario_full_bundle_completion_hurdle": 0.8483952151898174,
+      "decision": "MORE_EVIDENCE_REQUIRED"
+    }
+  ],
+  "interpretation": [
+    "The highest quoted maker edge in the current B2 snapshot fails the bounded strong-relation ablation because three of six hedge links rely on only one shared token with Jaccard scores between 0.0833 and 0.1111.",
+    "The remaining relation-strong maker-positive row has only about 4.8 bps quoted maker edge and a scenario break-even full-bundle completion hurdle of about 84.84% if incomplete execution falls back to the quoted taker economics.",
+    "Static maker positivity is not promotion evidence; direct B2 event-time fill, forced-completion, latency and markout evidence remains required."
+  ],
+  "required_chronological_ablation": {
+    "incumbent": "current B2 coherence gate",
+    "challenger": "same-event hard plus semantic score >=0.20 and >=2 shared content tokens; category cannot independently authorize a hedge",
+    "same_rows": true,
+    "metrics": [
+      "candidate survival and turnover",
+      "completed bundle rate and one-sided fill loss",
+      "forced-completion cost",
+      "60s and 300s fill-conditioned markout",
+      "incremental realized net paper PnL",
+      "drawdown and capital occupancy",
+      "1x, 1.5x and 2x execution-cost stress"
+    ],
+    "promotion_rule": "positive incremental realized net paper PnL versus incumbent on common chronological windows at all three cost levels, with existing OOS/risk gates unchanged"
+  },
+  "safety": {
+    "research_only": true,
+    "live_champion_changed": false,
+    "risk_or_oos_gate_changed": false,
+    "authenticated_execution_changed": false,
+    "real_money_execution": false
+  }
+}
