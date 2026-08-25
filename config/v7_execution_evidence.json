@@ -1,0 +1,74 @@
+{
+  "schema": "polymarket_execution_evidence_policy_v1",
+  "paper_only": true,
+  "allow_capital_reallocation": false,
+  "bootstrap_samples": 1000,
+  "cost_stress_multiplier": 1.5,
+  "models": {
+    "micro_maker": {
+      "target": "short_horizon_markout",
+      "horizon_seconds": 45,
+      "min_fills": 20,
+      "min_pnl_observations": 12,
+      "min_markout_observations": 12,
+      "min_fill_rate": 0.01,
+      "min_net_pnl": 0.0,
+      "min_stressed_net_pnl": 0.0,
+      "max_bootstrap_pvalue": 0.1,
+      "min_active_folds": 2,
+      "min_positive_fold_fraction": 0.5
+    },
+    "micro_taker": {
+      "target": "short_horizon_markout",
+      "horizon_seconds": 30,
+      "min_fills": 20,
+      "min_pnl_observations": 12,
+      "min_markout_observations": 12,
+      "min_fill_rate": 0.01,
+      "min_net_pnl": 0.0,
+      "min_stressed_net_pnl": 0.0,
+      "max_bootstrap_pvalue": 0.1,
+      "min_active_folds": 2,
+      "min_positive_fold_fraction": 0.5
+    },
+    "relative_value": {
+      "target": "hedged_convergence",
+      "horizon_seconds": 0,
+      "min_fills": 20,
+      "min_pnl_observations": 12,
+      "min_markout_observations": 12,
+      "min_fill_rate": 0.01,
+      "min_net_pnl": 0.0,
+      "min_stressed_net_pnl": 0.0,
+      "max_bootstrap_pvalue": 0.1,
+      "min_active_folds": 2,
+      "min_positive_fold_fraction": 0.5
+    },
+    "graph_hard": {
+      "target": "structural_payout",
+      "horizon_seconds": 0,
+      "min_fills": 10,
+      "min_pnl_observations": 10,
+      "min_markout_observations": 0,
+      "min_fill_rate": 0.01,
+      "min_net_pnl": 0.0,
+      "min_stressed_net_pnl": 0.0,
+      "max_bootstrap_pvalue": 0.1,
+      "min_active_folds": 2,
+      "min_positive_fold_fraction": 0.5
+    },
+    "external": {
+      "target": "terminal_probability",
+      "horizon_seconds": 0,
+      "min_fills": 20,
+      "min_pnl_observations": 12,
+      "min_markout_observations": 12,
+      "min_fill_rate": 0.01,
+      "min_net_pnl": 0.0,
+      "min_stressed_net_pnl": 0.0,
+      "max_bootstrap_pvalue": 0.1,
+      "min_active_folds": 2,
+      "min_positive_fold_fraction": 0.5
+    }
+  }
+}
