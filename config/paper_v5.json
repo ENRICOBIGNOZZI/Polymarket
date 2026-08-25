@@ -51,7 +51,7 @@
   "multi_strategy": {
     "schema_version": 1,
     "paper_only": true,
-    "description": "Aggressive paper-only activity: 1000-market coverage, 98% allocated capital, higher Kelly and gross limits, faster scans, continuous external-signal handoff, unchanged post-cost admission gates, and unchanged 15% drawdown kill.",
+    "description": "Aggressive paper-only activity: 1000-market coverage, 98% allocated capital, higher Kelly and gross limits, faster scans, unchanged post-cost admission gates, external exploration-only until an approved point-in-time signal handoff exists, and unchanged 15% drawdown kill.",
     "reserve_fraction": 0.02,
     "global_max_drawdown": 0.15,
     "global_max_gross_fraction": 0.75,
@@ -67,7 +67,7 @@
       {
         "name": "micro",
         "expert": "micro",
-        "capital_fraction": 0.20,
+        "capital_fraction": 0.22,
         "enabled": true,
         "overrides": {
           "market_limit": 1000,
@@ -87,7 +87,7 @@
       {
         "name": "pca",
         "expert": "pca",
-        "capital_fraction": 0.25,
+        "capital_fraction": 0.30,
         "enabled": true,
         "overrides": {
           "market_limit": 1000,
@@ -112,7 +112,7 @@
       {
         "name": "graph",
         "expert": "graph",
-        "capital_fraction": 0.23,
+        "capital_fraction": 0.28,
         "enabled": true,
         "overrides": {
           "market_limit": 1000,
@@ -133,7 +133,7 @@
       {
         "name": "semantic",
         "expert": "semantic",
-        "capital_fraction": 0.20,
+        "capital_fraction": 0.16,
         "enabled": true,
         "overrides": {
           "market_limit": 1000,
@@ -155,7 +155,7 @@
       {
         "name": "external",
         "expert": "external",
-        "capital_fraction": 0.10,
+        "capital_fraction": 0.02,
         "enabled": true,
         "overrides": {
           "market_limit": 1000,
@@ -167,7 +167,7 @@
           "min_net_edge": 0.00050,
           "uncertainty_penalty": 0.02,
           "fractional_kelly": 0.25,
-          "max_trade_usd": 100.0,
+          "max_trade_usd": 20.0,
           "max_gross_fraction": 0.75,
           "max_drawdown": 0.15
         }
