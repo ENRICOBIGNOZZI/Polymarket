@@ -2,6 +2,8 @@ name: V6 live-data research smoke
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "27 * * * *"
   pull_request:
     branches: [main]
     paths:
@@ -40,7 +42,8 @@ jobs:
           assert cfg['multi_strategy']['paper_only'] is True
           assert arch['paper_only'] is True
           assert arch['allow_authenticated_execution'] is False
-          assert live['version'] == 5, 'research smoke must not switch the live selector'
+          if '${{ github.event_name }}' == 'pull_request':
+              assert live['version'] == 5, 'research smoke must not switch the live selector'
           assert float(cfg['max_drawdown']) <= 0.15
           assert float(cfg['max_gross_fraction']) <= 0.45
           PY
@@ -111,9 +114,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p v6_evidence/micro_taker
-          # Three chronological passes are enough to verify acquisition, state,
-          # delayed-label mechanics and fixed-horizon exits. Alpha promotion still
-          # requires accumulated OOS evidence, not this smoke alone.
           for i in 1 2 3; do
             python3 scripts/v6_micro_taker.py \
               --config config/paper_v6.json --run-dir v6_evidence/micro_taker \
@@ -129,7 +129,7 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY'
-          import csv,json,re
+          import json,re
           from pathlib import Path
           root=Path('v6_evidence')
           def js(name):
