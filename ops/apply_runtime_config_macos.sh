@@ -8,6 +8,9 @@ TAILSCALE_FQDN="${POLYMARKET_TAILSCALE_FQDN:-mamma-portfolio.tail1bae85.ts.net}"
 POLYMARKET_GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-http://${TAILSCALE_FQDN}}"
 
 [[ "$(uname -s)" == "Darwin" ]] || { echo "macOS only" >&2; exit 1; }
+if [[ -d "$APP_DIR/.git" ]]; then
+  git -C "$APP_DIR" config --replace-all remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+fi
 [[ -d "$APP_DIR/monitoring/grafana/dashboards" ]] || {
   echo "missing Grafana dashboards under $APP_DIR" >&2
   exit 1
