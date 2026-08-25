@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -137,6 +138,47 @@ class FastRuntimeContractTest(unittest.TestCase):
             )
             self.assertEqual(third.returncode, 0, third)
             self.assertEqual(third.stdout.strip(), "reacquired")
+
+    def test_v6_runtime_writers_use_unique_atomic_temp_paths(self) -> None:
+        writers = [
+            "scripts/v6_hard_arb_paper.py",
+            "scripts/v6_micro_taker.py",
+            "scripts/v6_external_bridge.py",
+            "scripts/v6_relation_intents.py",
+            "scripts/v6_local_factor_intents.py",
+            "scripts/v6_intent_guard.py",
+            "scripts/v6_runtime_status.py",
+            "scripts/runtime_action_report.py",
+            "scripts/v7_execution_evidence.py",
+        ]
+        for relative in writers:
+            source = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertIn("os.getpid()", source, relative)
+            self.assertIn("threading.get_ident()", source, relative)
+            self.assertIn("os.replace(", source, relative)
+
+        loop = (ROOT / "scripts" / "paper_v6_loop.sh").read_text(encoding="utf-8")
+        self.assertIn('runtime_supervisor.csv.tmp.${BASHPID:-$$}', loop)
+
+    def test_hard_arb_atomic_state_write_survives_concurrent_calls(self) -> None:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import v6_hard_arb_paper as hard
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                state = Path(tmpdir) / "state.json"
+
+                def write(index: int) -> None:
+                    hard.atomic_json(state, {"index": index})
+
+                with ThreadPoolExecutor(max_workers=8) as pool:
+                    list(pool.map(write, range(32)))
+
+                payload = json.loads(state.read_text(encoding="utf-8"))
+                self.assertIn(payload["index"], range(32))
+                self.assertEqual(list(state.parent.glob("state.json.tmp.*")), [])
+        finally:
+            sys.path.pop(0)
 
     def test_hourly_operational_and_theory_schedulers_are_distinct(self) -> None:
         operational = (ROOT / ".github" / "workflows" / "fast-arb-hourly.yml").read_text(
