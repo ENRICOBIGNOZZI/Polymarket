@@ -120,13 +120,36 @@ class ModelGovernanceContractTest(unittest.TestCase):
                 "comments": [{"createdAt":"2026-08-25T00:00:00Z","authorAssociation":"OWNER","body":"Research Governance — APPROVED_FOR_INTEGRATION"}],
                 "reviews": [],
             }
-            source_path = temp / "source.json"; source_path.write_text(json.dumps(source), encoding="utf-8")
-            accepted = subprocess.run(["python3","scripts/research_pr_policy.py","--event",str(integration_path),"--changed-files",str(changed),"--manifest-existed-on-base","true","--source-pr",str(source_path),"--output",str(report)], cwd=ROOT, check=False, capture_output=True, text=True, timeout=10)
+            source_path = temp / "source-research.json"; source_path.write_text(json.dumps(source), encoding="utf-8")
+            accepted = subprocess.run(["python3","scripts/research_pr_policy.py","--event",str(integration_path),"--changed-files",str(changed),"--manifest-existed-on-base","true","--output",str(report),"--source-research-json",str(source_path)], cwd=ROOT, check=False, capture_output=True, text=True, timeout=10)
             self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+            self.assertIn("source_research_verdict: `APPROVED_FOR_INTEGRATION`", accepted.stdout)
+            self.assertIn("manual_approval_labels_required: `False`", accepted.stdout)
 
-    def test_code_paths_compile(self):
-        for path in (ROOT / "scripts").glob("*.py"):
-            py_compile.compile(path, doraise=True)
+    def test_research_policy_runs_on_every_main_push_and_rejects_direct_pushes(self):
+        policy = (WORKFLOWS / "research-policy.yml").read_text(encoding="utf-8")
+        push_block = policy.split("  push:\n", 1)[1].split("  pull_request:\n", 1)[0]
+        self.assertIn("branches: [main]", push_block)
+        self.assertNotIn("paths:", push_block)
+        self.assertIn("Enforce pull-request provenance for main pushes", policy)
+        self.assertIn("if: github.event_name == 'push'", policy)
+        self.assertIn("commits/${GITHUB_SHA}/pulls", policy)
+        self.assertIn('.base.ref == "main"', policy)
+        self.assertIn('.merged_at != null', policy)
+        self.assertIn("has no merged pull-request provenance", policy)
+
+    def test_post_merge_and_deployment_still_use_exact_validated_sha(self):
+        post_merge = (WORKFLOWS / "post-merge-validation.yml").read_text(encoding="utf-8")
+        deploy = (WORKFLOWS / "deploy-paper-server.yml").read_text(encoding="utf-8")
+        live_validation = (WORKFLOWS / "v4-live-smoke.yml").read_text(encoding="utf-8")
+        self.assertIn("repository_dispatch", post_merge); self.assertIn("ci.yml monitoring.yml v4-live-smoke.yml", post_merge)
+        self.assertIn('-f expected_sha="$EXPECTED_SHA"', post_merge); self.assertNotIn("gh pr merge", post_merge)
+        self.assertIn("POLYMARKET_DEPLOY_REF=paper-validated", deploy)
+        self.assertIn('test "$validated_sha" = "$main_sha"', live_validation); self.assertIn('-f sha="$validated_sha" -F force=false', live_validation)
+
+    def test_scheduler_scripts_compile(self):
+        for relative in ("scripts/validate_scheduler_registry.py","scripts/research_pr_policy.py","scripts/research_queue_report.py","scripts/integration_gate.py","scripts/promotion_gate.py","scripts/admin_supervisor_report.py"):
+            py_compile.compile(str(ROOT / relative), doraise=True)
 
 
 if __name__ == "__main__":
