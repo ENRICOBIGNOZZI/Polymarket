@@ -23,6 +23,18 @@ def _arg_value(flag: str, default: str = "") -> str:
     return sys.argv[i + 1] if i + 1 < len(sys.argv) else default
 
 
+def _replace_arg(flag: str, value: str) -> None:
+    try:
+        i = sys.argv.index(flag)
+    except ValueError:
+        sys.argv.extend([flag, value])
+        return
+    if i + 1 >= len(sys.argv):
+        sys.argv.append(value)
+    else:
+        sys.argv[i + 1] = value
+
+
 def _finite(value: Any, default: float = 0.0) -> float:
     try:
         out = float(value)
@@ -62,13 +74,7 @@ def _recent_compatible_flow(
 
 
 def recycle_dead_orders(run_dir: Path, trade_tape: Path, *, grace_seconds: int) -> dict[str, int]:
-    """Cancel resting paper maker orders that have observed no causal contra-flow.
-
-    The V6 maker already gates *new* orders on observed compatible flow. This
-    pre-pass prevents capital from remaining trapped when flow disappears after
-    entry. It does not create fills, cross the spread, or convert maker orders to
-    taker orders.
-    """
+    """Cancel resting paper maker orders that have observed no causal contra-flow."""
     state_path = run_dir / "state.json"
     if not state_path.exists():
         return {"examined": 0, "cancelled": 0}
@@ -121,14 +127,43 @@ def recycle_dead_orders(run_dir: Path, trade_tape: Path, *, grace_seconds: int) 
     return {"examined": examined, "cancelled": cancelled}
 
 
+def enforce_total_gross_cap(config_path: Path, run_dir: Path) -> Path:
+    """Compensate base maker room for already-filled inventory.
+
+    The base engine subtracts resting reservations from gross room but its current
+    research implementation does not subtract open-position cost. This wrapper
+    reduces the per-tick config gross fraction by the position-cost fraction so
+    resting orders plus filled inventory cannot exceed the configured hard cap.
+    """
+    cfg = json.loads(config_path.read_text(encoding="utf-8"))
+    state_path = run_dir / "state.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        state = {}
+    positions = state.get("positions") if isinstance(state.get("positions"), dict) else {}
+    position_cost = sum(max(0.0, _finite(p.get("cost"), 0.0)) for p in positions.values() if isinstance(p, dict))
+    equity = max(1.0, _finite(state.get("equity"), _finite(cfg.get("starting_capital"), 1.0)))
+    configured = max(0.0, min(1.0, _finite(cfg.get("max_gross_fraction"), 0.70)))
+    cfg["max_gross_fraction"] = max(0.0, configured - position_cost / equity)
+    tmp_cfg = run_dir / "maker_tick_config.json"
+    tmp_cfg.parent.mkdir(parents=True, exist_ok=True)
+    tmp_cfg.write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return tmp_cfg
+
+
 def main() -> int:
     run_dir_text = _arg_value("--run-dir")
     tape_text = _arg_value("--trade-tape")
+    config_text = _arg_value("--config")
     grace = int(os.environ.get("V6_MAKER_DEAD_FLOW_CANCEL_SECONDS", "20"))
     if run_dir_text and tape_text:
         stats = recycle_dead_orders(Path(run_dir_text), Path(tape_text), grace_seconds=grace)
         if stats["cancelled"]:
             print(json.dumps({"maker_dead_flow_recycle": stats}, sort_keys=True), file=sys.stderr)
+    if run_dir_text and config_text:
+        tick_config = enforce_total_gross_cap(Path(config_text), Path(run_dir_text))
+        _replace_arg("--config", str(tick_config))
     return base.main()
 
 
