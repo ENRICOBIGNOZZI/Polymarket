@@ -13,7 +13,64 @@ STRUCTURAL_INTERVAL_SECONDS="${V5_STRUCTURAL_INTERVAL_SECONDS:-60}"
 REWARD_INTERVAL_SECONDS="${V5_REWARD_INTERVAL_SECONDS:-300}"
 REPORT_INTERVAL_SECONDS="${V5_REPORT_INTERVAL_SECONDS:-60}"
 INTENT_MIN_EDGE="${V5_INTENT_MIN_EDGE:-0.00025}"
+EXTERNAL_REFRESH_SECONDS="${V5_EXTERNAL_REFRESH_SECONDS:-300}"
+EXTERNAL_MAX_AGE_SECONDS="${V5_EXTERNAL_MAX_AGE_SECONDS:-21600}"
+EXTERNAL_MIN_CONFIDENCE="${V5_EXTERNAL_MIN_CONFIDENCE:-0.10}"
+EXTERNAL_MIN_MAPPING_SCORE="${V5_EXTERNAL_MIN_MAPPING_SCORE:-0.70}"
+EXTERNAL_FEED="$RUN_ROOT/external_signals.csv"
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/strategies"
+
+refresh_external_feed() {
+  local tmp_dir inputs
+  tmp_dir="$(mktemp -d "$RUN_ROOT/external-feed.XXXXXX")"
+  if ! git fetch --no-tags origin telemetry:refs/remotes/origin/telemetry >/dev/null 2>&1; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+  if ! git show origin/telemetry:telemetry/latest-external-signals.jsonl > "$tmp_dir/latest.jsonl" 2>/dev/null; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+  inputs=(--input "$tmp_dir/latest.jsonl")
+  if git show origin/telemetry:telemetry/external-intelligence-observations.jsonl.gz > "$tmp_dir/history.jsonl.gz" 2>/dev/null; then
+    inputs+=(--input "$tmp_dir/history.jsonl.gz")
+  fi
+  if ! python3 scripts/materialize_external_paper_signals.py \
+      "${inputs[@]}" \
+      --output "$tmp_dir/external_signals.csv" \
+      --max-age-seconds "$EXTERNAL_MAX_AGE_SECONDS" \
+      --min-confidence "$EXTERNAL_MIN_CONFIDENCE" \
+      --min-mapping-score "$EXTERNAL_MIN_MAPPING_SCORE" \
+      >> "$RUN_ROOT/external_feed.log" 2>&1; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+  if ! python3 - "$tmp_dir/external_signals.csv" <<'PY'
+import csv
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+with path.open(encoding="utf-8", newline="") as handle:
+    reader = csv.reader(handle)
+    header = next(reader, [])
+if header != ["market_key", "q_yes", "confidence", "source", "timestamp"]:
+    raise SystemExit("invalid external signal feed header")
+PY
+  then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+  mv "$tmp_dir/external_signals.csv" "$EXTERNAL_FEED"
+  rm -rf "$tmp_dir"
+}
+
+# Always start with a syntactically valid feed. A failed telemetry refresh keeps
+# the prior valid runtime feed rather than turning stale/raw features into q.
+if ! refresh_external_feed; then
+  if [[ ! -s "$EXTERNAL_FEED" ]]; then
+    printf 'market_key,q_yes,confidence,source,timestamp\n' > "$EXTERNAL_FEED"
+  fi
+fi
 
 COMPACTION_INTERVAL_SECONDS="$(python3 - "$CONFIG" <<'PY'
 import json
@@ -226,6 +283,7 @@ last_rewards=0
 last_oos=0
 last_report=0
 last_compaction=0
+last_external_refresh=0
 
 while true; do
   now=$(date +%s)
@@ -236,6 +294,11 @@ while true; do
     printf '%s,supervisor,restart,%s\n' "$(date +%s)" "$SUPERVISOR_RESTARTS" >> "$RUN_ROOT/runtime_supervisor_events.csv"
     sleep 1
     start_supervisor
+  fi
+
+  if (( now - last_external_refresh >= EXTERNAL_REFRESH_SECONDS )); then
+    refresh_external_feed || true
+    last_external_refresh=$now
   fi
 
   # The passive microstructure sleeve is deliberately frequent and small. The
@@ -300,7 +363,7 @@ while true; do
 
   if (( now - last_report >= REPORT_INTERVAL_SECONDS )); then
     python3 scripts/runtime_action_report.py \
-      --run-root "$RUN_ROOT" --external-signals data/external_signals.csv \
+      --run-root "$RUN_ROOT" --external-signals "$EXTERNAL_FEED" \
       --window-seconds 3600 --production-edge "$INTENT_MIN_EDGE" \
       --output-json "$RUN_ROOT/action_report.json" \
       --output-markdown "$RUN_ROOT/action_report.md" \
