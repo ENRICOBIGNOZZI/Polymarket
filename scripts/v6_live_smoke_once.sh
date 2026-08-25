@@ -17,13 +17,19 @@ python3 scripts/v6_materialize_configs.py --config "$CONFIG" --run-root "$R" > "
 
 # Validate the same aggressive execution contract used by the persistent V6
 # launcher: edge-aware one-tick improvement, no giant FIFO queues, and the
-# configured $60/trade ceiling. Fills themselves remain tape/FIFO driven.
-./build/polymarket_maker_paper \
-  --config "$R/maker_config.json" --run-dir "$R/maker" --markets "$MARKETS" \
-  --min-liquidity "$MIN_LIQUIDITY" --min-edge "$EDGE" --max-order-usd 60 \
-  --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.10 \
-  --improve-ticks 1 --max-queue-multiple 6 --once \
-  | tee "$R/maker_latest.log"
+# configured $60/trade ceiling. Run several ticks so the smoke actually tests
+# resting-order lifecycle/queue depletion instead of stopping immediately after
+# POST. A fill is still not required: fills remain public-tape/FIFO driven.
+: > "$R/maker_latest.log"
+for i in 1 2 3 4; do
+  ./build/polymarket_maker_paper \
+    --config "$R/maker_config.json" --run-dir "$R/maker" --markets "$MARKETS" \
+    --min-liquidity "$MIN_LIQUIDITY" --min-edge "$EDGE" --max-order-usd 60 \
+    --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.10 \
+    --improve-ticks 1 --max-queue-multiple 6 --once \
+    | tee -a "$R/maker_latest.log"
+  if (( i < 4 )); then sleep 6; fi
+done
 
 # Three snapshots deliberately exercise feature persistence and maturity; a
 # smoke does not require the new online model to invent a trade before it has
