@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import math
 import os
@@ -20,8 +21,8 @@ FRESH_CACHE_SECONDS = 30.0
 STALE_CACHE_SECONDS = 900.0
 FALLBACK_MARKETS = 300
 GAMMA_TIMEOUT_SECONDS = 1.5
-CLOB_TIMEOUT_SECONDS = 3.0
-CLOB_DISCOVERY_BUDGET_SECONDS = 8.0
+CLOB_TIMEOUT_SECONDS = 6.0
+CLOB_DISCOVERY_BUDGET_SECONDS = 14.0
 BOOK_WORKERS = 8
 
 
@@ -55,6 +56,7 @@ def req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT_SECO
     headers = {
         "User-Agent": "polymarket-v6-market-proxy/2",
         "Accept": "application/json",
+        "Accept-Encoding": "gzip",
     }
     if data is not None:
         headers["Content-Type"] = "application/json"
@@ -66,8 +68,11 @@ def req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT_SECO
     )
     try:
         with urllib.request.urlopen(request, timeout=max(0.1, timeout)) as handle:
-            return json.loads(handle.read().decode())
-    except (OSError, TimeoutError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
+            raw = handle.read()
+            if str(handle.headers.get("Content-Encoding") or "").lower().strip() == "gzip":
+                raw = gzip.decompress(raw)
+            return json.loads(raw.decode())
+    except (OSError, EOFError, TimeoutError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"request failed: {url}: {exc}") from exc
 
 
