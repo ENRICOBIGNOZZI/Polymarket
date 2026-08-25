@@ -142,14 +142,17 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
         self.assertIn("scripts/v6_intent_guard.py", completed.stdout)
 
     def test_sensitive_integration_cannot_leave_draft_with_unapproved_source(self):
+        source_sha = "a" * 40
+        branch = "research/aggressive-v5-execution"
         completed = self.run_policy(
             "integration/aggressive-v5",
             ["src/engine.cpp", "config/live_champion.json"],
             draft=False,
-            body="Source research PR/branch/commit: #154\n",
+            body=f"Source research PR/branch/commit: #154 / `{branch}` / `{source_sha}`\n",
             source_research={
                 "number": 154,
-                "headRefName": "research/aggressive-v5-execution",
+                "headRefName": branch,
+                "headRefOid": source_sha,
                 "body": "research candidate",
                 "comments": [
                     {
@@ -162,18 +165,21 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
             },
         )
         self.assertNotEqual(completed.returncode, 0)
-        self.assertIn("unapproved model/runtime work must remain in research", completed.stdout)
+        self.assertIn("unapproved work must remain in research", completed.stdout)
         self.assertIn("MORE_EVIDENCE_REQUIRED", completed.stdout)
 
     def test_sensitive_draft_integration_rejects_unapproved_source(self):
+        source_sha = "b" * 40
+        branch = "research/aggressive-v5-execution"
         completed = self.run_policy(
             "integration/aggressive-v5-draft",
             ["src/engine.cpp", "config/live_champion.json"],
             draft=True,
-            body="Source research PR/branch/commit: #154\n",
+            body=f"Source research PR/branch/commit: #154 / `{branch}` / `{source_sha}`\n",
             source_research={
                 "number": 154,
-                "headRefName": "research/aggressive-v5-execution",
+                "headRefName": branch,
+                "headRefOid": source_sha,
                 "body": "research candidate",
                 "comments": [
                     {
@@ -186,10 +192,10 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
             },
         )
         self.assertNotEqual(completed.returncode, 0)
-        self.assertIn("unapproved model/runtime work must remain in research", completed.stdout)
+        self.assertIn("unapproved work must remain in research", completed.stdout)
         self.assertIn("MORE_EVIDENCE_REQUIRED", completed.stdout)
 
-    def test_sensitive_draft_integration_requires_numbered_source(self):
+    def test_sensitive_draft_integration_requires_exact_source(self):
         completed = self.run_policy(
             "integration/unlinked-v5-draft",
             ["src/engine.cpp", "config/live_champion.json"],
@@ -197,8 +203,8 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
             body="staged model candidate without approved research provenance",
         )
         self.assertNotEqual(completed.returncode, 0)
-        self.assertIn("sensitive integration PR must link a numbered source research PR", completed.stdout)
-        self.assertIn("must provide approved source research metadata", completed.stdout)
+        self.assertIn("must bind exact source provenance", completed.stdout)
+        self.assertIn("must provide trusted source research metadata", completed.stdout)
 
     def test_versioned_runtime_integration_requires_approved_source(self):
         completed = self.run_policy(
@@ -208,24 +214,27 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
             body="staged V6 model runtime without approved research provenance",
         )
         self.assertNotEqual(completed.returncode, 0)
-        self.assertIn("sensitive integration PR must link a numbered source research PR", completed.stdout)
-        self.assertIn("must provide approved source research metadata", completed.stdout)
+        self.assertIn("must bind exact source provenance", completed.stdout)
+        self.assertIn("must provide trusted source research metadata", completed.stdout)
 
     def test_sensitive_integration_accepts_explicit_approved_source_verdict(self):
+        source_sha = "c" * 40
+        source_branch = "research/approved-v5"
         completed = self.run_policy(
             "integration/approved-v5",
             ["src/engine.cpp", "config/live_champion.json"],
             draft=True,
-            body="Source research PR/branch/commit: #200\n",
+            body=f"Source research PR/branch/commit: #200 / `{source_branch}` / `{source_sha}`\n",
             source_research={
                 "number": 200,
-                "headRefName": "research/approved-v5",
+                "headRefName": source_branch,
+                "headRefOid": source_sha,
                 "body": "research candidate",
                 "comments": [
                     {
                         "createdAt": "2026-08-25T00:00:00Z",
                         "authorAssociation": "OWNER",
-                        "body": "Research Governance — APPROVED_FOR_INTEGRATION",
+                        "body": f"Research Governance — APPROVED_FOR_INTEGRATION\n\nExact validated head: `{source_sha}`.",
                     }
                 ],
                 "reviews": [],
@@ -233,23 +242,27 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertIn("source_research_verdict: `APPROVED_FOR_INTEGRATION`", completed.stdout)
+        self.assertIn(f"source_research_approved_sha: `{source_sha}`", completed.stdout)
         self.assertIn("policy: `pass`", completed.stdout)
 
     def test_latest_research_verdict_wins(self):
+        source_sha = "d" * 40
+        source_branch = "research/regressed-v5"
         completed = self.run_policy(
             "integration/regressed-v5",
             ["src/engine.cpp"],
             draft=True,
-            body="Source research PR/branch/commit: #201\n",
+            body=f"Source research PR/branch/commit: #201 / `{source_branch}` / `{source_sha}`\n",
             source_research={
                 "number": 201,
-                "headRefName": "research/regressed-v5",
+                "headRefName": source_branch,
+                "headRefOid": source_sha,
                 "body": "research candidate",
                 "comments": [
                     {
                         "createdAt": "2026-08-25T00:00:00Z",
                         "authorAssociation": "OWNER",
-                        "body": "Research Governance — APPROVED_FOR_INTEGRATION",
+                        "body": f"Research Governance — APPROVED_FOR_INTEGRATION\nExact validated head: `{source_sha}`.",
                     },
                     {
                         "createdAt": "2026-08-25T01:00:00Z",
