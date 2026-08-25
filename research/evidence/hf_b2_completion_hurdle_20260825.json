@@ -1,0 +1,66 @@
+{
+  "schema": "polymarket_hf_b2_completion_hurdle_evidence_v1",
+  "evidence_state": "MORE_EVIDENCE_REQUIRED",
+  "source_live_smoke": {
+    "git_sha": "6d2d6d287ebad1ab9dcfc72186f25739992c78f6",
+    "generated_ts": 1787627911,
+    "coherent_b2_rows": 34,
+    "coherent_raw_positive": 34,
+    "coherent_maker_positive": 1,
+    "admitted_intent_bundles": 0
+  },
+  "top_maker_positive_b2": {
+    "market": "2696747",
+    "slug": "us-iran-final-nuclear-deal-by-december-31-2026-191",
+    "side": "NO",
+    "legs": 8,
+    "hedges": 7,
+    "leg_spec": "2696747:NO:1|3700194:YES:0.21151|1633611:YES:0.555392|665374:NO:0.191745|2176270:YES:0.202895|2264328:YES:0.780272|2911832:YES:0.730645|2633430:YES:2.97462",
+    "raw_expected_edge": 0.0033497,
+    "maker_entry_net_edge": 0.0029233,
+    "taker_net_edge": -0.0191312,
+    "expected_mark_move": 0.00516291,
+    "executable_notional": 820.601,
+    "half_life_h": 23.9022,
+    "stability": 0.974185,
+    "hedge_error": 0.0170867,
+    "explained": 0.801871,
+    "residual_z": 0.811717,
+    "break_even_full_bundle_completion_probability": 0.8674510870797343,
+    "iid_per_leg_fill_floor_for_break_even": 0.9823825159153566,
+    "interpretation": "If incomplete maker execution ultimately realizes the observed taker fallback economics, full-bundle maker completion must exceed 86.7451% to break even. Under the deliberately hypothetical IID equal-leg-fill approximation, an eight-leg bundle would need about 98.2383% fill probability per leg. Real fills are dependent, so the per-leg figure is a hurdle diagnostic rather than an estimator."
+  },
+  "complete_set_maker_control": {
+    "valid_sessions": 16,
+    "history_span_seconds": 31557,
+    "probes_per_policy": 232,
+    "pair_fills_join": 0,
+    "pair_fills_improve1": 0,
+    "pair_fills_fade1": 0,
+    "pair_fill_wilson_upper_95": 0.01152739476996875,
+    "join_any_fills": 1,
+    "join_one_sided_fills": 1,
+    "join_total_pnl_ex_rewards_usd": -0.13894351315407616,
+    "join_markout_60_per_share": -0.0020000000000000018,
+    "improve1_any_fills": 2,
+    "improve1_one_sided_fills": 2,
+    "improve1_total_pnl_ex_rewards_usd": -2.456809049864078,
+    "improve1_markout_60_per_share": -0.0010905783921425982,
+    "eligible_for_paper_shadow": false,
+    "transfer_to_b2_allowed": false
+  },
+  "research_conclusion": {
+    "material_change": "The current live frontier contains a maker-positive B2 candidate for the first time in the refreshed sample, but its economics are dominated by execution completion risk.",
+    "promotion_status": "not_promotable",
+    "reason": "No B2 production intent was admitted, the direct B2 forward probe remains absent from current main, and the observed maker-vs-taker edge wedge implies an 86.75% full-bundle completion hurdle for an eight-leg bundle. Direct event-time B2 completion and fill-conditioned markout evidence is required.",
+    "next_measurement": "Run the direct B2 forward replay on this exact eight-leg candidate with causal pre-arrival microprice/depth/imbalance/OFI, queue stress, partial/full completion, forced-completion loss, and 60s/300s fill-conditioned markout."
+  },
+  "safety": {
+    "read_only": true,
+    "submitted_orders": 0,
+    "live_champion_changed": false,
+    "production_risk_changed": false,
+    "credentials_changed": false,
+    "real_money_execution_enabled": false
+  }
+}
