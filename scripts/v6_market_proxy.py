@@ -273,7 +273,8 @@ class Proxy:
             age = now - self.ts
             source = self.source
         page = rows[offset : offset + limit]
-        self.stat(source + "_cache", len(rows), source.startswith("gamma"), age)
+        cache_source = source if source.endswith("_cache") else source + "_cache"
+        self.stat(cache_source, len(rows), source.startswith("gamma"), age)
         return page
 
     def gamma_rows(self, n: int, query: dict[str, list[str]]) -> list[dict[str, Any]]:
@@ -489,6 +490,75 @@ class Proxy:
         self.clob_source = "clob_unavailable"
         raise RuntimeError("CLOB fallback failed: " + "; ".join(errors))
 
+    def _refresh_locked(
+        self,
+        query: dict[str, list[str]],
+        limit: int,
+        offset: int,
+        min_liquidity: float,
+    ) -> list[dict[str, Any]]:
+        """Refresh discovery while the caller owns ``refresh_lock``."""
+
+        target = min(FALLBACK_MARKETS, max(FALLBACK_MARKETS, offset + limit))
+        try:
+            rows = self.gamma_legacy_rows(target, query)
+            self.error = ""
+            self.save(rows)
+            self.stat("gamma_legacy", len(rows), True)
+        except Exception as legacy_error:
+            self.failures += 1
+            self.error = str(legacy_error)
+            try:
+                rows = self.gamma_rows(target, query)
+                self.error = ""
+                self.save(rows)
+                self.stat("gamma_keyset", len(rows), True)
+            except Exception as keyset_error:
+                self.failures += 1
+                self.error = f"{self.error}; {keyset_error}"
+                try:
+                    rows = self.clob_rows(min_liquidity)
+                    self.save(rows)
+                    self.stat(self.clob_source, len(rows), False)
+                except Exception as clob_error:
+                    self.failures += 1
+                    self.error = f"{self.error}; {clob_error}"
+                    cached = self.cached_page(limit, offset, min_liquidity, STALE_CACHE_SECONDS)
+                    if cached is not None:
+                        self.stat("stale_cache", len(self.rows), False, max(0.0, time.time() - self.ts))
+                        return cached
+                    self.stat("unavailable", 0, False, 1e12)
+                    raise RuntimeError(self.error or "discovery unavailable")
+
+        cached = self.cached_page(limit, offset, min_liquidity, FRESH_CACHE_SECONDS)
+        return cached if cached is not None else []
+
+    def _refresh_stale_cache_in_background(
+        self,
+        query: dict[str, list[str]],
+        limit: int,
+        offset: int,
+        min_liquidity: float,
+    ) -> None:
+        """Finish an optional refresh without making local readers wait for it."""
+
+        def refresh() -> None:
+            try:
+                self._refresh_locked(query, limit, offset, min_liquidity)
+            except Exception:
+                # The bounded stale cache has already been served to the caller.
+                # A later request will retry; errors remain in the status file.
+                pass
+            finally:
+                self.refresh_lock.release()
+
+        worker = threading.Thread(target=refresh, name="v6-market-refresh", daemon=True)
+        try:
+            worker.start()
+        except Exception:
+            self.refresh_lock.release()
+            raise
+
     def markets(self, query: dict[str, list[str]]) -> list[dict[str, Any]]:
         limit = max(1, min(100, int(f((query.get("limit") or [100])[-1], 100))))
         offset = max(0, int(f((query.get("offset") or [0])[-1], 0)))
@@ -498,54 +568,33 @@ class Proxy:
         if cached is not None:
             return cached
 
-        if not self.refresh_lock.acquire(blocking=False):
+        # A relay cache can be safely used for a bounded period even when it is
+        # no longer fresh.  Return it immediately: synchronously probing Gamma
+        # and CLOB here lets the C++ reader time out before the cache fallback is
+        # reached.  One background refresh remains in flight so the proxy still
+        # self-heals whenever upstream access recovers.
+        if self.refresh_lock.acquire(blocking=False):
             cached = self.cached_page(limit, offset, min_liquidity, STALE_CACHE_SECONDS)
             if cached is not None:
+                self._refresh_stale_cache_in_background(query, limit, offset, min_liquidity)
                 return cached
-            if not self.refresh_lock.acquire(timeout=3.0):
-                raise RuntimeError("market discovery refresh already in progress")
-            self.refresh_lock.release()
-            cached = self.cached_page(limit, offset, min_liquidity, STALE_CACHE_SECONDS)
-            if cached is not None:
-                return cached
-            raise RuntimeError("market discovery refresh completed without usable cache")
-
-        try:
-            target = min(FALLBACK_MARKETS, max(FALLBACK_MARKETS, offset + limit))
             try:
-                rows = self.gamma_legacy_rows(target, query)
-                self.error = ""
-                self.save(rows)
-                self.stat("gamma_legacy", len(rows), True)
-            except Exception as legacy_error:
-                self.failures += 1
-                self.error = str(legacy_error)
-                try:
-                    rows = self.gamma_rows(target, query)
-                    self.error = ""
-                    self.save(rows)
-                    self.stat("gamma_keyset", len(rows), True)
-                except Exception as keyset_error:
-                    self.failures += 1
-                    self.error = f"{self.error}; {keyset_error}"
-                    try:
-                        rows = self.clob_rows(min_liquidity)
-                        self.save(rows)
-                        self.stat(self.clob_source, len(rows), False)
-                    except Exception as clob_error:
-                        self.failures += 1
-                        self.error = f"{self.error}; {clob_error}"
-                        cached = self.cached_page(limit, offset, min_liquidity, STALE_CACHE_SECONDS)
-                        if cached is not None:
-                            self.stat("stale_cache", len(self.rows), False, max(0.0, time.time() - self.ts))
-                            return cached
-                        self.stat("unavailable", 0, False, 1e12)
-                        raise RuntimeError(self.error or "discovery unavailable")
+                return self._refresh_locked(query, limit, offset, min_liquidity)
+            finally:
+                self.refresh_lock.release()
+
+        cached = self.cached_page(limit, offset, min_liquidity, STALE_CACHE_SECONDS)
+        if cached is not None:
+            return cached
+        if not self.refresh_lock.acquire(timeout=3.0):
+            raise RuntimeError("market discovery refresh already in progress")
+        try:
+            cached = self.cached_page(limit, offset, min_liquidity, STALE_CACHE_SECONDS)
+            if cached is not None:
+                return cached
+            return self._refresh_locked(query, limit, offset, min_liquidity)
         finally:
             self.refresh_lock.release()
-
-        cached = self.cached_page(limit, offset, min_liquidity, FRESH_CACHE_SECONDS)
-        return cached if cached is not None else []
 
     def cached_market(self, mid: str) -> dict[str, Any] | None:
         with self.state_lock:
