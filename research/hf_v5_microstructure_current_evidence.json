@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "generated_date": "2026-08-25",
   "base_main_sha": "d6513fdbdf5ad8c8b7926b53fb7bba5acdab1257",
   "active_champion": {
@@ -21,7 +21,7 @@
   "first_live_event_time_evaluation": {
     "github_run_id": 32790670881,
     "worker": "Fast Arbitrage Hourly Shadow",
-    "source_head_before_receive_clock_fix": "7fc7f814d825e59263c98ff38aef4334d86df208",
+    "source_head_before_causal_clock_fixes": "7fc7f814d825e59263c98ff38aef4334d86df208",
     "data_health": {
       "ws_messages": 91238,
       "book_updates": 89611,
@@ -84,20 +84,43 @@
       }
     },
     "economic_interpretation": "the current single-window taker challenger is rejected: every evaluated horizon has negative mean net markout at every cost stress, even before adding protocol taker fees",
-    "statistical_interpretation": "the multifeature ridge only marginally improves MSE at 1s/5s and materially worsens it at 30s/60s; one window cannot establish absence of all HF alpha"
+    "statistical_interpretation": "the multifeature ridge only marginally improves MSE at 1s/5s and materially worsens it at 30s/60s; one window cannot establish absence of all HF alpha",
+    "causal_status": "DIAGNOSTIC_ONLY_PENDING_CLEAN_RERUN"
   },
-  "methodology_defect_and_fix": {
-    "state": "CORRECTED_ON_RESEARCH_BRANCH_REQUIRES_RERUN",
-    "defect": "the first purged evaluator ordered predictor rows and future targets by exchange timestamp; variable feed latency can reorder messages, allowing an exchange-time future update that was already received before the predictor row to contaminate decision-time chronology",
-    "correct_decision_clock": "received_ts_ms when available; exchange_ts_ms retained for feed-latency measurement",
-    "fix_commit": "bd6012b4f6412060267ce512ee4a4ed20beec169",
-    "regression_commit": "0c95b9ac1edfa5ba5866c20c6423ab3e4230d483",
-    "rule": "do not treat the exact pre-fix markout statistics as final causal estimates until the receive-time rerun completes"
-  },
+  "methodology_defects_and_fixes": [
+    {
+      "state": "CORRECTED_ON_RESEARCH_BRANCH_REQUIRES_RERUN",
+      "defect": "the first purged evaluator ordered predictor rows and future targets by exchange timestamp; variable feed latency can reorder messages, allowing an exchange-time future update that was already received before the predictor row to contaminate decision-time chronology",
+      "correct_contract": "use received_ts_ms as the decision clock when available; retain exchange_ts_ms only for feed-latency measurement",
+      "fix_commit": "bd6012b4f6412060267ce512ee4a4ed20beec169",
+      "regression_commit": "0c95b9ac1edfa5ba5866c20c6423ab3e4230d483"
+    },
+    {
+      "state": "CORRECTED_ON_RESEARCH_BRANCH_REQUIRES_RERUN",
+      "defect": "the first target label used the first book update after t+h, which is a variable-horizon next-update target and imports price information from beyond the requested markout horizon",
+      "correct_contract": "future midpoint is the last observable book state at or before t+h; max_lag_ms filters stale as-of states instead of stretching the target forward",
+      "fix_commit": "48b9f50802c2ff92b8030996305d331d1059a2d6",
+      "regression_commit": "72d4e77b31f124cf11f2382f62e605b0e01f4866"
+    }
+  ],
   "aggressive_micro_forecast_warning": {
     "source_research_pr": 154,
     "state": "NO_HF_ECONOMIC_VALIDATION_FROM_CURRENT_EVIDENCE",
     "reason": "the proposed extrapolative micro forecast uses contemporaneous microprice displacement and depth imbalance with fixed multipliers; the first live causal challenger using richer microprice/imbalance/OFI/spread/latency features is cost-negative at all tested horizons and stress levels, so current HF evidence does not justify interpreting the aggressive forecast as validated short-horizon alpha"
+  },
+  "current_live_context": {
+    "source": "telemetry/latest-live-smoke.json",
+    "git_sha": "d6513fdbdf5ad8c8b7926b53fb7bba5acdab1257",
+    "maker_signals": 31,
+    "maker_posted": 27,
+    "maker_resting": 27,
+    "maker_positions": 0,
+    "admitted_intent_bundles": 0,
+    "oos_trades": 0,
+    "oos_net_pnl_usd": 0.0,
+    "runtime_pnl_usd": -2.44419734008,
+    "realized_pnl_usd_total": 0.0000974777346983,
+    "interpretation": "the current public snapshot still does not provide fill-conditioned evidence for the V5 micro sleeve"
   },
   "forward_maker_context": {
     "class": "two-leg complete-set maker",
@@ -129,10 +152,10 @@
       "feed_latency_ms"
     ],
     "targets": [
-      "future_mid_markout_1s",
-      "future_mid_markout_5s",
-      "future_mid_markout_30s",
-      "future_mid_markout_60s",
+      "asof_future_mid_markout_1s",
+      "asof_future_mid_markout_5s",
+      "asof_future_mid_markout_30s",
+      "asof_future_mid_markout_60s",
       "maker_fill_probability",
       "fill_conditioned_markout_60s",
       "fill_conditioned_markout_300s"
