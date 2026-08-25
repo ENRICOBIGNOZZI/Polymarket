@@ -27,7 +27,7 @@ LIVE_MODEL_SURFACE_PATTERNS = (
     re.compile(r"^config/live_champion\.json$"), re.compile(r"^config/paper_v\d+\.json$"),
     re.compile(r"^config/v\d+_model_architecture\.json$"),
     re.compile(r"^config/(?:cross_venue|portfolio_supervisor)\.json$"), re.compile(r"^config/cross_venue_pairs\.csv$"),
-    re.compile(r"^scripts/paper_v\d+_(?:loop|once)(?:_v\d+)?\.sh$"), re.compile(r"^scripts/multi_strategy_paper\.py$"),
+    re.compile(r"^scripts/paper_v\d+_(?:loop|once)(?:_v\d+)?\.sh$"), re.compile(r"^scripts/paper_latest_loop\.sh$"), re.compile(r"^scripts/multi_strategy_paper\.py$"),
     re.compile(r"^scripts/build_v\d+_intents\.py$"), re.compile(r"^scripts/merge_v\d+_intents\.py$"),
     re.compile(r"^scripts/build_global_opportunity_book\.py$"), re.compile(r"^scripts/filter_coherent_hedges\.py$"),
     re.compile(r"^scripts/walk_forward_v\d+\.py$"), re.compile(r"^scripts/runtime_action_report\.py$"),
