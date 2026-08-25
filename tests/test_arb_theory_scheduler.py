@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "arb_theory_scheduler.py"
+WORKFLOW = ROOT / ".github" / "workflows" / "arb-theory-hourly.yml"
 
 
 class ArbTheorySchedulerTest(unittest.TestCase):
@@ -128,6 +129,19 @@ class ArbTheorySchedulerTest(unittest.TestCase):
                 text=True,
             )
             self.assertNotEqual(result.returncode, 0)
+
+    def test_workflow_degrades_only_on_known_actions_pr_creation_block(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        known_error = "GitHub Actions is not permitted to create or approve pull requests"
+        self.assertIn('pr_create_output="$(' , text)
+        self.assertIn("pr_create_rc=$?", text)
+        self.assertIn(f'grep -Fq "{known_error}"', text)
+        self.assertIn("draft_pr_creation=blocked_by_repository_actions_setting", text)
+        self.assertIn("promotion_authorized=false", text)
+        self.assertIn('exit "$pr_create_rc"', text)
+        self.assertLess(text.index(known_error), text.index('exit "$pr_create_rc"'))
+        self.assertIn("research branch and issue evidence were published", text.lower())
+        self.assertNotIn("config/live_champion.json' >", text)
 
 
 if __name__ == "__main__":
