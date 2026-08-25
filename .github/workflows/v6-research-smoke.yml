@@ -11,6 +11,7 @@ on:
       - "config/v6_model_architecture.json"
       - "scripts/paper_v6_loop.sh"
       - "scripts/v6_*.py"
+      - "src/maker_paper.cpp"
       - "tests/test_v6_model_contracts.py"
       - "tests/test_v6_runtime_contract.py"
       - "tests/test_v6_queue_filter.py"
@@ -90,7 +91,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p v6_evidence/maker
-          ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once > v6_evidence/maker.log 2>&1 || true
+          ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --max-queue-ratio 50 --once > v6_evidence/maker.log 2>&1 || true
       - name: Live public-data micro-taker causal warmup/markout probe
         shell: bash
         run: |
@@ -115,7 +116,10 @@ jobs:
               except Exception:return {}
           hard=(root/'graph_hard_taker_scan.csv').read_text(errors='ignore') if (root/'graph_hard_taker_scan.csv').exists() else ''
           m=re.search(r'net_positive_pre_gas=(\d+)',hard)
-          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'relation_queue':js('relation_queue_status.json'),'local_factor':js('local_factor_status.json'),'local_factor_queue':js('local_factor_queue_status.json'),'hard_arb':js('hard_arb/status.json'),'micro_edge_diagnostics':js('micro_edge_diagnostics.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0}
+          maker_log=(root/'maker.log').read_text(errors='ignore') if (root/'maker.log').exists() else ''
+          qm=re.search(r'queue_rejected=(\d+)',maker_log)
+          pm=re.search(r'posted=(\d+)',maker_log)
+          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'relation_queue':js('relation_queue_status.json'),'local_factor':js('local_factor_status.json'),'local_factor_queue':js('local_factor_queue_status.json'),'hard_arb':js('hard_arb/status.json'),'micro_edge_diagnostics':js('micro_edge_diagnostics.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0,'maker_queue_rejected':int(qm.group(1)) if qm else 0,'maker_posted':int(pm.group(1)) if pm else 0}
           state=root/'micro_taker/state.json'
           if state.exists():
               try:
