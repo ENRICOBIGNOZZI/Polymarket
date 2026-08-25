@@ -82,7 +82,7 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertLess(repair.index(apply), repair.index(restart))
         self.assertIn('Runtime and Grafana configuration repaired', repair)
 
-    def test_deployment_uses_validated_ref_and_v5_health(self):
+    def test_deployment_uses_validated_ref_and_versioned_health(self):
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
         linux_updater = (ROOT / "ops" / "update_server.sh").read_text(encoding="utf-8")
         health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(encoding="utf-8")
@@ -126,7 +126,10 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('EXPECTED_VALIDATED_SHA', deploy)
         self.assertIn('git show "$validated_sha:$updater_path"', deploy)
         self.assertIn('POLYMARKET_DEPLOY_REF=paper-validated bash "$updater"', deploy)
-        self.assertIn('adapter="v5"', deploy)
+        self.assertIn('[[ "$version" == "5" || "$version" == "6" ]]', deploy)
+        self.assertIn('adapter=\\"v${version}\\"', deploy)
+        self.assertIn('polymarket_v6_exporter_info', deploy)
+        self.assertIn('hard_arb/status.json', deploy)
         self.assertIn('polymarket-multi-strategy-v5', deploy)
 
     def test_bootstrap_services_follow_the_champion_manifest(self):
