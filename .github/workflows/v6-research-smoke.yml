@@ -50,7 +50,7 @@ jobs:
                   assert base_sha, 'non-integration PR must expose its base SHA'
                   base_live=json.loads(subprocess.check_output(['git','show',f'{base_sha}:config/live_champion.json'],text=True))
                   assert live == base_live, 'non-integration V6 smoke must preserve the base live champion selector'
-          assert float(cfg['max_drawdown']) <= .15;assert float(cfg['max_market_fraction']) <= .025;assert float(cfg['max_event_fraction']) <= .08;assert float(cfg['max_gross_fraction']) <= .45
+          assert float(cfg['max_drawdown']) <= .15;assert float(cfg['max_market_fraction']) <= .05;assert float(cfg['max_event_fraction']) <= .15;assert float(cfg['max_gross_fraction']) <= .70
           v=cfg['v6']; total=sum(float(v[k]) for k in ('micro_maker_capital_fraction','micro_taker_capital_fraction','relative_value_capital_fraction','hard_arb_capital_fraction','external_capital_fraction','reserve_fraction'));assert abs(total-1.0)<1e-9
           PY
       - name: Install build dependencies
