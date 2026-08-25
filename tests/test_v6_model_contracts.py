@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import csv
+import importlib.util
 import json
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import urllib.parse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +18,15 @@ FIELDS = [
     "max_notional", "market_id", "side", "weight", "limit_price",
     "execution_deadline_ts", "hold_deadline_ts",
 ]
+
+
+def load_script(name: str, relative: str):
+    spec = importlib.util.spec_from_file_location(name, ROOT / relative)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class V6ModelContracts(unittest.TestCase):
@@ -52,12 +63,42 @@ class V6ModelContracts(unittest.TestCase):
                 w.writerow({"bundle_id":"g1","strategy":"GRAPH_HARD","event_id":"e","created_ts":now,"mode":"MAKER","expected_edge":0.01,"max_notional":10,"market_id":"m1","side":"YES","weight":1,"limit_price":0.4,"execution_deadline_ts":now+120,"hold_deadline_ts":now+3600})
                 w.writerow({"bundle_id":"weak","strategy":"STRUCTURAL","event_id":"e2","created_ts":now,"mode":"MAKER","expected_edge":0.00025,"max_notional":10,"market_id":"m2","side":"NO","weight":1,"limit_price":0.4,"execution_deadline_ts":now+120,"hold_deadline_ts":now+3600})
             subprocess.run([sys.executable,str(ROOT/"scripts/v6_intent_guard.py"),"--input",str(src),"--output",str(dst),"--status",str(status),"--min-edge","0.0002","--stress-bps","10","--max-age-seconds","240"],check=True,capture_output=True,text=True)
-            rows=list(csv.DictReader(dst.open(newline="",encoding="utf-8")));self.assertEqual(len(rows),1);self.assertEqual(rows[0]["strategy"],"GRAPH_RV")
+            with dst.open(newline="",encoding="utf-8") as handle:
+                rows=list(csv.DictReader(handle))
+            self.assertEqual(len(rows),1);self.assertEqual(rows[0]["strategy"],"GRAPH_RV")
             report=json.loads(status.read_text());self.assertEqual(report["relabeled_graph_hard_to_rv"],1);self.assertEqual(report["rejections"]["stress_edge"],1)
 
     def test_hard_arb_executor_requires_complete_same_snapshot_depth(self):
         text=(ROOT/"scripts/v6_hard_arb_paper.py").read_text()
-        self.assertIn("negRiskAugmented",text);self.assertIn("all-or-none",text.lower());self.assertIn("min_size",text);self.assertIn("cost_ps",text);self.assertIn("fee_ps",text)
+        self.assertIn("negRiskAugmented",text);self.assertIn("all-or-none",text.lower());self.assertIn("min_size",text);self.assertIn("cost_per_share",text);self.assertIn("fee_ps",text)
+
+    def test_hard_arb_discovery_respects_market_scan_budget(self):
+        hard_arb=load_script("v6_hard_arb_pagination_test","scripts/v6_hard_arb_paper.py")
+        calls=[]
+        original=hard_arb.get_json
+
+        def fake_get_json(url, payload=None, timeout=20):
+            parsed=urllib.parse.urlsplit(url)
+            query=urllib.parse.parse_qs(parsed.query)
+            offset=int(query["offset"][0]);limit=int(query["limit"][0])
+            calls.append((offset,limit))
+            rows=[]
+            for i in range(limit):
+                rows.append({
+                    "negRisk": i == 0,
+                    "liquidityNum": 100.0,
+                    "eventId": f"event-{offset}",
+                })
+            return rows
+
+        hard_arb.get_json=fake_get_json
+        try:
+            event_ids=hard_arb.discover_event_ids("https://gamma.test",250,10.0,80)
+        finally:
+            hard_arb.get_json=original
+
+        self.assertEqual(calls,[(0,100),(100,100),(200,50)])
+        self.assertEqual(event_ids,["event-0","event-100","event-200"])
 
 
 if __name__=="__main__":unittest.main()
