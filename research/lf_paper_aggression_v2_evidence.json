@@ -1,18 +1,16 @@
 {
   "schema": "polymarket_lf_paper_aggression_v2_evidence_v1",
   "evidence_state": "MORE_EVIDENCE_REQUIRED",
-  "source_main_sha": "5d3b99efeeda595073635132000171d394736342",
+  "source_main_sha": "429be256efe12b4138a9fe30418d12257827f824",
   "research_branch": "research/lf-paper-aggression-semantic-external-v2-20260825",
   "baseline_public_evidence": {
-    "alpha_factory_generated_utc": "2026-08-25T05:37:47Z",
-    "b1_raw_positive": 1,
+    "alpha_factory_generated_utc": "2026-08-25T06:59:26Z",
+    "b1_raw_positive": 0,
     "b1_maker_positive": 0,
-    "b1_best_raw_edge": 0.0058054,
-    "b1_best_maker_edge": -0.0172768,
     "b2_raw_positive": 8,
     "b2_maker_positive": 0,
-    "b2_best_raw_edge": 0.000690014,
-    "b2_best_maker_edge": -0.0000591112,
+    "b2_best_raw_edge": 0.000392623,
+    "b2_best_maker_edge": -0.000642303,
     "oos_trades": 0,
     "external_status": "BACKTESTING",
     "external_observations": 1134,
@@ -24,7 +22,22 @@
     "external_return_1h_1h_trades": 37,
     "external_return_1h_1h_normal_pnl_per_share": -0.014,
     "external_gate_pass_count": 0,
-    "direct_probability_feed_rows_on_main": 0
+    "direct_probability_feed_rows_observed": 0
+  },
+  "latest_live_smoke_b2": {
+    "coherent_rows": 43,
+    "coherent_raw_positive": 43,
+    "coherent_maker_positive": 1,
+    "maker_positive_market": "663583",
+    "maker_positive_slug": "will-the-iranian-regime-fall-by-the-end-of-2026",
+    "maker_positive_side": "NO",
+    "maker_entry_net_edge": 0.000325087,
+    "raw_expected_edge": 0.000820554,
+    "taker_net_edge": -0.00566821,
+    "hedges": 4,
+    "hedge_error": 0.257291,
+    "coherence_scope": "semantic:0.1429:1|semantic:0.1000:1|semantic:0.6000:3|semantic:0.1000:1",
+    "relation_aware_challenger_interpretation": "reject: three of four hedge links are one-token semantic relations below the challenger relation-quality gate"
   },
   "challenger": {
     "paper_only": true,
@@ -71,7 +84,7 @@
       "mapping_score_haircuts_confidence": true,
       "raw_features_are_not_converted_to_probabilities": true,
       "preserve_prior_feed_on_refresh_failure": true,
-      "latest_main_source_health_fix_inherited": true
+      "current_main_operational_fixes_inherited": true
     }
   },
   "hard_safety_invariants": {
@@ -94,9 +107,9 @@
     "no regression in drawdown, kill switch, concentration or paper-only execution boundaries"
   ],
   "interpretation": [
-    "The current evidence does not establish profitable LF alpha; B1/B2 are raw-positive but not maker-positive and external candidates are negative after costs.",
+    "Current public telemetry contains one static maker-positive B2 row, but its weak semantic hedge links fail the challenger relation-quality standard and it has no OOS execution evidence.",
     "This challenger increases search breadth and lowers only paper executable-edge/warm-up gates while retaining actual fee/slippage/VWAP rechecks.",
     "Statistical and semantic guards known to manufacture false opportunities are not relaxed merely to increase trade count.",
-    "External intelligence is now connected to the paper input surface, but it will abstain until a fresh explicit q_external survives mapping and freshness checks."
+    "External intelligence is connected to the paper input surface, but it abstains until a fresh explicit q_external survives mapping and freshness checks."
   ]
 }
