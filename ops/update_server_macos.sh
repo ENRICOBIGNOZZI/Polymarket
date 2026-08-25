@@ -51,6 +51,32 @@ print(f"{m['version']}\t{m['run_root']}\t{m['config']}\t{m['loop']}")
 PY
 }
 
+request_runtime_handoff() {
+  local target_sha="$1" meta version run_root_rel config_rel loop_rel marker tmp
+  meta="$(champion_meta)" || return 1
+  IFS=$'\t' read -r version run_root_rel config_rel loop_rel <<<"$meta"
+  [[ "$run_root_rel" =~ ^runs/[A-Za-z0-9._-]+$ ]] || return 1
+  marker="$APP_DIR/$run_root_rel/runtime_handoff.request"
+  mkdir -p "$(dirname "$marker")"
+  tmp="$marker.tmp.$$"
+  {
+    printf 'target_sha=%s\n' "$target_sha"
+    printf 'requested_ts=%s\n' "$(date +%s)"
+    printf 'reason=validated_deploy_handoff\n'
+  } > "$tmp"
+  mv "$tmp" "$marker"
+  log "Requested bounded runtime-owner handoff for $run_root_rel"
+}
+
+clear_runtime_handoff() {
+  local meta version run_root_rel config_rel loop_rel marker
+  meta="$(champion_meta)" || return 1
+  IFS=$'\t' read -r version run_root_rel config_rel loop_rel <<<"$meta"
+  [[ "$run_root_rel" =~ ^runs/[A-Za-z0-9._-]+$ ]] || return 1
+  marker="$APP_DIR/$run_root_rel/runtime_handoff.request"
+  rm -f "$marker"
+}
+
 paper_runtime_healthy() {
   local meta version run_root_rel config_rel loop_rel supervisor
   meta="$(champion_meta 2>/dev/null)" || return 1
@@ -174,6 +200,7 @@ if [[ "$OLD_SHA" == "$NEW_SHA" ]]; then
     write_status unhealthy "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
     fail "validated code is current but runtime configuration repair failed"
   fi
+  request_runtime_handoff "$NEW_SHA" || fail "could not request runtime-owner handoff"
   sudo -n /usr/local/sbin/polymarket-service-control restart || true
   if wait_for_runtime_health; then
     write_status repaired "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
@@ -269,6 +296,7 @@ rollback() {
     fi
   done
   write_status rollback "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
+  clear_runtime_handoff || true
   sudo -n /usr/local/sbin/polymarket-service-control restart || true
   exit 1
 }
@@ -281,6 +309,7 @@ log "Applying manifest-aware runtime configuration"
 bash "$APP_DIR/ops/apply_runtime_config_macos.sh" || rollback "runtime configuration failed"
 
 log "Restarting manifest-selected paper services"
+request_runtime_handoff "$NEW_SHA" || rollback "could not request runtime-owner handoff"
 sudo -n /usr/local/sbin/polymarket-service-control restart || rollback "service restart failed"
 
 log "Waiting for production health (up to $((RUNTIME_HEALTH_ATTEMPTS * 2)) seconds for process/readiness confirmation)"
