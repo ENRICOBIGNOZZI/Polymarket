@@ -129,9 +129,25 @@ class ExternalRequestPolicyTests(unittest.TestCase):
         self.assertEqual(len(seen), 2)
         self.assertEqual(sleeps, [1.25])
 
+    def test_gdelt_disables_inner_burst_retries(self) -> None:
+        retries_seen: list[int] = []
+
+        def delegate(url: str, *, timeout: float, retries: int):
+            retries_seen.append(retries)
+            return {"ok": True}
+
+        request = policy.wrap_request_json(
+            delegate,
+            gdelt_min_interval_seconds=0,
+            gdelt_rate_limit_backoff_seconds=0,
+        )
+        request("https://api.gdeltproject.org/api/v2/doc/doc?query=test&format=json", retries=5)
+        self.assertEqual(retries_seen, [1])
+
     def test_gdelt_429_gets_one_long_backoff_retry(self) -> None:
         clock = [100.0]
         sleeps: list[float] = []
+        retries_seen: list[int] = []
         attempts = [0]
 
         def monotonic() -> float:
@@ -142,6 +158,7 @@ class ExternalRequestPolicyTests(unittest.TestCase):
             clock[0] += seconds
 
         def delegate(url: str, *, timeout: float, retries: int):
+            retries_seen.append(retries)
             attempts[0] += 1
             if attempts[0] == 1:
                 raise RuntimeError("HTTP Error 429: Too Many Requests")
@@ -154,14 +171,38 @@ class ExternalRequestPolicyTests(unittest.TestCase):
             monotonic=monotonic,
             sleep=sleep,
         )
-        payload = request("https://api.gdeltproject.org/api/v2/doc/doc?query=test&format=json")
+        payload = request("https://api.gdeltproject.org/api/v2/doc/doc?query=test&format=json", retries=4)
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(attempts[0], 2)
+        self.assertEqual(retries_seen, [1, 1])
         self.assertEqual(sleeps, [17.0])
 
+    def test_gdelt_decode_failure_gets_long_backoff_retry(self) -> None:
+        sleeps: list[float] = []
+        attempts = [0]
+
+        def delegate(url: str, *, timeout: float, retries: int):
+            attempts[0] += 1
+            if attempts[0] == 1:
+                raise RuntimeError("request failed: Expecting value: line 1 column 1 (char 0)")
+            return {"ok": True}
+
+        request = policy.wrap_request_json(
+            delegate,
+            gdelt_min_interval_seconds=0,
+            gdelt_rate_limit_backoff_seconds=23.0,
+            sleep=sleeps.append,
+        )
+        self.assertEqual(
+            request("https://api.gdeltproject.org/api/v2/doc/doc?query=test&format=json"),
+            {"ok": True},
+        )
+        self.assertEqual(attempts[0], 2)
+        self.assertEqual(sleeps, [23.0])
+
     def test_default_gdelt_pacing_and_clob_window_are_conservative(self) -> None:
-        self.assertGreaterEqual(policy.wrap_request_json.__kwdefaults__["gdelt_min_interval_seconds"], 10.0)
-        self.assertGreaterEqual(policy.wrap_request_json.__kwdefaults__["gdelt_rate_limit_backoff_seconds"], 30.0)
+        self.assertGreaterEqual(policy.wrap_request_json.__kwdefaults__["gdelt_min_interval_seconds"], 15.0)
+        self.assertGreaterEqual(policy.wrap_request_json.__kwdefaults__["gdelt_rate_limit_backoff_seconds"], 45.0)
         self.assertLessEqual(policy.DEFAULT_CLOB_HISTORY_WINDOW_SECONDS, 7 * 86400)
 
     def test_non_target_url_is_unchanged(self) -> None:
