@@ -49,6 +49,16 @@ class V6MarketCacheRelayContractTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, workflow)
 
+    def test_relay_tolerates_only_a_bounded_planned_restart_window(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("for attempt in {1..18}; do", workflow)
+        self.assertIn("relay_verify_retry=", workflow)
+        self.assertIn("relay_verify_attempt=", workflow)
+        self.assertIn("sleep 5", workflow)
+        self.assertIn('test "$verified" = true', workflow)
+        self.assertIn("bounded 90 seconds", workflow)
+        self.assertNotIn("continue-on-error: true", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
