@@ -1,0 +1,60 @@
+{
+  "schema": "lf_v6_graph_queue_feasibility_evidence_v1",
+  "source": {
+    "github_run_id": "32876067911",
+    "git_sha": "7d856731b5a321a5e6dce582f128391d4f1e6f59",
+    "generated_utc": "2026-08-25T17:12:02+00:00",
+    "artifact": "champion-live-paper-smoke-32876067911"
+  },
+  "paper_only": true,
+  "bundle": {
+    "bundle_id": "GRAPH_HARD-1787677902-0",
+    "strategy": "GRAPH_RV",
+    "event_id": "837321",
+    "reported_expected_edge": 0.020000000000000018,
+    "execution_window_seconds": 180,
+    "reserved_notional_usd": 60.0,
+    "completed": false,
+    "realized_pnl_usd": 0.0,
+    "legs": [
+      {
+        "market_id": "3535881",
+        "limit_price": 0.34,
+        "queue_ahead_shares": 87867.9,
+        "target_shares": 61.2245,
+        "required_compatible_sell_flow_shares": 87929.1245,
+        "prior_900s_compatible_sell_flow_shares": 0.0,
+        "max_prior_180s_compatible_sell_flow_shares": 0.0,
+        "prior_capacity_ratio": 0.0,
+        "post_entry_180s_receive_time_compatible_sell_flow_shares": 0.0
+      },
+      {
+        "market_id": "3535883",
+        "limit_price": 0.35,
+        "queue_ahead_shares": 68370.5,
+        "target_shares": 61.2245,
+        "required_compatible_sell_flow_shares": 68431.7245,
+        "prior_900s_compatible_sell_flow_shares": 78.94,
+        "max_prior_180s_compatible_sell_flow_shares": 78.94,
+        "prior_capacity_ratio": 0.001153558953,
+        "required_to_observed_180s_flow_multiple": 866.882753,
+        "post_entry_180s_receive_time_compatible_sell_flow_shares": 0.0
+      },
+      {
+        "market_id": "3535882",
+        "limit_price": 0.29,
+        "queue_ahead_shares": 90959.3,
+        "target_shares": 61.2245,
+        "required_compatible_sell_flow_shares": 91020.5245,
+        "prior_900s_compatible_sell_flow_shares": 0.0,
+        "max_prior_180s_compatible_sell_flow_shares": 0.0,
+        "prior_capacity_ratio": 0.0,
+        "post_entry_180s_receive_time_compatible_sell_flow_shares": 0.0
+      }
+    ],
+    "bundle_min_prior_capacity_ratio": 0.0,
+    "bundle_min_realized_clearance_ratio": 0.0
+  },
+  "finding": "Current main admitted and reserved capital for a +2% quoted Graph/RV basket even though two legs had zero compatible receive-time-observed SELL flow in the preceding 900 seconds and the only leg with compatible flow had queue-plus-target demand about 867 times the maximum observed 180-second compatible flow. No compatible post-entry receive-time flow appeared inside the 180-second execution window. This is execution-feasibility evidence, not an alpha estimate.",
+  "required_next_gate": "Use causal receive-time, point-in-time queue/depth/fee/target snapshots and forward joint completion plus partial-fill abort/unwind economics before Graph/RV admission can support promotion. A recent-flow queue-capacity check is only a fail-closed feasibility prefilter, not a fill probability."
+}
