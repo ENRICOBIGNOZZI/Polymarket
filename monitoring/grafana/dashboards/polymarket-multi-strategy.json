@@ -11,7 +11,7 @@
       "id": 1,
       "type": "stat",
       "title": "TOTAL PAPER PNL",
-      "description": "Aggregate marked PnL of the five independent V5 model books.",
+      "description": "Aggregate marked PnL of the independent model books.",
       "gridPos": {"x": 0, "y": 0, "w": 4, "h": 4},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"refId": "A", "expr": "polymarket_runtime_pnl_usd or vector(0)", "instant": true}],
@@ -195,7 +195,7 @@
   ],
   "refresh": "5s",
   "schemaVersion": 39,
-  "tags": ["polymarket", "paper", "multi-strategy", "v5"],
+  "tags": ["polymarket", "paper", "multi-strategy", "current"],
   "templating": {
     "list": [
       {
@@ -217,8 +217,8 @@
   "time": {"from": "now-6h", "to": "now"},
   "timepicker": {},
   "timezone": "browser",
-  "title": "Polymarket Multi-Strategy V5",
+  "title": "Polymarket Multi-Strategy",
   "uid": "polymarket-multi-strategy-v5",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

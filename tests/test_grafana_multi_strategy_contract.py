@@ -13,8 +13,11 @@ DASHBOARD = ROOT / "monitoring" / "grafana" / "dashboards" / "polymarket-multi-s
 class GrafanaMultiStrategyContractTests(unittest.TestCase):
     def test_dashboard_has_total_and_each_strategy_views(self) -> None:
         dashboard = json.loads(DASHBOARD.read_text(encoding="utf-8"))
+        # UID is deliberately retained for in-place Grafana upgrades; changing it
+        # would create a second dashboard on already-provisioned servers.
         self.assertEqual(dashboard["uid"], "polymarket-multi-strategy-v5")
-        self.assertEqual(dashboard["title"], "Polymarket Multi-Strategy V5")
+        self.assertEqual(dashboard["title"], "Polymarket Multi-Strategy")
+        self.assertNotIn("v5", {str(tag).lower() for tag in dashboard.get("tags", [])})
         panels = dashboard["panels"]
         self.assertEqual(len({panel["id"] for panel in panels}), len(panels))
         titles = {panel["title"] for panel in panels}
@@ -49,15 +52,20 @@ class GrafanaMultiStrategyContractTests(unittest.TestCase):
             "polymarket_model_alive",
         ):
             self.assertIn(metric, joined)
+        self.assertIn('polymarket_model_fills_total{model=~"$model",action="all"}', joined)
 
         variables = dashboard["templating"]["list"]
         self.assertEqual([item["name"] for item in variables], ["model"])
         self.assertTrue(variables[0]["includeAll"])
         self.assertTrue(variables[0]["multi"])
 
-    def test_dashboard_queries_are_exported_and_is_default(self) -> None:
+    def test_dashboard_queries_are_exported_by_selected_live_adapter(self) -> None:
         dashboard = json.loads(DASHBOARD.read_text(encoding="utf-8"))
-        exporter = (ROOT / "monitoring" / "exporter_v5.py").read_text(encoding="utf-8")
+        champion = json.loads((ROOT / "config" / "live_champion.json").read_text(encoding="utf-8"))
+        version = int(champion["version"])
+        exporter_path = ROOT / "monitoring" / f"exporter_v{version}.py"
+        self.assertTrue(exporter_path.is_file(), f"missing exporter for selected live V{version}")
+        exporter = exporter_path.read_text(encoding="utf-8")
         compose = (ROOT / "docker-compose.monitoring.yml").read_text(encoding="utf-8")
         self.assertIn(
             "GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/polymarket-multi-strategy.json",
@@ -71,7 +79,15 @@ class GrafanaMultiStrategyContractTests(unittest.TestCase):
         )
         model_metrics = set(re.findall(r"\b(polymarket_model_[a-z0-9_]+)\b", expressions))
         for metric in model_metrics:
-            self.assertIn(metric, exporter)
+            self.assertIn(metric, exporter, f"Grafana queries {metric} but V{version} exporter does not publish it")
+
+        # The dashboard's total-fill query is label-sensitive. This exact schema
+        # mismatch previously made V6 fills appear as zero/absent even with ledger
+        # fills, so keep it as a hard contract rather than a visual smoke check.
+        if 'action="all"' in expressions:
+            self.assertIn('"polymarket_model_fills_total"', exporter)
+            self.assertIn('labels={**labels, "action": action}', exporter)
+            self.assertIn('(\"all\", \"fills\")', exporter)
 
     def test_prometheus_alerts_cover_allocator_and_each_model(self) -> None:
         alerts = (ROOT / "monitoring" / "prometheus" / "alerts.yml").read_text(encoding="utf-8")

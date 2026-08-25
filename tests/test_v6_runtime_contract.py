@@ -106,6 +106,21 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("v6_hard_arb_paper.py", loop)
         self.assertIn("polymarket_maker_paper", loop)
 
+    def test_maker_fill_replay_is_late_index_safe_and_queue_aware(self) -> None:
+        source = (ROOT / "src" / "maker_paper.cpp").read_text(encoding="utf-8")
+        self.assertIn("{o.condition_id}, o.created_ts, tape_until, 10000", source)
+        self.assertNotIn("std::max(o.created_ts, o.last_trade_ts), tape_until", source)
+        self.assertIn("if (cursor_contains(o, trade.id)) continue;", source)
+        self.assertIn("QUEUE_TRADE_DEPLETION", source)
+        self.assertIn("QUEUE_CANCEL_DEPLETION", source)
+        self.assertIn("SKIP_QUEUE", source)
+        self.assertIn("candidate >= ask - 1e-12", source)
+        loop = (ROOT / "scripts" / "paper_v6_loop.sh").read_text(encoding="utf-8")
+        self.assertIn("--improve-ticks 1", loop)
+        self.assertIn("--max-queue-multiple 6", loop)
+        self.assertIn("--min-edge 0.00020", loop)
+        self.assertIn("--max-order-usd 60", loop)
+
     def test_v6_research_smoke_preserves_base_live_selector(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "v6-research-smoke.yml").read_text()
         self.assertIn("fetch-depth: 0", workflow)
