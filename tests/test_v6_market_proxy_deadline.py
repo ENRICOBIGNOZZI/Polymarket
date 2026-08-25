@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -83,6 +85,22 @@ class V6MarketProxyDeadlineTests(unittest.TestCase):
 
         self.assertEqual(stale, p.rows)
 
+    def test_cache_timestamp_too_far_in_future_fails_closed(self) -> None:
+        p = self.make_proxy()
+        proxy.atomic(
+            p.cache,
+            {
+                "schema": proxy.CACHE_SCHEMA,
+                "timestamp": time.time() + proxy.MAX_CACHE_FUTURE_SKEW_SECONDS + 1.0,
+                "markets": [
+                    {"id": "future", "conditionId": "future", "liquidityNum": 25.0}
+                ],
+            },
+        )
+
+        self.assertFalse(p.load())
+        self.assertEqual(p.rows, [])
+
     def test_req_advertises_and_decodes_gzip(self) -> None:
         class Response:
             headers = {"Content-Encoding": "gzip"}
@@ -159,6 +177,158 @@ class V6MarketProxyDeadlineTests(unittest.TestCase):
         ) as urllib:
             self.assertEqual(proxy.clob_req("https://clob.invalid/markets"), {"transport": "urllib"})
             urllib.assert_called_once()
+
+    def test_gamma_req_prefers_ipv4_curl_without_double_spending_budget(self) -> None:
+        with mock.patch("scripts.v6_market_proxy.shutil.which", return_value="/usr/bin/curl"), mock.patch(
+            "scripts.v6_market_proxy.curl_req", return_value={"transport": "curl"}
+        ) as curl, mock.patch("scripts.v6_market_proxy.req") as urllib:
+            self.assertEqual(proxy.gamma_req("https://gamma.invalid/markets"), {"transport": "curl"})
+            curl.assert_called_once()
+            urllib.assert_not_called()
+
+        with mock.patch("scripts.v6_market_proxy.shutil.which", return_value="/usr/bin/curl"), mock.patch(
+            "scripts.v6_market_proxy.curl_req", side_effect=RuntimeError("curl down")
+        ), mock.patch("scripts.v6_market_proxy.req") as urllib:
+            with self.assertRaisesRegex(RuntimeError, "curl down"):
+                proxy.gamma_req("https://gamma.invalid/markets")
+            urllib.assert_not_called()
+
+        with mock.patch("scripts.v6_market_proxy.shutil.which", return_value=None), mock.patch(
+            "scripts.v6_market_proxy.req", return_value={"transport": "urllib"}
+        ) as urllib:
+            self.assertEqual(proxy.gamma_req("https://gamma.invalid/markets"), {"transport": "urllib"})
+            urllib.assert_called_once()
+
+    def test_waiter_reloads_atomic_relay_while_refresh_is_in_flight(self) -> None:
+        p = self.make_proxy()
+        lock_held = threading.Event()
+        release_leader = threading.Event()
+        result: list[list[dict[str, object]]] = []
+        errors: list[BaseException] = []
+
+        def leader() -> None:
+            p.refresh_lock.acquire()
+            lock_held.set()
+            release_leader.wait(2.0)
+            p.refresh_lock.release()
+
+        def waiter() -> None:
+            try:
+                result.append(p.markets({"limit": ["1"], "offset": ["0"]}))
+            except BaseException as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+
+        leader_thread = threading.Thread(target=leader)
+        waiter_thread = threading.Thread(target=waiter)
+        leader_thread.start()
+        self.assertTrue(lock_held.wait(1.0))
+        with mock.patch.object(proxy, "REFRESH_POLL_SECONDS", 0.01):
+            waiter_thread.start()
+            time.sleep(0.03)
+            proxy.atomic(
+                p.cache,
+                {
+                    "schema": proxy.CACHE_SCHEMA,
+                    "timestamp": int(time.time()),
+                    "markets": [
+                        {"id": "relay", "conditionId": "relay", "liquidityNum": 25.0}
+                    ],
+                },
+            )
+            waiter_thread.join(1.0)
+        release_leader.set()
+        leader_thread.join(1.0)
+
+        self.assertFalse(waiter_thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(result[0][0]["id"], "relay")
+
+    def test_atomic_relay_with_nonincreasing_mtime_replaces_expired_cache(self) -> None:
+        p = self.make_proxy()
+        proxy.atomic(
+            p.cache,
+            {
+                "schema": proxy.CACHE_SCHEMA,
+                "timestamp": int(time.time() - proxy.STALE_CACHE_SECONDS - 10.0),
+                "markets": [
+                    {"id": "expired", "conditionId": "expired", "liquidityNum": 25.0}
+                ],
+            },
+        )
+        self.assertTrue(p.load())
+        previous_mtime_ns = p.cache.stat().st_mtime_ns
+
+        # scp + atomic rename may install a different inode whose mtime is not
+        # greater than the file the running proxy previously observed.
+        proxy.atomic(
+            p.cache,
+            {
+                "schema": proxy.CACHE_SCHEMA,
+                "timestamp": int(time.time()),
+                "markets": [
+                    {"id": "relay", "conditionId": "relay", "liquidityNum": 25.0}
+                ],
+            },
+        )
+        os.utime(p.cache, ns=(previous_mtime_ns, previous_mtime_ns))
+
+        page = p.cached_page(1, 0, 10.0, proxy.STALE_CACHE_SECONDS)
+
+        self.assertIsNotNone(page)
+        assert page is not None
+        self.assertEqual(page[0]["id"], "relay")
+
+    def test_relay_replacing_cache_during_save_is_reloaded(self) -> None:
+        p = self.make_proxy()
+        real_atomic = proxy.atomic
+
+        def replace_after_save(path: Path, value: object) -> None:
+            real_atomic(path, value)
+            real_atomic(
+                path,
+                {
+                    "schema": proxy.CACHE_SCHEMA,
+                    "timestamp": int(time.time()),
+                    "markets": [
+                        {"id": "relay", "conditionId": "relay", "liquidityNum": 25.0}
+                    ],
+                },
+            )
+
+        with mock.patch("scripts.v6_market_proxy.atomic", side_effect=replace_after_save):
+            p.save([{"id": "upstream", "conditionId": "upstream", "liquidityNum": 25.0}])
+
+        page = p.cached_page(1, 0, 10.0, proxy.STALE_CACHE_SECONDS)
+
+        self.assertIsNotNone(page)
+        assert page is not None
+        self.assertEqual(page[0]["id"], "relay")
+        self.assertTrue(p.source.endswith("_cache"))
+
+    def test_cache_source_suffix_is_idempotent(self) -> None:
+        p = self.make_proxy()
+        p.rows = [{"id": "cached", "conditionId": "cached", "liquidityNum": 25.0}]
+        p.ts = time.time()
+        p.source = "unavailable"
+
+        for _ in range(3):
+            self.assertIsNotNone(p.cached_page(1, 0, 10.0, proxy.STALE_CACHE_SECONDS))
+
+        self.assertEqual(p.source, "unavailable_cache")
+
+    def test_waiter_never_serves_expired_relay_cache(self) -> None:
+        p = self.make_proxy()
+        p.rows = [{"id": "expired", "conditionId": "expired", "liquidityNum": 25.0}]
+        p.ts = time.time() - proxy.STALE_CACHE_SECONDS - 1.0
+        p.refresh_lock.acquire()
+        try:
+            with mock.patch.object(proxy, "REFRESH_WAIT_SECONDS", 0.03), mock.patch.object(
+                proxy, "REFRESH_POLL_SECONDS", 0.005
+            ):
+                with self.assertRaisesRegex(RuntimeError, "refresh already in progress"):
+                    p.markets({"limit": ["1"], "offset": ["0"]})
+        finally:
+            p.refresh_lock.release()
 
     def test_known_cached_market_skips_gamma(self) -> None:
         p = self.make_proxy()
