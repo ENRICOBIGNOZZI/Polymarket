@@ -35,12 +35,87 @@ def _replace_arg(flag: str, value: str) -> None:
         sys.argv[i + 1] = value
 
 
+def _consume_float_arg(flag: str, default: float) -> float:
+    try:
+        i = sys.argv.index(flag)
+    except ValueError:
+        return default
+    raw = sys.argv[i + 1] if i + 1 < len(sys.argv) else str(default)
+    del sys.argv[i : min(len(sys.argv), i + 2)]
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return value if value == value and abs(value) != float("inf") else default
+
+
 def _finite(value: Any, default: float = 0.0) -> float:
     try:
         out = float(value)
     except (TypeError, ValueError, OverflowError):
         return default
     return out if out == out and abs(out) != float("inf") else default
+
+
+def gate_inside_fill_probability(
+    raw_fill_probability: float,
+    *,
+    queue_ahead: float,
+    confidence: float,
+    min_inside_confidence: float,
+) -> float:
+    """Fail closed on low-confidence inside-spread priority.
+
+    In the maker engine a passive quote at the public bid carries the displayed
+    touch queue. A zero queue is therefore the explicit research marker for an
+    inside-spread improvement. The gate never changes at-touch fill estimates;
+    it only removes the modeled fill-probability benefit of improving inside
+    the spread when microstructure confidence is below the configured floor.
+    """
+    raw = max(0.0, min(1.0, _finite(raw_fill_probability, 0.0)))
+    threshold = max(0.0, min(1.0, _finite(min_inside_confidence, 0.0)))
+    if threshold <= 0.0:
+        return raw
+    if _finite(queue_ahead, 0.0) <= 1e-12 and _finite(confidence, 0.0) < threshold:
+        return 0.0
+    return raw
+
+
+def install_inside_confidence_gate(min_inside_confidence: float) -> None:
+    """Patch only the research process' inside-spread fill proxy.
+
+    The base engine calls ``micro_signal`` once per market and then evaluates
+    YES/NO quote economics. We retain that confidence in process-local context
+    and suppress only the zero-queue (inside-spread) fill-probability uplift
+    when confidence is below the requested research threshold. No production
+    module or persistent configuration is changed.
+    """
+    threshold = max(0.0, min(1.0, _finite(min_inside_confidence, 0.0)))
+    if threshold <= 0.0:
+        return
+    original_micro_signal = base.micro_signal
+    original_fill_probability_proxy = base.fill_probability_proxy
+    context = {"confidence": 1.0}
+
+    def gated_micro_signal(yes: Any, no: Any) -> tuple[float, float]:
+        fair, confidence = original_micro_signal(yes, no)
+        context["confidence"] = _finite(confidence, 0.0)
+        return fair, confidence
+
+    def gated_fill_probability_proxy(*args: Any, **kwargs: Any) -> float:
+        raw = original_fill_probability_proxy(*args, **kwargs)
+        queue_ahead = kwargs.get("queue_ahead")
+        if queue_ahead is None and args:
+            queue_ahead = args[0]
+        return gate_inside_fill_probability(
+            raw,
+            queue_ahead=_finite(queue_ahead, 0.0),
+            confidence=context["confidence"],
+            min_inside_confidence=threshold,
+        )
+
+    base.micro_signal = gated_micro_signal
+    base.fill_probability_proxy = gated_fill_probability_proxy
 
 
 def _recent_compatible_flow(
@@ -157,6 +232,11 @@ def main() -> int:
     tape_text = _arg_value("--trade-tape")
     config_text = _arg_value("--config")
     grace = int(os.environ.get("V6_MAKER_DEAD_FLOW_CANCEL_SECONDS", "20"))
+    min_inside_confidence = _consume_float_arg(
+        "--min-inside-confidence",
+        _finite(os.environ.get("V6_MAKER_MIN_INSIDE_CONFIDENCE", "0"), 0.0),
+    )
+    install_inside_confidence_gate(min_inside_confidence)
     if run_dir_text and tape_text:
         stats = recycle_dead_orders(Path(run_dir_text), Path(tape_text), grace_seconds=grace)
         if stats["cancelled"]:
