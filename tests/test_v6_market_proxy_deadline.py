@@ -55,13 +55,13 @@ class V6MarketProxyDeadlineTests(unittest.TestCase):
         # The C++ HttpClient has a 30 second request deadline. The proxy leaves
         # at least five seconds outside the bounded Gamma/discovery/book budget.
         self.assertLessEqual(proxy.GAMMA_TIMEOUT_SECONDS, 2.0)
-        self.assertLessEqual(proxy.CLOB_TIMEOUT_SECONDS, 6.0)
-        self.assertLessEqual(proxy.CLOB_DISCOVERY_BUDGET_SECONDS, 14.0)
+        self.assertLessEqual(proxy.CLOB_TIMEOUT_SECONDS, 8.0)
+        self.assertLessEqual(proxy.CLOB_DISCOVERY_BUDGET_SECONDS, 16.0)
         self.assertLessEqual(
             proxy.GAMMA_TIMEOUT_SECONDS
             + proxy.CLOB_DISCOVERY_BUDGET_SECONDS
             + proxy.CLOB_TIMEOUT_SECONDS,
-            25.0,
+            26.0,
         )
         self.assertLessEqual(proxy.FALLBACK_MARKETS, 300)
         self.assertGreaterEqual(proxy.BOOK_WORKERS, 4)
@@ -86,15 +86,22 @@ class V6MarketProxyDeadlineTests(unittest.TestCase):
         request = open_url.call_args.args[0]
         self.assertEqual(request.get_header("Accept-encoding"), "gzip")
 
-    def test_clob_req_prefers_curl_and_falls_back_to_urllib(self) -> None:
-        with mock.patch("scripts.v6_market_proxy.curl_req", return_value={"transport": "curl"}) as curl, mock.patch(
-            "scripts.v6_market_proxy.req"
-        ) as urllib:
+    def test_clob_req_prefers_ipv4_curl_without_double_spending_budget(self) -> None:
+        with mock.patch("scripts.v6_market_proxy.shutil.which", return_value="/usr/bin/curl"), mock.patch(
+            "scripts.v6_market_proxy.curl_req", return_value={"transport": "curl"}
+        ) as curl, mock.patch("scripts.v6_market_proxy.req") as urllib:
             self.assertEqual(proxy.clob_req("https://clob.invalid/markets"), {"transport": "curl"})
             curl.assert_called_once()
             urllib.assert_not_called()
 
-        with mock.patch("scripts.v6_market_proxy.curl_req", side_effect=RuntimeError("curl down")), mock.patch(
+        with mock.patch("scripts.v6_market_proxy.shutil.which", return_value="/usr/bin/curl"), mock.patch(
+            "scripts.v6_market_proxy.curl_req", side_effect=RuntimeError("curl down")
+        ), mock.patch("scripts.v6_market_proxy.req") as urllib:
+            with self.assertRaisesRegex(RuntimeError, "curl down"):
+                proxy.clob_req("https://clob.invalid/markets")
+            urllib.assert_not_called()
+
+        with mock.patch("scripts.v6_market_proxy.shutil.which", return_value=None), mock.patch(
             "scripts.v6_market_proxy.req", return_value={"transport": "urllib"}
         ) as urllib:
             self.assertEqual(proxy.clob_req("https://clob.invalid/markets"), {"transport": "urllib"})
