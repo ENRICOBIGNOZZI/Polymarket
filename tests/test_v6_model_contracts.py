@@ -51,7 +51,7 @@ class V6ModelContracts(unittest.TestCase):
 
     def test_runtime_routes_each_model_to_its_execution(self):
         loop=(ROOT/"scripts/paper_v6_loop.sh").read_text()
-        self.assertIn("v6_intent_guard.py",loop);self.assertIn("relation_intents_raw.csv",loop);self.assertIn("v6_micro_taker.py",loop);self.assertIn("v6_local_factor_intents.py",loop);self.assertIn("v6_hard_arb_paper.py",loop);self.assertIn("polymarket_maker_paper",loop)
+        self.assertIn("v6_intent_guard.py",loop);self.assertIn("relation_intents_raw.csv",loop);self.assertIn("v6_micro_taker_institutional.py",loop);self.assertIn("v6_dynamic_factor_intents.py",loop);self.assertIn("v6_hard_arb_paper.py",loop);self.assertIn("polymarket_maker_paper",loop);self.assertIn("v6_global_risk.py",loop)
         self.assertNotIn("polymarket_pca_stat_arb",loop);self.assertNotIn("build_v4_intents.py --strategy B1",loop)
 
     def test_micro_target_uses_last_pre_horizon_observation(self):

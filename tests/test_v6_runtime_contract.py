@@ -100,11 +100,12 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("--min-t-reversion 2.00", loop)
         self.assertIn("--fdr 0.10", loop)
         self.assertIn("--min-common-points 48", loop)
-        self.assertIn("v6_local_factor_intents.py", loop)
+        self.assertIn("v6_dynamic_factor_intents.py", loop)
         self.assertIn("v6_relation_intents.py", loop)
-        self.assertIn("v6_micro_taker.py", loop)
+        self.assertIn("v6_micro_taker_institutional.py", loop)
         self.assertIn("v6_hard_arb_paper.py", loop)
         self.assertIn("polymarket_maker_paper", loop)
+        self.assertIn("v6_global_risk.py", loop)
 
     def test_v6_research_smoke_preserves_base_live_selector(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "v6-research-smoke.yml").read_text()

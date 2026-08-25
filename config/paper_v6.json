@@ -65,10 +65,24 @@
     "report_seconds": 60,
     "assumed_fee_rate": 0.07,
     "assumed_fee_exponent": 1.0,
+    "maker_max_queue_ratio": 50.0,
     "structural_min_similarity": 0.25,
     "structural_max_bundles": 100,
     "hard_arb_max_events": 80,
     "hard_arb_min_net_edge": 0.00020,
-    "hard_arb_max_trade_usd": 60.0
+    "hard_arb_max_trade_usd": 60.0,
+    "global_risk": {
+      "startup_grace_seconds": 180,
+      "stale_seconds": 180,
+      "max_gross_fraction": 0.45,
+      "max_scenario_loss_fraction": 0.12,
+      "shock_multipliers": {
+        "maker": 0.45,
+        "micro_taker": 0.65,
+        "broker": 0.40,
+        "hard_arb": 0.10,
+        "external": 1.00
+      }
+    }
   }
 }
