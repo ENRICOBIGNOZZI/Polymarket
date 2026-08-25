@@ -68,22 +68,26 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
         result = self.run_policy("research/shadow-oos-report","Measurement-only shadow instrumentation.",["scripts/walk_forward_v4.py","scripts/runtime_action_report.py"],labels=["shadow-isolated"],draft=False)
         self.assertNotEqual(result.returncode, 0); self.assertIn("scripts/walk_forward_v4.py", result.stdout); self.assertIn("scripts/runtime_action_report.py", result.stdout)
 
-    def test_non_draft_integration_requires_numbered_and_approved_source(self):
-        rejected = self.run_policy("integration/alpha","No numbered provenance yet.",["config/paper_v5.json"],labels=[],draft=False)
-        self.assertNotEqual(rejected.returncode, 0); self.assertIn("numbered source research PR", rejected.stdout)
-        body = "Source research PR/branch/commit: #123\n"
+    def test_non_draft_integration_requires_exact_and_approved_source(self):
+        rejected = self.run_policy("integration/alpha","No exact provenance yet.",["config/paper_v5.json"],labels=[],draft=False)
+        self.assertNotEqual(rejected.returncode, 0); self.assertIn("must bind exact source provenance", rejected.stdout)
+        source_sha = "a" * 40
+        source_branch = "research/alpha"
+        body = f"Source research PR/branch/commit: #123 / `{source_branch}` / `{source_sha}`\n"
         missing_source = self.run_policy("integration/alpha",body,["config/paper_v5.json"],labels=["autonomous-promotion-approved"],draft=False)
-        self.assertNotEqual(missing_source.returncode, 0); self.assertIn("source research metadata", missing_source.stdout)
+        self.assertNotEqual(missing_source.returncode, 0); self.assertIn("trusted source research metadata", missing_source.stdout)
         approved_source = {
             "number": 123,
-            "headRefName": "research/alpha",
+            "headRefName": source_branch,
+            "headRefOid": source_sha,
             "body": "research candidate",
-            "comments": [{"createdAt":"2026-08-25T00:00:00Z","authorAssociation":"OWNER","body":"Research Governance — APPROVED_FOR_INTEGRATION"}],
+            "comments": [{"createdAt":"2026-08-25T00:00:00Z","authorAssociation":"OWNER","body":f"Research Governance — APPROVED_FOR_INTEGRATION\nExact validated head: `{source_sha}`."}],
             "reviews": [],
         }
         accepted = self.run_policy("integration/alpha",body,["config/paper_v5.json"],labels=["autonomous-promotion-approved"],draft=False,source_research=approved_source)
         self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
         self.assertIn("source_research_verdict: `APPROVED_FOR_INTEGRATION`", accepted.stdout)
+        self.assertIn(f"source_research_approved_sha: `{source_sha}`", accepted.stdout)
         self.assertIn("automatic_paper_promotion: `True`", accepted.stdout)
         self.assertIn("manual_approval_labels_required: `False`", accepted.stdout)
 
