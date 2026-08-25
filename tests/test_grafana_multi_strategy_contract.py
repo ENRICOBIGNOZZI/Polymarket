@@ -32,7 +32,7 @@ class GrafanaMultiStrategyContractTests(unittest.TestCase):
             "Model Health and Staleness",
             "V7 Evidence Eligibility by Model",
             "V7 Evidence Observation Coverage",
-            "V7 Stress-tested Evidence PnL",
+            "V7 Stress-tested Evidence PnL & Calibration",
         ):
             self.assertIn(required, titles)
 
@@ -59,6 +59,7 @@ class GrafanaMultiStrategyContractTests(unittest.TestCase):
             "polymarket_model_execution_evidence_markout_observations",
             "polymarket_model_execution_evidence_stressed_net_pnl_usd",
             "polymarket_model_execution_evidence_bootstrap_pvalue",
+            "polymarket_model_execution_evidence_brier_improvement",
         ):
             self.assertIn(metric, joined)
         self.assertIn('polymarket_model_fills_total{model=~"$model",action="all"}', joined)
