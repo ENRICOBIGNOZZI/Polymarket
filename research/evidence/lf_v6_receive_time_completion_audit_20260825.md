@@ -38,20 +38,22 @@ Event-time replay places the trade at `100.000s`, before arrival, and rejects it
 
 ## Fresh tape measurement
 
-The artifact from exact-main live smoke run `32871116566` contains 259 tape rows. Because the recorder stores both clocks, the observation lag can be measured directly:
+The artifact from exact-main live smoke run `32871116566` contains 259 tape rows. Because the recorder stores both clocks, the age of a row when it was appended can be measured directly:
 
 - median `received_ms - timestamp*1000`: about **439.9 seconds**;
-- maximum lag: about **898.9 seconds**;
-- **249/259 = 96.1%** of rows were observed more than 60 seconds after their exchange timestamp;
-- **211/259 = 81.5%** were observed more than 180 seconds later.
+- maximum: about **898.9 seconds**;
+- **249/259 = 96.1%** of rows were appended more than 60 seconds after their exchange timestamp;
+- **211/259 = 81.5%** were appended more than 180 seconds later.
 
-The current Graph/RV intents use a roughly 180-second execution window. Therefore the clock mismatch is not a negligible sub-second detail: in this smoke most public trades were delivered to the recorder with event-to-observation lag longer than an entire bundle execution window. This does not imply those rows would all create false fills — queue, token, side and price still matter — but it proves that event-time-only replay can materially misplace eligible flow.
+Important interpretation: this smoke intentionally starts the recorder with a **900-second lookback before posting the Graph/RV bundles**. These numbers therefore measure the deliberate backfill age in this smoke, not steady-state Data-API network latency. They should not be read as an estimate that 81.5% of live trades are normally delayed by more than three minutes.
 
-For the nine legs in the three current Graph/RV bundles, 80 matching-token tape rows were present in the artifact; all were received before the bundles were posted, so this particular smoke still correctly shows zero completed bundles. The defect is about the validity of forward completion evidence across polling windows, not a claim that the three current resting baskets should already be marked filled.
+They are still directly relevant to causality: the execution consumer reads an append-only polled tape, so restart/backfill, a delayed batch, or a transient collector failure can append an old exchange-time row after an order has already progressed. Event-time-only gating can then place that newly observed row into an earlier order lifetime. `received_ms` is already persisted precisely enough to prevent that leakage.
+
+For the nine legs in the three current Graph/RV bundles, 80 matching-token tape rows were present in the artifact; all were received before the bundles were posted, so this particular smoke still correctly shows zero completed bundles. The defect is about the validity of forward completion evidence across polling/recovery windows, not a claim that the three current resting baskets should already be marked filled.
 
 ## Fresh economic context
 
-The exact-main public smoke currently has a healthy recorder with 220 markets and 259 fresh trades, but three three-leg `GRAPH_RV` bundles remain resting with zero completion. Runtime realized PnL and OOS PnL are both zero. The current candidates therefore do not supply positive fill/PnL evidence, but they make causal completion measurement the immediate LF bottleneck.
+The exact-main public smoke currently has a healthy recorder with 220 markets and 259 fresh/backfilled trades, but three three-leg `GRAPH_RV` bundles remain resting with zero completion. Runtime realized PnL and OOS PnL are both zero. The current candidates therefore do not supply positive fill/PnL evidence, but they make causal completion measurement the immediate LF bottleneck.
 
 Forward maker calibration also remains negative/inconclusive: 32 sessions and 472 probes per policy, zero paired fills, and all join/improve/fade policies fail the paper-shadow gates. This evidence is not transferred numerically to Graph/RV, but it reinforces that fill accounting cannot be relaxed or inferred from quote edge.
 
