@@ -2,6 +2,14 @@ name: V6 market cache relay
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/v6-market-cache-relay.yml"
+      - "config/live_champion.json"
+      - "config/paper_v6.json"
+      - "scripts/v6_market_proxy.py"
+      - "scripts/v6_market_snapshot.py"
   schedule:
     - cron: "*/5 * * * *"
 

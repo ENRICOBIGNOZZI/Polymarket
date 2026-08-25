@@ -12,6 +12,8 @@ class V6MarketCacheRelayContractTests(unittest.TestCase):
     def test_relay_is_scheduled_read_only_for_code_and_atomic_for_cache(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn('cron: "*/5 * * * *"', workflow)
+        self.assertIn("  push:\n    branches: [main]", workflow)
+        self.assertIn('".github/workflows/v6-market-cache-relay.yml"', workflow)
         self.assertIn("permissions:\n  contents: read\n", workflow)
         self.assertIn("scripts/v6_market_snapshot.py", workflow)
         self.assertIn("market_proxy_cache.json.relay.${GITHUB_RUN_ID}", workflow)
