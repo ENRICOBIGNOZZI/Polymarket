@@ -201,7 +201,16 @@ jobs:
 
           case "$(uname -s)" in
             Darwin)
-              sudo -n /usr/local/sbin/polymarket-service-control status
+              for label in \
+                com.polymarket.awake \
+                com.polymarket.paper \
+                com.polymarket.exporter \
+                com.polymarket.prometheus \
+                com.polymarket.grafana; do
+                printf 'launchd_label=%s\n' "$label"
+                launchd_state="$(/bin/launchctl print "system/$label")"
+                printf '%s\n' "$launchd_state" | grep -q $'\tstate = running'
+              done
               /bin/launchctl print system/com.polymarket.autoupdate >/dev/null
               status_file="$HOME/.config/polymarket/autoupdate_status.env"
               test -s "$status_file"

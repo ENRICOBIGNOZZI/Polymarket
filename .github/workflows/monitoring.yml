@@ -49,7 +49,8 @@ jobs:
             tests/test_monitoring_v5_exporter.py \
             tests/test_v4_monitoring_contract.py \
             tests/test_grafana_fast_paper_contract.py \
-            tests/test_grafana_multi_strategy_contract.py -v
+            tests/test_grafana_multi_strategy_contract.py \
+            tests/test_server_health_readonly.py -v
           python3 -m py_compile \
             scripts/compact_strategy_logs.py \
             monitoring/exporter.py monitoring/exporter_v4.py \
