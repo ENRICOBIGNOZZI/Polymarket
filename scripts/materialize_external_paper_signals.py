@@ -2,8 +2,8 @@
 """Materialize fresh direct-probability external observations for the V5 paper engine.
 
 The external-intelligence worker publishes research observations to the telemetry
-branch.  The V5 engine consumes a compact five-column CSV keyed by market id,
-condition id, or slug.  This bridge intentionally accepts only observations with
+branch. The V5 engine consumes a compact five-column CSV keyed by market id,
+condition id, or slug. This bridge intentionally accepts only observations with
 an explicit numeric q_external; raw Binance/GDELT features remain research data
 and are never converted into probabilities by the data-health layer.
 """
@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
-FIELDS = ("key", "q_yes", "confidence", "source", "timestamp")
+FIELDS = ("market_key", "q_yes", "confidence", "source", "timestamp")
 
 
 def finite(value: Any, default: float = math.nan) -> float:
@@ -40,9 +40,8 @@ def integer(value: Any, default: int = 0) -> int:
 
 def iter_rows(path: Path) -> Iterable[dict[str, Any]]:
     opener = gzip.open if path.suffix == ".gz" else open
-    mode = "rt"
     try:
-        with opener(path, mode, encoding="utf-8") as handle:
+        with opener(path, "rt", encoding="utf-8") as handle:
             for line in handle:
                 if not line.strip():
                     continue
@@ -60,15 +59,15 @@ def candidate(row: dict[str, Any], *, now: int, max_age_seconds: int) -> dict[st
     q_yes = finite(row.get("q_external"))
     confidence = finite(row.get("confidence"))
     timestamp = integer(row.get("observed_ts") or row.get("retrieved_ts"))
-    key = str(row.get("market_id") or row.get("condition_id") or row.get("slug") or "").strip()
+    market_key = str(row.get("market_id") or row.get("condition_id") or row.get("slug") or "").strip()
     source = str(row.get("source") or "external").strip() or "external"
-    if not key or not (0.0 < q_yes < 1.0) or not (0.0 < confidence <= 1.0) or timestamp <= 0:
+    if not market_key or not (0.0 < q_yes < 1.0) or not (0.0 < confidence <= 1.0) or timestamp <= 0:
         return None
     age = now - timestamp
     if age < -300 or age > max_age_seconds:
         return None
     return {
-        "key": key,
+        "market_key": market_key,
         "q_yes": f"{q_yes:.12g}",
         "confidence": f"{confidence:.12g}",
         "source": source,
@@ -84,11 +83,12 @@ def materialize(rows: Iterable[dict[str, Any]], *, now: int, max_age_seconds: in
         value = candidate(row, now=now, max_age_seconds=max_age_seconds)
         if value is None:
             continue
-        current = latest.get(value["key"])
+        key = value["market_key"]
+        current = latest.get(key)
         if current is None or (value["_timestamp"], value["_confidence"], value["source"]) > (
             current["_timestamp"], current["_confidence"], current["source"]
         ):
-            latest[value["key"]] = value
+            latest[key] = value
     return [latest[key] for key in sorted(latest)]
 
 
@@ -97,10 +97,8 @@ def write_csv(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", dir=path.parent, delete=False) as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDS)
         writer.writeheader()
-        count = 0
         for row in rows:
             writer.writerow({field: row.get(field, "") for field in FIELDS})
-            count += 1
         temporary = Path(handle.name)
     os.replace(temporary, path)
     if path.stat().st_size <= 0:
