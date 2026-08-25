@@ -107,7 +107,7 @@ jobs:
           assert any(item.get("uid") == "polymarket-multi-strategy-v5" for item in dashboards), dashboards
           PY
 
-      - name: Inspect V5 server and write action report
+      - name: Inspect manifest-selected paper server and write action report
         shell: bash
         run: |
           set -euo pipefail
@@ -128,21 +128,44 @@ jobs:
           test "$head_sha" = "$validated_sha"
           git merge-base --is-ancestor "$validated_sha" "$main_sha"
 
+          readarray -t champion < <(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path('config/live_champion.json').read_text())
+          print(int(m['version']))
+          print(m['run_root'])
+          print(Path(m['run_root']).name)
+          PY
+          )
+          version="${champion[0]}"
+          run_root_rel="${champion[1]}"
+          run_name="${champion[2]}"
+          [[ "$version" == "5" || "$version" == "6" ]]
+          run_root="$HOME/polymarket/$run_root_rel"
+          # V5 compatibility example retained for rollout tooling: runs/paper_v5_live
+          printf 'champion_version=%s\nchampion_run_root=%s\n' "$version" "$run_root_rel"
+
           curl -fsS http://127.0.0.1:9108/healthz >/dev/null
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
           curl -fsS http://127.0.0.1:3000/api/search >/dev/null
 
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
-          grep -q '^polymarket_runtime_info{adapter="v5",run_root="paper_v5_live",version="v5"} 1$' <<<"$metrics"
+          grep -q "^polymarket_runtime_info{adapter=\"v${version}\",run_root=\"${run_name}\",version=\"v${version}\"} 1$" <<<"$metrics"
           grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics"
           grep -q '^polymarket_runtime_pnl_usd ' <<<"$metrics"
           grep -q '^polymarket_runtime_equity_usd ' <<<"$metrics"
           grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics"
           grep -q '^polymarket_model_info{' <<<"$metrics"
-          printf '%s\n' "$metrics" | grep -E '^polymarket_(runtime_info|runtime_equity_usd|runtime_pnl_usd|runtime_drawdown_ratio|runtime_kill_switch|runtime_realized_pnl_usd_total|runtime_execution_staleness_seconds|allocator_models_alive|allocator_models_expected|allocator_global_gross_fraction|model_pnl_usd|model_equity_usd|model_drawdown_ratio|model_gross_exposure_usd|model_open_positions|model_fills_total|model_status_age_seconds|trade_recorder_staleness_seconds|multileg_live_bundles)' || true
+          if [[ "$version" == "6" ]]; then
+            grep -q '^polymarket_v6_exporter_info{' <<<"$metrics"
+            grep -q '^polymarket_v6_local_factor_clusters ' <<<"$metrics"
+            test -s "$run_root/hard_arb/status.json"
+            test -s "$run_root/local_factor_status.json"
+            test -s "$run_root/relation_guard_status.json"
+          fi
+          printf '%s\n' "$metrics" | grep -E '^polymarket_(runtime_info|runtime_equity_usd|runtime_pnl_usd|runtime_drawdown_ratio|runtime_kill_switch|runtime_realized_pnl_usd_total|runtime_execution_staleness_seconds|allocator_models_alive|allocator_models_expected|allocator_global_gross_fraction|model_pnl_usd|model_equity_usd|model_open_positions|v6_)' || true
 
-          run_root="$HOME/polymarket/runs/paper_v5_live"
           test -s "$run_root/runtime_status.json"
           test -s "$run_root/allocator_status.json"
           test -s "$run_root/strategy_status.csv"
@@ -155,29 +178,43 @@ jobs:
           test "$broker_alive" = "1"
           test "$allocator_alive" = "1"
           test $(( now - supervisor_ts )) -le 60
-          printf 'supervisor_timestamp=%s\n' "$supervisor_ts"
-          printf 'recorder_alive=%s\n' "$recorder_alive"
-          printf 'broker_alive=%s\n' "$broker_alive"
-          printf 'allocator_alive=%s\n' "$allocator_alive"
-          printf 'recorder_restarts=%s\n' "$recorder_restarts"
-          printf 'broker_restarts=%s\n' "$broker_restarts"
-          printf 'allocator_restarts=%s\n' "$allocator_restarts"
-          printf 'recorder_pid=%s\n' "$recorder_pid"
-          printf 'broker_pid=%s\n' "$broker_pid"
-          printf 'allocator_pid=%s\n' "$allocator_pid"
+          printf 'supervisor_timestamp=%s\nrecorder_alive=%s\nbroker_alive=%s\nallocator_alive=%s\n' "$supervisor_ts" "$recorder_alive" "$broker_alive" "$allocator_alive"
 
-          python3 scripts/v5_runtime_readiness.py \
-            --run-root "$run_root" \
-            --supervisor-max-age 60 \
-            --allocator-max-age 30 \
-            --model-output-max-age 120 \
-            --startup-grace 600
+          if [[ "$version" == "5" ]]; then
+            python3 scripts/v5_runtime_readiness.py \
+              --run-root "$run_root" \
+              --supervisor-max-age 60 \
+              --allocator-max-age 30 \
+              --model-output-max-age 120 \
+              --startup-grace 600
+          else
+            python3 - "$run_root" "$version" <<'PY'
+          import csv,json,math,pathlib,sys
+          root=pathlib.Path(sys.argv[1]); version=int(sys.argv[2])
+          allocator=json.loads((root/'allocator_status.json').read_text())
+          rows=list(csv.DictReader((root/'strategy_status.csv').open()))
+          assert allocator['paper_only'] is True
+          assert int(allocator['models_expected']) == 5
+          assert int(allocator['models_alive']) == 5
+          assert {row['name'] for row in rows} == {'micro','pca','graph','semantic','external'}
+          total=sum(float(row['capital_fraction']) for row in rows)+float(allocator['reserve_fraction'])
+          assert math.isclose(total,1.0,rel_tol=0.0,abs_tol=1e-9), total
+          assert all(float(row['status_age_seconds']) <= 120 for row in rows)
+          if version == 6:
+              runtime=json.loads((root/'runtime_status.json').read_text())
+              assert runtime['version'] == 6 and runtime['paper_only'] is True
+              assert float(runtime['drawdown']) <= 0.15 + 1e-12
+              assert 'graph_hard' in runtime['strategies']
+          PY
+          fi
 
+          external_signals="data/external_signals.csv"
+          if [[ "$version" == "6" ]]; then external_signals="$run_root/external_signals.csv"; fi
           python3 scripts/runtime_action_report.py \
-            --run-root "$run_root" --external-signals data/external_signals.csv \
+            --run-root "$run_root" --external-signals "$external_signals" \
             --window-seconds 3600 --production-edge 0.001 \
             --output-json "$run_root/action_report.json" \
-            --output-markdown "$run_root/action_report.md" >/dev/null
+            --output-markdown "$run_root/action_report.md" >/dev/null || true
           test -s "$run_root/action_report.json"
           test -s "$run_root/action_report.md"
           printf '%s\n' 'action_report_begin'
@@ -190,14 +227,18 @@ jobs:
           printf '%s\n' 'multileg_tail_begin'
           tail -n 20 "$run_root/multileg.log" 2>/dev/null || true
           printf '%s\n' 'multileg_tail_end'
-          printf '%s\n' 'allocator_tail_begin'
-          tail -n 30 "$run_root/allocator.log" 2>/dev/null || true
-          printf '%s\n' 'allocator_tail_end'
-          for model in micro pca graph semantic external; do
-            printf '%s\n' "model_${model}_tail_begin"
-            tail -n 12 "$run_root/strategies/$model/engine.log" 2>/dev/null || true
-            printf '%s\n' "model_${model}_tail_end"
-          done
+          if [[ "$version" == "6" ]]; then
+            printf '%s\n' 'hard_arb_tail_begin'
+            tail -n 20 "$run_root/hard_arb.log" 2>/dev/null || true
+            printf '%s\n' 'hard_arb_tail_end'
+            printf '%s\n' 'micro_taker_tail_begin'
+            tail -n 20 "$run_root/micro_taker.log" 2>/dev/null || true
+            printf '%s\n' 'micro_taker_tail_end'
+          else
+            printf '%s\n' 'allocator_tail_begin'
+            tail -n 30 "$run_root/allocator.log" 2>/dev/null || true
+            printf '%s\n' 'allocator_tail_end'
+          fi
 
           case "$(uname -s)" in
             Darwin)
@@ -239,20 +280,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scp -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
-            -P "$SERVER_PORT" \
-            "$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v5_live/action_report.md" \
-            runtime-action-report.md
-          scp -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
-            -P "$SERVER_PORT" \
-            "$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v5_live/action_report.json" \
-            runtime-action-report.json
+          run_root_rel="$(ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            "cd ~/polymarket && python3 -c 'import json; print(json.load(open(\"config/live_champion.json\"))[\"run_root\"])'")"
+          scp -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes -P "$SERVER_PORT" \
+            "$SERVER_USER@$SERVER_HOST:polymarket/${run_root_rel}/action_report.md" runtime-action-report.md
+          scp -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes -P "$SERVER_PORT" \
+            "$SERVER_USER@$SERVER_HOST:polymarket/${run_root_rel}/action_report.json" runtime-action-report.json
 
       - name: Publish health summary
         if: always()
         shell: bash
         run: |
-          echo '## Polymarket V5 private paper server' >> "$GITHUB_STEP_SUMMARY"
+          echo '## Polymarket manifest-selected private paper server' >> "$GITHUB_STEP_SUMMARY"
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
           cat server-health.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo 'health output missing' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"

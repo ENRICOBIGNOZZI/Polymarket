@@ -55,11 +55,11 @@ paper_runtime_healthy() {
   local meta version run_root_rel config_rel loop_rel supervisor
   meta="$(champion_meta 2>/dev/null)" || return 1
   IFS=$'\t' read -r version run_root_rel config_rel loop_rel <<<"$meta"
-  [[ "$version" =~ ^[0-9]+$ ]] || return 1
+  [[ "$version" == "5" || "$version" == "6" ]] || return 1
   supervisor="$APP_DIR/$run_root_rel/runtime_supervisor.csv"
   [[ -s "$supervisor" ]] || return 1
 
-  if (( version >= 5 )); then
+  if (( version == 5 )); then
     "$PYTHON_BIN" "$APP_DIR/scripts/v5_runtime_readiness.py" \
       --run-root "$APP_DIR/$run_root_rel" \
       --supervisor-max-age 60 \
@@ -69,20 +69,41 @@ paper_runtime_healthy() {
     return
   fi
 
-  "$PYTHON_BIN" - "$supervisor" <<'PY'
+  "$PYTHON_BIN" - "$supervisor" "$version" "$APP_DIR/$run_root_rel" <<'PY'
 import csv
+import json
+import math
 import sys
 import time
 from pathlib import Path
 supervisor = Path(sys.argv[1])
+version = int(sys.argv[2])
+run_root = Path(sys.argv[3])
 with supervisor.open(newline='', encoding='utf-8') as handle:
     rows = list(csv.DictReader(handle))
 assert rows
 row = rows[-1]
 assert row.get('recorder_alive') == '1'
 assert row.get('broker_alive') == '1'
-assert row.get('terminal_alive') == '1'
+assert row.get('allocator_alive') == '1'
 assert time.time() - float(row['timestamp']) <= 60
+allocator = json.loads((run_root / 'allocator_status.json').read_text())
+with (run_root / 'strategy_status.csv').open(newline='', encoding='utf-8') as handle:
+    strategies = list(csv.DictReader(handle))
+assert allocator.get('paper_only') is True
+assert int(allocator.get('models_expected', 0)) == 5
+assert int(allocator.get('models_alive', 0)) == 5
+assert {item.get('name') for item in strategies} == {'micro', 'pca', 'graph', 'semantic', 'external'}
+total = float(allocator.get('reserve_fraction', 0.0)) + sum(float(item['capital_fraction']) for item in strategies)
+assert math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9)
+assert all(float(item['status_age_seconds']) <= 120 for item in strategies)
+if version >= 6:
+    runtime = json.loads((run_root / 'runtime_status.json').read_text())
+    assert runtime.get('version') == 6 and runtime.get('paper_only') is True
+    assert float(runtime.get('drawdown', 1.0)) <= 0.15 + 1e-12
+    assert 'graph_hard' in runtime.get('strategies', {})
+    assert (run_root / 'hard_arb' / 'status.json').is_file()
+    assert (run_root / 'local_factor_status.json').is_file()
 PY
 }
 
@@ -99,6 +120,10 @@ full_runtime_healthy() {
     grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics" || return 1
     grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics" || return 1
     grep -q '^polymarket_model_info{' <<<"$metrics" || return 1
+  fi
+  if (( version >= 6 )); then
+    grep -q '^polymarket_v6_exporter_info{' <<<"$metrics" || return 1
+    grep -q '^polymarket_v6_local_factor_clusters ' <<<"$metrics" || return 1
   fi
   curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1 || return 1
   curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 || return 1
@@ -186,14 +211,21 @@ ctest --test-dir build --output-on-failure
   tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py \
   tests/test_monitoring_latest_exporter.py tests/test_monitoring_v5_exporter.py \
   tests/test_grafana_fast_paper_contract.py tests/test_grafana_multi_strategy_contract.py \
-  tests/test_multi_strategy_paper.py tests/test_v5_runtime_readiness.py -v
+  tests/test_multi_strategy_paper.py tests/test_v5_runtime_readiness.py \
+  tests/test_v4_monitoring_contract.py tests/test_v6_runtime_contract.py \
+  tests/test_v6_model_contracts.py -v
 "$PYTHON_BIN" -m py_compile \
-  monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_v5.py monitoring/exporter_latest.py \
+  monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_v5.py \
+  monitoring/exporter_v6.py monitoring/exporter_latest.py \
   scripts/multi_strategy_paper.py scripts/v5_runtime_readiness.py \
   scripts/build_v4_intents.py scripts/merge_v4_intents.py \
-  scripts/walk_forward_v4.py scripts/tiny_live_pilot.py
-bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh ops/apply_runtime_config_macos.sh
+  scripts/walk_forward_v4.py scripts/tiny_live_pilot.py scripts/v6_*.py
+bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh \
+  scripts/v6_live_smoke_once.sh ops/apply_runtime_config_macos.sh
+"$PYTHON_BIN" -m json.tool config/live_champion.json >/dev/null
 "$PYTHON_BIN" -m json.tool config/paper_v5.json >/dev/null
+"$PYTHON_BIN" -m json.tool config/paper_v6.json >/dev/null
+"$PYTHON_BIN" -m json.tool config/v6_model_architecture.json >/dev/null
 "$PYTHON_BIN" -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
 
 log "Candidate validation passed; staging production build"
@@ -245,7 +277,7 @@ rm -rf build.previous
 if [[ -d build ]]; then mv build build.previous; fi
 mv build.next build
 
-log "Applying V5-aware runtime configuration"
+log "Applying manifest-aware runtime configuration"
 bash "$APP_DIR/ops/apply_runtime_config_macos.sh" || rollback "runtime configuration failed"
 
 log "Restarting manifest-selected paper services"

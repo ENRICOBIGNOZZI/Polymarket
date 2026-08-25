@@ -48,15 +48,17 @@ jobs:
             tests/test_monitoring_latest_exporter.py \
             tests/test_monitoring_v5_exporter.py \
             tests/test_v4_monitoring_contract.py \
+            tests/test_v6_runtime_contract.py \
             tests/test_grafana_fast_paper_contract.py \
             tests/test_grafana_multi_strategy_contract.py \
             tests/test_server_health_readonly.py -v
           python3 -m py_compile \
-            scripts/compact_strategy_logs.py \
+            scripts/compact_strategy_logs.py scripts/v6_runtime_status.py \
             monitoring/exporter.py monitoring/exporter_v4.py \
-            monitoring/exporter_v5.py monitoring/exporter_latest.py
+            monitoring/exporter_v5.py monitoring/exporter_v6.py monitoring/exporter_latest.py
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-latest.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-fast-paper.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
-          bash -n scripts/monitoring_up.sh scripts/monitoring_down.sh
+          python3 -m json.tool config/paper_v6.json >/dev/null
+          bash -n scripts/monitoring_up.sh scripts/monitoring_down.sh scripts/v6_live_smoke_once.sh
           docker compose -f docker-compose.monitoring.yml config >/dev/null

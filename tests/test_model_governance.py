@@ -16,14 +16,15 @@ class ModelGovernanceContractTest(unittest.TestCase):
     def test_live_runtime_uses_automatic_validated_promotion_policy(self):
         manifest = json.loads((ROOT / "config" / "live_champion.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["schema_version"], 1)
-        self.assertEqual(manifest["version"], 5)
-        self.assertEqual(manifest["loop"], "scripts/paper_v5_loop.sh")
-        self.assertEqual(manifest["config"], "config/paper_v5.json")
-        self.assertEqual(manifest["run_root"], "runs/paper_v5_live")
+        version = int(manifest["version"])
+        self.assertIn(version, (5, 6))
+        self.assertEqual(manifest["loop"], f"scripts/paper_v{version}_loop.sh")
+        self.assertEqual(manifest["config"], f"config/paper_v{version}.json")
+        self.assertEqual(manifest["run_root"], f"runs/paper_v{version}_live")
         self.assertEqual(manifest["deployment_ref"], "paper-validated")
         self.assertEqual(manifest["promotion_policy"], "automatic validated integration")
         completed = subprocess.run(["bash", "scripts/paper_latest_loop.sh", "--print-champion"], cwd=ROOT, check=True, capture_output=True, text=True, timeout=10)
-        self.assertIn("paper_champion version=5", completed.stdout)
+        self.assertIn(f"paper_champion version={version}", completed.stdout)
         self.assertIn("deploy_ref=paper-validated", completed.stdout)
 
     def test_registry_covers_workflows_and_preserves_separate_authorities(self):

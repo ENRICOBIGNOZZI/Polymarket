@@ -4,12 +4,13 @@
   "canonical_branch": "main",
   "deployment_ref": "paper-validated",
   "live_champion_manifest": "config/live_champion.json",
+  "model_architecture_manifest": "config/v6_model_architecture.json",
   "scheduler_registry": "config/scheduler_registry.json",
   "context_policy": {
     "scope": "entire_repository",
     "require_full_worktree_inventory": true,
     "inventory_command": "git ls-files",
-    "rule": "Every scheduler must begin from the complete repository state for its checked-out revision and may specialize only after the project-wide context snapshot is available. Narrow path triggers do not redefine the scheduler's knowledge boundary."
+    "rule": "Every scheduler must begin from the complete repository state for its checked-out revision, read the live champion and V6 model architecture manifests, and may specialize only after the project-wide context snapshot is available. Research that reintroduces live expert averaging, semantic-price averaging or heterogeneous global PCA is non-promotable."
   },
   "required_surfaces": [
     ".github/workflows",
@@ -36,7 +37,7 @@
     "canonical_operator_url": "http://mamma-portfolio.tail1bae85.ts.net",
     "dashboard_uid": "polymarket-multi-strategy-v5",
     "dashboard_file": "monitoring/grafana/dashboards/polymarket-multi-strategy.json",
-    "rule": "The canonical URL never changes when the live paper champion changes; the dashboard behind / must track the active champion."
+    "rule": "The canonical URL and dashboard UID remain stable while the dashboard data source follows the manifest-selected paper champion."
   },
   "security": {
     "private_keys_in_repository": false,
