@@ -155,6 +155,14 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('hard_arb/status.json', deploy)
         self.assertIn('polymarket-multi-strategy-v5', deploy)
 
+    def test_remote_verifiers_are_compatible_with_macos_bash3(self):
+        health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(encoding="utf-8")
+        deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(encoding="utf-8")
+        for workflow in (health, deploy):
+            self.assertNotIn("readarray", workflow)
+            self.assertNotIn("mapfile", workflow)
+            self.assertIn("IFS=$'\\t' read -r", workflow)
+
     def test_server_health_serializes_with_paper_deploy(self):
         health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(encoding="utf-8")
         deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(encoding="utf-8")
