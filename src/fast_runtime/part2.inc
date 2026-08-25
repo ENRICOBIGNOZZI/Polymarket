@@ -115,10 +115,12 @@ public:
         std::int64_t exchange_ms = 0;
         if (root.is_array()) {
             for (const auto& value : root.as_array()) {
-                if (value.is_object()) apply_event_locked(value.as_object(), affected, exchange_ms);
+                if (value.is_object()) {
+                    apply_event_locked(value.as_object(), affected, exchange_ms, received_ms);
+                }
             }
         } else if (root.is_object()) {
-            apply_event_locked(root.as_object(), affected, exchange_ms);
+            apply_event_locked(root.as_object(), affected, exchange_ms, received_ms);
         }
         if (affected.empty()) return;
         for (const auto& market_id : affected) {
@@ -145,10 +147,14 @@ public:
 
     void resync_books() {
         const auto fresh = api_.fetch_books(tokens_);
+        const auto received_ms = now_ms();
         std::scoped_lock lock(mutex_);
-        for (const auto& [token, book] : fresh) books_[token] = book;
+        for (const auto& [token, book] : fresh) {
+            books_[token] = book;
+            book_received_ms_[token] = received_ms;
+        }
         ++rest_resyncs_;
-        evaluate_all_locked(0, now_ms());
+        evaluate_all_locked(0, received_ms);
     }
 
     void reload_external() {
@@ -259,4 +265,3 @@ public:
         };
         atomic_write(run_dir_ / "fast_arb_status.json", json::serialize(status) + "\n");
     }
-
