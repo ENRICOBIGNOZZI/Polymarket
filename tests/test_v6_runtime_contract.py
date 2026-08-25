@@ -151,19 +151,20 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("SKIP_QUEUE", source)
         self.assertIn("candidate >= ask - 1e-12", source)
         loop = (ROOT / "scripts" / "paper_v6_loop.sh").read_text(encoding="utf-8")
+        cfg = json.loads((ROOT / "config" / "paper_v6.json").read_text(encoding="utf-8"))
         self.assertIn("--improve-ticks 1", loop)
         self.assertIn("--max-queue-multiple 6", loop)
         self.assertIn('--min-edge "$INTENT_MIN_EDGE"', loop)
-
-        edge_default = re.search(r'INTENT_MIN_EDGE="\$\{V6_INTENT_MIN_EDGE:-([0-9.]+)\}"', loop)
-        self.assertIsNotNone(edge_default)
-        self.assertGreaterEqual(float(edge_default.group(1)), 0.00005)
-
-        max_order_values = [float(x) for x in re.findall(r"--max-order-usd\s+([0-9.]+)", loop)]
-        max_trade_values = [float(x) for x in re.findall(r"--max-trade-usd\s+([0-9.]+)", loop)]
-        self.assertTrue(max_order_values)
-        self.assertTrue(max_trade_values)
-        self.assertTrue(all(0.0 < x <= 125.0 for x in max_order_values + max_trade_values))
+        self.assertIn('INTENT_MIN_EDGE="${V6_INTENT_MIN_EDGE:-$CONFIG_INTENT_MIN_EDGE}"', loop)
+        self.assertGreaterEqual(float(cfg["v6"]["intent_min_edge"]), 0.00005)
+        self.assertIn('--max-order-usd "$MAX_TRADE_USD"', loop)
+        self.assertIn('--max-trade-usd "$MAX_TRADE_USD"', loop)
+        self.assertIn('--max-trade-usd "$HARD_ARB_MAX_TRADE_USD"', loop)
+        self.assertLessEqual(float(cfg["max_trade_usd"]), 125.0)
+        self.assertLessEqual(float(cfg["v6"]["hard_arb_max_trade_usd"]), 125.0)
+        numeric_order_values = [float(x) for x in re.findall(r"--max-order-usd\s+([0-9.]+)", loop)]
+        numeric_trade_values = [float(x) for x in re.findall(r"--max-trade-usd\s+([0-9.]+)", loop)]
+        self.assertTrue(all(0.0 < x <= 125.0 for x in numeric_order_values + numeric_trade_values))
 
     def test_v6_research_smoke_preserves_base_live_selector(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "v6-research-smoke.yml").read_text()
