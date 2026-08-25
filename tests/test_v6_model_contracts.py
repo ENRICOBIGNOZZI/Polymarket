@@ -19,17 +19,29 @@ FIELDS = [
 
 
 class V6ModelContracts(unittest.TestCase):
-    def test_live_champion_is_v6_paper(self):
+    def test_v6_candidate_preserves_paper_execution_separation(self):
         live = json.loads((ROOT / "config/live_champion.json").read_text())
         cfg = json.loads((ROOT / "config/paper_v6.json").read_text())
         arch = json.loads((ROOT / "config/v6_model_architecture.json").read_text())
-        self.assertEqual(live["version"], 6)
-        self.assertEqual(live["loop"], "scripts/paper_v6_loop.sh")
         self.assertTrue(cfg["v6"]["paper_only"])
+        self.assertTrue(cfg["multi_strategy"]["paper_only"])
         self.assertTrue(arch["paper_only"])
         self.assertFalse(arch["allow_authenticated_execution"])
         self.assertLessEqual(float(cfg["max_drawdown"]), 0.15)
         self.assertLessEqual(float(cfg["max_gross_fraction"]), 0.45)
+        self.assertLessEqual(float(cfg["multi_strategy"]["global_max_drawdown"]), 0.15)
+        self.assertLessEqual(float(cfg["multi_strategy"]["global_max_gross_fraction"]), 0.45)
+
+        # The same V6 code must be testable before promotion. Research branches
+        # deliberately keep V5 selected; integration branches may switch only the
+        # selector to V6 after independent evidence and governance approval.
+        self.assertIn(int(live["version"]), (5, 6))
+        if int(live["version"]) == 6:
+            self.assertEqual(live["loop"], "scripts/paper_v6_loop.sh")
+            self.assertEqual(live["config"], "config/paper_v6.json")
+        else:
+            self.assertEqual(live["loop"], "scripts/paper_v5_loop.sh")
+            self.assertEqual(live["config"], "config/paper_v5.json")
 
     def test_capital_sleeves_are_exhaustive(self):
         v6 = json.loads((ROOT / "config/paper_v6.json").read_text())["v6"]
