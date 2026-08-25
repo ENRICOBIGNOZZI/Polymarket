@@ -125,11 +125,45 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
         self.assertIn("unapproved model/runtime work must remain in research", completed.stdout)
         self.assertIn("MORE_EVIDENCE_REQUIRED", completed.stdout)
 
+    def test_sensitive_draft_integration_rejects_unapproved_source(self):
+        completed = self.run_policy(
+            "integration/aggressive-v5-draft",
+            ["src/engine.cpp", "config/live_champion.json"],
+            draft=True,
+            body="Source research PR/branch/commit: #154\n",
+            source_research={
+                "number": 154,
+                "headRefName": "research/aggressive-v5-execution",
+                "body": "research candidate",
+                "comments": [
+                    {
+                        "createdAt": "2026-08-25T00:00:00Z",
+                        "body": "Research Governance — MORE_EVIDENCE_REQUIRED",
+                    }
+                ],
+                "reviews": [],
+            },
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("unapproved model/runtime work must remain in research", completed.stdout)
+        self.assertIn("MORE_EVIDENCE_REQUIRED", completed.stdout)
+
+    def test_sensitive_draft_integration_requires_numbered_source(self):
+        completed = self.run_policy(
+            "integration/unlinked-v5-draft",
+            ["src/engine.cpp", "config/live_champion.json"],
+            draft=True,
+            body="staged model candidate without approved research provenance",
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("sensitive integration PR must link a numbered source research PR", completed.stdout)
+        self.assertIn("must provide approved source research metadata", completed.stdout)
+
     def test_sensitive_integration_accepts_explicit_approved_source_verdict(self):
         completed = self.run_policy(
             "integration/approved-v5",
             ["src/engine.cpp", "config/live_champion.json"],
-            draft=False,
+            draft=True,
             body="Source research PR/branch/commit: #200\n",
             source_research={
                 "number": 200,
@@ -152,7 +186,7 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
         completed = self.run_policy(
             "integration/regressed-v5",
             ["src/engine.cpp"],
-            draft=False,
+            draft=True,
             body="Source research PR/branch/commit: #201\n",
             source_research={
                 "number": 201,

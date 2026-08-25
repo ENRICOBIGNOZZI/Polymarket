@@ -110,8 +110,7 @@ jobs:
 
           source_args=()
           head_ref="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["ref"])')"
-          draft="$(python3 -c 'import json,os; print(str(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"].get("draft", False)).lower())')"
-          if [[ "$head_ref" == integration/* && "$draft" == "false" ]]; then
+          if [[ "$head_ref" == integration/* ]]; then
             source_number="$(python3 - <<'PY'
           import json, os, re
           event = json.load(open(os.environ['GITHUB_EVENT_PATH']))
