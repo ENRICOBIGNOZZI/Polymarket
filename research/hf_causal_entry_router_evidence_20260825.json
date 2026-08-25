@@ -1,0 +1,82 @@
+{
+  "complete_set_maker_control": {
+    "fade1": {
+      "fills": 0,
+      "one_sided_fills": 0
+    },
+    "improve1": {
+      "fills": 2,
+      "markout_60s_per_share": -0.00136895,
+      "one_sided_fills": 2,
+      "pnl_ex_rewards_usd": -2.45681
+    },
+    "independent_sessions": 20,
+    "interpretation": "Passive static complete-set edge is not transferable evidence for pair completion or B2 execution.",
+    "join": {
+      "fills": 1,
+      "markout_60s_per_share": -0.002,
+      "one_sided_fills": 1,
+      "pnl_ex_rewards_usd": -0.138941
+    },
+    "paired_fills": 0,
+    "probes_per_policy": 292,
+    "wilson_95_upper_pair_fill_rate": 0.009181
+  },
+  "decision": "REJECT_FIXED_PRESSURE_TAKER_USE_CAUSAL_FORWARD_ROUTER",
+  "fast_arb_shadow": {
+    "completed_opportunity_lifetimes": 8,
+    "end_to_end_latency_p99_ms": 1742.93,
+    "hard_executable": 0,
+    "interpretation": "Static maker edge is abundant, but the latency/fillability evidence does not support promotion; lowering the edge threshold is not the structural fix.",
+    "maker_complete_set_shadow_executable": 173,
+    "maker_shadow_positive_share_at_plus_10bps_stress": 0.9479769,
+    "observations": 1451,
+    "opportunity_lifetime_p10_ms": 731.6
+  },
+  "micro_next_window_common_sample": {
+    "aggregate_fees_usd": 0.281634,
+    "aggregate_notional_usd": 10.27572,
+    "aggregate_shares": 1783.05782,
+    "common_markets_with_next_window": 49,
+    "common_side": "YES",
+    "filled_markets_in_candidate": 129,
+    "future_mid_changed_rows": 0,
+    "horizon_seconds": 90,
+    "interpretation": "The fixed pressure extrapolation crossed the spread without subsequent mid-price movement on the common next-window sample.",
+    "model_predicted_net_edge_pnl_usd": 1.417918,
+    "positive_realized_rows": {
+      "1.5x_cost": 0,
+      "1x_cost": 0,
+      "2x_cost": 0
+    },
+    "realized_markout_pnl_usd": {
+      "1.5x_cost": -1.63846,
+      "1x_cost": -1.49515,
+      "2x_cost": -1.78178
+    }
+  },
+  "next_experiment": {
+    "discovery": "Keep broad paper discovery and low positive-edge thresholds.",
+    "execution": "Route unproven positive micro signals to maker-shadow rather than forcing taker fills.",
+    "required_future_features": [
+      "receive-time event chronology",
+      "microprice",
+      "L1/L3/L5 depth and imbalance",
+      "OFI",
+      "queue state",
+      "submit/cancel latency",
+      "45s/60s/300s markouts"
+    ],
+    "taker_gate": "Permit paper taker only after strictly prior, completed forward markouts have a positive one-sided 95% lower bound under 2x costs."
+  },
+  "schema_version": 1,
+  "sources": {
+    "aggressive_candidate_pr": 192,
+    "aggressive_candidate_sha": "f79477355fd18c9ff05cf2f361589acbc86a4d0a",
+    "aggressive_live_smoke_run": 32814991374,
+    "fast_arb_shadow_run": 32813664945,
+    "forward_maker_calibration_run": 32814733368,
+    "next_window_live_smoke_run": 32815091535,
+    "next_window_main_sha": "810c98da0661826bc19aae032b9893e867f238c7"
+  }
+}
