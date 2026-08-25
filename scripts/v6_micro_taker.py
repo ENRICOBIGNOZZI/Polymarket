@@ -91,9 +91,22 @@ class Market:
         self.yes = ids[yi]
         self.no = ids[ni]
         self.liq = max(0.0, finite(raw.get("liquidityNum"), 0.0))
+        self.fee_rate = math.nan
+        self.fee_exp = 1.0
+        self.fee_taker_only = True
+        self.fee_source = "unresolved"
         fs = raw.get("feeSchedule") if isinstance(raw.get("feeSchedule"), dict) else {}
-        self.fee_rate = max(0.0, finite(fs.get("rate"), 0.07))
-        self.fee_exp = max(0.0, finite(fs.get("exponent"), 1.0))
+        if fs:
+            self.fee_rate = max(0.0, finite(fs.get("rate"), 0.0))
+            self.fee_exp = max(0.0, finite(fs.get("exponent"), 1.0))
+            self.fee_taker_only = bool(fs.get("takerOnly", True))
+            self.fee_source = "gamma_schedule"
+        elif raw.get("feesEnabled") is False:
+            # Match the C++ market parser: an explicit Gamma feesEnabled=false
+            # is authoritative evidence of a zero-fee market. The old Python
+            # path incorrectly substituted the conservative 7% fee curve here.
+            self.fee_rate = 0.0
+            self.fee_source = "gamma_disabled"
 
 
 class Book:
@@ -195,6 +208,63 @@ def fetch_books(clob: str, markets: list[Market]) -> dict[str, Book]:
     return out
 
 
+def resolve_fee_details(clob: str, markets: list[Market]) -> dict[str, Any]:
+    """Resolve only markets whose fee state Gamma did not settle.
+
+    This mirrors PolymarketApi::fetch_fee_details: explicit Gamma fee schedules
+    win, feesEnabled=false means zero, otherwise query CLOB metadata then the
+    token fee-rate endpoint. Only if both public sources fail do we retain the
+    old conservative 7% curve. The fallback therefore stays fail-closed without
+    charging known zero-fee markets a fictitious fee.
+    """
+    counts: dict[str, int] = {
+        "gamma_schedule": 0,
+        "gamma_disabled": 0,
+        "clob_market": 0,
+        "clob_fee_rate": 0,
+        "conservative_fallback": 0,
+    }
+    for m in markets:
+        if math.isfinite(m.fee_rate):
+            counts[m.fee_source] = counts.get(m.fee_source, 0) + 1
+            continue
+        resolved = False
+        try:
+            raw = request_json(clob + "/clob-markets/" + urllib.parse.quote(m.condition, safe=""))
+            fd = raw.get("fd") if isinstance(raw, dict) and isinstance(raw.get("fd"), dict) else None
+            if fd is not None:
+                rate = finite(fd.get("r"))
+                if math.isfinite(rate) and rate >= 0.0:
+                    m.fee_rate = rate
+                    m.fee_exp = max(0.0, finite(fd.get("e"), 1.0))
+                    m.fee_taker_only = bool(fd.get("to", True))
+                    m.fee_source = "clob_market"
+                    resolved = True
+        except Exception:
+            pass
+        if not resolved:
+            try:
+                raw = request_json(clob + "/fee-rate?token_id=" + urllib.parse.quote(m.yes, safe=""))
+                base_fee = finite(raw.get("base_fee")) if isinstance(raw, dict) else math.nan
+                if math.isfinite(base_fee) and base_fee >= 0.0:
+                    m.fee_rate = base_fee / 10000.0
+                    m.fee_exp = 1.0
+                    m.fee_taker_only = True
+                    m.fee_source = "clob_fee_rate"
+                    resolved = True
+            except Exception:
+                pass
+        if not resolved:
+            m.fee_rate = 0.07
+            m.fee_exp = 1.0
+            m.fee_taker_only = True
+            m.fee_source = "conservative_fallback"
+        counts[m.fee_source] = counts.get(m.fee_source, 0) + 1
+    counts["markets"] = len(markets)
+    counts["resolved_without_fallback"] = len(markets) - counts.get("conservative_fallback", 0)
+    return counts
+
+
 def features(y: Book, n: Book) -> tuple[list[float], float, float] | None:
     mid = y.mid()
     spread = max(y.spread(), n.spread())
@@ -290,8 +360,10 @@ def main() -> int:
     samples = state.get("samples") if isinstance(state.get("samples"), list) else []
     realized_total = finite(state.get("realized_pnl_total"), 0.0)
     failures: list[str] = []
+    fee_stats: dict[str, Any] = {}
     try:
         markets = discover(gamma, args.markets, args.min_liquidity)
+        fee_stats = resolve_fee_details(clob, markets)
         books = fetch_books(clob, markets)
     except Exception as exc:
         markets = []
@@ -472,6 +544,7 @@ def main() -> int:
         "best_edge": best_edge,
         "realized_pnl_last_tick": realized,
         "realized_pnl_total": realized_total,
+        "fee_stats": fee_stats,
         "failures": failures,
     }
     atomic_json(state_path, state)
@@ -493,6 +566,7 @@ def main() -> int:
             "labeled_samples": labeled_samples,
             "target_staleness_max_seconds": state["target_staleness_max_seconds"],
             "label_stats_last_tick": label_stats,
+            "fee_stats": fee_stats,
         },
     )
     append_csv(
@@ -535,6 +609,7 @@ def main() -> int:
                 "equity": equity,
                 "realized_pnl_total": realized_total,
                 "best_edge": best_edge,
+                "fee_stats": fee_stats,
                 "target_staleness_max_seconds": state["target_staleness_max_seconds"],
                 "killed": killed,
             },
