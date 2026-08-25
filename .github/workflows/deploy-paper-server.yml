@@ -151,13 +151,32 @@ jobs:
           if [[ -n "${EXPECTED_VALIDATED_SHA:-}" ]]; then
             test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
           fi
+
+          readarray -t champion < <(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path('config/live_champion.json').read_text())
+          print(int(m['version']))
+          print(Path(m['run_root']).name)
+          PY
+          )
+          version="${champion[0]}"
+          run_name="${champion[1]}"
+          [[ "$version" == "5" || "$version" == "6" ]]
+
           curl -fsS http://127.0.0.1:9108/healthz >/dev/null
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
-          grep -q '^polymarket_runtime_info{adapter="v5",run_root="paper_v5_live",version="v5"} 1$' <<<"$metrics"
-          grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics"
+          grep -q "^polymarket_runtime_info{adapter=\"v${version}\",run_root=\"${run_name}\",version=\"v${version}\"} 1$" <<<"$metrics"
           grep -q '^polymarket_runtime_pnl_usd ' <<<"$metrics"
-          grep -q '^polymarket_model_info{' <<<"$metrics"
+          grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics"
           grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics"
+          grep -q '^polymarket_model_info{' <<<"$metrics"
+          if [[ "$version" == "6" ]]; then
+            grep -q '^polymarket_v6_exporter_info{' <<<"$metrics"
+            test -s "runs/${run_name}/hard_arb/status.json"
+            test -s "runs/${run_name}/local_factor_status.json"
+            test -s "runs/${run_name}/runtime_status.json"
+          fi
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
           grafana_search="$(curl -fsS http://127.0.0.1:3000/api/search)"
@@ -165,6 +184,8 @@ jobs:
           printf 'server_head=%s\n' "$head_sha"
           printf 'paper_validated=%s\n' "$validated_sha"
           printf 'origin_main=%s\n' "$main_sha"
+          printf 'champion_version=%s\n' "$version"
+          printf 'champion_run_root=%s\n' "$run_name"
           case "$(uname -s)" in
             Darwin) sudo -n /usr/local/sbin/polymarket-service-control status ;;
             Linux)
