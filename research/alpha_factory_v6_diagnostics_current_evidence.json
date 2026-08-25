@@ -1,0 +1,79 @@
+{
+  "schema": "polymarket_alpha_factory_v6_diagnostics_evidence_v1",
+  "research_only": true,
+  "captured_utc": "2026-08-25T10:15:05Z",
+  "base_main_sha": "5e26fca4f3dacdc52ec316336e927ed5efc095b8",
+  "champion_version": 6,
+  "live_smoke": {
+    "generated_ts": 1787652905,
+    "trade_recorder": {
+      "status": "healthy",
+      "markets": 220,
+      "new_trades": 118,
+      "errors": 0,
+      "trade_age_seconds": 58
+    },
+    "micro_maker": {
+      "signals": 13,
+      "posted": 8,
+      "resting": 8,
+      "positions": 0,
+      "reserved_usd": 180.0
+    },
+    "multileg": {
+      "bundles": 0,
+      "trades_processed": 118
+    },
+    "portfolio": {
+      "equity_usd": 10000.0,
+      "gross_exposure_usd": 180.0,
+      "reserved_cash_usd": 680.0,
+      "realized_pnl_usd": 0.0,
+      "oos_trades": 0
+    }
+  },
+  "forward_maker_calibration": {
+    "sessions": 25,
+    "probes_per_policy": 367,
+    "pair_fills_by_policy": {
+      "fade1": 0,
+      "improve1": 0,
+      "join": 0
+    },
+    "pair_fill_wilson_upper": 0.007318103561061013,
+    "improve1_total_pnl_ex_rewards_usd": -2.456809049864078,
+    "improve1_markout_60_bid_per_share": -0.0010905783921425982,
+    "join_total_pnl_ex_rewards_usd": -0.13894351315407616,
+    "join_markout_60_bid_per_share": -0.0020000000000000018,
+    "eligible_for_paper_shadow": false
+  },
+  "external_information": {
+    "best_current_candidate": "external:binance:return_1h:21600s",
+    "oos_predictions": 2098,
+    "trades": 46,
+    "normal_pnl_per_share": 1.1269999999999998,
+    "one_point_five_x_pnl_per_share": -0.05549999999999996,
+    "two_x_pnl_per_share": -0.012,
+    "bootstrap_pvalue": 0.10589410589410589,
+    "positive_fold_fraction": 0.25,
+    "gate_pass": false
+  },
+  "diagnosis": {
+    "material_control_plane_gap": "The incumbent Alpha Factory diagnostics remain B1/B2/B3-centric after V6 promotion and do not expose the exact-main V6 micro-maker or multileg zero-fill state.",
+    "current_execution_conclusion": "Fresh trade data coexist with 8 resting maker orders and zero maker positions; this is execution/fillability evidence, not a stale-data justification for lowering taker economics.",
+    "current_external_conclusion": "The freshest external lead is positive only at the normal proxy cost and fails 1.5x/2x cost stress and fold stability, so it is not promotable alpha."
+  },
+  "challenger_contract": {
+    "state": "MORE_EVIDENCE_REQUIRED",
+    "success": [
+      "V6 diagnostics are visible to Alpha Factory decision logic without inferring absent fills or alpha.",
+      "Zero-fill with healthy trade data routes to candidate-specific queue/fillability research.",
+      "RV no-bundle state routes to LF admission attribution instead of blind significance/relation relaxation."
+    ],
+    "rollback": [
+      "Any diagnostic parser changes champion selection, model thresholds, sizing, max drawdown, concentration, deployment, or authenticated execution.",
+      "Malformed or missing telemetry is interpreted as positive evidence rather than unavailable evidence.",
+      "The adapter creates duplicate model research instead of routing evidence to HF/LF owners."
+    ]
+  }
+}
