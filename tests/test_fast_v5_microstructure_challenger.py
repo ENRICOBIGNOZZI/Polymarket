@@ -43,6 +43,30 @@ class V5MicrostructureSemanticsTest(unittest.TestCase):
         self.assertGreaterEqual(result["incumbent_q_yes"], 0.48)
         self.assertLessEqual(result["incumbent_q_yes"], 0.50)
 
+    def test_fixed_micro_extrapolation_can_manufacture_coherent_book_gross_edge(self) -> None:
+        bid, ask = 0.48, 0.50
+        bid_depth, ask_depth = 100.0, 50.0
+        mid = 0.5 * (bid + ask)
+        spread = ask - bid
+        imbalance = (bid_depth - ask_depth) / (bid_depth + ask_depth)
+        micro = mod.microprice(bid, ask, bid_depth, ask_depth)
+        self.assertAlmostEqual(micro - mid, 0.5 * spread * imbalance, places=12)
+
+        impact_multiplier = 2.50
+        imbalance_strength = 0.75
+        scale = 0.5 * spread
+        adjustment = (
+            impact_multiplier * (micro - mid)
+            + imbalance_strength * scale * imbalance
+        )
+        extrapolated_q = mid + adjustment
+        gross_edge = extrapolated_q - ask
+        threshold_imbalance = 1.0 / (impact_multiplier + imbalance_strength)
+
+        self.assertGreater(imbalance, threshold_imbalance)
+        self.assertGreater(gross_edge, 0.0)
+        self.assertAlmostEqual(gross_edge, 0.0008333333333333334, places=12)
+
     def test_active_v5_micro_is_terminal_probability_semantics(self) -> None:
         source = (ROOT / "src" / "engine.cpp").read_text(encoding="utf-8")
         config = json.loads((ROOT / "config" / "paper_v5.json").read_text(encoding="utf-8"))
