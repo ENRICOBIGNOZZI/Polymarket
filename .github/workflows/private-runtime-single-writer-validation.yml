@@ -147,6 +147,7 @@ jobs:
           python3 - "$source_dir" "$evidence" <<'PY'
           import json
           import sys
+          import time
           from pathlib import Path
 
           source = Path(sys.argv[1])
