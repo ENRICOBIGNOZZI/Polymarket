@@ -17,6 +17,29 @@ class WorkflowYamlContractTest(unittest.TestCase):
                     offenders.append(f"{path.relative_to(ROOT)}:{line_number}:{line!r}")
         self.assertEqual(offenders, [], "workflow heredoc terminator escaped its YAML block scalar")
 
+    def test_explicit_non_scheduler_workflows_are_unscheduled_and_non_authoritative(self) -> None:
+        validator = (ROOT / "scripts" / "validate_scheduler_registry.py").read_text(encoding="utf-8")
+        explicit = (
+            ".github/workflows/grafana-access.yml",
+            ".github/workflows/private-runtime-single-writer-validation.yml",
+        )
+        forbidden = (
+            "gh pr merge",
+            "git push origin HEAD:main",
+            "git push origin main",
+            "git push origin paper-validated",
+            "POLYMARKET_DEPLOY_REF=",
+        )
+        for relative in explicit:
+            self.assertIn(f'"{relative}"', validator)
+            path = ROOT / relative
+            if not path.exists():
+                continue
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("\n  schedule:\n", text, relative)
+            for token in forbidden:
+                self.assertNotIn(token, text, f"{relative} contains forbidden authority: {token}")
+
     def test_deploy_workflow_keeps_all_remote_terminators_indented(self) -> None:
         deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(
             encoding="utf-8"
