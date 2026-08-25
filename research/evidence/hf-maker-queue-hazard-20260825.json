@@ -16,12 +16,17 @@
   },
   "admission": {
     "signals_first_tick": 42,
+    "logged_candidate_actions": 41,
     "posted_orders": 8,
     "queue_skipped": 33,
     "improved_orders": 0,
     "resting_orders_end": 8,
     "reserved_cash_end_usd": 180.0,
-    "max_queue_multiple_gate": 6.0
+    "max_queue_multiple_gate": 6.0,
+    "candidate_tokens_with_any_trade_in_full_900s_tape": 2,
+    "candidate_tokens_with_zero_trade_in_full_900s_tape": 39,
+    "posted_tokens_with_any_trade_in_full_900s_tape": 0,
+    "posted_tokens_with_compatible_trade_in_full_900s_tape": 0
   },
   "posted_order_queue_multiples": [
     3.999997,
@@ -40,8 +45,8 @@
   "structural_finding": {
     "status": "BLOCKING_EXECUTION_DEFECT",
     "decision": "FLOW_HAZARD_REQUIRED",
-    "reason": "The maker sizes many orders at approximately 25% of displayed bid touch before applying a queue-ahead multiple gate. For non-cash-binding orders this mechanically makes queue_ahead / own_shares approximately 4, so a max_queue_multiple=6 gate admits large dead queues even when observed post-entry compatible sell flow is zero. The forward-causal smoke therefore demonstrates that queue-multiple admission alone is not a fill-hazard model.",
-    "required_challenger": "Gate or rank maker entry/reprice by causal compatible contra-flow hazard and edge-weighted fill probability; cancel/recycle dead queues; allow inside-spread improvement only when incremental price cost is paid by post-cost edge. Do not convert to taker solely to manufacture fills."
+    "reason": "The forward-causal smoke is selecting almost entirely inactive tail contracts: 39/41 logged signal candidates had zero token trades anywhere in the recorder's full 900-second tape, and all 8 actually posted tokens had zero trades. In addition, the maker sizes many orders at approximately 25% of displayed bid touch before applying a queue-ahead multiple gate. For non-cash-binding orders this mechanically makes queue_ahead / own_shares approximately 4, so a max_queue_multiple=6 gate can admit large dead queues even when observed causal contra-flow hazard is zero. Liquidity and static edge are therefore not valid substitutes for short-horizon fill activity.",
+    "required_challenger": "Apply a causal activity/fill-hazard screen before reserving maker capital, rank positive-flow candidates by post-cost edge times a conservative fill-capacity proxy, cancel/recycle dead queues, and allow inside-spread improvement only when incremental price cost is paid by post-cost edge. Do not convert to taker solely to manufacture fills."
   },
   "safety": {
     "paper_only": true,
