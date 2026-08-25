@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v5_capital_time_netting_research_v1",
   "status": "MORE_EVIDENCE_REQUIRED",
-  "hypothesis": "When independently generated V5 sleeve opportunities compete for finite portfolio capital, ranking only by one-times-cost edge can waste capital on slow or cost-fragile trades; a fail-closed selector using two-times-cost robust edge per expected capital-hour may improve incremental realized paper PnL without changing any expert or execution model.",
+  "hypothesis": "When independently generated V5 sleeve opportunities compete for finite portfolio capital, the exact incumbent allocation may waste capital on slow or cost-fragile trades; a fail-closed counterfactual using two-times-cost robust edge per expected capital-hour may improve incremental realized paper PnL without changing any expert or execution model.",
   "incumbent": {
     "validated_sha": "d6513fdbdf5ad8c8b7926b53fb7bba5acdab1257",
     "version": 5,
@@ -50,24 +50,27 @@
   "challenger_contract": {
     "scope": "offline portfolio admission ablation only",
     "selection_information": "point-in-time forecast fields only",
-    "incumbent_score": "net_edge_1x",
+    "incumbent_selection": "exact incumbent_selected flags from the point-in-time decision/replay ledger; never reconstructed from a guessed score",
     "challenger_score": "min(net_edge under 1x, 1.5x, 2x costs) / expected_holding_hours",
     "two_x_cost_gate": "required positive before challenger admission",
-    "capital_budget": "identical between incumbent and challenger within each decision window",
+    "capital_budget": "challenger capital in each decision window may not exceed the actual incumbent capital used in that same window or the declared global cap",
+    "zero_activity_rule": "if incumbent used zero capital in a window, challenger must also use zero",
     "risk_limits": "unchanged",
     "live_champion_manifest": "unchanged",
     "authenticated_execution": false
   },
   "promotion_requirements": [
     "At least two chronological future OOS folds with point-in-time expected holding time available before selection.",
-    "Positive incremental realized net paper PnL versus the incumbent selector at 1x, 1.5x, and 2x execution costs.",
+    "Exact incumbent decision flags and identical replay rows for incumbent/challenger comparison.",
+    "Positive incremental realized net paper PnL versus the exact incumbent at 1x, 1.5x, and 2x execution costs.",
     "At least 50% of OOS folds positive at 2x costs.",
     "Challenger drawdown no worse than incumbent under every tested cost stress.",
-    "No use of future realized PnL, resolution outcome, or post-decision holding duration in selection.",
+    "No use of future realized PnL, resolution outcome, or post-decision realized holding duration in selection.",
+    "No increase in capital used relative to the incumbent in any decision window.",
     "No weakening of existing strategy-level OOS, drawdown, concentration, or kill-switch gates."
   ],
   "rollback": {
-    "condition": "Any negative incremental OOS PnL at a required cost stress, worse drawdown, leakage, or capital-budget violation.",
+    "condition": "Any non-positive incremental OOS PnL at a required cost stress, worse drawdown, leakage, or capital-budget violation.",
     "action": "Discard the challenger and retain the incumbent V5 paper selector unchanged."
   },
   "decision": "Implement the evaluator and tests, but do not claim alpha or request integration until future OOS capital-competition evidence exists."
