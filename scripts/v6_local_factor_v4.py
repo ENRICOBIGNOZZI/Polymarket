@@ -10,6 +10,8 @@ try:
 except ModuleNotFoundError:
     from scripts import v6_local_factor_v3 as base
 
+BASE_BUILD_PAIR = base.build_pair
+
 
 def _robust_scale(values: list[float]) -> tuple[float, float]:
     med = statistics.median(values)
@@ -114,8 +116,34 @@ def local_candidates(key: str, markets: list[Any], series: dict[str, dict[int, f
     return output
 
 
+def build_pair(*args, **kwargs):
+    rows, reason = BASE_BUILD_PAIR(*args, **kwargs)
+    if not rows:
+        return rows, reason
+    gamma = str(kwargs.get("gamma") or "")
+    now = int(kwargs.get("now") or 0)
+    exit_buffer = int(kwargs.get("exit_buffer_seconds") or 0)
+    cache = kwargs.get("cache") if isinstance(kwargs.get("cache"), dict) else {}
+    expiries = []
+    for row in rows:
+        raw = base.raw_market(gamma, str(row.get("market_id") or ""), cache)
+        if raw is None:
+            return [], "ttr_market_missing"
+        ts = base.market_end_ts(raw)
+        if ts is None:
+            return [], "ttr_missing"
+        expiries.append(int(ts))
+    hold_deadline = max(int(base.finite(row.get("hold_deadline_ts"), 0.0)) for row in rows)
+    if hold_deadline <= now:
+        return [], "ttr_invalid"
+    if any(hold_deadline > ts - exit_buffer for ts in expiries):
+        return [], "ttr_invalid"
+    return rows, reason
+
+
 def main() -> int:
     base.local_candidates = local_candidates
+    base.build_pair = build_pair
     return base.main()
 
 
