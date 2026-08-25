@@ -6,6 +6,7 @@ on:
     paths:
       - ops/fix_external_probability_model.py
       - ops/fix_external_pagination.py
+      - ops/fix_external_direct_priority.py
       - .github/workflows/apply-external-probability-fix.yml
 
 permissions:
@@ -35,9 +36,11 @@ jobs:
           set -euo pipefail
           python3 -m py_compile \
             ops/fix_external_probability_model.py \
-            ops/fix_external_pagination.py
+            ops/fix_external_pagination.py \
+            ops/fix_external_direct_priority.py
           python3 ops/fix_external_probability_model.py
           python3 ops/fix_external_pagination.py
+          python3 ops/fix_external_direct_priority.py
           python3 -m py_compile \
             scripts/external_intelligence.py \
             scripts/materialize_external_signals.py \
@@ -73,6 +76,7 @@ jobs:
           config = json.loads(Path('config/external_intelligence.json').read_text())
           assert config['universe']['max_markets'] >= 500
           assert config['universe']['page_size'] == 100
+          assert config['sources']['binance']['max_markets_per_asset'] >= 120
           config['sources']['kalshi']['enabled'] = False
           config['sources']['gdelt']['enabled'] = False
           config['backfill']['enabled'] = False
@@ -93,20 +97,34 @@ jobs:
             --mode incremental | tee "$E/collector.log"
 
           python3 - <<'PY'
-          import json
+          import gzip, json
           from pathlib import Path
 
           root = Path('/tmp/external-live')
           rows = [json.loads(line) for line in (root / 'signals.jsonl').read_text().splitlines() if line.strip()]
           direct = [row for row in rows if row.get('q_external') is not None]
           report = json.loads((root / 'report.json').read_text())
+          print('collection', report['collection'])
+          print('binance_health', json.dumps(report['source_health']['binance']['details'], sort_keys=True))
+          if not direct:
+              with gzip.open(root / 'observations-out.jsonl.gz', 'rt', encoding='utf-8') as handle:
+                  observations = [json.loads(line) for line in handle if line.strip()]
+              questions = []
+              seen = set()
+              for row in observations:
+                  key = (row.get('market_id'), row.get('question'))
+                  if key in seen:
+                      continue
+                  seen.add(key)
+                  questions.append(key)
+              print('selected_crypto_questions', questions[:80])
           assert report['collection']['polymarket_markets'] >= 450, report['collection']
           assert direct, 'no direct external probability was produced'
           assert all(0.0 < float(row['q_external']) < 1.0 for row in direct)
           assert all(float(row.get('confidence', 0.0)) >= 0.35 for row in direct)
           assert report['collection']['direct_probability_rows'] >= len(direct) > 0
           print('direct_probability_rows', len(direct), 'markets', report['collection']['polymarket_markets'])
-          for row in direct[:10]:
+          for row in direct[:20]:
               print(row['market_id'], row['question'], row['q_external'], row['pm_mid'], row['confidence'])
           PY
 
