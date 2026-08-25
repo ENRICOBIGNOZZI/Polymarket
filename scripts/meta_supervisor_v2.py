@@ -35,6 +35,54 @@ def classify_workflow(
     return result
 
 
+def _without_expected_scheduled_skips(
+    config: dict[str, Any], snapshot: dict[str, Any]
+) -> tuple[dict[str, Any], int]:
+    """Ignore only explicitly expected schedule skips when selecting latest evidence.
+
+    Some workflows deliberately gate their periodic job at job level. GitHub still
+    records those timer invocations as completed/skipped runs. Such a bookkeeping
+    run must not hide an earlier evidence-bearing workflow_run/manual attempt.
+    Other skipped runs remain fail-closed through classify_workflow().
+    """
+    specs = ((config.get("coordination") or {}).get("workflows") or {})
+    ignored_names = {
+        str(spec.get("name") or filename)
+        for filename, spec in specs.items()
+        if isinstance(spec, dict) and spec.get("ignore_scheduled_skips") is True
+    }
+    runs = snapshot.get("runs")
+    if not ignored_names or not isinstance(runs, list):
+        return snapshot, 0
+
+    filtered: list[Any] = []
+    ignored = 0
+    for raw in runs:
+        if not isinstance(raw, dict):
+            filtered.append(raw)
+            continue
+        name = str(raw.get("workflowName") or raw.get("name") or "")
+        event = str(raw.get("event") or "").lower()
+        status = str(raw.get("status") or "").lower()
+        conclusion = str(raw.get("conclusion") or "").lower()
+        expected_skip = (
+            name in ignored_names
+            and event == "schedule"
+            and status in {"completed", ""}
+            and conclusion == "skipped"
+        )
+        if expected_skip:
+            ignored += 1
+            continue
+        filtered.append(raw)
+
+    if ignored == 0:
+        return snapshot, 0
+    cleaned = dict(snapshot)
+    cleaned["runs"] = filtered
+    return cleaned, ignored
+
+
 def _surface_failure_cooldowns(report: dict[str, Any]) -> None:
     alerts = report.setdefault("alerts", [])
     existing = {
@@ -107,7 +155,9 @@ def _autonomous_product_health(config: dict[str, Any], snapshot: dict[str, Any],
 
 
 def build_report(config: dict[str, Any], snapshot: dict[str, Any], now: int) -> dict[str, Any]:
-    report = _original_build_report(config, snapshot, now)
+    evidence_snapshot, ignored_scheduled_skips = _without_expected_scheduled_skips(config, snapshot)
+    report = _original_build_report(config, evidence_snapshot, now)
+    report.setdefault("invariants", {})["expected_scheduled_skips_ignored"] = ignored_scheduled_skips
     _surface_failure_cooldowns(report)
     wired = _autonomous_product_channel_wired(snapshot)
     report.setdefault("invariants", {})["autonomous_research_product_channel_wired"] = wired
