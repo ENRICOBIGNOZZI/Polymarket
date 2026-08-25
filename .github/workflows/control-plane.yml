@@ -171,12 +171,29 @@ jobs:
           set -euo pipefail
           publish_file() {
             local local_path="$1" remote_path="$2" message="$3"
-            local endpoint="repos/${GITHUB_REPOSITORY}/contents/${remote_path}" content current_sha
+            local endpoint="repos/${GITHUB_REPOSITORY}/contents/${remote_path}" content current_sha attempt publish_error
             content="$(base64 -w0 "$local_path")"
-            current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
-            local args=("$endpoint" --method PUT -f message="$message" -f content="$content" -f branch=telemetry)
-            if [[ -n "$current_sha" ]]; then args+=(-f sha="$current_sha"); fi
-            gh api "${args[@]}" >/dev/null
+            publish_error="$(mktemp)"
+            for attempt in 1 2 3 4 5; do
+              current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
+              local args=("$endpoint" --method PUT -f message="$message" -f content="$content" -f branch=telemetry)
+              if [[ -n "$current_sha" ]]; then args+=(-f sha="$current_sha"); fi
+              if gh api "${args[@]}" >/dev/null 2>"$publish_error"; then
+                rm -f "$publish_error"
+                return 0
+              fi
+              if ! grep -q 'HTTP 409' "$publish_error"; then
+                cat "$publish_error" >&2
+                rm -f "$publish_error"
+                return 1
+              fi
+              if [[ "$attempt" -eq 5 ]]; then
+                cat "$publish_error" >&2
+                rm -f "$publish_error"
+                return 1
+              fi
+              sleep $((attempt * 2))
+            done
           }
           publish_file control_plane/latest-control-plane.json telemetry/latest-control-plane.json "Update Polymarket control-plane evidence"
           publish_file control_plane/latest-control-plane.md telemetry/latest-control-plane.md "Update Polymarket control-plane report"
