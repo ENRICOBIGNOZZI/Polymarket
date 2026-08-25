@@ -270,13 +270,24 @@ jobs:
           "${runtime_env2[@]}" /usr/bin/env bash scripts/paper_latest_loop.sh \
             >"$evidence/restarted-runtime.log" 2>&1 &
           restart_pid=$!
+          restarted_owner=""
+          candidate_owner=""
           for _ in {1..80}; do
-            [[ -s "$run_root/runtime_owner.lock" ]] && kill -0 "$restart_pid" 2>/dev/null && break
             kill -0 "$restart_pid" 2>/dev/null || { cat "$evidence/restarted-runtime.log" >&2; exit 1; }
+            if [[ -s "$run_root/runtime_owner.lock" ]]; then
+              candidate_owner="$(tr -dc '0-9' < "$run_root/runtime_owner.lock")"
+              if [[ "$candidate_owner" = "$restart_pid" ]]; then
+                restarted_owner="$candidate_owner"
+                break
+              fi
+            fi
             sleep 0.25
           done
-          restarted_owner="$(tr -dc '0-9' < "$run_root/runtime_owner.lock")"
-          test "$restarted_owner" = "$restart_pid"
+          if [[ "$restarted_owner" != "$restart_pid" ]]; then
+            echo "restart lock owner mismatch: expected=$restart_pid observed=${candidate_owner:-empty}" >&2
+            cat "$evidence/restarted-runtime.log" >&2 || true
+            exit 1
+          fi
           printf 'restart_owner_pid=%s\n' "$restarted_owner"
           sleep 10
 
