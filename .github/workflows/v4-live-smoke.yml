@@ -137,11 +137,43 @@ jobs:
             --output-json "$R/b2_sparse_hedge_frontier.json" \
             --output-markdown "$R/b2_sparse_hedge_frontier.md"
 
+          # Keep the incumbent executable coherence gate unchanged. The stronger
+          # relation rule below is a research-only diagnostic: every hedge must be
+          # same-event or have semantic Jaccard >= 0.20 with at least two shared
+          # content tokens; category-only relations cannot authorize the basket.
           python3 scripts/filter_coherent_hedges.py \
             --input "$R/stat_arb_pca_raw.csv" --output "$R/stat_arb_pca.csv" \
             --rejections "$R/stat_arb_pca_rejected.csv" --cache "$R/market_metadata_cache.json" \
             --min-jaccard 0.08 --min-shared-tokens 1 \
             | tee "$R/coherent_hedges.log"
+          python3 scripts/b2_strong_relation_gate.py \
+            --input "$R/stat_arb_pca.csv" --output "$R/stat_arb_pca_strong.csv" \
+            --rejections "$R/stat_arb_pca_strong_rejected.csv" \
+            --report-json "$R/stat_arb_pca_strong_report.json"
+
+          for k in 1 2 3 4; do
+            python3 scripts/filter_coherent_hedges.py \
+              --input "$R/stat_arb_pca_k${k}.csv" \
+              --output "$R/stat_arb_pca_k${k}_coherent.csv" \
+              --rejections "$R/stat_arb_pca_k${k}_coherent_rejected.csv" \
+              --cache "$R/market_metadata_cache.json" \
+              --min-jaccard 0.08 --min-shared-tokens 1 \
+              | tee "$R/coherent_hedges_k${k}.log"
+            python3 scripts/b2_strong_relation_gate.py \
+              --input "$R/stat_arb_pca_k${k}_coherent.csv" \
+              --output "$R/stat_arb_pca_k${k}_strong.csv" \
+              --rejections "$R/stat_arb_pca_k${k}_strong_rejected.csv" \
+              --report-json "$R/stat_arb_pca_k${k}_strong_report.json"
+          done
+
+          python3 scripts/b2_sparse_hedge_frontier.py \
+            --input "8:$R/stat_arb_pca_strong.csv" \
+            --input "4:$R/stat_arb_pca_k4_strong.csv" \
+            --input "3:$R/stat_arb_pca_k3_strong.csv" \
+            --input "2:$R/stat_arb_pca_k2_strong.csv" \
+            --input "1:$R/stat_arb_pca_k1_strong.csv" \
+            --output-json "$R/b2_sparse_strong_relation_frontier.json" \
+            --output-markdown "$R/b2_sparse_strong_relation_frontier.md"
 
           python3 scripts/build_v4_intents.py --strategy B1 \
             --input "$R/stat_arb_pairs.csv" --output "$R/b1_intents.csv" \
@@ -191,8 +223,10 @@ jobs:
           test -s "$R/strategy_status.csv"
           test -s "$R/allocator_status.json"
           test -s "$R/b2_sparse_hedge_frontier.json"
+          test -s "$R/b2_sparse_strong_relation_frontier.json"
           python3 -m json.tool "$R/runtime_status.json" >/dev/null
           python3 -m json.tool "$R/b2_sparse_hedge_frontier.json" >/dev/null
+          python3 -m json.tool "$R/b2_sparse_strong_relation_frontier.json" >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
 
       - name: Build public telemetry snapshot
@@ -225,6 +259,10 @@ jobs:
           done
           if test -s "$R/b2_sparse_hedge_frontier.md"; then
             cat "$R/b2_sparse_hedge_frontier.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if test -s "$R/b2_sparse_strong_relation_frontier.md"; then
+            echo '## Strong-relation sparse frontier' >> "$GITHUB_STEP_SUMMARY"
+            cat "$R/b2_sparse_strong_relation_frontier.md" >> "$GITHUB_STEP_SUMMARY"
           fi
           echo '### allocator status' >> "$GITHUB_STEP_SUMMARY"
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
