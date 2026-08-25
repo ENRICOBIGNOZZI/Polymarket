@@ -90,6 +90,18 @@ if [[ "${1:-}" == "--print-champion" ]]; then
   exit 0
 fi
 
+# Own the *entire* manifest-selected paper runtime with one inherited advisory
+# lock.  Child-level locks remain useful, but they are too late to prevent two
+# wrappers from launching competing recorder/model writers.  Re-exec through a
+# tiny fcntl launcher so the lock fd survives for this process lifetime.
+if [[ "${POLYMARKET_RUNTIME_SINGLETON_HELD:-0}" != "1" ]]; then
+  singleton_lock="$run_root/runtime_owner.lock"
+  exec python3 "$ROOT/scripts/runtime_singleton_launcher.py" \
+    --lock "$singleton_lock" -- \
+    env POLYMARKET_RUNTIME_SINGLETON_HELD=1 \
+    /usr/bin/env bash "$ROOT/scripts/paper_latest_loop.sh" "$@"
+fi
+
 fast_enabled="${POLYMARKET_FAST_ARB_ENABLED:-1}"
 # Shadow instrumentation must never block the incumbent champion by default.
 # Operators may set REQUIRED=1 on a validated deployment to fail closed on a
@@ -157,7 +169,10 @@ write_plane_status() {
   if (( champion_pid > 0 )) && kill -0 "$champion_pid" 2>/dev/null; then champion_alive=1; fi
   if [[ "$fast_enabled" == "1" ]] && (( fast_pid > 0 )) && kill -0 "$fast_pid" 2>/dev/null; then fast_alive=1; fi
   local path="$run_root/runtime_planes.csv"
-  local tmp="$path.tmp"
+  # Keep the replacement file in the target directory, but make its name unique
+  # on both macOS Bash 3.2 and newer shells.
+  local tmp
+  tmp="$(mktemp "$path.tmp.XXXXXX")"
   printf 'timestamp,champion_version,champion_alive,fast_enabled,fast_alive,fast_restarts,champion_pid,fast_pid\n' > "$tmp"
   printf '%s,%s,%s,%s,%s,%s,%s,%s\n' "$(date +%s)" "$version" "$champion_alive" \
     "$fast_enabled" "$fast_alive" "$fast_restarts" "$champion_pid" "$fast_pid" >> "$tmp"
