@@ -86,11 +86,11 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/v6_local_factor_intents.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/local_factor.log 2>&1 || true
-      - name: Live public-data baseline and aggressive maker forward probe
+      - name: Live public-data maker threshold and universe forward probes
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p v6_evidence/maker_baseline v6_evidence/maker_aggressive
+          mkdir -p v6_evidence/maker_baseline v6_evidence/maker_aggressive_threshold v6_evidence/maker_broad_universe
           run_policy() {
             local name="$1" markets="$2" min_liq="$3" min_edge="$4"
             set +e
@@ -110,16 +110,17 @@ jobs:
               return "$rc"
             fi
           }
-          run_policy maker_baseline 250 10 0.00035 &
-          baseline_pid=$!
-          run_policy maker_aggressive 400 5 0.00010 &
-          aggressive_pid=$!
+          run_policy maker_baseline 250 10 0.00035 & baseline_pid=$!
+          run_policy maker_aggressive_threshold 250 10 0.00010 & threshold_pid=$!
+          run_policy maker_broad_universe 400 5 0.00010 & broad_pid=$!
           set +e
           wait "$baseline_pid"; baseline_rc=$?
-          wait "$aggressive_pid"; aggressive_rc=$?
+          wait "$threshold_pid"; threshold_rc=$?
+          wait "$broad_pid"; broad_rc=$?
           set -e
           test "$baseline_rc" -eq 0
-          test "$aggressive_rc" -eq 0
+          test "$threshold_rc" -eq 0
+          test "$broad_rc" -eq 0
       - name: Live public-data micro-taker causal warmup/markout probe
         shell: bash
         run: |
@@ -136,7 +137,8 @@ jobs:
           python3 scripts/v6_hf_pressure_research.py \
             --micro-state v6_evidence/micro_taker/state.json \
             --maker-baseline v6_evidence/maker_baseline \
-            --maker-aggressive v6_evidence/maker_aggressive \
+            --maker-aggressive v6_evidence/maker_aggressive_threshold \
+            --maker-broad v6_evidence/maker_broad_universe \
             --output v6_evidence/hf_pressure.json || true
           python3 - <<'PY'
           import csv,json,re
