@@ -31,6 +31,7 @@ LIVE_MODEL_SURFACE_PATTERNS = (
     re.compile(r"^scripts/build_global_opportunity_book\.py$"), re.compile(r"^scripts/filter_coherent_hedges\.py$"),
     re.compile(r"^scripts/walk_forward_v\d+\.py$"), re.compile(r"^scripts/runtime_action_report\.py$"),
     re.compile(r"^scripts/portfolio_supervisor\.py$"), re.compile(r"^scripts/(?:cross_venue_loop|prediction_market_system_loop)\.sh$"),
+    re.compile(r"^scripts/v\d+_(?:external_bridge|hard_arb_paper|intent_guard|local_factor_intents|materialize_configs|micro_taker|relation_intents)\.py$"),
 )
 MODEL_CODE_SURFACE_PATTERNS = (
     re.compile(r"^(?:src|include)(?:/.*)?/(?:engine|fast_arb|maker_paper|multileg_paper|negrisk_arb|pca_stat_arb|stat_arb|rewards_scan)\.(?:cpp|cc|cxx|h|hpp)$"),
