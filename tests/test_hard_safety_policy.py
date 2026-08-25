@@ -175,10 +175,10 @@ class HardSafetyPolicyTest(unittest.TestCase):
 
     def test_new_runtime_hard_safety_override_is_rejected(self) -> None:
         base = "child={k:x for k,x in cfg.items()}\n"
-        current = base + "child['max_market_fraction']=0.06\n"
+        current = base + "MAX_MARKET_FRACTION=0.06\n"
         errors = compare_runtime_hard_safety(base, current, "scripts/v6_materialize_configs.py")
         self.assertEqual(len(errors), 1)
-        self.assertIn("max_market_fraction", errors[0])
+        self.assertIn("MAX_MARKET_FRACTION", errors[0])
 
     def test_runtime_authorized_paper_aggression_without_hard_safety_write_is_allowed(self) -> None:
         base = "run_maker --min-edge 0.00035 --max-order-usd 25\n"
