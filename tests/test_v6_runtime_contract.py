@@ -25,15 +25,22 @@ class V6RuntimeContractTest(unittest.TestCase):
         cls.relations = load_script("v6_relation_intents_test", "scripts/v6_relation_intents.py")
         cls.local_factor = load_script("v6_local_factor_intents_test", "scripts/v6_local_factor_intents.py")
 
-    def test_v6_runtime_exists_without_research_mutating_live_champion(self) -> None:
+    def test_v6_runtime_exists_with_manifest_selected_paper_champion(self) -> None:
         champion = json.loads((ROOT / "config/live_champion.json").read_text())
-        self.assertEqual(champion["version"], 5)
-        self.assertEqual(champion["loop"], "scripts/paper_v5_loop.sh")
+        self.assertIn(int(champion["version"]), (5, 6))
+        if int(champion["version"]) == 6:
+            self.assertEqual(champion["loop"], "scripts/paper_v6_loop.sh")
+            self.assertEqual(champion["config"], "config/paper_v6.json")
+            self.assertEqual(champion["run_root"], "runs/paper_v6_live")
+        else:
+            self.assertEqual(champion["loop"], "scripts/paper_v5_loop.sh")
+            self.assertEqual(champion["config"], "config/paper_v5.json")
         self.assertTrue((ROOT / "scripts/paper_v6_loop.sh").is_file())
         self.assertTrue((ROOT / "config/paper_v6.json").is_file())
         architecture = json.loads((ROOT / "config/v6_model_architecture.json").read_text())
         self.assertEqual(architecture["version"], 6)
         self.assertTrue(architecture["paper_only"])
+        self.assertFalse(architecture["allow_authenticated_execution"])
 
     def test_capital_and_hard_safety_contracts(self) -> None:
         cfg = json.loads((ROOT / "config/paper_v6.json").read_text())
