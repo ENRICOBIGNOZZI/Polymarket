@@ -82,17 +82,22 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertLess(repair.index(apply), repair.index(restart))
         self.assertIn('Runtime and Grafana configuration repaired', repair)
 
-    def test_v5_cold_start_wait_preserves_freshness_gate(self):
+    def test_v5_cold_start_wait_uses_startup_aware_readiness(self):
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
+        readiness = (ROOT / "scripts" / "v5_runtime_readiness.py").read_text(encoding="utf-8")
         self.assertIn(
             'RUNTIME_HEALTH_ATTEMPTS="${POLYMARKET_RUNTIME_HEALTH_ATTEMPTS:-180}"',
             updater,
         )
         self.assertIn('local attempts="${1:-$RUNTIME_HEALTH_ATTEMPTS}"', updater)
-        self.assertNotIn('wait_for_runtime_health 60', updater)
-        self.assertIn("if float(item['status_age_seconds']) > 120", updater)
-        self.assertIn("assert not stale, f'stale strategy status: {stale}'", updater)
         self.assertIn('POLYMARKET_RUNTIME_HEALTH_ATTEMPTS must be a positive integer', updater)
+        self.assertIn('scripts/v5_runtime_readiness.py', updater)
+        self.assertIn('--model-output-max-age 120', updater)
+        self.assertIn('--startup-grace 600', updater)
+        self.assertIn('model_output_max_age', readiness)
+        self.assertIn('startup_grace', readiness)
+        self.assertIn('allocator_events.csv', readiness)
+        self.assertIn('models_alive', readiness)
 
     def test_deployment_uses_validated_ref_and_v5_health(self):
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
@@ -115,7 +120,7 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('wait_for_runtime_health()', updater)
         self.assertIn('write_status repaired', updater)
         self.assertIn('polymarket-service-control restart', updater)
-        self.assertIn('allocator_alive', updater)
+        self.assertIn('scripts/v5_runtime_readiness.py', updater)
         self.assertIn('paper_latest_loop.sh', linux_updater)
         self.assertIn('POLYMARKET_RUN_NAME=auto', linux_updater)
 
@@ -125,6 +130,8 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('polymarket-multi-strategy-v5', health)
         self.assertIn('runs/paper_v5_live', health)
         self.assertIn('test "$allocator_alive" = "1"', health)
+        self.assertIn('scripts/v5_runtime_readiness.py', health)
+        self.assertIn('--startup-grace 600', health)
 
         self.assertIn('Advance paper validated ref', smoke)
         self.assertIn('git/refs/heads/paper-validated', smoke)
