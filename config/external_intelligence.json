@@ -6,8 +6,8 @@
   "allow_production_signal_write": false,
   "universe": {
     "max_markets": 500,
-    "page_size": 500,
-    "min_liquidity": 25.0,
+    "page_size": 100,
+    "min_liquidity": 10.0,
     "min_volume_24h": 0.0,
     "order_field": "volume24hr"
   },
