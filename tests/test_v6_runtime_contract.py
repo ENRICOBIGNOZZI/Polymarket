@@ -80,8 +80,6 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertEqual(self.local_factor.bh_cutoff([0.08, 0.20, 0.80], 0.05), 0.0)
 
     def test_ar_fit_requires_actual_mean_reversion(self) -> None:
-        # Nondegenerate stationary AR(1): the fit should estimate phi<1 and a
-        # negative error-correction coefficient without relying on zero-noise data.
         innovations = [0.04, -0.025, 0.015, -0.035, 0.02, 0.005, -0.01]
         residual = [0.7]
         for i in range(1, 100):
@@ -107,6 +105,14 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("v6_micro_taker.py", loop)
         self.assertIn("v6_hard_arb_paper.py", loop)
         self.assertIn("polymarket_maker_paper", loop)
+
+    def test_v6_research_smoke_preserves_base_live_selector(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "v6-research-smoke.yml").read_text()
+        self.assertIn("fetch-depth: 0", workflow)
+        self.assertIn("base_sha='${{ github.event.pull_request.base.sha }}'", workflow)
+        self.assertIn("f'{base_sha}:config/live_champion.json'", workflow)
+        self.assertIn("assert live == base_live", workflow)
+        self.assertNotIn("assert live['version'] == 5, 'non-integration research smoke", workflow)
 
 
 if __name__ == "__main__":
