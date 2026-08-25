@@ -40,6 +40,23 @@ class WorkflowYamlContractTest(unittest.TestCase):
             for token in forbidden:
                 self.assertNotIn(token, text, f"{relative} contains forbidden authority: {token}")
 
+        private_path = ROOT / ".github" / "workflows" / "private-runtime-single-writer-validation.yml"
+        if private_path.exists():
+            private = private_path.read_text(encoding="utf-8")
+            self.assertIn("\n  workflow_dispatch:\n", private)
+            self.assertIn("\n  pull_request:\n", private)
+            self.assertNotIn("\n  push:\n", private)
+            self.assertNotIn("\n  workflow_run:\n", private)
+            self.assertNotIn("\n  repository_dispatch:\n", private)
+            self.assertIn("permissions:\n  contents: read\n", private)
+            for permission in (
+                "actions: write",
+                "contents: write",
+                "issues: write",
+                "pull-requests: write",
+            ):
+                self.assertNotIn(permission, private)
+
     def test_deploy_workflow_keeps_all_remote_terminators_indented(self) -> None:
         deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(
             encoding="utf-8"
