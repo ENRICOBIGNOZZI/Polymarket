@@ -114,6 +114,18 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("assert live == base_live", workflow)
         self.assertNotIn("assert live['version'] == 5, 'non-integration research smoke", workflow)
 
+    def test_v6_external_feed_exists_before_external_engine_starts(self) -> None:
+        cfg = json.loads((ROOT / "config/paper_v6.json").read_text())
+        loop = (ROOT / "scripts/paper_v6_loop.sh").read_text()
+        self.assertEqual(cfg["external_signals_file"], "runs/paper_v6_live/external_signals.csv")
+        self.assertIn("refresh_external_feed(){", loop)
+        self.assertIn("v6_external_bridge.py", loop)
+        startup = "start_recorder;start_broker;refresh_external_feed;start_external;write_supervisor"
+        self.assertIn(startup, loop)
+        self.assertLess(loop.index(startup), loop.index("while true;do"))
+        self.assertIn("external_bridge_status.json", loop)
+        self.assertIn("market_key,q_yes,confidence,source,timestamp", loop)
+
 
 if __name__ == "__main__":
     unittest.main()
