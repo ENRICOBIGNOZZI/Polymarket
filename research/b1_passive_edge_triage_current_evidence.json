@@ -1,51 +1,59 @@
 {
-  "schema": "polymarket_b1_passive_edge_triage_evidence_v1",
-  "source_git_sha": "894cf1e03de22213e7acba41826ea4934e29e20a",
-  "source_live_smoke_generated_ts": 1787645394,
+  "schema": "polymarket_b1_passive_edge_triage_evidence_v2",
+  "source_git_sha": "5a8824625154b736196ec934be3a4b77838e5fde",
+  "source_live_smoke_generated_ts": 1787645985,
   "evidence_state": "MORE_EVIDENCE_REQUIRED",
-  "material_finding": "A current same-event B1 exact-score pair has unusually large maker-entry modeled edge while remaining taker-negative; it merits candidate-specific forward replay but is not promotion evidence.",
-  "candidate": {
+  "material_findings": [
+    "The prior same-event exact-score B1 candidate did not recur in the next independent exact-main smoke and therefore fails the challenger recurrence criterion.",
+    "The new maker-positive B1 candidate is a semantic relation between an Ethereum threshold and a Bitcoin threshold; generic template overlap relaxed the scanner relation gate despite no shared proposition-specific asset anchor.",
+    "A research-only B1 intent admission guard now fails closed on semantic rows without a shared proposition-specific slug anchor, while preserving same-event, latent-correlation, and same-asset threshold relations."
+  ],
+  "prior_candidate": {
     "key": "3535940:YES|3535928:NO",
     "relation": "same_event",
-    "y_market": "3535940",
-    "y_slug": "lal-val-bet-2026-08-25-exact-score-3-1",
-    "y_side": "YES",
-    "y_limit": 0.027,
-    "y_weight": 1.0,
-    "x_market": "3535928",
-    "x_slug": "lal-val-bet-2026-08-25-exact-score-0-1",
-    "x_side": "NO",
-    "x_limit": 0.9,
-    "x_weight": 0.388681,
-    "aligned": 628,
-    "window": 336,
-    "return_corr": 0.716701,
-    "beta": 1.16721,
-    "phi": 0.869414,
-    "half_life_hours": 2.47666,
-    "t_reversion": -4.78241,
-    "stability": 0.464128,
-    "z": -1.30614,
-    "raw_expected_edge": 0.037133,
     "maker_entry_net_edge": 0.0296454,
     "taker_net_edge": -0.0026806,
-    "executable_notional": 206.573
-  },
-  "derived_triage": {
-    "maker_taker_wedge": 0.032326,
     "counterfactual_break_even_completion": 0.08292396213574213,
-    "current_stability_gate": 0.45,
-    "stability_margin": 0.014128,
-    "action": "PRIORITIZE_CANDIDATE_SPECIFIC_REPLAY",
-    "interpretation": "The 8.29% break-even completion is only a binary maker-vs-taker fallback stress metric. The live broker instead uses partial fills, a 75% common-completion threshold, cancellation and unwind economics."
+    "next_snapshot_recurrence": false,
+    "state_change": "REJECT_NONRECURRING_CURRENT_SAMPLE"
   },
-  "current_intent_evidence": {
-    "bundles": 1,
-    "rows": 2,
-    "strategy": "B1",
-    "mode": "MAKER",
-    "expected_edge": 0.0296454,
-    "max_notional_per_leg_usd": 75.0
+  "current_maker_positive_candidate": {
+    "key": "3257399:YES|3257355:NO",
+    "relation": "semantic",
+    "y_slug": "will-ethereum-dip-to-1700-in-august-2026",
+    "x_slug": "will-bitcoin-dip-to-60k-in-august-2026",
+    "aligned": 1157,
+    "window": 48,
+    "return_corr": 0.367475,
+    "beta": 0.194825,
+    "phi": 0.831539,
+    "half_life_hours": 1.87869,
+    "t_reversion": -1.87626,
+    "stability": 0.604618,
+    "z": -1.54984,
+    "raw_expected_edge": 0.00453605,
+    "maker_entry_net_edge": 0.00203779,
+    "taker_net_edge": -0.00620516,
+    "executable_notional": 1668.22,
+    "counterfactual_break_even_completion": 0.7527838941155776,
+    "shared_specific_anchor_after_guard": false,
+    "state_change": "REJECT_GENERIC_SEMANTIC_ADMISSION"
+  },
+  "why_generic_overlap_is_not_enough": {
+    "shared_template_terms": ["will", "dip", "august"],
+    "target_specific_entities": ["ethereum"],
+    "hedge_specific_entities": ["bitcoin"],
+    "incumbent_effect": "The scanner labels the pair semantic and therefore uses the relaxed semantic correlation/reversion path rather than the stronger latent-correlation path.",
+    "challenger_effect": "The intent adapter requires a shared nonnumeric, noncalendar, non-template anchor before a semantic row can reach the broker."
+  },
+  "current_b2_context": {
+    "coherent_rows": 56,
+    "maker_positive_rows": 2,
+    "top_exact_score_market": "3535929",
+    "top_exact_score_maker_entry_net_edge": 0.00159595,
+    "top_exact_score_taker_net_edge": -0.0370829,
+    "top_exact_score_counterfactual_break_even_completion": 0.9587384319854391,
+    "note": "B2 relation quality, sparse hedges, persistence and completion economics remain owned by existing LF/HF research and are not duplicated here."
   },
   "generic_forward_maker_context": {
     "sessions": 21,
@@ -54,8 +62,7 @@
     "pair_fill_wilson_upper": 0.008735857369296423,
     "join_total_pnl_ex_rewards_usd": -0.13894351315407616,
     "improve1_total_pnl_ex_rewards_usd": -2.456809049864078,
-    "transferable_to_this_candidate": false,
-    "reason": "The forward-maker calibration is a different complete-set strategy class and cannot be used as the candidate-specific fill probability for this B1 pair."
+    "transferable_to_b1_candidate": false
   },
   "required_candidate_specific_evidence": [
     "prospective recurrence of the same pair/side hypothesis across independent chronological snapshots",
@@ -69,6 +76,7 @@
   "rollback_or_reject": [
     "maker-entry net edge is nonpositive on the next independent snapshot",
     "pair/side identity does not recur prospectively",
+    "semantic relation has no shared proposition-specific anchor",
     "candidate-specific replay is nonpositive at 2x execution stress",
     "one-sided fill/unwind losses dominate completed-bundle gains",
     "parameter stability fails prospectively"
