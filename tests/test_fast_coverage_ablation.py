@@ -32,6 +32,25 @@ class FastCoverageAblationTest(unittest.TestCase):
         self.assertNotIn("fast_arb_policy_research_aggressive.json", workflow)
         self.assertNotIn("real_order_submission=true", workflow)
 
+    def test_hard_evidence_records_per_leg_websocket_freshness(self) -> None:
+        runtime_public = (ROOT / "src" / "fast_runtime" / "part2.inc").read_text(
+            encoding="utf-8"
+        )
+        runtime_private = (ROOT / "src" / "fast_runtime" / "part3.inc").read_text(
+            encoding="utf-8"
+        )
+        opportunity = (ROOT / "include" / "pm" / "fast_arb.hpp").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("book_received_ms_[token] = 0", runtime_public)
+        self.assertIn("book_received_ms_[token] = received_ms", runtime_private)
+        self.assertIn("max_leg_book_age_ms", runtime_private)
+        self.assertIn("leg_book_skew_ms", runtime_private)
+        self.assertIn("annotate_hard_freshness_locked(opportunity)", runtime_private)
+        self.assertIn("std::int64_t max_leg_book_age_ms = -1", opportunity)
+        self.assertIn("std::int64_t leg_book_skew_ms = -1", opportunity)
+
 
 if __name__ == "__main__":
     unittest.main()
