@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import math
+import sys
 import unittest
 from pathlib import Path
 
@@ -11,6 +12,7 @@ MODULE_PATH = ROOT / "scripts" / "lf_v6_factor_hedge_units_audit.py"
 SPEC = importlib.util.spec_from_file_location("lf_v6_factor_hedge_units_audit", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 mod = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = mod
 SPEC.loader.exec_module(mod)
 
 
