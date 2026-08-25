@@ -219,10 +219,18 @@ jobs:
           print(f'http://127.0.0.1:{parsed.port}')
           PY
           )"
-          health="$(curl -fsS --max-time 3 "$proxy_url/healthz")"
-          printf 'proxy_health=%s\n' "$health"
-          response="$(curl -fsS --max-time 5 "$proxy_url/markets?active=true&closed=false&limit=1&offset=0&order=liquidityNum&ascending=false&liquidity_num_min=10")"
-          python3 - "$response" "$RUN_ROOT_REL/market_proxy_status.json" <<'PY'
+          # A successful live-paper smoke can trigger deploy at the same minute as
+          # this scheduled relay. Deployment intentionally restarts the paper
+          # runtime, so a single immediate localhost probe can observe the planned
+          # restart and falsely classify a valid relay as broken. Retry only the
+          # read-only consumption proof for a bounded 90 seconds; never restart or
+          # mutate the service here, and still fail closed unless the running proxy
+          # actually serves the installed cache.
+          verified=false
+          for attempt in {1..18}; do
+            if health="$(curl -fsS --max-time 3 "$proxy_url/healthz" 2>/dev/null)" && \
+               response="$(curl -fsS --max-time 5 "$proxy_url/markets?active=true&closed=false&limit=1&offset=0&order=liquidityNum&ascending=false&liquidity_num_min=10" 2>/dev/null)" && \
+               python3 - "$response" "$RUN_ROOT_REL/market_proxy_status.json" <<'PY'
           import json,sys,time
           rows=json.loads(sys.argv[1])
           assert isinstance(rows,list) and rows, rows
@@ -241,6 +249,16 @@ jobs:
           print('live_proxy_markets='+str(status.get('markets')))
           print('live_proxy_cache_age_seconds='+str(status.get('cache_age_seconds')))
           PY
+            then
+              printf 'proxy_health=%s\n' "$health"
+              printf 'relay_verify_attempt=%s\n' "$attempt"
+              verified=true
+              break
+            fi
+            printf 'relay_verify_retry=%s\n' "$attempt"
+            sleep 5
+          done
+          test "$verified" = true
           REMOTE
 
       - name: Publish relay summary
