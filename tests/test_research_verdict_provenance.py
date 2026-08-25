@@ -7,17 +7,19 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SOURCE_SHA = "a" * 40
+SOURCE_BRANCH = "research/test-alpha"
 
 
 class ResearchVerdictProvenanceTest(unittest.TestCase):
-    def run_policy(self, source: dict) -> subprocess.CompletedProcess[str]:
+    def run_policy(self, source: dict, *, body: str | None = None) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             event = {
                 "pull_request": {
                     "head": {"ref": "integration/test-alpha"},
                     "draft": True,
-                    "body": "Source research PR/branch/commit: #321\n",
+                    "body": body or f"Source research PR/branch/commit: #321 / `{SOURCE_BRANCH}` / `{SOURCE_SHA}`\n",
                     "labels": [],
                 }
             }
@@ -51,19 +53,26 @@ class ResearchVerdictProvenanceTest(unittest.TestCase):
             )
 
     @staticmethod
-    def source(*, body: str = "", comments: list[dict] | None = None, reviews: list[dict] | None = None) -> dict:
+    def source(*, body: str = "", comments: list[dict] | None = None, reviews: list[dict] | None = None,
+               sha: str = SOURCE_SHA, branch: str = SOURCE_BRANCH) -> dict:
         return {
             "number": 321,
-            "head": {"ref": "research/test-alpha"},
+            "head": {"ref": branch, "sha": sha},
             "body": body,
             "comments": comments or [],
             "reviews": reviews or [],
         }
 
+    @staticmethod
+    def approved_comment(sha: str = SOURCE_SHA, verdict: str = "APPROVED_FOR_INTEGRATION") -> dict:
+        return {
+            "created_at": "2026-08-25T05:00:00Z",
+            "author_association": "OWNER",
+            "body": f"Research Governance — {verdict}\n\nExact validated head: `{sha}`.\n",
+        }
+
     def test_source_body_cannot_self_approve(self):
-        result = self.run_policy(
-            self.source(body="## Decision\nAPPROVED_FOR_INTEGRATION\n")
-        )
+        result = self.run_policy(self.source(body="## Decision\nAPPROVED_FOR_INTEGRATION\n"))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("latest trusted source verdict: none", result.stdout)
 
@@ -74,7 +83,7 @@ class ResearchVerdictProvenanceTest(unittest.TestCase):
                     {
                         "created_at": "2026-08-25T05:00:00Z",
                         "author_association": "NONE",
-                        "body": "## Research Governance — APPROVED_FOR_INTEGRATION",
+                        "body": f"Research Governance — APPROVED_FOR_INTEGRATION\nExact validated head: `{SOURCE_SHA}`.",
                     }
                 ]
             )
@@ -90,7 +99,7 @@ class ResearchVerdictProvenanceTest(unittest.TestCase):
                         "created_at": "2026-08-25T05:00:00Z",
                         "author_association": "OWNER",
                         "body": (
-                            "## Research Governance — `MORE_EVIDENCE_REQUIRED`\n\n"
+                            "Research Governance — MORE_EVIDENCE_REQUIRED\n\n"
                             "Before any APPROVED_FOR_INTEGRATION decision, collect more OOS evidence."
                         ),
                     }
@@ -101,22 +110,66 @@ class ResearchVerdictProvenanceTest(unittest.TestCase):
         self.assertIn("source_research_verdict: `MORE_EVIDENCE_REQUIRED`", result.stdout)
         self.assertIn("latest trusted source verdict: MORE_EVIDENCE_REQUIRED", result.stdout)
 
-    def test_trusted_structured_governance_comment_can_approve(self):
+    def test_trusted_structured_governance_comment_can_approve_exact_head(self):
         result = self.run_policy(
             self.source(
                 body="This body mentions REJECTED and MORE_EVIDENCE_REQUIRED as historical states.",
-                comments=[
-                    {
-                        "created_at": "2026-08-25T05:00:00Z",
-                        "author_association": "OWNER",
-                        "body": "## Research Governance — `APPROVED_FOR_INTEGRATION`\n\nObjective evidence gates passed.",
-                    }
-                ],
+                comments=[self.approved_comment()],
             )
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("source_research_verdict: `APPROVED_FOR_INTEGRATION`", result.stdout)
+        self.assertIn(f"source_research_approved_sha: `{SOURCE_SHA}`", result.stdout)
         self.assertIn("policy: `pass`", result.stdout)
+
+    def test_positive_verdict_without_exact_head_is_not_sufficient(self):
+        result = self.run_policy(
+            self.source(
+                comments=[
+                    {
+                        "created_at": "2026-08-25T05:00:00Z",
+                        "author_association": "OWNER",
+                        "body": "Research Governance — APPROVED_FOR_INTEGRATION\nEvidence looks good.",
+                    }
+                ]
+            )
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must bind an exact validated source head SHA", result.stdout)
+
+    def test_source_change_after_approval_invalidates_integration(self):
+        changed_sha = "b" * 40
+        result = self.run_policy(
+            self.source(sha=changed_sha, comments=[self.approved_comment(SOURCE_SHA)]),
+            body=f"Source research PR/branch/commit: #321 / `{SOURCE_BRANCH}` / `{changed_sha}`\n",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("source research changed after approval", result.stdout)
+
+    def test_integration_cannot_cite_unapproved_source_commit(self):
+        wrong_sha = "c" * 40
+        result = self.run_policy(
+            self.source(comments=[self.approved_comment()]),
+            body=f"Source research PR/branch/commit: #321 / `{SOURCE_BRANCH}` / `{wrong_sha}`\n",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("integration source commit mismatch", result.stdout)
+
+    def test_integration_cannot_cite_wrong_source_branch(self):
+        result = self.run_policy(
+            self.source(comments=[self.approved_comment()]),
+            body=f"Source research PR/branch/commit: #321 / `research/other-alpha` / `{SOURCE_SHA}`\n",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("integration source branch mismatch", result.stdout)
+
+    def test_integration_requires_full_number_branch_commit_provenance(self):
+        result = self.run_policy(
+            self.source(comments=[self.approved_comment()]),
+            body="Source research PR/branch/commit: #321\n",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must bind exact source provenance", result.stdout)
 
     def test_latest_trusted_structured_verdict_wins(self):
         result = self.run_policy(
@@ -125,7 +178,7 @@ class ResearchVerdictProvenanceTest(unittest.TestCase):
                     {
                         "created_at": "2026-08-25T04:00:00Z",
                         "author_association": "COLLABORATOR",
-                        "body": "Research Governance — APPROVED_FOR_INTEGRATION",
+                        "body": f"Research Governance — APPROVED_FOR_INTEGRATION\nExact validated head: `{SOURCE_SHA}`.",
                     },
                     {
                         "created_at": "2026-08-25T05:00:00Z",
