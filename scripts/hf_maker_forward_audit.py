@@ -132,7 +132,7 @@ def audit(
         limit_price = finite(post.get("limit_price"), 0.0)
         own = max(0.0, finite(post.get("remaining_shares"), 0.0))
         queue = max(0.0, finite(post.get("queue_ahead"), 0.0))
-        edge = finite(post.get("edge"), 0.0)
+        edge = finite(post.get("signal_edge"), finite(post.get("edge"), 0.0))
         prior_count, prior_volume = _flow(
             tape,
             token=token,
