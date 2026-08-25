@@ -221,13 +221,14 @@
     {
       "id": 20,
       "type": "timeseries",
-      "title": "V7 Stress-tested Evidence PnL",
+      "title": "V7 Stress-tested Evidence PnL & Calibration",
       "description": "Paper PnL after the configured 1.5x execution-cost stress, paired with the one-sided day-block bootstrap p-value.",
       "gridPos": {"x": 16, "y": 32, "w": 8, "h": 8},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
         {"refId": "A", "expr": "polymarket_model_execution_evidence_stressed_net_pnl_usd{model=~\"$model\"}", "legendFormat": "{{model}} stressed pnl"},
-        {"refId": "B", "expr": "polymarket_model_execution_evidence_bootstrap_pvalue{model=~\"$model\"}", "legendFormat": "{{model}} p-value"}
+        {"refId": "B", "expr": "polymarket_model_execution_evidence_bootstrap_pvalue{model=~\"$model\"}", "legendFormat": "{{model}} p-value"},
+        {"refId": "C", "expr": "polymarket_model_execution_evidence_brier_improvement{model=~\"$model\"}", "legendFormat": "{{model}} Brier improvement"}
       ],
       "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineInterpolation": "linear", "lineWidth": 1, "fillOpacity": 5, "showPoints": "never"}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
