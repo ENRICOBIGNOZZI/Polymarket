@@ -80,8 +80,6 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertEqual(self.local_factor.bh_cutoff([0.08, 0.20, 0.80], 0.05), 0.0)
 
     def test_ar_fit_requires_actual_mean_reversion(self) -> None:
-        # Nondegenerate stationary AR(1): the fit should estimate phi<1 and a
-        # negative error-correction coefficient without relying on zero-noise data.
         innovations = [0.04, -0.025, 0.015, -0.035, 0.02, 0.005, -0.01]
         residual = [0.7]
         for i in range(1, 100):
@@ -107,6 +105,17 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("v6_micro_taker.py", loop)
         self.assertIn("v6_hard_arb_paper.py", loop)
         self.assertIn("polymarket_maker_paper", loop)
+
+    def test_v6_materializes_external_feed_before_external_engine_starts(self) -> None:
+        cfg = json.loads((ROOT / "config/paper_v6.json").read_text())
+        loop = (ROOT / "scripts/paper_v6_loop.sh").read_text()
+        self.assertEqual(cfg["external_signals_file"], "runs/paper_v6_live/external_signals.csv")
+        self.assertIn("refresh_external_feed(){", loop)
+        self.assertIn("v6_external_bridge.py", loop)
+        self.assertIn("refresh_external_feed;start_external", loop)
+        self.assertLess(loop.index("refresh_external_feed;start_external"), loop.index("while true;do"))
+        self.assertIn("external_bridge_status.json", loop)
+        self.assertIn("market_key,q_yes,confidence,source,timestamp", loop)
 
 
 if __name__ == "__main__":
