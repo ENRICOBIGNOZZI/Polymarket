@@ -62,6 +62,11 @@ class FastRuntimeContractTest(unittest.TestCase):
         self.assertIn("POLYMARKET_RUNTIME_SINGLETON_HELD", selector)
         self.assertLess(selector.index("runtime_singleton_launcher.py"), selector.index("start_champion()"))
 
+    def test_runtime_status_temp_path_is_compatible_with_macos_bash_32(self) -> None:
+        selector = (ROOT / "scripts" / "paper_latest_loop.sh").read_text(encoding="utf-8")
+        self.assertIn('local tmp="$path.tmp.${BASHPID:-$$}"', selector)
+        self.assertNotIn('local tmp="$path.tmp.$BASHPID"', selector)
+
     def test_runtime_singleton_launcher_excludes_competing_owner(self) -> None:
         launcher = ROOT / "scripts" / "runtime_singleton_launcher.py"
         with tempfile.TemporaryDirectory() as tmpdir:
