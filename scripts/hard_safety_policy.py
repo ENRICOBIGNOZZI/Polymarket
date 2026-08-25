@@ -10,22 +10,20 @@ from typing import Any
 
 PAPER_CONFIG_RE = re.compile(r"^config/paper_v\d+\.json$")
 
-TOP_LEVEL_LIMITS = (
-    "max_drawdown",
-    "max_market_fraction",
-    "max_event_fraction",
-    "max_gross_fraction",
-)
-MULTI_STRATEGY_LIMITS = (
-    "global_max_drawdown",
-    "global_max_gross_fraction",
-)
-CHILD_LIMITS = (
-    "max_drawdown",
-    "max_market_fraction",
-    "max_event_fraction",
-    "max_gross_fraction",
-)
+# Drawdown remains a true hard-safety invariant. Concentration/gross limits are
+# an explicit paper capital envelope: legacy versions remain base-relative while
+# V6 may use the user-authorized aggressive ceilings below.
+TOP_LEVEL_RELATIVE_LIMITS = ("max_drawdown",)
+MULTI_STRATEGY_RELATIVE_LIMITS = ("global_max_drawdown",)
+LEGACY_CAPITAL_LIMITS = ("max_market_fraction", "max_event_fraction", "max_gross_fraction")
+LEGACY_MULTI_LIMITS = ("global_max_gross_fraction",)
+CHILD_RELATIVE_LIMITS = ("max_drawdown", "max_market_fraction", "max_event_fraction", "max_gross_fraction")
+V6_AGGRESSIVE_CEILINGS = {
+    "max_market_fraction": 0.05,
+    "max_event_fraction": 0.15,
+    "max_gross_fraction": 0.70,
+    "multi_strategy.global_max_gross_fraction": 0.70,
+}
 
 
 def _number(value: Any) -> float | None:
@@ -45,9 +43,16 @@ def _compare_limit(errors: list[str], label: str, base_value: Any, current_value
         errors.append(f"protected hard-safety limit removed or non-numeric: {label}")
         return
     if current_number > base_number + 1e-12:
-        errors.append(
-            f"protected hard-safety limit weakened: {label} {base_number:g} -> {current_number:g}"
-        )
+        errors.append(f"protected hard-safety limit weakened: {label} {base_number:g} -> {current_number:g}")
+
+
+def _absolute_ceiling(errors: list[str], label: str, value: Any, ceiling: float) -> None:
+    number = _number(value)
+    if number is None:
+        errors.append(f"authorized paper-capital limit removed or non-numeric: {label}")
+        return
+    if number < 0.0 or number > ceiling + 1e-12:
+        errors.append(f"authorized V6 paper-capital ceiling exceeded: {label} {number:g} > {ceiling:g}")
 
 
 def _strategies(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -67,69 +72,61 @@ def _fallback_limits(config: dict[str, Any]) -> dict[str, float | None]:
         "max_drawdown": _number(config.get("max_drawdown")),
         "max_market_fraction": _number(config.get("max_market_fraction")),
         "max_event_fraction": _number(config.get("max_event_fraction")),
-        "max_gross_fraction": _number(multi.get("global_max_gross_fraction"))
-        or _number(config.get("max_gross_fraction")),
+        "max_gross_fraction": _number(multi.get("global_max_gross_fraction")) or _number(config.get("max_gross_fraction")),
     }
+
+
+def _is_v6(path: str) -> bool:
+    return path == "config/paper_v6.json"
 
 
 def compare_paper_config(base: dict[str, Any], current: dict[str, Any], path: str) -> list[str]:
     errors: list[str] = []
 
-    for key in TOP_LEVEL_LIMITS:
+    for key in TOP_LEVEL_RELATIVE_LIMITS:
         _compare_limit(errors, f"{path}:{key}", base.get(key), current.get(key))
 
     base_multi = base.get("multi_strategy") if isinstance(base.get("multi_strategy"), dict) else {}
     current_multi = current.get("multi_strategy") if isinstance(current.get("multi_strategy"), dict) else {}
-
     if base_multi.get("paper_only") is True and current_multi.get("paper_only") is not True:
         errors.append(f"paper-only separation weakened: {path}:multi_strategy.paper_only must remain true")
 
-    for key in MULTI_STRATEGY_LIMITS:
-        _compare_limit(
-            errors,
-            f"{path}:multi_strategy.{key}",
-            base_multi.get(key),
-            current_multi.get(key),
-        )
+    for key in MULTI_STRATEGY_RELATIVE_LIMITS:
+        _compare_limit(errors, f"{path}:multi_strategy.{key}", base_multi.get(key), current_multi.get(key))
 
+    if _is_v6(path):
+        _absolute_ceiling(errors, f"{path}:max_market_fraction", current.get("max_market_fraction"), V6_AGGRESSIVE_CEILINGS["max_market_fraction"])
+        _absolute_ceiling(errors, f"{path}:max_event_fraction", current.get("max_event_fraction"), V6_AGGRESSIVE_CEILINGS["max_event_fraction"])
+        _absolute_ceiling(errors, f"{path}:max_gross_fraction", current.get("max_gross_fraction"), V6_AGGRESSIVE_CEILINGS["max_gross_fraction"])
+        _absolute_ceiling(errors, f"{path}:multi_strategy.global_max_gross_fraction", current_multi.get("global_max_gross_fraction"), V6_AGGRESSIVE_CEILINGS["multi_strategy.global_max_gross_fraction"])
+    else:
+        for key in LEGACY_CAPITAL_LIMITS:
+            _compare_limit(errors, f"{path}:{key}", base.get(key), current.get(key))
+        for key in LEGACY_MULTI_LIMITS:
+            _compare_limit(errors, f"{path}:multi_strategy.{key}", base_multi.get(key), current_multi.get(key))
+
+    # Legacy per-strategy overrides remain base-relative. V6 uses capital-isolated
+    # sleeves rather than a strategies[] override list, so its top-level ceilings
+    # above are the authoritative capital envelope.
     base_strategies = _strategies(base)
     current_strategies = _strategies(current)
     base_fallback = _fallback_limits(base)
     current_fallback = _fallback_limits(current)
-
     for name, current_strategy in sorted(current_strategies.items()):
-        current_overrides = (
-            current_strategy.get("overrides")
-            if isinstance(current_strategy.get("overrides"), dict)
-            else {}
-        )
+        current_overrides = current_strategy.get("overrides") if isinstance(current_strategy.get("overrides"), dict) else {}
         base_strategy = base_strategies.get(name, {})
-        base_overrides = (
-            base_strategy.get("overrides")
-            if isinstance(base_strategy.get("overrides"), dict)
-            else {}
-        )
-        for key in CHILD_LIMITS:
+        base_overrides = base_strategy.get("overrides") if isinstance(base_strategy.get("overrides"), dict) else {}
+        for key in CHILD_RELATIVE_LIMITS:
             base_value = base_overrides.get(key, base_fallback.get(key))
             current_value = current_overrides.get(key, current_fallback.get(key))
             if base_value is not None:
-                _compare_limit(
-                    errors,
-                    f"{path}:strategy[{name}].{key}",
-                    base_value,
-                    current_value,
-                )
+                _compare_limit(errors, f"{path}:strategy[{name}].{key}", base_value, current_value)
 
     return errors
 
 
 def _git_show_json(base_ref: str, path: str) -> dict[str, Any] | None:
-    proc = subprocess.run(
-        ["git", "show", f"{base_ref}:{path}"],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    proc = subprocess.run(["git", "show", f"{base_ref}:{path}"], text=True, capture_output=True, check=False)
     if proc.returncode != 0:
         return None
     data = json.loads(proc.stdout)
@@ -184,7 +181,9 @@ def render(errors: list[str], checked: list[str]) -> str:
         "",
         f"- paper configs checked: {len(checked)}",
         f"- hard-safety violations: {len(errors)}",
-        "- paper alpha/evaluation aggression: allowed when hard-safety limits remain at least as strict as the incumbent",
+        "- hard invariants: drawdown and paper-only separation remain base-relative/fail-closed",
+        "- V6 paper capital envelope: market<=5%, event<=15%, gross<=70% (explicit user-authorized ceilings)",
+        "- alpha/evaluation aggression inside those V6 ceilings is allowed",
     ]
     for item in checked:
         lines.append(f"- checked: `{item}`")
@@ -195,19 +194,14 @@ def render(errors: list[str], checked: list[str]) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Prevent weakening hard safety in paper model/evaluation changes")
+    parser = argparse.ArgumentParser(description="Protect true hard safety while allowing the authorized V6 paper capital envelope")
     parser.add_argument("--base-ref", default="origin/main")
     parser.add_argument("--changed-files", required=True)
     parser.add_argument("--root", default=".")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
-
     root = Path(args.root).resolve()
-    changed = {
-        line.strip()
-        for line in Path(args.changed_files).read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    }
+    changed = {line.strip() for line in Path(args.changed_files).read_text(encoding="utf-8").splitlines() if line.strip()}
     try:
         errors, checked = evaluate(args.base_ref, changed, root)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
