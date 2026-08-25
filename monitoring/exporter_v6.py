@@ -7,7 +7,7 @@ from typing import Sequence
 from exporter import ExporterHandler, Metrics, _float, _read_json, parse_args
 from exporter_v4 import V4Collector
 
-EXPORTER_V6_VERSION = "1.1.0"
+EXPORTER_V6_VERSION = "1.2.0"
 
 
 class V6Collector(V4Collector):
@@ -16,7 +16,12 @@ class V6Collector(V4Collector):
         metrics = Metrics()
         status = _read_json(self.run_root / "runtime_status.json") or {}
         allocator = _read_json(self.run_root / "allocator_status.json") or {}
-        metrics.sample("polymarket_v6_exporter_info", 1, help_text="Static V6 model-specific exporter metadata.", labels={"version": EXPORTER_V6_VERSION})
+        metrics.sample(
+            "polymarket_v6_exporter_info",
+            1,
+            help_text="Static V6 model-specific exporter metadata.",
+            labels={"version": EXPORTER_V6_VERSION},
+        )
         for name, row in (status.get("strategies") or {}).items():
             if not isinstance(row, dict):
                 continue
@@ -30,6 +35,36 @@ class V6Collector(V4Collector):
                 metrics.sample("polymarket_model_signal_window_rows", _float(row.get("signals")), help_text="Current V6 forward signals by model.", labels=labels)
             if "best_edge" in row:
                 metrics.sample("polymarket_model_best_net_edge_ratio", _float(row.get("best_edge")), help_text="Best current V6 executable edge by model.", labels=labels)
+            if "fills" in row:
+                metrics.sample(
+                    "polymarket_model_fills_total",
+                    _float(row.get("fills")),
+                    help_text="Cumulative V6 simulated fill events by model.",
+                    metric_type="counter",
+                    labels=labels,
+                )
+                metrics.sample(
+                    "polymarket_model_buy_fills_total",
+                    _float(row.get("buy_fills")),
+                    help_text="Cumulative V6 simulated entry/buy fill events by model.",
+                    metric_type="counter",
+                    labels=labels,
+                )
+                metrics.sample(
+                    "polymarket_model_sell_fills_total",
+                    _float(row.get("sell_fills")),
+                    help_text="Cumulative V6 simulated exit/sell fill events by model.",
+                    metric_type="counter",
+                    labels=labels,
+                )
+                metrics.sample(
+                    "polymarket_model_settle_fills_total",
+                    _float(row.get("settle_fills")),
+                    help_text="Cumulative V6 simulated settlement fill events by model.",
+                    metric_type="counter",
+                    labels=labels,
+                )
+
         relations = status.get("relations") if isinstance(status.get("relations"), dict) else {}
         local_factor = status.get("local_factor") if isinstance(status.get("local_factor"), dict) else {}
         bridge = status.get("external_bridge") if isinstance(status.get("external_bridge"), dict) else {}
