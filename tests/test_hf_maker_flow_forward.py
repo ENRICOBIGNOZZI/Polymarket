@@ -84,10 +84,22 @@ class HFMakerFlowForwardTest(unittest.TestCase):
     def test_research_workflow_runs_flow_aware_engine_not_posthoc_only(self) -> None:
         workflow = Path(".github/workflows/v6-research-smoke.yml").read_text(encoding="utf-8")
         self.assertIn("scripts/v6_micro_maker_v2.py", workflow)
-        self.assertIn("maker_ab/flow", workflow)
-        self.assertIn("maker_ab/baseline", workflow)
+        self.assertIn("root=v6_evidence/maker_ab", workflow)
+        self.assertIn('baseline="$root/baseline"', workflow)
+        self.assertIn('flow="$root/flow"', workflow)
+        self.assertIn('--run-dir "$flow"', workflow)
         self.assertIn("--min-fill-probability 0.005", workflow)
         self.assertIn("V6_MAKER_DEAD_FLOW_CANCEL_SECONDS", workflow)
+
+    def test_research_workflow_accepts_authorized_paper_ceiling(self) -> None:
+        workflow = Path(".github/workflows/v6-research-smoke.yml").read_text(encoding="utf-8")
+        self.assertIn("float(cfg['max_market_fraction']) <= .05", workflow)
+        self.assertIn("float(cfg['max_event_fraction']) <= .15", workflow)
+        self.assertIn("float(cfg['max_gross_fraction']) <= .70", workflow)
+        self.assertIn("float(cfg['max_drawdown']) <= .15", workflow)
+        self.assertNotIn("float(cfg['max_market_fraction']) <= .025", workflow)
+        self.assertNotIn("float(cfg['max_event_fraction']) <= .08", workflow)
+        self.assertNotIn("float(cfg['max_gross_fraction']) <= .45", workflow)
 
 
 if __name__ == "__main__":
