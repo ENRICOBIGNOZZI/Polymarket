@@ -20,8 +20,8 @@ FRESH_CACHE_SECONDS = 30.0
 STALE_CACHE_SECONDS = 900.0
 FALLBACK_MARKETS = 300
 GAMMA_TIMEOUT_SECONDS = 1.5
-CLOB_TIMEOUT_SECONDS = 2.5
-CLOB_DISCOVERY_BUDGET_SECONDS = 6.0
+CLOB_TIMEOUT_SECONDS = 3.0
+CLOB_DISCOVERY_BUDGET_SECONDS = 8.0
 BOOK_WORKERS = 8
 
 
@@ -111,6 +111,7 @@ class Proxy:
         self.failures = 0
         self.error = ""
         self.source = "startup"
+        self.clob_source = "startup"
         self.load()
 
     def load(self) -> None:
@@ -214,19 +215,19 @@ class Proxy:
             raise RuntimeError("Gamma keyset returned no markets")
         return out[:n]
 
-    def clob_candidates(self, n: int) -> list[dict[str, Any]]:
+    def clob_candidates(self, n: int, path: str, deadline: float) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         cursor = ""
-        deadline = time.monotonic() + CLOB_DISCOVERY_BUDGET_SECONDS
+        source = path.strip("/") or "markets"
         while len(out) < n and time.monotonic() < deadline:
             params = {"next_cursor": cursor} if cursor else {}
-            url = self.clob + "/markets" + ("?" + urllib.parse.urlencode(params) if params else "")
+            url = self.clob + path + ("?" + urllib.parse.urlencode(params) if params else "")
             remaining = deadline - time.monotonic()
             if remaining <= 0.1:
                 break
             value = req(url, timeout=min(CLOB_TIMEOUT_SECONDS, remaining))
             if not isinstance(value, dict) or not isinstance(value.get("data"), list):
-                raise RuntimeError("bad CLOB markets response")
+                raise RuntimeError(f"bad CLOB {source} response")
             batch = [row for row in value["data"] if isinstance(row, dict)]
             for row in batch:
                 if not b(row.get("active"), True) or b(row.get("closed")) or b(row.get("archived")):
@@ -244,7 +245,7 @@ class Proxy:
                 break
             cursor = nxt
         if not out:
-            raise RuntimeError("CLOB markets fallback returned no candidates")
+            raise RuntimeError(f"CLOB {source} returned no candidates")
         return out
 
     def books(self, candidates: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -307,8 +308,10 @@ class Proxy:
             "_proxy_source": "clob",
         }
 
-    def clob_rows(self, min_liquidity: float) -> list[dict[str, Any]]:
-        candidates = self.clob_candidates(FALLBACK_MARKETS)
+    def clob_rows_from(
+        self, path: str, min_liquidity: float, deadline: float
+    ) -> list[dict[str, Any]]:
+        candidates = self.clob_candidates(FALLBACK_MARKETS, path, deadline)
         books = self.books(candidates)
         out: list[dict[str, Any]] = []
         for candidate in candidates:
@@ -317,8 +320,27 @@ class Proxy:
                 out.append(row)
         out.sort(key=lambda row: f(row.get("liquidityNum")), reverse=True)
         if not out:
-            raise RuntimeError("CLOB fallback found no two-sided liquid markets")
+            raise RuntimeError(
+                f"CLOB {path.strip('/') or 'markets'} found no two-sided liquid markets"
+            )
         return out[:FALLBACK_MARKETS]
+
+    def clob_rows(self, min_liquidity: float) -> list[dict[str, Any]]:
+        deadline = time.monotonic() + CLOB_DISCOVERY_BUDGET_SECONDS
+        errors: list[str] = []
+        for path, source in (
+            ("/sampling-markets", "clob_sampling"),
+            ("/markets", "clob_markets"),
+        ):
+            try:
+                rows = self.clob_rows_from(path, min_liquidity, deadline)
+            except Exception as exc:
+                errors.append(f"{source}: {exc}")
+                continue
+            self.clob_source = source
+            return rows
+        self.clob_source = "clob_unavailable"
+        raise RuntimeError("CLOB fallback failed: " + "; ".join(errors))
 
     def markets(self, query: dict[str, list[str]]) -> list[dict[str, Any]]:
         limit = max(1, min(100, int(f((query.get("limit") or [100])[-1], 100))))
@@ -354,7 +376,7 @@ class Proxy:
                 try:
                     rows = self.clob_rows(min_liquidity)
                     self.save(rows)
-                    self.stat("clob_fallback", len(rows), False)
+                    self.stat(self.clob_source, len(rows), False)
                 except Exception as clob_error:
                     self.failures += 1
                     self.error = f"{self.error}; {clob_error}"
