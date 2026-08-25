@@ -99,10 +99,13 @@ def maker_diagnostics(run_dir: Path) -> dict[str, Any]:
         else None
     )
     final = equity_rows[-1] if equity_rows else {}
+    ticks = len(equity_rows)
+    posts = actions.get("POST", 0)
 
     return {
-        "ticks": len(equity_rows),
-        "posts": actions.get("POST", 0),
+        "ticks": ticks,
+        "posts": posts,
+        "posts_per_tick": (posts / ticks) if ticks else 0.0,
         "queue_depletions": actions.get("QUEUE_DEPLETION", 0),
         "partial_fills": actions.get("PARTIAL_FILL", 0),
         "full_fills": actions.get("FILL", 0),
@@ -120,10 +123,16 @@ def maker_diagnostics(run_dir: Path) -> dict[str, Any]:
     }
 
 
-def build_report(micro_state: Path, maker_baseline: Path, maker_aggressive: Path) -> dict[str, Any]:
+def build_report(
+    micro_state: Path,
+    maker_baseline: Path,
+    maker_aggressive: Path,
+    maker_broad: Path | None = None,
+) -> dict[str, Any]:
     micro = micro_diagnostics(micro_state)
     baseline = maker_diagnostics(maker_baseline)
     aggressive = maker_diagnostics(maker_aggressive)
+    broad = maker_diagnostics(maker_broad) if maker_broad is not None else None
     post_delta = aggressive["posts"] - baseline["posts"]
     fill_delta = aggressive["maker_buy_fill_rows"] - baseline["maker_buy_fill_rows"]
 
@@ -134,22 +143,30 @@ def build_report(micro_state: Path, maker_baseline: Path, maker_aggressive: Path
     else:
         maker_state = "NO_ACTIVITY_IMPROVEMENT"
 
-    return {
+    report: dict[str, Any] = {
         "paper_only": True,
         "authenticated_execution": False,
         "micro_taker": micro,
         "maker_baseline": baseline,
-        "maker_aggressive": aggressive,
+        "maker_aggressive_threshold": aggressive,
         "maker_post_delta": post_delta,
         "maker_fill_row_delta": fill_delta,
         "maker_challenger_state": maker_state,
         "promotion_ready": False,
         "decision": (
             "Do not force taker fills when the causal target is flat. Keep taker admission cost-aware; "
-            "use the lower-threshold, broader-universe maker policy only as forward paper shadow until "
-            "queue fills, adverse markout, exits and stressed net PnL are observed over repeated windows."
+            "test lower maker thresholds at a fixed universe separately from broader scanning, and require "
+            "repeated queue fills, adverse markout, exits and stressed net PnL before any promotion."
         ),
     }
+    if broad is not None:
+        baseline_ticks = max(1, int(baseline["ticks"]))
+        report["maker_broad_universe"] = broad
+        report["broad_tick_ratio_vs_baseline"] = broad["ticks"] / baseline_ticks
+        report["broad_scan_throughput_warning"] = bool(
+            baseline["ticks"] >= 2 and broad["ticks"] < 0.75 * baseline["ticks"]
+        )
+    return report
 
 
 def main() -> int:
@@ -157,10 +174,11 @@ def main() -> int:
     parser.add_argument("--micro-state", type=Path, required=True)
     parser.add_argument("--maker-baseline", type=Path, required=True)
     parser.add_argument("--maker-aggressive", type=Path, required=True)
+    parser.add_argument("--maker-broad", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
-    report = build_report(args.micro_state, args.maker_baseline, args.maker_aggressive)
+    report = build_report(args.micro_state, args.maker_baseline, args.maker_aggressive, args.maker_broad)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2, sort_keys=True))
