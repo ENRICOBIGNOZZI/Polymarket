@@ -115,7 +115,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p v6_evidence/maker
-          ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once > v6_evidence/maker.log 2>&1 || true
+          ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --improve-ticks 1 --max-queue-multiple 6 --once > v6_evidence/maker.log 2>&1 || true
       - name: Live public-data micro-taker causal warmup/markout probe
         shell: bash
         run: |
@@ -142,17 +142,20 @@ jobs:
             sleep 1
           done
           test -s v6_evidence/trade_tape.csv
-          # Sixteen observations span two complete 45-second exits while a
-          # 10-second target can still use a strictly pre-horizon REST mark.
-          # This produces causal labels and multiple tiny paper outcomes in one
-          # bounded smoke instead of merely proving that a position can open.
+          # Seventy-two observations cover more than 30 non-overlapping
+          # 10-second forecast blocks, so the production alpha evidence gate is
+          # reachable in this isolated smoke without weakening any threshold.
+          # The same window also produces causal labels and multiple tiny paper
+          # exploration outcomes instead of merely proving that a position can
+          # open.  Keep the bounded run comfortably inside the job timeout.
           # Keep the execution probe on the recorder's exact market universe;
           # otherwise active mid-price tokens can exist in the tape but remain
           # invisible to the smaller liquidity-ranked book scan.
-          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
+          probe_ticks=72
+          for i in $(seq 1 "$probe_ticks"); do
             kill -0 "$recorder_pid"
             python3 scripts/v6_queue_filter.py micro --config config/paper_v6.json --run-dir v6_evidence/micro_taker --markets "$probe_markets" --min-liquidity 25 --horizon-seconds 10 --max-target-staleness-seconds 5 --max-trade-usd 15 --min-edge 0.0003 --slippage-bps 5 --max-positions 10 --trade-tape v6_evidence/trade_tape.csv --exploration-enabled --exploration-max-trade-usd 5 --exploration-max-opens-per-hour 3 --exploration-max-positions 1 --exploration-hold-seconds 45 --exploration-min-activity 1 >> v6_evidence/micro_taker.log 2>&1
-            if (( i < 16 )); then sleep 5; fi
+            if (( i < probe_ticks )); then sleep 5; fi
           done
           stop_smoke_recorder
           trap - EXIT
