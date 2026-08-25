@@ -13,6 +13,7 @@ on:
       - "config/alpha_factory.json"
       - "scripts/promotion_gate.py"
       - "tests/test_promotion_gate.py"
+      - "tests/test_promotion_evidence_binding.py"
       - "config/scheduler_registry.json"
 
 permissions:
@@ -40,7 +41,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m unittest tests/test_promotion_gate.py -v
+          python3 -m unittest tests/test_promotion_gate.py tests/test_promotion_evidence_binding.py -v
           python3 -m py_compile scripts/promotion_gate.py
           python3 -m json.tool config/promotion_policy.json >/dev/null
           python3 - <<'PY'
@@ -145,12 +146,29 @@ jobs:
               --json-output "$probe_dir/result.json"
             )
             if [[ -n "$evidence_path" ]]; then
-              source_sha="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["headRefOid"])' "$probe_dir/source.json")"
-              if gh api "repos/${GITHUB_REPOSITORY}/contents/${evidence_path}?ref=${source_sha}" \
+              actual_source_sha="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["headRefOid"])' "$probe_dir/source.json")"
+              if ! gh api "repos/${GITHUB_REPOSITORY}/contents/${evidence_path}?ref=${actual_source_sha}" \
                 --jq .content > "$probe_dir/evidence.b64" 2>/dev/null; then
-                base64 -d "$probe_dir/evidence.b64" > "$probe_dir/evidence.json"
-                gate_args+=(--evidence "$probe_dir/evidence.json")
+                printf '%s\tblocked\tevidence_unavailable\n' "$number" >> promotion-controller/decisions.tsv
+                continue
               fi
+              base64 -d "$probe_dir/evidence.b64" > "$probe_dir/evidence.json"
+              bound_source_sha="$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1])).get("source_head_sha") or ""))' "$probe_dir/evidence.json")"
+              if [[ ! "$bound_source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                printf '%s\tblocked\tinvalid_evidence_source_sha\n' "$number" >> promotion-controller/decisions.tsv
+                continue
+              fi
+              if ! git fetch --quiet --no-tags origin "$actual_source_sha" "$bound_source_sha" || \
+                 ! git merge-base --is-ancestor "$bound_source_sha" "$actual_source_sha"; then
+                printf '%s\tblocked\tevidence_source_not_ancestor\n' "$number" >> promotion-controller/decisions.tsv
+                continue
+              fi
+              python3 - "$probe_dir/source.json" "$actual_source_sha" "$bound_source_sha" <<'PY'
+          import json,sys
+          path=sys.argv[1]; source=json.load(open(path)); source['actualHeadRefOid']=sys.argv[2]; source['headRefOid']=sys.argv[3]
+          with open(path,'w') as handle: json.dump(source,handle)
+          PY
+              gate_args+=(--evidence "$probe_dir/evidence.json")
             fi
 
             set +e
@@ -173,15 +191,17 @@ jobs:
               print(path)
           PY
             candidate_head="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["headRefOid"])' "$probe_dir/candidate.json")"
-            source_head="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["headRefOid"])' "$probe_dir/source.json")"
+            source_actual_head="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("actualHeadRefOid") or d["headRefOid"])' "$probe_dir/source.json")"
+            source_bound_head="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["headRefOid"])' "$probe_dir/source.json")"
             provenance_ok=1
             : > "$probe_dir/provenance.tsv"
             while IFS= read -r path; do
               [[ -n "$path" ]] || continue
               candidate_blob="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${candidate_head}" --jq .sha 2>/dev/null || echo __missing__)"
-              source_blob="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${source_head}" --jq .sha 2>/dev/null || echo __missing__)"
-              printf '%s\t%s\t%s\n' "$path" "$candidate_blob" "$source_blob" >> "$probe_dir/provenance.tsv"
-              if [[ "$candidate_blob" != "$source_blob" ]]; then
+              source_blob="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${source_actual_head}" --jq .sha 2>/dev/null || echo __missing__)"
+              bound_blob="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${source_bound_head}" --jq .sha 2>/dev/null || echo __missing__)"
+              printf '%s\t%s\t%s\t%s\n' "$path" "$candidate_blob" "$source_blob" "$bound_blob" >> "$probe_dir/provenance.tsv"
+              if [[ "$candidate_blob" != "$source_blob" || "$candidate_blob" != "$bound_blob" ]]; then
                 provenance_ok=0
               fi
             done < "$probe_dir/source-match-files.txt"
@@ -203,16 +223,11 @@ jobs:
           import json
           rows = []
           for line in open('promotion-controller/eligible.jsonl'):
-              if line.strip():
-                  rows.append(json.loads(line))
+              if line.strip(): rows.append(json.loads(line))
           if not rows:
               print('')
           else:
-              rows.sort(key=lambda x: (
-                  0 if x['promotion_class'] == 'operational' else 1,
-                  -float(x['score']) if x['promotion_class'] == 'economic' else 0.0,
-                  int(x['number']),
-              ))
+              rows.sort(key=lambda x: (0 if x['promotion_class']=='operational' else 1,-float(x['score']) if x['promotion_class']=='economic' else 0.0,int(x['number'])))
               print(rows[0]['number'])
           PY
           )"
@@ -222,7 +237,7 @@ jobs:
             echo "selected_pr=$selected" | tee promotion-controller/authorization.txt
             if ! grep -qx "$selected" promotion-controller/previously-authorized.txt 2>/dev/null; then
               gh pr comment "$selected" --body \
-                "Promotion Controller authorized this paper integration for the current cycle. Objective candidate/source checks passed; economic surfaces additionally passed exact-source code provenance, machine-readable OOS, cost-stress, drawdown, FDR, stability, incremental-utility, independent-window and data-health gates. Authorization is re-evaluated every cycle and does not authorize real-money execution."
+                "Promotion Controller authorized this paper integration for the current cycle. Objective candidate/source checks passed; economic surfaces additionally passed ancestor-bound exact-source code provenance, machine-readable OOS, cost-stress, drawdown, FDR, stability, incremental-utility, independent-window and data-health gates. Authorization is re-evaluated every cycle and does not authorize real-money execution."
             fi
           else
             echo 'selected_pr=none' | tee promotion-controller/authorization.txt

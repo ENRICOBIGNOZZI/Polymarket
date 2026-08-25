@@ -70,8 +70,8 @@ jobs:
             > integration-merge/candidate.json
           source_number="$(python3 - <<'PY'
           import json,re
-          body = json.load(open('integration-merge/candidate.json')).get('body') or ''
-          match = re.search(r'source research pr/branch/commit:\s*#(\d+)\b', body, re.I)
+          body=json.load(open('integration-merge/candidate.json')).get('body') or ''
+          match=re.search(r'source research pr/branch/commit:\s*#(\d+)\b',body,re.I)
           print(match.group(1) if match else '')
           PY
           )"
@@ -84,15 +84,12 @@ jobs:
 
           current_main="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
           base_sha="$(python3 -c 'import json; print(json.load(open("integration-merge/candidate.json"))["baseRefOid"])')"
-          test "$base_sha" = "$current_main" || {
-            echo "Authorized PR base $base_sha is stale versus main $current_main; wait for fresh checks." >&2
-            exit 1
-          }
+          test "$base_sha" = "$current_main" || { echo "Authorized PR base $base_sha is stale versus main $current_main; wait for fresh checks." >&2; exit 1; }
 
           evidence_path="$(python3 - <<'PY'
           import json,re
-          body = json.load(open('integration-merge/candidate.json')).get('body') or ''
-          match = re.search(r'promotion evidence file:\s*([^\s`]+\.json)\b', body, re.I)
+          body=json.load(open('integration-merge/candidate.json')).get('body') or ''
+          match=re.search(r'promotion evidence file:\s*([^\s`]+\.json)\b',body,re.I)
           print(match.group(1) if match else '')
           PY
           )"
@@ -108,31 +105,37 @@ jobs:
             --require-approval-label
           )
           if [[ -n "$evidence_path" ]]; then
-            source_sha="$(python3 -c 'import json; print(json.load(open("integration-merge/source.json"))["headRefOid"])')"
-            gh api "repos/${GITHUB_REPOSITORY}/contents/${evidence_path}?ref=${source_sha}" \
-              --jq .content > integration-merge/evidence.b64
+            actual_source_sha="$(python3 -c 'import json; print(json.load(open("integration-merge/source.json"))["headRefOid"])')"
+            gh api "repos/${GITHUB_REPOSITORY}/contents/${evidence_path}?ref=${actual_source_sha}" --jq .content > integration-merge/evidence.b64
             base64 -d integration-merge/evidence.b64 > integration-merge/evidence.json
+            bound_source_sha="$(python3 -c 'import json; print(str(json.load(open("integration-merge/evidence.json")).get("source_head_sha") or ""))')"
+            [[ "$bound_source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'Promotion evidence source SHA is invalid.' >&2; exit 1; }
+            git fetch --quiet --no-tags origin "$actual_source_sha" "$bound_source_sha"
+            git merge-base --is-ancestor "$bound_source_sha" "$actual_source_sha" || { echo 'Promotion evidence is not bound to an ancestor of the current research head.' >&2; exit 1; }
+            python3 - integration-merge/source.json "$actual_source_sha" "$bound_source_sha" <<'PY'
+          import json,sys
+          path=sys.argv[1];source=json.load(open(path));source['actualHeadRefOid']=sys.argv[2];source['headRefOid']=sys.argv[3]
+          with open(path,'w') as handle:json.dump(source,handle)
+          PY
             gate_args+=(--evidence integration-merge/evidence.json)
           fi
           "${gate_args[@]}"
 
           candidate_head="$(python3 -c 'import json; print(json.load(open("integration-merge/candidate.json"))["headRefOid"])')"
-          source_head="$(python3 -c 'import json; print(json.load(open("integration-merge/source.json"))["headRefOid"])')"
+          source_actual_head="$(python3 -c 'import json; d=json.load(open("integration-merge/source.json")); print(d.get("actualHeadRefOid") or d["headRefOid"])')"
+          source_bound_head="$(python3 -c 'import json; print(json.load(open("integration-merge/source.json"))["headRefOid"])')"
           python3 - <<'PY' > integration-merge/source-match-files.txt
           import json
-          for path in json.load(open('integration-merge/promotion-gate.json')).get('source_content_match_files', []):
-              print(path)
+          for path in json.load(open('integration-merge/promotion-gate.json')).get('source_content_match_files',[]):print(path)
           PY
           : > integration-merge/provenance.tsv
           while IFS= read -r path; do
             [[ -n "$path" ]] || continue
             candidate_blob="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${candidate_head}" --jq .sha 2>/dev/null || echo __missing__)"
-            source_blob="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${source_head}" --jq .sha 2>/dev/null || echo __missing__)"
-            printf '%s\t%s\t%s\n' "$path" "$candidate_blob" "$source_blob" >> integration-merge/provenance.tsv
-            test "$candidate_blob" = "$source_blob" || {
-              echo "Economic source-content mismatch: $path" >&2
-              exit 1
-            }
+            source_blob="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${source_actual_head}" --jq .sha 2>/dev/null || echo __missing__)"
+            bound_blob="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${source_bound_head}" --jq .sha 2>/dev/null || echo __missing__)"
+            printf '%s\t%s\t%s\t%s\n' "$path" "$candidate_blob" "$source_blob" "$bound_blob" >> integration-merge/provenance.tsv
+            test "$candidate_blob" = "$source_blob" && test "$candidate_blob" = "$bound_blob" || { echo "Economic source-content mismatch: $path" >&2; exit 1; }
           done < integration-merge/source-match-files.txt
 
       - name: Merge controller-authorized automatic paper-champion promotion
@@ -142,9 +145,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh pr view "$PR_NUMBER" \
-            --json headRefOid,baseRefOid,mergeStateStatus,labels \
-            > integration-merge/candidate-final.json
+          gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,mergeStateStatus,labels > integration-merge/candidate-final.json
           expected_head="$(python3 -c 'import json; print(json.load(open("integration-merge/candidate-final.json"))["headRefOid"])')"
           expected_base="$(python3 -c 'import json; print(json.load(open("integration-merge/candidate-final.json"))["baseRefOid"])')"
           current_main="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
@@ -152,33 +153,22 @@ jobs:
           test "$(python3 -c 'import json; print(json.load(open("integration-merge/candidate-final.json"))["mergeStateStatus"])')" = CLEAN
           python3 - <<'PY'
           import json
-          labels = {x.get('name') for x in json.load(open('integration-merge/candidate-final.json')).get('labels', [])}
+          labels={x.get('name') for x in json.load(open('integration-merge/candidate-final.json')).get('labels',[])}
           assert 'autonomous-promotion-approved' in labels
           PY
 
-          gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$expected_head" \
-            | tee integration-merge/merge-result.txt
+          gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$expected_head" | tee integration-merge/merge-result.txt
           merged_sha="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq .mergeCommit.oid)"
           [[ "$merged_sha" =~ ^[0-9a-f]{40}$ ]]
           test "$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$merged_sha"
           echo "MERGED_SHA=$merged_sha" >> "$GITHUB_ENV"
 
           python3 - "$merged_sha" "$PR_NUMBER" > integration-merge/integration-dispatch.json <<'PY'
-          import json
-          import sys
-          print(json.dumps({
-              'event_type': 'champion-integration-merged',
-              'client_payload': {
-                  'sha': sys.argv[1],
-                  'pr_number': int(sys.argv[2]),
-                  'automatic_promotion': True,
-              },
-          }))
+          import json,sys
+          print(json.dumps({'event_type':'champion-integration-merged','client_payload':{'sha':sys.argv[1],'pr_number':int(sys.argv[2]),'automatic_promotion':True}}))
           PY
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" \
-            --input integration-merge/integration-dispatch.json
-          gh pr comment "$PR_NUMBER" --body \
-            "Automatically promoted at \`$merged_sha\` after Promotion Controller authorization and immediate fail-closed revalidation. Post-merge exact-SHA validation now owns \`paper-validated\` and deployment. Authenticated real-money execution remains disabled."
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" --input integration-merge/integration-dispatch.json
+          gh pr comment "$PR_NUMBER" --body "Automatically promoted at \`$merged_sha\` after Promotion Controller authorization and immediate fail-closed revalidation. Post-merge exact-SHA validation now owns \`paper-validated\` and deployment. Authenticated real-money execution remains disabled."
 
       - name: Publish integration action
         if: always()
