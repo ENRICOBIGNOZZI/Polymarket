@@ -189,8 +189,8 @@ reap_orphan_v6_loops(){
 }
 trap cleanup EXIT
 trap shutdown INT TERM
-reap_orphan_v6_loops
 seed_market_proxy_cache
+reap_orphan_v6_loops
 start_proxy
 proxy_ready=0
 for _ in {1..50};do
