@@ -31,6 +31,7 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
         age: int = 60,
         conclusion: str = "success",
         run_id: int = 1,
+        event: str = "schedule",
     ) -> dict:
         return {
             "databaseId": run_id,
@@ -39,7 +40,7 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
             "conclusion": conclusion,
             "headSha": self.main,
             "headBranch": "main",
-            "event": "schedule",
+            "event": event,
             "createdAt": self.now - age - 10,
             "updatedAt": self.now - age,
             "url": f"https://example.invalid/run/{run_id}",
@@ -83,6 +84,77 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
         result = module.classify_workflow(spec, latest, "a" * 40, 2_000, 300)
         self.assertEqual(result["state"], "failed")
         self.assertTrue(result["dispatch_needed"])
+
+    def test_expected_deploy_timer_skip_does_not_mask_real_failure(self) -> None:
+        runs = [
+            run
+            for run in self.healthy_runs()
+            if run["workflowName"] != "deploy-paper-server"
+        ]
+        runs.extend(
+            [
+                self.workflow_run(
+                    "deploy-paper-server",
+                    age=120,
+                    conclusion="failure",
+                    run_id=90,
+                    event="workflow_run",
+                ),
+                self.workflow_run(
+                    "deploy-paper-server",
+                    age=30,
+                    conclusion="skipped",
+                    run_id=91,
+                    event="schedule",
+                ),
+            ]
+        )
+        snapshot = self.healthy_snapshot()
+        snapshot["runs"] = runs
+        report = module.build_report(self.config, snapshot, self.now)
+        deploy = report["workflow_status"]["deploy-paper-server.yml"]
+        self.assertEqual(deploy["state"], "failure_cooldown", deploy)
+        self.assertEqual(deploy["latest_run"]["database_id"], 90)
+        self.assertIn("failure", deploy["reason"])
+        self.assertEqual(report["invariants"]["expected_scheduled_skips_ignored"], 1)
+        self.assertEqual(report["status"], "DEGRADED")
+
+    def test_expected_deploy_timer_skip_without_prior_evidence_is_missing(self) -> None:
+        runs = [
+            run
+            for run in self.healthy_runs()
+            if run["workflowName"] != "deploy-paper-server"
+        ]
+        runs.append(
+            self.workflow_run(
+                "deploy-paper-server",
+                age=30,
+                conclusion="skipped",
+                run_id=91,
+                event="schedule",
+            )
+        )
+        snapshot = self.healthy_snapshot()
+        snapshot["runs"] = runs
+        report = module.build_report(self.config, snapshot, self.now)
+        deploy = report["workflow_status"]["deploy-paper-server.yml"]
+        self.assertEqual(deploy["state"], "missing", deploy)
+        self.assertIsNone(deploy["latest_run"])
+        self.assertEqual(report["invariants"]["expected_scheduled_skips_ignored"], 1)
+        self.assertEqual(report["status"], "DEGRADED")
+
+    def test_nonconfigured_scheduled_skip_remains_fail_closed(self) -> None:
+        runs = self.healthy_runs()
+        for run in runs:
+            if run["workflowName"] == "Polymarket Research Policy":
+                run["conclusion"] = "skipped"
+                run["updatedAt"] = self.now - 30
+        snapshot = self.healthy_snapshot()
+        snapshot["runs"] = runs
+        report = module.build_report(self.config, snapshot, self.now)
+        policy = report["workflow_status"]["research-policy.yml"]
+        self.assertEqual(policy["state"], "failed", policy)
+        self.assertTrue(policy["dispatch_needed"])
 
     def test_missing_autonomous_product_is_unhealthy(self) -> None:
         health = module._autonomous_product_health({}, {}, 2_000)
