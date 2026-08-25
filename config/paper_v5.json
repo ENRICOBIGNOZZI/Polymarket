@@ -2,7 +2,7 @@
   "gamma_url": "https://gamma-api.polymarket.com",
   "clob_url": "https://clob.polymarket.com",
   "run_dir": "runs/paper_v5_live",
-  "external_signals_file": "data/external_signals.csv",
+  "external_signals_file": "runs/paper_v5_live/external_signals.csv",
 
   "market_limit": 500,
   "gamma_page_size": 100,
