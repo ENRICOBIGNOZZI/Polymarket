@@ -7,6 +7,7 @@ MIN_LIQUIDITY="${V6_MIN_LIQUIDITY:-10}"
 MARKETS="${V6_MARKETS:-700}"
 RECORDER_MARKETS="${V6_RECORDER_MARKETS:-1200}"
 INTENT_MIN_EDGE="${V6_INTENT_MIN_EDGE:-0.00020}"
+MAX_QUEUE_RATIO="${V6_MAX_QUEUE_RATIO:-50}"
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/micro_taker" "$RUN_ROOT/hard_arb" "$RUN_ROOT/external"
 
 # Capital-isolated sleeves sum to parent capital. There is no operational
@@ -29,8 +30,9 @@ for name,frac in alloc:
     (root/f'{name}_config.json').write_text(json.dumps(child,indent=2,sort_keys=True)+'\n')
 PY
 
-rm -f "$RUN_ROOT"/intents.csv "$RUN_ROOT"/local_factor_intents.csv \
-      "$RUN_ROOT"/relation_intents_raw.csv "$RUN_ROOT"/relation_intents.csv \
+rm -f "$RUN_ROOT"/intents.csv "$RUN_ROOT"/local_factor_intents.csv "$RUN_ROOT"/local_factor_exec_intents.csv \
+      "$RUN_ROOT"/relation_intents_raw.csv "$RUN_ROOT"/relation_intents.csv "$RUN_ROOT"/relation_exec_intents.csv \
+      "$RUN_ROOT"/relation_queue_status.json "$RUN_ROOT"/local_factor_queue_status.json \
       "$RUN_ROOT"/stat_arb_pairs_diagnostic.csv
 
 rec_pid=0; broker_pid=0; external_pid=0
@@ -50,7 +52,7 @@ trap cleanup EXIT INT TERM
 start_recorder;start_broker;start_external;write_supervisor
 
 last_factor=0;last_relation=0;last_external=0;last_report=0;last_micro_taker=0;last_hard_arb=0
-rebuild_intents(){ python3 scripts/merge_v4_intents.py --input "$RUN_ROOT/local_factor_intents.csv" --input "$RUN_ROOT/relation_intents.csv" --output "$RUN_ROOT/intents.csv" --min-edge "$INTENT_MIN_EDGE" --max-age-seconds 240 --max-bundles 120 >>"$RUN_ROOT/intent_merge.log" 2>&1||true; }
+rebuild_intents(){ python3 scripts/merge_v4_intents.py --input "$RUN_ROOT/local_factor_exec_intents.csv" --input "$RUN_ROOT/relation_exec_intents.csv" --output "$RUN_ROOT/intents.csv" --min-edge "$INTENT_MIN_EDGE" --max-age-seconds 240 --max-bundles 120 >>"$RUN_ROOT/intent_merge.log" 2>&1||true; }
 
 while true;do
   now="$(date +%s)"
@@ -63,8 +65,10 @@ while true;do
   ./build/polymarket_maker_paper --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.15 --once >>"$RUN_ROOT/maker.log" 2>&1||true
 
   # Micro taker: online short-horizon markout model; mandatory horizon exit.
+  # Search a broader universe without lowering the alpha threshold. This raises
+  # the number of immediately executable opportunities rather than weakening admission.
   if ((now-last_micro_taker>=5));then
-    python3 scripts/v6_micro_taker.py --config "$RUN_ROOT/micro_taker_config.json" --run-dir "$RUN_ROOT/micro_taker" --markets 250 --min-liquidity 25 --horizon-seconds 30 --max-trade-usd 15 --min-edge 0.00030 --slippage-bps 5 --max-positions 20 >>"$RUN_ROOT/micro_taker.log" 2>&1||true
+    python3 scripts/v6_micro_taker.py --config "$RUN_ROOT/micro_taker_config.json" --run-dir "$RUN_ROOT/micro_taker" --markets 500 --min-liquidity 25 --horizon-seconds 30 --max-trade-usd 15 --min-edge 0.00030 --slippage-bps 5 --max-positions 24 >>"$RUN_ROOT/micro_taker.log" 2>&1||true
     last_micro_taker=$now
   fi
 
@@ -76,11 +80,15 @@ while true;do
   fi
 
   if ((now-last_factor>=60));then
-    rm -f "$RUN_ROOT/local_factor_intents.csv" "$RUN_ROOT/stat_arb_pairs_diagnostic.csv"
+    rm -f "$RUN_ROOT/local_factor_intents.csv" "$RUN_ROOT/local_factor_exec_intents.csv" "$RUN_ROOT/stat_arb_pairs_diagnostic.csv"
     # Legacy B1 is diagnostic only under strict gates and cannot generate V6 intents.
     ./build/polymarket_stat_arb --config "$RUN_ROOT/broker_config.json" --markets "$MARKETS" --history-universe 300 --lookback-hours 720 --fidelity-minutes 30 --min-z 1.25 --min-t-reversion 2.00 --max-half-life-hours 168 --top 150 --csv "$RUN_ROOT/stat_arb_pairs_diagnostic.csv" >"$RUN_ROOT/stat_arb_pairs_diagnostic.log" 2>"$RUN_ROOT/stat_arb_pairs_errors.log"||true
     # Production mean reversion: local panel, common sample and BH-FDR controlled.
     python3 scripts/v6_local_factor_intents.py --config "$CONFIG" --output "$RUN_ROOT/local_factor_intents.csv" --status "$RUN_ROOT/local_factor_status.json" --markets 400 --min-liquidity "$MIN_LIQUIDITY" --lookback-hours 336 --fidelity-minutes 60 --max-clusters 15 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 --slippage-bps 5 >"$RUN_ROOT/local_factor_latest.log" 2>"$RUN_ROOT/local_factor_errors.log"||true
+    # Passive signals must also be executable: reject stale/deep-queue bundles
+    # before they can reserve broker capital.
+    rm -f "$RUN_ROOT/local_factor_exec_intents.csv"
+    python3 scripts/v6_queue_filter.py --config "$CONFIG" --input "$RUN_ROOT/local_factor_intents.csv" --output "$RUN_ROOT/local_factor_exec_intents.csv" --status "$RUN_ROOT/local_factor_queue_status.json" --max-queue-ratio "$MAX_QUEUE_RATIO" --max-age-seconds 240 >"$RUN_ROOT/local_factor_queue_latest.log" 2>"$RUN_ROOT/local_factor_queue_errors.log"||true
     rebuild_intents;last_factor=$now
   fi
 
@@ -88,6 +96,8 @@ while true;do
     # Semantic parsing discovers relations only. Maker bundles are GRAPH_RV, not hard arb.
     python3 scripts/v6_relation_intents.py --config "$CONFIG" --output "$RUN_ROOT/relation_intents_raw.csv" --status "$RUN_ROOT/relation_status.json" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 --max-events 80 >"$RUN_ROOT/relation_latest.log" 2>"$RUN_ROOT/relation_errors.log"||true
     python3 scripts/v6_intent_guard.py --input "$RUN_ROOT/relation_intents_raw.csv" --output "$RUN_ROOT/relation_intents.csv" --status "$RUN_ROOT/relation_guard_status.json" --min-edge "$INTENT_MIN_EDGE" --stress-bps 10 --max-age-seconds 240 >>"$RUN_ROOT/relation_guard.log" 2>&1||true
+    rm -f "$RUN_ROOT/relation_exec_intents.csv"
+    python3 scripts/v6_queue_filter.py --config "$CONFIG" --input "$RUN_ROOT/relation_intents.csv" --output "$RUN_ROOT/relation_exec_intents.csv" --status "$RUN_ROOT/relation_queue_status.json" --max-queue-ratio "$MAX_QUEUE_RATIO" --max-age-seconds 240 >"$RUN_ROOT/relation_queue_latest.log" 2>"$RUN_ROOT/relation_queue_errors.log"||true
     rebuild_intents;last_relation=$now
   fi
 
@@ -97,6 +107,7 @@ while true;do
   fi
 
   if ((now-last_report>=60));then
+    python3 scripts/v6_execution_diagnostics.py --run-root "$RUN_ROOT" --output "$RUN_ROOT/execution_diagnostics.json" >"$RUN_ROOT/execution_diagnostics.log" 2>&1||true
     python3 scripts/v6_runtime_status.py --config "$CONFIG" --run-root "$RUN_ROOT" >"$RUN_ROOT/runtime_status.log" 2>&1||true
     python3 scripts/runtime_action_report.py --run-root "$RUN_ROOT" --external-signals "$RUN_ROOT/external_signals.csv" --window-seconds 3600 --production-edge "$INTENT_MIN_EDGE" --output-json "$RUN_ROOT/action_report.json" --output-markdown "$RUN_ROOT/action_report.md" >"$RUN_ROOT/action_report_latest.log" 2>&1||true
     last_report=$now
