@@ -3,9 +3,14 @@ set -euo pipefail
 
 CONFIG="${1:-config/paper_v6.json}"
 R="${2:-paper_v6_live}"
-MARKETS="${V6_SMOKE_MARKETS:-220}"
-MIN_LIQUIDITY="${V6_SMOKE_MIN_LIQUIDITY:-10}"
-EDGE="${V6_SMOKE_MIN_EDGE:-0.00020}"
+MARKETS="${V6_SMOKE_MARKETS:-500}"
+MIN_LIQUIDITY="${V6_SMOKE_MIN_LIQUIDITY:-2}"
+EDGE="${V6_SMOKE_MIN_EDGE:-0.00005}"
+FORWARD_TICKS="${V6_SMOKE_FORWARD_TICKS:-8}"
+FORWARD_SLEEP_SECONDS="${V6_SMOKE_FORWARD_SLEEP_SECONDS:-10}"
+MAKER_MAX_ORDER_USD="${V6_SMOKE_MAKER_MAX_ORDER_USD:-125}"
+[[ "$FORWARD_TICKS" =~ ^[1-9][0-9]*$ ]]
+[[ "$FORWARD_SLEEP_SECONDS" =~ ^[0-9]+$ ]]
 mkdir -p "$R" "$R/maker" "$R/micro_taker" "$R/hard_arb" "$R/external"
 
 python3 scripts/v6_materialize_configs.py --config "$CONFIG" --run-root "$R" > "$R/materialize.log"
@@ -15,25 +20,37 @@ python3 scripts/v6_materialize_configs.py --config "$CONFIG" --run-root "$R" > "
   --min-liquidity "$MIN_LIQUIDITY" --lookback-seconds 900 --once \
   | tee "$R/trade_recorder_latest.log"
 
-# Validate the same aggressive execution contract used by the persistent V6
-# launcher: edge-aware one-tick improvement, no giant FIFO queues, and the
-# configured $60/trade ceiling. Run several ticks so the smoke actually tests
-# resting-order lifecycle/queue depletion instead of stopping immediately after
-# POST. A fill is still not required: fills remain public-tape/FIFO driven.
+# HF research challenger: broaden discovery and lower the paper edge floor inside
+# the user-authorized envelope, but do not buy fills. A join order must clear a
+# stricter queue/size gate; inside-spread improvement is allowed for up to three
+# ticks only while the existing maker model still has positive post-cost edge.
+# Refresh public tape before each subsequent maker tick so all queue depletion
+# and fills are strictly post-entry evidence.
 : > "$R/maker_latest.log"
-for i in 1 2 3 4; do
+for (( maker_tick=1; maker_tick<=FORWARD_TICKS; maker_tick++ )); do
+  if (( maker_tick > 1 )); then
+    sleep "$FORWARD_SLEEP_SECONDS"
+    ./build/polymarket_trade_recorder \
+      --config "$CONFIG" --run-dir "$R" --markets "$MARKETS" --batch 40 \
+      --min-liquidity "$MIN_LIQUIDITY" --lookback-seconds 900 --once \
+      | tee -a "$R/trade_recorder_latest.log"
+  fi
   ./build/polymarket_maker_paper \
     --config "$R/maker_config.json" --run-dir "$R/maker" --markets "$MARKETS" \
-    --min-liquidity "$MIN_LIQUIDITY" --min-edge "$EDGE" --max-order-usd 60 \
-    --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.10 \
-    --improve-ticks 1 --max-queue-multiple 6 --once \
+    --min-liquidity "$MIN_LIQUIDITY" --min-edge "$EDGE" --max-order-usd "$MAKER_MAX_ORDER_USD" \
+    --ttl-seconds 60 --hold-seconds 300 --adverse-selection-mult 0.10 \
+    --improve-ticks 3 --max-queue-multiple 2 --once \
     | tee -a "$R/maker_latest.log"
-  if (( i < 4 )); then sleep 6; fi
 done
 
+python3 scripts/hf_maker_queue_hazard_audit.py \
+  --order-log "$R/maker/maker_order_log.csv" --trade-tape "$R/trade_tape.csv" \
+  --max-queue-multiple 2 --output "$R/maker/queue_hazard_audit.json" \
+  | tee "$R/maker_queue_hazard_audit.log"
+
 # Three snapshots deliberately exercise feature persistence and maturity; a
-# smoke does not require the new online model to invent a trade before it has
-# enough training observations.
+# smoke does not require the online taker model to invent a trade before it has
+# causal forward evidence. Do not force taker fills from a flat target.
 for i in 1 2 3; do
   python3 scripts/v6_micro_taker.py \
     --config "$R/micro_taker_config.json" --run-dir "$R/micro_taker" \
@@ -43,6 +60,9 @@ for i in 1 2 3; do
   if (( i < 3 )); then sleep 6; fi
 done
 
+# Keep the existing paper hard-arb smoke bounded. Its output is discovery
+# evidence only until per-token receive-time, leg-skew and legging/unwind
+# contracts are present in the paper executor as they are in the fast shadow.
 python3 scripts/v6_hard_arb_paper.py \
   --config "$R/hard_arb_config.json" --run-dir "$R/hard_arb" \
   --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --max-events 50 \
@@ -109,13 +129,14 @@ assert float(status['drawdown']) <= 0.15 + 1e-12
 assert (root/'hard_arb/status.json').exists()
 assert (root/'local_factor_status.json').exists()
 assert (root/'relation_guard_status.json').exists()
+assert (root/'maker/queue_hazard_audit.json').exists()
 PY
 
 python3 - "$R" <<'PY'
 from pathlib import Path
 import json,sys
 r=Path(sys.argv[1])
-for p in ('runtime_status.json','allocator_status.json','local_factor_status.json','relation_status.json','relation_guard_status.json','hard_arb/status.json'):
+for p in ('runtime_status.json','allocator_status.json','local_factor_status.json','relation_status.json','relation_guard_status.json','hard_arb/status.json','maker/queue_hazard_audit.json'):
     json.loads((r/p).read_text())
 print('v6_live_smoke_ok')
 PY
