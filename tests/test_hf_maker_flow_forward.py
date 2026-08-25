@@ -10,7 +10,12 @@ from scripts.hf_maker_flow_admission import evaluate
 from scripts.hf_maker_forward_audit import audit, realized_roundtrip_pnl
 from scripts.v6_market_common import TapeFlow
 from scripts.v6_micro_maker import replayable_trade_timestamp
-from scripts.v6_micro_maker_v2 import enforce_total_gross_cap, gate_inside_fill_probability
+from scripts.v6_micro_maker_v2 import (
+    enforce_total_gross_cap,
+    gate_inside_fill_probability,
+    projected_remaining_clearance_ratio,
+    should_recycle_dead_order,
+)
 
 
 def write_csv(path: Path, fields: list[str], rows: list[dict[str, object]]) -> None:
@@ -55,6 +60,62 @@ class HFMakerFlowForwardTest(unittest.TestCase):
                 0.42, queue_ahead=0.0, confidence=0.90, min_inside_confidence=0.80
             ),
             0.42,
+        )
+
+    def test_high_projected_hazard_is_not_recycled_on_fixed_grace(self) -> None:
+        order = {
+            "created_ts": 100,
+            "queue_ahead": 20.0,
+            "remaining_shares": 5.0,
+            "flow_rate": 5.0,
+        }
+        self.assertGreater(projected_remaining_clearance_ratio(order, now=125, ttl_seconds=60), 1.0)
+        self.assertFalse(
+            should_recycle_dead_order(
+                order,
+                observed_compatible_flow=0.0,
+                now=125,
+                grace_seconds=20,
+                ttl_seconds=60,
+                min_projected_clearance=1.0,
+            )
+        )
+
+    def test_low_projected_hazard_is_recycled_after_grace(self) -> None:
+        order = {
+            "created_ts": 100,
+            "queue_ahead": 100.0,
+            "remaining_shares": 20.0,
+            "flow_rate": 0.1,
+        }
+        self.assertLess(projected_remaining_clearance_ratio(order, now=125, ttl_seconds=60), 1.0)
+        self.assertTrue(
+            should_recycle_dead_order(
+                order,
+                observed_compatible_flow=0.0,
+                now=125,
+                grace_seconds=20,
+                ttl_seconds=60,
+                min_projected_clearance=1.0,
+            )
+        )
+
+    def test_observed_flow_prevents_dead_queue_recycle(self) -> None:
+        order = {
+            "created_ts": 100,
+            "queue_ahead": 100.0,
+            "remaining_shares": 20.0,
+            "flow_rate": 0.0,
+        }
+        self.assertFalse(
+            should_recycle_dead_order(
+                order,
+                observed_compatible_flow=1.0,
+                now=125,
+                grace_seconds=20,
+                ttl_seconds=60,
+                min_projected_clearance=1.0,
+            )
         )
 
     def test_roundtrip_pnl_is_fill_conditioned(self) -> None:
