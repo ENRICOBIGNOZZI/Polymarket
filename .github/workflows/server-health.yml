@@ -266,7 +266,7 @@ jobs:
             if [[ -z "$last_failure" ]]; then
               return 1
             fi
-            if [[ -z "$last_success" || "$last_failure" -gt "$last_success" ]]; then
+            if [[ -z "$last_success" || "$last_failure" -ge "$last_success" ]]; then
               return 0
             fi
             return 1
