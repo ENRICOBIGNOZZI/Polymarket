@@ -239,14 +239,16 @@ jobs:
           )
 
           cd "$source_dir"
-          # This is an isolated process-tree canary.  The simulated process has
-          # the exact same-repository V6 loop path in its argv (which is what the
-          # production reaper matches), but it never starts a proxy, recorder or
-          # model writer.  It therefore exercises process selection/termination
-          # without introducing another paper runtime into the validation node.
+          # This is an isolated process-tree canary.  The simulated process uses
+          # the historical relative `scripts/paper_v6_loop.sh` argv form, while
+          # its cwd is the exact source repository.  It never starts a proxy,
+          # recorder or model writer, so it exercises production selection and
+          # termination without introducing another paper runtime into the node.
           simulated_v6_visible() {
-            local pid="$1"
-            pgrep -f "$source_dir/scripts/paper_v6_loop.sh" 2>/dev/null | grep -qx "$pid"
+            local pid="$1" cwd=""
+            pgrep -f 'paper_v6_loop\.sh' 2>/dev/null | grep -qx "$pid" || return 1
+            cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)"
+            [[ "$cwd" == "$source_dir" ]]
           }
           pid_descends_from() {
             local pid="$1" ancestor="$2" parent=""
@@ -267,13 +269,15 @@ jobs:
           }
           start_simulated_v6_loop(){
             local mode="$1" log="$2"
-            if [[ "$mode" == "resistant" ]]; then
-              /usr/bin/env bash -c 'trap "" TERM; while :; do sleep 1; done' \
-                "$source_dir/scripts/paper_v6_loop.sh" >"$log" 2>&1 &
-            else
-              /usr/bin/env bash -c 'trap "exit 0" TERM INT; while :; do sleep 1; done' \
-                "$source_dir/scripts/paper_v6_loop.sh" >"$log" 2>&1 &
-            fi
+            (
+              cd "$source_dir"
+              if [[ "$mode" == "resistant" ]]; then
+                exec /usr/bin/env bash -c 'trap "" TERM; while :; do sleep 1; done' \
+                  'scripts/paper_v6_loop.sh'
+              fi
+              exec /usr/bin/env bash -c 'trap "exit 0" TERM INT; while :; do sleep 1; done' \
+                'scripts/paper_v6_loop.sh'
+            ) >"$log" 2>&1 &
             SIMULATED_V6_PID=$!
           }
 
@@ -288,7 +292,7 @@ jobs:
             echo "graceful stale-loop simulator is not visible to the production matcher: pid=$stale_pid" >&2
             exit 1
           fi
-          printf 'graceful_stale_loop_pid=%s\n' "$stale_pid"
+          printf 'relative_stale_loop_pid=%s\n' "$stale_pid"
 
           "${runtime_env[@]}" /usr/bin/env bash scripts/paper_latest_loop.sh \
             >"$evidence/first-runtime.log" 2>&1 &
@@ -322,7 +326,7 @@ jobs:
               active_v6_pid="$candidate"
               break
             fi
-          done < <(pgrep -f "$source_dir/scripts/paper_v6_loop.sh" 2>/dev/null || true)
+          done < <(pgrep -f 'paper_v6_loop\.sh' 2>/dev/null || true)
           if [[ ! "$active_v6_pid" =~ ^[1-9][0-9]*$ ]] || ! kill -0 "$first_pid" 2>/dev/null; then
             echo "active runtime or V6 descendant was disturbed by stale-loop handoff" >&2
             cat "$evidence/first-runtime.log" >&2 || true
