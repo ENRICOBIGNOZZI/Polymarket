@@ -7,7 +7,7 @@ from http.server import ThreadingHTTPServer
 from exporter import ExporterHandler, Metrics, _float, _mtime, _read_csv, _read_json, parse_args
 from exporter_v4 import V4Collector
 
-EXPORTER_V5_VERSION = "1.1.0"
+EXPORTER_V5_VERSION = "1.2.0"
 
 
 class V5Collector(V4Collector):
@@ -174,6 +174,90 @@ class V5Collector(V4Collector):
                 max((_float(signal.get("net_edge")) for signal in signal_rows), default=0.0),
                 help_text="Best net executable edge in the bounded recent signal window.",
                 labels=labels,
+            )
+
+        operability_path = self.run_root / "model_operability.json"
+        operability = _read_json(operability_path) or {}
+        operability_models = operability.get("models") if isinstance(operability.get("models"), list) else []
+        operability_timestamp = _float(operability.get("timestamp"), _mtime(operability_path) or now)
+        metrics.sample(
+            "polymarket_model_operability_state_present",
+            1 if operability else 0,
+            help_text="Whether the execution-aware V5 model operability report is present.",
+        )
+        metrics.sample(
+            "polymarket_model_operability_staleness_seconds",
+            max(0.0, now - operability_timestamp) if operability else 0.0,
+            help_text="Age of the execution-aware V5 model operability report.",
+        )
+        metrics.sample(
+            "polymarket_generic_children_scan_only",
+            1 if operability.get("generic_children_scan_only") else 0,
+            help_text="Whether generic one-expert children are restricted to shadow and exit management.",
+        )
+        for item in operability_models:
+            if not isinstance(item, dict):
+                continue
+            labels = {
+                "model": str(item.get("name", "unknown")),
+                "backend": str(item.get("backend", "unknown")),
+                "state": str(item.get("state", "UNKNOWN")),
+            }
+            metrics.sample(
+                "polymarket_model_operability_info",
+                1,
+                help_text="Execution-aware model routing and current state.",
+                labels=labels,
+            )
+            fields = {
+                "polymarket_model_entry_enabled": item.get("entry_enabled"),
+                "polymarket_model_backend_process_alive": item.get("process_alive"),
+                "polymarket_model_backend_status_age_seconds": item.get("status_age_seconds"),
+                "polymarket_model_backend_signals": item.get("signals"),
+                "polymarket_model_backend_gross_positive": item.get("gross_positive"),
+                "polymarket_model_backend_cost_positive": item.get("cost_positive"),
+                "polymarket_model_backend_net_positive": item.get("net_positive"),
+                "polymarket_model_backend_orders": item.get("orders"),
+                "polymarket_model_backend_fills": item.get("fills"),
+                "polymarket_model_backend_positions": item.get("positions"),
+                "polymarket_model_backend_best_net_edge_ratio": item.get("best_net_edge"),
+            }
+            for name, value in fields.items():
+                metrics.sample(
+                    name,
+                    1 if value is True else 0 if value is False else _float(value),
+                    help_text="Execution-aware V5 model backend diagnostic.",
+                    labels={"model": labels["model"], "backend": labels["backend"]},
+                )
+
+        watchdog_path = self.run_root / "stale_watchdog_status.json"
+        watchdog = _read_json(watchdog_path) or {}
+        watchdog_timestamp = _float(watchdog.get("timestamp"), _mtime(watchdog_path) or now)
+        metrics.sample(
+            "polymarket_stale_watchdog_state_present",
+            1 if watchdog else 0,
+            help_text="Whether the V5 stale-process watchdog has published state.",
+        )
+        metrics.sample(
+            "polymarket_stale_watchdog_staleness_seconds",
+            max(0.0, now - watchdog_timestamp) if watchdog else 0.0,
+            help_text="Age of the V5 stale-process watchdog state.",
+        )
+        if watchdog:
+            metrics.sample(
+                "polymarket_stale_watchdog_info",
+                1,
+                help_text="Current V5 stale-process watchdog state.",
+                labels={
+                    "state": str(watchdog.get("state", "UNKNOWN")),
+                    "reason": str(watchdog.get("reason", "")),
+                },
+            )
+            metrics.sample(
+                "polymarket_stale_watchdog_restart_requests_total",
+                _float(watchdog.get("restart_requests")),
+                help_text="Allocator restart requests issued by the V5 stale-process watchdog.",
+                metric_type="counter",
             )
 
         metrics.sample(
