@@ -159,7 +159,7 @@ jobs:
         run: |
           set -euo pipefail
           {
-            tailscale ping -c 3 "$GRAFANA_HOSTNAME"
+            tailscale ping --until-direct=false --c 1 --timeout=10s "$GRAFANA_HOSTNAME"
             getent hosts "$GRAFANA_FQDN"
             for i in {1..30}; do
               if curl -fsS --max-time 5 "$GRAFANA_URL/api/health" >/tmp/grafana-health.json 2>/dev/null; then
