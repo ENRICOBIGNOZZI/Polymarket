@@ -7,7 +7,7 @@ from typing import Sequence
 from exporter import ExporterHandler, Metrics, _float, _read_json, parse_args
 from exporter_v4 import V4Collector
 
-EXPORTER_V6_VERSION = "1.1.0"
+EXPORTER_V6_VERSION = "1.2.0"
 
 
 class V6Collector(V4Collector):
@@ -16,6 +16,8 @@ class V6Collector(V4Collector):
         metrics = Metrics()
         status = _read_json(self.run_root / "runtime_status.json") or {}
         allocator = _read_json(self.run_root / "allocator_status.json") or {}
+        proxy = _read_json(self.run_root / "market_proxy_status.json") or {}
+        now = time.time()
         metrics.sample("polymarket_v6_exporter_info", 1, help_text="Static V6 model-specific exporter metadata.", labels={"version": EXPORTER_V6_VERSION})
         for name, row in (status.get("strategies") or {}).items():
             if not isinstance(row, dict):
@@ -38,7 +40,19 @@ class V6Collector(V4Collector):
         metrics.sample("polymarket_v6_local_factor_bundles", _float(local_factor.get("bundles")), help_text="Current local-factor bundles.")
         metrics.sample("polymarket_v6_local_factor_clusters", _float(local_factor.get("clusters")), help_text="Current local factor clusters evaluated.")
         metrics.sample("polymarket_v6_external_signals", _float(bridge.get("materialized_signals")), help_text="OOS-approved external probabilities materialized for V6.")
-        metrics.sample("polymarket_v6_scrape_timestamp_seconds", time.time(), help_text="V6 exporter scrape timestamp.")
+
+        proxy_present = bool(proxy)
+        proxy_timestamp = _float(proxy.get("timestamp"))
+        proxy_status_age = max(0.0, now - proxy_timestamp) if proxy_timestamp > 0 else 1e12
+        proxy_source = str(proxy.get("source") or "missing")
+        metrics.sample("polymarket_v6_market_proxy_state_present", 1 if proxy_present else 0, help_text="Whether V6 market-discovery proxy status is present.")
+        metrics.sample("polymarket_v6_market_proxy_status_age_seconds", proxy_status_age, help_text="Age of the latest V6 market-discovery proxy status.")
+        metrics.sample("polymarket_v6_market_proxy_upstream_gamma_ok", 1 if proxy.get("upstream_gamma_ok") else 0, help_text="Whether the V6 market proxy currently has healthy upstream Gamma discovery.")
+        metrics.sample("polymarket_v6_market_proxy_failures_total", _float(proxy.get("failures")), help_text="Cumulative upstream/fallback failures observed by the V6 market proxy.")
+        metrics.sample("polymarket_v6_market_proxy_cache_age_seconds", _float(proxy.get("cache_age_seconds"), 1e12 if not proxy_present else 0.0), help_text="Age of market metadata served or retained by the V6 market proxy.")
+        metrics.sample("polymarket_v6_market_proxy_markets", _float(proxy.get("markets")), help_text="Market count in the latest V6 market-proxy response/status.")
+        metrics.sample("polymarket_v6_market_proxy_info", 1 if proxy_present else 0, help_text="V6 market-proxy source metadata without error-text labels.", labels={"source": proxy_source})
+        metrics.sample("polymarket_v6_scrape_timestamp_seconds", now, help_text="V6 exporter scrape timestamp.")
 
         # Transitional metrics consumed by the already-installed V5-aware server
         # updater. They describe V6 health only; no V5 allocator/expert execution is
