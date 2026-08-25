@@ -180,7 +180,7 @@ def main() -> int:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--rejections", type=Path, required=True)
-    parser.add_argument("--cache", type=Path, required=True)
+    parser.add_argument("--cache", type=Path)
     parser.add_argument("--report-json", type=Path)
     parser.add_argument("--min-jaccard", type=float, default=0.20)
     parser.add_argument("--min-shared-tokens", type=int, default=2)
@@ -200,7 +200,8 @@ def main() -> int:
     if "coherence_scope" not in fieldnames and rows:
         raise SystemExit("input CSV must contain coherence_scope")
 
-    metadata = load_metadata(args.cache)
+    cache_path = args.cache or args.input.parent / "market_metadata_cache.json"
+    metadata = load_metadata(cache_path)
     kept, rejected = gate_rows(
         rows,
         metadata=metadata,
