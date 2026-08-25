@@ -97,6 +97,14 @@ def main() -> int:
             reject["mode"] += 1
             continue
 
+        # Release gate: the frozen V6 structural threshold parser can group
+        # contracts with different expiries and thereby overstate the guaranteed
+        # payoff floor. Until the typed/date-aware relation semantics are validated,
+        # fail closed rather than book potentially fictitious structural PnL.
+        if strategy == "STRUCTURAL":
+            reject["structural_payoff_unverified"] += 1
+            continue
+
         # A resting multi-leg order is relative value, not hard arbitrage: legging
         # and partial-fill risk invalidate a deterministic payoff guarantee.
         if strategy == "GRAPH_HARD" and mode != "TAKER":
@@ -111,7 +119,7 @@ def main() -> int:
             reject["hard_not_taker"] += 1
             continue
 
-        # Statistical/structural maker edges need a positive buffer after a
+        # Statistical/graph maker edges need a positive buffer after a
         # deterministic extra cost/adverse-selection stress.
         stressed_edge = edge - max(0.0, args.stress_bps) / 10000.0
         if mode == "MAKER" and stressed_edge <= args.min_edge:
@@ -130,6 +138,7 @@ def main() -> int:
         "input_rows": sum(reject.values()) + len(accepted),
         "accepted_rows": len(accepted),
         "relabeled_graph_hard_to_rv": relabeled,
+        "structural_enabled": False,
         "rejections": dict(sorted(reject.items())),
         "strategies": dict(sorted(Counter(str(r["strategy"]) for r in accepted).items())),
         "best_edge": max((finite(r.get("expected_edge"), 0.0) for r in accepted), default=0.0),
