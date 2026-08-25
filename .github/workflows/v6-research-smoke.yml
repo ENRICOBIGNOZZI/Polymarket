@@ -53,8 +53,6 @@ jobs:
                   assert base_sha, 'non-integration PR must expose its base SHA'
                   base_live=json.loads(subprocess.check_output(['git','show',f'{base_sha}:config/live_champion.json'],text=True))
                   assert live == base_live, 'non-integration V6 smoke must preserve the base live champion selector'
-          # Hard safety remains fail-closed. The paper capital envelope is intentionally
-          # user-authorized to be more aggressive and is tested against its new ceiling.
           assert float(cfg['max_drawdown']) <= .15
           assert float(cfg['multi_strategy']['global_max_drawdown']) <= .15
           assert float(cfg['max_market_fraction']) <= .05
@@ -90,7 +88,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p v6_evidence
-          : > v6_evidence/trade_tape.csv
+          ./build/polymarket_trade_recorder --config config/paper_v6.json --run-dir v6_evidence --markets 500 --batch 40 --min-liquidity 2 --lookback-seconds 900 --once > v6_evidence/trade_recorder_initial.log 2>&1 || true
           python3 scripts/v6_relation_intents.py --config config/paper_v6.json --output v6_evidence/relation_raw.csv --status v6_evidence/relation_status.json --markets 500 --min-liquidity 2 --min-edge 0.00005 --max-trade-usd 125 --max-events 100 > v6_evidence/relation.log 2>&1 || true
           python3 scripts/v6_intent_guard.py --input v6_evidence/relation_raw.csv --output v6_evidence/relation_guarded.csv --status v6_evidence/relation_guard_status.json --min-edge 0.00005 --stress-bps 5 --max-age-seconds 180 > v6_evidence/relation_guard.log 2>&1 || true
           python3 scripts/v6_queue_filter.py --config config/paper_v6.json --input v6_evidence/relation_guarded.csv --output v6_evidence/relation_queue.csv --status v6_evidence/queue_filter_status.json --trade-tape v6_evidence/trade_tape.csv --min-edge 0.00005 --reserve-bps 5 --min-leg-fill-probability 0.005 --min-joint-fill-probability 0.000001 --target-leg-fill-probability 0.10 --max-improve-ticks-per-leg 4 > v6_evidence/queue_filter.log 2>&1 || true
@@ -113,7 +111,7 @@ jobs:
           set -euo pipefail
           python3 scripts/v6_local_factor_v3.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --trade-tape v6_evidence/trade_tape.csv --markets 500 --min-liquidity 2 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 25 --min-common-points 36 --min-z 0.75 --fdr 0.15 --min-edge 0.00005 --max-trade-usd 100 --slippage-bps 5 --min-fill-probability 0.005 > v6_evidence/local_factor.log 2>&1 || true
 
-      - name: Live public-data flow-aware maker probe
+      - name: Live public-data forward flow-aware maker probe
         shell: bash
         run: |
           set -euo pipefail
@@ -123,7 +121,19 @@ jobs:
           from pathlib import Path
           cfg=json.loads(Path('config/paper_v6.json').read_text()); cfg['starting_capital']=2200.0; cfg['run_dir']='v6_evidence/maker'; Path('v6_evidence/maker_config.json').write_text(json.dumps(cfg,indent=2,sort_keys=True)+'\n')
           PY
-          python3 scripts/v6_micro_maker.py --config v6_evidence/maker_config.json --run-dir v6_evidence/maker --trade-tape v6_evidence/trade_tape.csv --markets 400 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 60 --ttl-seconds 60 --hold-seconds 180 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 3 --slippage-bps 5 > v6_evidence/maker.log 2>&1 || true
+          record_trade_tape() {
+            ./build/polymarket_trade_recorder --config config/paper_v6.json --run-dir v6_evidence --markets 500 --batch 40 --min-liquidity 2 --lookback-seconds 900 --once >> v6_evidence/trade_recorder_forward.log 2>&1 || true
+          }
+          maker_tick() {
+            python3 scripts/v6_micro_maker.py --config v6_evidence/maker_config.json --run-dir v6_evidence/maker --trade-tape v6_evidence/trade_tape.csv --markets 500 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 45 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 3 --slippage-bps 5 >> v6_evidence/maker.log 2>&1 || true
+          }
+          record_trade_tape
+          maker_tick
+          for delay in 20 20 20 20; do
+            sleep "$delay"
+            record_trade_tape
+            maker_tick
+          done
 
       - name: Summarize aggressive V6 evidence
         if: always()
@@ -137,9 +147,15 @@ jobs:
               p=root/path
               try:return json.loads(p.read_text())
               except Exception:return {}
+          tape=root/'trade_tape.csv'
+          tape_rows=max(0, sum(1 for _ in tape.open(encoding='utf-8'))-1) if tape.exists() else 0
+          fills=root/'maker'/'maker_fills.csv'
+          fill_rows=max(0, sum(1 for _ in fills.open(encoding='utf-8'))-1) if fills.exists() else 0
           summary={
               'paper_only':True,
               'authenticated_execution':False,
+              'trade_tape_rows':tape_rows,
+              'maker_fill_rows':fill_rows,
               'relation':js('relation_status.json'),
               'relation_guard':js('relation_guard_status.json'),
               'queue_filter':js('queue_filter_status.json'),
