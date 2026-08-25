@@ -1,0 +1,49 @@
+{
+  "schema": "b2_sparse_strong_relation_evidence_v1",
+  "observed_main_sha": "c1c67a43a93261b15692c207bc27459f11c29e88",
+  "telemetry_generated_ts": 1787640160,
+  "alpha_factory_generated": "2026-08-25T06:59:26+00:00",
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "latest_b2": {
+    "coherent_rows": 43,
+    "coherent_raw_positive": 43,
+    "coherent_maker_positive": 1,
+    "oos_trades": 0
+  },
+  "current_maker_positive": {
+    "market": "663583",
+    "slug": "will-the-iranian-regime-fall-by-the-end-of-2026",
+    "side": "NO",
+    "maker_entry_net_edge": 0.000325087,
+    "raw_expected_edge": 0.000820554,
+    "taker_net_edge": -0.00566821,
+    "hedges": 4,
+    "hedge_error": 0.257291,
+    "coherence_scope": "semantic:0.1429:1|semantic:0.1000:1|semantic:0.6000:3|semantic:0.1000:1",
+    "strong_relation_gate": "reject",
+    "weak_relation_certificates": 3,
+    "interpretation": "The only maker-positive incumbent B2 row in the latest public snapshot depends on three one-token low-similarity semantic hedge links. Its static maker edge is not accepted as LF alpha evidence until a same-event/strong-semantic sparse hedge survives common-sample cost stress and forward execution."
+  },
+  "strong_relation_research_policy": {
+    "same_event": "allow",
+    "semantic_min_jaccard": 0.2,
+    "semantic_min_shared_tokens": 2,
+    "same_category_only": "reject",
+    "unknown_or_malformed": "reject"
+  },
+  "required_evidence": [
+    "compare max_hedges 8/4/3/2/1 on the same exact-head public window",
+    "apply strong relation quality after metadata coherence and before accepting economic evidence",
+    "require positive maker edge and positive 2x execution-drag-stressed edge",
+    "require hedge_error <= 0.80",
+    "require persistence in at least two later chronological public windows",
+    "require direct forward paired-fill and forced-completion evidence before promotion"
+  ],
+  "safety": {
+    "live_champion_changed": false,
+    "risk_limits_changed": false,
+    "oos_gate_changed": false,
+    "authenticated_execution_enabled": false,
+    "real_money_execution_enabled": false
+  }
+}
