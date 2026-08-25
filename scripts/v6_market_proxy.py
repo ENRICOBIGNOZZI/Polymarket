@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import math
 import os
+import shutil
+import subprocess
 import threading
 import time
 import urllib.error
@@ -20,9 +23,11 @@ FRESH_CACHE_SECONDS = 30.0
 STALE_CACHE_SECONDS = 900.0
 FALLBACK_MARKETS = 300
 GAMMA_TIMEOUT_SECONDS = 1.5
-CLOB_TIMEOUT_SECONDS = 2.5
-CLOB_DISCOVERY_BUDGET_SECONDS = 6.0
+GAMMA_LEGACY_TIMEOUT_SECONDS = 8.0
+CLOB_TIMEOUT_SECONDS = 5.0
+CLOB_DISCOVERY_BUDGET_SECONDS = 10.0
 BOOK_WORKERS = 8
+CACHE_SCHEMA = "polymarket_v6_market_proxy_cache_v1"
 
 
 def f(x: Any, d: float = 0.0) -> float:
@@ -43,6 +48,18 @@ def b(x: Any, d: bool = False) -> bool:
     return d
 
 
+def valid_cache_market(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+    liquidity = f(row.get("liquidityNum"), float("nan"))
+    return (
+        bool(str(row.get("id") or ""))
+        and bool(str(row.get("conditionId") or ""))
+        and math.isfinite(liquidity)
+        and liquidity >= 0.0
+    )
+
+
 def atomic(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f".tmp.{os.getpid()}.{threading.get_ident()}")
@@ -55,6 +72,7 @@ def req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT_SECO
     headers = {
         "User-Agent": "polymarket-v6-market-proxy/2",
         "Accept": "application/json",
+        "Accept-Encoding": "gzip",
     }
     if data is not None:
         headers["Content-Type"] = "application/json"
@@ -66,9 +84,61 @@ def req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT_SECO
     )
     try:
         with urllib.request.urlopen(request, timeout=max(0.1, timeout)) as handle:
-            return json.loads(handle.read().decode())
-    except (OSError, TimeoutError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
+            raw = handle.read()
+            if str(handle.headers.get("Content-Encoding") or "").lower().strip() == "gzip":
+                raw = gzip.decompress(raw)
+            return json.loads(raw.decode())
+    except (OSError, EOFError, TimeoutError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"request failed: {url}: {exc}") from exc
+
+
+def curl_req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT_SECONDS) -> Any:
+    binary = shutil.which("curl")
+    if not binary:
+        raise RuntimeError("curl unavailable")
+    data = None if payload is None else json.dumps(payload, separators=(",", ":"))
+    args = [
+        binary,
+        "--silent",
+        "--show-error",
+        "--fail",
+        "--location",
+        "--ipv4",
+        "--compressed",
+        "--max-time",
+        str(max(1, math.ceil(timeout))),
+        "--user-agent",
+        "polymarket-v6-market-proxy/2",
+        "--header",
+        "Accept: application/json",
+    ]
+    if data is not None:
+        args.extend(["--header", "Content-Type: application/json", "--data-binary", data])
+    args.append(url)
+    try:
+        completed = subprocess.run(
+            args,
+            check=False,
+            capture_output=True,
+            timeout=max(1.0, timeout + 1.0),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"curl request failed: {url}: {exc}") from exc
+    if completed.returncode != 0:
+        detail = completed.stderr.decode(errors="replace").strip()[:240]
+        raise RuntimeError(f"curl request failed: {url}: exit={completed.returncode} {detail}")
+    try:
+        return json.loads(completed.stdout.decode())
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"curl returned invalid JSON: {url}: {exc}") from exc
+
+
+def clob_req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT_SECONDS) -> Any:
+    # Curl is preferred for public CLOB traffic: it uses compressed transfers and
+    # a forced IPv4 route, avoiding a slow/broken IPv6 connect from the private node.
+    if shutil.which("curl"):
+        return curl_req(url, payload, timeout)
+    return req(url, payload, timeout)
 
 
 def tokens(market: dict[str, Any]) -> list[dict[str, Any]]:
@@ -111,22 +181,40 @@ class Proxy:
         self.failures = 0
         self.error = ""
         self.source = "startup"
+        self.clob_source = "startup"
+        self.cache_mtime_ns = 0
         self.load()
 
-    def load(self) -> None:
+    def load(self) -> bool:
         try:
+            metadata = self.cache.stat()
+            if metadata.st_mtime_ns <= self.cache_mtime_ns:
+                return False
             value = json.loads(self.cache.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return
-        if not isinstance(value, dict):
-            return
+            return False
+        if not isinstance(value, dict) or value.get("schema") != CACHE_SCHEMA:
+            return False
         markets = value.get("markets")
-        if isinstance(markets, list):
-            self.rows = [row for row in markets if isinstance(row, dict)]
-            self.ts = f(value.get("timestamp"), 0.0)
+        timestamp = f(value.get("timestamp"), 0.0)
+        if not isinstance(markets, list) or timestamp <= 0.0:
+            return False
+        if not markets or not all(valid_cache_market(row) for row in markets):
+            return False
+        rows = [dict(row) for row in markets]
         mapping = value.get("gamma_to_condition")
-        if isinstance(mapping, dict):
-            self.idmap = {str(k): str(v) for k, v in mapping.items() if k and v}
+        with self.state_lock:
+            # Cache timestamps are integer seconds, so accept a newer atomic file
+            # written in the same second but never roll state back materially.
+            if timestamp + 1.0 < self.ts:
+                self.cache_mtime_ns = metadata.st_mtime_ns
+                return False
+            self.rows = rows
+            self.ts = timestamp
+            if isinstance(mapping, dict):
+                self.idmap.update({str(k): str(v) for k, v in mapping.items() if k and v})
+            self.cache_mtime_ns = metadata.st_mtime_ns
+        return True
 
     def stat(self, source: str, n: int, upstream_ok: bool, age: float = 0.0) -> None:
         self.source = source
@@ -159,14 +247,19 @@ class Proxy:
         atomic(
             self.cache,
             {
-                "schema": "polymarket_v6_market_proxy_cache_v1",
+                "schema": CACHE_SCHEMA,
                 "timestamp": int(now),
                 "markets": rows,
                 "gamma_to_condition": mapping,
             },
         )
+        try:
+            self.cache_mtime_ns = self.cache.stat().st_mtime_ns
+        except OSError:
+            pass
 
     def cached_page(self, limit: int, offset: int, min_liquidity: float, max_age: float) -> list[dict[str, Any]] | None:
+        self.load()
         now = time.time()
         with self.state_lock:
             if not self.rows or now - self.ts > max_age:
@@ -214,19 +307,69 @@ class Proxy:
             raise RuntimeError("Gamma keyset returned no markets")
         return out[:n]
 
-    def clob_candidates(self, n: int) -> list[dict[str, Any]]:
+    def gamma_legacy_rows(self, n: int, query: dict[str, list[str]]) -> list[dict[str, Any]]:
+        params = {
+            key: value[-1]
+            for key, value in query.items()
+            if value and key in {"active", "closed", "order", "ascending", "liquidity_num_min"}
+        }
+        params.setdefault("active", "true")
+        params.setdefault("closed", "false")
+        offsets = list(range(0, n, 100))
+
+        def fetch(offset: int) -> tuple[int, list[dict[str, Any]]]:
+            request_params = dict(params)
+            request_params["limit"] = str(min(100, n - offset))
+            request_params["offset"] = str(offset)
+            url = self.gamma + "/markets?" + urllib.parse.urlencode(request_params)
+            value = (
+                curl_req(url, timeout=GAMMA_LEGACY_TIMEOUT_SECONDS)
+                if shutil.which("curl")
+                else req(url, timeout=GAMMA_LEGACY_TIMEOUT_SECONDS)
+            )
+            if not isinstance(value, list):
+                raise RuntimeError("bad Gamma legacy markets response")
+            return offset, [row for row in value if isinstance(row, dict)]
+
+        pages: dict[int, list[dict[str, Any]]] = {}
+        failures: list[str] = []
+        with ThreadPoolExecutor(max_workers=min(3, len(offsets))) as pool:
+            futures = [pool.submit(fetch, offset) for offset in offsets]
+            for future in as_completed(futures):
+                try:
+                    offset, batch = future.result()
+                except Exception as exc:
+                    failures.append(str(exc))
+                    continue
+                pages[offset] = batch
+        if failures or set(pages) != set(offsets):
+            raise RuntimeError("Gamma legacy offset discovery incomplete: " + "; ".join(failures))
+
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for offset in offsets:
+            for row in pages[offset]:
+                key = str(row.get("id") or row.get("conditionId") or "")
+                if key and key not in seen:
+                    seen.add(key)
+                    out.append(row)
+        if len(out) < n:
+            raise RuntimeError(f"Gamma legacy returned only {len(out)} of {n} requested markets")
+        return out[:n]
+
+    def clob_candidates(self, n: int, path: str, deadline: float) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         cursor = ""
-        deadline = time.monotonic() + CLOB_DISCOVERY_BUDGET_SECONDS
+        source = path.strip("/") or "markets"
         while len(out) < n and time.monotonic() < deadline:
             params = {"next_cursor": cursor} if cursor else {}
-            url = self.clob + "/markets" + ("?" + urllib.parse.urlencode(params) if params else "")
+            url = self.clob + path + ("?" + urllib.parse.urlencode(params) if params else "")
             remaining = deadline - time.monotonic()
             if remaining <= 0.1:
                 break
-            value = req(url, timeout=min(CLOB_TIMEOUT_SECONDS, remaining))
+            value = clob_req(url, timeout=min(CLOB_TIMEOUT_SECONDS, remaining))
             if not isinstance(value, dict) or not isinstance(value.get("data"), list):
-                raise RuntimeError("bad CLOB markets response")
+                raise RuntimeError(f"bad CLOB {source} response")
             batch = [row for row in value["data"] if isinstance(row, dict)]
             for row in batch:
                 if not b(row.get("active"), True) or b(row.get("closed")) or b(row.get("archived")):
@@ -244,7 +387,7 @@ class Proxy:
                 break
             cursor = nxt
         if not out:
-            raise RuntimeError("CLOB markets fallback returned no candidates")
+            raise RuntimeError(f"CLOB {source} returned no candidates")
         return out
 
     def books(self, candidates: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -258,7 +401,7 @@ class Proxy:
         out: dict[str, dict[str, Any]] = {}
 
         def fetch(chunk: list[str]) -> Any:
-            return req(
+            return clob_req(
                 self.clob + "/books",
                 [{"token_id": token_id} for token_id in chunk],
                 timeout=CLOB_TIMEOUT_SECONDS,
@@ -307,8 +450,10 @@ class Proxy:
             "_proxy_source": "clob",
         }
 
-    def clob_rows(self, min_liquidity: float) -> list[dict[str, Any]]:
-        candidates = self.clob_candidates(FALLBACK_MARKETS)
+    def clob_rows_from(
+        self, path: str, min_liquidity: float, deadline: float
+    ) -> list[dict[str, Any]]:
+        candidates = self.clob_candidates(FALLBACK_MARKETS, path, deadline)
         books = self.books(candidates)
         out: list[dict[str, Any]] = []
         for candidate in candidates:
@@ -317,8 +462,27 @@ class Proxy:
                 out.append(row)
         out.sort(key=lambda row: f(row.get("liquidityNum")), reverse=True)
         if not out:
-            raise RuntimeError("CLOB fallback found no two-sided liquid markets")
+            raise RuntimeError(
+                f"CLOB {path.strip('/') or 'markets'} found no two-sided liquid markets"
+            )
         return out[:FALLBACK_MARKETS]
+
+    def clob_rows(self, min_liquidity: float) -> list[dict[str, Any]]:
+        deadline = time.monotonic() + CLOB_DISCOVERY_BUDGET_SECONDS
+        errors: list[str] = []
+        for path, source in (
+            ("/sampling-markets", "clob_sampling"),
+            ("/markets", "clob_markets"),
+        ):
+            try:
+                rows = self.clob_rows_from(path, min_liquidity, deadline)
+            except Exception as exc:
+                errors.append(f"{source}: {exc}")
+                continue
+            self.clob_source = source
+            return rows
+        self.clob_source = "clob_unavailable"
+        raise RuntimeError("CLOB fallback failed: " + "; ".join(errors))
 
     def markets(self, query: dict[str, list[str]]) -> list[dict[str, Any]]:
         limit = max(1, min(100, int(f((query.get("limit") or [100])[-1], 100))))
@@ -344,26 +508,34 @@ class Proxy:
         try:
             target = min(FALLBACK_MARKETS, max(FALLBACK_MARKETS, offset + limit))
             try:
-                rows = self.gamma_rows(target, query)
+                rows = self.gamma_legacy_rows(target, query)
                 self.error = ""
                 self.save(rows)
-                self.stat("gamma_keyset", len(rows), True)
-            except Exception as gamma_error:
+                self.stat("gamma_legacy", len(rows), True)
+            except Exception as legacy_error:
                 self.failures += 1
-                self.error = str(gamma_error)
+                self.error = str(legacy_error)
                 try:
-                    rows = self.clob_rows(min_liquidity)
+                    rows = self.gamma_rows(target, query)
+                    self.error = ""
                     self.save(rows)
-                    self.stat("clob_fallback", len(rows), False)
-                except Exception as clob_error:
+                    self.stat("gamma_keyset", len(rows), True)
+                except Exception as keyset_error:
                     self.failures += 1
-                    self.error = f"{self.error}; {clob_error}"
-                    cached = self.cached_page(limit, offset, min_liquidity, STALE_CACHE_SECONDS)
-                    if cached is not None:
-                        self.stat("stale_cache", len(self.rows), False, max(0.0, time.time() - self.ts))
-                        return cached
-                    self.stat("unavailable", 0, False, 1e12)
-                    raise RuntimeError(self.error or "discovery unavailable")
+                    self.error = f"{self.error}; {keyset_error}"
+                    try:
+                        rows = self.clob_rows(min_liquidity)
+                        self.save(rows)
+                        self.stat(self.clob_source, len(rows), False)
+                    except Exception as clob_error:
+                        self.failures += 1
+                        self.error = f"{self.error}; {clob_error}"
+                        cached = self.cached_page(limit, offset, min_liquidity, STALE_CACHE_SECONDS)
+                        if cached is not None:
+                            self.stat("stale_cache", len(self.rows), False, max(0.0, time.time() - self.ts))
+                            return cached
+                        self.stat("unavailable", 0, False, 1e12)
+                        raise RuntimeError(self.error or "discovery unavailable")
         finally:
             self.refresh_lock.release()
 
@@ -398,7 +570,7 @@ class Proxy:
         if cached and time.time() - cached[0] <= STALE_CACHE_SECONDS and isinstance(cached[1], dict):
             return cached[1]
         cid = self.idmap.get(mid, mid)
-        value = req(
+        value = clob_req(
             self.clob + "/markets/" + urllib.parse.quote(cid, safe=""),
             timeout=CLOB_TIMEOUT_SECONDS,
         )

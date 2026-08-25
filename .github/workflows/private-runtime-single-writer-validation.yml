@@ -8,10 +8,17 @@ on:
       - "scripts/runtime_singleton_launcher.py"
       - "scripts/paper_latest_loop.sh"
       - "scripts/paper_v6_loop.sh"
+      - "scripts/v6_market_proxy.py"
+      - "scripts/v6_market_snapshot.py"
+      - "tests/test_v6_market_snapshot.py"
+      - "tests/test_v6_market_cache_relay_contract.py"
+      - "config/scheduler_registry.json"
+      - ".github/workflows/v6-market-cache-relay.yml"
       - "config/live_champion.json"
       - "config/paper_v6.json"
       - "tests/test_fast_runtime_contract.py"
       - "tests/test_v6_runtime_contract.py"
+      - "tests/test_v6_market_proxy_deadline.py"
       - "scripts/validate_scheduler_registry.py"
       - ".github/workflows/private-runtime-single-writer-validation.yml"
 
@@ -46,6 +53,24 @@ jobs:
           test "$sha" = "${{ github.event.pull_request.head.sha || github.sha }}"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           python3 -m unittest tests/test_fast_runtime_contract.py -v
+
+      - name: Build exact-head V6 public relay cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p private-single-writer-evidence
+          python3 scripts/v6_market_snapshot.py \
+            --output private-single-writer-evidence/relay-source-cache.json \
+            --status private-single-writer-evidence/relay-source-status.json \
+            --markets 300 --min-markets 100 --min-liquidity 10 \
+            --max-cache-age-seconds 90 | tee private-single-writer-evidence/relay-source-summary.json
+          python3 - private-single-writer-evidence/relay-source-cache.json <<'PY'
+          import json,sys,time
+          value=json.load(open(sys.argv[1],encoding="utf-8"))
+          assert value.get("schema") == "polymarket_v6_market_proxy_cache_v1"
+          assert time.time()-float(value["timestamp"]) <= 90
+          assert len(value.get("markets") or []) >= 100
+          PY
 
       - name: Select existing Tailscale credential mode
         id: tailscale_auth
@@ -136,6 +161,44 @@ jobs:
           git archive "$SOURCE_SHA" | tar -x -C "$source_dir"
           test "$(git rev-parse "$SOURCE_SHA")" = "$SOURCE_SHA"
           ln -s "$repo/build" "$source_dir/build"
+
+          python3 - "$source_dir" "$evidence" <<'PY'
+          import json
+          import sys
+          import time
+          from pathlib import Path
+
+          source = Path(sys.argv[1])
+          evidence = Path(sys.argv[2])
+          sys.path.insert(0, str(source))
+          from scripts.v6_market_proxy import Proxy
+
+          probe = evidence / "relay-cache-reload"
+          proxy = Proxy(
+              "http://127.0.0.1:9",
+              "http://127.0.0.1:9",
+              probe / "cache.json",
+              probe / "status.json",
+          )
+          payload = {
+              "schema": "polymarket_v6_market_proxy_cache_v1",
+              "timestamp": int(time.time()),
+              "markets": [{"id": "relay", "conditionId": "relay", "liquidityNum": 25.0}],
+              "gamma_to_condition": {"relay": "relay"},
+          }
+          (probe / "cache.json").parent.mkdir(parents=True, exist_ok=True)
+          (probe / "cache.json").write_text(json.dumps(payload), encoding="utf-8")
+          rows = proxy.markets({"limit": ["1"], "offset": ["0"], "liquidity_num_min": ["10"]})
+          status = json.loads((probe / "status.json").read_text(encoding="utf-8"))
+          assert rows[0]["id"] == "relay"
+          assert proxy.idmap["relay"] == "relay"
+          assert str(status.get("source") or "").endswith("_cache"), status
+          summary = {"source": proxy.source, "markets": len(rows), "paper_only": True}
+          (evidence / "relay-cache-reload.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print("relay_cache_reload=PASS " + json.dumps(summary, sort_keys=True))
+          PY
 
           python3 - "$source_dir/config/paper_v6.json" "$root/probe_config.json" <<'PY'
           import json,sys
