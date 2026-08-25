@@ -9,10 +9,10 @@ on:
     paths:
       - "config/paper_v6.json"
       - "config/v6_model_architecture.json"
+      - "src/maker_paper.cpp"
       - "scripts/paper_v6_loop.sh"
       - "scripts/v6_*.py"
-      - "tests/test_v6_model_contracts.py"
-      - "tests/test_v6_runtime_contract.py"
+      - "tests/test_v6_*.py"
       - ".github/workflows/v6-research-smoke.yml"
 
 permissions:
@@ -49,6 +49,8 @@ jobs:
                   assert live == base_live, 'non-integration V6 smoke must preserve the base live champion selector'
           assert float(cfg['max_drawdown']) <= .15;assert float(cfg['max_market_fraction']) <= .025;assert float(cfg['max_event_fraction']) <= .08;assert float(cfg['max_gross_fraction']) <= .45
           v=cfg['v6']; total=sum(float(v[k]) for k in ('micro_maker_capital_fraction','micro_taker_capital_fraction','relative_value_capital_fraction','hard_arb_capital_fraction','external_capital_fraction','reserve_fraction'));assert abs(total-1.0)<1e-9
+          assert float(v['global_risk']['max_gross_fraction']) <= .45
+          assert float(v['global_risk']['max_scenario_loss_fraction']) <= .12
           PY
       - name: Install build dependencies
         run: |
@@ -60,7 +62,7 @@ jobs:
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
-          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py -v
+          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py tests/test_v6_institutional_stack.py -v
       - name: Live public-data relation probes
         shell: bash
         run: |
@@ -80,24 +82,24 @@ jobs:
           cfg=json.loads(Path('config/paper_v6.json').read_text()); cfg['starting_capital']=1500.0; cfg['run_dir']='v6_evidence/hard_arb'; Path('v6_evidence/hard_arb_config.json').write_text(json.dumps(cfg,indent=2,sort_keys=True)+'\n')
           PY
           python3 scripts/v6_hard_arb_paper.py --config v6_evidence/hard_arb_config.json --run-dir v6_evidence/hard_arb --markets 300 --min-liquidity 10 --max-events 50 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/hard_arb.log 2>&1 || true
-      - name: Live public-data FDR local-factor probe
+      - name: Live public-data dynamic local-factor probe
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/v6_local_factor_intents.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/local_factor.log 2>&1 || true
-      - name: Live public-data maker economics probe
+          python3 scripts/v6_dynamic_factor_intents.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 2 > v6_evidence/local_factor.log 2>&1 || true
+      - name: Live public-data queue-aware maker probe
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p v6_evidence/maker
-          ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once > v6_evidence/maker.log 2>&1 || true
-      - name: Live public-data micro-taker causal warmup/markout probe
+          ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --max-queue-ratio 50 --once > v6_evidence/maker.log 2>&1 || true
+      - name: Live public-data institutional micro-taker warmup
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p v6_evidence/micro_taker
           for i in 1 2 3 4 5 6; do
-            python3 scripts/v6_micro_taker.py --config config/paper_v6.json --run-dir v6_evidence/micro_taker --markets 120 --min-liquidity 25 --horizon-seconds 5 --max-target-staleness-seconds 3 --max-trade-usd 15 --min-edge 0.0003 --slippage-bps 5 --max-positions 10 >> v6_evidence/micro_taker.log 2>&1 || true
+            python3 scripts/v6_micro_taker_institutional.py --config config/paper_v6.json --run-dir v6_evidence/micro_taker --markets 120 --min-liquidity 25 --horizon-seconds 5 --max-target-staleness-seconds 3 --max-trade-usd 15 --min-edge 0.0003 --base-slippage-bps 2 --uncertainty-z 0.50 --risk-budget-fraction 0.003 --max-positions 10 >> v6_evidence/micro_taker.log 2>&1 || true
             sleep 2
           done
       - name: Summarize V6 evidence
@@ -122,28 +124,19 @@ jobs:
                   labeled=[x for x in samples if isinstance(x,dict) and x.get('y') is not None]
                   bad=[x for x in labeled if int(x.get('target_observation_ts') or 0)>int(x.get('ts') or 0)+5]
                   lags=[int(x['target_staleness_seconds']) for x in labeled if x.get('target_staleness_seconds') is not None]
-                  summary['micro_taker_samples']=len(samples)
-                  summary['micro_taker_labeled']=len(labeled)
-                  summary['micro_taker_post_horizon_labels']=len(bad)
-                  summary['micro_taker_target_staleness_max_seconds']=max(lags) if lags else None
-                  summary['micro_taker_open_positions']=len(s.get('positions') or {})
-                  summary['micro_taker_signals_last_tick']=int(s.get('signals') or 0)
-                  summary['micro_taker_opened_last_tick']=int(s.get('opened') or 0)
-                  summary['micro_taker_best_edge_last_tick']=float(s.get('best_edge') or 0.0)
-                  summary['micro_taker_realized_pnl_total']=float(s.get('realized_pnl_total') or 0.0)
-                  summary['micro_taker_label_stats_last_tick']=s.get('label_stats_last_tick') or {}
+                  summary['micro_taker_model']=s.get('model')
+                  summary['micro_taker_samples']=len(samples);summary['micro_taker_labeled']=len(labeled);summary['micro_taker_post_horizon_labels']=len(bad)
+                  summary['micro_taker_target_staleness_max_seconds']=max(lags) if lags else None;summary['micro_taker_open_positions']=len(s.get('positions') or {})
+                  summary['micro_taker_signals_last_tick']=int(s.get('signals') or 0);summary['micro_taker_opened_last_tick']=int(s.get('opened') or 0);summary['micro_taker_best_edge_last_tick']=float(s.get('best_edge') or 0.0);summary['micro_taker_realized_pnl_total']=float(s.get('realized_pnl_total') or 0.0);summary['micro_taker_rejections']=s.get('rejection_histogram') or {}
                   if bad: raise RuntimeError('micro taker used a post-horizon target observation')
-              except Exception as exc:
-                  summary['micro_taker_summary_error']=f'{type(exc).__name__}:{exc}'
+              except Exception as exc:summary['micro_taker_summary_error']=f'{type(exc).__name__}:{exc}'
+          maker_log=(root/'maker.log').read_text(errors='ignore') if (root/'maker.log').exists() else ''
+          q=re.search(r'queue_rejected=(\d+)',maker_log);summary['maker_queue_rejected']=int(q.group(1)) if q else 0
           fills=root/'micro_taker/fills.csv'
           if fills.exists():
               try:
-                  rows=list(csv.DictReader(fills.open(newline='',encoding='utf-8')))
-                  summary['micro_taker_buy_fills']=sum((r.get('action') or '').upper()=='BUY' for r in rows)
-                  summary['micro_taker_sell_fills']=sum((r.get('action') or '').upper()=='SELL' for r in rows)
-                  summary['micro_taker_closed_fill_pnl']=sum(float(r.get('pnl') or 0.0) for r in rows if (r.get('action') or '').upper()=='SELL')
-              except Exception as exc:
-                  summary['micro_taker_fills_summary_error']=f'{type(exc).__name__}:{exc}'
+                  rows=list(csv.DictReader(fills.open(newline='',encoding='utf-8')));summary['micro_taker_buy_fills']=sum((r.get('action') or '').upper()=='BUY' for r in rows);summary['micro_taker_sell_fills']=sum((r.get('action') or '').upper()=='SELL' for r in rows);summary['micro_taker_closed_fill_pnl']=sum(float(r.get('pnl') or 0.0) for r in rows if (r.get('action') or '').upper()=='SELL')
+              except Exception as exc:summary['micro_taker_fills_summary_error']=f'{type(exc).__name__}:{exc}'
           (root/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n');print(json.dumps(summary,indent=2,sort_keys=True))
           if summary.get('micro_taker_post_horizon_labels',0): raise SystemExit('causal micro target contract failed')
           PY
