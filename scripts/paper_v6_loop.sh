@@ -62,7 +62,9 @@ while true;do
   write_supervisor
 
   # Micro maker: passive spread capture with queue/fill/adverse-selection accounting.
-  ./build/polymarket_maker_paper --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.15 --once >>"$RUN_ROOT/maker.log" 2>&1||true
+  # Reject economically unreachable FIFO queues instead of reserving paper capital
+  # hundreds of target sizes behind the touch.
+  ./build/polymarket_maker_paper --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.15 --max-queue-ratio "$MAX_QUEUE_RATIO" --once >>"$RUN_ROOT/maker.log" 2>&1||true
 
   # Micro taker: online short-horizon markout model; mandatory horizon exit.
   # Search a broader universe without lowering the alpha threshold. This raises
