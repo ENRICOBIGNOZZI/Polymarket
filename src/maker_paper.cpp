@@ -513,13 +513,13 @@ private:
         return x;
     }
 
-    void add_position_fill(const Order& o, double filled_shares, std::int64_t now) {
+    void add_position_fill(const Order& o, double filled_shares, std::int64_t fill_ts) {
         auto it = positions_.find(o.market_id);
         if (it == positions_.end()) {
             Position p;
             p.market_id = o.market_id; p.event_id = o.event_id; p.condition_id = o.condition_id;
             p.slug = o.slug; p.side = o.side; p.token_id = o.token_id;
-            p.shares = filled_shares; p.entry_price = o.limit_price; p.entry_ts = now;
+            p.shares = filled_shares; p.entry_price = o.limit_price; p.entry_ts = fill_ts;
             p.game_start_ts = o.game_start_ts; p.timed_sports = o.timed_sports;
             p.fee_rate = o.fee_rate; p.fee_exponent = o.fee_exponent; p.fee_taker_only = o.fee_taker_only;
             positions_[o.market_id] = std::move(p);
@@ -530,7 +530,7 @@ private:
         if (new_shares <= 0.0) return;
         p.entry_price = (p.shares * p.entry_price + filled_shares * o.limit_price) / new_shares;
         p.shares = new_shares;
-        p.entry_ts = std::min(p.entry_ts, now);
+        p.entry_ts = std::min(p.entry_ts, fill_ts);
     }
 
     void process_orders(const std::unordered_map<std::string,pm::Book>& books, std::int64_t now) {
@@ -541,29 +541,31 @@ private:
                 erase.push_back(id);
                 continue;
             }
-            if (pm::timed_sports_started(order_timing(o), now)) {
-                append_order("CANCEL_GAME_START", o, 0.0, 0.0);
-                erase.push_back(id);
-                continue;
-            }
-            if (now - o.created_ts >= ttl_) {
-                append_order("CANCEL_TTL", o, 0.0, 0.0);
-                erase.push_back(id);
-                continue;
-            }
             if (o.condition_id.empty()) {
                 append_order("CANCEL_LEGACY_STATE", o, 0.0, 0.0);
                 erase.push_back(id);
                 continue;
             }
 
+            // Fill eligibility is an event-time property. Public trade records can
+            // arrive after the order's TTL in wall-clock time, so consume trades
+            // that occurred while the order was actually active before cancelling
+            // the unfilled remainder. Otherwise reporting/indexing latency creates
+            // false non-fills in the paper engine.
+            std::int64_t active_until = o.created_ts + std::max<std::int64_t>(0, ttl_);
+            if (o.timed_sports && o.game_start_ts > 0) {
+                active_until = std::min(active_until, o.game_start_ts);
+            }
+            const std::int64_t tape_until = std::min(now, active_until);
             std::vector<pm::RecentTrade> trades;
-            try {
-                trades = api_.fetch_recent_trades(
-                    {o.condition_id}, std::max(o.created_ts, o.last_trade_ts), now, 1000);
-            } catch (const std::exception& e) {
-                // Tape failure is fail-closed: the order remains resting but cannot fill.
-                std::cerr << "maker_trade_tape_error market=" << o.market_id << " error=" << e.what() << '\n';
+            if (tape_until >= o.created_ts) {
+                try {
+                    trades = api_.fetch_recent_trades(
+                        {o.condition_id}, std::max(o.created_ts, o.last_trade_ts), tape_until, 1000);
+                } catch (const std::exception& e) {
+                    // Tape failure is fail-closed: no synthetic fill is created.
+                    std::cerr << "maker_trade_tape_error market=" << o.market_id << " error=" << e.what() << '\n';
+                }
             }
 
             bool completed = false;
@@ -571,6 +573,7 @@ private:
                 if (trade.ts < o.last_trade_ts) continue;
                 if (trade.ts == o.last_trade_ts && cursor_contains(o, trade.id)) continue;
                 cursor_remember(o, trade);
+                if (trade.ts < o.created_ts || trade.ts > active_until) continue;
                 if (trade.token_id != o.token_id) continue;
 
                 auto consumed = pm::consume_passive_bid_trade(
@@ -582,7 +585,7 @@ private:
                 o.queue_ahead = consumed.queue_ahead;
 
                 if (consumed.filled_shares <= 0.0) {
-                    if (o.queue_ahead + 1e-12 < old_queue) append_order("QUEUE_DEPLETION", o, 0.0, 0.0);
+                    if (o.queue_ahead + 1e-12 < old_queue) append_order("QUEUE_TRADE_DEPLETION", o, 0.0, 0.0);
                     continue;
                 }
 
@@ -597,7 +600,7 @@ private:
 
                 cash_ -= fill_cost;
                 o.shares = consumed.remaining_shares;
-                add_position_fill(o, consumed.filled_shares, now);
+                add_position_fill(o, consumed.filled_shares, trade.ts);
                 const auto& p = positions_.at(id);
                 append_fill(p, o.shares <= 1e-12 ? "BUY_MAKER" : "BUY_MAKER_PARTIAL",
                             consumed.filled_shares, o.limit_price, 0.0, "taker_sell_consumed_queue");
@@ -611,6 +614,27 @@ private:
             if (completed) continue;
 
             auto bit = books.find(o.token_id);
+            const bool still_active = now < active_until;
+            if (bit != books.end() && still_active && o.queue_ahead > 0.0) {
+                // The public book excludes our simulated order. After accounting
+                // for observed aggressive trades, current displayed size at our
+                // price is therefore an upper bound on how much FIFO can still be
+                // ahead of us. Reducing only via min() is conservative: new orders
+                // posted behind us can make the snapshot too large, never too small.
+                const double visible_other = displayed_size_at_price(bit->second, true, o.limit_price);
+                if (std::isfinite(visible_other) && visible_other + 1e-12 < o.queue_ahead) {
+                    o.queue_ahead = std::max(0.0, visible_other);
+                    append_order("QUEUE_CANCEL_DEPLETION", o, 0.0, 0.0);
+                }
+            }
+
+            if (now >= active_until) {
+                append_order(o.timed_sports && o.game_start_ts > 0 && active_until == o.game_start_ts
+                                 ? "CANCEL_GAME_START" : "CANCEL_TTL",
+                             o, 0.0, 0.0);
+                erase.push_back(id);
+                continue;
+            }
             if (bit == books.end()) continue;
             const double bb = bit->second.best_bid();
             if (std::isfinite(bb) && bb > o.limit_price + 0.5 * std::max(1e-6, bit->second.tick_size)) {
