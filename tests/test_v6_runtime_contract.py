@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import csv
 import importlib.util
 import json
 import math
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -25,6 +27,8 @@ class V6RuntimeContractTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.relations = load_script("v6_relation_intents_test", "scripts/v6_relation_intents.py")
         cls.local_factor = load_script("v6_local_factor_intents_test", "scripts/v6_local_factor_intents.py")
+        cls.local_factor_v3 = load_script("v6_local_factor_v3_test", "scripts/v6_local_factor_v3.py")
+        cls.market_common = load_script("v6_market_common_test", "scripts/v6_market_common.py")
         cls.hard_safety = load_script("v6_hard_safety_policy_test", "scripts/hard_safety_policy.py")
 
     def test_v6_runtime_exists_with_manifest_selected_paper_champion(self) -> None:
@@ -81,9 +85,6 @@ class V6RuntimeContractTest(unittest.TestCase):
             float(ceilings["global_max_gross_fraction"]),
         )
 
-        # Authorized aggressive PAPER envelope. Current runtime may remain stricter
-        # until its research/integration evidence is approved, but CI must not encode
-        # the superseded 2.5% / 8% / 45% profile as an immutable safety contract.
         self.assertLessEqual(int(cfg["market_limit"]), 1000)
         self.assertGreaterEqual(float(cfg["min_liquidity"]), 2.0)
         self.assertGreaterEqual(float(cfg["min_net_edge"]), 0.00005)
@@ -119,6 +120,78 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertGreater(phi, 0.02)
         self.assertLess(phi, 0.999)
         self.assertLess(tstat, 0.0)
+
+    def test_repaired_local_factor_contract_is_cross_fit_and_null_preserving(self) -> None:
+        source = (ROOT / "scripts/v6_local_factor_v3.py").read_text(encoding="utf-8")
+        self.assertIn("other.market_id != market.market_id", source)
+        self.assertIn("increments =", source)
+        self.assertIn("path.append", source)
+        self.assertIn("unit_root_block_pvalue", source)
+        self.assertIn("horizon_residual_change", source)
+        self.assertIn("guarded_hold_seconds", source)
+        self.assertIn("ttr_missing_policy", source)
+        self.assertNotIn("pvalue_from_t", source)
+
+    def test_repaired_local_factor_rejects_self_inclusion_on_orthogonal_panel(self) -> None:
+        matrix = [[1]]
+        while len(matrix) < 64:
+            matrix = [row + row for row in matrix] + [row + [-x for x in row] for row in matrix]
+        markets = [self.local_factor.Market(str(i), "e", f"q{i}", f"y{i}", f"n{i}", 100.0) for i in range(5)]
+        series = {}
+        for i, market in enumerate(markets, start=1):
+            series[market.market_id] = {j * 3600: float(x) for j, x in enumerate(matrix[i])}
+        candidates = self.local_factor_v3.local_candidates("orthogonal", markets, series, 48, 0.0, bootstrap_reps=50)
+        self.assertEqual(candidates, [])
+
+    def test_repaired_unit_root_bootstrap_separates_null_and_stationary_paths(self) -> None:
+        import random
+        rng = random.Random(321)
+        walk = [0.0]
+        for _ in range(95):
+            walk.append(walk[-1] + rng.gauss(0.0, 1.0))
+        stationary = [1.0]
+        for _ in range(95):
+            stationary.append(0.65 * stationary[-1] + rng.gauss(0.0, 0.25))
+        p_null, _ = self.local_factor_v3.unit_root_block_pvalue(walk, 123, reps=120)
+        p_stationary, _ = self.local_factor_v3.unit_root_block_pvalue(stationary, 456, reps=120)
+        self.assertGreater(p_null, 0.02)
+        self.assertLess(p_stationary, 0.10)
+
+    def test_repaired_horizon_uses_actual_fidelity_and_fails_closed_without_ttr(self) -> None:
+        class Signal:
+            phi = 0.9
+            expected_residual_change = -0.1
+        self.assertAlmostEqual(self.local_factor_v3.horizon_residual_change(Signal(), 2.0), -0.19, places=12)
+        self.assertIsNone(
+            self.local_factor_v3.guarded_hold_seconds(
+                [0.9, 0.9], [None, 1_800_000_000], now=1_700_000_000,
+                fidelity_minutes=30, exit_buffer_seconds=900,
+            )
+        )
+        hold = self.local_factor_v3.guarded_hold_seconds(
+            [0.9, 0.9], [1_700_010_000, 1_700_010_000], now=1_700_000_000,
+            fidelity_minutes=30, exit_buffer_seconds=900,
+        )
+        self.assertIsNotNone(hold)
+        self.assertLessEqual(float(hold), 9_100.0)
+
+    def test_tape_flow_uses_receive_time_for_causal_knowledge(self) -> None:
+        now = 1_800_000_000
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "trade_tape.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["timestamp", "received_ms", "asset_id", "side", "price", "size"])
+                writer.writeheader()
+                writer.writerow({
+                    "timestamp": now - 7200,
+                    "received_ms": (now - 10) * 1000,
+                    "asset_id": "token",
+                    "side": "SELL",
+                    "price": 0.40,
+                    "size": 25,
+                })
+            flow = self.market_common.TapeFlow.from_csv(path, lookback_seconds=60, now=now)
+            self.assertAlmostEqual(flow.compatible_sell_volume("token", 0.40, lookback_seconds=60), 25.0)
 
     def test_v6_execution_excludes_global_pca_semantic_and_weak_b1(self) -> None:
         loop = (ROOT / "scripts/paper_v6_loop.sh").read_text()
