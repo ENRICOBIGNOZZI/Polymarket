@@ -11,8 +11,8 @@ REQUIRED_IDS = {
     "administrator-supervisor", "research-policy", "research-queue", "promotion-controller",
     "integration-merge", "post-merge-validation", "code-validation", "monitoring-validation",
     "live-paper-validation", "paper-server-deploy", "paper-server-health", "forward-maker-research",
-    "alpha-factory", "meta-supervisor", "fast-arb-shadow-research", "arb-theory-research",
-    "external-intelligence", "live-api-smoke",
+    "v6-live-data-research", "alpha-factory", "meta-supervisor", "fast-arb-shadow-research",
+    "arb-theory-research", "external-intelligence", "live-api-smoke",
 }
 NON_SCHEDULER_WORKFLOWS = {".github/workflows/grafana-access.yml"}
 
