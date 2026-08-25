@@ -82,6 +82,74 @@ struct Book {
     }
 };
 
+struct MicroForecast {
+    double q_yes = 0.5;
+    double confidence = 0.0;
+    double pressure = 0.0;
+};
+
+inline MicroForecast micro_forecast(const Book& yes, const Book& no,
+                                     double impact_multiplier,
+                                     double imbalance_strength) {
+    const double mid = yes.midpoint();
+    if (!std::isfinite(mid)) return {};
+
+    const double yes_micro = yes.microprice();
+    const double no_micro = no.microprice();
+    const double yes_bid_depth = yes.weighted_depth(true);
+    const double yes_ask_depth = yes.weighted_depth(false);
+    const double no_bid_depth = no.weighted_depth(true);
+    const double no_ask_depth = no.weighted_depth(false);
+    const double yes_depth = yes_bid_depth + yes_ask_depth;
+    const double no_depth = no_bid_depth + no_ask_depth;
+    const double wy = std::sqrt(std::max(0.0, yes_depth)) / (1.0 + 12.0 * yes.spread());
+    const double wn = std::sqrt(std::max(0.0, no_depth)) / (1.0 + 12.0 * no.spread());
+
+    double raw = mid;
+    if (std::isfinite(yes_micro) && std::isfinite(no_micro) && wy + wn > 1e-12) {
+        raw = (wy * yes_micro + wn * (1.0 - no_micro)) / (wy + wn);
+    } else if (std::isfinite(yes_micro)) {
+        raw = yes_micro;
+    } else if (std::isfinite(no_micro)) {
+        raw = 1.0 - no_micro;
+    }
+
+    const double yes_imbalance = (yes_bid_depth - yes_ask_depth) / std::max(1e-9, yes_depth);
+    const double no_imbalance = (no_bid_depth - no_ask_depth) / std::max(1e-9, no_depth);
+    const double pressure = 0.5 * (yes_imbalance - no_imbalance);
+    const double scale = std::max({0.0025, yes.tick_size, no.tick_size,
+                                   0.5 * yes.spread(), 0.5 * no.spread()});
+    const double adjustment = std::clamp(
+        impact_multiplier * (raw - mid) + imbalance_strength * scale * pressure,
+        -0.15,
+        0.15);
+    const double parity = std::isfinite(yes_micro) && std::isfinite(no_micro)
+        ? std::abs(yes_micro - (1.0 - no_micro))
+        : 0.20;
+    const double liquidity = (yes_depth + no_depth) / (yes_depth + no_depth + 100.0);
+    const double spread_confidence = std::exp(-3.0 * (yes.spread() + no.spread()));
+    const double signal_strength = std::clamp(std::abs(adjustment) / std::max(0.005, scale), 0.0, 2.0);
+    const double confidence = std::clamp(
+        liquidity * spread_confidence * std::exp(-6.0 * parity) * (0.55 + 0.25 * signal_strength),
+        0.03,
+        1.0);
+    return {std::clamp(mid + adjustment, 0.001, 0.999), confidence, pressure};
+}
+
+inline bool model_market_eligible(const Book& yes, const Book& no,
+                                  double min_mid, double max_mid,
+                                  double max_spread) {
+    const double mid = yes.midpoint();
+    if (!std::isfinite(mid) || mid <= min_mid || mid >= max_mid) return false;
+    const bool yes_quoted = std::isfinite(yes.best_bid()) || std::isfinite(yes.best_ask());
+    const bool no_quoted = std::isfinite(no.best_bid()) || std::isfinite(no.best_ask());
+    const bool at_least_one_executable_side =
+        std::isfinite(yes.best_ask()) || std::isfinite(no.best_ask());
+    const bool at_least_one_reasonable_spread =
+        yes.spread() <= max_spread || no.spread() <= max_spread;
+    return yes_quoted && no_quoted && at_least_one_executable_side && at_least_one_reasonable_spread;
+}
+
 struct Market {
     std::string id;
     std::string condition_id;
@@ -184,12 +252,15 @@ struct Config {
     double min_mid = 0.01;
     double max_mid = 0.99;
     double max_spread = 0.15;
+    double micro_impact_multiplier = 2.50;
+    double micro_imbalance_strength = 0.75;
 
     double min_net_edge = 0.005;
     double uncertainty_penalty = 0.20;
     double slippage_bps = 5.0;
     double fractional_kelly = 0.10;
     double max_trade_usd = 250.0;
+    double min_trade_usd = 5.0;
     double max_market_fraction = 0.03;
     double max_event_fraction = 0.08;
     double max_gross_fraction = 0.25;
@@ -204,6 +275,7 @@ struct Config {
     std::size_t pca_universe = 200;
     double pca_mr_strength = 0.35;
     double pca_min_residual_z = 0.75;
+    double pca_min_t_reversion = 0.50;
 
     double graph_max_sum_error = 0.20;
     double semantic_min_similarity = 0.68;

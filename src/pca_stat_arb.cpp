@@ -106,9 +106,18 @@ std::map<std::int64_t,double> bucket_levels(const std::vector<pm::PricePoint>& v
     return out;
 }
 
+std::optional<double> asof_level(const std::map<std::int64_t,double>& values,
+                                 std::int64_t ts, std::int64_t max_age) {
+    auto it = values.upper_bound(ts);
+    if (it == values.begin()) return std::nullopt;
+    --it;
+    if (ts - it->first > max_age) return std::nullopt;
+    return it->second;
+}
+
 ResidualFit fit_residual(const std::vector<TimedValue>& r, std::int64_t bucket_s) {
     ResidualFit f;
-    if (r.size() < 24) return f;
+    if (r.size() < 16) return f;
     std::vector<double> values;
     values.reserve(r.size());
     for (const auto& x : r) values.push_back(x.value);
@@ -123,7 +132,7 @@ ResidualFit fit_residual(const std::vector<TimedValue>& r, std::int64_t bucket_s
         dr.push_back(r[t].value - r[t - 1].value);
     }
     f.transitions = lag.size();
-    if (lag.size() < 20) return f;
+    if (lag.size() < 12) return f;
     const double ml = mean(lag), md = mean(dr);
     double sxx = 0.0, sxy = 0.0;
     for (std::size_t i = 0; i < lag.size(); ++i) {
@@ -144,7 +153,7 @@ ResidualFit fit_residual(const std::vector<TimedValue>& r, std::int64_t bucket_s
     const double se = std::sqrt(std::max(0.0, sigma2) / sxx);
     f.t_reversion = se > 1e-12 ? gamma / se : 0.0;
     f.phi = 1.0 + gamma;
-    f.ok = gamma < 0.0 && f.phi > 0.02 && f.phi < 0.999 && std::isfinite(f.t_reversion);
+    f.ok = gamma < 0.0 && f.phi > 0.05 && f.phi < 0.999 && std::isfinite(f.t_reversion);
     return f;
 }
 
@@ -276,8 +285,8 @@ int main(int argc, char** argv) {
         std::string config = "config/paper_v3.json", csv_path;
         std::size_t market_limit = 600, universe_limit = 100, lookback_hours = 336;
         std::size_t fidelity_minutes = 30, factors = 3, max_hedges = 8, top = 40;
-        double min_liquidity = 100.0, min_z = 1.5, min_t = 1.75, max_half_life_hours = 168.0;
-        double max_factor_hedge_error = 0.20;
+        double min_liquidity = 25.0, min_z = 0.90, min_t = 0.75, max_half_life_hours = 240.0;
+        double max_factor_hedge_error = 0.65;
 
         for (int i = 1; i < argc; ++i) {
             const std::string a = argv[i];
@@ -330,14 +339,12 @@ int main(int argc, char** argv) {
                     pm::MarketTiming{m.timed_sports, m.game_start_ts, m.seconds_delay}, now)) continue;
             auto y = books.find(m.yes_token), n = books.find(m.no_token);
             if (y == books.end() || n == books.end()) continue;
-            const double p = y->second.midpoint();
-            if (!std::isfinite(p) || p <= cfg.min_mid || p >= cfg.max_mid) continue;
-            if (y->second.spread() > cfg.max_spread || n->second.spread() > cfg.max_spread) continue;
-            if (!std::isfinite(y->second.best_bid()) || !std::isfinite(y->second.best_ask()) ||
-                !std::isfinite(n->second.best_bid()) || !std::isfinite(n->second.best_ask())) continue;
+            if (!pm::model_market_eligible(y->second, n->second, cfg.min_mid, cfg.max_mid, cfg.max_spread)) continue;
             universe.push_back(&m);
         }
-        std::sort(universe.begin(), universe.end(), [](auto* a, auto* b) { return a->liquidity > b->liquidity; });
+        std::sort(universe.begin(), universe.end(), [](auto* a, auto* b) {
+            return a->liquidity + 0.20 * a->volume24h > b->liquidity + 0.20 * b->volume24h;
+        });
         if (universe.size() > universe_limit) universe.resize(universe_limit);
 
         std::vector<std::string> yes_tokens;
@@ -359,7 +366,7 @@ int main(int argc, char** argv) {
             auto lv = bucket_levels(it->second, bucket_s);
             const double current = books.at(m->yes_token).midpoint();
             if (std::isfinite(current)) lv[(now / bucket_s) * bucket_s] = pm::logit(current);
-            if (lv.size() < 36) continue;
+            if (lv.size() < 24) continue;
             std::vector<double> values;
             values.reserve(lv.size());
             for (const auto& kv : lv) values.push_back(kv.second);
@@ -373,28 +380,26 @@ int main(int argc, char** argv) {
             return 0;
         }
 
-        // Pairwise correlation on actual common timestamp buckets only.
+        // Pairwise correlation on a regular as-of panel. Prediction-market
+        // histories update asynchronously; exact timestamp intersections were
+        // discarding most of the usable covariance information.
+        const std::int64_t panel_start = (start / bucket_s) * bucket_s;
+        const std::int64_t panel_end = (now / bucket_s) * bucket_s;
+        const std::int64_t max_age = 3 * bucket_s;
         std::vector<std::vector<double>> C(N, std::vector<double>(N, 0.0));
         for (std::size_t i = 0; i < N; ++i) C[i][i] = 1.0;
         for (std::size_t i = 0; i < N; ++i) {
             for (std::size_t j = i + 1; j < N; ++j) {
-                auto a = s[i].level.begin(), b = s[j].level.begin();
                 double sum = 0.0;
                 std::size_t n = 0;
-                while (a != s[i].level.end() && b != s[j].level.end()) {
-                    if (a->first == b->first) {
-                        sum += ((a->second - s[i].mu) / s[i].sigma) *
-                               ((b->second - s[j].mu) / s[j].sigma);
-                        ++n;
-                        ++a;
-                        ++b;
-                    } else if (a->first < b->first) {
-                        ++a;
-                    } else {
-                        ++b;
-                    }
+                for (std::int64_t ts = panel_start; ts <= panel_end; ts += bucket_s) {
+                    auto av = asof_level(s[i].level, ts, max_age);
+                    auto bv = asof_level(s[j].level, ts, max_age);
+                    if (!av || !bv) continue;
+                    sum += ((*av - s[i].mu) / s[i].sigma) * ((*bv - s[j].mu) / s[j].sigma);
+                    ++n;
                 }
-                if (n >= 24) C[i][j] = C[j][i] = std::clamp(sum / static_cast<double>(n), -1.0, 1.0);
+                if (n >= 16) C[i][j] = C[j][i] = std::clamp(sum / static_cast<double>(n), -1.0, 1.0);
             }
         }
 
@@ -404,23 +409,20 @@ int main(int argc, char** argv) {
         const double explained = std::clamp(
             std::accumulate(eigenvalues.begin(), eigenvalues.end(), 0.0) / static_cast<double>(N), 0.0, 1.0);
 
-        // Sparse panel residuals: at each timestamp project factors using only observed series.
-        std::set<std::int64_t> timestamps;
-        for (const auto& z : s)
-            for (const auto& kv : z.level) timestamps.insert(kv.first);
+        // Regular as-of residual panel with bounded carry-forward staleness.
         std::vector<std::vector<TimedValue>> residuals(N);
-        for (auto ts : timestamps) {
+        for (std::int64_t ts = panel_start; ts <= panel_end; ts += bucket_s) {
             std::vector<double> y(N, 0.0);
             std::vector<bool> observed(N, false);
             std::size_t count = 0;
             for (std::size_t j = 0; j < N; ++j) {
-                auto it = s[j].level.find(ts);
-                if (it == s[j].level.end()) continue;
-                y[j] = (it->second - s[j].mu) / s[j].sigma;
+                auto value = asof_level(s[j].level, ts, max_age);
+                if (!value) continue;
+                y[j] = (*value - s[j].mu) / s[j].sigma;
                 observed[j] = true;
                 ++count;
             }
-            if (count < std::max<std::size_t>(4, N / 4)) continue;
+            if (count < std::max<std::size_t>(4, N / 5)) continue;
             std::vector<double> factor(vecs.size(), 0.0);
             for (std::size_t k = 0; k < vecs.size(); ++k) {
                 double num = 0.0, den = 0.0;
@@ -456,19 +458,19 @@ int main(int argc, char** argv) {
         }
 
         std::vector<Opportunity> opportunities;
-        std::size_t mr_pass = 0, relation_pass = 0, hedge_pass = 0;
+        std::size_t mr_pass = 0, relation_pass = 0, hedge_candidates = 0, hedge_pass = 0;
         for (std::size_t j = 0; j < N; ++j) {
             auto fit = fit_residual(residuals[j], bucket_s);
             if (!fit.ok || fit.t_reversion > -min_t) continue;
             const std::size_t cut = residuals[j].size() / 2;
-            if (cut < 24 || residuals[j].size() - cut < 24) continue;
+            if (cut < 12 || residuals[j].size() - cut < 12) continue;
             std::vector<TimedValue> r1(residuals[j].begin(), residuals[j].begin() + static_cast<std::ptrdiff_t>(cut));
             std::vector<TimedValue> r2(residuals[j].begin() + static_cast<std::ptrdiff_t>(cut), residuals[j].end());
             auto f1 = fit_residual(r1, bucket_s), f2 = fit_residual(r2, bucket_s);
             if (!f1.ok || !f2.ok) continue;
             const double stability = std::exp(-4.0 * std::abs(f1.phi - f2.phi)) *
                                      ((f1.t_reversion < 0.0 && f2.t_reversion < 0.0) ? 1.0 : 0.0);
-            if (stability < 0.45) continue;
+            if (stability < 0.25) continue;
             const double bucket_hours = static_cast<double>(fidelity_minutes) / 60.0;
             const double half_life = -std::log(2.0) / std::log(fit.phi) * bucket_hours;
             if (!std::isfinite(half_life) || half_life <= 0.0 || half_life > max_half_life_hours) continue;
@@ -480,21 +482,32 @@ int main(int argc, char** argv) {
             const double z = (residual_now - fit.mean) / fit.sd;
             if (std::abs(z) < min_z) continue;
 
-            // Construct a minimum-norm hedge only from contracts that belong to
-            // the same explicit event or a strong semantic cluster. A global PCA
-            // loading match is not, by itself, an economically valid hedge.
-            struct HC { std::size_t index; double score; };
+            // PCA already supplies a statistical hedge relation. Explicit
+            // event/semantic links receive a bonus, but are no longer a hard gate.
+            // Aggregate factor error and stability remain the execution controls.
+            struct HC { std::size_t index; double score; bool explicit_relation; };
             std::vector<HC> candidates;
+            std::vector<double> target_loading(vecs.size(), 0.0);
+            for (std::size_t k = 0; k < vecs.size(); ++k) target_loading[k] = vecs[k][j];
+            const double target_norm = norm2(target_loading);
+            if (target_norm < 1e-6) continue;
             for (std::size_t i = 0; i < N; ++i) {
                 if (i == j || !current_observed[i]) continue;
-                if (pm::market_relation(*s[j].market, *s[i].market) == pm::MarketRelation::none) continue;
-                ++relation_pass;
-                double loading_norm = 0.0;
-                for (const auto& v : vecs) loading_norm += v[i] * v[i];
-                loading_norm = std::sqrt(loading_norm);
+                std::vector<double> loading(vecs.size(), 0.0);
+                for (std::size_t k = 0; k < vecs.size(); ++k) loading[k] = vecs[k][i];
+                const double loading_norm = norm2(loading);
                 if (loading_norm < 1e-4) continue;
-                const double score = loading_norm * std::log1p(std::max(0.0, s[i].market->liquidity));
-                candidates.push_back({i, score});
+                const double cosine = std::abs(dot(target_loading, loading)) /
+                                      std::max(1e-8, target_norm * loading_norm);
+                const bool explicit_relation =
+                    pm::market_relation(*s[j].market, *s[i].market) != pm::MarketRelation::none;
+                if (!explicit_relation && cosine < 0.10) continue;
+                if (explicit_relation) ++relation_pass;
+                ++hedge_candidates;
+                const double relation_bonus = explicit_relation ? 1.50 : 1.0;
+                const double score = (0.25 + cosine) * relation_bonus *
+                                     std::log1p(std::max(0.0, s[i].market->liquidity));
+                candidates.push_back({i, score, explicit_relation});
             }
             std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) { return a.score > b.score; });
             if (candidates.size() > max_hedges) candidates.resize(max_hedges);
@@ -504,7 +517,7 @@ int main(int argc, char** argv) {
             std::vector<std::vector<double>> A(K, std::vector<double>(K, 0.0));
             std::vector<double> b(K, 0.0);
             for (std::size_t k = 0; k < K; ++k) {
-                A[k][k] = 1e-5;
+                A[k][k] = 1e-3;
                 b[k] = -vecs[k][j];
             }
             for (const auto& c : candidates) {
@@ -519,20 +532,14 @@ int main(int argc, char** argv) {
             for (const auto& c : candidates) {
                 double h = 0.0;
                 for (std::size_t k = 0; k < K; ++k) h += vecs[k][c.index] * coeff[k];
-                if (std::abs(h) >= 0.02) hedges.push_back({c.index, h});
+                h = std::clamp(h, -4.0, 4.0);
+                if (std::abs(h) >= 0.01) hedges.push_back({c.index, h});
             }
             if (hedges.empty()) continue;
-            std::vector<double> remaining(K, 0.0);
-            for (std::size_t k = 0; k < K; ++k) remaining[k] = vecs[k][j];
-            bool extreme_weight = false;
-            for (const auto& [i,h] : hedges) {
-                if (std::abs(h) > 4.0) extreme_weight = true;
+            std::vector<double> remaining = target_loading;
+            for (const auto& [i,h] : hedges)
                 for (std::size_t k = 0; k < K; ++k) remaining[k] += h * vecs[k][i];
-            }
-            if (extreme_weight) continue;
-            std::vector<double> target_loading(K, 0.0);
-            for (std::size_t k = 0; k < K; ++k) target_loading[k] = vecs[k][j];
-            const double hedge_error = norm2(remaining) / std::max(1e-8, norm2(target_loading));
+            const double hedge_error = norm2(remaining) / std::max(1e-8, target_norm);
             if (!std::isfinite(hedge_error) || hedge_error > max_factor_hedge_error) continue;
             ++hedge_pass;
 
@@ -551,7 +558,7 @@ int main(int argc, char** argv) {
                 if (!std::isfinite(p)) return false;
                 const double sensitivity = std::max(1e-4, s[i].sigma * p * (1.0 - p));
                 const double shares = std::abs(standardized_weight) * target_sensitivity / sensitivity;
-                if (shares < 0.01 || shares > 6.0) return false;
+                if (shares < 0.01 || shares > 10.0) return false;
                 const std::string side = standardized_weight >= 0.0 ? "YES" : "NO";
                 const auto& book = side == "YES" ? books.at(s[i].market->yes_token) : books.at(s[i].market->no_token);
                 legs.push_back({s[i].market, &book, api.fetch_fee_details(*s[i].market), side, shares, target});
@@ -614,6 +621,7 @@ int main(int argc, char** argv) {
                   << " explained=" << explained
                   << " mr_pass=" << mr_pass
                   << " relation_pass=" << relation_pass
+                  << " hedge_candidates=" << hedge_candidates
                   << " hedge_pass=" << hedge_pass
                   << " opportunities=" << opportunities.size()
                   << " raw_positive=" << raw_positive

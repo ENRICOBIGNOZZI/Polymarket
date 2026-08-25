@@ -158,11 +158,14 @@ Config Engine::load_config(const std::string& path) {
     c.min_mid = jdouble(o, "min_mid", c.min_mid);
     c.max_mid = jdouble(o, "max_mid", c.max_mid);
     c.max_spread = jdouble(o, "max_spread", c.max_spread);
+    c.micro_impact_multiplier = jdouble(o, "micro_impact_multiplier", c.micro_impact_multiplier);
+    c.micro_imbalance_strength = jdouble(o, "micro_imbalance_strength", c.micro_imbalance_strength);
     c.min_net_edge = jdouble(o, "min_net_edge", c.min_net_edge);
     c.uncertainty_penalty = jdouble(o, "uncertainty_penalty", c.uncertainty_penalty);
     c.slippage_bps = jdouble(o, "slippage_bps", c.slippage_bps);
     c.fractional_kelly = jdouble(o, "fractional_kelly", c.fractional_kelly);
     c.max_trade_usd = jdouble(o, "max_trade_usd", c.max_trade_usd);
+    c.min_trade_usd = jdouble(o, "min_trade_usd", c.min_trade_usd);
     c.max_market_fraction = jdouble(o, "max_market_fraction", c.max_market_fraction);
     c.max_event_fraction = jdouble(o, "max_event_fraction", c.max_event_fraction);
     c.max_gross_fraction = jdouble(o, "max_gross_fraction", c.max_gross_fraction);
@@ -176,6 +179,7 @@ Config Engine::load_config(const std::string& path) {
     c.pca_universe = jsize(o, "pca_universe", c.pca_universe);
     c.pca_mr_strength = jdouble(o, "pca_mr_strength", c.pca_mr_strength);
     c.pca_min_residual_z = jdouble(o, "pca_min_residual_z", c.pca_min_residual_z);
+    c.pca_min_t_reversion = jdouble(o, "pca_min_t_reversion", c.pca_min_t_reversion);
     c.graph_max_sum_error = jdouble(o, "graph_max_sum_error", c.graph_max_sum_error);
     c.semantic_min_similarity = jdouble(o, "semantic_min_similarity", c.semantic_min_similarity);
     c.semantic_shrink = jdouble(o, "semantic_shrink", c.semantic_shrink);
@@ -577,19 +581,19 @@ std::unordered_map<std::string,Engine::Adjustment> Engine::pca_adjustments(
         const double sigma2 = rss / dof;
         const double se_beta = std::sqrt(std::max(0.0, sigma2) / std::max(1e-8, sxx + ridge));
         const double t_reversion = se_beta > 1e-8 ? -beta / se_beta : 0.0;
-        if (t_reversion < 0.75) continue;
+        if (t_reversion < cfg_.pca_min_t_reversion) continue;
 
         const double forecast_std = y_mu + beta * x_now;
         if (forecast_std * x_now >= 0.0) continue;
 
         const double cur = yes_books.at(s[j].m->yes_token).midpoint();
-        const double forecast_logit = std::clamp(cfg_.pca_mr_strength * forecast_std * s[j].sd, -0.20, 0.20);
+        const double forecast_logit = std::clamp(cfg_.pca_mr_strength * forecast_std * s[j].sd, -0.30, 0.30);
         if (std::abs(forecast_logit) < 1e-5) continue;
         const double q = logistic(logit(cur) + forecast_logit);
         const double z_conf = std::clamp((std::abs(z) - cfg_.pca_min_residual_z) / 3.0 + 0.20, 0.10, 1.0);
         const double sample_conf = std::min(1.0, static_cast<double>(T) / 48.0);
         const double factor_conf = std::clamp(0.35 + 1.5 * explained, 0.35, 1.0);
-        const double reversion_conf = std::clamp((t_reversion - 0.75) / 2.5, 0.05, 1.0);
+        const double reversion_conf = std::clamp((t_reversion - cfg_.pca_min_t_reversion) / 2.0, 0.05, 1.0);
         out[s[j].m->id] = {q, std::clamp(z_conf * sample_conf * factor_conf * reversion_conf, 0.02, 1.0)};
     }
     return out;
@@ -670,20 +674,9 @@ std::vector<ExpertPrediction> Engine::build_experts(
     std::vector<ExpertPrediction> out;
     const double mid = yes.midpoint();
     if (std::isfinite(mid)) {
-        const double y = yes.microprice();
-        const double n = no.microprice();
-        const double dy = yes.weighted_depth(true) + yes.weighted_depth(false);
-        const double dn = no.weighted_depth(true) + no.weighted_depth(false);
-        const double wy = std::sqrt(std::max(0.0, dy)) / (1.0 + 20.0 * yes.spread());
-        const double wn = std::sqrt(std::max(0.0, dn)) / (1.0 + 20.0 * no.spread());
-        double q = mid;
-        if (std::isfinite(y) && std::isfinite(n) && wy + wn > 1e-12) q = (wy * y + wn * (1.0 - n)) / (wy + wn);
-        else if (std::isfinite(y)) q = y;
-        const double parity = std::isfinite(y) && std::isfinite(n) ? std::abs(y - (1.0 - n)) : 0.25;
-        const double liq = (dy + dn) / (dy + dn + 200.0);
-        const double spread_conf = std::exp(-5.0 * (yes.spread() + no.spread()));
-        const double conf = std::clamp(liq * spread_conf * std::exp(-8.0 * parity), 0.02, 1.0);
-        out.push_back({"micro", std::clamp(q, 0.001, 0.999), conf});
+        const auto forecast = micro_forecast(
+            yes, no, cfg_.micro_impact_multiplier, cfg_.micro_imbalance_strength);
+        out.push_back({"micro", forecast.q_yes, forecast.confidence});
     }
     if (auto it = pca.find(m.id); it != pca.end()) out.push_back({"pca", it->second.first, it->second.second});
     if (auto it = graph.find(m.id); it != graph.end()) out.push_back({"graph", it->second.first, it->second.second});
@@ -789,13 +782,19 @@ double Engine::event_exposure(const std::string& event) const {
 double Engine::size_trade(const Signal& s, const Market& m, double eq, double gross) const {
     if (killed_ || eq <= 0.0 || s.net_edge <= cfg_.min_net_edge) return 0.0;
     const double kelly = cfg_.fractional_kelly * full_kelly(s.fair_side, s.executable_price) * eq;
-    double limit = std::min({kelly, cfg_.max_trade_usd,
+    const double target = std::max(cfg_.min_trade_usd, kelly);
+    double limit = std::min({target, cfg_.max_trade_usd,
                              cfg_.max_market_fraction * eq - market_exposure(m.id),
                              cfg_.max_event_fraction * eq - event_exposure(m.event_id),
                              cfg_.max_gross_fraction * eq - gross,
                              cash_});
-    const double dd_room = cfg_.max_drawdown * peak_equity_ - (peak_equity_ - eq) - gross;
-    limit = std::min(limit, std::max(0.0, dd_room));
+    // Drawdown is a live stop, not a worst-case gross-exposure cap. The previous
+    // subtraction of all gross exposure made a 15% DD target silently cap gross
+    // exposure at 15%, even when the portfolio cap was materially higher.
+    const double realized_drawdown = std::max(0.0, peak_equity_ - eq);
+    const double drawdown_room = std::max(0.0, cfg_.max_drawdown * peak_equity_ - realized_drawdown);
+    limit = std::min(limit, drawdown_room);
+    if (limit + 1e-9 < cfg_.min_trade_usd) return 0.0;
     return std::max(0.0, limit);
 }
 
@@ -900,15 +899,30 @@ void Engine::run_once(bool paper, bool scan_only) {
 
     std::vector<Market> tradable;
     std::unordered_map<std::string,Book> yes_books;
+    std::size_t volume_rejected = 0, missing_books = 0, mid_rejected = 0;
+    std::size_t spread_rejected = 0, execution_rejected = 0;
     for (const auto& m : markets) {
-        if (m.volume24h + 1e-12 < cfg_.min_volume24h) continue;
+        if (m.volume24h + 1e-12 < cfg_.min_volume24h) { ++volume_rejected; continue; }
         auto yi = books.find(m.yes_token);
         auto ni = books.find(m.no_token);
-        if (yi == books.end() || ni == books.end()) continue;
+        if (yi == books.end() || ni == books.end()) { ++missing_books; continue; }
         const double mid = yi->second.midpoint();
-        if (!std::isfinite(mid) || mid <= cfg_.min_mid || mid >= cfg_.max_mid) continue;
-        if (yi->second.spread() > cfg_.max_spread || ni->second.spread() > cfg_.max_spread) continue;
-        if (!std::isfinite(yi->second.best_ask()) || !std::isfinite(ni->second.best_ask())) continue;
+        if (!std::isfinite(mid) || mid <= cfg_.min_mid || mid >= cfg_.max_mid) {
+            ++mid_rejected;
+            continue;
+        }
+        if (yi->second.spread() > cfg_.max_spread && ni->second.spread() > cfg_.max_spread) {
+            ++spread_rejected;
+            continue;
+        }
+        if (!std::isfinite(yi->second.best_ask()) && !std::isfinite(ni->second.best_ask())) {
+            ++execution_rejected;
+            continue;
+        }
+        if (!model_market_eligible(yi->second, ni->second, cfg_.min_mid, cfg_.max_mid, cfg_.max_spread)) {
+            ++execution_rejected;
+            continue;
+        }
         tradable.push_back(m);
         yes_books[m.yes_token] = yi->second;
     }
@@ -1014,6 +1028,9 @@ void Engine::run_once(bool paper, bool scan_only) {
 
     persist_state(equity(books), gross_exposure(books));
     std::cout << "discovered=" << markets.size() << " tradable=" << tradable.size() << " candidates=" << candidates.size()
+              << " volume_rejected=" << volume_rejected << " missing_books=" << missing_books
+              << " mid_rejected=" << mid_rejected << " spread_rejected=" << spread_rejected
+              << " execution_rejected=" << execution_rejected
               << " no_terminal_evidence=" << no_terminal_evidence
               << " gross_pos=" << gross_positive << " cost_pos=" << cost_positive << " net_pos=" << net_positive
               << " best_net=" << (candidates.empty() ? 0.0 : best_net) << " pca=" << pca.size() << " graph=" << graph.size()

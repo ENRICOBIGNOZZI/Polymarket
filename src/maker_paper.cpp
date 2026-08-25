@@ -89,26 +89,10 @@ struct MicroSignal {
     double confidence = 0.0;
 };
 
-MicroSignal micro_signal(const pm::Book& yes, const pm::Book& no) {
-    const double mid = yes.midpoint();
-    if (!std::isfinite(mid)) return {};
-    const double y = yes.microprice();
-    const double n = no.microprice();
-    const double dy = yes.weighted_depth(true) + yes.weighted_depth(false);
-    const double dn = no.weighted_depth(true) + no.weighted_depth(false);
-    const double wy = std::sqrt(std::max(0.0, dy)) / (1.0 + 20.0 * yes.spread());
-    const double wn = std::sqrt(std::max(0.0, dn)) / (1.0 + 20.0 * no.spread());
-    double q = mid;
-    if (std::isfinite(y) && std::isfinite(n) && wy + wn > 1e-12) {
-        q = (wy * y + wn * (1.0 - n)) / (wy + wn);
-    } else if (std::isfinite(y)) {
-        q = y;
-    }
-    const double parity = std::isfinite(y) && std::isfinite(n) ? std::abs(y - (1.0 - n)) : 0.25;
-    const double liq = (dy + dn) / (dy + dn + 200.0);
-    const double spread_conf = std::exp(-5.0 * (yes.spread() + no.spread()));
-    const double conf = std::clamp(liq * spread_conf * std::exp(-8.0 * parity), 0.02, 1.0);
-    return {std::clamp(q, 0.001, 0.999), conf};
+MicroSignal micro_signal(const pm::Book& yes, const pm::Book& no, const pm::Config& cfg) {
+    const auto forecast = pm::micro_forecast(
+        yes, no, cfg.micro_impact_multiplier, cfg.micro_imbalance_strength);
+    return {forecast.q_yes, forecast.confidence};
 }
 
 bool cursor_contains(const Order& o, const std::string& trade_id) {
@@ -186,9 +170,9 @@ public:
                 const auto& nb = ni->second;
                 const double mid = yb.midpoint();
                 if (!std::isfinite(mid) || mid <= cfg_.min_mid || mid >= cfg_.max_mid) continue;
-                if (yb.spread() > cfg_.max_spread || nb.spread() > cfg_.max_spread) continue;
-                const auto ms = micro_signal(yb, nb);
-                if (ms.confidence < 0.10) continue;
+                if (!pm::model_market_eligible(yb, nb, cfg_.min_mid, cfg_.max_mid, cfg_.max_spread)) continue;
+                const auto ms = micro_signal(yb, nb, cfg_);
+                if (ms.confidence < 0.04) continue;
                 const auto fd = api_.fetch_fee_details(m);
 
                 struct Choice {
@@ -232,7 +216,7 @@ public:
                 const double event_room = cfg_.max_event_fraction * eq - event_committed(m.event_id);
                 const double gross_room = cfg_.max_gross_fraction * eq - pos_cost - reserved;
                 const double current_drawdown_dollars = std::max(0.0, peak_equity_ - eq);
-                const double loss_room = cfg_.max_drawdown * peak_equity_ - current_drawdown_dollars - pos_cost - reserved;
+                const double loss_room = cfg_.max_drawdown * peak_equity_ - current_drawdown_dollars;
                 const double max_cash = std::min({
                     max_order_usd_, available_cash, cfg_.max_market_fraction * eq,
                     std::max(0.0, event_room), std::max(0.0, gross_room), std::max(0.0, loss_room)
@@ -586,7 +570,7 @@ private:
                 const auto* m = mit->second;
                 auto yi = books.find(m->yes_token), ni = books.find(m->no_token);
                 if (yi != books.end() && ni != books.end()) {
-                    const auto ms = micro_signal(yi->second, ni->second);
+                    const auto ms = micro_signal(yi->second, ni->second, cfg_);
                     const double fair = p.side == "YES" ? ms.q_yes : 1.0 - ms.q_yes;
                     const double bid = bit->second.best_bid();
                     if (std::isfinite(bid) && fair <= bid + 0.25 * bit->second.spread()) exit = true;
