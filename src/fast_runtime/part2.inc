@@ -151,7 +151,9 @@ public:
         std::scoped_lock lock(mutex_);
         for (const auto& [token, book] : fresh) {
             books_[token] = book;
-            book_received_ms_[token] = received_ms;
+            // REST book batches have no candidate-leg receive timestamp. Reset the
+            // websocket freshness proof so hard baskets cannot inherit a stale timestamp.
+            book_received_ms_[token] = 0;
         }
         ++rest_resyncs_;
         evaluate_all_locked(0, received_ms);
