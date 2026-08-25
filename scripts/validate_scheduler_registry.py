@@ -14,9 +14,10 @@ REQUIRED_IDS = {
     "v6-live-data-research", "alpha-factory", "meta-supervisor", "fast-arb-shadow-research",
     "arb-theory-research", "external-intelligence", "live-api-smoke",
 }
+PRIVATE_VALIDATION_WORKFLOW = ".github/workflows/private-runtime-single-writer-validation.yml"
 NON_SCHEDULER_WORKFLOWS = {
     ".github/workflows/grafana-access.yml",
-    ".github/workflows/private-runtime-single-writer-validation.yml",
+    PRIVATE_VALIDATION_WORKFLOW,
 }
 NON_SCHEDULER_FORBIDDEN_TOKENS = (
     "gh pr merge",
@@ -24,6 +25,12 @@ NON_SCHEDULER_FORBIDDEN_TOKENS = (
     "git push origin main",
     "git push origin paper-validated",
     "POLYMARKET_DEPLOY_REF=",
+)
+PRIVATE_VALIDATION_FORBIDDEN_PERMISSIONS = (
+    "actions: write",
+    "contents: write",
+    "issues: write",
+    "pull-requests: write",
 )
 
 
@@ -106,6 +113,17 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         for forbidden in NON_SCHEDULER_FORBIDDEN_TOKENS:
             if forbidden in text:
                 errors.append(f"explicit non-scheduler workflow contains forbidden authority: {relative}: {forbidden}")
+        if relative == PRIVATE_VALIDATION_WORKFLOW:
+            if "\n  workflow_dispatch:\n" not in text or "\n  pull_request:\n" not in text:
+                errors.append("private runtime validation must remain workflow_dispatch/pull_request scoped")
+            for forbidden_trigger in ("\n  push:\n", "\n  workflow_run:\n", "\n  repository_dispatch:\n"):
+                if forbidden_trigger in text:
+                    errors.append(f"private runtime validation contains forbidden trigger: {forbidden_trigger.strip()}")
+            if "permissions:\n  contents: read\n" not in text:
+                errors.append("private runtime validation must keep GitHub contents read-only")
+            for forbidden_permission in PRIVATE_VALIDATION_FORBIDDEN_PERMISSIONS:
+                if forbidden_permission in text:
+                    errors.append(f"private runtime validation contains forbidden GitHub permission: {forbidden_permission}")
     managed_workflows = actual_workflows.difference(NON_SCHEDULER_WORKFLOWS)
     unregistered = sorted(managed_workflows.difference(workflows)); stale = sorted(workflows.difference(actual_workflows))
     if unregistered: errors.append("unregistered workflows: " + ", ".join(unregistered))
