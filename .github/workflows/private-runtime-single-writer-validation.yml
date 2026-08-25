@@ -333,7 +333,10 @@ jobs:
             "$run_root/runtime_owner.lock" "$evidence/stale-owner-child.pid" "$evidence/stale-owner.log"
           stale_owner_pid="$SIMULATED_OWNER_PID"
           for _ in {1..40}; do
-            owner_in_lock="$(tr -dc '0-9' < "$run_root/runtime_owner.lock" 2>/dev/null || true)"
+            owner_in_lock=""
+            if [[ -s "$run_root/runtime_owner.lock" ]]; then
+              owner_in_lock="$(tr -dc '0-9' < "$run_root/runtime_owner.lock")"
+            fi
             if simulated_legacy_runtime_owner_visible "$stale_owner_pid" && [[ "$owner_in_lock" == "$stale_owner_pid" ]] && [[ -s "$evidence/stale-owner-child.pid" ]]; then
               break
             fi
@@ -372,14 +375,24 @@ jobs:
             >"$evidence/first-runtime.log" 2>&1 &
           first_pid=$!
 
+          candidate_owner=""
           for _ in {1..80}; do
-            [[ -s "$run_root/runtime_owner.lock" ]] && kill -0 "$first_pid" 2>/dev/null && break
+            if [[ -s "$run_root/runtime_owner.lock" ]]; then
+              candidate_owner="$(tr -dc '0-9' < "$run_root/runtime_owner.lock")"
+              if [[ "$candidate_owner" == "$first_pid" ]] && kill -0 "$first_pid" 2>/dev/null; then
+                break
+              fi
+            fi
             kill -0 "$first_pid" 2>/dev/null || { cat "$evidence/first-runtime.log" >&2; exit 1; }
             sleep 0.25
           done
           test -s "$run_root/runtime_owner.lock"
           owner_pid="$(tr -dc '0-9' < "$run_root/runtime_owner.lock")"
-          test "$owner_pid" = "$first_pid"
+          if [[ "$owner_pid" != "$first_pid" ]]; then
+            echo "first handoff lock owner mismatch: expected=$first_pid observed=${candidate_owner:-empty}" >&2
+            cat "$evidence/first-runtime.log" >&2 || true
+            exit 1
+          fi
           kill -0 "$owner_pid"
           grep -q "stale_runtime_owner_reaped=$stale_owner_pid" "$evidence/first-runtime.log"
           for _ in {1..40}; do
@@ -527,7 +540,10 @@ jobs:
             "$run_root/runtime_owner.lock" "$evidence/orphan-owner-child.pid" "$evidence/orphan-owner.log"
           orphan_owner_pid="$SIMULATED_OWNER_PID"
           for _ in {1..40}; do
-            owner_in_lock="$(tr -dc '0-9' < "$run_root/runtime_owner.lock" 2>/dev/null || true)"
+            owner_in_lock=""
+            if [[ -s "$run_root/runtime_owner.lock" ]]; then
+              owner_in_lock="$(tr -dc '0-9' < "$run_root/runtime_owner.lock")"
+            fi
             if simulated_legacy_runtime_owner_visible "$orphan_owner_pid" && [[ "$owner_in_lock" == "$orphan_owner_pid" ]] && [[ -s "$evidence/orphan-owner-child.pid" ]]; then
               break
             fi
