@@ -148,6 +148,14 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('adapter="v5"', deploy)
         self.assertIn('polymarket-multi-strategy-v5', deploy)
 
+    def test_server_health_serializes_with_paper_deploy(self):
+        health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(encoding="utf-8")
+        deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(encoding="utf-8")
+        shared_lock = "concurrency:\n  group: polymarket-paper-server\n  cancel-in-progress: false"
+        self.assertIn(shared_lock, health)
+        self.assertIn(shared_lock, deploy)
+        self.assertNotIn("group: polymarket-paper-server-health", health)
+
     def test_bootstrap_services_follow_the_champion_manifest(self):
         linux = (ROOT / "ops" / "bootstrap_server.sh").read_text(encoding="utf-8")
         mac = (ROOT / "ops" / "bootstrap_macos.sh").read_text(encoding="utf-8")
