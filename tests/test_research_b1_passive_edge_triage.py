@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str((Path(__file__).resolve().parents[1] / "scripts").resolve()))
 
+from build_v4_intents import b1_relation_valid  # noqa: E402
 from research_b1_passive_edge_triage import (  # noqa: E402
     analyze_snapshots,
     counterfactual_break_even_completion,
@@ -83,6 +84,29 @@ class B1PassiveEdgeTriageTest(unittest.TestCase):
         del bad["x_market"]
         with self.assertRaises(ValueError):
             analyze_snapshots([snapshot(bad)])
+
+    def test_generic_crypto_template_overlap_cannot_admit_semantic_pair(self):
+        candidate = {
+            "relation": "semantic",
+            "y_slug": "will-ethereum-dip-to-1700-in-august-2026",
+            "x_slug": "will-bitcoin-dip-to-60k-in-august-2026",
+        }
+        self.assertFalse(b1_relation_valid(candidate))
+
+    def test_same_asset_threshold_ladder_keeps_specific_anchor(self):
+        candidate = {
+            "relation": "semantic",
+            "y_slug": "will-bitcoin-dip-to-55k-in-august-2026",
+            "x_slug": "will-bitcoin-dip-to-60k-in-august-2026",
+        }
+        self.assertTrue(b1_relation_valid(candidate))
+
+    def test_same_event_and_latent_correlation_do_not_need_text_anchor(self):
+        self.assertTrue(b1_relation_valid({"relation": "same_event"}))
+        self.assertTrue(b1_relation_valid({"relation": "latent_corr"}))
+
+    def test_unknown_relation_fails_closed(self):
+        self.assertFalse(b1_relation_valid({"relation": "weak", "y_slug": "a", "x_slug": "a"}))
 
 
 if __name__ == "__main__":
