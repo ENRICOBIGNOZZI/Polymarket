@@ -14,6 +14,7 @@ on:
       - "tests/test_v6_model_contracts.py"
       - "tests/test_v6_runtime_contract.py"
       - "tests/test_v6_micro_maker_queue_shadow.py"
+      - "tests/test_v6_maker_flow_audit.py"
       - ".github/workflows/v6-research-smoke.yml"
 
 permissions:
@@ -61,7 +62,7 @@ jobs:
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
-          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py tests/test_v6_micro_maker_queue_shadow.py -v
+          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py tests/test_v6_micro_maker_queue_shadow.py tests/test_v6_maker_flow_audit.py -v
       - name: Live public-data relation probes
         shell: bash
         run: |
@@ -86,12 +87,17 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/v6_local_factor_intents.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/local_factor.log 2>&1 || true
-      - name: Live public-data maker queue-placement A/B probe
+      - name: Live public-data maker queue-placement and causal-flow probe
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p v6_evidence/maker v6_evidence/maker_queue_aware
           ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.0001 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once > v6_evidence/maker.log 2>&1 || true
+          python3 scripts/v6_maker_flow_audit.py \
+            --orders v6_evidence/maker/maker_orders.csv \
+            --output v6_evidence/maker/prepost_flow_audit.json \
+            --lookback-seconds 900 --ttl-seconds 30 --max-orders 80 \
+            > v6_evidence/maker/prepost_flow_audit.log 2>&1 || true
           cp -a v6_evidence/maker/. v6_evidence/maker_queue_aware/
           for i in 1 2 3 4 5 6; do
             python3 scripts/v6_micro_maker_queue_shadow.py \
@@ -143,7 +149,7 @@ jobs:
               return out
           hard=(root/'graph_hard_taker_scan.csv').read_text(errors='ignore') if (root/'graph_hard_taker_scan.csv').exists() else ''
           m=re.search(r'net_positive_pre_gas=(\d+)',hard)
-          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'local_factor':js('local_factor_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0,'maker_baseline':maker_summary('maker'),'maker_queue_aware':maker_summary('maker_queue_aware')}
+          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'local_factor':js('local_factor_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0,'maker_baseline':maker_summary('maker'),'maker_queue_aware':maker_summary('maker_queue_aware'),'maker_prepost_flow_audit':js('maker/prepost_flow_audit.json')}
           state=root/'micro_taker/state.json'
           if state.exists():
               try:
