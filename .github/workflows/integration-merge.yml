@@ -86,6 +86,59 @@ jobs:
           base_sha="$(python3 -c 'import json; print(json.load(open("integration-merge/candidate.json"))["baseRefOid"])')"
           test "$base_sha" = "$current_main" || { echo "Authorized PR base $base_sha is stale versus main $current_main; wait for fresh checks." >&2; exit 1; }
 
+          # Re-run the trusted research lifecycle gate immediately before merge.
+          # Candidate status checks can become stale when source comments/reviews
+          # change, so the unique merge authority must independently re-fetch
+          # trusted governance evidence and re-bind the cited branch/head.
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${source_number}" \
+            > integration-merge/source-pr.json
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/issues/${source_number}/comments?per_page=100" \
+            > integration-merge/source-comments-pages.json
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/pulls/${source_number}/reviews?per_page=100" \
+            > integration-merge/source-reviews-pages.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          def flatten(path: str) -> list[dict]:
+              raw = json.loads(Path(path).read_text(encoding='utf-8'))
+              if not isinstance(raw, list):
+                  return []
+              if raw and all(isinstance(page, list) for page in raw):
+                  return [item for page in raw for item in page if isinstance(item, dict)]
+              return [item for item in raw if isinstance(item, dict)]
+
+          source = json.loads(Path('integration-merge/source-pr.json').read_text(encoding='utf-8'))
+          source['comments'] = flatten('integration-merge/source-comments-pages.json')
+          source['reviews'] = flatten('integration-merge/source-reviews-pages.json')
+          Path('integration-merge/source-research.json').write_text(
+              json.dumps(source, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+
+          candidate = json.loads(Path('integration-merge/candidate.json').read_text(encoding='utf-8'))
+          event = {
+              'pull_request': {
+                  'head': {'ref': candidate.get('headRefName') or ''},
+                  'draft': bool(candidate.get('isDraft')),
+                  'body': candidate.get('body') or '',
+                  'labels': candidate.get('labels') or [],
+              }
+          }
+          Path('integration-merge/policy-event.json').write_text(
+              json.dumps(event, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+          python3 scripts/research_pr_policy.py \
+            --event integration-merge/policy-event.json \
+            --changed-files integration-merge/changed-files.txt \
+            --manifest-existed-on-base true \
+            --source-research-json integration-merge/source-research.json \
+            --output integration-merge/research-policy.md
+
           evidence_path="$(python3 - <<'PY'
           import json,re
           body=json.load(open('integration-merge/candidate.json')).get('body') or ''
@@ -179,6 +232,7 @@ jobs:
           echo "- merged PR: ${PR_NUMBER:-none}" >> "$GITHUB_STEP_SUMMARY"
           echo "- source research PR: ${SOURCE_PR_NUMBER:-none}" >> "$GITHUB_STEP_SUMMARY"
           echo "- merged SHA: ${MERGED_SHA:-none}" >> "$GITHUB_STEP_SUMMARY"
+          cat integration-merge/research-policy.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           cat integration-merge/promotion-gate.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
       - name: Upload integration evidence
