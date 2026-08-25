@@ -4,8 +4,6 @@ on:
   push:
     branches: [research/aggressive-v5-execution]
     paths:
-      - ops/fix_external_probability_model.py
-      - ops/fix_external_pagination.py
       - ops/fix_external_direct_priority.py
       - .github/workflows/apply-external-probability-fix.yml
 
@@ -31,15 +29,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
 
-      - name: Apply direct probability model
+      - name: Apply remaining direct-probability priority fix
         run: |
           set -euo pipefail
-          python3 -m py_compile \
-            ops/fix_external_probability_model.py \
-            ops/fix_external_pagination.py \
-            ops/fix_external_direct_priority.py
-          python3 ops/fix_external_probability_model.py
-          python3 ops/fix_external_pagination.py
+          python3 -m py_compile ops/fix_external_direct_priority.py
           python3 ops/fix_external_direct_priority.py
           python3 -m py_compile \
             scripts/external_intelligence.py \
@@ -50,7 +43,6 @@ jobs:
       - name: Build and test
         run: |
           set -euo pipefail
-          # Keep the one-shot workflow outside the permanent scheduler inventory.
           mv .github/workflows/apply-external-probability-fix.yml /tmp/apply-external-probability-fix.yml
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
@@ -117,7 +109,7 @@ jobs:
                       continue
                   seen.add(key)
                   questions.append(key)
-              print('selected_crypto_questions', questions[:80])
+              print('selected_crypto_questions', questions[:120])
           assert report['collection']['polymarket_markets'] >= 450, report['collection']
           assert direct, 'no direct external probability was produced'
           assert all(0.0 < float(row['q_external']) < 1.0 for row in direct)
@@ -146,8 +138,7 @@ jobs:
           import csv, re
           from pathlib import Path
 
-          root = Path('/tmp/external-live')
-          text = (root / 'external-engine.log').read_text()
+          text = Path('/tmp/external-live/external-engine.log').read_text()
           values = {key: int(value) for key, value in re.findall(
               r'(discovered|tradable|candidates|no_terminal_evidence|net_pos)=([0-9]+)', text
           )}
@@ -171,5 +162,5 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
           test -n "$(git status --porcelain)"
-          git commit -m "Add direct Binance probability signals for crypto thresholds"
+          git commit -m "Prioritize direct crypto probability markets"
           git push origin HEAD:research/aggressive-v5-execution
