@@ -114,6 +114,8 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertEqual(cfg["external_signals_file"], "runs/paper_v6_live/external_signals.csv")
         self.assertIn("refresh_external_feed(){", loop)
         self.assertIn("v6_external_bridge.py", loop)
+        # Preflight materialization is a wiring invariant, independent of whether
+        # the evidence gate admits any q_external in the current market sample.
         startup = "start_recorder;start_broker;refresh_external_feed;start_external;write_supervisor"
         self.assertIn(startup, loop)
         self.assertLess(loop.index(startup), loop.index("while true;do"))
