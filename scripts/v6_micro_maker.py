@@ -220,6 +220,13 @@ def trade_key(row: dict[str, str]) -> str:
     )
 
 
+def trade_is_strictly_after_queue_entry(row: dict[str, str], order: dict[str, Any]) -> bool:
+    """Conservative causal guard for second-resolution public trade tape replay."""
+    trade_ts = int(finite(row.get("timestamp"), 0.0))
+    created_ts = int(finite(order.get("created_ts"), 0.0))
+    return created_ts > 0 and trade_ts > created_ts
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="V6 flow-aware micro maker paper engine")
     parser.add_argument("--config", type=Path, required=True)
@@ -285,6 +292,8 @@ def main() -> int:
         token = str(order.get("token_id") or "")
         limit_price = finite(order.get("limit_price"))
         for row in tape_rows:
+            if not trade_is_strictly_after_queue_entry(row, order):
+                continue
             key = trade_key(row)
             if key in seen or str(row.get("asset_id") or "") != token:
                 continue

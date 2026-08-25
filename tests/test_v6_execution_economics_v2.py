@@ -28,6 +28,7 @@ class V6ExecutionEconomicsV2Tests(unittest.TestCase):
         cls.common = load_script("v6_market_common_test_v2", "scripts/v6_market_common.py")
         cls.structural = load_script("v6_typed_structural_test_v2", "scripts/v6_typed_structural.py")
         cls.local = load_script("v6_local_factor_test_v2", "scripts/v6_local_factor_v2.py")
+        cls.maker = load_script("v6_micro_maker_test_v2", "scripts/v6_micro_maker.py")
 
     def test_fee_schedule_is_verified_and_maker_taker_semantics_are_distinct(self):
         fee = self.common._fee_from_gamma({"feeSchedule":{"rate":0.1,"exponent":2.0,"takerOnly":True}})
@@ -43,6 +44,13 @@ class V6ExecutionEconomicsV2Tests(unittest.TestCase):
         high_flow=self.common.fill_probability_proxy(queue_ahead=1000,own_shares=20,compatible_flow_per_second=10,horizon_seconds=90)
         low_queue=self.common.fill_probability_proxy(queue_ahead=10,own_shares=20,compatible_flow_per_second=.1,horizon_seconds=90)
         self.assertLess(low,high_flow); self.assertLess(low,low_queue); self.assertGreaterEqual(low,0.0); self.assertLessEqual(high_flow,1.0)
+
+    def test_micro_maker_tape_replay_is_strictly_post_queue_entry(self):
+        order={"created_ts":100}
+        self.assertFalse(self.maker.trade_is_strictly_after_queue_entry({"timestamp":"99"},order))
+        self.assertFalse(self.maker.trade_is_strictly_after_queue_entry({"timestamp":"100"},order))
+        self.assertTrue(self.maker.trade_is_strictly_after_queue_entry({"timestamp":"101"},order))
+        self.assertFalse(self.maker.trade_is_strictly_after_queue_entry({"timestamp":"101"},{"created_ts":0}))
 
     def test_typed_structural_text_family_keeps_dates(self):
         a=self.structural.threshold_signature("Will Bitcoin reach $82,500 by August 31, 2026?")
