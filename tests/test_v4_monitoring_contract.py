@@ -41,22 +41,47 @@ class LiveMonitoringContractTest(unittest.TestCase):
         self.assertIn('adapter="v5"', smoke)
         self.assertIn("polymarket_allocator_state_present 1", smoke)
 
-    def test_v6_smoke_exercises_model_specific_runtime_when_selected(self):
+    def test_v6_smoke_exercises_current_fill_aware_runtime_when_selected(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
         helper = (ROOT / "scripts" / "v6_live_smoke_once.sh").read_text(encoding="utf-8")
         self.assertIn("if: env.CHAMPION_VERSION == '6'", smoke)
         self.assertIn("scripts/v6_live_smoke_once.sh", smoke)
         self.assertIn("paper_v6_live", smoke)
-        self.assertIn("v6_materialize_configs.py", helper)
-        self.assertIn("v6_micro_taker.py", helper)
-        self.assertIn("v6_hard_arb_paper.py", helper)
-        self.assertIn("v6_local_factor_intents.py", helper)
-        self.assertIn("v6_relation_intents.py", helper)
-        self.assertIn("v6_intent_guard.py", helper)
-        self.assertIn("polymarket_multileg_paper", helper)
-        self.assertIn("v6_external_bridge.py", helper)
+        for token in (
+            "v6_materialize_configs.py",
+            "v6_micro_maker.py",
+            "v6_micro_taker_v2.py",
+            "v6_hard_arb_paper_v2.py",
+            "v6_local_factor_v3.py",
+            "v6_relation_intents.py",
+            "v6_intent_guard.py",
+            "v6_queue_filter.py",
+            "polymarket_multileg_paper",
+            "v6_external_bridge.py",
+        ):
+            self.assertIn(token, helper)
         self.assertIn('adapter="v6"', helper)
         self.assertIn("polymarket_v6_exporter_info", helper)
+        self.assertNotIn("scripts/v6_micro_taker.py", helper)
+        self.assertNotIn("scripts/v6_hard_arb_paper.py", helper)
+        self.assertNotIn("scripts/v6_local_factor_intents.py", helper)
+
+    def test_v6_smoke_can_observe_post_order_fills(self):
+        helper = (ROOT / "scripts" / "v6_live_smoke_once.sh").read_text(encoding="utf-8")
+        self.assertIn('FLOW_CYCLES="${V6_SMOKE_FLOW_CYCLES:-3}"', helper)
+        self.assertIn('FLOW_SLEEP="${V6_SMOKE_FLOW_SLEEP_SECONDS:-10}"', helper)
+        post = helper.index("maker_once\nmicro_once")
+        flow = helper.index("for ((cycle=1; cycle<=FLOW_CYCLES; cycle++))")
+        self.assertLess(post, flow)
+        loop_tail = helper[flow:]
+        self.assertIn('sleep "$FLOW_SLEEP"', loop_tail)
+        self.assertIn("record_once", loop_tail)
+        self.assertIn("maker_once", loop_tail)
+        self.assertIn("broker_once", loop_tail)
+        self.assertIn("execution_evidence.json", helper)
+        self.assertIn("post_order_flow_cycles", helper)
+        self.assertIn("maker_fill_rows", helper)
+        self.assertIn("closed_bundle_rows", helper)
 
     def test_live_smoke_runs_after_main_merge_and_hourly(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
