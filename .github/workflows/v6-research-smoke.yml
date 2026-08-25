@@ -13,6 +13,7 @@ on:
       - "scripts/v6_*.py"
       - "tests/test_v6_model_contracts.py"
       - "tests/test_v6_runtime_contract.py"
+      - "tests/test_v6_micro_maker_queue_shadow.py"
       - ".github/workflows/v6-research-smoke.yml"
 
 permissions:
@@ -60,7 +61,7 @@ jobs:
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
-          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py -v
+          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py tests/test_v6_micro_maker_queue_shadow.py -v
       - name: Live public-data relation probes
         shell: bash
         run: |
@@ -85,12 +86,23 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/v6_local_factor_intents.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/local_factor.log 2>&1 || true
-      - name: Live public-data maker economics probe
+      - name: Live public-data maker queue-placement A/B probe
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p v6_evidence/maker
-          ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once > v6_evidence/maker.log 2>&1 || true
+          mkdir -p v6_evidence/maker v6_evidence/maker_queue_aware
+          ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.0001 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once > v6_evidence/maker.log 2>&1 || true
+          cp -a v6_evidence/maker/. v6_evidence/maker_queue_aware/
+          for i in 1 2 3 4 5 6; do
+            python3 scripts/v6_micro_maker_queue_shadow.py \
+              --run-dir v6_evidence/maker_queue_aware \
+              --min-edge 0.0001 --max-queue-ratio 50 --max-improve-ticks 1 --apply \
+              --output "v6_evidence/maker_queue_aware/queue_${i}.json" \
+              >> v6_evidence/maker_queue_aware/queue.log 2>&1 || true
+            sleep 4
+            ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.0001 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once >> v6_evidence/maker.log 2>&1 || true
+            ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker_queue_aware --markets 250 --min-liquidity 10 --min-edge 0.0001 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once >> v6_evidence/maker_queue_aware/maker.log 2>&1 || true
+          done
       - name: Live public-data micro-taker causal warmup/markout probe
         shell: bash
         run: |
@@ -106,15 +118,32 @@ jobs:
         run: |
           python3 - <<'PY'
           import csv,json,re
+          from collections import Counter
           from pathlib import Path
           root=Path('v6_evidence'); root.mkdir(parents=True,exist_ok=True)
           def js(name):
               p=root/name
               try:return json.loads(p.read_text())
               except Exception:return {}
+          def maker_summary(dirname):
+              p=root/dirname
+              out={'fills':0,'buy_fills':0,'sell_fills':0,'resting_orders':0,'queue_actions':{}}
+              try:
+                  rows=list(csv.DictReader((p/'maker_fills.csv').open(newline='',encoding='utf-8')))
+                  out['fills']=len(rows);out['buy_fills']=sum((r.get('action') or '').upper().startswith('BUY') for r in rows);out['sell_fills']=sum((r.get('action') or '').upper().startswith('SELL') for r in rows)
+              except Exception:pass
+              try:
+                  out['resting_orders']=sum(1 for _ in csv.DictReader((p/'maker_orders.csv').open(newline='',encoding='utf-8')))
+              except Exception:pass
+              actions=Counter()
+              for q in sorted(p.glob('queue_*.json')):
+                  try:actions.update(json.loads(q.read_text()).get('actions') or {})
+                  except Exception:pass
+              out['queue_actions']=dict(actions)
+              return out
           hard=(root/'graph_hard_taker_scan.csv').read_text(errors='ignore') if (root/'graph_hard_taker_scan.csv').exists() else ''
           m=re.search(r'net_positive_pre_gas=(\d+)',hard)
-          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'local_factor':js('local_factor_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0}
+          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'local_factor':js('local_factor_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0,'maker_baseline':maker_summary('maker'),'maker_queue_aware':maker_summary('maker_queue_aware')}
           state=root/'micro_taker/state.json'
           if state.exists():
               try:
