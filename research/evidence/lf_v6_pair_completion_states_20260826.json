@@ -1,0 +1,100 @@
+{
+  "schema": "lf_v6_pair_completion_state_audit_v1",
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "current_main_sha": "64a1cad3b6626362d96e3dd9f4c1860282f9604a",
+  "target_repaired_frontier": {
+    "pr": 374,
+    "head_sha": "24559447d60a3d17cd1e17f8c48c19becea47d16",
+    "selection_contract": "utility = executable_pair_edge * min(per_leg_marginal_fill_probability)",
+    "known_repairs_retained": [
+      "leave_one_out_factor",
+      "null_preserving_increment_block_unit_root_bootstrap",
+      "BH_FDR_after_valid_marginal_pvalues",
+      "n_step_residual_forecast",
+      "actual_fidelity_to_wall_clock",
+      "time_to_resolution_minus_exit_buffer",
+      "verified_fee_requirement",
+      "actual_target_shares_for_fill_proxy",
+      "receive_time_causal_tape"
+    ]
+  },
+  "material_finding": {
+    "description": "For a two-leg Local Factor hedge, min(p_fill_a,p_fill_b) is the Frechet upper bound on joint completion, not a conservative estimator of joint completion. It can remain positive when true same-window completion is zero, and it omits the economic loss of one-leg partial fills that must be aborted or unwound.",
+    "toy_marginals": {
+      "p_fill_a": 0.1,
+      "p_fill_b": 0.1,
+      "frechet_joint_lower": 0.0,
+      "independence_joint": 0.01,
+      "min_marginal_proxy": 0.1,
+      "frechet_joint_upper": 0.1
+    },
+    "toy_state_economics_usd_per_window": {
+      "completed_pair_pnl": 1.0,
+      "a_only_abort_unwind_pnl": -0.3,
+      "b_only_abort_unwind_pnl": -0.3,
+      "mutually_exclusive_fill_process_ev": -0.06,
+      "independent_fill_process_ev": -0.044,
+      "perfect_positive_dependence_ev": 0.1
+    },
+    "interpretation": "Identical marginal fill probabilities can imply negative or positive pair EV depending on same-window dependence and partial-fill unwind economics. A positive edge times min-marginal utility is therefore insufficient evidence for executable LF pair alpha."
+  },
+  "fresh_live_context": {
+    "telemetry_sha": "64a1cad3b6626362d96e3dd9f4c1860282f9604a",
+    "github_run_id": "32905651510",
+    "trade_recorder": {
+      "markets": 220,
+      "new_trades": 334,
+      "errors": 0,
+      "truncated_batches": 0,
+      "status": "healthy"
+    },
+    "graph_rv": {
+      "bundles": 2,
+      "legs": 8,
+      "max_quoted_expected_edge": 0.020000000000000018,
+      "completed_bundles": 0,
+      "realized_pnl_usd": 0.0
+    },
+    "maker": {
+      "resting_orders": 6,
+      "positions": 0,
+      "reserved_usd": 151.703
+    },
+    "runtime": {
+      "equity_usd": 10000.0,
+      "realized_pnl_usd": 0.0,
+      "oos_trades": 0,
+      "oos_net_pnl_usd": 0.0,
+      "drawdown_ratio": 0.0,
+      "kill_switch": false
+    },
+    "measurement_caveat": "The current standard v6_live_smoke_once.sh records the public tape before relation intents and runs the multi-leg broker only once, so this exact smoke is not a forward same-window completion sample for the two resting Graph/RV baskets."
+  },
+  "required_successor_contract": [
+    "preserve the repaired LF statistical chain before any threshold aggression",
+    "use price-PnL-unit hedge weights rather than standardized loading-only weights",
+    "persist point-in-time per-leg queue depth quote fee target size and receive-time origin",
+    "measure same-window joint fill bitmasks prospectively on refreshed public tape",
+    "estimate full-completion and each one-leg partial state directly rather than using min marginals",
+    "value every partial state with contemporaneous abort/unwind bid depth fees slippage latency and adverse markout",
+    "use chronological/block-bootstrap uncertainty and fail closed with insufficient independent completion windows",
+    "compare fill-conditioned pair PnL under 1x 1.5x and 2x executable-cost stress",
+    "only after the above compare broader universe shorter common sample lower z and higher FDR within the authorized PAPER envelope"
+  ],
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "max_drawdown_ratio": 0.15,
+    "kill_switch_required": true,
+    "authorized_envelope_unchanged": {
+      "markets_approx": 1000,
+      "min_liquidity_usd": 2.0,
+      "min_post_cost_edge": 0.00005,
+      "fractional_kelly": 0.25,
+      "max_trade_usd": 125.0,
+      "market_cap": 0.05,
+      "event_cap": 0.15,
+      "gross_cap": 0.70
+    }
+  }
+}
