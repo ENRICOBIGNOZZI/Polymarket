@@ -153,8 +153,14 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
         snapshot["runs"] = runs
         report = module.build_report(self.config, snapshot, self.now)
         policy = report["workflow_status"]["research-policy.yml"]
-        self.assertEqual(policy["state"], "failed", policy)
-        self.assertTrue(policy["dispatch_needed"])
+        self.assertEqual(policy["state"], "skipped", policy)
+        self.assertEqual(report["status"], "DEGRADED")
+        alerts = [
+            alert for alert in report["alerts"]
+            if alert.get("code") == "WORKFLOW_SKIPPED"
+            and "research-policy.yml" in str(alert.get("detail"))
+        ]
+        self.assertTrue(alerts, report["alerts"])
 
     def test_missing_autonomous_product_is_unhealthy(self) -> None:
         health = module._autonomous_product_health({}, {}, 2_000)
