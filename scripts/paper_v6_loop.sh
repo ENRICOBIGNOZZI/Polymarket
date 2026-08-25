@@ -7,6 +7,7 @@ MIN_LIQUIDITY="${V6_MIN_LIQUIDITY:-10}"
 MARKETS="${V6_MARKETS:-700}"
 RECORDER_MARKETS="${V6_RECORDER_MARKETS:-1200}"
 INTENT_MIN_EDGE="${V6_INTENT_MIN_EDGE:-0.00020}"
+MAX_QUEUE_RATIO="${V6_MAX_QUEUE_RATIO:-50}"
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/micro_taker" "$RUN_ROOT/hard_arb" "$RUN_ROOT/external"
 
 # Capital-isolated sleeves sum to parent capital. There is no operational
@@ -33,7 +34,7 @@ PY
 # primitives regress. This is deterministic and does not touch public data.
 python3 scripts/v6_queue_filter.py self-test >"$RUN_ROOT/execution_self_test.log" 2>&1
 
-rm -f "$RUN_ROOT"/intents.csv "$RUN_ROOT"/local_factor_intents.csv \
+rm -f "$RUN_ROOT"/intents.csv "$RUN_ROOT"/intents_raw.csv "$RUN_ROOT"/local_factor_intents.csv \
       "$RUN_ROOT"/relation_intents_raw.csv "$RUN_ROOT"/relation_intents.csv \
       "$RUN_ROOT"/stat_arb_pairs_diagnostic.csv
 
@@ -54,7 +55,15 @@ trap cleanup EXIT INT TERM
 start_recorder;start_broker;start_external;write_supervisor
 
 last_factor=0;last_relation=0;last_external=0;last_report=0;last_micro_taker=0;last_hard_arb=0
-rebuild_intents(){ python3 scripts/merge_v4_intents.py --input "$RUN_ROOT/local_factor_intents.csv" --input "$RUN_ROOT/relation_intents.csv" --output "$RUN_ROOT/intents.csv" --min-edge "$INTENT_MIN_EDGE" --max-age-seconds 240 --max-bundles 120 >>"$RUN_ROOT/intent_merge.log" 2>&1||true; }
+rebuild_intents(){
+  # Merge is not execution admission. Always delete prior outputs first so a
+  # public-data/filter failure cannot leave a stale tradable intent file behind.
+  rm -f "$RUN_ROOT/intents_raw.csv" "$RUN_ROOT/intents.csv"
+  python3 scripts/merge_v4_intents.py --input "$RUN_ROOT/local_factor_intents.csv" --input "$RUN_ROOT/relation_intents.csv" --output "$RUN_ROOT/intents_raw.csv" --min-edge "$INTENT_MIN_EDGE" --max-age-seconds 240 --max-bundles 120 >>"$RUN_ROOT/intent_merge.log" 2>&1 || return 0
+  if ! python3 scripts/v6_intent_queue_filter.py --config "$CONFIG" --input "$RUN_ROOT/intents_raw.csv" --output "$RUN_ROOT/intents.csv" --status "$RUN_ROOT/queue_filter_status.json" --max-queue-ratio "$MAX_QUEUE_RATIO" --max-age-seconds 240 >>"$RUN_ROOT/queue_filter.log" 2>&1; then
+    rm -f "$RUN_ROOT/intents.csv"
+  fi
+}
 
 while true;do
   now="$(date +%s)"
