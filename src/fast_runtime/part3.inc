@@ -7,6 +7,7 @@ private:
     fs::path run_dir_;
     std::unordered_map<std::string, pm::Market> markets_;
     std::unordered_map<std::string, pm::Book> books_;
+    std::unordered_map<std::string, std::int64_t> book_received_ms_;
     std::unordered_map<std::string, pm::FeeDetails> fees_;
     std::unordered_map<std::string, std::string> token_to_market_;
     std::unordered_map<std::string, std::vector<std::string>> event_members_;
@@ -37,7 +38,8 @@ private:
         return "observed_ts_ms,kind,id,event_id,hard_arbitrage,executable,risk_class,"
                "reject_reason,payoff_floor,raw_edge_per_share,net_edge_per_share,"
                "executable_shares,capital_required,expected_profit,exchange_ts_ms,"
-               "received_ts_ms,decision_ts_ms,feed_latency_ms,legs";
+               "received_ts_ms,decision_ts_ms,feed_latency_ms,max_leg_book_age_ms,"
+               "leg_book_skew_ms,legs";
     }
 
     static std::string leg_string(const pm::fast::Opportunity& opportunity) {
@@ -70,7 +72,8 @@ private:
             << opportunity.executable_shares << ',' << opportunity.capital_required << ','
             << opportunity.expected_profit << ',' << opportunity.exchange_ts_ms << ','
             << opportunity.received_ts_ms << ',' << opportunity.decision_ts_ms << ','
-            << feed_latency << ',' << csv_escape(leg_string(opportunity)) << '\n';
+            << feed_latency << ',' << opportunity.max_leg_book_age_ms << ','
+            << opportunity.leg_book_skew_ms << ',' << csv_escape(leg_string(opportunity)) << '\n';
     }
 
     void ensure_logs() {
@@ -168,7 +171,8 @@ private:
 
     void apply_event_locked(const json::object& event,
                             std::unordered_set<std::string>& affected,
-                            std::int64_t& exchange_ms) {
+                            std::int64_t& exchange_ms,
+                            std::int64_t received_ms) {
         std::string type = get_text(event, "event_type");
         if (type.empty()) type = get_text(event, "type");
         const auto timestamp = normalize_timestamp_ms(get_integer(event, "timestamp", 0));
@@ -186,6 +190,7 @@ private:
             book.min_order_size = get_number(event, "min_order_size", book.min_order_size);
             book.last_trade = get_number(event, "last_trade_price", book.last_trade);
             books_[token] = std::move(book);
+            book_received_ms_[token] = received_ms;
             affected.insert(token_to_market_.at(token));
             return;
         }
@@ -203,6 +208,7 @@ private:
                 const auto side = get_text(change, "side");
                 pm::fast::apply_level(book, side == "BUY", get_number(change, "price", -1.0),
                                       get_number(change, "size", 0.0));
+                book_received_ms_[token] = received_ms;
                 affected.insert(token_to_market_.at(token));
             }
             return;
@@ -213,6 +219,7 @@ private:
             if (token.empty() || !token_to_market_.count(token)) return;
             books_[token].tick_size = get_number(event, "new_tick_size",
                                                    books_[token].tick_size);
+            book_received_ms_[token] = received_ms;
             affected.insert(token_to_market_.at(token));
             return;
         }
@@ -221,6 +228,7 @@ private:
             const auto token = get_text(event, "asset_id");
             if (token.empty() || !token_to_market_.count(token)) return;
             books_[token].last_trade = get_number(event, "price", books_[token].last_trade);
+            book_received_ms_[token] = received_ms;
             affected.insert(token_to_market_.at(token));
         }
     }
@@ -317,7 +325,34 @@ private:
         }
     }
 
+    void annotate_hard_freshness_locked(pm::fast::Opportunity& opportunity) const {
+        if (!opportunity.hard_arbitrage || opportunity.legs.empty()) return;
+        bool complete = true;
+        bool first = true;
+        std::int64_t oldest = 0;
+        std::int64_t newest = 0;
+        for (const auto& leg : opportunity.legs) {
+            const auto it = book_received_ms_.find(leg.token_id);
+            if (it == book_received_ms_.end() || it->second <= 0) {
+                complete = false;
+                break;
+            }
+            if (first) {
+                oldest = newest = it->second;
+                first = false;
+            } else {
+                oldest = std::min(oldest, it->second);
+                newest = std::max(newest, it->second);
+            }
+        }
+        if (!complete || first) return;
+        const auto decision = opportunity.decision_ts_ms > 0 ? opportunity.decision_ts_ms : now_ms();
+        opportunity.max_leg_book_age_ms = std::max<std::int64_t>(0, decision - oldest);
+        opportunity.leg_book_skew_ms = std::max<std::int64_t>(0, newest - oldest);
+    }
+
     void record_locked(pm::fast::Opportunity opportunity) {
+        annotate_hard_freshness_locked(opportunity);
         ++evaluations_;
         if (opportunity.executable) {
             ++executable_observations_;
@@ -331,6 +366,8 @@ private:
         const std::string signature = std::to_string(opportunity.executable) + ':' +
                                       std::to_string(edge_bucket) + ':' +
                                       std::to_string(shares_bucket) + ':' +
+                                      std::to_string(opportunity.max_leg_book_age_ms) + ':' +
+                                      std::to_string(opportunity.leg_book_skew_ms) + ':' +
                                       opportunity.reject_reason;
         const bool changed = signatures_[opportunity.id] != signature;
         const bool cooled = timestamp - last_log_ms_[opportunity.id] >= 100;
@@ -350,4 +387,3 @@ private:
         while (decision_latency_us_.size() > limit) decision_latency_us_.pop_front();
     }
 };
-
