@@ -217,9 +217,16 @@ jobs:
           cat "$run_root/action_report.md"
           printf '%s\n' 'action_report_end'
 
+          recorder_tail="$(tail -n 20 "$run_root/trade_recorder.log" 2>/dev/null || true)"
           printf '%s\n' 'trade_recorder_tail_begin'
-          tail -n 20 "$run_root/trade_recorder.log" 2>/dev/null || true
+          printf '%s\n' "$recorder_tail"
           printf '%s\n' 'trade_recorder_tail_end'
+          recorder_tail_lines="$(printf '%s\n' "$recorder_tail" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+          recorder_success_ticks="$(printf '%s\n' "$recorder_tail" | grep -c '^trade_recorder markets=' || true)"
+          recorder_http_failures="$(printf '%s\n' "$recorder_tail" | grep -c '^fatal: HTTP request failed:' || true)"
+          printf 'recorder_tail_lines=%s\nrecorder_success_ticks=%s\nrecorder_http_failures=%s\n' \
+            "$recorder_tail_lines" "$recorder_success_ticks" "$recorder_http_failures"
+
           printf '%s\n' 'multileg_tail_begin'
           tail -n 20 "$run_root/multileg.log" 2>/dev/null || true
           printf '%s\n' 'multileg_tail_end'
@@ -234,6 +241,13 @@ jobs:
             printf '%s\n' 'allocator_tail_begin'
             tail -n 30 "$run_root/allocator.log" 2>/dev/null || true
             printf '%s\n' 'allocator_tail_end'
+          fi
+
+          if [[ "$recorder_tail_lines" -ge 5 && \
+                "$recorder_success_ticks" -eq 0 && \
+                "$recorder_http_failures" -eq "$recorder_tail_lines" ]]; then
+            echo "private recorder data path unhealthy: recent recorder tail contains only HTTP failures" >&2
+            exit 1
           fi
 
           case "$(uname -s)" in
