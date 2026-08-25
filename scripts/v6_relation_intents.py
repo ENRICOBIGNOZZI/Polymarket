@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -24,7 +25,7 @@ FIELDS = [
 
 UP = re.compile(r"\b(above|over|exceed|exceeds|reach|reaches|at least|more than|higher than)\b", re.I)
 DOWN = re.compile(r"\b(below|under|dip to|fall to|at most|less than|lower than)\b", re.I)
-NUMBER = re.compile(r"(?P<prefix>[$€£]?)\s*(?P<num>\d[\d,]*(?:\.\d+)?)\s*(?P<suffix>k|m|b|%|bp|bps)?", re.I)
+NUMBER = re.compile(r"(?P<prefix>[$â¬Â£]?)\s*(?P<num>\d[\d,]*(?:\.\d+)?)\s*(?P<suffix>k|m|b|%|bp|bps)?", re.I)
 DATE_TOKEN = re.compile(r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|20\d{2})\b", re.I)
 
 
@@ -304,7 +305,7 @@ def structural_intents(markets: list[Market], books: dict[str, Book], now: int, 
 
 def atomic_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}.{threading.get_ident()}")
     with tmp.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDS)
         writer.writeheader(); writer.writerows(rows)
@@ -349,7 +350,9 @@ def main() -> int:
         "best_edge": max((float(r["expected_edge"]) for r in rows), default=0.0),
         "failures": failures,
     }
-    tmp = args.status.with_suffix(args.status.suffix + ".tmp")
+    tmp = args.status.with_name(
+        args.status.name + f".tmp.{os.getpid()}.{threading.get_ident()}"
+    )
     tmp.parent.mkdir(parents=True, exist_ok=True)
     tmp.write_text(json.dumps(status, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(tmp, args.status)
