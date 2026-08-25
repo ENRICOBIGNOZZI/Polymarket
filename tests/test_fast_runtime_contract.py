@@ -76,6 +76,7 @@ class FastRuntimeContractTest(unittest.TestCase):
 
     def test_v6_startup_reaps_only_loop_outside_current_runtime_ancestry(self) -> None:
         v6_loop = (ROOT / "scripts" / "paper_v6_loop.sh").read_text(encoding="utf-8")
+        self.assertIn('ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"', v6_loop)
         self.assertIn('is_current_runtime_descendant(){', v6_loop)
         self.assertIn('is_stale_v6_loop(){', v6_loop)
         self.assertIn('/bin/ps -o ppid=', v6_loop)
@@ -83,6 +84,16 @@ class FastRuntimeContractTest(unittest.TestCase):
         self.assertIn('pgrep -f "$ROOT/scripts/paper_v6_loop.sh"', v6_loop)
         self.assertIn('stale_v6_loop_reaped=', v6_loop)
         self.assertIn('reap_stale_v6_loops\nstart_proxy', v6_loop)
+
+    def test_private_runtime_canary_exercises_stale_loop_handoff_and_fail_closed(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "private-runtime-single-writer-validation.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('start_simulated_v6_loop(){', workflow)
+        self.assertIn('stale_v6_loop_reaped=$stale_pid', workflow)
+        self.assertIn('fatal: stale V6 loop did not exit before startup', workflow)
+        self.assertIn('resistant stale loop did not force fail-closed startup', workflow)
+        self.assertIn('restart_accounting_identity=stable', workflow)
 
     def test_runtime_singleton_launcher_excludes_competing_owner(self) -> None:
         launcher = ROOT / "scripts" / "runtime_singleton_launcher.py"
