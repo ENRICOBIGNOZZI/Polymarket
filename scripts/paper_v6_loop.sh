@@ -74,7 +74,9 @@ write_supervisor(){
   mv "$tmp" "$RUN_ROOT/runtime_supervisor.csv"
 }
 cleanup(){ for p in "$rec_pid" "$broker_pid" "$external_pid" "$proxy_pid";do if ((p>0));then kill "$p" 2>/dev/null||true;fi;done;for p in "$rec_pid" "$broker_pid" "$external_pid" "$proxy_pid";do if ((p>0));then wait "$p" 2>/dev/null||true;fi;done; }
-trap cleanup EXIT INT TERM
+shutdown(){ trap - EXIT INT TERM; cleanup; exit 0; }
+trap cleanup EXIT
+trap shutdown INT TERM
 start_proxy
 proxy_ready=0
 for _ in {1..50};do
