@@ -37,12 +37,6 @@ rec_pid=0; broker_pid=0; external_pid=0
 rec_restarts=0; broker_restarts=0; external_restarts=0
 start_recorder(){ ./build/polymarket_trade_recorder --config "$CONFIG" --run-dir "$RUN_ROOT" --markets "$RECORDER_MARKETS" --batch 40 --min-liquidity "$MIN_LIQUIDITY" --lookback-seconds 900 --interval 5 --loop >>"$RUN_ROOT/trade_recorder.log" 2>&1 & rec_pid=$!; }
 start_broker(){ ./build/polymarket_multileg_paper --config "$RUN_ROOT/broker_config.json" --run-dir "$RUN_ROOT" --intents "$RUN_ROOT/intents.csv" --trade-tape "$RUN_ROOT/trade_tape.csv" --min-edge "$INTENT_MIN_EDGE" --completion-threshold 0.75 --submit-latency-ms 100 --cancel-latency-ms 100 --max-replaces 6 --max-leg-risk-usd 12 --adverse-horizon-seconds 45 --interval 1 --loop >>"$RUN_ROOT/multileg.log" 2>&1 & broker_pid=$!; }
-refresh_external_feed(){
-  python3 scripts/v6_external_bridge.py --output "$RUN_ROOT/external_signals.csv" --status "$RUN_ROOT/external_bridge_status.json" --max-age-seconds 21600 --min-confidence 0.35 >"$RUN_ROOT/external_bridge.log" 2>&1||true
-  if [[ ! -s "$RUN_ROOT/external_signals.csv" ]];then
-    printf 'market_key,q_yes,confidence,source,timestamp\n' >"$RUN_ROOT/external_signals.csv"
-  fi
-}
 start_external(){ ./build/polymarket_engine --config "$RUN_ROOT/external_config.json" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --paper --loop >>"$RUN_ROOT/external/engine.log" 2>&1 & external_pid=$!; }
 write_supervisor(){
   local ra=0 ba=0 ea=0; kill -0 "$rec_pid" 2>/dev/null&&ra=1||true; kill -0 "$broker_pid" 2>/dev/null&&ba=1||true; kill -0 "$external_pid" 2>/dev/null&&ea=1||true
@@ -53,9 +47,9 @@ write_supervisor(){
 }
 cleanup(){ for p in "$rec_pid" "$broker_pid" "$external_pid";do if ((p>0));then kill "$p" 2>/dev/null||true;fi;done;for p in "$rec_pid" "$broker_pid" "$external_pid";do if ((p>0));then wait "$p" 2>/dev/null||true;fi;done; }
 trap cleanup EXIT INT TERM
-start_recorder;start_broker;refresh_external_feed;start_external;write_supervisor
+start_recorder;start_broker;start_external;write_supervisor
 
-last_factor=0;last_relation=0;last_external="$(date +%s)";last_report=0;last_micro_taker=0;last_hard_arb=0
+last_factor=0;last_relation=0;last_external=0;last_report=0;last_micro_taker=0;last_hard_arb=0
 rebuild_intents(){ python3 scripts/merge_v4_intents.py --input "$RUN_ROOT/local_factor_intents.csv" --input "$RUN_ROOT/relation_intents.csv" --output "$RUN_ROOT/intents.csv" --min-edge "$INTENT_MIN_EDGE" --max-age-seconds 240 --max-bundles 120 >>"$RUN_ROOT/intent_merge.log" 2>&1||true; }
 
 while true;do
@@ -98,7 +92,7 @@ while true;do
   fi
 
   if ((now-last_external>=60));then
-    refresh_external_feed
+    python3 scripts/v6_external_bridge.py --output "$RUN_ROOT/external_signals.csv" --status "$RUN_ROOT/external_bridge_status.json" --max-age-seconds 21600 --min-confidence 0.35 >"$RUN_ROOT/external_bridge.log" 2>&1||true
     last_external=$now
   fi
 
