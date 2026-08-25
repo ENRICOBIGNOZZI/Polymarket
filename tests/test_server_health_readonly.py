@@ -83,6 +83,14 @@ class ServerHealthReadonlyContractTest(unittest.TestCase):
         self.assertIn("^multileg_tick ", health)
         self.assertIn('^\\{.*"equity"', health)
 
+    def test_same_line_state_failure_is_fail_closed(self):
+        health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('"$last_failure" -ge "$last_success"', health)
+        self.assertNotIn('"$last_failure" -gt "$last_success"', health)
+
     def test_v5_staleness_alert_respects_first_output_startup_grace(self):
         exporter = (ROOT / "monitoring" / "exporter_v5.py").read_text(encoding="utf-8")
         alerts = (ROOT / "monitoring" / "prometheus" / "alerts.yml").read_text(
