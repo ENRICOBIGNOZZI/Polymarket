@@ -9,6 +9,11 @@ on:
       - "scripts/paper_latest_loop.sh"
       - "scripts/paper_v6_loop.sh"
       - "scripts/v6_market_proxy.py"
+      - "scripts/v6_market_snapshot.py"
+      - "tests/test_v6_market_snapshot.py"
+      - "tests/test_v6_market_cache_relay_contract.py"
+      - "config/scheduler_registry.json"
+      - ".github/workflows/v6-market-cache-relay.yml"
       - "config/live_champion.json"
       - "config/paper_v6.json"
       - "tests/test_fast_runtime_contract.py"
@@ -149,28 +154,31 @@ jobs:
           sys.path.insert(0, str(source))
           from scripts.v6_market_proxy import Proxy
 
-          probe = evidence / "forced-gamma-legacy"
+          probe = evidence / "relay-cache-reload"
           proxy = Proxy(
-              "https://gamma-api.polymarket.com",
+              "http://127.0.0.1:9",
               "http://127.0.0.1:9",
               probe / "cache.json",
               probe / "status.json",
           )
-          rows = proxy.markets({"limit": ["5"], "offset": ["0"], "liquidity_num_min": ["1"]})
-          status = json.loads((probe / "status.json").read_text(encoding="utf-8"))
-          assert proxy.source.startswith("gamma_legacy"), proxy.source
-          assert str(status.get("source") or "").startswith("gamma_legacy"), status
-          assert len(rows) == 5, len(rows)
-          assert all(float(row.get("liquidityNum") or 0.0) >= 1.0 for row in rows)
-          summary = {
-              "source": proxy.source,
-              "markets": len(rows),
-              "min_liquidity": min(float(row["liquidityNum"]) for row in rows),
+          payload = {
+              "schema": "polymarket_v6_market_proxy_cache_v1",
+              "timestamp": int(time.time()),
+              "markets": [{"id": "relay", "conditionId": "relay", "liquidityNum": 25.0}],
+              "gamma_to_condition": {"relay": "relay"},
           }
-          (evidence / "forced-gamma-legacy.json").write_text(
+          (probe / "cache.json").parent.mkdir(parents=True, exist_ok=True)
+          (probe / "cache.json").write_text(json.dumps(payload), encoding="utf-8")
+          rows = proxy.markets({"limit": ["1"], "offset": ["0"], "liquidity_num_min": ["10"]})
+          status = json.loads((probe / "status.json").read_text(encoding="utf-8"))
+          assert rows[0]["id"] == "relay"
+          assert proxy.idmap["relay"] == "relay"
+          assert str(status.get("source") or "").endswith("_cache"), status
+          summary = {"source": proxy.source, "markets": len(rows), "paper_only": True}
+          (evidence / "relay-cache-reload.json").write_text(
               json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
           )
-          print("forced_gamma_legacy=PASS " + json.dumps(summary, sort_keys=True))
+          print("relay_cache_reload=PASS " + json.dumps(summary, sort_keys=True))
           PY
 
           python3 - "$source_dir/config/paper_v6.json" "$root/probe_config.json" <<'PY'
