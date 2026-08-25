@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "research_state": "CURRENT_SINGLE_BURST_STATIONARY_HAZARD_REJECTED_MORE_EVIDENCE_REQUIRED",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "source": {
+    "workflow": "V6 live-data research smoke",
+    "run_id": 32908541530,
+    "artifact_id": 9586037141,
+    "tested_head": "14b0d9630f79eb8baf8102c24fadbb450605fcdc"
+  },
+  "authorized_paper_envelope": {
+    "markets_max": 1000,
+    "min_liquidity": 2.0,
+    "post_cost_min_edge": 0.00005,
+    "fractional_kelly_max": 0.25,
+    "max_trade_usd": 125.0,
+    "max_market_fraction": 0.05,
+    "max_event_fraction": 0.15,
+    "max_gross_fraction": 0.70,
+    "max_drawdown": 0.15
+  },
+  "maker_common_sample": {
+    "forward_horizon_seconds": 300,
+    "policy_arm_posts": 14,
+    "unique_market_side_candidates": 3,
+    "posts_with_positive_projected_clearance": 14,
+    "posts_driven_by_exactly_one_prior_compatible_sell_trade": 14,
+    "posts_with_any_future_compatible_sell_flow": 0,
+    "maker_buy_events": 0,
+    "realized_closed_pnl": 0.0,
+    "arms": {
+      "flow": {
+        "posted_orders": 3,
+        "positive_projected_clearance": 3,
+        "future_compatible_flow": 0,
+        "maker_buy_events": 0
+      },
+      "at_touch_no_improve": {
+        "posted_orders": 2,
+        "positive_projected_clearance": 2,
+        "future_compatible_flow": 0,
+        "maker_buy_events": 0
+      },
+      "confidence_gated_inside": {
+        "posted_orders": 4,
+        "positive_projected_clearance": 4,
+        "future_compatible_flow": 0,
+        "maker_buy_events": 0
+      },
+      "toxicity_adjusted": {
+        "posted_orders": 5,
+        "positive_projected_clearance": 5,
+        "future_compatible_flow": 0,
+        "maker_buy_events": 0
+      }
+    }
+  },
+  "interpretation": {
+    "rejection": "The current stationary extrapolation of one isolated pre-entry compatible SELL burst is not supported by this prospective common-sample window.",
+    "not_claimed": "The 14 policy-arm posts are not independent observations; they map to three unique market-side candidates. This evidence rejects the hazard construction, not maker trading in general.",
+    "threshold_decision": "Do not lower the 0.5 percent paper fill-admission gate on this evidence.",
+    "challenger": "Use event-time recurrence shrinkage: one isolated compatible-flow burst contributes zero stationary hazard; additional bursts contribute leave-one-burst-out recurrence weight while receive time remains the causality gate and event time remains the economic clock."
+  },
+  "micro_taker": {
+    "samples": 1793,
+    "labeled": 896,
+    "newly_labeled_last_tick": 224,
+    "post_horizon_labels": 0,
+    "signals_last_tick": 0,
+    "opened_last_tick": 0,
+    "open_positions": 0,
+    "realized_pnl": 0.0,
+    "decision": "Do not force flat-target taker trades."
+  },
+  "hard_arb": {
+    "scanned_events": 27,
+    "fee_schedules_checked_last_tick": 189,
+    "positive_candidates": 0,
+    "entered": 0,
+    "realized_pnl": 0.0,
+    "atomic_snapshot_assumption": false,
+    "sequential_leg_revalidation": true,
+    "leg_latency_ms": 100,
+    "decision": "No threshold reduction is justified without a freshness-qualified executable candidate."
+  },
+  "hard_safety": {
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "state_integrity_unchanged": true,
+    "concentration_caps_unchanged": true,
+    "real_money_execution_prohibited": true
+  }
+}
