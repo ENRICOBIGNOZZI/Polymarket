@@ -1,0 +1,74 @@
+{
+  "schema": "polymarket_lf_semantic_relation_evidence_v1",
+  "evidence_state": "MORE_EVIDENCE_REQUIRED",
+  "research_branch": "research/lf-semantic-polarity-threshold-audit-20260825",
+  "source_main_sha": "43ee9338921440a74bc841373d31acfbe3b33a5b",
+  "latest_validated_live_smoke_sha": "d6513fdbdf5ad8c8b7926b53fb7bba5acdab1257",
+  "finding": {
+    "type": "semantic_relation_misspecification",
+    "summary": "The V5 semantic expert uses lexical Jaccard similarity and direct peer-probability averaging without an explicit polarity, threshold, expiry, or proposition-relation guard.",
+    "current_semantic_min_similarity": 0.18,
+    "current_semantic_shrink": 0.5,
+    "opposite_polarity_fixture": {
+      "market_probabilities": [0.8, 0.2],
+      "lexical_similarity": 0.7142857142857143,
+      "semantic_probabilities": [0.5, 0.5],
+      "absolute_probability_shift_each_side": 0.3
+    },
+    "ordered_threshold_fixture": {
+      "market_probabilities": [0.75, 0.25],
+      "lexical_similarity": 0.7142857142857143,
+      "semantic_probabilities": [0.5, 0.5],
+      "market_monotonic_gap": 0.5,
+      "semantic_monotonic_gap": 0.0,
+      "absolute_probability_shift_each_side": 0.25
+    }
+  },
+  "current_public_evidence": {
+    "b1_candidates": 0,
+    "b2_candidates": 0,
+    "oos_trades": 0,
+    "oos_net_pnl_usd": 0.0,
+    "runtime_pnl_usd": -2.44419734008,
+    "runtime_realized_pnl_usd_total": 0.0000974777346983,
+    "trade_recorder_status": "healthy",
+    "external_intelligence_status": "BACKTESTING",
+    "external_stored_observations": 574,
+    "external_stored_price_snapshots": 999,
+    "external_passing_candidates": 0
+  },
+  "interpretation": [
+    "The deterministic fixtures are counterexamples to the semantic model contract, not estimates of live mispricing frequency or expected PnL.",
+    "Lexical similarity is not sufficient to establish probability exchangeability: opposite-polarity propositions require complement logic and threshold families require order constraints.",
+    "The current validated public sample contains no OOS production bundles, so no profitable semantic challenger is claimed.",
+    "A relation-aware semantic challenger must be evaluated on common chronological rows with purged terminal scoring and executable cost stress before integration."
+  ],
+  "required_ablation": {
+    "incumbent": "lexical Jaccard peer-probability averaging",
+    "challengers": [
+      "relation-aware abstention",
+      "verified-complement transformation",
+      "same-expiry threshold-ladder isotonic projection",
+      "proposition-equivalent peer pooling only"
+    ],
+    "metrics": [
+      "Brier score by time-to-resolution",
+      "log loss by time-to-resolution",
+      "calibration error",
+      "logical violation rate",
+      "executable OOS net PnL at 1x, 1.5x and 2x costs",
+      "turnover",
+      "drawdown",
+      "cross-strategy covariance"
+    ]
+  },
+  "safety": {
+    "research_only": true,
+    "live_champion_changed": false,
+    "production_thresholds_changed": false,
+    "risk_or_oos_gates_changed": false,
+    "credentials_changed": false,
+    "authenticated_execution_changed": false,
+    "real_money_execution": false
+  }
+}
