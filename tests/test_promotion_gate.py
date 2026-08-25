@@ -53,6 +53,12 @@ class PromotionGateTests(unittest.TestCase):
         }
         return candidate, source, evidence, now
 
+    def approve_exact_source(self, source, verdict="INTEGRATION_READY"):
+        source["comments"] = [{
+            "createdAt":"2026-08-25T12:00:00Z",
+            "body":f"## Research Governance — {verdict}\n\nValidated source head: `{source['headRefOid']}`.\n",
+        }]
+
     def test_economic_candidate_passes_only_with_full_evidence(self):
         candidate, source, evidence, now = self.fixture()
         result = MODULE.evaluate(candidate, source, ["src/engine.cpp"], evidence, ALPHA_CONFIG, POLICY, now)
@@ -87,6 +93,107 @@ class PromotionGateTests(unittest.TestCase):
         self.assertTrue(result["eligible"], result)
         self.assertEqual(result["promotion_class"], "operational")
 
+    def test_exact_governance_approved_runtime_loop_recovery_is_operational(self):
+        candidate, source, _, now = self.fixture()
+        candidate["body"] = (
+            "Source research PR/branch/commit: #10\n"
+            "Operational recovery files: scripts/paper_v6_loop.sh\n"
+        )
+        self.approve_exact_source(source)
+        result = MODULE.evaluate(
+            candidate,
+            source,
+            ["scripts/paper_v6_loop.sh", "scripts/v6_market_proxy.py"],
+            None,
+            ALPHA_CONFIG,
+            POLICY,
+            now,
+        )
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(result["promotion_class"], "operational")
+        self.assertEqual(result["operational_recovery_files"], ["scripts/paper_v6_loop.sh"])
+        self.assertIn("scripts/paper_v6_loop.sh", result["source_content_match_files"])
+
+    def test_runtime_loop_without_recovery_declaration_stays_economic(self):
+        candidate, source, _, now = self.fixture()
+        candidate["body"] = "Source research PR/branch/commit: #10\n"
+        self.approve_exact_source(source)
+        result = MODULE.evaluate(
+            candidate, source, ["scripts/paper_v6_loop.sh"], None, ALPHA_CONFIG, POLICY, now
+        )
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["promotion_class"], "economic")
+        self.assertIn("economic_promotion_requires_machine_readable_evidence", result["errors"])
+
+    def test_runtime_recovery_requires_exact_positive_governance_verdict(self):
+        candidate, source, _, now = self.fixture()
+        candidate["body"] = (
+            "Source research PR/branch/commit: #10\n"
+            "Operational recovery files: scripts/paper_v6_loop.sh\n"
+        )
+        self.approve_exact_source(source, "MORE_EVIDENCE_REQUIRED")
+        result = MODULE.evaluate(
+            candidate, source, ["scripts/paper_v6_loop.sh"], None, ALPHA_CONFIG, POLICY, now
+        )
+        self.assertFalse(result["eligible"])
+        self.assertIn(
+            "operational_recovery_requires_exact_positive_research_governance_verdict",
+            result["errors"],
+        )
+
+    def test_runtime_recovery_verdict_must_bind_current_source_head(self):
+        candidate, source, _, now = self.fixture()
+        candidate["body"] = (
+            "Source research PR/branch/commit: #10\n"
+            "Operational recovery files: scripts/paper_v6_loop.sh\n"
+        )
+        source["comments"] = [{
+            "createdAt":"2026-08-25T12:00:00Z",
+            "body":f"## Research Governance — INTEGRATION_READY\n\nValidated source head: `{'c'*40}`.\n",
+        }]
+        result = MODULE.evaluate(
+            candidate, source, ["scripts/paper_v6_loop.sh"], None, ALPHA_CONFIG, POLICY, now
+        )
+        self.assertFalse(result["eligible"])
+        self.assertIn(
+            "operational_recovery_requires_exact_positive_research_governance_verdict",
+            result["errors"],
+        )
+
+    def test_runtime_recovery_cannot_exempt_config_or_model_economics(self):
+        candidate, source, _, now = self.fixture()
+        candidate["body"] = (
+            "Source research PR/branch/commit: #10\n"
+            "Operational recovery files: config/paper_v6.json\n"
+        )
+        self.approve_exact_source(source)
+        result = MODULE.evaluate(
+            candidate, source, ["config/paper_v6.json"], None, ALPHA_CONFIG, POLICY, now
+        )
+        self.assertFalse(result["eligible"])
+        self.assertIn("operational_recovery_path_not_allowlisted:config/paper_v6.json", result["errors"])
+        self.assertIn("economic_promotion_requires_machine_readable_evidence", result["errors"])
+
+    def test_runtime_recovery_declaration_must_cover_every_economic_file(self):
+        candidate, source, _, now = self.fixture()
+        candidate["body"] = (
+            "Source research PR/branch/commit: #10\n"
+            "Operational recovery files: scripts/paper_v6_loop.sh\n"
+        )
+        self.approve_exact_source(source)
+        result = MODULE.evaluate(
+            candidate,
+            source,
+            ["scripts/paper_v6_loop.sh", "config/paper_v6.json"],
+            None,
+            ALPHA_CONFIG,
+            POLICY,
+            now,
+        )
+        self.assertFalse(result["eligible"])
+        self.assertIn("operational_recovery_files_do_not_match_all_economic_files", result["errors"])
+        self.assertIn("economic_promotion_requires_machine_readable_evidence", result["errors"])
+
     def test_merge_requires_controller_authorization_label(self):
         candidate, source, evidence, now = self.fixture()
         blocked = MODULE.evaluate(candidate, source, ["src/engine.cpp"], evidence, ALPHA_CONFIG, POLICY, now, require_approval_label=True)
@@ -99,6 +206,7 @@ class PromotionGateTests(unittest.TestCase):
     def test_candidate_code_provenance_excludes_only_live_selector(self):
         self.assertTrue(MODULE.requires_source_content_match("src/engine.cpp"))
         self.assertTrue(MODULE.requires_source_content_match("config/paper_v6.json"))
+        self.assertTrue(MODULE.requires_source_content_match("scripts/paper_v6_loop.sh"))
         self.assertFalse(MODULE.requires_source_content_match("config/live_champion.json"))
         self.assertFalse(MODULE.requires_source_content_match("docs/OPERATIONS.md"))
 
