@@ -82,21 +82,21 @@ jobs:
           set -euo pipefail
           mkdir -p v6_evidence/maker
           ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once > v6_evidence/maker.log 2>&1 || true
-      - name: Live public-data micro-taker warmup/markout probe
+      - name: Live public-data micro-taker causal warmup/markout probe
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p v6_evidence/micro_taker
-          for i in 1 2 3; do
-            python3 scripts/v6_micro_taker.py --config config/paper_v6.json --run-dir v6_evidence/micro_taker --markets 120 --min-liquidity 25 --horizon-seconds 5 --max-trade-usd 15 --min-edge 0.0003 --slippage-bps 5 --max-positions 10 >> v6_evidence/micro_taker.log 2>&1 || true
-            sleep 6
+          for i in 1 2 3 4 5 6; do
+            python3 scripts/v6_micro_taker.py --config config/paper_v6.json --run-dir v6_evidence/micro_taker --markets 120 --min-liquidity 25 --horizon-seconds 5 --max-target-staleness-seconds 3 --max-trade-usd 15 --min-edge 0.0003 --slippage-bps 5 --max-positions 10 >> v6_evidence/micro_taker.log 2>&1 || true
+            sleep 2
           done
       - name: Summarize V6 evidence
         if: always()
         shell: bash
         run: |
           python3 - <<'PY'
-          import json,re
+          import csv,json,re
           from pathlib import Path
           root=Path('v6_evidence')
           def js(name):
@@ -109,9 +109,34 @@ jobs:
           state=root/'micro_taker/state.json'
           if state.exists():
               try:
-                  s=json.loads(state.read_text());samples=s.get('samples') or [];summary['micro_taker_samples']=len(samples);summary['micro_taker_labeled']=sum(x.get('y') is not None for x in samples if isinstance(x,dict));summary['micro_taker_open_positions']=len(s.get('positions') or {})
-              except Exception:pass
+                  s=json.loads(state.read_text());samples=s.get('samples') or []
+                  labeled=[x for x in samples if isinstance(x,dict) and x.get('y') is not None]
+                  bad=[x for x in labeled if int(x.get('target_observation_ts') or 0)>int(x.get('ts') or 0)+5]
+                  lags=[int(x['target_staleness_seconds']) for x in labeled if x.get('target_staleness_seconds') is not None]
+                  summary['micro_taker_samples']=len(samples)
+                  summary['micro_taker_labeled']=len(labeled)
+                  summary['micro_taker_post_horizon_labels']=len(bad)
+                  summary['micro_taker_target_staleness_max_seconds']=max(lags) if lags else None
+                  summary['micro_taker_open_positions']=len(s.get('positions') or {})
+                  summary['micro_taker_signals_last_tick']=int(s.get('signals') or 0)
+                  summary['micro_taker_opened_last_tick']=int(s.get('opened') or 0)
+                  summary['micro_taker_best_edge_last_tick']=float(s.get('best_edge') or 0.0)
+                  summary['micro_taker_realized_pnl_total']=float(s.get('realized_pnl_total') or 0.0)
+                  summary['micro_taker_label_stats_last_tick']=s.get('label_stats_last_tick') or {}
+                  if bad: raise RuntimeError('micro taker used a post-horizon target observation')
+              except Exception as exc:
+                  summary['micro_taker_summary_error']=f'{type(exc).__name__}:{exc}'
+          fills=root/'micro_taker/fills.csv'
+          if fills.exists():
+              try:
+                  rows=list(csv.DictReader(fills.open(newline='',encoding='utf-8')))
+                  summary['micro_taker_buy_fills']=sum((r.get('action') or '').upper()=='BUY' for r in rows)
+                  summary['micro_taker_sell_fills']=sum((r.get('action') or '').upper()=='SELL' for r in rows)
+                  summary['micro_taker_closed_fill_pnl']=sum(float(r.get('pnl') or 0.0) for r in rows if (r.get('action') or '').upper()=='SELL')
+              except Exception as exc:
+                  summary['micro_taker_fills_summary_error']=f'{type(exc).__name__}:{exc}'
           (root/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n');print(json.dumps(summary,indent=2,sort_keys=True))
+          if summary.get('micro_taker_post_horizon_labels',0): raise SystemExit('causal micro target contract failed')
           PY
           echo '## V6 live-data research smoke' >> "$GITHUB_STEP_SUMMARY"
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
