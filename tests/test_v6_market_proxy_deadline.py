@@ -68,6 +68,21 @@ class V6MarketProxyDeadlineTests(unittest.TestCase):
         self.assertLessEqual(proxy.FALLBACK_MARKETS, 300)
         self.assertGreaterEqual(proxy.BOOK_WORKERS, 4)
 
+    def test_relayed_discovery_cache_survives_hosted_schedule_delay(self) -> None:
+        # GitHub cron delivery is best-effort. The bounded stale window keeps
+        # verified discovery metadata available while the private host cannot
+        # reach Gamma/CLOB; it must not become an unbounded data fallback.
+        self.assertEqual(proxy.FRESH_CACHE_SECONDS, 300.0)
+        self.assertEqual(proxy.STALE_CACHE_SECONDS, 3600.0)
+        p = self.make_proxy()
+        p.rows = [{"id": "relay", "conditionId": "relay", "liquidityNum": 25.0}]
+        p.ts = time.time() - 1800.0
+
+        self.assertIsNone(p.cached_page(1, 0, 10.0, proxy.FRESH_CACHE_SECONDS))
+        stale = p.cached_page(1, 0, 10.0, proxy.STALE_CACHE_SECONDS)
+
+        self.assertEqual(stale, p.rows)
+
     def test_req_advertises_and_decodes_gzip(self) -> None:
         class Response:
             headers = {"Content-Encoding": "gzip"}
