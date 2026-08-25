@@ -1,0 +1,65 @@
+{
+  "schema": "v6_graph_rv_completion_research_v1",
+  "source_main_sha": "9695c4b3002526c8b747dfd6dad0bda3f12a0961",
+  "evidence_state": "MORE_EVIDENCE_REQUIRED",
+  "candidate": {
+    "bundle_id": "GRAPH_HARD-1787649330-1",
+    "event_id": "837321",
+    "strategy": "GRAPH_RV",
+    "mode": "MAKER",
+    "market_ids": ["3535881", "3535883", "3535882"],
+    "limit_prices": [0.33, 0.36, 0.29],
+    "reported_expected_edge": 0.02,
+    "max_notional_usd": 60.0,
+    "live_smoke_generated_ts": 1787649357,
+    "live_smoke_state": "RESTING_NOT_COMPLETE"
+  },
+  "policy": {
+    "guard_stress_bps": 10.0,
+    "min_edge": 0.0002,
+    "min_candidate_sessions": 12,
+    "min_candidate_completions": 10,
+    "hard_risk_unchanged": true,
+    "paper_only": true
+  },
+  "candidate_specific_execution": {
+    "sessions": 0,
+    "completed_sessions": 0,
+    "mean_complete_net_pnl_per_share": null,
+    "mean_abort_net_pnl_per_share": null,
+    "independent_positive_windows": 0,
+    "cost_stress_expected_net_pnl_per_share": {}
+  },
+  "static_economics": {
+    "limit_price_sum": 0.98,
+    "quoted_maker_edge_per_share": 0.02,
+    "guard_stressed_edge_per_share": 0.019,
+    "interpretation": "large passive quote edge, not hard arbitrage and not execution evidence"
+  },
+  "context_only_nontransferable_evidence": {
+    "strategy_class": "binary_yes_no_complete_set_forward_maker",
+    "transferable_to_graph_rv": false,
+    "sessions": 24,
+    "probes_per_policy": 352,
+    "paired_fills_per_policy": 0,
+    "pair_fill_wilson_upper_one_sided_95": 0.007627575897881487,
+    "join_total_pnl_ex_rewards_usd": -0.13894351315407616,
+    "improve1_total_pnl_ex_rewards_usd": -2.456809049864078,
+    "join_fill_weighted_60s_markout_per_share": -0.0020000000000000018,
+    "improve1_fill_weighted_60s_markout_per_share": -0.0010905783921425982,
+    "reason_nontransferable": "the worker probes a different binary YES+NO complete-set strategy class rather than the current three-leg NegRisk GRAPH_RV event basket"
+  },
+  "alpha_factory_decision": {
+    "current_candidate": "PRIORITIZE_FOR_CANDIDATE_SPECIFIC_REPLAY",
+    "promotion": false,
+    "reason": "the first V6 graph maker bundle has a material 2 percent passive edge and survives the current 10 bp static guard, but there is no candidate-specific common-completion, partial-fill, cancel-latency, timeout-unwind, or fill-conditioned markout sample",
+    "required_next_evidence": [
+      "prospective recurrence of the exact event and leg-set",
+      "event-time queue state through maker order arrival on every leg",
+      "common-minimum completion and excess-fill distribution under the live multileg contract",
+      "cancel-latency fills and timeout unwind PnL on actually filled inventory",
+      "60s and 300s fill-conditioned markout",
+      "common chronological expected net PnL at 1x, 1.5x and 2x queue-latency-slippage stress"
+    ]
+  }
+}
