@@ -91,10 +91,29 @@ is_current_runtime_descendant(){
   done
   return 1
 }
+process_cwd(){
+  local pid="$1"
+  command -v lsof >/dev/null 2>&1 || return 1
+  lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | /usr/bin/sed -n 's/^n//p' | /usr/bin/head -n 1
+}
+process_command(){ /bin/ps -o command= -p "$1" 2>/dev/null || true; }
+process_executable(){ /bin/ps -o comm= -p "$1" 2>/dev/null || true; }
 is_stale_v6_loop(){
   local pid="$1"
   [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" != "$$" ]] || return 1
   ! is_current_runtime_descendant "$pid"
+}
+is_same_repository_v6_loop(){
+  local pid="$1" command_line cwd
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  command_line="$(process_command "$pid")"
+  [[ "$command_line" == *"paper_v6_loop.sh"* ]] || return 1
+  # Current launchers use an absolute script path.  Older macOS launchd
+  # instances can retain `bash scripts/paper_v6_loop.sh`; accept that form
+  # only after the process working directory proves it is this repository.
+  [[ "$command_line" == *"$ROOT/scripts/paper_v6_loop.sh"* ]] && return 0
+  cwd="$(process_cwd "$pid")"
+  [[ "$cwd" == "$ROOT" ]]
 }
 reap_stale_v6_loops(){
   # A pre-handoff loop from an older deployment cannot know about the parent
@@ -106,31 +125,136 @@ reap_stale_v6_loops(){
   for ((attempt=1; attempt<=25; ++attempt)); do
     remaining=0
     while IFS= read -r pid; do
-      if is_stale_v6_loop "$pid"; then
+      if is_same_repository_v6_loop "$pid" && is_stale_v6_loop "$pid"; then
         remaining=1
         if (( attempt == 1 )); then
           echo "stale_v6_loop_reaped=$pid" >&2
           kill -TERM "$pid" 2>/dev/null || true
         fi
       fi
-    done < <(pgrep -f "$ROOT/scripts/paper_v6_loop.sh" 2>/dev/null || true)
+    done < <(pgrep -f 'paper_v6_loop\.sh' 2>/dev/null || true)
     (( remaining == 0 )) && return 0
     sleep 0.2
   done
   echo "fatal: stale V6 loop did not exit before startup" >&2
   return 1
 }
+proxy_listener_pids(){
+  command -v lsof >/dev/null 2>&1 || return 1
+  lsof -nP -t -iTCP:"$MARKET_PROXY_PORT" -sTCP:LISTEN 2>/dev/null || true
+}
+is_same_repository_v6_proxy_listener(){
+  local pid="$1" command_line executable cwd
+  [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" != "$$" ]] || return 1
+  command_line="$(process_command "$pid")"
+  executable="$(process_executable "$pid")"
+  [[ "$command_line" == *"v6_market_proxy.py"* ]] || return 1
+  # Require the real Python interpreter as well as its argv.  This excludes
+  # pgrep/diagnostic commands that happen to mention the script name.
+  [[ "$executable" == *"python"* || "$executable" == *"Python"* ]] || return 1
+  cwd="$(process_cwd "$pid")"
+  [[ "$cwd" == "$ROOT" ]]
+}
+is_v6_broker_for_run(){
+  local pid="$1" command_line executable
+  [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" != "$$" ]] || return 1
+  command_line="$(process_command "$pid")"
+  executable="$(process_executable "$pid")"
+  [[ "$executable" == *"polymarket_multileg_paper"* ]] || return 1
+  [[ "$command_line" == *"--run-dir"* && "$command_line" == *"$RUN_ROOT"* ]]
+}
+is_same_repository_v6_broker(){
+  local pid="$1" cwd
+  is_v6_broker_for_run "$pid" || return 1
+  cwd="$(process_cwd "$pid")"
+  [[ "$cwd" == "$ROOT" ]]
+}
+reap_stale_v6_proxy_listener(){
+  # A loop that died before its child process group could be collected leaves a
+  # live old proxy on the fixed localhost port.  Merely curling /healthz would
+  # then bless that old binary and make the replacement loop restart a proxy
+  # that can never bind.  Retire only a same-repository Python proxy outside
+  # the new singleton owner's ancestry; a foreign listener stops startup.
+  [[ -n "$RUNTIME_PARENT_PID" ]] || return 0
+  command -v lsof >/dev/null 2>&1 || { echo "fatal: V6 proxy ownership requires lsof" >&2; return 1; }
+  local pid remaining attempt
+  for ((attempt=1; attempt<=25; ++attempt)); do
+    remaining=0
+    while IFS= read -r pid; do
+      [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
+      is_current_runtime_descendant "$pid" && continue
+      if ! is_same_repository_v6_proxy_listener "$pid"; then
+        echo "fatal: V6 market proxy port $MARKET_PROXY_PORT is owned by unverified pid=$pid" >&2
+        return 1
+      fi
+      remaining=1
+      if (( attempt == 1 )); then
+        echo "stale_v6_proxy_listener_reaped=$pid" >&2
+        kill -TERM "$pid" 2>/dev/null || true
+      fi
+    done < <(proxy_listener_pids)
+    (( remaining == 0 )) && return 0
+    sleep 0.2
+  done
+  echo "fatal: stale V6 proxy listener did not exit before startup" >&2
+  return 1
+}
+reap_stale_v6_brokers(){
+  # The multi-leg launcher owns a lock, but an older orphan may still be
+  # writing shared state before that lock is observed.  Retire only an exact
+  # same-repository broker for this run root outside the active owner tree.
+  [[ -n "$RUNTIME_PARENT_PID" ]] || return 0
+  command -v pgrep >/dev/null 2>&1 || return 0
+  command -v lsof >/dev/null 2>&1 || { echo "fatal: V6 broker ownership requires lsof" >&2; return 1; }
+  local pid remaining attempt
+  for ((attempt=1; attempt<=25; ++attempt)); do
+    remaining=0
+    while IFS= read -r pid; do
+      is_v6_broker_for_run "$pid" || continue
+      is_current_runtime_descendant "$pid" && continue
+      if ! is_same_repository_v6_broker "$pid"; then
+        echo "fatal: V6 multi-leg broker for $RUN_ROOT is owned by unverified pid=$pid" >&2
+        return 1
+      fi
+      remaining=1
+      if (( attempt == 1 )); then
+        echo "stale_v6_broker_reaped=$pid" >&2
+        kill -TERM "$pid" 2>/dev/null || true
+      fi
+    done < <(pgrep -f 'polymarket_multileg_paper' 2>/dev/null || true)
+    (( remaining == 0 )) && return 0
+    sleep 0.2
+  done
+  echo "fatal: stale V6 multi-leg broker did not exit before startup" >&2
+  return 1
+}
+proxy_pid_owns_port(){
+  [[ "$proxy_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  kill -0 "$proxy_pid" 2>/dev/null || return 1
+  local pid
+  while IFS= read -r pid; do
+    [[ "$pid" == "$proxy_pid" ]] && return 0
+  done < <(proxy_listener_pids)
+  return 1
+}
+wait_for_owned_proxy(){
+  local attempt
+  for ((attempt=1; attempt<=50; ++attempt)); do
+    if proxy_pid_owns_port && curl -fsS --max-time 1 "http://127.0.0.1:${MARKET_PROXY_PORT}/healthz" >/dev/null 2>&1; then
+      return 0
+    fi
+    kill -0 "$proxy_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  return 1
+}
 trap cleanup EXIT
 trap shutdown INT TERM
 reap_stale_v6_loops
+reap_stale_v6_proxy_listener
+reap_stale_v6_brokers
 start_proxy
-proxy_ready=0
-for _ in {1..50};do
-  if curl -fsS "http://127.0.0.1:${MARKET_PROXY_PORT}/healthz" >/dev/null 2>&1;then proxy_ready=1;break;fi
-  kill -0 "$proxy_pid" 2>/dev/null||break
-  sleep 0.1
-done
-((proxy_ready==1))||{ echo "fatal: V6 market proxy failed to start" >&2; exit 1; }
+wait_for_owned_proxy || { echo "fatal: V6 market proxy failed to start with verified port ownership" >&2; exit 1; }
 start_recorder;start_broker;start_external;write_supervisor
 
 # Backward-safe deployment: new queue-aware flags are used as soon as the rebuilt
@@ -149,7 +273,13 @@ while true;do
     exit 0
   fi
   now="$(date +%s)"
-  if ! kill -0 "$proxy_pid" 2>/dev/null;then wait "$proxy_pid" 2>/dev/null||true;proxy_restarts=$((proxy_restarts+1));start_proxy;sleep 1;fi
+  if ! proxy_pid_owns_port || ! curl -fsS --max-time 1 "http://127.0.0.1:${MARKET_PROXY_PORT}/healthz" >/dev/null 2>&1;then
+    # Do not spin forever against an old listener or a live-but-wedged child.
+    # Exiting lets the singleton parent perform one clean, provenance-checked
+    # handoff rather than allowing the recorder to keep timing out silently.
+    echo "fatal: V6 market proxy lost verified listener ownership or health" >&2
+    exit 1
+  fi
   if ! kill -0 "$rec_pid" 2>/dev/null;then wait "$rec_pid" 2>/dev/null||true;rec_restarts=$((rec_restarts+1));start_recorder;fi
   if ! kill -0 "$broker_pid" 2>/dev/null;then wait "$broker_pid" 2>/dev/null||true;broker_restarts=$((broker_restarts+1));start_broker;fi
   if ! kill -0 "$external_pid" 2>/dev/null;then wait "$external_pid" 2>/dev/null||true;external_restarts=$((external_restarts+1));start_external;fi
