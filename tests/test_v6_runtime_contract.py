@@ -173,6 +173,21 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("assert live == base_live", workflow)
         self.assertNotIn("assert live['version'] == 5, 'non-integration research smoke", workflow)
 
+    def test_v6_live_smoke_has_forward_causal_fill_ticks(self) -> None:
+        smoke = (ROOT / "scripts" / "v6_live_smoke_once.sh").read_text(encoding="utf-8")
+        self.assertIn('FORWARD_TICKS="${V6_SMOKE_FORWARD_TICKS:-4}"', smoke)
+        self.assertIn('FORWARD_SLEEP_SECONDS="${V6_SMOKE_FORWARD_SLEEP_SECONDS:-10}"', smoke)
+        maker_loop = smoke.index("for (( maker_tick=1; maker_tick<=FORWARD_TICKS; maker_tick++ )); do")
+        broker_loop = smoke.index("for (( broker_tick=1; broker_tick<=FORWARD_TICKS; broker_tick++ )); do")
+        maker_recorder = smoke.index("./build/polymarket_trade_recorder", maker_loop)
+        maker = smoke.index("./build/polymarket_maker_paper", maker_loop)
+        broker_recorder = smoke.index("./build/polymarket_trade_recorder", broker_loop)
+        broker = smoke.index("./build/polymarket_multileg_paper", broker_loop)
+        self.assertLess(maker_recorder, maker)
+        self.assertLess(broker_recorder, broker)
+        self.assertIn('| tee -a "$R/maker_latest.log"', smoke)
+        self.assertIn('| tee -a "$R/multileg_latest.log"', smoke)
+
 
 if __name__ == "__main__":
     unittest.main()
