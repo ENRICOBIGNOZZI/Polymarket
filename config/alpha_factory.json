@@ -9,7 +9,8 @@
     "forward_maker": "telemetry/latest-forward-maker.json",
     "forward_maker_history": "telemetry/forward-maker-history.jsonl",
     "max_live_smoke_age_seconds": 10800,
-    "max_forward_age_seconds": 10800
+    "max_forward_age_seconds": 10800,
+    "max_autonomous_research_age_seconds": 5400
   },
   "gates": {
     "min_oos_trades": 30,
@@ -35,13 +36,14 @@
       "v4-live-smoke.yml": {"name":"v4-live-paper-smoke","requires_current_main":true,"max_age_seconds":7200,"dispatchable":true,"priority":30,"dependencies":["ci.yml","monitoring.yml"]},
       "forward-maker-research.yml": {"name":"forward-maker-alpha-research","requires_current_main":true,"max_age_seconds":5400,"dispatchable":true,"priority":40,"dependencies":["ci.yml"]},
       "alpha-factory.yml": {"name":"Polymarket Alpha Factory","requires_current_main":true,"max_age_seconds":10800,"dispatchable":true,"priority":50,"dependencies":["v4-live-smoke.yml","forward-maker-research.yml"]},
+      "research-queue.yml": {"name":"Polymarket Research Director","requires_current_main":true,"max_age_seconds":5400,"dispatchable":true,"priority":55,"dependencies":["alpha-factory.yml"]},
       "research-policy.yml": {"name":"Polymarket Research Policy","requires_current_main":true,"max_age_seconds":7200,"dispatchable":true,"priority":60,"dependencies":["ci.yml"]},
       "promotion-controller.yml": {"name":"Polymarket Promotion Controller","requires_current_main":true,"max_age_seconds":1800,"dispatchable":true,"priority":65,"dependencies":["ci.yml","monitoring.yml","v4-live-smoke.yml","research-policy.yml","alpha-factory.yml"]},
       "server-health.yml": {"name":"paper-server-health","requires_current_main":false,"max_age_seconds":7200,"dispatchable":false,"priority":70,"dependencies":[]},
       "deploy-paper-server.yml": {"name":"deploy-paper-server","requires_current_main":false,"max_age_seconds":0,"dispatchable":false,"priority":80,"dependencies":["v4-live-smoke.yml"],"ignore_scheduled_skips":true}
     },
     "allowlisted_dispatches": [
-      "ci.yml","monitoring.yml","v4-live-smoke.yml","forward-maker-research.yml","alpha-factory.yml","research-policy.yml","promotion-controller.yml"
+      "ci.yml","monitoring.yml","v4-live-smoke.yml","forward-maker-research.yml","alpha-factory.yml","research-queue.yml","research-policy.yml","promotion-controller.yml"
     ],
     "forbidden_dispatches": ["integration-merge.yml","deploy-paper-server.yml","server-health.yml"]
   }
