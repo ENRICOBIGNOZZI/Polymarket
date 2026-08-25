@@ -40,6 +40,20 @@ class WorkflowYamlContractTest(unittest.TestCase):
         self.assertNotIn('echo "$TS_AUTHKEY"', deploy)
         self.assertNotIn('echo "$TS_OAUTH_SECRET"', deploy)
 
+    def test_server_health_uses_canonical_tailscale_serve_grafana_route(self) -> None:
+        health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("GRAFANA_HOSTNAME: mamma-portfolio", health)
+        self.assertIn("GRAFANA_FQDN: mamma-portfolio.tail1bae85.ts.net", health)
+        self.assertIn("GRAFANA_URL: http://mamma-portfolio.tail1bae85.ts.net", health)
+        self.assertIn('tailscale ping --until-direct=false --c 1 --timeout=10s "$GRAFANA_HOSTNAME"', health)
+        self.assertIn('getent hosts "$GRAFANA_FQDN"', health)
+        self.assertIn('"$GRAFANA_URL/api/health"', health)
+        self.assertIn('"$GRAFANA_URL/api/search"', health)
+        self.assertNotIn('"http://$SERVER_HOST:3000/api/health"', health)
+        self.assertNotIn('"http://$SERVER_HOST:3000/api/search"', health)
+
     def test_scheduled_ci_backfills_api_updated_pr_heads_exactly_once(self) -> None:
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("  actions: write\n", ci)
