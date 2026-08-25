@@ -13,6 +13,7 @@ on:
       - "scripts/v6_*.py"
       - "tests/test_v6_model_contracts.py"
       - "tests/test_v6_runtime_contract.py"
+      - "tests/test_v6_execution_costs.py"
       - ".github/workflows/v6-research-smoke.yml"
 
 permissions:
@@ -60,7 +61,9 @@ jobs:
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
-          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py -v
+          python3 -m py_compile scripts/v6_queue_filter.py
+          python3 scripts/v6_queue_filter.py self-test
+          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py tests/test_v6_execution_costs.py -v
       - name: Live public-data relation probes
         shell: bash
         run: |
@@ -79,7 +82,7 @@ jobs:
           from pathlib import Path
           cfg=json.loads(Path('config/paper_v6.json').read_text()); cfg['starting_capital']=1500.0; cfg['run_dir']='v6_evidence/hard_arb'; Path('v6_evidence/hard_arb_config.json').write_text(json.dumps(cfg,indent=2,sort_keys=True)+'\n')
           PY
-          python3 scripts/v6_hard_arb_paper.py --config v6_evidence/hard_arb_config.json --run-dir v6_evidence/hard_arb --markets 300 --min-liquidity 10 --max-events 50 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/hard_arb.log 2>&1 || true
+          python3 scripts/v6_queue_filter.py hard --config v6_evidence/hard_arb_config.json --run-dir v6_evidence/hard_arb --markets 300 --min-liquidity 10 --max-events 50 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 --leg-latency-ms 100 > v6_evidence/hard_arb.log 2>&1 || true
       - name: Live public-data FDR local-factor probe
         shell: bash
         run: |
@@ -97,7 +100,7 @@ jobs:
           set -euo pipefail
           mkdir -p v6_evidence/micro_taker
           for i in 1 2 3 4 5 6; do
-            python3 scripts/v6_micro_taker.py --config config/paper_v6.json --run-dir v6_evidence/micro_taker --markets 120 --min-liquidity 25 --horizon-seconds 5 --max-target-staleness-seconds 3 --max-trade-usd 15 --min-edge 0.0003 --slippage-bps 5 --max-positions 10 >> v6_evidence/micro_taker.log 2>&1 || true
+            python3 scripts/v6_queue_filter.py micro --config config/paper_v6.json --run-dir v6_evidence/micro_taker --markets 120 --min-liquidity 25 --horizon-seconds 5 --max-target-staleness-seconds 3 --max-trade-usd 15 --min-edge 0.0003 --slippage-bps 5 --max-positions 10 >> v6_evidence/micro_taker.log 2>&1 || true
             sleep 2
           done
       - name: Summarize V6 evidence
@@ -132,6 +135,9 @@ jobs:
                   summary['micro_taker_best_edge_last_tick']=float(s.get('best_edge') or 0.0)
                   summary['micro_taker_realized_pnl_total']=float(s.get('realized_pnl_total') or 0.0)
                   summary['micro_taker_label_stats_last_tick']=s.get('label_stats_last_tick') or {}
+                  summary['micro_taker_execution_model']=s.get('execution_model')
+                  summary['micro_taker_depth_rejections_last_tick']=int(s.get('depth_rejections_last_tick') or 0)
+                  summary['micro_taker_fee_sources_last_tick']=s.get('fee_sources_last_tick') or {}
                   if bad: raise RuntimeError('micro taker used a post-horizon target observation')
               except Exception as exc:
                   summary['micro_taker_summary_error']=f'{type(exc).__name__}:{exc}'
@@ -140,8 +146,8 @@ jobs:
               try:
                   rows=list(csv.DictReader(fills.open(newline='',encoding='utf-8')))
                   summary['micro_taker_buy_fills']=sum((r.get('action') or '').upper()=='BUY' for r in rows)
-                  summary['micro_taker_sell_fills']=sum((r.get('action') or '').upper()=='SELL' for r in rows)
-                  summary['micro_taker_closed_fill_pnl']=sum(float(r.get('pnl') or 0.0) for r in rows if (r.get('action') or '').upper()=='SELL')
+                  summary['micro_taker_sell_fills']=sum((r.get('action') or '').upper() in {'SELL','SELL_PARTIAL'} for r in rows)
+                  summary['micro_taker_closed_fill_pnl']=sum(float(r.get('pnl') or 0.0) for r in rows if (r.get('action') or '').upper() in {'SELL','SELL_PARTIAL'})
               except Exception as exc:
                   summary['micro_taker_fills_summary_error']=f'{type(exc).__name__}:{exc}'
           (root/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n');print(json.dumps(summary,indent=2,sort_keys=True))
