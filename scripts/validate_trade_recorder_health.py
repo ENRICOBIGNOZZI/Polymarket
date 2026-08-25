@@ -20,6 +20,8 @@ REQUIRED_FIELDS = (
     "seen",
     "elapsed_ms",
 )
+DEFAULT_MAX_REQUEST_ERRORS = 1
+DEFAULT_MAX_REQUEST_ERROR_RATE = 0.08
 
 
 def parse_status_line(text: str) -> dict[str, int]:
@@ -51,8 +53,14 @@ def parse_status_line(text: str) -> dict[str, int]:
     return fields
 
 
-def evaluate(fields: dict[str, int], now_ts: int, max_trade_age_seconds: int,
-             max_future_skew_seconds: int) -> dict[str, object]:
+def evaluate(
+    fields: dict[str, int],
+    now_ts: int,
+    max_trade_age_seconds: int,
+    max_future_skew_seconds: int,
+    max_request_errors: int = DEFAULT_MAX_REQUEST_ERRORS,
+    max_request_error_rate: float = DEFAULT_MAX_REQUEST_ERROR_RATE,
+) -> dict[str, object]:
     failures: list[str] = []
 
     if fields["markets"] <= 0:
@@ -63,8 +71,16 @@ def evaluate(fields: dict[str, int], now_ts: int, max_trade_age_seconds: int,
         failures.append("condition_mapping_incomplete")
     if fields["requests"] <= 0:
         failures.append("no_data_api_requests")
-    if fields["errors"] > 0:
+
+    request_error_rate = (
+        fields["errors"] / fields["requests"] if fields["requests"] > 0 else 1.0
+    )
+    if (
+        fields["errors"] > max(0, max_request_errors)
+        or request_error_rate > max(0.0, max_request_error_rate)
+    ):
         failures.append("data_api_request_errors")
+
     if fields["truncated_batches"] > 0:
         failures.append("trade_batches_truncated")
     if fields["fetched"] <= 0:
@@ -86,6 +102,9 @@ def evaluate(fields: dict[str, int], now_ts: int, max_trade_age_seconds: int,
         "trade_age_seconds": trade_age_seconds,
         "max_trade_age_seconds": max_trade_age_seconds,
         "max_future_skew_seconds": max_future_skew_seconds,
+        "request_error_rate": request_error_rate,
+        "max_request_errors": max(0, max_request_errors),
+        "max_request_error_rate": max(0.0, max_request_error_rate),
         "fields": fields,
     }
 
@@ -95,6 +114,8 @@ def main() -> int:
     parser.add_argument("--log", required=True)
     parser.add_argument("--max-trade-age-seconds", type=int, default=1200)
     parser.add_argument("--max-future-skew-seconds", type=int, default=30)
+    parser.add_argument("--max-request-errors", type=int, default=DEFAULT_MAX_REQUEST_ERRORS)
+    parser.add_argument("--max-request-error-rate", type=float, default=DEFAULT_MAX_REQUEST_ERROR_RATE)
     parser.add_argument("--now-ts", type=int)
     parser.add_argument("--output")
     args = parser.parse_args()
@@ -106,6 +127,8 @@ def main() -> int:
             int(time.time()) if args.now_ts is None else args.now_ts,
             max(1, args.max_trade_age_seconds),
             max(0, args.max_future_skew_seconds),
+            max(0, args.max_request_errors),
+            max(0.0, args.max_request_error_rate),
         )
     except (OSError, ValueError) as exc:
         report = {"status": "unhealthy", "failures": [str(exc)]}

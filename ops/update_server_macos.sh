@@ -58,40 +58,31 @@ paper_runtime_healthy() {
   [[ "$version" =~ ^[0-9]+$ ]] || return 1
   supervisor="$APP_DIR/$run_root_rel/runtime_supervisor.csv"
   [[ -s "$supervisor" ]] || return 1
-  "$PYTHON_BIN" - "$supervisor" "$version" "$APP_DIR/$run_root_rel" <<'PY'
+
+  if (( version >= 5 )); then
+    "$PYTHON_BIN" "$APP_DIR/scripts/v5_runtime_readiness.py" \
+      --run-root "$APP_DIR/$run_root_rel" \
+      --supervisor-max-age 60 \
+      --allocator-max-age 30 \
+      --model-output-max-age 120 \
+      --startup-grace 600 >/dev/null
+    return
+  fi
+
+  "$PYTHON_BIN" - "$supervisor" <<'PY'
 import csv
-import json
-import math
 import sys
 import time
 from pathlib import Path
 supervisor = Path(sys.argv[1])
-version = int(sys.argv[2])
-run_root = Path(sys.argv[3])
 with supervisor.open(newline='', encoding='utf-8') as handle:
     rows = list(csv.DictReader(handle))
-assert rows, 'empty runtime supervisor'
+assert rows
 row = rows[-1]
-assert row.get('recorder_alive') == '1', row
-assert row.get('broker_alive') == '1', row
-assert row.get('allocator_alive' if version >= 5 else 'terminal_alive') == '1', row
-assert time.time() - float(row['timestamp']) <= 60, row
-if version >= 5:
-    allocator = json.loads((run_root / 'allocator_status.json').read_text())
-    with (run_root / 'strategy_status.csv').open(newline='', encoding='utf-8') as handle:
-        strategies = list(csv.DictReader(handle))
-    assert allocator.get('paper_only') is True, allocator
-    assert int(allocator.get('models_expected', 0)) == 5, allocator
-    assert int(allocator.get('models_alive', 0)) == 5, allocator
-    assert {item.get('name') for item in strategies} == {'micro', 'pca', 'graph', 'semantic', 'external'}, strategies
-    total = float(allocator.get('reserve_fraction', 0.0)) + sum(float(item['capital_fraction']) for item in strategies)
-    assert math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9), (total, strategies)
-    stale = {
-        str(item.get('name')): float(item['status_age_seconds'])
-        for item in strategies
-        if float(item['status_age_seconds']) > 120
-    }
-    assert not stale, f'stale strategy status: {stale}'
+assert row.get('recorder_alive') == '1'
+assert row.get('broker_alive') == '1'
+assert row.get('terminal_alive') == '1'
+assert time.time() - float(row['timestamp']) <= 60
 PY
 }
 
@@ -195,10 +186,11 @@ ctest --test-dir build --output-on-failure
   tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py \
   tests/test_monitoring_latest_exporter.py tests/test_monitoring_v5_exporter.py \
   tests/test_grafana_fast_paper_contract.py tests/test_grafana_multi_strategy_contract.py \
-  tests/test_multi_strategy_paper.py -v
+  tests/test_multi_strategy_paper.py tests/test_v5_runtime_readiness.py -v
 "$PYTHON_BIN" -m py_compile \
   monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_v5.py monitoring/exporter_latest.py \
-  scripts/multi_strategy_paper.py scripts/build_v4_intents.py scripts/merge_v4_intents.py \
+  scripts/multi_strategy_paper.py scripts/v5_runtime_readiness.py \
+  scripts/build_v4_intents.py scripts/merge_v4_intents.py \
   scripts/walk_forward_v4.py scripts/tiny_live_pilot.py
 bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh ops/apply_runtime_config_macos.sh
 "$PYTHON_BIN" -m json.tool config/paper_v5.json >/dev/null
@@ -259,7 +251,7 @@ bash "$APP_DIR/ops/apply_runtime_config_macos.sh" || rollback "runtime configura
 log "Restarting manifest-selected paper services"
 sudo -n /usr/local/sbin/polymarket-service-control restart || rollback "service restart failed"
 
-log "Waiting for production health (up to $((RUNTIME_HEALTH_ATTEMPTS * 2)) seconds for cold-start model refresh)"
+log "Waiting for production health (up to $((RUNTIME_HEALTH_ATTEMPTS * 2)) seconds for process/readiness confirmation)"
 if ! wait_for_runtime_health; then
   rollback "post-deploy paper runtime health checks failed"
 fi

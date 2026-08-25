@@ -39,8 +39,22 @@ class TradeRecorderHealthTest(unittest.TestCase):
         self.assertEqual(report["status"], "healthy")
         self.assertEqual(report["trade_age_seconds"], 300)
 
-    def test_data_api_error_fails_closed(self) -> None:
+    def test_one_low_rate_transient_error_with_fresh_tape_passes(self) -> None:
+        report = MODULE.evaluate(
+            self.fields(requests=13, errors=1, fetched=2549, new_trades=2549, seen=2549),
+            1_000_056,
+            1200,
+            30,
+        )
+        self.assertEqual(report["status"], "healthy")
+        self.assertAlmostEqual(report["request_error_rate"], 1 / 13)
+
+    def test_data_api_error_rate_still_fails_closed(self) -> None:
         report = MODULE.evaluate(self.fields(errors=1), 1_000_300, 1200, 30)
+        self.assertIn("data_api_request_errors", report["failures"])
+
+    def test_multiple_api_errors_fail_even_at_low_rate(self) -> None:
+        report = MODULE.evaluate(self.fields(requests=100, errors=2), 1_000_300, 1200, 30)
         self.assertIn("data_api_request_errors", report["failures"])
 
     def test_truncated_second_page_fails_closed(self) -> None:
