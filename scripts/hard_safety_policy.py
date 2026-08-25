@@ -45,16 +45,17 @@ _RUNTIME_FLAG_ALT = "|".join(re.escape(key.replace("_", "-")) for key in RUNTIME
 _RUNTIME_ENV_ALT = "|".join(re.escape(key.upper()) for key in RUNTIME_PROTECTED_KEYS)
 RUNTIME_HARD_SAFETY_WRITE_RE = re.compile(
     rf"(?:"
-    rf"\[\s*['\"](?:{_RUNTIME_KEY_ALT})['\"]\s*\]\s*="
+    rf"\[\s*['\"](?:{_RUNTIME_KEY_ALT})['\"]\s*="
     rf"|['\"](?:{_RUNTIME_KEY_ALT})['\"]\s*:"
     rf"|--(?:{_RUNTIME_FLAG_ALT})\b"
     rf"|\b(?:{_RUNTIME_ENV_ALT})\s*="
     rf")"
 )
 
-# Current user-authorized V6 PAPER envelope. These are ceilings, not targets:
-# model/research code may stay stricter, but governance must not reject V6 solely
-# because the approved paper caps are above the historical 2.5% / 8% / 45% values.
+# Current user-authorized V6 PAPER envelope. These are ceilings/floors, not
+# targets. Historical 2.5% / 8% / 45% caps are deliberately not immutable V6
+# safety limits. The economic envelope may be used only through normal
+# research -> trusted governance -> integration provenance.
 V6_AUTHORIZED_CEILINGS = {
     "max_drawdown": 0.15,
     "max_market_fraction": 0.05,
@@ -62,7 +63,25 @@ V6_AUTHORIZED_CEILINGS = {
     "max_gross_fraction": 0.70,
     "global_max_drawdown": 0.15,
     "global_max_gross_fraction": 0.70,
+    "fractional_kelly": 0.25,
+    "max_trade_usd": 125.0,
+    "hard_arb_max_trade_usd": 125.0,
 }
+V6_AUTHORIZED_FLOORS = {
+    "min_liquidity": 2.0,
+    "min_net_edge": 0.00005,  # 0.5 bp after executable costs
+    "uncertainty_penalty": 0.0,
+    "intent_min_edge": 0.00005,
+    "hard_arb_min_net_edge": 0.00005,
+}
+V6_CAPITAL_FRACTIONS = (
+    "micro_maker_capital_fraction",
+    "micro_taker_capital_fraction",
+    "relative_value_capital_fraction",
+    "hard_arb_capital_fraction",
+    "external_capital_fraction",
+    "reserve_fraction",
+)
 
 
 def _number(value: Any) -> float | None:
@@ -93,6 +112,15 @@ def _compare_limit(
         errors.append(
             f"protected hard-safety limit weakened: {label} allowed<={allowed:g}, got {current_number:g}"
         )
+
+
+def _compare_floor(errors: list[str], label: str, current_value: Any, floor: float) -> None:
+    current_number = _number(current_value)
+    if current_number is None:
+        errors.append(f"protected paper admission bound removed or non-numeric: {label}")
+        return
+    if current_number < floor - 1e-12:
+        errors.append(f"authorized PAPER envelope violated: {label} required>={floor:g}, got {current_number:g}")
 
 
 def _strategies(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -182,6 +210,57 @@ def compare_paper_config(base: dict[str, Any], current: dict[str, Any], path: st
                     current_value,
                     ceiling=_ceiling(path, key),
                 )
+        if _is_v6(path):
+            if "min_net_edge" in current_overrides:
+                _compare_floor(
+                    errors,
+                    f"{path}:strategy[{name}].min_net_edge",
+                    current_overrides.get("min_net_edge"),
+                    V6_AUTHORIZED_FLOORS["min_net_edge"],
+                )
+            for key in ("fractional_kelly", "max_trade_usd"):
+                if key in current_overrides:
+                    _compare_limit(
+                        errors,
+                        f"{path}:strategy[{name}].{key}",
+                        None,
+                        current_overrides.get(key),
+                        ceiling=V6_AUTHORIZED_CEILINGS[key],
+                    )
+
+    if _is_v6(path):
+        for key in ("min_liquidity", "min_net_edge", "uncertainty_penalty"):
+            _compare_floor(errors, f"{path}:{key}", current.get(key), V6_AUTHORIZED_FLOORS[key])
+        for key in ("fractional_kelly", "max_trade_usd"):
+            _compare_limit(
+                errors,
+                f"{path}:{key}",
+                None,
+                current.get(key),
+                ceiling=V6_AUTHORIZED_CEILINGS[key],
+            )
+
+        v6 = current.get("v6") if isinstance(current.get("v6"), dict) else {}
+        if v6.get("paper_only") is not True:
+            errors.append(f"paper-only separation weakened: {path}:v6.paper_only must remain true")
+        for key in ("intent_min_edge", "hard_arb_min_net_edge"):
+            _compare_floor(errors, f"{path}:v6.{key}", v6.get(key), V6_AUTHORIZED_FLOORS[key])
+        _compare_limit(
+            errors,
+            f"{path}:v6.hard_arb_max_trade_usd",
+            None,
+            v6.get("hard_arb_max_trade_usd"),
+            ceiling=V6_AUTHORIZED_CEILINGS["hard_arb_max_trade_usd"],
+        )
+        fractions: list[float] = []
+        for key in V6_CAPITAL_FRACTIONS:
+            value = _number(v6.get(key))
+            if value is None or value < -1e-12:
+                errors.append(f"invalid V6 capital allocation: {path}:v6.{key}")
+            else:
+                fractions.append(value)
+        if len(fractions) == len(V6_CAPITAL_FRACTIONS) and sum(fractions) > 1.0 + 1e-12:
+            errors.append(f"V6 paper capital allocations exceed 100%: {path}:v6 total={sum(fractions):g}")
 
     return errors
 
@@ -287,9 +366,10 @@ def render(errors: list[str], checked: list[str]) -> str:
         "",
         f"- paper/runtime surfaces checked: {len(checked)}",
         f"- hard-safety violations: {len(errors)}",
-        "- V6 authorized PAPER ceilings: drawdown 15%, market 5%, event 15%, gross 70%",
-        "- paper alpha/admission aggression below those ceilings remains allowed; historical 2.5% / 8% / 45% values are not treated as immutable V6 caps",
-        "- runtime rule: protected hard-safety controls may be inherited from versioned config, not newly hidden in runtime/materialization overrides",
+        "- V6 authorized PAPER envelope: drawdown <=15%, market <=5%, event <=15%, gross <=70%, Kelly <=25%, max trade <=$125",
+        "- V6 executable admission floors: min liquidity >=$2, post-cost min edge >=0.5 bp, uncertainty penalty >=0",
+        "- historical 2.5% / 8% / 45% values are not immutable V6 caps; the authorized envelope still requires normal research/governance/integration provenance",
+        "- runtime rule: protected drawdown/concentration/gross/paper-only controls may be inherited from versioned config, not newly hidden in runtime/materialization overrides",
     ]
     for item in checked:
         lines.append(f"- checked: `{item}`")
