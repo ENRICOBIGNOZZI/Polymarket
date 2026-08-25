@@ -54,6 +54,24 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           python3 -m unittest tests/test_fast_runtime_contract.py -v
 
+      - name: Build exact-head V6 public relay cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p private-single-writer-evidence
+          python3 scripts/v6_market_snapshot.py \
+            --output private-single-writer-evidence/relay-source-cache.json \
+            --status private-single-writer-evidence/relay-source-status.json \
+            --markets 300 --min-markets 100 --min-liquidity 10 \
+            --max-cache-age-seconds 90 | tee private-single-writer-evidence/relay-source-summary.json
+          python3 - private-single-writer-evidence/relay-source-cache.json <<'PY'
+          import json,sys,time
+          value=json.load(open(sys.argv[1],encoding="utf-8"))
+          assert value.get("schema") == "polymarket_v6_market_proxy_cache_v1"
+          assert time.time()-float(value["timestamp"]) <= 90
+          assert len(value.get("markets") or []) >= 100
+          PY
+
       - name: Select existing Tailscale credential mode
         id: tailscale_auth
         shell: bash
