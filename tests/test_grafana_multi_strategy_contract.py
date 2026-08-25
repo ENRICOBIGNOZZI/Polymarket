@@ -16,6 +16,8 @@ class GrafanaMultiStrategyContractTests(unittest.TestCase):
         # UID is deliberately retained for in-place Grafana upgrades; changing it
         # would create a second dashboard on already-provisioned servers.
         self.assertEqual(dashboard["uid"], "polymarket-multi-strategy-v5")
+        self.assertEqual(dashboard["title"], "Polymarket Multi-Strategy")
+        self.assertNotIn("v5", {str(tag).lower() for tag in dashboard.get("tags", [])})
         panels = dashboard["panels"]
         self.assertEqual(len({panel["id"] for panel in panels}), len(panels))
         titles = {panel["title"] for panel in panels}
