@@ -1,0 +1,34 @@
+{
+  "schema": "lf_v6_threshold_relation_evidence_v1",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "current_main_sha": "9695c4b3002526c8b747dfd6dad0bda3f12a0961",
+  "scope": "research-only typed threshold relation integrity and opportunity coverage on live V6",
+  "material_findings": [
+    "The current V6 threshold family key discards day-of-month while structural_intents assumes a one-dollar terminal payoff floor for paired threshold relations. Different expiries inside the same month/year can therefore be grouped even though the implication is not valid across dates.",
+    "The incumbent unsuffixed numeric ranking can choose the calendar year instead of an integer/count threshold.",
+    "The incumbent direction vocabulary does not recognize or-more/or-fewer constructions.",
+    "The incumbent optional b suffix can consume the first letter of the following word by, turning $100,000 by ... into a 1e14 threshold.",
+    "The live V6 intent guard currently rejects STRUCTURAL intents, so this is fail-closed for live paper but blocks safe structural opportunity coverage."
+  ],
+  "deterministic_counterexample": {
+    "low_contract": "BTC > 100000 on 2026-08-25",
+    "high_contract": "BTC > 150000 on 2026-08-31",
+    "path": {"btc_2026_08_25": 90000, "btc_2026_08_31": 160000},
+    "basket_payoff": 0,
+    "conclusion": "Cross-expiry YES(low)+NO(high) has no guaranteed $1 payoff floor."
+  },
+  "required_next_evidence": [
+    "Run incumbent and typed relation parsers on the same chronological 300/700-market V6 public universe.",
+    "Report recovered valid same-expiry families, rejected cross-expiry families and candidate turnover.",
+    "Verify the logical payoff floor for every structural bundle before using structural edge.",
+    "Require positive executable economics after 1x, 1.5x and 2x cost/legging stress."
+  ],
+  "safety": {
+    "max_drawdown_changed": false,
+    "kill_switch_changed": false,
+    "concentration_changed": false,
+    "authenticated_execution_enabled": false,
+    "live_champion_changed": false
+  },
+  "promotion": "blocked"
+}
