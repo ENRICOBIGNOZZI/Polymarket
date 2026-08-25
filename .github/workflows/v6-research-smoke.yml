@@ -10,9 +10,11 @@ on:
       - "config/paper_v6.json"
       - "config/v6_model_architecture.json"
       - "scripts/paper_v6_loop.sh"
+      - "scripts/paper_v6_loop_v2.sh"
       - "scripts/v6_*.py"
       - "tests/test_v6_model_contracts.py"
       - "tests/test_v6_runtime_contract.py"
+      - "tests/test_v6_execution_economics_v2.py"
       - ".github/workflows/v6-research-smoke.yml"
 
 permissions:
@@ -25,11 +27,12 @@ concurrency:
 jobs:
   research-smoke:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: Enforce isolated paper-only contract
         shell: bash
         run: |
@@ -42,115 +45,112 @@ jobs:
           event='${{ github.event_name }}'; head='${{ github.head_ref }}'; base_sha='${{ github.event.pull_request.base.sha }}'
           if event == 'pull_request':
               if head.startswith('integration/'):
-                  assert live['version'] == 6, 'V6 integration smoke requires the V6 live selector'
+                  assert live['version'] == 6
               else:
-                  assert base_sha, 'non-integration PR must expose its base SHA'
+                  assert base_sha
                   base_live=json.loads(subprocess.check_output(['git','show',f'{base_sha}:config/live_champion.json'],text=True))
-                  assert live == base_live, 'non-integration V6 smoke must preserve the base live champion selector'
+                  assert live == base_live, 'research smoke may not mutate live champion selector'
           assert float(cfg['max_drawdown']) <= .15;assert float(cfg['max_market_fraction']) <= .025;assert float(cfg['max_event_fraction']) <= .08;assert float(cfg['max_gross_fraction']) <= .45
           v=cfg['v6']; total=sum(float(v[k]) for k in ('micro_maker_capital_fraction','micro_taker_capital_fraction','relative_value_capital_fraction','hard_arb_capital_fraction','external_capital_fraction','reserve_fraction'));assert abs(total-1.0)<1e-9
           PY
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev
-      - name: Build V6 dependencies and deterministic contracts
+
+      - name: Build and deterministic V6 contracts
         shell: bash
         run: |
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
-          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py -v
-      - name: Live public-data relation probes
+          python3 -m unittest \
+            tests/test_v6_model_contracts.py \
+            tests/test_v6_runtime_contract.py \
+            tests/test_v6_execution_economics_v2.py \
+            tests/test_grafana_v6_operations_contract.py -v
+          python3 -m py_compile \
+            scripts/v6_market_common.py scripts/v6_micro_maker.py scripts/v6_micro_taker_v2.py \
+            scripts/v6_hard_arb_paper_v2.py scripts/v6_local_factor_v2.py scripts/v6_queue_filter.py \
+            scripts/v6_typed_structural.py scripts/v6_typed_structural_v2.py scripts/v6_runtime_status_v2.py \
+            monitoring/exporter_v6.py
+          bash -n scripts/paper_v6_loop_v2.sh
+          python3 -m json.tool monitoring/grafana/dashboards/polymarket-v6-model-operations.json >/dev/null
+
+      - name: Capture public trade tape
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p v6_evidence
-          python3 scripts/v6_relation_intents.py --config config/paper_v6.json --output v6_evidence/relation_raw.csv --status v6_evidence/relation_status.json --markets 300 --min-liquidity 10 --min-edge 0.0002 --max-trade-usd 60 --max-events 50 > v6_evidence/relation.log 2>&1 || true
-          python3 scripts/v6_intent_guard.py --input v6_evidence/relation_raw.csv --output v6_evidence/relation_guarded.csv --status v6_evidence/relation_guard_status.json --min-edge 0.0002 --stress-bps 10 --max-age-seconds 240 > v6_evidence/relation_guard.log 2>&1 || true
-          ./build/polymarket_negrisk_arb --config config/paper_v6.json --markets 300 --min-liquidity 10 --top 100 > v6_evidence/graph_hard_taker_scan.csv 2> v6_evidence/graph_hard_taker_errors.log || true
-      - name: Live public-data executable hard-arb paper probe
+          mkdir -p v6_evidence v6_evidence/maker v6_evidence/micro_taker v6_evidence/hard_arb
+          ./build/polymarket_trade_recorder --config config/paper_v6.json --run-dir v6_evidence --markets 300 --batch 40 --min-liquidity 10 --lookback-seconds 900 --once > v6_evidence/trade_recorder.log 2>&1 || true
+
+      - name: Live execution-aware V6 probes
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p v6_evidence/hard_arb
           python3 - <<'PY'
           import json
           from pathlib import Path
-          cfg=json.loads(Path('config/paper_v6.json').read_text()); cfg['starting_capital']=1500.0; cfg['run_dir']='v6_evidence/hard_arb'; Path('v6_evidence/hard_arb_config.json').write_text(json.dumps(cfg,indent=2,sort_keys=True)+'\n')
+          cfg=json.loads(Path('config/paper_v6.json').read_text())
+          for name,capital in [('maker',1200.0),('micro_taker',800.0),('hard_arb',1500.0)]:
+              child=dict(cfg); child['starting_capital']=capital; child['run_dir']=f'v6_evidence/{name}'
+              Path(f'v6_evidence/{name}_config.json').write_text(json.dumps(child,indent=2,sort_keys=True)+'\n')
           PY
-          python3 scripts/v6_hard_arb_paper.py --config v6_evidence/hard_arb_config.json --run-dir v6_evidence/hard_arb --markets 300 --min-liquidity 10 --max-events 50 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/hard_arb.log 2>&1 || true
-      - name: Live public-data FDR local-factor probe
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/v6_local_factor_intents.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/local_factor.log 2>&1 || true
-      - name: Live public-data maker economics probe
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p v6_evidence/maker
-          ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once > v6_evidence/maker.log 2>&1 || true
-      - name: Live public-data micro-taker causal warmup/markout probe
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p v6_evidence/micro_taker
+
+          python3 scripts/v6_relation_intents.py --config config/paper_v6.json --output v6_evidence/relation_raw.csv --status v6_evidence/relation_status.json --markets 300 --min-liquidity 10 --min-edge 0.0002 --max-trade-usd 60 --max-events 50 > v6_evidence/relation.log 2>&1 || true
+          python3 scripts/v6_intent_guard.py --input v6_evidence/relation_raw.csv --output v6_evidence/relation_guarded.csv --status v6_evidence/relation_guard_status.json --min-edge 0.0002 --stress-bps 10 --max-age-seconds 240 > v6_evidence/relation_guard.log 2>&1 || true
+          python3 scripts/v6_typed_structural_v2.py --config config/paper_v6.json --output v6_evidence/typed_structural.csv --status v6_evidence/typed_structural_status.json --markets 300 --min-liquidity 10 --min-edge 0.0002 --max-trade-usd 60 > v6_evidence/typed_structural.log 2>&1 || true
+          python3 scripts/v6_queue_filter.py --config config/paper_v6.json --input v6_evidence/relation_guarded.csv --input v6_evidence/typed_structural.csv --output v6_evidence/relation_fillable.csv --status v6_evidence/queue_filter_status.json --trade-tape v6_evidence/trade_tape.csv --min-edge 0.0002 --reserve-bps 10 --flow-lookback-seconds 900 --horizon-seconds 180 --min-leg-fill-probability 0.02 --min-joint-fill-probability 0.0005 --target-leg-fill-probability 0.20 --max-improve-ticks-per-leg 3 > v6_evidence/queue_filter.log 2>&1 || true
+
+          python3 scripts/v6_local_factor_v2.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --trade-tape v6_evidence/trade_tape.csv --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 --flow-lookback-seconds 900 --min-fill-probability 0.03 > v6_evidence/local_factor.log 2>&1 || true
+          python3 scripts/v6_hard_arb_paper_v2.py --config v6_evidence/hard_arb_config.json --run-dir v6_evidence/hard_arb --markets 300 --min-liquidity 10 --max-events 50 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/hard_arb.log 2>&1 || true
+          python3 scripts/v6_micro_maker.py --config v6_evidence/maker_config.json --run-dir v6_evidence/maker --trade-tape v6_evidence/trade_tape.csv --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --flow-lookback-seconds 900 --min-fill-probability 0.02 --target-fill-probability 0.15 --max-improve-ticks 2 > v6_evidence/maker.log 2>&1 || true
+
           for i in 1 2 3 4 5 6; do
-            python3 scripts/v6_micro_taker.py --config config/paper_v6.json --run-dir v6_evidence/micro_taker --markets 120 --min-liquidity 25 --horizon-seconds 5 --max-target-staleness-seconds 3 --max-trade-usd 15 --min-edge 0.0003 --slippage-bps 5 --max-positions 10 >> v6_evidence/micro_taker.log 2>&1 || true
+            python3 scripts/v6_micro_taker_v2.py --config v6_evidence/micro_taker_config.json --run-dir v6_evidence/micro_taker --trade-tape v6_evidence/trade_tape.csv --markets 120 --min-liquidity 25 --horizon-seconds 5 --max-target-staleness-seconds 3 --flow-lookback-seconds 180 --model-half-life-seconds 3600 --max-trade-usd 15 --min-edge 0.0003 --slippage-bps 5 --max-positions 10 >> v6_evidence/micro_taker.log 2>&1 || true
             sleep 2
           done
-      - name: Summarize V6 evidence
+
+      - name: Summarize execution-aware V6 evidence
         if: always()
         shell: bash
         run: |
           python3 - <<'PY'
-          import csv,json,re
+          import csv,json
           from pathlib import Path
           root=Path('v6_evidence'); root.mkdir(parents=True,exist_ok=True)
-          def js(name):
-              p=root/name
+          def js(path):
+              p=root/path
               try:return json.loads(p.read_text())
               except Exception:return {}
-          hard=(root/'graph_hard_taker_scan.csv').read_text(errors='ignore') if (root/'graph_hard_taker_scan.csv').exists() else ''
-          m=re.search(r'net_positive_pre_gas=(\d+)',hard)
-          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'local_factor':js('local_factor_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0}
-          state=root/'micro_taker/state.json'
-          if state.exists():
-              try:
-                  s=json.loads(state.read_text());samples=s.get('samples') or []
-                  labeled=[x for x in samples if isinstance(x,dict) and x.get('y') is not None]
-                  bad=[x for x in labeled if int(x.get('target_observation_ts') or 0)>int(x.get('ts') or 0)+5]
-                  lags=[int(x['target_staleness_seconds']) for x in labeled if x.get('target_staleness_seconds') is not None]
-                  summary['micro_taker_samples']=len(samples)
-                  summary['micro_taker_labeled']=len(labeled)
-                  summary['micro_taker_post_horizon_labels']=len(bad)
-                  summary['micro_taker_target_staleness_max_seconds']=max(lags) if lags else None
-                  summary['micro_taker_open_positions']=len(s.get('positions') or {})
-                  summary['micro_taker_signals_last_tick']=int(s.get('signals') or 0)
-                  summary['micro_taker_opened_last_tick']=int(s.get('opened') or 0)
-                  summary['micro_taker_best_edge_last_tick']=float(s.get('best_edge') or 0.0)
-                  summary['micro_taker_realized_pnl_total']=float(s.get('realized_pnl_total') or 0.0)
-                  summary['micro_taker_label_stats_last_tick']=s.get('label_stats_last_tick') or {}
-                  if bad: raise RuntimeError('micro taker used a post-horizon target observation')
-              except Exception as exc:
-                  summary['micro_taker_summary_error']=f'{type(exc).__name__}:{exc}'
-          fills=root/'micro_taker/fills.csv'
-          if fills.exists():
-              try:
-                  rows=list(csv.DictReader(fills.open(newline='',encoding='utf-8')))
-                  summary['micro_taker_buy_fills']=sum((r.get('action') or '').upper()=='BUY' for r in rows)
-                  summary['micro_taker_sell_fills']=sum((r.get('action') or '').upper()=='SELL' for r in rows)
-                  summary['micro_taker_closed_fill_pnl']=sum(float(r.get('pnl') or 0.0) for r in rows if (r.get('action') or '').upper()=='SELL')
-              except Exception as exc:
-                  summary['micro_taker_fills_summary_error']=f'{type(exc).__name__}:{exc}'
-          (root/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n');print(json.dumps(summary,indent=2,sort_keys=True))
-          if summary.get('micro_taker_post_horizon_labels',0): raise SystemExit('causal micro target contract failed')
+          def rows(path):
+              p=root/path
+              try:return list(csv.DictReader(p.open(newline='',encoding='utf-8')))
+              except Exception:return []
+          maker=js('maker/status.json'); micro=js('micro_taker/status.json'); hard=js('hard_arb/status.json'); local=js('local_factor_status.json'); relation=js('relation_status.json'); guard=js('relation_guard_status.json'); queue=js('queue_filter_status.json'); structural=js('typed_structural_status.json')
+          samples=(js('micro_taker/state.json').get('samples') or [])
+          labeled=[r for r in samples if isinstance(r,dict) and r.get('y') is not None]
+          post_horizon=[r for r in labeled if int(r.get('target_observation_ts') or 0)>int(r.get('ts') or 0)+5]
+          summary={
+              'paper_only':True,'authenticated_execution':False,
+              'trade_tape_rows':len(rows('trade_tape.csv')),
+              'micro_maker':{k:maker.get(k) for k in ('signals','posted','resting_orders','open_positions','best_edge','best_expected_fill_edge','rejected_flow','fee_unverified_markets','fills_last_tick')},
+              'micro_taker':{k:micro.get(k) for k in ('labeled_samples','signals','opened','best_edge','fee_unverified_markets','realized_pnl_total')},
+              'micro_taker_post_horizon_labels':len(post_horizon),
+              'hard_arb':{k:hard.get(k) for k in ('scanned_events','positive_candidates','entered','best_edge','fee_unverified_events','book_costing')},
+              'local_factor':local,'relation':relation,'relation_guard':guard,'queue_filter':queue,'typed_structural':structural,
+          }
+          (root/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n'); print(json.dumps(summary,indent=2,sort_keys=True))
+          if post_horizon: raise SystemExit('causal micro target contract failed')
+          if hard and hard.get('book_costing') != 'multi_level_vwap': raise SystemExit('hard arb did not use multi-level VWAP')
+          if local and local.get('factor') != 'leave_one_out_local_cross_section': raise SystemExit('local factor did not use LOO factor')
           PY
-          echo '## V6 live-data research smoke' >> "$GITHUB_STEP_SUMMARY"
+          echo '## V6 execution-aware live-data research smoke' >> "$GITHUB_STEP_SUMMARY"
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
           cat v6_evidence/summary.json >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload V6 research evidence
         if: always()
         uses: actions/upload-artifact@v4
