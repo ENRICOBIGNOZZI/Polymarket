@@ -87,9 +87,12 @@ try:
     value = json.loads(src.read_text(encoding='utf-8'))
     markets = value.get('markets') or []
     age = time.time() - float(value.get('timestamp') or 0)
+    # The seed contains discovery metadata only. Match the proxy's existing
+    # one-hour bounded stale-cache contract so a temporarily isolated paper node
+    # can start while immediately attempting an upstream refresh.
     valid = (
         value.get('schema') == 'polymarket_v6_market_proxy_cache_v1'
-        and 0 <= age <= 300
+        and 0 <= age <= 3600
         and isinstance(markets, list) and len(markets) > 0
         and all(isinstance(row, dict) and str(row.get('id') or '') and str(row.get('conditionId') or '') for row in markets)
     )
