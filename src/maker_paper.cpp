@@ -136,10 +136,10 @@ pm::MarketTiming position_timing(const Position& p) {
 class MakerPaper {
 public:
     MakerPaper(pm::Config cfg, std::string run_dir, double min_edge, double max_order_usd,
-               std::int64_t ttl, std::int64_t hold, double adverse_mult)
+               std::int64_t ttl, std::int64_t hold, double adverse_mult, double max_queue_ratio)
         : cfg_(std::move(cfg)), api_(cfg_), run_dir_(std::move(run_dir)), min_edge_(min_edge),
           max_order_usd_(max_order_usd), ttl_(ttl), hold_(hold), adverse_mult_(adverse_mult),
-          cash_(cfg_.starting_capital), peak_equity_(cfg_.starting_capital) {
+          max_queue_ratio_(max_queue_ratio), cash_(cfg_.starting_capital), peak_equity_(cfg_.starting_capital) {
         fs::create_directories(run_dir_);
         load_state();
         ensure_files();
@@ -176,7 +176,7 @@ public:
         peak_equity_ = std::max(peak_equity_, eq);
         if (peak_equity_ > 0.0 && 1.0 - eq / peak_equity_ >= cfg_.max_drawdown) killed_ = true;
 
-        std::size_t signals = 0, posted = 0;
+        std::size_t signals = 0, posted = 0, queue_rejected = 0;
         if (!killed_) {
             for (const auto& m : markets) {
                 if (positions_.count(m.id) || orders_.count(m.id)) continue;
@@ -244,6 +244,13 @@ public:
                     std::max(c.book->min_order_size, 0.25 * std::max(1.0, touch_size(*c.book, true))));
                 if (shares < c.book->min_order_size || shares * limit > available_cash + 1e-9) continue;
 
+                const double queue_ahead = touch_size(*c.book, true);
+                const double queue_ratio = queue_ahead / std::max({shares, c.book->min_order_size, 1e-9});
+                if (max_queue_ratio_ > 0.0 && queue_ratio > max_queue_ratio_) {
+                    ++queue_rejected;
+                    continue;
+                }
+
                 Order o;
                 o.market_id = m.id;
                 o.event_id = m.event_id;
@@ -253,7 +260,7 @@ public:
                 o.token_id = c.token;
                 o.limit_price = limit;
                 o.shares = shares;
-                o.queue_ahead = touch_size(*c.book, true);
+                o.queue_ahead = queue_ahead;
                 o.created_ts = now;
                 o.game_start_ts = timing.game_start_ts;
                 o.timed_sports = timing.timed_sports;
@@ -275,6 +282,7 @@ public:
         std::cout << "maker_tick markets=" << markets.size()
                   << " signals=" << signals
                   << " posted=" << posted
+                  << " queue_rejected=" << queue_rejected
                   << " resting=" << orders_.size()
                   << " positions=" << positions_.size()
                   << " reserved=" << reserved_cash()
@@ -293,6 +301,7 @@ private:
     std::int64_t ttl_ = 300;
     std::int64_t hold_ = 180;
     double adverse_mult_ = 0.50;
+    double max_queue_ratio_ = 0.0;
     double cash_ = 0.0;
     double peak_equity_ = 0.0;
     bool killed_ = false;
@@ -634,6 +643,7 @@ int main(int argc, char** argv) {
         std::string run_dir = "runs/paper_v3_maker";
         std::size_t markets = 600;
         double min_liquidity = 100.0, min_edge = 0.003, max_order_usd = 75.0, adverse_mult = 0.50;
+        double max_queue_ratio = 0.0;
         std::int64_t ttl = 300, hold = 180;
         int interval = 10;
         bool loop = false;
@@ -652,20 +662,21 @@ int main(int argc, char** argv) {
             else if (a == "--ttl-seconds") ttl = std::stoll(next());
             else if (a == "--hold-seconds") hold = std::stoll(next());
             else if (a == "--adverse-selection-mult") adverse_mult = std::stod(next());
+            else if (a == "--max-queue-ratio") max_queue_ratio = std::stod(next());
             else if (a == "--interval") interval = std::stoi(next());
             else if (a == "--loop") loop = true;
             else if (a == "--once") loop = false;
             else if (a == "--help" || a == "-h") {
                 std::cout << "polymarket_maker_paper [--config FILE] [--run-dir DIR] [--markets N] [--min-edge X] "
                              "[--max-order-usd X] [--ttl-seconds N] [--hold-seconds N] "
-                             "[--adverse-selection-mult X] [--interval N] [--once|--loop]\n";
+                             "[--adverse-selection-mult X] [--max-queue-ratio X] [--interval N] [--once|--loop]\n";
                 return 0;
             } else {
                 throw std::runtime_error("Unknown argument: " + a);
             }
         }
         auto cfg = pm::Engine::load_config(config);
-        MakerPaper paper(cfg, run_dir, min_edge, max_order_usd, ttl, hold, adverse_mult);
+        MakerPaper paper(cfg, run_dir, min_edge, max_order_usd, ttl, hold, adverse_mult, max_queue_ratio);
         do {
             paper.tick(markets, min_liquidity);
             if (loop) std::this_thread::sleep_for(std::chrono::seconds(std::max(1, interval)));
