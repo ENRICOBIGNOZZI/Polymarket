@@ -36,9 +36,6 @@ jobs:
       SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
       SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
       SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
-      GRAFANA_HOSTNAME: mamma-portfolio
-      GRAFANA_FQDN: mamma-portfolio.tail1bae85.ts.net
-      GRAFANA_URL: http://mamma-portfolio.tail1bae85.ts.net
     steps:
       - name: Select existing Tailscale credential mode
         id: tailscale_auth
@@ -94,12 +91,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tailscale ping --until-direct=false --c 1 --timeout=10s "$GRAFANA_HOSTNAME"
-          getent hosts "$GRAFANA_FQDN"
           curl --fail --silent --show-error --retry 10 --retry-delay 2 --retry-all-errors \
-            "$GRAFANA_URL/api/health" | tee grafana-health.json
+            "http://$SERVER_HOST:3000/api/health" | tee grafana-health.json
           curl --fail --silent --show-error --retry 5 --retry-delay 2 --retry-all-errors \
-            "$GRAFANA_URL/api/search" > grafana-search.json
+            "http://$SERVER_HOST:3000/api/search" > grafana-search.json
           python3 - <<'PY'
           import json
           with open("grafana-search.json", encoding="utf-8") as f:
@@ -166,23 +161,12 @@ jobs:
           printf 'broker_pid=%s\n' "$broker_pid"
           printf 'allocator_pid=%s\n' "$allocator_pid"
 
-          python3 - "$run_root" <<'PY'
-          import csv
-          import json
-          import math
-          import pathlib
-          import sys
-          root = pathlib.Path(sys.argv[1])
-          allocator = json.loads((root / 'allocator_status.json').read_text())
-          rows = list(csv.DictReader((root / 'strategy_status.csv').open()))
-          assert allocator['paper_only'] is True
-          assert allocator['models_expected'] == 5
-          assert {row['name'] for row in rows} == {'micro', 'pca', 'graph', 'semantic', 'external'}
-          total = sum(float(row['capital_fraction']) for row in rows) + float(allocator['reserve_fraction'])
-          assert math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9), total
-          assert int(allocator['models_alive']) == 5
-          assert all(float(row['status_age_seconds']) <= 120 for row in rows)
-          PY
+          python3 scripts/v5_runtime_readiness.py \
+            --run-root "$run_root" \
+            --supervisor-max-age 60 \
+            --allocator-max-age 30 \
+            --model-output-max-age 120 \
+            --startup-grace 600
 
           python3 scripts/runtime_action_report.py \
             --run-root "$run_root" --external-signals data/external_signals.csv \
