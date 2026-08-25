@@ -111,7 +111,9 @@ class FastRuntimeContractTest(unittest.TestCase):
         self.assertIn('lsof -a -p "$pid" -d cwd -Fn', v6_loop)
         self.assertIn('[[ "$cwd" == "$ROOT" ]]', v6_loop)
         self.assertIn('stale_v6_loop_reaped=', v6_loop)
-        self.assertIn('reap_stale_v6_loops\nstart_proxy', v6_loop)
+        self.assertIn('reap_stale_v6_loops\nreap_stale_v6_proxy_listener\nreap_stale_v6_brokers\nstart_proxy', v6_loop)
+        self.assertIn('stale_v6_proxy_listener_reaped=', v6_loop)
+        self.assertIn('proxy_pid_owns_port', v6_loop)
 
     def test_private_runtime_canary_exercises_stale_loop_handoff_and_fail_closed(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "private-runtime-single-writer-validation.yml").read_text(
@@ -126,6 +128,9 @@ class FastRuntimeContractTest(unittest.TestCase):
         self.assertIn('singleton lock leaked after orphan handoff', workflow)
         self.assertIn('singleton lock leaked into descendants', workflow)
         self.assertIn('stale_v6_loop_reaped=$stale_pid', workflow)
+        self.assertIn('start_stale_proxy_listener()', workflow)
+        self.assertIn('stale_v6_proxy_listener_reaped=$stale_proxy_pid', workflow)
+        self.assertIn('new V6 proxy does not own the validation port', workflow)
         self.assertIn("historical relative `scripts/paper_v6_loop.sh` argv form", workflow)
         self.assertIn('fatal: stale V6 loop did not exit before startup', workflow)
         self.assertIn('resistant stale loop did not force fail-closed startup', workflow)
