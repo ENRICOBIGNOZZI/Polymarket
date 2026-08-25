@@ -1,0 +1,43 @@
+{
+  "schema": "v6_queue_aware_execution_research_v1",
+  "source_main_sha": "f37e316c1f46232e7b26fc379eb52404f5f04ff7",
+  "paper_only": true,
+  "problem": {
+    "live_candidate": "GRAPH_RV event 837321",
+    "limit_prices": [0.33, 0.36, 0.29],
+    "quoted_edge_per_share": 0.02,
+    "target_shares_per_leg_approx": 61.2245,
+    "queue_ahead_shares": [30849.0, 40035.5, 38851.4],
+    "queue_to_target": [503.87, 653.91, 634.57],
+    "fills_observed": 0,
+    "diagnosis": "join-at-bid reserves capital hundreds of target sizes behind displayed FIFO queue"
+  },
+  "change": {
+    "passive_queue_ratio_cap": 50.0,
+    "scope": ["GRAPH_RV passive intents", "local-factor passive intents"],
+    "behavior": "reject stale or extreme-queue passive bundles before broker capital reservation",
+    "micro_taker_markets_before": 250,
+    "micro_taker_markets_after": 500,
+    "micro_taker_min_edge_before": 0.0003,
+    "micro_taker_min_edge_after": 0.0003,
+    "micro_taker_max_trade_usd": 15.0,
+    "micro_taker_max_positions_before": 20,
+    "micro_taker_max_positions_after": 24,
+    "reason": "increase immediately executable opportunity breadth without lowering alpha admission"
+  },
+  "safety": {
+    "alpha_thresholds_lowered": false,
+    "drawdown_changed": false,
+    "gross_or_concentration_limits_changed": false,
+    "authenticated_execution_enabled": false,
+    "real_money": false,
+    "failure_mode": "fail closed by deleting filtered intent outputs before each queue-filter run"
+  },
+  "measurement": {
+    "persistent_output": "runs/paper_v6_live/execution_diagnostics.json",
+    "maker_metrics": ["resting_orders", "maker_buy_fill_events", "queue_to_remaining_p50", "queue_to_remaining_p90", "queue_to_remaining_max"],
+    "multileg_metrics": ["legs_with_any_fill", "closed_bundles", "unwound_bundles", "queue_to_remaining_p50", "queue_to_remaining_p90", "queue_to_remaining_max"],
+    "queue_filter_status": ["relation_queue_status.json", "local_factor_queue_status.json"]
+  },
+  "promotion_criterion": "CI green plus live-paper smoke showing queue filter operates fail-closed and does not reduce data/runtime health; subsequent trading quality judged from fill/completion/markout evidence rather than raw posted-order count"
+}
