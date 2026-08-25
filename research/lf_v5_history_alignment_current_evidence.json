@@ -1,0 +1,62 @@
+{
+  "schema": "lf_v5_history_alignment_research_v1",
+  "source_main_sha": "97a7de6807612d209f80903007d416236cfbb28d",
+  "validated_sha_at_research_start": "d17e2fe27ee678ddb2352035d58a0865b20976a7",
+  "finding": {
+    "component": "V5 Engine::pca_adjustments",
+    "history_storage": "unordered_map<string, deque<double>>",
+    "timestamp_persisted_to_csv": true,
+    "timestamp_restored_into_in_memory_history": false,
+    "cross_market_alignment": "last-T observation index rather than timestamp",
+    "structural_risk": "asynchronous or missing market observations can be treated as synchronous factor returns"
+  },
+  "deterministic_counterexample": {
+    "market_a_timestamps": [0, 1, 2, 3, 4],
+    "market_b_timestamps": [0, 2, 3, 4, 5],
+    "shared_latent_logit_states_by_observation_index": [0, 1, 0, 1, 0],
+    "incumbent_positional_correlation": 1.0,
+    "exact_common_one_bucket_interval_endpoints": [3, 4],
+    "timestamp_aligned_correlation": -1.0,
+    "interpretation": "The same asynchronous observations can flip from perfect positive to perfect negative correlation when aligned by actual common intervals. This is a model-integrity counterexample, not a live PnL estimate."
+  },
+  "current_public_lf_evidence": {
+    "live_smoke_sha": "d17e2fe27ee678ddb2352035d58a0865b20976a7",
+    "b1_usable_series": 0,
+    "b2_coherent_rows": 0,
+    "oos_trades": 0,
+    "oos_net_pnl_usd": 0,
+    "runtime_mtm_pnl_usd": -14.1219486088,
+    "runtime_gross_exposure_usd": 211.251094196,
+    "external_status": "BACKTESTING",
+    "external_stored_observations": 658,
+    "external_stored_price_snapshots": 1099,
+    "external_best_observed_candidate": "external:binance:return_1h:3600s",
+    "external_best_oos_predictions": 61,
+    "external_best_trades": 1,
+    "external_best_normal_pnl_per_share": -0.005,
+    "external_gate_passes": 0
+  },
+  "separation_from_existing_research": {
+    "pr_91": "Sparse covariance PSD integrity for standalone B2; distinct from V5 engine timestamp loss.",
+    "pr_124": "Residual unit-root significance; distinct from cross-market time alignment.",
+    "pr_128": "Relation-local factor capacity; distinct from timestamp synchronization.",
+    "pr_154": "Adds asynchronous-history changes to standalone stat-arb/PCA paths but does not timestamp-align Engine::pca_adjustments."
+  },
+  "required_common_sample_experiment": [
+    "persist timestamped V5 history points",
+    "resample each market onto one common chronological grid with a bounded as-of staleness rule",
+    "form logit returns only between common bucket endpoints",
+    "compare incumbent positional PCA, timestamp-aligned PCA, PSD-safe timestamp-aligned PCA, and relation-local timestamp-aligned PCA on identical rows",
+    "report subspace stability, hedge error, candidate survival/turnover, time-to-resolution buckets, maker/taker executable edge and 1x/1.5x/2x cost stress",
+    "require purged OOS realized portfolio PnL/drawdown before any integration"
+  ],
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "safety": {
+    "research_only": true,
+    "live_champion_changed": false,
+    "production_thresholds_changed": false,
+    "risk_or_oos_gates_changed": false,
+    "credentials_or_execution_changed": false,
+    "real_money_execution": false
+  }
+}
