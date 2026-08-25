@@ -42,6 +42,13 @@
     "semantic": 0.0,
     "external": 1.0
   },
+  "multi_strategy": {
+    "schema_version": 1,
+    "paper_only": true,
+    "global_max_drawdown": 0.15,
+    "global_max_gross_fraction": 0.45,
+    "description": "V6 capital-isolated model-specific paper sleeves; no operational fair-value mixture."
+  },
   "v6": {
     "paper_only": true,
     "micro_maker_capital_fraction": 0.12,
