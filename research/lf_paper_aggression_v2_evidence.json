@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_lf_paper_aggression_v2_evidence_v1",
   "evidence_state": "MORE_EVIDENCE_REQUIRED",
-  "source_main_sha": "c0a49925bae56f22f874ae8c84b44e62292e6390",
+  "source_main_sha": "5d3b99efeeda595073635132000171d394736342",
   "research_branch": "research/lf-paper-aggression-semantic-external-v2-20260825",
   "baseline_public_evidence": {
     "alpha_factory_generated_utc": "2026-08-25T05:37:47Z",
@@ -70,7 +70,8 @@
       "minimum_mapping_score": 0.70,
       "mapping_score_haircuts_confidence": true,
       "raw_features_are_not_converted_to_probabilities": true,
-      "preserve_prior_feed_on_refresh_failure": true
+      "preserve_prior_feed_on_refresh_failure": true,
+      "latest_main_source_health_fix_inherited": true
     }
   },
   "hard_safety_invariants": {
