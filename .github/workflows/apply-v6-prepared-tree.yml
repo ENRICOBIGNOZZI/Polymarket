@@ -1,0 +1,84 @@
+name: Apply validated V6 prepared tree
+
+on:
+  push:
+    branches: ["codex/v6-model-architecture"]
+    paths:
+      - ".github/workflows/apply-v6-prepared-tree.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-v6-prepared-tree
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PREPARED_TREE_SHA: cb0f2c3a53f9f475cacec851e6f1d9b9ade67450
+      TARGET_BRANCH: codex/v6-model-architecture
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create candidate commit from prepared tree
+        id: candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          parent_sha="$(git rev-parse HEAD)"
+          candidate_sha="$(
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/commits" \
+              -f message='Implement V6 model-specific Polymarket architecture' \
+              -f tree="$PREPARED_TREE_SHA" \
+              -f "parents[]=$parent_sha" \
+              --jq .sha
+          )"
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "candidate_sha=$candidate_sha" >> "$GITHUB_OUTPUT"
+          git fetch --no-tags origin "$candidate_sha"
+          git checkout --detach "$candidate_sha"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+
+      - name: Validate C++ and deterministic tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-v6 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-v6 --parallel 2
+          ctest --test-dir build-v6 --output-on-failure
+
+      - name: Validate Python, JSON, shell and repository contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q scripts monitoring tests
+          while IFS= read -r -d '' path; do python3 -m json.tool "$path" >/dev/null; done < <(find config -type f -name '*.json' -print0)
+          while IFS= read -r -d '' path; do bash -n "$path"; done < <(find scripts ops -type f -name '*.sh' -print0)
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+          python3 scripts/validate_scheduler_registry.py --root . --registry config/scheduler_registry.json --output /tmp/scheduler-registry-report.md
+          python3 scripts/validate_project_context.py --root . --output /tmp/project-context-validation.md
+
+      - name: Advance V6 branch to tested candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${TARGET_BRANCH}" --jq .object.sha)"
+          test "$current_sha" = "$GITHUB_SHA"
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/${TARGET_BRANCH}" \
+            -f sha="$CANDIDATE_SHA" -F force=false >/dev/null
+          echo "validated_v6_sha=$CANDIDATE_SHA"
