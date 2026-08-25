@@ -6,6 +6,7 @@ import csv
 import json
 import math
 import os
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -48,7 +49,7 @@ def parse_array(value: Any) -> list[Any]:
 
 def atomic_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}.{threading.get_ident()}")
     tmp.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(tmp, path)
 
