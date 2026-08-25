@@ -3,16 +3,18 @@
   "generated_date": "2026-08-25",
   "source_main_sha": "810c98da0661826bc19aae032b9893e867f238c7",
   "decision": "MORE_EVIDENCE_REQUIRED",
-  "finding": "The V5 PCA sleeve predicts a next standardized idiosyncratic return, converts it into a price-like q_yes, and then routes that q_yes through terminal binary Kelly sizing and resolved-outcome Brier scoring. A short-horizon mark-to-market forecast does not identify terminal payout probability.",
+  "finding": "The V5 PCA sleeve predicts a next standardized idiosyncratic return, converts it into a price-like q_yes, and then routes that q_yes through terminal binary Kelly sizing and resolved-outcome Brier scoring. A short-horizon mark-to-market forecast does not identify terminal payout probability. The in-memory PCA history also stores only prices, while bootstrap and live observations arrive on different cadences, so one index step is not a stable chronological horizon.",
   "current_v5_pca": {
     "capital_fraction": 0.25,
     "child_starting_capital_usd": 2500.0,
     "interval_seconds": 15,
+    "history_bootstrap_fidelity_minutes": 30,
     "pca_window": 720,
     "pca_min_history": 24,
     "pca_universe": 350,
     "pca_fractional_kelly": 0.12,
-    "pca_max_trade_usd": 75.0
+    "pca_max_trade_usd": 75.0,
+    "history_memory_type": "unordered_map<string,deque<double>>"
   },
   "deterministic_counterexample": {
     "current_mid": 0.50,
@@ -25,6 +27,28 @@
     "engine_fractional_kelly_fraction": 0.00979591836734694,
     "engine_fractional_kelly_dollars_before_other_caps": 24.4897959183673,
     "interpretation": "Identification counterexample only; not a live PnL estimate. The same one-step price forecast can coexist with terminal probabilities that imply either negative or positive terminal EV."
+  },
+  "configured_horizon_mix_diagnostic": {
+    "assumption": "one live observation appended per configured 15-second sleep; actual loop duration is processing time plus sleep, so these are cadence approximations",
+    "bootstrap_step_seconds": 1800,
+    "live_configured_sleep_seconds": 15,
+    "window_returns": 720,
+    "after_1h": {
+      "approx_live_returns": 240,
+      "approx_bootstrap_returns": 480,
+      "approx_live_fraction": 0.3333333333333333
+    },
+    "after_2h": {
+      "approx_live_returns": 480,
+      "approx_bootstrap_returns": 240,
+      "approx_live_fraction": 0.6666666666666666
+    },
+    "after_3h": {
+      "approx_live_returns": 720,
+      "approx_bootstrap_returns": 0,
+      "approx_live_fraction": 1.0
+    },
+    "interpretation": "Adjacent price differences from radically different elapsed times are treated as exchangeable one-step returns because timestamps are not retained in the PCA in-memory history. The estimation target therefore changes with runtime age unless history is explicitly time-aligned/resampled."
   },
   "latest_alpha_factory": {
     "generated_utc": "2026-08-25T05:20:03+00:00",
@@ -61,7 +85,7 @@
     }
   },
   "distinct_from_existing_research": [
-    "#174 timestamp alignment of V5 PCA history",
+    "#174 timestamp alignment of V5 PCA history; prerequisite and partially related to making chronological horizons explicit",
     "#184 overlapping-state finite-sample reversion bias",
     "#141 singleton confidence cancellation",
     "#165 resolution-complete terminal calibration inventory",
@@ -70,7 +94,7 @@
     "#128 relation-aligned factor capacity"
   ],
   "required_common_sample_experiment": [
-    "timestamp-align the PCA panel first",
+    "timestamp-align/resample the PCA panel first so the target horizon is explicitly chronological rather than an observation index",
     "evaluate PCA as an explicit mark-to-market model at fixed future horizons such as 15m, 30m, 1h and 6h using purged chronological event/time-clustered rows",
     "compare bounded cost-aware markout sizing against the incumbent terminal-binary Kelly interpretation",
     "if PCA state is used for terminal probability, fit a separate time-to-resolution calibration/decoder only on prior resolved events and report Brier, log-loss and calibration error",
