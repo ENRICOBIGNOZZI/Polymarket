@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "source_main_sha": "6d2d6d287ebad1ab9dcfc72186f25739992c78f6",
+  "generated_utc": "2026-08-25T03:21:49Z",
+  "research_area": "low_frequency_graph_constraints",
+  "finding": "The V5 graph sleeve converts a neg-risk event-level sum-to-one constraint projection into standalone single-market directional fair values, even though the structural constraint identifies basket mispricing rather than which individual outcome has positive physical expected value.",
+  "current_v5": {
+    "graph_enabled": true,
+    "graph_capital_fraction": 0.25,
+    "graph_max_sum_error": 0.35,
+    "paper_only": true
+  },
+  "deterministic_counterexample": {
+    "yes_midpoints": [0.22, 0.22, 0.22],
+    "yes_asks": [0.23, 0.23, 0.23],
+    "valid_true_probabilities": [0.10, 0.45, 0.45],
+    "midpoint_sum": 0.66,
+    "sum_error": 0.34,
+    "passes_current_sum_gate": true,
+    "equal_variance_graph_projection": [0.3333333333333333, 0.3333333333333333, 0.3333333333333333],
+    "outcome_1_graph_model_edge": 0.1033333333333333,
+    "outcome_1_true_ev": -0.13,
+    "complete_all_yes_basket_gross_profit_before_costs": 0.31,
+    "interpretation": "Both the projected vector and the true-probability vector satisfy the same sum-to-one event constraint. The constraint therefore cannot identify the sign of a single-leg physical expected value; the guaranteed structural trade is the complete basket when executable all-in cost is below one."
+  },
+  "fresh_alpha_factory": {
+    "generated_utc": "2026-08-25T03:06:05Z",
+    "status": "RESEARCHING",
+    "b2_candidates": 8,
+    "b2_raw_positive": 8,
+    "b2_maker_positive": 0,
+    "b2_best_maker_edge": -0.0000422745,
+    "oos_input_trades": 0,
+    "oos_selected_trades": 0,
+    "external_fresh_rows": 0,
+    "recommended_canary": "none"
+  },
+  "public_semantics_sources": [
+    "https://github.com/Polymarket/neg-risk-ctf-adapter/",
+    "https://docs.polymarket.com/trading/quickstart"
+  ],
+  "required_common_sample_experiment": [
+    "incumbent graph single-leg decisions",
+    "basket-only executable neg-risk arbitrage using all required legs",
+    "graph constraints used only as features/priors for an independently calibrated terminal-probability model",
+    "abstention when a complete cost-positive basket is unavailable and no independent directional probability exists"
+  ],
+  "metrics": [
+    "basket locked edge after fees/slippage/depth",
+    "partial-fill and leg-risk stress",
+    "single-leg terminal Brier/log-loss/calibration by time-to-resolution when an independent probability model exists",
+    "common-sample executable OOS PnL at 1x/1.5x/2x costs",
+    "turnover",
+    "drawdown",
+    "cross-sleeve covariance"
+  ],
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "safety": {
+    "production_code_changed": false,
+    "live_champion_changed": false,
+    "risk_or_oos_gate_changed": false,
+    "credentials_changed": false,
+    "real_money_execution": false
+  }
+}
