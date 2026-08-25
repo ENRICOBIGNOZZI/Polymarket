@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-08-25T13:35:44Z",
+  "source": {
+    "pull_request": 305,
+    "workflow_run": 32853863895,
+    "artifact_id": 9565503287,
+    "validation_sha": "1d7700d241a4f2c5f2117c936811e98ff615c496"
+  },
+  "chronology": {
+    "first_post_timestamp": 1787664823,
+    "last_maker_tick_timestamp": 1787664866,
+    "forward_public_tape_new_trades_observed_between_ticks": 7,
+    "maker_positions_after_forward_window": 0,
+    "maker_fills_after_forward_window": 0
+  },
+  "admission": {
+    "signals_first_tick": 42,
+    "posted_orders": 8,
+    "queue_skipped": 33,
+    "improved_orders": 0,
+    "resting_orders_end": 8,
+    "reserved_cash_end_usd": 180.0,
+    "max_queue_multiple_gate": 6.0
+  },
+  "posted_order_queue_multiples": [
+    3.999997,
+    3.999996,
+    4.000000,
+    4.000000,
+    4.000005,
+    4.796473,
+    5.983959,
+    5.601707
+  ],
+  "posted_order_price_range": [0.002, 0.015],
+  "posted_order_queue_ahead_shares_range": [1661.78, 73806.5],
+  "posted_tokens_with_compatible_post_entry_sell_trades": 0,
+  "posted_tokens_total": 8,
+  "structural_finding": {
+    "status": "BLOCKING_EXECUTION_DEFECT",
+    "decision": "FLOW_HAZARD_REQUIRED",
+    "reason": "The maker sizes many orders at approximately 25% of displayed bid touch before applying a queue-ahead multiple gate. For non-cash-binding orders this mechanically makes queue_ahead / own_shares approximately 4, so a max_queue_multiple=6 gate admits large dead queues even when observed post-entry compatible sell flow is zero. The forward-causal smoke therefore demonstrates that queue-multiple admission alone is not a fill-hazard model.",
+    "required_challenger": "Gate or rank maker entry/reprice by causal compatible contra-flow hazard and edge-weighted fill probability; cancel/recycle dead queues; allow inside-spread improvement only when incremental price cost is paid by post-cost edge. Do not convert to taker solely to manufacture fills."
+  },
+  "safety": {
+    "paper_only": true,
+    "max_drawdown_unchanged": 0.15,
+    "kill_switch_unchanged": true,
+    "authenticated_execution_prohibited": true
+  }
+}
