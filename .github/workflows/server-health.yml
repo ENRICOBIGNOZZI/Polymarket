@@ -128,18 +128,14 @@ jobs:
           test "$head_sha" = "$validated_sha"
           git merge-base --is-ancestor "$validated_sha" "$main_sha"
 
-          readarray -t champion < <(python3 - <<'PY'
+          champion_meta="$(python3 - <<'PY'
           import json
           from pathlib import Path
           m=json.loads(Path('config/live_champion.json').read_text())
-          print(int(m['version']))
-          print(m['run_root'])
-          print(Path(m['run_root']).name)
+          print(f"{int(m['version'])}\t{m['run_root']}\t{Path(m['run_root']).name}")
           PY
-          )
-          version="${champion[0]}"
-          run_root_rel="${champion[1]}"
-          run_name="${champion[2]}"
+          )"
+          IFS=$'\t' read -r version run_root_rel run_name <<<"$champion_meta"
           [[ "$version" == "5" || "$version" == "6" ]]
           run_root="$HOME/polymarket/$run_root_rel"
           # V5 compatibility example retained for rollout tooling: runs/paper_v5_live
