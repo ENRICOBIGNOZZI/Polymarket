@@ -70,20 +70,23 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
 
     def test_non_draft_integration_requires_numbered_and_approved_source(self):
         rejected = self.run_policy("integration/alpha","No numbered provenance yet.",["config/paper_v5.json"],labels=[],draft=False)
-        self.assertNotEqual(rejected.returncode, 0); self.assertIn("numbered source research PR", rejected.stdout)
-        body = "Source research PR/branch/commit: #123\n"
+        self.assertNotEqual(rejected.returncode, 0); self.assertIn("bind exact source provenance", rejected.stdout)
+        approved_sha = "0123456789abcdef0123456789abcdef01234567"
+        body = f"Source research PR/branch/commit: #123 / research/alpha / {approved_sha}\n"
         missing_source = self.run_policy("integration/alpha",body,["config/paper_v5.json"],labels=["autonomous-promotion-approved"],draft=False)
         self.assertNotEqual(missing_source.returncode, 0); self.assertIn("source research metadata", missing_source.stdout)
         approved_source = {
             "number": 123,
             "headRefName": "research/alpha",
+            "headRefOid": approved_sha,
             "body": "research candidate",
-            "comments": [{"createdAt":"2026-08-25T00:00:00Z","authorAssociation":"OWNER","body":"Research Governance — APPROVED_FOR_INTEGRATION"}],
+            "comments": [{"createdAt":"2026-08-25T00:00:00Z","authorAssociation":"OWNER","body":f"Research Governance — APPROVED_FOR_INTEGRATION\nExact validated head: `{approved_sha}`"}],
             "reviews": [],
         }
         accepted = self.run_policy("integration/alpha",body,["config/paper_v5.json"],labels=["autonomous-promotion-approved"],draft=False,source_research=approved_source)
         self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
         self.assertIn("source_research_verdict: `APPROVED_FOR_INTEGRATION`", accepted.stdout)
+        self.assertIn("source_research_approved_sha: `" + approved_sha + "`", accepted.stdout)
         self.assertIn("automatic_paper_promotion: `True`", accepted.stdout)
         self.assertIn("manual_approval_labels_required: `False`", accepted.stdout)
 
