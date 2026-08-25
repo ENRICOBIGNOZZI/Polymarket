@@ -102,6 +102,45 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
         self.assertIn("scripts/portfolio_supervisor.py", completed.stdout)
         self.assertIn("scripts/install_cross_venue_credentials.sh", completed.stdout)
 
+    def test_normal_branch_cannot_bypass_versioned_model_specific_runtime_surfaces(self):
+        changed = [
+            "scripts/v6_external_bridge.py",
+            "scripts/v6_hard_arb_paper.py",
+            "scripts/v6_intent_guard.py",
+            "scripts/v6_local_factor_intents.py",
+            "scripts/v6_materialize_configs.py",
+            "scripts/v6_micro_taker.py",
+            "scripts/v6_relation_intents.py",
+        ]
+        completed = self.run_policy("fix/v6-runtime-model", changed, body="V6 paper model runtime fix")
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("model/runtime work cannot change", completed.stdout)
+        for path in changed:
+            self.assertIn(path, completed.stdout)
+
+    def test_draft_research_may_hold_versioned_model_specific_runtime_surfaces(self):
+        completed = self.run_policy(
+            "research/v6-runtime-model",
+            ["scripts/v6_micro_taker.py", "scripts/v6_local_factor_intents.py"],
+            draft=True,
+            body="V6 model research",
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("policy: `pass`", completed.stdout)
+
+    def test_shadow_label_rejects_versioned_model_specific_runtime_surfaces(self):
+        completed = self.run_policy(
+            "research/v6-runtime-shadow",
+            ["scripts/v6_external_bridge.py", "scripts/v6_intent_guard.py"],
+            labels=["shadow-isolated"],
+            draft=False,
+            body="V6 shadow model measurement",
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("shadow-isolated code cannot modify", completed.stdout)
+        self.assertIn("scripts/v6_external_bridge.py", completed.stdout)
+        self.assertIn("scripts/v6_intent_guard.py", completed.stdout)
+
     def test_sensitive_integration_cannot_leave_draft_with_unapproved_source(self):
         completed = self.run_policy(
             "integration/aggressive-v5",
@@ -156,6 +195,17 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
             ["src/engine.cpp", "config/live_champion.json"],
             draft=True,
             body="staged model candidate without approved research provenance",
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("sensitive integration PR must link a numbered source research PR", completed.stdout)
+        self.assertIn("must provide approved source research metadata", completed.stdout)
+
+    def test_versioned_runtime_integration_requires_approved_source(self):
+        completed = self.run_policy(
+            "integration/v6-runtime-model",
+            ["scripts/v6_micro_taker.py"],
+            draft=True,
+            body="staged V6 model runtime without approved research provenance",
         )
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("sensitive integration PR must link a numbered source research PR", completed.stdout)
