@@ -3,7 +3,9 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -24,6 +26,7 @@ class V6RuntimeContractTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.relations = load_script("v6_relation_intents_test", "scripts/v6_relation_intents.py")
         cls.local_factor = load_script("v6_local_factor_intents_test", "scripts/v6_local_factor_intents.py")
+        cls.single_writer = load_script("v6_single_writer_launcher_test", "scripts/v6_single_writer_launcher.py")
 
     def test_v6_runtime_exists_with_manifest_selected_paper_champion(self) -> None:
         champion = json.loads((ROOT / "config/live_champion.json").read_text())
@@ -105,6 +108,27 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("v6_micro_taker.py", loop)
         self.assertIn("v6_hard_arb_paper.py", loop)
         self.assertIn("polymarket_maker_paper", loop)
+
+    def test_stateful_v6_one_shot_workers_are_single_writer(self) -> None:
+        loop = (ROOT / "scripts/paper_v6_loop.sh").read_text()
+        self.assertIn('v6_single_writer_launcher.py --lock "$RUN_ROOT/micro_taker/single_writer.lock" --name micro_taker', loop)
+        self.assertIn('v6_single_writer_launcher.py --lock "$RUN_ROOT/hard_arb/single_writer.lock" --name hard_arb', loop)
+
+    def test_single_writer_lock_rejects_concurrent_owner_and_recovers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock = Path(tmpdir) / "worker.lock"
+            first = self.single_writer.acquire_lock(lock)
+            self.assertIsNotNone(first)
+            try:
+                second = self.single_writer.acquire_lock(lock)
+                self.assertIsNone(second)
+            finally:
+                assert first is not None
+                os.close(first)
+            third = self.single_writer.acquire_lock(lock)
+            self.assertIsNotNone(third)
+            assert third is not None
+            os.close(third)
 
     def test_v6_research_smoke_preserves_base_live_selector(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "v6-research-smoke.yml").read_text()
