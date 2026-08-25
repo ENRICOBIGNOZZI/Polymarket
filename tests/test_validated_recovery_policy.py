@@ -8,11 +8,13 @@ WORKFLOW = ROOT / ".github" / "workflows" / "research-policy.yml"
 
 
 class ValidatedRecoveryPolicyTest(unittest.TestCase):
-    def test_recovery_requires_explicit_marker_and_missing_base_pr_provenance(self):
+    def test_recovery_requires_explicit_marker_and_unprovenanced_commit_after_validated_ref(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("Validated rollback recovery: true", text)
-        self.assertIn("base_merged_pr=", text)
-        self.assertIn('[[ -z "$base_merged_pr" ]]', text)
+        self.assertIn("unprovenanced_commit=", text)
+        self.assertIn('[[ -n "$unprovenanced_commit" ]]', text)
+        self.assertIn('git rev-list --reverse "${validated_sha}..${base_sha}"', text)
+        self.assertIn('repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/pulls', text)
 
     def test_recovery_is_exactly_bound_to_existing_validated_ref(self):
         text = WORKFLOW.read_text(encoding="utf-8")
