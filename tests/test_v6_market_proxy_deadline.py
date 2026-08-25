@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import json
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -82,6 +83,39 @@ class V6MarketProxyDeadlineTests(unittest.TestCase):
         stale = p.cached_page(1, 0, 10.0, proxy.STALE_CACHE_SECONDS)
 
         self.assertEqual(stale, p.rows)
+
+    def test_stale_relay_cache_returns_before_background_refresh(self) -> None:
+        p = self.make_proxy()
+        p.rows = [{"id": "relay", "conditionId": "relay", "liquidityNum": 25.0}]
+        p.ts = time.time() - 1800.0
+        p.source = "relay"
+        refresh_started = threading.Event()
+        allow_refresh = threading.Event()
+
+        def blocked_refresh(*_: object) -> list[dict[str, object]]:
+            refresh_started.set()
+            allow_refresh.wait(timeout=3.0)
+            raise RuntimeError("upstream still unavailable")
+
+        p.gamma_legacy_rows = blocked_refresh  # type: ignore[method-assign]
+        p.gamma_rows = blocked_refresh  # type: ignore[method-assign]
+        p.clob_rows = blocked_refresh  # type: ignore[method-assign]
+
+        started = time.monotonic()
+        rows = p.markets({"limit": ["1"], "offset": ["0"], "liquidity_num_min": ["10"]})
+
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.assertEqual(rows[0]["id"], "relay")
+        self.assertTrue(refresh_started.wait(timeout=0.5))
+
+        allow_refresh.set()
+        for _ in range(40):
+            if p.refresh_lock.acquire(blocking=False):
+                p.refresh_lock.release()
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("background refresh did not release its lock")
 
     def test_req_advertises_and_decodes_gzip(self) -> None:
         class Response:
