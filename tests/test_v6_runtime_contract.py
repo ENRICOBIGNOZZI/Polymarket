@@ -136,6 +136,11 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("v6_hard_arb_paper.py", loop)
         self.assertIn("polymarket_maker_paper", loop)
 
+    def test_v6_runtime_term_trap_stops_children_instead_of_restarting_them(self) -> None:
+        loop = (ROOT / "scripts" / "paper_v6_loop.sh").read_text(encoding="utf-8")
+        self.assertIn("shutdown(){ trap - EXIT INT TERM; cleanup; exit 0; }", loop)
+        self.assertIn("trap cleanup EXIT\ntrap shutdown INT TERM", loop)
+
     def test_maker_fill_replay_is_late_index_safe_and_queue_aware(self) -> None:
         source = (ROOT / "src" / "maker_paper.cpp").read_text(encoding="utf-8")
         self.assertIn("{o.condition_id}, o.created_ts, tape_until, 10000", source)
