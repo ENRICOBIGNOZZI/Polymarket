@@ -36,6 +36,19 @@ Event-time replay declares the trade eligible, consumes the queue and fills all 
 
 Event-time replay places the trade at `100.000s`, before arrival, and rejects it. Receive-time replay correctly recognizes it as post-arrival observable flow.
 
+## Fresh tape measurement
+
+The artifact from exact-main live smoke run `32871116566` contains 259 tape rows. Because the recorder stores both clocks, the observation lag can be measured directly:
+
+- median `received_ms - timestamp*1000`: about **439.9 seconds**;
+- maximum lag: about **898.9 seconds**;
+- **249/259 = 96.1%** of rows were observed more than 60 seconds after their exchange timestamp;
+- **211/259 = 81.5%** were observed more than 180 seconds later.
+
+The current Graph/RV intents use a roughly 180-second execution window. Therefore the clock mismatch is not a negligible sub-second detail: in this smoke most public trades were delivered to the recorder with event-to-observation lag longer than an entire bundle execution window. This does not imply those rows would all create false fills — queue, token, side and price still matter — but it proves that event-time-only replay can materially misplace eligible flow.
+
+For the nine legs in the three current Graph/RV bundles, 80 matching-token tape rows were present in the artifact; all were received before the bundles were posted, so this particular smoke still correctly shows zero completed bundles. The defect is about the validity of forward completion evidence across polling windows, not a claim that the three current resting baskets should already be marked filled.
+
 ## Fresh economic context
 
 The exact-main public smoke currently has a healthy recorder with 220 markets and 259 fresh trades, but three three-leg `GRAPH_RV` bundles remain resting with zero completion. Runtime realized PnL and OOS PnL are both zero. The current candidates therefore do not supply positive fill/PnL evidence, but they make causal completion measurement the immediate LF bottleneck.
