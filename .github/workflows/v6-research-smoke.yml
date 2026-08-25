@@ -11,9 +11,11 @@ on:
       - "config/v6_model_architecture.json"
       - "scripts/paper_v6_loop.sh"
       - "scripts/v6_*.py"
+      - "scripts/hf_maker_*.py"
       - "tests/test_v6_model_contracts.py"
       - "tests/test_v6_runtime_contract.py"
       - "tests/test_v6_execution_costs.py"
+      - "tests/test_hf_maker_flow_forward.py"
       - ".github/workflows/v6-research-smoke.yml"
 
 permissions:
@@ -61,9 +63,9 @@ jobs:
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
-          python3 -m py_compile scripts/v6_queue_filter.py
+          python3 -m py_compile scripts/v6_queue_filter.py scripts/v6_market_common.py scripts/v6_micro_maker.py scripts/v6_micro_maker_v2.py scripts/hf_maker_flow_admission.py scripts/hf_maker_forward_audit.py
           python3 scripts/v6_queue_filter.py self-test
-          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py tests/test_v6_execution_costs.py -v
+          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py tests/test_v6_execution_costs.py tests/test_hf_maker_flow_forward.py -v
       - name: Live public-data relation probes
         shell: bash
         run: |
@@ -88,12 +90,65 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/v6_local_factor_intents.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/local_factor.log 2>&1 || true
-      - name: Live public-data maker economics probe
+      - name: Common-sample maker A-B under authorized paper envelope
         shell: bash
+        env:
+          V6_MAKER_DEAD_FLOW_CANCEL_SECONDS: "20"
         run: |
           set -euo pipefail
-          mkdir -p v6_evidence/maker
-          ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once > v6_evidence/maker.log 2>&1 || true
+          root=v6_evidence/maker_ab
+          shared="$root/shared"
+          baseline="$root/baseline"
+          flow="$root/flow"
+          mkdir -p "$shared" "$baseline" "$flow"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          cfg=json.loads(Path('config/paper_v6.json').read_text())
+          cfg['market_limit']=1000
+          cfg['min_liquidity']=2.0
+          cfg['min_net_edge']=0.00005
+          cfg['fractional_kelly']=0.25
+          cfg['max_trade_usd']=125.0
+          cfg['max_market_fraction']=0.05
+          cfg['max_event_fraction']=0.15
+          cfg['max_gross_fraction']=0.70
+          cfg['max_drawdown']=0.15
+          cfg['multi_strategy']['paper_only']=True
+          cfg['multi_strategy']['global_max_drawdown']=0.15
+          cfg['multi_strategy']['global_max_gross_fraction']=0.70
+          cfg['v6']['paper_only']=True
+          Path('v6_evidence/maker_ab/paper_envelope.json').write_text(json.dumps(cfg,indent=2,sort_keys=True)+'\n')
+          PY
+          cfg="$root/paper_envelope.json"
+          ./build/polymarket_trade_recorder --config "$cfg" --run-dir "$shared" --markets 1000 --min-liquidity 2 --batch 40 --lookback-seconds 300 --once > "$shared/recorder-bootstrap.log" 2>&1 || true
+          ./build/polymarket_trade_recorder --config "$cfg" --run-dir "$shared" --markets 1000 --min-liquidity 2 --batch 40 --lookback-seconds 300 --interval 10 --loop > "$shared/recorder.log" 2>&1 &
+          recorder_pid=$!
+          cleanup() { kill "$recorder_pid" 2>/dev/null || true; wait "$recorder_pid" 2>/dev/null || true; }
+          trap cleanup EXIT
+          deadline=$((SECONDS + 360))
+          tick=0
+          while (( SECONDS < deadline )); do
+            tick=$((tick + 1))
+            ./build/polymarket_maker_paper --config "$cfg" --run-dir "$baseline" --markets 1000 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 60 --adverse-selection-mult 0.10 --improve-ticks 3 --max-queue-multiple 2 --once >> "$baseline/maker.log" 2>&1 || true
+            python3 scripts/v6_micro_maker_v2.py --config "$cfg" --run-dir "$flow" --trade-tape "$shared/trade_tape.csv" --markets 1000 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 60 --adverse-selection-mult 0.10 --flow-lookback-seconds 120 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 3 --slippage-bps 5 >> "$flow/maker.log" 2>&1 || true
+            sleep 5
+          done
+          cleanup
+          trap - EXIT
+          python3 scripts/hf_maker_forward_audit.py --order-log "$baseline/maker_order_log.csv" --trade-tape "$shared/trade_tape.csv" --fills "$baseline/maker_fills.csv" --prior-lookback-seconds 120 --forward-horizon-seconds 60 --min-edge 0.00005 --output "$baseline/forward_audit.json" > "$baseline/forward_audit.log"
+          python3 scripts/hf_maker_forward_audit.py --order-log "$flow/maker_order_log.csv" --trade-tape "$shared/trade_tape.csv" --fills "$flow/maker_fills.csv" --prior-lookback-seconds 120 --forward-horizon-seconds 60 --min-edge 0.00005 --output "$flow/forward_audit.json" > "$flow/forward_audit.log"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('v6_evidence/maker_ab')
+          def read(path):
+              try:return json.loads(path.read_text())
+              except Exception:return {}
+          b=read(root/'baseline/forward_audit.json'); f=read(root/'flow/forward_audit.json')
+          comparison={'paper_only':True,'authenticated_execution':False,'envelope':{'markets':1000,'min_liquidity':2.0,'min_edge':0.00005,'fractional_kelly':0.25,'max_trade_usd':125.0,'max_market_fraction':0.05,'max_event_fraction':0.15,'max_gross_fraction':0.70,'max_drawdown':0.15},'baseline':b,'flow_gated':f,'flow_gate_wired':True,'primary_metric':'realized_closed_pnl'}
+          (root/'comparison.json').write_text(json.dumps(comparison,indent=2,sort_keys=True)+'\n'); print(json.dumps(comparison,indent=2,sort_keys=True))
+          PY
       - name: Live public-data micro-taker causal warmup/markout probe
         shell: bash
         run: |
@@ -117,7 +172,7 @@ jobs:
               except Exception:return {}
           hard=(root/'graph_hard_taker_scan.csv').read_text(errors='ignore') if (root/'graph_hard_taker_scan.csv').exists() else ''
           m=re.search(r'net_positive_pre_gas=(\d+)',hard)
-          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'local_factor':js('local_factor_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0}
+          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'local_factor':js('local_factor_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0,'maker_ab':js('maker_ab/comparison.json')}
           state=root/'micro_taker/state.json'
           if state.exists():
               try:
@@ -125,31 +180,15 @@ jobs:
                   labeled=[x for x in samples if isinstance(x,dict) and x.get('y') is not None]
                   bad=[x for x in labeled if int(x.get('target_observation_ts') or 0)>int(x.get('ts') or 0)+5]
                   lags=[int(x['target_staleness_seconds']) for x in labeled if x.get('target_staleness_seconds') is not None]
-                  summary['micro_taker_samples']=len(samples)
-                  summary['micro_taker_labeled']=len(labeled)
-                  summary['micro_taker_post_horizon_labels']=len(bad)
-                  summary['micro_taker_target_staleness_max_seconds']=max(lags) if lags else None
-                  summary['micro_taker_open_positions']=len(s.get('positions') or {})
-                  summary['micro_taker_signals_last_tick']=int(s.get('signals') or 0)
-                  summary['micro_taker_opened_last_tick']=int(s.get('opened') or 0)
-                  summary['micro_taker_best_edge_last_tick']=float(s.get('best_edge') or 0.0)
-                  summary['micro_taker_realized_pnl_total']=float(s.get('realized_pnl_total') or 0.0)
-                  summary['micro_taker_label_stats_last_tick']=s.get('label_stats_last_tick') or {}
-                  summary['micro_taker_execution_model']=s.get('execution_model')
-                  summary['micro_taker_depth_rejections_last_tick']=int(s.get('depth_rejections_last_tick') or 0)
-                  summary['micro_taker_fee_sources_last_tick']=s.get('fee_sources_last_tick') or {}
+                  summary['micro_taker_samples']=len(samples);summary['micro_taker_labeled']=len(labeled);summary['micro_taker_post_horizon_labels']=len(bad);summary['micro_taker_target_staleness_max_seconds']=max(lags) if lags else None
+                  summary['micro_taker_open_positions']=len(s.get('positions') or {});summary['micro_taker_signals_last_tick']=int(s.get('signals') or 0);summary['micro_taker_opened_last_tick']=int(s.get('opened') or 0);summary['micro_taker_best_edge_last_tick']=float(s.get('best_edge') or 0.0);summary['micro_taker_realized_pnl_total']=float(s.get('realized_pnl_total') or 0.0);summary['micro_taker_label_stats_last_tick']=s.get('label_stats_last_tick') or {};summary['micro_taker_execution_model']=s.get('execution_model');summary['micro_taker_depth_rejections_last_tick']=int(s.get('depth_rejections_last_tick') or 0);summary['micro_taker_fee_sources_last_tick']=s.get('fee_sources_last_tick') or {}
                   if bad: raise RuntimeError('micro taker used a post-horizon target observation')
-              except Exception as exc:
-                  summary['micro_taker_summary_error']=f'{type(exc).__name__}:{exc}'
+              except Exception as exc: summary['micro_taker_summary_error']=f'{type(exc).__name__}:{exc}'
           fills=root/'micro_taker/fills.csv'
           if fills.exists():
               try:
-                  rows=list(csv.DictReader(fills.open(newline='',encoding='utf-8')))
-                  summary['micro_taker_buy_fills']=sum((r.get('action') or '').upper()=='BUY' for r in rows)
-                  summary['micro_taker_sell_fills']=sum((r.get('action') or '').upper() in {'SELL','SELL_PARTIAL'} for r in rows)
-                  summary['micro_taker_closed_fill_pnl']=sum(float(r.get('pnl') or 0.0) for r in rows if (r.get('action') or '').upper() in {'SELL','SELL_PARTIAL'})
-              except Exception as exc:
-                  summary['micro_taker_fills_summary_error']=f'{type(exc).__name__}:{exc}'
+                  rows=list(csv.DictReader(fills.open(newline='',encoding='utf-8')));summary['micro_taker_buy_fills']=sum((r.get('action') or '').upper()=='BUY' for r in rows);summary['micro_taker_sell_fills']=sum((r.get('action') or '').upper() in {'SELL','SELL_PARTIAL'} for r in rows);summary['micro_taker_closed_fill_pnl']=sum(float(r.get('pnl') or 0.0) for r in rows if (r.get('action') or '').upper() in {'SELL','SELL_PARTIAL'})
+              except Exception as exc: summary['micro_taker_fills_summary_error']=f'{type(exc).__name__}:{exc}'
           (root/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n');print(json.dumps(summary,indent=2,sort_keys=True))
           if summary.get('micro_taker_post_horizon_labels',0): raise SystemExit('causal micro target contract failed')
           PY
