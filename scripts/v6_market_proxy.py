@@ -23,8 +23,9 @@ FRESH_CACHE_SECONDS = 30.0
 STALE_CACHE_SECONDS = 900.0
 FALLBACK_MARKETS = 300
 GAMMA_TIMEOUT_SECONDS = 1.5
-CLOB_TIMEOUT_SECONDS = 8.0
-CLOB_DISCOVERY_BUDGET_SECONDS = 16.0
+GAMMA_LEGACY_TIMEOUT_SECONDS = 8.0
+CLOB_TIMEOUT_SECONDS = 5.0
+CLOB_DISCOVERY_BUDGET_SECONDS = 10.0
 BOOK_WORKERS = 8
 
 
@@ -270,6 +271,56 @@ class Proxy:
             raise RuntimeError("Gamma keyset returned no markets")
         return out[:n]
 
+    def gamma_legacy_rows(self, n: int, query: dict[str, list[str]]) -> list[dict[str, Any]]:
+        params = {
+            key: value[-1]
+            for key, value in query.items()
+            if value and key in {"active", "closed", "order", "ascending", "liquidity_num_min"}
+        }
+        params.setdefault("active", "true")
+        params.setdefault("closed", "false")
+        offsets = list(range(0, n, 100))
+
+        def fetch(offset: int) -> tuple[int, list[dict[str, Any]]]:
+            request_params = dict(params)
+            request_params["limit"] = str(min(100, n - offset))
+            request_params["offset"] = str(offset)
+            url = self.gamma + "/markets?" + urllib.parse.urlencode(request_params)
+            value = (
+                curl_req(url, timeout=GAMMA_LEGACY_TIMEOUT_SECONDS)
+                if shutil.which("curl")
+                else req(url, timeout=GAMMA_LEGACY_TIMEOUT_SECONDS)
+            )
+            if not isinstance(value, list):
+                raise RuntimeError("bad Gamma legacy markets response")
+            return offset, [row for row in value if isinstance(row, dict)]
+
+        pages: dict[int, list[dict[str, Any]]] = {}
+        failures: list[str] = []
+        with ThreadPoolExecutor(max_workers=min(3, len(offsets))) as pool:
+            futures = [pool.submit(fetch, offset) for offset in offsets]
+            for future in as_completed(futures):
+                try:
+                    offset, batch = future.result()
+                except Exception as exc:
+                    failures.append(str(exc))
+                    continue
+                pages[offset] = batch
+        if failures or set(pages) != set(offsets):
+            raise RuntimeError("Gamma legacy offset discovery incomplete: " + "; ".join(failures))
+
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for offset in offsets:
+            for row in pages[offset]:
+                key = str(row.get("id") or row.get("conditionId") or "")
+                if key and key not in seen:
+                    seen.add(key)
+                    out.append(row)
+        if len(out) < n:
+            raise RuntimeError(f"Gamma legacy returned only {len(out)} of {n} requested markets")
+        return out[:n]
+
     def clob_candidates(self, n: int, path: str, deadline: float) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         cursor = ""
@@ -421,26 +472,34 @@ class Proxy:
         try:
             target = min(FALLBACK_MARKETS, max(FALLBACK_MARKETS, offset + limit))
             try:
-                rows = self.gamma_rows(target, query)
+                rows = self.gamma_legacy_rows(target, query)
                 self.error = ""
                 self.save(rows)
-                self.stat("gamma_keyset", len(rows), True)
-            except Exception as gamma_error:
+                self.stat("gamma_legacy", len(rows), True)
+            except Exception as legacy_error:
                 self.failures += 1
-                self.error = str(gamma_error)
+                self.error = str(legacy_error)
                 try:
-                    rows = self.clob_rows(min_liquidity)
+                    rows = self.gamma_rows(target, query)
+                    self.error = ""
                     self.save(rows)
-                    self.stat(self.clob_source, len(rows), False)
-                except Exception as clob_error:
+                    self.stat("gamma_keyset", len(rows), True)
+                except Exception as keyset_error:
                     self.failures += 1
-                    self.error = f"{self.error}; {clob_error}"
-                    cached = self.cached_page(limit, offset, min_liquidity, STALE_CACHE_SECONDS)
-                    if cached is not None:
-                        self.stat("stale_cache", len(self.rows), False, max(0.0, time.time() - self.ts))
-                        return cached
-                    self.stat("unavailable", 0, False, 1e12)
-                    raise RuntimeError(self.error or "discovery unavailable")
+                    self.error = f"{self.error}; {keyset_error}"
+                    try:
+                        rows = self.clob_rows(min_liquidity)
+                        self.save(rows)
+                        self.stat(self.clob_source, len(rows), False)
+                    except Exception as clob_error:
+                        self.failures += 1
+                        self.error = f"{self.error}; {clob_error}"
+                        cached = self.cached_page(limit, offset, min_liquidity, STALE_CACHE_SECONDS)
+                        if cached is not None:
+                            self.stat("stale_cache", len(self.rows), False, max(0.0, time.time() - self.ts))
+                            return cached
+                        self.stat("unavailable", 0, False, 1e12)
+                        raise RuntimeError(self.error or "discovery unavailable")
         finally:
             self.refresh_lock.release()
 
