@@ -271,6 +271,18 @@ class V6Collector(V4Collector):
                 labels=evidence_labels,
             )
             metrics.sample(
+                "polymarket_model_execution_evidence_terminal_calibration_observations",
+                _float(evidence_row.get("terminal_calibration_observations")),
+                help_text="Resolved terminal labels used to assess Brier improvement over the market.",
+                labels=evidence_labels,
+            )
+            metrics.sample(
+                "polymarket_model_execution_evidence_brier_improvement",
+                _float(evidence_row.get("brier_improvement_over_market")),
+                help_text="Mean Brier-score improvement over the contemporaneous market probability.",
+                labels=evidence_labels,
+            )
+            metrics.sample(
                 "polymarket_model_execution_evidence_age_seconds",
                 evidence_age,
                 help_text="Age of the V7 execution-evidence report.",
