@@ -1,11 +1,23 @@
 from __future__ import annotations
 
 import csv
+import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.b2_sparse_hedge_frontier import build_report, stress_edges
+ROOT = Path(__file__).resolve().parents[1]
+SPEC = importlib.util.spec_from_file_location(
+    "b2_sparse_hedge_frontier",
+    ROOT / "scripts" / "b2_sparse_hedge_frontier.py",
+)
+assert SPEC is not None and SPEC.loader is not None
+MODULE = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = MODULE
+SPEC.loader.exec_module(MODULE)
+build_report = MODULE.build_report
+stress_edges = MODULE.stress_edges
 
 
 FIELDS = [
