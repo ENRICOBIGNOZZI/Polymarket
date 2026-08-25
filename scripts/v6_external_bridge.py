@@ -7,6 +7,7 @@ import io
 import json
 import math
 import os
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -31,7 +32,7 @@ def finite(value, default=math.nan):
 
 def atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}.{threading.get_ident()}")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
 
