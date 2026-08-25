@@ -8,6 +8,7 @@ on:
       - "scripts/runtime_singleton_launcher.py"
       - "scripts/paper_latest_loop.sh"
       - "scripts/paper_v6_loop.sh"
+      - "ops/update_server_macos.sh"
       - "scripts/v6_hard_arb_paper.py"
       - "scripts/v6_micro_taker.py"
       - "scripts/v6_external_bridge.py"
@@ -148,13 +149,17 @@ jobs:
           evidence="$root/evidence"
           first_pid=0
           restart_pid=0
+          stale_owner_pid=0
+          stale_owner_child_pid=0
+          orphan_owner_pid=0
+          orphan_child_pid=0
           stale_pid=0
           resistant_pid=0
           failed_runtime_pid=0
 
           cleanup() {
             set +e
-            for pid in "$failed_runtime_pid" "$resistant_pid" "$restart_pid" "$first_pid" "$stale_pid"; do
+            for pid in "$failed_runtime_pid" "$resistant_pid" "$restart_pid" "$first_pid" "$stale_pid" "$orphan_child_pid" "$orphan_owner_pid" "$stale_owner_child_pid" "$stale_owner_pid"; do
               if [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 0 )); then
                 kill "$pid" 2>/dev/null || true
                 for _ in {1..20}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
@@ -281,6 +286,75 @@ jobs:
             SIMULATED_V6_PID=$!
           }
 
+          # Mimic the historical singleton launcher precisely enough to retain
+          # its lock fd in a child process after the top-level wrapper exits.
+          # The new exact-head launcher must both reap this verified old tree
+          # and ensure that its own descendants never inherit that descriptor.
+          simulated_legacy_runtime_owner_visible() {
+            local pid="$1" cwd=""
+            pgrep -f 'paper_latest_loop\.sh' 2>/dev/null | grep -qx "$pid" || return 1
+            cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)"
+            [[ "$cwd" == "$source_dir" ]]
+          }
+          start_simulated_legacy_runtime_owner() {
+            local lock="$1" child_file="$2" log="$3"
+            (
+              cd "$source_dir"
+              exec python3 - "$lock" "$child_file" <<'PY'
+          import fcntl
+          import os
+          import sys
+
+          lock, child_file = sys.argv[1:]
+          fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+          fcntl.flock(fd, fcntl.LOCK_EX)
+          os.ftruncate(fd, 0)
+          os.write(fd, f"{os.getpid()}\\n".encode())
+          os.fsync(fd)
+          os.set_inheritable(fd, True)
+          env = dict(os.environ, SIMULATED_OWNER_CHILD_FILE=child_file)
+          os.execvpe(
+              "/usr/bin/env",
+              [
+                  "/usr/bin/env",
+                  "bash",
+                  "-c",
+                  'trap "exit 0" TERM INT; sleep 300 & child=$!; printf "%s\\n" "$child" > "$SIMULATED_OWNER_CHILD_FILE"; wait',
+                  "scripts/paper_latest_loop.sh",
+              ],
+              env,
+          )
+          PY
+            ) >"$log" 2>&1 &
+            SIMULATED_OWNER_PID=$!
+          }
+
+          start_simulated_legacy_runtime_owner \
+            "$run_root/runtime_owner.lock" "$evidence/stale-owner-child.pid" "$evidence/stale-owner.log"
+          stale_owner_pid="$SIMULATED_OWNER_PID"
+          for _ in {1..40}; do
+            owner_in_lock="$(tr -dc '0-9' < "$run_root/runtime_owner.lock" 2>/dev/null || true)"
+            if simulated_legacy_runtime_owner_visible "$stale_owner_pid" && [[ "$owner_in_lock" == "$stale_owner_pid" ]] && [[ -s "$evidence/stale-owner-child.pid" ]]; then
+              break
+            fi
+            kill -0 "$stale_owner_pid" 2>/dev/null || { echo 'legacy stale-owner simulator exited early' >&2; exit 1; }
+            sleep 0.1
+          done
+          if ! simulated_legacy_runtime_owner_visible "$stale_owner_pid"; then
+            echo "legacy stale owner is not visible to the production matcher: pid=$stale_owner_pid" >&2
+            exit 1
+          fi
+          stale_owner_child_pid="$(tr -dc '0-9' < "$evidence/stale-owner-child.pid")"
+          [[ "$stale_owner_child_pid" =~ ^[1-9][0-9]*$ ]] || { echo 'legacy stale owner did not expose inherited-lock child' >&2; exit 1; }
+          lsof -t "$run_root/runtime_owner.lock" 2>/dev/null | grep -qx "$stale_owner_pid"
+          lsof -t "$run_root/runtime_owner.lock" 2>/dev/null | grep -qx "$stale_owner_child_pid"
+          {
+            printf 'target_sha=%s\n' "$SOURCE_SHA"
+            printf 'requested_ts=%s\n' "$(date +%s)"
+            printf 'reason=private_legacy_owner_handoff\n'
+          } > "$run_root/runtime_handoff.request"
+          printf 'legacy_stale_owner_pid=%s\nlegacy_inherited_lock_child_pid=%s\n' "$stale_owner_pid" "$stale_owner_child_pid"
+
           start_simulated_v6_loop graceful "$evidence/stale-graceful.log"
           stale_pid="$SIMULATED_V6_PID"
           for _ in {1..40}; do
@@ -307,6 +381,29 @@ jobs:
           owner_pid="$(tr -dc '0-9' < "$run_root/runtime_owner.lock")"
           test "$owner_pid" = "$first_pid"
           kill -0 "$owner_pid"
+          grep -q "stale_runtime_owner_reaped=$stale_owner_pid" "$evidence/first-runtime.log"
+          for _ in {1..40}; do
+            stopped_or_zombie "$stale_owner_pid" && stopped_or_zombie "$stale_owner_child_pid" && break
+            sleep 0.25
+          done
+          if ! stopped_or_zombie "$stale_owner_pid" || ! stopped_or_zombie "$stale_owner_child_pid"; then
+            echo 'legacy runtime owner or inherited-lock child survived handoff' >&2
+            cat "$evidence/first-runtime.log" >&2 || true
+            exit 1
+          fi
+          wait "$stale_owner_pid" 2>/dev/null || true
+          stale_owner_pid=0
+          stale_owner_child_pid=0
+          if [[ -e "$run_root/runtime_handoff.request" ]]; then
+            echo 'runtime handoff marker was not consumed by the new singleton owner' >&2
+            exit 1
+          fi
+          holder_count="$(lsof -t "$run_root/runtime_owner.lock" 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [[ "$holder_count" != "1" ]] || ! lsof -t "$run_root/runtime_owner.lock" 2>/dev/null | grep -qx "$first_pid"; then
+            echo "singleton lock leaked into descendants: owner=$first_pid holders=$holder_count" >&2
+            lsof "$run_root/runtime_owner.lock" >&2 || true
+            exit 1
+          fi
           printf 'source_sha=%s\nfirst_owner_pid=%s\nproxy_port=%s\n' "$SOURCE_SHA" "$owner_pid" "$port"
 
           for _ in {1..40}; do
@@ -422,6 +519,33 @@ jobs:
             V6_MARKETS=1
             V6_RECORDER_MARKETS=1
           )
+          # Reproduce the harder failure mode: the old wrapper is already gone,
+          # but its inherited descriptor remains open in an orphan child.  A
+          # fresh validated wrapper must recover only that provenance-checked
+          # holder before it can acquire the singleton lock.
+          start_simulated_legacy_runtime_owner \
+            "$run_root/runtime_owner.lock" "$evidence/orphan-owner-child.pid" "$evidence/orphan-owner.log"
+          orphan_owner_pid="$SIMULATED_OWNER_PID"
+          for _ in {1..40}; do
+            owner_in_lock="$(tr -dc '0-9' < "$run_root/runtime_owner.lock" 2>/dev/null || true)"
+            if simulated_legacy_runtime_owner_visible "$orphan_owner_pid" && [[ "$owner_in_lock" == "$orphan_owner_pid" ]] && [[ -s "$evidence/orphan-owner-child.pid" ]]; then
+              break
+            fi
+            kill -0 "$orphan_owner_pid" 2>/dev/null || { echo 'orphan stale-owner simulator exited early' >&2; exit 1; }
+            sleep 0.1
+          done
+          orphan_child_pid="$(tr -dc '0-9' < "$evidence/orphan-owner-child.pid")"
+          [[ "$orphan_child_pid" =~ ^[1-9][0-9]*$ ]] || { echo 'orphan simulator did not expose inherited-lock child' >&2; exit 1; }
+          kill -KILL "$orphan_owner_pid"
+          wait "$orphan_owner_pid" 2>/dev/null || true
+          orphan_owner_pid=0
+          kill -0 "$orphan_child_pid"
+          lsof -t "$run_root/runtime_owner.lock" 2>/dev/null | grep -qx "$orphan_child_pid"
+          {
+            printf 'target_sha=%s\n' "$SOURCE_SHA"
+            printf 'requested_ts=%s\n' "$(date +%s)"
+            printf 'reason=private_orphan_lock_handoff\n'
+          } > "$run_root/runtime_handoff.request"
           "${runtime_env2[@]}" /usr/bin/env bash scripts/paper_latest_loop.sh \
             >"$evidence/restarted-runtime.log" 2>&1 &
           restart_pid=$!
@@ -441,6 +565,27 @@ jobs:
           if [[ "$restarted_owner" != "$restart_pid" ]]; then
             echo "restart lock owner mismatch: expected=$restart_pid observed=${candidate_owner:-empty}" >&2
             cat "$evidence/restarted-runtime.log" >&2 || true
+            exit 1
+          fi
+          grep -q "stale_runtime_orphan_lock_holder_reaped=$orphan_child_pid" "$evidence/restarted-runtime.log"
+          for _ in {1..40}; do
+            stopped_or_zombie "$orphan_child_pid" && break
+            sleep 0.25
+          done
+          if ! stopped_or_zombie "$orphan_child_pid"; then
+            echo 'orphan inherited-lock child survived bounded handoff' >&2
+            cat "$evidence/restarted-runtime.log" >&2 || true
+            exit 1
+          fi
+          orphan_child_pid=0
+          if [[ -e "$run_root/runtime_handoff.request" ]]; then
+            echo 'orphan runtime handoff marker was not consumed by the new singleton owner' >&2
+            exit 1
+          fi
+          holder_count="$(lsof -t "$run_root/runtime_owner.lock" 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [[ "$holder_count" != "1" ]] || ! lsof -t "$run_root/runtime_owner.lock" 2>/dev/null | grep -qx "$restart_pid"; then
+            echo "singleton lock leaked after orphan handoff: owner=$restart_pid holders=$holder_count" >&2
+            lsof "$run_root/runtime_owner.lock" >&2 || true
             exit 1
           fi
           printf 'restart_owner_pid=%s\n' "$restarted_owner"
