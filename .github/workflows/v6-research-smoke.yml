@@ -78,9 +78,11 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
           bash -n scripts/paper_v6_loop.sh
+          bash -n scripts/v6_live_smoke_once.sh
           python3 -m py_compile \
-            scripts/v6_market_common.py scripts/v6_micro_maker.py scripts/v6_micro_taker_v2.py \
-            scripts/v6_hard_arb_paper_v2.py scripts/v6_queue_filter.py scripts/v6_local_factor_v3.py
+            scripts/v6_market_common.py scripts/v6_micro_maker.py scripts/v6_maker_reprice.py \
+            scripts/v6_micro_taker_v2.py scripts/v6_hard_arb_paper_v2.py \
+            scripts/v6_queue_filter.py scripts/v6_local_factor_v3.py
           python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py -v
 
       - name: Live public-data relation and queue-economics probes
@@ -91,7 +93,7 @@ jobs:
           ./build/polymarket_trade_recorder --config config/paper_v6.json --run-dir v6_evidence --markets 500 --batch 40 --min-liquidity 2 --lookback-seconds 900 --once > v6_evidence/trade_recorder_initial.log 2>&1 || true
           python3 scripts/v6_relation_intents.py --config config/paper_v6.json --output v6_evidence/relation_raw.csv --status v6_evidence/relation_status.json --markets 500 --min-liquidity 2 --min-edge 0.00005 --max-trade-usd 125 --max-events 100 > v6_evidence/relation.log 2>&1 || true
           python3 scripts/v6_intent_guard.py --input v6_evidence/relation_raw.csv --output v6_evidence/relation_guarded.csv --status v6_evidence/relation_guard_status.json --min-edge 0.00005 --stress-bps 5 --max-age-seconds 180 > v6_evidence/relation_guard.log 2>&1 || true
-          python3 scripts/v6_queue_filter.py --config config/paper_v6.json --input v6_evidence/relation_guarded.csv --output v6_evidence/relation_queue.csv --status v6_evidence/queue_filter_status.json --trade-tape v6_evidence/trade_tape.csv --min-edge 0.00005 --reserve-bps 5 --min-leg-fill-probability 0.005 --min-joint-fill-probability 0.000001 --target-leg-fill-probability 0.10 --max-improve-ticks-per-leg 4 > v6_evidence/queue_filter.log 2>&1 || true
+          python3 scripts/v6_queue_filter.py --config config/paper_v6.json --input v6_evidence/relation_guarded.csv --output v6_evidence/relation_queue.csv --status v6_evidence/queue_filter_status.json --trade-tape v6_evidence/trade_tape.csv --min-edge 0.00005 --reserve-bps 2 --min-leg-fill-probability 0.002 --min-joint-fill-probability 0.0000001 --target-leg-fill-probability 0.10 --max-improve-ticks-per-leg 12 > v6_evidence/queue_filter.log 2>&1 || true
 
       - name: Live public-data executable hard-arb v2 probe
         shell: bash
@@ -111,7 +113,7 @@ jobs:
           set -euo pipefail
           python3 scripts/v6_local_factor_v3.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --trade-tape v6_evidence/trade_tape.csv --markets 500 --min-liquidity 2 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 25 --min-common-points 36 --min-z 0.75 --fdr 0.15 --min-edge 0.00005 --max-trade-usd 100 --slippage-bps 5 --min-fill-probability 0.005 > v6_evidence/local_factor.log 2>&1 || true
 
-      - name: Live public-data forward flow-aware maker probe
+      - name: Live public-data forward maker/reprice probe
         shell: bash
         run: |
           set -euo pipefail
@@ -119,20 +121,24 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          cfg=json.loads(Path('config/paper_v6.json').read_text()); cfg['starting_capital']=2200.0; cfg['run_dir']='v6_evidence/maker'; Path('v6_evidence/maker_config.json').write_text(json.dumps(cfg,indent=2,sort_keys=True)+'\n')
+          cfg=json.loads(Path('config/paper_v6.json').read_text()); cfg['starting_capital']=2200.0; cfg['run_dir']='v6_evidence/maker'; cfg['max_market_fraction']=max(float(cfg.get('max_market_fraction',0.0)),60.0/2200.0); Path('v6_evidence/maker_config.json').write_text(json.dumps(cfg,indent=2,sort_keys=True)+'\n')
           PY
           record_trade_tape() {
             ./build/polymarket_trade_recorder --config config/paper_v6.json --run-dir v6_evidence --markets 500 --batch 40 --min-liquidity 2 --lookback-seconds 900 --once >> v6_evidence/trade_recorder_forward.log 2>&1 || true
           }
           maker_tick() {
-            python3 scripts/v6_micro_maker.py --config v6_evidence/maker_config.json --run-dir v6_evidence/maker --trade-tape v6_evidence/trade_tape.csv --markets 500 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 45 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 3 --slippage-bps 5 >> v6_evidence/maker.log 2>&1 || true
+            python3 scripts/v6_micro_maker.py --config v6_evidence/maker_config.json --run-dir v6_evidence/maker --trade-tape v6_evidence/trade_tape.csv --markets 500 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 60 --ttl-seconds 60 --hold-seconds 45 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 3 --slippage-bps 5 >> v6_evidence/maker.log 2>&1 || true
+          }
+          reprice_tick() {
+            python3 scripts/v6_maker_reprice.py --config v6_evidence/maker_config.json --run-dir v6_evidence/maker --trade-tape v6_evidence/trade_tape.csv --markets 500 --min-liquidity 2 --min-edge 0.00005 --taker-min-edge 0.00005 --reprice-after-seconds 10 --dead-queue-cancel-seconds 30 --max-reprices 5 --max-improve-ticks 8 --target-fill-probability 0.10 --dead-fill-probability 0.001 --flow-lookback-seconds 900 --fill-horizon-seconds 90 --hold-seconds 45 --adverse-selection-mult 0.15 --slippage-bps 5 >> v6_evidence/maker_reprice.log 2>&1 || true
           }
           record_trade_tape
           maker_tick
-          for delay in 20 20 20 20; do
+          for delay in 15 15 15 15; do
             sleep "$delay"
             record_trade_tape
             maker_tick
+            reprice_tick
           done
 
       - name: Summarize aggressive V6 evidence
@@ -140,22 +146,28 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY'
-          import json
+          import csv,json
           from pathlib import Path
           root=Path('v6_evidence'); root.mkdir(parents=True,exist_ok=True)
           def js(path):
               p=root/path
               try:return json.loads(p.read_text())
               except Exception:return {}
-          tape=root/'trade_tape.csv'
-          tape_rows=max(0, sum(1 for _ in tape.open(encoding='utf-8'))-1) if tape.exists() else 0
-          fills=root/'maker'/'maker_fills.csv'
-          fill_rows=max(0, sum(1 for _ in fills.open(encoding='utf-8'))-1) if fills.exists() else 0
+          def rows(path):
+              p=root/path
+              try:
+                  with p.open(newline='',encoding='utf-8') as h:return list(csv.DictReader(h))
+              except Exception:return []
+          tape=rows('trade_tape.csv'); fills=rows('maker/maker_fills.csv'); order_log=rows('maker/maker_order_log.csv')
           summary={
               'paper_only':True,
               'authenticated_execution':False,
-              'trade_tape_rows':tape_rows,
-              'maker_fill_rows':fill_rows,
+              'trade_tape_rows':len(tape),
+              'maker_fill_rows':len(fills),
+              'maker_reprice_events':sum(str(x.get('event') or '')=='REPRICE' for x in order_log),
+              'maker_taker_conversions':sum(str(x.get('event') or '')=='TAKER_CONVERT' for x in order_log),
+              'maker_dead_queue_cancels':sum(str(x.get('event') or '') in {'CANCEL_DEAD_QUEUE','CANCEL_REPRICE_LIMIT'} for x in order_log),
+              'maker_reprice':js('maker/maker_reprice_status.json'),
               'relation':js('relation_status.json'),
               'relation_guard':js('relation_guard_status.json'),
               'queue_filter':js('queue_filter_status.json'),
