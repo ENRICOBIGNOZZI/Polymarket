@@ -22,15 +22,18 @@ for attempt in $(seq 1 20); do
   if [[ -r "$pid_file" ]]; then
     IFS= read -r owner < "$pid_file" || true
   fi
-  if [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null; then
-    echo "multileg broker already running for $run_root (pid=$owner)" >&2
-    exit 75
+  if [[ "$owner" =~ ^[0-9]+$ ]]; then
+    if kill -0 "$owner" 2>/dev/null; then
+      echo "multileg broker already running for $run_root (pid=$owner)" >&2
+      exit 75
+    fi
+    rm -rf "$lock_dir"
+    continue
   fi
 
   # A just-created lock can exist briefly before its owner PID is visible.
-  # Wait before considering it stale so simultaneous supervisors cannot both
-  # launch a broker. A stale lock is safe to remove because its recorded PID
-  # is absent or no longer alive.
+  # Wait before considering a pid-less lock stale so simultaneous supervisors
+  # cannot both launch a broker.
   if ((attempt < 20)); then
     sleep 0.1
     continue
