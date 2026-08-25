@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "research_state": "CURRENT_FILL_ACTIVE_POLICIES_REJECTED_MORE_EVIDENCE_REQUIRED",
+  "source": {
+    "pull_request": 386,
+    "head_sha_before_evidence_update": "9b60800e4100ba35e8c62bda00567828bd4c4bc4",
+    "workflow_run_id": 32892358532,
+    "artifact_id": 9580256419,
+    "artifact_digest": "sha256:d988aa0332f06e108dc746fcc3eda1defcf232dbfa7efdd63a75bf63061e0d02",
+    "artifact_created_at": "2026-08-25T20:05:57Z"
+  },
+  "paper_envelope": {
+    "markets": 1000,
+    "min_liquidity_usd": 2.0,
+    "post_cost_min_edge": 0.00005,
+    "fractional_kelly": 0.25,
+    "max_trade_usd": 125.0,
+    "max_market_fraction": 0.05,
+    "max_event_fraction": 0.15,
+    "max_gross_fraction": 0.70,
+    "max_drawdown": 0.15,
+    "paper_only": true,
+    "authenticated_execution": false
+  },
+  "common_sample": {
+    "seconds": 360,
+    "ttl_seconds": 60,
+    "hold_seconds": 60,
+    "flow_lookback_seconds": 120,
+    "min_fill_probability": 0.005,
+    "target_fill_probability": 0.10,
+    "hazard_aware_dead_queue_recycling": true
+  },
+  "policies": {
+    "current_flow_gate": {
+      "max_improve_ticks": 3,
+      "posted_orders": 32,
+      "posts_with_positive_projected_clearance": 32,
+      "posts_with_future_compatible_flow": 6,
+      "maker_buy_events": 2,
+      "maker_buy_shares": 55.535,
+      "taker_exit_events": 1,
+      "taker_exit_shares": 48.695,
+      "open_maker_shares_at_audit": 6.84,
+      "realized_closed_pnl_usd": -0.985343325,
+      "fill_conditioned_pnl_per_closed_share": -0.020235,
+      "order_actions": {
+        "POST": 32,
+        "CANCEL_TTL": 4,
+        "CANCEL_ZERO_CAUSAL_FLOW": 21
+      },
+      "decision": "REJECT_CURRENT_POLICY_ON_WINDOW"
+    },
+    "at_touch_no_improve": {
+      "max_improve_ticks": 0,
+      "posted_orders": 32,
+      "posts_with_future_compatible_flow": 8,
+      "maker_buy_events": 2,
+      "maker_buy_shares": 48.795,
+      "taker_exit_events": 2,
+      "taker_exit_shares": 48.795,
+      "open_maker_shares_at_audit": 0.0,
+      "realized_closed_pnl_usd": -1.47305235,
+      "fill_conditioned_pnl_per_closed_share": -0.0301885921,
+      "order_actions": {
+        "POST": 32,
+        "CANCEL_TTL": 7,
+        "CANCEL_ZERO_CAUSAL_FLOW": 18
+      },
+      "decision": "REJECT_CURRENT_POLICY_ON_WINDOW"
+    },
+    "confidence_gated_inside": {
+      "max_improve_ticks": 3,
+      "min_inside_confidence": 0.80,
+      "posted_orders": 30,
+      "posts_with_future_compatible_flow": 3,
+      "maker_buy_events": 0,
+      "maker_buy_shares": 0.0,
+      "closed_round_trips": 0,
+      "realized_closed_pnl_usd": 0.0,
+      "order_actions": {
+        "POST": 30,
+        "CANCEL_TTL": 5,
+        "CANCEL_ZERO_CAUSAL_FLOW": 20
+      },
+      "decision": "ZERO_FILL_DESPITE_CAUSAL_FLOW"
+    }
+  },
+  "material_adverse_fill": {
+    "market_id": "3128887",
+    "side": "NO",
+    "order_created_ts": 1787688060,
+    "limit_price": 0.49,
+    "filled_closed_shares": 48.695,
+    "initial_queue_ahead_shares": 194.78,
+    "signal_edge": 0.000571471393,
+    "confidence": 0.848193282,
+    "fill_probability_proxy": 0.813696155,
+    "expected_fill_edge": 0.000465004076,
+    "prior_compatible_sell_rate_per_second": 17.7199,
+    "exit_price_after_slippage": 0.469765,
+    "realized_pnl_usd": -0.985343325,
+    "realized_pnl_per_closed_share": -0.020235,
+    "fee_source": "gamma:fees_disabled",
+    "diagnosis": "High modeled fill probability coincided with a large compatible SELL wave that repriced through the maker quote. This is adverse-selection evidence: fill hazard is not alpha."
+  },
+  "structural_diagnosis": {
+    "finding": "Hazard-aware queue retention removed an artificial zero-fill mechanism, but the fill-active policies lost money in this independent common-sample window.",
+    "model_defect": "The current selection objective ranks quotes by signal_edge times fill_probability. Its microstructure confidence is based on liquidity, spread and YES/NO microprice parity, while the adverse-selection penalty is spread times one-minus-confidence. It does not explicitly estimate directional pre-entry flow toxicity or the conditional markout given a fill.",
+    "confidence_only_result": "A confidence floor of 0.80 avoided the observed losing fills in this timing sample but returned to zero fills, so confidence alone is not a sufficient execution policy.",
+    "required_next_challenger": [
+      "separate benign fill hazard from toxic directional fill hazard using only receive-time-causal pre-entry information",
+      "include microprice displacement, L1/L3/L5 imbalance and depth, OFI/contra-flow direction, queue ahead and submit/cancel latency",
+      "rank quotes by expected net fill-conditioned PnL rather than signal_edge times marginal fill probability",
+      "permit inside-spread improvement only when its incremental fill benefit still leaves positive toxicity-adjusted executable EV",
+      "record executable 45s, 60s and 300s post-fill markouts plus cancel-latency fills",
+      "evaluate common-sample chronological windows under 1x, 1.5x and 2x cost stress"
+    ]
+  },
+  "micro_taker": {
+    "markets": 120,
+    "books": 180,
+    "signals": 0,
+    "opened": 0,
+    "realized_pnl_usd": 0.0,
+    "newly_labeled_last_tick": 90,
+    "max_target_staleness_seconds": 2.0,
+    "missing_pre_horizon_targets": 0,
+    "decision": "DO_NOT_FORCE_FLAT_TARGET_TAKER_TRADES"
+  },
+  "hard_arb": {
+    "scanned_events": 3,
+    "authoritative_fee_schedules": 21,
+    "positive_candidates": 0,
+    "entered": 0,
+    "realized_pnl_usd": 0.0,
+    "atomic_snapshot_assumption": false,
+    "sequential_leg_revalidation": true,
+    "leg_latency_ms": 100,
+    "decision": "NO_THRESHOLD_RELAXATION_WITHOUT_EXECUTABLE_EDGE"
+  },
+  "hard_safety": {
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "state_integrity_required": true,
+    "market_event_gross_caps_unchanged": true,
+    "authenticated_real_money_execution": false
+  }
+}
