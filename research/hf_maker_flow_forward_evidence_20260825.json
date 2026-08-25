@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "research_state": "STRONG_CHALLENGER_MORE_EVIDENCE_REQUIRED",
+  "source": {
+    "pull_request": 338,
+    "head_sha": "b28c877d1d29c026c2d00c69081f71321d76c620",
+    "workflow_run_id": 32873037953,
+    "artifact": "v6-research-smoke-32873037953"
+  },
+  "paper_envelope": {
+    "markets": 1000,
+    "min_liquidity_usd": 2.0,
+    "post_cost_min_edge": 0.00005,
+    "fractional_kelly": 0.25,
+    "max_trade_usd": 125.0,
+    "max_market_fraction": 0.05,
+    "max_event_fraction": 0.15,
+    "max_gross_fraction": 0.70,
+    "max_drawdown": 0.15,
+    "authenticated_execution": false
+  },
+  "common_sample_seconds": 360,
+  "baseline": {
+    "posted_orders": 100,
+    "maker_buy_events": 0,
+    "maker_buy_shares": 0.0,
+    "closed_round_trips": 0,
+    "realized_closed_pnl_usd": 0.0,
+    "flow_active_posts": 0,
+    "posts_with_future_compatible_flow": 0,
+    "order_actions": {
+      "POST": 100,
+      "CANCEL_TTL": 82,
+      "SKIP_QUEUE": 2281
+    },
+    "decision": "ZERO_FILL_DEAD_FLOW"
+  },
+  "flow_gated_challenger": {
+    "posted_orders": 13,
+    "flow_active_posts": 13,
+    "posts_with_positive_projected_clearance": 13,
+    "posts_with_future_compatible_flow": 1,
+    "maker_buy_events": 1,
+    "maker_buy_shares": 128.8659793814433,
+    "taker_exit_events": 1,
+    "taker_exit_shares": 128.8659793814433,
+    "closed_round_trips": 1,
+    "realized_closed_pnl_usd": 1.366178589439453,
+    "fill_conditioned_pnl_per_closed_share": 0.010601545854050154,
+    "unmatched_sell_shares": 0.0,
+    "open_maker_shares_at_audit": 0.0,
+    "order_actions": {
+      "POST": 13,
+      "CANCEL_ZERO_CAUSAL_FLOW": 10
+    },
+    "decision": "POSITIVE_FILL_CONDITIONED_PNL"
+  },
+  "first_causal_fill": {
+    "market_id": "3825712",
+    "slug": "atp-ofner-nishiko-2026-08-25",
+    "side": "NO",
+    "order_created_ts": 1787676049,
+    "limit_price": 0.97,
+    "initial_queue_ahead_shares": 21129.8,
+    "fill_event_ts": 1787676066,
+    "fill_received_ms": 1787676077540,
+    "fill_trade_price": 0.95756,
+    "fill_trade_size": 148787.87,
+    "filled_shares": 128.8659793814433,
+    "exit_processing_ts": 1787676147,
+    "exit_price_after_slippage": 0.981509,
+    "exit_fee_usd": 0.11694,
+    "realized_pnl_usd": 1.366178589439453,
+    "causal_interpretation": "The public SELL trade occurred strictly after queue entry and before the 60-second order TTL, but arrived on the local tape about 11.54 seconds later. Replay-before-TTL-cancel correctly preserves this fill; the trade size was far larger than the modeled queue ahead plus our order size."
+  },
+  "micro_taker_control": {
+    "samples": 540,
+    "labeled": 360,
+    "post_horizon_labels": 0,
+    "max_target_staleness_seconds": 2,
+    "signals_last_tick": 0,
+    "opened_last_tick": 0,
+    "realized_pnl_usd": 0.0,
+    "decision": "DO_NOT_FORCE_TAKER_FROM_FLAT_OR_NON_EXECUTABLE_TARGETS"
+  },
+  "hard_arb_control": {
+    "scanned_events": 8,
+    "positive_candidates": 0,
+    "entered": 0,
+    "realized_pnl_usd": 0.0,
+    "sequential_leg_revalidation": true,
+    "atomic_snapshot_assumption": false
+  },
+  "interpretation": {
+    "material_result": "The causal flow gate eliminated most dead postings and produced the first completed positive-PnL maker round trip on the common chronological public-data window, while the baseline posted much more often and still produced zero fills.",
+    "not_yet_proven": "One closed fill is insufficient to establish stable positive expected fill-conditioned PnL or adverse-selection robustness.",
+    "next_required_evidence": [
+      "independent-window recurrence of actual maker fills",
+      "executable post-fill markouts at 45s, 60s and 300s",
+      "fill-hazard calibration by queue ahead, causal contra-flow, microprice, imbalance and OFI",
+      "cost stress and cancel-latency sensitivity",
+      "rebase onto current main before any integration consideration"
+    ]
+  }
+}
