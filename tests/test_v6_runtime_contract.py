@@ -141,6 +141,22 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("shutdown(){ trap - EXIT INT TERM; cleanup; exit 0; }", loop)
         self.assertIn("trap cleanup EXIT\ntrap shutdown INT TERM", loop)
 
+    def test_v6_runtime_requires_proven_proxy_port_and_single_broker_owner(self) -> None:
+        loop = (ROOT / "scripts" / "paper_v6_loop.sh").read_text(encoding="utf-8")
+        # A localhost health response alone is not evidence that it belongs to
+        # this runtime: a pre-handoff proxy can otherwise retain the fixed port.
+        self.assertIn("reap_stale_v6_proxy_listener", loop)
+        self.assertIn("stale_v6_proxy_listener_reaped=", loop)
+        self.assertIn("proxy_pid_owns_port", loop)
+        self.assertIn("wait_for_owned_proxy", loop)
+        self.assertIn("failed to start with verified port ownership", loop)
+        self.assertIn("lost verified listener ownership or health", loop)
+        # The same provenance guard applies to a stale broker writing the
+        # shared multi-leg state, without touching another run root.
+        self.assertIn("reap_stale_v6_brokers", loop)
+        self.assertIn("stale_v6_broker_reaped=", loop)
+        self.assertIn('"--run-dir"* && "$command_line" == *"$RUN_ROOT"', loop)
+
     def test_maker_fill_replay_is_late_index_safe_and_queue_aware(self) -> None:
         source = (ROOT / "src" / "maker_paper.cpp").read_text(encoding="utf-8")
         self.assertIn("{o.condition_id}, o.created_ts, tape_until, 10000", source)
