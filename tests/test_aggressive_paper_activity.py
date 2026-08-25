@@ -8,6 +8,13 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config" / "paper_v5.json"
 CHAMPION = ROOT / "config" / "live_champion.json"
 LAUNCHER = ROOT / "scripts" / "aggressive_paper_v5_loop.sh"
+INCUMBENT_EDGE_FLOORS = {
+    "micro": 0.00005,
+    "pca": 0.00020,
+    "graph": 0.00015,
+    "semantic": 0.00015,
+    "external": 0.00050,
+}
 
 
 class AggressivePaperActivityContractTest(unittest.TestCase):
@@ -37,8 +44,11 @@ class AggressivePaperActivityContractTest(unittest.TestCase):
             if not row.get("enabled"):
                 continue
             overrides = row["overrides"]
-            self.assertLessEqual(float(overrides["min_net_edge"]), 0.00010)
+            self.assertGreaterEqual(
+                float(overrides["min_net_edge"]), INCUMBENT_EDGE_FLOORS[row["expert"]]
+            )
             self.assertGreaterEqual(float(overrides["fractional_kelly"]), 0.25)
+            self.assertLessEqual(int(overrides["interval_seconds"]), 10)
             self.assertEqual(float(overrides["max_drawdown"]), 0.15)
             weighted_gross += float(row["capital_fraction"]) * float(
                 overrides["max_gross_fraction"]
@@ -54,6 +64,9 @@ class AggressivePaperActivityContractTest(unittest.TestCase):
         self.assertEqual(champion["deployment_ref"], "paper-validated")
         self.assertTrue(LAUNCHER.exists())
         self.assertTrue(LAUNCHER.stat().st_mode & 0o111)
+        launcher = LAUNCHER.read_text(encoding="utf-8")
+        self.assertIn('V5_MODEL_MARKETS:-1000', launcher)
+        self.assertIn('V5_INTENT_MIN_EDGE:-0.00025', launcher)
 
 
 if __name__ == "__main__":
