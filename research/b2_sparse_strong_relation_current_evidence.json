@@ -22,7 +22,19 @@
     "coherence_scope": "semantic:0.1429:1|semantic:0.1000:1|semantic:0.6000:3|semantic:0.1000:1",
     "strong_relation_gate": "reject",
     "weak_relation_certificates": 3,
-    "interpretation": "The only maker-positive incumbent B2 row in the latest public snapshot depends on three one-token low-similarity semantic hedge links. Its static maker edge is not accepted as LF alpha evidence until a same-event/strong-semantic sparse hedge survives common-sample cost stress and forward execution."
+    "maker_completion_break_even_if_unfilled_remainder_crosses_taker": 0.9457582362429228,
+    "interpretation": "The only maker-positive incumbent B2 row in the latest public snapshot depends on three one-token low-similarity semantic hedge links. Its static maker edge is not accepted as LF alpha evidence until a same-event/strong-semantic sparse hedge survives common-sample cost stress and forward execution. With a simple maker-versus-taker completion mixture, its quoted edges require about 94.58% maker completion to break even if the unfilled remainder crosses at the quoted taker economics."
+  },
+  "forward_maker_context": {
+    "last_generated_ts": 1787642866,
+    "probes_per_policy": 307,
+    "pair_fills_join": 0,
+    "pair_fills_improve1": 0,
+    "pair_fills_fade1": 0,
+    "pair_fill_rate_wilson_upper": 0.008735857369296423,
+    "join_60s_markout_per_share": -0.0020000000000000018,
+    "improve1_60s_markout_per_share": -0.0010905783921425982,
+    "interpretation": "This is generic forward maker evidence rather than candidate-specific B2 completion evidence. It cannot directly estimate the current basket fill probability, but it makes a 94.58% completion hurdle non-credible as a promotion assumption without direct event-time evidence."
   },
   "strong_relation_research_policy": {
     "same_event": "allow",
