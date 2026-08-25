@@ -87,7 +87,8 @@ class GrafanaMultiStrategyContractTests(unittest.TestCase):
             "polymarket_allocator_models_alive < polymarket_allocator_models_expected",
             alerts,
         )
-        self.assertIn("max(polymarket_model_status_age_seconds) > 60", alerts)
+        self.assertIn("max(polymarket_model_alert_staleness_seconds) > 60", alerts)
+        self.assertNotIn("max(polymarket_model_status_age_seconds) > 60", alerts)
         self.assertIn("max(polymarket_model_kill_switch) == 1", alerts)
         self.assertIn(
             "polymarket_allocator_global_gross_fraction > polymarket_allocator_global_max_gross_fraction",

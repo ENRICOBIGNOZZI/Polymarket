@@ -7,7 +7,10 @@ from http.server import ThreadingHTTPServer
 from exporter import ExporterHandler, Metrics, _float, _mtime, _read_csv, _read_json, parse_args
 from exporter_v4 import V4Collector
 
-EXPORTER_V5_VERSION = "1.1.0"
+EXPORTER_V5_VERSION = "1.2.0"
+START_EVENTS = {"start", "restart"}
+MODEL_OUTPUT_MAX_AGE_SECONDS = 120.0
+MODEL_STARTUP_GRACE_SECONDS = 600.0
 
 
 class V5Collector(V4Collector):
@@ -17,6 +20,16 @@ class V5Collector(V4Collector):
         now = time.time()
         allocator = _read_json(self.run_root / "allocator_status.json") or {}
         rows = _read_csv(self.run_root / "strategy_status.csv")
+        events = _read_csv(self.run_root / "allocator_events.csv")
+        latest_start: dict[str, float] = {}
+        for event in events:
+            name = str(event.get("strategy", ""))
+            if event.get("event") not in START_EVENTS or not name:
+                continue
+            timestamp = _float(event.get("timestamp"), -1.0)
+            if timestamp < 0.0:
+                continue
+            latest_start[name] = max(timestamp, latest_start.get(name, float("-inf")))
 
         metrics.sample(
             "polymarket_v5_exporter_info",
@@ -96,7 +109,18 @@ class V5Collector(V4Collector):
         )
 
         for row in rows:
-            labels = {"model": row.get("name", "unknown"), "expert": row.get("expert", "unknown")}
+            model_name = row.get("name", "unknown")
+            labels = {"model": model_name, "expert": row.get("expert", "unknown")}
+            status_age = max(0.0, _float(row.get("status_age_seconds")))
+            start_timestamp = latest_start.get(model_name)
+            start_age = now - start_timestamp if start_timestamp is not None else float("inf")
+            startup_grace_active = (
+                _float(row.get("alive")) > 0.0
+                and status_age > MODEL_OUTPUT_MAX_AGE_SECONDS
+                and start_timestamp is not None
+                and -5.0 <= start_age <= MODEL_STARTUP_GRACE_SECONDS
+            )
+            alert_staleness = 0.0 if startup_grace_active else status_age
             fields = {
                 "polymarket_model_info": (1.0, "Independent V5 paper model metadata."),
                 "polymarket_model_capital_fraction": (_float(row.get("capital_fraction")), "Fraction of V5 parent paper capital allocated to the model."),
@@ -111,7 +135,19 @@ class V5Collector(V4Collector):
                 "polymarket_model_open_positions": (_float(row.get("open_positions")), "Current open positions by model."),
                 "polymarket_model_kill_switch": (_float(row.get("killed")), "Model-local paper kill-switch state."),
                 "polymarket_model_alive": (_float(row.get("alive")), "Whether the independent model process is alive."),
-                "polymarket_model_status_age_seconds": (_float(row.get("status_age_seconds")), "Age of the model status snapshot."),
+                "polymarket_model_status_age_seconds": (status_age, "Raw age of the model status snapshot."),
+                "polymarket_model_alert_staleness_seconds": (
+                    alert_staleness,
+                    "Model status age used for alerting; zero only during bounded pre-first-output startup grace.",
+                ),
+                "polymarket_model_startup_grace_active": (
+                    1.0 if startup_grace_active else 0.0,
+                    "Whether the live model is inside the bounded 600-second pre-first-output startup grace.",
+                ),
+                "polymarket_model_start_age_seconds": (
+                    max(0.0, start_age) if start_timestamp is not None else 1e12,
+                    "Age of the latest allocator start or restart event for the model.",
+                ),
                 "polymarket_model_restarts_total": (_float(row.get("restarts")), "Allocator-observed process restarts by model."),
             }
             for name, (value, help_text) in fields.items():

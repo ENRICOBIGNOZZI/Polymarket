@@ -140,13 +140,13 @@ groups:
           description: At least one independent micro, PCA, graph, semantic, or external paper book is not running.
 
       - alert: PolymarketV5ModelStateStale
-        expr: max(polymarket_model_status_age_seconds) > 60
+        expr: max(polymarket_model_alert_staleness_seconds) > 60
         for: 2m
         labels:
           severity: critical
         annotations:
           summary: An independent V5 model state is stale
-          description: At least one model book has not refreshed its paper state for more than 60 seconds.
+          description: At least one model book is stale outside the bounded pre-first-output startup grace; risk and PnL visibility require review.
 
       - alert: PolymarketV5ModelKillSwitchActive
         expr: max(polymarket_model_kill_switch) == 1

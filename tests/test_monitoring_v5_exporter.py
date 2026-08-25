@@ -65,35 +65,45 @@ class MonitoringV5ExporterTests(unittest.TestCase):
                 "realized_pnl", "peak_equity", "drawdown", "gross_exposure", "open_positions", "killed", "alive",
                 "status_age_seconds", "restarts", "fills", "buy_fills", "sell_fills", "settle_fills", "last_error",
             ]
-            with (run / "strategy_status.csv").open("w", encoding="utf-8", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=fields)
-                writer.writeheader()
-                writer.writerow(
-                    {
-                        "timestamp": now,
-                        "name": "graph",
-                        "expert": "graph",
-                        "capital_fraction": 0.30,
-                        "starting_capital": 3000,
-                        "cash": 2940,
-                        "equity": 3012.5,
-                        "pnl": 12.5,
-                        "realized_pnl": 4.0,
-                        "peak_equity": 3020,
-                        "drawdown": 0.0025,
-                        "gross_exposure": 72.5,
-                        "open_positions": 2,
-                        "killed": 0,
-                        "alive": 1,
-                        "status_age_seconds": 2,
-                        "restarts": 0,
-                        "fills": 3,
-                        "buy_fills": 2,
-                        "sell_fills": 1,
-                        "settle_fills": 0,
-                        "last_error": "",
-                    }
-                )
+
+            def write_strategy_status(status_age: float) -> None:
+                with (run / "strategy_status.csv").open("w", encoding="utf-8", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=fields)
+                    writer.writeheader()
+                    writer.writerow(
+                        {
+                            "timestamp": now,
+                            "name": "graph",
+                            "expert": "graph",
+                            "capital_fraction": 0.30,
+                            "starting_capital": 3000,
+                            "cash": 2940,
+                            "equity": 3012.5,
+                            "pnl": 12.5,
+                            "realized_pnl": 4.0,
+                            "peak_equity": 3020,
+                            "drawdown": 0.0025,
+                            "gross_exposure": 72.5,
+                            "open_positions": 2,
+                            "killed": 0,
+                            "alive": 1,
+                            "status_age_seconds": status_age,
+                            "restarts": 0,
+                            "fills": 3,
+                            "buy_fills": 2,
+                            "sell_fills": 1,
+                            "settle_fills": 0,
+                            "last_error": "",
+                        }
+                    )
+
+            def write_start_event(timestamp: float) -> None:
+                with (run / "allocator_events.csv").open("w", encoding="utf-8", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=["timestamp", "event", "strategy"])
+                    writer.writeheader()
+                    writer.writerow({"timestamp": timestamp, "event": "start", "strategy": "graph"})
+
+            write_strategy_status(2)
             with (strategy / "signals.csv").open("w", encoding="utf-8", newline="") as handle:
                 writer = csv.DictWriter(handle, fieldnames=["cost_adjusted_edge", "net_edge"])
                 writer.writeheader()
@@ -110,6 +120,18 @@ class MonitoringV5ExporterTests(unittest.TestCase):
             self.assertIn('polymarket_model_fills_total{action="all",expert="graph",model="graph"} 3', text)
             self.assertIn('polymarket_model_cost_positive_signals_total{expert="graph",model="graph"} 1', text)
             self.assertIn('polymarket_model_best_net_edge_ratio{expert="graph",model="graph"} 0.01', text)
+
+            write_strategy_status(1e12)
+            write_start_event(time.time())
+            startup_text = collector.collect()
+            self.assertIn('polymarket_model_status_age_seconds{expert="graph",model="graph"} 1e+12', startup_text)
+            self.assertIn('polymarket_model_alert_staleness_seconds{expert="graph",model="graph"} 0', startup_text)
+            self.assertIn('polymarket_model_startup_grace_active{expert="graph",model="graph"} 1', startup_text)
+
+            write_start_event(time.time() - 601)
+            expired_text = collector.collect()
+            self.assertIn('polymarket_model_alert_staleness_seconds{expert="graph",model="graph"} 1e+12', expired_text)
+            self.assertIn('polymarket_model_startup_grace_active{expert="graph",model="graph"} 0', expired_text)
 
 
 if __name__ == "__main__":
