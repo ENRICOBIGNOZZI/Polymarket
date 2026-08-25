@@ -77,8 +77,40 @@ write_supervisor(){
 cleanup(){ for p in "$rec_pid" "$broker_pid" "$external_pid" "$proxy_pid";do if ((p>0));then kill "$p" 2>/dev/null||true;fi;done;for p in "$rec_pid" "$broker_pid" "$external_pid" "$proxy_pid";do if ((p>0));then wait "$p" 2>/dev/null||true;fi;done; }
 shutdown(){ trap - EXIT INT TERM; cleanup; exit 0; }
 parent_runtime_alive(){ [[ -z "$RUNTIME_PARENT_PID" ]] || kill -0 "$RUNTIME_PARENT_PID" 2>/dev/null; }
+is_orphan_v6_loop(){
+  local pid="$1" parent
+  [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" != "$$" ]] || return 1
+  parent="$(/bin/ps -o ppid= -p "$pid" 2>/dev/null | /usr/bin/tr -d '[:space:]')"
+  [[ "$parent" == "1" ]]
+}
+reap_orphan_v6_loops(){
+  # A pre-handoff loop from an older deployment cannot know about the parent
+  # liveness contract above. It is safe to retire only a same-repository V6
+  # loop that launchd has already orphaned (PPID 1); a live sibling fails
+  # closed rather than being touched.
+  [[ -n "$RUNTIME_PARENT_PID" ]] || return 0
+  command -v pgrep >/dev/null 2>&1 || return 0
+  local pid remaining attempt
+  for ((attempt=1; attempt<=25; ++attempt)); do
+    remaining=0
+    while IFS= read -r pid; do
+      if is_orphan_v6_loop "$pid"; then
+        remaining=1
+        if (( attempt == 1 )); then
+          echo "orphan_v6_loop_reaped=$pid" >&2
+          kill -TERM "$pid" 2>/dev/null || true
+        fi
+      fi
+    done < <(pgrep -f "$ROOT/scripts/paper_v6_loop.sh" 2>/dev/null || true)
+    (( remaining == 0 )) && return 0
+    sleep 0.2
+  done
+  echo "fatal: orphaned V6 loop did not exit before startup" >&2
+  return 1
+}
 trap cleanup EXIT
 trap shutdown INT TERM
+reap_orphan_v6_loops
 start_proxy
 proxy_ready=0
 for _ in {1..50};do
