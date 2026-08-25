@@ -40,19 +40,27 @@ class V6RuntimeContractTest(unittest.TestCase):
     def test_aggressive_paper_profile_and_hard_safety_contracts(self) -> None:
         cfg = json.loads((ROOT / "config/paper_v6.json").read_text())
         v6 = cfg["v6"]
-        total = sum(float(v6[key]) for key in (
-            "micro_maker_capital_fraction",
-            "micro_taker_capital_fraction",
-            "relative_value_capital_fraction",
-            "hard_arb_capital_fraction",
-            "external_capital_fraction",
-            "reserve_fraction",
-        ))
+        expected_allocations = {
+            "micro_maker_capital_fraction": 0.22,
+            "micro_taker_capital_fraction": 0.12,
+            "relative_value_capital_fraction": 0.34,
+            "hard_arb_capital_fraction": 0.22,
+            "external_capital_fraction": 0.08,
+            "reserve_fraction": 0.02,
+        }
+        total = sum(float(v6[key]) for key in expected_allocations)
         self.assertTrue(math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-12))
+        for key, expected in expected_allocations.items():
+            self.assertEqual(float(v6[key]), expected, key)
+        self.assertEqual(int(cfg["market_limit"]), 1000)
         self.assertEqual(float(cfg["min_liquidity"]), 2.0)
         self.assertEqual(float(cfg["min_net_edge"]), 0.00005)
+        self.assertGreater(float(cfg["min_net_edge"]), 0.0)
+        self.assertEqual(float(v6["intent_min_edge"]), 0.00005)
+        self.assertEqual(float(v6["hard_arb_min_net_edge"]), 0.00005)
         self.assertEqual(float(cfg["fractional_kelly"]), 0.25)
         self.assertEqual(float(cfg["max_trade_usd"]), 125.0)
+        self.assertEqual(float(v6["hard_arb_max_trade_usd"]), 125.0)
         self.assertEqual(float(cfg["max_market_fraction"]), 0.05)
         self.assertEqual(float(cfg["max_event_fraction"]), 0.15)
         self.assertEqual(float(cfg["max_gross_fraction"]), 0.70)
