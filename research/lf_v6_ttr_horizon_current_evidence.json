@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-25T11:23:54Z",
+  "base_main_sha": "3d12478bb5c6d50de46d559e35cc9631b9545804",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "finding": {
+    "title": "V6 local-factor markout horizon is not bound to time-to-resolution",
+    "source_path": "scripts/v6_local_factor_intents.py",
+    "facts": [
+      "Market metadata used by the local-factor model has no expiry/resolution field.",
+      "The intended hold is set from two residual half-lives, capped at 24, and converted to wall-clock time with a fixed 3600 seconds per bar.",
+      "The candidate expected residual change is one-step, while the intended hold can span many bars.",
+      "Therefore a local-factor bundle can schedule its modeled markout exit after the market has already resolved, where the assumed future bid/ask exit no longer exists.",
+      "The hold conversion is only dimensionally correct at the current 60-minute history fidelity."
+    ]
+  },
+  "deterministic_fixture": {
+    "phi": 0.9,
+    "fidelity_minutes": 60,
+    "half_life_bars": 6.578813478960585,
+    "incumbent_hold_hours": 13.15762695792117,
+    "time_to_resolution_hours": 2.0,
+    "incumbent_exit_after_resolution_hours": 11.15762695792117,
+    "guarded_hold_hours_with_15m_exit_buffer": 1.75,
+    "one_step_residual_change_per_unit_deviation": -0.1,
+    "guarded_horizon_matched_change_per_unit_deviation": -0.1683810221749238,
+    "interpretation": "This is a model-contract counterexample, not a live PnL estimate."
+  },
+  "current_public_evidence": {
+    "alpha_factory_generated_at": "2026-08-25T11:14:47Z",
+    "champion_version": 6,
+    "b1_candidates": 0,
+    "b2_candidates": 0,
+    "external_feed_rows_seen_by_alpha_factory": 0,
+    "oos_trades": 0,
+    "recommended_canary": "none",
+    "external_intelligence_generated_at": "2026-08-25T10:47:52Z",
+    "external_status": "BACKTESTING",
+    "external_stored_observations": 9297,
+    "external_stored_price_snapshots": 4537,
+    "external_gate_passes": 0,
+    "external_examples": {
+      "binance_return_5m_3600s": {
+        "oos_predictions": 205,
+        "trades": 47,
+        "normal_pnl_per_share": -0.488,
+        "two_x_cost_pnl_per_share": -0.221
+      },
+      "binance_realized_vol_24h_21600s": {
+        "oos_predictions": 2736,
+        "trades": 248,
+        "normal_pnl_per_share": -1.5235,
+        "two_x_cost_pnl_per_share": -1.7005
+      }
+    }
+  },
+  "successor_experiment": {
+    "prerequisites": [
+      "carry point-in-time expiry/resolution timestamp into V6 local-factor market metadata",
+      "use fidelity_minutes when converting AR half-life bars into wall-clock time",
+      "cap the markout hold at time-to-resolution minus a pre-resolution exit buffer",
+      "abstain when no valid pre-resolution markout window remains",
+      "use AR n-step expected residual change for the actual guarded hold horizon",
+      "keep terminal-probability modeling separate from markout relative value",
+      "combine with leave-one-out/cross-fitted factor estimation and dependence-aware unit-root inference before interpreting FDR"
+    ],
+    "common_sample_profiles": {
+      "incumbent": {
+        "markets": 400,
+        "min_liquidity": 10,
+        "max_clusters": 15,
+        "min_common_points": 48,
+        "min_abs_z": 1.0
+      },
+      "paper_aggressive_after_repairs": {
+        "markets": 700,
+        "min_liquidity": 5,
+        "max_clusters": 30,
+        "min_common_points": 36,
+        "min_abs_z": 0.75
+      }
+    },
+    "unchanged_economics_and_hard_safety": {
+      "min_edge": 0.0002,
+      "max_trade_usd": 60,
+      "slippage_bps": 5,
+      "max_drawdown": 0.15,
+      "market_concentration": 0.025,
+      "event_concentration": 0.08,
+      "global_gross_cap": 0.45,
+      "authenticated_real_money_execution": false
+    },
+    "required_metrics": [
+      "candidate survival by time-to-resolution bucket",
+      "factor and hedge stability",
+      "pre-resolution exit feasibility",
+      "every-leg executable edge",
+      "partial-fill and unwind PnL",
+      "portfolio net PnL and drawdown at 1x/1.5x/2x executable costs"
+    ]
+  },
+  "external_wiring_note": "Do not duplicate the current V6 external startup fix: draft PR #272 already materializes the fail-closed approved q_external feed before starting the external engine. Current external evidence has zero passing direct terminal models, so the correct present feed remains abstention/header-only rather than fabricated probabilities."
+}
