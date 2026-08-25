@@ -41,11 +41,13 @@ class V6RuntimeContractTest(unittest.TestCase):
         total = sum(float(v6[key]) for key in (
             "micro_maker_capital_fraction",
             "micro_taker_capital_fraction",
-            "multileg_capital_fraction",
+            "relative_value_capital_fraction",
+            "hard_arb_capital_fraction",
             "external_capital_fraction",
             "reserve_fraction",
         ))
         self.assertTrue(math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-12))
+        self.assertGreater(float(v6["hard_arb_capital_fraction"]), 0.0)
         self.assertEqual(float(cfg["max_drawdown"]), 0.15)
         self.assertEqual(float(cfg["max_market_fraction"]), 0.025)
         self.assertEqual(float(cfg["max_event_fraction"]), 0.08)
@@ -58,17 +60,13 @@ class V6RuntimeContractTest(unittest.TestCase):
     def test_threshold_parser_recognizes_nested_crypto_contracts(self) -> None:
         low = self.relations.threshold_signature("Will Bitcoin reach $82,500 in August 2026?")
         high = self.relations.threshold_signature("Will Bitcoin reach $90,000 in August 2026?")
-        self.assertIsNotNone(low)
-        self.assertIsNotNone(high)
-        self.assertEqual(low[0], high[0])
-        self.assertEqual(low[1], "UP")
-        self.assertLess(low[2], high[2])
+        self.assertIsNotNone(low); self.assertIsNotNone(high)
+        self.assertEqual(low[0], high[0]); self.assertEqual(low[1], "UP"); self.assertLess(low[2], high[2])
 
     def test_local_factor_cluster_is_not_one_market_pca(self) -> None:
         family1 = self.local_factor.payoff_family("Will Bitcoin reach $82,500 in August 2026?")
         family2 = self.local_factor.payoff_family("Will Bitcoin reach $90,000 in August 2026?")
-        self.assertEqual(family1, family2)
-        self.assertIsNotNone(family1)
+        self.assertEqual(family1, family2); self.assertIsNotNone(family1)
 
     def test_bh_cutoff_controls_multiple_reversion_tests(self) -> None:
         self.assertAlmostEqual(self.local_factor.bh_cutoff([0.001, 0.02, 0.20, 0.80], 0.10), 0.02)
@@ -77,9 +75,7 @@ class V6RuntimeContractTest(unittest.TestCase):
     def test_ar_fit_requires_actual_mean_reversion(self) -> None:
         residual = [(-1.0) ** i * (0.8 ** i) for i in range(60)]
         phi, tstat, _, sd = self.local_factor.ar_fit(residual)
-        self.assertGreater(sd, 0.0)
-        self.assertLess(phi, 0.999)
-        self.assertLess(tstat, 0.0)
+        self.assertGreater(sd, 0.0); self.assertLess(phi, 0.999); self.assertLess(tstat, 0.0)
 
     def test_v6_execution_excludes_global_pca_semantic_and_weak_b1(self) -> None:
         loop = (ROOT / "scripts/paper_v6_loop.sh").read_text()
@@ -94,6 +90,7 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("v6_local_factor_intents.py", loop)
         self.assertIn("v6_relation_intents.py", loop)
         self.assertIn("v6_micro_taker.py", loop)
+        self.assertIn("v6_hard_arb_paper.py", loop)
         self.assertIn("polymarket_maker_paper", loop)
 
 
