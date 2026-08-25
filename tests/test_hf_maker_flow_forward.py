@@ -141,7 +141,7 @@ class HFMakerFlowForwardTest(unittest.TestCase):
             self.assertEqual(flow.compatible_sell_volume("t", 0.41, lookback_seconds=120), 30.0)
             self.assertEqual(flow.compatible_sell_count("t", 0.41, lookback_seconds=120), 1)
 
-    def test_tape_flow_rate_decays_by_market_event_age_not_delivery_age(self) -> None:
+    def test_tape_flow_raw_rate_decays_by_market_event_age_not_delivery_age(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tape = Path(tmp) / "trade_tape.csv"
             fields = ["timestamp", "received_ms", "asset_id", "side", "price", "size"]
@@ -150,11 +150,39 @@ class HFMakerFlowForwardTest(unittest.TestCase):
                 {"timestamp": 995, "received_ms": 999000, "asset_id": "fresh", "side": "SELL", "price": 0.40, "size": 100},
             ])
             flow = TapeFlow.from_csv(tape, lookback_seconds=120, now=1000)
-            old_rate = flow.compatible_sell_rate("old", 0.41, lookback_seconds=120)
-            fresh_rate = flow.compatible_sell_rate("fresh", 0.41, lookback_seconds=120)
+            old_rate = flow.compatible_sell_raw_rate("old", 0.41, lookback_seconds=120)
+            fresh_rate = flow.compatible_sell_raw_rate("fresh", 0.41, lookback_seconds=120)
             self.assertEqual(flow.compatible_sell_recency("old", 0.41, lookback_seconds=120), 110.0)
             self.assertEqual(flow.compatible_sell_receive_recency("old", 0.41, lookback_seconds=120), 1.0)
             self.assertLess(old_rate, 0.20 * fresh_rate)
+
+    def test_single_flow_burst_does_not_create_stationary_fill_hazard(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tape = Path(tmp) / "trade_tape.csv"
+            fields = ["timestamp", "received_ms", "asset_id", "side", "price", "size"]
+            write_csv(tape, fields, [
+                {"timestamp": 995, "received_ms": 999000, "asset_id": "t", "side": "SELL", "price": 0.40, "size": 100},
+                {"timestamp": 996, "received_ms": 999100, "asset_id": "t", "side": "SELL", "price": 0.40, "size": 50},
+            ])
+            flow = TapeFlow.from_csv(tape, lookback_seconds=120, now=1000)
+            self.assertGreater(flow.compatible_sell_raw_rate("t", 0.41, lookback_seconds=120), 0.0)
+            self.assertEqual(flow.compatible_sell_burst_count("t", 0.41, lookback_seconds=120), 1)
+            self.assertEqual(flow.compatible_sell_recurrence_confidence("t", 0.41, lookback_seconds=120), 0.0)
+            self.assertEqual(flow.compatible_sell_rate("t", 0.41, lookback_seconds=120), 0.0)
+
+    def test_two_separated_flow_bursts_receive_leave_one_burst_out_shrinkage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tape = Path(tmp) / "trade_tape.csv"
+            fields = ["timestamp", "received_ms", "asset_id", "side", "price", "size"]
+            write_csv(tape, fields, [
+                {"timestamp": 970, "received_ms": 971000, "asset_id": "t", "side": "SELL", "price": 0.40, "size": 100},
+                {"timestamp": 995, "received_ms": 999000, "asset_id": "t", "side": "SELL", "price": 0.40, "size": 100},
+            ])
+            flow = TapeFlow.from_csv(tape, lookback_seconds=120, now=1000)
+            raw = flow.compatible_sell_raw_rate("t", 0.41, lookback_seconds=120)
+            self.assertEqual(flow.compatible_sell_burst_count("t", 0.41, lookback_seconds=120), 2)
+            self.assertAlmostEqual(flow.compatible_sell_recurrence_confidence("t", 0.41, lookback_seconds=120), 0.5)
+            self.assertAlmostEqual(flow.compatible_sell_rate("t", 0.41, lookback_seconds=120), 0.5 * raw)
 
     def test_delayed_tape_row_inside_live_ttl_remains_replayable(self) -> None:
         order = {"created_ts": 100}
