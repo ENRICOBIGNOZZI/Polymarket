@@ -8,6 +8,7 @@ import math
 import os
 import re
 import statistics
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -21,7 +22,7 @@ FIELDS = [
     "max_notional", "market_id", "side", "weight", "limit_price",
     "execution_deadline_ts", "hold_deadline_ts",
 ]
-THRESHOLD = re.compile(r"([$€£]?\s*\d[\d,]*(?:\.\d+)?\s*(?:k|m|b|%|bp|bps)?)", re.I)
+THRESHOLD = re.compile(r"([$â¬Â£]?\s*\d[\d,]*(?:\.\d+)?\s*(?:k|m|b|%|bp|bps)?)", re.I)
 DIRECTION = re.compile(r"\b(above|below|over|under|reach|exceed|dip|at least|at most|more than|less than)\b", re.I)
 NORMAL = statistics.NormalDist()
 
@@ -420,7 +421,7 @@ def build_pair_intent(key: str, signals: list[Candidate], books: dict[str,Book],
 
 def atomic_csv(path: Path, rows: list[dict[str,Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}.{threading.get_ident()}")
     with tmp.open("w", newline="", encoding="utf-8") as h:
         w = csv.DictWriter(h, fieldnames=FIELDS); w.writeheader(); w.writerows(rows)
     os.replace(tmp, path)
@@ -459,7 +460,10 @@ def main() -> int:
         "reversion_tests":len(all_candidates),"fdr":args.fdr,"bh_pvalue_cutoff":cutoff,"fdr_eligible_signals":len(eligible),
         "bundles":serial,"intent_rows":len(rows),"best_edge":max((float(r["expected_edge"]) for r in rows),default=0.0),"failures":failures,
     }
-    args.status.parent.mkdir(parents=True,exist_ok=True); tmp=args.status.with_suffix(args.status.suffix+".tmp"); tmp.write_text(json.dumps(status,indent=2,sort_keys=True)+"\n"); os.replace(tmp,args.status)
+    args.status.parent.mkdir(parents=True,exist_ok=True)
+    tmp=args.status.with_name(args.status.name+f".tmp.{os.getpid()}.{threading.get_ident()}")
+    tmp.write_text(json.dumps(status,indent=2,sort_keys=True)+"\n")
+    os.replace(tmp,args.status)
     print(json.dumps(status,sort_keys=True)); return 0
 
 
