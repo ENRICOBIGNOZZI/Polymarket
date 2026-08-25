@@ -4,6 +4,7 @@ from __future__ import annotations
 import gzip
 import importlib.util
 import json
+import math
 import subprocess
 import sys
 import tempfile
@@ -71,6 +72,88 @@ class ExternalIntelligenceTests(unittest.TestCase):
         )
         self.assertFalse(numbers)
         self.assertEqual(rejection, "critical_number_mismatch")
+
+    def test_kalshi_prefilter_rejects_cross_asset(self) -> None:
+        ethereum = self.kalshi("Ethereum above $100,000 on December 31 2026")
+        self.assertFalse(external.kalshi_candidate_compatible(self.market(), ethereum))
+        self.assertIsNone(external.match_kalshi(self.market(), [ethereum], self.config, self.now))
+
+    def test_crypto_threshold_probability_is_direct_and_bounded(self) -> None:
+        features = {
+            "spot": 90_000.0,
+            "return_5m": 0.001,
+            "return_1h": 0.003,
+            "return_24h": 0.01,
+            "realized_vol_24h": 0.04,
+        }
+        reach = external.crypto_threshold_probability(
+            self.market("Will Bitcoin reach $100,000 in August?"), "BTC", features, self.now, self.config
+        )
+        self.assertIsNotNone(reach)
+        assert reach is not None
+        q_reach, confidence, metadata = reach
+        self.assertGreater(q_reach, 0.05)
+        self.assertLess(q_reach, 0.997)
+        self.assertGreaterEqual(confidence, 0.35)
+        self.assertEqual(metadata["event_type"], "upper_barrier")
+
+        dip = external.crypto_threshold_probability(
+            self.market("Will Bitcoin dip to $75,000 in August?"), "BTC", features, self.now, self.config
+        )
+        self.assertIsNotNone(dip)
+        assert dip is not None
+        self.assertGreater(dip[0], 0.01)
+        self.assertEqual(dip[2]["event_type"], "lower_barrier")
+
+        crossed = dict(features, spot=105_000.0)
+        crossed_estimate = external.crypto_threshold_probability(
+            self.market("Will Bitcoin reach $100,000 in August?"), "BTC", crossed, self.now, self.config
+        )
+        assert crossed_estimate is not None
+        self.assertGreater(crossed_estimate[0], 0.99)
+
+    def test_crypto_threshold_probability_abstains_on_ranges(self) -> None:
+        features = {"spot": 100_000.0, "return_24h": 0.0, "realized_vol_24h": 0.04}
+        market = self.market("Will Bitcoin trade between $90,000 and $110,000 in August?")
+        self.assertIsNone(external.crypto_threshold_probability(market, "BTC", features, self.now, self.config))
+
+    def test_crypto_features_and_collector_emit_direct_probability(self) -> None:
+        rows = []
+        for index in range(289):
+            close = 90_000.0 * math.exp(0.00005 * index)
+            close_ts_ms = (self.now - (288 - index) * 300) * 1000
+            rows.append([0, 0, 0, 0, str(close), 0, close_ts_ms])
+        features, source_ts = external.crypto_features(rows)
+        self.assertGreater(features["spot"], 90_000.0)
+        original = external.fetch_binance_klines
+        external.fetch_binance_klines = lambda *args, **kwargs: rows
+        try:
+            observations, health, errors = external.collect_binance(
+                [self.market("Will Bitcoin reach $100,000 in August?")], self.config, self.now
+            )
+        finally:
+            external.fetch_binance_klines = original
+        self.assertFalse(errors)
+        self.assertEqual(health["BTC"]["status"], "ok")
+        direct = [row for row in observations if row["feature_name"] == "external_probability"]
+        self.assertEqual(len(direct), 1)
+        self.assertIsNotNone(direct[0]["q_external"])
+        self.assertEqual(direct[0]["source_event_ts"], source_ts)
+
+    def test_pm_history_uses_supported_interval_without_oversized_range(self) -> None:
+        calls = []
+        original = external.request_json
+        external.request_json = lambda url, **kwargs: calls.append(url) or {
+            "history": [{"t": self.now - 3600, "p": 0.5}]
+        }
+        try:
+            rows = external.fetch_pm_history("token", self.now - 14 * 86400, self.now)
+        finally:
+            external.request_json = original
+        self.assertEqual(len(rows), 1)
+        self.assertIn("interval=1m", calls[0])
+        self.assertNotIn("startTs", calls[0])
+        self.assertNotIn("endTs", calls[0])
 
     def test_gdelt_compact_timestamp(self) -> None:
         timestamp = external.parse_timestamp("20260824T154500Z")
