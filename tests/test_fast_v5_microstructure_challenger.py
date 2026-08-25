@@ -135,6 +135,9 @@ class V5MicrostructureSemanticsTest(unittest.TestCase):
             self.assertEqual(rows[1]["feed_latency_ms"], 55)
             self.assertGreater(rows[1]["ofi_l1"], 0.0)
             self.assertTrue(features.is_file())
+            loaded = purged._load_feature_rows(features)
+            self.assertEqual([row["received_ts_ms"] for row in loaded], [1787613000050, 1787613001055])
+            self.assertEqual([row["exchange_ts_ms"] for row in loaded], [1787613000000, 1787613001000])
 
     def test_receive_time_label_does_not_time_travel_on_reordered_messages(self) -> None:
         common = {
