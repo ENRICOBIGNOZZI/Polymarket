@@ -1,0 +1,70 @@
+{
+  "schema": "polymarket_research_evidence_v1",
+  "research_question": "Does the current V5 OOS evidence layer measure the realized paper trades of the five independent child books, or only the separate multi-leg bundle ledger?",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "structural_finding": "OOS_ATTRIBUTION_GAP_CONFIRMED",
+  "alpha_claim": false,
+  "source_state": {
+    "main_sha": "d17e2fe27ee678ddb2352035d58a0865b20976a7",
+    "paper_validated_sha": "d17e2fe27ee678ddb2352035d58a0865b20976a7",
+    "champion_version": 5,
+    "champion_run_root": "runs/paper_v5_live",
+    "live_smoke_sha": "d17e2fe27ee678ddb2352035d58a0865b20976a7",
+    "live_smoke_generated_ts": 1787624005
+  },
+  "current_live_evidence": {
+    "runtime_equity_usd": 9985.87805139,
+    "runtime_pnl_usd": -14.1219486088,
+    "runtime_realized_pnl_usd": 0.0000972312249417,
+    "runtime_gross_exposure_usd": 211.251094196,
+    "runtime_live_units": 9,
+    "runtime_reserved_cash_usd": 500.0,
+    "runtime_drawdown_ratio": 0.00141219486088,
+    "runtime_kill_switch": 0,
+    "top_level_oos_trades": 0,
+    "top_level_oos_active_folds": 0,
+    "top_level_oos_net_pnl_usd": 0.0,
+    "top_level_oos_stressed_net_pnl_usd": 0.0,
+    "top_level_production_bundles": 0,
+    "b1_usable_series": 0,
+    "b2_status": "insufficient_series",
+    "trade_recorder_status": "healthy",
+    "trade_recorder_markets": 500,
+    "trade_recorder_new_trades": 5177
+  },
+  "source_contract": {
+    "paper_v5_loop": "scripts/paper_v5_loop.sh runs scripts/walk_forward_v4.py once per hour with --ledger $RUN_ROOT/bundle_ledger.csv and writes $RUN_ROOT/walk_forward.json.",
+    "legacy_walk_forward": "scripts/walk_forward_v4.py only admits CLOSED/UNWOUND bundle-ledger rows with positive entry_cash as OOS trades.",
+    "v5_child_books": "scripts/multi_strategy_paper.py runs each V5 sleeve in runs/paper_v5_live/strategies/<name>, reads each child status/fills/broker_state, and aggregates child equity, realized PnL, gross exposure and live positions.",
+    "oos_publication": "scripts/multi_strategy_paper.py publishes OOS fields from the single top-level walk_forward.json rather than reconstructing the child fills it otherwise aggregates.",
+    "child_execution_files": "src/engine.cpp persists signals.csv, fills.csv and broker_state.csv for each child book; fills contain BUY/SELL/SETTLE paper executions."
+  },
+  "interpretation": {
+    "confirmed": "V5 can hold child-book positions and produce aggregate mark-to-market PnL while the official OOS gate remains at zero because the gate is fed only by the separate multi-leg bundle ledger.",
+    "not_confirmed": "The observed negative current runtime PnL is not yet a statistically valid strategy-level OOS estimate because child closed-trade lineage has not been reconstructed and cost-stressed by sleeve.",
+    "impact": "Cross-sleeve capital research such as PR #169 cannot be economically validated from the current top-level walk_forward.json alone."
+  },
+  "bounded_challenger": {
+    "script": "scripts/research_v5_sleeve_oos.py",
+    "scope": "research-only attribution; no production mutation",
+    "entry_lineage": "Bind each BUY to the latest same-market/same-side signal at or before the fill timestamp within a bounded lag. Future signals cannot backfill lineage.",
+    "realization": "FIFO-match BUY lots to SELL/SETTLE fills; open inventory is never counted as realized OOS PnL.",
+    "base_costs": "Use recorded paper entry/exit prices and recorded protocol fees.",
+    "stress": "At 1.5x and 2x, subtract incremental recorded fees plus a configurable modeled slippage reserve on entry+exit turnover; base executable prices are not double-counted.",
+    "chronology": "Report sequential forward folds using only already-realized paper trades; no future signal may select an entry.",
+    "coverage_ablation": "Report legacy closed bundle inputs versus causally linked closed V5 child trades. This comparison is accounting coverage only, not alpha.",
+    "minimum_evidence": "At least 30 causally linked closed child trades, at least two active chronological folds, majority-positive 2x folds, positive aggregate 2x PnL, zero missing entry lineage, and zero unmatched exits."
+  },
+  "rollback_rejection_criteria": [
+    "Reject economic conclusions if entry signal lineage is missing or can be backfilled from the future.",
+    "Reject economic conclusions if exits cannot be matched to prior paper inventory.",
+    "Do not count open mark-to-market positions as realized OOS trades.",
+    "Do not promote on accounting coverage alone; require positive cost-stressed realized evidence and incumbent/challenger ablation.",
+    "Do not modify config/live_champion.json, production thresholds, sizing, drawdown/OOS gates, deployment, credentials or authenticated execution from this research branch."
+  ],
+  "coordination": {
+    "hf": "No queue/fill/latency model is changed; PRs #105, #123 and #147 remain the HF owners.",
+    "lf": "No PCA/reversion/semantic/external model is changed; LF research remains in #91, #106, #124, #128, #141, #165 and #171.",
+    "portfolio": "This attribution layer is intended as missing evidence infrastructure for PR #169, not a competing capital allocator."
+  }
+}
