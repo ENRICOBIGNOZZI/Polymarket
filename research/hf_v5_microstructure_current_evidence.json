@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "generated_date": "2026-08-25",
   "base_main_sha": "d6513fdbdf5ad8c8b7926b53fb7bba5acdab1257",
   "active_champion": {
@@ -106,7 +106,20 @@
   "aggressive_micro_forecast_warning": {
     "source_research_pr": 154,
     "state": "NO_HF_ECONOMIC_VALIDATION_FROM_CURRENT_EVIDENCE",
-    "reason": "the proposed extrapolative micro forecast uses contemporaneous microprice displacement and depth imbalance with fixed multipliers; the first live causal challenger using richer microprice/imbalance/OFI/spread/latency features is cost-negative at all tested horizons and stress levels, so current HF evidence does not justify interpreting the aggressive forecast as validated short-horizon alpha"
+    "reason": "the proposed extrapolative micro forecast uses contemporaneous microprice displacement and depth imbalance with fixed multipliers; the first live causal challenger using richer microprice/imbalance/OFI/spread/latency features is cost-negative at all tested horizons and stress levels, so current HF evidence does not justify interpreting the aggressive forecast as validated short-horizon alpha",
+    "coherent_mirrored_counterexample": {
+      "impact_multiplier": 2.5,
+      "imbalance_strength": 0.75,
+      "condition_for_mechanical_ask_cross_when_scale_is_half_spread": "abs(depth_imbalance) > 1 / (impact_multiplier + imbalance_strength)",
+      "threshold_abs_imbalance": 0.3076923076923077,
+      "fixture_yes_bid": 0.48,
+      "fixture_yes_ask": 0.50,
+      "fixture_bid_depth": 100.0,
+      "fixture_ask_depth": 50.0,
+      "fixture_abs_imbalance": 0.3333333333333333,
+      "fixture_gross_yes_taker_edge": 0.0008333333333333334,
+      "interpretation": "the extrapolation can manufacture a positive gross taker edge from a perfectly complement-coherent book without any forward-return evidence; therefore spread crossing is not itself proof of alpha"
+    }
   },
   "current_live_context": {
     "source": "telemetry/latest-live-smoke.json",
