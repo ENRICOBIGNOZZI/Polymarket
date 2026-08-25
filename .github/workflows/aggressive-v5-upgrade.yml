@@ -1,0 +1,97 @@
+name: Apply Aggressive V5 Main Upgrade
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - scripts/apply_aggressive_v5_20260825.py
+      - .github/workflows/aggressive-v5-upgrade.yml
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: aggressive-v5-main-upgrade
+  cancel-in-progress: false
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Apply aggressive paper-runtime upgrade
+        run: python3 scripts/apply_aggressive_v5_20260825.py
+
+      - name: Validate Python and JSON surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            scripts/apply_aggressive_v5_20260825.py \
+            scripts/filter_coherent_hedges.py \
+            scripts/summarize_live_smoke.py \
+            scripts/multi_strategy_paper.py \
+            tests/test_aggressive_v5_policy.py
+          python3 -m json.tool config/paper_v5.json >/dev/null
+          python3 -m json.tool config/aggressive_operations_policy.json >/dev/null
+          python3 tests/test_aggressive_v5_policy.py
+
+      - name: Build and run the complete test suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev python3
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+
+      - name: Commit validated upgrade to main
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            echo "No upgrade diff remained"
+            exit 0
+          fi
+          git config user.name "polymarket-operations-bot"
+          git config user.email "88671442+ENRICOBIGNOZZI@users.noreply.github.com"
+          git add CMakeLists.txt config src scripts tests .github/workflows
+          git commit -m "Activate aggressive five-sleeve V5 paper runtime"
+          if git push origin HEAD:main; then
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          branch="automation/aggressive-v5-$(date +%s)"
+          git push origin "HEAD:refs/heads/$branch"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+            --title "Activate aggressive five-sleeve V5 paper runtime" \
+            --body "Automated fallback: direct main push was rejected after the complete test suite passed."
+          pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --json number --jq '.[0].number')"
+          gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --squash --auto
+          echo "Direct main push was unavailable; PR #$pr has auto-merge enabled"
+          exit 1
+
+      - name: Dispatch exact-SHA live validation
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="${{ steps.publish.outputs.sha }}"
+          test -n "$sha"
+          # GITHUB_TOKEN-authored pushes do not recursively trigger workflows.
+          gh workflow run v4-live-smoke.yml --repo "$GITHUB_REPOSITORY" --ref main -f expected_sha="$sha"
+          echo "Dispatched live paper validation for $sha"
