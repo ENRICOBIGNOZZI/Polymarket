@@ -79,11 +79,9 @@ def resolve_fee_details(
     *,
     timeout: int = 10,
 ) -> FeeDetails:
-    """Resolve fee semantics with explicit provenance and fail-closed support."""
     gamma = _fee_from_gamma(raw_market)
     if gamma is not None:
         return gamma
-
     if condition_id:
         try:
             root = request_json(
@@ -104,7 +102,6 @@ def resolve_fee_details(
                     )
         except Exception:
             pass
-
     if token_id:
         try:
             root = request_json(
@@ -122,7 +119,6 @@ def resolve_fee_details(
                 )
         except Exception:
             pass
-
     return FeeDetails(0.07, 1.0, True, False, "legacy_unverified_fallback")
 
 
@@ -145,13 +141,7 @@ class TapeTrade:
 
 
 class TapeFlow:
-    """Causal public-flow view keyed to local receive time.
-
-    Exchange/event timestamps remain attached to each trade for queue replay, but
-    a trade can influence a posting decision only after the recorder actually
-    observed it. This prevents delayed Data API records from leaking into the
-    pre-order fill-hazard estimate.
-    """
+    """Causal public-flow view requiring both event and receive-time recency."""
 
     def __init__(self, trades: list[TapeTrade], now: int | None = None):
         self.now = int(time.time()) if now is None else int(now)
@@ -170,7 +160,9 @@ class TapeFlow:
         now: int | None = None,
     ) -> "TapeFlow":
         current = int(time.time()) if now is None else int(now)
-        cutoff_ms = (current - max(1, int(lookback_seconds))) * 1000
+        window = max(1, int(lookback_seconds))
+        cutoff_s = current - window
+        cutoff_ms = cutoff_s * 1000
         decision_ms = current * 1000
         trades: list[TapeTrade] = []
         try:
@@ -184,7 +176,7 @@ class TapeFlow:
                     size = finite(row.get("size"), 0.0)
                     if received_ms < cutoff_ms or received_ms > decision_ms:
                         continue
-                    if ts <= 0 or ts > current + 30:
+                    if ts < cutoff_s or ts > current + 30:
                         continue
                     if asset and side in {"BUY", "SELL"} and math.isfinite(price) and 0 < price < 1 and size > 0:
                         trades.append(TapeTrade(ts, received_ms, asset, side, price, size))
@@ -193,12 +185,16 @@ class TapeFlow:
         return cls(trades, now=current)
 
     def compatible_sell_trades(self, token_id: str, limit_price: float, *, lookback_seconds: int) -> list[TapeTrade]:
-        cutoff_ms = (self.now - max(1, int(lookback_seconds))) * 1000
+        window = max(1, int(lookback_seconds))
+        cutoff_s = self.now - window
+        cutoff_ms = cutoff_s * 1000
         decision_ms = self.now * 1000
         return [
             trade for trade in self.by_asset.get(token_id, [])
-            if cutoff_ms <= trade.received_ms <= decision_ms
-            and trade.side == "SELL" and trade.price <= limit_price + 1e-12
+            if trade.ts >= cutoff_s
+            and cutoff_ms <= trade.received_ms <= decision_ms
+            and trade.side == "SELL"
+            and trade.price <= limit_price + 1e-12
         ]
 
     def compatible_sell_volume(self, token_id: str, limit_price: float, *, lookback_seconds: int) -> float:
@@ -212,7 +208,6 @@ class TapeFlow:
         return float(self.now - rows[-1].received_ms / 1000.0) if rows else math.inf
 
     def compatible_sell_rate(self, token_id: str, limit_price: float, *, lookback_seconds: int) -> float:
-        """Recency-weighted compatible volume hazard in shares/second."""
         window = max(1.0, float(lookback_seconds))
         rows = self.compatible_sell_trades(token_id, limit_price, lookback_seconds=int(window))
         if not rows:
@@ -227,13 +222,15 @@ class TapeFlow:
         return weighted_volume / max(effective_seconds, 1e-9)
 
     def side_volume(self, token_id: str, side: str, *, lookback_seconds: int) -> float:
-        cutoff_ms = (self.now - max(1, int(lookback_seconds))) * 1000
+        window = max(1, int(lookback_seconds))
+        cutoff_s = self.now - window
+        cutoff_ms = cutoff_s * 1000
         decision_ms = self.now * 1000
         want = side.strip().upper()
         return sum(
             trade.size
             for trade in self.by_asset.get(token_id, [])
-            if cutoff_ms <= trade.received_ms <= decision_ms and trade.side == want
+            if trade.ts >= cutoff_s and cutoff_ms <= trade.received_ms <= decision_ms and trade.side == want
         )
 
     def signed_flow(self, token_id: str, *, lookback_seconds: int) -> float:
@@ -250,14 +247,6 @@ def fill_probability_proxy(
     horizon_seconds: float,
     prior_flow_per_second: float = 0.0,
 ) -> float:
-    """Conservative queue-capacity fill proxy, bounded in [0,1].
-
-    Positive probability requires observed compatible public flow. A requested
-    prior is capped by that observed rate, and queue + own size must be cleared.
-    `ratio/(1+ratio)` is deliberately less optimistic than treating expected
-    flow as a free exponential crossing probability; at expected flow equal to
-    required queue capacity it assigns 50%, not 63%.
-    """
     q = max(0.0, queue_ahead)
     own = max(1e-9, own_shares)
     observed_rate = max(0.0, compatible_flow_per_second)
