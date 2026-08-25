@@ -1,7 +1,5 @@
 {
-  "annotations": {
-    "list": []
-  },
+  "annotations": {"list": []},
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -14,1047 +12,249 @@
       "type": "stat",
       "title": "TOTAL PAPER PNL",
       "description": "Aggregate marked PnL of the independent model books.",
-      "gridPos": {
-        "x": 0,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_runtime_pnl_usd or vector(0)",
-          "instant": true
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD"
-        },
-        "overrides": []
-      }
+      "gridPos": {"x": 0, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_runtime_pnl_usd or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []}
     },
     {
       "id": 2,
       "type": "stat",
       "title": "Aggregate Equity",
-      "gridPos": {
-        "x": 4,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_runtime_equity_usd or vector(0)",
-          "instant": true
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD"
-        },
-        "overrides": []
-      }
+      "gridPos": {"x": 4, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_runtime_equity_usd or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []}
     },
     {
       "id": 3,
       "type": "stat",
       "title": "Aggregate Realized PnL",
-      "gridPos": {
-        "x": 8,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_runtime_realized_pnl_usd_total or vector(0)",
-          "instant": true
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD"
-        },
-        "overrides": []
-      }
+      "gridPos": {"x": 8, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_runtime_realized_pnl_usd_total or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []}
     },
     {
       "id": 4,
       "type": "stat",
       "title": "Global Drawdown",
-      "gridPos": {
-        "x": 12,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_runtime_drawdown_ratio or vector(0)",
-          "instant": true
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 0.075
-              },
-              {
-                "color": "red",
-                "value": 0.15
-              }
-            ]
-          }
-        },
-        "overrides": []
-      }
+      "gridPos": {"x": 12, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_runtime_drawdown_ratio or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.075}, {"color": "red", "value": 0.15}]}}, "overrides": []}
     },
     {
       "id": 5,
       "type": "stat",
       "title": "Models Alive / Expected",
-      "gridPos": {
-        "x": 16,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "gridPos": {"x": 16, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_allocator_models_alive or vector(0)",
-          "legendFormat": "alive",
-          "instant": true
-        },
-        {
-          "refId": "B",
-          "expr": "polymarket_allocator_models_expected or vector(0)",
-          "legendFormat": "expected",
-          "instant": true
-        }
+        {"refId": "A", "expr": "polymarket_allocator_models_alive or vector(0)", "legendFormat": "alive", "instant": true},
+        {"refId": "B", "expr": "polymarket_allocator_models_expected or vector(0)", "legendFormat": "expected", "instant": true}
       ],
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "horizontal",
-        "textMode": "value_and_name",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto"
-      },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      }
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "horizontal", "textMode": "value_and_name", "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {}, "overrides": []}
     },
     {
       "id": 6,
       "type": "stat",
       "title": "Global Kill Switch",
-      "gridPos": {
-        "x": 20,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_runtime_kill_switch or vector(0)",
-          "instant": true
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "OFF",
-                  "color": "green",
-                  "index": 0
-                },
-                "1": {
-                  "text": "ON",
-                  "color": "red",
-                  "index": 1
-                }
-              }
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      }
+      "gridPos": {"x": 20, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_runtime_kill_switch or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "OFF", "color": "green", "index": 0}, "1": {"text": "ON", "color": "red", "index": 1}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []}
     },
     {
       "id": 7,
       "type": "timeseries",
       "title": "PnL by Independent Strategy",
-      "gridPos": {
-        "x": 0,
-        "y": 4,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_model_pnl_usd{model=~\"$model\"}",
-          "legendFormat": "{{model}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never"
-          },
-          "unit": "currencyUSD"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_model_pnl_usd{model=~\"$model\"}", "legendFormat": "{{model}}"}],
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineInterpolation": "linear", "lineWidth": 1, "fillOpacity": 8, "showPoints": "never"}, "unit": "currencyUSD"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
       "id": 8,
       "type": "timeseries",
       "title": "Equity by Independent Strategy",
-      "gridPos": {
-        "x": 12,
-        "y": 4,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_model_equity_usd{model=~\"$model\"}",
-          "legendFormat": "{{model}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never"
-          },
-          "unit": "currencyUSD"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_model_equity_usd{model=~\"$model\"}", "legendFormat": "{{model}}"}],
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineInterpolation": "linear", "lineWidth": 1, "fillOpacity": 8, "showPoints": "never"}, "unit": "currencyUSD"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
       "id": 9,
       "type": "timeseries",
       "title": "Gross Exposure by Strategy",
-      "gridPos": {
-        "x": 0,
-        "y": 12,
-        "w": 8,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_model_gross_exposure_usd{model=~\"$model\"}",
-          "legendFormat": "{{model}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "never"
-          },
-          "unit": "currencyUSD"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
+      "gridPos": {"x": 0, "y": 12, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_model_gross_exposure_usd{model=~\"$model\"}", "legendFormat": "{{model}}"}],
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineInterpolation": "linear", "lineWidth": 1, "fillOpacity": 5, "showPoints": "never"}, "unit": "currencyUSD"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
       "id": 10,
       "type": "timeseries",
       "title": "Drawdown by Strategy",
-      "gridPos": {
-        "x": 8,
-        "y": 12,
-        "w": 8,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_model_drawdown_ratio{model=~\"$model\"}",
-          "legendFormat": "{{model}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "never"
-          },
-          "unit": "percentunit"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
+      "gridPos": {"x": 8, "y": 12, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_model_drawdown_ratio{model=~\"$model\"}", "legendFormat": "{{model}}"}],
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineInterpolation": "linear", "lineWidth": 1, "fillOpacity": 5, "showPoints": "never"}, "unit": "percentunit"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
       "id": 11,
       "type": "timeseries",
       "title": "Positions and Fills by Strategy",
-      "gridPos": {
-        "x": 16,
-        "y": 12,
-        "w": 8,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "gridPos": {"x": 16, "y": 12, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_model_open_positions{model=~\"$model\"}",
-          "legendFormat": "{{model}} positions"
-        },
-        {
-          "refId": "B",
-          "expr": "polymarket_model_fills_total{model=~\"$model\",action=\"all\"}",
-          "legendFormat": "{{model}} fills"
-        }
+        {"refId": "A", "expr": "polymarket_model_open_positions{model=~\"$model\"}", "legendFormat": "{{model}} positions"},
+        {"refId": "B", "expr": "polymarket_model_fills_total{model=~\"$model\",action=\"all\"}", "legendFormat": "{{model}} fills"}
       ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineInterpolation": "linear", "lineWidth": 1, "fillOpacity": 5, "showPoints": "never"}}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
       "id": 12,
       "type": "timeseries",
       "title": "Signal Funnel by Strategy",
-      "gridPos": {
-        "x": 0,
-        "y": 20,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "gridPos": {"x": 0, "y": 20, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_model_signals_total{model=~\"$model\"}",
-          "legendFormat": "{{model}} all"
-        },
-        {
-          "refId": "B",
-          "expr": "polymarket_model_cost_positive_signals_total{model=~\"$model\"}",
-          "legendFormat": "{{model}} cost+"
-        },
-        {
-          "refId": "C",
-          "expr": "polymarket_model_net_positive_signals_total{model=~\"$model\"}",
-          "legendFormat": "{{model}} net+"
-        }
+        {"refId": "A", "expr": "polymarket_model_signals_total{model=~\"$model\"}", "legendFormat": "{{model}} all"},
+        {"refId": "B", "expr": "polymarket_model_cost_positive_signals_total{model=~\"$model\"}", "legendFormat": "{{model}} cost+"},
+        {"refId": "C", "expr": "polymarket_model_net_positive_signals_total{model=~\"$model\"}", "legendFormat": "{{model}} net+"}
       ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "stepAfter",
-            "lineWidth": 1,
-            "fillOpacity": 3,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 1, "fillOpacity": 3, "showPoints": "never"}}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
       "id": 13,
       "type": "timeseries",
       "title": "Model Health and Staleness",
-      "gridPos": {
-        "x": 12,
-        "y": 20,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "gridPos": {"x": 12, "y": 20, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_model_alive{model=~\"$model\"}",
-          "legendFormat": "{{model}} alive"
-        },
-        {
-          "refId": "B",
-          "expr": "polymarket_model_status_age_seconds{model=~\"$model\"}",
-          "legendFormat": "{{model}} age s"
-        },
-        {
-          "refId": "C",
-          "expr": "polymarket_model_kill_switch{model=~\"$model\"}",
-          "legendFormat": "{{model}} killed"
-        }
+        {"refId": "A", "expr": "polymarket_model_alive{model=~\"$model\"}", "legendFormat": "{{model}} alive"},
+        {"refId": "B", "expr": "polymarket_model_status_age_seconds{model=~\"$model\"}", "legendFormat": "{{model}} age s"},
+        {"refId": "C", "expr": "polymarket_model_kill_switch{model=~\"$model\"}", "legendFormat": "{{model}} killed"}
       ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "fillOpacity": 3,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineInterpolation": "linear", "lineWidth": 1, "fillOpacity": 3, "showPoints": "never"}}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
       "id": 14,
       "type": "stat",
       "title": "Auxiliary Multi-leg PnL",
-      "gridPos": {
-        "x": 0,
-        "y": 28,
-        "w": 6,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_multileg_pnl_usd or vector(0)",
-          "instant": true
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD"
-        },
-        "overrides": []
-      }
+      "gridPos": {"x": 0, "y": 28, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_multileg_pnl_usd or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []}
     },
     {
       "id": 15,
       "type": "stat",
       "title": "Auxiliary Maker PnL",
-      "gridPos": {
-        "x": 6,
-        "y": 28,
-        "w": 6,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_maker_pnl_usd or vector(0)",
-          "instant": true
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD"
-        },
-        "overrides": []
-      }
+      "gridPos": {"x": 6, "y": 28, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_maker_pnl_usd or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []}
     },
     {
       "id": 16,
       "type": "stat",
       "title": "OOS Net PnL",
-      "gridPos": {
-        "x": 12,
-        "y": 28,
-        "w": 6,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_runtime_oos_net_pnl_usd or vector(0)",
-          "instant": true
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD"
-        },
-        "overrides": []
-      }
+      "gridPos": {"x": 12, "y": 28, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_runtime_oos_net_pnl_usd or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []}
     },
     {
       "id": 17,
       "type": "stat",
       "title": "Best Net Edge by Model",
-      "gridPos": {
-        "x": 18,
-        "y": 28,
-        "w": 6,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_model_best_net_edge_ratio{model=~\"$model\"}",
-          "legendFormat": "{{model}}",
-          "instant": true
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "horizontal",
-        "textMode": "value_and_name",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit"
-        },
-        "overrides": []
-      }
+      "gridPos": {"x": 18, "y": 28, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_model_best_net_edge_ratio{model=~\"$model\"}", "legendFormat": "{{model}}", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "horizontal", "textMode": "value_and_name", "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []}
     },
     {
       "id": 18,
       "type": "timeseries",
       "title": "V7 Evidence Eligibility by Model",
       "description": "A model becomes eligible only after its typed execution evidence passes; this panel never changes allocation.",
-      "gridPos": {
-        "x": 0,
-        "y": 32,
-        "w": 8,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_model_execution_evidence_eligible{model=~\"$model\"}",
-          "legendFormat": "{{model}} {{target}} {{state}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "stepAfter",
-            "lineWidth": 2,
-            "fillOpacity": 4,
-            "showPoints": "never"
-          },
-          "min": 0,
-          "max": 1,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
+      "gridPos": {"x": 0, "y": 32, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_model_execution_evidence_eligible{model=~\"$model\"}", "legendFormat": "{{model}} {{target}} {{state}}"}],
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 4, "showPoints": "never"}, "min": 0, "max": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
       "id": 19,
       "type": "timeseries",
       "title": "V7 Evidence Observation Coverage",
       "description": "Fills, realized-PnL observations, and forward markouts are distinct pieces of evidence.",
-      "gridPos": {
-        "x": 8,
-        "y": 32,
-        "w": 8,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "gridPos": {"x": 8, "y": 32, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_model_execution_evidence_fills{model=~\"$model\"}",
-          "legendFormat": "{{model}} fills"
-        },
-        {
-          "refId": "B",
-          "expr": "polymarket_model_execution_evidence_pnl_observations{model=~\"$model\"}",
-          "legendFormat": "{{model}} pnl obs"
-        },
-        {
-          "refId": "C",
-          "expr": "polymarket_model_execution_evidence_markout_observations{model=~\"$model\"}",
-          "legendFormat": "{{model}} markouts"
-        }
+        {"refId": "A", "expr": "polymarket_model_execution_evidence_fills{model=~\"$model\"}", "legendFormat": "{{model}} fills"},
+        {"refId": "B", "expr": "polymarket_model_execution_evidence_pnl_observations{model=~\"$model\"}", "legendFormat": "{{model}} pnl obs"},
+        {"refId": "C", "expr": "polymarket_model_execution_evidence_markout_observations{model=~\"$model\"}", "legendFormat": "{{model}} markouts"}
       ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "stepAfter",
-            "lineWidth": 1,
-            "fillOpacity": 3,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 1, "fillOpacity": 3, "showPoints": "never"}}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
       "id": 20,
       "type": "timeseries",
       "title": "V7 Stress-tested Evidence PnL",
       "description": "Paper PnL after the configured 1.5x execution-cost stress, paired with the one-sided day-block bootstrap p-value.",
-      "gridPos": {
-        "x": 16,
-        "y": 32,
-        "w": 8,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "gridPos": {"x": 16, "y": 32, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {
-          "refId": "A",
-          "expr": "polymarket_model_execution_evidence_stressed_net_pnl_usd{model=~\"$model\"}",
-          "legendFormat": "{{model}} stressed pnl"
-        },
-        {
-          "refId": "B",
-          "expr": "polymarket_model_execution_evidence_bootstrap_pvalue{model=~\"$model\"}",
-          "legendFormat": "{{model}} p-value"
-        }
+        {"refId": "A", "expr": "polymarket_model_execution_evidence_stressed_net_pnl_usd{model=~\"$model\"}", "legendFormat": "{{model}} stressed pnl"},
+        {"refId": "B", "expr": "polymarket_model_execution_evidence_bootstrap_pvalue{model=~\"$model\"}", "legendFormat": "{{model}} p-value"}
       ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineInterpolation": "linear", "lineWidth": 1, "fillOpacity": 5, "showPoints": "never"}}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     }
   ],
   "refresh": "5s",
   "schemaVersion": 39,
-  "tags": [
-    "polymarket",
-    "paper",
-    "multi-strategy",
-    "current"
-  ],
+  "tags": ["polymarket", "paper", "multi-strategy", "current"],
   "templating": {
     "list": [
       {
         "name": "model",
         "label": "Strategy",
         "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "prometheus"
-        },
-        "query": {
-          "query": "label_values(polymarket_model_info, model)",
-          "refId": "PrometheusVariableQueryEditor-VariableQuery"
-        },
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": {"query": "label_values(polymarket_model_info, model)", "refId": "PrometheusVariableQueryEditor-VariableQuery"},
         "definition": "label_values(polymarket_model_info, model)",
         "includeAll": true,
         "allValue": ".*",
         "multi": true,
         "refresh": 1,
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": "$__all"
-        },
+        "current": {"selected": true, "text": "All", "value": "$__all"},
         "options": []
       }
     ]
   },
-  "time": {
-    "from": "now-6h",
-    "to": "now"
-  },
+  "time": {"from": "now-6h", "to": "now"},
   "timepicker": {},
   "timezone": "browser",
   "title": "Polymarket Multi-Strategy",
