@@ -88,19 +88,19 @@ class V6ModelContracts(unittest.TestCase):
         self.assertNotIn("first observable mark after the forecast horizon",text)
         self.assertIn("realized_pnl_total",text)
 
-    def test_maker_graph_hard_is_demoted_and_stressed(self):
+    def test_maker_graph_hard_is_demoted_and_unverified_structural_is_blocked(self):
         now=int(time.time())
         with tempfile.TemporaryDirectory() as td:
             td=Path(td);src,dst,status=td/"in.csv",td/"out.csv",td/"status.json"
             with src.open("w",newline="",encoding="utf-8") as h:
                 w=csv.DictWriter(h,fieldnames=FIELDS);w.writeheader()
                 w.writerow({"bundle_id":"g1","strategy":"GRAPH_HARD","event_id":"e","created_ts":now,"mode":"MAKER","expected_edge":0.01,"max_notional":10,"market_id":"m1","side":"YES","weight":1,"limit_price":0.4,"execution_deadline_ts":now+120,"hold_deadline_ts":now+3600})
-                w.writerow({"bundle_id":"weak","strategy":"STRUCTURAL","event_id":"e2","created_ts":now,"mode":"MAKER","expected_edge":0.00025,"max_notional":10,"market_id":"m2","side":"NO","weight":1,"limit_price":0.4,"execution_deadline_ts":now+120,"hold_deadline_ts":now+3600})
+                w.writerow({"bundle_id":"unsafe","strategy":"STRUCTURAL","event_id":"e2","created_ts":now,"mode":"MAKER","expected_edge":0.01,"max_notional":10,"market_id":"m2","side":"NO","weight":1,"limit_price":0.4,"execution_deadline_ts":now+120,"hold_deadline_ts":now+3600})
             subprocess.run([sys.executable,str(ROOT/"scripts/v6_intent_guard.py"),"--input",str(src),"--output",str(dst),"--status",str(status),"--min-edge","0.0002","--stress-bps","10","--max-age-seconds","240"],check=True,capture_output=True,text=True)
             with dst.open(newline="",encoding="utf-8") as handle:
                 rows=list(csv.DictReader(handle))
             self.assertEqual(len(rows),1);self.assertEqual(rows[0]["strategy"],"GRAPH_RV")
-            report=json.loads(status.read_text());self.assertEqual(report["relabeled_graph_hard_to_rv"],1);self.assertEqual(report["rejections"]["stress_edge"],1)
+            report=json.loads(status.read_text());self.assertEqual(report["relabeled_graph_hard_to_rv"],1);self.assertEqual(report["rejections"]["structural_payoff_unverified"],1);self.assertFalse(report["structural_enabled"])
 
     def test_hard_arb_executor_requires_complete_same_snapshot_depth(self):
         text=(ROOT/"scripts/v6_hard_arb_paper.py").read_text()
