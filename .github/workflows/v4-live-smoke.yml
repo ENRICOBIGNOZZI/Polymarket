@@ -31,6 +31,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.expected_sha || github.sha }}
+          fetch-depth: 0
 
       - name: Verify exact validation revision
         shell: bash
@@ -50,20 +51,32 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
           ctest --test-dir build --output-on-failure
+          python3 -m unittest tests/test_materialize_external_paper_signals.py -v
 
       - name: Fresh public-data aggressive V5 full-strategy smoke
         shell: bash
         run: |
           set -euo pipefail
           R=paper_v5_live
-          mkdir -p "$R" "$R/maker" "$R/strategies"
+          mkdir -p "$R" "$R/maker" "$R/strategies" external_intelligence/input
 
-          # Execute every independent sleeve once against live public books. This
-          # is not a manifest-only check: each child engine must discover, score,
-          # write signals/status and simulate paper orders when its edge gate fires.
+          # Pull the newest research telemetry, but admit only observations that already
+          # contain a direct numeric event probability. Raw external features never get
+          # converted into invented probabilities by the paper runner.
+          git fetch --no-tags origin telemetry:refs/remotes/origin/telemetry || true
+          git show origin/telemetry:telemetry/latest-external-signals.jsonl \
+            > external_intelligence/input/latest-external-signals.jsonl 2>/dev/null || true
+          python3 scripts/materialize_external_paper_signals.py \
+            --input external_intelligence/input/latest-external-signals.jsonl \
+            --output data/external_signals.csv \
+            --min-confidence 0.05 --max-age-seconds 86400 \
+            | tee "$R/external_feed.log"
+
+          # Execute every independent sleeve once against live public books with broad,
+          # paper-aggressive admission. Hard drawdown/concentration controls remain in config.
           python3 scripts/multi_strategy_paper.py \
             --config config/paper_v5.json --run-root "$R" --engine ./build/polymarket_engine \
-            --markets 180 --min-liquidity 25 --once \
+            --markets 500 --min-liquidity 10 --once \
             | tee "$R/allocator_once.log"
 
           python3 - <<'PY'
@@ -95,50 +108,50 @@ jobs:
 
           ./build/polymarket_trade_recorder \
             --config config/paper_v5.json --run-dir "$R" \
-            --markets 500 --batch 40 --min-liquidity 25 --lookback-seconds 900 --once \
+            --markets 800 --batch 40 --min-liquidity 10 --lookback-seconds 900 --once \
             | tee "$R/trade_recorder_latest.log"
 
           ./build/polymarket_negrisk_arb \
-            --config config/paper_v5.json --markets 500 --min-liquidity 25 --top 200 \
+            --config config/paper_v5.json --markets 800 --min-liquidity 10 --top 300 \
             | tee "$R/structural_latest.log" "$R/structural_latest.csv"
 
           ./build/polymarket_stat_arb \
-            --config config/paper_v5.json --markets 500 --history-universe 240 \
-            --lookback-hours 720 --fidelity-minutes 30 --min-z 0.75 --min-t-reversion 0.75 \
-            --max-half-life-hours 336 --top 200 --csv "$R/stat_arb_pairs.csv" \
+            --config config/paper_v5.json --markets 800 --history-universe 400 \
+            --lookback-hours 720 --fidelity-minutes 15 --min-z 0.25 --min-t-reversion 0.20 \
+            --max-half-life-hours 504 --top 300 --csv "$R/stat_arb_pairs.csv" \
             | tee "$R/stat_arb_pairs_latest.log"
 
           ./build/polymarket_pca_stat_arb \
-            --config config/paper_v5.json --markets 500 --universe 240 \
-            --lookback-hours 720 --fidelity-minutes 30 --factors 5 --max-hedges 8 \
-            --min-z 0.65 --min-t-reversion 0.60 --max-half-life-hours 336 \
-            --max-factor-hedge-error 0.80 --top 200 --csv "$R/stat_arb_pca_raw.csv" \
+            --config config/paper_v5.json --markets 800 --universe 400 \
+            --lookback-hours 720 --fidelity-minutes 15 --factors 5 --max-hedges 10 \
+            --min-z 0.20 --min-t-reversion 0.20 --max-half-life-hours 504 \
+            --max-factor-hedge-error 1.25 --top 300 --csv "$R/stat_arb_pca_raw.csv" \
             | tee "$R/stat_arb_pca_latest.log"
           python3 scripts/filter_coherent_hedges.py \
             --input "$R/stat_arb_pca_raw.csv" --output "$R/stat_arb_pca.csv" \
             --rejections "$R/stat_arb_pca_rejected.csv" --cache "$R/market_metadata_cache.json" \
-            --min-jaccard 0.08 --min-shared-tokens 1 \
+            --min-jaccard 0.03 --min-shared-tokens 1 \
             | tee "$R/coherent_hedges.log"
 
           python3 scripts/build_v4_intents.py --strategy B1 \
             --input "$R/stat_arb_pairs.csv" --output "$R/b1_intents.csv" \
-            --config config/paper_v5.json --min-edge 0.00025
+            --config config/paper_v5.json --min-edge 0.0
           python3 scripts/build_v4_intents.py --strategy B2 \
             --input "$R/stat_arb_pca.csv" --output "$R/b2_intents.csv" \
-            --config config/paper_v5.json --min-edge 0.00025
+            --config config/paper_v5.json --min-edge 0.0
           python3 scripts/merge_v4_intents.py \
             --input "$R/b1_intents.csv" --input "$R/b2_intents.csv" --output "$R/intents.csv" \
-            --min-edge 0.00025 --max-age-seconds 240 --max-bundles 80
+            --min-edge 0.0 --max-age-seconds 300 --max-bundles 120
 
           ./build/polymarket_multileg_paper \
             --config config/paper_v5.json --run-dir "$R" --intents "$R/intents.csv" --trade-tape "$R/trade_tape.csv" \
-            --min-edge 0.00025 --completion-threshold 0.75 --submit-latency-ms 100 --cancel-latency-ms 100 \
-            --max-replaces 6 --max-leg-risk-usd 12 --adverse-horizon-seconds 45 --once \
+            --min-edge 0.0 --completion-threshold 0.50 --submit-latency-ms 100 --cancel-latency-ms 100 \
+            --max-replaces 8 --max-leg-risk-usd 12 --adverse-horizon-seconds 45 --once \
             | tee "$R/multileg_latest.log"
 
           ./build/polymarket_maker_paper \
-            --config config/paper_v5.json --run-dir "$R/maker" --markets 500 --min-liquidity 25 \
-            --min-edge 0.0005 --max-order-usd 25 --ttl-seconds 120 --hold-seconds 300 \
+            --config config/paper_v5.json --run-dir "$R/maker" --markets 800 --min-liquidity 10 \
+            --min-edge 0.0 --max-order-usd 20 --ttl-seconds 120 --hold-seconds 300 \
             --adverse-selection-mult 0.20 --once | tee "$R/maker_latest.log"
 
           python3 scripts/walk_forward_v4.py \
@@ -192,7 +205,7 @@ jobs:
             tail -n 8 "$f" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           done
-          for f in "$R/trade_recorder_latest.log" "$R/structural_latest.log" "$R/stat_arb_pairs_latest.log" "$R/stat_arb_pca_latest.log" "$R/coherent_hedges.log" "$R/multileg_latest.log" "$R/maker_latest.log"; do
+          for f in "$R/external_feed.log" "$R/trade_recorder_latest.log" "$R/structural_latest.log" "$R/stat_arb_pairs_latest.log" "$R/stat_arb_pca_latest.log" "$R/coherent_hedges.log" "$R/multileg_latest.log" "$R/maker_latest.log"; do
             echo "### $f" >> "$GITHUB_STEP_SUMMARY"
             echo '```text' >> "$GITHUB_STEP_SUMMARY"
             tail -n 8 "$f" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
