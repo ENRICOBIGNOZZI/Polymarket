@@ -99,6 +99,15 @@ class ExecutionEvidenceTest(unittest.TestCase):
         self.assertIn("invalid_target_contract", row["reason_codes"])
         self.assertIn("terminal_mixture_forbidden", row["reason_codes"])
 
+    def test_terminal_model_requires_resolved_calibration_against_market(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            policy = policy_for_test()
+            policy["models"]["external"]["min_terminal_observations"] = 1
+            report = evidence.build_report(Path(temporary), policy, now=1_700_000_000)
+        row = report["models"]["external"]
+        self.assertIn("terminal_calibration_unverifiable", row["reason_codes"])
+        self.assertIn("terminal_brier_improvement_gate", row["reason_codes"])
+
     def test_cli_writes_atomic_json_and_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
