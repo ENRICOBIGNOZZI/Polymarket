@@ -22,9 +22,11 @@ on:
       - "scripts/external_request_policy.py"
       - "scripts/run_external_intelligence.py"
       - "scripts/attach_external_evidence.py"
+      - "scripts/build_github_contents_request.py"
       - "tests/test_external_intelligence.py"
       - "tests/test_external_request_policy.py"
       - "tests/test_attach_external_evidence.py"
+      - "tests/test_github_contents_request.py"
       - ".github/workflows/external-intelligence.yml"
       - "docs/EXTERNAL_INTELLIGENCE.md"
   pull_request:
@@ -35,9 +37,11 @@ on:
       - "scripts/external_request_policy.py"
       - "scripts/run_external_intelligence.py"
       - "scripts/attach_external_evidence.py"
+      - "scripts/build_github_contents_request.py"
       - "tests/test_external_intelligence.py"
       - "tests/test_external_request_policy.py"
       - "tests/test_attach_external_evidence.py"
+      - "tests/test_github_contents_request.py"
       - ".github/workflows/external-intelligence.yml"
       - "docs/EXTERNAL_INTELLIGENCE.md"
 
@@ -65,12 +69,14 @@ jobs:
           python3 -m unittest \
             tests/test_external_intelligence.py \
             tests/test_external_request_policy.py \
-            tests/test_attach_external_evidence.py -v
+            tests/test_attach_external_evidence.py \
+            tests/test_github_contents_request.py -v
           python3 -m py_compile \
             scripts/external_intelligence.py \
             scripts/external_request_policy.py \
             scripts/run_external_intelligence.py \
-            scripts/attach_external_evidence.py
+            scripts/attach_external_evidence.py \
+            scripts/build_github_contents_request.py
           python3 -m json.tool config/external_intelligence.json >/dev/null
           python3 - <<'PY'
           import json
@@ -191,14 +197,21 @@ jobs:
             local remote_path="$2"
             local message="$3"
             local endpoint="repos/${GITHUB_REPOSITORY}/contents/${remote_path}"
-            local content current_sha
-            content="$(base64 -w0 "$local_path")"
+            local current_sha request_path
             current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
-            local args=("$endpoint" --method PUT -f message="$message" -f content="$content" -f branch=telemetry)
+            request_path="$(mktemp)"
+            local payload_args=(
+              --input "$local_path"
+              --message "$message"
+              --branch telemetry
+              --output "$request_path"
+            )
             if [[ -n "$current_sha" ]]; then
-              args+=(-f sha="$current_sha")
+              payload_args+=(--sha "$current_sha")
             fi
-            gh api "${args[@]}" >/dev/null
+            python3 scripts/build_github_contents_request.py "${payload_args[@]}"
+            gh api "$endpoint" --method PUT --input "$request_path" >/dev/null
+            rm -f "$request_path"
           }
 
           publish_file external_intelligence/output/observations.jsonl.gz \
