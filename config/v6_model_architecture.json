@@ -1,5 +1,5 @@
 {
-  "schema": "polymarket_v6_model_architecture_v1",
+  "schema": "polymarket_v6_model_architecture_v2",
   "version": 6,
   "paper_only": true,
   "allow_authenticated_execution": false,
@@ -7,16 +7,18 @@
   "semantic_role": "Contract parsing, entity extraction, threshold-family construction and logical relation discovery. Semantic similarity alone must never create a fair probability or trade.",
   "models": {
     "micro": {
-      "outputs": ["short_horizon_return", "maker_fill_value", "adverse_selection"],
+      "outputs": ["short_horizon_return", "maker_fill_value", "adverse_selection", "prediction_uncertainty"],
       "execution": ["MAKER", "TAKER"],
-      "required_evidence": ["forward_markout", "fill_probability", "adverse_selection", "trade_conversion"]
+      "state": ["L1_L5_imbalance", "microprice", "parity", "depth_curvature", "short_momentum", "short_volatility", "spread", "liquidity"],
+      "rule": "Short-horizon microstructure targets are causally labeled. Taker decisions use an uncertainty lower bound, displayed-depth VWAP and short-horizon mean-variance sizing rather than binary Kelly.",
+      "required_evidence": ["forward_markout", "fill_probability", "adverse_selection", "trade_conversion", "prediction_sigma", "depth_rejection"]
     },
     "local_factor": {
       "outputs": ["cluster_residual_forecast", "hedged_relative_value"],
       "clusters": ["event", "structured_threshold_family", "category"],
       "execution": ["MAKER"],
-      "rule": "Many local factor models are allowed; one PCA per single market is forbidden because PCA requires a cross-section.",
-      "required_evidence": ["cluster_coherence", "negative_residual_autocorrelation", "walk_forward_markout", "hedge_error"]
+      "rule": "Many local factor models are allowed; the production challenger estimates the latent factor on aligned logit returns with exponentially weighted loadings, then tests the factor-neutral residual state for mean reversion under BH-FDR.",
+      "required_evidence": ["cluster_coherence", "negative_residual_autocorrelation", "walk_forward_markout", "hedge_error", "loading_stability"]
     },
     "graph_hard": {
       "outputs": ["executable_multileg_guarantee"],
@@ -43,6 +45,22 @@
       "required_evidence": ["source_provenance", "freshness", "match_quality", "Brier_improvement", "cost_stress"]
     }
   },
+  "execution_contract": {
+    "displayed_depth": "Every taker admission and exit must walk the displayed ladder for the intended size. Insufficient depth is a rejection, never extrapolated liquidity.",
+    "fees": "Use market-specific fee information when available, with an explicit conservative fallback only when the public endpoint is unavailable.",
+    "slippage": "Residual slippage is state-dependent after depth walking and increases with spread, short volatility and participation while decreasing with liquidity.",
+    "maker_queue": "Passive quoting must model queue ahead and reject extreme queue/order ratios before posting; cancel/replace resets priority.",
+    "uncertainty": "Model-driven taker alpha is admitted on a lower-confidence-bound executable edge, not point-estimate edge.",
+    "sizing": "Short-horizon relative-value and microstructure signals use bounded risk-budget or mean-variance sizing; terminal binary Kelly is not reused across unrelated economic objects.",
+    "real_money": "No authenticated order path is enabled by this architecture. User-channel reconciliation, balances/allowances, FOK/FAK semantics and production kill switches remain a separate reviewed live adapter."
+  },
+  "global_risk_contract": {
+    "scope": "A single scenario-risk observer sits above all capital-isolated sleeves and reconciles their durable equity, gross exposure and kill state.",
+    "limits": ["global_drawdown", "global_gross", "scenario_loss", "child_kill", "stale_or_missing_state"],
+    "persistence": "A global kill flag is sticky across process restarts and cannot self-clear.",
+    "startup": "Missing child marks are tolerated only during an explicit bounded startup grace period; afterwards the observer fails closed.",
+    "scenario_rule": "Open gross is shocked by sleeve-specific conservative loss multipliers before admitting continued operation."
+  },
   "operability_contract": {
     "required_diagnostics": [
       "markets_considered",
@@ -53,10 +71,13 @@
       "rejection_histogram",
       "fills",
       "forward_markout",
-      "realized_pnl"
+      "realized_pnl",
+      "prediction_uncertainty",
+      "global_gross",
+      "global_scenario_loss"
     ],
     "rule": "A silent model is a defect. A model may abstain, but it must publish the exact reason distribution and the scheduler must distinguish no alpha, failed data, failed execution and failed risk admission.",
-    "aggressiveness": "Increase operations by expanding valid edge sources, maker participation, local models and executable relation coverage. Do not manufacture trades by ignoring costs or logical completeness."
+    "aggressiveness": "Increase operations by expanding valid edge sources, maker participation, local models and executable relation coverage. Do not manufacture trades by ignoring costs, uncertainty, depth or logical completeness."
   },
   "scheduler_directive": {
     "mandatory_context": [
@@ -64,13 +85,13 @@
       "config/v6_model_architecture.json",
       "config/live_champion.json"
     ],
-    "all_schedulers": "Treat V6 model roles and output contracts as authoritative. Research that reintroduces semantic peer averaging, global heterogeneous PCA, midpoint-only hard arbitrage or a live fair-value mixture is non-promotable.",
-    "alpha_factory": "Maintain challengers separately for micro, local_factor, graph_hard, graph_rv, structural and external; rank by executable OOS utility and incremental trade coverage.",
-    "forward_maker": "Optimize micro maker fill EV and adverse selection; also test short-horizon taker forecasts separately.",
+    "all_schedulers": "Treat V6 model, execution and global-risk contracts as authoritative. Research that reintroduces semantic peer averaging, global heterogeneous level PCA, midpoint-only hard arbitrage, fixed fictitious liquidity or a live fair-value mixture is non-promotable.",
+    "alpha_factory": "Maintain challengers separately for micro, local_factor, graph_hard, graph_rv, structural and external; rank by executable OOS utility and incremental trade coverage after uncertainty and cost stress.",
+    "forward_maker": "Optimize micro maker fill EV and adverse selection with queue-aware admission; test short-horizon taker forecasts separately.",
     "fast_arb": "Prioritize executable graph_hard relations and full multi-leg VWAP revalidation.",
     "arb_theory": "Expand proof-backed implication, exhaustive-event and structural payoff relations, then emit standardized intents.",
     "external_intelligence": "Produce timestamped specialist probabilities only after point-in-time match validation and OOS evidence.",
-    "promotion_controller": "Promotion must preserve the V6 contracts and require exact-source OOS evidence, cost stress, drawdown control, data health and non-degrading incremental utility.",
-    "monitoring": "Expose model coverage, rejections, emitted bundles, fills and PnL by V6 family and execution mode."
+    "promotion_controller": "Promotion must preserve the V6 contracts and require exact-source OOS evidence, cost stress, drawdown control, data health, scenario-risk health and non-degrading incremental utility.",
+    "monitoring": "Expose model coverage, rejections, emitted bundles, fills, PnL, global gross and scenario loss by V6 family and execution mode."
   }
 }
