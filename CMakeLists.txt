@@ -66,7 +66,7 @@ target_compile_options(polymarket_rewards_scan PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(polymarket_fast_arb_shadow src/fast_arb_main.cpp)
 target_link_libraries(polymarket_fast_arb_shadow PRIVATE pm_fast_arb)
-target_compile_options(polymarket_fast_arb PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(polymarket_fast_arb_shadow PRIVATE -Wall -Wextra -Wpedantic)
 
 include(CTest)
 if(BUILD_TESTING)
