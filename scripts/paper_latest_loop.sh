@@ -169,7 +169,9 @@ write_plane_status() {
   if (( champion_pid > 0 )) && kill -0 "$champion_pid" 2>/dev/null; then champion_alive=1; fi
   if [[ "$fast_enabled" == "1" ]] && (( fast_pid > 0 )) && kill -0 "$fast_pid" 2>/dev/null; then fast_alive=1; fi
   local path="$run_root/runtime_planes.csv"
-  # macOS ships Bash 3.2, which has no BASHPID. The singleton lock already\n  # excludes a second runtime; $ is therefore a safe portable per-wrapper suffix.\n  local tmp="$path.tmp.${BASHPID:-$}"
+  # macOS ships Bash 3.2, which has no BASHPID. The singleton lock already
+  # excludes a second runtime; the shell PID is a portable per-wrapper suffix.
+  local tmp="$path.tmp.${BASHPID:-$$}"
   printf 'timestamp,champion_version,champion_alive,fast_enabled,fast_alive,fast_restarts,champion_pid,fast_pid\n' > "$tmp"
   printf '%s,%s,%s,%s,%s,%s,%s,%s\n' "$(date +%s)" "$version" "$champion_alive" \
     "$fast_enabled" "$fast_alive" "$fast_restarts" "$champion_pid" "$fast_pid" >> "$tmp"
