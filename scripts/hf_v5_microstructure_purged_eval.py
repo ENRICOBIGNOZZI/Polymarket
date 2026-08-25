@@ -20,6 +20,79 @@ sys.modules[SPEC.name] = base
 SPEC.loader.exec_module(base)
 
 
+def _decision_ts_ms(row: Mapping[str, object]) -> int:
+    """Return the timestamp at which the book state was actually observable."""
+    received = int(row.get("received_ts_ms", 0) or 0)
+    exchange = int(row.get("exchange_ts_ms", 0) or 0)
+    return received if received > 0 else exchange
+
+
+def label_receive_time_markout(
+    snapshots: Sequence[Mapping[str, object]],
+    horizon_ms: int,
+    max_lag_ms: int | None = None,
+) -> list[object]:
+    """Label future midpoint moves on the local receive-time information clock.
+
+    Exchange timestamps are retained for feed-latency measurement, but they are
+    not a valid decision chronology when messages can arrive out of order. A
+    future target must never use a book update that was already received before
+    the predictor row became observable.
+    """
+    if horizon_ms <= 0:
+        raise ValueError("horizon_ms must be positive")
+    tolerance = max_lag_ms if max_lag_ms is not None else max(1000, horizon_ms // 2)
+    by_market: dict[str, list[Mapping[str, object]]] = {}
+    for row in snapshots:
+        by_market.setdefault(str(row["market_id"]), []).append(row)
+
+    labeled: list[object] = []
+    for market_id, rows in by_market.items():
+        rows = sorted(
+            rows,
+            key=lambda row: (
+                _decision_ts_ms(row),
+                int(row.get("exchange_ts_ms", 0) or 0),
+            ),
+        )
+        j = 0
+        for i, row in enumerate(rows):
+            ts = _decision_ts_ms(row)
+            if ts <= 0:
+                continue
+            target = ts + horizon_ms
+            j = max(j, i + 1)
+            while j < len(rows) and _decision_ts_ms(rows[j]) < target:
+                j += 1
+            if j >= len(rows):
+                break
+            future_ts = _decision_ts_ms(rows[j])
+            if future_ts - target > tolerance:
+                continue
+            mid = float(row["mid"])
+            future_mid = float(rows[j]["mid"])
+            labeled.append(
+                base.LabeledRow(
+                    ts,
+                    market_id,
+                    mid,
+                    float(row["spread"]),
+                    (
+                        float(row["microprice"]) - mid,
+                        float(row["imbalance_l1"]),
+                        float(row["imbalance_l3"]),
+                        float(row["imbalance_l5"]),
+                        float(row["ofi_l1"]),
+                        float(row["spread"]),
+                        float(row["feed_latency_ms"]),
+                    ),
+                    future_mid - mid,
+                )
+            )
+    labeled.sort(key=lambda row: (int(row.ts_ms), str(row.market_id)))
+    return labeled
+
+
 def purged_split(
     labeled: Sequence[object],
     horizon_ms: int,
@@ -57,6 +130,7 @@ def evaluate_purged(
             "test_rows": len(test),
             "cutoff_ts_ms": cutoff,
             "embargo_ms": horizon_ms + max(0, tolerance_ms),
+            "decision_clock": "received_ts_ms_when_available",
         }
 
     y_train = [float(row.future_move) for row in train]
@@ -88,6 +162,7 @@ def evaluate_purged(
         "test_rows": len(test),
         "cutoff_ts_ms": cutoff,
         "embargo_ms": horizon_ms + max(0, tolerance_ms),
+        "decision_clock": "received_ts_ms_when_available",
         "features": list(base.FEATURES),
         "baseline": {
             "name": "microprice_displacement_only",
@@ -102,7 +177,7 @@ def evaluate_purged(
         },
         "cost_stress": stress,
         "execution_cost_note": "Economic score includes half-spread plus configured slippage. It excludes protocol taker fees, so non-positive results are conservative rejections: adding a non-negative taker fee cannot improve them.",
-        "promotion_note": "Purging prevents target overlap across the split; independent sessions and fill-conditioned evidence remain mandatory.",
+        "promotion_note": "Purging prevents target overlap across the receive-time split; independent sessions and fill-conditioned evidence remain mandatory.",
     }
 
 
@@ -111,6 +186,7 @@ def render(result: Mapping[str, object], horizon_ms: int) -> str:
         f"# Purged V5 HF markout evaluation — {horizon_ms} ms",
         "",
         f"- evidence state: `{result.get('evidence_state', 'MORE_EVIDENCE_REQUIRED')}`",
+        f"- decision clock: `{result.get('decision_clock', 'unknown')}`",
         f"- labeled rows: `{result.get('rows', 0)}`",
         f"- train rows after purge: `{result.get('train_rows', 0)}`",
         f"- test rows: `{result.get('test_rows', 0)}`",
@@ -165,7 +241,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         snapshots = base._load_snapshots(args.features)
     tolerance = args.max_lag_ms if args.max_lag_ms is not None else max(1000, args.horizon_ms // 2)
-    labeled = base.label_future_markout(snapshots, args.horizon_ms, tolerance)
+    labeled = label_receive_time_markout(snapshots, args.horizon_ms, tolerance)
     result = evaluate_purged(
         labeled,
         horizon_ms=args.horizon_ms,
@@ -175,7 +251,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         slippage_bps=args.slippage_bps,
     )
     result["feature_rows"] = len(snapshots)
-    payload = {"schema_version": 1, "horizon_ms": args.horizon_ms, "evaluation": result}
+    payload = {"schema_version": 2, "horizon_ms": args.horizon_ms, "evaluation": result}
     report = render(result, args.horizon_ms)
     if args.output_json:
         args.output_json.parent.mkdir(parents=True, exist_ok=True)
