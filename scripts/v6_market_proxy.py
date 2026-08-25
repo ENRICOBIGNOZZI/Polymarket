@@ -26,11 +26,14 @@ END = {"", "LTE=", "-1"}
 # used for five minutes; the one-hour fallback remains fail-closed afterwards.
 FRESH_CACHE_SECONDS = 300.0
 STALE_CACHE_SECONDS = 3600.0
+MAX_CACHE_FUTURE_SKEW_SECONDS = 30.0
 FALLBACK_MARKETS = 300
 GAMMA_TIMEOUT_SECONDS = 1.5
 GAMMA_LEGACY_TIMEOUT_SECONDS = 8.0
 CLOB_TIMEOUT_SECONDS = 5.0
 CLOB_DISCOVERY_BUDGET_SECONDS = 10.0
+REFRESH_WAIT_SECONDS = 25.0
+REFRESH_POLL_SECONDS = 0.10
 BOOK_WORKERS = 8
 CACHE_SCHEMA = "polymarket_v6_market_proxy_cache_v1"
 
@@ -146,6 +149,15 @@ def clob_req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT
     return req(url, payload, timeout)
 
 
+def gamma_req(url: str, payload: Any | None = None, timeout: float = GAMMA_TIMEOUT_SECONDS) -> Any:
+    # The private macOS node has intermittently selected an unusable IPv6 route
+    # for public Polymarket hosts.  Match the CLOB transport policy so Gamma
+    # discovery also gets curl's bounded, compressed IPv4 request when present.
+    if shutil.which("curl"):
+        return curl_req(url, payload, timeout)
+    return req(url, payload, timeout)
+
+
 def tokens(market: dict[str, Any]) -> list[dict[str, Any]]:
     value = market.get("tokens")
     return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
@@ -187,13 +199,25 @@ class Proxy:
         self.error = ""
         self.source = "startup"
         self.clob_source = "startup"
-        self.cache_mtime_ns = 0
+        self.cache_signature: tuple[int, int, int, int] | None = None
         self.load()
 
     def load(self) -> bool:
         try:
             metadata = self.cache.stat()
-            if metadata.st_mtime_ns <= self.cache_mtime_ns:
+            # The hosted relay writes an incoming file and atomically renames it
+            # over the live cache.  That replacement can legitimately carry an
+            # equal or older mtime than the previous inode, so monotonic mtime
+            # comparison can strand the proxy on an expired in-memory cache.
+            # Identity equality detects an unchanged file without assuming that
+            # replacement timestamps increase.
+            signature = (
+                int(metadata.st_dev),
+                int(metadata.st_ino),
+                int(metadata.st_size),
+                int(metadata.st_mtime_ns),
+            )
+            if signature == self.cache_signature:
                 return False
             value = json.loads(self.cache.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -204,6 +228,8 @@ class Proxy:
         timestamp = f(value.get("timestamp"), 0.0)
         if not isinstance(markets, list) or timestamp <= 0.0:
             return False
+        if timestamp > time.time() + MAX_CACHE_FUTURE_SKEW_SECONDS:
+            return False
         if not markets or not all(valid_cache_market(row) for row in markets):
             return False
         rows = [dict(row) for row in markets]
@@ -212,13 +238,13 @@ class Proxy:
             # Cache timestamps are integer seconds, so accept a newer atomic file
             # written in the same second but never roll state back materially.
             if timestamp + 1.0 < self.ts:
-                self.cache_mtime_ns = metadata.st_mtime_ns
+                self.cache_signature = signature
                 return False
             self.rows = rows
             self.ts = timestamp
             if isinstance(mapping, dict):
                 self.idmap.update({str(k): str(v) for k, v in mapping.items() if k and v})
-            self.cache_mtime_ns = metadata.st_mtime_ns
+            self.cache_signature = signature
         return True
 
     def stat(self, source: str, n: int, upstream_ok: bool, age: float = 0.0) -> None:
@@ -258,10 +284,13 @@ class Proxy:
                 "gamma_to_condition": mapping,
             },
         )
-        try:
-            self.cache_mtime_ns = self.cache.stat().st_mtime_ns
-        except OSError:
-            pass
+        # Do not stat the target after the atomic write.  A relay can replace
+        # the file between atomic() and stat(); recording that new signature
+        # against the upstream rows already in memory would suppress the relay
+        # reload.  One validated reread on the next cache access closes the
+        # race without serving unbounded or synthetic data.
+        with self.state_lock:
+            self.cache_signature = None
 
     def cached_page(self, limit: int, offset: int, min_liquidity: float, max_age: float) -> list[dict[str, Any]] | None:
         self.load()
@@ -273,8 +302,37 @@ class Proxy:
             age = now - self.ts
             source = self.source
         page = rows[offset : offset + limit]
-        self.stat(source + "_cache", len(rows), source.startswith("gamma"), age)
+        cache_source = source if source.endswith("_cache") else source + "_cache"
+        self.stat(cache_source, len(rows), source.startswith("gamma"), age)
         return page
+
+    def wait_for_refresh_cache(
+        self, limit: int, offset: int, min_liquidity: float
+    ) -> list[dict[str, Any]]:
+        """Wait for the current refresh or a fresh atomic relay cache.
+
+        A discovery leader can legitimately spend most of the C++ client's
+        bounded request deadline trying Gamma and CLOB.  Returning after three
+        seconds made every concurrent page request fail even when that leader,
+        or the hosted relay, was about to publish valid data.  Polling the cache
+        keeps relay delivery responsive while preserving the one-hour hard
+        freshness ceiling; no row is synthesized or served beyond that limit.
+        """
+        deadline = time.monotonic() + REFRESH_WAIT_SECONDS
+        while True:
+            cached = self.cached_page(limit, offset, min_liquidity, STALE_CACHE_SECONDS)
+            if cached is not None:
+                return cached
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                raise RuntimeError("market discovery refresh already in progress")
+            if not self.refresh_lock.acquire(timeout=min(REFRESH_POLL_SECONDS, remaining)):
+                continue
+            self.refresh_lock.release()
+            cached = self.cached_page(limit, offset, min_liquidity, STALE_CACHE_SECONDS)
+            if cached is not None:
+                return cached
+            raise RuntimeError("market discovery refresh completed without usable cache")
 
     def gamma_rows(self, n: int, query: dict[str, list[str]]) -> list[dict[str, Any]]:
         params = {
@@ -292,7 +350,7 @@ class Proxy:
             request_params["limit"] = str(min(100, n - len(out)))
             if cursor:
                 request_params["after_cursor"] = cursor
-            value = req(
+            value = gamma_req(
                 self.gamma + "/markets/keyset?" + urllib.parse.urlencode(request_params),
                 timeout=GAMMA_TIMEOUT_SECONDS,
             )
@@ -327,11 +385,7 @@ class Proxy:
             request_params["limit"] = str(min(100, n - offset))
             request_params["offset"] = str(offset)
             url = self.gamma + "/markets?" + urllib.parse.urlencode(request_params)
-            value = (
-                curl_req(url, timeout=GAMMA_LEGACY_TIMEOUT_SECONDS)
-                if shutil.which("curl")
-                else req(url, timeout=GAMMA_LEGACY_TIMEOUT_SECONDS)
-            )
+            value = gamma_req(url, timeout=GAMMA_LEGACY_TIMEOUT_SECONDS)
             if not isinstance(value, list):
                 raise RuntimeError("bad Gamma legacy markets response")
             return offset, [row for row in value if isinstance(row, dict)]
@@ -502,13 +556,7 @@ class Proxy:
             cached = self.cached_page(limit, offset, min_liquidity, STALE_CACHE_SECONDS)
             if cached is not None:
                 return cached
-            if not self.refresh_lock.acquire(timeout=3.0):
-                raise RuntimeError("market discovery refresh already in progress")
-            self.refresh_lock.release()
-            cached = self.cached_page(limit, offset, min_liquidity, STALE_CACHE_SECONDS)
-            if cached is not None:
-                return cached
-            raise RuntimeError("market discovery refresh completed without usable cache")
+            return self.wait_for_refresh_cache(limit, offset, min_liquidity)
 
         try:
             target = min(FALLBACK_MARKETS, max(FALLBACK_MARKETS, offset + limit))
@@ -560,7 +608,7 @@ class Proxy:
             return cached_market
         path = "/markets/" + urllib.parse.quote(mid, safe="")
         try:
-            value = req(self.gamma + path, timeout=GAMMA_TIMEOUT_SECONDS)
+            value = gamma_req(self.gamma + path, timeout=GAMMA_TIMEOUT_SECONDS)
             if isinstance(value, dict):
                 cid = str(value.get("conditionId") or "")
                 gamma_id = str(value.get("id") or mid)
@@ -588,7 +636,7 @@ class Proxy:
 
     def generic(self, path_query: str) -> Any:
         try:
-            value = req(self.gamma + path_query, timeout=GAMMA_TIMEOUT_SECONDS)
+            value = gamma_req(self.gamma + path_query, timeout=GAMMA_TIMEOUT_SECONDS)
             self.exact[path_query] = (time.time(), value)
             return value
         except Exception as exc:
