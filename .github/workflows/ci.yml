@@ -88,8 +88,8 @@ jobs:
             scripts/v6_external_bridge.py scripts/v6_relation_intents.py scripts/v6_intent_guard.py \
             scripts/v6_market_common.py scripts/v6_micro_maker.py scripts/v6_maker_reprice.py \
             scripts/v6_micro_taker_v2.py scripts/v6_hard_arb_paper_v2.py scripts/v6_queue_filter.py \
-            scripts/v6_local_factor_v3.py scripts/v6_local_factor_intents.py scripts/v6_micro_taker.py \
-            scripts/v6_hard_arb_paper.py scripts/v6_runtime_status.py \
+            scripts/v6_bundle_risk_guard.py scripts/v6_local_factor_v3.py scripts/v6_local_factor_intents.py \
+            scripts/v6_micro_taker.py scripts/v6_hard_arb_paper.py scripts/v6_runtime_status.py \
             monitoring/exporter_v5.py monitoring/exporter_v6.py monitoring/exporter_latest.py
           python3 -m json.tool config/paper_v5.json >/dev/null
           python3 -m json.tool config/paper_v6.json >/dev/null
