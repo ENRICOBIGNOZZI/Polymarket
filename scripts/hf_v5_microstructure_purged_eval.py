@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import importlib.util
 import json
 import sys
@@ -27,6 +28,45 @@ def _decision_ts_ms(row: Mapping[str, object]) -> int:
     return received if received > 0 else exchange
 
 
+def _load_feature_rows(path: Path) -> list[dict[str, object]]:
+    """Load a materialized feature file without dropping the receive-time clock."""
+    required = set(base.REQUIRED_COLUMNS) | {"received_ts_ms"}
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        missing = required.difference(reader.fieldnames or [])
+        if missing:
+            raise ValueError("missing causal feature columns: " + ", ".join(sorted(missing)))
+        rows: list[dict[str, object]] = []
+        numeric = required.difference({"market_id", "exchange_ts_ms", "received_ts_ms"})
+        for raw in reader:
+            market_id = str(raw.get("market_id", ""))
+            if not market_id:
+                continue
+            try:
+                exchange = int(float(raw.get("exchange_ts_ms", "0")))
+                received = int(float(raw.get("received_ts_ms", "0")))
+            except (TypeError, ValueError):
+                continue
+            if received <= 0:
+                continue
+            parsed: dict[str, object] = {
+                "market_id": market_id,
+                "exchange_ts_ms": exchange,
+                "received_ts_ms": received,
+            }
+            ok = True
+            for name in numeric:
+                value = base._finite(raw.get(name))
+                if value is None:
+                    ok = False
+                    break
+                parsed[name] = value
+            if ok:
+                rows.append(parsed)
+    rows.sort(key=lambda row: (_decision_ts_ms(row), str(row["market_id"]), int(row["exchange_ts_ms"])))
+    return rows
+
+
 def label_receive_time_markout(
     snapshots: Sequence[Mapping[str, object]],
     horizon_ms: int,
@@ -34,12 +74,12 @@ def label_receive_time_markout(
 ) -> list[object]:
     """Label the midpoint state *as of* the local receive-time horizon.
 
-    The predictor clock is local receive time.  At t+h the correct event-driven
+    The predictor clock is local receive time. At t+h the correct event-driven
     book state is the last update received at or before t+h, not the first
-    update after t+h.  Using the latter predicts a variable-horizon next update
+    update after t+h. Using the latter predicts a variable-horizon next update
     and leaks price information from beyond the requested markout horizon.
 
-    ``max_lag_ms`` is a staleness filter on the as-of target state.  Rows whose
+    ``max_lag_ms`` is a staleness filter on the as-of target state. Rows whose
     last update at t+h is too old are excluded instead of silently stretching
     the horizon forward.
     """
@@ -135,7 +175,7 @@ def evaluate_purged(
             "test_rows": len(test),
             "cutoff_ts_ms": cutoff,
             "embargo_ms": horizon_ms + max(0, tolerance_ms),
-            "decision_clock": "received_ts_ms_when_available",
+            "decision_clock": "received_ts_ms_required",
             "target_clock": "last_book_state_at_or_before_t_plus_h",
         }
 
@@ -168,7 +208,7 @@ def evaluate_purged(
         "test_rows": len(test),
         "cutoff_ts_ms": cutoff,
         "embargo_ms": horizon_ms + max(0, tolerance_ms),
-        "decision_clock": "received_ts_ms_when_available",
+        "decision_clock": "received_ts_ms_required",
         "target_clock": "last_book_state_at_or_before_t_plus_h",
         "features": list(base.FEATURES),
         "baseline": {
@@ -247,7 +287,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.capture:
         snapshots = base.replay_capture(args.capture, args.output_features)
     else:
-        snapshots = base._load_snapshots(args.features)
+        snapshots = _load_feature_rows(args.features)
     tolerance = args.max_lag_ms if args.max_lag_ms is not None else max(1000, args.horizon_ms // 2)
     labeled = label_receive_time_markout(snapshots, args.horizon_ms, tolerance)
     result = evaluate_purged(
@@ -259,7 +299,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         slippage_bps=args.slippage_bps,
     )
     result["feature_rows"] = len(snapshots)
-    payload = {"schema_version": 3, "horizon_ms": args.horizon_ms, "evaluation": result}
+    payload = {"schema_version": 4, "horizon_ms": args.horizon_ms, "evaluation": result}
     report = render(result, args.horizon_ms)
     if args.output_json:
         args.output_json.parent.mkdir(parents=True, exist_ok=True)
