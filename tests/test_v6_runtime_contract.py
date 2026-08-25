@@ -129,7 +129,7 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("polymarket_trade_recorder", workflow)
         self.assertIn("record_trade_tape()", workflow)
         self.assertIn("maker_tick()", workflow)
-        self.assertIn("for delay in 20 20 20 20", workflow)
+        self.assertIn("for delay in 15 15 15 15", workflow)
         self.assertIn("--hold-seconds 45", workflow)
         self.assertIn("'trade_tape_rows':tape_rows", workflow)
         self.assertIn("'maker_fill_rows':fill_rows", workflow)
