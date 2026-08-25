@@ -204,10 +204,14 @@ struct Config {
     std::size_t pca_universe = 200;
     double pca_mr_strength = 0.35;
     double pca_min_residual_z = 0.75;
+    double pca_min_t_reversion = 0.75;
 
+    double micro_pressure_extrapolation = 0.0;
     double graph_max_sum_error = 0.20;
+    double graph_partial_min_coverage = 0.60;
     double semantic_min_similarity = 0.68;
     double semantic_shrink = 0.08;
+    std::size_t semantic_min_shared_tokens = 2;
 
     bool scan_only = false;
     std::map<std::string,double> expert_weights{{"micro",0.35},{"pca",0.60},{"graph",0.80},{"semantic",0.08},{"external",1.0}};
