@@ -119,6 +119,44 @@ groups:
           summary: Latest Polymarket OOS report is stale
           description: The auto-selected runtime's walk-forward gate is more than two hours old.
 
+  - name: polymarket-v6-market-proxy
+    rules:
+      - alert: PolymarketV6MarketProxyMissingOrStale
+        expr: (polymarket_v6_market_proxy_state_present == 0) or (polymarket_v6_market_proxy_status_age_seconds > 120)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: V6 market-discovery proxy telemetry is missing or stale
+          description: The V6 read-only market proxy has not published fresh provenance/health state; runtime market-data visibility is incomplete.
+
+      - alert: PolymarketV6MarketProxyGammaUnavailable
+        expr: polymarket_v6_market_proxy_upstream_gamma_ok == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: V6 market proxy is operating without healthy Gamma discovery
+          description: The proxy is relying on a fallback source or cannot reach Gamma. Paper execution may continue only under the existing fallback and risk gates.
+
+      - alert: PolymarketV6MarketProxyStaleCache
+        expr: polymarket_v6_market_proxy_info{source="stale_cache"} == 1 and polymarket_v6_market_proxy_cache_age_seconds > 600
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: V6 market proxy is serving an aging metadata cache
+          description: Market discovery is using stale cached metadata older than ten minutes; data provenance is degraded near the proxy's bounded cache limit.
+
+      - alert: PolymarketV6MarketProxyUnavailable
+        expr: polymarket_v6_market_proxy_info{source="unavailable"} == 1
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: V6 market proxy has no usable discovery source
+          description: Gamma, CLOB fallback and bounded cache are unavailable; paper market discovery is not healthy.
+
   - name: polymarket-v5-independent-models
     rules:
       - alert: PolymarketV5AllocatorDown
