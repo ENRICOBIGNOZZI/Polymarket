@@ -22,6 +22,30 @@
     "hard_risk_unchanged": true,
     "paper_only": true
   },
+  "prospective_recurrence": {
+    "independent_smoke_windows_observed": 2,
+    "same_event_and_leg_set_recurred": true,
+    "second_window": {
+      "github_run_id": "32831911445",
+      "generated_ts": 1787650096,
+      "bundle_id": "GRAPH_HARD-1787650077-1",
+      "state": "RESTING_NOT_COMPLETE",
+      "quoted_maker_edge_per_share": 0.02,
+      "target_shares_per_leg": 61.2245,
+      "initial_queue_ahead_shares": {
+        "3535881": 30849.0,
+        "3535883": 40035.5,
+        "3535882": 38851.4
+      },
+      "initial_queue_ahead_to_target_ratio": {
+        "3535881": 503.86691602218065,
+        "3535883": 653.913057681157,
+        "3535882": 634.5727609045399
+      },
+      "fills_observed_before_smoke_end": 0,
+      "interpretation": "the 2 percent quote edge recurs, but join-at-bid starts behind roughly 504x to 654x the target size on each leg; current maker admission does not model this queue bottleneck"
+    }
+  },
   "candidate_specific_execution": {
     "sessions": 0,
     "completed_sessions": 0,
@@ -50,16 +74,18 @@
     "reason_nontransferable": "the worker probes a different binary YES+NO complete-set strategy class rather than the current three-leg NegRisk GRAPH_RV event basket"
   },
   "alpha_factory_decision": {
-    "current_candidate": "PRIORITIZE_FOR_CANDIDATE_SPECIFIC_REPLAY",
+    "current_candidate": "PRIORITIZE_QUEUE_AWARE_CANDIDATE_SPECIFIC_REPLAY",
     "promotion": false,
-    "reason": "the first V6 graph maker bundle has a material 2 percent passive edge and survives the current 10 bp static guard, but there is no candidate-specific common-completion, partial-fill, cancel-latency, timeout-unwind, or fill-conditioned markout sample",
+    "reason": "the V6 graph maker basket has now recurred with the same 2 percent passive edge, but the second prospective window posted behind roughly 30.8k to 40.0k shares of queue for a 61.2-share target on every leg and produced no fill before smoke end; static edge is therefore not executable-alpha evidence",
     "required_next_evidence": [
-      "prospective recurrence of the exact event and leg-set",
-      "event-time queue state through maker order arrival on every leg",
+      "full execution-deadline observation of the recurring exact event and leg-set",
+      "event-time queue depletion and compatible trade arrivals through maker order arrival on every leg",
+      "join versus bounded improve/queue-aware quote policies under the same event-time tape",
       "common-minimum completion and excess-fill distribution under the live multileg contract",
       "cancel-latency fills and timeout unwind PnL on actually filled inventory",
       "60s and 300s fill-conditioned markout",
       "common chronological expected net PnL at 1x, 1.5x and 2x queue-latency-slippage stress"
-    ]
+    ],
+    "rollback_criterion": "reject the passive GRAPH_RV challenger if candidate-specific completion lower bounds cannot cover observed abort/unwind downside or if expected net PnL is nonpositive at any required cost-stress level"
   }
 }
