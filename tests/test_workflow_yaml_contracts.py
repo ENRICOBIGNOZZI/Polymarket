@@ -126,6 +126,25 @@ class WorkflowYamlContractTest(unittest.TestCase):
         self.assertIn("- name: Advance paper validated ref", smoke)
         self.assertNotIn("continue-on-error: true", smoke)
 
+    def test_meta_supervisor_retries_only_telemetry_cas_conflicts(self) -> None:
+        control = (ROOT / ".github" / "workflows" / "control-plane.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("for attempt in 1 2 3 4 5; do", control)
+        self.assertIn('current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha', control)
+        self.assertIn('if gh api "${args[@]}" >/dev/null 2>"$publish_error"; then', control)
+        self.assertIn("if ! grep -q 'HTTP 409' \"$publish_error\"; then", control)
+        self.assertIn('if [[ "$attempt" -eq 5 ]]; then', control)
+        self.assertIn("sleep $((attempt * 2))", control)
+        self.assertGreater(
+            control.index("for attempt in 1 2 3 4 5; do"),
+            control.index("publish_error=\"$(mktemp)\""),
+        )
+        self.assertGreater(
+            control.index('current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha'),
+            control.index("for attempt in 1 2 3 4 5; do"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
