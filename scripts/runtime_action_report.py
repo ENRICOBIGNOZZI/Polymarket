@@ -11,6 +11,7 @@ import csv
 import json
 import math
 import os
+import threading
 import time
 from collections import Counter
 from datetime import datetime, timezone
@@ -101,7 +102,7 @@ def parse_external_timestamp(value: str | None) -> int:
 
 def atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}.{threading.get_ident()}")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
 
@@ -405,8 +406,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         "# Polymarket hourly action report",
         "",
         (
-            f"Generated: `{report['generated_utc']}` · window: "
-            f"`{report['window_seconds']}s` · production edge gate: "
+            f"Generated: `{report['generated_utc']}` Â· window: "
+            f"`{report['window_seconds']}s` Â· production edge gate: "
             f"`{report['production_edge_threshold']:.6f}`"
         ),
         "",
@@ -455,7 +456,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines += ["", "## Why", ""]
     if report["reasons"]:
         lines.extend(
-            f"- `{item['code']}` — {item['detail']}." for item in report["reasons"]
+            f"- `{item['code']}` â {item['detail']}." for item in report["reasons"]
         )
     else:
         lines.append("- No blocking condition detected.")
