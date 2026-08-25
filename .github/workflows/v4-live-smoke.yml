@@ -24,7 +24,7 @@ concurrency:
 jobs:
   live-paper-smoke:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 60
     env:
       VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.sha }}
     steps:
@@ -56,19 +56,83 @@ jobs:
         run: |
           set -euo pipefail
           R=paper_v5_live
-          mkdir -p "$R" "$R/maker" "$R/strategies"
+          E="$R/external_live"
+          mkdir -p "$R" "$R/maker" "$R/strategies" "$E"
 
-          # Execute every independent sleeve once against live public books. This
-          # is not a manifest-only check: each child engine must discover, score,
-          # write signals/status and simulate paper orders when its edge gate fires.
+          # Build current direct external probabilities before starting the five
+          # independent sleeves. Kalshi/GDELT/backfill stay disabled in this
+          # bounded smoke: only live Binance threshold probabilities are admitted.
+          python3 - <<'PY'
+          import gzip
+          import json
+          from pathlib import Path
+
+          root = Path('paper_v5_live/external_live')
+          empty = gzip.compress(b'', compresslevel=9, mtime=0)
+          (root / 'observations-in.jsonl.gz').write_bytes(empty)
+          (root / 'prices-in.jsonl.gz').write_bytes(empty)
+          (root / 'state-in.json').write_text('{}\n')
+
+          config = json.loads(Path('config/external_intelligence.json').read_text())
+          assert config['universe']['max_markets'] >= 500
+          assert config['universe']['page_size'] == 100
+          config['sources']['kalshi']['enabled'] = False
+          config['sources']['gdelt']['enabled'] = False
+          config['backfill']['enabled'] = False
+          (root / 'config.json').write_text(json.dumps(config, indent=2) + '\n')
+          PY
+
+          python3 scripts/external_intelligence.py \
+            --config "$E/config.json" \
+            --observations-in "$E/observations-in.jsonl.gz" \
+            --prices-in "$E/prices-in.jsonl.gz" \
+            --state-in "$E/state-in.json" \
+            --observations-out "$E/observations-out.jsonl.gz" \
+            --prices-out "$E/prices-out.jsonl.gz" \
+            --state-out "$E/state-out.json" \
+            --signals-out "$E/signals.jsonl" \
+            --report-json "$E/report.json" \
+            --report-markdown "$E/report.md" \
+            --mode incremental | tee "$E/collector.log"
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('paper_v5_live/external_live')
+          report = json.loads((root / 'report.json').read_text())
+          rows = [
+              json.loads(line)
+              for line in (root / 'signals.jsonl').read_text().splitlines()
+              if line.strip()
+          ]
+          direct = [row for row in rows if row.get('q_external') is not None]
+          assert report['collection']['polymarket_markets'] >= 450, report['collection']
+          assert report['collection']['direct_probability_rows'] > 0, report['collection']
+          assert direct, 'no current direct external probability'
+          assert all(0.0 < float(row['q_external']) < 1.0 for row in direct)
+          assert all(float(row.get('confidence', 0.0)) >= 0.35 for row in direct)
+          print('direct_probability_rows', len(direct))
+          PY
+
+          python3 scripts/materialize_external_signals.py \
+            --input "$E/signals.jsonl" --output data/external_signals.csv \
+            --min-confidence 0.35 --max-age-seconds 21600 \
+            | tee "$E/materializer.log"
+
+          # Execute every independent sleeve once against 500 live public books.
+          # This is not a manifest-only check: every child must discover, score,
+          # write status/signals and simulate paper orders when its edge gate fires.
           python3 scripts/multi_strategy_paper.py \
             --config config/paper_v5.json --run-root "$R" --engine ./build/polymarket_engine \
-            --markets 180 --min-liquidity 25 --once \
+            --markets 500 --min-liquidity 25 --once \
             | tee "$R/allocator_once.log"
 
           python3 - <<'PY'
           import csv
           import json
+          import os
+          import re
           from pathlib import Path
 
           root = Path('paper_v5_live')
@@ -78,19 +142,48 @@ jobs:
           expected = {'micro', 'pca', 'graph', 'semantic', 'external'}
           assert {item['name'] for item in manifest['strategies']} == expected
 
+          funnels = {}
           for item in manifest['strategies']:
               child = json.loads(Path(item['config']).read_text())
               active = {name: weight for name, weight in child['expert_weights'].items() if weight > 0}
               assert active == {item['expert']: 1.0}
               run_dir = Path(item['run_dir'])
               log = run_dir / 'engine.log'
-              assert log.exists() and 'discovered=' in log.read_text(errors='replace'), (item['name'], log)
+              assert log.exists(), (item['name'], log)
+              text = log.read_text(errors='replace')
+              assert 'discovered=' in text, (item['name'], text[-500:])
+              values = {
+                  key: int(value)
+                  for key, value in re.findall(
+                      r'(discovered|tradable|candidates|no_terminal_evidence|net_pos)=([0-9]+)',
+                      text,
+                  )
+              }
+              assert values.get('discovered', 0) >= 450, (item['name'], values)
+              assert values.get('tradable', 0) > 0, (item['name'], values)
+              assert values.get('candidates', 0) > 0, (item['name'], values)
+              funnels[item['name']] = values
               assert (run_dir / 'signals.csv').exists()
               assert (run_dir / 'fills.csv').exists()
               assert (run_dir / 'status.json').exists()
 
-          rows = list(csv.DictReader((root / 'strategy_status.csv').open(newline='', encoding='utf-8')))
+          external = funnels['external']
+          assert external['no_terminal_evidence'] < external['tradable'], external
+          strict_promotion = os.environ.get('GITHUB_EVENT_NAME', '') != 'schedule'
+          if strict_promotion:
+              assert external.get('net_pos', 0) > 0, external
+              fills = list(csv.DictReader(
+                  (root / 'strategies' / 'external' / 'fills.csv').open(
+                      newline='', encoding='utf-8'
+                  )
+              ))
+              assert any(row.get('action') == 'BUY' for row in fills), fills[:10]
+
+          rows = list(csv.DictReader(
+              (root / 'strategy_status.csv').open(newline='', encoding='utf-8')
+          ))
           assert {row['name'] for row in rows} == expected
+          assert all(float(row.get('drawdown') or 0.0) < 0.15 + 1e-12 for row in rows)
           PY
 
           ./build/polymarket_trade_recorder \
@@ -114,10 +207,33 @@ jobs:
             --min-z 0.65 --min-t-reversion 0.60 --max-half-life-hours 336 \
             --max-factor-hedge-error 0.80 --top 200 --csv "$R/stat_arb_pca_raw.csv" \
             | tee "$R/stat_arb_pca_latest.log"
+
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          root = Path('paper_v5_live')
+          b1 = (root / 'stat_arb_pairs_latest.log').read_text(errors='replace')
+          b2 = (root / 'stat_arb_pca_latest.log').read_text(errors='replace')
+
+          def number(text, key):
+              match = re.search(rf'\b{re.escape(key)}=([0-9]+)', text)
+              assert match, (key, text[-1000:])
+              return int(match.group(1))
+
+          assert number(b1, 'usable_series') > 0
+          assert number(b1, 'model_fits') > 0
+          assert number(b2, 'panel_series') > 0
+          assert number(b2, 'hedge_candidates') > 0
+          assert number(b2, 'hedge_pass') > 0
+          PY
+
           python3 scripts/filter_coherent_hedges.py \
             --input "$R/stat_arb_pca_raw.csv" --output "$R/stat_arb_pca.csv" \
             --rejections "$R/stat_arb_pca_rejected.csv" --cache "$R/market_metadata_cache.json" \
             --min-jaccard 0.08 --min-shared-tokens 1 \
+            --allow-factor-hedges --max-factor-hedge-error 0.80 \
+            --min-factor-stability 0.20 --min-factor-z 0.65 \
             | tee "$R/coherent_hedges.log"
 
           python3 scripts/build_v4_intents.py --strategy B1 \
@@ -168,6 +284,7 @@ jobs:
           test -s "$R/strategy_status.csv"
           test -s "$R/allocator_status.json"
           python3 -m json.tool "$R/runtime_status.json" >/dev/null
+          python3 -m json.tool "$E/report.json" >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
 
       - name: Build public telemetry snapshot
@@ -192,7 +309,7 @@ jobs:
             tail -n 8 "$f" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           done
-          for f in "$R/trade_recorder_latest.log" "$R/structural_latest.log" "$R/stat_arb_pairs_latest.log" "$R/stat_arb_pca_latest.log" "$R/coherent_hedges.log" "$R/multileg_latest.log" "$R/maker_latest.log"; do
+          for f in "$R/external_live/collector.log" "$R/external_live/materializer.log" "$R/trade_recorder_latest.log" "$R/structural_latest.log" "$R/stat_arb_pairs_latest.log" "$R/stat_arb_pca_latest.log" "$R/coherent_hedges.log" "$R/multileg_latest.log" "$R/maker_latest.log"; do
             echo "### $f" >> "$GITHUB_STEP_SUMMARY"
             echo '```text' >> "$GITHUB_STEP_SUMMARY"
             tail -n 8 "$f" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
