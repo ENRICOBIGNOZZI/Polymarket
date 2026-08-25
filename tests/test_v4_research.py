@@ -24,11 +24,11 @@ class V4ResearchTests(unittest.TestCase):
             cfg.write_text(json.dumps({"max_trade_usd": 25.0}), encoding="utf-8")
             b1_scan, b1_out = td / "b1_scan.csv", td / "b1.csv"
             with b1_scan.open("w", newline="") as f:
-                fields = ["y_market","x_market","half_life_h","maker_entry_net_edge","executable_notional","y_side","x_side","y_limit","x_limit","y_weight","x_weight"]
+                fields = ["relation","y_market","y_slug","x_market","x_slug","half_life_h","maker_entry_net_edge","executable_notional","y_side","x_side","y_limit","x_limit","y_weight","x_weight"]
                 w = csv.DictWriter(f, fieldnames=fields); w.writeheader()
-                w.writerow(dict(y_market="m1",x_market="m2",half_life_h=2,maker_entry_net_edge=.004,executable_notional=40,
+                w.writerow(dict(relation="same_event",y_market="m1",y_slug="event-exact-score-1-0",x_market="m2",x_slug="event-exact-score-0-1",half_life_h=2,maker_entry_net_edge=.004,executable_notional=40,
                                 y_side="YES",x_side="NO",y_limit=.41,x_limit=.38,y_weight=1,x_weight=.8))
-                w.writerow(dict(y_market="bad",x_market="bad2",half_life_h=2,maker_entry_net_edge=-.01,executable_notional=40,
+                w.writerow(dict(relation="same_event",y_market="bad",y_slug="event-exact-score-2-0",x_market="bad2",x_slug="event-exact-score-0-2",half_life_h=2,maker_entry_net_edge=-.01,executable_notional=40,
                                 y_side="YES",x_side="NO",y_limit=.4,x_limit=.4,y_weight=1,x_weight=1))
             subprocess.run([sys.executable, str(BUILD), "--strategy", "B1", "--input", str(b1_scan), "--output", str(b1_out),
                             "--config", str(cfg), "--now", "1800000000"], check=True, capture_output=True, text=True)
