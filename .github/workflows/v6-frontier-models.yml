@@ -1,0 +1,58 @@
+name: v6-frontier-models
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/v6_micro_maker_v2.py'
+      - 'scripts/v6_micro_taker_v3.py'
+      - 'scripts/v6_local_factor_v4.py'
+      - 'scripts/v6_relation_intents_v2.py'
+      - 'scripts/v6_bundle_state_guard.py'
+      - 'scripts/v6_hard_arb_paper_v3.py'
+      - 'scripts/external_intelligence_v2.py'
+      - 'scripts/v6_frontier_once.sh'
+      - 'tests/test_v6_frontier_models.py'
+      - '.github/workflows/v6-frontier-models.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v6-frontier-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deterministic-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python and shell syntax
+        run: |
+          set -euo pipefail
+          bash -n scripts/v6_frontier_once.sh
+          python3 -m py_compile \
+            scripts/v6_micro_maker_v2.py \
+            scripts/v6_micro_taker_v3.py \
+            scripts/v6_local_factor_v4.py \
+            scripts/v6_relation_intents_v2.py \
+            scripts/v6_bundle_state_guard.py \
+            scripts/v6_hard_arb_paper_v3.py \
+            scripts/external_intelligence_v2.py
+      - name: Frontier model contracts
+        run: python3 -m unittest tests/test_v6_frontier_models.py -v
+      - name: Preserve V6 safety boundaries
+        run: |
+          python3 - <<'PY'
+          import json
+          cfg=json.load(open('config/paper_v6.json'))
+          arch=json.load(open('config/v6_model_architecture.json'))
+          assert cfg['v6']['paper_only'] is True
+          assert cfg['max_drawdown'] <= 0.15
+          assert cfg['max_market_fraction'] <= 0.05
+          assert cfg['max_event_fraction'] <= 0.15
+          assert cfg['max_gross_fraction'] <= 0.70
+          assert arch['allow_authenticated_execution'] is False
+          assert float(cfg['semantic_shrink']) == 0.0
+          PY
