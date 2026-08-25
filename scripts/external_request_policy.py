@@ -9,6 +9,7 @@ from typing import Any
 PM_CLOB_HOST = "clob.polymarket.com"
 KALSHI_HOST = "external-api.kalshi.com"
 GDELT_HOST = "api.gdeltproject.org"
+DEFAULT_CLOB_HISTORY_WINDOW_SECONDS = 14 * 86400
 
 
 def _query_pairs(url: str) -> tuple[urllib.parse.SplitResult, list[tuple[str, str]]]:
@@ -38,10 +39,61 @@ def rewrite_external_url(url: str) -> str:
     )
 
 
+def _clob_history_window(url: str) -> tuple[int, int] | None:
+    parsed, pairs = _query_pairs(url)
+    if parsed.hostname != PM_CLOB_HOST or parsed.path.rstrip("/") != "/prices-history":
+        return None
+    query = dict(pairs)
+    try:
+        start_ts = int(query["startTs"])
+        end_ts = int(query["endTs"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if start_ts <= 0 or end_ts <= start_ts:
+        return None
+    return start_ts, end_ts
+
+
+def _replace_window(url: str, start_ts: int, end_ts: int) -> str:
+    parsed, pairs = _query_pairs(url)
+    rewritten: list[tuple[str, str]] = []
+    for key, value in pairs:
+        if key == "startTs":
+            value = str(start_ts)
+        elif key == "endTs":
+            value = str(end_ts)
+        rewritten.append((key, value))
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urllib.parse.urlencode(rewritten), parsed.fragment)
+    )
+
+
+def _merge_history_payloads(payloads: list[Any]) -> dict[str, Any]:
+    by_timestamp: dict[int, dict[str, Any]] = {}
+    untimestamped: list[dict[str, Any]] = []
+    for payload in payloads:
+        history = payload.get("history") if isinstance(payload, dict) else None
+        if not isinstance(history, list):
+            continue
+        for row in history:
+            if not isinstance(row, dict):
+                continue
+            try:
+                timestamp = int(float(row.get("t")))
+            except (TypeError, ValueError, OverflowError):
+                untimestamped.append(row)
+                continue
+            by_timestamp[timestamp] = row
+    merged = [by_timestamp[key] for key in sorted(by_timestamp)]
+    merged.extend(untimestamped)
+    return {"history": merged}
+
+
 def wrap_request_json(
     delegate: Callable[..., Any],
     *,
-    gdelt_min_interval_seconds: float = 1.25,
+    gdelt_min_interval_seconds: float = 5.0,
+    clob_history_window_seconds: int = DEFAULT_CLOB_HISTORY_WINDOW_SECONDS,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Callable[..., Any]:
@@ -51,6 +103,23 @@ def wrap_request_json(
         nonlocal last_gdelt_request
         normalized = rewrite_external_url(url)
         host = urllib.parse.urlsplit(normalized).hostname
+
+        window = _clob_history_window(normalized)
+        if window is not None and clob_history_window_seconds > 0:
+            start_ts, end_ts = window
+            if end_ts - start_ts > clob_history_window_seconds:
+                payloads: list[Any] = []
+                cursor = start_ts
+                while cursor < end_ts:
+                    chunk_end = min(end_ts, cursor + clob_history_window_seconds)
+                    payloads.append(delegate(
+                        _replace_window(normalized, cursor, chunk_end),
+                        timeout=timeout,
+                        retries=retries,
+                    ))
+                    cursor = chunk_end
+                return _merge_history_payloads(payloads)
+
         if host == GDELT_HOST and gdelt_min_interval_seconds > 0:
             now = monotonic()
             if last_gdelt_request is not None:
