@@ -217,10 +217,10 @@ def main() -> int:
     }
     atomic_json(args.run_root / "runtime_status.json", status)
 
-    # Transitional V5-shaped telemetry only. Unlike the previous compatibility
-    # view, fill counts are sourced from the actual V6 ledgers rather than being
-    # hard-coded to zero. Relative-value fill events are intentionally not
-    # fabricated until that sleeve has a cumulative fill ledger of its own.
+    # Transitional V5-shaped telemetry only: no V5 expert or mixture is restored.
+    # Fill counts are sourced from actual V6 ledgers rather than being hard-coded
+    # to zero. Relative-value events stay uncounted until that sleeve exposes a
+    # cumulative fill ledger of its own; current live legs are not fills.
     micro_counts = {k: maker_fills[k] + micro_fills[k] for k in maker_fills}
     graph_counts = hard_fills
     zero_counts = {"fills": 0, "buy_fills": 0, "sell_fills": 0, "settle_fills": 0}
