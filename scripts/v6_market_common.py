@@ -213,15 +213,60 @@ class TapeFlow:
         rows = self.compatible_sell_trades(token_id, limit_price, lookback_seconds=lookback_seconds)
         return float(self.now - max(trade.received_ms for trade in rows) / 1000.0) if rows else math.inf
 
-    def compatible_sell_rate(self, token_id: str, limit_price: float, *, lookback_seconds: int) -> float:
-        """Event-age-decayed causal volume rate.
+    @staticmethod
+    def _burst_count(rows: list[TapeTrade], *, gap_seconds: int = 10) -> int:
+        """Count distinct event-time bursts rather than split prints from one burst."""
+        if not rows:
+            return 0
+        gap = max(1, int(gap_seconds))
+        event_times = sorted({int(trade.ts) for trade in rows})
+        bursts = 1
+        previous = event_times[0]
+        for ts in event_times[1:]:
+            if ts - previous >= gap:
+                bursts += 1
+            previous = ts
+        return bursts
 
-        Receive time is an information-availability gate, not a market-event clock.
-        A trade that happened 110 seconds ago but only arrived locally one second
-        ago must not be treated as one-second-old order flow. Weighting by event
-        age prevents delayed REST tape delivery from manufacturing fresh fill
-        hazard while preserving strict receive-time causality in the row filter.
+    def compatible_sell_burst_count(
+        self,
+        token_id: str,
+        limit_price: float,
+        *,
+        lookback_seconds: int,
+        gap_seconds: int = 10,
+    ) -> int:
+        rows = self.compatible_sell_trades(token_id, limit_price, lookback_seconds=lookback_seconds)
+        return self._burst_count(rows, gap_seconds=gap_seconds)
+
+    def compatible_sell_recurrence_confidence(
+        self,
+        token_id: str,
+        limit_price: float,
+        *,
+        lookback_seconds: int,
+        gap_seconds: int = 10,
+    ) -> float:
+        """Leave-one-burst-out confidence that observed contra-flow is recurrent.
+
+        One isolated historical burst is evidence that flow occurred, not evidence
+        that the same flow rate will persist through a new maker order's TTL. We
+        therefore reserve one burst as the trigger and estimate recurrence only
+        from additional event-time bursts. The factor tends to one as independent
+        bursts accumulate and is exactly zero for a single burst.
         """
+        bursts = self.compatible_sell_burst_count(
+            token_id,
+            limit_price,
+            lookback_seconds=lookback_seconds,
+            gap_seconds=gap_seconds,
+        )
+        if bursts < 2:
+            return 0.0
+        return max(0.0, min(1.0, (bursts - 1.0) / bursts))
+
+    def compatible_sell_raw_rate(self, token_id: str, limit_price: float, *, lookback_seconds: int) -> float:
+        """Event-age-decayed causal volume rate before recurrence shrinkage."""
         window = max(1.0, float(lookback_seconds))
         rows = self.compatible_sell_trades(token_id, limit_price, lookback_seconds=int(window))
         if not rows:
@@ -234,6 +279,26 @@ class TapeFlow:
         )
         effective_seconds = (1.0 - math.exp(-decay * window)) / decay
         return weighted_volume / max(effective_seconds, 1e-9)
+
+    def compatible_sell_rate(self, token_id: str, limit_price: float, *, lookback_seconds: int) -> float:
+        """Event-age-decayed, recurrence-shrunk causal contra-flow rate.
+
+        Receive time remains an information-availability gate and event time is
+        the economic clock. The prospective maker A/B/C/D evidence also showed
+        that a single pre-entry SELL burst repeatedly failed to recur after the
+        quote was posted. Multiplying the raw rate by a leave-one-burst-out
+        recurrence factor prevents one isolated burst from manufacturing a
+        stationary Poisson-style fill hazard.
+        """
+        raw = self.compatible_sell_raw_rate(token_id, limit_price, lookback_seconds=lookback_seconds)
+        if raw <= 0.0:
+            return 0.0
+        confidence = self.compatible_sell_recurrence_confidence(
+            token_id,
+            limit_price,
+            lookback_seconds=lookback_seconds,
+        )
+        return raw * confidence
 
     def side_volume(self, token_id: str, side: str, *, lookback_seconds: int) -> float:
         window = max(1, int(lookback_seconds))
