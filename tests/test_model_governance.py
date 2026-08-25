@@ -126,6 +126,42 @@ class ModelGovernanceContractTest(unittest.TestCase):
             self.assertIn("source_research_verdict: `APPROVED_FOR_INTEGRATION`", accepted.stdout)
             self.assertIn("manual_approval_labels_required: `False`", accepted.stdout)
 
+    def test_research_policy_guards_v6_institutional_runtime_surfaces(self):
+        sensitive = [
+            "config/v6_model_architecture.json",
+            "scripts/v6_dynamic_factor_intents.py",
+            "scripts/v6_execution_model.py",
+            "scripts/v6_global_risk.py",
+            "scripts/v6_intent_queue_filter.py",
+            "scripts/v6_micro_taker_institutional.py",
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            changed = temp / "changed.txt"
+            changed.write_text("\n".join(sensitive) + "\n", encoding="utf-8")
+            report = temp / "report.md"
+
+            normal_event = {"pull_request":{"head":{"ref":"fix/v6-helper"},"draft":False,"body":"operational fix","labels":[]}}
+            normal_path = temp / "normal-event.json"
+            normal_path.write_text(json.dumps(normal_event), encoding="utf-8")
+            normal = subprocess.run(["python3","scripts/research_pr_policy.py","--event",str(normal_path),"--changed-files",str(changed),"--manifest-existed-on-base","true","--output",str(report)], cwd=ROOT, check=False, capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(normal.returncode, 0, normal.stdout + normal.stderr)
+            for path in sensitive:
+                self.assertIn(path, normal.stdout)
+
+            research_event = {"pull_request":{"head":{"ref":"research/v6-institutional"},"draft":True,"body":"paper-only model research","labels":[]}}
+            research_path = temp / "research-event.json"
+            research_path.write_text(json.dumps(research_event), encoding="utf-8")
+            research = subprocess.run(["python3","scripts/research_pr_policy.py","--event",str(research_path),"--changed-files",str(changed),"--manifest-existed-on-base","true","--output",str(report)], cwd=ROOT, check=False, capture_output=True, text=True, timeout=10)
+            self.assertEqual(research.returncode, 0, research.stdout + research.stderr)
+
+            shadow_event = {"pull_request":{"head":{"ref":"research/v6-institutional-shadow"},"draft":False,"body":"measurement-only research","labels":[{"name":"shadow-isolated"}]}}
+            shadow_path = temp / "shadow-event.json"
+            shadow_path.write_text(json.dumps(shadow_event), encoding="utf-8")
+            shadow = subprocess.run(["python3","scripts/research_pr_policy.py","--event",str(shadow_path),"--changed-files",str(changed),"--manifest-existed-on-base","true","--output",str(report)], cwd=ROOT, check=False, capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(shadow.returncode, 0, shadow.stdout + shadow.stderr)
+            self.assertIn("shadow-isolated code cannot modify", shadow.stdout)
+
     def test_research_policy_runs_on_every_main_push_and_rejects_direct_pushes(self):
         policy = (WORKFLOWS / "research-policy.yml").read_text(encoding="utf-8")
         push_block = policy.split("  push:\n", 1)[1].split("  pull_request:\n", 1)[0]
