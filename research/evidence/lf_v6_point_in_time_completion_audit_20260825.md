@@ -42,4 +42,4 @@ This is an identification counterexample, not an estimate of live Polymarket PnL
 
 ## Current public context
 
-The latest public V6 smoke still shows one three-leg Graph/RV bundle resting with `complete=0`, 356 trades processed, 0 OOS trades and $0 realized/OOS PnL. The external-intelligence worker remains BACKTESTING with no passing model. Therefore there is no current fill/PnL evidence that justifies promotion of the frontier completion economics.
+The latest exact-main public V6 smoke has two three-leg Graph/RV bundles resting, `complete=0`, 218 public trades processed in the current tape, 0 OOS trades, and $0 realized/OOS PnL. The maker path also has seven resting orders but zero positions/fills. The new V7 typed execution-evidence sidecar is fail-closed and useful for realized evidence aggregation, but it does not reconstruct historical order-book state. External Intelligence remains BACKTESTING with no passing model. Therefore there is no current fill/PnL evidence that justifies promotion of the frontier completion economics.
