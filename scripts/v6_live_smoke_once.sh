@@ -6,6 +6,10 @@ R="${2:-paper_v6_live}"
 MARKETS="${V6_SMOKE_MARKETS:-220}"
 MIN_LIQUIDITY="${V6_SMOKE_MIN_LIQUIDITY:-10}"
 EDGE="${V6_SMOKE_MIN_EDGE:-0.00020}"
+FORWARD_TICKS="${V6_SMOKE_FORWARD_TICKS:-4}"
+FORWARD_SLEEP_SECONDS="${V6_SMOKE_FORWARD_SLEEP_SECONDS:-10}"
+[[ "$FORWARD_TICKS" =~ ^[1-9][0-9]*$ ]]
+[[ "$FORWARD_SLEEP_SECONDS" =~ ^[0-9]+$ ]]
 mkdir -p "$R" "$R/maker" "$R/micro_taker" "$R/hard_arb" "$R/external"
 
 python3 scripts/v6_materialize_configs.py --config "$CONFIG" --run-root "$R" > "$R/materialize.log"
@@ -15,20 +19,25 @@ python3 scripts/v6_materialize_configs.py --config "$CONFIG" --run-root "$R" > "
   --min-liquidity "$MIN_LIQUIDITY" --lookback-seconds 900 --once \
   | tee "$R/trade_recorder_latest.log"
 
-# Validate the same aggressive execution contract used by the persistent V6
-# launcher: edge-aware one-tick improvement, no giant FIFO queues, and the
-# configured $60/trade ceiling. Run several ticks so the smoke actually tests
-# resting-order lifecycle/queue depletion instead of stopping immediately after
-# POST. A fill is still not required: fills remain public-tape/FIFO driven.
+# A one-shot paper maker can only post fresh orders after its fill-replay pass.
+# Preserve state across bounded forward ticks and refresh the public tape before
+# every post-entry replay. This makes any queue depletion/fill causal in local
+# receive time instead of repeatedly replaying only the pre-entry backfill.
 : > "$R/maker_latest.log"
-for i in 1 2 3 4; do
+for (( maker_tick=1; maker_tick<=FORWARD_TICKS; maker_tick++ )); do
+  if (( maker_tick > 1 )); then
+    sleep "$FORWARD_SLEEP_SECONDS"
+    ./build/polymarket_trade_recorder \
+      --config "$CONFIG" --run-dir "$R" --markets "$MARKETS" --batch 40 \
+      --min-liquidity "$MIN_LIQUIDITY" --lookback-seconds 900 --once \
+      | tee -a "$R/trade_recorder_latest.log"
+  fi
   ./build/polymarket_maker_paper \
     --config "$R/maker_config.json" --run-dir "$R/maker" --markets "$MARKETS" \
     --min-liquidity "$MIN_LIQUIDITY" --min-edge "$EDGE" --max-order-usd 60 \
     --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.10 \
     --improve-ticks 1 --max-queue-multiple 6 --once \
     | tee -a "$R/maker_latest.log"
-  if (( i < 4 )); then sleep 6; fi
 done
 
 # Three snapshots deliberately exercise feature persistence and maturity; a
@@ -73,12 +82,26 @@ python3 scripts/merge_v4_intents.py \
   --output "$R/intents.csv" --min-edge "$EDGE" --max-age-seconds 240 --max-bundles 60 \
   | tee "$R/intent_merge.log"
 
-./build/polymarket_multileg_paper \
-  --config "$R/broker_config.json" --run-dir "$R" --intents "$R/intents.csv" \
-  --trade-tape "$R/trade_tape.csv" --min-edge "$EDGE" --completion-threshold 0.75 \
-  --submit-latency-ms 100 --cancel-latency-ms 100 --max-replaces 6 \
-  --max-leg-risk-usd 12 --adverse-horizon-seconds 45 --once \
-  | tee "$R/multileg_latest.log"
+# A fresh Graph/RV basket cannot have a causal completion from the tape snapshot
+# collected before admission. Preserve broker state and re-poll public trades
+# between bounded forward ticks so partial/joint fills, aborts and unwind PnL
+# can only come from flow received after the paper orders existed.
+: > "$R/multileg_latest.log"
+for (( broker_tick=1; broker_tick<=FORWARD_TICKS; broker_tick++ )); do
+  if (( broker_tick > 1 )); then
+    sleep "$FORWARD_SLEEP_SECONDS"
+    ./build/polymarket_trade_recorder \
+      --config "$CONFIG" --run-dir "$R" --markets "$MARKETS" --batch 40 \
+      --min-liquidity "$MIN_LIQUIDITY" --lookback-seconds 900 --once \
+      | tee -a "$R/trade_recorder_latest.log"
+  fi
+  ./build/polymarket_multileg_paper \
+    --config "$R/broker_config.json" --run-dir "$R" --intents "$R/intents.csv" \
+    --trade-tape "$R/trade_tape.csv" --min-edge "$EDGE" --completion-threshold 0.75 \
+    --submit-latency-ms 100 --cancel-latency-ms 100 --max-replaces 6 \
+    --max-leg-risk-usd 12 --adverse-horizon-seconds 45 --once \
+    | tee -a "$R/multileg_latest.log"
+done
 
 python3 scripts/v6_external_bridge.py \
   --output "$R/external_signals.csv" --status "$R/external_bridge_status.json" \
