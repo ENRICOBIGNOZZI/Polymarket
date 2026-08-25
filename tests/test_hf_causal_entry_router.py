@@ -40,6 +40,15 @@ class HFCausalEntryRouterTest(unittest.TestCase):
         self.assertEqual([x["causal_history_count"] for x in decisions], [0, 0, 0])
         self.assertTrue(all(x["route"] == "MAKER_SHADOW" for x in decisions))
 
+    def test_same_timestamp_outcome_is_not_admitted(self) -> None:
+        rows = [
+            self._obs(0, 20, future=0.54, market="history"),
+            self._obs(20, 21, market="candidate"),
+        ]
+        decisions = route_observations(rows, min_history=2)
+        self.assertEqual(decisions[-1]["causal_history_count"], 0)
+        self.assertEqual(decisions[-1]["route"], "MAKER_SHADOW")
+
     def test_taker_activates_only_after_prior_positive_2x_markout_is_known(self) -> None:
         history = [
             self._obs(i, i + 1, future=0.54, entry=0.50, fee=0.001, slip=0.001, market=str(i))
