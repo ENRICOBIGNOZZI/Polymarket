@@ -144,6 +144,19 @@ def realized_pnl(row: dict[str, str]) -> float:
     return first_number(row, ("net_pnl", "pnl", "realized_pnl"))
 
 
+def row_has_realized_pnl(row: dict[str, str]) -> bool:
+    """Exclude entry/partial-fill zeroes from a realized-PnL sample.
+
+    Bundle ledgers are already terminal rows and normally use ``net_pnl`` with
+    no action.  Execution logs need an explicit close, unwind, or settlement
+    action before their PnL belongs in the statistical sample.
+    """
+    if str(row.get("net_pnl") or "").strip():
+        return True
+    action = canonical_action(row)
+    return any(token in action for token in ("SELL", "EXIT", "UNWIND", "SETTLE", "CLOSE"))
+
+
 def observed_markout(row: dict[str, str]) -> float:
     return first_number(row, ("markout", "forward_markout", "markout_pnl", "post_fill_markout"))
 
@@ -151,6 +164,21 @@ def observed_markout(row: dict[str, str]) -> float:
 def explicit_cost(row: dict[str, str]) -> float:
     value = first_number(row, ("fee", "fees", "slippage_cost", "execution_cost", "cost"))
     return max(0.0, value) if math.isfinite(value) else math.nan
+
+
+def terminal_calibration(rows: Iterable[dict[str, str]]) -> tuple[int, float | None]:
+    """Return resolved-label count and mean Brier improvement over the market."""
+    improvements: list[float] = []
+    for row in rows:
+        outcome = first_number(row, ("outcome", "resolved_outcome", "label"))
+        model = first_number(row, ("model_probability", "fair_probability", "probability", "q"))
+        market = first_number(row, ("market_probability", "market_price", "mid_price", "p"))
+        if not all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in (outcome, model, market)):
+            continue
+        if outcome not in (0.0, 1.0):
+            continue
+        improvements.append((market - outcome) ** 2 - (model - outcome) ** 2)
+    return len(improvements), statistics.fmean(improvements) if improvements else None
 
 
 def block_bootstrap_one_sided(values: list[tuple[int, float]], samples: int, seed: int) -> float | None:
@@ -213,6 +241,8 @@ def default_policy() -> dict[str, Any]:
                 "max_bootstrap_pvalue": 0.10,
                 "min_active_folds": 2,
                 "min_positive_fold_fraction": 0.50,
+                "min_terminal_observations": 12 if target == "terminal_probability" else 0,
+                "min_brier_improvement": 0.0 if target == "terminal_probability" else None,
             }
             for model, target in models.items()
         },
@@ -251,7 +281,7 @@ def assess_model(
     submission_rows = [row for path in submission_paths for row in read_rows(path)]
     fills = [row for row in execution_rows if row_is_fill(row)]
     submissions = [row for row in submission_rows if row_is_submission(row)]
-    pnl_values = [(timestamp(row), realized_pnl(row)) for row in execution_rows]
+    pnl_values = [(timestamp(row), realized_pnl(row)) for row in execution_rows if row_has_realized_pnl(row)]
     pnl_values = [(ts, value) for ts, value in pnl_values if math.isfinite(value)]
     markouts = [observed_markout(row) for row in execution_rows]
     markouts = [value for value in markouts if math.isfinite(value)]
@@ -268,6 +298,8 @@ def assess_model(
         int(hashlib.sha256(model.encode()).hexdigest()[:8], 16),
     )
     active_folds, positive_fold_fraction = fold_stability(pnl_values)
+    terminal_rows = [*execution_rows, *submission_rows]
+    terminal_observations, brier_improvement = terminal_calibration(terminal_rows)
 
     reasons: list[str] = []
     if target not in ALLOWED_TARGETS:
@@ -303,6 +335,12 @@ def assess_model(
     min_positive = number(contract.get("min_positive_fold_fraction"), 0.50)
     if positive_fold_fraction is None or positive_fold_fraction < min_positive:
         reasons.append("fold_stability_gate")
+    if target == "terminal_probability":
+        if terminal_observations < integer(contract.get("min_terminal_observations"), 12):
+            reasons.append("terminal_calibration_unverifiable")
+        min_brier_improvement = number(contract.get("min_brier_improvement"), 0.0)
+        if brier_improvement is None or brier_improvement <= min_brier_improvement:
+            reasons.append("terminal_brier_improvement_gate")
 
     state = "PAPER_ELIGIBLE" if not reasons else "INSUFFICIENT_EVIDENCE"
     source_stats = []
@@ -330,6 +368,8 @@ def assess_model(
         "stressed_net_pnl": stressed,
         "forward_markout_observations": len(markouts),
         "mean_forward_markout": statistics.fmean(markouts) if markouts else None,
+        "terminal_calibration_observations": terminal_observations,
+        "brier_improvement_over_market": brier_improvement,
         "bootstrap_one_sided_pvalue": bootstrap,
         "active_folds": active_folds,
         "positive_fold_fraction": positive_fold_fraction,
