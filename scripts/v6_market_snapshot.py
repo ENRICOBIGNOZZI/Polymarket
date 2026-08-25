@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any
 
 if __package__:
-    from .v6_market_proxy import FALLBACK_MARKETS, Proxy
+    from .v6_market_proxy import FALLBACK_MARKETS, Proxy, valid_cache_market
 else:
-    from v6_market_proxy import FALLBACK_MARKETS, Proxy
+    from v6_market_proxy import FALLBACK_MARKETS, Proxy, valid_cache_market
 
 
 def number(value: Any, default: float = 0.0) -> float:
@@ -61,11 +61,9 @@ def main(argv: list[str] | None = None) -> int:
     if cache_age > max(0.0, args.max_cache_age_seconds):
         raise RuntimeError(f"relay cache is too old: {cache_age:.1f}s")
     if not all(
-        isinstance(row, dict)
-        and str(row.get("id") or "")
-        and str(row.get("conditionId") or "")
+        valid_cache_market(row)
         and number(row.get("liquidityNum")) >= max(0.0, args.min_liquidity)
-        for row in rows
+        for row in cache_rows
     ):
         raise RuntimeError("relay cache contains invalid market rows")
 
@@ -73,7 +71,8 @@ def main(argv: list[str] | None = None) -> int:
         "schema": "polymarket_v6_market_cache_relay_v1",
         "timestamp": int(time.time()),
         "cache_age_seconds": cache_age,
-        "markets": len(rows),
+        "markets": len(cache_rows),
+        "served_page_markets": len(rows),
         "source": proxy.source,
         "paper_only": True,
     }

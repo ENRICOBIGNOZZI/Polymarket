@@ -17,7 +17,11 @@ class V6MarketCacheRelayContractTests(unittest.TestCase):
         self.assertIn("market_proxy_cache.json.relay.${GITHUB_RUN_ID}", workflow)
         self.assertIn('mv "$incoming" "$target"', workflow)
         self.assertIn('time.time()-float(value["timestamp"]) <= 120', workflow)
-        self.assertIn('test "$(git rev-parse HEAD)" = "$(git rev-parse origin/paper-validated)"', workflow)
+        self.assertIn('paper_validated_sha="$(git rev-parse origin/paper-validated)"', workflow)
+        self.assertIn('test "$(git rev-parse HEAD)" = "$paper_validated_sha"', workflow)
+        self.assertIn('git checkout --detach "$PAPER_VALIDATED_SHA"', workflow)
+        self.assertIn('test "$(git rev-parse HEAD)" = "$PAPER_VALIDATED_SHA"', workflow)
+        self.assertIn('paper_validated_sha=', workflow)
         for forbidden in ("gh pr merge", "git push origin", "POLYMARKET_DEPLOY_REF=", "contents: write"):
             self.assertNotIn(forbidden, workflow)
 

@@ -27,6 +27,7 @@ GAMMA_LEGACY_TIMEOUT_SECONDS = 8.0
 CLOB_TIMEOUT_SECONDS = 5.0
 CLOB_DISCOVERY_BUDGET_SECONDS = 10.0
 BOOK_WORKERS = 8
+CACHE_SCHEMA = "polymarket_v6_market_proxy_cache_v1"
 
 
 def f(x: Any, d: float = 0.0) -> float:
@@ -45,6 +46,18 @@ def b(x: Any, d: bool = False) -> bool:
     if isinstance(x, str):
         return x.strip().lower() in {"1", "true", "yes"}
     return d
+
+
+def valid_cache_market(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+    liquidity = f(row.get("liquidityNum"), float("nan"))
+    return (
+        bool(str(row.get("id") or ""))
+        and bool(str(row.get("conditionId") or ""))
+        and math.isfinite(liquidity)
+        and liquidity >= 0.0
+    )
 
 
 def atomic(path: Path, obj: Any) -> None:
@@ -127,6 +140,7 @@ def clob_req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT
         return curl_req(url, payload, timeout)
     return req(url, payload, timeout)
 
+
 def tokens(market: dict[str, Any]) -> list[dict[str, Any]]:
     value = market.get("tokens")
     return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
@@ -179,15 +193,15 @@ class Proxy:
             value = json.loads(self.cache.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return False
-        if not isinstance(value, dict):
+        if not isinstance(value, dict) or value.get("schema") != CACHE_SCHEMA:
             return False
         markets = value.get("markets")
         timestamp = f(value.get("timestamp"), 0.0)
         if not isinstance(markets, list) or timestamp <= 0.0:
             return False
-        rows = [row for row in markets if isinstance(row, dict)]
-        if not rows:
+        if not markets or not all(valid_cache_market(row) for row in markets):
             return False
+        rows = [dict(row) for row in markets]
         mapping = value.get("gamma_to_condition")
         with self.state_lock:
             # Cache timestamps are integer seconds, so accept a newer atomic file
@@ -233,7 +247,7 @@ class Proxy:
         atomic(
             self.cache,
             {
-                "schema": "polymarket_v6_market_proxy_cache_v1",
+                "schema": CACHE_SCHEMA,
                 "timestamp": int(now),
                 "markets": rows,
                 "gamma_to_condition": mapping,

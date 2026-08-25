@@ -205,6 +205,34 @@ class V6MarketProxyDeadlineTests(unittest.TestCase):
         self.assertEqual(p.idmap["relay"], "relay")
         self.assertTrue(p.source.endswith("_cache"))
 
+    def test_relay_cache_rejects_wrong_schema_and_incomplete_rows(self) -> None:
+        p = self.make_proxy()
+        p.cache.write_text(
+            json.dumps(
+                {
+                    "schema": "unexpected_cache_schema",
+                    "timestamp": int(time.time()),
+                    "markets": [{"id": "relay", "conditionId": "relay", "liquidityNum": 25.0}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assertFalse(p.load())
+        self.assertEqual(p.rows, [])
+
+        p.cache.write_text(
+            json.dumps(
+                {
+                    "schema": proxy.CACHE_SCHEMA,
+                    "timestamp": int(time.time()),
+                    "markets": [{"id": "relay", "liquidityNum": 25.0}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assertFalse(p.load())
+        self.assertEqual(p.rows, [])
+
     def test_sampling_market_candidates_paginate_without_gamma(self) -> None:
         p = self.make_proxy()
         requests: list[str] = []
@@ -222,7 +250,8 @@ class V6MarketProxyDeadlineTests(unittest.TestCase):
 
         proxy.req = fake_req
         try:
-            rows = p.clob_candidates(2, "/sampling-markets", time.monotonic() + 2.0)
+            with mock.patch("scripts.v6_market_proxy.shutil.which", return_value=None):
+                rows = p.clob_candidates(2, "/sampling-markets", time.monotonic() + 2.0)
         finally:
             proxy.req = original
 

@@ -72,6 +72,46 @@ class V6MarketSnapshotTests(unittest.TestCase):
             self.assertEqual(payload["schema"], "polymarket_v6_market_proxy_cache_v1")
             self.assertEqual(len(payload["markets"]), 2)
 
+    def test_snapshot_rejects_incomplete_persisted_cache_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output = root / "cache.json"
+
+            class FakeProxy:
+                def __init__(self, gamma: str, clob: str, cache: Path, state: Path):
+                    del gamma, clob, state
+                    self.cache = cache
+                    self.source = "gamma_legacy"
+
+                def markets(self, query: dict[str, list[str]]) -> list[dict[str, object]]:
+                    del query
+                    self.cache.write_text(
+                        json.dumps(
+                            {
+                                "schema": "polymarket_v6_market_proxy_cache_v1",
+                                "timestamp": int(time.time()),
+                                "markets": [{"id": "broken", "liquidityNum": 25.0}],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    return [{"id": "ok", "conditionId": "ok", "liquidityNum": 25.0}]
+
+            with mock.patch.object(snapshot, "Proxy", FakeProxy):
+                with self.assertRaisesRegex(RuntimeError, "invalid market rows"):
+                    snapshot.main(
+                        [
+                            "--output",
+                            str(output),
+                            "--markets",
+                            "1",
+                            "--min-markets",
+                            "1",
+                            "--min-liquidity",
+                            "10",
+                        ]
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()
