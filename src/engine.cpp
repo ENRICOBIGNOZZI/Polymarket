@@ -77,18 +77,28 @@ std::vector<std::string> split_csv_line(const std::string& line) {
     return out;
 }
 
+bool semantic_stopword(const std::string& token) {
+    static const std::set<std::string> stop{
+        "and", "are", "before", "after", "between", "during", "for", "from",
+        "has", "have", "into", "market", "over", "polymarket", "than", "that",
+        "the", "their", "then", "there", "these", "this", "under", "was", "were",
+        "what", "when", "where", "which", "who", "why", "will", "with", "would"
+    };
+    return stop.count(token) != 0;
+}
+
 std::vector<std::string> words(const std::string& s) {
     std::vector<std::string> out;
     std::string cur;
+    auto flush = [&]() {
+        if (cur.size() >= 3 && !semantic_stopword(cur)) out.push_back(cur);
+        cur.clear();
+    };
     for (unsigned char c : s) {
-        if (std::isalnum(c)) {
-            cur.push_back(static_cast<char>(std::tolower(c)));
-        } else {
-            if (cur.size() >= 3) out.push_back(cur);
-            cur.clear();
-        }
+        if (std::isalnum(c)) cur.push_back(static_cast<char>(std::tolower(c)));
+        else flush();
     }
-    if (cur.size() >= 3) out.push_back(cur);
+    flush();
     std::sort(out.begin(), out.end());
     out.erase(std::unique(out.begin(), out.end()), out.end());
     return out;
@@ -106,6 +116,18 @@ double jaccard(const std::string& a, const std::string& b) {
         else { ++uni; ++j; }
     }
     return uni ? static_cast<double>(inter) / static_cast<double>(uni) : 0.0;
+}
+
+std::size_t shared_word_count(const std::string& a, const std::string& b) {
+    const auto x = words(a);
+    const auto y = words(b);
+    std::size_t i = 0, j = 0, shared = 0;
+    while (i < x.size() && j < y.size()) {
+        if (x[i] == y[j]) { ++shared; ++i; ++j; }
+        else if (x[i] < y[j]) ++i;
+        else ++j;
+    }
+    return shared;
 }
 
 double sample_sd(const std::vector<double>& x, double mean) {
@@ -176,9 +198,13 @@ Config Engine::load_config(const std::string& path) {
     c.pca_universe = jsize(o, "pca_universe", c.pca_universe);
     c.pca_mr_strength = jdouble(o, "pca_mr_strength", c.pca_mr_strength);
     c.pca_min_residual_z = jdouble(o, "pca_min_residual_z", c.pca_min_residual_z);
+    c.pca_min_t_reversion = jdouble(o, "pca_min_t_reversion", c.pca_min_t_reversion);
+    c.micro_pressure_extrapolation = jdouble(o, "micro_pressure_extrapolation", c.micro_pressure_extrapolation);
     c.graph_max_sum_error = jdouble(o, "graph_max_sum_error", c.graph_max_sum_error);
+    c.graph_partial_min_coverage = jdouble(o, "graph_partial_min_coverage", c.graph_partial_min_coverage);
     c.semantic_min_similarity = jdouble(o, "semantic_min_similarity", c.semantic_min_similarity);
     c.semantic_shrink = jdouble(o, "semantic_shrink", c.semantic_shrink);
+    c.semantic_min_shared_tokens = jsize(o, "semantic_min_shared_tokens", c.semantic_min_shared_tokens);
     c.scan_only = jbool(o, "scan_only", c.scan_only);
 
     if (auto it = o.find("expert_weights"); it != o.end() && it->value().is_object()) {
@@ -465,7 +491,7 @@ std::unordered_map<std::string,Engine::Adjustment> Engine::pca_adjustments(
 
     std::size_t T = cfg_.pca_window;
     for (auto* m : base) T = std::min(T, history_.at(m->id).size() - 1);
-    if (T + 1 < cfg_.pca_min_history || T < 12) return {};
+    if (T + 1 < cfg_.pca_min_history || T < 8) return {};
 
     std::vector<Series> s;
     for (auto* m : base) {
@@ -528,7 +554,7 @@ std::unordered_map<std::string,Engine::Adjustment> Engine::pca_adjustments(
     }
     const double current_factor = dot(v, current_x);
 
-    const std::size_t H = std::min<std::size_t>(12, std::max<std::size_t>(4, T / 4));
+    const std::size_t H = std::min<std::size_t>(12, std::max<std::size_t>(3, T / 4));
     std::unordered_map<std::string,Adjustment> out;
     for (std::size_t j = 0; j < N; ++j) {
         std::vector<double> states;
@@ -541,7 +567,7 @@ std::unordered_map<std::string,Engine::Adjustment> Engine::pca_adjustments(
             states.push_back(state);
             next_resid.push_back(resid[t + 1][j]);
         }
-        if (states.size() < 8) continue;
+        if (states.size() < 4) continue;
 
         const double state_mu = mean(states);
         const double state_sd = std::max(0.20, sample_sd(states, state_mu));
@@ -551,9 +577,6 @@ std::unordered_map<std::string,Engine::Adjustment> Engine::pca_adjustments(
         const double z = x_now / state_sd;
         if (std::abs(z) < cfg_.pca_min_residual_z) continue;
 
-        // Estimate whether residual dislocations actually predict reversal instead of
-        // assuming every large residual will mean-revert. The target is the next
-        // standardized idiosyncratic return conditional on the rolling residual state.
         const double y_mu = mean(next_resid);
         double sxx = 0.0, sxy = 0.0;
         for (std::size_t i = 0; i < states.size(); ++i) {
@@ -577,19 +600,19 @@ std::unordered_map<std::string,Engine::Adjustment> Engine::pca_adjustments(
         const double sigma2 = rss / dof;
         const double se_beta = std::sqrt(std::max(0.0, sigma2) / std::max(1e-8, sxx + ridge));
         const double t_reversion = se_beta > 1e-8 ? -beta / se_beta : 0.0;
-        if (t_reversion < 0.75) continue;
+        if (t_reversion < cfg_.pca_min_t_reversion) continue;
 
         const double forecast_std = y_mu + beta * x_now;
         if (forecast_std * x_now >= 0.0) continue;
 
         const double cur = yes_books.at(s[j].m->yes_token).midpoint();
-        const double forecast_logit = std::clamp(cfg_.pca_mr_strength * forecast_std * s[j].sd, -0.20, 0.20);
+        const double forecast_logit = std::clamp(cfg_.pca_mr_strength * forecast_std * s[j].sd, -0.30, 0.30);
         if (std::abs(forecast_logit) < 1e-5) continue;
         const double q = logistic(logit(cur) + forecast_logit);
         const double z_conf = std::clamp((std::abs(z) - cfg_.pca_min_residual_z) / 3.0 + 0.20, 0.10, 1.0);
-        const double sample_conf = std::min(1.0, static_cast<double>(T) / 48.0);
+        const double sample_conf = std::min(1.0, static_cast<double>(T) / 36.0);
         const double factor_conf = std::clamp(0.35 + 1.5 * explained, 0.35, 1.0);
-        const double reversion_conf = std::clamp((t_reversion - 0.75) / 2.5, 0.05, 1.0);
+        const double reversion_conf = std::clamp((t_reversion - cfg_.pca_min_t_reversion) / 1.5 + 0.05, 0.05, 1.0);
         out[s[j].m->id] = {q, std::clamp(z_conf * sample_conf * factor_conf * reversion_conf, 0.02, 1.0)};
     }
     return out;
@@ -623,23 +646,32 @@ std::unordered_map<std::string,Engine::Adjustment> Engine::graph_adjustments(
             std::vector<G> g;
             g.reserve(full.size());
             double sum = 0.0, varsum = 0.0;
-            bool complete = true;
             for (const auto& m : full) {
                 auto it = books.find(m.yes_token);
-                if (it == books.end()) { complete = false; break; }
+                if (it == books.end()) continue;
                 const double p = it->second.midpoint();
                 const double spread = it->second.spread();
                 const double depth = it->second.weighted_depth(true) + it->second.weighted_depth(false);
-                if (!std::isfinite(p) || !std::isfinite(spread)) { complete = false; break; }
+                if (!std::isfinite(p) || !std::isfinite(spread)) continue;
                 const double var = std::max(1e-6, spread * spread + 1.0 / (depth + 1.0));
                 g.push_back({&m, p, var});
                 sum += p;
                 varsum += var;
             }
-            if (!complete || g.size() != full.size() || varsum <= 0.0) continue;
-            if (std::abs(sum - 1.0) > cfg_.graph_max_sum_error) continue;
+            if (g.size() < 2 || varsum <= 0.0) continue;
+            const bool complete = g.size() == full.size();
+            const double coverage = static_cast<double>(g.size()) / static_cast<double>(full.size());
+            if (!complete && coverage + 1e-12 < cfg_.graph_partial_min_coverage) continue;
 
-            const double conf = std::clamp(1.0 - std::abs(sum - 1.0) / std::max(1e-6, cfg_.graph_max_sum_error), 0.10, 1.0);
+            // For an incomplete mutually-exclusive set, sum<=1 is feasible and contains no
+            // hard logical contradiction. A partial sum above one is still impossible and can
+            // be projected back to the simplex without pretending the subset is exhaustive.
+            if (!complete && sum <= 1.0) continue;
+            const double discrepancy = complete ? std::abs(sum - 1.0) : sum - 1.0;
+            if (discrepancy > cfg_.graph_max_sum_error) continue;
+
+            const double base_conf = std::clamp(1.0 - discrepancy / std::max(1e-6, cfg_.graph_max_sum_error), 0.10, 1.0);
+            const double conf = base_conf * (complete ? 0.85 : std::clamp(0.55 * coverage, 0.15, 0.55));
             std::vector<double> q(g.size());
             double qsum = 0.0;
             for (std::size_t i = 0; i < g.size(); ++i) {
@@ -648,7 +680,7 @@ std::unordered_map<std::string,Engine::Adjustment> Engine::graph_adjustments(
             }
             if (qsum <= 0.0) continue;
             for (std::size_t i = 0; i < g.size(); ++i) {
-                out[g[i].m->id] = {std::clamp(q[i] / qsum, 0.001, 0.999), 0.85 * conf};
+                out[g[i].m->id] = {std::clamp(q[i] / qsum, 0.001, 0.999), conf};
             }
         } catch (const std::exception& e) {
             std::cerr << "graph event lookup failed for " << event_id << ": " << e.what() << '\n';
@@ -676,23 +708,37 @@ std::vector<ExpertPrediction> Engine::build_experts(
         const double dn = no.weighted_depth(true) + no.weighted_depth(false);
         const double wy = std::sqrt(std::max(0.0, dy)) / (1.0 + 20.0 * yes.spread());
         const double wn = std::sqrt(std::max(0.0, dn)) / (1.0 + 20.0 * no.spread());
-        double q = mid;
-        if (std::isfinite(y) && std::isfinite(n) && wy + wn > 1e-12) q = (wy * y + wn * (1.0 - n)) / (wy + wn);
-        else if (std::isfinite(y)) q = y;
+        double base = mid;
+        if (std::isfinite(y) && std::isfinite(n) && wy + wn > 1e-12) base = (wy * y + wn * (1.0 - n)) / (wy + wn);
+        else if (std::isfinite(y)) base = y;
+
+        // A raw microprice is bounded by the current touch and is therefore frequently
+        // incapable of beating the executable ask after fees/slippage. Extrapolate only the
+        // observed book-pressure displacement; zero displacement still means zero forecast.
+        const double pressure = base - mid;
+        const double max_jump = std::max(0.01, 2.0 * std::max(yes.spread(), no.spread()));
+        const double q = std::clamp(base + cfg_.micro_pressure_extrapolation * pressure,
+                                    std::max(0.001, mid - max_jump), std::min(0.999, mid + max_jump));
         const double parity = std::isfinite(y) && std::isfinite(n) ? std::abs(y - (1.0 - n)) : 0.25;
         const double liq = (dy + dn) / (dy + dn + 200.0);
         const double spread_conf = std::exp(-5.0 * (yes.spread() + no.spread()));
-        const double conf = std::clamp(liq * spread_conf * std::exp(-8.0 * parity), 0.02, 1.0);
-        out.push_back({"micro", std::clamp(q, 0.001, 0.999), conf});
+        const double pressure_conf = std::clamp(std::abs(pressure) / std::max(1e-4, 0.5 * yes.spread()), 0.10, 1.0);
+        const double conf = std::clamp(liq * spread_conf * std::exp(-8.0 * parity) * pressure_conf, 0.02, 1.0);
+        out.push_back({"micro", q, conf});
     }
     if (auto it = pca.find(m.id); it != pca.end()) out.push_back({"pca", it->second.first, it->second.second});
     if (auto it = graph.find(m.id); it != graph.end()) out.push_back({"graph", it->second.first, it->second.second});
 
     if (std::isfinite(mid)) {
-        double sw = 0.0, spv = 0.0;
+        double sw = 0.0, spv = 0.0, best_sim = 0.0;
+        std::size_t peer_count = 0;
         for (const auto& peer : universe) {
             if (peer.id == m.id) continue;
-            const double sim = jaccard(m.question, peer.question);
+            const bool same_event = !m.event_id.empty() && m.event_id == peer.event_id;
+            const std::size_t shared = shared_word_count(m.question, peer.question);
+            if (!same_event && shared < cfg_.semantic_min_shared_tokens) continue;
+            double sim = jaccard(m.question, peer.question);
+            if (same_event) sim = std::min(1.0, sim + 0.25);
             if (sim < cfg_.semantic_min_similarity) continue;
             auto it = yes_books.find(peer.yes_token);
             if (it == yes_books.end()) continue;
@@ -701,11 +747,14 @@ std::vector<ExpertPrediction> Engine::build_experts(
             const double w = sim * sim * std::sqrt(std::max(1.0, peer.liquidity));
             sw += w;
             spv += w * p;
+            best_sim = std::max(best_sim, sim);
+            ++peer_count;
         }
         if (sw > 0.0) {
             const double peer = spv / sw;
             const double q = (1.0 - cfg_.semantic_shrink) * mid + cfg_.semantic_shrink * peer;
-            out.push_back({"semantic", std::clamp(q, 0.001, 0.999), std::min(0.25, 0.05 + cfg_.semantic_shrink)});
+            const double conf = std::clamp(0.05 + 0.25 * best_sim + 0.03 * std::min<std::size_t>(3, peer_count), 0.05, 0.40);
+            out.push_back({"semantic", std::clamp(q, 0.001, 0.999), conf});
         }
     }
 
@@ -809,9 +858,6 @@ void Engine::paper_trade(const Signal& s, const Market& m, const Book& book, con
     const double cost = shares * px + fee;
     if (cost > cash_ || shares < book.min_order_size) return;
 
-    // Re-run the complete admission test at the actual simulated VWAP. The ranking
-    // stage sees the top ask; walking the book can consume enough edge that the
-    // uncertainty-adjusted trade is no longer admissible.
     const double realized_cost_edge = s.fair_side - px - fee / shares;
     const double realized_net_edge = realized_cost_edge - cfg_.uncertainty_penalty * s.uncertainty;
     if (realized_net_edge <= cfg_.min_net_edge) return;
@@ -990,9 +1036,6 @@ void Engine::run_once(bool paper, bool scan_only) {
         auto pit = positions_.find(m.id);
         if (pit != positions_.end()) {
             auto bit = books.find(pit->second.token_id);
-            // Missing terminal evidence is a hard entry gate, not an instruction to
-            // liquidate. Use the live market midpoint only for conservative exit
-            // management of an already-open position.
             const double exit_fair = has_terminal_evidence ? fair : mid;
             if (bit != books.end()) maybe_exit(m, bit->second, exit_fair, fd);
         }
