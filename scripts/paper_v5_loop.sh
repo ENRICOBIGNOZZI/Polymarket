@@ -12,8 +12,42 @@ STAT_INTERVAL_SECONDS="${V5_STAT_INTERVAL_SECONDS:-120}"
 STRUCTURAL_INTERVAL_SECONDS="${V5_STRUCTURAL_INTERVAL_SECONDS:-60}"
 REWARD_INTERVAL_SECONDS="${V5_REWARD_INTERVAL_SECONDS:-300}"
 REPORT_INTERVAL_SECONDS="${V5_REPORT_INTERVAL_SECONDS:-60}"
+EXTERNAL_REFRESH_SECONDS="${V5_EXTERNAL_REFRESH_SECONDS:-300}"
+EXTERNAL_MAX_AGE_SECONDS="${V5_EXTERNAL_MAX_AGE_SECONDS:-21600}"
 INTENT_MIN_EDGE="${V5_INTENT_MIN_EDGE:-0.00025}"
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/strategies"
+EXTERNAL_FEED="$RUN_ROOT/external_signals.csv"
+
+refresh_external_feed() {
+  local latest="$RUN_ROOT/.latest-external-signals.jsonl"
+  local history="$RUN_ROOT/.external-intelligence-observations.jsonl.gz"
+  local output="$RUN_ROOT/.external-signals.csv.tmp"
+  rm -f "$latest" "$history" "$output"
+  git fetch --quiet --no-tags origin telemetry:refs/remotes/origin/telemetry || return 1
+  git show origin/telemetry:telemetry/latest-external-signals.jsonl > "$latest" 2>/dev/null || return 1
+  git show origin/telemetry:telemetry/external-intelligence-observations.jsonl.gz > "$history" 2>/dev/null || true
+  local args=(
+    python3 scripts/materialize_external_paper_signals.py
+    --input "$latest"
+    --output "$output"
+    --max-age-seconds "$EXTERNAL_MAX_AGE_SECONDS"
+  )
+  if [[ -s "$history" ]]; then
+    args+=(--input "$history")
+  fi
+  "${args[@]}" >> "$RUN_ROOT/external_feed_refresh.log" 2>&1 || return 1
+  [[ "$(head -n 1 "$output")" == "market_key,q_yes,confidence,source,timestamp" ]] || return 1
+  mv "$output" "$EXTERNAL_FEED"
+  rm -f "$latest" "$history"
+}
+
+if ! refresh_external_feed; then
+  if [[ ! -s "$EXTERNAL_FEED" ]]; then
+    printf 'market_key,q_yes,confidence,source,timestamp\n' > "$EXTERNAL_FEED"
+  fi
+  printf '%s external_feed_refresh=failed prior_feed_preserved=true\n' "$(date +%s)" \
+    >> "$RUN_ROOT/external_feed_refresh.log"
+fi
 
 COMPACTION_INTERVAL_SECONDS="$(python3 - "$CONFIG" <<'PY'
 import json
@@ -226,6 +260,7 @@ last_rewards=0
 last_oos=0
 last_report=0
 last_compaction=0
+last_external_refresh=0
 
 while true; do
   now=$(date +%s)
@@ -236,6 +271,14 @@ while true; do
     printf '%s,supervisor,restart,%s\n' "$(date +%s)" "$SUPERVISOR_RESTARTS" >> "$RUN_ROOT/runtime_supervisor_events.csv"
     sleep 1
     start_supervisor
+  fi
+
+  if (( now - last_external_refresh >= EXTERNAL_REFRESH_SECONDS )); then
+    if ! refresh_external_feed; then
+      printf '%s external_feed_refresh=failed prior_feed_preserved=true\n' "$now" \
+        >> "$RUN_ROOT/external_feed_refresh.log"
+    fi
+    last_external_refresh=$now
   fi
 
   # The passive microstructure sleeve is deliberately frequent and small. The
@@ -300,7 +343,7 @@ while true; do
 
   if (( now - last_report >= REPORT_INTERVAL_SECONDS )); then
     python3 scripts/runtime_action_report.py \
-      --run-root "$RUN_ROOT" --external-signals data/external_signals.csv \
+      --run-root "$RUN_ROOT" --external-signals "$EXTERNAL_FEED" \
       --window-seconds 3600 --production-edge "$INTENT_MIN_EDGE" \
       --output-json "$RUN_ROOT/action_report.json" \
       --output-markdown "$RUN_ROOT/action_report.md" \
