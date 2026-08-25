@@ -208,7 +208,7 @@ def load_tape_rows(path: Path, cutoff: int, now: int) -> list[dict[str, str]]:
         with path.open(newline="", encoding="utf-8") as handle:
             return [
                 dict(row) for row in csv.DictReader(handle)
-                if cutoff <= int(finite(row.get("timestamp"), 0.0)) <= now + 30
+                if cutoff <= int(finite(row.get("timestamp"), 0.0)) <= now
             ]
     except OSError:
         return []
@@ -225,6 +225,27 @@ def trade_is_strictly_after_queue_entry(row: dict[str, str], order: dict[str, An
     trade_ts = int(finite(row.get("timestamp"), 0.0))
     created_ts = int(finite(order.get("created_ts"), 0.0))
     return created_ts > 0 and trade_ts > created_ts
+
+
+def replayable_trade_timestamp(
+    row: dict[str, str],
+    order: dict[str, Any],
+    *,
+    now: int,
+    ttl_seconds: int,
+) -> int | None:
+    """Return causal event time only for trades that occurred while the paper order was live."""
+    trade_ts = int(finite(row.get("timestamp"), 0.0))
+    received_ms = int(finite(row.get("received_ms"), 0.0))
+    created_ts = int(finite(order.get("created_ts"), 0.0))
+    if created_ts <= 0 or not trade_is_strictly_after_queue_entry(row, order):
+        return None
+    if received_ms <= 0 or received_ms > now * 1000:
+        return None
+    expiry_ts = created_ts + max(0, int(ttl_seconds))
+    if trade_ts > now or trade_ts > expiry_ts:
+        return None
+    return trade_ts
 
 
 def main() -> int:
@@ -284,15 +305,14 @@ def main() -> int:
 
     filled_orders = 0
     for market_id, order in list(orders.items()):
-        if now - int(finite(order.get("created_ts"), now)) >= args.ttl_seconds:
-            append_csv(args.run_dir / "maker_order_log.csv", order_log_fields, {**order, "timestamp": now, "action": "CANCEL_TTL"})
-            del orders[market_id]
-            continue
+        created_ts = int(finite(order.get("created_ts"), now))
+        expired = now >= created_ts + args.ttl_seconds
         seen = set(order.get("seen_trade_keys") or [])
         token = str(order.get("token_id") or "")
         limit_price = finite(order.get("limit_price"))
         for row in tape_rows:
-            if not trade_is_strictly_after_queue_entry(row, order):
+            trade_ts = replayable_trade_timestamp(row, order, now=now, ttl_seconds=args.ttl_seconds)
+            if trade_ts is None:
                 continue
             key = trade_key(row)
             if key in seen or str(row.get("asset_id") or "") != token:
@@ -329,15 +349,18 @@ def main() -> int:
                 position = {
                     "market_id": market_id, "event_id": market.event, "slug": market.slug,
                     "side": order["side"], "token_id": token, "shares": 0.0, "cost": 0.0,
-                    "entry_ts": now,
+                    "entry_ts": trade_ts,
                 }
+            else:
+                prior_entry = int(finite(position.get("entry_ts"), trade_ts))
+                position["entry_ts"] = min(prior_entry, trade_ts)
             position["shares"] = finite(position.get("shares")) + fill_shares
             position["cost"] = finite(position.get("cost")) + fill_cost
             positions[market_id] = position
             append_csv(
                 args.run_dir / "maker_fills.csv", fill_fields,
                 {
-                    "timestamp": now, "market_id": market_id, "slug": market.slug,
+                    "timestamp": trade_ts, "market_id": market_id, "slug": market.slug,
                     "action": "BUY_MAKER" if remaining <= 1e-12 else "BUY_MAKER_PARTIAL",
                     "side": order["side"], "shares": fill_shares, "price": limit_price,
                     "fee": entry_fee, "pnl": 0.0, "reason": "taker_sell_consumed_queue",
@@ -349,7 +372,11 @@ def main() -> int:
                 break
         if market_id in orders:
             order["seen_trade_keys"] = list(seen)[-500:]
-            orders[market_id] = order
+            if expired:
+                append_csv(args.run_dir / "maker_order_log.csv", order_log_fields, {**order, "timestamp": now, "action": "CANCEL_TTL"})
+                del orders[market_id]
+            else:
+                orders[market_id] = order
 
     slip = max(0.0, args.slippage_bps) / 10000.0
     for market_id, position in list(positions.items()):
