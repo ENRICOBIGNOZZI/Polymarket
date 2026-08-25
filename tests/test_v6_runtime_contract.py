@@ -35,7 +35,7 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertEqual(architecture["version"], 6)
         self.assertTrue(architecture["paper_only"])
 
-    def test_capital_sleeves_sum_to_one(self) -> None:
+    def test_capital_and_hard_safety_contracts(self) -> None:
         cfg = json.loads((ROOT / "config/paper_v6.json").read_text())
         v6 = cfg["v6"]
         total = sum(float(v6[key]) for key in (
@@ -47,6 +47,12 @@ class V6RuntimeContractTest(unittest.TestCase):
         ))
         self.assertTrue(math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-12))
         self.assertEqual(float(cfg["max_drawdown"]), 0.15)
+        self.assertEqual(float(cfg["max_market_fraction"]), 0.025)
+        self.assertEqual(float(cfg["max_event_fraction"]), 0.08)
+        self.assertEqual(float(cfg["max_gross_fraction"]), 0.45)
+        self.assertIs(cfg["multi_strategy"]["paper_only"], True)
+        self.assertEqual(float(cfg["multi_strategy"]["global_max_drawdown"]), 0.15)
+        self.assertEqual(float(cfg["multi_strategy"]["global_max_gross_fraction"]), 0.45)
         self.assertEqual(float(cfg["semantic_shrink"]), 0.0)
 
     def test_threshold_parser_recognizes_nested_crypto_contracts(self) -> None:
@@ -64,17 +70,27 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertEqual(family1, family2)
         self.assertIsNotNone(family1)
 
+    def test_bh_cutoff_controls_multiple_reversion_tests(self) -> None:
+        self.assertAlmostEqual(self.local_factor.bh_cutoff([0.001, 0.02, 0.20, 0.80], 0.10), 0.02)
+        self.assertEqual(self.local_factor.bh_cutoff([0.08, 0.20, 0.80], 0.05), 0.0)
+
     def test_ar_fit_requires_actual_mean_reversion(self) -> None:
-        residual = [(-1.0) ** i * (0.8 ** i) for i in range(40)]
+        residual = [(-1.0) ** i * (0.8 ** i) for i in range(60)]
         phi, tstat, _, sd = self.local_factor.ar_fit(residual)
         self.assertGreater(sd, 0.0)
         self.assertLess(phi, 0.999)
         self.assertLess(tstat, 0.0)
 
-    def test_v6_loop_does_not_run_global_pca_or_semantic_expert(self) -> None:
+    def test_v6_execution_excludes_global_pca_semantic_and_weak_b1(self) -> None:
         loop = (ROOT / "scripts/paper_v6_loop.sh").read_text()
         self.assertNotIn("polymarket_pca_stat_arb", loop)
         self.assertNotIn("strategies/semantic", loop)
+        self.assertNotIn("build_v4_intents.py --strategy B1", loop)
+        self.assertNotIn('--input "$RUN_ROOT/b1_intents.csv"', loop)
+        self.assertIn("stat_arb_pairs_diagnostic.csv", loop)
+        self.assertIn("--min-t-reversion 2.00", loop)
+        self.assertIn("--fdr 0.10", loop)
+        self.assertIn("--min-common-points 48", loop)
         self.assertIn("v6_local_factor_intents.py", loop)
         self.assertIn("v6_relation_intents.py", loop)
         self.assertIn("v6_micro_taker.py", loop)
