@@ -204,10 +204,24 @@ class TapeFlow:
         return len(self.compatible_sell_trades(token_id, limit_price, lookback_seconds=lookback_seconds))
 
     def compatible_sell_recency(self, token_id: str, limit_price: float, *, lookback_seconds: int) -> float:
+        """Age in seconds of the newest compatible *market event* known by decision time."""
         rows = self.compatible_sell_trades(token_id, limit_price, lookback_seconds=lookback_seconds)
-        return float(self.now - rows[-1].received_ms / 1000.0) if rows else math.inf
+        return float(self.now - max(trade.ts for trade in rows)) if rows else math.inf
+
+    def compatible_sell_receive_recency(self, token_id: str, limit_price: float, *, lookback_seconds: int) -> float:
+        """Age in seconds since the newest compatible trade became locally observable."""
+        rows = self.compatible_sell_trades(token_id, limit_price, lookback_seconds=lookback_seconds)
+        return float(self.now - max(trade.received_ms for trade in rows) / 1000.0) if rows else math.inf
 
     def compatible_sell_rate(self, token_id: str, limit_price: float, *, lookback_seconds: int) -> float:
+        """Event-age-decayed causal volume rate.
+
+        Receive time is an information-availability gate, not a market-event clock.
+        A trade that happened 110 seconds ago but only arrived locally one second
+        ago must not be treated as one-second-old order flow. Weighting by event
+        age prevents delayed REST tape delivery from manufacturing fresh fill
+        hazard while preserving strict receive-time causality in the row filter.
+        """
         window = max(1.0, float(lookback_seconds))
         rows = self.compatible_sell_trades(token_id, limit_price, lookback_seconds=int(window))
         if not rows:
@@ -215,7 +229,7 @@ class TapeFlow:
         half_life = max(5.0, window / 3.0)
         decay = math.log(2.0) / half_life
         weighted_volume = sum(
-            trade.size * math.exp(-decay * max(0.0, self.now - trade.received_ms / 1000.0))
+            trade.size * math.exp(-decay * max(0.0, self.now - trade.ts))
             for trade in rows
         )
         effective_seconds = (1.0 - math.exp(-decay * window)) / decay
