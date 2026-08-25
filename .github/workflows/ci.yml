@@ -87,10 +87,11 @@ jobs:
             scripts/validate_project_context.py scripts/validate_scheduler_registry.py \
             scripts/v6_external_bridge.py scripts/v6_relation_intents.py scripts/v6_intent_guard.py \
             scripts/v6_local_factor_intents.py scripts/v6_micro_taker.py scripts/v6_hard_arb_paper.py \
-            scripts/v6_runtime_status.py monitoring/exporter_v5.py monitoring/exporter_v6.py monitoring/exporter_latest.py
+            scripts/v6_runtime_status.py scripts/v7_execution_evidence.py monitoring/exporter_v5.py monitoring/exporter_v6.py monitoring/exporter_latest.py
           python3 -m json.tool config/paper_v5.json >/dev/null
           python3 -m json.tool config/paper_v6.json >/dev/null
           python3 -m json.tool config/v6_model_architecture.json >/dev/null
+          python3 -m json.tool config/v7_execution_evidence.json >/dev/null
           python3 -m json.tool config/live_champion.json >/dev/null
           python3 -m json.tool config/project_context.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
@@ -98,5 +99,5 @@ jobs:
           python3 scripts/validate_project_context.py --root . --output /tmp/project-context-validation.md
           python3 scripts/project_context_snapshot.py --root . --manifest config/project_context.json --output-json /tmp/project-context.json --output-markdown /tmp/project-context.md
           test -s /tmp/project-context.json; test -s /tmp/project-context.md
-          python3 -m unittest tests/test_v6_runtime_contract.py tests/test_v6_model_contracts.py \
+          python3 -m unittest tests/test_v6_runtime_contract.py tests/test_v6_model_contracts.py tests/test_v7_execution_evidence.py \
             tests/test_compact_strategy_logs.py tests/test_ops_macos.py tests/test_workflow_yaml_contracts.py -v
