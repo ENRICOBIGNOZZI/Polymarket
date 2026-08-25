@@ -1,0 +1,73 @@
+{
+  "schema": "polymarket_lf_v6_factor_hedge_units_evidence_v1",
+  "date": "2026-08-25",
+  "base_main_sha": "36057c61011817948a88c110fb192d70aac438b1",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "finding": {
+    "summary": "V6 Local Factor constructs hedge weights from standardized factor loadings, but executable PnL responds to factor shocks in price units. The price-unit exposure also depends on each market's logit-history scale and current p*(1-p) delta.",
+    "incumbent_weight": "abs((sign_a * loading_a) / (sign_b * loading_b))",
+    "first_order_side_price_exposure": "sign * p * (1-p) * yes_sd * loading",
+    "implication": "A pair can be neutral in standardized loading coordinates while retaining material directional common-factor exposure in executable price PnL. This can contaminate residual mean-reversion PnL and partial-fill risk.",
+    "production_source": "scripts/v6_local_factor_intents.py",
+    "repaired_frontier_source": "PR #374 scripts/v6_local_factor_v3.py uses the same loading-only hedge ratio"
+  },
+  "deterministic_examples": [
+    {
+      "name": "different_logit_scales_and_price_deltas",
+      "leg_a": {"mid": 0.5, "yes_sd": 0.1, "loading": 1.0, "side": "YES"},
+      "leg_b": {"mid": 0.95, "yes_sd": 0.3, "loading": -1.0, "side": "YES"},
+      "incumbent_weight_b": 1.0,
+      "price_delta_weight_b": 1.7543859649122793,
+      "incumbent_residual_fraction_of_leg_a": 0.43
+    },
+    {
+      "name": "extreme_probability_delta_compression",
+      "leg_a": {"mid": 0.5, "yes_sd": 0.1, "loading": 1.0, "side": "YES"},
+      "leg_b": {"mid": 0.99, "yes_sd": 0.3, "loading": -1.0, "side": "YES"},
+      "incumbent_weight_b": 1.0,
+      "price_delta_weight_b": 8.41750841750841,
+      "incumbent_residual_fraction_of_leg_a": 0.8812
+    },
+    {
+      "name": "same_price_different_logit_scale",
+      "leg_a": {"mid": 0.5, "yes_sd": 0.1, "loading": 1.0, "side": "YES"},
+      "leg_b": {"mid": 0.5, "yes_sd": 0.5, "loading": -1.0, "side": "YES"},
+      "incumbent_weight_b": 1.0,
+      "price_delta_weight_b": 0.2,
+      "incumbent_residual_exposure_multiple_of_leg_a": 4.0
+    }
+  ],
+  "fresh_live_context": {
+    "telemetry_sha": "36057c61011817948a88c110fb192d70aac438b1",
+    "live_smoke_run_id": "32894106740",
+    "trade_recorder_status": "healthy",
+    "trade_rows": 384,
+    "graph_rv_bundles": 2,
+    "graph_rv_rows": 8,
+    "graph_rv_best_quote_edge": 0.020000000000000018,
+    "completed_bundles": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_pnl_usd": 0.0,
+    "maker_resting_orders": 6,
+    "maker_positions": 0
+  },
+  "authorized_envelope_interaction": {
+    "pr": 395,
+    "issue": "PR #395 lowers the Local Factor executable edge floor from 2 bp to 0.5 bp and raises its max-trade ceiling from $60 to $125 while still invoking the unrepaired scripts/v6_local_factor_intents.py path.",
+    "required_order": "Repair inference/horizon/TTR and hedge units before applying Local Factor threshold aggression. Other paper sleeves may retain the user-authorized aggressive envelope subject to their own execution gates."
+  },
+  "required_next_experiment": [
+    "Run the repaired leave-one-out/null-preserving/TTR-aware Local Factor on identical chronological panels with three hedge definitions: loading-only, loading*yes_sd, and price-delta p*(1-p)*loading*yes_sd.",
+    "Measure realized common-factor beta of the constructed pair before examining alpha.",
+    "Then compare candidate survival, turnover, queue-aware joint completion, partial-fill abort/unwind loss, and fill-conditioned executable PnL under 1x/1.5x/2x cost stress.",
+    "Do not treat a lower residual factor beta alone as alpha evidence."
+  ],
+  "safety": {
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "market_event_gross_caps_unchanged": true,
+    "authenticated_execution": false,
+    "real_money_execution": false
+  }
+}
