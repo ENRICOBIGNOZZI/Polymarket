@@ -38,7 +38,7 @@ class ExternalPaperSignalTests(unittest.TestCase):
     def test_direct_probability_materializes_in_engine_schema(self) -> None:
         rows = bridge.materialize([self.row()], now=self.now, max_age_seconds=3600)
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["key"], "123")
+        self.assertEqual(rows[0]["market_key"], "123")
         self.assertEqual(rows[0]["source"], "kalshi")
         self.assertAlmostEqual(float(rows[0]["q_yes"]), 0.61)
         self.assertAlmostEqual(float(rows[0]["confidence"]), 0.72)
