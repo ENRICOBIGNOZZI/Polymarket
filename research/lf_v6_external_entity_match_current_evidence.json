@@ -1,0 +1,65 @@
+{
+  "schema": "lf_v6_external_entity_match_evidence_v1",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "main_sha": "9695c4b3002526c8b747dfd6dad0bda3f12a0961",
+  "observed_utc": "2026-08-25T08:57:51+00:00",
+  "material_findings": [
+    "V6 is now the live paper champion and its external bridge is wired to telemetry, but current external telemetry has zero accepted Kalshi matches despite scanning 2500 Kalshi markets.",
+    "The incumbent Kalshi score_pair uses lexical overlap, sequence similarity, numeric compatibility, orientation and expiry but never applies detect_asset/classify_market as a hard entity-compatibility gate.",
+    "Current mapping diagnostics therefore rank cross-asset pairs such as Polymarket Bitcoin thresholds against Kalshi silver/gold thresholds. These are rejected by weak aggregate score today, but lowering the match threshold without an entity gate would convert a data-quality defect into false external probabilities.",
+    "A research-aggressive matcher should first hard-require entity/asset compatibility and only then broaden the universe and lower soft score/margin/confidence floors."
+  ],
+  "current_external_telemetry": {
+    "polymarket_markets": 100,
+    "kalshi_markets": 2500,
+    "kalshi_matches": 0,
+    "accepted_signal_rows": 3854,
+    "binance_rows": 3850,
+    "gdelt_rows": 4,
+    "top_near_candidate": {
+      "candidate_id": "external:binance:realized_vol_24h:21600s",
+      "oos_predictions": 1347,
+      "trades": 47,
+      "net_pnl_per_share_1x": 1.647,
+      "net_pnl_per_share_1_5x": 0.311,
+      "net_pnl_per_share_2x": 0.0,
+      "profit_factor": 11.98,
+      "positive_fold_fraction": 0.25,
+      "raw_pvalue": 0.000999000999000999,
+      "gate_pass": false,
+      "reasons": [
+        "nonpositive_2x_cost_stress",
+        "fold_stability_gate",
+        "exact_clob_replay_required_before_integration"
+      ],
+      "note": "This is a short-horizon feature backtest, not an approved terminal probability, so it must not be fabricated into q_external."
+    }
+  },
+  "research_challenger": {
+    "polymarket_max_markets": 700,
+    "polymarket_min_liquidity": 10.0,
+    "kalshi_max_markets": 5000,
+    "same_entity_min_match_score": 0.58,
+    "same_entity_min_match_margin": 0.02,
+    "same_entity_min_confidence": 0.20,
+    "hard_gates": [
+      "entity_or_asset_compatibility",
+      "critical_number_match",
+      "orientation_compatibility",
+      "expiry_compatibility"
+    ]
+  },
+  "required_next_evidence": [
+    "Run incumbent and entity-aware aggressive matcher on the same point-in-time Polymarket/Kalshi universe and report accepted/rejected pairs by reason.",
+    "Require manual or rule-derived proposition equivalence on a sample of newly admitted cross-venue matches before interpreting Kalshi price as a terminal probability.",
+    "For direct probabilities, evaluate terminal Brier/log-loss and calibration by time-to-resolution against contemporaneous Polymarket probability, then executable paper PnL at 1x, 1.5x and 2x costs.",
+    "Do not route the Binance realized-vol near-candidate through the terminal-probability external bridge; it needs a separate short-horizon external-RV model if pursued."
+  ],
+  "safety": {
+    "max_drawdown_changed": false,
+    "kill_switch_changed": false,
+    "concentration_changed": false,
+    "authenticated_execution_enabled": false,
+    "live_champion_changed": false
+  }
+}
