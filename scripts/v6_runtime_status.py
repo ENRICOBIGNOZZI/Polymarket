@@ -57,37 +57,6 @@ def fill_counts(path: Path) -> dict[str, int]:
     return {"fills": len(rows), "buy_fills": buy, "sell_fills": sell, "settle_fills": settle}
 
 
-def multileg_fill_counts(path: Path) -> dict[str, int]:
-    """Count durable execution events from the relative-value multi-leg ledger.
-
-    PARTIAL_FILL is the passive entry execution event (including a final passive
-    fill, whose event name remains PARTIAL_FILL). EXIT_TAKER and SETTLE are the
-    two durable exit execution events. Queue/cancel/reprice events are never fills.
-    """
-    buy = sell = settle = 0
-    for row in read_csv(path):
-        event = str(row.get("event") or "").upper()
-        shares = f(row.get("shares"), 0.0)
-        if shares <= 0.0:
-            continue
-        if event == "PARTIAL_FILL":
-            buy += 1
-        elif event == "EXIT_TAKER":
-            sell += 1
-        elif event == "SETTLE":
-            settle += 1
-    return {
-        "fills": buy + sell + settle,
-        "buy_fills": buy,
-        "sell_fills": sell,
-        "settle_fills": settle,
-    }
-
-
-def sum_csv_column(path: Path, column: str) -> float:
-    return sum(f(row.get(column), 0.0) for row in read_csv(path))
-
-
 def atomic_json(path: Path, obj: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -125,10 +94,8 @@ def main() -> int:
 
     maker_fills = fill_counts(args.run_root / "maker" / "maker_fills.csv")
     micro_fills = fill_counts(args.run_root / "micro_taker" / "fills.csv")
-    broker_fills = multileg_fill_counts(args.run_root / "multileg_events.csv")
     hard_fills = fill_counts(args.run_root / "hard_arb" / "fills.csv")
     external_fills = fill_counts(args.run_root / "external" / "fills.csv")
-    broker_realized = sum_csv_column(args.run_root / "bundle_ledger.csv", "net_pnl")
 
     alloc = {
         "micro_maker": starting * f(v.get("micro_maker_capital_fraction"), .12),
@@ -162,43 +129,29 @@ def main() -> int:
     hard_live = int(f(hard.get("open_positions")))
     external_live = int(f(external.get("open_positions")))
     reserved = reserve + f(maker.get("reserved_cash")) + f(broker.get("reserved_cash"))
-
-    maker_cash = f(maker.get("cash"), alloc["micro_maker"])
-    maker_gross = f(maker.get("reserved_cash")) + max(0.0, maker_eq - maker_cash)
-    micro_gross = f(micro.get("gross_exposure"))
-    broker_gross = f(broker.get("gross_entry_cash")) + f(broker.get("reserved_cash"))
-    hard_gross = f(hard.get("gross_exposure"))
-    external_gross = f(external.get("gross_exposure"))
-    gross = maker_gross + micro_gross + broker_gross + hard_gross + external_gross
+    gross = (
+        f(maker.get("reserved_cash"))
+        + f(micro.get("gross_exposure"))
+        + f(broker.get("gross_entry_cash"))
+        + f(hard.get("gross_exposure"))
+        + f(external.get("gross_exposure"))
+    )
 
     relations = read_json(args.run_root / "relation_status.json")
     local_factor = read_json(args.run_root / "local_factor_status.json")
     bridge = read_json(args.run_root / "external_bridge_status.json")
-    relation_signals = int(f(relations.get("bundles"))) + int(f(local_factor.get("bundles")))
 
     strategies = {
         "micro_maker": {
-            "capital_fraction": f(v.get("micro_maker_capital_fraction"), .12),
-            "starting_capital": alloc["micro_maker"],
-            "cash": maker_cash,
             "equity": maker_eq,
             "pnl": maker_eq - alloc["micro_maker"],
-            "realized_pnl": 0.0,
-            "gross_exposure": maker_gross,
-            "drawdown": f(maker.get("drawdown")),
             "live_units": maker_live,
             "killed": bool(int(f(maker.get("killed")))),
             **maker_fills,
         },
         "micro_taker": {
-            "capital_fraction": f(v.get("micro_taker_capital_fraction"), .08),
-            "starting_capital": alloc["micro_taker"],
-            "cash": f(micro.get("cash"), alloc["micro_taker"]),
             "equity": micro_eq,
             "pnl": micro_eq - alloc["micro_taker"],
-            "realized_pnl": f(micro.get("realized_pnl")),
-            "gross_exposure": micro_gross,
-            "drawdown": f(micro.get("drawdown")),
             "live_units": micro_live,
             "killed": bool(micro.get("killed", False)),
             "signals": int(f(micro.get("signals"))),
@@ -207,29 +160,14 @@ def main() -> int:
             **micro_fills,
         },
         "relative_value": {
-            "capital_fraction": f(v.get("relative_value_capital_fraction"), .50),
-            "starting_capital": alloc["relative_value"],
-            "cash": f(broker.get("cash"), alloc["relative_value"]),
             "equity": broker_eq,
             "pnl": broker_eq - alloc["relative_value"],
-            "realized_pnl": broker_realized,
-            "gross_exposure": broker_gross,
-            "drawdown": f(broker.get("drawdown")),
             "live_units": broker_live,
             "killed": bool(int(f(broker.get("killed")))),
-            "signals": relation_signals,
-            "best_edge": max(f(relations.get("best_edge")), f(local_factor.get("best_edge"))),
-            **broker_fills,
         },
         "graph_hard": {
-            "capital_fraction": f(v.get("hard_arb_capital_fraction"), .15),
-            "starting_capital": alloc["hard_arb"],
-            "cash": f(hard.get("cash"), alloc["hard_arb"]),
             "equity": hard_eq,
             "pnl": hard_eq - alloc["hard_arb"],
-            "realized_pnl": f(hard.get("realized_pnl")),
-            "gross_exposure": hard_gross,
-            "drawdown": f(hard.get("drawdown")),
             "live_units": hard_live,
             "killed": bool(hard.get("killed", False)),
             "signals": int(f(hard.get("positive_candidates"))),
@@ -238,29 +176,24 @@ def main() -> int:
             **hard_fills,
         },
         "external": {
-            "capital_fraction": f(v.get("external_capital_fraction"), .10),
-            "starting_capital": alloc["external"],
-            "cash": f(external.get("cash"), alloc["external"]),
             "equity": external_eq,
             "pnl": external_eq - alloc["external"],
-            "realized_pnl": f(external.get("realized_pnl")),
-            "gross_exposure": external_gross,
-            "drawdown": f(external.get("drawdown")),
             "live_units": external_live,
             "killed": bool(external.get("killed", False)),
             **external_fills,
         },
     }
 
-    cash = maker_cash + f(micro.get("cash"), alloc["micro_taker"]) + f(broker.get("cash"), alloc["relative_value"]) + f(hard.get("cash"), alloc["hard_arb"]) + f(external.get("cash"), alloc["external"]) + reserve
-    realized_pnl = (
-        f(micro.get("realized_pnl"))
-        + broker_realized
-        + f(hard.get("realized_pnl"))
-        + f(external.get("realized_pnl"))
+    cash = (
+        f(maker.get("cash"), alloc["micro_maker"])
+        + f(micro.get("cash"), alloc["micro_taker"])
+        + f(broker.get("cash"), alloc["relative_value"])
+        + f(hard.get("cash"), alloc["hard_arb"])
+        + f(external.get("cash"), alloc["external"])
+        + reserve
     )
     status = {
-        "schema": "polymarket_v6_runtime_status_v2",
+        "schema": "polymarket_v6_runtime_status_v1",
         "timestamp": int(time.time()),
         "version": 6,
         "paper_only": True,
@@ -274,7 +207,7 @@ def main() -> int:
         "live_units": maker_live + micro_live + broker_live + hard_live + external_live,
         "reserved_cash": reserved,
         "gross_exposure": gross,
-        "realized_pnl": realized_pnl,
+        "realized_pnl": f(micro.get("realized_pnl")) + f(hard.get("realized_pnl")) + f(external.get("realized_pnl")),
         "execution_imbalance": 0.0,
         "execution_staleness": 0.0,
         "strategies": strategies,
@@ -285,14 +218,15 @@ def main() -> int:
     atomic_json(args.run_root / "runtime_status.json", status)
 
     # Transitional V5-shaped telemetry only: no V5 expert or mixture is restored.
-    # The canonical V6 dashboard consumes runtime_status.json through exporter_v6;
-    # this CSV remains only for compatibility with older health tooling.
+    # Fill counts are sourced from actual V6 ledgers rather than being hard-coded
+    # to zero. Relative-value events stay uncounted until that sleeve exposes a
+    # cumulative fill ledger of its own; current live legs are not fills.
     micro_counts = {k: maker_fills[k] + micro_fills[k] for k in maker_fills}
-    graph_counts = {k: broker_fills[k] + hard_fills[k] for k in broker_fills}
+    graph_counts = hard_fills
     zero_counts = {"fills": 0, "buy_fills": 0, "sell_fills": 0, "settle_fills": 0}
     compat = [
         ("micro", "micro", .20, maker_eq + micro_eq, maker_live + micro_live, micro_counts),
-        ("pca", "local_factor", .35, broker_eq * (.35 / .50), broker_live, broker_fills),
+        ("pca", "local_factor", .35, broker_eq * (.35 / .50), broker_live, zero_counts),
         ("graph", "graph_structural_hard", .30, broker_eq * (.15 / .50) + hard_eq, broker_live + hard_live, graph_counts),
         ("semantic", "relation_parser", 0.0, 0.0, 0, zero_counts),
         ("external", "external", .10, external_eq, external_live, external_fills),
