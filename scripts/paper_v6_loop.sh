@@ -108,15 +108,20 @@ while true;do
   ./build/polymarket_maker_paper --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-order-usd 60 --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.10 "${MAKER_QUEUE_ARGS[@]}" --once >>"$RUN_ROOT/maker.log" 2>&1||true
 
   # Micro taker: online short-horizon markout model; mandatory horizon exit.
+  # A second top-level runtime may overlap briefly during service restart. Serialize
+  # this stateful worker so duplicate writers cannot race on state/status files.
   if ((now-last_micro_taker>=5));then
-    python3 scripts/v6_micro_taker.py --config "$RUN_ROOT/micro_taker_config.json" --run-dir "$RUN_ROOT/micro_taker" --markets 250 --min-liquidity 25 --horizon-seconds 30 --max-trade-usd 15 --min-edge 0.00030 --slippage-bps 5 --max-positions 20 >>"$RUN_ROOT/micro_taker.log" 2>&1||true
+    python3 scripts/v6_single_writer_launcher.py --lock "$RUN_ROOT/micro_taker/single_writer.lock" --name micro_taker -- \
+      python3 scripts/v6_micro_taker.py --config "$RUN_ROOT/micro_taker_config.json" --run-dir "$RUN_ROOT/micro_taker" --markets 250 --min-liquidity 25 --horizon-seconds 30 --max-trade-usd 15 --min-edge 0.00030 --slippage-bps 5 --max-positions 20 >>"$RUN_ROOT/micro_taker.log" 2>&1||true
     last_micro_taker=$now
   fi
 
   # Hard graph arbitrage: complete non-augmented NegRisk sets only. Admission is
   # all-or-none against displayed ask depth in one snapshot, after fee/slippage.
+  # Serialize state writes across restart overlap for the same run root.
   if ((now-last_hard_arb>=10));then
-    python3 scripts/v6_hard_arb_paper.py --config "$RUN_ROOT/hard_arb_config.json" --run-dir "$RUN_ROOT/hard_arb" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --max-events 80 --min-edge 0.00020 --max-trade-usd 60 --slippage-bps 5 >>"$RUN_ROOT/hard_arb.log" 2>&1||true
+    python3 scripts/v6_single_writer_launcher.py --lock "$RUN_ROOT/hard_arb/single_writer.lock" --name hard_arb -- \
+      python3 scripts/v6_hard_arb_paper.py --config "$RUN_ROOT/hard_arb_config.json" --run-dir "$RUN_ROOT/hard_arb" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --max-events 80 --min-edge 0.00020 --max-trade-usd 60 --slippage-bps 5 >>"$RUN_ROOT/hard_arb.log" 2>&1||true
     last_hard_arb=$now
   fi
 
