@@ -20,11 +20,19 @@
 #include <openssl/ssl.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <utility>
+#include <version>
+
+#if !defined(__APPLE__) && defined(__cpp_lib_jthread) && __cpp_lib_jthread >= 201911L
+#define PM_USE_STD_JTHREAD 1
+#else
+#define PM_USE_STD_JTHREAD 0
+#endif
 
 namespace pm::fast {
 namespace {
@@ -104,11 +112,28 @@ std::string openssl_error() {
 } // namespace
 
 struct MarketWebSocketFeed::Impl {
+#if PM_USE_STD_JTHREAD
+    using WorkerStopToken = std::stop_token;
+#else
+    struct WorkerStopToken {
+        const std::atomic<bool>* stop = nullptr;
+
+        bool stop_requested() const noexcept {
+            return stop && stop->load(std::memory_order_relaxed);
+        }
+    };
+#endif
+
     Endpoint endpoint;
     std::vector<std::vector<std::string>> shards;
     MessageHandler on_message;
     ErrorHandler on_error;
+#if PM_USE_STD_JTHREAD
     std::vector<std::jthread> threads;
+#else
+    std::vector<std::thread> threads;
+    std::atomic<bool> fallback_stop_requested{false};
+#endif
     std::atomic<bool> started{false};
     std::atomic<std::size_t> connected{0};
     std::atomic<std::uint64_t> messages{0};
@@ -137,7 +162,7 @@ struct MarketWebSocketFeed::Impl {
         if (on_error) on_error(shard, message);
     }
 
-    void run_worker(std::stop_token stop, std::size_t shard_index,
+    void run_worker(WorkerStopToken stop, std::size_t shard_index,
                     const std::vector<std::string>& ids) {
         int backoff_seconds = 1;
         bool first_attempt = true;
@@ -188,12 +213,14 @@ struct MarketWebSocketFeed::Impl {
                 backoff_seconds = 1;
                 std::int64_t last_text_ping = now_ms();
 
+#if PM_USE_STD_JTHREAD
                 std::stop_callback cancel_on_stop(stop, [&ws] {
                     beast::error_code ignored;
                     beast::get_lowest_layer(ws).socket().cancel(ignored);
                     beast::get_lowest_layer(ws).socket().shutdown(tcp::socket::shutdown_both, ignored);
                     beast::get_lowest_layer(ws).socket().close(ignored);
                 });
+#endif
 
                 while (!stop.stop_requested()) {
                     beast::flat_buffer buffer;
@@ -224,7 +251,9 @@ struct MarketWebSocketFeed::Impl {
 
             if (marked_connected) connected.fetch_sub(1, std::memory_order_relaxed);
             if (!stop.stop_requested()) {
-                std::this_thread::sleep_for(std::chrono::seconds(backoff_seconds));
+                for (int tenth = 0; tenth < backoff_seconds * 10 && !stop.stop_requested(); ++tenth) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
                 backoff_seconds = std::min(30, backoff_seconds * 2);
             }
         }
@@ -233,18 +262,35 @@ struct MarketWebSocketFeed::Impl {
     void start() {
         bool expected = false;
         if (!started.compare_exchange_strong(expected, true)) return;
+#if !PM_USE_STD_JTHREAD
+        fallback_stop_requested.store(false, std::memory_order_relaxed);
+#endif
         threads.reserve(shards.size());
         for (std::size_t i = 0; i < shards.size(); ++i) {
+#if PM_USE_STD_JTHREAD
             threads.emplace_back([this, i, ids = shards[i]](std::stop_token stop) {
                 run_worker(stop, i, ids);
             });
+#else
+            threads.emplace_back([this, i, ids = shards[i]] {
+                run_worker(WorkerStopToken{&fallback_stop_requested}, i, ids);
+            });
+#endif
         }
     }
 
     void stop() {
         if (!started.exchange(false)) return;
+#if PM_USE_STD_JTHREAD
         for (auto& thread : threads) thread.request_stop();
         threads.clear();
+#else
+        fallback_stop_requested.store(true, std::memory_order_relaxed);
+        for (auto& thread : threads) {
+            if (thread.joinable()) thread.join();
+        }
+        threads.clear();
+#endif
     }
 };
 

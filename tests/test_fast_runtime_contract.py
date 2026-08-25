@@ -34,6 +34,10 @@ class FastRuntimeContractTest(unittest.TestCase):
         self.assertIn("boost/asio/ssl/host_name_verification.hpp", transport)
         self.assertIn("ssl::host_name_verification(endpoint.host)", transport)
         self.assertIn("ssl::rfc2818_verification(endpoint.host)", transport)
+        self.assertIn("!defined(__APPLE__) && defined(__cpp_lib_jthread)", transport)
+        self.assertIn("std::vector<std::thread> threads", transport)
+        self.assertIn("fallback_stop_requested", transport)
+        self.assertIn("if (thread.joinable()) thread.join();", transport)
         self.assertNotIn("curl_ws_", transport)
 
     def test_runtime_selector_supervises_fast_and_champion_planes(self) -> None:
