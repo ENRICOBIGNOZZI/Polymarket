@@ -29,7 +29,7 @@ class LiveMonitoringContractTest(unittest.TestCase):
 
     def test_live_smoke_runs_real_paper_children_before_export(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
-        self.assertIn("--markets 180 --min-liquidity 25 --once", smoke)
+        self.assertIn("--markets 500 --min-liquidity 10 --once", smoke)
         self.assertNotIn("--scan-only --once", smoke)
         self.assertIn("if line.startswith('polymarket_runtime_execution_staleness_seconds ')", smoke)
         self.assertIn("assert staleness < 3600.0, staleness", smoke)
@@ -60,7 +60,7 @@ class LiveMonitoringContractTest(unittest.TestCase):
     def test_multileg_uses_broad_recorded_trade_tape_and_explicit_horizon(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
         self.assertIn("polymarket_trade_recorder", smoke)
-        self.assertIn("--markets 500 --batch 40 --min-liquidity 25 --lookback-seconds 900", smoke)
+        self.assertIn("--markets 800 --batch 40 --min-liquidity 10 --lookback-seconds 900", smoke)
         self.assertIn('--trade-tape "$R/trade_tape.csv"', smoke)
         self.assertIn("--trade-lookback-seconds 900", smoke)
 
@@ -72,7 +72,16 @@ class LiveMonitoringContractTest(unittest.TestCase):
         for producer in (v4_once, v4_loop):
             self.assertIn("--max-hedges 4", producer)
         for producer in (v5_loop, smoke):
-            self.assertIn("--max-hedges 8", producer)
+            self.assertIn("--max-hedges 10", producer)
+
+    def test_v5_aggressive_profile_keeps_costs_and_wires_external_probabilities(self):
+        smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
+        loop = (ROOT / "scripts" / "paper_v5_loop.sh").read_text(encoding="utf-8")
+        for producer in (smoke, loop):
+            self.assertIn("materialize_external_paper_signals.py", producer)
+            self.assertIn("--min-edge 0.0", producer)
+            self.assertIn("--min-t-reversion 0.20", producer)
+        self.assertIn("slippage_bps", (ROOT / "config" / "paper_v5.json").read_text(encoding="utf-8"))
 
     def test_v5_parent_is_fail_closed_and_all_children_are_executed(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
