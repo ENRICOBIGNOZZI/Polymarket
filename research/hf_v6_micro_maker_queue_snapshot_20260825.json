@@ -1,0 +1,51 @@
+{
+  "schema": "polymarket_hf_v6_micro_maker_queue_snapshot_v1",
+  "source": {
+    "git_sha": "3d12478bb5c6d50de46d559e35cc9631b9545804",
+    "github_run_id": 32841398698,
+    "artifact": "champion-live-paper-smoke-32841398698",
+    "generated_at_utc": "2026-08-25T11:18:25Z"
+  },
+  "paper_only": true,
+  "authenticated_execution": false,
+  "maker_tick": {
+    "markets": 220,
+    "signals": 12,
+    "posted": 8,
+    "resting": 8,
+    "positions": 0,
+    "reserved_usd": 180.0,
+    "equity": 1200.0,
+    "drawdown": 0.0,
+    "killed": false
+  },
+  "queue_ratio": {
+    "definition": "stored_queue_ahead / remaining_shares",
+    "orders": 8,
+    "above_50x": 7,
+    "fraction_above_50x": 0.875,
+    "minimum": 24.21552,
+    "median": 153.12432380952382,
+    "mean": 374.8072606635133,
+    "maximum": 1071.4304
+  },
+  "orders": [
+    {"market_id":"561992","limit_price":0.002,"remaining_shares":12500.0,"queue_ahead":302694.0,"queue_ratio":24.21552},
+    {"market_id":"559691","limit_price":0.002,"remaining_shares":12500.0,"queue_ahead":1091150.0,"queue_ratio":87.292},
+    {"market_id":"559657","limit_price":0.002,"remaining_shares":12500.0,"queue_ahead":1104220.0,"queue_ratio":88.3376},
+    {"market_id":"562002","limit_price":0.002,"remaining_shares":12500.0,"queue_ahead":1897870.0,"queue_ratio":151.8296},
+    {"market_id":"562006","limit_price":0.002,"remaining_shares":10500.0,"queue_ahead":1621400.0,"queue_ratio":154.41904761904763},
+    {"market_id":"561999","limit_price":0.002,"remaining_shares":12500.0,"queue_ahead":5070340.0,"queue_ratio":405.6272},
+    {"market_id":"560317","limit_price":0.07,"remaining_shares":128.571,"queue_ahead":130539.0,"queue_ratio":1015.3067176890589},
+    {"market_id":"665374","limit_price":0.16,"remaining_shares":156.25,"queue_ahead":167411.0,"queue_ratio":1071.4304}
+  ],
+  "diagnosis": "The incumbent micro-maker posts at the current best bid and records the full touch size as queue ahead. On this validated live snapshot, 7 of 8 resting orders sit behind more than 50 target-order equivalents of displayed queue while producing zero fills. Lowering the signal threshold alone cannot repair this queue-placement bottleneck.",
+  "challenger": {
+    "max_queue_ratio": 50.0,
+    "max_improve_ticks": 1,
+    "rule": "keep joins with queue_ratio <= 50; otherwise improve inside the spread only when the already cost-adjusted signal edge can pay the tick and remain above min_edge; if not, cancel the dead queue and recycle capital",
+    "causal_rule": "any reprice resets created_ts and the trade-tape cursor so pre-reprice prints cannot fill the improved quote",
+    "risk_rule": "reprice preserves or reduces original reserved notional and never crosses the executable ask"
+  },
+  "research_state": "MORE_EVIDENCE_REQUIRED"
+}
