@@ -47,6 +47,24 @@ class ServerHealthReadonlyContractTest(unittest.TestCase):
         self.assertIn('test "$status_head" = "$head_sha"', health)
         self.assertIn('test "$status_validated" = "$validated_sha"', health)
 
+    def test_private_health_fails_closed_on_sustained_recorder_http_failure(self):
+        health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("recorder_tail_lines=", health)
+        self.assertIn("recorder_success_ticks=", health)
+        self.assertIn("recorder_http_failures=", health)
+        self.assertIn('"$recorder_tail_lines" -ge 5', health)
+        self.assertIn('"$recorder_success_ticks" -eq 0', health)
+        self.assertIn(
+            '"$recorder_http_failures" -eq "$recorder_tail_lines"', health
+        )
+        self.assertIn(
+            "private recorder data path unhealthy: recent recorder tail contains only HTTP failures",
+            health,
+        )
+
     def test_v5_staleness_alert_respects_first_output_startup_grace(self):
         exporter = (ROOT / "monitoring" / "exporter_v5.py").read_text(encoding="utf-8")
         alerts = (ROOT / "monitoring" / "prometheus" / "alerts.yml").read_text(
