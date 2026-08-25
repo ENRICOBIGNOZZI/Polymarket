@@ -50,6 +50,7 @@ class LiveMonitoringContractTest(unittest.TestCase):
         for token in (
             "v6_materialize_configs.py",
             "v6_micro_maker.py",
+            "v6_maker_reprice.py",
             "v6_micro_taker_v2.py",
             "v6_hard_arb_paper_v2.py",
             "v6_local_factor_v3.py",
@@ -66,7 +67,7 @@ class LiveMonitoringContractTest(unittest.TestCase):
         self.assertNotIn("scripts/v6_hard_arb_paper.py", helper)
         self.assertNotIn("scripts/v6_local_factor_intents.py", helper)
 
-    def test_v6_smoke_can_observe_post_order_fills(self):
+    def test_v6_smoke_can_observe_and_reprice_post_order_fills(self):
         helper = (ROOT / "scripts" / "v6_live_smoke_once.sh").read_text(encoding="utf-8")
         self.assertIn('FLOW_CYCLES="${V6_SMOKE_FLOW_CYCLES:-3}"', helper)
         self.assertIn('FLOW_SLEEP="${V6_SMOKE_FLOW_SLEEP_SECONDS:-10}"', helper)
@@ -77,11 +78,15 @@ class LiveMonitoringContractTest(unittest.TestCase):
         self.assertIn('sleep "$FLOW_SLEEP"', loop_tail)
         self.assertIn("record_once", loop_tail)
         self.assertIn("maker_once", loop_tail)
+        self.assertIn("maker_reprice_once", loop_tail)
         self.assertIn("broker_once", loop_tail)
+        self.assertIn("--taker-min-edge \"$EDGE\"", helper)
+        self.assertIn("--max-improve-ticks 8", helper)
+        self.assertIn("--dead-queue-cancel-seconds 30", helper)
         self.assertIn("execution_evidence.json", helper)
-        self.assertIn("post_order_flow_cycles", helper)
-        self.assertIn("maker_fill_rows", helper)
-        self.assertIn("closed_bundle_rows", helper)
+        self.assertIn("maker_taker_conversions", helper)
+        self.assertIn("maker_reprice_events", helper)
+        self.assertIn("maker_dead_queue_cancels", helper)
 
     def test_live_smoke_runs_after_main_merge_and_hourly(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
