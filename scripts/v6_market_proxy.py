@@ -201,6 +201,7 @@ class Proxy:
                 self.idmap.update({str(k): str(v) for k, v in mapping.items() if k and v})
             self.cache_mtime_ns = metadata.st_mtime_ns
         return True
+
     def stat(self, source: str, n: int, upstream_ok: bool, age: float = 0.0) -> None:
         self.source = source
         atomic(
