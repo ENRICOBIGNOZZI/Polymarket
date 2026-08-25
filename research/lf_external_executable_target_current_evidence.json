@@ -1,0 +1,39 @@
+{
+  "schema": "lf_external_executable_target_current_evidence_v1",
+  "captured_at_utc": "2026-08-25T19:22:00Z",
+  "base_main_sha": "fb8209a82df044d270ae00d117fb81f6e08c8074",
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "finding": {
+    "target_semantics": "future_mid - current_mid",
+    "incumbent_admission_hurdle": "0.5 * current_spread + extra_cost",
+    "realized_long_pnl": "future_bid - current_ask - extra_cost",
+    "realized_short_pnl": "current_bid - future_ask - extra_cost",
+    "structural_gap": "the admission hurdle omits the expected horizon exit half-spread even though realized PnL exits at the future executable quote"
+  },
+  "latest_external_intelligence": {
+    "generated_at_utc": "2026-08-25T19:08:00Z",
+    "status": "BACKTESTING",
+    "active_polymarket_markets": 500,
+    "stored_observations": 43181,
+    "stored_price_snapshots": 21333,
+    "passing_candidates": 0,
+    "gdelt_news_count_recent_3600s": {
+      "oos_predictions": 30,
+      "trades": 5,
+      "normal_pnl_per_share": -0.014,
+      "gate_pass": false
+    },
+    "note": "The negative GDELT sample is context only; this audit does not attribute its loss to the hurdle defect without common-sample replay."
+  },
+  "latest_exact_main_live_smoke": {
+    "generated_at_utc": "2026-08-25T19:17:13Z",
+    "git_sha": "fb8209a82df044d270ae00d117fb81f6e08c8074",
+    "oos_trades": 0,
+    "oos_net_pnl_usd": 0.0,
+    "graph_rv_bundles": 1,
+    "graph_rv_complete_bundles": 0,
+    "graph_rv_expected_edge": 0.02,
+    "graph_rv_reserved_cash_usd": 60.0
+  },
+  "required_next_test": "Replay identical chronological external predictions with incumbent midpoint-delta admission versus a causal horizon-executable hurdle that estimates exit spread only from prior information. Compare trade count, executable PnL, cost stress 1x/1.5x/2x, fold stability and predictive MSE. q_external remains fail-closed until a direct terminal model passes its separate terminal-calibration gates."
+}
