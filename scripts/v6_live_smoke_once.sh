@@ -15,14 +15,10 @@ python3 scripts/v6_materialize_configs.py --config "$CONFIG" --run-root "$R" > "
   --min-liquidity "$MIN_LIQUIDITY" --lookback-seconds 900 --once \
   | tee "$R/trade_recorder_latest.log"
 
-# Validate the same aggressive execution contract used by the persistent V6
-# launcher: edge-aware one-tick improvement, no giant FIFO queues, and the
-# configured $60/trade ceiling. Fills themselves remain tape/FIFO driven.
 ./build/polymarket_maker_paper \
   --config "$R/maker_config.json" --run-dir "$R/maker" --markets "$MARKETS" \
-  --min-liquidity "$MIN_LIQUIDITY" --min-edge "$EDGE" --max-order-usd 60 \
-  --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.10 \
-  --improve-ticks 1 --max-queue-multiple 6 --once \
+  --min-liquidity "$MIN_LIQUIDITY" --min-edge 0.00035 --max-order-usd 25 \
+  --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once \
   | tee "$R/maker_latest.log"
 
 # Three snapshots deliberately exercise feature persistence and maturity; a

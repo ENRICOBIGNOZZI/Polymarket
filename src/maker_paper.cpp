@@ -36,20 +36,15 @@ std::vector<std::string> split(const std::string& s) {
     return out;
 }
 
-double displayed_size_at_price(const pm::Book& b, bool bid_side, double price) {
-    if (!std::isfinite(price)) return 0.0;
-    const double tolerance = 0.25 * std::max(1e-8, b.tick_size);
+double touch_size(const pm::Book& b, bool bid_side) {
+    const double px = bid_side ? b.best_bid() : b.best_ask();
+    if (!std::isfinite(px)) return 0.0;
     double q = 0.0;
     const auto& levels = bid_side ? b.bids : b.asks;
     for (const auto& l : levels) {
-        if (std::abs(l.price - price) <= tolerance) q += l.size;
+        if (std::abs(l.price - px) <= 1e-9) q += l.size;
     }
     return q;
-}
-
-double touch_size(const pm::Book& b, bool bid_side) {
-    const double px = bid_side ? b.best_bid() : b.best_ask();
-    return displayed_size_at_price(b, bid_side, px);
 }
 
 struct Order {
@@ -141,11 +136,9 @@ pm::MarketTiming position_timing(const Position& p) {
 class MakerPaper {
 public:
     MakerPaper(pm::Config cfg, std::string run_dir, double min_edge, double max_order_usd,
-               std::int64_t ttl, std::int64_t hold, double adverse_mult,
-               int improve_ticks, double max_queue_multiple)
+               std::int64_t ttl, std::int64_t hold, double adverse_mult)
         : cfg_(std::move(cfg)), api_(cfg_), run_dir_(std::move(run_dir)), min_edge_(min_edge),
           max_order_usd_(max_order_usd), ttl_(ttl), hold_(hold), adverse_mult_(adverse_mult),
-          improve_ticks_(std::max(0, improve_ticks)), max_queue_multiple_(max_queue_multiple),
           cash_(cfg_.starting_capital), peak_equity_(cfg_.starting_capital) {
         fs::create_directories(run_dir_);
         load_state();
@@ -183,7 +176,7 @@ public:
         peak_equity_ = std::max(peak_equity_, eq);
         if (peak_equity_ > 0.0 && 1.0 - eq / peak_equity_ >= cfg_.max_drawdown) killed_ = true;
 
-        std::size_t signals = 0, posted = 0, improved = 0, queue_skipped = 0;
+        std::size_t signals = 0, posted = 0;
         if (!killed_) {
             for (const auto& m : markets) {
                 if (positions_.count(m.id) || orders_.count(m.id)) continue;
@@ -204,9 +197,6 @@ public:
                     std::string token;
                     double fair = 0.5;
                     double net_expected_edge = -1.0;
-                    double limit_price = 0.0;
-                    double queue_ahead = 0.0;
-                    int improvement_ticks = 0;
                 };
                 std::vector<Choice> choices;
                 auto consider = [&](const std::string& side, const pm::Book& b,
@@ -218,36 +208,23 @@ public:
                     const double future_bid = std::clamp(fair - 0.5 * spread, 0.001, 0.999) *
                                               (1.0 - cfg_.slippage_bps / 10000.0);
                     const double exit_fee_per_share = pm::Engine::protocol_fee(1.0, future_bid, fd);
-                    const double tick = std::max(1e-6, b.tick_size);
-
-                    // Move ahead of the touch only when the incremental tick is paid for by edge.
-                    // We never cross the ask here: this executable remains a maker model.
-                    int improvement = 0;
-                    for (int k = 1; k <= improve_ticks_; ++k) {
-                        const double candidate = bid + static_cast<double>(k) * tick;
-                        if (candidate >= ask - 1e-12) break;
-                        const double candidate_edge =
-                            future_bid - exit_fee_per_share - candidate - adverse_buffer;
-                        if (candidate_edge > min_edge_) improvement = k;
-                        else break;
-                    }
-                    const double limit = bid + static_cast<double>(improvement) * tick;
-                    if (limit >= ask - 1e-12) return;
-                    const double edge = future_bid - exit_fee_per_share - limit - adverse_buffer;
-                    if (edge <= min_edge_) return;
-                    const double queue = displayed_size_at_price(b, true, limit);
-                    choices.push_back({side, &b, token, fair, edge, limit, queue, improvement});
+                    const double edge = future_bid - exit_fee_per_share - bid - adverse_buffer;
+                    if (edge > min_edge_) choices.push_back({side, &b, token, fair, edge});
                 };
                 consider("YES", yb, m.yes_token, ms.q_yes);
                 consider("NO", nb, m.no_token, 1.0 - ms.q_yes);
                 if (choices.empty()) continue;
                 ++signals;
-                std::sort(choices.begin(), choices.end(), [](const auto& a, const auto& b) {
-                    return a.net_expected_edge > b.net_expected_edge;
+                const auto c = *std::max_element(choices.begin(), choices.end(), [](const auto& a, const auto& b) {
+                    return a.net_expected_edge < b.net_expected_edge;
                 });
 
                 const pm::MarketTiming timing{m.timed_sports, m.game_start_ts, m.seconds_delay};
                 if (!pm::pregame_market_eligible(timing, now)) continue;
+
+                const double limit = c.book->best_bid();
+                if (!std::isfinite(limit) || !std::isfinite(c.book->best_ask()) ||
+                    limit >= c.book->best_ask() - 1e-12) continue;
 
                 const double reserved = reserved_cash();
                 const double pos_cost = position_cost();
@@ -262,57 +239,32 @@ public:
                 });
                 if (max_cash <= 0.0) continue;
 
-                bool placed = false;
-                for (const auto& c : choices) {
-                    const double limit = c.limit_price;
-                    if (!std::isfinite(limit) || !std::isfinite(c.book->best_ask()) ||
-                        limit >= c.book->best_ask() - 1e-12) continue;
+                double shares = max_cash / limit;
+                shares = std::min(shares,
+                    std::max(c.book->min_order_size, 0.25 * std::max(1.0, touch_size(*c.book, true))));
+                if (shares < c.book->min_order_size || shares * limit > available_cash + 1e-9) continue;
 
-                    double shares = max_cash / limit;
-                    shares = std::min(shares,
-                        std::max(c.book->min_order_size, 0.25 * std::max(1.0, touch_size(*c.book, true))));
-                    if (shares < c.book->min_order_size || shares * limit > available_cash + 1e-9) continue;
-
-                    // A join order behind an enormous FIFO queue is dead capital. Inside-spread
-                    // improvement generally has zero displayed queue at the new price and is not gated.
-                    if (c.improvement_ticks == 0 && std::isfinite(max_queue_multiple_) &&
-                        max_queue_multiple_ > 0.0 &&
-                        c.queue_ahead > max_queue_multiple_ * std::max(shares, 1e-12)) {
-                        Order q;
-                        q.market_id = m.id; q.event_id = m.event_id; q.condition_id = m.condition_id;
-                        q.slug = m.slug; q.side = c.side; q.token_id = c.token;
-                        q.limit_price = limit; q.shares = shares; q.queue_ahead = c.queue_ahead;
-                        append_order("SKIP_QUEUE", q, c.net_expected_edge, ms.confidence);
-                        ++queue_skipped;
-                        continue;
-                    }
-
-                    Order o;
-                    o.market_id = m.id;
-                    o.event_id = m.event_id;
-                    o.condition_id = m.condition_id;
-                    o.slug = m.slug;
-                    o.side = c.side;
-                    o.token_id = c.token;
-                    o.limit_price = limit;
-                    o.shares = shares;
-                    o.queue_ahead = c.queue_ahead;
-                    o.created_ts = now;
-                    o.game_start_ts = timing.game_start_ts;
-                    o.timed_sports = timing.timed_sports;
-                    o.last_trade_ts = now;
-                    o.last_trade_keys = "|";
-                    o.fee_rate = fd.rate;
-                    o.fee_exponent = fd.exponent;
-                    o.fee_taker_only = fd.taker_only;
-                    orders_[m.id] = std::move(o);
-                    append_order("POST", orders_.at(m.id), c.net_expected_edge, ms.confidence);
-                    ++posted;
-                    if (c.improvement_ticks > 0) ++improved;
-                    placed = true;
-                    break;
-                }
-                (void)placed;
+                Order o;
+                o.market_id = m.id;
+                o.event_id = m.event_id;
+                o.condition_id = m.condition_id;
+                o.slug = m.slug;
+                o.side = c.side;
+                o.token_id = c.token;
+                o.limit_price = limit;
+                o.shares = shares;
+                o.queue_ahead = touch_size(*c.book, true);
+                o.created_ts = now;
+                o.game_start_ts = timing.game_start_ts;
+                o.timed_sports = timing.timed_sports;
+                o.last_trade_ts = now;
+                o.last_trade_keys = "|";
+                o.fee_rate = fd.rate;
+                o.fee_exponent = fd.exponent;
+                o.fee_taker_only = fd.taker_only;
+                orders_[m.id] = std::move(o);
+                append_order("POST", orders_.at(m.id), c.net_expected_edge, ms.confidence);
+                ++posted;
             }
         }
 
@@ -323,8 +275,6 @@ public:
         std::cout << "maker_tick markets=" << markets.size()
                   << " signals=" << signals
                   << " posted=" << posted
-                  << " improved=" << improved
-                  << " queue_skipped=" << queue_skipped
                   << " resting=" << orders_.size()
                   << " positions=" << positions_.size()
                   << " reserved=" << reserved_cash()
@@ -343,8 +293,6 @@ private:
     std::int64_t ttl_ = 300;
     std::int64_t hold_ = 180;
     double adverse_mult_ = 0.50;
-    int improve_ticks_ = 0;
-    double max_queue_multiple_ = std::numeric_limits<double>::infinity();
     double cash_ = 0.0;
     double peak_equity_ = 0.0;
     bool killed_ = false;
@@ -686,9 +634,8 @@ int main(int argc, char** argv) {
         std::string run_dir = "runs/paper_v3_maker";
         std::size_t markets = 600;
         double min_liquidity = 100.0, min_edge = 0.003, max_order_usd = 75.0, adverse_mult = 0.50;
-        double max_queue_multiple = std::numeric_limits<double>::infinity();
         std::int64_t ttl = 300, hold = 180;
-        int interval = 10, improve_ticks = 0;
+        int interval = 10;
         bool loop = false;
         for (int i = 1; i < argc; ++i) {
             const std::string a = argv[i];
@@ -705,24 +652,20 @@ int main(int argc, char** argv) {
             else if (a == "--ttl-seconds") ttl = std::stoll(next());
             else if (a == "--hold-seconds") hold = std::stoll(next());
             else if (a == "--adverse-selection-mult") adverse_mult = std::stod(next());
-            else if (a == "--improve-ticks") improve_ticks = std::stoi(next());
-            else if (a == "--max-queue-multiple") max_queue_multiple = std::stod(next());
             else if (a == "--interval") interval = std::stoi(next());
             else if (a == "--loop") loop = true;
             else if (a == "--once") loop = false;
             else if (a == "--help" || a == "-h") {
                 std::cout << "polymarket_maker_paper [--config FILE] [--run-dir DIR] [--markets N] [--min-edge X] "
                              "[--max-order-usd X] [--ttl-seconds N] [--hold-seconds N] "
-                             "[--adverse-selection-mult X] [--improve-ticks N] [--max-queue-multiple X] "
-                             "[--interval N] [--once|--loop]\n";
+                             "[--adverse-selection-mult X] [--interval N] [--once|--loop]\n";
                 return 0;
             } else {
                 throw std::runtime_error("Unknown argument: " + a);
             }
         }
         auto cfg = pm::Engine::load_config(config);
-        MakerPaper paper(cfg, run_dir, min_edge, max_order_usd, ttl, hold, adverse_mult,
-                         improve_ticks, max_queue_multiple);
+        MakerPaper paper(cfg, run_dir, min_edge, max_order_usd, ttl, hold, adverse_mult);
         do {
             paper.tick(markets, min_liquidity);
             if (loop) std::this_thread::sleep_for(std::chrono::seconds(std::max(1, interval)));
