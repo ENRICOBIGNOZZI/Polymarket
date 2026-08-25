@@ -32,8 +32,9 @@ def load_script(name: str, relative: str):
 class V6ModelContracts(unittest.TestCase):
     def test_v6_candidate_preserves_paper_execution_separation(self):
         live=json.loads((ROOT/"config/live_champion.json").read_text());cfg=json.loads((ROOT/"config/paper_v6.json").read_text());arch=json.loads((ROOT/"config/v6_model_architecture.json").read_text())
+        safety=load_script("v6_hard_safety_policy_test","scripts/hard_safety_policy.py");ceil=safety.V6_AUTHORIZED_CEILINGS
         self.assertTrue(cfg["v6"]["paper_only"]);self.assertTrue(cfg["multi_strategy"]["paper_only"]);self.assertTrue(arch["paper_only"]);self.assertFalse(arch["allow_authenticated_execution"])
-        self.assertLessEqual(float(cfg["max_drawdown"]),0.15);self.assertLessEqual(float(cfg["max_gross_fraction"]),0.45);self.assertLessEqual(float(cfg["multi_strategy"]["global_max_drawdown"]),0.15);self.assertLessEqual(float(cfg["multi_strategy"]["global_max_gross_fraction"]),0.45)
+        self.assertLessEqual(float(cfg["max_drawdown"]),ceil["max_drawdown"]);self.assertLessEqual(float(cfg["max_gross_fraction"]),ceil["max_gross_fraction"]);self.assertLessEqual(float(cfg["multi_strategy"]["global_max_drawdown"]),ceil["max_drawdown"]);self.assertLessEqual(float(cfg["multi_strategy"]["global_max_gross_fraction"]),ceil["global_max_gross_fraction"])
         self.assertIn(int(live["version"]),(5,6))
         if int(live["version"])==6:
             self.assertEqual(live["loop"],"scripts/paper_v6_loop.sh");self.assertEqual(live["config"],"config/paper_v6.json")

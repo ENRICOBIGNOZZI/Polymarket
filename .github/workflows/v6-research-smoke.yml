@@ -36,8 +36,10 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, subprocess
+          import json, subprocess, sys
           from pathlib import Path
+          sys.path.insert(0, str(Path('scripts').resolve()))
+          from hard_safety_policy import V6_AUTHORIZED_CEILINGS, V6_AUTHORIZED_FLOORS
           cfg=json.loads(Path('config/paper_v6.json').read_text());arch=json.loads(Path('config/v6_model_architecture.json').read_text());live=json.loads(Path('config/live_champion.json').read_text())
           assert cfg['v6']['paper_only'] is True;assert cfg['multi_strategy']['paper_only'] is True;assert arch['paper_only'] is True;assert arch['allow_authenticated_execution'] is False
           event='${{ github.event_name }}'; head='${{ github.head_ref }}'; base_sha='${{ github.event.pull_request.base.sha }}'
@@ -48,8 +50,20 @@ jobs:
                   assert base_sha, 'non-integration PR must expose its base SHA'
                   base_live=json.loads(subprocess.check_output(['git','show',f'{base_sha}:config/live_champion.json'],text=True))
                   assert live == base_live, 'non-integration V6 smoke must preserve the base live champion selector'
-          assert float(cfg['max_drawdown']) <= .15;assert float(cfg['max_market_fraction']) <= .025;assert float(cfg['max_event_fraction']) <= .08;assert float(cfg['max_gross_fraction']) <= .45
+          assert float(cfg['max_drawdown']) <= V6_AUTHORIZED_CEILINGS['max_drawdown']
+          assert float(cfg['max_market_fraction']) <= V6_AUTHORIZED_CEILINGS['max_market_fraction']
+          assert float(cfg['max_event_fraction']) <= V6_AUTHORIZED_CEILINGS['max_event_fraction']
+          assert float(cfg['max_gross_fraction']) <= V6_AUTHORIZED_CEILINGS['max_gross_fraction']
+          assert float(cfg['multi_strategy']['global_max_gross_fraction']) <= V6_AUTHORIZED_CEILINGS['global_max_gross_fraction']
+          assert float(cfg['fractional_kelly']) <= V6_AUTHORIZED_CEILINGS['fractional_kelly']
+          assert float(cfg['max_trade_usd']) <= V6_AUTHORIZED_CEILINGS['max_trade_usd']
+          assert float(cfg['min_liquidity']) >= V6_AUTHORIZED_FLOORS['min_liquidity']
+          assert float(cfg['min_net_edge']) >= V6_AUTHORIZED_FLOORS['min_net_edge']
+          assert float(cfg['uncertainty_penalty']) >= V6_AUTHORIZED_FLOORS['uncertainty_penalty']
           v=cfg['v6']; total=sum(float(v[k]) for k in ('micro_maker_capital_fraction','micro_taker_capital_fraction','relative_value_capital_fraction','hard_arb_capital_fraction','external_capital_fraction','reserve_fraction'));assert abs(total-1.0)<1e-9
+          assert float(v['intent_min_edge']) >= V6_AUTHORIZED_FLOORS['intent_min_edge']
+          assert float(v['hard_arb_min_net_edge']) >= V6_AUTHORIZED_FLOORS['hard_arb_min_net_edge']
+          assert float(v['hard_arb_max_trade_usd']) <= V6_AUTHORIZED_CEILINGS['hard_arb_max_trade_usd']
           PY
       - name: Install build dependencies
         run: |
