@@ -115,6 +115,17 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("f'{base_sha}:config/live_champion.json'", workflow)
         self.assertIn("assert live == base_live", workflow)
 
+    def test_v6_research_smoke_collects_forward_maker_evidence(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "v6-research-smoke.yml").read_text()
+        self.assertNotIn(": > v6_evidence/trade_tape.csv", workflow)
+        self.assertIn("polymarket_trade_recorder", workflow)
+        self.assertIn("record_trade_tape()", workflow)
+        self.assertIn("maker_tick()", workflow)
+        self.assertIn("for delay in 20 20 20 20", workflow)
+        self.assertIn("--hold-seconds 45", workflow)
+        self.assertIn("'trade_tape_rows':tape_rows", workflow)
+        self.assertIn("'maker_fill_rows':fill_rows", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
