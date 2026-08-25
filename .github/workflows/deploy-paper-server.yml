@@ -87,19 +87,19 @@ jobs:
                 && curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 \
                 && [[ -s "$run_root/activity_status.json" ]] \
                 && python3 - "$run_root/activity_status.json" <<'PY'
-import json
-import sys
-import time
-from pathlib import Path
-status = json.loads(Path(sys.argv[1]).read_text())
-assert status.get('healthy') is True, status
-assert time.time() - float(status['timestamp']) <= 180, status
-assert int(status.get('models_alive', 0)) == 5, status
-assert int(status.get('models_fresh', 0)) == 5, status
-assert int(status.get('total_discovered', 0)) >= 500, status
-assert int(status.get('total_tradable', 0)) > 0, status
-assert int(status.get('total_candidates', 0)) > 0, status
-PY
+          import json
+          import sys
+          import time
+          from pathlib import Path
+          status = json.loads(Path(sys.argv[1]).read_text())
+          assert status.get('healthy') is True, status
+          assert time.time() - float(status['timestamp']) <= 180, status
+          assert int(status.get('models_alive', 0)) == 5, status
+          assert int(status.get('models_fresh', 0)) == 5, status
+          assert int(status.get('total_discovered', 0)) >= 500, status
+          assert int(status.get('total_tradable', 0)) > 0, status
+          assert int(status.get('total_candidates', 0)) > 0, status
+          PY
               then
                 runtime_ok=true
               fi
@@ -203,19 +203,19 @@ PY
           activity_ok=false
           for _ in {1..150}; do
             if [[ -s "$run_root/activity_status.json" ]] && python3 - "$run_root/activity_status.json" <<'PY'
-import json
-import sys
-import time
-from pathlib import Path
-status = json.loads(Path(sys.argv[1]).read_text())
-assert status.get('healthy') is True, status
-assert time.time() - float(status['timestamp']) <= 180, status
-assert int(status.get('models_alive', 0)) == 5, status
-assert int(status.get('models_fresh', 0)) == 5, status
-assert int(status.get('total_discovered', 0)) >= 500, status
-assert int(status.get('total_tradable', 0)) > 0, status
-assert int(status.get('total_candidates', 0)) > 0, status
-PY
+          import json
+          import sys
+          import time
+          from pathlib import Path
+          status = json.loads(Path(sys.argv[1]).read_text())
+          assert status.get('healthy') is True, status
+          assert time.time() - float(status['timestamp']) <= 180, status
+          assert int(status.get('models_alive', 0)) == 5, status
+          assert int(status.get('models_fresh', 0)) == 5, status
+          assert int(status.get('total_discovered', 0)) >= 500, status
+          assert int(status.get('total_tradable', 0)) > 0, status
+          assert int(status.get('total_candidates', 0)) > 0, status
+          PY
             then
               activity_ok=true
               break
