@@ -110,6 +110,9 @@ while true;do
   # Micro taker: online short-horizon markout model; mandatory horizon exit.
   if ((now-last_micro_taker>=5));then
     python3 scripts/v6_micro_taker.py --config "$RUN_ROOT/micro_taker_config.json" --run-dir "$RUN_ROOT/micro_taker" --markets 250 --min-liquidity 25 --horizon-seconds 30 --max-trade-usd 15 --min-edge 0.00030 --slippage-bps 5 --max-positions 20 >>"$RUN_ROOT/micro_taker.log" 2>&1||true
+    # PAPER-only operational probe. It runs only after the unchanged alpha model,
+    # only when that sleeve is idle, and is separately tagged for research exclusion.
+    python3 scripts/paper_observability_probe.py --config "$RUN_ROOT/micro_taker_config.json" --probe-config config/paper_observability_probe.json --run-dir "$RUN_ROOT/micro_taker" --markets 250 --min-liquidity 25 --slippage-bps 5 >>"$RUN_ROOT/micro_taker_observability.log" 2>&1||true
     last_micro_taker=$now
   fi
 
@@ -144,7 +147,6 @@ while true;do
   if ((now-last_report>=60));then
     python3 scripts/v6_runtime_status.py --config "$CONFIG" --run-root "$RUN_ROOT" >"$RUN_ROOT/runtime_status.log" 2>&1||true
     python3 scripts/runtime_action_report.py --run-root "$RUN_ROOT" --external-signals "$RUN_ROOT/external_signals.csv" --window-seconds 3600 --production-edge "$INTENT_MIN_EDGE" --output-json "$RUN_ROOT/action_report.json" --output-markdown "$RUN_ROOT/action_report.md" >"$RUN_ROOT/action_report_latest.log" 2>&1||true
-    python3 scripts/v7_execution_evidence.py --run-root "$RUN_ROOT" --policy config/v7_execution_evidence.json >"$RUN_ROOT/v7_execution_evidence.log" 2>&1||true
     last_report=$now
   fi
   sleep 5

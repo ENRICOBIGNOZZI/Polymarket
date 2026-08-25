@@ -1,0 +1,12 @@
+{
+  "schema": "paper_observability_probe_v1",
+  "paper_only": true,
+  "enabled": true,
+  "notional_usd": 5.0,
+  "cooldown_seconds": 60,
+  "min_price": 0.05,
+  "max_price": 0.95,
+  "max_top_level_fraction": 0.25,
+  "max_roundtrips": 20,
+  "purpose": "Operational fill-to-PnL observability only; never alpha evidence or authenticated execution."
+}
