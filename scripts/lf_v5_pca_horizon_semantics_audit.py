@@ -70,8 +70,41 @@ def terminal_identification_set(
     return out
 
 
+def mixed_horizon_window(
+    *,
+    window_returns: int = 720,
+    bootstrap_fidelity_minutes: int = 30,
+    live_interval_seconds: int = 15,
+    live_elapsed_seconds: int = 3600,
+) -> dict[str, float | int]:
+    """Approximate how a price-only rolling window changes horizon after bootstrap.
+
+    The engine keeps prices without timestamps in `history_`. A fresh bootstrap can
+    contribute 30-minute observations while the V5 PCA child appends one live price
+    per loop. Treating every adjacent pair as the same one-step return therefore
+    makes the composition of the estimation horizon depend on runtime age. The live
+    loop actually takes processing time plus its configured sleep, so this is a
+    lower-bound cadence approximation rather than a wall-clock timing claim.
+    """
+
+    live_points = max(0, live_elapsed_seconds // max(1, live_interval_seconds))
+    live_returns = min(window_returns, live_points)
+    bootstrap_returns = max(0, window_returns - live_returns)
+    return {
+        "window_returns": window_returns,
+        "bootstrap_fidelity_seconds": bootstrap_fidelity_minutes * 60,
+        "configured_live_sleep_seconds": live_interval_seconds,
+        "live_elapsed_seconds": live_elapsed_seconds,
+        "approx_live_returns": live_returns,
+        "approx_bootstrap_returns": bootstrap_returns,
+        "approx_live_fraction": live_returns / window_returns if window_returns else 0.0,
+        "approx_bootstrap_fraction": bootstrap_returns / window_returns if window_returns else 0.0,
+    }
+
+
 def source_contract(root: Path) -> dict[str, object]:
     engine = (root / "src" / "engine.cpp").read_text(encoding="utf-8")
+    engine_header = (root / "include" / "pm" / "engine.hpp").read_text(encoding="utf-8")
     manager = (root / "scripts" / "multi_strategy_paper.py").read_text(encoding="utf-8")
     config = json.loads((root / "config" / "paper_v5.json").read_text(encoding="utf-8"))
     pca = next(item for item in config["multi_strategy"]["strategies"] if item["name"] == "pca")
@@ -86,21 +119,30 @@ def source_contract(root: Path) -> dict[str, object]:
         "s.fair_yes = fair;",
         "full_kelly(s.fair_side, s.executable_price)",
         "const double loss = (q - *m.resolved_yes) * (q - *m.resolved_yes);",
+        "d.push_back(std::stod(x[2]));",
+        "append_history(ts, m, mid);",
     ]
     manager_fragments = [
         'child["expert_weights"] = {',
         "name: (1.0 if name == strategy.expert else 0.0) for name in manager.expert_names",
     ]
+    header_fragments = [
+        "std::unordered_map<std::string,std::deque<double>> history_;",
+    ]
 
     return {
         "engine_contract_present": all(fragment in engine for fragment in required_engine_fragments),
+        "history_is_price_only_contract_present": all(fragment in engine_header for fragment in header_fragments),
         "manager_singleton_contract_present": all(fragment in manager for fragment in manager_fragments),
         "required_engine_fragments": required_engine_fragments,
+        "header_fragments": header_fragments,
         "manager_fragments": manager_fragments,
         "pca_capital_fraction": float(pca["capital_fraction"]),
         "pca_interval_seconds": int(pca["overrides"]["interval_seconds"]),
         "pca_fractional_kelly": float(pca["overrides"]["fractional_kelly"]),
         "pca_max_trade_usd": float(pca["overrides"]["max_trade_usd"]),
+        "pca_window": int(pca["overrides"]["pca_window"]),
+        "history_fidelity_minutes": int(config["history_fidelity_minutes"]),
         "parent_starting_capital": float(config["starting_capital"]),
         "pca_child_starting_capital": float(config["starting_capital"]) * float(pca["capital_fraction"]),
     }
@@ -112,24 +154,37 @@ def summarize(root: Path) -> dict[str, object]:
         fractional_kelly=float(contract["pca_fractional_kelly"]),
         child_capital=float(contract["pca_child_starting_capital"]),
     )
+    horizon_mix = [
+        mixed_horizon_window(
+            window_returns=int(contract["pca_window"]),
+            bootstrap_fidelity_minutes=int(contract["history_fidelity_minutes"]),
+            live_interval_seconds=int(contract["pca_interval_seconds"]),
+            live_elapsed_seconds=seconds,
+        )
+        for seconds in (0, 3600, 7200, 10800)
+    ]
     return {
         "schema": "polymarket_lf_v5_pca_horizon_semantics_audit_v1",
         "source_contract": contract,
         "counterexample": fixture,
         "terminal_identification_set": terminal_identification_set(),
+        "target_horizon_mix": horizon_mix,
         "structural_finding": (
-            "V5 PCA estimates a one-step standardized idiosyncratic return and turns that mark-to-market "
+            "V5 PCA estimates an index-step standardized idiosyncratic return and turns that mark-to-market "
             "forecast into q_yes. The singleton PCA child then routes q_yes through the terminal-probability "
             "decision path, including binary Kelly sizing and eventual resolved-outcome Brier scoring. A "
-            "one-step price forecast does not by itself identify E[terminal binary payout]."
+            "one-step price forecast does not by itself identify E[terminal binary payout]. Moreover history_ "
+            "stores prices without timestamps, while bootstrap and live observations have radically different "
+            "cadences, so even the duration represented by one index step is not stable without timestamp alignment."
         ),
         "interpretation": (
             "The deterministic sign-reversal fixture is a semantics/identification counterexample, not a live "
-            "PnL estimate. It shows that positive edge under the engine's terminal interpretation can coexist "
-            "with negative terminal expected value when the PCA output is only a short-horizon price forecast."
+            "PnL estimate. The horizon-mix table is based on configured cadence and assumes one appended live "
+            "observation per configured sleep; actual loops include processing time. Both diagnostics show why "
+            "the PCA output needs an explicit target horizon before it can be assigned terminal probability semantics."
         ),
         "required_experiment": [
-            "first use timestamp-aligned PCA histories so the target horizon is a real chronological interval",
+            "first use timestamp-aligned PCA histories so every target is attached to an explicit chronological horizon rather than an observation index",
             "evaluate PCA as a mark-to-market model on explicit 15m/30m/1h/6h future logit or midpoint targets using purged event/time-clustered OOS rows",
             "for mark-to-market trading, compare bounded cost-aware sizing and explicit exit-horizon utility without interpreting the forecast as a terminal binary probability",
             "if PCA state is to produce a terminal probability, fit a separate time-to-resolution decoder/calibration using only prior resolved events and evaluate Brier, log-loss and calibration by horizon",
