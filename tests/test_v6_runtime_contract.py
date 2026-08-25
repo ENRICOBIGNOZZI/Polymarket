@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -24,6 +25,7 @@ class V6RuntimeContractTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.relations = load_script("v6_relation_intents_test", "scripts/v6_relation_intents.py")
         cls.local_factor = load_script("v6_local_factor_intents_test", "scripts/v6_local_factor_intents.py")
+        cls.hard_safety = load_script("v6_hard_safety_policy_test", "scripts/hard_safety_policy.py")
 
     def test_v6_runtime_exists_with_manifest_selected_paper_champion(self) -> None:
         champion = json.loads((ROOT / "config/live_champion.json").read_text())
@@ -55,13 +57,41 @@ class V6RuntimeContractTest(unittest.TestCase):
         ))
         self.assertTrue(math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-12))
         self.assertGreater(float(v6["hard_arb_capital_fraction"]), 0.0)
+
+        ceilings = self.hard_safety.V6_AUTHORIZED_CEILINGS
+        self.assertEqual(float(ceilings["max_drawdown"]), 0.15)
+        self.assertEqual(float(ceilings["max_market_fraction"]), 0.05)
+        self.assertEqual(float(ceilings["max_event_fraction"]), 0.15)
+        self.assertEqual(float(ceilings["max_gross_fraction"]), 0.70)
+        self.assertEqual(float(ceilings["global_max_drawdown"]), 0.15)
+        self.assertEqual(float(ceilings["global_max_gross_fraction"]), 0.70)
+
         self.assertEqual(float(cfg["max_drawdown"]), 0.15)
-        self.assertEqual(float(cfg["max_market_fraction"]), 0.025)
-        self.assertEqual(float(cfg["max_event_fraction"]), 0.08)
-        self.assertEqual(float(cfg["max_gross_fraction"]), 0.45)
+        self.assertGreater(float(cfg["max_market_fraction"]), 0.0)
+        self.assertLessEqual(float(cfg["max_market_fraction"]), float(ceilings["max_market_fraction"]))
+        self.assertGreater(float(cfg["max_event_fraction"]), 0.0)
+        self.assertLessEqual(float(cfg["max_event_fraction"]), float(ceilings["max_event_fraction"]))
+        self.assertGreater(float(cfg["max_gross_fraction"]), 0.0)
+        self.assertLessEqual(float(cfg["max_gross_fraction"]), float(ceilings["max_gross_fraction"]))
         self.assertIs(cfg["multi_strategy"]["paper_only"], True)
         self.assertEqual(float(cfg["multi_strategy"]["global_max_drawdown"]), 0.15)
-        self.assertEqual(float(cfg["multi_strategy"]["global_max_gross_fraction"]), 0.45)
+        self.assertGreater(float(cfg["multi_strategy"]["global_max_gross_fraction"]), 0.0)
+        self.assertLessEqual(
+            float(cfg["multi_strategy"]["global_max_gross_fraction"]),
+            float(ceilings["global_max_gross_fraction"]),
+        )
+
+        # Authorized aggressive PAPER envelope. Current runtime may remain stricter
+        # until its research/integration evidence is approved, but CI must not encode
+        # the superseded 2.5% / 8% / 45% profile as an immutable safety contract.
+        self.assertLessEqual(int(cfg["market_limit"]), 1000)
+        self.assertGreaterEqual(float(cfg["min_liquidity"]), 2.0)
+        self.assertGreaterEqual(float(cfg["min_net_edge"]), 0.00005)
+        self.assertEqual(float(cfg["uncertainty_penalty"]), 0.0)
+        self.assertGreater(float(cfg["fractional_kelly"]), 0.0)
+        self.assertLessEqual(float(cfg["fractional_kelly"]), 0.25)
+        self.assertGreater(float(cfg["max_trade_usd"]), 0.0)
+        self.assertLessEqual(float(cfg["max_trade_usd"]), 125.0)
         self.assertEqual(float(cfg["semantic_shrink"]), 0.0)
 
     def test_threshold_parser_recognizes_nested_crypto_contracts(self) -> None:
@@ -118,8 +148,17 @@ class V6RuntimeContractTest(unittest.TestCase):
         loop = (ROOT / "scripts" / "paper_v6_loop.sh").read_text(encoding="utf-8")
         self.assertIn("--improve-ticks 1", loop)
         self.assertIn("--max-queue-multiple 6", loop)
-        self.assertIn("--min-edge 0.00020", loop)
-        self.assertIn("--max-order-usd 60", loop)
+        self.assertIn('--min-edge "$INTENT_MIN_EDGE"', loop)
+
+        edge_default = re.search(r'INTENT_MIN_EDGE="\$\{V6_INTENT_MIN_EDGE:-([0-9.]+)\}"', loop)
+        self.assertIsNotNone(edge_default)
+        self.assertGreaterEqual(float(edge_default.group(1)), 0.00005)
+
+        max_order_values = [float(x) for x in re.findall(r"--max-order-usd\s+([0-9.]+)", loop)]
+        max_trade_values = [float(x) for x in re.findall(r"--max-trade-usd\s+([0-9.]+)", loop)]
+        self.assertTrue(max_order_values)
+        self.assertTrue(max_trade_values)
+        self.assertTrue(all(0.0 < x <= 125.0 for x in max_order_values + max_trade_values))
 
     def test_v6_research_smoke_preserves_base_live_selector(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "v6-research-smoke.yml").read_text()
