@@ -62,7 +62,7 @@ class FastRuntimeContractTest(unittest.TestCase):
         self.assertIn("POLYMARKET_RUNTIME_SINGLETON_HELD", selector)
         self.assertLess(selector.index("runtime_singleton_launcher.py"), selector.index("start_champion()"))
         # The private macOS server uses Bash 3.2, which does not provide BASHPID.
-        self.assertIn('tmp="$path.tmp.${BASHPID:-$}"', selector)
+        self.assertIn('tmp="$path.tmp.${BASHPID:-$$}"', selector)
 
     def test_runtime_singleton_launcher_excludes_competing_owner(self) -> None:
         launcher = ROOT / "scripts" / "runtime_singleton_launcher.py"
