@@ -57,6 +57,29 @@ class V4ResearchTests(unittest.TestCase):
             self.assertTrue(all(float(r["limit_price"]) == 0.0 for r in b2))
             self.assertEqual(json.loads(completed.stdout)["coherence_rejected"], 1)
 
+    def test_b2_accepts_same_category_certificate_from_upstream_gate(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            scan, out = td / "scan.csv", td / "out.csv"
+            with scan.open("w", newline="") as f:
+                fields = ["market","half_life_h","maker_entry_net_edge","executable_notional","legs","coherence_scope"]
+                w = csv.DictWriter(f, fieldnames=fields); w.writeheader()
+                w.writerow(dict(
+                    market="target", half_life_h=8, maker_entry_net_edge=.003,
+                    executable_notional=80, legs="target:NO:1|category_hedge:YES:0.4|semantic_hedge:NO:0.2",
+                    coherence_scope="same_category:0.5000:1|semantic:0.1250:1",
+                ))
+            completed = subprocess.run([
+                sys.executable, str(BUILD), "--strategy", "B2", "--input", str(scan),
+                "--output", str(out), "--now", "1800000000", "--min-edge", "0.00025",
+            ], check=True, capture_output=True, text=True)
+            rows = list(csv.DictReader(out.open()))
+            self.assertEqual(len(rows), 3)
+            self.assertEqual({row["market_id"] for row in rows}, {"target", "category_hedge", "semantic_hedge"})
+            summary = json.loads(completed.stdout)
+            self.assertEqual(summary["coherence_rejected"], 0)
+            self.assertEqual(summary["bundles"], 1)
+
     def test_b2_rejects_unrelated_or_missing_target_certificate(self):
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
