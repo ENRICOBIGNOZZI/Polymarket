@@ -23,7 +23,7 @@ alloc = [
 ]
 assert abs(sum(float(x[1]) for x in alloc) + float(v6['reserve_fraction']) - 1.0) < 1e-9
 for name, frac in alloc:
-    child = {k: v for k, v in cfg.items() if k != 'v6'}
+    child = {k: v for k, v in cfg.items() if k not in {'v6', 'multi_strategy'}}
     child['starting_capital'] = total * float(frac)
     child['run_dir'] = str(root / name)
     child['expert_weights'] = {'micro':0.0,'pca':0.0,'graph':0.0,'semantic':0.0,'external':0.0}
@@ -34,8 +34,9 @@ for name, frac in alloc:
     (root / f'{name}_config.json').write_text(json.dumps(child, indent=2, sort_keys=True) + '\n')
 PY
 
-rm -f "$RUN_ROOT"/intents.csv "$RUN_ROOT"/b1_intents.csv "$RUN_ROOT"/local_factor_intents.csv \
-      "$RUN_ROOT"/relation_intents_raw.csv "$RUN_ROOT"/relation_intents.csv "$RUN_ROOT"/stat_arb_pairs.csv
+rm -f "$RUN_ROOT"/intents.csv "$RUN_ROOT"/local_factor_intents.csv \
+      "$RUN_ROOT"/relation_intents_raw.csv "$RUN_ROOT"/relation_intents.csv \
+      "$RUN_ROOT"/stat_arb_pairs_diagnostic.csv
 
 rec_pid=0; broker_pid=0; external_pid=0
 rec_restarts=0; broker_restarts=0; external_restarts=0
@@ -62,8 +63,8 @@ write_supervisor() {
   kill -0 "$broker_pid" 2>/dev/null && ba=1 || true
   kill -0 "$external_pid" 2>/dev/null && ea=1 || true
   local tmp="$RUN_ROOT/runtime_supervisor.csv.tmp"
-  # allocator_alive is a transitional field name expected by the already-deployed
-  # health gate. In V6 it means the independent directional/external process is alive.
+  # allocator_alive is a transitional field name expected by the deployed health
+  # gate. In V6 it denotes the independent directional/external process.
   printf 'timestamp,recorder_alive,broker_alive,allocator_alive,recorder_restarts,broker_restarts,allocator_restarts,recorder_pid,broker_pid,allocator_pid\n' > "$tmp"
   printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$(date +%s)" "$ra" "$ba" "$ea" "$rec_restarts" "$broker_restarts" "$external_restarts" "$rec_pid" "$broker_pid" "$external_pid" >> "$tmp"
   mv "$tmp" "$RUN_ROOT/runtime_supervisor.csv"
@@ -78,10 +79,13 @@ start_recorder; start_broker; start_external; write_supervisor
 last_factor=0; last_relation=0; last_external=0; last_report=0; last_micro_taker=0
 
 rebuild_intents() {
-  python3 scripts/build_v4_intents.py --strategy B1 --input "$RUN_ROOT/stat_arb_pairs.csv" --output "$RUN_ROOT/b1_intents.csv" \
-    --config "$RUN_ROOT/broker_config.json" --min-edge "$INTENT_MIN_EDGE" >> "$RUN_ROOT/intent_build.log" 2>&1 || true
-  python3 scripts/merge_v4_intents.py --input "$RUN_ROOT/b1_intents.csv" --input "$RUN_ROOT/local_factor_intents.csv" --input "$RUN_ROOT/relation_intents.csv" \
-    --output "$RUN_ROOT/intents.csv" --min-edge "$INTENT_MIN_EDGE" --max-age-seconds 240 --max-bundles 120 >> "$RUN_ROOT/intent_merge.log" 2>&1 || true
+  # Only statistically controlled local-factor and verified relation-RV bundles
+  # enter the V6 broker. Legacy B1 remains a diagnostic and cannot create fills.
+  python3 scripts/merge_v4_intents.py \
+    --input "$RUN_ROOT/local_factor_intents.csv" \
+    --input "$RUN_ROOT/relation_intents.csv" \
+    --output "$RUN_ROOT/intents.csv" --min-edge "$INTENT_MIN_EDGE" \
+    --max-age-seconds 240 --max-bundles 120 >> "$RUN_ROOT/intent_merge.log" 2>&1 || true
 }
 
 while true; do
@@ -96,8 +100,8 @@ while true; do
     --min-liquidity "$MIN_LIQUIDITY" --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 90 --hold-seconds 240 \
     --adverse-selection-mult 0.15 --once >> "$RUN_ROOT/maker.log" 2>&1 || true
 
-  # MICRO TAKER: pooled online forward-markout regression. Positions are forced
-  # out after the forecast horizon so they cannot become terminal event bets.
+  # MICRO TAKER: online forward-markout regression. Positions are forced out at
+  # the forecast horizon, so a micro trade cannot turn into a terminal event bet.
   if (( now - last_micro_taker >= 5 )); then
     python3 scripts/v6_micro_taker.py --config "$RUN_ROOT/micro_taker_config.json" --run-dir "$RUN_ROOT/micro_taker" \
       --markets 250 --min-liquidity 25 --horizon-seconds 30 --max-trade-usd 15 --min-edge 0.00030 \
@@ -106,47 +110,60 @@ while true; do
   fi
 
   if (( now - last_factor >= 60 )); then
-    rm -f "$RUN_ROOT/stat_arb_pairs.csv" "$RUN_ROOT/local_factor_intents.csv"
-    ./build/polymarket_stat_arb --config "$RUN_ROOT/broker_config.json" --markets "$MARKETS" --history-universe 350 \
-      --lookback-hours 720 --fidelity-minutes 30 --min-z 0.65 --min-t-reversion 0.60 --max-half-life-hours 336 \
-      --top 250 --csv "$RUN_ROOT/stat_arb_pairs.csv" > "$RUN_ROOT/stat_arb_pairs_latest.log" 2> "$RUN_ROOT/stat_arb_pairs_errors.log" || true
-    # Unlike V5 global PCA, this engine constructs many event/payoff-local panels.
-    python3 scripts/v6_local_factor_intents.py --config "$CONFIG" --output "$RUN_ROOT/local_factor_intents.csv" \
-      --status "$RUN_ROOT/local_factor_status.json" --markets 500 --min-liquidity "$MIN_LIQUIDITY" --lookback-hours 336 \
-      --fidelity-minutes 60 --max-clusters 30 --min-z 0.65 --min-t 0.75 --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 \
+    rm -f "$RUN_ROOT/local_factor_intents.csv" "$RUN_ROOT/stat_arb_pairs_diagnostic.csv"
+
+    # Legacy pair-stat-arb is retained only as a diagnostic under materially
+    # stricter gates. It is not converted to intents and cannot trade in V6.
+    ./build/polymarket_stat_arb --config "$RUN_ROOT/broker_config.json" --markets "$MARKETS" --history-universe 300 \
+      --lookback-hours 720 --fidelity-minutes 30 --min-z 1.25 --min-t-reversion 2.00 --max-half-life-hours 168 \
+      --top 150 --csv "$RUN_ROOT/stat_arb_pairs_diagnostic.csv" \
+      > "$RUN_ROOT/stat_arb_pairs_diagnostic.log" 2> "$RUN_ROOT/stat_arb_pairs_errors.log" || true
+
+    # Production relative-value reversion is local, common-sample and multiplicity
+    # controlled. BH-FDR is applied across the current set of local residual tests.
+    python3 scripts/v6_local_factor_intents.py --config "$CONFIG" \
+      --output "$RUN_ROOT/local_factor_intents.csv" --status "$RUN_ROOT/local_factor_status.json" \
+      --markets 400 --min-liquidity "$MIN_LIQUIDITY" --lookback-hours 336 --fidelity-minutes 60 \
+      --max-clusters 15 --min-common-points 48 --min-z 1.00 --fdr 0.10 \
+      --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 --slippage-bps 5 \
       > "$RUN_ROOT/local_factor_latest.log" 2> "$RUN_ROOT/local_factor_errors.log" || true
     rebuild_intents; last_factor=$now
   fi
 
   if (( now - last_relation >= 30 )); then
-    # Relation discovery may emit maker graph dislocations. They are explicitly
-    # downgraded to GRAPH_RV unless a future scanner supplies a true TAKER hard-arb
-    # intent. This prevents partial-fill maker bundles from being mislabeled as
-    # deterministic arbitrage.
-    python3 scripts/v6_relation_intents.py --config "$CONFIG" --output "$RUN_ROOT/relation_intents_raw.csv" --status "$RUN_ROOT/relation_status.json" \
-      --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 --max-events 80 \
+    # Semantic parsing only discovers structural relations. Maker graph bundles
+    # are explicitly GRAPH_RV because partial fills preclude a hard guarantee.
+    python3 scripts/v6_relation_intents.py --config "$CONFIG" \
+      --output "$RUN_ROOT/relation_intents_raw.csv" --status "$RUN_ROOT/relation_status.json" \
+      --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" \
+      --max-trade-usd 60 --max-events 80 \
       > "$RUN_ROOT/relation_latest.log" 2> "$RUN_ROOT/relation_errors.log" || true
-    python3 scripts/v6_intent_guard.py --input "$RUN_ROOT/relation_intents_raw.csv" --output "$RUN_ROOT/relation_intents.csv" \
-      --status "$RUN_ROOT/relation_guard_status.json" --min-edge "$INTENT_MIN_EDGE" --stress-bps 10 --max-age-seconds 240 \
+    python3 scripts/v6_intent_guard.py --input "$RUN_ROOT/relation_intents_raw.csv" \
+      --output "$RUN_ROOT/relation_intents.csv" --status "$RUN_ROOT/relation_guard_status.json" \
+      --min-edge "$INTENT_MIN_EDGE" --stress-bps 10 --max-age-seconds 240 \
       >> "$RUN_ROOT/relation_guard.log" 2>&1 || true
-    # Independent executable-book NegRisk diagnostic: asks, taker fees, slippage,
-    # complete-event metadata and displayed depth. It remains diagnostic until the
-    # multi-leg broker has a true immediate-taker/atomic execution path.
-    ./build/polymarket_negrisk_arb --config "$CONFIG" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --top 100 \
+
+    # Complete-NegRisk hard-arbitrage remains an executable-book taker diagnostic
+    # until the multi-leg simulator has a true immediate/atomic taker state path.
+    ./build/polymarket_negrisk_arb --config "$CONFIG" --markets "$MARKETS" \
+      --min-liquidity "$MIN_LIQUIDITY" --top 100 \
       > "$RUN_ROOT/graph_hard_taker_scan.csv" 2> "$RUN_ROOT/graph_hard_taker_errors.log" || true
     rebuild_intents; last_relation=$now
   fi
 
   if (( now - last_external >= 60 )); then
-    python3 scripts/v6_external_bridge.py --output "$RUN_ROOT/external_signals.csv" --status "$RUN_ROOT/external_bridge_status.json" \
-      --max-age-seconds 21600 --min-confidence 0.35 > "$RUN_ROOT/external_bridge.log" 2>&1 || true
+    python3 scripts/v6_external_bridge.py --output "$RUN_ROOT/external_signals.csv" \
+      --status "$RUN_ROOT/external_bridge_status.json" --max-age-seconds 21600 --min-confidence 0.35 \
+      > "$RUN_ROOT/external_bridge.log" 2>&1 || true
     last_external=$now
   fi
 
   if (( now - last_report >= 60 )); then
-    python3 scripts/v6_runtime_status.py --config "$CONFIG" --run-root "$RUN_ROOT" > "$RUN_ROOT/runtime_status.log" 2>&1 || true
-    python3 scripts/runtime_action_report.py --run-root "$RUN_ROOT" --external-signals "$RUN_ROOT/external_signals.csv" --window-seconds 3600 \
-      --production-edge "$INTENT_MIN_EDGE" --output-json "$RUN_ROOT/action_report.json" --output-markdown "$RUN_ROOT/action_report.md" \
+    python3 scripts/v6_runtime_status.py --config "$CONFIG" --run-root "$RUN_ROOT" \
+      > "$RUN_ROOT/runtime_status.log" 2>&1 || true
+    python3 scripts/runtime_action_report.py --run-root "$RUN_ROOT" --external-signals "$RUN_ROOT/external_signals.csv" \
+      --window-seconds 3600 --production-edge "$INTENT_MIN_EDGE" \
+      --output-json "$RUN_ROOT/action_report.json" --output-markdown "$RUN_ROOT/action_report.md" \
       > "$RUN_ROOT/action_report_latest.log" 2>&1 || true
     last_report=$now
   fi
