@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "source": {
+    "workflow": "V6 live-data research smoke",
+    "run_id": 32910817671,
+    "head_sha": "c3f6430d7614182b47870cc22ca56998cae10891",
+    "artifact": "v6-research-smoke-32910817671"
+  },
+  "maker_common_sample": {
+    "current_flow_gate": {
+      "posted_orders": 2,
+      "maker_buy_events": 0,
+      "maker_buy_shares": 0.0,
+      "realized_closed_pnl": 0.0,
+      "decision": "ZERO_FILL_DESPITE_CAUSAL_FLOW"
+    },
+    "at_touch_no_improve": {
+      "posted_orders": 3,
+      "maker_buy_events": 0,
+      "maker_buy_shares": 0.0,
+      "realized_closed_pnl": 0.0,
+      "decision": "ZERO_FILL_DESPITE_CAUSAL_FLOW"
+    },
+    "confidence_gated_inside": {
+      "posted_orders": 4,
+      "maker_buy_events": 1,
+      "maker_buy_shares": 50.0,
+      "taker_exit_events": 1,
+      "taker_exit_shares": 50.0,
+      "realized_closed_pnl": -0.10037500000000012,
+      "fill_conditioned_pnl_per_closed_share": -0.0020075000000000023,
+      "fill_market_id": "3215074",
+      "maker_entry_price": 0.017,
+      "taker_exit_price": 0.0149925,
+      "modeled_post_cost_edge_at_post": 0.002098049508239102,
+      "modeled_fill_probability_at_post": 0.695502515167662,
+      "decision": "FILLS_NEGATIVE_PNL"
+    },
+    "toxicity_adjusted": {
+      "posted_orders": 3,
+      "maker_buy_events": 0,
+      "maker_buy_shares": 0.0,
+      "realized_closed_pnl": 0.0,
+      "toxicity_evaluations": 1412,
+      "toxicity_discounts": 10,
+      "toxicity_hard_blocks": 4,
+      "max_observed_toxicity": 0.7848995281722516,
+      "hard_block_threshold": 0.55,
+      "decision": "ZERO_FILL_DESPITE_CAUSAL_FLOW",
+      "interpretation": "The toxicity-adjusted arm avoided the negative inside-spread fill in this window, but produced no fill-conditioned PnL evidence. It is a defensive challenger, not a promotion result."
+    }
+  },
+  "micro_taker_cadence_defect": {
+    "markets_requested": 300,
+    "samples": 1814,
+    "unique_snapshot_waves": 8,
+    "snapshot_wave_sizes": [227, 227, 227, 227, 227, 227, 227, 225],
+    "snapshot_wave_intervals_seconds": [7, 8, 7, 6, 7, 6, 7],
+    "median_snapshot_interval_seconds": 7,
+    "max_snapshot_interval_seconds": 8,
+    "requested_horizon_seconds": 5,
+    "max_target_staleness_seconds": 3,
+    "matured_samples_without_pre_horizon_observation": 1589,
+    "newly_labeled": 0,
+    "post_horizon_labels": 0,
+    "signals": 0,
+    "opens": 0,
+    "realized_pnl": 0.0,
+    "diagnosis": "All 1589 matured forecasts lacked any strictly later observation at or before t+5 because the 300-market REST scan cadence was 6-8 seconds. This is a measurement-cadence defect, not evidence that the micro target is flat. A 5-second target cannot be evaluated from a 6-8 second observation grid without look-ahead."
+  },
+  "hard_arb": {
+    "scanned_events": 28,
+    "positive_candidates": 0,
+    "entered": 0,
+    "realized_pnl": 0.0,
+    "atomic_snapshot_assumption": false,
+    "sequential_leg_revalidation": true
+  },
+  "next_experiment": {
+    "micro_taker": "Keep the 300-market public scan but use a 10-second causal target with <=5-second target staleness so the observed 6-8 second scan cadence yields pre-horizon labels. Do not borrow post-horizon books and do not lower executable-edge gates.",
+    "maker": "Continue toxicity-adjusted maker shadow and require actual fills plus positive 45s/60s/300s executable markouts before promotion."
+  },
+  "hard_safety": {
+    "max_drawdown": 0.15,
+    "market_fraction": 0.05,
+    "event_fraction": 0.15,
+    "gross_fraction": 0.70,
+    "kill_switch_unchanged": true,
+    "state_integrity_unchanged": true,
+    "real_money_execution": false
+  }
+}
