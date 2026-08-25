@@ -36,6 +36,9 @@ jobs:
       SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
       SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
       SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+      GRAFANA_HOSTNAME: mamma-portfolio
+      GRAFANA_FQDN: mamma-portfolio.tail1bae85.ts.net
+      GRAFANA_URL: http://mamma-portfolio.tail1bae85.ts.net
     steps:
       - name: Select existing Tailscale credential mode
         id: tailscale_auth
@@ -91,10 +94,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          tailscale ping --until-direct=false --c 1 --timeout=10s "$GRAFANA_HOSTNAME"
+          getent hosts "$GRAFANA_FQDN"
           curl --fail --silent --show-error --retry 10 --retry-delay 2 --retry-all-errors \
-            "http://$SERVER_HOST:3000/api/health" | tee grafana-health.json
+            "$GRAFANA_URL/api/health" | tee grafana-health.json
           curl --fail --silent --show-error --retry 5 --retry-delay 2 --retry-all-errors \
-            "http://$SERVER_HOST:3000/api/search" > grafana-search.json
+            "$GRAFANA_URL/api/search" > grafana-search.json
           python3 - <<'PY'
           import json
           with open("grafana-search.json", encoding="utf-8") as f:
