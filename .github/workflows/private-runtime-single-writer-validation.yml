@@ -8,10 +8,12 @@ on:
       - "scripts/runtime_singleton_launcher.py"
       - "scripts/paper_latest_loop.sh"
       - "scripts/paper_v6_loop.sh"
+      - "scripts/v6_market_proxy.py"
       - "config/live_champion.json"
       - "config/paper_v6.json"
       - "tests/test_fast_runtime_contract.py"
       - "tests/test_v6_runtime_contract.py"
+      - "tests/test_v6_market_proxy_deadline.py"
       - "scripts/validate_scheduler_registry.py"
       - ".github/workflows/private-runtime-single-writer-validation.yml"
 
