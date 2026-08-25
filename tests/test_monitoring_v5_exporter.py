@@ -124,13 +124,13 @@ class MonitoringV5ExporterTests(unittest.TestCase):
             write_strategy_status(1e12)
             write_start_event(time.time())
             startup_text = collector.collect()
-            self.assertIn('polymarket_model_status_age_seconds{expert="graph",model="graph"} 1000000000000', startup_text)
+            self.assertIn('polymarket_model_status_age_seconds{expert="graph",model="graph"} 1e+12', startup_text)
             self.assertIn('polymarket_model_alert_staleness_seconds{expert="graph",model="graph"} 0', startup_text)
             self.assertIn('polymarket_model_startup_grace_active{expert="graph",model="graph"} 1', startup_text)
 
             write_start_event(time.time() - 601)
             expired_text = collector.collect()
-            self.assertIn('polymarket_model_alert_staleness_seconds{expert="graph",model="graph"} 1000000000000', expired_text)
+            self.assertIn('polymarket_model_alert_staleness_seconds{expert="graph",model="graph"} 1e+12', expired_text)
             self.assertIn('polymarket_model_startup_grace_active{expert="graph",model="graph"} 0', expired_text)
 
 
