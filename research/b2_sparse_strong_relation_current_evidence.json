@@ -1,16 +1,16 @@
 {
-  "schema": "b2_sparse_strong_relation_evidence_v1",
-  "observed_main_sha": "c1c67a43a93261b15692c207bc27459f11c29e88",
+  "schema": "b2_sparse_strong_relation_evidence_v2",
+  "source_main_sha": "429be256efe12b4138a9fe30418d12257827f824",
   "telemetry_generated_ts": 1787640160,
   "alpha_factory_generated": "2026-08-25T06:59:26+00:00",
   "research_state": "MORE_EVIDENCE_REQUIRED",
-  "latest_b2": {
+  "latest_incumbent_b2": {
     "coherent_rows": 43,
     "coherent_raw_positive": 43,
     "coherent_maker_positive": 1,
     "oos_trades": 0
   },
-  "current_maker_positive": {
+  "incumbent_maker_positive": {
     "market": "663583",
     "slug": "will-the-iranian-regime-fall-by-the-end-of-2026",
     "side": "NO",
@@ -20,10 +20,94 @@
     "hedges": 4,
     "hedge_error": 0.257291,
     "coherence_scope": "semantic:0.1429:1|semantic:0.1000:1|semantic:0.6000:3|semantic:0.1000:1",
-    "strong_relation_gate": "reject",
-    "weak_relation_certificates": 3,
+    "relation_quality": "reject",
     "maker_completion_break_even_if_unfilled_remainder_crosses_taker": 0.9457582362429228,
-    "interpretation": "The only maker-positive incumbent B2 row in the latest public snapshot depends on three one-token low-similarity semantic hedge links. Its static maker edge is not accepted as LF alpha evidence until a same-event/strong-semantic sparse hedge survives common-sample cost stress and forward execution. With a simple maker-versus-taker completion mixture, its quoted edges require about 94.58% maker completion to break even if the unfilled remainder crosses at the quoted taker economics."
+    "interpretation": "The only maker-positive incumbent B2 row depends on three one-token low-similarity semantic hedge links. Its quoted maker/taker economics also require about 94.58% maker completion in a simple maker-versus-forced-taker mixture. It is not accepted as LF alpha evidence."
+  },
+  "first_sparse_smoke": {
+    "run_id": 32821862030,
+    "head_sha": "b73452f2a098051a5177a36d9ac84d63f1537753",
+    "conclusion": "success",
+    "raw_frontier": {
+      "k1_maker_positive": 3,
+      "k1_robust_2x_positive": 1,
+      "k2_maker_positive": 3,
+      "k2_robust_2x_positive": 1,
+      "k3_maker_positive": 1,
+      "k3_robust_2x_positive": 0,
+      "k4_maker_positive": 1,
+      "k4_robust_2x_positive": 0,
+      "k8_maker_positive": 0,
+      "k8_robust_2x_positive": 0
+    },
+    "initial_relation_gate_falsification": {
+      "market": "679047",
+      "slug": "will-bernard-cazeneuve-win-the-2027-french-presidential-election",
+      "side": "YES",
+      "hedge_market": "561280",
+      "hedge_question": "Will Raphael Warnock win the 2028 US Presidential Election?",
+      "raw_expected_edge": 0.0945075,
+      "maker_entry_net_edge": 0.101144,
+      "taker_net_edge": -0.29441,
+      "hedge_error": 0.683213,
+      "executable_notional": 49.7211,
+      "old_certificate": "semantic:0.2500:2",
+      "failure": "The initial strong relation rule counted generic shared tokens 'presidential' and 'election' and therefore treated different-country, different-year elections as related. The apparent 2x-robust sparse alpha was a semantic-relation false positive."
+    }
+  },
+  "refined_event_context_replay": {
+    "input_run_id": 32821862030,
+    "method": "deterministic replay of the successful public-data artifact using its frozen market_metadata_cache.json; no price or scanner output was changed",
+    "policy": {
+      "same_event": "allow",
+      "semantic_min_jaccard": 0.2,
+      "semantic_min_shared_tokens": 2,
+      "semantic_min_shared_event_context_tokens": 2,
+      "generic_context_tokens_removed": [
+        "election",
+        "presidential",
+        "president",
+        "final",
+        "finals",
+        "championship",
+        "league",
+        "win"
+      ],
+      "years_and_competition_tokens_preserved": true,
+      "same_category_only": "reject",
+      "unknown_or_malformed": "reject"
+    },
+    "frontier": {
+      "k1_kept": 12,
+      "k1_maker_positive": 1,
+      "k1_robust_2x_positive": 0,
+      "k2_kept": 7,
+      "k2_maker_positive": 0,
+      "k2_robust_2x_positive": 0,
+      "k3_kept": 5,
+      "k3_maker_positive": 0,
+      "k3_robust_2x_positive": 0,
+      "k4_kept": 5,
+      "k4_maker_positive": 0,
+      "k4_robust_2x_positive": 0,
+      "k8_kept": 3,
+      "k8_maker_positive": 0,
+      "k8_robust_2x_positive": 0
+    },
+    "remaining_k1_maker_positive": {
+      "market": "2243311",
+      "slug": "will-dallas-mavericks-win-the-2027-nba-finals",
+      "side": "YES",
+      "hedge_market": "2243296",
+      "shared_event_context": ["2027", "nba"],
+      "raw_expected_edge": 0.0417947,
+      "maker_entry_net_edge": 0.0171429,
+      "two_x_execution_drag_stressed_edge": -0.0075089,
+      "hedge_error": 0.792835,
+      "executable_notional": 0.729626,
+      "interpretation": "This is a genuine same-competition/year semantic peer, but it fails the 2x execution-drag stress and has less than one dollar of executable notional in this window."
+    },
+    "conclusion": "After removing generic event-type words from semantic relation evidence, the only apparently 2x-robust sparse candidate disappears. No k=1..4 or incumbent k=8 basket survives all current evidence gates in this window."
   },
   "forward_maker_context": {
     "last_generated_ts": 1787642866,
@@ -34,22 +118,15 @@
     "pair_fill_rate_wilson_upper": 0.008735857369296423,
     "join_60s_markout_per_share": -0.0020000000000000018,
     "improve1_60s_markout_per_share": -0.0010905783921425982,
-    "interpretation": "This is generic forward maker evidence rather than candidate-specific B2 completion evidence. It cannot directly estimate the current basket fill probability, but it makes a 94.58% completion hurdle non-credible as a promotion assumption without direct event-time evidence."
-  },
-  "strong_relation_research_policy": {
-    "same_event": "allow",
-    "semantic_min_jaccard": 0.2,
-    "semantic_min_shared_tokens": 2,
-    "same_category_only": "reject",
-    "unknown_or_malformed": "reject"
+    "interpretation": "Generic forward maker evidence is not candidate-specific, but it does not support assuming near-complete maker execution for multi-leg B2 baskets."
   },
   "required_evidence": [
-    "compare max_hedges 8/4/3/2/1 on the same exact-head public window",
-    "apply strong relation quality after metadata coherence and before accepting economic evidence",
+    "rerun max_hedges 8/4/3/2/1 on current main with the refined event-context relation gate",
     "require positive maker edge and positive 2x execution-drag-stressed edge",
     "require hedge_error <= 0.80",
-    "require persistence in at least two later chronological public windows",
-    "require direct forward paired-fill and forced-completion evidence before promotion"
+    "require nontrivial executable notional",
+    "require persistence in at least two later chronological public-data windows",
+    "require direct forward paired-fill, forced-completion and markout evidence before promotion"
   ],
   "safety": {
     "live_champion_changed": false,
