@@ -12,22 +12,17 @@ log() { printf '[mac-deploy] %s\n' "$*"; }
 fail() { printf '[mac-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 
 find_brew() {
-  if command -v brew >/dev/null 2>&1; then
-    command -v brew
-  elif [[ -x /opt/homebrew/bin/brew ]]; then
-    printf '%s\n' /opt/homebrew/bin/brew
-  elif [[ -x /usr/local/bin/brew ]]; then
-    printf '%s\n' /usr/local/bin/brew
-  else
-    return 1
+  if command -v brew >/dev/null 2>&1; then command -v brew
+  elif [[ -x /opt/homebrew/bin/brew ]]; then printf '%s\n' /opt/homebrew/bin/brew
+  elif [[ -x /usr/local/bin/brew ]]; then printf '%s\n' /usr/local/bin/brew
+  else return 1
   fi
 }
 
 write_status() {
   local status="$1" head_sha="$2" validated_sha="$3" main_sha="$4"
   mkdir -p "$STATE_DIR"
-  local tmp
-  tmp="$(mktemp "$STATE_DIR/autoupdate_status.XXXXXX")"
+  local tmp; tmp="$(mktemp "$STATE_DIR/autoupdate_status.XXXXXX")"
   {
     printf 'checked_ts=%s\n' "$(date +%s)"
     printf 'status=%s\n' "$status"
@@ -42,10 +37,9 @@ write_status() {
 
 champion_meta() {
   "$PYTHON_BIN" - "$APP_DIR/config/live_champion.json" <<'PY'
-import json
-import sys
+import json,sys
 from pathlib import Path
-m = json.loads(Path(sys.argv[1]).read_text())
+m=json.loads(Path(sys.argv[1]).read_text())
 print(f"{m['version']}\t{m['run_root']}\t{m['config']}\t{m['loop']}")
 PY
 }
@@ -54,38 +48,35 @@ paper_runtime_healthy() {
   local meta version run_root_rel config_rel loop_rel supervisor
   meta="$(champion_meta 2>/dev/null)" || return 1
   IFS=$'\t' read -r version run_root_rel config_rel loop_rel <<<"$meta"
-  [[ "$version" =~ ^[0-9]+$ ]] || return 1
+  [[ "$version" == "5" || "$version" == "6" ]] || return 1
   supervisor="$APP_DIR/$run_root_rel/runtime_supervisor.csv"
   [[ -s "$supervisor" ]] || return 1
   "$PYTHON_BIN" - "$supervisor" "$version" "$APP_DIR/$run_root_rel" <<'PY'
-import csv
-import json
-import math
-import sys
-import time
+import csv,json,math,sys,time
 from pathlib import Path
-supervisor = Path(sys.argv[1])
-version = int(sys.argv[2])
-run_root = Path(sys.argv[3])
-with supervisor.open(newline='', encoding='utf-8') as handle:
-    rows = list(csv.DictReader(handle))
-assert rows
-row = rows[-1]
-assert row.get('recorder_alive') == '1'
-assert row.get('broker_alive') == '1'
-assert row.get('allocator_alive' if version >= 5 else 'terminal_alive') == '1'
-assert time.time() - float(row['timestamp']) <= 60
-if version >= 5:
-    allocator = json.loads((run_root / 'allocator_status.json').read_text())
-    with (run_root / 'strategy_status.csv').open(newline='', encoding='utf-8') as handle:
-        strategies = list(csv.DictReader(handle))
+supervisor=Path(sys.argv[1]); version=int(sys.argv[2]); run_root=Path(sys.argv[3])
+with supervisor.open(newline='',encoding='utf-8') as h: rows=list(csv.DictReader(h))
+assert rows; row=rows[-1]
+assert row.get('recorder_alive')=='1'; assert row.get('broker_alive')=='1'
+assert row.get('allocator_alive' if version>=5 else 'terminal_alive')=='1'
+assert time.time()-float(row['timestamp'])<=60
+if version>=5:
+    allocator=json.loads((run_root/'allocator_status.json').read_text())
+    with (run_root/'strategy_status.csv').open(newline='',encoding='utf-8') as h: strategies=list(csv.DictReader(h))
     assert allocator.get('paper_only') is True
-    assert int(allocator.get('models_expected', 0)) == 5
-    assert int(allocator.get('models_alive', 0)) == 5
-    assert {item.get('name') for item in strategies} == {'micro', 'pca', 'graph', 'semantic', 'external'}
-    total = float(allocator.get('reserve_fraction', 0.0)) + sum(float(item['capital_fraction']) for item in strategies)
-    assert math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9)
-    assert all(float(item['status_age_seconds']) <= 120 for item in strategies)
+    assert int(allocator.get('models_expected',0))==5
+    assert int(allocator.get('models_alive',0))==5
+    assert {x.get('name') for x in strategies}=={'micro','pca','graph','semantic','external'}
+    total=float(allocator.get('reserve_fraction',0.0))+sum(float(x['capital_fraction']) for x in strategies)
+    assert math.isclose(total,1.0,rel_tol=0.0,abs_tol=1e-9)
+    assert all(float(x['status_age_seconds'])<=120 for x in strategies)
+if version>=6:
+    runtime=json.loads((run_root/'runtime_status.json').read_text())
+    assert runtime.get('version')==6 and runtime.get('paper_only') is True
+    assert float(runtime.get('drawdown',1.0))<=0.15+1e-12
+    assert 'graph_hard' in runtime.get('strategies',{})
+    assert (run_root/'hard_arb'/'status.json').is_file()
+    assert (run_root/'local_factor_status.json').is_file()
 PY
 }
 
@@ -103,22 +94,22 @@ full_runtime_healthy() {
     grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics" || return 1
     grep -q '^polymarket_model_info{' <<<"$metrics" || return 1
   fi
+  if (( version >= 6 )); then
+    grep -q '^polymarket_v6_exporter_info{' <<<"$metrics" || return 1
+    grep -q '^polymarket_v6_local_factor_clusters ' <<<"$metrics" || return 1
+  fi
   curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1 || return 1
   curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 || return 1
   grafana_search="$(curl -fsS http://127.0.0.1:3000/api/search 2>/dev/null)" || return 1
-  if (( version >= 5 )); then
-    grep -q 'polymarket-multi-strategy-v5' <<<"$grafana_search" || return 1
-  fi
+  if (( version >= 5 )); then grep -q 'polymarket-multi-strategy-v5' <<<"$grafana_search" || return 1; fi
   paper_runtime_healthy
 }
 
 wait_for_runtime_health() {
-  local attempts="${1:-60}"
+  local attempts="${1:-120}"
   local i
-  for ((i=0; i<attempts; ++i)); do
-    if full_runtime_healthy; then
-      return 0
-    fi
+  for ((i=0;i<attempts;++i)); do
+    if full_runtime_healthy; then return 0; fi
     sleep 2
   done
   return 1
@@ -128,7 +119,6 @@ wait_for_runtime_health() {
 [[ -d "$APP_DIR/.git" ]] || fail "$APP_DIR is not a git checkout"
 [[ -f "$APP_DIR/.server_bootstrapped_macos" ]] || fail "run ops/bootstrap_macos.sh interactively once first"
 BREW_BIN="$(find_brew)" || fail "Homebrew is required (checked PATH, /opt/homebrew/bin/brew, /usr/local/bin/brew)"
-
 BREW_PREFIX="$("$BREW_BIN" --prefix)"
 export PATH="$BREW_PREFIX/bin:$BREW_PREFIX/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PKG_CONFIG_PATH="$("$BREW_BIN" --prefix curl)/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
@@ -152,7 +142,7 @@ if [[ "$OLD_SHA" == "$NEW_SHA" ]]; then
     fail "validated code is current but runtime configuration repair failed"
   fi
   sudo -n /usr/local/sbin/polymarket-service-control restart || true
-  if wait_for_runtime_health 60; then
+  if wait_for_runtime_health 120; then
     write_status repaired "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
     log "Runtime and Grafana configuration repaired at validated commit $NEW_SHA"
     exit 0
@@ -188,13 +178,19 @@ ctest --test-dir build --output-on-failure
   tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py \
   tests/test_monitoring_latest_exporter.py tests/test_monitoring_v5_exporter.py \
   tests/test_grafana_fast_paper_contract.py tests/test_grafana_multi_strategy_contract.py \
-  tests/test_multi_strategy_paper.py -v
+  tests/test_multi_strategy_paper.py tests/test_v4_monitoring_contract.py \
+  tests/test_v6_runtime_contract.py tests/test_v6_model_contracts.py -v
 "$PYTHON_BIN" -m py_compile \
-  monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_v5.py monitoring/exporter_latest.py \
+  monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_v5.py \
+  monitoring/exporter_v6.py monitoring/exporter_latest.py \
   scripts/multi_strategy_paper.py scripts/build_v4_intents.py scripts/merge_v4_intents.py \
-  scripts/walk_forward_v4.py scripts/tiny_live_pilot.py
-bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh ops/apply_runtime_config_macos.sh
+  scripts/walk_forward_v4.py scripts/tiny_live_pilot.py scripts/v6_*.py
+bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh \
+  scripts/v6_live_smoke_once.sh ops/apply_runtime_config_macos.sh
+"$PYTHON_BIN" -m json.tool config/live_champion.json >/dev/null
 "$PYTHON_BIN" -m json.tool config/paper_v5.json >/dev/null
+"$PYTHON_BIN" -m json.tool config/paper_v6.json >/dev/null
+"$PYTHON_BIN" -m json.tool config/v6_model_architecture.json >/dev/null
 "$PYTHON_BIN" -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
 
 log "Candidate validation passed; staging production build"
@@ -206,36 +202,21 @@ cmake -S . -B build.next -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$BREW_P
 cmake --build build.next --parallel "$JOBS"
 
 log "Snapshotting runtime config"
-mkdir -p "$CONFIG_BACKUP/grafana/provisioning/datasources" \
-  "$CONFIG_BACKUP/grafana/provisioning/dashboards"
-for rel in \
-  grafana.ini \
-  grafana/provisioning/datasources/prometheus.yml \
-  grafana/provisioning/dashboards/dashboards.yml; do
+mkdir -p "$CONFIG_BACKUP/grafana/provisioning/datasources" "$CONFIG_BACKUP/grafana/provisioning/dashboards"
+for rel in grafana.ini grafana/provisioning/datasources/prometheus.yml grafana/provisioning/dashboards/dashboards.yml; do
   if [[ -f "$STATE_DIR/$rel" ]]; then
-    mkdir -p "$CONFIG_BACKUP/$(dirname "$rel")"
-    cp "$STATE_DIR/$rel" "$CONFIG_BACKUP/$rel"
+    mkdir -p "$CONFIG_BACKUP/$(dirname "$rel")"; cp "$STATE_DIR/$rel" "$CONFIG_BACKUP/$rel"
   fi
 done
 
 rollback() {
   local reason="$1"
   log "ROLLBACK: $reason"
-  cd "$APP_DIR"
-  git reset --hard "$OLD_SHA" || true
-  if [[ -d build.previous ]]; then
-    rm -rf build
-    mv build.previous build
-  fi
-  for rel in \
-    grafana.ini \
-    grafana/provisioning/datasources/prometheus.yml \
-    grafana/provisioning/dashboards/dashboards.yml; do
+  cd "$APP_DIR"; git reset --hard "$OLD_SHA" || true
+  if [[ -d build.previous ]]; then rm -rf build; mv build.previous build; fi
+  for rel in grafana.ini grafana/provisioning/datasources/prometheus.yml grafana/provisioning/dashboards/dashboards.yml; do
     rm -f "$STATE_DIR/$rel"
-    if [[ -f "$CONFIG_BACKUP/$rel" ]]; then
-      mkdir -p "$STATE_DIR/$(dirname "$rel")"
-      cp "$CONFIG_BACKUP/$rel" "$STATE_DIR/$rel"
-    fi
+    if [[ -f "$CONFIG_BACKUP/$rel" ]]; then mkdir -p "$STATE_DIR/$(dirname "$rel")"; cp "$CONFIG_BACKUP/$rel" "$STATE_DIR/$rel"; fi
   done
   write_status rollback "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
   sudo -n /usr/local/sbin/polymarket-service-control restart || true
@@ -246,16 +227,12 @@ rm -rf build.previous
 if [[ -d build ]]; then mv build build.previous; fi
 mv build.next build
 
-log "Applying V5-aware runtime configuration"
+log "Applying manifest-aware runtime configuration"
 bash "$APP_DIR/ops/apply_runtime_config_macos.sh" || rollback "runtime configuration failed"
-
 log "Restarting manifest-selected paper services"
 sudo -n /usr/local/sbin/polymarket-service-control restart || rollback "service restart failed"
-
 log "Waiting for production health"
-if ! wait_for_runtime_health 60; then
-  rollback "post-deploy paper runtime health checks failed"
-fi
+if ! wait_for_runtime_health 120; then rollback "post-deploy paper runtime health checks failed"; fi
 
 rm -rf build.previous
 write_status deployed "$NEW_SHA" "$NEW_SHA" "$MAIN_SHA"
