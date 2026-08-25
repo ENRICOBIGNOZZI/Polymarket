@@ -159,16 +159,47 @@ jobs:
           Source research PR/branch/commit: research/auto-fast-arb-policy
           EOF
           if [[ -z "$pr_number" ]]; then
-            gh pr create --draft \
-              --base main \
-              --head "$branch" \
-              --title "research: hourly fast-arbitrage candidate" \
-              --body-file research-output/pr-body.md \
-              --label shadow-isolated
+            set +e
+            pr_create_output="$(
+              gh pr create --draft \
+                --base main \
+                --head "$branch" \
+                --title "research: hourly fast-arbitrage candidate" \
+                --body-file research-output/pr-body.md \
+                --label shadow-isolated 2>&1
+            )"
+            pr_create_rc=$?
+            set -e
+            if (( pr_create_rc != 0 )); then
+              if grep -Fq "GitHub Actions is not permitted to create or approve pull requests" <<<"$pr_create_output"; then
+                {
+                  echo "draft_pr_creation=blocked_by_repository_actions_setting"
+                  echo "research_branch=$branch"
+                  echo "promotion_authorized=false"
+                } | tee research-output/pr-publication-status.txt
+                {
+                  echo "## Research PR publication"
+                  echo
+                  echo "GitHub Actions cannot create pull requests under the current repository setting."
+                  echo "The research branch and issue evidence were published, but this candidate remains non-promotable until a draft research PR exists through the normal governance path."
+                  echo "No production or champion state was changed."
+                } >> "$GITHUB_STEP_SUMMARY"
+              else
+                printf '%s\n' "$pr_create_output" >&2
+                exit "$pr_create_rc"
+              fi
+            else
+              printf '%s\n' "$pr_create_output" | tee research-output/pr-publication-status.txt
+            fi
           else
             gh pr edit "$pr_number" \
               --body-file research-output/pr-body.md \
               --add-label shadow-isolated
+            {
+              echo "draft_pr_creation=existing"
+              echo "pr_number=$pr_number"
+              echo "promotion_authorized=false"
+            } > research-output/pr-publication-status.txt
           fi
 
       - name: Upload theory-cycle evidence
