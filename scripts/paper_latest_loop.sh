@@ -90,6 +90,77 @@ if [[ "${1:-}" == "--print-champion" ]]; then
   exit 0
 fi
 
+# Only one manifest-selected paper runtime may own a run root at a time. This
+# prevents deploy/restart overlap from creating concurrent state writers. The
+# lock is PID-bound and stale locks are recovered without touching other roots.
+runtime_lock="$run_root/.paper_latest_singleton"
+lock_owner_file="$runtime_lock/pid"
+lock_owned=0
+acquire_runtime_lock() {
+  if mkdir "$runtime_lock" 2>/dev/null; then
+    printf '%s\n' "$$" > "$lock_owner_file"
+    lock_owned=1
+    return 0
+  fi
+  local owner=""
+  owner="$(cat "$lock_owner_file" 2>/dev/null || true)"
+  if [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null; then
+    echo "fatal: manifest-selected paper runtime already active pid=$owner run_root=$run_root" >&2
+    return 1
+  fi
+  rm -rf "$runtime_lock"
+  mkdir "$runtime_lock"
+  printf '%s\n' "$$" > "$lock_owner_file"
+  lock_owned=1
+}
+release_runtime_lock() {
+  if [[ "$lock_owned" == "1" ]]; then
+    local owner=""
+    owner="$(cat "$lock_owner_file" 2>/dev/null || true)"
+    if [[ "$owner" == "$$" ]]; then rm -rf "$runtime_lock"; fi
+    lock_owned=0
+  fi
+}
+acquire_runtime_lock
+
+# V6 public-market discovery is made resilient at the outer operational layer,
+# so the economic V6 loop remains byte-for-byte unchanged. The local proxy
+# prefers Gamma keyset pagination, falls back to public CLOB markets+books, and
+# only then serves a bounded metadata cache. No authenticated endpoint is used.
+proxy_enabled=0
+proxy_pid=0
+proxy_restarts=0
+proxy_port="${V6_MARKET_PROXY_PORT:-$((19000 + ($$ % 1000)))}"
+proxy_script="$ROOT/scripts/v6_market_proxy.py"
+base_config="$config"
+if [[ "$version" == "6" && "${POLYMARKET_V6_MARKET_PROXY_ENABLED:-1}" == "1" ]]; then
+  [[ -f "$proxy_script" ]] || {
+    release_runtime_lock
+    echo "fatal: V6 market proxy missing: $proxy_script" >&2
+    exit 1
+  }
+  read -r upstream_gamma upstream_clob < <(python3 - "$base_config" <<'PY'
+import json,sys
+with open(sys.argv[1], encoding='utf-8') as handle:
+    cfg=json.load(handle)
+print(str(cfg.get('gamma_url','https://gamma-api.polymarket.com')), str(cfg.get('clob_url','https://clob.polymarket.com')))
+PY
+  )
+  runtime_config="$run_root/runtime_config.json"
+  python3 - "$base_config" "$runtime_config" "$proxy_port" <<'PY'
+import json,os,sys
+from pathlib import Path
+src=Path(sys.argv[1]); dst=Path(sys.argv[2]); port=int(sys.argv[3])
+cfg=json.loads(src.read_text(encoding='utf-8'))
+cfg['gamma_url']=f'http://127.0.0.1:{port}'
+tmp=dst.with_name(dst.name+f'.tmp.{os.getpid()}')
+tmp.write_text(json.dumps(cfg,indent=2,sort_keys=True)+'\n',encoding='utf-8')
+os.replace(tmp,dst)
+PY
+  config="$runtime_config"
+  proxy_enabled=1
+fi
+
 fast_enabled="${POLYMARKET_FAST_ARB_ENABLED:-1}"
 # Shadow instrumentation must never block the incumbent champion by default.
 # Operators may set REQUIRED=1 on a validated deployment to fail closed on a
@@ -130,6 +201,34 @@ champion_pid=0
 fast_pid=0
 fast_restarts=0
 
+start_proxy() {
+  if [[ "$proxy_enabled" != "1" ]]; then return 0; fi
+  PYTHONUNBUFFERED=1 python3 "$proxy_script" \
+    --host 127.0.0.1 \
+    --port "$proxy_port" \
+    --gamma "$upstream_gamma" \
+    --clob "$upstream_clob" \
+    --cache "$run_root/market_proxy_cache.json" \
+    --status "$run_root/market_proxy_status.json" \
+    >> "$run_root/market_proxy.log" 2>&1 &
+  proxy_pid=$!
+}
+
+wait_proxy_ready() {
+  if [[ "$proxy_enabled" != "1" ]]; then return 0; fi
+  local ready=0
+  local _
+  for _ in {1..50}; do
+    if curl -fsS "http://127.0.0.1:${proxy_port}/healthz" >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    kill -0 "$proxy_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  [[ "$ready" == "1" ]]
+}
+
 start_champion() {
   /usr/bin/env bash "$loop" "$config" "$run_root" &
   champion_pid=$!
@@ -167,8 +266,11 @@ write_plane_status() {
 cleanup() {
   if (( fast_pid > 0 )); then kill "$fast_pid" 2>/dev/null || true; fi
   if (( champion_pid > 0 )); then kill "$champion_pid" 2>/dev/null || true; fi
+  if (( proxy_pid > 0 )); then kill "$proxy_pid" 2>/dev/null || true; fi
   if (( fast_pid > 0 )); then wait "$fast_pid" 2>/dev/null || true; fi
   if (( champion_pid > 0 )); then wait "$champion_pid" 2>/dev/null || true; fi
+  if (( proxy_pid > 0 )); then wait "$proxy_pid" 2>/dev/null || true; fi
+  release_runtime_lock
 }
 
 shutdown() {
@@ -180,11 +282,31 @@ shutdown() {
 trap cleanup EXIT
 trap shutdown INT TERM
 
+if [[ "$proxy_enabled" == "1" ]]; then
+  start_proxy
+  if ! wait_proxy_ready; then
+    echo "fatal: V6 market proxy failed to start" >&2
+    exit 1
+  fi
+fi
 start_champion
 if [[ "$fast_enabled" == "1" ]]; then start_fast; fi
 write_plane_status
 
 while true; do
+  if [[ "$proxy_enabled" == "1" ]] && ! kill -0 "$proxy_pid" 2>/dev/null; then
+    wait "$proxy_pid" 2>/dev/null || true
+    proxy_restarts=$((proxy_restarts + 1))
+    printf '%s,market_proxy,restart,%s\n' "$(date +%s)" "$proxy_restarts" \
+      >> "$run_root/runtime_plane_events.csv"
+    sleep 1
+    start_proxy
+    if ! wait_proxy_ready; then
+      echo "fatal: V6 market proxy restart failed" >&2
+      exit 1
+    fi
+  fi
+
   if ! kill -0 "$champion_pid" 2>/dev/null; then
     set +e
     wait "$champion_pid"
