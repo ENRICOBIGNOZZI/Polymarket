@@ -49,6 +49,21 @@ class ModelGovernanceContractTest(unittest.TestCase):
                 offenders.append(path.name)
         self.assertEqual(offenders, [], f"direct main mutation workflows: {offenders}")
 
+    def test_one_shot_aggressive_mutation_scaffolding_is_absent(self):
+        offenders = []
+        for pattern in (
+            "scripts/apply_aggressive_v5*20260825.py",
+            "automation/aggressive_v5_bootstrap*.txt",
+        ):
+            offenders.extend(
+                str(path.relative_to(ROOT)) for path in sorted(ROOT.glob(pattern))
+            )
+        self.assertEqual(
+            offenders,
+            [],
+            f"one-shot aggressive mutation scaffolding: {offenders}",
+        )
+
     def test_promotion_controller_decides_and_integration_scheduler_only_executes(self):
         controller = (WORKFLOWS / "promotion-controller.yml").read_text(encoding="utf-8")
         integration = (WORKFLOWS / "integration-merge.yml").read_text(encoding="utf-8")
