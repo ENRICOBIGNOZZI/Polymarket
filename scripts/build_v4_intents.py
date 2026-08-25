@@ -99,15 +99,21 @@ def parse_pca_legs(raw: str):
 
 
 def b2_coherence_valid(row: dict[str, str]) -> bool:
-    """Require a positive relation certificate for every non-target hedge leg."""
+    """Require the same positive relation certificate emitted by the B2 coherence gate.
+
+    ``filter_coherent_hedges.py`` admits hedge legs related by same event,
+    same non-empty Polymarket category, or semantic overlap. The execution
+    adapter must recognize exactly those positive certificate families; an
+    unknown or unrelated certificate remains fail-closed.
+    """
     raw = (row.get("coherence_scope") or "").strip()
     if not raw:
         return False
     scopes = [part.strip() for part in raw.split("|") if part.strip()]
     return bool(scopes) and all(
-        scope == "same_event"
-        or scope == "semantic"
+        scope in {"same_event", "same_category", "semantic"}
         or scope.startswith("same_event:")
+        or scope.startswith("same_category:")
         or scope.startswith("semantic:")
         for scope in scopes
     )
