@@ -46,6 +46,11 @@ for name,frac in alloc:
     child={k:x for k,x in cfg.items() if k not in {'v6','multi_strategy'}}
     child['starting_capital']=total*float(frac); child['run_dir']=str(root/name)
     child['expert_weights']={'micro':0.0,'pca':0.0,'graph':0.0,'semantic':0.0,'external':0.0}
+    # Keep the global $/trade ceiling economically reachable inside the smaller
+    # maker sleeve instead of accidentally shrinking it to 2.5% of sleeve NAV.
+    if name=='maker' and child['starting_capital']>0:
+        trade_cap=float(cfg.get('max_trade_usd',60.0))
+        child['max_market_fraction']=max(float(child.get('max_market_fraction',0.0)),min(1.0,trade_cap/child['starting_capital']))
     if name=='external':
         child['external_signals_file']=str(root/'external_signals.csv'); child['expert_weights']['external']=1.0; child['uncertainty_penalty']=0.0
     (root/f'{name}_config.json').write_text(json.dumps(child,indent=2,sort_keys=True)+'\n')
@@ -80,6 +85,13 @@ done
 ((proxy_ready==1))||{ echo "fatal: V6 market proxy failed to start" >&2; exit 1; }
 start_recorder;start_broker;start_external;write_supervisor
 
+# Backward-safe deployment: new queue-aware flags are used as soon as the rebuilt
+# binary exposes them; an older binary can keep running until the rebuild lands.
+MAKER_QUEUE_ARGS=()
+if ./build/polymarket_maker_paper --help 2>&1 | grep -q -- '--improve-ticks'; then
+  MAKER_QUEUE_ARGS=(--improve-ticks 1 --max-queue-multiple 6)
+fi
+
 last_factor=0;last_relation=0;last_external=0;last_report=0;last_micro_taker=0;last_hard_arb=0
 rebuild_intents(){ python3 scripts/merge_v4_intents.py --input "$RUN_ROOT/local_factor_intents.csv" --input "$RUN_ROOT/relation_intents.csv" --output "$RUN_ROOT/intents.csv" --min-edge "$INTENT_MIN_EDGE" --max-age-seconds 240 --max-bundles 120 >>"$RUN_ROOT/intent_merge.log" 2>&1||true; }
 
@@ -91,8 +103,9 @@ while true;do
   if ! kill -0 "$external_pid" 2>/dev/null;then wait "$external_pid" 2>/dev/null||true;external_restarts=$((external_restarts+1));start_external;fi
   write_supervisor
 
-  # Micro maker: passive spread capture with queue/fill/adverse-selection accounting.
-  ./build/polymarket_maker_paper --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.15 --once >>"$RUN_ROOT/maker.log" 2>&1||true
+  # Micro maker: edge-aware inside-spread improvement plus FIFO queue gating.
+  # Do not fake fills: the actual paper fill still requires compatible taker SELL flow.
+  ./build/polymarket_maker_paper --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-order-usd 60 --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.10 "${MAKER_QUEUE_ARGS[@]}" --once >>"$RUN_ROOT/maker.log" 2>&1||true
 
   # Micro taker: online short-horizon markout model; mandatory horizon exit.
   if ((now-last_micro_taker>=5));then
