@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "research_state": "HYPOTHESIS_GENERATING_STRONG_CHALLENGER_MORE_EVIDENCE_REQUIRED",
+  "method": "retrospective receive-time-causal audit of already completed independent paper windows; thresholds were selected after observing these windows and therefore require prospective validation",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "sources": [
+    {
+      "workflow_run_id": 32873037953,
+      "artifact_id": 9573144454,
+      "window": 1
+    },
+    {
+      "workflow_run_id": 32873037953,
+      "artifact_id": 9577230798,
+      "window": 2
+    },
+    {
+      "workflow_run_id": 32892358532,
+      "artifact_id": 9580256419,
+      "window": 3
+    }
+  ],
+  "material_fills": [
+    {
+      "window": 1,
+      "market_id": "3825712",
+      "side": "NO",
+      "quote_type": "at_touch",
+      "confidence": 0.904186314,
+      "fill_probability_proxy": 0.208014985,
+      "signed_flow_30s": 1.0,
+      "signed_flow_60s": 0.7281,
+      "signed_flow_120s": 0.7024,
+      "buy_volume_30s": 2874.91,
+      "sell_volume_30s": 0.0,
+      "buy_volume_120s": 42511.54,
+      "sell_volume_120s": 7430.60,
+      "realized_pnl_usd": 1.366178589,
+      "realized_pnl_per_share": 0.010601546,
+      "counterfactual": "retained by directional toxicity gate"
+    },
+    {
+      "window": 2,
+      "market_id": "3524601",
+      "side": "YES",
+      "quote_type": "inside_spread",
+      "confidence": 0.603633041,
+      "fill_probability_proxy": 0.420221365,
+      "signed_flow_30s": 0.7753,
+      "signed_flow_60s": 0.9443,
+      "signed_flow_120s": 0.5602,
+      "buy_volume_30s": 98.76,
+      "sell_volume_30s": 12.5,
+      "buy_volume_120s": 3298.48,
+      "sell_volume_120s": 929.84,
+      "realized_pnl_usd": -0.480250473,
+      "realized_pnl_per_share": -0.017787055,
+      "counterfactual": "blocked by existing inside-spread confidence floor 0.80"
+    },
+    {
+      "window": 3,
+      "market_id": "3128887",
+      "side": "NO",
+      "quote_type": "at_touch",
+      "confidence": 0.848193282,
+      "fill_probability_proxy": 0.813696155,
+      "signed_flow_30s": -1.0,
+      "signed_flow_60s": -1.0,
+      "signed_flow_120s": -1.0,
+      "buy_volume_30s": 0.0,
+      "sell_volume_30s": 1016.93,
+      "buy_volume_120s": 0.0,
+      "sell_volume_120s": 1018.59,
+      "realized_pnl_usd": -0.985343325,
+      "realized_pnl_per_share": -0.020235,
+      "counterfactual": "blocked by receive-time directional toxicity gate"
+    }
+  ],
+  "challenger": {
+    "inside_spread_confidence_floor": 0.80,
+    "toxicity_short_seconds": 30,
+    "toxicity_long_seconds": 120,
+    "toxicity_hard_block_threshold": 0.55,
+    "toxicity_discount_strength": 1.5,
+    "toxicity_features": [
+      "receive_time_signed_flow_30s",
+      "receive_time_signed_flow_120s",
+      "microprice_displacement",
+      "L1_depth_imbalance",
+      "L3_depth_imbalance",
+      "L5_depth_imbalance"
+    ],
+    "interpretation": "the combined gate would have retained the observed profitable at-touch fill while blocking the two material losing patterns for different causal reasons; this is retrospective and must not be treated as OOS proof"
+  },
+  "required_prospective_evidence": [
+    "same-window comparison against current flow gate, at-touch control and confidence-only gate",
+    "actual maker fills and fill-conditioned realized PnL",
+    "45s, 60s and 300s executable markouts where horizon-complete",
+    "1x, 1.5x and 2x cost stress",
+    "cancel-latency and dead-queue behavior",
+    "no authenticated or real-money execution"
+  ],
+  "hard_safety": {
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "state_integrity_required": true,
+    "market_fraction": 0.05,
+    "event_fraction": 0.15,
+    "gross_fraction": 0.70,
+    "authenticated_real_money_execution": false
+  }
+}
