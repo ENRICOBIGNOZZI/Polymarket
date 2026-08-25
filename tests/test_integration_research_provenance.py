@@ -64,7 +64,7 @@ class IntegrationResearchProvenanceTest(unittest.TestCase):
         event = {"pull_request":{"head":{"ref":candidate["headRefName"]},"draft":candidate["isDraft"],"body":candidate["body"],"labels":candidate["labels"]}}
         errors, summary = research_pr_policy.evaluate(event, {"config/paper_v5.json"}, manifest_existed_on_base=True)
         self.assertEqual(summary["policy"], "fail")
-        self.assertTrue(any("numbered source research PR" in error for error in errors))
+        self.assertTrue(any("must bind exact source provenance" in error for error in errors))
 
     def test_mismatched_source_number_is_rejected(self):
         source = self.source(); source["number"] = 124
