@@ -55,13 +55,15 @@ class V6MarketProxyDeadlineTests(unittest.TestCase):
         # The C++ HttpClient has a 30 second request deadline. The proxy leaves
         # at least five seconds outside the bounded Gamma/discovery/book budget.
         self.assertLessEqual(proxy.GAMMA_TIMEOUT_SECONDS, 2.0)
-        self.assertLessEqual(proxy.CLOB_TIMEOUT_SECONDS, 8.0)
-        self.assertLessEqual(proxy.CLOB_DISCOVERY_BUDGET_SECONDS, 16.0)
+        self.assertLessEqual(proxy.GAMMA_LEGACY_TIMEOUT_SECONDS, 8.0)
+        self.assertLessEqual(proxy.CLOB_TIMEOUT_SECONDS, 5.0)
+        self.assertLessEqual(proxy.CLOB_DISCOVERY_BUDGET_SECONDS, 10.0)
         self.assertLessEqual(
-            proxy.GAMMA_TIMEOUT_SECONDS
+            3.0 * proxy.GAMMA_TIMEOUT_SECONDS
+            + proxy.GAMMA_LEGACY_TIMEOUT_SECONDS
             + proxy.CLOB_DISCOVERY_BUDGET_SECONDS
             + proxy.CLOB_TIMEOUT_SECONDS,
-            26.0,
+            28.0,
         )
         self.assertLessEqual(proxy.FALLBACK_MARKETS, 300)
         self.assertGreaterEqual(proxy.BOOK_WORKERS, 4)
@@ -85,6 +87,42 @@ class V6MarketProxyDeadlineTests(unittest.TestCase):
 
         request = open_url.call_args.args[0]
         self.assertEqual(request.get_header("Accept-encoding"), "gzip")
+
+    def test_gamma_legacy_rows_are_parallel_complete_and_deduplicated(self) -> None:
+        p = self.make_proxy()
+        requests: list[int] = []
+
+        def fake_curl(url: str, payload: object = None, timeout: float = 0.0) -> object:
+            del payload, timeout
+            query = proxy.urllib.parse.parse_qs(proxy.urllib.parse.urlsplit(url).query)
+            offset = int(query["offset"][0])
+            limit = int(query["limit"][0])
+            requests.append(offset)
+            return [
+                {"id": str(index), "conditionId": str(index)}
+                for index in range(offset, offset + limit)
+            ]
+
+        with mock.patch("scripts.v6_market_proxy.shutil.which", return_value="/usr/bin/curl"), mock.patch(
+            "scripts.v6_market_proxy.curl_req", side_effect=fake_curl
+        ):
+            rows = p.gamma_legacy_rows(250, {})
+
+        self.assertEqual(sorted(requests), [0, 100, 200])
+        self.assertEqual([row["id"] for row in rows], [str(index) for index in range(250)])
+
+    def test_markets_prefer_gamma_legacy_before_keyset_or_clob(self) -> None:
+        p = self.make_proxy()
+        p.gamma_legacy_rows = lambda n, q: [
+            {"id": "legacy", "conditionId": "legacy", "liquidityNum": 1.0}
+        ]  # type: ignore[method-assign]
+        p.gamma_rows = lambda n, q: (_ for _ in ()).throw(AssertionError("keyset should not run"))  # type: ignore[method-assign]
+        p.clob_rows = lambda q: (_ for _ in ()).throw(AssertionError("CLOB should not run"))  # type: ignore[method-assign]
+
+        rows = p.markets({"limit": ["1"], "offset": ["0"]})
+
+        self.assertEqual(rows[0]["id"], "legacy")
+        self.assertTrue(p.source.startswith("gamma_legacy"))
 
     def test_clob_req_prefers_ipv4_curl_without_double_spending_budget(self) -> None:
         with mock.patch("scripts.v6_market_proxy.shutil.which", return_value="/usr/bin/curl"), mock.patch(
