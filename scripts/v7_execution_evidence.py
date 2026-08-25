@@ -15,6 +15,7 @@ import math
 import os
 import random
 import statistics
+import threading
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -61,14 +62,14 @@ def read_rows(path: Path) -> list[dict[str, str]]:
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}.{threading.get_ident()}")
     tmp.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(tmp, path)
 
 
 def atomic_text(path: Path, value: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}.{threading.get_ident()}")
     tmp.write_text(value, encoding="utf-8")
     os.replace(tmp, path)
 
