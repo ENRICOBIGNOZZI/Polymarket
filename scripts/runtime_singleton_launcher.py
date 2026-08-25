@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Fail-closed single-owner launcher for the paper runtime.
+"""Fail-closed single-owner supervisor for the paper runtime.
 
-The lock file descriptor is deliberately inherited across exec, so ownership is
-held for the full lifetime of the launched runtime rather than only while this
-small launcher process exists.
+The launcher retains the advisory lock itself and supervises one isolated child
+process group.  Letting the descriptor cross ``exec`` into every descendant
+made a stopped wrapper capable of leaving an orphan child that still held the
+runtime lock indefinitely.
 """
 from __future__ import annotations
 
 import argparse
 import fcntl
 import os
+import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,6 +23,47 @@ def _current_owner(fd: int) -> str:
         return os.read(fd, 128).decode("utf-8", errors="replace").strip()
     except OSError:
         return ""
+
+
+def _forward_to_child_group(child: subprocess.Popen[object], signum: int) -> None:
+    """Forward a service signal to the owned runtime group, if it still exists."""
+
+    if child.poll() is not None:
+        return
+    try:
+        os.killpg(child.pid, signum)
+    except ProcessLookupError:
+        pass
+
+
+def _supervise(command: list[str]) -> int:
+    # start_new_session makes the direct child the process-group leader.  This
+    # lets launchd stop the complete paper tree through this supervisor without
+    # putting its singleton fd in child processes.
+    child: subprocess.Popen[object] | None = subprocess.Popen(
+        command,
+        close_fds=True,
+        start_new_session=True,
+    )
+
+    def forward(signum: int, _frame: object) -> None:
+        _forward_to_child_group(child, signum)
+
+    previous_handlers: dict[int, object] = {}
+    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        previous_handlers[signum] = signal.signal(signum, forward)
+    try:
+        return child.wait()
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+        if child.poll() is None:
+            _forward_to_child_group(child, signal.SIGTERM)
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _forward_to_child_group(child, signal.SIGKILL)
+                child.wait(timeout=5)
 
 
 def main() -> int:
@@ -48,9 +92,13 @@ def main() -> int:
     os.ftruncate(fd, 0)
     os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
     os.fsync(fd)
-    os.set_inheritable(fd, True)
-    os.execvp(command[0], command)
-    return 0
+    # The supervisor, not its descendants, is the sole lock holder.  The
+    # marker remains readable for a bounded, provenance-checked deploy handoff.
+    os.set_inheritable(fd, False)
+    try:
+        return _supervise(command)
+    finally:
+        os.close(fd)
 
 
 if __name__ == "__main__":
