@@ -15,11 +15,19 @@ RESEARCH_PREFIXES = ("research/", "experiment/", "diagnostic/")
 SOURCE_PATTERN = re.compile(r"source research pr/branch/commit:\s*#(\d+)\b", re.I)
 CANDIDATE_PATTERN = re.compile(r"promotion candidate:\s*([^\s`]+)", re.I)
 EVIDENCE_PATTERN = re.compile(r"promotion evidence file:\s*([^\s`]+\.json)\b", re.I)
+OPERATIONAL_RECOVERY_PATTERN = re.compile(
+    r"^operational recovery files:\s*([^\n]+)$", re.I | re.M
+)
+VALIDATED_SOURCE_HEAD_PATTERN = re.compile(
+    r"validated source head:\s*`?([0-9a-f]{40})`?", re.I
+)
 VERDICT_PATTERN = re.compile(
     r"\b(INTEGRATION_READY|APPROVED_FOR_INTEGRATION|MORE_EVIDENCE_REQUIRED|REJECTED)\b",
     re.I,
 )
 NEGATIVE_VERDICTS = {"MORE_EVIDENCE_REQUIRED", "REJECTED"}
+POSITIVE_VERDICTS = {"INTEGRATION_READY", "APPROVED_FOR_INTEGRATION"}
+OPERATIONAL_RECOVERY_PATH = re.compile(r"^scripts/paper_v\d+_loop\.sh$", re.I)
 REQUIRED_CANDIDATE_CHECKS = (
     "build-test (Release)",
     "build-test (Debug)",
@@ -132,6 +140,13 @@ def promotion_class(changed_files: list[str]) -> str:
     return "economic" if any(is_economic_surface(path) for path in changed_files) else "operational"
 
 
+def declared_operational_recovery_files(candidate: dict[str, Any]) -> list[str]:
+    value = marker(str(candidate.get("body") or ""), OPERATIONAL_RECOVERY_PATTERN)
+    if not value:
+        return []
+    return [part.strip().strip("`") for part in value.split(",") if part.strip().strip("`")]
+
+
 def research_verdict(source: dict[str, Any]) -> str | None:
     events: list[tuple[str, str]] = [("", str(source.get("body") or ""))]
     for comment in source.get("comments") or []:
@@ -148,6 +163,57 @@ def research_verdict(source: dict[str, Any]) -> str | None:
         return None
     verdicts.sort(key=lambda item: item[0])
     return verdicts[-1][1]
+
+
+def exact_research_governance_verdict(source: dict[str, Any]) -> str | None:
+    source_head = str(source.get("headRefOid") or "")
+    if not re.fullmatch(r"[0-9a-f]{40}", source_head):
+        return None
+    events: list[tuple[str, str]] = []
+    for comment in source.get("comments") or []:
+        if isinstance(comment, dict):
+            events.append((str(comment.get("createdAt") or comment.get("created_at") or ""), str(comment.get("body") or "")))
+    for review in source.get("reviews") or []:
+        if isinstance(review, dict):
+            events.append((str(review.get("submittedAt") or review.get("submitted_at") or ""), str(review.get("body") or "")))
+    verdicts: list[tuple[str, str]] = []
+    for timestamp, text in events:
+        if "research governance" not in text.lower():
+            continue
+        validated = VALIDATED_SOURCE_HEAD_PATTERN.search(text)
+        if not validated or validated.group(1).lower() != source_head.lower():
+            continue
+        for match in VERDICT_PATTERN.finditer(text):
+            verdicts.append((timestamp, match.group(1).upper()))
+    if not verdicts:
+        return None
+    verdicts.sort(key=lambda item: item[0])
+    return verdicts[-1][1]
+
+
+def operational_recovery_override(
+    candidate: dict[str, Any], source: dict[str, Any], changed_files: list[str]
+) -> tuple[bool, list[str], list[str]]:
+    declared = declared_operational_recovery_files(candidate)
+    if not declared:
+        return False, [], []
+    errors: list[str] = []
+    economic_files = sorted(path for path in changed_files if is_economic_surface(path))
+    if not economic_files:
+        errors.append("operational_recovery_declaration_without_economic_surface")
+    if len(set(declared)) != len(declared):
+        errors.append("duplicate_operational_recovery_file")
+    for path in declared:
+        if not OPERATIONAL_RECOVERY_PATH.fullmatch(path):
+            errors.append(f"operational_recovery_path_not_allowlisted:{path}")
+    if set(declared) != set(economic_files):
+        errors.append("operational_recovery_files_do_not_match_all_economic_files")
+    verdict = exact_research_governance_verdict(source)
+    if verdict not in POSITIVE_VERDICTS:
+        errors.append(
+            "operational_recovery_requires_exact_positive_research_governance_verdict"
+        )
+    return not errors, errors, sorted(set(declared))
 
 
 def validate_windows(windows: list[dict[str, Any]], minimum: int, require_non_overlap: bool) -> list[str]:
@@ -312,6 +378,16 @@ def evaluate(candidate: dict[str, Any], source: dict[str, Any], changed_files: l
         errors.append("autonomous_promotion_label_missing")
 
     kind = promotion_class(changed_files)
+    recovery_files: list[str] = []
+    if kind == "economic":
+        recovery_ok, recovery_errors, recovery_files = operational_recovery_override(
+            candidate, source, changed_files
+        )
+        if recovery_ok:
+            kind = "operational"
+        elif recovery_files or declared_operational_recovery_files(candidate):
+            errors.extend(recovery_errors)
+
     if kind == "economic":
         if evidence is None:
             errors.append("economic_promotion_requires_machine_readable_evidence")
@@ -330,6 +406,7 @@ def evaluate(candidate: dict[str, Any], source: dict[str, Any], changed_files: l
         "candidate_id": marker(str(candidate.get("body") or ""), CANDIDATE_PATTERN),
         "evidence_path": marker(str(candidate.get("body") or ""), EVIDENCE_PATTERN),
         "economic_files": sorted(path for path in changed_files if is_economic_surface(path)),
+        "operational_recovery_files": recovery_files,
         "source_content_match_files": sorted(path for path in changed_files if requires_source_content_match(path)),
         "errors": sorted(set(errors)),
         "manual_approval_required": False,
@@ -368,6 +445,7 @@ def main() -> int:
         f"- candidate id: `{result.get('candidate_id') or 'n/a'}`",
         f"- evidence path: `{result.get('evidence_path') or 'n/a'}`",
         f"- economic files: `{len(result.get('economic_files') or [])}`",
+        f"- approved operational recovery files: `{len(result.get('operational_recovery_files') or [])}`",
         "- manual approval required: `false`",
         "- authenticated real-money execution: `false`",
     ]
