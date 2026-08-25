@@ -112,6 +112,44 @@ class V5MicrostructureSemanticsTest(unittest.TestCase):
             self.assertGreater(rows[1]["ofi_l1"], 0.0)
             self.assertTrue(features.is_file())
 
+    def test_receive_time_label_does_not_time_travel_on_reordered_messages(self) -> None:
+        common = {
+            "market_id": "m1",
+            "spread": 0.02,
+            "microprice": 0.50,
+            "imbalance_l1": 0.1,
+            "imbalance_l3": 0.1,
+            "imbalance_l5": 0.1,
+            "ofi_l1": 0.0,
+            "feed_latency_ms": 0.0,
+        }
+        rows = [
+            {
+                **common,
+                "exchange_ts_ms": 2000,
+                "received_ts_ms": 1500,
+                "mid": 0.49,
+            },
+            {
+                **common,
+                "exchange_ts_ms": 1000,
+                "received_ts_ms": 2000,
+                "mid": 0.50,
+            },
+            {
+                **common,
+                "exchange_ts_ms": 3000,
+                "received_ts_ms": 2500,
+                "mid": 0.51,
+            },
+        ]
+        labeled = purged.label_receive_time_markout(rows, horizon_ms=500, max_lag_ms=0)
+        self.assertEqual(len(labeled), 2)
+        self.assertEqual(labeled[0].ts_ms, 1500)
+        self.assertEqual(labeled[1].ts_ms, 2000)
+        self.assertAlmostEqual(labeled[0].future_move, 0.01, places=12)
+        self.assertAlmostEqual(labeled[1].future_move, 0.01, places=12)
+
     def test_purged_split_embargoes_future_label_overlap(self) -> None:
         labeled = []
         for i in range(200):
