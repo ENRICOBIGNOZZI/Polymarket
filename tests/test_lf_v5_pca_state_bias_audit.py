@@ -23,6 +23,22 @@ class V5PcaStateBiasAuditTest(unittest.TestCase):
         self.assertEqual(contract["pca_universe"], 350)
         self.assertEqual(contract["pca_min_residual_z"], 0.60)
 
+    def test_centering_has_exact_negative_iid_cross_product_expectation(self) -> None:
+        expected = {
+            23: (5, 18, 75, -75.0 / 18.0),
+            48: (12, 36, 354, -354.0 / 36.0),
+            96: (12, 84, 930, -930.0 / 84.0),
+            720: (12, 708, 8418, -8418.0 / 708.0),
+        }
+        for T, (H, rows, pairs, centered_sxy) in expected.items():
+            with self.subTest(T=T):
+                result = mod.iid_expected_centered_sxy(T)
+                self.assertEqual(result["H"], H)
+                self.assertEqual(result["regression_rows"], rows)
+                self.assertEqual(result["overlap_pairs"], pairs)
+                self.assertAlmostEqual(result["expected_centered_sxy"], centered_sxy, places=12)
+                self.assertLess(result["expected_centered_sxy"], 0.0)
+
     def test_iid_null_fixture_has_material_false_admission(self) -> None:
         expected = {
             23: (125, 0.3125),
@@ -36,6 +52,7 @@ class V5PcaStateBiasAuditTest(unittest.TestCase):
                 self.assertEqual(result["admitted"], count)
                 self.assertAlmostEqual(result["admission_rate"], rate, places=12)
                 self.assertLess(result["mean_beta"], 0.0)
+                self.assertLess(result["analytic_expected_centered_sxy"], 0.0)
                 self.assertGreater(result["independence_scale_expected_admissions_at_350_markets"], 50.0)
 
     def test_minimum_history_can_leave_only_23_returns(self) -> None:
@@ -49,6 +66,7 @@ class V5PcaStateBiasAuditTest(unittest.TestCase):
     def test_summary_is_research_only(self) -> None:
         summary = mod.summarize(ROOT, paths=400)
         self.assertEqual(summary["decision"], "MORE_EVIDENCE_REQUIRED")
+        self.assertIn("exactly negative", summary["analytic_mechanism"])
         self.assertIn("block-bootstrap", " ".join(summary["required_experiment"]))
         self.assertIn("multiplicity", " ".join(summary["required_experiment"]))
 
