@@ -1,0 +1,75 @@
+{
+  "generated_utc": "2026-08-25T12:25:00Z",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "main_sha": "0deba1b7b3e0749a6fe43a6702dd6d0625d3e6cb",
+  "candidate_under_audit": {
+    "pull_request": 281,
+    "head_sha": "b7592614e21e34c1009470593b15dc4b9c353fee",
+    "file": "scripts/v6_local_factor_v2.py",
+    "test_contract": "circular-block bootstrap of the centered negative-reversion score"
+  },
+  "controlled_null_experiment": {
+    "alpha": 0.1,
+    "paths_per_cell": 200,
+    "bootstrap_reps": 300,
+    "null": "I(1) residual levels with iid or AR(1) increments and no stationary residual alpha by construction",
+    "results": [
+      {
+        "points": 48,
+        "innovation_ar1_rho": 0.0,
+        "score_centered_block_rejection_rate": 0.705,
+        "unit_root_block_adf_rejection_rate": 0.06
+      },
+      {
+        "points": 48,
+        "innovation_ar1_rho": 0.5,
+        "score_centered_block_rejection_rate": 0.245,
+        "unit_root_block_adf_rejection_rate": 0.07
+      },
+      {
+        "points": 96,
+        "innovation_ar1_rho": 0.0,
+        "score_centered_block_rejection_rate": 0.675,
+        "unit_root_block_adf_rejection_rate": 0.105
+      },
+      {
+        "points": 96,
+        "innovation_ar1_rho": 0.5,
+        "score_centered_block_rejection_rate": 0.215,
+        "unit_root_block_adf_rejection_rate": 0.075
+      },
+      {
+        "points": 336,
+        "innovation_ar1_rho": 0.0,
+        "score_centered_block_rejection_rate": 0.685,
+        "unit_root_block_adf_rejection_rate": 0.085
+      },
+      {
+        "points": 336,
+        "innovation_ar1_rho": 0.5,
+        "score_centered_block_rejection_rate": 0.225,
+        "unit_root_block_adf_rejection_rate": 0.115
+      }
+    ],
+    "stationary_power_check": {
+      "points": 336,
+      "phi": 0.9,
+      "score_centered_block_rejection_rate": 1.0,
+      "unit_root_block_adf_rejection_rate": 0.995
+    }
+  },
+  "fresh_project_state": {
+    "latest_public_live_smoke_sha": "b4dc9eae8d8d236cc47b5ca65f83b0e0a5ea13d2",
+    "public_oos_trades": 0,
+    "public_oos_net_pnl_usd": 0.0,
+    "external_status": "BACKTESTING",
+    "external_approved_signal_rows": 0
+  },
+  "interpretation": [
+    "Centering and resampling the score sequence does not impose the unit-root null on the residual level process.",
+    "The score-centered circular-block test therefore remains strongly oversized under an I(1) null even though it is dependence-aware at the score level.",
+    "A null-preserving bootstrap that reconstructs level paths under gamma=0 before computing an ADF-style statistic is near the nominal 10% size in these controlled cells and retains strong power with 336 observations for phi=0.90.",
+    "This is a synthetic calibration diagnostic, not a Polymarket false-discovery-rate or PnL estimate."
+  ],
+  "promotion_boundary": "Do not treat PR #281 local-factor FDR survivors as calibrated alpha until marginal unit-root p-values are null-valid before BH/FDR."
+}
