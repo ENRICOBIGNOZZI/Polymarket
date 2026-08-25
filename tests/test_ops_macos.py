@@ -129,6 +129,15 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('adapter="v5"', deploy)
         self.assertIn('polymarket-multi-strategy-v5', deploy)
 
+    def test_deploy_health_failures_are_named_without_weakening_staleness_gate(self):
+        updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
+        self.assertIn('[mac-deploy] health failure:', updater)
+        self.assertIn('stale model status:', updater)
+        self.assertIn('runtime supervisor stale age_seconds=', updater)
+        self.assertIn('limit=120s', updater)
+        self.assertIn("if age > 120:", updater)
+        self.assertNotIn("assert all(float(item['status_age_seconds']) <= 120", updater)
+
     def test_bootstrap_services_follow_the_champion_manifest(self):
         linux = (ROOT / "ops" / "bootstrap_server.sh").read_text(encoding="utf-8")
         mac = (ROOT / "ops" / "bootstrap_macos.sh").read_text(encoding="utf-8")
