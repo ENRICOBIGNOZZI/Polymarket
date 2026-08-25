@@ -41,6 +41,14 @@ class ModelGovernanceContractTest(unittest.TestCase):
         self.assertEqual([item["id"] for item in schedulers if item["deploy_authority"]], ["paper-server-deploy"])
         self.assertEqual([item["id"] for item in schedulers if item["validation_dispatch_authority"]], ["post-merge-validation"])
 
+    def test_workflows_never_push_directly_to_main(self):
+        offenders = []
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            text = path.read_text(encoding="utf-8")
+            if "git push origin HEAD:main" in text or "git push origin main" in text:
+                offenders.append(path.name)
+        self.assertEqual(offenders, [], f"direct main mutation workflows: {offenders}")
+
     def test_promotion_controller_decides_and_integration_scheduler_only_executes(self):
         controller = (WORKFLOWS / "promotion-controller.yml").read_text(encoding="utf-8")
         integration = (WORKFLOWS / "integration-merge.yml").read_text(encoding="utf-8")
