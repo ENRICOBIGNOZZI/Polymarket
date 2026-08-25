@@ -73,9 +73,17 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertEqual(self.local_factor.bh_cutoff([0.08, 0.20, 0.80], 0.05), 0.0)
 
     def test_ar_fit_requires_actual_mean_reversion(self) -> None:
-        residual = [(-1.0) ** i * (0.8 ** i) for i in range(60)]
+        # Nondegenerate stationary AR(1): the fit should estimate phi<1 and a
+        # negative error-correction coefficient without relying on zero-noise data.
+        innovations = [0.04, -0.025, 0.015, -0.035, 0.02, 0.005, -0.01]
+        residual = [0.7]
+        for i in range(1, 100):
+            residual.append(0.65 * residual[-1] + innovations[i % len(innovations)])
         phi, tstat, _, sd = self.local_factor.ar_fit(residual)
-        self.assertGreater(sd, 0.0); self.assertLess(phi, 0.999); self.assertLess(tstat, 0.0)
+        self.assertGreater(sd, 0.0)
+        self.assertGreater(phi, 0.02)
+        self.assertLess(phi, 0.999)
+        self.assertLess(tstat, 0.0)
 
     def test_v6_execution_excludes_global_pca_semantic_and_weak_b1(self) -> None:
         loop = (ROOT / "scripts/paper_v6_loop.sh").read_text()
