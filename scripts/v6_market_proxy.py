@@ -23,8 +23,8 @@ FRESH_CACHE_SECONDS = 30.0
 STALE_CACHE_SECONDS = 900.0
 FALLBACK_MARKETS = 300
 GAMMA_TIMEOUT_SECONDS = 1.5
-CLOB_TIMEOUT_SECONDS = 6.0
-CLOB_DISCOVERY_BUDGET_SECONDS = 14.0
+CLOB_TIMEOUT_SECONDS = 8.0
+CLOB_DISCOVERY_BUDGET_SECONDS = 16.0
 BOOK_WORKERS = 8
 
 
@@ -89,6 +89,7 @@ def curl_req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT
         "--show-error",
         "--fail",
         "--location",
+        "--ipv4",
         "--compressed",
         "--max-time",
         str(max(1, math.ceil(timeout))),
@@ -119,13 +120,11 @@ def curl_req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT
 
 
 def clob_req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT_SECONDS) -> Any:
-    try:
+    # Curl is preferred for public CLOB traffic: it uses compressed transfers and
+    # a forced IPv4 route, avoiding a slow/broken IPv6 connect from the private node.
+    if shutil.which("curl"):
         return curl_req(url, payload, timeout)
-    except RuntimeError as curl_error:
-        try:
-            return req(url, payload, timeout)
-        except RuntimeError as urllib_error:
-            raise RuntimeError(f"{curl_error}; urllib fallback: {urllib_error}") from urllib_error
+    return req(url, payload, timeout)
 
 def tokens(market: dict[str, Any]) -> list[dict[str, Any]]:
     value = market.get("tokens")
