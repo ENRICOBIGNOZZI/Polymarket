@@ -12,13 +12,27 @@ find_package(PkgConfig REQUIRED)
 find_package(Boost REQUIRED)
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
+
+set(LF_SEMANTIC_ENGINE ${CMAKE_CURRENT_BINARY_DIR}/generated/engine_lf_semantic.cpp)
+add_custom_command(
+    OUTPUT ${LF_SEMANTIC_ENGINE}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/generated
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/render_lf_semantic_challenger.py
+            --input ${CMAKE_CURRENT_SOURCE_DIR}/src/engine.cpp
+            --output ${LF_SEMANTIC_ENGINE}
+    DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/scripts/render_lf_semantic_challenger.py
+    VERBATIM
+)
 
 add_library(pm_core
     src/http.cpp
     src/api.cpp
     src/event_api.cpp
-    src/engine.cpp
+    ${LF_SEMANTIC_ENGINE}
     src/boost_json.cpp
 )
 target_include_directories(pm_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
@@ -70,7 +84,6 @@ target_compile_options(polymarket_fast_arb_shadow PRIVATE -Wall -Wextra -Wpedant
 
 include(CTest)
 if(BUILD_TESTING)
-    find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_executable(pm_tests tests/test_core.cpp)
     target_link_libraries(pm_tests PRIVATE pm_core)
     add_executable(pm_execution_tests tests/test_execution.cpp)
@@ -116,5 +129,7 @@ if(BUILD_TESTING)
     add_test(NAME multi_strategy_paper_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_multi_strategy_paper.py)
     add_test(NAME monitoring_v5_exporter_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitoring_v5_exporter.py)
     add_test(NAME grafana_multi_strategy_contract_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_grafana_multi_strategy_contract.py)
+    add_test(NAME external_paper_signals_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_external_paper_signals.py)
+    add_test(NAME lf_paper_aggression_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_lf_paper_aggression.py)
     add_test(NAME mock_integration COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_mock.sh $<TARGET_FILE:polymarket_engine>)
 endif()

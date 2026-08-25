@@ -1,0 +1,101 @@
+{
+  "schema": "polymarket_lf_paper_aggression_v2_evidence_v1",
+  "evidence_state": "MORE_EVIDENCE_REQUIRED",
+  "source_main_sha": "c0a49925bae56f22f874ae8c84b44e62292e6390",
+  "research_branch": "research/lf-paper-aggression-semantic-external-v2-20260825",
+  "baseline_public_evidence": {
+    "alpha_factory_generated_utc": "2026-08-25T05:37:47Z",
+    "b1_raw_positive": 1,
+    "b1_maker_positive": 0,
+    "b1_best_raw_edge": 0.0058054,
+    "b1_best_maker_edge": -0.0172768,
+    "b2_raw_positive": 8,
+    "b2_maker_positive": 0,
+    "b2_best_raw_edge": 0.000690014,
+    "b2_best_maker_edge": -0.0000591112,
+    "oos_trades": 0,
+    "external_status": "BACKTESTING",
+    "external_observations": 1134,
+    "external_price_snapshots": 1599,
+    "external_return_5m_1h_oos_predictions": 149,
+    "external_return_5m_1h_trades": 45,
+    "external_return_5m_1h_normal_pnl_per_share": -0.035,
+    "external_return_1h_1h_oos_predictions": 149,
+    "external_return_1h_1h_trades": 37,
+    "external_return_1h_1h_normal_pnl_per_share": -0.014,
+    "external_gate_pass_count": 0,
+    "direct_probability_feed_rows_on_main": 0
+  },
+  "challenger": {
+    "paper_only": true,
+    "market_limit": 1000,
+    "minimum_liquidity": 10.0,
+    "stat_scan_interval_seconds": 60,
+    "structural_scan_interval_seconds": 30,
+    "intent_min_executable_edge": 0.00005,
+    "pca": {
+      "bootstrap_market_limit": 1000,
+      "minimum_history_points": 16,
+      "universe": 600,
+      "minimum_residual_z": 0.50,
+      "child_min_executable_edge": 0.00005,
+      "standalone_b2_universe": 500,
+      "standalone_b2_min_z": 0.55,
+      "standalone_b2_min_t_reversion": 0.60,
+      "note": "The reversion-significance threshold is not lowered below the incumbent B2 value because prior controlled unit-root diagnostics showed severe false-admission inflation when it was relaxed."
+    },
+    "coherence": {
+      "minimum_jaccard": 0.20,
+      "minimum_shared_tokens": 2,
+      "note": "Relation quality is strengthened rather than relaxed because the previous one-token 0.08 gate admitted economically unrelated hedge legs."
+    },
+    "semantic": {
+      "minimum_lexical_similarity": 0.55,
+      "shrink": 0.05,
+      "compiled_challenger": "relation-aware source transform",
+      "guards": [
+        "retain two-letter polarity/entity tokens and all numeric tokens",
+        "reject polarity mismatch",
+        "reject numerical/date/threshold mismatch",
+        "reject directional mismatch",
+        "require at least two shared salient entity/content tokens",
+        "require salient-token Jaccard >=0.65 within an event and >=0.80 across events"
+      ]
+    },
+    "external": {
+      "runtime_feed": "runs/paper_v5_live/external_signals.csv",
+      "refresh_seconds": 300,
+      "max_age_seconds": 21600,
+      "minimum_confidence": 0.10,
+      "minimum_mapping_score": 0.70,
+      "mapping_score_haircuts_confidence": true,
+      "raw_features_are_not_converted_to_probabilities": true,
+      "preserve_prior_feed_on_refresh_failure": true
+    }
+  },
+  "hard_safety_invariants": {
+    "global_max_drawdown": 0.15,
+    "child_max_drawdown": 0.15,
+    "max_market_fraction": 0.025,
+    "max_event_fraction": 0.08,
+    "global_max_gross_fraction": 0.45,
+    "multileg_completion_threshold": 0.75,
+    "max_leg_risk_usd": 12.0,
+    "authenticated_real_money_execution": false
+  },
+  "required_evidence_before_integration": [
+    "exact-head public paper smoke with executable books and cost accounting",
+    "common-sample incumbent versus challenger candidate-count and fill comparison",
+    "PCA/B1/B2 net edge and bundle PnL under 1x, 1.5x and 2x cost stress",
+    "semantic relation counterexample tests plus chronological Brier/log-loss and executable PnL",
+    "external direct-probability rows with chronological terminal scoring; raw Binance/GDELT features remain research-only until calibrated",
+    "strategy-level PnL, drawdown, turnover, capital utilization and cross-strategy covariance",
+    "no regression in drawdown, kill switch, concentration or paper-only execution boundaries"
+  ],
+  "interpretation": [
+    "The current evidence does not establish profitable LF alpha; B1/B2 are raw-positive but not maker-positive and external candidates are negative after costs.",
+    "This challenger increases search breadth and lowers only paper executable-edge/warm-up gates while retaining actual fee/slippage/VWAP rechecks.",
+    "Statistical and semantic guards known to manufacture false opportunities are not relaxed merely to increase trade count.",
+    "External intelligence is now connected to the paper input surface, but it will abstain until a fresh explicit q_external survives mapping and freshness checks."
+  ]
+}

@@ -3,17 +3,55 @@ set -euo pipefail
 
 CONFIG="${1:-config/paper_v5.json}"
 RUN_ROOT="${2:-runs/paper_v5_live}"
-MIN_LIQUIDITY="${V5_MIN_LIQUIDITY:-25}"
-MODEL_MARKETS="${V5_MODEL_MARKETS:-500}"
-RECORDER_MARKETS="${V5_RECORDER_MARKETS:-1000}"
+MIN_LIQUIDITY="${V5_MIN_LIQUIDITY:-10}"
+MODEL_MARKETS="${V5_MODEL_MARKETS:-1000}"
+RECORDER_MARKETS="${V5_RECORDER_MARKETS:-1500}"
 RECORDER_BATCH="${V5_RECORDER_BATCH:-40}"
 RECORDER_LOOKBACK_SECONDS="${V5_RECORDER_LOOKBACK_SECONDS:-900}"
-STAT_INTERVAL_SECONDS="${V5_STAT_INTERVAL_SECONDS:-120}"
-STRUCTURAL_INTERVAL_SECONDS="${V5_STRUCTURAL_INTERVAL_SECONDS:-60}"
+STAT_INTERVAL_SECONDS="${V5_STAT_INTERVAL_SECONDS:-60}"
+STRUCTURAL_INTERVAL_SECONDS="${V5_STRUCTURAL_INTERVAL_SECONDS:-30}"
 REWARD_INTERVAL_SECONDS="${V5_REWARD_INTERVAL_SECONDS:-300}"
 REPORT_INTERVAL_SECONDS="${V5_REPORT_INTERVAL_SECONDS:-60}"
-INTENT_MIN_EDGE="${V5_INTENT_MIN_EDGE:-0.00025}"
+EXTERNAL_REFRESH_SECONDS="${V5_EXTERNAL_REFRESH_SECONDS:-300}"
+EXTERNAL_MAX_AGE_SECONDS="${V5_EXTERNAL_MAX_AGE_SECONDS:-21600}"
+EXTERNAL_MIN_CONFIDENCE="${V5_EXTERNAL_MIN_CONFIDENCE:-0.10}"
+EXTERNAL_MIN_MAPPING_SCORE="${V5_EXTERNAL_MIN_MAPPING_SCORE:-0.70}"
+INTENT_MIN_EDGE="${V5_INTENT_MIN_EDGE:-0.00005}"
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/strategies"
+EXTERNAL_FEED="$RUN_ROOT/external_signals.csv"
+
+refresh_external_feed() {
+  local latest="$RUN_ROOT/.latest-external-signals.jsonl"
+  local history="$RUN_ROOT/.external-intelligence-observations.jsonl.gz"
+  local output="$RUN_ROOT/.external-signals.csv.tmp"
+  rm -f "$latest" "$history" "$output"
+  git fetch --quiet --no-tags origin telemetry:refs/remotes/origin/telemetry || return 1
+  git show origin/telemetry:telemetry/latest-external-signals.jsonl > "$latest" 2>/dev/null || return 1
+  git show origin/telemetry:telemetry/external-intelligence-observations.jsonl.gz > "$history" 2>/dev/null || true
+  local args=(
+    python3 scripts/materialize_external_paper_signals.py
+    --input "$latest"
+    --output "$output"
+    --max-age-seconds "$EXTERNAL_MAX_AGE_SECONDS"
+    --min-confidence "$EXTERNAL_MIN_CONFIDENCE"
+    --min-mapping-score "$EXTERNAL_MIN_MAPPING_SCORE"
+  )
+  if [[ -s "$history" ]]; then
+    args+=(--input "$history")
+  fi
+  "${args[@]}" >> "$RUN_ROOT/external_feed_refresh.log" 2>&1 || return 1
+  [[ "$(head -n 1 "$output")" == "market_key,q_yes,confidence,source,timestamp" ]] || return 1
+  mv "$output" "$EXTERNAL_FEED"
+  rm -f "$latest" "$history"
+}
+
+if ! refresh_external_feed; then
+  if [[ ! -s "$EXTERNAL_FEED" ]]; then
+    printf 'market_key,q_yes,confidence,source,timestamp\n' > "$EXTERNAL_FEED"
+  fi
+  printf '%s external_feed_refresh=failed prior_feed_preserved=true\n' "$(date +%s)" \
+    >> "$RUN_ROOT/external_feed_refresh.log"
+fi
 
 COMPACTION_INTERVAL_SECONDS="$(python3 - "$CONFIG" <<'PY'
 import json
@@ -48,7 +86,7 @@ filter_b2() {
     --output "$RUN_ROOT/stat_arb_pca.csv" \
     --rejections "$RUN_ROOT/stat_arb_pca_rejected.csv" \
     --cache "$RUN_ROOT/market_metadata_cache.json" \
-    --min-jaccard 0.08 --min-shared-tokens 1 \
+    --min-jaccard 0.20 --min-shared-tokens 2 \
     >> "$RUN_ROOT/coherent_hedges.log" 2>&1
 }
 
@@ -65,7 +103,7 @@ rebuild_intents() {
   python3 scripts/merge_v4_intents.py \
     --input "$RUN_ROOT/b1_intents.csv" --input "$RUN_ROOT/b2_intents.csv" \
     --output "$RUN_ROOT/intents.csv" --min-edge "$INTENT_MIN_EDGE" \
-    --max-age-seconds 240 --max-bundles 80 \
+    --max-age-seconds 240 --max-bundles 160 \
     >> "$RUN_ROOT/intent_merge.log" 2>&1
 }
 
@@ -226,6 +264,7 @@ last_rewards=0
 last_oos=0
 last_report=0
 last_compaction=0
+last_external_refresh=0
 
 while true; do
   now=$(date +%s)
@@ -238,6 +277,14 @@ while true; do
     start_supervisor
   fi
 
+  if (( now - last_external_refresh >= EXTERNAL_REFRESH_SECONDS )); then
+    if ! refresh_external_feed; then
+      printf '%s external_feed_refresh=failed prior_feed_preserved=true\n' "$now" \
+        >> "$RUN_ROOT/external_feed_refresh.log"
+    fi
+    last_external_refresh=$now
+  fi
+
   # The passive microstructure sleeve is deliberately frequent and small. The
   # edge gate still includes exit fee, slippage and an adverse-selection buffer.
   ./build/polymarket_maker_paper \
@@ -248,16 +295,16 @@ while true; do
   if (( now - last_stat >= STAT_INTERVAL_SECONDS )); then
     rm -f "$RUN_ROOT/stat_arb_pairs.csv" "$RUN_ROOT/stat_arb_pca_raw.csv"
     ./build/polymarket_stat_arb \
-      --config "$CONFIG" --markets "$MODEL_MARKETS" --history-universe 300 \
-      --lookback-hours 720 --fidelity-minutes 30 --min-z 0.75 \
-      --min-t-reversion 0.75 --max-half-life-hours 336 --top 200 \
+      --config "$CONFIG" --markets "$MODEL_MARKETS" --history-universe 500 \
+      --lookback-hours 720 --fidelity-minutes 30 --min-z 0.60 \
+      --min-t-reversion 0.75 --max-half-life-hours 336 --top 400 \
       --csv "$RUN_ROOT/stat_arb_pairs.csv" \
       > "$RUN_ROOT/stat_arb_pairs_latest.log" 2> "$RUN_ROOT/stat_arb_pairs_errors.log" || true
     ./build/polymarket_pca_stat_arb \
-      --config "$CONFIG" --markets "$MODEL_MARKETS" --universe 300 \
+      --config "$CONFIG" --markets "$MODEL_MARKETS" --universe 500 \
       --lookback-hours 720 --fidelity-minutes 30 --factors 5 --max-hedges 8 \
-      --min-z 0.65 --min-t-reversion 0.60 --max-half-life-hours 336 \
-      --max-factor-hedge-error 0.80 --top 200 --csv "$RUN_ROOT/stat_arb_pca_raw.csv" \
+      --min-z 0.55 --min-t-reversion 0.60 --max-half-life-hours 336 \
+      --max-factor-hedge-error 0.80 --top 400 --csv "$RUN_ROOT/stat_arb_pca_raw.csv" \
       > "$RUN_ROOT/stat_arb_pca_latest.log" 2> "$RUN_ROOT/stat_arb_pca_errors.log" || true
     filter_b2 || true
     rebuild_intents || true
@@ -266,7 +313,7 @@ while true; do
 
   if (( now - last_structural >= STRUCTURAL_INTERVAL_SECONDS )); then
     ./build/polymarket_negrisk_arb \
-      --config "$CONFIG" --markets "$MODEL_MARKETS" --min-liquidity "$MIN_LIQUIDITY" --top 200 \
+      --config "$CONFIG" --markets "$MODEL_MARKETS" --min-liquidity "$MIN_LIQUIDITY" --top 400 \
       2> "$RUN_ROOT/structural_errors.log" \
       | tee "$RUN_ROOT/structural_latest.log" "$RUN_ROOT/structural_latest.csv" >/dev/null || true
     last_structural=$now
@@ -300,7 +347,7 @@ while true; do
 
   if (( now - last_report >= REPORT_INTERVAL_SECONDS )); then
     python3 scripts/runtime_action_report.py \
-      --run-root "$RUN_ROOT" --external-signals data/external_signals.csv \
+      --run-root "$RUN_ROOT" --external-signals "$EXTERNAL_FEED" \
       --window-seconds 3600 --production-edge "$INTENT_MIN_EDGE" \
       --output-json "$RUN_ROOT/action_report.json" \
       --output-markdown "$RUN_ROOT/action_report.md" \
