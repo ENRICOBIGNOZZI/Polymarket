@@ -148,22 +148,75 @@ def _recent_compatible_flow(
     return total
 
 
-def recycle_dead_orders(run_dir: Path, trade_tape: Path, *, grace_seconds: int) -> dict[str, int]:
-    """Cancel resting paper maker orders that have observed no causal contra-flow."""
+def projected_remaining_clearance_ratio(
+    order: dict[str, Any],
+    *,
+    now: int,
+    ttl_seconds: int,
+) -> float:
+    """Project whether original causal flow can still clear queue plus own size."""
+    created = int(_finite(order.get("created_ts"), now))
+    remaining_ttl = max(0.0, created + max(0, int(ttl_seconds)) - now)
+    rate = max(0.0, _finite(order.get("flow_rate"), 0.0))
+    required = max(
+        1e-12,
+        max(0.0, _finite(order.get("queue_ahead"), 0.0))
+        + max(0.0, _finite(order.get("remaining_shares"), 0.0)),
+    )
+    return rate * remaining_ttl / required
+
+
+def should_recycle_dead_order(
+    order: dict[str, Any],
+    *,
+    observed_compatible_flow: float,
+    now: int,
+    grace_seconds: int,
+    ttl_seconds: int,
+    min_projected_clearance: float,
+) -> bool:
+    """Recycle only zero-flow orders whose remaining causal queue hazard is weak.
+
+    A bursty public tape can have no trade during the fixed grace while the
+    pre-entry flow estimate still implies that queue plus own size can clear
+    before TTL. Those high-hazard orders should keep their priority. Orders at
+    or beyond TTL are left to the base engine's canonical TTL cancellation.
+    """
+    created = int(_finite(order.get("created_ts"), now))
+    age = max(0, now - created)
+    ttl = max(1, int(ttl_seconds))
+    if age < max(1, int(grace_seconds)) or age >= ttl:
+        return False
+    if _finite(observed_compatible_flow, 0.0) > 1e-12:
+        return False
+    threshold = max(0.0, _finite(min_projected_clearance, 1.0))
+    return projected_remaining_clearance_ratio(order, now=now, ttl_seconds=ttl) < threshold
+
+
+def recycle_dead_orders(
+    run_dir: Path,
+    trade_tape: Path,
+    *,
+    grace_seconds: int,
+    ttl_seconds: int,
+    min_projected_clearance: float,
+) -> dict[str, int]:
+    """Cancel only resting paper maker orders with weak remaining causal fill hazard."""
     state_path = run_dir / "state.json"
     if not state_path.exists():
-        return {"examined": 0, "cancelled": 0}
+        return {"examined": 0, "cancelled": 0, "preserved_hazard": 0}
     try:
         state = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"examined": 0, "cancelled": 0}
+        return {"examined": 0, "cancelled": 0, "preserved_hazard": 0}
     orders = state.get("orders") if isinstance(state.get("orders"), dict) else {}
     if not orders:
-        return {"examined": 0, "cancelled": 0}
+        return {"examined": 0, "cancelled": 0, "preserved_hazard": 0}
 
     now = int(time.time())
     cancelled = 0
     examined = 0
+    preserved_hazard = 0
     for market_id, order in list(orders.items()):
         examined += 1
         created = int(_finite(order.get("created_ts"), now))
@@ -177,6 +230,19 @@ def recycle_dead_orders(run_dir: Path, trade_tape: Path, *, grace_seconds: int) 
             now=now,
         )
         if flow > 1e-12:
+            continue
+        if not should_recycle_dead_order(
+            order,
+            observed_compatible_flow=flow,
+            now=now,
+            grace_seconds=grace_seconds,
+            ttl_seconds=ttl_seconds,
+            min_projected_clearance=min_projected_clearance,
+        ):
+            if now - created < max(1, ttl_seconds) and projected_remaining_clearance_ratio(
+                order, now=now, ttl_seconds=ttl_seconds
+            ) >= max(0.0, min_projected_clearance):
+                preserved_hazard += 1
             continue
         if hasattr(base, "append_csv"):
             fields = [
@@ -199,7 +265,7 @@ def recycle_dead_orders(run_dir: Path, trade_tape: Path, *, grace_seconds: int) 
         tmp = state_path.with_suffix(state_path.suffix + ".tmp")
         tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(tmp, state_path)
-    return {"examined": examined, "cancelled": cancelled}
+    return {"examined": examined, "cancelled": cancelled, "preserved_hazard": preserved_hazard}
 
 
 def enforce_total_gross_cap(config_path: Path, run_dir: Path) -> Path:
@@ -231,15 +297,25 @@ def main() -> int:
     run_dir_text = _arg_value("--run-dir")
     tape_text = _arg_value("--trade-tape")
     config_text = _arg_value("--config")
+    ttl_seconds = int(_finite(_arg_value("--ttl-seconds", "90"), 90.0))
     grace = int(os.environ.get("V6_MAKER_DEAD_FLOW_CANCEL_SECONDS", "20"))
+    min_projected_clearance = _finite(
+        os.environ.get("V6_MAKER_DEAD_FLOW_MIN_PROJECTED_CLEARANCE", "1.0"), 1.0
+    )
     min_inside_confidence = _consume_float_arg(
         "--min-inside-confidence",
         _finite(os.environ.get("V6_MAKER_MIN_INSIDE_CONFIDENCE", "0"), 0.0),
     )
     install_inside_confidence_gate(min_inside_confidence)
     if run_dir_text and tape_text:
-        stats = recycle_dead_orders(Path(run_dir_text), Path(tape_text), grace_seconds=grace)
-        if stats["cancelled"]:
+        stats = recycle_dead_orders(
+            Path(run_dir_text),
+            Path(tape_text),
+            grace_seconds=grace,
+            ttl_seconds=max(1, ttl_seconds),
+            min_projected_clearance=max(0.0, min_projected_clearance),
+        )
+        if stats["cancelled"] or stats["preserved_hazard"]:
             print(json.dumps({"maker_dead_flow_recycle": stats}, sort_keys=True), file=sys.stderr)
     if run_dir_text and config_text:
         tick_config = enforce_total_gross_cap(Path(config_text), Path(run_dir_text))
