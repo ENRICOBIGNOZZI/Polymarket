@@ -12,9 +12,15 @@ The incumbent set is never reconstructed from a guessed ranking rule. Each
 input row carries an ``incumbent_selected`` flag taken from a point-in-time
 replay/decision ledger. The challenger is capped by the *actual incumbent
 capital used in that same decision window* (and by a global cap), so it cannot
-manufacture extra activity or extra gross capital. Forecast fields determine
-challenger selection; future realized PnL is used only after selection for the
-chronological OOS ablation. This file is deliberately offline/research-only.
+manufacture extra activity or extra gross capital. Each row may also carry
+``background_reserved_capital``: point-in-time capital already occupied by
+positions or resting orders that are outside the candidate rows being netted.
+All rows in a decision window must agree on that value. This closes the gap
+between bundle-level candidate replay and the actual multi-sleeve portfolio.
+
+Forecast fields determine challenger selection; future realized PnL is used
+only after selection for the chronological OOS ablation. This file is
+deliberately offline/research-only.
 """
 from __future__ import annotations
 
@@ -29,6 +35,7 @@ from typing import Iterable, Sequence
 STRESS_LEVELS = (1.0, 1.5, 2.0)
 _TRUE = {"1", "true", "yes", "y"}
 _FALSE = {"0", "false", "no", "n", ""}
+_TOL = 1e-9
 
 
 def _finite(value: object, default: float = 0.0) -> float:
@@ -62,6 +69,7 @@ class Opportunity:
     cost_per_dollar: float
     realized_pnl_1x: float
     incumbent_selected: bool
+    background_reserved_capital: float = 0.0
 
     @classmethod
     def from_row(cls, row: dict[str, str]) -> "Opportunity":
@@ -75,6 +83,10 @@ class Opportunity:
         cost = _finite(row.get("cost_per_dollar"))
         realized = _finite(row.get("realized_pnl_1x"))
         incumbent = _bool(row.get("incumbent_selected"))
+        background = _finite(
+            row.get("background_reserved_capital", row.get("background_capital_usd")),
+            0.0,
+        )
         if timestamp <= 0:
             raise ValueError("timestamp must be positive")
         if not strategy or not market_id or side not in {"YES", "NO"}:
@@ -85,7 +97,21 @@ class Opportunity:
             raise ValueError("expected_holding_hours must be positive and point-in-time")
         if cost < 0.0:
             raise ValueError("cost_per_dollar must be non-negative")
-        return cls(timestamp, strategy, market_id, side, notional, holding, net_edge, cost, realized, incumbent)
+        if background < 0.0:
+            raise ValueError("background_reserved_capital must be non-negative")
+        return cls(
+            timestamp,
+            strategy,
+            market_id,
+            side,
+            notional,
+            holding,
+            net_edge,
+            cost,
+            realized,
+            incumbent,
+            background,
+        )
 
     def forecast_edge(self, stress: float) -> float:
         if stress < 1.0:
@@ -101,7 +127,6 @@ class Opportunity:
         return min(self.forecast_edge(level) for level in STRESS_LEVELS)
 
     def capital_time_score(self) -> float:
-        # Expected robust dollars per dollar-hour of capital occupancy.
         return self.robust_edge() / self.expected_holding_hours
 
 
@@ -112,6 +137,17 @@ def _buckets(rows: Sequence[Opportunity], window_seconds: int) -> dict[int, list
     for index, row in enumerate(rows):
         out.setdefault(row.timestamp // window_seconds, []).append(index)
     return out
+
+
+def _background_capital(rows: Sequence[Opportunity], indices: Sequence[int]) -> float:
+    values = [rows[index].background_reserved_capital for index in indices]
+    if not values:
+        return 0.0
+    low = min(values)
+    high = max(values)
+    if high - low > _TOL:
+        raise ValueError("background_reserved_capital must be identical within a decision window")
+    return high
 
 
 def incumbent_selection(rows: Sequence[Opportunity]) -> set[int]:
@@ -127,17 +163,21 @@ def select_challenger(
 ) -> set[int]:
     """Select cost-robust rows using no more capital than the incumbent used.
 
-    No incumbent capital in a decision window means no challenger capital in
-    that window. This prevents the research layer from turning missing/blocked
-    incumbent activity into a fabricated alpha result.
+    Background capital is capital already occupied by positions/resting orders
+    not represented by the candidate rows. It never creates challenger budget.
+    A replay that claims incumbent-selected capital plus background occupancy
+    above the declared global cap is internally inconsistent and fails closed.
     """
     if global_capital_budget <= 0.0:
         raise ValueError("global_capital_budget must be positive")
 
     selected: set[int] = set()
     for _, indices in sorted(_buckets(rows, window_seconds).items()):
+        background = _background_capital(rows, indices)
         incumbent_used = sum(rows[i].notional for i in indices if rows[i].incumbent_selected)
-        budget = min(global_capital_budget, incumbent_used)
+        if background + incumbent_used > global_capital_budget + _TOL:
+            raise ValueError("incumbent selected capital plus background occupancy exceeds global_capital_budget")
+        budget = min(global_capital_budget - background, incumbent_used)
         if budget <= 0.0:
             continue
 
@@ -151,7 +191,7 @@ def select_challenger(
         remaining = budget
         for _, index in ranked:
             row = rows[index]
-            if row.notional <= remaining + 1e-12:
+            if row.notional <= remaining + _TOL:
                 selected.add(index)
                 remaining -= row.notional
     return selected
@@ -195,22 +235,27 @@ def evaluate(
         min_edge=min_edge,
     )
 
-    # Verify capital parity window by window. Challenger may use less, never more.
     capital_windows: list[dict[str, float | int]] = []
     parity_ok = True
     for bucket, indices in sorted(_buckets(ordered, window_seconds).items()):
+        background = _background_capital(ordered, indices)
         incumbent_used = sum(ordered[i].notional for i in indices if i in incumbent)
         challenger_used = sum(ordered[i].notional for i in indices if i in challenger)
-        allowed = min(global_capital_budget, incumbent_used)
-        if incumbent_used > global_capital_budget + 1e-12:
-            # The normalized replay itself violates the declared global cap.
-            raise ValueError("incumbent selected capital exceeds global_capital_budget")
-        parity_ok = parity_ok and challenger_used <= allowed + 1e-12
+        incumbent_total = background + incumbent_used
+        challenger_total = background + challenger_used
+        if incumbent_total > global_capital_budget + _TOL:
+            raise ValueError("incumbent total capital exceeds global_capital_budget")
+        allowed_candidate_capital = min(global_capital_budget - background, incumbent_used)
+        parity_ok = parity_ok and challenger_used <= allowed_candidate_capital + _TOL
+        parity_ok = parity_ok and challenger_total <= global_capital_budget + _TOL
         capital_windows.append({
             "bucket": bucket,
-            "incumbent_used": incumbent_used,
-            "challenger_used": challenger_used,
-            "allowed": allowed,
+            "background_reserved_capital": background,
+            "incumbent_candidate_capital": incumbent_used,
+            "challenger_candidate_capital": challenger_used,
+            "incumbent_total_capital": incumbent_total,
+            "challenger_total_capital": challenger_total,
+            "allowed_candidate_capital": allowed_candidate_capital,
         })
 
     start = ordered[0].timestamp
@@ -238,7 +283,7 @@ def evaluate(
             "challenger_max_drawdown_usd": ch_dd,
         }
         all_stress_positive = all_stress_positive and incremental > 0.0
-        challenger_not_worse_dd = challenger_not_worse_dd and ch_dd <= inc_dd + 1e-12
+        challenger_not_worse_dd = challenger_not_worse_dd and ch_dd <= inc_dd + _TOL
 
     fold_results: list[dict[str, object]] = []
     for fold, indices in sorted(folds.items()):
@@ -274,8 +319,9 @@ def evaluate(
         "positive_fold_fraction_2x": fold_positive_at_2x / len(fold_results) if fold_results else 0.0,
         "selection_contract": {
             "incumbent": "exact point-in-time incumbent_selected replay flags",
+            "background_capital": "point-in-time capital occupied outside candidate rows; must agree within each decision window",
             "challenger": "positive two-times-cost robust edge ranked by robust edge per expected capital-hour",
-            "challenger_capital_per_window": "no greater than actual incumbent capital used in that window",
+            "challenger_capital_per_window": "no greater than actual incumbent candidate capital and no total-cap breach after background occupancy",
             "forecast_only_selection": True,
             "future_realized_pnl_used_for_selection": False,
         },
