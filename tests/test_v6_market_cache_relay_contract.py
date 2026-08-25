@@ -41,6 +41,14 @@ class V6MarketCacheRelayContractTests(unittest.TestCase):
         self.assertIn("cache_age_seconds", workflow)
         self.assertIn("live_proxy_cache_consumed=true", workflow)
         self.assertIn("relay-evidence/live-proxy-consumption.txt", workflow)
+        # A failed read-only proof must leave actionable process/cache evidence
+        # instead of only a sequence of opaque retry counters.
+        self.assertIn("proxy_diagnostics()", workflow)
+        self.assertIn("relay_proxy_listener_pid=", workflow)
+        self.assertIn('("status", sys.argv[1])', workflow)
+        self.assertIn('("cache", sys.argv[2])', workflow)
+        self.assertIn('print("relay_proxy_" + label + "="', workflow)
+        self.assertIn("relay_proxy_log_tail_begin", workflow)
         for forbidden in (
             "polymarket-service-control restart",
             "kill -TERM",
