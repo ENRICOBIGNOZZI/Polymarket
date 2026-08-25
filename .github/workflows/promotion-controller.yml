@@ -12,8 +12,10 @@ on:
       - "config/promotion_policy.json"
       - "config/alpha_factory.json"
       - "scripts/promotion_gate.py"
+      - "scripts/research_pr_policy.py"
       - "tests/test_promotion_gate.py"
       - "tests/test_promotion_evidence_binding.py"
+      - "tests/test_research_verdict_provenance.py"
       - "config/scheduler_registry.json"
 
 permissions:
@@ -42,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest tests/test_promotion_gate.py tests/test_promotion_evidence_binding.py -v
-          python3 -m py_compile scripts/promotion_gate.py
+          python3 -m py_compile scripts/promotion_gate.py scripts/research_pr_policy.py
           python3 -m json.tool config/promotion_policy.json >/dev/null
           python3 - <<'PY'
           import json
@@ -128,6 +130,67 @@ jobs:
             fi
             gh pr diff "$number" --name-only > "$probe_dir/changed-files.txt"
 
+            # Authorization itself must use the same trusted, exact-head research
+            # governance contract as PR policy. Re-fetch REST comments/reviews so
+            # untrusted text cannot spoof a verdict and source drift revokes approval.
+            if ! gh api "repos/${GITHUB_REPOSITORY}/pulls/${source_number}" \
+              > "$probe_dir/source-pr.json" 2>/dev/null; then
+              printf '%s\tblocked\tsource_unavailable\n' "$number" >> promotion-controller/decisions.tsv
+              continue
+            fi
+            gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/issues/${source_number}/comments?per_page=100" \
+              > "$probe_dir/source-comments-pages.json"
+            gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/pulls/${source_number}/reviews?per_page=100" \
+              > "$probe_dir/source-reviews-pages.json"
+            python3 - "$probe_dir" <<'PY'
+          import json,sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          def flatten(path: Path) -> list[dict]:
+              raw = json.loads(path.read_text(encoding='utf-8'))
+              if not isinstance(raw, list):
+                  return []
+              if raw and all(isinstance(page, list) for page in raw):
+                  return [item for page in raw for item in page if isinstance(item, dict)]
+              return [item for item in raw if isinstance(item, dict)]
+
+          source = json.loads((root/'source-pr.json').read_text(encoding='utf-8'))
+          source['comments'] = flatten(root/'source-comments-pages.json')
+          source['reviews'] = flatten(root/'source-reviews-pages.json')
+          (root/'source-research.json').write_text(
+              json.dumps(source, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          candidate = json.loads((root/'candidate.json').read_text(encoding='utf-8'))
+          event = {
+              'pull_request': {
+                  'head': {'ref': candidate.get('headRefName') or ''},
+                  'draft': bool(candidate.get('isDraft')),
+                  'body': candidate.get('body') or '',
+                  'labels': candidate.get('labels') or [],
+              }
+          }
+          (root/'policy-event.json').write_text(
+              json.dumps(event, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          PY
+            if ! python3 scripts/research_pr_policy.py \
+              --event "$probe_dir/policy-event.json" \
+              --changed-files "$probe_dir/changed-files.txt" \
+              --manifest-existed-on-base true \
+              --source-research-json "$probe_dir/source-research.json" \
+              --output "$probe_dir/research-policy.md"; then
+              printf '%s\tblocked\ttrusted_research_policy\n' "$number" >> promotion-controller/decisions.tsv
+              {
+                echo
+                echo "## Candidate #$number / source #$source_number"
+                cat "$probe_dir/research-policy.md" 2>/dev/null || true
+              } >> promotion-controller/controller-report.md
+              continue
+            fi
+
             evidence_path="$(python3 - "$probe_dir/candidate.json" <<'PY'
           import json,re,sys
           body = json.load(open(sys.argv[1])).get('body') or ''
@@ -178,6 +241,7 @@ jobs:
             {
               echo
               echo "## Candidate #$number / source #$source_number"
+              cat "$probe_dir/research-policy.md" 2>/dev/null || true
               cat "$probe_dir/report.md" 2>/dev/null || true
             } >> promotion-controller/controller-report.md
             if [[ "$gate_rc" -ne 0 ]]; then
@@ -237,7 +301,7 @@ jobs:
             echo "selected_pr=$selected" | tee promotion-controller/authorization.txt
             if ! grep -qx "$selected" promotion-controller/previously-authorized.txt 2>/dev/null; then
               gh pr comment "$selected" --body \
-                "Promotion Controller authorized this paper integration for the current cycle. Objective candidate/source checks passed; economic surfaces additionally passed ancestor-bound exact-source code provenance, machine-readable OOS, cost-stress, drawdown, FDR, stability, incremental-utility, independent-window and data-health gates. Authorization is re-evaluated every cycle and does not authorize real-money execution."
+                "Promotion Controller authorized this paper integration for the current cycle. Trusted exact-head Research Governance provenance plus objective candidate/source checks passed; economic surfaces additionally passed ancestor-bound exact-source code provenance, machine-readable OOS, cost-stress, drawdown, FDR, stability, incremental-utility, independent-window and data-health gates. Authorization is re-evaluated every cycle and does not authorize real-money execution."
             fi
           else
             echo 'selected_pr=none' | tee promotion-controller/authorization.txt
