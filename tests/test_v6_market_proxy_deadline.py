@@ -183,6 +183,28 @@ class V6MarketProxyDeadlineTests(unittest.TestCase):
             },
         }
 
+    def test_newer_relay_cache_is_reloaded_without_upstream(self) -> None:
+        p = self.make_proxy()
+        p.cache.write_text(
+            __import__("json").dumps(
+                {
+                    "schema": "polymarket_v6_market_proxy_cache_v1",
+                    "timestamp": int(time.time()),
+                    "markets": [
+                        {"id": "relay", "conditionId": "relay", "liquidityNum": 25.0}
+                    ],
+                    "gamma_to_condition": {"relay": "relay"},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        rows = p.markets({"limit": ["1"], "offset": ["0"], "liquidity_num_min": ["10"]})
+
+        self.assertEqual(rows[0]["id"], "relay")
+        self.assertEqual(p.idmap["relay"], "relay")
+        self.assertTrue(p.source.endswith("_cache"))
+
     def test_sampling_market_candidates_paginate_without_gamma(self) -> None:
         p = self.make_proxy()
         requests: list[str] = []
