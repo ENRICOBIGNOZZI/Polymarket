@@ -57,8 +57,7 @@ jobs:
           page=1
           dispatched=0
           while :; do
-            page_rows="$(gh api "repos/${repo}/pulls?state=open&per_page=100&page=${page}" \
-              --jq '.[] | [.number, .head.ref, .head.sha, .head.repo.full_name] | @tsv')"
+            page_rows="$(gh api "repos/${repo}/pulls?state=open&per_page=100&page=${page}" --jq '.[] | [.number, .head.ref, .head.sha, .head.repo.full_name] | @tsv')"
             row_count=0
             while IFS=$'\t' read -r pr_number head_ref head_sha head_repo; do
               [[ -n "${pr_number:-}" ]] || continue
@@ -109,8 +108,8 @@ jobs:
             scripts/project_context_snapshot.py scripts/validate_project_context.py \
             scripts/validate_scheduler_registry.py \
             scripts/v6_external_bridge.py scripts/v6_relation_intents.py \
-            scripts/v6_local_factor_intents.py scripts/v6_micro_taker.py \
-            scripts/v6_runtime_status.py \
+            scripts/v6_intent_guard.py scripts/v6_local_factor_intents.py \
+            scripts/v6_micro_taker.py scripts/v6_runtime_status.py \
             monitoring/exporter_v5.py monitoring/exporter_v6.py monitoring/exporter_latest.py
           python3 -m json.tool config/paper_v5.json >/dev/null
           python3 -m json.tool config/paper_v6.json >/dev/null
@@ -119,21 +118,19 @@ jobs:
           python3 -m json.tool config/project_context.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
           python3 scripts/validate_scheduler_registry.py \
-            --root . \
-            --registry config/scheduler_registry.json \
+            --root . --registry config/scheduler_registry.json \
             --output /tmp/scheduler-registry-report.md
           python3 scripts/validate_project_context.py \
-            --root . \
-            --output /tmp/project-context-validation.md
+            --root . --output /tmp/project-context-validation.md
           python3 scripts/project_context_snapshot.py \
-            --root . \
-            --manifest config/project_context.json \
+            --root . --manifest config/project_context.json \
             --output-json /tmp/project-context.json \
             --output-markdown /tmp/project-context.md
           test -s /tmp/project-context.json
           test -s /tmp/project-context.md
           python3 -m unittest \
             tests/test_v6_runtime_contract.py \
+            tests/test_v6_model_contracts.py \
             tests/test_compact_strategy_logs.py \
             tests/test_ops_macos.py \
             tests/test_workflow_yaml_contracts.py -v
