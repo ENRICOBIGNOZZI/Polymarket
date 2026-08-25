@@ -6,6 +6,8 @@ import gzip
 import json
 import math
 import os
+import shutil
+import subprocess
 import threading
 import time
 import urllib.error
@@ -75,6 +77,55 @@ def req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT_SECO
     except (OSError, EOFError, TimeoutError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"request failed: {url}: {exc}") from exc
 
+
+def curl_req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT_SECONDS) -> Any:
+    binary = shutil.which("curl")
+    if not binary:
+        raise RuntimeError("curl unavailable")
+    data = None if payload is None else json.dumps(payload, separators=(",", ":"))
+    args = [
+        binary,
+        "--silent",
+        "--show-error",
+        "--fail",
+        "--location",
+        "--compressed",
+        "--max-time",
+        str(max(1, math.ceil(timeout))),
+        "--user-agent",
+        "polymarket-v6-market-proxy/2",
+        "--header",
+        "Accept: application/json",
+    ]
+    if data is not None:
+        args.extend(["--header", "Content-Type: application/json", "--data-binary", data])
+    args.append(url)
+    try:
+        completed = subprocess.run(
+            args,
+            check=False,
+            capture_output=True,
+            timeout=max(1.0, timeout + 1.0),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"curl request failed: {url}: {exc}") from exc
+    if completed.returncode != 0:
+        detail = completed.stderr.decode(errors="replace").strip()[:240]
+        raise RuntimeError(f"curl request failed: {url}: exit={completed.returncode} {detail}")
+    try:
+        return json.loads(completed.stdout.decode())
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"curl returned invalid JSON: {url}: {exc}") from exc
+
+
+def clob_req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT_SECONDS) -> Any:
+    try:
+        return curl_req(url, payload, timeout)
+    except RuntimeError as curl_error:
+        try:
+            return req(url, payload, timeout)
+        except RuntimeError as urllib_error:
+            raise RuntimeError(f"{curl_error}; urllib fallback: {urllib_error}") from urllib_error
 
 def tokens(market: dict[str, Any]) -> list[dict[str, Any]]:
     value = market.get("tokens")
@@ -230,7 +281,7 @@ class Proxy:
             remaining = deadline - time.monotonic()
             if remaining <= 0.1:
                 break
-            value = req(url, timeout=min(CLOB_TIMEOUT_SECONDS, remaining))
+            value = clob_req(url, timeout=min(CLOB_TIMEOUT_SECONDS, remaining))
             if not isinstance(value, dict) or not isinstance(value.get("data"), list):
                 raise RuntimeError(f"bad CLOB {source} response")
             batch = [row for row in value["data"] if isinstance(row, dict)]
@@ -264,7 +315,7 @@ class Proxy:
         out: dict[str, dict[str, Any]] = {}
 
         def fetch(chunk: list[str]) -> Any:
-            return req(
+            return clob_req(
                 self.clob + "/books",
                 [{"token_id": token_id} for token_id in chunk],
                 timeout=CLOB_TIMEOUT_SECONDS,
@@ -425,7 +476,7 @@ class Proxy:
         if cached and time.time() - cached[0] <= STALE_CACHE_SECONDS and isinstance(cached[1], dict):
             return cached[1]
         cid = self.idmap.get(mid, mid)
-        value = req(
+        value = clob_req(
             self.clob + "/markets/" + urllib.parse.quote(cid, safe=""),
             timeout=CLOB_TIMEOUT_SECONDS,
         )
