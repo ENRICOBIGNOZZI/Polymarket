@@ -65,6 +65,15 @@ class FastRuntimeContractTest(unittest.TestCase):
         # The private macOS server uses Bash 3.2, which does not provide BASHPID.
         self.assertIn('tmp="$path.tmp.${BASHPID:-$$}"', selector)
 
+    def test_v6_child_retires_when_the_runtime_wrapper_disappears(self) -> None:
+        selector = (ROOT / "scripts" / "paper_latest_loop.sh").read_text(encoding="utf-8")
+        v6_loop = (ROOT / "scripts" / "paper_v6_loop.sh").read_text(encoding="utf-8")
+        self.assertIn('POLYMARKET_RUNTIME_PARENT_PID="$$"', selector)
+        self.assertIn('RUNTIME_PARENT_PID="${POLYMARKET_RUNTIME_PARENT_PID:-}"', v6_loop)
+        self.assertIn('parent_runtime_alive(){', v6_loop)
+        self.assertIn('runtime_parent_lost=1', v6_loop)
+        self.assertLess(v6_loop.index('parent_runtime_alive(){'), v6_loop.index('while true;do'))
+
     def test_runtime_singleton_launcher_excludes_competing_owner(self) -> None:
         launcher = ROOT / "scripts" / "runtime_singleton_launcher.py"
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -119,6 +128,9 @@ class FastRuntimeContractTest(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     first.kill()
                     first.wait(timeout=5)
+                for stream in (first.stdout, first.stderr):
+                    if stream is not None:
+                        stream.close()
 
             third = subprocess.run(
                 [
