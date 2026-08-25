@@ -362,7 +362,7 @@ jobs:
               parent=stack.pop()
               for pid,cmd in children.get(parent,[]):
                   if pid in seen: continue
-                  seen.add(pid); desc.append({'pid':pid,'ppid':ppid,'command':cmd}); stack.append(pid)
+                  seen.add(pid); desc.append({'pid':pid,'ppid':parent,'command':cmd}); stack.append(pid)
           markers=[
               'paper_v6_loop.sh','v6_market_proxy.py','polymarket_trade_recorder',
               'polymarket_multileg_paper','polymarket_engine','polymarket_maker_paper',
