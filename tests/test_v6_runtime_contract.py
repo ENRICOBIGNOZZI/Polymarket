@@ -25,14 +25,15 @@ class V6RuntimeContractTest(unittest.TestCase):
         cls.relations = load_script("v6_relation_intents_test", "scripts/v6_relation_intents.py")
         cls.local_factor = load_script("v6_local_factor_intents_test", "scripts/v6_local_factor_intents.py")
 
-    def test_champion_points_to_real_v6_runtime(self) -> None:
+    def test_v6_runtime_exists_without_research_mutating_live_champion(self) -> None:
         champion = json.loads((ROOT / "config/live_champion.json").read_text())
-        self.assertEqual(champion["version"], 6)
-        self.assertEqual(champion["loop"], "scripts/paper_v6_loop.sh")
-        self.assertEqual(champion["config"], "config/paper_v6.json")
-        self.assertEqual(champion["run_root"], "runs/paper_v6_live")
-        self.assertTrue((ROOT / champion["loop"]).is_file())
-        self.assertTrue((ROOT / champion["config"]).is_file())
+        self.assertEqual(champion["version"], 5)
+        self.assertEqual(champion["loop"], "scripts/paper_v5_loop.sh")
+        self.assertTrue((ROOT / "scripts/paper_v6_loop.sh").is_file())
+        self.assertTrue((ROOT / "config/paper_v6.json").is_file())
+        architecture = json.loads((ROOT / "config/v6_model_architecture.json").read_text())
+        self.assertEqual(architecture["version"], 6)
+        self.assertTrue(architecture["paper_only"])
 
     def test_capital_sleeves_sum_to_one(self) -> None:
         cfg = json.loads((ROOT / "config/paper_v6.json").read_text())
@@ -70,7 +71,7 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertLess(phi, 0.999)
         self.assertLess(tstat, 0.0)
 
-    def test_live_loop_does_not_run_global_pca_or_semantic_expert(self) -> None:
+    def test_v6_loop_does_not_run_global_pca_or_semantic_expert(self) -> None:
         loop = (ROOT / "scripts/paper_v6_loop.sh").read_text()
         self.assertNotIn("polymarket_pca_stat_arb", loop)
         self.assertNotIn("strategies/semantic", loop)
