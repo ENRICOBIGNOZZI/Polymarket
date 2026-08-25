@@ -78,7 +78,7 @@ class IncumbentHealthGateTest(unittest.TestCase):
 
     def test_private_health_remains_independently_enforced(self):
         workflow = SERVER_HEALTH_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn('cron: "23 * * * *"', workflow)
+        self.assertIn('cron: "8,23,38,53 * * * *"', workflow)
         self.assertIn('workflows: ["deploy-paper-server", "Grafana Permanent Access"]', workflow)
         self.assertIn("github.event_name == 'schedule'", workflow)
         self.assertIn("github.event.workflow_run.conclusion == 'success'", workflow)
