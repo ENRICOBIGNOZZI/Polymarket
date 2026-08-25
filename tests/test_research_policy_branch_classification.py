@@ -71,7 +71,7 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
             "number": 123,
             "headRefName": "research/alpha",
             "body": "research candidate",
-            "comments": [{"createdAt":"2026-08-25T00:00:00Z","body":"Research Governance — APPROVED_FOR_INTEGRATION"}],
+            "comments": [{"createdAt":"2026-08-25T00:00:00Z","authorAssociation":"OWNER","body":"Research Governance — APPROVED_FOR_INTEGRATION"}],
             "reviews": [],
         }
         accepted = self.run_policy("integration/alpha",body,["config/paper_v5.json"],labels=["autonomous-promotion-approved"],draft=False,source_research=approved_source)

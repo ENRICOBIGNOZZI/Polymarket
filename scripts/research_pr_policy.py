@@ -16,10 +16,12 @@ INTEGRATION_ONLY_LABELS = {
 }
 SOURCE_RESEARCH_PR_PATTERN = re.compile(r"source research pr/branch/commit:\s*#(\d+)\b", flags=re.IGNORECASE)
 RESEARCH_VERDICT_PATTERN = re.compile(
-    r"\b(INTEGRATION_READY|APPROVED_FOR_INTEGRATION|MORE_EVIDENCE_REQUIRED|REJECTED|SHADOW_ONLY)\b",
-    flags=re.IGNORECASE,
+    r"(?im)^\s*(?:#{1,6}\s*)?Research Governance"
+    r"(?:\s+(?:evidence state|correction|decision))?\s*(?:—|–|-|:)\s*"
+    r"[`*_~]*(INTEGRATION_READY|APPROVED_FOR_INTEGRATION|MORE_EVIDENCE_REQUIRED|REJECTED|SHADOW_ONLY)\b"
 )
 APPROVED_RESEARCH_VERDICTS = {"INTEGRATION_READY", "APPROVED_FOR_INTEGRATION"}
+TRUSTED_GOVERNANCE_AUTHOR_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 MODEL_BODY_TERMS = ("alpha","model","strategy","signal","stat-arb","stat arb","pca","maker","opportunity","portfolio","paper champion","candidate bundle")
 LIVE_MODEL_SURFACE_PATTERNS = (
     re.compile(r"^config/live_champion\.json$"), re.compile(r"^config/paper_v\d+\.json$"),
@@ -74,26 +76,40 @@ def shadow_forbidden_files(changed_files: set[str]) -> list[str]:
     return forbidden
 
 
+def author_association(item: dict[str, Any]) -> str:
+    return str(item.get("authorAssociation") or item.get("author_association") or "").upper()
+
+
 def research_verdict(source: dict[str, Any] | None) -> str | None:
+    """Return the latest trusted, explicitly marked Research Governance verdict.
+
+    Source PR prose is evidence supplied by the research author and is never an
+    approval authority. Only a structured governance comment/review authored by
+    an OWNER, MEMBER or COLLABORATOR can supply a verdict used by integration.
+    """
     if not isinstance(source, dict):
         return None
-    events: list[tuple[str, int, str]] = []
-    body = str(source.get("body") or "")
-    if body:
-        events.append(("", 0, body))
-    ordinal = 1
-    for key, timestamp_key in (("comments", "createdAt"), ("reviews", "submittedAt")):
+    verdicts: list[tuple[str, int, int, str]] = []
+    ordinal = 0
+    for key, timestamp_keys in (
+        ("comments", ("createdAt", "created_at")),
+        ("reviews", ("submittedAt", "submitted_at", "createdAt", "created_at")),
+    ):
         for item in source.get(key) or []:
             if not isinstance(item, dict):
                 continue
-            snake = timestamp_key.replace("At", "_at")
-            timestamp = str(item.get(timestamp_key) or item.get(snake) or "")
-            events.append((timestamp, ordinal, str(item.get("body") or "")))
+            if author_association(item) not in TRUSTED_GOVERNANCE_AUTHOR_ASSOCIATIONS:
+                continue
+            timestamp = ""
+            for timestamp_key in timestamp_keys:
+                value = item.get(timestamp_key)
+                if value:
+                    timestamp = str(value)
+                    break
+            text = str(item.get("body") or "")
+            for match_order, match in enumerate(RESEARCH_VERDICT_PATTERN.finditer(text)):
+                verdicts.append((timestamp, ordinal, match_order, match.group(1).upper()))
             ordinal += 1
-    verdicts: list[tuple[str, int, int, str]] = []
-    for timestamp, event_order, text in events:
-        for match_order, match in enumerate(RESEARCH_VERDICT_PATTERN.finditer(text)):
-            verdicts.append((timestamp, event_order, match_order, match.group(1).upper()))
     if not verdicts:
         return None
     verdicts.sort(key=lambda item: (item[0], item[1], item[2]))
@@ -159,8 +175,8 @@ def evaluate(
                     errors.append("sensitive integration source must come from research/*, experiment/*, or diagnostic/*")
                 if latest_source_verdict not in APPROVED_RESEARCH_VERDICTS:
                     errors.append(
-                        "unapproved model/runtime work must remain in research until the latest source verdict is APPROVED_FOR_INTEGRATION or INTEGRATION_READY; "
-                        f"latest source verdict: {latest_source_verdict or 'none'}"
+                        "unapproved model/runtime work must remain in research until the latest trusted Research Governance verdict is APPROVED_FOR_INTEGRATION or INTEGRATION_READY; "
+                        f"latest trusted source verdict: {latest_source_verdict or 'none'}"
                     )
         elif not draft and linked_source_number is None:
             errors.append("integration PR must link a numbered source research PR as `Source research PR/branch/commit: #<number>`")

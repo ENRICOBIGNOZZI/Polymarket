@@ -116,7 +116,7 @@ class ModelGovernanceContractTest(unittest.TestCase):
                 "number": 123,
                 "headRefName": "research/new-alpha",
                 "body": "research candidate",
-                "comments": [{"createdAt":"2026-08-25T00:00:00Z","body":"Research Governance — APPROVED_FOR_INTEGRATION"}],
+                "comments": [{"createdAt":"2026-08-25T00:00:00Z","authorAssociation":"OWNER","body":"Research Governance — APPROVED_FOR_INTEGRATION"}],
                 "reviews": [],
             }
             source_path = temp / "source-research.json"; source_path.write_text(json.dumps(source), encoding="utf-8")

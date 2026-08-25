@@ -115,6 +115,7 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
                 "comments": [
                     {
                         "createdAt": "2026-08-25T00:00:00Z",
+                        "authorAssociation": "OWNER",
                         "body": "Research Governance — MORE_EVIDENCE_REQUIRED",
                     }
                 ],
@@ -138,6 +139,7 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
                 "comments": [
                     {
                         "createdAt": "2026-08-25T00:00:00Z",
+                        "authorAssociation": "OWNER",
                         "body": "Research Governance — MORE_EVIDENCE_REQUIRED",
                     }
                 ],
@@ -172,6 +174,7 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
                 "comments": [
                     {
                         "createdAt": "2026-08-25T00:00:00Z",
+                        "authorAssociation": "OWNER",
                         "body": "Research Governance — APPROVED_FOR_INTEGRATION",
                     }
                 ],
@@ -195,10 +198,12 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
                 "comments": [
                     {
                         "createdAt": "2026-08-25T00:00:00Z",
+                        "authorAssociation": "OWNER",
                         "body": "Research Governance — APPROVED_FOR_INTEGRATION",
                     },
                     {
                         "createdAt": "2026-08-25T01:00:00Z",
+                        "authorAssociation": "OWNER",
                         "body": "Research Governance — MORE_EVIDENCE_REQUIRED",
                     },
                 ],
