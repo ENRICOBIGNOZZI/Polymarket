@@ -97,6 +97,27 @@ class V6ModelContracts(unittest.TestCase):
         self.assertGreater(near, far)
         self.assertGreaterEqual(far, 0.0)
 
+    def test_fill_probability_prior_requires_observed_compatible_flow(self):
+        common = load_script("v6_market_common_inactive_prior_contract", "scripts/v6_market_common.py")
+        probability = common.fill_probability_proxy(
+            queue_ahead=0, own_shares=10, compatible_flow_per_second=0,
+            horizon_seconds=90, prior_flow_per_second=1.0 / 300.0,
+        )
+        self.assertEqual(probability, 0.0)
+
+    def test_fill_probability_prior_cannot_dominate_sparse_observed_flow(self):
+        common = load_script("v6_market_common_sparse_prior_contract", "scripts/v6_market_common.py")
+        observed = 0.001
+        capped = common.fill_probability_proxy(
+            queue_ahead=0, own_shares=10, compatible_flow_per_second=observed,
+            horizon_seconds=90, prior_flow_per_second=100.0,
+        )
+        reference = common.fill_probability_proxy(
+            queue_ahead=0, own_shares=10, compatible_flow_per_second=observed,
+            horizon_seconds=90, prior_flow_per_second=observed,
+        )
+        self.assertAlmostEqual(capped, reference, places=15)
+
     def test_local_factor_v3_uses_null_preserving_level_bootstrap(self):
         lf = load_script("v6_local_factor_v3_contract", "scripts/v6_local_factor_v3.py")
         residual = [0.0]
