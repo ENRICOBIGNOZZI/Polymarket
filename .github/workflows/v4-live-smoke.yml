@@ -242,6 +242,24 @@ jobs:
           main_sha="$(git rev-parse origin/main)"
           current_validated_sha="$(git rev-parse origin/paper-validated)"
           test "$validated_sha" = "$main_sha"
+
+          merged_pr=""
+          for attempt in {1..10}; do
+            merged_pr="$(
+              gh api "repos/${GITHUB_REPOSITORY}/commits/${validated_sha}/pulls" \
+                --jq '[.[] | select(.base.ref == "main" and .merged_at != null)] | first | .number // empty'
+            )"
+            if [[ -n "$merged_pr" ]]; then
+              break
+            fi
+            sleep 3
+          done
+          if [[ -z "$merged_pr" ]]; then
+            echo "::error::refusing paper-validated promotion: main revision $validated_sha has no merged pull-request provenance"
+            exit 1
+          fi
+          echo "paper_validation_source_pr=$merged_pr"
+
           if [[ "$current_validated_sha" != "$validated_sha" ]]; then
             gh api --method PATCH \
               "repos/${GITHUB_REPOSITORY}/git/refs/heads/paper-validated" \
