@@ -1,0 +1,46 @@
+{
+  "schema": "lf_v6_threshold_relation_evidence_v1",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "current_main_sha": "cb2a63f45bd46cb468247f2f0d6ca0d94d6941bf",
+  "v6_release_candidate_sha": "9bf158416dcc7c5632067ea2d75858ce124868be",
+  "audited_relation_source_blob": "d3c86c7ef250b48ce2432b8c3a3a8ad6b016fed4",
+  "scope": "research-only typed threshold relation integrity and opportunity coverage",
+  "material_findings": [
+    "The frozen V6 threshold family key discards day-of-month while structural_intents assumes a one-dollar terminal payoff floor for paired threshold relations. Different expiries inside the same month/year can therefore be grouped even though the implication is not valid across dates.",
+    "The incumbent unsuffixed numeric ranking can choose the calendar year instead of an integer/count threshold, making count ladders such as at-least-N contracts collapse to the same threshold.",
+    "The incumbent direction vocabulary does not recognize 'or more'/'or fewer' constructions, reducing structural discovery coverage.",
+    "The incumbent optional b suffix can consume the first letter of the following word 'by', turning $100,000 by ... into a 1e14 threshold.",
+    "The typed research parser preserves threshold kind and full day-level expiry, blocks suffix bleed, excludes plain years from count-threshold selection, and recognizes or-more/or-fewer wording without changing executable edge or portfolio risk gates."
+  ],
+  "deterministic_counterexample": {
+    "low_contract": "BTC > 100000 on 2026-08-25",
+    "high_contract": "BTC > 150000 on 2026-08-31",
+    "path": {
+      "btc_2026_08_25": 90000,
+      "btc_2026_08_31": 160000
+    },
+    "yes_low_early_payoff": 0,
+    "no_high_late_payoff": 0,
+    "basket_payoff": 0,
+    "conclusion": "Cross-expiry YES(low)+NO(high) has no guaranteed $1 payoff floor."
+  },
+  "current_public_relevance": {
+    "observed_date": "2026-08-25",
+    "bitcoin_aug_25_event": "https://polymarket.com/event/bitcoin-above-on-august-25-2026",
+    "bitcoin_aug_31_event": "https://polymarket.com/event/bitcoin-above-on-august-31-2026",
+    "note": "Both day-specific Bitcoin threshold ladders are contemporaneously present on Polymarket; this establishes live relevance of day-level expiry identity, not that the current V6 scanner necessarily emitted a bad bundle in the observed window."
+  },
+  "external_context": {
+    "status": "BACKTESTING_OR_NOT_APPROVED",
+    "direct_probability_gate_pass": false,
+    "note": "Current telemetry does not justify lowering the V6 external probability handoff gate; raw Binance/GDELT rows remain q_external=null or unapproved."
+  },
+  "required_next_evidence": [
+    "Run incumbent and typed relation parsers on the same chronological 300/700-market V6 public universe.",
+    "Report recovered valid same-expiry families, rejected cross-expiry families, candidate turnover and exact relation certificates.",
+    "For every candidate bundle, verify the logical payoff floor from proposition semantics before using structural edge.",
+    "Require positive executable economics after current guard plus 1x, 1.5x and 2x cost/legging stress; candidate count alone is not success.",
+    "Do not relax max drawdown, kill switch, market/event concentration, gross exposure, or authenticated-execution prohibition."
+  ],
+  "promotion": "blocked"
+}
