@@ -48,7 +48,7 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j2
           ctest --test-dir build --output-on-failure
-          python3 -m unittest tests/test_fast_data_health.py -v
+          python3 -m unittest tests/test_fast_data_health.py tests/test_fast_aggressive_research_policy.py -v
 
       - name: Run read-only fast shadow probe
         shell: bash
@@ -56,17 +56,29 @@ jobs:
           set -euo pipefail
           mkdir -p runs/hourly-fast
           duration=180
-          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then duration=45; fi
+          markets=600
+          min_liquidity=100
+          snapshot_refresh_seconds=20
+          runtime_policy=config/fast_arb_policy.json
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            duration=45
+            markets=1000
+            min_liquidity=25
+            snapshot_refresh_seconds=10
+            runtime_policy=config/fast_arb_policy_research_aggressive.json
+          fi
+          echo "runtime_policy=$runtime_policy markets=$markets min_liquidity=$min_liquidity snapshot_refresh_seconds=$snapshot_refresh_seconds duration=$duration"
+          echo "RUNTIME_POLICY=$runtime_policy" >> "$GITHUB_ENV"
           ./build/polymarket_fast_arb_shadow \
             --config config/paper_v4.json \
-            --policy config/fast_arb_policy.json \
+            --policy "$runtime_policy" \
             --relations config/fast_arb_relations.csv \
             --external-signals data/external_signals.csv \
             --run-dir runs/hourly-fast \
-            --markets 600 \
-            --min-liquidity 100 \
+            --markets "$markets" \
+            --min-liquidity "$min_liquidity" \
             --shard-size 200 \
-            --snapshot-refresh-seconds 20 \
+            --snapshot-refresh-seconds "$snapshot_refresh_seconds" \
             --duration-seconds "$duration" \
             --recycle-seconds 0
 
@@ -75,9 +87,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          runtime_policy="${RUNTIME_POLICY:-config/fast_arb_policy.json}"
           python3 scripts/arb_theory_scheduler.py \
             --evidence-root runs/hourly-fast \
-            --base-policy config/fast_arb_policy.json \
+            --base-policy "$runtime_policy" \
             --stress-bps 10 \
             --output-json runs/hourly-fast/fast_arb_candidate.json \
             --output-markdown runs/hourly-fast/fast_arb_theory_report.md \
@@ -87,12 +100,13 @@ jobs:
             --errors runs/hourly-fast/fast_arb_errors.csv \
             --max-feed-stale-ms 45000 \
             --min-rest-resyncs 2
-          python3 - <<'PY'
+          RUNTIME_POLICY="$runtime_policy" python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
           status = json.loads(Path("runs/hourly-fast/fast_arb_status.json").read_text())
           candidate = json.loads(Path("runs/hourly-fast/fast_arb_candidate.json").read_text())
-          base_policy = json.loads(Path("config/fast_arb_policy.json").read_text())
+          base_policy = json.loads(Path(os.environ["RUNTIME_POLICY"]).read_text())
           assert status["mode"] == "shadow"
           assert status["real_order_submission"] is False
           assert candidate["mode"] == "research_only"
