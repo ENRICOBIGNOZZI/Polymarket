@@ -12,6 +12,43 @@
     "reversion_t_gate": 0.75,
     "rolling_state_max_h": 12
   },
+  "analytic_iid_overlap_bias": {
+    "state_definition": "S_i = eps_i + ... + eps_{i+H-1}",
+    "target_definition": "Y_i = eps_{i+H}",
+    "same_row_covariance": 0,
+    "reason_centered_numerator_is_negative": "Y_j is contained in later S_i for 1 <= i-j <= H; full-sample centering subtracts this positive cross-row overlap covariance.",
+    "formula": "E[sum_i (S_i-Sbar)(Y_i-Ybar)] = -(1/n) * sum_{d=1}^{min(H,n-1)} (n-d), n=T-H",
+    "cells": [
+      {
+        "T": 23,
+        "H": 5,
+        "regression_rows": 18,
+        "overlap_pairs": 75,
+        "expected_centered_sxy": -4.166666666666667
+      },
+      {
+        "T": 48,
+        "H": 12,
+        "regression_rows": 36,
+        "overlap_pairs": 354,
+        "expected_centered_sxy": -9.833333333333334
+      },
+      {
+        "T": 96,
+        "H": 12,
+        "regression_rows": 84,
+        "overlap_pairs": 930,
+        "expected_centered_sxy": -11.071428571428571
+      },
+      {
+        "T": 720,
+        "H": 12,
+        "regression_rows": 708,
+        "overlap_pairs": 8418,
+        "expected_centered_sxy": -11.889830508474576
+      }
+    ]
+  },
   "deterministic_iid_null": {
     "paths_per_cell": 400,
     "description": "Independent standardized residual returns with no mean-reversion predictability; the exact incumbent V5 PCA rolling-state adjustment gate is reproduced.",
@@ -41,7 +78,7 @@
         "admission_rate": 0.17
       }
     ],
-    "interpretation": "These are deterministic model-size diagnostics, not estimates of the live Polymarket false-discovery rate and not PnL backtests. The overlapping rolling-state design plus full-sample demeaning induces a finite-sample negative beta bias under the iid null; the low t_reversion gate and search multiplicity then make spurious adjustments economically relevant to test."
+    "interpretation": "These are deterministic model-size diagnostics, not estimates of the live Polymarket false-discovery rate and not PnL backtests. The analytic overlap identity proves the expected centered regression numerator is negative under the iid null; the low t_reversion gate and search multiplicity then make spurious adjustments economically relevant to test."
   },
   "latest_exact_main_public_smoke": {
     "generated_ts": 1787631733,
