@@ -224,18 +224,25 @@ jobs:
           recorder_tail_lines="$(printf '%s\n' "$recorder_tail" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
           recorder_success_ticks="$(printf '%s\n' "$recorder_tail" | grep -c '^trade_recorder markets=' || true)"
           recorder_http_failures="$(printf '%s\n' "$recorder_tail" | grep -c '^fatal: HTTP request failed:' || true)"
-          printf 'recorder_tail_lines=%s\nrecorder_success_ticks=%s\nrecorder_http_failures=%s\n' \
-            "$recorder_tail_lines" "$recorder_success_ticks" "$recorder_http_failures"
+          recorder_proxy_failures="$(printf '%s\n' "$recorder_tail" | grep -c '^fatal: Gamma markets HTTP 503:' || true)"
+          recorder_data_failures=$(( recorder_http_failures + recorder_proxy_failures ))
+          printf 'recorder_tail_lines=%s\nrecorder_success_ticks=%s\nrecorder_http_failures=%s\nrecorder_proxy_failures=%s\nrecorder_data_failures=%s\n' \
+            "$recorder_tail_lines" "$recorder_success_ticks" "$recorder_http_failures" "$recorder_proxy_failures" "$recorder_data_failures"
 
+          multileg_tail="$(tail -n 20 "$run_root/multileg.log" 2>/dev/null || true)"
           printf '%s\n' 'multileg_tail_begin'
-          tail -n 20 "$run_root/multileg.log" 2>/dev/null || true
+          printf '%s\n' "$multileg_tail"
           printf '%s\n' 'multileg_tail_end'
+          hard_arb_tail=""
+          micro_taker_tail=""
           if [[ "$version" == "6" ]]; then
+            hard_arb_tail="$(tail -n 20 "$run_root/hard_arb.log" 2>/dev/null || true)"
             printf '%s\n' 'hard_arb_tail_begin'
-            tail -n 20 "$run_root/hard_arb.log" 2>/dev/null || true
+            printf '%s\n' "$hard_arb_tail"
             printf '%s\n' 'hard_arb_tail_end'
+            micro_taker_tail="$(tail -n 20 "$run_root/micro_taker.log" 2>/dev/null || true)"
             printf '%s\n' 'micro_taker_tail_begin'
-            tail -n 20 "$run_root/micro_taker.log" 2>/dev/null || true
+            printf '%s\n' "$micro_taker_tail"
             printf '%s\n' 'micro_taker_tail_end'
           else
             printf '%s\n' 'allocator_tail_begin'
@@ -245,9 +252,39 @@ jobs:
 
           if [[ "$recorder_tail_lines" -ge 5 && \
                 "$recorder_success_ticks" -eq 0 && \
-                "$recorder_http_failures" -eq "$recorder_tail_lines" ]]; then
-            echo "private recorder data path unhealthy: recent recorder tail contains only HTTP failures" >&2
+                "$recorder_data_failures" -eq "$recorder_tail_lines" ]]; then
+            echo "private recorder data path unhealthy: recent recorder tail contains only data failures" >&2
             exit 1
+          fi
+
+          latest_runtime_failure() {
+            local runtime_tail="$1"
+            local success_pattern="$2"
+            local last_success last_failure
+            last_success="$(printf '%s\n' "$runtime_tail" | grep -nE "$success_pattern" | tail -n 1 | cut -d: -f1 || true)"
+            last_failure="$(printf '%s\n' "$runtime_tail" | grep -nE 'fatal: Cannot replace state file:|another V6 multi-leg broker already owns|FileNotFoundError:' | tail -n 1 | cut -d: -f1 || true)"
+            if [[ -z "$last_failure" ]]; then
+              return 1
+            fi
+            if [[ -z "$last_success" || "$last_failure" -gt "$last_success" ]]; then
+              return 0
+            fi
+            return 1
+          }
+
+          if latest_runtime_failure "$multileg_tail" '^multileg_tick '; then
+            echo "private runtime state integrity unhealthy: multileg has an unrecovered state/lock failure" >&2
+            exit 1
+          fi
+          if [[ "$version" == "6" ]]; then
+            if latest_runtime_failure "$hard_arb_tail" '^\{.*"equity"'; then
+              echo "private runtime state integrity unhealthy: hard_arb has an unrecovered state-write failure" >&2
+              exit 1
+            fi
+            if latest_runtime_failure "$micro_taker_tail" '^\{.*"equity"'; then
+              echo "private runtime state integrity unhealthy: micro_taker has an unrecovered state-write failure" >&2
+              exit 1
+            fi
           fi
 
           case "$(uname -s)" in
