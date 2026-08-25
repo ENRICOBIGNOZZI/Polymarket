@@ -10,6 +10,7 @@ except ModuleNotFoundError:
     from scripts import external_intelligence as base
 
 BASE_SCORE_PAIR = base.score_pair
+BASE_READ_JSON = base.read_json
 
 
 def _asset_identity(pm, km) -> tuple[str | None, str | None]:
@@ -32,8 +33,6 @@ def entity_compatible(pm, km) -> bool:
 def score_pair(pm, km, max_expiry_days: float):
     score, numeric, orient, expiry, rejection = BASE_SCORE_PAIR(pm, km, max_expiry_days)
     if not entity_compatible(pm, km):
-        # Rank incompatible entities below every plausible compatible candidate,
-        # rather than allowing a lexically similar wrong asset to occupy rank 1.
         return -1.0, numeric, orient, expiry, "entity_mismatch"
     return score, numeric, orient, expiry, rejection
 
@@ -52,9 +51,6 @@ def match_kalshi(pm, candidates: Sequence, config: dict, now: int):
     second = scored[1][0] if len(scored) > 1 else -1.0
     margin = score - second
 
-    # Aggressive only after the hard entity/asset identity gate. These are still
-    # discovery thresholds; direct q_external remains subject to chronological
-    # OOS calibration and executable cost stress in the existing pipeline.
     min_score = min(base.finite(source.get("min_match_score"), 0.68), 0.58)
     min_margin = min(base.finite(source.get("min_match_margin"), 0.04), 0.02)
     min_confidence = min(base.finite(source.get("min_confidence"), 0.35), 0.20)
@@ -73,9 +69,28 @@ def match_kalshi(pm, candidates: Sequence, config: dict, now: int):
     return base.Match(score, margin, confidence, rejection, numeric, orient, expiry, best)
 
 
+def read_json(path, default):
+    value = BASE_READ_JSON(path, default)
+    if not isinstance(value, dict) or value.get("schema") != "polymarket_external_intelligence_config_v1":
+        return value
+    value = dict(value)
+    universe = dict(value.get("universe") or {})
+    universe["max_markets"] = max(700, int(base.integer(universe.get("max_markets"), 400)))
+    universe["min_liquidity"] = min(10.0, base.finite(universe.get("min_liquidity"), 100.0))
+    value["universe"] = universe
+    sources = dict(value.get("sources") or {})
+    kalshi = dict(sources.get("kalshi") or {})
+    if kalshi:
+        kalshi["max_markets"] = max(5000, int(base.integer(kalshi.get("max_markets"), 2500)))
+        sources["kalshi"] = kalshi
+    value["sources"] = sources
+    return value
+
+
 def main() -> int:
     base.score_pair = score_pair
     base.match_kalshi = match_kalshi
+    base.read_json = read_json
     return base.main()
 
 
