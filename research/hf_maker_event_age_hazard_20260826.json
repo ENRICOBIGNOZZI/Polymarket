@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "source": {
+    "workflow_run_id": 32906345622,
+    "artifact_id": 9585309016,
+    "artifact_digest": "sha256:20b6cd30664dd82279f88f7a5711a623636dcd"
+  },
+  "prospective_common_sample": {
+    "head_sha": "545ec2d11ecdfa748589130148c2dd2bb0de93a8",
+    "duration_seconds": 600,
+    "arms": {
+      "current_flow_gate": {
+        "posts": 2,
+        "maker_fills": 0,
+        "future_compatible_flow_posts_60s": 0,
+        "future_compatible_flow_posts_300s": 0
+      },
+      "at_touch_no_improve": {
+        "posts": 2,
+        "maker_fills": 0,
+        "future_compatible_flow_posts_60s": 0,
+        "future_compatible_flow_posts_300s": 0
+      },
+      "confidence_gated_inside": {
+        "posts": 1,
+        "maker_fills": 0,
+        "future_compatible_flow_posts_60s": 0,
+        "future_compatible_flow_posts_300s": 0
+      },
+      "toxicity_adjusted": {
+        "posts": 1,
+        "maker_fills": 0,
+        "future_compatible_flow_posts_60s": 0,
+        "future_compatible_flow_posts_300s": 0,
+        "toxicity_evaluations": 1372,
+        "toxicity_discounted": 4,
+        "toxicity_hard_blocks": 0,
+        "max_toxicity": 0.47565499690573987
+      }
+    }
+  },
+  "blocking_hazard_defect": {
+    "description": "Receive time was correctly used as the information-availability gate, but compatible SELL volume was exponentially weighted by receive age rather than market-event age. A delayed historical trade could therefore arrive now and be treated as fresh order flow even though the market event was nearly two minutes old.",
+    "flow_post_examples": [
+      {
+        "market_id": "2126460",
+        "side": "NO",
+        "limit_price": 0.977,
+        "queue_ahead": 14159.84,
+        "own_shares": 127.94268167860798,
+        "source_sell_size": 100.0,
+        "source_sell_event_age_seconds": 112.0,
+        "source_sell_receive_age_seconds": 1.145,
+        "old_flow_rate_per_second": 1.9415135828095058,
+        "event_age_flow_rate_per_second": 0.28436322360001504,
+        "old_modeled_fill_probability": 0.008101012160960383,
+        "event_age_modeled_fill_probability_approx": 0.0011927283409272633,
+        "authorized_min_fill_probability_in_experiment": 0.005,
+        "observed_future_compatible_sell_shares_300s": 0.0,
+        "diagnosis": "OLD_EVENT_ARRIVED_RECENTLY_AND_CREATED_FALSE_FRESH_HAZARD"
+      },
+      {
+        "market_id": "2176270",
+        "side": "YES",
+        "limit_price": 0.37,
+        "source_sell_size": 300.0,
+        "source_sell_event_age_seconds": 113.0,
+        "source_sell_receive_age_seconds": 61.597,
+        "observed_future_compatible_sell_shares_300s": 0.0
+      }
+    ]
+  },
+  "trade_tape_delivery_lag_diagnostic": {
+    "rows": 5370,
+    "note": "Includes bootstrap/history rows and therefore is not a pure steady-state latency distribution; it demonstrates why receive age cannot substitute for event age in a flow-hazard model.",
+    "lag_seconds": {
+      "min": 1.896,
+      "p50": 150.875,
+      "p90": 330.43,
+      "p99": 358.38686,
+      "max": 365.655
+    },
+    "fraction_received_within_15_seconds": 0.23687150837988827,
+    "fraction_received_within_60_seconds": 0.4227188081936685
+  },
+  "retrospective_arrival_persistence_diagnostic": {
+    "description": "Across token-time observations in the artifact tape, prior SELL arrivals were sparse. A prior compatible-flow observation did not imply another arrival in the next minute. This supports shrinking stale/single-burst hazard rather than lowering the fill gate further.",
+    "token_time_observations_with_prior_sell_flow": 2122,
+    "future_sell_arrival_rate_next_60s": 0.12959472196041472,
+    "future_sell_arrival_rate_by_prior_sell_count": {
+      "count_1": 0.115,
+      "count_2": 0.111,
+      "count_3": 0.224,
+      "count_4": 0.5,
+      "count_ge_5": 0.148
+    },
+    "interpretation": "This is a broad token-level diagnostic rather than candidate-specific fill evidence; use it only to motivate prospective event-age-aware hazard testing."
+  },
+  "implemented_research_fix": {
+    "file": "scripts/v6_market_common.py",
+    "change": "compatible_sell_rate now preserves receive-time causality but exponentially decays volume by market-event age; compatible_sell_recency is event-time recency and compatible_sell_receive_recency is retained separately for diagnostics.",
+    "regression_test": "test_tape_flow_rate_decays_by_market_event_age_not_delivery_age",
+    "expected_effect_on_market_2126460": "The modeled fill probability falls from about 0.81% to about 0.12%, below the experiment's 0.5% admission floor, so this stale-flow false admission is removed without raising the authorized post-cost edge threshold."
+  },
+  "next_gate": "Run the same chronological A/B/C/D experiment prospectively on the event-age-aware hazard. Require actual maker fills plus positive fill-conditioned PnL and 45s/60s/300s executable markouts before any promotion claim.",
+  "hard_safety_unchanged": {
+    "max_drawdown": 0.15,
+    "kill_switch": true,
+    "state_integrity": true,
+    "max_market_fraction": 0.05,
+    "max_event_fraction": 0.15,
+    "max_gross_fraction": 0.70,
+    "real_money_execution": false
+  }
+}
