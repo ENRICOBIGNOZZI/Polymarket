@@ -55,15 +55,33 @@ class ServerHealthReadonlyContractTest(unittest.TestCase):
         self.assertIn("recorder_tail_lines=", health)
         self.assertIn("recorder_success_ticks=", health)
         self.assertIn("recorder_http_failures=", health)
+        self.assertIn("recorder_proxy_failures=", health)
+        self.assertIn("recorder_data_failures=", health)
+        self.assertIn("Gamma markets HTTP 503", health)
         self.assertIn('"$recorder_tail_lines" -ge 5', health)
         self.assertIn('"$recorder_success_ticks" -eq 0', health)
         self.assertIn(
-            '"$recorder_http_failures" -eq "$recorder_tail_lines"', health
+            '"$recorder_data_failures" -eq "$recorder_tail_lines"', health
         )
         self.assertIn(
-            "private recorder data path unhealthy: recent recorder tail contains only HTTP failures",
+            "private recorder data path unhealthy: recent recorder tail contains only data failures",
             health,
         )
+
+    def test_private_health_fails_closed_on_unrecovered_state_integrity_errors(self):
+        health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("latest_runtime_failure()", health)
+        self.assertIn("fatal: Cannot replace state file:", health)
+        self.assertIn("another V6 multi-leg broker already owns", health)
+        self.assertIn("FileNotFoundError:", health)
+        self.assertIn("private runtime state integrity unhealthy: multileg", health)
+        self.assertIn("private runtime state integrity unhealthy: hard_arb", health)
+        self.assertIn("private runtime state integrity unhealthy: micro_taker", health)
+        self.assertIn("^multileg_tick ", health)
+        self.assertIn('^\\{.*"equity"', health)
 
     def test_v5_staleness_alert_respects_first_output_startup_grace(self):
         exporter = (ROOT / "monitoring" / "exporter_v5.py").read_text(encoding="utf-8")
