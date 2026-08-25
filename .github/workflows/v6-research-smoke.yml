@@ -13,6 +13,7 @@ on:
       - "scripts/v6_*.py"
       - "tests/test_v6_model_contracts.py"
       - "tests/test_v6_runtime_contract.py"
+      - "tests/test_v6_hf_pressure_research.py"
       - ".github/workflows/v6-research-smoke.yml"
 
 permissions:
@@ -28,21 +29,25 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Enforce isolated paper-only contract
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json
+          import json, subprocess
           from pathlib import Path
           cfg=json.loads(Path('config/paper_v6.json').read_text());arch=json.loads(Path('config/v6_model_architecture.json').read_text());live=json.loads(Path('config/live_champion.json').read_text())
           assert cfg['v6']['paper_only'] is True;assert cfg['multi_strategy']['paper_only'] is True;assert arch['paper_only'] is True;assert arch['allow_authenticated_execution'] is False
-          event='${{ github.event_name }}'; head='${{ github.head_ref }}'
+          event='${{ github.event_name }}'; head='${{ github.head_ref }}'; base_sha='${{ github.event.pull_request.base.sha }}'
           if event == 'pull_request':
               if head.startswith('integration/'):
                   assert live['version'] == 6, 'V6 integration smoke requires the V6 live selector'
               else:
-                  assert live['version'] == 5, 'non-integration research smoke must not switch the live selector'
+                  assert base_sha, 'research PR must expose its base SHA'
+                  base_live=json.loads(subprocess.check_output(['git','show',f'{base_sha}:config/live_champion.json'],text=True))
+                  assert live == base_live, 'non-integration research must not mutate the live champion selector'
           assert float(cfg['max_drawdown']) <= .15;assert float(cfg['max_market_fraction']) <= .025;assert float(cfg['max_event_fraction']) <= .08;assert float(cfg['max_gross_fraction']) <= .45
           v=cfg['v6']; total=sum(float(v[k]) for k in ('micro_maker_capital_fraction','micro_taker_capital_fraction','relative_value_capital_fraction','hard_arb_capital_fraction','external_capital_fraction','reserve_fraction'));assert abs(total-1.0)<1e-9
           PY
@@ -56,7 +61,7 @@ jobs:
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
-          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py -v
+          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py tests/test_v6_hf_pressure_research.py -v
       - name: Live public-data relation probes
         shell: bash
         run: |
@@ -81,12 +86,40 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/v6_local_factor_intents.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/local_factor.log 2>&1 || true
-      - name: Live public-data maker economics probe
+      - name: Live public-data baseline and aggressive maker forward probe
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p v6_evidence/maker
-          ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once > v6_evidence/maker.log 2>&1 || true
+          mkdir -p v6_evidence/maker_baseline v6_evidence/maker_aggressive
+          run_policy() {
+            local name="$1" markets="$2" min_liq="$3" min_edge="$4"
+            set +e
+            timeout --signal=TERM --kill-after=10s 60s \
+              ./build/polymarket_maker_paper \
+              --config config/paper_v6.json \
+              --run-dir "v6_evidence/${name}" \
+              --markets "$markets" --min-liquidity "$min_liq" \
+              --min-edge "$min_edge" --max-order-usd 25 \
+              --ttl-seconds 45 --hold-seconds 90 \
+              --adverse-selection-mult 0.15 --interval 10 --loop \
+              > "v6_evidence/${name}.log" 2>&1
+            local rc=$?
+            set -e
+            if [[ "$rc" -ne 0 && "$rc" -ne 124 && "$rc" -ne 143 ]]; then
+              echo "maker policy ${name} failed rc=${rc}" >&2
+              return "$rc"
+            fi
+          }
+          run_policy maker_baseline 250 10 0.00035 &
+          baseline_pid=$!
+          run_policy maker_aggressive 400 5 0.00010 &
+          aggressive_pid=$!
+          set +e
+          wait "$baseline_pid"; baseline_rc=$?
+          wait "$aggressive_pid"; aggressive_rc=$?
+          set -e
+          test "$baseline_rc" -eq 0
+          test "$aggressive_rc" -eq 0
       - name: Live public-data micro-taker causal warmup/markout probe
         shell: bash
         run: |
@@ -100,6 +133,11 @@ jobs:
         if: always()
         shell: bash
         run: |
+          python3 scripts/v6_hf_pressure_research.py \
+            --micro-state v6_evidence/micro_taker/state.json \
+            --maker-baseline v6_evidence/maker_baseline \
+            --maker-aggressive v6_evidence/maker_aggressive \
+            --output v6_evidence/hf_pressure.json || true
           python3 - <<'PY'
           import csv,json,re
           from pathlib import Path
@@ -110,7 +148,7 @@ jobs:
               except Exception:return {}
           hard=(root/'graph_hard_taker_scan.csv').read_text(errors='ignore') if (root/'graph_hard_taker_scan.csv').exists() else ''
           m=re.search(r'net_positive_pre_gas=(\d+)',hard)
-          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'local_factor':js('local_factor_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0}
+          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'local_factor':js('local_factor_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0,'hf_pressure':js('hf_pressure.json')}
           state=root/'micro_taker/state.json'
           if state.exists():
               try:
@@ -120,6 +158,7 @@ jobs:
                   lags=[int(x['target_staleness_seconds']) for x in labeled if x.get('target_staleness_seconds') is not None]
                   summary['micro_taker_samples']=len(samples)
                   summary['micro_taker_labeled']=len(labeled)
+                  summary['micro_taker_nonzero_labels']=sum(abs(float(x.get('y') or 0.0))>1e-12 for x in labeled)
                   summary['micro_taker_post_horizon_labels']=len(bad)
                   summary['micro_taker_target_staleness_max_seconds']=max(lags) if lags else None
                   summary['micro_taker_open_positions']=len(s.get('positions') or {})
