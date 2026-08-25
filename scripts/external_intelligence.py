@@ -915,7 +915,22 @@ def collect_binance(
             continue
         health[asset] = {"status": "ok", "source_event_ts": source_ts, "features": features}
         maximum = max(1, integer(source.get("max_markets_per_asset"), 20))
-        for market in sorted(markets, key=lambda item: (item.volume24h, item.liquidity), reverse=True)[:maximum]:
+        ranked: list[tuple[bool, float, float, PmMarket, tuple[float, float, dict[str, Any]] | None]] = []
+        for market in markets:
+            estimate = crypto_threshold_probability(market, asset, features, now, config)
+            ranked.append((
+                estimate is not None,
+                market.volume24h,
+                market.liquidity,
+                market,
+                estimate,
+            ))
+        ranked.sort(key=lambda row: (row[0], row[1], row[2]), reverse=True)
+        selected = ranked[:maximum]
+        health[asset]["eligible_markets"] = len(markets)
+        health[asset]["selected_markets"] = len(selected)
+        health[asset]["direct_probability_markets"] = sum(row[0] for row in ranked)
+        for _, _, _, market, estimate in selected:
             for name, value in sorted(features.items()):
                 observations.append(observation_row(
                     market,
@@ -929,7 +944,6 @@ def collect_binance(
                     mapping_score=1.0,
                     metadata={"asset": asset, "symbol": symbol},
                 ))
-            estimate = crypto_threshold_probability(market, asset, features, now, config)
             if estimate is not None:
                 q_external, confidence, metadata = estimate
                 observations.append(observation_row(

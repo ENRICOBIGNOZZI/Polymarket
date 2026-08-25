@@ -27,7 +27,7 @@
     "binance": {
       "enabled": true,
       "kline_limit": 289,
-      "max_markets_per_asset": 60,
+      "max_markets_per_asset": 120,
       "base_confidence": 0.6,
       "probability_model": {
         "enabled": true,
