@@ -3,17 +3,18 @@ set -euo pipefail
 
 CONFIG="${1:-config/paper_v5.json}"
 RUN_ROOT="${2:-runs/paper_v5_live}"
-MIN_LIQUIDITY="${V5_MIN_LIQUIDITY:-25}"
-MODEL_MARKETS="${V5_MODEL_MARKETS:-500}"
-RECORDER_MARKETS="${V5_RECORDER_MARKETS:-1000}"
+MIN_LIQUIDITY="${V5_MIN_LIQUIDITY:-10}"
+MODEL_MARKETS="${V5_MODEL_MARKETS:-800}"
+RECORDER_MARKETS="${V5_RECORDER_MARKETS:-1200}"
 RECORDER_BATCH="${V5_RECORDER_BATCH:-40}"
 RECORDER_LOOKBACK_SECONDS="${V5_RECORDER_LOOKBACK_SECONDS:-900}"
 STAT_INTERVAL_SECONDS="${V5_STAT_INTERVAL_SECONDS:-120}"
 STRUCTURAL_INTERVAL_SECONDS="${V5_STRUCTURAL_INTERVAL_SECONDS:-60}"
+EXTERNAL_REFRESH_INTERVAL_SECONDS="${V5_EXTERNAL_REFRESH_INTERVAL_SECONDS:-60}"
 REWARD_INTERVAL_SECONDS="${V5_REWARD_INTERVAL_SECONDS:-300}"
 REPORT_INTERVAL_SECONDS="${V5_REPORT_INTERVAL_SECONDS:-60}"
-INTENT_MIN_EDGE="${V5_INTENT_MIN_EDGE:-0.00025}"
-mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/strategies"
+INTENT_MIN_EDGE="${V5_INTENT_MIN_EDGE:-0.0}"
+mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/strategies" "$RUN_ROOT/external"
 
 COMPACTION_INTERVAL_SECONDS="$(python3 - "$CONFIG" <<'PY'
 import json
@@ -28,9 +29,21 @@ print(value)
 PY
 )"
 
+refresh_external_feed() {
+  local src="$RUN_ROOT/external/latest-external-signals.jsonl"
+  git fetch --no-tags origin telemetry:refs/remotes/origin/telemetry >/dev/null 2>&1 || true
+  git show origin/telemetry:telemetry/latest-external-signals.jsonl > "$src.tmp" 2>/dev/null || : > "$src.tmp"
+  mv "$src.tmp" "$src"
+  python3 scripts/materialize_external_paper_signals.py \
+    --input "$src" --output data/external_signals.csv \
+    --min-confidence 0.05 --max-age-seconds 86400 \
+    > "$RUN_ROOT/external_feed_latest.log" 2> "$RUN_ROOT/external_feed_errors.log" || true
+}
+
 # Materialise and validate all five generated child configs before starting the
 # persistent allocator. This is validation only; the allocator below runs them
 # continuously in paper mode against live Polymarket books.
+refresh_external_feed
 python3 scripts/multi_strategy_paper.py \
   --config "$CONFIG" --run-root "$RUN_ROOT" --engine ./build/polymarket_engine \
   --markets "$MODEL_MARKETS" --min-liquidity "$MIN_LIQUIDITY" --validate-only \
@@ -48,7 +61,7 @@ filter_b2() {
     --output "$RUN_ROOT/stat_arb_pca.csv" \
     --rejections "$RUN_ROOT/stat_arb_pca_rejected.csv" \
     --cache "$RUN_ROOT/market_metadata_cache.json" \
-    --min-jaccard 0.08 --min-shared-tokens 1 \
+    --min-jaccard 0.03 --min-shared-tokens 1 \
     >> "$RUN_ROOT/coherent_hedges.log" 2>&1
 }
 
@@ -65,7 +78,7 @@ rebuild_intents() {
   python3 scripts/merge_v4_intents.py \
     --input "$RUN_ROOT/b1_intents.csv" --input "$RUN_ROOT/b2_intents.csv" \
     --output "$RUN_ROOT/intents.csv" --min-edge "$INTENT_MIN_EDGE" \
-    --max-age-seconds 240 --max-bundles 80 \
+    --max-age-seconds 300 --max-bundles 120 \
     >> "$RUN_ROOT/intent_merge.log" 2>&1
 }
 
@@ -102,8 +115,8 @@ supervise_execution() {
     ./build/polymarket_multileg_paper \
       --config "$CONFIG" --run-dir "$RUN_ROOT" \
       --intents "$RUN_ROOT/intents.csv" --trade-tape "$RUN_ROOT/trade_tape.csv" \
-      --min-edge "$INTENT_MIN_EDGE" --completion-threshold 0.75 \
-      --submit-latency-ms 100 --cancel-latency-ms 100 --max-replaces 6 \
+      --min-edge "$INTENT_MIN_EDGE" --completion-threshold 0.50 \
+      --submit-latency-ms 100 --cancel-latency-ms 100 --max-replaces 8 \
       --max-leg-risk-usd 12 --adverse-horizon-seconds 45 --interval 1 --loop \
       >> "$RUN_ROOT/multileg.log" 2>&1 &
     broker_pid=$!
@@ -222,6 +235,7 @@ start_supervisor
 
 last_stat=0
 last_structural=0
+last_external=0
 last_rewards=0
 last_oos=0
 last_report=0
@@ -238,26 +252,31 @@ while true; do
     start_supervisor
   fi
 
-  # The passive microstructure sleeve is deliberately frequent and small. The
-  # edge gate still includes exit fee, slippage and an adverse-selection buffer.
+  if (( now - last_external >= EXTERNAL_REFRESH_INTERVAL_SECONDS )); then
+    refresh_external_feed
+    last_external=$now
+  fi
+
+  # Frequent, small maker paper quotes. Executable costs and adverse-selection
+  # accounting remain active; only the admission hurdle is reduced to zero.
   ./build/polymarket_maker_paper \
     --config "$CONFIG" --run-dir "$RUN_ROOT/maker" --markets "$MODEL_MARKETS" --min-liquidity "$MIN_LIQUIDITY" \
-    --min-edge 0.0005 --max-order-usd 25 --ttl-seconds 120 --hold-seconds 300 \
+    --min-edge 0.0 --max-order-usd 20 --ttl-seconds 120 --hold-seconds 300 \
     --adverse-selection-mult 0.20 --once >> "$RUN_ROOT/maker.log" 2>&1 || true
 
   if (( now - last_stat >= STAT_INTERVAL_SECONDS )); then
     rm -f "$RUN_ROOT/stat_arb_pairs.csv" "$RUN_ROOT/stat_arb_pca_raw.csv"
     ./build/polymarket_stat_arb \
-      --config "$CONFIG" --markets "$MODEL_MARKETS" --history-universe 300 \
-      --lookback-hours 720 --fidelity-minutes 30 --min-z 0.75 \
-      --min-t-reversion 0.75 --max-half-life-hours 336 --top 200 \
+      --config "$CONFIG" --markets "$MODEL_MARKETS" --history-universe 400 \
+      --lookback-hours 720 --fidelity-minutes 15 --min-z 0.25 \
+      --min-t-reversion 0.20 --max-half-life-hours 504 --top 300 \
       --csv "$RUN_ROOT/stat_arb_pairs.csv" \
       > "$RUN_ROOT/stat_arb_pairs_latest.log" 2> "$RUN_ROOT/stat_arb_pairs_errors.log" || true
     ./build/polymarket_pca_stat_arb \
-      --config "$CONFIG" --markets "$MODEL_MARKETS" --universe 300 \
-      --lookback-hours 720 --fidelity-minutes 30 --factors 5 --max-hedges 8 \
-      --min-z 0.65 --min-t-reversion 0.60 --max-half-life-hours 336 \
-      --max-factor-hedge-error 0.80 --top 200 --csv "$RUN_ROOT/stat_arb_pca_raw.csv" \
+      --config "$CONFIG" --markets "$MODEL_MARKETS" --universe 400 \
+      --lookback-hours 720 --fidelity-minutes 15 --factors 5 --max-hedges 10 \
+      --min-z 0.20 --min-t-reversion 0.20 --max-half-life-hours 504 \
+      --max-factor-hedge-error 1.25 --top 300 --csv "$RUN_ROOT/stat_arb_pca_raw.csv" \
       > "$RUN_ROOT/stat_arb_pca_latest.log" 2> "$RUN_ROOT/stat_arb_pca_errors.log" || true
     filter_b2 || true
     rebuild_intents || true
@@ -266,7 +285,7 @@ while true; do
 
   if (( now - last_structural >= STRUCTURAL_INTERVAL_SECONDS )); then
     ./build/polymarket_negrisk_arb \
-      --config "$CONFIG" --markets "$MODEL_MARKETS" --min-liquidity "$MIN_LIQUIDITY" --top 200 \
+      --config "$CONFIG" --markets "$MODEL_MARKETS" --min-liquidity "$MIN_LIQUIDITY" --top 300 \
       2> "$RUN_ROOT/structural_errors.log" \
       | tee "$RUN_ROOT/structural_latest.log" "$RUN_ROOT/structural_latest.csv" >/dev/null || true
     last_structural=$now
