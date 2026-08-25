@@ -11,14 +11,22 @@ POLICY = ROOT / "scripts" / "research_pr_policy.py"
 
 
 class CrossVenueResearchPolicyTest(unittest.TestCase):
-    def run_policy(self, branch: str, changed_files: list[str], labels: list[str] | None = None, draft: bool = False):
+    def run_policy(
+        self,
+        branch: str,
+        changed_files: list[str],
+        labels: list[str] | None = None,
+        draft: bool = False,
+        body: str = "cross-venue portfolio arbitrage research",
+        source_research: dict | None = None,
+    ):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             event = {
                 "pull_request": {
                     "head": {"ref": branch},
                     "draft": draft,
-                    "body": "cross-venue portfolio arbitrage research",
+                    "body": body,
                     "labels": [{"name": name} for name in (labels or [])],
                 }
             }
@@ -27,19 +35,24 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
             report_path = temp / "report.md"
             event_path.write_text(json.dumps(event), encoding="utf-8")
             changed_path.write_text("\n".join(changed_files) + "\n", encoding="utf-8")
+            command = [
+                "python3",
+                str(POLICY),
+                "--event",
+                str(event_path),
+                "--changed-files",
+                str(changed_path),
+                "--manifest-existed-on-base",
+                "true",
+                "--output",
+                str(report_path),
+            ]
+            if source_research is not None:
+                source_path = temp / "source.json"
+                source_path.write_text(json.dumps(source_research), encoding="utf-8")
+                command.extend(["--source-research-json", str(source_path)])
             return subprocess.run(
-                [
-                    "python3",
-                    str(POLICY),
-                    "--event",
-                    str(event_path),
-                    "--changed-files",
-                    str(changed_path),
-                    "--manifest-existed-on-base",
-                    "true",
-                    "--output",
-                    str(report_path),
-                ],
+                command,
                 cwd=ROOT,
                 check=False,
                 capture_output=True,
@@ -88,6 +101,78 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
         self.assertIn("shadow-isolated code cannot modify", completed.stdout)
         self.assertIn("scripts/portfolio_supervisor.py", completed.stdout)
         self.assertIn("scripts/install_cross_venue_credentials.sh", completed.stdout)
+
+    def test_sensitive_integration_cannot_leave_draft_with_unapproved_source(self):
+        completed = self.run_policy(
+            "integration/aggressive-v5",
+            ["src/engine.cpp", "config/live_champion.json"],
+            draft=False,
+            body="Source research PR/branch/commit: #154\n",
+            source_research={
+                "number": 154,
+                "headRefName": "research/aggressive-v5-execution",
+                "body": "research candidate",
+                "comments": [
+                    {
+                        "createdAt": "2026-08-25T00:00:00Z",
+                        "body": "Research Governance — MORE_EVIDENCE_REQUIRED",
+                    }
+                ],
+                "reviews": [],
+            },
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("unapproved model/runtime work must remain in research", completed.stdout)
+        self.assertIn("MORE_EVIDENCE_REQUIRED", completed.stdout)
+
+    def test_sensitive_integration_accepts_explicit_approved_source_verdict(self):
+        completed = self.run_policy(
+            "integration/approved-v5",
+            ["src/engine.cpp", "config/live_champion.json"],
+            draft=False,
+            body="Source research PR/branch/commit: #200\n",
+            source_research={
+                "number": 200,
+                "headRefName": "research/approved-v5",
+                "body": "research candidate",
+                "comments": [
+                    {
+                        "createdAt": "2026-08-25T00:00:00Z",
+                        "body": "Research Governance — APPROVED_FOR_INTEGRATION",
+                    }
+                ],
+                "reviews": [],
+            },
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("source_research_verdict: `APPROVED_FOR_INTEGRATION`", completed.stdout)
+        self.assertIn("policy: `pass`", completed.stdout)
+
+    def test_latest_research_verdict_wins(self):
+        completed = self.run_policy(
+            "integration/regressed-v5",
+            ["src/engine.cpp"],
+            draft=False,
+            body="Source research PR/branch/commit: #201\n",
+            source_research={
+                "number": 201,
+                "headRefName": "research/regressed-v5",
+                "body": "research candidate",
+                "comments": [
+                    {
+                        "createdAt": "2026-08-25T00:00:00Z",
+                        "body": "Research Governance — APPROVED_FOR_INTEGRATION",
+                    },
+                    {
+                        "createdAt": "2026-08-25T01:00:00Z",
+                        "body": "Research Governance — MORE_EVIDENCE_REQUIRED",
+                    },
+                ],
+                "reviews": [],
+            },
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("MORE_EVIDENCE_REQUIRED", completed.stdout)
 
 
 if __name__ == "__main__":
