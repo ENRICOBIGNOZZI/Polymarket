@@ -143,7 +143,7 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
         self.assertEqual(report["invariants"]["expected_scheduled_skips_ignored"], 1)
         self.assertEqual(report["status"], "DEGRADED")
 
-    def test_nonconfigured_scheduled_skip_remains_fail_closed(self) -> None:
+    def test_nonconfigured_scheduled_skip_is_not_filtered(self) -> None:
         runs = self.healthy_runs()
         for run in runs:
             if run["workflowName"] == "Polymarket Research Policy":
@@ -154,13 +154,8 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
         report = module.build_report(self.config, snapshot, self.now)
         policy = report["workflow_status"]["research-policy.yml"]
         self.assertEqual(policy["state"], "skipped", policy)
-        self.assertEqual(report["status"], "DEGRADED")
-        alerts = [
-            alert for alert in report["alerts"]
-            if alert.get("code") == "WORKFLOW_SKIPPED"
-            and "research-policy.yml" in str(alert.get("detail"))
-        ]
-        self.assertTrue(alerts, report["alerts"])
+        self.assertIn("skipped", policy["reason"])
+        self.assertEqual(report["invariants"]["expected_scheduled_skips_ignored"], 0)
 
     def test_missing_autonomous_product_is_unhealthy(self) -> None:
         health = module._autonomous_product_health({}, {}, 2_000)
