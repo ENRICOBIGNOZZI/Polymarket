@@ -231,9 +231,25 @@ jobs:
             exit 1
           fi
 
+          stopped_or_zombie() {
+            local pid="$1"
+            local state=""
+            if ! kill -0 "$pid" 2>/dev/null; then return 0; fi
+            state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+            [[ "$state" == Z* ]]
+          }
+
           kill "$first_pid"
-          for _ in {1..40}; do kill -0 "$first_pid" 2>/dev/null || break; sleep 0.25; done
-          kill -0 "$first_pid" 2>/dev/null && { echo 'first runtime did not stop cleanly' >&2; exit 1; }
+          for _ in {1..40}; do
+            stopped_or_zombie "$first_pid" && break
+            sleep 0.25
+          done
+          if ! stopped_or_zombie "$first_pid"; then
+            echo 'first runtime did not stop cleanly' >&2
+            exit 1
+          fi
+          # kill -0 remains true for an unreaped zombie on macOS. Reap it before
+          # asserting lock recovery; lingering children would still retain the lock.
           wait "$first_pid" 2>/dev/null || true
           first_pid=0
 
