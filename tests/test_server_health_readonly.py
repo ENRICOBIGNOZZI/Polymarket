@@ -42,10 +42,76 @@ class ServerHealthReadonlyContractTest(unittest.TestCase):
         self.assertIn("scripts/v5_runtime_readiness.py", health)
         self.assertIn("--model-output-max-age 120", health)
         self.assertIn("--startup-grace 600", health)
-        self.assertIn("scripts/runtime_action_report.py", health)
+        self.assertNotIn("scripts/runtime_action_report.py", health)
+        self.assertNotIn('--output-json "$run_root/action_report.json"', health)
+        self.assertNotIn('--output-markdown "$run_root/action_report.md"', health)
+        self.assertIn('action_report_json="$run_root/action_report.json"', health)
+        self.assertIn("polymarket_runtime_action_report_v1", health)
+        self.assertIn("assert -30.0 <= age <= 180.0", health)
+        self.assertIn("scripts/validate_trade_recorder_health.py", health)
+        self.assertIn("--max-trade-age-seconds 300", health)
+        self.assertIn("--max-request-error-rate 0.08", health)
+        self.assertIn("assert -30.0 <= runtime_age <= 120.0", health)
+        self.assertIn("runtime.get('proxy_ready') is True", health)
+        self.assertIn("runtime_proxy_cache_age_seconds=", health)
+        self.assertIn("0.0 <= proxy_cache_age <= 3600.0", health)
+        self.assertIn("runtime.get('supervisor_ready') is True", health)
+        self.assertIn("runtime.get('unready_components') == []", health)
+        self.assertIn("required_components-set(raw_components)", health)
+        self.assertIn("math.isfinite(age) and age >= 0.0", health)
+        self.assertIn("math.isclose(execution_staleness,worst_component_staleness", health)
+        self.assertIn("0.0 <= execution_staleness <= 120.0", health)
+        self.assertIn("runtime_status_age_seconds=", health)
+        self.assertIn("runtime_component_staleness=", health)
+        self.assertIn("runtime_unready_components=", health)
+        for component in (
+            "maker",
+            "micro_taker",
+            "multileg_broker",
+            "hard_arb",
+            "external",
+            "trade_recorder",
+            "supervisor",
+            "market_proxy",
+            "relations",
+            "graph_research",
+            "local_factor",
+            "external_bridge",
+        ):
+            self.assertIn(f"'{component}'", health)
+        self.assertIn('test -s "$run_root/graph_research_status.json"', health)
+        self.assertIn("graph['graph_mode'] == 'RESEARCH_ONLY'", health)
+        self.assertIn("graph['broker_routing_enabled'] is False", health)
+        self.assertIn("exploration['paper_only'] is True", health)
+        self.assertIn("float(exploration['max_trade_usd']) <= 5.0", health)
         self.assertIn('test "$status_ref" = "paper-validated"', health)
         self.assertIn('test "$status_head" = "$head_sha"', health)
         self.assertIn('test "$status_validated" = "$validated_sha"', health)
+
+    def test_private_health_reports_the_failing_runtime_stage_without_relaxing_it(self):
+        health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('trap health_failure ERR', health)
+        self.assertIn('health_failed_stage=%s', health)
+        self.assertIn('health_failed_command=%s', health)
+        self.assertIn('health_failed_exit_code=%s', health)
+        self.assertIn('health_status=PASS', health)
+        self.assertIn("Runtime invariant result", health)
+        self.assertIn("health stage marker missing", health)
+        for stage in (
+            "revision_identity",
+            "local_endpoint_readiness",
+            "metrics_contract",
+            "runtime_files",
+            "runtime_semantics",
+            "action_report",
+            "recorder_data_path",
+            "runtime_integrity",
+            "service_supervisor",
+        ):
+            self.assertIn(f'health_stage="{stage}"', health)
 
     def test_private_health_fails_closed_on_sustained_recorder_http_failure(self):
         health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(
@@ -61,10 +127,10 @@ class ServerHealthReadonlyContractTest(unittest.TestCase):
         self.assertIn('"$recorder_tail_lines" -ge 5', health)
         self.assertIn('"$recorder_success_ticks" -eq 0', health)
         self.assertIn(
-            '"$recorder_data_failures" -eq "$recorder_tail_lines"', health
+            '"$recorder_data_failures" -ge 5', health
         )
         self.assertIn(
-            "private recorder data path unhealthy: recent recorder tail contains only data failures",
+            "private recorder data path unhealthy: recent recorder tail has no successful tick and at least five data failures",
             health,
         )
 

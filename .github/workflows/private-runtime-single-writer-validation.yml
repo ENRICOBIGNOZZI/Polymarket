@@ -8,6 +8,10 @@ on:
       - "scripts/runtime_singleton_launcher.py"
       - "scripts/paper_latest_loop.sh"
       - "scripts/paper_v6_loop.sh"
+      - "scripts/v6_task_runtime.sh"
+      - "scripts/v6_queue_filter.py"
+      - "scripts/graph_research_ev.py"
+      - "scripts/execution_ev.py"
       - "scripts/v6_hard_arb_paper.py"
       - "scripts/v6_micro_taker.py"
       - "scripts/v6_external_bridge.py"
@@ -358,14 +362,26 @@ jobs:
               parent=stack.pop()
               for pid,cmd in children.get(parent,[]):
                   if pid in seen: continue
-                  seen.add(pid); desc.append({'pid':pid,'command':cmd}); stack.append(pid)
+                  seen.add(pid); desc.append({'pid':pid,'ppid':ppid,'command':cmd}); stack.append(pid)
           markers=[
               'paper_v6_loop.sh','v6_market_proxy.py','polymarket_trade_recorder',
               'polymarket_multileg_paper','polymarket_engine','polymarket_maker_paper',
-              'v6_micro_taker.py','v6_hard_arb_paper.py','v6_local_factor_intents.py',
-              'v6_relation_intents.py','v6_intent_guard.py','v6_external_bridge.py'
+              'v6_queue_filter.py micro','v6_queue_filter.py hard','v6_local_factor_intents.py',
+              'v6_relation_intents.py','v6_intent_guard.py','graph_research_ev.py',
+              'v6_external_bridge.py'
           ]
-          counts={m:sum(m in row['command'] for row in desc) for m in markers}
+          # Background task wrappers are Bash subshells and retain the parent
+          # paper_v6_loop.sh command line.  Only the champion directly parented
+          # by the singleton owner represents a second runtime; deeper matches
+          # are legitimate one-shot wrappers.
+          counts={}
+          for marker in markers:
+              matches=(
+                  row for row in desc
+                  if marker in row['command']
+                  and (marker != 'paper_v6_loop.sh' or row['ppid'] == owner)
+              )
+              counts[marker]=sum(1 for _ in matches)
           bad={k:v for k,v in counts.items() if v>1}
           payload={'owner':owner,'label':label,'descendants':desc,'counts':counts,'duplicates':bad}
           open(f'{out}/process-{label}.json','w',encoding='utf-8').write(json.dumps(payload,indent=2,sort_keys=True)+'\n')

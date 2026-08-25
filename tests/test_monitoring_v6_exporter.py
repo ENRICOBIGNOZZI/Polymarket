@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "monitoring"))
 
 from exporter_latest import LatestCollector  # noqa: E402
-from exporter_v6 import _multileg_fill_counts  # noqa: E402
+from exporter_v6 import _model_health, _multileg_fill_counts  # noqa: E402
 
 
 class MonitoringV6ExporterTests(unittest.TestCase):
@@ -64,10 +64,16 @@ class MonitoringV6ExporterTests(unittest.TestCase):
                         "execution_staleness": 0,
                         "strategies": strategies,
                         "relations": {"bundles": 2, "best_edge": 0.004},
-                        "local_factor": {"bundles": 1, "clusters": 3, "best_edge": 0.003},
+                        "graph_research": {"graph_mode":"RESEARCH_ONLY","broker_routing_enabled":False,"candidate_bundles":3,"economic_research_candidates":0,"insufficient_evidence_candidates":3,"joint_models":[{"observations":7}]},
+                        "local_factor": {"bundles": 1, "clusters": 3, "reversion_tests": 11, "fdr_eligible_signals": 2, "best_edge": 0.003},
                         "external_bridge": {"materialized_signals": 0},
                     }
                 ),
+                encoding="utf-8",
+            )
+            (run / "micro_taker").mkdir()
+            (run / "micro_taker" / "status.json").write_text(
+                json.dumps({"exploration":{"enabled":True,"active_positions":1,"hourly_opens":2,"opened_last_tick":1,"candidate_strata_last_tick":4,"depth_rejections_last_tick":1,"realized_pnl_total":-0.25}}),
                 encoding="utf-8",
             )
             (run / "v7_execution_evidence.json").write_text(
@@ -105,7 +111,7 @@ class MonitoringV6ExporterTests(unittest.TestCase):
             (run / "allocator_status.json").write_text(
                 json.dumps(
                     {
-                        "models_alive": 5,
+                        "models_alive": 4,
                         "models_expected": 5,
                         "reserve_fraction": 0.05,
                         "global_gross_fraction": 0.0255,
@@ -115,6 +121,28 @@ class MonitoringV6ExporterTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            with (run / "strategy_status.csv").open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["name", "expert", "alive", "status_age_seconds"])
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {"name": "micro", "expert": "micro", "alive": 1, "status_age_seconds": 3},
+                        {"name": "pca", "expert": "local_factor", "alive": 0, "status_age_seconds": 600},
+                        {"name": "graph", "expert": "graph", "alive": 1, "status_age_seconds": 5},
+                        {"name": "semantic", "expert": "relation_parser", "alive": 1, "status_age_seconds": 7},
+                        {"name": "external", "expert": "external", "alive": 1, "status_age_seconds": 9},
+                    ]
+                )
+            (run / "relation_guard_status.json").write_text(json.dumps({"accepted_rows": 2}), encoding="utf-8")
+            with (run / "relation_intents.csv").open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["bundle_id", "market_id"])
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {"bundle_id": "graph-bundle-1", "market_id": "m1"},
+                        {"bundle_id": "graph-bundle-1", "market_id": "m2"},
+                    ]
+                )
             with (run / "multileg_equity.csv").open("w", newline="", encoding="utf-8") as handle:
                 writer = csv.DictWriter(
                     handle,
@@ -134,17 +162,31 @@ class MonitoringV6ExporterTests(unittest.TestCase):
             self.assertIn('version="v6"', text)
             self.assertIn('polymarket_model_gross_exposure_usd{expert="relative_value",model="relative_value"} 180', text)
             self.assertIn('polymarket_model_drawdown_ratio{expert="relative_value",model="relative_value"} 0.02', text)
-            self.assertIn('polymarket_model_alive{expert="relative_value",model="relative_value"} 1', text)
+            self.assertIn('polymarket_model_alive{expert="relative_value",model="relative_value"} 0', text)
+            self.assertIn('polymarket_model_status_age_seconds{expert="relative_value",model="relative_value"} 600', text)
+            self.assertIn('polymarket_model_alive{expert="micro_maker",model="micro_maker"} 1', text)
             self.assertIn('polymarket_model_fills_total{action="all",expert="relative_value",model="relative_value"} 7', text)
             self.assertIn('polymarket_model_fills_total{action="buy",expert="relative_value",model="relative_value"} 4', text)
             self.assertIn('polymarket_model_fills_total{action="sell",expert="relative_value",model="relative_value"} 2', text)
             self.assertIn('polymarket_model_fills_total{action="settle",expert="relative_value",model="relative_value"} 1', text)
             self.assertIn('polymarket_model_realized_pnl_usd{expert="relative_value",model="relative_value"} 7', text)
             self.assertIn('polymarket_model_signals_total{expert="micro_maker",model="micro_maker"} 4', text)
+            self.assertIn('polymarket_model_signals_total{expert="relative_value",model="relative_value"} 1', text)
+            self.assertIn('polymarket_model_best_net_edge_ratio{expert="relative_value",model="relative_value"} 0.003', text)
+            self.assertIn('polymarket_allocator_models_alive 4', text)
             self.assertIn('polymarket_allocator_global_max_gross_fraction 0.45', text)
             self.assertIn('polymarket_model_execution_evidence_eligible{expert="relative_value",model="relative_value",state="PAPER_ELIGIBLE",target="hedged_convergence"} 1', text)
             self.assertIn('polymarket_model_execution_evidence_fills{expert="relative_value",model="relative_value",state="PAPER_ELIGIBLE",target="hedged_convergence"} 7', text)
             self.assertIn('polymarket_model_execution_evidence_eligible{expert="micro_maker",model="micro_maker",state="INSUFFICIENT_EVIDENCE",target="short_horizon_markout"} 0', text)
+            self.assertIn('polymarket_v6_graph_research_candidate_bundles 3', text)
+            self.assertIn('polymarket_v6_graph_research_joint_observations 7', text)
+            self.assertIn('polymarket_v6_graph_research_broker_routing_enabled 0', text)
+            self.assertIn('polymarket_v6_micro_taker_exploration_active_positions 1', text)
+            self.assertIn('polymarket_v6_micro_taker_exploration_realized_pnl_usd -0.25', text)
+            self.assertIn('polymarket_v6_relation_guard_accepted_rows 2', text)
+            self.assertIn('polymarket_v6_relation_guard_accepted_bundles 1', text)
+            self.assertIn('polymarket_v6_local_factor_candidates 11', text)
+            self.assertIn('polymarket_v6_local_factor_fdr_survivors 2', text)
 
     @staticmethod
     def _write_multileg_events(path: Path) -> None:
@@ -173,6 +215,11 @@ class MonitoringV6ExporterTests(unittest.TestCase):
             self._write_multileg_events(path)
             counts = _multileg_fill_counts(path)
             self.assertEqual(counts, {"fills": 7, "buy_fills": 4, "sell_fills": 2, "settle_fills": 1})
+
+    def test_model_health_fails_closed_without_its_strategy_row(self) -> None:
+        rows = {"micro": {"alive": "1", "status_age_seconds": "4"}}
+        self.assertEqual(_model_health(rows, "micro_taker"), (1.0, 4.0))
+        self.assertEqual(_model_health(rows, "relative_value"), (0.0, 1e12))
 
 
 if __name__ == "__main__":

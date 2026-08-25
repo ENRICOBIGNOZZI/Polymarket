@@ -7,7 +7,7 @@ on:
     paths:
       - ".github/workflows/server-health.yml"
   workflow_run:
-    workflows: ["deploy-paper-server", "Grafana Permanent Access"]
+    workflows: ["V6 market cache relay", "Grafana Permanent Access"]
     types: [completed]
     branches: [main]
   schedule:
@@ -107,14 +107,25 @@ jobs:
           assert any(item.get("uid") == "polymarket-multi-strategy-v5" for item in dashboards), dashboards
           PY
 
-      - name: Inspect manifest-selected paper server and write action report
+      - name: Inspect manifest-selected paper server and read action report
         shell: bash
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
             -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE' | tee server-health.txt
           set -euo pipefail
+          health_stage="bootstrap"
+          health_failure() {
+            local exit_code="$?"
+            printf 'health_status=FAIL\n'
+            printf 'health_failed_stage=%s\n' "$health_stage"
+            printf 'health_failed_command=%s\n' "$BASH_COMMAND"
+            printf 'health_failed_exit_code=%s\n' "$exit_code"
+            exit "$exit_code"
+          }
+          trap health_failure ERR
           cd ~/polymarket
+          health_stage="revision_identity"
           printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           printf 'os=%s\n' "$(uname -s)"
           head_sha="$(git rev-parse HEAD)"
@@ -128,6 +139,7 @@ jobs:
           test "$head_sha" = "$validated_sha"
           git merge-base --is-ancestor "$validated_sha" "$main_sha"
 
+          health_stage="champion_metadata"
           champion_meta="$(python3 - <<'PY'
           import json
           from pathlib import Path
@@ -141,11 +153,13 @@ jobs:
           # V5 compatibility example retained for rollout tooling: runs/paper_v5_live
           printf 'champion_version=%s\nchampion_run_root=%s\n' "$version" "$run_root_rel"
 
+          health_stage="local_endpoint_readiness"
           curl -fsS http://127.0.0.1:9108/healthz >/dev/null
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
           curl -fsS http://127.0.0.1:3000/api/search >/dev/null
 
+          health_stage="metrics_contract"
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
           grep -q "^polymarket_runtime_info{adapter=\"v${version}\",run_root=\"${run_name}\",version=\"v${version}\"} 1$" <<<"$metrics"
           grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics"
@@ -159,9 +173,11 @@ jobs:
             test -s "$run_root/hard_arb/status.json"
             test -s "$run_root/local_factor_status.json"
             test -s "$run_root/relation_guard_status.json"
+            test -s "$run_root/graph_research_status.json"
           fi
           printf '%s\n' "$metrics" | grep -E '^polymarket_(runtime_info|runtime_equity_usd|runtime_pnl_usd|runtime_drawdown_ratio|runtime_kill_switch|runtime_realized_pnl_usd_total|runtime_execution_staleness_seconds|allocator_models_alive|allocator_models_expected|allocator_global_gross_fraction|model_pnl_usd|model_equity_usd|model_open_positions|v6_)' || true
 
+          health_stage="runtime_files"
           test -s "$run_root/runtime_status.json"
           test -s "$run_root/allocator_status.json"
           test -s "$run_root/strategy_status.csv"
@@ -176,6 +192,7 @@ jobs:
           test $(( now - supervisor_ts )) -le 60
           printf 'supervisor_timestamp=%s\nrecorder_alive=%s\nbroker_alive=%s\nallocator_alive=%s\n' "$supervisor_ts" "$recorder_alive" "$broker_alive" "$allocator_alive"
 
+          health_stage="runtime_semantics"
           if [[ "$version" == "5" ]]; then
             python3 scripts/v5_runtime_readiness.py \
               --run-root "$run_root" \
@@ -185,7 +202,7 @@ jobs:
               --startup-grace 600
           else
             python3 - "$run_root" "$version" <<'PY'
-          import csv,json,math,pathlib,sys
+          import csv,json,math,pathlib,sys,time
           root=pathlib.Path(sys.argv[1]); version=int(sys.argv[2])
           allocator=json.loads((root/'allocator_status.json').read_text())
           rows=list(csv.DictReader((root/'strategy_status.csv').open()))
@@ -200,23 +217,84 @@ jobs:
               runtime=json.loads((root/'runtime_status.json').read_text())
               assert runtime['version'] == 6 and runtime['paper_only'] is True
               assert float(runtime['drawdown']) <= 0.15 + 1e-12
+              required_components={
+                  'maker','micro_taker','multileg_broker','hard_arb','external',
+                  'trade_recorder','supervisor','market_proxy','relations',
+                  'graph_research','local_factor','external_bridge',
+              }
+              raw_components=runtime.get('component_staleness_seconds')
+              assert isinstance(raw_components,dict), raw_components
+              missing_components=sorted(required_components-set(raw_components))
+              assert not missing_components, missing_components
+              component_staleness={name:float(age) for name,age in raw_components.items()}
+              assert all(math.isfinite(age) and age >= 0.0 for age in component_staleness.values()), component_staleness
+              runtime_timestamp=float(runtime['timestamp'])
+              assert math.isfinite(runtime_timestamp), runtime_timestamp
+              runtime_age=time.time()-runtime_timestamp
+              execution_staleness=float(runtime['execution_staleness'])
+              assert math.isfinite(execution_staleness), execution_staleness
+              print('runtime_status_age_seconds=%.3f' % runtime_age)
+              print('runtime_component_staleness='+json.dumps(component_staleness,sort_keys=True))
+              print('runtime_unready_components='+json.dumps(runtime.get('unready_components')))
+              print('runtime_proxy_ready='+str(runtime.get('proxy_ready')))
+              print('runtime_proxy_cache_age_seconds='+str(runtime.get('proxy_cache_age_seconds')))
+              print('runtime_supervisor_ready='+str(runtime.get('supervisor_ready')))
+              assert -30.0 <= runtime_age <= 120.0, runtime_age
+              assert runtime.get('proxy_ready') is True
+              proxy_cache_age=float(runtime['proxy_cache_age_seconds'])
+              assert math.isfinite(proxy_cache_age) and 0.0 <= proxy_cache_age <= 3600.0, proxy_cache_age
+              assert runtime.get('supervisor_ready') is True
+              assert runtime.get('unready_components') == []
+              worst_component_staleness=max(component_staleness.values())
+              assert math.isclose(execution_staleness,worst_component_staleness,rel_tol=0.0,abs_tol=1e-6), (execution_staleness,worst_component_staleness)
+              assert 0.0 <= execution_staleness <= 120.0
               assert 'graph_hard' in runtime['strategies']
+              graph=json.loads((root/'graph_research_status.json').read_text())
+              assert graph['paper_only'] is True
+              assert graph['graph_mode'] == 'RESEARCH_ONLY'
+              assert graph['broker_routing_enabled'] is False
+              assert graph['raw_scanner_edge_is_execution_edge'] is False
+              print('graph_mode=%s' % graph['graph_mode'])
+              print('graph_candidate_bundles=%s' % graph.get('candidate_bundles', 0))
+              micro=json.loads((root/'micro_taker'/'status.json').read_text())
+              exploration=micro['exploration']
+              assert exploration['paper_only'] is True and exploration['enabled'] is True
+              assert 30 <= int(exploration['hold_seconds']) <= 60
+              assert 0.0 < float(exploration['max_trade_usd']) <= 5.0
+              assert 0 < int(exploration['max_opens_per_hour']) <= 6
+              assert 0 < int(exploration['max_positions']) <= 2
+              print('micro_exploration_active_positions=%s' % exploration.get('active_positions', 0))
+              print('micro_exploration_hourly_opens=%s' % exploration.get('hourly_opens', 0))
           PY
           fi
 
-          external_signals="data/external_signals.csv"
-          if [[ "$version" == "6" ]]; then external_signals="$run_root/external_signals.csv"; fi
-          python3 scripts/runtime_action_report.py \
-            --run-root "$run_root" --external-signals "$external_signals" \
-            --window-seconds 3600 --production-edge 0.001 \
-            --output-json "$run_root/action_report.json" \
-            --output-markdown "$run_root/action_report.md" >/dev/null || true
-          test -s "$run_root/action_report.json"
-          test -s "$run_root/action_report.md"
+          health_stage="action_report"
+          action_report_json="$run_root/action_report.json"
+          action_report_markdown="$run_root/action_report.md"
+          test -s "$action_report_json"
+          test -s "$action_report_markdown"
+          python3 - "$action_report_json" <<'PY'
+          import json,sys,time
+          from pathlib import Path
+          path=Path(sys.argv[1])
+          report=json.loads(path.read_text(encoding='utf-8'))
+          assert report.get('schema') == 'polymarket_runtime_action_report_v1'
+          generated=float(report['generated_ts'])
+          age=time.time()-generated
+          assert -30.0 <= age <= 180.0, age
+          print('action_report_age_seconds=%.3f' % max(0.0, age))
+          PY
           printf '%s\n' 'action_report_begin'
-          cat "$run_root/action_report.md"
+          cat "$action_report_markdown"
           printf '%s\n' 'action_report_end'
 
+          health_stage="recorder_data_path"
+          python3 scripts/validate_trade_recorder_health.py \
+            --log "$run_root/trade_recorder.log" \
+            --max-trade-age-seconds 300 \
+            --max-future-skew-seconds 30 \
+            --max-request-errors 1 \
+            --max-request-error-rate 0.08
           recorder_tail="$(tail -n 20 "$run_root/trade_recorder.log" 2>/dev/null || true)"
           printf '%s\n' 'trade_recorder_tail_begin'
           printf '%s\n' "$recorder_tail"
@@ -252,11 +330,12 @@ jobs:
 
           if [[ "$recorder_tail_lines" -ge 5 && \
                 "$recorder_success_ticks" -eq 0 && \
-                "$recorder_data_failures" -eq "$recorder_tail_lines" ]]; then
-            echo "private recorder data path unhealthy: recent recorder tail contains only data failures" >&2
+                "$recorder_data_failures" -ge 5 ]]; then
+            echo "private recorder data path unhealthy: recent recorder tail has no successful tick and at least five data failures" >&2
             exit 1
           fi
 
+          health_stage="runtime_integrity"
           latest_runtime_failure() {
             local runtime_tail="$1"
             local success_pattern="$2"
@@ -287,6 +366,7 @@ jobs:
             fi
           fi
 
+          health_stage="service_supervisor"
           case "$(uname -s)" in
             Darwin)
               for label in \
@@ -321,6 +401,9 @@ jobs:
               systemctl is-active --quiet polymarket-monitoring.service
               ;;
           esac
+          health_stage="complete"
+          printf 'health_status=PASS\n'
+          printf 'health_last_stage=%s\n' "$health_stage"
           REMOTE
 
       - name: Fetch structured action report
@@ -339,6 +422,11 @@ jobs:
         shell: bash
         run: |
           echo '## Polymarket manifest-selected private paper server' >> "$GITHUB_STEP_SUMMARY"
+          echo '### Runtime invariant result' >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          grep -E '^health_(status|last_stage|failed_stage|failed_command|failed_exit_code)=' server-health.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo 'health stage marker missing' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo '### Full readonly health log' >> "$GITHUB_STEP_SUMMARY"
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
           cat server-health.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo 'health output missing' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"

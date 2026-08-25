@@ -49,7 +49,7 @@ class LiveMonitoringContractTest(unittest.TestCase):
         self.assertIn("paper_v6_live", smoke)
         self.assertIn("v6_materialize_configs.py", helper)
         self.assertIn("v6_micro_taker.py", helper)
-        self.assertIn("v6_hard_arb_paper.py", helper)
+        self.assertIn("v6_queue_filter.py hard", helper)
         self.assertIn("v6_local_factor_intents.py", helper)
         self.assertIn("v6_relation_intents.py", helper)
         self.assertIn("v6_intent_guard.py", helper)

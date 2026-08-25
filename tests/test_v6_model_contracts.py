@@ -49,10 +49,13 @@ class V6ModelContracts(unittest.TestCase):
     def test_semantic_is_discovery_not_fair_value(self):
         arch=json.loads((ROOT/"config/v6_model_architecture.json").read_text());self.assertIn("must never create a fair probability or trade",arch["semantic_role"]);self.assertIn("live fair-value mixture is non-promotable",arch["scheduler_directive"]["all_schedulers"])
         cfg=json.loads((ROOT/"config/paper_v6.json").read_text());self.assertEqual(float(cfg["semantic_shrink"]),0.0);self.assertEqual(float(cfg["expert_weights"]["semantic"]),0.0)
+        graph=arch["models"]["graph_rv"];self.assertEqual(graph["execution"],["RESEARCH_ONLY"]);self.assertIn("joint full/partial/zero",graph["rule"])
 
     def test_runtime_routes_each_model_to_its_execution(self):
         loop=(ROOT/"scripts/paper_v6_loop.sh").read_text()
-        self.assertIn("v6_intent_guard.py",loop);self.assertIn("relation_intents_raw.csv",loop);self.assertIn("v6_micro_taker.py",loop);self.assertIn("v6_local_factor_intents.py",loop);self.assertIn("v6_hard_arb_paper.py",loop);self.assertIn("polymarket_maker_paper",loop)
+        self.assertIn("v6_intent_guard.py",loop);self.assertIn("relation_intents_raw.csv",loop);self.assertIn("v6_queue_filter.py micro",loop);self.assertIn("graph_research_ev.py",loop);self.assertIn("v6_local_factor_intents.py",loop);self.assertIn("v6_queue_filter.py hard",loop);self.assertIn("--leg-latency-ms 100",loop);self.assertIn("polymarket_maker_paper",loop)
+        self.assertIn("task_rebuild_intents(){",loop);self.assertIn('scripts/merge_v4_intents.py --input "$RUN_ROOT/local_factor_intents.csv"',loop);self.assertIn("task_rebuild_intents\n  return",loop)
+        self.assertNotIn('--input "$RUN_ROOT/relation_intents.csv" --output "$RUN_ROOT/intents.csv"',loop)
         self.assertNotIn("polymarket_pca_stat_arb",loop);self.assertNotIn("build_v4_intents.py --strategy B1",loop)
 
     def test_micro_target_uses_last_pre_horizon_observation(self):

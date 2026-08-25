@@ -99,6 +99,8 @@ class V6RuntimeContractTest(unittest.TestCase):
         high = self.relations.threshold_signature("Will Bitcoin reach $90,000 in August 2026?")
         self.assertIsNotNone(low); self.assertIsNotNone(high)
         self.assertEqual(low[0], high[0]); self.assertEqual(low[1], "UP"); self.assertLess(low[2], high[2])
+        self.assertEqual(self.relations.threshold_signature("Will EUR/USD exceed €1.25?")[2], 1.25)
+        self.assertEqual(self.relations.threshold_signature("Will GBP/USD exceed £1.40?")[2], 1.40)
 
     def test_local_factor_cluster_is_not_one_market_pca(self) -> None:
         family1 = self.local_factor.payoff_family("Will Bitcoin reach $82,500 in August 2026?")
@@ -132,8 +134,10 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("--min-common-points 48", loop)
         self.assertIn("v6_local_factor_intents.py", loop)
         self.assertIn("v6_relation_intents.py", loop)
-        self.assertIn("v6_micro_taker.py", loop)
-        self.assertIn("v6_hard_arb_paper.py", loop)
+        self.assertIn("v6_queue_filter.py micro", loop)
+        self.assertIn("graph_research_ev.py", loop)
+        self.assertIn("v6_queue_filter.py hard", loop)
+        self.assertIn("--leg-latency-ms 100", loop)
         self.assertIn("polymarket_maker_paper", loop)
 
     def test_v6_runtime_term_trap_stops_children_instead_of_restarting_them(self) -> None:
@@ -165,6 +169,25 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertTrue(max_trade_values)
         self.assertTrue(all(0.0 < x <= 125.0 for x in max_order_values + max_trade_values))
 
+    def test_graph_is_research_only_and_micro_exploration_stays_tiny(self) -> None:
+        cfg = json.loads((ROOT / "config/paper_v6.json").read_text())
+        graph = cfg["v6"]["graph"]
+        exploration = cfg["v6"]["micro_taker_exploration"]
+        self.assertEqual(graph["mode"], "research_only")
+        self.assertIs(graph["broker_routing_enabled"], False)
+        self.assertTrue(exploration["paper_only"])
+        self.assertTrue(exploration["enabled"])
+        self.assertLessEqual(float(exploration["max_trade_usd"]), 5.0)
+        self.assertLessEqual(int(exploration["max_opens_per_hour"]), 6)
+        self.assertLessEqual(int(exploration["max_positions"]), 2)
+        self.assertGreaterEqual(int(exploration["hold_seconds"]), 30)
+        self.assertLessEqual(int(exploration["hold_seconds"]), 60)
+        self.assertGreater(float(exploration["min_entry_price"]), 0.0)
+        self.assertLess(float(exploration["min_entry_price"]), float(exploration["max_entry_price"]))
+        self.assertLess(float(exploration["max_entry_price"]), 1.0)
+        self.assertGreater(float(exploration["max_round_trip_cost_fraction"]), 0.0)
+        self.assertLessEqual(float(exploration["max_round_trip_cost_fraction"]), 0.03)
+
     def test_v6_research_smoke_preserves_base_live_selector(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "v6-research-smoke.yml").read_text()
         self.assertIn("fetch-depth: 0", workflow)
@@ -172,6 +195,28 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("f'{base_sha}:config/live_champion.json'", workflow)
         self.assertIn("assert live == base_live", workflow)
         self.assertNotIn("assert live['version'] == 5, 'non-integration research smoke", workflow)
+
+    def test_v6_research_smoke_feeds_and_observes_tiny_exploration(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "v6-research-smoke.yml").read_text()
+        self.assertIn("./build/polymarket_trade_recorder", workflow)
+        self.assertIn("--interval 5 --loop", workflow)
+        self.assertIn("probe_markets=250", workflow)
+        self.assertEqual(workflow.count('--markets "$probe_markets"'), 2)
+        self.assertNotIn("--markets 120", workflow)
+        self.assertIn("stop_smoke_recorder", workflow)
+        self.assertIn('kill -0 "$recorder_pid"', workflow)
+        self.assertIn("--trade-tape v6_evidence/trade_tape.csv", workflow)
+        self.assertIn("--exploration-hold-seconds 45", workflow)
+        self.assertIn("for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do", workflow)
+        self.assertIn("--horizon-seconds 10", workflow)
+        self.assertIn("--max-target-staleness-seconds 5", workflow)
+        self.assertIn("--exploration-max-opens-per-hour 3", workflow)
+        self.assertIn("micro_taker_exploration_buy_fills", workflow)
+        self.assertIn("github.run_attempt", workflow)
+        self.assertIn("micro_taker_exploration_hourly_opens", workflow)
+        self.assertIn("micro_taker_exploration_closed", workflow)
+        self.assertIn("micro_taker_exploration_economic_rejections", workflow)
+        self.assertIn("micro_taker_exploration_best_round_trip_cost_fraction", workflow)
 
 
 if __name__ == "__main__":

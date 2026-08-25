@@ -94,12 +94,19 @@ def _canonical_from_contract(root: Path, now: float) -> CanonicalStatus | None:
     if not raw:
         return None
     oos = raw.get("oos") if isinstance(raw.get("oos"), dict) else {}
+    contract_timestamp = _float(raw.get("timestamp"), 0.0)
+    if contract_timestamp > now + 30.0:
+        contract_age = 1e12
+    elif contract_timestamp > 0.0:
+        contract_age = max(0.0, now - contract_timestamp)
+    else:
+        contract_age = max(0.0, now - (_mtime(root / "runtime_status.json") or now))
     return CanonicalStatus(
         equity=_float(raw.get("equity")), pnl=_float(raw.get("pnl")), drawdown=_float(raw.get("drawdown")),
         killed=1.0 if bool(raw.get("killed")) else 0.0, live_units=_float(raw.get("live_units")),
         reserved_cash=_float(raw.get("reserved_cash")), gross_exposure=_float(raw.get("gross_exposure")),
         realized_pnl=_float(raw.get("realized_pnl")), execution_imbalance=_float(raw.get("execution_imbalance")),
-        execution_staleness=_float(raw.get("execution_staleness")), oos_trades=_float(oos.get("trades")),
+        execution_staleness=max(_float(raw.get("execution_staleness")), contract_age), oos_trades=_float(oos.get("trades")),
         oos_net_pnl=_float(oos.get("net_pnl")), oos_stressed_net_pnl=_float(oos.get("stressed_net_pnl")),
         oos_drawdown=_float(oos.get("max_drawdown")), oos_pvalue=_float(oos.get("bootstrap_pvalue"), 1.0),
         oos_eligible=1.0 if bool(oos.get("eligible_for_tiny_pilot")) else 0.0,
@@ -125,13 +132,26 @@ def _canonical_fallback(root: Path, config: Path, now: float) -> CanonicalStatus
     imbalance = 0.0
     try:
         import csv
+        live_bundle_ids: set[str] = set()
+        try:
+            with (root / "multileg_bundles.csv").open(newline="", encoding="utf-8") as f:
+                live_bundle_ids = {
+                    str(row.get("bundle_id") or "")
+                    for row in csv.DictReader(f)
+                    if str(row.get("status") or "").upper() in {"RESTING", "COMPLETE", "ABORTING"}
+                }
+        except OSError:
+            pass
         by_bundle: dict[str, list[float]] = {}
         with (root / "multileg_legs.csv").open(newline="", encoding="utf-8") as f:
             for leg in csv.DictReader(f):
+                bundle_id = str(leg.get("bundle_id") or "")
+                if bundle_id not in live_bundle_ids:
+                    continue
                 target = max(0.0, _float(leg.get("target_shares")))
                 filled = max(0.0, _float(leg.get("filled_shares")))
                 frac = min(1.0, max(0.0, filled / target)) if target > 1e-12 else 0.0
-                by_bundle.setdefault(leg.get("bundle_id", ""), []).append(frac)
+                by_bundle.setdefault(bundle_id, []).append(frac)
         for fractions in by_bundle.values():
             if fractions:
                 imbalance = max(imbalance, max(fractions) - min(fractions))

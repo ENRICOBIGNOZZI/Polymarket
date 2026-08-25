@@ -54,7 +54,7 @@ python3 -m py_compile \
   monitoring/exporter_v6.py monitoring/exporter_latest.py \
   scripts/multi_strategy_paper.py scripts/build_v4_intents.py scripts/merge_v4_intents.py \
   scripts/walk_forward_v4.py scripts/tiny_live_pilot.py scripts/v6_*.py
-bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh \
+bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh scripts/v6_task_runtime.sh \
   scripts/v6_live_smoke_once.sh scripts/monitoring_up.sh scripts/monitoring_down.sh
 python3 -m json.tool "$CONFIG_REL" >/dev/null
 python3 -m json.tool config/live_champion.json >/dev/null

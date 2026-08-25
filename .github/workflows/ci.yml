@@ -79,7 +79,7 @@ jobs:
       - name: Deployment, scheduler context, and V6 runtime contracts
         run: |
           set -euo pipefail
-          bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh \
+          bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh scripts/v6_task_runtime.sh \
             ops/bootstrap_server.sh ops/update_server.sh ops/bootstrap_macos.sh ops/update_server_macos.sh \
             ops/macos_service_control.sh ops/install_autoupdate_macos.sh ops/finish_bootstrap_macos.sh ops/apply_runtime_config_macos.sh
           python3 -m py_compile \

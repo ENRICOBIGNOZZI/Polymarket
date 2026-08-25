@@ -69,6 +69,27 @@
     "structural_max_bundles": 100,
     "hard_arb_max_events": 80,
     "hard_arb_min_net_edge": 0.00020,
-    "hard_arb_max_trade_usd": 60.0
+    "hard_arb_max_trade_usd": 60.0,
+    "graph": {
+      "mode": "research_only",
+      "min_joint_fill_observations": 30,
+      "capital_latency_bps": 1.0,
+      "completion_threshold": 0.75,
+      "cost_quantile": 0.75,
+      "broker_routing_enabled": false
+    },
+    "micro_taker_exploration": {
+      "paper_only": true,
+      "enabled": true,
+      "max_trade_usd": 5.0,
+      "max_opens_per_hour": 6,
+      "max_positions": 2,
+      "hold_seconds": 45,
+      "min_activity_trades_60s": 1,
+      "min_entry_price": 0.05,
+      "max_entry_price": 0.95,
+      "max_round_trip_cost_fraction": 0.03,
+      "markout_horizons_seconds": [1, 10, 45]
+    }
   }
 }

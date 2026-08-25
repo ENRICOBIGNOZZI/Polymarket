@@ -9,6 +9,23 @@ WORKFLOW = ROOT / ".github" / "workflows" / "v6-market-cache-relay.yml"
 
 
 class V6MarketCacheRelayContractTests(unittest.TestCase):
+    def test_deploy_seeds_cache_before_server_health(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('workflows: ["deploy-paper-server"]', workflow)
+        self.assertIn("github.event.workflow_run.conclusion == 'success'", workflow)
+        self.assertIn(
+            'workflows: ["V6 market cache relay", "Grafana Permanent Access"]',
+            health,
+        )
+        self.assertNotIn(
+            'workflows: ["deploy-paper-server", "Grafana Permanent Access"]',
+            health,
+        )
+
     def test_relay_is_scheduled_read_only_for_code_and_atomic_for_cache(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn('cron: "*/5 * * * *"', workflow)
@@ -19,7 +36,8 @@ class V6MarketCacheRelayContractTests(unittest.TestCase):
         self.assertIn("scripts/v6_market_snapshot.py", workflow)
         self.assertIn("market_proxy_cache.json.relay.${GITHUB_RUN_ID}", workflow)
         self.assertIn('mv "$incoming" "$target"', workflow)
-        self.assertIn('time.time()-float(value["timestamp"]) <= 120', workflow)
+        self.assertIn('assert -30.0 <= age <= 90', workflow)
+        self.assertIn('assert -30.0 <= age <= 120', workflow)
         self.assertIn('paper_validated_sha="$(git rev-parse origin/paper-validated)"', workflow)
         self.assertIn('test "$(git rev-parse HEAD)" = "$paper_validated_sha"', workflow)
         self.assertIn('git checkout --detach "$PAPER_VALIDATED_SHA"', workflow)

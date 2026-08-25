@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import argparse
+import csv
 import json
 import math
 import os
@@ -41,6 +42,16 @@ class BookFill:
     slippage_cost: float
     complete: bool
 
+@dataclass(frozen=True)
+class RoundTripCost:
+    entry: BookFill
+    exit: BookFill
+    entry_cost: float
+    exit_proceeds: float
+    predictable_loss: float
+    cost_fraction: float
+    fee_fraction: float
+
 def _bool(v: Any, d: bool=False) -> bool:
     if isinstance(v,bool): return v
     if isinstance(v,(int,float)): return bool(v)
@@ -53,12 +64,15 @@ def _bool(v: Any, d: bool=False) -> bool:
 def _from_obj(o: dict[str,Any], source: str, hint: bool|None=None) -> FeeDetails|None:
     s=o.get("feeSchedule") if isinstance(o.get("feeSchedule"),dict) else None
     if s is None and isinstance(o.get("fd"),dict): s=o["fd"]
-    if s is None and any(k in o for k in ("rate","feeRate","exponent","takerOnly")): s=o
+    if s is None and any(k in o for k in ("rate","feeRate","exponent","takerOnly","r","e","to")): s=o
     if s is None: return None
-    r=finite(s.get("rate",s.get("feeRate")))
+    # CLOB V2 uses the compact fd={r,e,to} representation.  Missing those
+    # aliases silently selected the much larger conservative fallback and made
+    # paper exploration report fictitious fees.
+    r=finite(s.get("rate",s.get("feeRate",s.get("r"))))
     if not math.isfinite(r): return None
-    e=max(0.0,finite(s.get("exponent"),1.0))
-    t=_bool(s.get("takerOnly"),True)
+    e=max(0.0,finite(s.get("exponent",s.get("e")),1.0))
+    t=_bool(s.get("takerOnly",s.get("to")),True)
     enabled=(r>0.0) if hint is None else bool(hint and r>0.0)
     return FeeDetails(enabled,max(0.0,r),e,t,source)
 
@@ -135,6 +149,33 @@ def max_buy_for_cash(asks: Sequence[tuple[float,float]], cap: float, d: FeeDetai
     return best
 
 
+def paper_round_trip_for_cash(asks: Sequence[tuple[float,float]], bids: Sequence[tuple[float,float]],
+                              cap: float, d: FeeDetails, *, slippage_bps: float=0.0) -> RoundTripCost|None:
+    """Price a buy plus an immediate, fully executable paper unwind.
+
+    The result is a structural friction estimate, not a forecast.  Both sides
+    walk displayed depth, apply the configured latency stress, and charge the
+    resolved taker schedule.  Requiring a full unwind prevents thin bids from
+    looking artificially cheap.
+    """
+    entry=max_buy_for_cash(asks,cap,d,slippage_bps=slippage_bps)
+    if entry is None or entry.filled_shares<=1e-12: return None
+    exit_fill=walk_book_for_shares(bids,entry.filled_shares,d,buy=False,
+                                  slippage_bps=slippage_bps,require_full=True)
+    if exit_fill is None: return None
+    entry_cost=entry.stressed_cash+entry.fee
+    exit_proceeds=exit_fill.stressed_cash-exit_fill.fee
+    if entry_cost<=1e-12: return None
+    loss=max(0.0,entry_cost-exit_proceeds)
+    fees=max(0.0,entry.fee)+max(0.0,exit_fill.fee)
+    return RoundTripCost(entry,exit_fill,entry_cost,exit_proceeds,loss,
+                         loss/entry_cost,fees/entry_cost)
+
+
+def exploration_price_allowed(price: float, minimum: float, maximum: float) -> bool:
+    return math.isfinite(price) and 0.0<minimum<=price<=maximum<1.0
+
+
 SCRIPT_DIR=Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path: sys.path.insert(0,str(SCRIPT_DIR))
 import v6_micro_taker as micro_legacy
@@ -173,6 +214,120 @@ def _augment_positions(gamma: str, markets: list[Any], positions: dict[str,Any])
             pass
     return markets
 
+
+MICRO_FILL_FIELDS=["timestamp","market_id","slug","action","side","shares","price","fee","pnl"]
+MICRO_EVENT_FIELDS=["timestamp","position_id","market_id","slug","action","side","token_id","experiment_kind","shares","price","fee","pnl","stratum"]
+MICRO_MARKOUT_FIELDS=["timestamp","position_id","market_id","token_id","side","experiment_kind","stratum","entry_ts","horizon_seconds","observed_delay_seconds","shares","entry_price","entry_fee","bid","gross_markout_pnl","markout_pnl"]
+EXPLORATION_OUTCOME_FIELDS=["timestamp","position_id","market_id","slug","side","stratum","activity_bucket","activity_trades_60s","activity_volume_60s","queue_depth_bucket","top_ask_depth","entry_ts","exit_ts","hold_seconds","entry_cost","entry_fee","exit_fee","expected_round_trip_loss","expected_round_trip_cost_fraction","expected_round_trip_fee_fraction","pnl","markout_1s","markout_10s","markout_45s"]
+TRADE_TAPE_FIELDS=["timestamp","received_ms","lag_ms","condition_id","asset_id","outcome","side","price","size","transaction_hash","slug","event_slug"]
+
+
+def _append_micro_fill(run_dir: Path, *, now: int, market: Any, action: str, side: str,
+                       shares: float, price: float, fee: float, pnl: float) -> None:
+    micro_legacy.append_csv(
+        run_dir/"fills.csv", MICRO_FILL_FIELDS,
+        {"timestamp":now,"market_id":market.id,"slug":market.slug,"action":action,
+         "side":side,"shares":shares,"price":price,"fee":fee,"pnl":pnl})
+
+
+def _append_micro_event(run_dir: Path, *, now: int, position: dict[str,Any], market: Any,
+                        action: str, shares: float, price: float, fee: float, pnl: float) -> None:
+    side=str(position.get("side") or "")
+    micro_legacy.append_csv(
+        run_dir/"execution_events.csv", MICRO_EVENT_FIELDS,
+        {"timestamp":now,"position_id":position.get("position_id", ""),"market_id":market.id,
+         "slug":market.slug,"action":action,"side":side,
+         "token_id":market.yes if side=="YES" else market.no,
+         "experiment_kind":position.get("experiment_kind", "ALPHA"),"shares":shares,
+         "price":price,"fee":fee,"pnl":pnl,"stratum":position.get("stratum", "")})
+
+
+def _recent_trade_activity(path: Path|None, now: int, window_seconds: int=60,
+                           max_bytes: int=1_000_000) -> dict[str,dict[str,float]]:
+    """Read a bounded tail of public tape to stratify a paper taker sample.
+
+    This is activity, not a fabricated taker queue.  Takers do not stand in a
+    queue, so queue pressure below is only displayed best-ask depth.
+    """
+    if path is None or not path.exists() or path.stat().st_size<=0:
+        return {}
+    try:
+        with path.open("rb") as handle:
+            size=handle.seek(0,2); handle.seek(max(0,size-max_bytes))
+            text=handle.read().decode("utf-8",errors="replace")
+    except OSError:
+        return {}
+    lines=text.splitlines()
+    if not lines: return {}
+    if size>max_bytes: lines=lines[1:]
+    out: dict[str,dict[str,float]]={}
+    for row in csv.DictReader(lines,fieldnames=TRADE_TAPE_FIELDS):
+        ts=int(finite(row.get("timestamp"),0.0)); token=str(row.get("asset_id") or "")
+        if not token or ts<=0 or ts>now or now-ts>window_seconds: continue
+        item=out.setdefault(token,{"trades":0.0,"volume":0.0})
+        item["trades"]+=1.0; item["volume"]+=max(0.0,finite(row.get("size"),0.0))
+    return out
+
+
+def _activity_bucket(trades: float) -> str:
+    if trades>=10: return "hot"
+    if trades>=3: return "active"
+    return "low"
+
+
+def _queue_depth_bucket(top_ask_depth: float) -> str:
+    if top_ask_depth<5: return "thin"
+    if top_ask_depth<25: return "normal"
+    return "deep"
+
+
+def _mark_micro_positions(run_dir: Path, positions: dict[str,dict[str,Any]],
+                          current: dict[str,tuple[Any,Any,Any,Any]], now: int) -> None:
+    for mid,position in positions.items():
+        cur=current.get(mid)
+        if cur is None: continue
+        market,yes,no,_=cur; side=str(position.get("side") or "")
+        book=yes if side=="YES" else no; bid=book.bid(); entry_ts=int(finite(position.get("entry_ts"),0.0))
+        if not math.isfinite(bid) or entry_ts<=0: continue
+        age=now-entry_ts; marks=position.get("markouts") if isinstance(position.get("markouts"),dict) else {}
+        values=position.get("markout_values") if isinstance(position.get("markout_values"),dict) else {}
+        position["markouts"]=marks; position["markout_values"]=values
+        position_id=str(position.get("position_id") or f"micro_taker:{mid}:{entry_ts}"); position["position_id"]=position_id
+        shares=max(0.0,finite(position.get("shares"),0.0)); entry=finite(position.get("entry_price"),0.0)
+        for horizon in (1,10,45):
+            key=str(horizon)
+            if age<horizon or key in marks: continue
+            gross=shares*(bid-entry); net=shares*bid-max(0.0,finite(position.get("cost"),0.0))
+            marks[key]=now; values[key]=net
+            micro_legacy.append_csv(
+                run_dir/"markouts.csv", MICRO_MARKOUT_FIELDS,
+                {"timestamp":now,"position_id":position_id,"market_id":mid,
+                 "token_id":market.yes if side=="YES" else market.no,"side":side,
+                 "experiment_kind":position.get("experiment_kind","ALPHA"),"stratum":position.get("stratum", ""),
+                 "entry_ts":entry_ts,"horizon_seconds":horizon,"observed_delay_seconds":age,
+                 "shares":shares,"entry_price":entry,"entry_fee":position.get("entry_fee",0.0),"bid":bid,
+                 "gross_markout_pnl":gross,"markout_pnl":net})
+
+
+def _append_exploration_outcome(run_dir: Path, *, now: int, position: dict[str,Any],
+                                market: Any, exit_fee: float, pnl: float) -> None:
+    if position.get("experiment_kind")!="EXPLORATION": return
+    marks=position.get("markout_values") if isinstance(position.get("markout_values"),dict) else {}
+    micro_legacy.append_csv(
+        run_dir/"exploration_outcomes.csv", EXPLORATION_OUTCOME_FIELDS,
+        {"timestamp":now,"position_id":position.get("position_id", ""),"market_id":market.id,"slug":market.slug,
+         "side":position.get("side", ""),"stratum":position.get("stratum", ""),
+         "activity_bucket":position.get("activity_bucket", ""),"activity_trades_60s":position.get("activity_trades_60s",0),
+         "activity_volume_60s":position.get("activity_volume_60s",0),"queue_depth_bucket":position.get("queue_depth_bucket", ""),
+         "top_ask_depth":position.get("top_ask_depth",0),"entry_ts":position.get("entry_ts",0),"exit_ts":now,
+         "hold_seconds":max(0,now-int(finite(position.get("entry_ts"),0.0))),"entry_cost":position.get("cost",0),
+         "entry_fee":position.get("entry_fee",0),"exit_fee":exit_fee,
+         "expected_round_trip_loss":position.get("exploration_expected_round_trip_loss", ""),
+         "expected_round_trip_cost_fraction":position.get("exploration_expected_round_trip_cost_fraction", ""),
+         "expected_round_trip_fee_fraction":position.get("exploration_expected_round_trip_fee_fraction", ""),"pnl":pnl,
+         "markout_1s":marks.get("1", ""),"markout_10s":marks.get("10", ""),"markout_45s":marks.get("45", "")})
+
+
 def _micro_main() -> int:
     ap=argparse.ArgumentParser()
     ap.add_argument("--config",type=Path,required=True); ap.add_argument("--run-dir",type=Path,required=True)
@@ -180,10 +335,37 @@ def _micro_main() -> int:
     ap.add_argument("--horizon-seconds",type=int,default=30); ap.add_argument("--max-target-staleness-seconds",type=int,default=10)
     ap.add_argument("--max-trade-usd",type=float,default=15); ap.add_argument("--min-edge",type=float,default=.0003)
     ap.add_argument("--slippage-bps",type=float,default=5); ap.add_argument("--max-positions",type=int,default=20)
+    ap.add_argument("--trade-tape",type=Path)
+    ap.add_argument("--exploration-enabled",action="store_true")
+    ap.add_argument("--exploration-max-trade-usd",type=float,default=5)
+    ap.add_argument("--exploration-max-opens-per-hour",type=int,default=6)
+    ap.add_argument("--exploration-max-positions",type=int,default=2)
+    ap.add_argument("--exploration-hold-seconds",type=int,default=45)
+    ap.add_argument("--exploration-min-activity",type=int,default=1)
+    ap.add_argument("--exploration-min-entry-price",type=float)
+    ap.add_argument("--exploration-max-entry-price",type=float)
+    ap.add_argument("--exploration-max-round-trip-cost-fraction",type=float)
     a=ap.parse_args()
     if a.horizon_seconds<=0 or a.max_target_staleness_seconds<0: raise SystemExit("invalid horizon/staleness")
+    if a.exploration_enabled and not 30<=a.exploration_hold_seconds<=60:
+        raise SystemExit("exploration hold must be between 30 and 60 seconds")
+    if a.exploration_enabled and (a.exploration_max_trade_usd<=0 or a.exploration_max_opens_per_hour<=0 or a.exploration_max_positions<=0):
+        raise SystemExit("invalid exploration paper limit")
 
     cfg=json.loads(a.config.read_text()); gamma,clob=cfg["gamma_url"],cfg["clob_url"]
+    v6_cfg=cfg.get("v6") if isinstance(cfg.get("v6"),dict) else {}
+    exploration_cfg=v6_cfg.get("micro_taker_exploration") if isinstance(v6_cfg.get("micro_taker_exploration"),dict) else {}
+    if a.exploration_min_entry_price is None:
+        a.exploration_min_entry_price=finite(exploration_cfg.get("min_entry_price"),.05)
+    if a.exploration_max_entry_price is None:
+        a.exploration_max_entry_price=finite(exploration_cfg.get("max_entry_price"),.95)
+    if a.exploration_max_round_trip_cost_fraction is None:
+        a.exploration_max_round_trip_cost_fraction=finite(exploration_cfg.get("max_round_trip_cost_fraction"),.03)
+    if a.exploration_enabled and not (
+        0.0<a.exploration_min_entry_price<a.exploration_max_entry_price<1.0
+        and 0.0<a.exploration_max_round_trip_cost_fraction<=1.0
+    ):
+        raise SystemExit("invalid exploration economic guard")
     start=float(cfg["starting_capital"]); now=int(time.time()); a.run_dir.mkdir(parents=True,exist_ok=True)
     sp=a.run_dir/"state.json"
     state=json.loads(sp.read_text()) if sp.exists() else {"cash":start,"peak":start,"killed":False,"positions":{},"samples":[]}
@@ -191,6 +373,16 @@ def _micro_main() -> int:
     positions=state.get("positions") if isinstance(state.get("positions"),dict) else {}
     samples=state.get("samples") if isinstance(state.get("samples"),list) else []
     realized_total=finite(state.get("realized_pnl_total"),0.0); failures=[]; sources=Counter()
+    old_exploration=state.get("exploration") if isinstance(state.get("exploration"),dict) else {}
+    exploration_realized_total=finite(state.get("exploration_realized_pnl_total"),
+                                      finite(old_exploration.get("realized_pnl_total"),0.0))
+    raw_history=state.get("exploration_open_history") if isinstance(state.get("exploration_open_history"),list) else []
+    exploration_history=[item for item in raw_history if isinstance(item,dict) and now-int(finite(item.get("timestamp"),0.0))<3600]
+    raw_probe_history=state.get("exploration_probe_history") if isinstance(state.get("exploration_probe_history"),list) else []
+    exploration_probe_history=[
+        item for item in raw_probe_history
+        if isinstance(item,dict) and now-int(finite(item.get("timestamp"),0.0))<3600
+    ][-720:]
 
     try:
         markets=_augment_positions(gamma,micro_legacy.discover(gamma,a.markets,a.min_liquidity),positions)
@@ -207,7 +399,8 @@ def _micro_main() -> int:
 
     labels=micro_legacy.label_matured_samples(samples,now=now,horizon_seconds=a.horizon_seconds,
                                         max_target_staleness_seconds=a.max_target_staleness_seconds)
-    beta=micro_legacy.solve_ridge(samples,1e-2); realized=0.0; partial_exits=0
+    beta=micro_legacy.solve_ridge(samples,1e-2); realized=exploration_realized=0.0; partial_exits=0
+    _mark_micro_positions(a.run_dir,positions,current,now)
 
     # Depth-aware exits. Public depth is walked level-by-level; slippage_bps is
     # an additional latency/adverse-selection stress, not a spread proxy.
@@ -215,20 +408,36 @@ def _micro_main() -> int:
         cur=current.get(mid)
         if cur is None: continue
         m,y,n,z=cur; side=p["side"]; book=y if side=="YES" else n
+        kind=str(p.get("experiment_kind") or "ALPHA")
+        position_id=str(p.get("position_id") or f"micro_taker:{kind.lower()}:{mid}:{int(finite(p.get('entry_ts'),0.0))}")
+        p["position_id"]=position_id; p["experiment_kind"]=kind
         pred=max(-2*z[2],min(2*z[2],sum(x*b for x,b in zip(beta,z[0])))); fair=z[1]+pred
         flip=(side=="YES" and fair<=z[1]) or (side=="NO" and fair>=z[1])
-        if now-int(p["entry_ts"])<a.horizon_seconds and not flip: continue
+        horizon=max(1,int(finite(p.get("exit_horizon_seconds"),a.horizon_seconds)))
+        if kind=="EXPLORATION":
+            if now-int(p["entry_ts"])<horizon: continue
+        elif now-int(p["entry_ts"])<horizon and not flip:
+            continue
         d=_micro_fee(m,clob,cfg,sources); old=max(0.0,finite(p.get("shares"),0.0))
         f=walk_book_for_shares(book.bids,old,d,buy=False,slippage_bps=a.slippage_bps,require_full=False)
         if f is None or f.filled_shares<=1e-12: continue
         sold=f.filled_shares; cb=max(0.0,finite(p.get("cost"),0.0)); alloc=cb*min(1.0,sold/max(old,1e-12))
         proceeds=f.stressed_cash-f.fee; pnl=proceeds-alloc; cash+=proceeds; realized+=pnl
-        residual=max(0.0,old-sold); action="SELL" if residual<=1e-9 else "SELL_PARTIAL"
-        if residual<=1e-9: del positions[mid]
-        else: p["shares"]=residual; p["cost"]=max(0.0,cb-alloc); partial_exits+=1
-        micro_legacy.append_csv(a.run_dir/"fills.csv",["timestamp","market_id","slug","action","side","shares","price","fee","pnl"],
-                          {"timestamp":now,"market_id":mid,"slug":m.slug,"action":action,"side":side,
-                           "shares":sold,"price":f.stressed_vwap,"fee":f.fee,"pnl":pnl})
+        residual=max(0.0,old-sold); base_action="SELL" if residual<=1e-9 else "SELL_PARTIAL"
+        action=f"{base_action}_EXPLORATION" if kind=="EXPLORATION" else base_action
+        _append_micro_fill(a.run_dir,now=now,market=m,action=action,side=side,shares=sold,price=f.stressed_vwap,fee=f.fee,pnl=pnl)
+        _append_micro_event(a.run_dir,now=now,position=p,market=m,action=action,shares=sold,price=f.stressed_vwap,fee=f.fee,pnl=pnl)
+        if residual<=1e-9:
+            if kind=="EXPLORATION":
+                exploration_realized+=pnl
+                outcome_pnl=pnl+finite(p.get("realized_pnl_so_far"),0.0)
+                _append_exploration_outcome(a.run_dir,now=now,position=p,market=m,exit_fee=f.fee,pnl=outcome_pnl)
+            del positions[mid]
+        else:
+            p["shares"]=residual; p["cost"]=max(0.0,cb-alloc); partial_exits+=1
+            if kind=="EXPLORATION":
+                exploration_realized+=pnl
+                p["realized_pnl_so_far"]=finite(p.get("realized_pnl_so_far"),0.0)+pnl
 
     equity=_equity(cash,positions,current); peak=max(peak,equity)
     dd=max(0.0,1-equity/peak) if peak else 0.0; killed=bool(state.get("killed")) or dd>=float(cfg.get("max_drawdown",.15))
@@ -262,16 +471,137 @@ def _micro_main() -> int:
         signals+=1; cost=f.stressed_cash+f.fee
         if cost>cash+1e-9: continue
         cash-=cost; gross+=cost; event_cost[m.event]+=cost
-        positions[m.id]={"side":side,"shares":f.filled_shares,"entry_price":f.stressed_vwap,"entry_ts":now,
-                         "cost":cost,"entry_fee":f.fee,"event":m.event,"fee_source":d.source}
+        position={"position_id":f"micro_taker:alpha:{m.id}:{side}:{now}","experiment_kind":"ALPHA",
+                  "side":side,"shares":f.filled_shares,"entry_price":f.stressed_vwap,"entry_ts":now,
+                  "exit_horizon_seconds":a.horizon_seconds,"cost":cost,"entry_fee":f.fee,"event":m.event,
+                  "fee_source":d.source,"markouts":{},"markout_values":{}}
+        positions[m.id]=position
         opened+=1
-        micro_legacy.append_csv(a.run_dir/"fills.csv",["timestamp","market_id","slug","action","side","shares","price","fee","pnl"],
-                          {"timestamp":now,"market_id":m.id,"slug":m.slug,"action":"BUY","side":side,
-                           "shares":f.filled_shares,"price":f.stressed_vwap,"fee":f.fee,"pnl":0.0})
+        _append_micro_fill(a.run_dir,now=now,market=m,action="BUY",side=side,shares=f.filled_shares,price=f.stressed_vwap,fee=f.fee,pnl=0.0)
+        _append_micro_event(a.run_dir,now=now,position=position,market=m,action="BUY",shares=f.filled_shares,price=f.stressed_vwap,fee=f.fee,pnl=0.0)
+
+    # A fixed, deliberately tiny paper sleeve explores executable taker fills.
+    # It does not call a wallet, a signing API, or a live order endpoint.  The
+    # best-ask displayed quantity is logged as a queue-pressure proxy because a
+    # taker has no queue-ahead position of its own.
+    activity=_recent_trade_activity(a.trade_tape,now)
+    exploration_opened=exploration_candidates=exploration_activity_candidates=0
+    exploration_depth_rejections=exploration_economic_probes=0
+    exploration_economic_rejections: Counter[str]=Counter()
+    exploration_fee_sources: Counter[str]=Counter()
+    selected_round_trip_cost_fractions: list[float]=[]
+    best_round_trip_cost_fraction=math.inf
+    if a.exploration_enabled and not killed:
+        used_strata={str(item.get("stratum") or "") for item in exploration_history}
+        choices=[]
+        assumed_rate=max(0.0,finite(v6_cfg.get("assumed_fee_rate",cfg.get("assumed_fee_rate",.07)),.07))
+        assumed_exponent=max(0.0,finite(v6_cfg.get("assumed_fee_exponent",cfg.get("assumed_fee_exponent",1.0)),1.0))
+        ranking_fee=FeeDetails(assumed_rate>0.0,assumed_rate,assumed_exponent,True,"ranking:conservative")
+        ranking_cap=min(a.exploration_max_trade_usd,a.max_trade_usd)
+        for mid,(m,y,n,z) in current.items():
+            if mid in positions: continue
+            pred=max(-2*z[2],min(2*z[2],sum(x*b for x,b in zip(beta,z[0])))); q=max(.001,min(.999,z[1]+pred))
+            for side,book,fair in (("YES",y,q),("NO",n,1-q)):
+                token=m.yes if side=="YES" else m.no
+                active=activity.get(token,{})
+                trade_count=max(0.0,finite(active.get("trades"),0.0))
+                if trade_count<a.exploration_min_activity or not book.asks: continue
+                top_depth=max(0.0,finite(book.asks[0][1],0.0))
+                activity_bucket=_activity_bucket(trade_count); depth_bucket=_queue_depth_bucket(top_depth)
+                stratum=f"{side}|{activity_bucket}|{depth_bucket}"
+                if stratum in used_strata: continue
+                exploration_activity_candidates+=1
+                ask=book.ask()
+                if not exploration_price_allowed(ask,a.exploration_min_entry_price,a.exploration_max_entry_price):
+                    exploration_economic_rejections["entry_price_band"]+=1; continue
+                if not book.bids:
+                    exploration_economic_rejections["missing_exit_depth"]+=1; continue
+                estimate=paper_round_trip_for_cash(book.asks,book.bids,ranking_cap,ranking_fee,
+                                                   slippage_bps=a.slippage_bps)
+                estimated_cost_fraction=estimate.cost_fraction if estimate is not None else math.inf
+                choices.append((estimated_cost_fraction,-trade_count,
+                                -max(0.0,finite(active.get("volume"),0.0)),stratum,m,side,book,fair,
+                                top_depth,activity_bucket,depth_bucket,active))
+        # Minimize known round-trip friction before using activity and volume as
+        # fill-likelihood tie breakers. Stratum diversity remains enforced.
+        choices.sort(key=lambda item:(item[0],item[1],item[2],item[3],item[4].id))
+        exploration_candidates=len(choices)
+        for _,_,_,stratum,m,side,book,fair,top_depth,activity_bucket,depth_bucket,active in choices:
+            active_positions=sum(str(p.get("experiment_kind") or "ALPHA")=="EXPLORATION" for p in positions.values())
+            if (len(positions)>=a.max_positions or active_positions>=a.exploration_max_positions or
+                    len(exploration_history)>=a.exploration_max_opens_per_hour):
+                break
+            # YES and NO for one market can both be ranked in the same tick.
+            # Opening the first side must skip its sibling without truncating
+            # exploration of later markets.
+            if m.id in positions:
+                continue
+            equity=_equity(cash,positions,current); current_dd=max(0.0,peak-equity)
+            dd_room=max(0.0,max_dd*peak-current_dd-gross)
+            room=min(a.exploration_max_trade_usd,a.max_trade_usd,max(0.0,max_market*equity),
+                     max(0.0,max_event*equity-event_cost[m.event]),max(0.0,max_gross*equity-gross),dd_room,cash)
+            if room<=0: continue
+            d=_micro_fee(m,clob,cfg,sources)
+            exploration_fee_sources[d.source]+=1
+            round_trip=paper_round_trip_for_cash(book.asks,book.bids,room,d,slippage_bps=a.slippage_bps)
+            exploration_economic_probes+=1
+            if round_trip is None:
+                exploration_depth_rejections+=1
+                exploration_economic_rejections["incomplete_round_trip_depth"]+=1; continue
+            f=round_trip.entry
+            if f.filled_shares+1e-12<book.min_order:
+                exploration_depth_rejections+=1
+                exploration_economic_rejections["minimum_order_size"]+=1; continue
+            if not exploration_price_allowed(f.stressed_vwap,a.exploration_min_entry_price,a.exploration_max_entry_price):
+                exploration_economic_rejections["entry_price_band"]+=1; continue
+            best_round_trip_cost_fraction=min(best_round_trip_cost_fraction,round_trip.cost_fraction)
+            if round_trip.cost_fraction>a.exploration_max_round_trip_cost_fraction+1e-12:
+                exploration_economic_rejections["round_trip_cost"]+=1; continue
+            cost=round_trip.entry_cost
+            if cost>cash+1e-9: continue
+            cash-=cost; gross+=cost; event_cost[m.event]+=cost
+            position={"position_id":f"micro_taker:exploration:{m.id}:{side}:{now}","experiment_kind":"EXPLORATION",
+                      "side":side,"shares":f.filled_shares,"entry_price":f.stressed_vwap,"entry_ts":now,
+                      "exit_horizon_seconds":a.exploration_hold_seconds,"cost":cost,"entry_fee":f.fee,"event":m.event,
+                      "fee_source":d.source,"stratum":stratum,"activity_bucket":activity_bucket,
+                      "activity_trades_60s":active.get("trades",0.0),"activity_volume_60s":active.get("volume",0.0),
+                      "queue_depth_bucket":depth_bucket,"top_ask_depth":top_depth,"queue_ahead":0.0,
+                      "markouts":{},"markout_values":{},"exploration_fair_at_entry":fair,
+                      "exploration_all_in_unit_price":f.all_in_unit_price,
+                      "exploration_expected_round_trip_loss":round_trip.predictable_loss,
+                      "exploration_expected_round_trip_cost_fraction":round_trip.cost_fraction,
+                      "exploration_expected_round_trip_fee_fraction":round_trip.fee_fraction}
+            positions[m.id]=position; exploration_history.append({"timestamp":now,"stratum":stratum})
+            used_strata.add(stratum); exploration_opened+=1
+            selected_round_trip_cost_fractions.append(round_trip.cost_fraction)
+            _append_micro_fill(a.run_dir,now=now,market=m,action="BUY_EXPLORATION",side=side,shares=f.filled_shares,price=f.stressed_vwap,fee=f.fee,pnl=0.0)
+            _append_micro_event(a.run_dir,now=now,position=position,market=m,action="BUY_EXPLORATION",shares=f.filled_shares,price=f.stressed_vwap,fee=f.fee,pnl=0.0)
+
+    if a.exploration_enabled:
+        exploration_probe_history.append({
+            "timestamp":now,
+            "activity_candidates":exploration_activity_candidates,
+            "candidate_strata":exploration_candidates,
+            "economic_probes":exploration_economic_probes,
+            "economic_rejections":dict(sorted(exploration_economic_rejections.items())),
+            "fee_sources":dict(sorted(exploration_fee_sources.items())),
+            "best_round_trip_cost_fraction":None if not math.isfinite(best_round_trip_cost_fraction) else best_round_trip_cost_fraction,
+            "selected_round_trip_cost_fractions":selected_round_trip_cost_fractions,
+            "opened":exploration_opened,
+        })
+        exploration_probe_history=exploration_probe_history[-720:]
+    exploration_rejections_hour: Counter[str]=Counter()
+    exploration_fee_sources_hour: Counter[str]=Counter()
+    exploration_costs_hour: list[float]=[]
+    for probe in exploration_probe_history:
+        exploration_rejections_hour.update(probe.get("economic_rejections") or {})
+        exploration_fee_sources_hour.update(probe.get("fee_sources") or {})
+        probe_cost=finite(probe.get("best_round_trip_cost_fraction"),math.nan)
+        if math.isfinite(probe_cost): exploration_costs_hour.append(probe_cost)
 
     for mid,(_,_,_,z) in current.items(): samples.append({"ts":now,"market_id":mid,"mid":z[1],"x":z[0],"y":None})
     if len(samples)>20000: samples=samples[-20000:]
-    realized_total+=realized; equity=_equity(cash,positions,current); peak=max(peak,equity)
+    realized_total+=realized; exploration_realized_total+=exploration_realized; equity=_equity(cash,positions,current); peak=max(peak,equity)
     dd=max(0.0,1-equity/peak) if peak else 0.0; killed=killed or dd>=max_dd
     out={"timestamp":now,"cash":cash,"equity":equity,"peak":peak,"drawdown":dd,"killed":killed,
          "positions":positions,"samples":samples,"markets":len(markets),"books":len(books),"signals":signals,"opened":opened,
@@ -279,12 +609,40 @@ def _micro_main() -> int:
          "label_stats_last_tick":labels,"target_staleness_max_seconds":labels.get("max_target_staleness_seconds"),
          "partial_exits_last_tick":partial_exits,"depth_rejections_last_tick":depth_rej,
          "fee_sources_last_tick":dict(sources),"failures":failures,"paper_only":True,
-         "execution_model":"depth_vwap_plus_latency_stress"}
+         "execution_model":"depth_vwap_plus_latency_stress","open_positions":len(positions),
+         "gross_exposure":gross,"realized_pnl":realized_total,
+         "exploration_realized_pnl_total":exploration_realized_total,
+         "exploration_open_history":exploration_history,
+         "exploration_probe_history":exploration_probe_history,
+         "exploration":{"enabled":bool(a.exploration_enabled),"paper_only":True,"hold_seconds":a.exploration_hold_seconds,
+                        "max_trade_usd":a.exploration_max_trade_usd,"max_opens_per_hour":a.exploration_max_opens_per_hour,
+                        "max_positions":a.exploration_max_positions,"opened_last_tick":exploration_opened,
+                        "active_positions":sum(str(p.get("experiment_kind") or "ALPHA")=="EXPLORATION" for p in positions.values()),
+                        "hourly_opens":len(exploration_history),"activity_candidates_last_tick":exploration_activity_candidates,
+                        "candidate_strata_last_tick":exploration_candidates,"economic_probes_last_tick":exploration_economic_probes,
+                        "economic_rejections_last_tick":dict(sorted(exploration_economic_rejections.items())),
+                        "economic_rejections_hour":dict(sorted(exploration_rejections_hour.items())),
+                        "fee_sources_last_tick":dict(sorted(exploration_fee_sources.items())),
+                        "fee_sources_hour":dict(sorted(exploration_fee_sources_hour.items())),
+                        "probe_ticks_hour":len(exploration_probe_history),
+                        "activity_candidates_hour":sum(int(finite(item.get("activity_candidates"),0.0)) for item in exploration_probe_history),
+                        "min_entry_price":a.exploration_min_entry_price,"max_entry_price":a.exploration_max_entry_price,
+                        "max_round_trip_cost_fraction":a.exploration_max_round_trip_cost_fraction,
+                        "best_round_trip_cost_fraction_last_tick":None if not math.isfinite(best_round_trip_cost_fraction) else best_round_trip_cost_fraction,
+                        "best_round_trip_cost_fraction_hour":min(exploration_costs_hour) if exploration_costs_hour else None,
+                        "selected_round_trip_cost_fractions_last_tick":selected_round_trip_cost_fractions,
+                        "ranking":"lowest_conservative_round_trip_cost_then_activity_volume",
+                        "strata_opened_this_hour":dict(sorted(Counter(str(item.get("stratum") or "") for item in exploration_history).items())),
+                        "depth_rejections_last_tick":exploration_depth_rejections,"realized_pnl_last_tick":exploration_realized,
+                        "realized_pnl_total":exploration_realized_total,"markout_horizons_seconds":[1,10,45],
+                        "queue_measurement":"displayed_best_ask_depth_proxy; taker_queue_ahead_is_zero"}}
     micro_legacy.atomic_json(sp,out); micro_legacy.atomic_json(a.run_dir/"status.json",out)
     micro_legacy.append_csv(a.run_dir/"equity.csv",["timestamp","cash","equity","drawdown","positions","realized_pnl_total","killed"],
                       {"timestamp":now,"cash":cash,"equity":equity,"drawdown":dd,"positions":len(positions),
                        "realized_pnl_total":realized_total,"killed":int(killed)})
     print(f"micro_exec markets={len(markets)} signals={signals} opened={opened} positions={len(positions)} "
+          f"exploration_opened={exploration_opened} exploration_active={out['exploration']['active_positions']} "
+          f"exploration_economic_rejections={sum(exploration_economic_rejections.values())} "
           f"best_edge={best_edge:.8f} realized={realized:.8f} depth_rejections={depth_rej} equity={equity:.6f}")
     return 0
 

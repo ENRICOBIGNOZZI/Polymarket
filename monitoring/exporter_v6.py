@@ -16,8 +16,16 @@ from exporter import (
 )
 from exporter_v4 import V4Collector
 
-EXPORTER_V6_VERSION = "1.5.0"
+EXPORTER_V6_VERSION = "1.5.1"
 V6_MODEL_FRESH_SECONDS = 120.0
+MISSING_STATUS_AGE_SECONDS = 1e12
+V6_STRATEGY_HEALTH = {
+    "micro_maker": "micro",
+    "micro_taker": "micro",
+    "relative_value": "pca",
+    "graph_hard": "graph",
+    "external": "external",
+}
 
 
 def _label(value: object, limit: int = 120) -> str:
@@ -61,6 +69,25 @@ def _multileg_fill_counts(path) -> dict[str, int]:
 
 def _sum_csv(path, column: str) -> float:
     return sum(_float(row.get(column)) for row in _read_csv(path))
+
+
+def _unique_bundle_count(path) -> int:
+    return len(
+        {
+            str(row.get("bundle_id") or "").strip()
+            for row in _read_csv(path)
+            if str(row.get("bundle_id") or "").strip()
+        }
+    )
+
+
+def _model_health(strategy_rows: dict[str, dict[str, object]], model: str) -> tuple[float, float]:
+    row = strategy_rows.get(V6_STRATEGY_HEALTH.get(model, "")) or {}
+    if not row:
+        return 0.0, MISSING_STATUS_AGE_SECONDS
+    alive = 1.0 if _float(row.get("alive")) >= 1.0 else 0.0
+    age = max(0.0, _float(row.get("status_age_seconds"), MISSING_STATUS_AGE_SECONDS))
+    return alive, age
 
 
 def _maker_realized_pnl(path) -> float:
@@ -216,11 +243,16 @@ class V6Collector(V4Collector):
         cfg = _read_json(self.config_path) or {}
         v6 = cfg.get("v6") if isinstance(cfg.get("v6"), dict) else {}
         starting = _float(cfg.get("starting_capital"), 10000.0)
-        status_age = max(0.0, now - (_mtime(status_path) or now)) if status else 1e12
-        model_alive = 1.0 if status and status_age <= V6_MODEL_FRESH_SECONDS else 0.0
-        alert_staleness = 0.0 if status_age <= V6_MODEL_FRESH_SECONDS else status_age
+        strategy_rows = {
+            str(row.get("name") or ""): row
+            for row in _read_csv(self.run_root / "strategy_status.csv")
+            if str(row.get("name") or "")
+        }
 
         relations = status.get("relations") if isinstance(status.get("relations"), dict) else {}
+        graph_research = status.get("graph_research") if isinstance(status.get("graph_research"), dict) else {}
+        if not graph_research:
+            graph_research = _read_json(self.run_root / "graph_research_status.json") or {}
         relation_guard = _read_json(self.run_root / "relation_guard_status.json") or {}
         queue_filter = _read_json(self.run_root / "queue_filter_status.json") or {}
         local_factor = status.get("local_factor") if isinstance(status.get("local_factor"), dict) else {}
@@ -233,6 +265,7 @@ class V6Collector(V4Collector):
 
         maker = _last_csv_row(self.run_root / "maker" / "maker_equity.csv") or {}
         micro = _read_json(self.run_root / "micro_taker" / "status.json") or {}
+        exploration = micro.get("exploration") if isinstance(micro.get("exploration"), dict) else {}
         broker = _last_csv_row(self.run_root / "multileg_equity.csv") or {}
         hard = _read_json(self.run_root / "hard_arb" / "status.json") or {}
         external = _read_json(self.run_root / "external" / "status.json") or {}
@@ -284,8 +317,10 @@ class V6Collector(V4Collector):
                 "gross_exposure": _float(broker.get("gross_entry_cash")) + _float(broker.get("reserved_cash")),
                 "drawdown": _float(broker.get("drawdown")),
                 "realized_pnl": _sum_csv(self.run_root / "bundle_ledger.csv", "net_pnl"),
-                "signals": _float(relations.get("bundles")) + _float(local_factor.get("bundles")),
-                "best_edge": max(_float(relations.get("best_edge")), _float(local_factor.get("best_edge"))),
+                # Raw Graph scanner spreads are research diagnostics, not
+                # executable Relative Value signals or edges.
+                "signals": _float(local_factor.get("bundles")),
+                "best_edge": _float(local_factor.get("best_edge")),
                 "orders_total": sum(1 for row in broker_events if str(row.get("event") or "").upper() == "POST"),
             },
             "graph_hard": {
@@ -324,6 +359,8 @@ class V6Collector(V4Collector):
             row = dict(raw_row)
             row.update(enrichment.get(str(name), {}))
             row.update(durable_fills.get(str(name), {}))
+            sleeve_alive, sleeve_age = _model_health(strategy_rows, str(name))
+            alert_staleness = 0.0 if sleeve_age <= V6_MODEL_FRESH_SECONDS else sleeve_age
             labels = {"model": str(name), "expert": str(name)}
             fields = {
                 "polymarket_model_info": (1.0, "V6 independent economic model metadata."),
@@ -338,10 +375,10 @@ class V6Collector(V4Collector):
                 "polymarket_model_open_positions": (_float(row.get("live_units")), "V6 live orders, bundles, or positions by model."),
                 "polymarket_model_orders_total": (_float(row.get("orders_total")), "Durable V6 paper orders posted or entries attempted by model."),
                 "polymarket_model_kill_switch": (1.0 if row.get("killed") else 0.0, "V6 model-local kill state."),
-                "polymarket_model_alive": (model_alive, "Whether the monolithic V6 runtime status is fresh enough to consider each model alive."),
-                "polymarket_model_status_age_seconds": (status_age, "Age of the canonical V6 runtime-status snapshot."),
+                "polymarket_model_alive": (sleeve_alive, "Whether the corresponding V6 strategy-status sleeve is alive."),
+                "polymarket_model_status_age_seconds": (sleeve_age, "Age reported by the corresponding V6 strategy-status sleeve."),
                 "polymarket_model_alert_staleness_seconds": (alert_staleness, "V6 model staleness used by alerts after a bounded two-report grace window."),
-                "polymarket_model_startup_grace_active": (1.0 if status and status_age <= V6_MODEL_FRESH_SECONDS else 0.0, "Compatibility health flag: V6 runtime is inside the bounded freshness window."),
+                "polymarket_model_startup_grace_active": (1.0 if sleeve_age <= V6_MODEL_FRESH_SECONDS else 0.0, "Compatibility health flag: V6 sleeve is inside the bounded freshness window."),
             }
             for metric_name, (value, help_text) in fields.items():
                 metrics.sample(metric_name, value, help_text=help_text, labels=labels)
@@ -486,8 +523,24 @@ class V6Collector(V4Collector):
             metrics.sample("polymarket_recent_fill_pnl_usd", _float(fill.get("pnl")), help_text="Recent individual V6 paper fill PnL when realized on that row.", labels=labels)
 
         metrics.sample("polymarket_v6_relation_bundles", _float(relations.get("bundles")), help_text="Current executable graph/structural V6 bundles.")
-        metrics.sample("polymarket_v6_relation_best_edge_ratio", _float(relations.get("best_edge")), help_text="Best current graph/structural maker edge.")
-        metrics.sample("polymarket_v6_relation_guard_accepted_bundles", _float(relation_guard.get("accepted_bundles")), help_text="Graph relation bundles after economic guard.")
+        metrics.sample("polymarket_v6_relation_best_edge_ratio", _float(relations.get("best_edge")), help_text="Raw graph/structural scanner spread; it is not a GRAPH_RV execution edge.")
+        metrics.sample("polymarket_v6_relation_guard_accepted_rows", _float(relation_guard.get("accepted_rows")), help_text="Guarded Graph relation intent rows; one basket can contain multiple rows.")
+        metrics.sample("polymarket_v6_relation_guard_accepted_bundles", _unique_bundle_count(self.run_root / "relation_intents.csv"), help_text="Unique Graph relation bundles after contract-semantic guard, before research-only joint-fill EV measurement.")
+        joint_models = graph_research.get("joint_models") if isinstance(graph_research.get("joint_models"), list) else []
+        joint_observations = sum(
+            _float(row.get("observations")) for row in joint_models if isinstance(row, dict)
+        )
+        graph_labels = {
+            "mode": _label(graph_research.get("graph_mode") or "UNAVAILABLE", 32),
+            "broker_routing_enabled": str(int(bool(graph_research.get("broker_routing_enabled", False)))),
+        }
+        metrics.sample("polymarket_v6_graph_research_info", 1.0 if graph_research else 0.0, help_text="GRAPH_RV research mode and broker-routing state; a value of zero routing is intentional.", labels=graph_labels)
+        metrics.sample("polymarket_v6_graph_research_candidate_bundles", _float(graph_research.get("candidate_bundles")), help_text="Current GRAPH_RV baskets measured in research, never broker-routed by this path.")
+        metrics.sample("polymarket_v6_graph_research_economic_candidates", _float(graph_research.get("economic_research_candidates")), help_text="GRAPH_RV baskets with positive conservative joint-fill EV, still research-only.")
+        metrics.sample("polymarket_v6_graph_research_insufficient_evidence", _float(graph_research.get("insufficient_evidence_candidates")), help_text="GRAPH_RV baskets lacking enough empirical joint full/partial/zero fill evidence.")
+        metrics.sample("polymarket_v6_graph_research_joint_observations", joint_observations, help_text="Finalized paper GRAPH_RV basket observations used for joint-fill models.")
+        metrics.sample("polymarket_v6_graph_research_broker_routing_enabled", 1.0 if graph_research.get("broker_routing_enabled") is True else 0.0, help_text="Whether GRAPH_RV research is allowed to write broker intents; must remain zero in the research configuration.")
+        metrics.sample("polymarket_v6_graph_research_raw_edge_is_execution_edge", 1.0 if graph_research.get("raw_scanner_edge_is_execution_edge") is True else 0.0, help_text="Whether a raw GRAPH_RV scanner spread is treated as execution edge; must remain zero.")
         metrics.sample("polymarket_v6_queue_filter_accepted_bundles", _float(queue_filter.get("accepted_bundles")), help_text="Fill-aware maker bundles admitted to broker.")
         metrics.sample("polymarket_v6_queue_filter_improved_bundles", _float(queue_filter.get("improved_bundles")), help_text="Maker bundles whose quote was improved using edge budget.")
         metrics.sample("polymarket_v6_queue_filter_best_joint_fill_probability", _float(queue_filter.get("best_joint_fill_probability")), help_text="Best current joint fill probability proxy.")
@@ -495,17 +548,24 @@ class V6Collector(V4Collector):
         metrics.sample("polymarket_v6_queue_filter_max_queue_ahead_shares", _float(queue_filter.get("max_queue_ahead")), help_text="Largest queue ahead observed by V6 queue filter.")
         metrics.sample("polymarket_v6_local_factor_bundles", _float(local_factor.get("bundles")), help_text="Current local-factor bundles.")
         metrics.sample("polymarket_v6_local_factor_clusters", _float(local_factor.get("clusters")), help_text="Current local factor clusters evaluated.")
-        metrics.sample("polymarket_v6_local_factor_candidates", _float(local_factor.get("candidate_count")), help_text="Local factor residual candidates before FDR.")
-        metrics.sample("polymarket_v6_local_factor_fdr_survivors", _float(local_factor.get("fdr_survivors")), help_text="Local factor block-bootstrap FDR survivors.")
+        metrics.sample("polymarket_v6_local_factor_candidates", _float(local_factor.get("reversion_tests")), help_text="Local factor residual reversion tests before FDR.")
+        metrics.sample("polymarket_v6_local_factor_fdr_survivors", _float(local_factor.get("fdr_eligible_signals")), help_text="Local factor block-bootstrap FDR-eligible signals.")
         metrics.sample("polymarket_v6_typed_structural_bundles", _float(typed_structural.get("bundles")), help_text="Fail-closed typed structural bundles.")
         metrics.sample("polymarket_v6_external_signals", _float(bridge.get("materialized_signals")), help_text="OOS-approved external probabilities materialized for V6.")
+        metrics.sample("polymarket_v6_micro_taker_exploration_enabled", 1.0 if exploration.get("enabled") is True else 0.0, help_text="Whether the bounded paper taker exploration sleeve is enabled.")
+        metrics.sample("polymarket_v6_micro_taker_exploration_active_positions", _float(exploration.get("active_positions")), help_text="Current bounded paper exploration taker positions.")
+        metrics.sample("polymarket_v6_micro_taker_exploration_hourly_opens", _float(exploration.get("hourly_opens")), help_text="Exploration entries opened in the rolling one-hour stratified budget.")
+        metrics.sample("polymarket_v6_micro_taker_exploration_opened_last_tick", _float(exploration.get("opened_last_tick")), help_text="Exploration taker entries opened in the last micro tick.")
+        metrics.sample("polymarket_v6_micro_taker_exploration_candidate_strata", _float(exploration.get("candidate_strata_last_tick")), help_text="Eligible activity/depth taker strata seen in the last tick.")
+        metrics.sample("polymarket_v6_micro_taker_exploration_depth_rejections", _float(exploration.get("depth_rejections_last_tick")), help_text="Exploration candidates rejected by executable depth and minimum-size checks.")
+        metrics.sample("polymarket_v6_micro_taker_exploration_realized_pnl_usd", _float(exploration.get("realized_pnl_total")), help_text="Cumulative realized paper PnL for exploration only; never alpha-promotion evidence.")
         metrics.sample("polymarket_v6_scrape_timestamp_seconds", now, help_text="V6 exporter scrape timestamp.")
 
         # Transitional metrics consumed by stable monitoring/server health checks.
         # They describe V6 only; no V5 allocator/expert execution is restored.
         metrics.sample("polymarket_allocator_state_present", 1 if allocator else 0, help_text="Legacy health compatibility view for V6.")
         metrics.sample("polymarket_allocator_models_expected", _float(allocator.get("models_expected"), 5), help_text="V6 model count exposed through stable health metric.")
-        metrics.sample("polymarket_allocator_models_alive", _float(allocator.get("models_alive"), 5) if model_alive else 0.0, help_text="V6 alive model count gated by canonical runtime freshness.")
+        metrics.sample("polymarket_allocator_models_alive", _float(allocator.get("models_alive")), help_text="V6 alive model count reported by the per-sleeve allocator health ledger.")
         metrics.sample("polymarket_allocator_reserve_fraction", _float(allocator.get("reserve_fraction")), help_text="V6 parent paper reserve fraction.")
         metrics.sample("polymarket_allocator_global_gross_fraction", _float(allocator.get("global_gross_fraction")), help_text="V6 gross fraction exposed through stable health metric.")
         metrics.sample("polymarket_allocator_global_max_gross_fraction", _float(allocator.get("global_max_gross_fraction"), 0.45), help_text="Configured V6 aggregate gross-exposure cap.")

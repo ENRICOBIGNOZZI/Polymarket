@@ -104,17 +104,20 @@ def event_key(row: dict[str, str], fallback: str) -> str:
 
 def strategy_paths(run_root: Path, model: str) -> tuple[list[Path], list[Path]]:
     """Return (execution rows, submission rows) without assuming a single broker schema."""
+    external_admissions = run_root / "external" / "signals.csv"
+    if not external_admissions.exists():
+        external_admissions = run_root / "external_signals.csv"
     mapping = {
         "micro_maker": (
             [run_root / "maker" / "maker_fills.csv"],
-            [run_root / "maker" / "maker_orders.csv", run_root / "maker" / "maker_signals.csv"],
+            [run_root / "maker" / "maker_order_log.csv"],
         ),
         "micro_taker": (
-            [run_root / "micro_taker" / "fills.csv"],
-            [run_root / "micro_taker" / "signals.csv"],
+            [run_root / "micro_taker" / "execution_events.csv", run_root / "micro_taker" / "markouts.csv"],
+            [],
         ),
         "relative_value": (
-            [run_root / "bundle_ledger.csv", run_root / "multileg_events.csv"],
+            [run_root / "bundle_ledger.csv"],
             [run_root / "intents.csv"],
         ),
         "graph_hard": (
@@ -123,10 +126,24 @@ def strategy_paths(run_root: Path, model: str) -> tuple[list[Path], list[Path]]:
         ),
         "external": (
             [run_root / "external" / "fills.csv"],
-            [run_root / "external_signals.csv"],
+            [external_admissions],
         ),
     }
     return mapping.get(model, ([], []))
+
+
+def unique_rows_by(rows: Iterable[dict[str, str]], columns: Iterable[str]) -> list[dict[str, str]]:
+    """Keep the latest row for each non-empty producer identity.
+
+    A missing identity is not converted into a synthetic denominator.  The
+    relevant production schemas always provide ``bundle_id``.
+    """
+    unique: dict[str, dict[str, str]] = {}
+    for row in rows:
+        key = first_text(row, columns)
+        if key:
+            unique[key] = row
+    return list(unique.values())
 
 
 def row_is_fill(row: dict[str, str]) -> bool:
@@ -136,9 +153,21 @@ def row_is_fill(row: dict[str, str]) -> bool:
     return any(token in action for token in ("BUY", "SELL", "FILL", "EXIT", "SETTLE"))
 
 
+def row_is_exploration(row: dict[str, str]) -> bool:
+    """Exploration fills are diagnostic data, never alpha promotion evidence."""
+    kind = first_text(row, ("experiment_kind", "sleeve", "mode")).upper()
+    action = canonical_action(row)
+    return kind == "EXPLORATION" or "EXPLORATION" in action
+
+
 def row_is_submission(row: dict[str, str]) -> bool:
     action = canonical_action(row)
-    return action in {"POST", "SUBMIT", "RESTING", "OPEN"} or bool(first_text(row, ("expected_edge", "maker_entry_net_edge")))
+    if action in {"POST", "SUBMIT", "RESTING", "OPEN"}:
+        return True
+    if first_text(row, ("expected_edge", "maker_entry_net_edge")):
+        return True
+    desired_notional = number(row.get("desired_notional"), math.nan)
+    return math.isfinite(desired_notional) and desired_notional > 0.0
 
 
 def realized_pnl(row: dict[str, str]) -> float:
@@ -159,12 +188,27 @@ def row_has_realized_pnl(row: dict[str, str]) -> bool:
 
 
 def observed_markout(row: dict[str, str]) -> float:
-    return first_number(row, ("markout", "forward_markout", "markout_pnl", "post_fill_markout"))
+    value = first_number(row, ("markout", "forward_markout", "markout_pnl", "post_fill_markout"))
+    if math.isfinite(value):
+        return value
+    # The current relative-value terminal ledger has no observed flag.  A
+    # non-zero adverse mark can only come from the producer measurement; zero
+    # remains ambiguous and therefore fails closed until the producer records
+    # observation state explicitly.
+    adverse = number(row.get("adverse_mark_pnl"), math.nan)
+    return adverse if math.isfinite(adverse) and adverse != 0.0 else math.nan
 
 
 def explicit_cost(row: dict[str, str]) -> float:
-    value = first_number(row, ("fee", "fees", "slippage_cost", "execution_cost", "cost"))
-    return max(0.0, value) if math.isfinite(value) else math.nan
+    # Generic ``cost`` is principal in the hard-arbitrage fill ledger.  Only
+    # explicitly named execution frictions may enter cost stress.
+    components = (
+        first_number(row, ("fee", "fees")),
+        first_number(row, ("slippage_cost", "slippage")),
+        first_number(row, ("execution_cost",)),
+    )
+    observed = [max(0.0, value) for value in components if math.isfinite(value)]
+    return sum(observed) if observed else math.nan
 
 
 def terminal_calibration(rows: Iterable[dict[str, str]]) -> tuple[int, float | None]:
@@ -278,10 +322,17 @@ def assess_model(
 ) -> dict[str, Any]:
     target = str(contract.get("target") or "")
     execution_paths, submission_paths = strategy_paths(run_root, model)
-    execution_rows = [row for path in execution_paths for row in read_rows(path)]
+    all_execution_rows = [row for path in execution_paths for row in read_rows(path)]
+    exploration_rows = [row for row in all_execution_rows if row_is_exploration(row)]
+    execution_rows = [row for row in all_execution_rows if not row_is_exploration(row)]
     submission_rows = [row for path in submission_paths for row in read_rows(path)]
-    fills = [row for row in execution_rows if row_is_fill(row)]
     submissions = [row for row in submission_rows if row_is_submission(row)]
+    if model == "relative_value":
+        execution_rows = unique_rows_by(execution_rows, ("bundle_id",))
+        submissions = unique_rows_by(submissions, ("bundle_id",))
+        fills = [row for row in execution_rows if number(row.get("fill_fraction"), 0.0) > 0.0]
+    else:
+        fills = [row for row in execution_rows if row_is_fill(row)]
     pnl_values = [(timestamp(row), realized_pnl(row)) for row in execution_rows if row_has_realized_pnl(row)]
     pnl_values = [(ts, value) for ts, value in pnl_values if math.isfinite(value)]
     markouts = [observed_markout(row) for row in execution_rows]
@@ -369,6 +420,7 @@ def assess_model(
         "stressed_net_pnl": stressed,
         "forward_markout_observations": len(markouts),
         "mean_forward_markout": statistics.fmean(markouts) if markouts else None,
+        "exploration_rows_excluded": len(exploration_rows),
         "terminal_calibration_observations": terminal_observations,
         "brier_improvement_over_market": brier_improvement,
         "bootstrap_one_sided_pvalue": bootstrap,

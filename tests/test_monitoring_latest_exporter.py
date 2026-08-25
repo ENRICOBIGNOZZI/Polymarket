@@ -80,7 +80,11 @@ class LatestExporterTest(unittest.TestCase):
             (root / "multileg_legs.csv").write_text(
                 "bundle_id,target_shares,filled_shares\n"
                 "b,10,9\n"
-                "b,10,4\n", encoding="utf-8")
+                "b,10,4\n"
+                "old,10,10\n"
+                "old,10,1\n", encoding="utf-8")
+            (root / "multileg_bundles.csv").write_text(
+                "bundle_id,status\nb,RESTING\nold,UNWOUND\n", encoding="utf-8")
             (root / "bundle_ledger.csv").write_text("net_pnl\n2.5\n", encoding="utf-8")
             (root / "walk_forward.json").write_text(json.dumps({
                 "eligible_for_tiny_pilot": False,
@@ -94,6 +98,25 @@ class LatestExporterTest(unittest.TestCase):
             self.assertIn("polymarket_runtime_execution_imbalance_ratio 0.5", text)
             self.assertIn("polymarket_runtime_realized_pnl_usd_total 2.5", text)
             self.assertIn("polymarket_runtime_oos_stressed_net_pnl_usd -1", text)
+
+    def test_contract_staleness_grows_when_report_stops(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            runs, config = base / "runs", base / "config"
+            root = runs / "paper_v6_live"
+            root.mkdir(parents=True)
+            config.mkdir()
+            self._config(config / "paper_v6.json")
+            (root / "runtime_status.json").write_text(
+                json.dumps({"timestamp": 1, "equity": 10000, "execution_staleness": 2}),
+                encoding="utf-8",
+            )
+            text = LatestCollector(runs, config, "paper_v6_live", None, 10).collect()
+            metric = next(
+                line for line in text.splitlines()
+                if line.startswith("polymarket_runtime_execution_staleness_seconds ")
+            )
+            self.assertGreater(float(metric.split()[-1]), 1000.0)
 
 
 if __name__ == "__main__":

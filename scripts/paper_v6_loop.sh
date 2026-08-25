@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+source scripts/v6_task_runtime.sh
 
 CONFIG="${1:-config/paper_v6.json}"
 BASE_CONFIG="$CONFIG"
@@ -12,7 +13,8 @@ MARKETS="${V6_MARKETS:-700}"
 RECORDER_MARKETS="${V6_RECORDER_MARKETS:-1200}"
 INTENT_MIN_EDGE="${V6_INTENT_MIN_EDGE:-0.00020}"
 RUNTIME_PARENT_PID="${POLYMARKET_RUNTIME_PARENT_PID:-}"
-mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/micro_taker" "$RUN_ROOT/hard_arb" "$RUN_ROOT/external"
+V6_TASK_STATUS_DIR="$RUN_ROOT/task_status"
+mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/micro_taker" "$RUN_ROOT/hard_arb" "$RUN_ROOT/external" "$V6_TASK_STATUS_DIR"
 
 # V6 market discovery is routed through a local read-only resilience proxy. It
 # prefers Gamma keyset pagination (the current stable API), falls back to public
@@ -34,6 +36,26 @@ print(gamma, clob)
 PY
 )
 CONFIG="$RUNTIME_CONFIG"
+
+# Research controls are explicit in the paper manifest.  They remain within the
+# existing micro sleeve and cannot turn on authenticated execution.
+read -r GRAPH_JOINT_OBSERVATIONS GRAPH_LATENCY_BPS GRAPH_COMPLETION GRAPH_COST_QUANTILE EXPLORATION_ENABLED EXPLORATION_MAX_TRADE EXPLORATION_MAX_OPENS EXPLORATION_MAX_POSITIONS EXPLORATION_HOLD EXPLORATION_MIN_ACTIVITY < <(python3 - "$CONFIG" <<'PY'
+import json, sys
+from pathlib import Path
+cfg=json.loads(Path(sys.argv[1]).read_text()); v=cfg.get('v6') or {}
+graph=v.get('graph') or {}; exploration=v.get('micro_taker_exploration') or {}
+assert graph.get('mode') == 'research_only'
+assert graph.get('broker_routing_enabled') is False
+assert bool(exploration.get('paper_only'))
+assert 30 <= int(exploration.get('hold_seconds', 45)) <= 60
+assert 0.0 < float(exploration.get('max_trade_usd', 5.0)) <= 5.0
+print(int(graph.get('min_joint_fill_observations', 30)), float(graph.get('capital_latency_bps', 1.0)),
+      float(graph.get('completion_threshold', .75)), float(graph.get('cost_quantile', .75)),
+      int(bool(exploration.get('enabled'))), float(exploration.get('max_trade_usd', 5.0)),
+      int(exploration.get('max_opens_per_hour', 6)), int(exploration.get('max_positions', 2)),
+      int(exploration.get('hold_seconds', 45)), int(exploration.get('min_activity_trades_60s', 1)))
+PY
+)
 
 # Capital-isolated sleeves sum to parent capital. There is no operational
 # mixture-of-experts: every sleeve has one economic task and its own execution.
@@ -62,9 +84,12 @@ PY
 
 rm -f "$RUN_ROOT"/intents.csv "$RUN_ROOT"/local_factor_intents.csv \
       "$RUN_ROOT"/relation_intents_raw.csv "$RUN_ROOT"/relation_intents.csv \
+      "$RUN_ROOT"/graph_research_ev.csv "$RUN_ROOT"/graph_research_status.json \
       "$RUN_ROOT"/stat_arb_pairs_diagnostic.csv
 
 proxy_pid=0; rec_pid=0; broker_pid=0; external_pid=0
+maker_pid=0; micro_taker_pid=0; hard_arb_pid=0; factor_pid=0
+relation_pid=0; external_bridge_pid=0; report_pid=0
 proxy_restarts=0; rec_restarts=0; broker_restarts=0; external_restarts=0
 start_proxy(){ PYTHONUNBUFFERED=1 python3 scripts/v6_market_proxy.py --host 127.0.0.1 --port "$MARKET_PROXY_PORT" --gamma "$GAMMA_URL" --clob "$CLOB_URL" --cache "$RUN_ROOT/market_proxy_cache.json" --status "$RUN_ROOT/market_proxy_status.json" >>"$RUN_ROOT/market_proxy.log" 2>&1 & proxy_pid=$!; }
 start_recorder(){ ./build/polymarket_trade_recorder --config "$CONFIG" --run-dir "$RUN_ROOT" --markets "$RECORDER_MARKETS" --batch 40 --min-liquidity "$MIN_LIQUIDITY" --lookback-seconds 900 --interval 5 --loop >>"$RUN_ROOT/trade_recorder.log" 2>&1 & rec_pid=$!; }
@@ -77,7 +102,14 @@ write_supervisor(){
   printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$(date +%s)" "$ra" "$ba" "$ea" "$rec_restarts" "$broker_restarts" "$external_restarts" "$rec_pid" "$broker_pid" "$external_pid" >>"$tmp"
   mv "$tmp" "$RUN_ROOT/runtime_supervisor.csv"
 }
-cleanup(){ for p in "$rec_pid" "$broker_pid" "$external_pid" "$proxy_pid";do if ((p>0));then kill "$p" 2>/dev/null||true;fi;done;for p in "$rec_pid" "$broker_pid" "$external_pid" "$proxy_pid";do if ((p>0));then wait "$p" 2>/dev/null||true;fi;done; }
+cleanup(){
+  # Stop task wrappers first so each wrapper can forward TERM to its active
+  # scanner and publish a terminal status.  Both phases are bounded and use
+  # KILL only after the TERM grace period.
+  v6_task_terminate_pids "$maker_pid" "$micro_taker_pid" "$hard_arb_pid" "$factor_pid" \
+    "$relation_pid" "$external_bridge_pid" "$report_pid"
+  v6_task_terminate_pids "$rec_pid" "$broker_pid" "$external_pid" "$proxy_pid"
+}
 shutdown(){ trap - EXIT INT TERM; cleanup; exit 0; }
 parent_runtime_alive(){ [[ -z "$RUNTIME_PARENT_PID" ]] || kill -0 "$RUNTIME_PARENT_PID" 2>/dev/null; }
 is_current_runtime_descendant(){
@@ -139,9 +171,84 @@ MAKER_QUEUE_ARGS=()
 if ./build/polymarket_maker_paper --help 2>&1 | grep -q -- '--improve-ticks'; then
   MAKER_QUEUE_ARGS=(--improve-ticks 1 --max-queue-multiple 6)
 fi
+EXPLORATION_ARGS=()
+if [[ "$EXPLORATION_ENABLED" == "1" ]]; then
+  EXPLORATION_ARGS=(--exploration-enabled --exploration-max-trade-usd "$EXPLORATION_MAX_TRADE" --exploration-max-opens-per-hour "$EXPLORATION_MAX_OPENS" --exploration-max-positions "$EXPLORATION_MAX_POSITIONS" --exploration-hold-seconds "$EXPLORATION_HOLD" --exploration-min-activity "$EXPLORATION_MIN_ACTIVITY")
+fi
 
 last_factor=0;last_relation=0;last_external=0;last_report=0;last_micro_taker=0;last_hard_arb=0
-rebuild_intents(){ python3 scripts/merge_v4_intents.py --input "$RUN_ROOT/local_factor_intents.csv" --input "$RUN_ROOT/relation_intents.csv" --output "$RUN_ROOT/intents.csv" --min-edge "$INTENT_MIN_EDGE" --max-age-seconds 240 --max-bundles 120 >>"$RUN_ROOT/intent_merge.log" 2>&1||true; }
+# The broker consumes only the independently executable local-factor sleeve.
+# GRAPH_RV remains running as a research scanner, but its raw spread is never
+# presented to the broker as an execution edge.
+task_rc=0
+capture_task_failure(){ local rc="$1"; if ((task_rc == 0));then task_rc="$rc";fi; }
+task_rebuild_intents(){
+  v6_task_run_child python3 scripts/merge_v4_intents.py --input "$RUN_ROOT/local_factor_intents.csv" --output "$RUN_ROOT/intents.csv" --min-edge "$INTENT_MIN_EDGE" --max-age-seconds 240 --max-bundles 120 >>"$RUN_ROOT/intent_merge.log" 2>&1 || capture_task_failure "$?"
+}
+
+task_maker(){
+  task_rc=0
+  v6_task_run_child ./build/polymarket_maker_paper --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-order-usd 60 --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.10 "${MAKER_QUEUE_ARGS[@]}" --once >>"$RUN_ROOT/maker.log" 2>&1 || capture_task_failure "$?"
+  return "$task_rc"
+}
+
+task_micro_taker(){
+  task_rc=0
+  v6_task_run_child python3 scripts/v6_queue_filter.py micro --config "$RUN_ROOT/micro_taker_config.json" --run-dir "$RUN_ROOT/micro_taker" --markets 250 --min-liquidity 25 --horizon-seconds 30 --max-target-staleness-seconds 10 --max-trade-usd 15 --min-edge 0.00030 --slippage-bps 5 --max-positions 20 --trade-tape "$RUN_ROOT/trade_tape.csv" "${EXPLORATION_ARGS[@]}" >>"$RUN_ROOT/micro_taker.log" 2>&1 || capture_task_failure "$?"
+  return "$task_rc"
+}
+
+task_hard_arb(){
+  task_rc=0
+  v6_task_run_child python3 scripts/v6_queue_filter.py hard --config "$RUN_ROOT/hard_arb_config.json" --run-dir "$RUN_ROOT/hard_arb" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --max-events 80 --min-edge 0.00020 --max-trade-usd 60 --slippage-bps 5 --leg-latency-ms 100 >>"$RUN_ROOT/hard_arb.log" 2>&1 || capture_task_failure "$?"
+  return "$task_rc"
+}
+
+task_factor(){
+  task_rc=0
+  rm -f "$RUN_ROOT/local_factor_intents.csv" "$RUN_ROOT/stat_arb_pairs_diagnostic.csv"
+  # Legacy B1 is diagnostic only under strict gates and cannot generate V6 intents.
+  v6_task_run_child ./build/polymarket_stat_arb --config "$RUN_ROOT/broker_config.json" --markets "$MARKETS" --history-universe 300 --lookback-hours 720 --fidelity-minutes 30 --min-z 1.25 --min-t-reversion 2.00 --max-half-life-hours 168 --top 150 --csv "$RUN_ROOT/stat_arb_pairs_diagnostic.csv" >"$RUN_ROOT/stat_arb_pairs_diagnostic.log" 2>"$RUN_ROOT/stat_arb_pairs_errors.log" || capture_task_failure "$?"
+  # Production mean reversion: local panel, common sample and BH-FDR controlled.
+  v6_task_run_child python3 scripts/v6_local_factor_intents.py --config "$CONFIG" --output "$RUN_ROOT/local_factor_intents.csv" --status "$RUN_ROOT/local_factor_status.json" --markets 400 --min-liquidity "$MIN_LIQUIDITY" --lookback-hours 336 --fidelity-minutes 60 --max-clusters 15 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 --slippage-bps 5 >"$RUN_ROOT/local_factor_latest.log" 2>"$RUN_ROOT/local_factor_errors.log" || capture_task_failure "$?"
+  task_rebuild_intents
+  return "$task_rc"
+}
+
+task_relation(){
+  task_rc=0
+  # Semantic parsing remains enabled for Graph research.  The guard keeps its
+  # contract semantics strict; graph_research_ev replaces scanner edge with
+  # conditional joint-fill EV and writes no broker intent.
+  v6_task_run_child python3 scripts/v6_relation_intents.py --config "$CONFIG" --output "$RUN_ROOT/relation_intents_raw.csv" --status "$RUN_ROOT/relation_status.json" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 --max-events 80 >"$RUN_ROOT/relation_latest.log" 2>"$RUN_ROOT/relation_errors.log" || capture_task_failure "$?"
+  v6_task_run_child python3 scripts/v6_intent_guard.py --input "$RUN_ROOT/relation_intents_raw.csv" --output "$RUN_ROOT/relation_intents.csv" --status "$RUN_ROOT/relation_guard_status.json" --min-edge "$INTENT_MIN_EDGE" --stress-bps 10 --max-age-seconds 240 >>"$RUN_ROOT/relation_guard.log" 2>&1 || capture_task_failure "$?"
+  v6_task_run_child python3 scripts/graph_research_ev.py --input "$RUN_ROOT/relation_intents.csv" --ledger "$RUN_ROOT/bundle_ledger.csv" --events "$RUN_ROOT/multileg_events.csv" --output "$RUN_ROOT/graph_research_ev.csv" --status "$RUN_ROOT/graph_research_status.json" --min-observations "$GRAPH_JOINT_OBSERVATIONS" --minimum-ev-usd 0 --capital-latency-bps "$GRAPH_LATENCY_BPS" --completion-threshold "$GRAPH_COMPLETION" --cost-quantile "$GRAPH_COST_QUANTILE" >>"$RUN_ROOT/graph_research.log" 2>&1 || capture_task_failure "$?"
+  return "$task_rc"
+}
+
+task_external_bridge(){
+  task_rc=0
+  v6_task_run_child python3 scripts/v6_external_bridge.py --output "$RUN_ROOT/external_signals.csv" --status "$RUN_ROOT/external_bridge_status.json" --max-age-seconds 21600 --min-confidence 0.35 >"$RUN_ROOT/external_bridge.log" 2>&1 || capture_task_failure "$?"
+  return "$task_rc"
+}
+
+task_report(){
+  task_rc=0
+  v6_task_run_child python3 scripts/v6_runtime_status.py --config "$CONFIG" --run-root "$RUN_ROOT" >"$RUN_ROOT/runtime_status.log" 2>&1 || capture_task_failure "$?"
+  v6_task_run_child python3 scripts/runtime_action_report.py --run-root "$RUN_ROOT" --external-signals "$RUN_ROOT/external_signals.csv" --window-seconds 3600 --production-edge "$INTENT_MIN_EDGE" --output-json "$RUN_ROOT/action_report.json" --output-markdown "$RUN_ROOT/action_report.md" >"$RUN_ROOT/action_report_latest.log" 2>&1 || capture_task_failure "$?"
+  v6_task_run_child python3 scripts/v7_execution_evidence.py --run-root "$RUN_ROOT" --policy config/v7_execution_evidence.json >"$RUN_ROOT/v7_execution_evidence.log" 2>&1 || capture_task_failure "$?"
+  return "$task_rc"
+}
+
+reap_finished_tasks(){
+  if v6_task_reap_if_finished "$maker_pid";then maker_pid=0;fi
+  if v6_task_reap_if_finished "$micro_taker_pid";then micro_taker_pid=0;fi
+  if v6_task_reap_if_finished "$hard_arb_pid";then hard_arb_pid=0;fi
+  if v6_task_reap_if_finished "$factor_pid";then factor_pid=0;fi
+  if v6_task_reap_if_finished "$relation_pid";then relation_pid=0;fi
+  if v6_task_reap_if_finished "$external_bridge_pid";then external_bridge_pid=0;fi
+  if v6_task_reap_if_finished "$report_pid";then report_pid=0;fi
+}
 
 while true;do
   if ! parent_runtime_alive;then
@@ -154,49 +261,55 @@ while true;do
   if ! kill -0 "$broker_pid" 2>/dev/null;then wait "$broker_pid" 2>/dev/null||true;broker_restarts=$((broker_restarts+1));start_broker;fi
   if ! kill -0 "$external_pid" 2>/dev/null;then wait "$external_pid" 2>/dev/null||true;external_restarts=$((external_restarts+1));start_external;fi
   write_supervisor
+  reap_finished_tasks
 
   # Micro maker: edge-aware inside-spread improvement plus FIFO queue gating.
   # Do not fake fills: the actual paper fill still requires compatible taker SELL flow.
-  ./build/polymarket_maker_paper --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-order-usd 60 --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.10 "${MAKER_QUEUE_ARGS[@]}" --once >>"$RUN_ROOT/maker.log" 2>&1||true
+  if ((maker_pid == 0));then
+    v6_task_start maker "$now" task_maker
+    maker_pid="$V6_TASK_STARTED_PID"
+  fi
 
-  # Micro taker: online short-horizon markout model; mandatory horizon exit.
-  if ((now-last_micro_taker>=5));then
-    python3 scripts/v6_micro_taker.py --config "$RUN_ROOT/micro_taker_config.json" --run-dir "$RUN_ROOT/micro_taker" --markets 250 --min-liquidity 25 --horizon-seconds 30 --max-trade-usd 15 --min-edge 0.00030 --slippage-bps 5 --max-positions 20 >>"$RUN_ROOT/micro_taker.log" 2>&1||true
+  # Micro taker: depth-aware paper execution.  The separate exploration sleeve
+  # is capped at $5 per entry, exits at 45 seconds, and measures actual public
+  # book fees, markouts, and activity/depth strata without touching real orders.
+  if ((micro_taker_pid == 0 && now-last_micro_taker >= 5));then
+    v6_task_start micro_taker "$now" task_micro_taker
+    micro_taker_pid="$V6_TASK_STARTED_PID"
     last_micro_taker=$now
   fi
 
-  # Hard graph arbitrage: complete non-augmented NegRisk sets only. Admission is
-  # all-or-none against displayed ask depth in one snapshot, after fee/slippage.
-  if ((now-last_hard_arb>=10));then
-    python3 scripts/v6_hard_arb_paper.py --config "$RUN_ROOT/hard_arb_config.json" --run-dir "$RUN_ROOT/hard_arb" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --max-events 80 --min-edge 0.00020 --max-trade-usd 60 --slippage-bps 5 >>"$RUN_ROOT/hard_arb.log" 2>&1||true
+  # Hard graph arbitrage: complete non-augmented NegRisk sets only.  The paper
+  # executor walks displayed depth, pays market-specific fees/slippage, and
+  # revalidates every remaining leg after the configured inter-leg latency.
+  # Partial sequences are immediately unwound and tracked until flat.
+  if ((hard_arb_pid == 0 && now-last_hard_arb >= 10));then
+    v6_task_start hard_arb "$now" task_hard_arb
+    hard_arb_pid="$V6_TASK_STARTED_PID"
     last_hard_arb=$now
   fi
 
-  if ((now-last_factor>=60));then
-    rm -f "$RUN_ROOT/local_factor_intents.csv" "$RUN_ROOT/stat_arb_pairs_diagnostic.csv"
-    # Legacy B1 is diagnostic only under strict gates and cannot generate V6 intents.
-    ./build/polymarket_stat_arb --config "$RUN_ROOT/broker_config.json" --markets "$MARKETS" --history-universe 300 --lookback-hours 720 --fidelity-minutes 30 --min-z 1.25 --min-t-reversion 2.00 --max-half-life-hours 168 --top 150 --csv "$RUN_ROOT/stat_arb_pairs_diagnostic.csv" >"$RUN_ROOT/stat_arb_pairs_diagnostic.log" 2>"$RUN_ROOT/stat_arb_pairs_errors.log"||true
-    # Production mean reversion: local panel, common sample and BH-FDR controlled.
-    python3 scripts/v6_local_factor_intents.py --config "$CONFIG" --output "$RUN_ROOT/local_factor_intents.csv" --status "$RUN_ROOT/local_factor_status.json" --markets 400 --min-liquidity "$MIN_LIQUIDITY" --lookback-hours 336 --fidelity-minutes 60 --max-clusters 15 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 --slippage-bps 5 >"$RUN_ROOT/local_factor_latest.log" 2>"$RUN_ROOT/local_factor_errors.log"||true
-    rebuild_intents;last_factor=$now
+  if ((factor_pid == 0 && now-last_factor >= 60));then
+    v6_task_start factor "$now" task_factor
+    factor_pid="$V6_TASK_STARTED_PID"
+    last_factor=$now
   fi
 
-  if ((now-last_relation>=30));then
-    # Semantic parsing discovers relations only. Maker bundles are GRAPH_RV, not hard arb.
-    python3 scripts/v6_relation_intents.py --config "$CONFIG" --output "$RUN_ROOT/relation_intents_raw.csv" --status "$RUN_ROOT/relation_status.json" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 --max-events 80 >"$RUN_ROOT/relation_latest.log" 2>"$RUN_ROOT/relation_errors.log"||true
-    python3 scripts/v6_intent_guard.py --input "$RUN_ROOT/relation_intents_raw.csv" --output "$RUN_ROOT/relation_intents.csv" --status "$RUN_ROOT/relation_guard_status.json" --min-edge "$INTENT_MIN_EDGE" --stress-bps 10 --max-age-seconds 240 >>"$RUN_ROOT/relation_guard.log" 2>&1||true
-    rebuild_intents;last_relation=$now
+  if ((relation_pid == 0 && now-last_relation >= 30));then
+    v6_task_start relation "$now" task_relation
+    relation_pid="$V6_TASK_STARTED_PID"
+    last_relation=$now
   fi
 
-  if ((now-last_external>=60));then
-    python3 scripts/v6_external_bridge.py --output "$RUN_ROOT/external_signals.csv" --status "$RUN_ROOT/external_bridge_status.json" --max-age-seconds 21600 --min-confidence 0.35 >"$RUN_ROOT/external_bridge.log" 2>&1||true
+  if ((external_bridge_pid == 0 && now-last_external >= 60));then
+    v6_task_start external_bridge "$now" task_external_bridge
+    external_bridge_pid="$V6_TASK_STARTED_PID"
     last_external=$now
   fi
 
-  if ((now-last_report>=60));then
-    python3 scripts/v6_runtime_status.py --config "$CONFIG" --run-root "$RUN_ROOT" >"$RUN_ROOT/runtime_status.log" 2>&1||true
-    python3 scripts/runtime_action_report.py --run-root "$RUN_ROOT" --external-signals "$RUN_ROOT/external_signals.csv" --window-seconds 3600 --production-edge "$INTENT_MIN_EDGE" --output-json "$RUN_ROOT/action_report.json" --output-markdown "$RUN_ROOT/action_report.md" >"$RUN_ROOT/action_report_latest.log" 2>&1||true
-    python3 scripts/v7_execution_evidence.py --run-root "$RUN_ROOT" --policy config/v7_execution_evidence.json >"$RUN_ROOT/v7_execution_evidence.log" 2>&1||true
+  if ((report_pid == 0 && now-last_report >= 60));then
+    v6_task_start report "$now" task_report
+    report_pid="$V6_TASK_STARTED_PID"
     last_report=$now
   fi
   sleep 5

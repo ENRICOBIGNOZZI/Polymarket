@@ -22,7 +22,7 @@ FIELDS = [
     "max_notional", "market_id", "side", "weight", "limit_price",
     "execution_deadline_ts", "hold_deadline_ts",
 ]
-THRESHOLD = re.compile(r"([$â¬Â£]?\s*\d[\d,]*(?:\.\d+)?\s*(?:k|m|b|%|bp|bps)?)", re.I)
+THRESHOLD = re.compile(r"([$€£]?\s*\d[\d,]*(?:\.\d+)?\s*(?:k|m|b|%|bp|bps)?)", re.I)
 DIRECTION = re.compile(r"\b(above|below|over|under|reach|exceed|dip|at least|at most|more than|less than)\b", re.I)
 NORMAL = statistics.NormalDist()
 

@@ -2,6 +2,10 @@ name: V6 market cache relay
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ["deploy-paper-server"]
+    types: [completed]
+    branches: [main]
   push:
     branches: [main]
     paths:
@@ -23,6 +27,9 @@ concurrency:
 
 jobs:
   relay:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     env:
@@ -145,7 +152,8 @@ jobs:
           import json,sys,time
           payload=json.load(open(sys.argv[1],encoding="utf-8"))
           assert payload.get("schema") == "polymarket_v6_market_proxy_cache_v1"
-          assert time.time()-float(payload["timestamp"]) <= 90
+          age=time.time()-float(payload["timestamp"])
+          assert -30.0 <= age <= 90
           assert len(payload.get("markets") or []) >= 100
           assert all(
               isinstance(row,dict) and str(row.get("id") or "")
@@ -181,7 +189,8 @@ jobs:
           path=sys.argv[1]
           value=json.load(open(path,encoding="utf-8"))
           assert value.get("schema") == "polymarket_v6_market_proxy_cache_v1"
-          assert time.time()-float(value["timestamp"]) <= 120
+          age=time.time()-float(value["timestamp"])
+          assert -30.0 <= age <= 120
           assert len(value.get("markets") or []) >= 100
           assert all(
               isinstance(row,dict) and str(row.get("id") or "")

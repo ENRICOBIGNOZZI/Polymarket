@@ -8,6 +8,9 @@ CACHE_DIR="${POLYMARKET_DEPLOY_CACHE:-$HOME/.cache/polymarket-deploy}"
 STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
 STATUS_FILE="$STATE_DIR/autoupdate_status.env"
 RUNTIME_HEALTH_ATTEMPTS="${POLYMARKET_RUNTIME_HEALTH_ATTEMPTS:-180}"
+DEPLOY_LOCK_PATH="${POLYMARKET_DEPLOY_LOCK_PATH:-$STATE_DIR/deploy.lock}"
+DEPLOY_LOCK_TIMEOUT_SECONDS="${POLYMARKET_DEPLOY_LOCK_TIMEOUT_SECONDS:-900}"
+SERVICE_CONTROL_SCRIPT="$APP_DIR/ops/macos_service_control.sh"
 
 log() { printf '[mac-deploy] %s\n' "$*"; }
 fail() { printf '[mac-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -69,16 +72,19 @@ paper_runtime_healthy() {
     return
   fi
 
-  "$PYTHON_BIN" - "$supervisor" "$version" "$APP_DIR/$run_root_rel" <<'PY'
+  "$PYTHON_BIN" - "$supervisor" "$version" "$APP_DIR/$run_root_rel" "$APP_DIR" <<'PY'
 import csv
 import json
 import math
+import os
+import subprocess
 import sys
 import time
 from pathlib import Path
 supervisor = Path(sys.argv[1])
 version = int(sys.argv[2])
 run_root = Path(sys.argv[3])
+app_dir = Path(sys.argv[4])
 with supervisor.open(newline='', encoding='utf-8') as handle:
     rows = list(csv.DictReader(handle))
 assert rows
@@ -98,6 +104,27 @@ total = float(allocator.get('reserve_fraction', 0.0)) + sum(float(item['capital_
 assert math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9)
 assert all(float(item['status_age_seconds']) <= 120 for item in strategies)
 if version >= 6:
+    lock_owner = int((run_root / 'multileg.lock').read_text().strip())
+    assert lock_owner == int(row['broker_pid'])
+    os.kill(lock_owner, 0)
+    processes = []
+    for line in subprocess.check_output(
+        ['/bin/ps', '-axo', 'pid=,ppid=,command='], text=True
+    ).splitlines():
+        fields = line.strip().split(None, 2)
+        if len(fields) != 3:
+            continue
+        try:
+            processes.append((int(fields[0]), int(fields[1]), fields[2]))
+        except ValueError:
+            continue
+    commands = {pid: command for pid, _, command in processes}
+    marker = str(app_dir / 'scripts' / 'paper_v6_loop.sh')
+    top_level_v6_supervisors = [
+        pid for pid, ppid, command in processes
+        if marker in command and marker not in commands.get(ppid, '')
+    ]
+    assert len(top_level_v6_supervisors) == 1, top_level_v6_supervisors
     runtime = json.loads((run_root / 'runtime_status.json').read_text())
     assert runtime.get('version') == 6 and runtime.get('paper_only') is True
     assert float(runtime.get('drawdown', 1.0)) <= 0.15 + 1e-12
@@ -156,6 +183,59 @@ export PATH="$BREW_PREFIX/bin:$BREW_PREFIX/sbin:/usr/local/bin:/usr/bin:/bin:/us
 export PKG_CONFIG_PATH="$("$BREW_BIN" --prefix curl)/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 PYTHON_BIN="$BREW_PREFIX/bin/python3"
 [[ "$RUNTIME_HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS must be a positive integer"
+[[ "$DEPLOY_LOCK_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_LOCK_TIMEOUT_SECONDS must be a positive integer"
+
+# Both the local launchd reconciler and the GitHub deployment workflow invoke
+# this updater.  Hold one kernel-owned advisory lock across the entire updater
+# lifetime so git/build/service state always has exactly one writer.  flock(2)
+# is released automatically if the owner exits or is killed, so stale PID text
+# can never strand deployment; it is metadata only and is replaced on acquire.
+if [[ "${POLYMARKET_DEPLOY_LOCK_HELD:-0}" != "1" ]]; then
+  mkdir -p "$STATE_DIR"
+  exec "$PYTHON_BIN" - "$DEPLOY_LOCK_PATH" "$DEPLOY_LOCK_TIMEOUT_SECONDS" "$0" "$@" <<'PY'
+import fcntl
+import os
+import sys
+import time
+
+lock_path, timeout_text, script, *arguments = sys.argv[1:]
+timeout = int(timeout_text)
+fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+deadline = time.monotonic() + timeout
+announced = False
+while True:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        break
+    except BlockingIOError:
+        if not announced:
+            os.lseek(fd, 0, os.SEEK_SET)
+            owner = os.read(fd, 256).decode("utf-8", errors="replace").strip()
+            print(
+                "[mac-deploy] Waiting for existing updater lock"
+                + (f" ({owner})" if owner else ""),
+                flush=True,
+            )
+            announced = True
+        if time.monotonic() >= deadline:
+            print(
+                f"[mac-deploy] ERROR: timed out after {timeout}s waiting for {lock_path}",
+                file=sys.stderr,
+                flush=True,
+            )
+            os.close(fd)
+            raise SystemExit(75)
+        time.sleep(1.0)
+
+os.ftruncate(fd, 0)
+os.write(fd, f"pid={os.getpid()} acquired_ts={int(time.time())}\n".encode("utf-8"))
+os.fsync(fd)
+os.set_inheritable(fd, True)
+environment = dict(os.environ)
+environment["POLYMARKET_DEPLOY_LOCK_HELD"] = "1"
+os.execve("/bin/bash", ["/bin/bash", script, *arguments], environment)
+PY
+fi
 
 cd "$APP_DIR"
 OLD_SHA="$(git rev-parse HEAD)"
@@ -174,7 +254,7 @@ if [[ "$OLD_SHA" == "$NEW_SHA" ]]; then
     write_status unhealthy "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
     fail "validated code is current but runtime configuration repair failed"
   fi
-  sudo -n /usr/local/sbin/polymarket-service-control restart || true
+  bash "$SERVICE_CONTROL_SCRIPT" restart || true
   if wait_for_runtime_health; then
     write_status repaired "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
     log "Runtime and Grafana configuration repaired at validated commit $NEW_SHA"
@@ -202,6 +282,7 @@ trap cleanup EXIT
 
 log "Validating candidate $NEW_SHA from $DEPLOY_REF in isolated worktree"
 git -C "$APP_DIR" worktree add --detach "$STAGE_SRC" "$NEW_SHA" >/dev/null
+SERVICE_CONTROL_SCRIPT="$STAGE_SRC/ops/macos_service_control.sh"
 cd "$STAGE_SRC"
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$BREW_PREFIX"
 JOBS="$(sysctl -n hw.logicalcpu 2>/dev/null || echo 2)"
@@ -220,7 +301,7 @@ ctest --test-dir build --output-on-failure
   scripts/multi_strategy_paper.py scripts/v5_runtime_readiness.py \
   scripts/build_v4_intents.py scripts/merge_v4_intents.py \
   scripts/walk_forward_v4.py scripts/tiny_live_pilot.py scripts/v6_*.py
-bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh \
+bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh scripts/v6_task_runtime.sh \
   scripts/v6_live_smoke_once.sh ops/apply_runtime_config_macos.sh
 "$PYTHON_BIN" -m json.tool config/live_champion.json >/dev/null
 "$PYTHON_BIN" -m json.tool config/paper_v5.json >/dev/null
@@ -269,7 +350,7 @@ rollback() {
     fi
   done
   write_status rollback "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
-  sudo -n /usr/local/sbin/polymarket-service-control restart || true
+  bash "$SERVICE_CONTROL_SCRIPT" restart || true
   exit 1
 }
 
@@ -281,7 +362,7 @@ log "Applying manifest-aware runtime configuration"
 bash "$APP_DIR/ops/apply_runtime_config_macos.sh" || rollback "runtime configuration failed"
 
 log "Restarting manifest-selected paper services"
-sudo -n /usr/local/sbin/polymarket-service-control restart || rollback "service restart failed"
+bash "$SERVICE_CONTROL_SCRIPT" restart || rollback "service restart failed"
 
 log "Waiting for production health (up to $((RUNTIME_HEALTH_ATTEMPTS * 2)) seconds for process/readiness confirmation)"
 if ! wait_for_runtime_health; then

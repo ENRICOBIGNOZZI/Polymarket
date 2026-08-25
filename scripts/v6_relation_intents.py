@@ -25,7 +25,7 @@ FIELDS = [
 
 UP = re.compile(r"\b(above|over|exceed|exceeds|reach|reaches|at least|more than|higher than)\b", re.I)
 DOWN = re.compile(r"\b(below|under|dip to|fall to|at most|less than|lower than)\b", re.I)
-NUMBER = re.compile(r"(?P<prefix>[$â¬Â£]?)\s*(?P<num>\d[\d,]*(?:\.\d+)?)\s*(?P<suffix>k|m|b|%|bp|bps)?", re.I)
+NUMBER = re.compile(r"(?P<prefix>[$€£]?)\s*(?P<num>\d[\d,]*(?:\.\d+)?)\s*(?P<suffix>k|m|b|%|bp|bps)?", re.I)
 DATE_TOKEN = re.compile(r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|20\d{2})\b", re.I)
 
 

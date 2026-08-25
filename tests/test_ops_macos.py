@@ -76,11 +76,24 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn(marker, updater)
         repair = updater.split(marker, 1)[1].split('\nif git merge-base --is-ancestor', 1)[0]
         apply = 'bash "$APP_DIR/ops/apply_runtime_config_macos.sh"'
-        restart = 'sudo -n /usr/local/sbin/polymarket-service-control restart'
+        restart = 'bash "$SERVICE_CONTROL_SCRIPT" restart'
         self.assertIn(apply, repair)
         self.assertIn(restart, repair)
         self.assertLess(repair.index(apply), repair.index(restart))
         self.assertIn('Runtime and Grafana configuration repaired', repair)
+
+    def test_updater_serializes_launchd_and_workflow_with_kernel_lock(self):
+        updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
+
+        self.assertIn('${POLYMARKET_DEPLOY_LOCK_PATH:-$STATE_DIR/deploy.lock}', updater)
+        self.assertIn('${POLYMARKET_DEPLOY_LOCK_TIMEOUT_SECONDS:-900}', updater)
+        self.assertIn('fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)', updater)
+        self.assertIn('os.set_inheritable(fd, True)', updater)
+        self.assertIn('environment["POLYMARKET_DEPLOY_LOCK_HELD"] = "1"', updater)
+        self.assertIn('os.execve("/bin/bash", ["/bin/bash", script, *arguments], environment)', updater)
+        self.assertIn('timed out after {timeout}s waiting for {lock_path}', updater)
+        self.assertLess(updater.index('fcntl.flock('), updater.index('cd "$APP_DIR"'))
+        self.assertLess(updater.index('fcntl.flock('), updater.index('git fetch origin'))
 
     def test_v5_cold_start_wait_uses_startup_aware_readiness(self):
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
@@ -119,7 +132,11 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('full_runtime_healthy()', updater)
         self.assertIn('wait_for_runtime_health()', updater)
         self.assertIn('write_status repaired', updater)
-        self.assertIn('polymarket-service-control restart', updater)
+        self.assertIn('bash "$SERVICE_CONTROL_SCRIPT" restart', updater)
+        self.assertNotIn('sudo -n /usr/local/sbin/polymarket-service-control restart', updater)
+        self.assertIn("assert lock_owner == int(row['broker_pid'])", updater)
+        self.assertIn('top_level_v6_supervisors', updater)
+        self.assertIn('assert len(top_level_v6_supervisors) == 1', updater)
         self.assertIn('scripts/v5_runtime_readiness.py', updater)
         self.assertIn('polymarket_v6_exporter_info', updater)
         self.assertIn('hard_arb', updater)
@@ -188,6 +205,23 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertNotIn("sed -n '1,30p'", control)
         self.assertIn("Darwin) bash ops/macos_service_control.sh status ;;", deploy)
         self.assertNotIn("Darwin) sudo -n /usr/local/sbin/polymarket-service-control status ;;", deploy)
+
+    def test_macos_restart_is_graceful_and_reaps_legacy_v6_orphans(self):
+        control = (ROOT / "ops" / "macos_service_control.sh").read_text(encoding="utf-8")
+        restart = control.split('  restart)\n', 1)[1].split('    ;;', 1)[0]
+
+        self.assertIn('reap_legacy_paper_supervisors', restart)
+        self.assertIn('restart_gracefully "$label"', restart)
+        self.assertNotIn('kickstart -k', restart)
+        self.assertIn('/bin/kill -TERM "$old_pid"', control)
+        self.assertIn('new_pid" != "$old_pid', control)
+        self.assertIn('$2 == 1 && index($0, needle)', control)
+        self.assertIn('$workdir/scripts/paper_v6_loop.sh', control)
+        self.assertIn('/bin/kill -TERM "$pid"', control)
+        self.assertNotIn('/bin/kill -KILL "$pid"', control)
+        updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
+        self.assertIn('SERVICE_CONTROL_SCRIPT="$STAGE_SRC/ops/macos_service_control.sh"', updater)
+        self.assertIn('bash "$SERVICE_CONTROL_SCRIPT" restart', updater)
 
     def test_bootstrap_services_follow_the_champion_manifest(self):
         linux = (ROOT / "ops" / "bootstrap_server.sh").read_text(encoding="utf-8")

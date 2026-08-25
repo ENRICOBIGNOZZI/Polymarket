@@ -39,6 +39,14 @@ def read_rows(path: Path, header_prefix: str | None = None) -> list[dict[str, st
         return []
 
 
+def read_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def fnum(value: str | None, default: float = 0.0) -> float:
     try:
         out = float(value if value not in (None, "") else default)
@@ -128,6 +136,14 @@ def build_report(
     ledger = read_rows(run_root / "bundle_ledger.csv")
     supervisor = read_rows(run_root / "runtime_supervisor.csv")
     external = read_rows(external_path)
+    graph_research = read_json(run_root / "graph_research_status.json")
+    graph_research_rows = read_rows(run_root / "graph_research_ev.csv")
+    micro_taker = read_json(run_root / "micro_taker" / "status.json")
+    micro_exploration = (
+        micro_taker.get("exploration")
+        if isinstance(micro_taker.get("exploration"), dict)
+        else {}
+    )
 
     recent_events = recent_rows(events, now, window, ("timestamp",))
     recent_ledger = recent_rows(ledger, now, window, ("closed_ts", "timestamp"))
@@ -245,6 +261,23 @@ def build_report(
                 "detail": "no positive complete BUY_ALL_YES basket at executable size",
             }
         )
+    if graph_research:
+        reasons.append(
+            {
+                "code": "GRAPH_RESEARCH_ONLY",
+                "detail": (
+                    f"{int(graph_research.get('candidate_bundles') or 0)} Graph baskets are "
+                    "scored with empirical joint-fill EV and are not broker-routed"
+                ),
+            }
+        )
+    if micro_exploration.get("enabled") is True and int(micro_exploration.get("candidate_strata_last_tick") or 0) == 0:
+        reasons.append(
+            {
+                "code": "EXPLORATION_WAITING_FOR_ACTIVITY",
+                "detail": "the bounded taker probe has no eligible recent public trade/activity stratum yet",
+            }
+        )
     if reward_positive == 0 and rewards:
         reasons.append(
             {
@@ -289,6 +322,20 @@ def build_report(
         actions.append(
             "bundle state: "
             + ", ".join(f"{key}={value}" for key, value in sorted(bundle_status.items()))
+        )
+    if graph_research:
+        actions.append(
+            "RESEARCH: Graph joint-fill EV: "
+            f"{int(graph_research.get('candidate_bundles') or 0)} candidates, "
+            f"{int(graph_research.get('economic_research_candidates') or 0)} economic research candidates, "
+            "0 broker intents"
+        )
+    if micro_exploration.get("enabled") is True:
+        actions.append(
+            "PAPER EXPLORE: micro taker "
+            f"active={int(micro_exploration.get('active_positions') or 0)}, "
+            f"opens_hour={int(micro_exploration.get('hourly_opens') or 0)}, "
+            f"realized_pnl={fnum(str(micro_exploration.get('realized_pnl_total') or 0.0)):.6f} USD"
         )
     if not intent_bundles:
         actions.append("ABSTAIN: no bundle passed coherence, costs, and risk gates")
@@ -343,6 +390,22 @@ def build_report(
                 "raw_positive": structural_raw,
                 "net_positive_pre_gas": structural_net,
                 "clob_complete_set_positive": structural_clob,
+            },
+            "Graph_research": {
+                "rows": len(graph_research_rows),
+                "candidate_bundles": int(graph_research.get("candidate_bundles") or 0),
+                "economic_research_candidates": int(graph_research.get("economic_research_candidates") or 0),
+                "insufficient_evidence_candidates": int(graph_research.get("insufficient_evidence_candidates") or 0),
+                "broker_routing_enabled": bool(graph_research.get("broker_routing_enabled", False)),
+                "raw_scanner_edge_is_execution_edge": bool(graph_research.get("raw_scanner_edge_is_execution_edge", False)),
+            },
+            "micro_taker_exploration": {
+                "enabled": micro_exploration.get("enabled") is True,
+                "active_positions": int(micro_exploration.get("active_positions") or 0),
+                "hourly_opens": int(micro_exploration.get("hourly_opens") or 0),
+                "candidate_strata_last_tick": int(micro_exploration.get("candidate_strata_last_tick") or 0),
+                "realized_pnl_total": fnum(str(micro_exploration.get("realized_pnl_total") or 0.0)),
+                "hold_seconds": int(micro_exploration.get("hold_seconds") or 0),
             },
             "B3_rewards_shadow": {
                 "rows": len(rewards),
@@ -399,6 +462,8 @@ def compact_candidate(row: dict[str, str] | None, fields: tuple[str, ...]) -> st
 def render_markdown(report: dict[str, Any]) -> str:
     funnel = report["candidate_funnel"]
     b2 = funnel["B2_pca_hedges"]
+    graph_research = funnel["Graph_research"]
+    exploration = funnel["micro_taker_exploration"]
     broker = report["broker"]
     best = report["best_candidates"]
     runtime = report["runtime"]
@@ -406,8 +471,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         "# Polymarket hourly action report",
         "",
         (
-            f"Generated: `{report['generated_utc']}` Â· window: "
-            f"`{report['window_seconds']}s` Â· production edge gate: "
+            f"Generated: `{report['generated_utc']}` · window: "
+            f"`{report['window_seconds']}s` · production edge gate: "
             f"`{report['production_edge_threshold']:.6f}`"
         ),
         "",
@@ -437,6 +502,19 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"complete baskets positive {funnel['NegRisk']['clob_complete_set_positive']}."
         ),
         (
+            f"- Graph research: {graph_research['candidate_bundles']} baskets; "
+            f"economic research candidates {graph_research['economic_research_candidates']}; "
+            f"broker routing {'ON' if graph_research['broker_routing_enabled'] else 'OFF'}; "
+            "raw scanner edge is not execution edge."
+        ),
+        (
+            f"- Micro taker exploration: {'enabled' if exploration['enabled'] else 'off'}; "
+            f"active {exploration['active_positions']}; opens/hour {exploration['hourly_opens']}; "
+            f"eligible strata {exploration['candidate_strata_last_tick']}; "
+            f"realized PnL {exploration['realized_pnl_total']:.6f} USD; "
+            f"hold {exploration['hold_seconds']}s."
+        ),
+        (
             f"- External expert: {funnel['external']['fresh_rows']} fresh signals "
             f"from {funnel['external']['rows']} configured rows."
         ),
@@ -456,7 +534,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines += ["", "## Why", ""]
     if report["reasons"]:
         lines.extend(
-            f"- `{item['code']}` â {item['detail']}." for item in report["reasons"]
+            f"- `{item['code']}` — {item['detail']}." for item in report["reasons"]
         )
     else:
         lines.append("- No blocking condition detected.")

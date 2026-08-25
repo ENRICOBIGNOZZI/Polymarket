@@ -43,10 +43,10 @@ for i in 1 2 3; do
   if (( i < 3 )); then sleep 6; fi
 done
 
-python3 scripts/v6_hard_arb_paper.py \
+python3 scripts/v6_queue_filter.py hard \
   --config "$R/hard_arb_config.json" --run-dir "$R/hard_arb" \
   --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --max-events 50 \
-  --min-edge "$EDGE" --max-trade-usd 60 --slippage-bps 5 \
+  --min-edge "$EDGE" --max-trade-usd 60 --slippage-bps 5 --leg-latency-ms 100 \
   | tee "$R/hard_arb_latest.log"
 
 python3 scripts/v6_local_factor_intents.py \

@@ -27,8 +27,9 @@
     },
     "graph_rv": {
       "outputs": ["constrained_probability_projection"],
-      "execution": ["MAKER"],
-      "required_evidence": ["constraint_violation", "post_fill_markout", "event_completeness"]
+      "execution": ["RESEARCH_ONLY"],
+      "rule": "The raw relation spread is not an execution edge. GRAPH_RV remains a paper research scanner until an empirical joint full/partial/zero fill distribution yields positive conditional execution EV; it cannot emit broker intents.",
+      "required_evidence": ["constraint_violation", "joint_fill_distribution", "conditional_execution_ev", "post_fill_markout", "event_completeness"]
     },
     "structural": {
       "outputs": ["monotone_implied_distribution", "threshold_curve_fair_probability"],
