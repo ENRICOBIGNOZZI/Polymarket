@@ -50,6 +50,34 @@ def _sample_sd(values: list[float], mean: float) -> float:
     return math.sqrt(sum((value - mean) ** 2 for value in values) / (len(values) - 1))
 
 
+def iid_expected_centered_sxy(T: int) -> dict[str, float | int]:
+    """Exact expected centered state/target cross-product under iid N(0,1).
+
+    Relabel the n=T-H training rows as
+        S_i = eps_i + ... + eps_{i+H-1},
+        Y_i = eps_{i+H}.
+    Then E[S_i Y_i]=0 for every same row. But Y_j is contained in S_i for
+    1 <= i-j <= H. Therefore E[sum_i (S_i-Sbar)(Y_i-Ybar)] is negative:
+        - (1/n) * sum_{d=1}^{min(H,n-1)} (n-d).
+    This proves the sign bias without relying on simulation.
+    """
+
+    H = min(12, max(4, T // 4))
+    n = T - H
+    if n <= 0:
+        return {"T": T, "H": H, "regression_rows": max(0, n), "overlap_pairs": 0, "expected_centered_sxy": 0.0}
+    max_lag = min(H, n - 1)
+    overlap_pairs = sum(n - lag for lag in range(1, max_lag + 1))
+    expected_centered_sxy = -overlap_pairs / n
+    return {
+        "T": T,
+        "H": H,
+        "regression_rows": n,
+        "overlap_pairs": overlap_pairs,
+        "expected_centered_sxy": expected_centered_sxy,
+    }
+
+
 def incumbent_gate(
     residual_returns: list[float],
     current_residual_return: float,
@@ -135,6 +163,7 @@ def iid_null_experiment(T: int, paths: int = 400, seed: int = 0x20260825) -> dic
         z_gate += int(abs(float(result.get("z", 0.0))) >= 0.60)
         rows = int(result["rows"])
     rate = admitted / paths
+    analytic = iid_expected_centered_sxy(T)
     return {
         "process": "iid_standardized_residual_returns_no_predictability",
         "T": T,
@@ -146,6 +175,8 @@ def iid_null_experiment(T: int, paths: int = 400, seed: int = 0x20260825) -> dic
         "mean_beta": beta_sum / paths,
         "mean_t_reversion": t_sum / paths,
         "residual_z_gate_rate": z_gate / paths,
+        "analytic_expected_centered_sxy": float(analytic["expected_centered_sxy"]),
+        "analytic_overlap_pairs": int(analytic["overlap_pairs"]),
         "independence_scale_expected_admissions_at_350_markets": 350.0 * rate,
         "independence_scale_probability_at_least_one_at_350_markets": 1.0 - (1.0 - rate) ** 350,
     }
@@ -180,6 +211,12 @@ def summarize(root: Path, paths: int = 400) -> dict[str, object]:
         "schema": "polymarket_lf_v5_pca_state_bias_audit_v1",
         "source_contract": source_contract(root),
         "experiments": experiments,
+        "analytic_mechanism": (
+            "For iid residual returns, same-row E[state_t * residual_{t+1}] is zero. But a target "
+            "residual_{t+1} appears in up to H later overlapping state rows. Full-sample centering subtracts "
+            "the positive cross-row overlap covariance, so the expected centered regression numerator is "
+            "exactly negative: -(1/n) * sum_{d=1}^{min(H,n-1)} (n-d), n=T-H."
+        ),
         "mechanism": (
             "Each training row predicts residual[t+1] from an H-period rolling residual state ending at t. "
             "Although same-row covariance is zero under iid residual returns, residual[t+1] enters later "
