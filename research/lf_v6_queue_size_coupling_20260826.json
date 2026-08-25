@@ -1,0 +1,67 @@
+{
+  "schema": "lf_v6_queue_size_coupling_evidence_v1",
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "base_main_sha": "64a1cad3b6626362d96e3dd9f4c1860282f9604a",
+  "finding": "Graph/RV maker target capacity is mechanically coupled to same-side touch depth twice: the relation generator uses min best-bid size to cap bundle notional, and the multi-leg broker caps units at 25% of same-side touch size before enforcing minimum order size. This creates a hard queue-ahead floor and can make larger/worse queues mechanically permit larger target sizes.",
+  "deterministic_fixture": {
+    "capital_per_unit": 0.98,
+    "min_order_shares": 5.0,
+    "max_trade_usd": 60.0,
+    "scenarios": [
+      {
+        "queue_ahead_shares": 5.0,
+        "generator_max_notional": 4.9,
+        "broker_target_shares": 1.25,
+        "admitted": false
+      },
+      {
+        "queue_ahead_shares": 19.0,
+        "generator_max_notional": 18.62,
+        "broker_target_shares": 4.75,
+        "admitted": false
+      },
+      {
+        "queue_ahead_shares": 20.0,
+        "generator_max_notional": 19.6,
+        "broker_target_shares": 5.0,
+        "admitted": true
+      },
+      {
+        "queue_ahead_shares": 1000.0,
+        "generator_max_notional": 60.0,
+        "broker_target_shares": 61.224489795918366,
+        "admitted": true
+      }
+    ],
+    "implied_queue_floor_shares": 20.0,
+    "reference_queue_decoupled_target_shares": 25.0
+  },
+  "current_live_context": {
+    "telemetry_sha": "64a1cad3b6626362d96e3dd9f4c1860282f9604a",
+    "github_run_id": "32908625321",
+    "trade_recorder_status": "healthy",
+    "new_public_trades": 189,
+    "graph_rv_bundles": 2,
+    "graph_rv_legs": 8,
+    "max_quoted_expected_edge": 0.020000000000000018,
+    "completed_bundles": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0
+  },
+  "interpretation": "This is an execution-sizing identification defect, not alpha evidence. Same-side queue ahead should affect fill/completion probability. It should not by itself determine how much capacity the strategy is allowed to target. A successor should size from hard risk/capital limits and independently measured executable unwind depth, then apply queue-aware same-window completion and partial-fill/unwind EV before admission.",
+  "required_common_sample_experiment": [
+    "Use identical chronological Graph/RV candidates and identical executable prices, verified fees, slippage and deadlines.",
+    "Arm A: incumbent relation-generator plus broker same-side-touch size coupling.",
+    "Arm B: queue-decoupled target capacity bounded by risk and independently measured cumulative executable unwind depth.",
+    "Keep queue ahead as a separate causal fill/completion input in both arms.",
+    "Measure per-leg fill states, all-leg completion, partial-fill frequency, abort/unwind loss, capital-hours and fill-conditioned net PnL at 1x, 1.5x and 2x execution cost stress.",
+    "Do not promote Arm B merely for higher fill count; require non-degrading executable EV and hard-safety compliance."
+  ],
+  "hard_safety": {
+    "max_drawdown_ratio": 0.15,
+    "kill_switch": true,
+    "state_integrity": true,
+    "authenticated_execution": false,
+    "real_money_execution": false
+  }
+}
