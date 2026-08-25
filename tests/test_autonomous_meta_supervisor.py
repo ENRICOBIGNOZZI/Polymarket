@@ -63,6 +63,15 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
             },
         }
 
+    def healthy_snapshot(self) -> dict:
+        return {
+            "main_sha": self.main,
+            "paper_validated_sha": self.main,
+            "paper_validated_is_ancestor": True,
+            "server_deploy_enabled": False,
+            "runs": self.healthy_runs(),
+        }
+
     def test_skipped_dispatchable_worker_requires_recovery(self) -> None:
         spec = {"dispatchable": True, "requires_current_main": False, "max_age_seconds": 0}
         latest = {
@@ -79,6 +88,38 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
         health = module._autonomous_product_health({}, {}, 2_000)
         self.assertFalse(health["healthy"])
         self.assertIn("autonomous_research_product_missing", health["reasons"])
+
+    def test_unwired_product_channel_does_not_create_false_degradation(self) -> None:
+        snapshot = self.healthy_snapshot()
+        self.assertFalse(module._autonomous_product_channel_wired(snapshot))
+        report = module.build_report(self.config, snapshot, self.now)
+        self.assertEqual(report["status"], "HEALTHY", report)
+        self.assertFalse(report["invariants"]["autonomous_research_product_channel_wired"])
+        product = report["product_health"]["autonomous_research"]
+        self.assertEqual(product["reported_status"], "NOT_WIRED")
+        self.assertTrue(product["healthy"])
+        self.assertFalse(
+            any(
+                alert.get("code") == "AUTONOMOUS_RESEARCH_PRODUCT_DEGRADED"
+                for alert in report["alerts"]
+            ),
+            report["alerts"],
+        )
+
+    def test_wired_but_missing_product_remains_fail_closed(self) -> None:
+        snapshot = self.healthy_snapshot()
+        snapshot["products"] = {"autonomous_research": {}}
+        self.assertTrue(module._autonomous_product_channel_wired(snapshot))
+        report = module.build_report(self.config, snapshot, self.now)
+        self.assertEqual(report["status"], "DEGRADED", report)
+        self.assertTrue(report["invariants"]["autonomous_research_product_channel_wired"])
+        self.assertTrue(
+            any(
+                alert.get("code") == "AUTONOMOUS_RESEARCH_PRODUCT_DEGRADED"
+                for alert in report["alerts"]
+            ),
+            report["alerts"],
+        )
 
     def test_waiting_runtime_is_acceptable_when_server_deploy_is_disabled(self) -> None:
         snapshot = {
