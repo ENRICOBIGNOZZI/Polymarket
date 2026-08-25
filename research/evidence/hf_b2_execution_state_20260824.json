@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_hf_b2_execution_state_v2",
-  "generated_utc": "2026-08-24T21:22:00Z",
+  "generated_utc": "2026-08-25T01:41:05Z",
   "evidence_state": "MORE_EVIDENCE_REQUIRED",
   "source_live_smoke": {
     "git_sha": "c5234ef85467689698a51d033c0d4edfdd394a63",
@@ -41,41 +41,42 @@
   "forward_complete_set_calibration": {
     "sample_decision": "REJECT_CURRENT_COMPLETE_SET_MAKER_SAMPLE",
     "decision_scope": "current complete-set join/improve1/fade1 worker only; not transferable to B2 multi-leg completion probability",
-    "valid_sessions": 8,
-    "history_span_seconds": 10563,
-    "probes_per_policy": 112,
-    "pair_fill_confidence_note": "For zero paired fills in 112 probes, the one-sided 95% Wilson upper bound is 2.3587%; the upper endpoint of a two-sided 95% Wilson interval is 3.3161%. The calibration gate uses the one-sided bound. Neither statistic may be transferred across execution classes.",
+    "valid_sessions": 15,
+    "history_span_seconds": 22023,
+    "probes_per_policy": 217,
+    "pair_fill_confidence_note": "For zero paired fills in 217 probes, the one-sided 95% Wilson upper bound is 1.2314%; the upper endpoint of a two-sided 95% Wilson interval is 1.7395%. The calibration gate uses the one-sided bound. Neither statistic may be transferred across execution classes.",
     "join": {
       "any_fills": 1,
       "pair_fills": 0,
       "one_sided_fills": 1,
-      "pair_fill_rate_wilson_upper": 0.02358685877442495,
-      "pair_fill_rate_wilson_one_sided_95_upper": 0.02358685877442495,
-      "pair_fill_rate_wilson_two_sided_95_upper_endpoint": 0.03316134706694388,
+      "pair_fill_rate_wilson_upper": 0.012314406871853464,
+      "pair_fill_rate_wilson_one_sided_95_upper": 0.012314406871853464,
+      "pair_fill_rate_wilson_two_sided_95_upper_endpoint": 0.017394645195733326,
       "one_sided_given_any_fill_rate": 1.0,
       "total_pnl_ex_rewards_usd": -0.13894351315407616,
       "filled_share_weighted_markout_60_bid_per_share": -0.0020000000000000018,
       "eligible_for_paper_shadow": false
     },
     "improve1": {
-      "any_fills": 1,
+      "any_fills": 2,
       "pair_fills": 0,
-      "one_sided_fills": 1,
-      "pair_fill_rate_wilson_upper": 0.02358685877442495,
-      "pair_fill_rate_wilson_one_sided_95_upper": 0.02358685877442495,
-      "pair_fill_rate_wilson_two_sided_95_upper_endpoint": 0.03316134706694388,
+      "one_sided_fills": 2,
+      "pair_fill_rate_wilson_upper": 0.012314406871853464,
+      "pair_fill_rate_wilson_one_sided_95_upper": 0.012314406871853464,
+      "pair_fill_rate_wilson_two_sided_95_upper_endpoint": 0.017394645195733326,
       "one_sided_given_any_fill_rate": 1.0,
-      "total_pnl_ex_rewards_usd": -0.13894351315407616,
-      "filled_share_weighted_markout_60_bid_per_share": -0.0020000000000000018,
+      "total_pnl_ex_rewards_usd": -2.456809049864078,
+      "filled_share_weighted_pnl_ex_rewards_usd_per_share": -0.022342752363260075,
+      "filled_share_weighted_markout_60_bid_per_share": -0.0010905783921425982,
       "eligible_for_paper_shadow": false
     },
     "fade1": {
       "any_fills": 0,
       "pair_fills": 0,
       "one_sided_fills": 0,
-      "pair_fill_rate_wilson_upper": 0.02358685877442495,
-      "pair_fill_rate_wilson_one_sided_95_upper": 0.02358685877442495,
-      "pair_fill_rate_wilson_two_sided_95_upper_endpoint": 0.03316134706694388,
+      "pair_fill_rate_wilson_upper": 0.012314406871853464,
+      "pair_fill_rate_wilson_one_sided_95_upper": 0.012314406871853464,
+      "pair_fill_rate_wilson_two_sided_95_upper_endpoint": 0.017394645195733326,
       "total_pnl_ex_rewards_usd": 0.0,
       "eligible_for_paper_shadow": false
     }
@@ -96,6 +97,25 @@
     "b2_rows_with_any_fill": 0,
     "telemetry_published": false,
     "interpretation": "The PR-specific complete-set worker added another zero-fill window, while the direct B2 worker again produced no fills under its short stress replay. The B2 result remains measurement-limited and is not a completion-probability estimate."
+  },
+  "latest_main_forward_maker_evidence": {
+    "workflow_run_id": 32791899288,
+    "git_sha": "d6513fdbdf5ad8c8b7926b53fb7bba5acdab1257",
+    "duration_seconds": 480,
+    "eligible_markets": 15,
+    "quote_definitions": 45,
+    "snapshots": 49,
+    "any_fills": 0,
+    "pair_fills": 0,
+    "one_sided_fills": 0,
+    "pnl_ex_rewards_usd": 0.0,
+    "calibration_sessions": 15,
+    "calibration_history_span_seconds": 22023,
+    "calibration_selected_policy": "NONE",
+    "calibration_eligible_policies": 0,
+    "deterministic_tests_passed": 35,
+    "deterministic_tests_total": 35,
+    "interpretation": "The latest successful scheduled worker added a 480-second zero-fill window across 15 markets and left the repeated-session maker calibration with no eligible policy."
   },
   "fast_shadow_latest_worker_health": {
     "workflow_run_id": 32776306290,
@@ -128,8 +148,8 @@
   "interpretation": {
     "complete_set_evidence_transfer_to_b2_allowed": false,
     "reason": "The existing forward-maker worker observes two-leg complete-set/reward quotes, while current B2 candidates are five-leg factor hedges. Fill, queue, latency and completion distributions must be measured on the actual B2 execution class.",
-    "current_complete_set_result": "Eight independent persisted sessions now provide 112 probes per policy with zero paired fills. The current complete-set passive maker sample is rejected as evidence of routinely achievable paired execution; this is not a permanent rejection of all maker strategies.",
-    "current_b2_result": "The current validated live frontier has three raw-positive B2 candidates but zero maker-positive candidates. The direct B2 PR probe has 0/24 full completions and 0/24 rows with any fill in a 120-second window. This is negative execution evidence but remains too short and too coarsely timestamped to estimate B2 completion probability.",
+    "current_complete_set_result": "Fifteen independent persisted sessions now provide 217 probes per policy with zero paired fills. Join has one one-sided fill; improve1 has two one-sided fills and cumulative ex-reward PnL of -$2.4568 on its filled shares. The current complete-set passive maker sample is rejected more strongly as evidence of routinely achievable paired execution; this is not a permanent rejection of all maker strategies and is not transferable to B2.",
+    "current_b2_result": "The current validated live frontier used for this evidence snapshot has three raw-positive B2 candidates but zero maker-positive candidates. The direct B2 PR probe has 0/24 full completions and 0/24 rows with any fill in a 120-second window. This is negative execution evidence but remains too short and too coarsely timestamped to estimate B2 completion probability.",
     "next_experiment": "Capture the actual B2 token books in event time with timestamp resolution finer than the 250/500/750 ms latency scenarios, compute strictly causal pre-arrival microprice/depth/imbalance/OFI, and replay the same legs under queue stress, partial/full completion, forced completion cost, and 60s/300s fill-conditioned markout."
   },
   "safety": {
