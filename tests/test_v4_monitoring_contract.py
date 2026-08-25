@@ -135,7 +135,7 @@ class LiveMonitoringContractTest(unittest.TestCase):
         self.assertIn("polymarket_v6_exporter_info", exporter)
         self.assertIn("polymarket_v6_local_factor_clusters", exporter)
         self.assertIn("v6_legacy_health_view", status)
-        self.assertIn("no V5 expert or mixture", status)
+        self.assertIn("Transitional V5-shaped telemetry only", status)
         self.assertIn("models_expected", status)
 
 
