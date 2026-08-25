@@ -70,6 +70,38 @@ class MonitoringV6ExporterTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (run / "v7_execution_evidence.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "polymarket_execution_evidence_v1",
+                        "models": {
+                            "micro_maker": {
+                                "target": "short_horizon_markout",
+                                "state": "INSUFFICIENT_EVIDENCE",
+                                "paper_eligible": False,
+                                "fills": 3,
+                                "realized_pnl_observations": 2,
+                                "forward_markout_observations": 0,
+                                "net_pnl": -1.5,
+                                "stressed_net_pnl": -2.0,
+                                "bootstrap_one_sided_pvalue": 1.0,
+                            },
+                            "relative_value": {
+                                "target": "hedged_convergence",
+                                "state": "PAPER_ELIGIBLE",
+                                "paper_eligible": True,
+                                "fills": 7,
+                                "realized_pnl_observations": 4,
+                                "forward_markout_observations": 4,
+                                "net_pnl": 7.0,
+                                "stressed_net_pnl": 5.0,
+                                "bootstrap_one_sided_pvalue": 0.02,
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
             (run / "allocator_status.json").write_text(
                 json.dumps(
                     {
@@ -110,6 +142,9 @@ class MonitoringV6ExporterTests(unittest.TestCase):
             self.assertIn('polymarket_model_realized_pnl_usd{expert="relative_value",model="relative_value"} 7', text)
             self.assertIn('polymarket_model_signals_total{expert="micro_maker",model="micro_maker"} 4', text)
             self.assertIn('polymarket_allocator_global_max_gross_fraction 0.45', text)
+            self.assertIn('polymarket_model_execution_evidence_eligible{expert="relative_value",model="relative_value",state="PAPER_ELIGIBLE",target="hedged_convergence"} 1', text)
+            self.assertIn('polymarket_model_execution_evidence_fills{expert="relative_value",model="relative_value",state="PAPER_ELIGIBLE",target="hedged_convergence"} 7', text)
+            self.assertIn('polymarket_model_execution_evidence_eligible{expert="micro_maker",model="micro_maker",state="INSUFFICIENT_EVIDENCE",target="short_horizon_markout"} 0', text)
 
     @staticmethod
     def _write_multileg_events(path: Path) -> None:

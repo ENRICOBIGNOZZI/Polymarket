@@ -16,7 +16,7 @@ from exporter import (
 )
 from exporter_v4 import V4Collector
 
-EXPORTER_V6_VERSION = "1.3.0"
+EXPORTER_V6_VERSION = "1.4.0"
 V6_MODEL_FRESH_SECONDS = 120.0
 
 
@@ -77,6 +77,10 @@ class V6Collector(V4Collector):
         relations = status.get("relations") if isinstance(status.get("relations"), dict) else {}
         local_factor = status.get("local_factor") if isinstance(status.get("local_factor"), dict) else {}
         bridge = status.get("external_bridge") if isinstance(status.get("external_bridge"), dict) else {}
+        evidence_path = self.run_root / "v7_execution_evidence.json"
+        evidence = _read_json(evidence_path) or {}
+        evidence_models = evidence.get("models") if isinstance(evidence.get("models"), dict) else {}
+        evidence_age = max(0.0, now - (_mtime(evidence_path) or now)) if evidence else 1e12
 
         maker = _last_csv_row(self.run_root / "maker" / "maker_equity.csv") or {}
         micro = _read_json(self.run_root / "micro_taker" / "status.json") or {}
@@ -208,6 +212,82 @@ class V6Collector(V4Collector):
             metrics.sample("polymarket_model_buy_fills_total", _float(row.get("buy_fills")), help_text="Cumulative V6 entry/buy fill events by model.", metric_type="counter", labels=labels)
             metrics.sample("polymarket_model_sell_fills_total", _float(row.get("sell_fills")), help_text="Cumulative V6 exit/sell fill events by model.", metric_type="counter", labels=labels)
             metrics.sample("polymarket_model_settle_fills_total", _float(row.get("settle_fills")), help_text="Cumulative V6 settlement fill events by model.", metric_type="counter", labels=labels)
+
+            # V7 is a fail-closed evidence sidecar. Its target label is fixed by
+            # policy and makes it impossible to misread terminal forecasts as
+            # short-horizon execution alpha in Grafana.
+            evidence_row = evidence_models.get(str(name)) if isinstance(evidence_models.get(str(name)), dict) else {}
+            evidence_labels = {
+                **labels,
+                "target": str(evidence_row.get("target") or "unavailable"),
+                "state": str(evidence_row.get("state") or "UNAVAILABLE"),
+            }
+            metrics.sample(
+                "polymarket_model_execution_evidence_present",
+                1.0 if evidence_row else 0.0,
+                help_text="Whether a typed V7 execution-evidence record exists for this model.",
+                labels=evidence_labels,
+            )
+            metrics.sample(
+                "polymarket_model_execution_evidence_eligible",
+                1.0 if evidence_row.get("paper_eligible") is True else 0.0,
+                help_text="Whether the model passes all V7 paper evidence gates; this does not mutate allocation.",
+                labels=evidence_labels,
+            )
+            metrics.sample(
+                "polymarket_model_execution_evidence_fills",
+                _float(evidence_row.get("fills")),
+                help_text="V7 fill observations used by the typed execution-evidence gate.",
+                labels=evidence_labels,
+            )
+            metrics.sample(
+                "polymarket_model_execution_evidence_pnl_observations",
+                _float(evidence_row.get("realized_pnl_observations")),
+                help_text="V7 realized PnL observations used by the execution-evidence gate.",
+                labels=evidence_labels,
+            )
+            metrics.sample(
+                "polymarket_model_execution_evidence_markout_observations",
+                _float(evidence_row.get("forward_markout_observations")),
+                help_text="V7 forward-markout observations used by the execution-evidence gate.",
+                labels=evidence_labels,
+            )
+            metrics.sample(
+                "polymarket_model_execution_evidence_net_pnl_usd",
+                _float(evidence_row.get("net_pnl")),
+                help_text="V7 realized paper net PnL for the model evidence window.",
+                labels=evidence_labels,
+            )
+            metrics.sample(
+                "polymarket_model_execution_evidence_stressed_net_pnl_usd",
+                _float(evidence_row.get("stressed_net_pnl")),
+                help_text="V7 1.5x-cost-stressed paper net PnL for the model evidence window.",
+                labels=evidence_labels,
+            )
+            metrics.sample(
+                "polymarket_model_execution_evidence_bootstrap_pvalue",
+                _float(evidence_row.get("bootstrap_one_sided_pvalue"), 1.0),
+                help_text="V7 one-sided day-block bootstrap p-value for model PnL.",
+                labels=evidence_labels,
+            )
+            metrics.sample(
+                "polymarket_model_execution_evidence_terminal_calibration_observations",
+                _float(evidence_row.get("terminal_calibration_observations")),
+                help_text="Resolved terminal labels used to assess Brier improvement over the market.",
+                labels=evidence_labels,
+            )
+            metrics.sample(
+                "polymarket_model_execution_evidence_brier_improvement",
+                _float(evidence_row.get("brier_improvement_over_market")),
+                help_text="Mean Brier-score improvement over the contemporaneous market probability.",
+                labels=evidence_labels,
+            )
+            metrics.sample(
+                "polymarket_model_execution_evidence_age_seconds",
+                evidence_age,
+                help_text="Age of the V7 execution-evidence report.",
+                labels=evidence_labels,
+            )
 
         metrics.sample("polymarket_v6_relation_bundles", _float(relations.get("bundles")), help_text="Current executable graph/structural V6 bundles.")
         metrics.sample("polymarket_v6_relation_best_edge_ratio", _float(relations.get("best_edge")), help_text="Best current graph/structural maker edge.")
