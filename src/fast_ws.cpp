@@ -5,7 +5,13 @@
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/error.hpp>
 #include <boost/asio/ssl/stream.hpp>
+#if __has_include(<boost/asio/ssl/host_name_verification.hpp>)
+#include <boost/asio/ssl/host_name_verification.hpp>
+#define PM_USE_BOOST_HOST_NAME_VERIFICATION 1
+#else
 #include <boost/asio/ssl/rfc2818_verification.hpp>
+#define PM_USE_BOOST_HOST_NAME_VERIFICATION 0
+#endif
 #include <boost/beast/core.hpp>
 #include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket.hpp>
@@ -151,7 +157,11 @@ struct MarketWebSocketFeed::Impl {
                                                 endpoint.host.c_str())) {
                     throw std::runtime_error("SNI setup failed: " + openssl_error());
                 }
+#if PM_USE_BOOST_HOST_NAME_VERIFICATION
+                ws.next_layer().set_verify_callback(ssl::host_name_verification(endpoint.host));
+#else
                 ws.next_layer().set_verify_callback(ssl::rfc2818_verification(endpoint.host));
+#endif
 
                 const auto resolved = resolver.resolve(endpoint.host, endpoint.port);
                 beast::get_lowest_layer(ws).expires_after(std::chrono::seconds(10));
