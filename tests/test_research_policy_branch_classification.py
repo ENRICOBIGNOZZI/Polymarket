@@ -44,6 +44,18 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
         result = self.run_policy("fix/v6-queue-admission","Adjust passive queue admission before broker intents.",["scripts/v6_queue_filter.py"])
         self.assertNotEqual(result.returncode, 0); self.assertIn("model/runtime work cannot change", result.stdout); self.assertIn("scripts/v6_queue_filter.py", result.stdout)
 
+    def test_feature_branch_cannot_modify_paper_latest_runtime_wrapper(self):
+        result = self.run_policy("fix/runtime-wrapper","Change the manifest-selected paper runtime supervisor.",["scripts/paper_latest_loop.sh"])
+        self.assertNotEqual(result.returncode, 0); self.assertIn("model/runtime work cannot change", result.stdout); self.assertIn("scripts/paper_latest_loop.sh", result.stdout)
+
+    def test_draft_research_can_modify_paper_latest_runtime_wrapper(self):
+        result = self.run_policy("research/runtime-wrapper","Research a bounded paper runtime-supervision change.",["scripts/paper_latest_loop.sh"],draft=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr); self.assertIn("policy: `pass`", result.stdout)
+
+    def test_shadow_isolated_cannot_modify_paper_latest_runtime_wrapper(self):
+        result = self.run_policy("research/runtime-wrapper-shadow","Measurement-only shadow runtime experiment.",["scripts/paper_latest_loop.sh"],labels=["shadow-isolated"],draft=True)
+        self.assertNotEqual(result.returncode, 0); self.assertIn("shadow-isolated code cannot modify production", result.stdout); self.assertIn("scripts/paper_latest_loop.sh", result.stdout)
+
     def test_feature_branch_cannot_hide_direct_model_source_change(self):
         result = self.run_policy("feature/pca-residual-upgrade","Improve PCA stat-arb alpha and residual model signals.",["src/pca_stat_arb.cpp","tests/test_v4_research.py"])
         self.assertNotEqual(result.returncode, 0); self.assertIn("src/pca_stat_arb.cpp", result.stdout)
