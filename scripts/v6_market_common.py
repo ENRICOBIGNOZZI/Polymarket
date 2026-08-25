@@ -218,10 +218,19 @@ def fill_probability_proxy(
     horizon_seconds: float,
     prior_flow_per_second: float = 0.0,
 ) -> float:
-    """Conservative queue-to-flow proxy, bounded in [0,1]."""
+    """Conservative queue-to-flow proxy, bounded in [0,1].
+
+    A generic flow prior is allowed only after compatible public flow has actually
+    been observed for the token/price. The prior is capped by the observed rate so
+    it cannot create a positive fill probability on an inactive token or dominate
+    a very small amount of evidence.
+    """
     q = max(0.0, queue_ahead)
     own = max(1e-9, own_shares)
-    rate = max(0.0, compatible_flow_per_second) + max(0.0, prior_flow_per_second)
+    observed_rate = max(0.0, compatible_flow_per_second)
+    requested_prior = max(0.0, prior_flow_per_second)
+    effective_prior = min(requested_prior, observed_rate) if observed_rate > 0.0 else 0.0
+    rate = observed_rate + effective_prior
     expected_flow = rate * max(0.0, horizon_seconds)
     if expected_flow <= 0.0:
         return 0.0
