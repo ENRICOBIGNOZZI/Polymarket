@@ -85,7 +85,9 @@ jobs:
           set -euo pipefail
           cd ~/polymarket
           git fetch -q origin main paper-validated
-          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/paper-validated)"
+          paper_validated_sha="$(git rev-parse origin/paper-validated)"
+          test "$(git rev-parse HEAD)" = "$paper_validated_sha"
+          printf 'paper_validated_sha=%s\n' "$paper_validated_sha"
           python3 - <<'PY'
           import json,re
           from pathlib import Path
@@ -108,13 +110,22 @@ jobs:
             root="$(printf '%s\n' "$target" | sed -n 's/^run_root=//p' | tail -n 1)"
             [[ "$root" =~ ^runs/[A-Za-z0-9._-]+$ ]]
             echo "run_root=$root" >> "$GITHUB_OUTPUT"
+            paper_validated_sha="$(printf '%s\n' "$target" | sed -n 's/^paper_validated_sha=//p' | tail -n 1)"
+            [[ "$paper_validated_sha" =~ ^[0-9a-f]{40}$ ]]
+            echo "paper_validated_sha=$paper_validated_sha" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build fresh verified public market cache
         if: steps.target.outputs.active == 'true'
         shell: bash
+        env:
+          PAPER_VALIDATED_SHA: ${{ steps.target.outputs.paper_validated_sha }}
         run: |
           set -euo pipefail
+          [[ "$PAPER_VALIDATED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch -q origin paper-validated
+          git checkout --detach "$PAPER_VALIDATED_SHA"
+          test "$(git rev-parse HEAD)" = "$PAPER_VALIDATED_SHA"
           mkdir -p relay-evidence
           python3 scripts/v6_market_snapshot.py \
             --output relay-evidence/market_proxy_cache.json \
@@ -127,6 +138,12 @@ jobs:
           assert payload.get("schema") == "polymarket_v6_market_proxy_cache_v1"
           assert time.time()-float(payload["timestamp"]) <= 90
           assert len(payload.get("markets") or []) >= 100
+          assert all(
+              isinstance(row,dict) and str(row.get("id") or "")
+              and str(row.get("conditionId") or "")
+              and float(row.get("liquidityNum")) >= 10
+              for row in payload["markets"]
+          )
           PY
 
       - name: Transfer cache atomically to private V6 runtime
@@ -157,6 +174,12 @@ jobs:
           assert value.get("schema") == "polymarket_v6_market_proxy_cache_v1"
           assert time.time()-float(value["timestamp"]) <= 120
           assert len(value.get("markets") or []) >= 100
+          assert all(
+              isinstance(row,dict) and str(row.get("id") or "")
+              and str(row.get("conditionId") or "")
+              and float(row.get("liquidityNum")) >= 10
+              for row in value["markets"]
+          )
           PY
           mv "$incoming" "$target"
           printf 'relay_cache_installed=%s\n' "$target"
