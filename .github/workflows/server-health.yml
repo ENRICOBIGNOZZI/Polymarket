@@ -161,23 +161,12 @@ jobs:
           printf 'broker_pid=%s\n' "$broker_pid"
           printf 'allocator_pid=%s\n' "$allocator_pid"
 
-          python3 - "$run_root" <<'PY'
-          import csv
-          import json
-          import math
-          import pathlib
-          import sys
-          root = pathlib.Path(sys.argv[1])
-          allocator = json.loads((root / 'allocator_status.json').read_text())
-          rows = list(csv.DictReader((root / 'strategy_status.csv').open()))
-          assert allocator['paper_only'] is True
-          assert allocator['models_expected'] == 5
-          assert {row['name'] for row in rows} == {'micro', 'pca', 'graph', 'semantic', 'external'}
-          total = sum(float(row['capital_fraction']) for row in rows) + float(allocator['reserve_fraction'])
-          assert math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9), total
-          assert int(allocator['models_alive']) == 5
-          assert all(float(row['status_age_seconds']) <= 120 for row in rows)
-          PY
+          python3 scripts/v5_runtime_readiness.py \
+            --run-root "$run_root" \
+            --supervisor-max-age 60 \
+            --allocator-max-age 30 \
+            --model-output-max-age 120 \
+            --startup-grace 600
 
           python3 scripts/runtime_action_report.py \
             --run-root "$run_root" --external-signals data/external_signals.csv \
