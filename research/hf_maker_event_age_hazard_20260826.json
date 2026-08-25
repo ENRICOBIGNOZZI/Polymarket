@@ -6,7 +6,7 @@
   "source": {
     "workflow_run_id": 32906345622,
     "artifact_id": 9585309016,
-    "artifact_digest": "sha256:20b6cd30664dd82279f88f7a5711a623636dcd"
+    "artifact_digest": "sha256:20b6cd30664dd82279f88da01173b9ae072acee674316d4439d87cedacb14b51"
   },
   "prospective_common_sample": {
     "head_sha": "545ec2d11ecdfa748589130148c2dd2bb0de93a8",
