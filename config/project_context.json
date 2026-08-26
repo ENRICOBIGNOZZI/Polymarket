@@ -1,17 +1,16 @@
 {
-  "schema_version": 2,
+  "schema_version": 1,
   "repository": "ENRICOBIGNOZZI/Polymarket",
   "canonical_branch": "main",
   "deployment_ref": "paper-validated",
   "live_champion_manifest": "config/live_champion.json",
-  "v7_candidate_manifest": "config/v7_champion_candidate.json",
   "model_architecture_manifest": "config/v6_model_architecture.json",
   "scheduler_registry": "config/scheduler_registry.json",
   "context_policy": {
     "scope": "entire_repository",
     "require_full_worktree_inventory": true,
     "inventory_command": "git ls-files",
-    "rule": "Every scheduler must begin from the complete repository state for its checked-out revision, read the live champion and current candidate architecture manifests, and may specialize only after the project-wide context snapshot is available. Research that reintroduces live expert averaging, semantic-price averaging or heterogeneous global PCA is non-promotable."
+    "rule": "Every scheduler must begin from the complete repository state for its checked-out revision, read the live champion and V6 model architecture manifests, and may specialize only after the project-wide context snapshot is available. Research that reintroduces live expert averaging, semantic-price averaging or heterogeneous global PCA is non-promotable."
   },
   "required_surfaces": [
     ".github/workflows",
@@ -32,24 +31,7 @@
     "user": "enrico",
     "port": 22,
     "remote_root": "~/polymarket",
-    "ssh_config_source": "ops/ssh_config_polymarket",
-    "single_owner_selector": "scripts/run_paper.sh",
-    "singleton_launcher": "scripts/runtime_singleton_launcher.py",
-    "plane_supervisor": "scripts/runtime_plane_supervisor.py"
-  },
-  "runtime_planes": {
-    "champion": {
-      "source": "config/live_champion.json",
-      "mode": "paper",
-      "real_order_submission": false
-    },
-    "fast-arb": {
-      "binary": "build/polymarket_fast_arb_shadow",
-      "mode": "shadow_only",
-      "real_order_submission": false,
-      "policy": "config/fast_arb_policy.json",
-      "separate_from_champion_capital": true
-    }
+    "ssh_config_source": "ops/ssh_config_polymarket"
   },
   "grafana": {
     "canonical_operator_url": "http://mamma-portfolio.tail1bae85.ts.net",
