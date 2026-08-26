@@ -943,7 +943,13 @@ void Engine::run_once(bool paper, bool scan_only) {
                 last_forecasts_[m.id][e.name] = e.q_yes;
             }
         }
-        const FeeDetails fd = fee_for(m);
+        FeeDetails fd;
+        try {
+            fd = fee_for(m);
+        } catch (const std::exception& error) {
+            std::cerr << "fee schedule skipped market=" << m.id << " error=" << error.what() << '\n';
+            continue;
+        }
 
         const double ay = yi->second.best_ask(), an = ni->second.best_ask();
         if (std::isfinite(ay) && std::isfinite(an)) {

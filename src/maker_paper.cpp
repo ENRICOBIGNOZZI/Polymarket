@@ -67,7 +67,7 @@ struct Order {
     bool timed_sports = false;
     std::int64_t last_trade_ts = 0; // Diagnostic max timestamp only; never an admission watermark.
     std::string last_trade_keys = "|"; // All trade ids seen during this short-lived order.
-    double fee_rate = 0.07;
+    double fee_rate = -1.0;
     double fee_exponent = 1.0;
     bool fee_taker_only = true;
 };
@@ -84,7 +84,7 @@ struct Position {
     std::int64_t entry_ts = 0;
     std::int64_t game_start_ts = 0;
     bool timed_sports = false;
-    double fee_rate = 0.07;
+    double fee_rate = -1.0;
     double fee_exponent = 1.0;
     bool fee_taker_only = true;
 };
@@ -191,7 +191,13 @@ public:
                 if (yb.spread() > cfg_.max_spread || nb.spread() > cfg_.max_spread) continue;
                 const auto ms = micro_signal(yb, nb);
                 if (ms.confidence < 0.10) continue;
-                const auto fd = api_.fetch_fee_details(m);
+                pm::FeeDetails fd;
+                try {
+                    fd = api_.fetch_fee_details(m);
+                } catch (const std::exception& error) {
+                    std::cerr << "fee schedule skipped market=" << m.id << " error=" << error.what() << '\n';
+                    continue;
+                }
 
                 struct Choice {
                     std::string side;
@@ -675,8 +681,19 @@ private:
             if (!walked || walked->first <= 1e-12) continue;
             const double shares = std::min(p.shares, walked->first);
             const double px = walked->second * (1.0 - cfg_.slippage_bps / 10000.0);
-            pm::FeeDetails fd{p.fee_rate, p.fee_exponent, p.fee_taker_only};
-            if (mit != market_by_id.end()) fd = api_.fetch_fee_details(*mit->second);
+            pm::FeeDetails fd;
+            bool fee_known = false;
+            if (mit != market_by_id.end()) {
+                try {
+                    fd = api_.fetch_fee_details(*mit->second);
+                    fee_known = true;
+                } catch (...) {}
+            }
+            if (!fee_known && p.fee_rate >= 0.0) {
+                fd = {p.fee_rate, p.fee_exponent, p.fee_taker_only};
+                fee_known = true;
+            }
+            if (!fee_known) continue;
             const double fee = pm::Engine::protocol_fee(shares, px, fd);
             cash_ += shares * px - fee;
             p.shares = std::max(0.0, p.shares - shares);

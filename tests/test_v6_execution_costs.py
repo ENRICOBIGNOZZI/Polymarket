@@ -27,17 +27,42 @@ class V6ExecutionMeasurementTest(unittest.TestCase):
         self.assertFalse(details.enabled)
         self.assertEqual(qf.fee_amount(100.0, 0.5, details, taker=True), 0.0)
 
-    def test_clob_fee_descriptor_beats_conservative_fallback(self) -> None:
+    def test_clob_compact_fee_descriptor_is_authoritative(self) -> None:
         calls = []
 
         def request(url, *_args):
             calls.append(url)
-            return {"feesEnabled": True, "fd": {"rate": 0.04, "exponent": 1.0, "takerOnly": True}}
+            return {"fd": {"r": 0.04, "e": 1.0, "to": True}}
 
         details = qf.resolve_fee_details({"conditionId": "abc"}, "https://clob.test", request)
         self.assertEqual(details.source, "clob:fee_schedule")
         self.assertAlmostEqual(details.rate, 0.04)
         self.assertEqual(calls, ["https://clob.test/clob-markets/abc"])
+
+    def test_unknown_fee_schedule_abstains_instead_of_inventing_rate(self) -> None:
+        calls = []
+
+        def request(url, *_args):
+            calls.append(url)
+            return {"condition": "abc"}
+
+        with self.assertRaises(qf.FeeScheduleUnavailable):
+            qf.resolve_fee_details({"conditionId": "abc"}, "https://clob.test", request)
+        self.assertEqual(calls, ["https://clob.test/clob-markets/abc"])
+
+    def test_category_rates_come_from_each_market(self) -> None:
+        politics = qf.parse_fee_details(
+            {
+                "feesEnabled": True,
+                "feeSchedule": {"rate": 0.04, "exponent": 1.0, "takerOnly": True},
+            }
+        )
+        geopolitics = qf.parse_fee_details({"feesEnabled": False})
+        self.assertIsNotNone(politics)
+        self.assertIsNotNone(geopolitics)
+        assert politics is not None and geopolitics is not None
+        self.assertAlmostEqual(politics.rate, 0.04)
+        self.assertEqual(qf.fee_amount(100.0, 0.5, geopolitics), 0.0)
 
     def test_taker_fee_is_level_specific_and_maker_fee_is_zero(self) -> None:
         details = qf.FeeDetails(True, 0.07, 1.0, True, "test")
@@ -78,6 +103,14 @@ class V6ExecutionMeasurementTest(unittest.TestCase):
         self.assertIn("scripts/v6_queue_filter.py hard", workflow)
         self.assertIn("scripts/v6_queue_filter.py micro", workflow)
         self.assertIn("--leg-latency-ms 100", workflow)
+
+    def test_v6_config_has_no_uniform_fee_fallback(self) -> None:
+        config = (ROOT / "config" / "paper_v6.json").read_text()
+        self.assertNotIn("assumed_fee_rate", config)
+        self.assertNotIn("assumed_fee_exponent", config)
+        api = (ROOT / "src" / "api.cpp").read_text()
+        self.assertNotIn("/fee-rate?token_id=", api)
+        self.assertNotIn("FeeDetails fd{0.07", api)
 
 
 if __name__ == "__main__":
