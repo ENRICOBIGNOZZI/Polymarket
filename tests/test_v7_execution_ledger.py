@@ -74,13 +74,17 @@ def fill(**overrides):
 
 
 class CanonicalExecutionLedgerTest(unittest.TestCase):
-    def test_candidate_is_paper_only_and_receive_time_causal(self) -> None:
+    def test_candidate_is_paper_only_and_fully_clocked(self) -> None:
         candidate().validate()
         for overrides in ({"authenticated_execution": True}, {"paper_only": False}):
             with self.assertRaisesRegex(ledger.LedgerContractError, "safety:not_paper_only"):
                 candidate(**overrides).validate()
+        with self.assertRaisesRegex(ledger.LedgerContractError, "missing_exchange_receive_decision_clock"):
+            candidate(exchange_ts_ms=None).validate()
         with self.assertRaisesRegex(ledger.LedgerContractError, "decision_before_receive"):
             candidate(receive_ts_ms=1_020, decision_ts_ms=1_010).validate()
+        with self.assertRaisesRegex(ledger.LedgerContractError, "recorded_before_decision"):
+            candidate(recorded_ts_ms=1_015, decision_ts_ms=1_020).validate()
 
     def test_fill_requires_causal_execution_and_authoritative_fee(self) -> None:
         fill().validate()
@@ -113,9 +117,21 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
                 strategy="MICRO_TAKER",
                 model_sha=SHA_A,
                 recorded_ts_ms=3_030,
+                exchange_ts_ms=3_000,
                 receive_ts_ms=3_010,
                 book_snapshot_id="book-mark-1",
                 position_id="position-1",
+            ).validate()
+        with self.assertRaisesRegex(ledger.LedgerContractError, "missing_causal_book"):
+            ledger.LedgerEvent(
+                event_type="POSITION_MARK",
+                strategy="MICRO_TAKER",
+                model_sha=SHA_A,
+                recorded_ts_ms=3_030,
+                receive_ts_ms=3_010,
+                book_snapshot_id="book-mark-1",
+                position_id="position-1",
+                executable_liquidation_value=4.75,
             ).validate()
 
     def test_single_writer_owner_fails_closed(self) -> None:
