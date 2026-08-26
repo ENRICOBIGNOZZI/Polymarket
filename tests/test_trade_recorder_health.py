@@ -88,6 +88,8 @@ class TradeRecorderHealthTest(unittest.TestCase):
         self.assertIn("steps.v6_smoke.outcome == 'failure'", workflow)
         self.assertIn('test -s "$CHAMPION_RUN_NAME/trade_recorder_health.json"', workflow)
         self.assertIn("report.get('status') != 'unhealthy'", workflow)
+        self.assertIn('echo "V6_NEGATIVE_CANARY=true" >> "$GITHUB_ENV"', workflow)
+        self.assertIn("if: env.V6_NEGATIVE_CANARY != 'true'", workflow)
         self.assertIn("if: github.event_name != 'pull_request' && success()", workflow)
         self.assertIn("- name: Advance paper validated ref", workflow)
 
