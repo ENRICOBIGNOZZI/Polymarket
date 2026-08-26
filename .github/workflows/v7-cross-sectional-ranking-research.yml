@@ -2,6 +2,8 @@ name: V7 cross-sectional relative tail research
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "17 */2 * * *"
   pull_request:
     branches: [main]
     paths:
