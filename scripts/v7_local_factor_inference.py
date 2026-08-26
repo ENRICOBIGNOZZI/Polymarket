@@ -20,6 +20,37 @@ def intersection_union_pvalue(p_a: float, p_b: float) -> float:
     return min(1.0, max(0.0, max(p_a, p_b)))
 
 
+def bh_resolution_diagnostics(hypotheses: int, reps: int, q: float) -> dict[str, float | int | bool]:
+    """Describe whether Monte Carlo p-value granularity resolves the BH tail.
+
+    Plus-one Monte Carlo p-values cannot be smaller than 1/(B+1).  With m
+    hypotheses, an isolated first-ranked discovery at BH level q needs a p-value
+    no larger than q/m.  Coarser resolution is still conservative, but zero BH
+    discoveries then have weak evidential meaning because a genuinely strong
+    isolated hypothesis may be numerically unable to cross the first BH step.
+    """
+    m = max(0, int(hypotheses))
+    b = max(1, int(reps))
+    level = min(0.5, max(1e-12, float(q)))
+    minimum_attainable = 1.0 / (b + 1.0)
+    first_threshold = level / m if m > 0 else 0.0
+    required_reps = max(0, math.ceil(m / level) - 1) if m > 0 else 0
+    minimum_rank = (
+        max(1, math.ceil(minimum_attainable * m / level))
+        if m > 0
+        else 0
+    )
+    return {
+        "hypotheses": m,
+        "repetitions": b,
+        "minimum_attainable_pvalue": minimum_attainable,
+        "first_rank_bh_threshold": first_threshold,
+        "singleton_bh_resolution_adequate": bool(m > 0 and minimum_attainable <= first_threshold),
+        "repetitions_required_for_singleton_bh_resolution": required_reps,
+        "minimum_rank_needed_if_pvalues_hit_nominal_floor": minimum_rank,
+    }
+
+
 def panel_pair_iut_pvalues(
     panel: core.StandardizedPanel,
     pairs: Sequence[tuple[str, str]] | None = None,
@@ -31,10 +62,10 @@ def panel_pair_iut_pvalues(
 
     Both targets are excluded from the common factor, so each target's residual
     statistic can be calibrated marginally from the same joint panel-increment
-    bootstrap.  Calibrating only max(t_A,t_B) under the special case where both
+    bootstrap. Calibrating only max(t_A,t_B) under the special case where both
     targets are unit-root is not valid for the full composite null: if one target
     is already stationary and the other is unit-root, that calibration can be
-    anti-conservative.  The max of the two valid marginal p-values controls the
+    anti-conservative. The max of the two valid marginal p-values controls the
     intersection-union null before BH is applied across pair hypotheses.
     """
     pair_list = list(pairs or core.all_pairs(panel))
