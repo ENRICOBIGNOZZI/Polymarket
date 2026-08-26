@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "decision": "RAW_HARD_HITS_FRESHNESS_BLOCKED_DIAGNOSTIC_ONLY",
+  "source_main_sha": "43d881331cb311f37dcb504d342a3fdf5d63e43d",
+  "research_branch_head_sha": "4575ebfecae3e0c80ab54931244ae80eba37ed75",
+  "workflow_checkout_sha": "7656a5904e530dd8125964823efd97e83d5c11f3",
+  "exact_head_evidence": false,
+  "workflow_run_id": 33023376260,
+  "paper_only": true,
+  "real_order_submission": false,
+  "feed": {
+    "ws_messages": 28851,
+    "book_updates": 28409,
+    "feed_stale_ms_final": 52,
+    "rest_resyncs": 5,
+    "feed_latency_p99_ms": 18956.21,
+    "decision_latency_p99_us": 259147.72
+  },
+  "opportunity_horizon": {
+    "completed_lifetime_samples": 24,
+    "lifetime_p10_ms": 435.4
+  },
+  "raw_hard_executable_rows": 7,
+  "hard_stress_bps": 10.0,
+  "hard_stressed_positive_share": 1.0,
+  "strict_per_token_freshness_valid": false,
+  "strict_gate_failures": {
+    "negrisk:133792": 1,
+    "binary:3897838": 6
+  },
+  "raw_hard_candidates": [
+    {
+      "kind": "NEGRISK_COMPLETE_SET",
+      "id": "negrisk:133792",
+      "net_edge_per_share": 0.0281407,
+      "executable_shares": 29.6,
+      "capital_required": 28.7641,
+      "expected_profit": 0.832965,
+      "exchange_ts_ms": 0,
+      "received_ts_ms": 1787787054363,
+      "diagnostic": "blocked_missing_per_token_and_exchange_freshness"
+    },
+    {
+      "kind": "BINARY_COMPLETE_SET",
+      "id": "binary:3897838",
+      "net_edge_per_share": 0.00193379,
+      "observations": 6,
+      "capital_required_min": 49.8983,
+      "capital_required_max": 5357.08,
+      "expected_profit_min": 0.0966896,
+      "expected_profit_max": 10.3806,
+      "feed_latency_ms_min": 9691,
+      "feed_latency_ms_max": 15501,
+      "diagnostic": "blocked_missing_per_token_freshness_and_latency_exceeds_short_opportunity_horizon"
+    }
+  ],
+  "nonhard_diagnostic": {
+    "maker_complete_set_shadow_profit_is_not_audited_paper_pnl": true,
+    "reason": "passive theoretical sizing can expand to the non-binding compatibility sentinel; do not use it as bankroll-constrained or fill-conditioned economics"
+  },
+  "required_successor_evidence": [
+    "per-token exchange and receive clocks with reconnect lineage",
+    "bounded age and cross-leg skew on every required leg",
+    "same-SHA joint PAPER execution state",
+    "partial-fill and unwind accounting",
+    "audited realized post-cost fill-conditioned PnL",
+    "1.5x and 2x cost stress"
+  ]
+}
