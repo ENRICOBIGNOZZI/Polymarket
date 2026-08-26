@@ -21,6 +21,7 @@ EVENT_TYPES = frozenset(
         "ORDER_SUBMITTED",
         "ORDER_STATE",
         "FILL",
+        "MARKOUT",
         "POSITION_MARK",
         "EXIT",
         "FINAL",
@@ -85,6 +86,7 @@ class LedgerEvent:
     candidate_id: str | None = None
     bundle_id: str | None = None
     order_id: str | None = None
+    fill_id: str | None = None
     leg_id: str | None = None
     position_id: str | None = None
 
@@ -154,6 +156,7 @@ class LedgerEvent:
             ("candidate_id", self.candidate_id),
             ("bundle_id", self.bundle_id),
             ("order_id", self.order_id),
+            ("fill_id", self.fill_id),
             ("leg_id", self.leg_id),
             ("position_id", self.position_id),
             ("market_id", self.market_id),
@@ -256,7 +259,7 @@ class LedgerEvent:
             if not self.book_snapshot_id:
                 raise LedgerContractError("decision:missing_book_snapshot_id")
 
-        if self.event_type in {"ORDER_SUBMITTED", "ORDER_STATE", "FILL"} and not self.order_id:
+        if self.event_type in {"ORDER_SUBMITTED", "ORDER_STATE", "FILL", "MARKOUT"} and not self.order_id:
             raise LedgerContractError("order_id:missing")
         if self.event_type == "ORDER_SUBMITTED":
             if not self.intended_action or self.intended_size is None or self.intended_size <= 0:
@@ -264,6 +267,8 @@ class LedgerEvent:
         if self.event_type == "FILL":
             if self.exchange_ts_ms is None or self.receive_ts_ms is None:
                 raise LedgerContractError("fill:missing_exchange_receive_clock")
+            if not self.fill_id:
+                raise LedgerContractError("fill:missing_fill_id")
             if not self.token_id or self.side is None:
                 raise LedgerContractError("fill:missing_instrument_side")
             if self.fill_price is None:
@@ -272,6 +277,15 @@ class LedgerEvent:
                 raise LedgerContractError("fill:missing_positive_size")
             if self.fee is None or not self.fee_source:
                 raise LedgerContractError("fill:missing_authoritative_fee")
+        if self.event_type == "MARKOUT":
+            if not self.fill_id:
+                raise LedgerContractError("markout:missing_fill_id")
+            if self.exchange_ts_ms is None or self.receive_ts_ms is None or not self.book_snapshot_id:
+                raise LedgerContractError("markout:missing_causal_book")
+            if self.executable_liquidation_value is None:
+                raise LedgerContractError("markout:missing_executable_liquidation_value")
+            if len(self.markouts) != 1:
+                raise LedgerContractError("markout:requires_single_horizon")
         if self.event_type == "POSITION_MARK":
             if not self.position_id:
                 raise LedgerContractError("position_mark:missing_position_id")
@@ -289,6 +303,8 @@ class LedgerEvent:
             raise LedgerContractError(f"markouts:unsupported_horizon:{sorted(unknown)[0]}")
         for horizon, value in self.markouts.items():
             _finite_optional(f"markout_{horizon}", value)
+        if self.event_type != "MARKOUT" and self.markouts:
+            raise LedgerContractError("markouts:only_markout_events")
 
         if not isinstance(self.metadata, dict):
             raise LedgerContractError("metadata:not_object")
