@@ -101,6 +101,16 @@ class HardSafetyPolicyTest(unittest.TestCase):
         del current["multi_strategy"]["strategies"][0]["overrides"]["max_gross_fraction"]
         self.assertEqual(compare_paper_config(BASE, current, "config/paper_v6.json"), [])
 
+    def test_v6_cannot_exceed_authorized_market_universe(self) -> None:
+        current = v6_envelope()
+        current["market_limit"] = 1001
+        joined = "\n".join(compare_paper_config(BASE, current, "config/paper_v6.json"))
+        self.assertIn("market_limit allowed<=1000, got 1001", joined)
+
+        current = v6_envelope()
+        current["market_limit"] = 700
+        self.assertEqual(compare_paper_config(BASE, current, "config/paper_v6.json"), [])
+
     def test_v6_cannot_exceed_authorized_concentration_or_gross(self) -> None:
         current = v6_envelope()
         current["max_market_fraction"] = 0.051
@@ -155,6 +165,20 @@ class HardSafetyPolicyTest(unittest.TestCase):
         current["v6"]["reserve_fraction"] = 0.03
         errors = compare_paper_config(BASE, current, "config/paper_v6.json")
         self.assertTrue(any("allocations exceed 100%" in error for error in errors), errors)
+        self.assertTrue(any("reserve_fraction allowed<=0.02, got 0.03" in error for error in errors), errors)
+
+    def test_v6_each_sleeve_is_bounded_even_when_total_stays_one(self) -> None:
+        current = v6_envelope()
+        current["v6"]["relative_value_capital_fraction"] = 0.35
+        current["v6"]["micro_maker_capital_fraction"] = 0.21
+        joined = "\n".join(compare_paper_config(BASE, current, "config/paper_v6.json"))
+        self.assertIn("relative_value_capital_fraction allowed<=0.34, got 0.35", joined)
+        self.assertNotIn("allocations exceed 100%", joined)
+
+    def test_v6_conservative_underallocation_is_allowed(self) -> None:
+        current = v6_envelope()
+        current["v6"]["relative_value_capital_fraction"] = 0.30
+        self.assertEqual(compare_paper_config(BASE, current, "config/paper_v6.json"), [])
 
     def test_stricter_v6_safety_is_allowed(self) -> None:
         current = v6_envelope()
