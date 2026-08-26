@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-08-26T08:50:01Z",
+  "source_head": "6640bc7668087f7025b76a43cedd148b32d7f09d",
+  "source_workflow_run_id": 32948938687,
+  "artifact_id": 9599657017,
+  "research_state": "STRUCTURAL_ADMISSION_FIX_VALIDATED_BUT_ZERO_FILL_MORE_EVIDENCE_REQUIRED",
+  "hypothesis": "A one-print compatible SELL tape should not be hard-rejected as certain toxicity; sparse flow remains at-touch and softly toxicity-penalized, while recurrent toxic flow remains hard-rejected.",
+  "exact_head_validation": {
+    "research_policy": "success",
+    "monitoring": "success",
+    "ci_release": "success",
+    "ci_debug": "success",
+    "public_live_paper_smoke": "success",
+    "v6_live_data_research_smoke": "success",
+    "v6_ctest_passed": 57,
+    "v6_ctest_failed": 0
+  },
+  "seeded_universe": {
+    "discovered_markets": 1000,
+    "active_markets_evaluated": 120,
+    "books": 240,
+    "seed_global_recent_rows": 1000,
+    "seed_global_condition_count": 50,
+    "seed_global_asset_count": 68,
+    "seed_gamma_market_count": 49,
+    "seed_overlap_with_volume_prior": 14,
+    "seed_only_markets_added": 35,
+    "flow_condition_count": 31,
+    "seed_active_condition_count": 23,
+    "seed_added_active_condition_count": 16,
+    "activity_data_healthy": true,
+    "flow_errors": []
+  },
+  "maker_common_sample": {
+    "baseline_active_universe": {
+      "candidates_available": 20,
+      "orders": 8,
+      "fill_orders": 0,
+      "filled_shares": 0.0,
+      "fill_conditioned_pnl": 0.0
+    },
+    "active_flow": {
+      "candidates_available": 0,
+      "orders": 0,
+      "fill_orders": 0,
+      "filled_shares": 0.0,
+      "fill_conditioned_pnl": 0.0
+    },
+    "inside_spread": {
+      "considered": 0,
+      "kept": 0,
+      "reverted": 0,
+      "dropped": 0
+    }
+  },
+  "interpretation": {
+    "structural_fix_status": "deterministic contract validated on exact-head; recurrent two-print sell toxicity remains fail-closed and sparse flow cannot improve inside spread",
+    "forward_economic_status": "no new active-flow candidate, order, fill or fill-conditioned PnL in this independent window",
+    "threshold_decision": "do not lower post-cost edge below 0.5 bp and do not remove toxicity; zero-fill remains unresolved",
+    "next_diagnostic": "add an admission funnel that reports how many otherwise economic active-market side candidates are lost to compatible-print count, event age, fill probability, recurrent toxicity, soft toxicity-adjusted edge and confidence before changing another gate"
+  },
+  "micro_taker_same_run": {
+    "samples": 546,
+    "causal_labels": 364,
+    "post_horizon_labels": 0,
+    "signals": 0,
+    "trades": 0,
+    "realized_pnl": 0.0,
+    "action": "no forced taker trades"
+  },
+  "hard_arb_same_run": {
+    "scanned_events": 4,
+    "verified_fee_schedules": 26,
+    "positive_executable_candidates": 0,
+    "entries": 0,
+    "realized_pnl": 0.0,
+    "sequential_leg_revalidation": true,
+    "atomic_snapshot_assumption": false,
+    "action": "no threshold relaxation without executable edge"
+  },
+  "hard_safety_unchanged": {
+    "max_drawdown_fraction": 0.15,
+    "kill_switch": true,
+    "state_integrity": true,
+    "market_event_gross_caps": [0.05, 0.15, 0.70],
+    "authenticated_real_money_execution": false
+  }
+}
