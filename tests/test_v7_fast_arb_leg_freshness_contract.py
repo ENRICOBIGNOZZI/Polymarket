@@ -9,6 +9,7 @@ class V7FastArbLegFreshnessContractTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.part2 = (ROOT / "src" / "fast_runtime" / "part2.inc").read_text(encoding="utf-8")
         cls.part3 = (ROOT / "src" / "fast_runtime" / "part3.inc").read_text(encoding="utf-8")
+        cls.fast_ws = (ROOT / "src" / "fast_ws.cpp").read_text(encoding="utf-8")
 
     def test_each_l2_leg_has_its_own_exchange_and_receive_clock(self) -> None:
         self.assertIn("book_exchange_ts_ms_", self.part3)
@@ -50,9 +51,17 @@ class V7FastArbLegFreshnessContractTest(unittest.TestCase):
         self.assertIn("REST is useful for seeding/recovery", self.part2)
         self.assertNotIn("evaluate_all_locked(0, now_ms())", self.part2)
 
+    def test_reconnect_invalidates_the_entire_subscription_shard(self) -> None:
+        self.assertIn("shard * options_.shard_size", self.part2)
+        self.assertIn("ws_snapshot_ready_.erase(token);", self.part2)
+        self.assertIn("book_exchange_ts_ms_.erase(token);", self.part2)
+        self.assertIn("book_received_ts_ms_.erase(token);", self.part2)
+        self.assertIn("websocket closed; reconnecting and invalidating L2 lineage", self.fast_ws)
+        self.assertIn("report(shard_index", self.fast_ws)
+
     def test_shadow_safety_boundary_is_unchanged(self) -> None:
         self.assertIn('{"real_order_submission", false}', self.part2)
-        combined = self.part2 + "\n" + self.part3
+        combined = self.part2 + "\n" + self.part3 + "\n" + self.fast_ws
         self.assertNotIn("PRIVATE_KEY", combined)
         self.assertNotIn("--execute", combined)
 

@@ -181,6 +181,20 @@ public:
     }
 
     void append_feed_error(std::size_t shard, std::string_view message) {
+        // Any transport failure/reconnect breaks gap-free L2 lineage for the
+        // affected subscription shard. The next delta must not reuse the prior
+        // snapshot; eligibility resumes only after a new full WS book arrives.
+        {
+            std::scoped_lock lock(mutex_);
+            const std::size_t begin = shard * options_.shard_size;
+            const std::size_t end = std::min(tokens_.size(), begin + options_.shard_size);
+            for (std::size_t i = begin; i < end; ++i) {
+                const auto& token = tokens_[i];
+                ws_snapshot_ready_.erase(token);
+                book_exchange_ts_ms_.erase(token);
+                book_received_ts_ms_.erase(token);
+            }
+        }
         append_error("websocket_shard_" + std::to_string(shard), std::string(message));
     }
 
