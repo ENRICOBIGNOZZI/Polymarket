@@ -80,6 +80,33 @@ class BlockedRankingInferenceTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("insufficient_day_blocks", reasons)
 
+    def test_frozen_history_start_does_not_roll_through_training_window(self) -> None:
+        holdout_start = 1_800_000_000
+        training_window_seconds = 21 * 86400
+        lookback_seconds = 30 * 86400
+        bucket_seconds = 1800
+        expected_required = holdout_start - training_window_seconds - 12 * bucket_seconds
+
+        early_start, early_required = frozen.history_start_for_frozen_fit(
+            now_ts=holdout_start + 86400,
+            holdout_start_ts=holdout_start,
+            rolling_lookback_seconds=lookback_seconds,
+            training_window_seconds=training_window_seconds,
+            bucket_seconds=bucket_seconds,
+        )
+        late_start, late_required = frozen.history_start_for_frozen_fit(
+            now_ts=holdout_start + 60 * 86400,
+            holdout_start_ts=holdout_start,
+            rolling_lookback_seconds=lookback_seconds,
+            training_window_seconds=training_window_seconds,
+            bucket_seconds=bucket_seconds,
+        )
+
+        self.assertEqual(early_required, expected_required)
+        self.assertEqual(late_required, expected_required)
+        self.assertLessEqual(early_start, expected_required)
+        self.assertEqual(late_start, expected_required)
+
     @staticmethod
     def _training_row(
         ts: int,
