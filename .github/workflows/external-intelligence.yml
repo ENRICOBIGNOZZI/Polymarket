@@ -13,7 +13,7 @@ on:
           - backfill
           - demo
   schedule:
-    - cron: "17,47 * * * *"
+    - cron: "17 * * * *"
   push:
     branches: [main]
     paths:
@@ -29,6 +29,7 @@ on:
       - "tests/test_gdelt_webngrams.py"
       - "tests/test_attach_external_evidence.py"
       - "tests/test_github_contents_request.py"
+      - "tests/test_external_intelligence_workflow_contract.py"
       - ".github/workflows/external-intelligence.yml"
       - "docs/EXTERNAL_INTELLIGENCE.md"
   pull_request:
@@ -46,6 +47,7 @@ on:
       - "tests/test_gdelt_webngrams.py"
       - "tests/test_attach_external_evidence.py"
       - "tests/test_github_contents_request.py"
+      - "tests/test_external_intelligence_workflow_contract.py"
       - ".github/workflows/external-intelligence.yml"
       - "docs/EXTERNAL_INTELLIGENCE.md"
 
@@ -54,13 +56,13 @@ permissions:
   actions: read
 
 concurrency:
-  group: polymarket-external-intelligence
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+  group: polymarket-external-intelligence-${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) && 'writer' || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main') }}
 
 jobs:
   collect:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
         with:
@@ -75,7 +77,8 @@ jobs:
             tests/test_external_request_policy.py \
             tests/test_gdelt_webngrams.py \
             tests/test_attach_external_evidence.py \
-            tests/test_github_contents_request.py -v
+            tests/test_github_contents_request.py \
+            tests/test_external_intelligence_workflow_contract.py -v
           python3 -m py_compile \
             scripts/external_intelligence.py \
             scripts/external_request_policy.py \
@@ -241,7 +244,7 @@ jobs:
           fi
 
       - name: Publish durable history and evidence to telemetry
-        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && success()
+        if: (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) && success()
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
