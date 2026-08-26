@@ -15,6 +15,14 @@
     "training_window_days": 21,
     "recency_half_life_days": 7
   },
+  "universe_history": {
+    "current_research_mode": "current_active_survivors",
+    "promotion_mode": "point_in_time_market_snapshots",
+    "snapshot_cadence_minutes": 30,
+    "minimum_forward_snapshot_days": 14,
+    "require_point_in_time_universe_for_promotion": true,
+    "historical_liquidity_must_not_use_current_liquidity": true
+  },
   "model": {
     "type": "cross_sectionally_normalized_ridge",
     "ridge_penalty": 0.05,
@@ -41,7 +49,8 @@
     "minimum_positive_ic_fraction": 0.55,
     "minimum_decile_monotonicity": 0.50,
     "require_positive_top_bottom_spread": true,
-    "require_execution_ledger_validation_before_integration": true
+    "require_execution_ledger_validation_before_integration": true,
+    "require_point_in_time_universe_before_integration": true
   },
   "execution_shadow": {
     "mode": "TAKER",
