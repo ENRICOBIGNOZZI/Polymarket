@@ -121,7 +121,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          for workflow in ci.yml monitoring.yml v4-live-smoke.yml; do
+          for workflow in ci.yml monitoring.yml v7-live-paper-validation.yml; do
             current_main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
             if [[ "$current_main_sha" != "$EXPECTED_SHA" ]]; then
               echo "- dispatch skipped because main advanced to \`$current_main_sha\`; a newer push or recovery cycle owns validation" \
@@ -134,7 +134,7 @@ jobs:
           done
           if [[ -n "${PR_NUMBER:-}" ]]; then
             gh pr comment "$PR_NUMBER" --body \
-              "Dedicated post-merge validation dispatched CI, monitoring and live-paper smoke for exact main revision \`$EXPECTED_SHA\`. Promotion remains incomplete until \`paper-validated\` and deployed HEAD reach this SHA."
+              "Dedicated post-merge validation dispatched CI, monitoring and V7 live-paper validation for exact main revision \`$EXPECTED_SHA\`. Promotion remains incomplete until \`paper-validated\` and deployed HEAD reach this SHA."
           fi
 
       - name: Publish validation dispatch

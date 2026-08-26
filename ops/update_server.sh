@@ -5,24 +5,19 @@ APP_DIR="${POLYMARKET_APP_DIR:-$HOME/polymarket}"
 LOCAL_BRANCH="${POLYMARKET_BRANCH:-main}"
 DEPLOY_REF="${POLYMARKET_DEPLOY_REF:-paper-validated}"
 
-log() { printf '[deploy] %s\n' "$*"; }
-fail() { printf '[deploy] ERROR: %s\n' "$*" >&2; exit 1; }
+log(){ printf '[deploy-v7] %s\n' "$*"; }
+fail(){ printf '[deploy-v7] ERROR: %s\n' "$*" >&2; exit 1; }
 
 [[ -d "$APP_DIR/.git" ]] || fail "$APP_DIR is not a git checkout; run ops/bootstrap_server.sh once"
-[[ -f "$APP_DIR/.server_bootstrapped" ]] || fail "server bootstrap marker missing; run ops/bootstrap_server.sh once interactively"
-
+[[ -f "$APP_DIR/.server_bootstrapped" ]] || fail "server bootstrap marker missing"
 cd "$APP_DIR"
+
 OLD_SHA="$(git rev-parse HEAD)"
-log "Fetching origin/$LOCAL_BRANCH and validated ref origin/$DEPLOY_REF"
 git fetch origin "$LOCAL_BRANCH" "$DEPLOY_REF"
 MAIN_SHA="$(git rev-parse "origin/$LOCAL_BRANCH")"
 NEW_SHA="$(git rev-parse "origin/$DEPLOY_REF")"
-git merge-base --is-ancestor "$NEW_SHA" "$MAIN_SHA" || fail "$DEPLOY_REF ($NEW_SHA) is not an ancestor of $LOCAL_BRANCH ($MAIN_SHA)"
-
-if [[ "$OLD_SHA" == "$NEW_SHA" ]]; then
-  log "Already at validated commit $NEW_SHA; revalidating and repairing services if needed"
-else
-  log "Updating $OLD_SHA -> validated commit $NEW_SHA"
+git merge-base --is-ancestor "$NEW_SHA" "$MAIN_SHA" || fail "$DEPLOY_REF is not an ancestor of $LOCAL_BRANCH"
+if [[ "$OLD_SHA" != "$NEW_SHA" ]]; then
   git checkout "$LOCAL_BRANCH"
   git reset --hard "$NEW_SHA"
 fi
@@ -35,50 +30,39 @@ for key in ('version','loop','config','run_root'): print(m[key])
 PY
 )
 VERSION="${CHAMPION[0]}"; LOOP_REL="${CHAMPION[1]}"; CONFIG_REL="${CHAMPION[2]}"; RUN_ROOT_REL="${CHAMPION[3]}"; RUN_NAME="$(basename "$RUN_ROOT_REL")"
-[[ "$VERSION" =~ ^[0-9]+$ ]] || fail "invalid champion version"
-[[ "$VERSION" == "5" || "$VERSION" == "6" ]] || fail "unsupported champion version V$VERSION"
-[[ -f "$LOOP_REL" && -f "$CONFIG_REL" ]] || fail "champion files are missing"
+[[ "$VERSION" == "7" ]] || fail "only V7 can be deployed; manifest selected V$VERSION"
+[[ "$LOOP_REL" == "scripts/paper_v7_loop.sh" ]] || fail "unexpected V7 loop: $LOOP_REL"
+[[ "$CONFIG_REL" == "config/paper_v7.json" ]] || fail "unexpected V7 config: $CONFIG_REL"
+[[ "$RUN_ROOT_REL" == "runs/paper_v7_live" ]] || fail "unexpected V7 run root: $RUN_ROOT_REL"
+[[ -f "$LOOP_REL" && -f "$CONFIG_REL" ]] || fail "V7 champion files are missing"
 
-log "Building and validating paper-validated V$VERSION"
+log "Building and validating exact V7 paper-validated revision $NEW_SHA"
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel "$(nproc)"
 ctest --test-dir build --output-on-failure
-python3 -m unittest \
-  tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py \
-  tests/test_monitoring_latest_exporter.py tests/test_monitoring_v5_exporter.py \
-  tests/test_grafana_fast_paper_contract.py tests/test_grafana_multi_strategy_contract.py \
-  tests/test_multi_strategy_paper.py tests/test_v4_monitoring_contract.py \
-  tests/test_v6_runtime_contract.py tests/test_v6_model_contracts.py -v
-python3 -m py_compile \
-  monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_v5.py \
-  monitoring/exporter_v6.py monitoring/exporter_latest.py \
-  scripts/multi_strategy_paper.py scripts/build_v4_intents.py scripts/merge_v4_intents.py \
-  scripts/walk_forward_v4.py scripts/tiny_live_pilot.py scripts/v6_*.py
-bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh \
-  scripts/v6_live_smoke_once.sh scripts/monitoring_up.sh scripts/monitoring_down.sh
+python3 -m unittest tests/test_monitoring_v7_exporter.py tests/test_grafana_v7_contract.py -v
+python3 -m py_compile monitoring/exporter.py monitoring/exporter_v7.py scripts/v7_*.py
+bash -n scripts/paper_v7_loop.sh scripts/paper_v7_execution_loop.sh scripts/monitoring_up.sh scripts/monitoring_down.sh
 python3 -m json.tool "$CONFIG_REL" >/dev/null
 python3 -m json.tool config/live_champion.json >/dev/null
-if [[ "$VERSION" == "6" ]]; then
-  python3 -m json.tool config/v6_model_architecture.json >/dev/null
-fi
-python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
+python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7.json >/dev/null
 sudo docker compose -f docker-compose.monitoring.yml config >/dev/null
 
-log "Migrating systemd services to manifest-selected runtime"
+log "Installing V7-only systemd services"
 DEPLOY_USER="$(id -un)"
+sudo install -d -m 0755 /etc/polymarket
 TMP_ENV="$(mktemp)"
 cat > "$TMP_ENV" <<EOF
 POLYMARKET_APP_DIR=$APP_DIR
-POLYMARKET_RUN_NAME=auto
+POLYMARKET_RUN_NAME=$RUN_NAME
 EOF
-sudo install -d -m 0755 /etc/polymarket
 sudo install -m 0644 "$TMP_ENV" /etc/polymarket/runtime.env
 rm -f "$TMP_ENV"
 
 TMP_PAPER="$(mktemp)"
 cat > "$TMP_PAPER" <<EOF
 [Unit]
-Description=Polymarket manifest-selected paper-live engine
+Description=Polymarket V7 PAPER engine
 After=network-online.target
 Wants=network-online.target
 
@@ -87,7 +71,7 @@ Type=simple
 User=$DEPLOY_USER
 WorkingDirectory=$APP_DIR
 EnvironmentFile=/etc/polymarket/runtime.env
-ExecStart=/usr/bin/env bash $APP_DIR/scripts/paper_latest_loop.sh
+ExecStart=/usr/bin/env bash $APP_DIR/$LOOP_REL $APP_DIR/$CONFIG_REL $APP_DIR/$RUN_ROOT_REL
 Restart=always
 RestartSec=10
 KillSignal=SIGTERM
@@ -103,7 +87,7 @@ rm -f "$TMP_PAPER"
 TMP_MON="$(mktemp)"
 cat > "$TMP_MON" <<EOF
 [Unit]
-Description=Polymarket Prometheus/Grafana monitoring
+Description=Polymarket V7 Prometheus/Grafana monitoring
 After=docker.service polymarket-paper.service
 Requires=docker.service
 
@@ -111,7 +95,7 @@ Requires=docker.service
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=$APP_DIR
-Environment=POLYMARKET_RUN_NAME=auto
+Environment=POLYMARKET_RUN_NAME=$RUN_NAME
 ExecStart=/usr/bin/docker compose -f $APP_DIR/docker-compose.monitoring.yml up -d --force-recreate
 ExecStop=/usr/bin/docker compose -f $APP_DIR/docker-compose.monitoring.yml down
 TimeoutStartSec=120
@@ -123,58 +107,49 @@ EOF
 sudo install -m 0644 "$TMP_MON" /etc/systemd/system/polymarket-monitoring.service
 rm -f "$TMP_MON"
 sudo systemctl daemon-reload
-
-log "Restarting V$VERSION paper and monitoring services"
 sudo systemctl restart polymarket-paper.service
 sudo systemctl restart polymarket-monitoring.service
 
 healthy=0
-for _ in {1..75}; do
+metrics=""
+for _ in {1..90}; do
   if sudo systemctl is-active --quiet polymarket-paper.service && \
      sudo systemctl is-active --quiet polymarket-monitoring.service && \
      curl -fsS http://127.0.0.1:9108/healthz >/dev/null 2>&1; then
     metrics="$(curl -fsS http://127.0.0.1:9108/metrics 2>/dev/null || true)"
-    if grep -q "^polymarket_runtime_info{adapter=\"v$VERSION\",run_root=\"$RUN_NAME\",version=\"v$VERSION\"} 1$" <<<"$metrics"; then
+    if grep -q '^polymarket_runtime_info{adapter="v7",run_root="paper_v7_live",version="v7"} 1$' <<<"$metrics" && \
+       grep -q '^polymarket_v7_runtime_info 1$' <<<"$metrics"; then
       healthy=1
       break
     fi
   fi
   sleep 2
 done
-[[ "$healthy" == "1" ]] || fail "V$VERSION runtime did not become healthy"
+[[ "$healthy" == "1" ]] || fail "V7 runtime did not become healthy"
+grep -q '^polymarket_runtime_pnl_usd ' <<<"$metrics" || fail "V7 runtime PnL metric missing"
+grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics" || fail "V7 allocator state missing"
+grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics" || fail "V7 model count mismatch"
+grep -q '^polymarket_model_info{' <<<"$metrics" || fail "V7 per-strategy metrics missing"
 
-grep -q '^polymarket_runtime_pnl_usd ' <<<"$metrics"
-if (( VERSION >= 5 )); then
-  grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics"
-  grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics"
-  grep -q '^polymarket_model_info{' <<<"$metrics"
-fi
-if (( VERSION >= 6 )); then
-  grep -q '^polymarket_v6_exporter_info{' <<<"$metrics"
-  grep -q '^polymarket_v6_local_factor_clusters ' <<<"$metrics"
-  test -s "$APP_DIR/$RUN_ROOT_REL/hard_arb/status.json"
-  test -s "$APP_DIR/$RUN_ROOT_REL/local_factor_status.json"
-  test -s "$APP_DIR/$RUN_ROOT_REL/runtime_status.json"
-fi
-
-supervisor="$APP_DIR/$RUN_ROOT_REL/runtime_supervisor.csv"
-test -s "$supervisor"
-python3 - "$supervisor" "$VERSION" <<'PY'
-import csv,sys,time
+test -s "$APP_DIR/$RUN_ROOT_REL/v7_supervisor.json" || fail "V7 supervisor missing"
+test -s "$APP_DIR/$RUN_ROOT_REL/execution/runtime_status.json" || fail "V7 runtime status missing"
+test -s "$APP_DIR/$RUN_ROOT_REL/execution/allocator_status.json" || fail "V7 allocator status missing"
+test -s "$APP_DIR/$RUN_ROOT_REL/execution/strategy_status.csv" || fail "V7 strategy status missing"
+test -s "$APP_DIR/$RUN_ROOT_REL/execution/hard_arb/status.json" || fail "V7 hard-arb status missing"
+python3 - "$APP_DIR/$RUN_ROOT_REL" <<'PY'
+import json,sys,time
 from pathlib import Path
-path=Path(sys.argv[1]); version=int(sys.argv[2])
-with path.open(newline='',encoding='utf-8') as h: rows=list(csv.DictReader(h))
-assert rows,'empty runtime supervisor'; row=rows[-1]
-assert row.get('recorder_alive')=='1',row
-assert row.get('broker_alive')=='1',row
-primary='allocator_alive' if version>=5 else 'terminal_alive'
-assert row.get(primary)=='1',row
-assert time.time()-float(row['timestamp'])<=60,row
+root=Path(sys.argv[1])
+supervisor=json.loads((root/'v7_supervisor.json').read_text())
+runtime=json.loads((root/'execution'/'runtime_status.json').read_text())
+assert supervisor.get('execution_alive') is True, supervisor
+assert supervisor.get('shadow_alive') is True, supervisor
+assert runtime.get('version') == 7, runtime
+assert runtime.get('paper_only') is True, runtime
+assert runtime.get('authenticated_execution') is False, runtime
+assert float(runtime.get('drawdown', 1.0)) <= 0.15 + 1e-12, runtime
+assert time.time()-float(runtime['timestamp']) <= 180, runtime
 PY
 
-printf 'deployed_sha=%s\n' "$NEW_SHA"
-printf 'validated_ref=%s\n' "$DEPLOY_REF"
-printf 'main_sha=%s\n' "$MAIN_SHA"
-printf 'previous_sha=%s\n' "$OLD_SHA"
-printf 'champion_version=%s\n' "$VERSION"
-printf 'champion_run_root=%s\n' "$RUN_ROOT_REL"
+printf 'deployed_sha=%s\nvalidated_ref=%s\nmain_sha=%s\nprevious_sha=%s\nchampion_version=7\nchampion_run_root=%s\n' \
+  "$NEW_SHA" "$DEPLOY_REF" "$MAIN_SHA" "$OLD_SHA" "$RUN_ROOT_REL"

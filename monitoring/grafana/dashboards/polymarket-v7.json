@@ -1,0 +1,173 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "V7 TOTAL PAPER PNL",
+      "description": "Canonical marked PAPER PnL across all V7 sleeves.",
+      "gridPos": {"x": 0, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_runtime_pnl_usd or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []}
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "V7 Equity",
+      "gridPos": {"x": 4, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_runtime_equity_usd or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []}
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "V7 Realized PnL",
+      "gridPos": {"x": 8, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_runtime_realized_pnl_usd_total or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []}
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "V7 Drawdown",
+      "gridPos": {"x": 12, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_runtime_drawdown_ratio or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.075}, {"color": "red", "value": 0.15}]}}, "overrides": []}
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "V7 Sleeves Alive",
+      "gridPos": {"x": 16, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "polymarket_allocator_models_alive or vector(0)", "legendFormat": "alive", "instant": true},
+        {"refId": "B", "expr": "polymarket_allocator_models_expected or vector(0)", "legendFormat": "expected", "instant": true}
+      ],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "horizontal", "textMode": "value_and_name", "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {}, "overrides": []}
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "V7 Kill Switch",
+      "gridPos": {"x": 20, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_runtime_kill_switch or vector(0)", "instant": true}],
+      "options": {"reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "orientation": "auto", "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "OFF", "color": "green", "index": 0}, "1": {"text": "ON", "color": "red", "index": 1}}}]}, "overrides": []}
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "PnL by V7 Strategy",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_model_pnl_usd{model=~\"$model\"}", "legendFormat": "{{model}}"}],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Gross Exposure by V7 Strategy",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_model_gross_exposure_usd{model=~\"$model\"}", "legendFormat": "{{model}}"}],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {
+      "id": 9,
+      "type": "barchart",
+      "title": "Durable Fills by V7 Strategy",
+      "gridPos": {"x": 0, "y": 12, "w": 12, "h": 7},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_model_fills_total{action=\"all\",model=~\"$model\"}", "legendFormat": "{{model}}", "instant": true}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0}, "overrides": []},
+      "options": {"orientation": "auto", "showValue": "always", "stacking": "none", "groupWidth": 0.7, "barWidth": 0.97, "legend": {"displayMode": "list", "placement": "bottom"}}
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "V7 Strategy Staleness",
+      "gridPos": {"x": 12, "y": 12, "w": 12, "h": 7},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_model_alert_staleness_seconds{model=~\"$model\"}", "legendFormat": "{{model}}"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Ranking Mean IC by Horizon",
+      "gridPos": {"x": 0, "y": 19, "w": 8, "h": 7},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_v7_rank_mean_ic", "legendFormat": "{{horizon_minutes}}m"}],
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Local Factor BY Selected Pairs",
+      "gridPos": {"x": 8, "y": 19, "w": 8, "h": 7},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_v7_local_factor_by_selected_pairs", "legendFormat": "{{fidelity}}"}],
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Maker Queue Clearability by Cadence",
+      "gridPos": {"x": 16, "y": 19, "w": 8, "h": 7},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "polymarket_v7_hf_maker_clearable_fraction", "legendFormat": "{{cadence_seconds}}s"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["polymarket", "paper", "v7"],
+  "templating": {
+    "list": [
+      {
+        "name": "model",
+        "label": "V7 Strategy",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": {"query": "label_values(polymarket_model_info, model)", "refId": "PrometheusVariableQueryEditor-VariableQuery"},
+        "definition": "label_values(polymarket_model_info, model)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "refresh": 1,
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "options": []
+      }
+    ]
+  },
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Polymarket V7 PAPER",
+  "uid": "polymarket-v7-paper",
+  "version": 1,
+  "weekStart": ""
+}

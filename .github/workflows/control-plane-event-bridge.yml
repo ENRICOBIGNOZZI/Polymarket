@@ -9,7 +9,7 @@ on:
       - "ci"
       - "Polymarket Research Policy"
       - "monitoring"
-      - "v4-live-paper-smoke"
+      - "v7-live-paper-validation"
       - "Private runtime single-writer validation"
       - "Polymarket Promotion Controller"
     types: [completed]

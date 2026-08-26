@@ -6,13 +6,15 @@ services:
     command:
       - python
       - -B
-      - /app/exporter_latest_v7.py
+      - /app/exporter_v7.py
       - --runs-base
       - /runs
       - --run-name
-      - ${POLYMARKET_RUN_NAME:-auto}
+      - ${POLYMARKET_RUN_NAME:-paper_v7_live}
       - --config-dir
       - /config
+      - --config
+      - paper_v7.json
       - --host
       - 0.0.0.0
       - --port
@@ -59,7 +61,7 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-polymarket-paper}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/polymarket-multi-strategy.json
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/polymarket-v7.json
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro

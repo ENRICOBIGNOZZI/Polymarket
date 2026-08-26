@@ -39,30 +39,20 @@ jobs:
           test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
           echo "validation_sha=$VALIDATION_SHA"
 
-      - name: Validate latest exporter and total/per-strategy dashboards
+      - name: Validate V7 exporter and Grafana contract
         run: |
           python3 -m unittest \
             tests/test_compact_strategy_logs.py \
             tests/test_monitoring_exporter.py \
-            tests/test_monitoring_v4_exporter.py \
-            tests/test_monitoring_latest_exporter.py \
-            tests/test_monitoring_v5_exporter.py \
-            tests/test_monitoring_v6_exporter.py \
+            tests/test_monitoring_v7_exporter.py \
             tests/test_monitoring_hard_safety_contract.py \
-            tests/test_v4_monitoring_contract.py \
-            tests/test_v6_runtime_contract.py \
-            tests/test_grafana_fast_paper_contract.py \
-            tests/test_grafana_multi_strategy_contract.py \
-            tests/test_grafana_v6_operations_contract.py \
+            tests/test_grafana_v7_contract.py \
             tests/test_server_health_readonly.py -v
           python3 -m py_compile \
-            scripts/compact_strategy_logs.py scripts/v6_runtime_status.py \
-            monitoring/exporter.py monitoring/exporter_v4.py \
-            monitoring/exporter_v5.py monitoring/exporter_v6.py monitoring/exporter_latest.py
-          python3 -m json.tool monitoring/grafana/dashboards/polymarket-latest.json >/dev/null
-          python3 -m json.tool monitoring/grafana/dashboards/polymarket-fast-paper.json >/dev/null
-          python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
-          python3 -m json.tool monitoring/grafana/dashboards/polymarket-v6-model-operations.json >/dev/null
-          python3 -m json.tool config/paper_v6.json >/dev/null
-          bash -n scripts/monitoring_up.sh scripts/monitoring_down.sh scripts/v6_live_smoke_once.sh
+            scripts/compact_strategy_logs.py scripts/v7_runtime_status.py \
+            monitoring/exporter.py monitoring/exporter_v7.py
+          python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7.json >/dev/null
+          python3 -m json.tool config/paper_v7.json >/dev/null
+          bash -n scripts/monitoring_up.sh scripts/monitoring_down.sh \
+            scripts/paper_v7_loop.sh scripts/paper_v7_execution_loop.sh
           docker compose -f docker-compose.monitoring.yml config >/dev/null

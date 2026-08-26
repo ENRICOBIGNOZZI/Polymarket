@@ -1,0 +1,214 @@
+name: v7-live-paper-validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact commit SHA to validate; defaults to the event SHA
+        required: false
+        type: string
+  push:
+    branches: [main]
+  schedule:
+    - cron: "37 * * * *"
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v7-live-paper-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-paper-validation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.expected_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Verify exact validation revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
+          echo "validation_sha=$VALIDATION_SHA"
+
+      - name: Resolve V7 PAPER manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json, os
+          from pathlib import Path
+          manifest_path = Path('config/v7_champion_candidate.json') if os.environ.get('GITHUB_EVENT_NAME') == 'pull_request' else Path('config/live_champion.json')
+          manifest=json.loads(manifest_path.read_text())
+          version=int(manifest['version'])
+          if version != 7:
+              raise SystemExit(f'V7 validation refuses non-V7 champion: V{version}')
+          if manifest.get('paper_only') is False or manifest.get('authenticated_execution') is True:
+              raise SystemExit('V7 validation refuses authenticated execution')
+          print('CHAMPION_VERSION=7')
+          print(f'CHAMPION_CONFIG={manifest["config"]}')
+          print(f'CHAMPION_RUN_ROOT={manifest["run_root"]}')
+          print(f'CHAMPION_LOOP={manifest["loop"]}')
+          print(f'CHAMPION_MANIFEST={manifest_path}')
+          PY
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+
+      - name: Build and test V7 contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+          bash -n scripts/paper_v7_loop.sh scripts/paper_v7_execution_loop.sh
+          python3 -m py_compile scripts/v7_*.py monitoring/exporter_v7.py monitoring/exporter_latest_v7.py
+          python3 scripts/v7_hard_arb_guard.py self-test
+
+      - name: Fresh public-data V7 PAPER smoke
+        id: v7_smoke
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          R="runs/v7_validation_${GITHUB_RUN_ID}"
+          rm -rf "$R"
+          mkdir -p "$R"
+          rc=0
+          timeout --signal=TERM --kill-after=20s 100s \
+            bash "$CHAMPION_LOOP" "$CHAMPION_CONFIG" "$R" || rc=$?
+          if [[ "$rc" -ne 0 && "$rc" -ne 124 && "$rc" -ne 143 ]]; then
+            echo "V7 runtime exited unexpectedly rc=$rc" >&2
+            exit "$rc"
+          fi
+          EXEC="$R/execution"
+          python3 scripts/v7_runtime_status.py --config "$CHAMPION_CONFIG" --run-root "$EXEC"
+          python3 scripts/v7_execution_evidence_hardened.py --run-root "$EXEC" --policy config/v7_execution_evidence.json || true
+          python3 - "$EXEC/runtime_status.json" "$CHAMPION_CONFIG" <<'PY'
+          import json,sys
+          status=json.load(open(sys.argv[1])); cfg=json.load(open(sys.argv[2]))
+          assert status['version'] == 7
+          assert status['paper_only'] is True
+          assert status['authenticated_execution'] is False
+          assert float(status['drawdown']) <= float(cfg.get('max_drawdown', 0.15)) + 1e-12
+          assert isinstance(status.get('strategies'), dict) and len(status['strategies']) >= 5
+          print('v7_public_paper_status=ok')
+          PY
+          test -s "$EXEC/runtime_status.json"
+          test -s "$EXEC/strategy_status.csv"
+          test -s "$EXEC/allocator_status.json"
+          echo "VALIDATION_RUN_ROOT=$R" >> "$GITHUB_ENV"
+
+      - name: Require successful V7 smoke for main validation
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ steps.v7_smoke.outcome }}" = "success"
+
+      - name: Build public telemetry snapshot
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          R="${VALIDATION_RUN_ROOT:-runs/v7_validation_${GITHUB_RUN_ID}}"
+          EXEC="$R/execution"
+          if [[ -s "$EXEC/runtime_status.json" ]]; then
+            python3 scripts/summarize_live_smoke.py \
+              --run-root "$EXEC" --output "$EXEC/live_snapshot.json" \
+              --git-sha "$VALIDATION_SHA" --run-id "$GITHUB_RUN_ID" \
+              --trade-lookback-seconds 900 || true
+            if [[ ! -s "$EXEC/live_snapshot.json" ]]; then
+              cp "$EXEC/runtime_status.json" "$EXEC/live_snapshot.json"
+            fi
+          fi
+
+      - name: Publish V7 validation summary
+        if: always()
+        shell: bash
+        run: |
+          R="${VALIDATION_RUN_ROOT:-runs/v7_validation_${GITHUB_RUN_ID}}"
+          EXEC="$R/execution"
+          {
+            echo '## V7 exact-SHA PAPER validation'
+            echo "- revision: \`$VALIDATION_SHA\`"
+            echo "- manifest: \`${CHAMPION_MANIFEST:-unresolved}\`"
+            echo "- smoke outcome: \`${{ steps.v7_smoke.outcome }}\`"
+            echo '```json'
+            cat "$EXEC/runtime_status.json" 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish latest public V7 telemetry
+        if: github.event_name != 'pull_request' && success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          R="$VALIDATION_RUN_ROOT/execution"
+          test -s "$R/live_snapshot.json"
+          endpoint="repos/${GITHUB_REPOSITORY}/contents/telemetry/latest-live-smoke.json"
+          content="$(base64 -w0 "$R/live_snapshot.json")"
+          publish_error="$(mktemp)"
+          for attempt in 1 2 3 4 5; do
+            current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
+            args=("$endpoint" --method PUT -f message="Update public V7 live paper telemetry" -f content="$content" -f branch=telemetry)
+            if [[ -n "$current_sha" ]]; then args+=(-f sha="$current_sha"); fi
+            if gh api "${args[@]}" >/dev/null 2>"$publish_error"; then rm -f "$publish_error"; exit 0; fi
+            if [[ "$attempt" -eq 5 ]]; then cat "$publish_error" >&2; rm -f "$publish_error"; exit 1; fi
+            sleep $((attempt * 2))
+          done
+
+      - name: Upload V7 diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v7-live-paper-validation-${{ github.run_id }}
+          path: ${{ env.VALIDATION_RUN_ROOT || format('runs/v7_validation_{0}', github.run_id) }}/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Advance paper validated ref
+        if: github.event_name != 'pull_request' && success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          validated_sha="$(git rev-parse HEAD)"
+          test "$validated_sha" = "$VALIDATION_SHA"
+          git fetch --no-tags origin main paper-validated
+          main_sha="$(git rev-parse origin/main)"
+          current_validated_sha="$(git rev-parse origin/paper-validated)"
+          test "$validated_sha" = "$main_sha"
+
+          merged_pr=""
+          for attempt in {1..10}; do
+            merged_pr="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${validated_sha}/pulls" --jq '[.[] | select(.base.ref == "main" and .merged_at != null)] | first | .number // empty')"
+            if [[ -n "$merged_pr" ]]; then break; fi
+            sleep 3
+          done
+          if [[ -z "$merged_pr" ]]; then
+            echo "::error::refusing paper-validated promotion: main revision $validated_sha has no merged pull-request provenance"
+            exit 1
+          fi
+          echo "paper_validation_source_pr=$merged_pr"
+          if [[ "$current_validated_sha" != "$validated_sha" ]]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/paper-validated" \
+              -f sha="$validated_sha" -F force=false >/dev/null
+          fi
+          echo "paper_validated_sha=$validated_sha"
