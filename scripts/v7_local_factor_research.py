@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -18,8 +19,11 @@ if str(SCRIPT_DIR) not in sys.path:
 import v6_local_factor_intents as base
 import v7_local_factor_core as core
 import v7_local_factor_inference as inference
+import v7_local_factor_pairs as pairing
 
 HISTORY_WINDOW_SECONDS = 7 * 24 * 60 * 60
+DEFAULT_MAX_AUTO_BOOTSTRAP_REPS = 5000
+DEFAULT_MINIMUM_TEXT_SIMILARITY = 0.20
 
 
 def atomic_json(path: Path, value: Any) -> None:
@@ -115,7 +119,11 @@ def main() -> int:
     history_cfg = cfg["history"]
     inference_cfg = cfg["inference"]
     bucket_seconds = int(history_cfg["fidelity_minutes"]) * 60
-    reps = max(50, int(args.bootstrap_reps or inference_cfg["bootstrap_repetitions"]))
+    requested_reps = max(50, int(args.bootstrap_reps or inference_cfg["bootstrap_repetitions"]))
+    min_controls = int(inference_cfg["minimum_pair_controls"])
+    bh_q = float(inference_cfg["bh_fdr"])
+    min_text_similarity = float(inference_cfg.get("structural_pair_minimum_text_similarity", DEFAULT_MINIMUM_TEXT_SIMILARITY))
+    max_auto_reps = max(requested_reps, int(inference_cfg.get("maximum_bootstrap_repetitions", DEFAULT_MAX_AUTO_BOOTSTRAP_REPS)))
 
     failures: list[str] = []
     try:
@@ -129,6 +137,21 @@ def main() -> int:
         markets, cluster_rows = [], []
         failures.append(f"discovery:{type(exc).__name__}:{exc}")
 
+    # Freeze the pair universe from contract metadata before touching price history.
+    # No price, liquidity, residual, p-value or return enters this graph.
+    pair_graphs: dict[str, pairing.StructuralPairGraph] = {
+        cluster_key: pairing.build_structural_pair_graph(
+            cluster_key,
+            group,
+            min_controls=min_controls,
+            minimum_text_similarity=min_text_similarity,
+        )
+        for cluster_key, group in cluster_rows
+    }
+    predeclared_pair_count = sum(graph.pair_count for graph in pair_graphs.values())
+    repetitions_required = max(50, math.ceil(predeclared_pair_count / max(1e-12, bh_q)) - 1) if predeclared_pair_count else requested_reps
+    reps = min(max_auto_reps, max(requested_reps, repetitions_required))
+
     selected = {market.market_id: market for _, group in cluster_rows for market in group}
     start = now - int(history_cfg["lookback_hours"]) * 3600
     histories, history_failures = fetch_histories_chunked(
@@ -139,13 +162,16 @@ def main() -> int:
         int(history_cfg["fidelity_minutes"]),
     ) if selected else ({}, [])
     failures.extend(history_failures[:50])
-    history_required_market_count = 2 + int(inference_cfg["minimum_pair_controls"])
+    history_required_market_count = 2 + min_controls
     history_data_healthy = len(histories) >= history_required_market_count
 
     tests: list[dict[str, Any]] = []
     pvalues: dict[tuple[str, str, str], float] = {}
     fit_by_key: dict[tuple[str, str, str], tuple[core.StandardizedPanel, core.PairFit]] = {}
     for cluster_key, group in cluster_rows:
+        graph = pair_graphs.get(cluster_key)
+        if graph is None or not graph.pairs:
+            continue
         market_ids = [market.market_id for market in group]
         panel = core.build_regular_panel(
             histories,
@@ -157,9 +183,10 @@ def main() -> int:
             continue
         boot = inference.panel_pair_iut_pvalues(
             panel,
+            pairs=graph.pairs,
             reps=reps,
             seed=20260826 + sum(ord(ch) for ch in cluster_key),
-            min_controls=int(inference_cfg["minimum_pair_controls"]),
+            min_controls=min_controls,
         )
         for (a, b), (fit, pvalue) in boot.items():
             key = (cluster_key, a, b)
@@ -168,6 +195,7 @@ def main() -> int:
             tests.append(
                 {
                     "cluster": cluster_key,
+                    "pair_graph_method": graph.method,
                     "market_a": a,
                     "market_b": b,
                     "pvalue": pvalue,
@@ -179,7 +207,8 @@ def main() -> int:
                 }
             )
 
-    selected_pairs = core.bh_selected(pvalues, float(inference_cfg["bh_fdr"]))
+    selected_pairs = core.bh_selected(pvalues, bh_q)
+    resolution = inference.bh_resolution_diagnostics(len(pvalues), reps, bh_q)
     books: dict[str, Any] = {}
     if selected_pairs:
         try:
@@ -220,6 +249,17 @@ def main() -> int:
         if signal is not None:
             signals.append({"cluster": cluster_key, **asdict(signal)})
 
+    promotion_blockers = [
+        "joint_fill_state_evidence_not_yet_attached",
+        "partial_abort_unwind_economics_not_yet_attached",
+        "fill_conditioned_cost_stressed_pnl_not_yet_attached",
+        "research_branch_cannot_mutate_live_champion",
+    ]
+    if not history_data_healthy:
+        promotion_blockers.append("price_history_data_health_unhealthy")
+    if pvalues and not bool(resolution["singleton_bh_resolution_adequate"]):
+        promotion_blockers.append("bootstrap_resolution_too_coarse_for_bh_multiplicity")
+
     report = {
         "timestamp": now,
         "paper_only": True,
@@ -232,10 +272,26 @@ def main() -> int:
         "history_required_market_count": history_required_market_count,
         "history_data_healthy": history_data_healthy,
         "history_window_days": HISTORY_WINDOW_SECONDS // 86400,
+        "pair_graph_selection": "contract_metadata_only_before_price_history",
+        "pair_graph_minimum_text_similarity": min_text_similarity,
+        "predeclared_pair_count": predeclared_pair_count,
+        "pair_graphs": {
+            cluster_key: {
+                "method": graph.method,
+                "pair_count": graph.pair_count,
+                "threshold_markets": graph.threshold_markets,
+                "text_markets": graph.text_markets,
+            }
+            for cluster_key, graph in pair_graphs.items()
+        },
         "pair_pvalue_method": "intersection_union_max_marginal_null_preserving_bootstrap_pvalue",
         "pair_hypotheses": len(pvalues),
+        "requested_bootstrap_repetitions": requested_reps,
         "bootstrap_repetitions": reps,
-        "bh_fdr": float(inference_cfg["bh_fdr"]),
+        "bootstrap_repetition_cap": max_auto_reps,
+        "predeclared_repetitions_required_for_singleton_bh_resolution": repetitions_required,
+        "bootstrap_resolution": resolution,
+        "bh_fdr": bh_q,
         "bh_selected_pairs": len(selected_pairs),
         "post_bh_pair_signals": len(signals),
         "tests": tests,
@@ -244,12 +300,7 @@ def main() -> int:
         "execution_joint_state_validated": False,
         "fill_conditioned_pnl_validated": False,
         "promotion_ready": False,
-        "promotion_blockers": [
-            "joint_fill_state_evidence_not_yet_attached",
-            "partial_abort_unwind_economics_not_yet_attached",
-            "fill_conditioned_cost_stressed_pnl_not_yet_attached",
-            "research_branch_cannot_mutate_live_champion"
-        ] + ([] if history_data_healthy else ["price_history_data_health_unhealthy"])
+        "promotion_blockers": promotion_blockers,
     }
     atomic_json(args.output_json, report)
     print(json.dumps(report, sort_keys=True))
