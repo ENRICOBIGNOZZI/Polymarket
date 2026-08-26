@@ -1,0 +1,88 @@
+{
+  "schema": "hf_active_flow_seeded_window_v1",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "source_workflow_run": 32945917473,
+  "source_head_sha": "a8a3204a1368bfed9143a1e383e9dc1bbbbc3276",
+  "chronology": {
+    "evidence_completed_utc": "2026-08-26T08:15:15Z",
+    "comparison": "same exact-head public-data V6 research smoke"
+  },
+  "identity_resolution": {
+    "discovered_markets": 1000,
+    "seed_global_recent_rows": 1000,
+    "seed_global_condition_count": 50,
+    "seed_global_asset_count": 73,
+    "seed_gamma_market_count": 50,
+    "seed_resolved_by_clob_token_count": 50,
+    "seed_overlap_with_volume_prior": 14,
+    "seed_added_market_count": 36,
+    "active_markets_evaluated": 120,
+    "seed_active_condition_count": 23,
+    "seed_added_active_condition_count": 15,
+    "flow_condition_count": 29,
+    "activity_data_healthy": true,
+    "flow_errors": []
+  },
+  "strict_active_flow_policy": {
+    "min_recent_trades": 2,
+    "min_compatible_sell_prints": 2,
+    "max_event_age_seconds": 60,
+    "min_fill_probability": 0.02,
+    "max_sell_toxicity": 0.80,
+    "inside_spread_ticks": 1,
+    "candidates": 0,
+    "orders": 0,
+    "fills": 0,
+    "fill_conditioned_pnl": 0.0
+  },
+  "same_active_universe_static_control": {
+    "candidates": 17,
+    "orders": 8,
+    "fills": 0,
+    "fill_conditioned_pnl": 0.0
+  },
+  "bounded_relaxation_evidence": {
+    "representative_market_id": "3831702",
+    "slug": "highest-temperature-in-beijing-on-august-26-2026-29c",
+    "side": "YES",
+    "post_cost_static_edge_per_share": 0.014378152538813443,
+    "post_cost_static_edge_bps": 143.78152538813443,
+    "queue_ahead_shares": 70.0,
+    "own_shares": 17.5,
+    "recent_trade_count": 3,
+    "compatible_sell_prints": 1,
+    "compatible_sell_volume": 10.0,
+    "last_event_age_seconds": 81,
+    "signed_flow_imbalance": 0.2769342010122921,
+    "conservative_fill_probability_proxy": 0.03809523809523809,
+    "diagnosis": "positive-edge non-toxic at-touch candidate rejected by 2-print/60-second warm-up gates, not by economics",
+    "next_profile": {
+      "min_recent_trades": 1,
+      "min_compatible_sell_prints": 1,
+      "max_event_age_seconds": 90,
+      "min_fill_probability": 0.005,
+      "max_sell_toxicity": 0.80,
+      "inside_spread_ticks": 0
+    }
+  },
+  "counterexample_preserving_toxicity_gate": {
+    "market_id": "3746073",
+    "post_cost_static_edge_per_share": 0.011630116795440354,
+    "compatible_sell_prints": 3,
+    "conservative_fill_probability_proxy": 0.009839550539049452,
+    "signed_flow_imbalance": -1.0,
+    "diagnosis": "should remain rejected as fully SELL-toxic even under relaxed warm-up"
+  },
+  "decision": "TEST_RELAXED_AT_TOUCH_ACTIVE_FLOW_MORE_EVIDENCE_REQUIRED",
+  "safety": {
+    "max_drawdown": 0.15,
+    "max_market_fraction": 0.05,
+    "max_event_fraction": 0.15,
+    "max_gross_fraction": 0.70,
+    "max_order_usd": 125.0,
+    "min_liquidity": 2.0,
+    "min_post_cost_edge": 0.00005,
+    "real_money_execution": false
+  }
+}
