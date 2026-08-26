@@ -28,6 +28,9 @@
     "queue_skipped_rows_first_tick": 36,
     "signal_tokens_with_any_tape_trade": 2,
     "signal_token_tape_overlap_fraction": 0.04878048780487805,
+    "signal_tokens_with_compatible_sell": 1,
+    "signal_tokens_with_observed_queue_clearance": 0,
+    "max_observed_queue_clearance_ratio": 0.013048577188666664,
     "resting_orders": 5,
     "resting_orders_with_any_tape_trade": 0,
     "resting_order_tape_overlap_fraction": 0.0,
@@ -120,8 +123,11 @@
       "token_id": "23545193122217391289335133742859160842475987880562465754342378273033942179195",
       "limit_price": 0.1,
       "queue_ahead": 7283.09,
+      "remaining_shares": 323.036,
       "signal_edge": 0.00393174,
-      "tape_rows": 1
+      "tape_rows": 1,
+      "compatible_sell_volume": 0.0,
+      "observed_clearance_ratio": 0.0
     },
     {
       "market_id": 2176270,
@@ -131,14 +137,17 @@
       "token_id": "83783489454659420807679723574840032660002326710045123865554753994450797728825",
       "limit_price": 0.37,
       "queue_ahead": 29568.8,
+      "remaining_shares": 87.3069,
       "signal_edge": 0.00168438,
-      "tape_rows": 1
+      "tape_rows": 1,
+      "compatible_sell_volume": 386.97,
+      "observed_clearance_ratio": 0.013048577188666664
     }
   ],
   "decision": {
     "state": "STATIC_MAKER_ACTIVITY_MISMATCH",
-    "materiality": "All five posted/resting orders reserved paper capital on tokens absent from an otherwise healthy non-empty public trade tape. Only two of 41 first-tick signal tokens appeared anywhere in the tape, and both were rejected by queue burden.",
-    "interpretation": "Do not lower the 0.5 bp post-cost edge floor to manufacture fills. Seed/rank HF maker candidates by causal recent same-token activity before edge, queue and toxicity, then measure fill-conditioned markout prospectively.",
+    "materiality": "All five posted/resting orders reserved paper capital on tokens absent from an otherwise healthy non-empty public trade tape. Only two of 41 first-tick signal tokens appeared anywhere in the tape. Only one had compatible SELL flow, and its observed volume was just 1.30% of queue-ahead plus own size. Zero of 41 signal tokens had observed compatible flow sufficient to clear queue plus own size.",
+    "interpretation": "Do not lower the 0.5 bp post-cost edge floor to manufacture fills. Seed and rank HF maker candidates by causal recent same-token activity and compatible-flow-to-queue clearance before fill-conditioned edge and toxicity, then measure 45s/60s/300s markouts prospectively.",
     "promotion": "MORE_EVIDENCE_REQUIRED"
   },
   "safety": {
