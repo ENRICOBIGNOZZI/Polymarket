@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import sys
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -17,6 +18,7 @@ FLOW_SPEC = importlib.util.spec_from_file_location(
 )
 assert FLOW_SPEC and FLOW_SPEC.loader
 FLOW_MODULE = importlib.util.module_from_spec(FLOW_SPEC)
+sys.modules[FLOW_SPEC.name] = FLOW_MODULE
 FLOW_SPEC.loader.exec_module(FLOW_MODULE)
 
 
