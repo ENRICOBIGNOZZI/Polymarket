@@ -97,7 +97,6 @@ public:
         resync_books();
         {
             std::scoped_lock lock(mutex_);
-            evaluate_all_locked(0, now_ms());
             initialized_ms_ = now_ms();
         }
     }
@@ -118,14 +117,16 @@ public:
         std::int64_t exchange_ms = 0;
         if (root.is_array()) {
             for (const auto& value : root.as_array()) {
-                if (value.is_object()) apply_event_locked(value.as_object(), affected, exchange_ms);
+                if (value.is_object()) {
+                    apply_event_locked(value.as_object(), affected, exchange_ms, received_ms);
+                }
             }
         } else if (root.is_object()) {
-            apply_event_locked(root.as_object(), affected, exchange_ms);
+            apply_event_locked(root.as_object(), affected, exchange_ms, received_ms);
         }
         if (affected.empty()) return;
         for (const auto& market_id : affected) {
-            evaluate_market_locked(market_id, exchange_ms, received_ms);
+            evaluate_market_locked(market_id);
         }
         const auto decision_end = std::chrono::steady_clock::now();
         const double decision_us = static_cast<double>(
@@ -148,10 +149,25 @@ public:
 
     void resync_books() {
         const auto fresh = api_.fetch_books(tokens_);
+        const auto observed_ms = now_ms();
         std::scoped_lock lock(mutex_);
-        for (const auto& [token, book] : fresh) books_[token] = book;
+        for (const auto& [token, book] : fresh) {
+            // REST is useful for seeding/recovery, but its Book contract carries no
+            // exchange timestamp. Never overwrite a currently fresh WS snapshot
+            // with an un-timestamped REST image. A stale/missing token is replaced
+            // but remains ineligible until a full timestamped WS book arrives.
+            const auto received = book_received_ts_ms_.find(token);
+            const bool fresh_ws = ws_snapshot_ready_.count(token) &&
+                                  received != book_received_ts_ms_.end() &&
+                                  received->second > 0 && observed_ms >= received->second &&
+                                  observed_ms - received->second <= kMaxBookAgeMs;
+            if (fresh_ws) continue;
+            books_[token] = book;
+            ws_snapshot_ready_.erase(token);
+            book_exchange_ts_ms_.erase(token);
+            book_received_ts_ms_.erase(token);
+        }
         ++rest_resyncs_;
-        evaluate_all_locked(0, now_ms());
     }
 
     void reload_external() {
@@ -160,7 +176,7 @@ public:
         external_ = fresh;
         for (const auto& [market_id, signal] : external_) {
             (void)signal;
-            evaluate_market_locked(market_id, 0, now_ms());
+            evaluate_market_locked(market_id);
         }
     }
 
@@ -177,14 +193,28 @@ public:
         std::uint64_t executable = 0;
         std::uint64_t hard_executable = 0;
         std::uint64_t rest_resyncs = 0;
+        std::uint64_t freshness_missing = 0;
+        std::uint64_t freshness_age = 0;
+        std::uint64_t freshness_skew = 0;
         std::size_t external_count = 0;
+        std::size_t ws_snapshot_tokens = 0;
         std::int64_t last_message = 0;
+        const auto snapshot_ms = now_ms();
         {
             std::scoped_lock lock(mutex_);
             latest.reserve(latest_.size());
             for (const auto& [id, opportunity] : latest_) {
                 (void)id;
-                latest.push_back(opportunity);
+                auto current = opportunity;
+                if (current.executable) {
+                    const auto required = opportunity_required_tokens_locked(current);
+                    if (!freshness_window_locked(required, snapshot_ms, false).has_value()) {
+                        current.executable = false;
+                        current.expected_profit = 0.0;
+                        current.reject_reason = "stale_or_unsynchronized_leg_book";
+                    }
+                }
+                latest.push_back(std::move(current));
             }
             feed_latency = feed_latency_ms_;
             decision_latency = decision_latency_us_;
@@ -193,7 +223,11 @@ public:
             executable = executable_observations_;
             hard_executable = hard_executable_observations_;
             rest_resyncs = rest_resyncs_;
+            freshness_missing = freshness_missing_rejections_;
+            freshness_age = freshness_age_rejections_;
+            freshness_skew = freshness_skew_rejections_;
             external_count = external_.size();
+            ws_snapshot_tokens = ws_snapshot_ready_.size();
             last_message = last_message_ms_;
             opportunity_log_.flush();
             latency_log_.flush();
@@ -209,25 +243,30 @@ public:
 
         std::ostringstream csv;
         csv << opportunity_header() << '\n';
-        for (const auto& opportunity : latest) write_opportunity(csv, now_ms(), opportunity);
+        for (const auto& opportunity : latest) write_opportunity(csv, snapshot_ms, opportunity);
         atomic_write(run_dir_ / "fast_arb_latest.csv", csv.str());
 
         std::size_t current_executable = 0;
         std::size_t current_hard = 0;
+        std::size_t current_stale = 0;
         double best_edge = -1.0;
         double best_profit = 0.0;
         for (const auto& opportunity : latest) {
-            if (!opportunity.executable) continue;
+            if (!opportunity.executable) {
+                if (opportunity.reject_reason == "stale_or_unsynchronized_leg_book") {
+                    ++current_stale;
+                }
+                continue;
+            }
             ++current_executable;
             if (opportunity.hard_arbitrage) ++current_hard;
             best_edge = std::max(best_edge, opportunity.net_edge_per_share);
             best_profit = std::max(best_profit, opportunity.expected_profit);
         }
 
-        const auto timestamp = now_ms();
         json::object status{
             {"schema_version", 1},
-            {"timestamp_ms", timestamp},
+            {"timestamp_ms", snapshot_ms},
             {"mode", "shadow"},
             {"real_order_submission", false},
             {"stopping", stopping},
@@ -243,16 +282,23 @@ public:
             {"ws_errors", static_cast<std::int64_t>(feed.errors)},
             {"book_updates", static_cast<std::int64_t>(updates)},
             {"rest_resyncs", static_cast<std::int64_t>(rest_resyncs)},
+            {"ws_snapshot_ready_tokens", static_cast<std::int64_t>(ws_snapshot_tokens)},
+            {"book_freshness_max_age_ms", kMaxBookAgeMs},
+            {"book_freshness_max_skew_ms", kMaxBookSkewMs},
+            {"freshness_missing_rejections", static_cast<std::int64_t>(freshness_missing)},
+            {"freshness_age_rejections", static_cast<std::int64_t>(freshness_age)},
+            {"freshness_skew_rejections", static_cast<std::int64_t>(freshness_skew)},
             {"evaluations", static_cast<std::int64_t>(evaluations)},
             {"executable_observations", static_cast<std::int64_t>(executable)},
             {"hard_executable_observations", static_cast<std::int64_t>(hard_executable)},
             {"current_opportunities", static_cast<std::int64_t>(latest.size())},
             {"current_executable", static_cast<std::int64_t>(current_executable)},
             {"current_hard_executable", static_cast<std::int64_t>(current_hard)},
+            {"current_stale_opportunities", static_cast<std::int64_t>(current_stale)},
             {"best_net_edge_per_share", best_edge},
             {"best_expected_profit", best_profit},
             {"last_message_ms", last_message},
-            {"feed_stale_ms", last_message > 0 ? timestamp - last_message : -1},
+            {"feed_stale_ms", last_message > 0 ? snapshot_ms - last_message : -1},
             {"feed_latency_p50_ms", quantile(feed_latency, 0.50)},
             {"feed_latency_p95_ms", quantile(feed_latency, 0.95)},
             {"feed_latency_p99_ms", quantile(feed_latency, 0.99)},
