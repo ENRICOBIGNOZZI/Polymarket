@@ -19,10 +19,11 @@ if str(SCRIPT_DIR) not in sys.path:
 import v6_local_factor_intents as base
 import v7_local_factor_core as core
 import v7_local_factor_inference as inference
+import v7_local_factor_multiplicity as multiplicity
 import v7_local_factor_pairs as pairing
 
 HISTORY_WINDOW_SECONDS = 7 * 24 * 60 * 60
-DEFAULT_MAX_AUTO_BOOTSTRAP_REPS = 5000
+DEFAULT_MAX_AUTO_BOOTSTRAP_REPS = 15000
 DEFAULT_MINIMUM_TEXT_SIMILARITY = 0.20
 
 
@@ -73,12 +74,7 @@ def fetch_histories_chunked(
     end_ts: int,
     fidelity_minutes: int,
 ) -> tuple[dict[str, dict[int, float]], list[str]]:
-    """Reuse the V6 parser/transport on bounded absolute history windows.
-
-    Long 30-minute-fidelity absolute ranges are known to be rejected by the public
-    CLOB history service. Chunking is a data-acquisition invariant, not a model
-    change; merge by timestamp so boundary observations are deterministic.
-    """
+    """Reuse the V6 parser/transport on bounded absolute history windows."""
     histories: dict[str, dict[int, float]] = {}
     failures: list[str] = []
     window_start = start_ts
@@ -93,15 +89,13 @@ def fetch_histories_chunked(
         )
         for market_id, series in partial.items():
             histories.setdefault(market_id, {}).update(series)
-        failures.extend(
-            f"{window_start}:{window_end}:{failure}" for failure in partial_failures
-        )
+        failures.extend(f"{window_start}:{window_end}:{failure}" for failure in partial_failures)
         window_start = window_end
     return histories, failures
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Final repaired V7 Local Factor research challenger")
+    parser = argparse.ArgumentParser(description="Dependence-robust sparse V7 Local Factor research challenger")
     parser.add_argument("--config", type=Path, default=Path("config/research_v7_local_factor.json"))
     parser.add_argument("--paper-config", type=Path, default=Path("config/paper_v6.json"))
     parser.add_argument("--output-json", type=Path, required=True)
@@ -110,7 +104,10 @@ def main() -> int:
 
     cfg = json.loads(args.config.read_text(encoding="utf-8"))
     if not cfg.get("paper_only") or not cfg.get("research_only") or cfg.get("live_intents_enabled"):
-        raise SystemExit("final Local Factor challenger must remain paper/research-only with live intents disabled")
+        raise SystemExit("Local Factor challenger must remain paper/research-only with live intents disabled")
+    if int(cfg.get("schema_version", 0)) < 2:
+        raise SystemExit("Local Factor BY successor requires schema_version >= 2")
+
     paper = json.loads(args.paper_config.read_text(encoding="utf-8"))
     gamma = str(paper["gamma_url"]).rstrip("/")
     clob = str(paper["clob_url"]).rstrip("/")
@@ -121,9 +118,16 @@ def main() -> int:
     bucket_seconds = int(history_cfg["fidelity_minutes"]) * 60
     requested_reps = max(50, int(args.bootstrap_reps or inference_cfg["bootstrap_repetitions"]))
     min_controls = int(inference_cfg["minimum_pair_controls"])
-    bh_q = float(inference_cfg["bh_fdr"])
-    min_text_similarity = float(inference_cfg.get("structural_pair_minimum_text_similarity", DEFAULT_MINIMUM_TEXT_SIMILARITY))
-    max_auto_reps = max(requested_reps, int(inference_cfg.get("maximum_bootstrap_repetitions", DEFAULT_MAX_AUTO_BOOTSTRAP_REPS)))
+    fdr_q = float(inference_cfg["fdr_q"])
+    if inference_cfg.get("multiplicity_method") != "benjamini_yekutieli_arbitrary_dependence":
+        raise SystemExit("Local Factor successor requires dependence-robust Benjamini-Yekutieli FDR")
+    min_text_similarity = float(
+        inference_cfg.get("structural_pair_minimum_text_similarity", DEFAULT_MINIMUM_TEXT_SIMILARITY)
+    )
+    max_auto_reps = max(
+        requested_reps,
+        int(inference_cfg.get("maximum_bootstrap_repetitions", DEFAULT_MAX_AUTO_BOOTSTRAP_REPS)),
+    )
 
     failures: list[str] = []
     try:
@@ -137,8 +141,8 @@ def main() -> int:
         markets, cluster_rows = [], []
         failures.append(f"discovery:{type(exc).__name__}:{exc}")
 
-    # Freeze the pair universe from contract metadata before touching price history.
-    # No price, liquidity, residual, p-value or return enters this graph.
+    # The hypothesis graph is frozen from contract metadata before any price history,
+    # liquidity edge, residual, p-value or PnL is observed.
     pair_graphs: dict[str, pairing.StructuralPairGraph] = {
         cluster_key: pairing.build_structural_pair_graph(
             cluster_key,
@@ -148,8 +152,18 @@ def main() -> int:
         )
         for cluster_key, group in cluster_rows
     }
-    predeclared_pair_count = sum(graph.pair_count for graph in pair_graphs.values())
-    repetitions_required = max(50, math.ceil(predeclared_pair_count / max(1e-12, bh_q)) - 1) if predeclared_pair_count else requested_reps
+    predeclared_keys = {
+        (cluster_key, a, b)
+        for cluster_key, graph in pair_graphs.items()
+        for a, b in graph.pairs
+    }
+    predeclared_pair_count = len(predeclared_keys)
+    requested_resolution = multiplicity.by_resolution_diagnostics(
+        predeclared_pair_count, requested_reps, fdr_q
+    )
+    repetitions_required = int(
+        requested_resolution["repetitions_required_for_singleton_by_resolution"]
+    )
     reps = min(max_auto_reps, max(requested_reps, repetitions_required))
 
     selected = {market.market_id: market for _, group in cluster_rows for market in group}
@@ -166,7 +180,10 @@ def main() -> int:
     history_data_healthy = len(histories) >= history_required_market_count
 
     tests: list[dict[str, Any]] = []
-    pvalues: dict[tuple[str, str, str], float] = {}
+    # Keep every ex-ante declared hypothesis in the multiplicity family. A declared
+    # pair that cannot be estimated on the current regular panel is conservatively
+    # assigned p=1 rather than silently shrinking the family after observing data.
+    pvalues: dict[tuple[str, str, str], float] = {key: 1.0 for key in predeclared_keys}
     fit_by_key: dict[tuple[str, str, str], tuple[core.StandardizedPanel, core.PairFit]] = {}
     for cluster_key, group in cluster_rows:
         graph = pair_graphs.get(cluster_key)
@@ -190,6 +207,8 @@ def main() -> int:
         )
         for (a, b), (fit, pvalue) in boot.items():
             key = (cluster_key, a, b)
+            if key not in pvalues:
+                raise RuntimeError("estimated Local Factor pair was not in the predeclared structural family")
             pvalues[key] = pvalue
             fit_by_key[key] = (panel, fit)
             tests.append(
@@ -207,17 +226,21 @@ def main() -> int:
                 }
             )
 
-    selected_pairs = core.bh_selected(pvalues, bh_q)
-    resolution = inference.bh_resolution_diagnostics(len(pvalues), reps, bh_q)
+    selected_pairs = multiplicity.by_selected(pvalues, fdr_q)
+    resolution = multiplicity.by_resolution_diagnostics(predeclared_pair_count, reps, fdr_q)
     books: dict[str, Any] = {}
     if selected_pairs:
         try:
             books = base.fetch_books(clob, list(selected.values()))
         except Exception as exc:
             failures.append(f"books:{type(exc).__name__}:{exc}")
+
     raw_cache: dict[str, dict[str, Any]] = {}
     signals: list[dict[str, Any]] = []
     for key in sorted(selected_pairs):
+        if key not in fit_by_key:
+            # This should be impossible because unestimable hypotheses carry p=1.
+            continue
         cluster_key, a, b = key
         panel, fit = fit_by_key[key]
         market_a = selected.get(a)
@@ -241,7 +264,7 @@ def main() -> int:
             now=now,
             end_ts={a: market_end_ts(raw_a), b: market_end_ts(raw_b)},
             exit_buffer_seconds=int(cfg["forecast"]["time_to_resolution_exit_buffer_seconds"]),
-            min_abs_z=float(inference_cfg["minimum_abs_residual_z_after_bh"]),
+            min_abs_z=float(inference_cfg["minimum_abs_residual_z_after_multiplicity"]),
             max_hold_seconds=int(cfg["forecast"]["maximum_hold_hours"]) * 3600,
             min_weight=float(cfg["hedge"]["minimum_weight"]),
             max_weight=float(cfg["hedge"]["maximum_weight"]),
@@ -253,15 +276,19 @@ def main() -> int:
         "joint_fill_state_evidence_not_yet_attached",
         "partial_abort_unwind_economics_not_yet_attached",
         "fill_conditioned_cost_stressed_pnl_not_yet_attached",
+        "point_in_time_survivorship_safe_universe_not_yet_attached",
         "research_branch_cannot_mutate_live_champion",
     ]
+    if not selected_pairs:
+        promotion_blockers.append("no_dependence_robust_statistically_selected_pair")
     if not history_data_healthy:
         promotion_blockers.append("price_history_data_health_unhealthy")
-    if pvalues and not bool(resolution["singleton_bh_resolution_adequate"]):
-        promotion_blockers.append("bootstrap_resolution_too_coarse_for_bh_multiplicity")
+    if predeclared_pair_count and not bool(resolution["singleton_by_resolution_adequate"]):
+        promotion_blockers.append("bootstrap_resolution_too_coarse_for_by_multiplicity")
 
     report = {
         "timestamp": now,
+        "schema_version": 2,
         "paper_only": True,
         "research_only": True,
         "live_intents_enabled": False,
@@ -272,9 +299,13 @@ def main() -> int:
         "history_required_market_count": history_required_market_count,
         "history_data_healthy": history_data_healthy,
         "history_window_days": HISTORY_WINDOW_SECONDS // 86400,
+        "survivorship_safe": False,
         "pair_graph_selection": "contract_metadata_only_before_price_history",
         "pair_graph_minimum_text_similarity": min_text_similarity,
         "predeclared_pair_count": predeclared_pair_count,
+        "testable_pair_hypotheses": len(fit_by_key),
+        "unestimable_predeclared_hypotheses": predeclared_pair_count - len(fit_by_key),
+        "unestimable_predeclared_pvalue": 1.0,
         "pair_graphs": {
             cluster_key: {
                 "method": graph.method,
@@ -285,15 +316,17 @@ def main() -> int:
             for cluster_key, graph in pair_graphs.items()
         },
         "pair_pvalue_method": "intersection_union_max_marginal_null_preserving_bootstrap_pvalue",
-        "pair_hypotheses": len(pvalues),
+        "multiplicity_method": "benjamini_yekutieli_arbitrary_dependence",
+        "fdr_q": fdr_q,
+        "pair_hypotheses": predeclared_pair_count,
         "requested_bootstrap_repetitions": requested_reps,
         "bootstrap_repetitions": reps,
         "bootstrap_repetition_cap": max_auto_reps,
-        "predeclared_repetitions_required_for_singleton_bh_resolution": repetitions_required,
+        "predeclared_repetitions_required_for_singleton_by_resolution": repetitions_required,
         "bootstrap_resolution": resolution,
-        "bh_fdr": bh_q,
-        "bh_selected_pairs": len(selected_pairs),
-        "post_bh_pair_signals": len(signals),
+        "by_selected_pairs": len(selected_pairs),
+        "post_multiplicity_pair_signals": len(signals),
+        "minimum_testable_pair_pvalue": min((row["pvalue"] for row in tests), default=None),
         "tests": tests,
         "signals": signals,
         "failures": failures,
