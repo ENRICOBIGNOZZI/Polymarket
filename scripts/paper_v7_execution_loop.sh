@@ -6,6 +6,7 @@ cd "$ROOT"
 CONFIG="${1:-config/paper_v7.json}"
 RUN_ROOT="${2:-runs/paper_v7_live/execution}"
 FREQ_CONFIG="${V7_FREQUENCY_CONFIG:-config/v7_frequency_matrix.json}"
+CAPACITY_LOCK="$RUN_ROOT/token_capacity.lock"
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/micro_taker" "$RUN_ROOT/hard_arb" "$RUN_ROOT/external"
 
 read -r MARKETS MIN_LIQUIDITY MIN_EDGE MAX_TRADE HARD_EVENTS HARD_EDGE HARD_TRADE < <(python3 - "$CONFIG" <<'PY'
@@ -78,7 +79,7 @@ reap_stale_proxy(){
 
 start_proxy(){ PYTHONUNBUFFERED=1 python3 scripts/v6_market_proxy.py --host 127.0.0.1 --port "$MARKET_PROXY_PORT" --gamma "$GAMMA_URL" --clob "$CLOB_URL" --cache "$RUN_ROOT/market_proxy_cache.json" --status "$RUN_ROOT/market_proxy_status.json" >>"$RUN_ROOT/market_proxy.log" 2>&1 & proxy_pid=$!; }
 start_recorder(){ ./build/polymarket_trade_recorder --config "$RUNTIME_CONFIG" --run-dir "$RUN_ROOT" --markets "$MARKETS" --batch 20 --min-liquidity "$MIN_LIQUIDITY" --lookback-seconds 900 --interval 2 --loop >>"$RUN_ROOT/trade_recorder.log" 2>&1 & recorder_pid=$!; }
-start_broker(){ python3 scripts/v7_multileg_broker.py --config "$RUN_ROOT/broker_config.json" --run-dir "$RUN_ROOT" --intents "$RUN_ROOT/intents.csv" --trade-tape "$RUN_ROOT/trade_tape.csv" --min-edge "$MIN_EDGE" --submit-latency-ms 100 --slippage-bps 5 --adverse-horizon-seconds 45 --interval 1 --loop >>"$RUN_ROOT/multileg.log" 2>&1 & broker_pid=$!; }
+start_broker(){ python3 scripts/v7_multileg_broker_runner.py --config "$RUN_ROOT/broker_config.json" --run-dir "$RUN_ROOT" --intents "$RUN_ROOT/intents.csv" --trade-tape "$RUN_ROOT/trade_tape.csv" --capacity-lock "$CAPACITY_LOCK" --min-edge "$MIN_EDGE" --submit-latency-ms 100 --slippage-bps 5 --adverse-horizon-seconds 45 --interval 1 --loop >>"$RUN_ROOT/multileg.log" 2>&1 & broker_pid=$!; }
 refresh_external(){ python3 scripts/v6_external_bridge.py --output "$RUN_ROOT/external_signals.csv" --status "$RUN_ROOT/external_bridge_status.json" --max-age-seconds 21600 --min-confidence 0.35 >>"$RUN_ROOT/external_bridge.log" 2>&1 || true; }
 start_external(){ ./build/polymarket_engine --config "$RUN_ROOT/external_config.json" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --paper --loop >>"$RUN_ROOT/external/engine.log" 2>&1 & external_pid=$!; }
 
@@ -111,7 +112,8 @@ while true; do
   kill -0 "$external_pid" 2>/dev/null || { echo "fatal: V7 external sleeve exited" >&2; exit 1; }
 
   if (( now-last_maker >= MAKER_SECONDS )); then
-    python3 scripts/v6_micro_maker_v2.py --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --trade-tape "$RUN_ROOT/trade_tape.csv" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$MIN_EDGE" --max-order-usd "$MAX_TRADE" --ttl-seconds 60 --hold-seconds 240 --adverse-selection-mult 0.15 --flow-lookback-seconds 300 --min-fill-probability 0.001 --target-fill-probability 0.10 --max-improve-ticks 1 --slippage-bps 5 >>"$RUN_ROOT/maker.log" 2>&1 || true
+    python3 scripts/v7_capacity_lock.py --lock "$CAPACITY_LOCK" -- \
+      python3 scripts/v7_micro_maker_worker.py --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --trade-tape "$RUN_ROOT/trade_tape.csv" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$MIN_EDGE" --max-order-usd "$MAX_TRADE" --ttl-seconds 60 --hold-seconds 240 --flow-lookback-seconds 300 --min-fill-probability 0.001 --max-improve-ticks 1 --slippage-bps 5 --capital-cost-bps-per-hour 0.25 >>"$RUN_ROOT/maker.log" 2>&1 || true
     last_maker=$now
   fi
   if (( now-last_taker >= TAKER_SECONDS )); then
@@ -129,7 +131,7 @@ while true; do
     python3 scripts/runtime_action_report.py --run-root "$RUN_ROOT" --external-signals "$RUN_ROOT/external_signals.csv" --window-seconds 3600 --production-edge "$MIN_EDGE" --output-json "$RUN_ROOT/action_report.json" --output-markdown "$RUN_ROOT/action_report.md" >>"$RUN_ROOT/action_report.log" 2>&1 || true
     python3 scripts/v7_execution_evidence.py --run-root "$RUN_ROOT" --policy config/v7_execution_evidence.json >>"$RUN_ROOT/v7_execution_evidence.log" 2>&1 || true
     tmp="$RUN_ROOT/v7_execution_supervisor.json.tmp.${BASHPID:-$$}"
-    printf '{"timestamp":%s,"paper_only":true,"maker_seconds":%s,"taker_seconds":%s,"hard_seconds":%s,"graph_seconds":%s}\n' "$now" "$MAKER_SECONDS" "$TAKER_SECONDS" "$HARD_SECONDS" "$GRAPH_SECONDS" >"$tmp"; mv "$tmp" "$RUN_ROOT/v7_execution_supervisor.json"
+    printf '{"timestamp":%s,"paper_only":true,"maker_seconds":%s,"taker_seconds":%s,"hard_seconds":%s,"graph_seconds":%s,"capacity_lock":"%s"}\n' "$now" "$MAKER_SECONDS" "$TAKER_SECONDS" "$HARD_SECONDS" "$GRAPH_SECONDS" "$CAPACITY_LOCK" >"$tmp"; mv "$tmp" "$RUN_ROOT/v7_execution_supervisor.json"
     last_report=$now
   fi
   sleep 1
