@@ -16,9 +16,11 @@ on:
       - "src/fast_runtime/**"
       - "config/fast_arb_*"
       - "scripts/arb_theory_scheduler.py"
+      - "scripts/v7_fast_structural_gate.py"
       - "scripts/validate_fast_data_health.py"
-      - "scripts/paper_latest_loop.sh"
+      - "scripts/paper_v7_loop.sh"
       - "tests/test_fast_*"
+      - "tests/test_v7_fast_structural_gate.py"
       - "tests/test_arb_theory_scheduler.py"
       - ".github/workflows/fast-arb-hourly.yml"
       - ".github/workflows/arb-theory-hourly.yml"
@@ -48,9 +50,9 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j2
           ctest --test-dir build --output-on-failure
-          python3 -m unittest tests/test_fast_data_health.py -v
+          python3 -m unittest tests/test_fast_data_health.py tests/test_v7_fast_structural_gate.py -v
 
-      - name: Run read-only fast shadow probe
+      - name: Run read-only V7 fast shadow probe
         shell: bash
         run: |
           set -euo pipefail
@@ -58,7 +60,7 @@ jobs:
           duration=180
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then duration=45; fi
           ./build/polymarket_fast_arb_shadow \
-            --config config/paper_v4.json \
+            --config config/paper_v7.json \
             --policy config/fast_arb_policy.json \
             --relations config/fast_arb_relations.csv \
             --external-signals data/external_signals.csv \
@@ -75,6 +77,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          target_sha="$(git rev-parse HEAD)"
           python3 scripts/arb_theory_scheduler.py \
             --evidence-root runs/hourly-fast \
             --base-policy config/fast_arb_policy.json \
@@ -82,22 +85,37 @@ jobs:
             --output-json runs/hourly-fast/fast_arb_candidate.json \
             --output-markdown runs/hourly-fast/fast_arb_theory_report.md \
             --output-header runs/hourly-fast/fast_arb_candidate_policy.hpp
+          python3 scripts/v7_fast_structural_gate.py \
+            --candidate runs/hourly-fast/fast_arb_candidate.json \
+            --expected-sha "$target_sha" \
+            --generated-header runs/hourly-fast/fast_arb_candidate_policy.hpp
           python3 scripts/validate_fast_data_health.py \
             --status runs/hourly-fast/fast_arb_status.json \
             --errors runs/hourly-fast/fast_arb_errors.csv \
             --max-feed-stale-ms 45000 \
             --min-rest-resyncs 2
-          python3 - <<'PY'
+          TARGET_SHA="$target_sha" python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
           status = json.loads(Path("runs/hourly-fast/fast_arb_status.json").read_text())
-          candidate = json.loads(Path("runs/hourly-fast/fast_arb_candidate.json").read_text())
+          candidate_path = Path("runs/hourly-fast/fast_arb_candidate.json")
+          candidate = json.loads(candidate_path.read_text())
           base_policy = json.loads(Path("config/fast_arb_policy.json").read_text())
           assert status["mode"] == "shadow"
           assert status["real_order_submission"] is False
           assert candidate["mode"] == "research_only"
           assert candidate["real_order_submission"] is False
+          assert candidate["model_sha"] == os.environ["TARGET_SHA"]
           assert candidate["candidate_policy"]["min_net_edge"] >= base_policy["min_net_edge"]
+          assert candidate["promotion_ready"] is False
+          assert "joint_execution_evidence_missing" in candidate["promotion_gate"]["reasons"]
+          with Path("runs/hourly-fast/fast_arb_theory_report.md").open("a", encoding="utf-8") as handle:
+              handle.write("\n## Authoritative V7 economic promotion gate\n\n")
+              handle.write(f"- model_sha: `{candidate['model_sha']}`\n")
+              handle.write(f"- quoted_theory_promotion_ready: `{candidate['quoted_theory_promotion_ready']}`\n")
+              handle.write("- promotion_ready: `false`\n")
+              handle.write("- reason: same-SHA realized joint execution evidence is not produced by this shadow probe.\n")
           PY
           cat runs/hourly-fast/fast_arb_theory_report.md >> "$GITHUB_STEP_SUMMARY"
 
