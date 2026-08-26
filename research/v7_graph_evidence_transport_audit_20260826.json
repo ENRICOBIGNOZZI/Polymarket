@@ -1,0 +1,64 @@
+{
+  "as_of_utc": "2026-08-26T14:25:00Z",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "scope": "research_only",
+  "v7_base_pr": 506,
+  "v7_safety_repair_pr": 516,
+  "finding": {
+    "name": "structural_signature_execution_evidence_transport",
+    "severity": "promotion_blocker_for_graph_rv",
+    "description": "V7 Graph/RV forward admission pools completed sessions only by strategy/event/market-side signature. Current candidate expected edge, queue+target burden, target size, quote state and observation horizon are not inputs to evidence_for(), so positive fill/PnL history from an easier/richer policy state can authorize a materially harder/lower-edge current candidate with the same structural legs."
+  },
+  "deterministic_counterexample": {
+    "historical_sessions": 4,
+    "historical_expected_edge": 0.02,
+    "historical_required_flow_per_leg": [100.0, 100.0],
+    "historical_target_shares_per_leg": [10.0, 10.0],
+    "historical_window_seconds": 180,
+    "historical_2x_stress_pnl_each": 0.5,
+    "incumbent_state_blind_accepts_history": true,
+    "current_harder_lower_edge": {
+      "expected_edge": 0.00005,
+      "required_flow_per_leg": [1000.0, 1000.0],
+      "target_shares_per_leg": [50.0, 50.0],
+      "window_seconds": 180,
+      "transportable_historical_sessions_under_monotone_research_comparator": 0
+    },
+    "current_easier_higher_edge": {
+      "expected_edge": 0.03,
+      "required_flow_per_leg": [50.0, 50.0],
+      "target_shares_per_leg": [5.0, 5.0],
+      "window_seconds": 180,
+      "transportable_historical_sessions_under_monotone_research_comparator": 4
+    }
+  },
+  "required_successor_contract": [
+    "persist historical/current expected edge, target shares, queue/required flow, quote policy and observation horizon",
+    "do not route from structural-signature PnL alone",
+    "condition joint completion and partial-state economics on candidate execution state or use a fail-closed monotone transport rule",
+    "recompute current candidate EV from empirical full/partial/none states using current executable economics",
+    "require positive lower-bound fill-conditioned PnL under 1x/1.5x/2x costs before routing"
+  ],
+  "current_exact_main_context": {
+    "main_sha": "fccbdd036093c2f7973635c3c47431ad8381b261",
+    "trade_recorder_status": "healthy",
+    "fetched_trades": 287,
+    "trade_age_seconds": 82,
+    "graph_rv_bundles": 1,
+    "graph_rv_legs": 5,
+    "max_quoted_edge": 0.002,
+    "completed_bundles": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_pnl_usd": 0.0
+  },
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "authorized_max_trade_usd": 125.0,
+    "authorized_market_fraction": 0.05,
+    "authorized_event_fraction": 0.15,
+    "authorized_gross_fraction": 0.70,
+    "authorized_max_drawdown": 0.15
+  }
+}
