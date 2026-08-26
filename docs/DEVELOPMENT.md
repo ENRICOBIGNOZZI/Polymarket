@@ -1,88 +1,113 @@
 # Development workflow
 
-This repository uses `main` as the only authoritative integrated code line. The live paper entry point is selected explicitly by `config/live_champion.json`; code on another branch, or a numerically newer `paper_vN`, is not live until it passes the research, administrator approval, integration, validation and deployment lifecycle in [`SYSTEM_WATCH.md`](SYSTEM_WATCH.md).
-
-The distributed automation architecture is documented in [`SCHEDULER_CONTROL_PLANE.md`](SCHEDULER_CONTROL_PLANE.md). Each workflow has exactly one job and one bounded responsibility.
+`main` is the only authoritative integrated code line. The repository contains one canonical PAPER runtime generation: V7. `config/live_champion.json`, `config/v7_model_architecture.json` and `config/operator_directives.json` define the runtime, architecture and current operator envelope.
 
 ## Branch roles
 
-- `main`: stable, reproducible, unified paper champion. Every commit must build, pass deterministic tests and preserve a single portfolio/risk/execution path.
-- `feat/*`, `fix/*`, `improve/*`, `ops/*`: short-lived focused implementation branches merged through a pull request.
-- `research/*`: unapproved model hypotheses, features, estimators and parameter studies. They are evidence sources, not directly mergeable production models.
-- `experiment/*`, `diagnostic/*`: temporary live-data experiments and measurement workflows. Record the result, then close without merge unless a separately reviewed shadow-only instrument is reusable.
-- `integration/*`: the only branch class used to consolidate approved research into the current champion. It must start from current `main` and link the source evidence.
-- `ci/*`, `tmp/*`, `noop`: disposable infrastructure branches. They must not remain active after their purpose is complete.
+- `main` — integrated V7 PAPER system;
+- `feat/*`, `fix/*`, `improve/*`, `ops/*` — focused implementation/infrastructure work;
+- `research/*`, `experiment/*`, `diagnostic/*` — isolated evidence-producing work;
+- `integration/*` — exact-source integration candidates evaluated by the automatic promotion controller;
+- `operator/*` — direct operator-authority changes only, with the required explicit instruction marker;
+- `ci/*`, `tmp/*`, `noop` — disposable infrastructure branches.
 
-At most one broad `integration/*` branch should be active at a time. Smaller independent fixes should still use narrowly scoped pull requests.
+Short-lived branches should be deleted after merge/closure. Git history and PR discussions are the archive.
+
+## V7-only invariant
+
+The integrated repository must preserve:
+
+- one live champion manifest;
+- one runtime owner;
+- one execution ledger;
+- one broker authority;
+- one V7 PAPER configuration;
+- authenticated execution disabled;
+- no compatibility fallback to a retired runtime generation.
+
+New strategy research extends V7 interfaces; it does not add another complete live stack.
 
 ## Research placement
 
-Unapproved research belongs on `research/*`, `experiment/*` or `diagnostic/*`, not directly on `main`.
+Unapproved model work stays on research/experiment/diagnostic branches. It cannot change `config/live_champion.json`, book production PnL, alter live sizing/risk or submit authenticated orders.
 
-A limited exception exists for code labelled `shadow-isolated`. Such code may be merged only when tests prove that it writes separate telemetry/state and cannot emit production intents, book PnL, change sizing/exposure, alter drawdown or kill-switch behavior, modify OOS gates or submit authenticated orders. The exception exists for measurement, not premature promotion.
+A `shadow-isolated` exception is limited to measurement code with deterministic proof that it cannot mutate production intents, execution, PnL, allocation, risk or credentials.
 
-Approval of a research result does not authorize merging the research branch. The project administrator or an explicitly bounded integration task creates a new `integration/*` branch from current `main`, ports approved reusable code, resolves overlap with the incumbent, removes superseded paths and validates the resulting single champion.
+Positive research governance must bind an exact source SHA. Source drift invalidates the approval.
 
-## Single-champion invariant
+## Integration
 
-- `main` contains one integrated codebase, not several complete live models.
-- `config/live_champion.json` selects one loop, one config and one production run root.
-- `paper-validated` is the exact `main` revision that passed live-paper validation.
-- the private paper server deploys `paper-validated` only.
-- specialized experts may coexist inside the champion, but terminal probability, relative value, structural constraints, execution estimates and portfolio risk retain distinct semantics.
+An `integration/*` candidate must start from current `main` and identify its exact source:
 
-Changing `config/live_champion.json` is a promotion action. It is allowed only from an `integration/*` PR carrying `approved-for-integration`, `single-model-reviewed` and `administrator-approved`.
+```text
+Source research PR/branch/commit: #<number> / <research-branch> / <40-char-sha>
+```
+
+The Promotion Controller evaluates the candidate automatically. For economic changes it requires exact-source code matching plus the configured machine-readable OOS, cost-stress, drawdown, statistical-stability, data-health and incremental-utility evidence.
+
+`autonomous-promotion-approved` is ephemeral and is re-evaluated each controller cycle. Integration Merge repeats the relevant checks immediately before merging the expected head.
 
 ## Merge gates
 
-A pull request is mergeable only when all applicable conditions hold:
+Applicable changes must satisfy:
 
-1. Release and Debug builds complete successfully.
-2. Deterministic unit and mock integration tests pass.
-3. New behavior has tests or an explicit reason why a deterministic test is impossible.
-4. Configuration, state persistence, migration, rollback and failure behavior are documented.
-5. Terminal-probability forecasts remain separate from mark-to-market relative-value signals.
-6. Paper execution remains separate from authenticated real-money order submission.
-7. No credentials, private keys, wallet secrets or generated runtime state are committed.
-8. Externally dependent live-data checks are reported separately from deterministic CI.
-9. Model changes report executable economics after spread, fee, slippage, depth, queue, latency, adverse-selection, uncertainty and capital costs.
-10. Approved research is compared with the incumbent on common chronological data and integrated through `integration/*` rather than appended as a second complete stack.
-11. An integration PR identifies and removes or explicitly retires superseded code, configuration, state and telemetry paths.
-12. A live champion change updates the manifest explicitly and preserves rollback to the preceding `paper-validated` revision.
-13. Automatic integration requires explicit `administrator-approved` on the exact reviewed PR.
+1. Release and Debug builds;
+2. deterministic unit/integration/regression tests;
+3. current scheduler/project-context validation;
+4. PAPER-only/authenticated-disabled boundaries;
+5. current V7 operator limits;
+6. correct executable economics for model/execution changes;
+7. exact source provenance for integration work;
+8. monitoring and failure-mode coverage for operational changes;
+9. no credentials or generated runtime state committed;
+10. no duplicate live runtime/broker/state-writer path.
 
-## Pull-request lifecycle
+A model change is not made eligible by weakening economics merely to create trades.
 
-1. Create the branch from current `main`.
-2. Keep the PR focused and document the economic interpretation of every signal and cost.
-3. Keep research PRs draft or close them after recording `REJECTED`, `MORE_EVIDENCE_REQUIRED`, `APPROVED_FOR_INTEGRATION` or `SHADOW_ONLY`.
-4. For approved research, create a fresh `integration/*` PR that links the evidence and satisfies the single-model checklist.
-5. Use squash merge for normal feature and integration work so `main` has one coherent commit per PR.
-6. The dedicated integration scheduler may merge at most one non-draft, fully green `integration/*` PR carrying all three approval labels. It never uses an administrative bypass.
-7. The integration scheduler performs only the merge and emits a repository-dispatch handoff.
-8. The separate post-merge scheduler dispatches CI, monitoring and live-paper smoke for the exact merged SHA.
-9. Merge success is not validation, deployment or health success. Promotion is complete only after `main == paper-validated == deployed HEAD` and runtime health passes.
-10. Delete the head branch after merge or closure.
+## Post-merge lifecycle
 
-A branch must never remain alive merely to preserve history: commits, PR discussions and durable research notes are the historical record.
+A merge is only the first state transition:
+
+```text
+integration merge
+ -> exact-SHA CI
+ -> exact-SHA monitoring
+ -> exact-SHA V7 PAPER validation
+ -> paper-validated
+ -> deployment
+ -> server-health
+```
+
+Promotion is complete only after the intended SHA is validated, deployed and healthy. An older healthy deployment is not evidence for a newer `main` revision.
 
 ## Scheduler development
 
-Every workflow under `.github/workflows` must be registered in `config/scheduler_registry.json` and contain one top-level job. The registry preserves unique authority:
+Every managed workflow under `.github/workflows` must be represented in `config/scheduler_registry.json` and contain exactly one top-level job. The registry preserves unique authority:
 
-- only `integration-merge` may merge an approved integration;
+- only `integration-merge` may merge;
 - only `post-merge-validation` may dispatch the post-merge validation bundle;
-- only `paper-server-deploy` may deploy;
-- the administrator supervisor is read-only.
+- only `paper-server-deploy` may deploy.
 
 Run:
 
 ```bash
-python3 scripts/validate_scheduler_registry.py
+python3 scripts/validate_scheduler_registry.py \
+  --root . \
+  --registry config/scheduler_registry.json
 ```
 
-before changing any workflow. CI rejects unregistered workflows, multiple jobs, duplicate privileged authority or mutation logic in the administrator supervisor.
+before modifying the control plane.
 
-## Safety boundary
+## Local validation
 
-The repository is a research and paper-trading system. A future authenticated broker must be a separate adapter with its own reconciliation, balance checks, cancel/replace logic, real-fill confirmation and production kill switches. Research approval, administrator approval, model integration, compilation or paper deployment is not sufficient authorization to trade real money.
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+python3 scripts/validate_scheduler_registry.py --root . --registry config/scheduler_registry.json
+python3 scripts/validate_project_context.py --root .
+```
+
+## Security boundary
+
+The canonical repository/runtime is PAPER-only. Authenticated real-money execution is disabled. Private keys, wallet/exchange credentials and deployment secrets remain outside version control.
