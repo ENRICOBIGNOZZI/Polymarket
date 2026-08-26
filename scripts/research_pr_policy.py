@@ -78,6 +78,9 @@ def shadow_forbidden_files(changed_files: set[str]) -> list[str]:
     forbidden: list[str] = []
     for path in sorted(changed_files):
         lowered = path.lower()
+        if lowered.startswith(".github/workflows/") and lowered.endswith((".yml", ".yaml")):
+            forbidden.append(path)
+            continue
         if is_sensitive_model_surface(path): forbidden.append(path); continue
         if not lowered.startswith(("config/", "scripts/", "src/", "include/", "ops/")): continue
         if any(token in lowered for token in SHADOW_FORBIDDEN_TOKENS): forbidden.append(path)
@@ -237,7 +240,7 @@ def evaluate(
             errors.append("opaque model/runtime bootstrap work must use research/*, experiment/*, or diagnostic/*; paper champion integration must use integration/*. Sensitive change: opaque bootstrap payload")
 
     if forbidden_shadow_files:
-        errors.append("shadow-isolated code cannot modify production decision, model, execution, PnL, risk, OOS, credential, account, order, portfolio-allocation, sizing, exposure, or kill surfaces: " + ", ".join(forbidden_shadow_files))
+        errors.append("shadow-isolated code cannot modify production decision, model, execution, PnL, risk, OOS, credential, account, order, portfolio-allocation, sizing, exposure, kill, or workflow/control-plane surfaces: " + ", ".join(forbidden_shadow_files))
 
     summary = {
         "branch": head, "draft": draft, "labels": sorted(labels), "manifest_changed": manifest_changed,
