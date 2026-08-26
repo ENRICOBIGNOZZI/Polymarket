@@ -56,6 +56,19 @@ class V7ExactShaIntegrationContractTest(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, self.workflow)
 
+    def test_post_ref_cleanup_cannot_block_exact_sha_dispatch(self) -> None:
+        for token in (
+            'pr_state="$(gh pr view "$PR_NUMBER" --json state --jq .state 2>/dev/null || true)"',
+            'if [[ "$pr_state" == "OPEN" ]]; then',
+            'PR $PR_NUMBER already non-open after exact-head fast-forward',
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.workflow)
+        self.assertLess(
+            self.workflow.index('pr_state="$(gh pr view "$PR_NUMBER"'),
+            self.workflow.index('gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches"'),
+        )
+
     def test_registry_validator_enforces_same_contract(self) -> None:
         for token in (
             'git merge-base --is-ancestor "$current_main" "$expected_head"',
