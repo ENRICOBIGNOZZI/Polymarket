@@ -10,19 +10,21 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_frequency_registration_is_explicit_and_nonpooled():
     matrix = json.loads((ROOT / "config/v7_frequency_matrix.json").read_text(encoding="utf-8"))
     assert matrix["forecast_horizons_minutes"]["pca_stat_arb"] == [30, 60, 120, 360]
-    assert matrix["forecast_horizons_minutes"]["cross_sectional_rank"] == [30, 60, 120, 360]
+    assert matrix["forecast_horizons_minutes"]["cross_sectional_rank"] == [120, 360]
     assert matrix["local_factor_fidelity_minutes"] == [30, 60]
     rules = matrix["evidence_rules"]
     assert rules["separate_state_by_frequency"] is True
     assert rules["separate_pnl_by_frequency"] is True
+    assert rules["no_pooling_across_horizons_for_pvalues"] is True
     assert rules["no_post_hoc_frequency_selection_on_same_holdout"] is True
 
 
-def test_ranking_new_30m_60m_are_forward_challengers_not_retrofit():
+def test_ranking_remains_preselected_2h_6h_without_new_prospective_horizons():
     cfg = json.loads((ROOT / "config/research_v7_cross_sectional_rank.json").read_text(encoding="utf-8"))
     registration = cfg["frequency_registration"]
+    assert cfg["horizons_minutes"] == [120, 360]
     assert registration["legacy_discovery_selected_horizons_minutes"] == [120, 360]
-    assert registration["new_prospective_challenger_horizons_minutes"] == [30, 60]
+    assert registration["new_prospective_challenger_horizons_minutes"] == []
     assert registration["pool_evidence_across_horizons"] is False
     assert registration["select_new_horizon_on_pre_registration_history"] is False
 
@@ -37,6 +39,6 @@ def test_local_factor_30m_and_60m_are_separate_configs():
 
 if __name__ == "__main__":
     test_frequency_registration_is_explicit_and_nonpooled()
-    test_ranking_new_30m_60m_are_forward_challengers_not_retrofit()
+    test_ranking_remains_preselected_2h_6h_without_new_prospective_horizons()
     test_local_factor_30m_and_60m_are_separate_configs()
     print("ok 3 v7 frequency tests")
