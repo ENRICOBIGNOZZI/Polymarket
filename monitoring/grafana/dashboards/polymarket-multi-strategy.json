@@ -236,7 +236,7 @@
   ],
   "refresh": "5s",
   "schemaVersion": 39,
-  "tags": ["polymarket", "paper", "multi-strategy", "current"],
+  "tags": ["polymarket", "paper", "multi-strategy", "v7"],
   "templating": {
     "list": [
       {
@@ -258,8 +258,8 @@
   "time": {"from": "now-6h", "to": "now"},
   "timepicker": {},
   "timezone": "browser",
-  "title": "Polymarket Multi-Strategy",
-  "uid": "polymarket-multi-strategy-v5",
-  "version": 3,
+  "title": "Polymarket V7 Multi-Strategy",
+  "uid": "polymarket-multi-strategy-v7",
+  "version": 4,
   "weekStart": ""
 }
