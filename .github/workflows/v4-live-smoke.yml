@@ -220,6 +220,21 @@ jobs:
             sleep $((attempt * 2))
           done
 
+      - name: Enforce public trade-recorder data health
+        shell: bash
+        run: |
+          set -euo pipefail
+          R="$CHAMPION_RUN_NAME"
+          python3 - "$R/live_snapshot.json" <<'PY'
+          import json, sys
+          snapshot=json.load(open(sys.argv[1], encoding='utf-8'))
+          health=snapshot.get('data_health', {}).get('trade_recorder', {})
+          status=health.get('status')
+          failures=health.get('failures', [])
+          if status != 'healthy':
+              raise SystemExit(f"public trade-recorder data health is {status!r}: {failures}")
+          PY
+
       - name: Upload live diagnostics
         if: always()
         uses: actions/upload-artifact@v4
