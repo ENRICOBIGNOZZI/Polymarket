@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "engine_version": 7,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "runtime": {
+    "entrypoint": "scripts/paper_v7_loop.sh",
+    "execution_loop": "scripts/paper_v7_execution_loop.sh",
+    "run_root": "runs/paper_v7_live",
+    "single_runtime_owner": true,
+    "single_execution_ledger": true,
+    "single_broker_authority": true
+  },
+  "execution_components": {
+    "market_proxy": "scripts/v7_market_proxy.py",
+    "market_snapshot": "scripts/v7_market_snapshot.py",
+    "micro_maker": "scripts/v7_micro_maker_worker.py",
+    "micro_taker": "scripts/v7_micro_taker_worker.py",
+    "graph_relative_value": "scripts/v7_graph_roundtrip_guard.py",
+    "hard_arb": "scripts/v7_hard_arb_guard.py",
+    "multileg_broker": "scripts/v7_multileg_broker_runner.py",
+    "external_bridge": "scripts/v7_external_bridge.py",
+    "runtime_status": "scripts/v7_runtime_status.py"
+  },
+  "research_components": {
+    "pca_stat_arb": "scripts/v7_pca_stat_arb_research.py",
+    "local_factor": "scripts/v7_local_factor_research.py",
+    "cross_sectional_ranking": "scripts/v7_cross_sectional_rank_forward_multifreq.py",
+    "shadow_scheduler": "scripts/v7_shadow_loop.py"
+  },
+  "monitoring": {
+    "exporter": "monitoring/exporter_v7.py",
+    "dashboard": "monitoring/grafana/dashboards/polymarket-v7.json"
+  },
+  "legacy_runtime_supported": false
+}
