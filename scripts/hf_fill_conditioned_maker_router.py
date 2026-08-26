@@ -50,6 +50,37 @@ class RouterDecision:
     inside_post_cost_edge: float
 
 
+@dataclass(frozen=True)
+class RestingEvidence:
+    age_seconds: float
+    current_post_cost_edge: float
+    remaining_fill_probability: float
+    recent_trade_count: int
+    recent_buy_volume: float
+    recent_sell_volume: float
+    conservative_markout_prior_per_share: float = 0.0
+    capital_latency_cost_per_share: float = 0.0
+
+
+@dataclass(frozen=True)
+class RestingConfig:
+    grace_seconds: float = 20.0
+    min_post_cost_edge: float = 0.00005
+    min_remaining_fill_probability: float = 0.005
+    toxicity_min_trades: int = 4
+    max_sell_share: float = 0.775
+    cancel_latency_seconds: float = 1.0
+
+
+@dataclass(frozen=True)
+class RestingDecision:
+    action: str
+    reason: str
+    sell_share: float
+    remaining_ev_per_share: float
+    cancel_latency_seconds: float
+
+
 def _clamp01(x: float) -> float:
     return min(1.0, max(0.0, float(x)))
 
@@ -98,6 +129,38 @@ def evaluate(candidate: CandidateEvidence, config: RouterConfig = RouterConfig()
     if inside_has_edge and inside_has_fill_support and inside_is_better and recurrent_support and confidence_support:
         return decision("IMPROVE_ONE_TICK", "incremental_fill_conditioned_ev_pays_tick")
     return decision("POST_AT_TOUCH", "positive_touch_fill_conditioned_ev")
+
+
+def evaluate_resting(evidence: RestingEvidence, config: RestingConfig = RestingConfig()) -> RestingDecision:
+    """Revalidate an already-resting paper quote from information available now.
+
+    The function is deliberately fail-closed. A quote keeps its queue position during
+    the grace interval. Afterwards the remaining order is cancelled when current
+    post-cost edge is gone, recurrent contra-flow is directionally toxic, the rolling
+    fill hazard has collapsed, or fill-conditioned remaining EV is non-positive.
+    Cancellation is not instantaneous: callers must continue replaying public fills
+    through ``cancel_latency_seconds`` before removing residual size.
+    """
+    total_flow = max(0.0, evidence.recent_buy_volume) + max(0.0, evidence.recent_sell_volume)
+    sell_share = max(0.0, evidence.recent_sell_volume) / total_flow if total_flow > 0.0 else 0.0
+    p_fill = _clamp01(evidence.remaining_fill_probability)
+    payoff = evidence.current_post_cost_edge + evidence.conservative_markout_prior_per_share
+    remaining_ev = p_fill * payoff - max(0.0, evidence.capital_latency_cost_per_share)
+
+    def result(action: str, reason: str) -> RestingDecision:
+        return RestingDecision(action, reason, sell_share, remaining_ev, max(0.0, config.cancel_latency_seconds))
+
+    if evidence.age_seconds < config.grace_seconds:
+        return result("KEEP", "grace_interval")
+    if evidence.current_post_cost_edge < config.min_post_cost_edge:
+        return result("CANCEL_PENDING", "resting_edge_below_floor")
+    if evidence.recent_trade_count >= config.toxicity_min_trades and sell_share > config.max_sell_share:
+        return result("CANCEL_PENDING", "resting_flow_too_toxic")
+    if p_fill < config.min_remaining_fill_probability:
+        return result("CANCEL_PENDING", "remaining_fill_probability_too_low")
+    if remaining_ev <= 0.0:
+        return result("CANCEL_PENDING", "nonpositive_remaining_fill_conditioned_ev")
+    return result("KEEP", "positive_remaining_fill_conditioned_ev")
 
 
 def _load_candidate(path: Path) -> CandidateEvidence:
