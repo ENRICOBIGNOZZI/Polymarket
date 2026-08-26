@@ -9,7 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0, str((Path(__file__).resolve().parents[1] / "scripts")))
 
 import hf_active_flow_maker_probe as entrypoint  # noqa: E402
-from hf_active_flow_maker_batched_probe import fetch_trades_batch  # noqa: E402
+from hf_active_flow_maker_batched_probe import fetch_trades_batch, gate_inside_improvements  # noqa: E402
 from hf_active_flow_maker_probe import (  # noqa: E402
     Book,
     Candidate,
@@ -162,6 +162,33 @@ class ActiveFlowMakerProbeTest(unittest.TestCase):
         yes = next(c for c in active if c.side == "YES")
         self.assertEqual(yes.improvement_ticks, 0)
         self.assertAlmostEqual(yes.limit_price, 0.48)
+
+    def test_inside_spread_requires_incremental_fill_weighted_edge(self):
+        a = args()
+        m = market()
+        b = book(m.yes_token, bid=0.48, ask=0.51, bid_size=100.0, ask_size=100.0, tick=0.01)
+        trades = [
+            Trade("s1", m.yes_token, "SELL", 0.48, 40.0, 980),
+            Trade("s2", m.yes_token, "SELL", 0.48, 40.0, 990),
+            Trade("b1", m.yes_token, "BUY", 0.51, 80.0, 985),
+            Trade("b2", m.yes_token, "BUY", 0.51, 80.0, 995),
+        ]
+        inside_flow = flow_stats(trades, m.yes_token, 1000, 120, 0.49)
+        inside = Candidate(
+            "active_flow", m, "YES", m.yes_token, 0.01, 0.49, 25.0, 0.0,
+            0.0100, 0.0010, 0.8, 1, inside_flow,
+            fill_probability_proxy(inside_flow, 0.0, 25.0), 0.0,
+        )
+        inside.score = inside.fill_probability_proxy * inside.adjusted_edge
+        gated, stats = gate_inside_improvements(
+            [inside], {m.yes_token: b}, {m.condition_id: trades}, 1000, a)
+        self.assertEqual(stats["inside_considered"], 1)
+        self.assertEqual(stats["inside_kept"], 0)
+        self.assertEqual(stats["reverted_to_touch"], 1)
+        self.assertEqual(len(gated), 1)
+        self.assertEqual(gated[0].improvement_ticks, 0)
+        self.assertAlmostEqual(gated[0].limit_price, 0.48)
+        self.assertGreater(gated[0].score, inside.score)
 
     def test_fifo_consumption_is_post_decision_and_respects_actual_tick(self):
         a = args()
