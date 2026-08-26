@@ -98,8 +98,8 @@ class ActiveFlowMakerProbeTest(unittest.TestCase):
         url = request.call_args.args[0]
         self.assertIn("market=c1,c2", url)
         self.assertIn("limit=1000", url)
-        self.assertNotIn("start=", url)
-        self.assertNotIn("end=", url)
+        self.assertIn("start=900", url)
+        self.assertIn("end=1000", url)
 
     def test_retryable_batch_timeout_splits_to_single_conditions(self):
         rows1 = [{"conditionId": "c1", "asset": "t1", "side": "SELL", "timestamp": 990,
