@@ -96,6 +96,7 @@ jobs:
             scripts/v6_micro_maker.py \
             scripts/v6_micro_maker_v2.py \
             scripts/v6_micro_maker_v3.py \
+            scripts/v6_micro_maker_v4.py \
             scripts/hf_maker_flow_admission.py \
             scripts/hf_maker_forward_audit.py
           python3 scripts/v6_queue_filter.py self-test
@@ -136,7 +137,7 @@ jobs:
           set -euo pipefail
           python3 scripts/v6_local_factor_intents.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/local_factor.log 2>&1 || true
 
-      - name: Common-sample maker policy A-B-C-D under authorized paper envelope
+      - name: Common-sample maker policy A-B-C-D-E under authorized paper envelope
         shell: bash
         env:
           V6_MAKER_DEAD_FLOW_CANCEL_SECONDS: "20"
@@ -148,7 +149,8 @@ jobs:
           touch="$root/touch"
           confidence="$root/confidence"
           toxicity="$root/toxicity"
-          mkdir -p "$shared" "$flow" "$touch" "$confidence" "$toxicity"
+          persistence="$root/persistence"
+          mkdir -p "$shared" "$flow" "$touch" "$confidence" "$toxicity" "$persistence"
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -180,11 +182,12 @@ jobs:
             python3 scripts/v6_micro_maker_v2.py --config "$cfg" --run-dir "$touch" --trade-tape "$shared/trade_tape.csv" --markets 1000 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 60 --adverse-selection-mult 0.10 --flow-lookback-seconds 120 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 0 --slippage-bps 5 >> "$touch/maker.log" 2>&1 || true
             python3 scripts/v6_micro_maker_v2.py --config "$cfg" --run-dir "$confidence" --trade-tape "$shared/trade_tape.csv" --markets 1000 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 60 --adverse-selection-mult 0.10 --flow-lookback-seconds 120 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 3 --min-inside-confidence 0.80 --slippage-bps 5 >> "$confidence/maker.log" 2>&1 || true
             python3 scripts/v6_micro_maker_v3.py --config "$cfg" --run-dir "$toxicity" --trade-tape "$shared/trade_tape.csv" --markets 1000 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 60 --adverse-selection-mult 0.10 --flow-lookback-seconds 120 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 3 --min-inside-confidence 0.80 --toxicity-short-seconds 30 --toxicity-long-seconds 120 --max-toxicity 0.55 --toxicity-discount-strength 1.5 --slippage-bps 5 >> "$toxicity/maker.log" 2>&1 || true
+            python3 scripts/v6_micro_maker_v4.py --config "$cfg" --run-dir "$persistence" --trade-tape "$shared/trade_tape.csv" --markets 1000 --min-liquidity 2 --min-edge 0.00005 --max-order-usd 125 --ttl-seconds 60 --hold-seconds 60 --adverse-selection-mult 0.10 --flow-lookback-seconds 120 --min-fill-probability 0.005 --target-fill-probability 0.10 --max-improve-ticks 3 --min-inside-confidence 0.80 --min-inside-flow-bursts 3 --inside-flow-burst-gap-seconds 30 --max-inside-flow-event-age-seconds 30 --slippage-bps 5 >> "$persistence/maker.log" 2>&1 || true
             sleep 5
           done
           cleanup
           trap - EXIT
-          for policy in flow touch confidence toxicity; do
+          for policy in flow touch confidence toxicity persistence; do
             for horizon in 45 60 300; do
               python3 scripts/hf_maker_forward_audit.py --order-log "$root/$policy/maker_order_log.csv" --trade-tape "$shared/trade_tape.csv" --fills "$root/$policy/maker_fills.csv" --prior-lookback-seconds 120 --forward-horizon-seconds "$horizon" --min-edge 0.00005 --output "$root/$policy/forward_audit_${horizon}.json" > "$root/$policy/forward_audit_${horizon}.log"
             done
@@ -212,14 +215,19 @@ jobs:
               'at_touch_no_improve':read(root/'touch/forward_audit_60.json'),
               'confidence_gated_inside':read(root/'confidence/forward_audit_60.json'),
               'toxicity_adjusted':read(root/'toxicity/forward_audit_60.json'),
+              'persistence_gated_inside':read(root/'persistence/forward_audit_60.json'),
               'toxicity_status':read(root/'toxicity/toxicity_status.json'),
               'toxicity_markouts':markouts(root/'toxicity/maker_markouts.csv'),
+              'persistence_status':read(root/'persistence/flow_persistence_status.json'),
               'forward_flow_audits':{
                   p:{str(h):read(root/f'{p}/forward_audit_{h}.json') for h in (45,60,300)}
-                  for p in ('flow','touch','confidence','toxicity')
+                  for p in ('flow','touch','confidence','toxicity','persistence')
               },
               'inside_confidence_floor':0.80,
               'toxicity_hard_block_threshold':0.55,
+              'persistence_min_inside_bursts':3,
+              'persistence_burst_gap_seconds':30,
+              'persistence_max_event_age_seconds':30,
               'primary_metric':'fill_conditioned_pnl_per_closed_share',
           }
           (root/'comparison.json').write_text(json.dumps(comparison,indent=2,sort_keys=True)+'\n')
