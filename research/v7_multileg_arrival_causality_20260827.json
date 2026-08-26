@@ -1,0 +1,54 @@
+{
+  "schema": "polymarket_v7_multileg_arrival_causality_v1",
+  "decision": "BLOCKING_EXECUTION_EVIDENCE_DEFECT_MORE_EVIDENCE_REQUIRED",
+  "source_v7_branch": "research/v7-unified-final-evidence-20260826",
+  "source_v7_sha": "ffe3a4ef6d71959afbf4f118721026a48aab19d7",
+  "current_main_at_discovery": "0718d61481b44757feb5455004865bef82e6abb9",
+  "paper_validated_at_discovery": "63d33148a40b82824f5958f78bed95d64d5c93b3",
+  "finding": {
+    "source": "scripts/v7_multileg_broker.py",
+    "canonical_runtime": "scripts/v7_multileg_broker_runner.py",
+    "historical_admission": "arrival_ms = decision_wall_clock_ms + submit_latency_ms; arrival_event_ms = a second now_ms() taken before submit latency elapses",
+    "historical_fill_gate": "received_ms > arrival_ms AND event_ts_ms > arrival_event_ms",
+    "failure_mode": "a public trade whose exchange/event timestamp falls after the decision but before simulated order arrival can later be received after arrival_ms and be counted as a PAPER fill",
+    "economic_impact": "false queue depletion/fills can contaminate multi-leg completion, partial-state frequency, unwind PnL, fill-conditioned markout, capital utilization and realized PAPER PnL"
+  },
+  "deterministic_counterexample_ms": {
+    "decision": 1000,
+    "simulated_arrival_after_submit_latency": 1100,
+    "historical_arrival_event_threshold": 1000,
+    "trade_event": 1050,
+    "trade_receive": 1200,
+    "historical_classification": "eligible_on_both_clocks",
+    "causal_classification": "reject_trade_occurred_during_submit_latency"
+  },
+  "fix": {
+    "scope": "canonical coordinated V7 multi-leg PAPER runtime only",
+    "rule": "arrival_event_ms = max(arrival_event_ms, arrival_ms)",
+    "admission": "normalize newly admitted legs before ownership state is persisted under the capacity lock",
+    "replay": "normalize all live legs immediately before trade replay as defense in depth for historical V7 state",
+    "runtime_contract": "submit_latency_event_time_floor",
+    "alpha_changed": false,
+    "sizing_changed": false,
+    "risk_limits_changed": false,
+    "queue_model_changed": false
+  },
+  "required_validation": [
+    "deterministic regression rejects a trade whose event time lies inside submit latency even when receive time is later",
+    "deterministic positive control still fills a genuinely post-arrival trade",
+    "exact-head CI and Research Policy green",
+    "same-SHA prospective PAPER evidence collected after the fix before any Graph/RV completion or PnL is used for promotion"
+  ],
+  "coordination": {
+    "graph_queue_sizing_owned_by_pr": 600,
+    "ranking_frozen_holdout_owned_by_pr": 601,
+    "this_fix_does_not_modify_their_surfaces": true
+  },
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "operator_directives_unchanged": true,
+    "main_mutated": false,
+    "paper_validated_mutated": false
+  }
+}
