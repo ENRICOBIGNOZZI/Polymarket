@@ -1,4 +1,5 @@
 #include "pm/fast_arb.hpp"
+#include "pm/fast_paper_execution.hpp"
 #include <cassert>
 #include <cmath>
 #include <iostream>
@@ -13,7 +14,7 @@ int main(){
     Policy p; p.min_net_edge=0.0001; p.slippage_bps=0; p.latency_penalty_bps=0; p.max_notional_usd=100; p.min_executable_shares=1;
     Market m; m.id="m"; m.event_id="e"; m.condition_id="c"; m.yes_token="y"; m.no_token="n";
     auto y=book("y",.47,.48); auto n=book("n",.49,.50);
-    auto b=evaluate_binary(m,y,n,FeeDetails{},p);
+    auto b=evaluate_binary(m,y,n,FeeDetails{},p,1000,1001,1002);
     assert(b.executable); assert(std::abs(b.net_edge_per_share-.02)<1e-9); assert(b.hard_arbitrage);
 
     apply_level(y,false,.48,0); assert(std::abs(y.best_ask()-.48)>1e-6 || !std::isfinite(y.best_ask()));
@@ -46,6 +47,50 @@ int main(){
 
     auto maker=evaluate_maker_complete_set(m,book("y",.45,.50),book("n",.45,.50),p);
     assert(maker.executable); assert(maker.net_edge_per_share>0);
+
+    // The PAPER probe never reuses detection-snapshot fills. It starts only from
+    // causal WebSocket timestamps and attempts each leg on a later book state.
+    const std::string model_sha(40, 'a');
+    auto probe = paper::start_probe(b, model_sha, 1003, 10, 5000);
+    assert(probe.has_value());
+    assert(!paper::entry_due(*probe, 1012));
+    assert(paper::entry_due(*probe, 1013));
+    auto y_future = book("y", .47, .49, 1000.0);
+    FeeDetails fee{};
+    paper::attempt_entry(*probe, &y_future, &fee, p, 1013, 10);
+    assert(probe->next_leg == 1);
+    assert(!paper::entry_due(*probe, 1022));
+    auto n_future = book("n", .48, .50, 1000.0);
+    paper::attempt_entry(*probe, &n_future, &fee, p, 1023, 10);
+    auto completed = paper::finalize_probe(*probe, 1023);
+    assert(completed.completed_basket);
+    assert(completed.joint_state == "ALL_LEGS_FILLED_OPEN");
+    assert(completed.locked_terminal_pnl.has_value());
+    assert(!completed.net_pnl.has_value()); // locked edge is not realized PnL.
+
+    // If a later leg cannot complete, every acquired share is unwound against
+    // the then-current bid depth and the resulting loss is realized explicitly.
+    auto partial_probe = paper::start_probe(b, model_sha, 2000, 10, 5000);
+    assert(partial_probe.has_value());
+    paper::attempt_entry(*partial_probe, &y_future, &fee, p, 2010, 10);
+    auto thin_no = book("n", .45, .50, 0.2);
+    paper::attempt_entry(*partial_probe, &thin_no, &fee, p, 2020, 10);
+    assert(partial_probe->entry_failed);
+    auto unwind_y = book("y", .46, .50, 1000.0);
+    auto unwind_n = book("n", .44, .50, 1000.0);
+    paper::apply_unwind(partial_probe->legs[0], &unwind_y, &fee, p);
+    paper::apply_unwind(partial_probe->legs[1], &unwind_n, &fee, p);
+    auto partial = paper::finalize_probe(*partial_probe, 2020);
+    assert(!partial.completed_basket);
+    assert(partial.partial_unwind);
+    assert(partial.net_pnl.has_value());
+    assert(*partial.net_pnl < 0.0);
+
+    // REST/resync observations (exchange timestamp zero) may be scanned but are
+    // never admitted as prospective execution evidence.
+    auto noncausal = b;
+    noncausal.exchange_ts_ms = 0;
+    assert(!paper::start_probe(noncausal, model_sha, 3000, 10, 5000).has_value());
 
     std::cout << "fast arb tests passed\n";
 }
