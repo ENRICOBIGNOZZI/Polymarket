@@ -22,25 +22,14 @@ def intersection_union_pvalue(p_a: float, p_b: float) -> float:
 
 
 def bh_resolution_diagnostics(hypotheses: int, reps: int, q: float) -> dict[str, float | int | bool]:
-    """Describe whether Monte Carlo p-value granularity resolves the BH tail.
-
-    Plus-one Monte Carlo p-values cannot be smaller than 1/(B+1).  With m
-    hypotheses, an isolated first-ranked discovery at BH level q needs a p-value
-    no larger than q/m.  Coarser resolution is still conservative, but zero BH
-    discoveries then have weak evidential meaning because a genuinely strong
-    isolated hypothesis may be numerically unable to cross the first BH step.
-    """
+    """Describe whether Monte Carlo p-value granularity resolves the BH tail."""
     m = max(0, int(hypotheses))
     b = max(1, int(reps))
     level = min(0.5, max(1e-12, float(q)))
     minimum_attainable = 1.0 / (b + 1.0)
     first_threshold = level / m if m > 0 else 0.0
     required_reps = max(0, math.ceil(m / level) - 1) if m > 0 else 0
-    minimum_rank = (
-        max(1, math.ceil(minimum_attainable * m / level))
-        if m > 0
-        else 0
-    )
+    minimum_rank = max(1, math.ceil(minimum_attainable * m / level)) if m > 0 else 0
     return {
         "hypotheses": m,
         "repetitions": b,
@@ -53,13 +42,8 @@ def bh_resolution_diagnostics(hypotheses: int, reps: int, q: float) -> dict[str,
 
 
 def _pair_factor(panel: core.StandardizedPanel, pair: tuple[str, str], min_controls: int) -> tuple[float, ...] | None:
-    controls = tuple(sorted(mid for mid in panel.values if mid not in set(pair)))
-    if len(controls) < min_controls:
-        return None
-    return tuple(
-        statistics.fmean(panel.values[mid][j] for mid in controls)
-        for j in range(len(panel.times))
-    )
+    result = core.pair_control_factor(panel, pair[0], pair[1], min_controls=min_controls)
+    return None if result is None else result[1]
 
 
 def _standardize(values: Sequence[float]) -> tuple[float, ...] | None:
@@ -96,23 +80,13 @@ def _bootstrapped_target_adf(
     centered_increments: Sequence[float],
     indices: Sequence[int],
 ) -> float | None:
-    """Generate one marginal unit-root null path conditional on pair controls.
-
-    The pair-excluded factor is held fixed.  Only the target residual is imposed
-    to be I(1): its dependent increments are circular-block resampled, the level
-    path is reconstructed, the target series is rebuilt as beta*factor + u*, and
-    target standardization/loading/residual are re-estimated before the ADF
-    statistic is recomputed.  This avoids imposing I(1) on the other target or
-    on nuisance controls merely to calibrate one marginal null.
-    """
+    """Generate one marginal unit-root null path conditional on pair controls."""
     if len(centered_increments) + 1 != len(factor):
         return None
     path = [float(residual_start)]
     for idx in indices:
         path.append(path[-1] + drift + centered_increments[idx])
-    target = _standardize(
-        tuple(observed_loading * f + u for f, u in zip(factor, path))
-    )
+    target = _standardize(tuple(observed_loading * f + u for f, u in zip(factor, path)))
     if target is None:
         return None
     loading = core.ols_loading(target, factor)
@@ -132,12 +106,12 @@ def marginal_residual_unit_root_pvalue(
 ) -> tuple[core.PairFit, float] | None:
     """Conditional marginal unit-root bootstrap for one target in a pair.
 
-    The nuisance path of the *other* target is irrelevant because both targets
-    are excluded from the common factor.  Controls are conditioned on exactly as
-    observed; the tested target is generated under its residual-unit-root null.
-    This directly covers mixed composite-null configurations such as one target
-    I(1) and the other stationary, without assuming that every series in the
-    panel is I(1).
+    The target-free control PC is held fixed exactly as observed. Only the tested
+    target residual is imposed to be I(1); its dependent increments are block
+    resampled and the residual level path is reconstructed before target loading,
+    residual and ADF are refit. This preserves the composite-null nuisance path
+    while using the same orientation-invariant factor definition as the observed
+    pair fit.
     """
     fit = core.fit_pair(panel, pair[0], pair[1], min_controls=min_controls)
     if fit is None or target not in pair:
@@ -185,15 +159,7 @@ def panel_pair_iut_pvalues(
     seed: int = 20260826,
     min_controls: int = 2,
 ) -> dict[tuple[str, str], tuple[core.PairFit, float]]:
-    """Calibrate marginal residual-unit-root nulls, then form IUT pair p-values.
-
-    Each marginal bootstrap conditions on the observed pair-excluded controls and
-    imposes I(1) only on the residual of the target being tested.  The other
-    target is a nuisance path and cannot contaminate that marginal calibration.
-    Pair p-values are then max(p_A,p_B).  Dependence across pair p-values is left
-    to the separate dependence-robust multiplicity layer (BY on the current
-    research branch), rather than being hidden inside the marginal bootstrap.
-    """
+    """Calibrate marginal residual-unit-root nulls, then form IUT pair p-values."""
     pair_list = sorted(set(pairs or core.all_pairs(panel)))
     output: dict[tuple[str, str], tuple[core.PairFit, float]] = {}
     for i, pair in enumerate(pair_list):
