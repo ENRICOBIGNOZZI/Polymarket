@@ -5,7 +5,7 @@ on:
   schedule:
     - cron: "12,42 * * * *"
   workflow_run:
-    workflows: ["v4-live-paper-smoke"]
+    workflows: ["V7 live PAPER smoke"]
     types: [completed]
     branches: [main]
 
@@ -20,10 +20,7 @@ jobs:
   deploy:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (
-        github.event_name == 'schedule' &&
-        vars.POLYMARKET_SERVER_DEPLOY == 'true'
-      ) ||
+      (github.event_name == 'schedule' && vars.POLYMARKET_SERVER_DEPLOY == 'true') ||
       (
         github.event_name == 'workflow_run' &&
         github.event.workflow_run.conclusion == 'success' &&
@@ -50,17 +47,11 @@ jobs:
           TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
         run: |
           set -euo pipefail
-          if [[ -n "${TS_AUTHKEY:-}" ]]; then
-            mode=authkey
-          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
-            test -n "${TS_TAGS:-}" || { echo "OAuth credentials are visible but TS_TAGS is empty" >&2; exit 1; }
-            mode=oauth
-          else
-            echo "No visible Tailscale credential set. Expected existing TS_AUTHKEY or TS_OAUTH_CLIENT_ID + TS_OAUTH_SECRET." >&2
-            exit 1
+          if [[ -n "${TS_AUTHKEY:-}" ]]; then mode=authkey
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then test -n "${TS_TAGS:-}"; mode=oauth
+          else echo "No visible Tailscale credential set" >&2; exit 1
           fi
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
-          echo "tailscale_credential_mode=$mode"
 
       - name: Join private tailnet with auth key
         if: steps.tailscale_auth.outputs.mode == 'authkey'
@@ -84,14 +75,12 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
         run: |
           set -euo pipefail
-          test -n "${SSH_PRIVATE_KEY:-}" || { echo "POLYMARKET_SERVER_SSH_KEY secret is required" >&2; exit 1; }
+          test -n "${SSH_PRIVATE_KEY:-}"
           install -d -m 700 ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_deploy
           chmod 600 ~/.ssh/polymarket_deploy
           for i in {1..20}; do
-            if ssh-keyscan -T 3 -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
-              break
-            fi
+            ssh-keyscan -T 3 -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null && break
             sleep 2
           done
           test -s ~/.ssh/known_hosts
@@ -101,43 +90,34 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
-            state="$(
-              ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
-                -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-                -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "bash -s" <<'REMOTE'
-              set -euo pipefail
-              cd ~/polymarket
-              git fetch origin main paper-validated
-              target_sha="$(git rev-parse origin/paper-validated)"
-              head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
-              printf 'reconcile_event=periodic\n'
-              printf 'server_head=%s\n' "${head_sha:-missing}"
-              printf 'paper_validated=%s\n' "$target_sha"
-              if [[ "$head_sha" == "$target_sha" ]]; then
-                printf 'need_deploy=false\n'
-              else
-                printf 'need_deploy=true\n'
-              fi
+            state="$(ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 \
+              -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd ~/polymarket
+          git fetch origin main paper-validated
+          target_sha="$(git rev-parse origin/paper-validated)"
+          head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+          printf 'reconcile_event=periodic\nserver_head=%s\npaper_validated=%s\n' "${head_sha:-missing}" "$target_sha"
+          [[ "$head_sha" == "$target_sha" ]] && printf 'need_deploy=false\n' || printf 'need_deploy=true\n'
           REMOTE
             )"
             printf '%s\n' "$state" | tee deploy-evidence.txt
-            need_deploy="$(printf '%s\n' "$state" | sed -n 's/^need_deploy=//p' | tail -n 1)"
-            [[ "$need_deploy" == "true" || "$need_deploy" == "false" ]]
+            need_deploy="$(printf '%s\n' "$state" | sed -n 's/^need_deploy=//p' | tail -n1)"
           else
             need_deploy=true
             printf 'reconcile_event=%s\nneed_deploy=true\n' "$GITHUB_EVENT_NAME" | tee deploy-evidence.txt
           fi
+          [[ "$need_deploy" == "true" || "$need_deploy" == "false" ]]
           echo "NEED_DEPLOY=$need_deploy" >> "$GITHUB_ENV"
 
-      - name: Deploy validated paper ref
+      - name: Deploy exact validated V7 ref
         if: env.NEED_DEPLOY == 'true'
         shell: bash
         run: |
           set -euo pipefail
           [[ -z "$EXPECTED_VALIDATED_SHA" || "$EXPECTED_VALIDATED_SHA" =~ ^[0-9a-f]{40}$ ]]
-          ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
-            -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+          ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
             "EXPECTED_VALIDATED_SHA='$EXPECTED_VALIDATED_SHA' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
           set -euo pipefail
           cd ~/polymarket
@@ -145,125 +125,108 @@ jobs:
           main_sha="$(git rev-parse origin/main)"
           validated_sha="$(git rev-parse origin/paper-validated)"
           git merge-base --is-ancestor "$validated_sha" "$main_sha"
-          if [[ -n "${EXPECTED_VALIDATED_SHA:-}" ]]; then
-            test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
-          fi
-          printf 'predeploy_origin_main=%s\n' "$main_sha"
-          printf 'predeploy_paper_validated=%s\n' "$validated_sha"
-          printf 'trigger_expected_validated=%s\n' "${EXPECTED_VALIDATED_SHA:-periodic-or-manual}"
-
+          [[ -z "${EXPECTED_VALIDATED_SHA:-}" ]] || test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
+          git show "$validated_sha:config/live_champion.json" | python3 -c 'import json,sys; m=json.load(sys.stdin); assert int(m["version"])==7; assert m["loop"]=="scripts/paper_v7_loop.sh"; assert m["config"]=="config/paper_v7.json"; assert m["run_root"]=="runs/paper_v7_live"'
+          printf 'predeploy_origin_main=%s\npredeploy_paper_validated=%s\n' "$main_sha" "$validated_sha"
           case "$(uname -s)" in
             Darwin) updater_path=ops/update_server_macos.sh ;;
-            Linux)  updater_path=ops/update_server.sh ;;
-            *) echo "unsupported server OS: $(uname -s)" >&2; exit 1 ;;
+            Linux) updater_path=ops/update_server.sh ;;
+            *) exit 1 ;;
           esac
-          updater="$(mktemp)"
-          trap 'rm -f "$updater"' EXIT
+          updater="$(mktemp)"; trap 'rm -f "$updater"' EXIT
           git show "$validated_sha:$updater_path" > "$updater"
           chmod 700 "$updater"
           POLYMARKET_DEPLOY_REF=paper-validated bash "$updater"
           REMOTE
 
-      - name: Verify production paper services
+      - name: Verify V7 PAPER production services
         if: env.NEED_DEPLOY == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
-            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+          ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
             "EXPECTED_VALIDATED_SHA='$EXPECTED_VALIDATED_SHA' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
           set -euo pipefail
-
-          fail_verify() {
-            printf 'verify_failure=%s\n' "$1" >&2
-            exit 1
-          }
-
-          require_equal() {
-            local name="$1" actual="$2" expected="$3"
-            if [[ "$actual" != "$expected" ]]; then
-              printf 'verify_failure=%s actual=%s expected=%s\n' "$name" "$actual" "$expected" >&2
-              exit 1
-            fi
-          }
-
-          require_metric() {
-            local name="$1" pattern="$2"
-            grep -q "$pattern" <<<"$metrics" || fail_verify "$name"
-          }
-
-          require_file() {
-            local name="$1" path="$2"
-            test -s "$path" || fail_verify "$name"
-          }
+          fail_verify() { printf 'verify_failure=%s\n' "$1" >&2; exit 1; }
+          require_equal() { [[ "$2" == "$3" ]] || { printf 'verify_failure=%s actual=%s expected=%s\n' "$1" "$2" "$3" >&2; exit 1; }; }
+          require_metric() { grep -q "$2" <<<"$metrics" || fail_verify "$1"; }
+          require_file() { test -s "$2" || fail_verify "$1"; }
 
           cd ~/polymarket
-          git fetch origin main paper-validated || fail_verify "git_fetch_refs"
-          head_sha="$(git rev-parse HEAD)" || fail_verify "server_head_read"
-          main_sha="$(git rev-parse origin/main)" || fail_verify "main_sha_read"
-          validated_sha="$(git rev-parse origin/paper-validated)" || fail_verify "validated_sha_read"
-          require_equal "server_head_matches_validated" "$head_sha" "$validated_sha"
-          git merge-base --is-ancestor "$validated_sha" "$main_sha" || fail_verify "validated_not_ancestor_of_main"
-          if [[ -n "${EXPECTED_VALIDATED_SHA:-}" ]]; then
-            require_equal "validated_matches_trigger_sha" "$validated_sha" "$EXPECTED_VALIDATED_SHA"
-          fi
+          git fetch origin main paper-validated || fail_verify git_fetch_refs
+          head_sha="$(git rev-parse HEAD)"; main_sha="$(git rev-parse origin/main)"; validated_sha="$(git rev-parse origin/paper-validated)"
+          require_equal server_head_matches_validated "$head_sha" "$validated_sha"
+          git merge-base --is-ancestor "$validated_sha" "$main_sha" || fail_verify validated_not_ancestor_of_main
+          [[ -z "${EXPECTED_VALIDATED_SHA:-}" ]] || require_equal validated_matches_trigger_sha "$validated_sha" "$EXPECTED_VALIDATED_SHA"
 
-          champion_meta="$(python3 - <<'PY'
+          python3 - <<'PY' || exit 1
           import json
-          from pathlib import Path
-          m=json.loads(Path('config/live_champion.json').read_text())
-          print(f"{int(m['version'])}\t{Path(m['run_root']).name}")
+          m=json.load(open('config/live_champion.json'))
+          assert int(m['version']) == 7
+          assert m['loop'] == 'scripts/paper_v7_loop.sh'
+          assert m['config'] == 'config/paper_v7.json'
+          assert m['run_root'] == 'runs/paper_v7_live'
           PY
-          )" || fail_verify "champion_manifest_read"
-          IFS=$'\t' read -r version run_name <<<"$champion_meta"
-          [[ "$version" == "5" || "$version" == "6" ]] || fail_verify "unsupported_champion_version"
 
-          curl -fsS http://127.0.0.1:9108/healthz >/dev/null || fail_verify "exporter_healthz"
-          metrics="$(curl -fsS http://127.0.0.1:9108/metrics)" || fail_verify "exporter_metrics_fetch"
-          require_metric "runtime_info_schema" "^polymarket_runtime_info{adapter=\"v${version}\",run_root=\"${run_name}\",version=\"v${version}\"} 1$"
-          require_metric "runtime_pnl_metric" '^polymarket_runtime_pnl_usd '
-          require_metric "allocator_state_metric" '^polymarket_allocator_state_present 1$'
-          require_metric "allocator_models_expected_metric" '^polymarket_allocator_models_expected 5$'
-          require_metric "model_info_metric" '^polymarket_model_info{'
-          if [[ "$version" == "6" ]]; then
-            require_metric "v6_exporter_info_metric" '^polymarket_v6_exporter_info{'
-            # Grafana's V6 strategy panels depend on this exact Prometheus schema.
-            # Fail deployment rather than silently provisioning a dashboard whose
-            # fill/health panels resolve to empty vectors.
-            require_metric "v6_model_fills_metric" '^polymarket_model_fills_total{action="all",'
-            require_metric "v6_model_gross_exposure_metric" '^polymarket_model_gross_exposure_usd{'
-            require_metric "v6_model_drawdown_metric" '^polymarket_model_drawdown_ratio{'
-            require_metric "v6_model_alive_metric" '^polymarket_model_alive{'
-            require_metric "v6_model_staleness_metric" '^polymarket_model_alert_staleness_seconds{'
-            require_file "v6_hard_arb_status_file" "runs/${run_name}/hard_arb/status.json"
-            require_file "v6_local_factor_status_file" "runs/${run_name}/local_factor_status.json"
-            require_file "v6_runtime_status_file" "runs/${run_name}/runtime_status.json"
-          fi
-          curl -fsS http://127.0.0.1:9090/-/ready >/dev/null || fail_verify "prometheus_ready"
-          curl -fsS http://127.0.0.1:3000/api/health >/dev/null || fail_verify "grafana_health"
-          grafana_search="$(curl -fsS http://127.0.0.1:3000/api/search)" || fail_verify "grafana_search_fetch"
-          grep -q 'polymarket-multi-strategy-v5' <<<"$grafana_search" || fail_verify "grafana_dashboard_missing"
-          printf 'verify_result=success\n'
-          printf 'server_head=%s\n' "$head_sha"
-          printf 'paper_validated=%s\n' "$validated_sha"
-          printf 'origin_main=%s\n' "$main_sha"
-          printf 'champion_version=%s\n' "$version"
-          printf 'champion_run_root=%s\n' "$run_name"
+          curl -fsS http://127.0.0.1:9108/healthz >/dev/null || fail_verify exporter_healthz
+          metrics="$(curl -fsS http://127.0.0.1:9108/metrics)" || fail_verify exporter_metrics_fetch
+          require_metric runtime_info_schema '^polymarket_runtime_info{adapter="v7",run_root="paper_v7_live",version="v7"} 1$'
+          require_metric v7_runtime_info_metric '^polymarket_v7_runtime_info 1$'
+          require_metric runtime_pnl_metric '^polymarket_runtime_pnl_usd '
+          require_metric runtime_equity_metric '^polymarket_runtime_equity_usd '
+          require_metric allocator_state_metric '^polymarket_allocator_state_present 1$'
+          require_metric allocator_models_expected_metric '^polymarket_allocator_models_expected 5$'
+          require_metric allocator_models_alive_metric '^polymarket_allocator_models_alive 5$'
+          require_metric model_info_metric '^polymarket_model_info{'
+          require_metric model_fills_metric '^polymarket_model_fills_total{'
+          require_metric model_gross_exposure_metric '^polymarket_model_gross_exposure_usd{'
+          require_metric model_drawdown_metric '^polymarket_model_drawdown_ratio{'
+          require_metric model_alive_metric '^polymarket_model_alive{'
+          require_metric model_staleness_metric '^polymarket_model_staleness_seconds{'
+
+          root=runs/paper_v7_live
+          ex="$root/execution"
+          require_file v7_supervisor_file "$root/v7_supervisor.json"
+          require_file v7_execution_supervisor_file "$ex/v7_execution_supervisor.json"
+          require_file v7_runtime_status_file "$ex/runtime_status.json"
+          require_file v7_allocator_status_file "$ex/allocator_status.json"
+          require_file v7_strategy_status_file "$ex/strategy_status.csv"
+          require_file v7_market_proxy_status_file "$ex/market_proxy_status.json"
+          require_file v7_hard_arb_status_file "$ex/hard_arb/status.json"
+
+          python3 - "$root" <<'PY' || fail_verify v7_runtime_contract
+          import csv,json,sys,time
+          from pathlib import Path
+          root=Path(sys.argv[1]); ex=root/'execution'; now=time.time()
+          sup=json.load(open(root/'v7_supervisor.json')); exe=json.load(open(ex/'v7_execution_supervisor.json'))
+          runtime=json.load(open(ex/'runtime_status.json')); allocator=json.load(open(ex/'allocator_status.json')); proxy=json.load(open(ex/'market_proxy_status.json'))
+          rows=list(csv.DictReader(open(ex/'strategy_status.csv')))
+          assert sup['execution_alive'] is True and sup['shadow_alive'] is True and now-float(sup['timestamp']) <= 60
+          assert exe['paper_only'] is True and now-float(exe['timestamp']) <= 120
+          assert runtime['schema']=='polymarket_v7_runtime_status_v1' and runtime['version']==7 and runtime['paper_only'] is True and runtime['authenticated_execution'] is False
+          assert float(runtime['drawdown']) <= 0.15 + 1e-12
+          assert allocator['schema']=='polymarket_v7_allocator_status_v1' and int(allocator['models_expected'])==5 and int(allocator['models_alive'])==5
+          assert {r['name'] for r in rows} == {'micro_maker','micro_taker','relative_value','hard_arb','external'}
+          assert proxy['schema']=='polymarket_v7_market_proxy_status_v1' and now-float(proxy['timestamp']) <= 180
+          PY
+
+          curl -fsS http://127.0.0.1:9090/-/ready >/dev/null || fail_verify prometheus_ready
+          curl -fsS http://127.0.0.1:3000/api/health >/dev/null || fail_verify grafana_health
+          grafana_search="$(curl -fsS http://127.0.0.1:3000/api/search)" || fail_verify grafana_search_fetch
+          grep -q 'polymarket-multi-strategy' <<<"$grafana_search" || fail_verify grafana_dashboard_missing
           case "$(uname -s)" in
-            Darwin) bash ops/macos_service_control.sh status || fail_verify "macos_service_status" ;;
+            Darwin) bash ops/macos_service_control.sh status || fail_verify macos_service_status ;;
             Linux)
-              systemctl is-active --quiet polymarket-paper.service || fail_verify "linux_paper_service"
-              systemctl is-active --quiet polymarket-monitoring.service || fail_verify "linux_monitoring_service"
-              systemctl --no-pager --full status polymarket-paper.service | sed -n '1,12p'
-              systemctl --no-pager --full status polymarket-monitoring.service | sed -n '1,12p'
+              systemctl is-active --quiet polymarket-paper.service || fail_verify linux_paper_service
+              systemctl is-active --quiet polymarket-monitoring.service || fail_verify linux_monitoring_service
               ;;
-            *) fail_verify "unsupported_server_os" ;;
+            *) fail_verify unsupported_server_os ;;
           esac
+          printf 'verify_result=success\nserver_head=%s\npaper_validated=%s\norigin_main=%s\nchampion_version=7\nchampion_run_root=paper_v7_live\n' "$head_sha" "$validated_sha" "$main_sha"
           REMOTE
 
       - name: Record no-op reconciliation
         if: env.NEED_DEPLOY == 'false'
-        shell: bash
         run: echo 'reconciliation_result=already_current' | tee -a deploy-evidence.txt
 
       - name: Upload deployment evidence
