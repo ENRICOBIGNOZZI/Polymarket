@@ -19,13 +19,7 @@ _ACTIVITY_DIAGNOSTICS: dict[str, object] = {}
 
 
 def _market_query(offset: int, min_liquidity: float) -> str:
-    """Use an activity prior before the causal recent-flow admission gate.
-
-    The rejected static maker selected the most liquid nominal books and repeatedly
-    landed on long-dated markets with no public trade overlap. For HF research the
-    coarse Gamma universe is therefore ordered by trailing 24h volume, while the
-    actual admission decision still requires receive-time-causal recent trades.
-    """
+    """Use trailing activity as the coarse prior before the causal flow gate."""
     return urllib.parse.urlencode({
         "active": "true",
         "closed": "false",
@@ -35,6 +29,23 @@ def _market_query(offset: int, min_liquidity: float) -> str:
         "ascending": "false",
         "liquidity_num_min": f"{min_liquidity:.12g}",
     })
+
+
+def _trade_query(condition_ids: list[str], start_ts: int, end_ts: int) -> str:
+    """Build the current documented Data API market-scoped time-window query."""
+    market_value = ",".join(condition_ids)
+    return (
+        f"limit={_PAGE_LIMIT}&offset=0&takerOnly=true"
+        f"&start={max(0, int(start_ts))}&end={max(0, int(end_ts))}"
+        f"&market={urllib.parse.quote(market_value, safe=',')}"
+    )
+
+
+def _global_trade_query(start_ts: int, end_ts: int) -> str:
+    return (
+        f"limit={_PAGE_LIMIT}&offset=0&takerOnly=true"
+        f"&start={max(0, int(start_ts))}&end={max(0, int(end_ts))}"
+    )
 
 
 def discover_markets_activity_prior(limit: int, min_liquidity: float) -> list[core.Market]:
@@ -79,14 +90,13 @@ def _valid_trade_rows(rows: list[object], start_ts: int, end_ts: int) -> list[di
 
 def fetch_trades_batch(condition_ids: list[str], start_ts: int, end_ts: int,
                        batch_size: int = 5) -> tuple[dict[str, list[core.Trade]], int, list[str]]:
-    """Fetch recent public trade history and fail closed on a stale global tape.
+    """Fetch causal recent public trades with current Data API window semantics.
 
-    Data API `/trades` documents `market`, `limit`, `offset`, and `takerOnly`; event
-    time is filtered locally. Retryable failures are recursively split to single
-    conditions. If a large universe returns a clean but empty filtered response,
-    an unfiltered public page is used to distinguish a genuinely quiet selected
-    universe from an empty/stale Data API index. A stale global page is evidence of
-    a data defect, not economic evidence of zero HF activity.
+    The current official Data API documents `start` and `end` as epoch-second trade
+    window bounds. Omitting them and filtering only the first default page can make
+    a busy market look inactive when the first page is not the requested HF window.
+    We therefore constrain every scoped query server-side and still re-check event
+    timestamps locally. Retryable failures are recursively split to single markets.
     """
     global _ACTIVITY_DIAGNOSTICS
     out: dict[str, list[core.Trade]] = defaultdict(list)
@@ -99,6 +109,9 @@ def fetch_trades_batch(condition_ids: list[str], start_ts: int, end_ts: int,
     if len(unique_conditions) >= _GLOBAL_SANITY_MIN_CONDITIONS:
         _ACTIVITY_DIAGNOSTICS = {
             "activity_universe_prior": "gamma_volume24hr_desc_then_causal_recent_trade_gate",
+            "trade_window_server_side": True,
+            "trade_window_start_ts": start_ts,
+            "trade_window_end_ts": end_ts,
             "filtered_batch_recent_rows": 0,
             "global_sanity_checked": False,
             "global_sanity_raw_rows": 0,
@@ -140,13 +153,9 @@ def fetch_trades_batch(condition_ids: list[str], start_ts: int, end_ts: int,
         nonlocal last_received_ms
         if not chunk:
             return
-        market_value = ",".join(chunk)
-        query = (
-            f"limit={_PAGE_LIMIT}&offset=0&takerOnly=true"
-            f"&market={urllib.parse.quote(market_value, safe=',')}"
-        )
         try:
-            raw, received_ms = core.request_json(f"{core.DATA_URL}/trades?{query}")
+            raw, received_ms = core.request_json(
+                f"{core.DATA_URL}/trades?{_trade_query(chunk, start_ts, end_ts)}")
             last_received_ms = max(last_received_ms, received_ms)
         except urllib.error.HTTPError as exc:
             if exc.code in _RETRYABLE_HTTP and len(chunk) > 1:
@@ -178,43 +187,60 @@ def fetch_trades_batch(condition_ids: list[str], start_ts: int, end_ts: int,
     if len(unique_conditions) >= _GLOBAL_SANITY_MIN_CONDITIONS:
         _ACTIVITY_DIAGNOSTICS["filtered_batch_recent_rows"] = filtered_recent_rows
 
-    # A clean 0/1000 is not sufficient evidence of a dead market universe.
-    # Inspect the newest rows from the entire public tape and record their event age.
+    # A clean empty selected universe is checked against the same server-side
+    # window without a market filter. If the bounded global query is empty, inspect
+    # the default latest page only to classify whether the API index itself is stale.
     if not out and not errors and len(unique_conditions) >= _GLOBAL_SANITY_MIN_CONDITIONS:
-        query = f"limit={_PAGE_LIMIT}&offset=0&takerOnly=true"
         try:
-            raw, received_ms = core.request_json(f"{core.DATA_URL}/trades?{query}")
+            raw, received_ms = core.request_json(
+                f"{core.DATA_URL}/trades?{_global_trade_query(start_ts, end_ts)}")
             last_received_ms = max(last_received_ms, received_ms)
             rows = raw if isinstance(raw, list) else raw.get("data", []) if isinstance(raw, dict) else []
             if not isinstance(rows, list):
-                raise RuntimeError("unexpected global trade response")
-            raw_rows = [item for item in rows if isinstance(item, dict)]
+                raise RuntimeError("unexpected bounded global trade response")
+            bounded_rows = [item for item in rows if isinstance(item, dict)]
+            recent = _valid_trade_rows(bounded_rows, start_ts, end_ts)
+
+            latest_rows = bounded_rows
+            if not recent:
+                latest_raw, latest_received_ms = core.request_json(
+                    f"{core.DATA_URL}/trades?limit={_PAGE_LIMIT}&offset=0&takerOnly=true")
+                last_received_ms = max(last_received_ms, latest_received_ms)
+                latest_rows_any = (
+                    latest_raw if isinstance(latest_raw, list)
+                    else latest_raw.get("data", []) if isinstance(latest_raw, dict)
+                    else []
+                )
+                if not isinstance(latest_rows_any, list):
+                    raise RuntimeError("unexpected default global trade response")
+                latest_rows = [item for item in latest_rows_any if isinstance(item, dict)]
+
             raw_timestamps = [
                 int(core.number(item.get("timestamp"), 0))
-                for item in raw_rows
+                for item in latest_rows
                 if int(core.number(item.get("timestamp"), 0)) > 0
             ]
             newest_ts = max(raw_timestamps) if raw_timestamps else None
             newest_age = max(0, end_ts - newest_ts) if newest_ts is not None else None
-            recent = _valid_trade_rows(raw_rows, start_ts, end_ts)
             recent_conditions = {str(x.get("conditionId") or "") for x in recent if x.get("conditionId")}
             overlap = recent_conditions.intersection(unique_conditions)
-            if not raw_rows:
-                tape_state = "empty_global_page"
-            elif not recent:
-                tape_state = "stale_for_hf_window"
-            elif overlap:
+            if recent and overlap:
                 tape_state = "recent_with_universe_overlap"
-            else:
+            elif recent:
                 tape_state = "recent_without_universe_overlap"
+            elif not latest_rows:
+                tape_state = "empty_global_page"
+            else:
+                tape_state = "stale_for_hf_window"
             _ACTIVITY_DIAGNOSTICS.update({
                 "global_sanity_checked": True,
-                "global_sanity_raw_rows": len(raw_rows),
+                "global_sanity_raw_rows": len(latest_rows),
                 "global_sanity_recent_rows": len(recent),
                 "global_sanity_recent_conditions": len(recent_conditions),
                 "global_sanity_overlap_conditions": len(overlap),
                 "global_sanity_newest_trade_ts": newest_ts,
                 "global_sanity_newest_age_seconds": newest_age,
+                "global_sanity_fallback_used": False,
                 "global_trade_tape_state": tape_state,
             })
             before = sum(len(v) for v in out.values())
@@ -231,9 +257,6 @@ def fetch_trades_batch(condition_ids: list[str], start_ts: int, end_ts: int,
     return dict(out), last_received_ms, errors
 
 
-# Keep the runner implementation in one module while replacing only the public
-# data transport and coarse-universe prior. The actual trading admission remains
-# causal recent flow + executable economics.
 core.discover_markets = discover_markets_activity_prior
 batched.fetch_trades_batch = fetch_trades_batch
 
@@ -252,13 +275,8 @@ def activity_data_healthy(result: dict[str, object]) -> bool:
     global_overlap = int(universe.get("global_sanity_overlap_conditions") or 0)
     if discovered > 0 and active == 0 and error_count > 0:
         return False
-    # A large discovered universe plus an unfiltered global tape that is empty or
-    # stale for the requested HF lookback cannot support an economic zero-activity
-    # conclusion. Treat it as a blocking tape-freshness/indexing defect.
     if discovered > 0 and active == 0 and checked and (global_raw == 0 or global_recent == 0):
         return False
-    # If the global tape is recent but has no overlap with the selected universe,
-    # the candidate-universe prior is still wrong for HF purposes.
     if discovered > 0 and active == 0 and checked and global_recent > 0 and global_overlap == 0:
         return False
     return True
@@ -269,28 +287,29 @@ def _deterministic_contract_checks() -> None:
     assert q.get("order") == ["volume24hr"]
     assert q.get("ascending") == ["false"]
     assert q.get("liquidity_num_min") == ["2"]
-    # Not checked means there is no contradictory global evidence yet.
+    tq = urllib.parse.parse_qs(_trade_query(["0xaaa", "0xbbb"], 100, 200))
+    assert tq.get("start") == ["100"]
+    assert tq.get("end") == ["200"]
+    assert tq.get("market") == ["0xaaa,0xbbb"]
+    assert tq.get("takerOnly") == ["true"]
     assert activity_data_healthy({"universe": {
         "discovered_markets": 1000, "active_markets_evaluated": 0,
         "flow_errors": [], "global_sanity_checked": False,
         "global_sanity_raw_rows": 0, "global_sanity_recent_rows": 0,
         "global_sanity_overlap_conditions": 0,
     }})
-    # A checked empty global tape is not usable HF evidence.
     assert not activity_data_healthy({"universe": {
         "discovered_markets": 1000, "active_markets_evaluated": 0,
         "flow_errors": [], "global_sanity_checked": True,
         "global_sanity_raw_rows": 0, "global_sanity_recent_rows": 0,
         "global_sanity_overlap_conditions": 0,
     }})
-    # A populated but stale global page is likewise invalid for a 5-minute HF gate.
     assert not activity_data_healthy({"universe": {
         "discovered_markets": 1000, "active_markets_evaluated": 0,
         "flow_errors": [], "global_sanity_checked": True,
         "global_sanity_raw_rows": 1000, "global_sanity_recent_rows": 0,
         "global_sanity_overlap_conditions": 0,
     }})
-    # A live global tape with zero overlap identifies universe-selection failure.
     assert not activity_data_healthy({"universe": {
         "discovered_markets": 1000, "active_markets_evaluated": 0,
         "flow_errors": [], "global_sanity_checked": True,
