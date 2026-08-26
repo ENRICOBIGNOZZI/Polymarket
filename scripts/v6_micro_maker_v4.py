@@ -39,19 +39,19 @@ def _consume_int_arg(flag: str, default: int) -> int:
 
 
 def bounded_patient_ttl(requested_ttl_seconds: int, patient_ttl_seconds: int, *, hard_cap_seconds: int = 300) -> int:
-    """Return a bounded research TTL for the guarded persistence/toxicity arm.
+    """Return a bounded paper-research TTL for the guarded maker arm.
 
     The latest forward window contained a low-toxicity at-touch order with
     +52.8 bps post-cost modeled edge that saw no compatible flow inside 60s but
     did see enough event-time compatible SELL volume to clear queue plus own
-    size by about 275s of local observation time. A 300s paper-only challenger
-    tests that documented capital-vs-fillability trade-off without allowing an
+    size by 274.866s of local observation time. A 300s challenger tests that
+    documented capital-vs-fillability trade-off without permitting an
     unbounded stale quote. Dead-queue recycling remains active throughout.
     """
     requested = max(1, int(requested_ttl_seconds))
     patient = max(1, int(patient_ttl_seconds))
-    cap = max(requested, int(hard_cap_seconds))
-    return max(requested, min(patient, cap))
+    cap = max(1, int(hard_cap_seconds))
+    return min(cap, max(requested, patient))
 
 
 def persistence_gated_fill_probability(
@@ -188,6 +188,7 @@ def main() -> int:
             "requested_ttl_seconds": requested_ttl_seconds,
             "patient_ttl_seconds": patient_ttl_seconds,
             "effective_ttl_seconds": effective_ttl_seconds,
+            "patient_ttl_hard_cap_seconds": 300,
             "dead_queue_recycling_active": True,
             "toxicity_status_file": "toxicity_status.json",
             "markout_file": "maker_markouts.csv",
