@@ -100,6 +100,7 @@ class FastRuntimeContractTest(unittest.TestCase):
 
     def test_v6_startup_reaps_only_loop_outside_current_runtime_ancestry(self) -> None:
         v6_loop = (ROOT / "scripts" / "paper_v6_loop.sh").read_text(encoding="utf-8")
+        launcher = (ROOT / "scripts" / "v6_multileg_launcher.py").read_text(encoding="utf-8")
         self.assertIn('ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"', v6_loop)
         self.assertIn('is_current_runtime_descendant(){', v6_loop)
         self.assertIn('is_stale_v6_loop(){', v6_loop)
@@ -111,9 +112,14 @@ class FastRuntimeContractTest(unittest.TestCase):
         self.assertIn('lsof -a -p "$pid" -d cwd -Fn', v6_loop)
         self.assertIn('[[ "$cwd" == "$ROOT" ]]', v6_loop)
         self.assertIn('stale_v6_loop_reaped=', v6_loop)
-        self.assertIn('reap_stale_v6_loops\nreap_stale_v6_proxy_listener\nreap_stale_v6_brokers\nstart_proxy', v6_loop)
+        self.assertIn('reap_stale_v6_loops\nreap_stale_v6_proxy_listener\n# Stale multi-leg ownership', v6_loop)
         self.assertIn('stale_v6_proxy_listener_reaped=', v6_loop)
         self.assertIn('proxy_pid_owns_port', v6_loop)
+        self.assertNotIn('reap_stale_v6_brokers', v6_loop)
+        self.assertNotIn('stale_v6_broker_reaped=', v6_loop)
+        self.assertIn('_recover_stale_owner', launcher)
+        self.assertIn('_safe_stale_owner', launcher)
+        self.assertIn('stale_v6_multileg_owner_reaped=', launcher)
 
     def test_private_runtime_canary_exercises_stale_loop_handoff_and_fail_closed(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "private-runtime-single-writer-validation.yml").read_text(
