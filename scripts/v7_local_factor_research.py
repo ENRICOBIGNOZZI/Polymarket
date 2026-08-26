@@ -25,6 +25,7 @@ import v7_local_factor_pairs as pairing
 HISTORY_WINDOW_SECONDS = 7 * 24 * 60 * 60
 DEFAULT_MAX_AUTO_BOOTSTRAP_REPS = 15000
 DEFAULT_MINIMUM_TEXT_SIMILARITY = 0.20
+DEFAULT_MAXIMUM_PAIR_CONTROLS = 4
 
 
 def atomic_json(path: Path, value: Any) -> None:
@@ -74,7 +75,6 @@ def fetch_histories_chunked(
     end_ts: int,
     fidelity_minutes: int,
 ) -> tuple[dict[str, dict[int, float]], list[str]]:
-    """Reuse the V6 parser/transport on bounded absolute history windows."""
     histories: dict[str, dict[int, float]] = {}
     failures: list[str] = []
     window_start = start_ts
@@ -118,6 +118,10 @@ def main() -> int:
     bucket_seconds = int(history_cfg["fidelity_minutes"]) * 60
     requested_reps = max(50, int(args.bootstrap_reps or inference_cfg["bootstrap_repetitions"]))
     min_controls = int(inference_cfg["minimum_pair_controls"])
+    max_controls = max(
+        min_controls,
+        int(inference_cfg.get("maximum_pair_controls", DEFAULT_MAXIMUM_PAIR_CONTROLS)),
+    )
     fdr_q = float(inference_cfg["fdr_q"])
     if inference_cfg.get("multiplicity_method") != "benjamini_yekutieli_arbitrary_dependence":
         raise SystemExit("Local Factor successor requires dependence-robust Benjamini-Yekutieli FDR")
@@ -141,8 +145,9 @@ def main() -> int:
         markets, cluster_rows = [], []
         failures.append(f"discovery:{type(exc).__name__}:{exc}")
 
-    # The hypothesis graph is frozen from contract metadata before any price history,
-    # liquidity edge, residual, p-value or PnL is observed.
+    # Freeze both the hypothesis graph and each pair's bounded nuisance-control set
+    # from contract metadata before any price history, missingness, residual, p-value,
+    # edge or PnL is observed.
     pair_graphs: dict[str, pairing.StructuralPairGraph] = {
         cluster_key: pairing.build_structural_pair_graph(
             cluster_key,
@@ -151,6 +156,16 @@ def main() -> int:
             minimum_text_similarity=min_text_similarity,
         )
         for cluster_key, group in cluster_rows
+    }
+    pair_control_plans: dict[str, dict[tuple[str, str], tuple[str, ...]]] = {
+        cluster_key: pairing.predeclare_pair_controls(
+            group,
+            pair_graphs[cluster_key].pairs,
+            min_controls=min_controls,
+            max_controls=max_controls,
+        )
+        for cluster_key, group in cluster_rows
+        if cluster_key in pair_graphs
     }
     predeclared_keys = {
         (cluster_key, a, b)
@@ -180,33 +195,38 @@ def main() -> int:
     history_data_healthy = len(histories) >= history_required_market_count
 
     tests: list[dict[str, Any]] = []
-    # Keep every ex-ante declared hypothesis in the multiplicity family. A declared
-    # pair that cannot be estimated on the current regular panel is conservatively
-    # assigned p=1 rather than silently shrinking the family after observing data.
     pvalues: dict[tuple[str, str, str], float] = {key: 1.0 for key in predeclared_keys}
     fit_by_key: dict[tuple[str, str, str], tuple[core.StandardizedPanel, core.PairFit]] = {}
     for cluster_key, group in cluster_rows:
         graph = pair_graphs.get(cluster_key)
         if graph is None or not graph.pairs:
             continue
-        market_ids = [market.market_id for market in group]
-        panel = core.build_regular_panel(
-            histories,
-            market_ids,
-            bucket_seconds=bucket_seconds,
-            min_points=int(history_cfg["minimum_regular_common_points"]),
-        )
-        if panel is None:
-            continue
-        boot = inference.panel_pair_iut_pvalues(
-            panel,
-            pairs=graph.pairs,
-            reps=reps,
-            seed=20260826 + sum(ord(ch) for ch in cluster_key),
-            min_controls=min_controls,
-        )
-        for (a, b), (fit, pvalue) in boot.items():
+        control_plan = pair_control_plans.get(cluster_key, {})
+        for a, b in graph.pairs:
             key = (cluster_key, a, b)
+            controls = control_plan.get((a, b), ())
+            if len(controls) < min_controls:
+                continue
+            pair_market_ids = [a, b, *controls]
+            panel = core.build_regular_panel(
+                histories,
+                pair_market_ids,
+                bucket_seconds=bucket_seconds,
+                min_points=int(history_cfg["minimum_regular_common_points"]),
+            )
+            if panel is None or any(mid not in panel.values for mid in pair_market_ids):
+                continue
+            boot = inference.panel_pair_iut_pvalues(
+                panel,
+                pairs=[(a, b)],
+                reps=reps,
+                seed=20260826 + sum(ord(ch) for ch in f"{cluster_key}:{a}:{b}"),
+                min_controls=min_controls,
+            )
+            result = boot.get((a, b))
+            if result is None:
+                continue
+            fit, pvalue = result
             if key not in pvalues:
                 raise RuntimeError("estimated Local Factor pair was not in the predeclared structural family")
             pvalues[key] = pvalue
@@ -222,6 +242,7 @@ def main() -> int:
                     "adf_a": fit.adf_a,
                     "adf_b": fit.adf_b,
                     "controls": len(fit.controls),
+                    "control_ids": list(controls),
                     "regular_points": len(panel.times),
                 }
             )
@@ -239,7 +260,6 @@ def main() -> int:
     signals: list[dict[str, Any]] = []
     for key in sorted(selected_pairs):
         if key not in fit_by_key:
-            # This should be impossible because unestimable hypotheses carry p=1.
             continue
         cluster_key, a, b = key
         panel, fit = fit_by_key[key]
@@ -301,11 +321,24 @@ def main() -> int:
         "history_window_days": HISTORY_WINDOW_SECONDS // 86400,
         "survivorship_safe": False,
         "pair_graph_selection": "contract_metadata_only_before_price_history",
+        "pair_panel_construction": "predeclared_pair_plus_bounded_metadata_only_controls",
+        "pair_controls_frozen_before_price_history": True,
+        "maximum_pair_controls": max_controls,
         "pair_graph_minimum_text_similarity": min_text_similarity,
         "predeclared_pair_count": predeclared_pair_count,
         "testable_pair_hypotheses": len(fit_by_key),
         "unestimable_predeclared_hypotheses": predeclared_pair_count - len(fit_by_key),
         "unestimable_predeclared_pvalue": 1.0,
+        "pair_control_plans": [
+            {
+                "cluster": cluster_key,
+                "market_a": a,
+                "market_b": b,
+                "controls": list(pair_control_plans.get(cluster_key, {}).get((a, b), ())),
+            }
+            for cluster_key, graph in pair_graphs.items()
+            for a, b in graph.pairs
+        ],
         "pair_graphs": {
             cluster_key: {
                 "method": graph.method,
@@ -315,7 +348,7 @@ def main() -> int:
             }
             for cluster_key, graph in pair_graphs.items()
         },
-        "pair_pvalue_method": "intersection_union_max_marginal_null_preserving_bootstrap_pvalue",
+        "pair_pvalue_method": "intersection_union_max_marginal_conditional_null_preserving_bootstrap_pvalue",
         "multiplicity_method": "benjamini_yekutieli_arbitrary_dependence",
         "fdr_q": fdr_q,
         "pair_hypotheses": predeclared_pair_count,
