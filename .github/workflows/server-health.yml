@@ -125,7 +125,7 @@ jobs:
           assert dashboard.get('uid') == uid, dashboard.get('uid')
           PY
 
-      - name: Inspect version-neutral PAPER server
+      - name: Inspect manifest-selected paper server and write action report
         shell: bash
         run: |
           set -euo pipefail
@@ -134,7 +134,8 @@ jobs:
             "GRAFANA_DASHBOARD_UID='$GRAFANA_DASHBOARD_UID' bash -s" <<'REMOTE' | tee server-health.txt
           set -euo pipefail
           cd ~/polymarket
-          printf 'timestamp=%s\nos=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(uname -s)"
+          printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          printf 'os=%s\n' "$(uname -s)"
           head_sha="$(git rev-parse HEAD)"
           git fetch -q origin main paper-validated
           main_sha="$(git rev-parse origin/main)"
@@ -146,35 +147,37 @@ jobs:
 
           champion_meta="$(python3 - <<'PY'
           import json
-          from pathlib import Path
+          from pathlib import Path, PurePosixPath
           m=json.loads(Path('config/live_champion.json').read_text(encoding='utf-8'))
-          print(f"{int(m['version'])}\t{m['run_root']}\t{Path(m['run_root']).name}")
+          version=m.get('version')
+          assert isinstance(version,int) and not isinstance(version,bool) and version > 0
+          run_root=str(m['run_root']); path=PurePosixPath(run_root)
+          assert not path.is_absolute() and '..' not in path.parts
+          print(f"{version}\t{run_root}\t{Path(run_root).name}")
           PY
           )"
           IFS=$'\t' read -r version run_root_rel run_name <<<"$champion_meta"
-          [[ "$version" =~ ^[1-9][0-9]*$ ]]
+          run_root="$HOME/polymarket/$run_root_rel"
           printf 'champion_version=%s\nchampion_run_root=%s\n' "$version" "$run_root_rel"
-
-          if (( version == 5 )); then
-            python3 scripts/v5_runtime_readiness.py \
-              --run-root "$HOME/polymarket/$run_root_rel" \
-              --supervisor-max-age 60 --allocator-max-age 30 \
-              --model-output-max-age 120 --startup-grace 600
-          else
-            python3 scripts/runtime_contract_health.py \
-              --manifest config/live_champion.json --repository-root . \
-              --max-age-seconds 180
-          fi
 
           exporter_healthz_file="$(mktemp)"
           trap 'rm -f "$exporter_healthz_file"' EXIT
-          exporter_healthz_code="$(curl --silent --show-error \
+          exporter_healthz_code=""
+          if ! exporter_healthz_code="$(curl --silent --show-error \
             --output "$exporter_healthz_file" --write-out '%{http_code}' \
-            http://127.0.0.1:9108/healthz || true)"
-          printf 'exporter_healthz_http=%s\nexporter_healthz_body_begin\n' "${exporter_healthz_code:-000}"
+            http://127.0.0.1:9108/healthz)"; then
+            exporter_healthz_code="${exporter_healthz_code:-000}"
+          fi
+          printf 'exporter_healthz_http=%s\n' "$exporter_healthz_code"
+          printf '%s\n' 'exporter_healthz_body_begin'
           cat "$exporter_healthz_file"
-          printf '\nexporter_healthz_body_end\n'
-          test "$exporter_healthz_code" = "200"
+          printf '\n%s\n' 'exporter_healthz_body_end'
+          exporter_healthz_failed=0
+          if [[ "$exporter_healthz_code" != "200" ]]; then exporter_healthz_failed=1; fi
+
+          curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
+          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+          curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$GRAFANA_DASHBOARD_UID" >/dev/null
 
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
           grep -Eq "^polymarket_runtime_info\\{adapter=\"[^\"]+\",run_root=\"${run_name}\",version=\"v${version}\"\\} 1$" <<<"$metrics"
@@ -183,17 +186,151 @@ jobs:
           if (( version >= 6 )); then
             grep -q '^polymarket_runtime_contract_present 1$' <<<"$metrics"
           fi
-          printf '%s\n' "$metrics" | grep -E '^polymarket_(runtime_info|runtime_contract_present|runtime_equity_usd|runtime_pnl_usd|runtime_drawdown_ratio|runtime_kill_switch|runtime_realized_pnl_usd_total|runtime_execution_staleness_seconds|model_)' | head -n 160 || true
 
-          curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
-          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
-          curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$GRAFANA_DASHBOARD_UID" >/dev/null
+          # Exact-version adapters retain stronger historical checks. They are
+          # additive to the generic contract, never inherited by future versions.
+          if (( version == 5 || version == 6 )); then
+            grep -q "^polymarket_runtime_info{adapter=\"v${version}\",run_root=\"${run_name}\",version=\"v${version}\"} 1$" <<<"$metrics"
+            grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics"
+            grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics"
+            grep -q '^polymarket_model_info{' <<<"$metrics"
+          fi
+          if (( version == 6 )); then
+            grep -q '^polymarket_v6_exporter_info{' <<<"$metrics"
+            grep -q '^polymarket_v6_local_factor_clusters ' <<<"$metrics"
+            test -s "$run_root/hard_arb/status.json"
+            test -s "$run_root/local_factor_status.json"
+            test -s "$run_root/relation_guard_status.json"
+          fi
+          printf '%s\n' "$metrics" | grep -E '^polymarket_(runtime_info|runtime_contract_present|runtime_equity_usd|runtime_pnl_usd|runtime_drawdown_ratio|runtime_kill_switch|runtime_realized_pnl_usd_total|runtime_execution_staleness_seconds|allocator_models_alive|allocator_models_expected|allocator_global_gross_fraction|model_pnl_usd|model_equity_usd|model_open_positions|v6_)' | head -n 180 || true
 
-          state_root="$(python3 scripts/runtime_contract_health.py \
-            --manifest config/live_champion.json --repository-root . \
-            --max-age-seconds 180 --json 2>/dev/null | \
-            python3 -c 'import json,sys; print(json.load(sys.stdin)["state_root"])' 2>/dev/null || true)"
-          if [[ -n "$state_root" ]]; then
+          if (( version == 5 || version == 6 )); then
+            test -s "$run_root/runtime_status.json"
+            test -s "$run_root/allocator_status.json"
+            test -s "$run_root/strategy_status.csv"
+            supervisor="$run_root/runtime_supervisor.csv"
+            test -s "$supervisor"
+            supervisor_row="$(tail -n 1 "$supervisor")"
+            IFS=, read -r supervisor_ts recorder_alive broker_alive allocator_alive recorder_restarts broker_restarts allocator_restarts recorder_pid broker_pid allocator_pid <<<"$supervisor_row"
+            now="$(date +%s)"
+            test "$recorder_alive" = "1"
+            test "$broker_alive" = "1"
+            test "$allocator_alive" = "1"
+            test $(( now - supervisor_ts )) -le 60
+            printf 'supervisor_timestamp=%s\nrecorder_alive=%s\nbroker_alive=%s\nallocator_alive=%s\n' "$supervisor_ts" "$recorder_alive" "$broker_alive" "$allocator_alive"
+          fi
+
+          if (( version == 5 )); then
+            python3 scripts/v5_runtime_readiness.py \
+              --run-root "$run_root" --supervisor-max-age 60 --allocator-max-age 30 \
+              --model-output-max-age 120 --startup-grace 600
+          else
+            python3 scripts/runtime_contract_health.py \
+              --manifest config/live_champion.json --repository-root . \
+              --max-age-seconds 180
+          fi
+
+          if (( version == 6 )); then
+            python3 - "$run_root" <<'PY'
+          import csv,json,math,pathlib,sys
+          root=pathlib.Path(sys.argv[1])
+          allocator=json.loads((root/'allocator_status.json').read_text())
+          rows=list(csv.DictReader((root/'strategy_status.csv').open()))
+          runtime=json.loads((root/'runtime_status.json').read_text())
+          assert allocator['paper_only'] is True
+          assert int(allocator['models_expected']) == 5
+          assert int(allocator['models_alive']) == 5
+          assert {row['name'] for row in rows} == {'micro','pca','graph','semantic','external'}
+          total=sum(float(row['capital_fraction']) for row in rows)+float(allocator['reserve_fraction'])
+          assert math.isclose(total,1.0,rel_tol=0.0,abs_tol=1e-9), total
+          assert all(float(row['status_age_seconds']) <= 120 for row in rows)
+          assert runtime['version'] == 6 and runtime['paper_only'] is True
+          assert float(runtime['drawdown']) <= 0.15 + 1e-12
+          assert 'graph_hard' in runtime['strategies']
+          PY
+          fi
+
+          if (( version == 5 || version == 6 )); then
+            external_signals="data/external_signals.csv"
+            if (( version == 6 )); then external_signals="$run_root/external_signals.csv"; fi
+            python3 scripts/runtime_action_report.py \
+              --run-root "$run_root" --external-signals "$external_signals" \
+              --window-seconds 3600 --production-edge 0.001 \
+              --output-json "$run_root/action_report.json" \
+              --output-markdown "$run_root/action_report.md" >/dev/null || true
+            test -s "$run_root/action_report.json"
+            test -s "$run_root/action_report.md"
+            printf '%s\n' 'action_report_begin'
+            cat "$run_root/action_report.md"
+            printf '%s\n' 'action_report_end'
+
+            recorder_tail="$(tail -n 20 "$run_root/trade_recorder.log" 2>/dev/null || true)"
+            printf '%s\n' 'trade_recorder_tail_begin'
+            printf '%s\n' "$recorder_tail"
+            printf '%s\n' 'trade_recorder_tail_end'
+            recorder_tail_lines="$(printf '%s\n' "$recorder_tail" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+            recorder_success_ticks="$(printf '%s\n' "$recorder_tail" | grep -c '^trade_recorder markets=' || true)"
+            recorder_http_failures="$(printf '%s\n' "$recorder_tail" | grep -c '^fatal: HTTP request failed:' || true)"
+            recorder_proxy_failures="$(printf '%s\n' "$recorder_tail" | grep -c '^fatal: Gamma markets HTTP 503:' || true)"
+            recorder_data_failures=$(( recorder_http_failures + recorder_proxy_failures ))
+            printf 'recorder_tail_lines=%s\nrecorder_success_ticks=%s\nrecorder_http_failures=%s\nrecorder_proxy_failures=%s\nrecorder_data_failures=%s\n' \
+              "$recorder_tail_lines" "$recorder_success_ticks" "$recorder_http_failures" "$recorder_proxy_failures" "$recorder_data_failures"
+
+            multileg_tail="$(tail -n 20 "$run_root/multileg.log" 2>/dev/null || true)"
+            printf '%s\n' 'multileg_tail_begin'
+            printf '%s\n' "$multileg_tail"
+            printf '%s\n' 'multileg_tail_end'
+            hard_arb_tail=""
+            micro_taker_tail=""
+            if (( version == 6 )); then
+              hard_arb_tail="$(tail -n 20 "$run_root/hard_arb.log" 2>/dev/null || true)"
+              printf '%s\n' 'hard_arb_tail_begin'
+              printf '%s\n' "$hard_arb_tail"
+              printf '%s\n' 'hard_arb_tail_end'
+              micro_taker_tail="$(tail -n 20 "$run_root/micro_taker.log" 2>/dev/null || true)"
+              printf '%s\n' 'micro_taker_tail_begin'
+              printf '%s\n' "$micro_taker_tail"
+              printf '%s\n' 'micro_taker_tail_end'
+            else
+              printf '%s\n' 'allocator_tail_begin'
+              tail -n 30 "$run_root/allocator.log" 2>/dev/null || true
+              printf '%s\n' 'allocator_tail_end'
+            fi
+
+            if [[ "$recorder_tail_lines" -ge 5 && \
+                  "$recorder_success_ticks" -eq 0 && \
+                  "$recorder_data_failures" -eq "$recorder_tail_lines" ]]; then
+              echo "private recorder data path unhealthy: recent recorder tail contains only data failures" >&2
+              exit 1
+            fi
+
+            latest_runtime_failure() {
+              local runtime_tail="$1" success_pattern="$2" last_success last_failure
+              last_success="$(printf '%s\n' "$runtime_tail" | grep -nE "$success_pattern" | tail -n 1 | cut -d: -f1 || true)"
+              last_failure="$(printf '%s\n' "$runtime_tail" | grep -nE 'fatal: Cannot replace state file:|another V6 multi-leg broker already owns|FileNotFoundError:' | tail -n 1 | cut -d: -f1 || true)"
+              if [[ -z "$last_failure" ]]; then return 1; fi
+              if [[ -z "$last_success" || "$last_failure" -ge "$last_success" ]]; then return 0; fi
+              return 1
+            }
+            if latest_runtime_failure "$multileg_tail" '^multileg_tick '; then
+              echo "private runtime state integrity unhealthy: multileg has an unrecovered state/lock failure" >&2
+              exit 1
+            fi
+            if (( version == 6 )); then
+              if latest_runtime_failure "$hard_arb_tail" '^\{.*"equity"'; then
+                echo "private runtime state integrity unhealthy: hard_arb has an unrecovered state-write failure" >&2
+                exit 1
+              fi
+              if latest_runtime_failure "$micro_taker_tail" '^\{.*"equity"'; then
+                echo "private runtime state integrity unhealthy: micro_taker has an unrecovered state-write failure" >&2
+                exit 1
+              fi
+            fi
+          else
+            state_root="$(python3 scripts/runtime_contract_health.py \
+              --manifest config/live_champion.json --repository-root . \
+              --max-age-seconds 180 --json | \
+              python3 -c 'import json,sys; print(json.load(sys.stdin)["state_root"])')"
             printf 'state_root=%s\n' "$state_root"
             for log in trade_recorder.log multileg.log maker.log micro_taker.log hard_arb.log; do
               if [[ -s "$state_root/$log" ]]; then
@@ -204,10 +341,38 @@ jobs:
             done
           fi
 
+          if [[ "$exporter_healthz_failed" -ne 0 ]]; then
+            echo "private exporter health check failed after diagnostics" >&2
+            exit 1
+          fi
+
           case "$(uname -s)" in
             Darwin)
-              bash ops/macos_service_control.sh status
+              for label in \
+                com.polymarket.awake \
+                com.polymarket.paper \
+                com.polymarket.exporter \
+                com.polymarket.prometheus \
+                com.polymarket.grafana; do
+                service_state="$(/bin/launchctl print "system/$label")"
+                grep -q 'state = running' <<<"$service_state"
+              done
               /bin/launchctl print system/com.polymarket.autoupdate >/dev/null
+              status_file="$HOME/.config/polymarket/autoupdate_status.env"
+              test -s "$status_file"
+              cat "$status_file"
+              checked_ts="$(awk -F= '$1=="checked_ts"{print $2}' "$status_file")"
+              deploy_status="$(awk -F= '$1=="status"{print $2}' "$status_file")"
+              status_head="$(awk -F= '$1=="head"{print $2}' "$status_file")"
+              status_validated="$(awk -F= '$1=="validated"{print $2}' "$status_file")"
+              status_ref="$(awk -F= '$1=="deploy_ref"{print $2}' "$status_file")"
+              now="$(date +%s)"
+              test -n "$checked_ts"
+              test $(( now - checked_ts )) -le 900
+              case "$deploy_status" in up_to_date|deployed|repaired) ;; *) exit 1 ;; esac
+              test "$status_ref" = "paper-validated"
+              test "$status_head" = "$head_sha"
+              test "$status_validated" = "$validated_sha"
               ;;
             Linux)
               systemctl is-active --quiet polymarket-paper.service
