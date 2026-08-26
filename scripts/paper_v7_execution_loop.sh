@@ -117,7 +117,7 @@ while true; do
 
   if (( now-last_maker >= MAKER_SECONDS )); then
     python3 scripts/v7_capacity_lock.py --lock "$CAPACITY_LOCK" -- \
-      python3 scripts/v7_micro_maker_worker.py --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --trade-tape "$RUN_ROOT/trade_tape.csv" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$MIN_EDGE" --max-order-usd "$MAX_TRADE" --ttl-seconds 60 --hold-seconds 240 --flow-lookback-seconds 300 --min-fill-probability 0.001 --max-improve-ticks 1 --slippage-bps 5 --capital-cost-bps-per-hour 0.25 >>"$RUN_ROOT/maker.log" 2>&1 || true
+      python3 scripts/v7_micro_maker_worker.py --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --trade-tape "$RUN_ROOT/trade_tape.csv" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$MIN_EDGE" --max-order-usd "$MAX_TRADE" --ttl-seconds 60 --hold-seconds 240 --flow-lookback-seconds 300 --min-fill-probability 0.001 --max-improve-ticks 1 --slippage-bps 5 --capital-cost-bps-per-hour 0.25 --cancel-latency-ms 100 --cancel-tape-grace-ms 30000 >>"$RUN_ROOT/maker.log" 2>&1 || true
     last_maker=$now
   fi
   if (( now-last_taker >= TAKER_SECONDS )); then
@@ -133,7 +133,7 @@ while true; do
   if (( now-last_report >= 60 )); then
     python3 scripts/v6_runtime_status.py --config "$RUNTIME_CONFIG" --run-root "$RUN_ROOT" >>"$RUN_ROOT/runtime_status.log" 2>&1 || true
     python3 scripts/runtime_action_report.py --run-root "$RUN_ROOT" --external-signals "$RUN_ROOT/external_signals.csv" --window-seconds 3600 --production-edge "$MIN_EDGE" --output-json "$RUN_ROOT/action_report.json" --output-markdown "$RUN_ROOT/action_report.md" >>"$RUN_ROOT/action_report.log" 2>&1 || true
-    python3 scripts/v7_execution_evidence.py --run-root "$RUN_ROOT" --policy config/v7_execution_evidence.json >>"$RUN_ROOT/v7_execution_evidence.log" 2>&1 || true
+    python3 scripts/v7_execution_evidence_hardened.py --run-root "$RUN_ROOT" --policy config/v7_execution_evidence.json >>"$RUN_ROOT/v7_execution_evidence.log" 2>&1 || true
     tmp="$RUN_ROOT/v7_execution_supervisor.json.tmp.${BASHPID:-$$}"
     printf '{"timestamp":%s,"paper_only":true,"maker_seconds":%s,"taker_seconds":%s,"hard_seconds":%s,"graph_seconds":%s,"capacity_lock":"%s"}\n' "$now" "$MAKER_SECONDS" "$TAKER_SECONDS" "$HARD_SECONDS" "$GRAPH_SECONDS" "$CAPACITY_LOCK" >"$tmp"; mv "$tmp" "$RUN_ROOT/v7_execution_supervisor.json"
     last_report=$now
