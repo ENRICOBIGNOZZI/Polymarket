@@ -46,7 +46,7 @@
     "paper_only": true,
     "global_max_drawdown": 0.15,
     "global_max_gross_fraction": 0.70,
-    "description": "Unified V7 capital-isolated PAPER execution plus separate multi-frequency shadow research. Authorized envelope: $125 max trade, 5% market, 15% event, 70% gross, 15% max drawdown."
+    "description": "Unified V7 capital-isolated PAPER execution plus separate multi-frequency shadow research. User-authorized hard ceilings: $125/trade, 5% market, 15% canonical-event exposure, 70% gross, 15% max drawdown; authenticated execution remains prohibited."
   },
   "v7": {
     "paper_only": true,
