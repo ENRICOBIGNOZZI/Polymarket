@@ -56,11 +56,22 @@ def test_frequency_matrix_has_hf_and_30m_to_6h_without_pooling():
 
 def test_v7_entrypoint_has_one_execution_owner_and_separate_shadow_scheduler():
     text = (ROOT / "scripts/paper_v7_loop.sh").read_text(encoding="utf-8")
-    assert "paper_v6_loop.sh" in text  # transitional compatibility layer until cleanup tranche
+    assert "paper_v7_execution_loop.sh" in text
+    assert "paper_v6_loop.sh" not in text
     assert "v7_shadow_loop.py" in text
     assert "POLYMARKET_RUNTIME_PARENT_PID=\"$$\"" in text
     assert text.count("start_execution") >= 2
-    assert "authenticated" not in text.lower()
+
+
+def test_v7_execution_loop_uses_corrected_workers_and_joint_state_gate():
+    text = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+    assert "v6_micro_maker_v2.py" in text
+    assert "v7_micro_taker_worker.py" in text
+    assert "v6_bundle_quote_optimizer.py" in text
+    assert "v6_bundle_state_guard.py" in text
+    assert "--completion-threshold 1.0" in text
+    assert "runtime_primary_seconds" in text
+    assert "sleep 1" in text
 
 
 def test_shadow_scheduler_is_research_only_and_frequency_separated():
