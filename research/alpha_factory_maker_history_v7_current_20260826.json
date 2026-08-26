@@ -1,7 +1,8 @@
 {
   "schema": "polymarket_alpha_factory_maker_history_repair_evidence_v1",
   "generated_date": "2026-08-26",
-  "base_main_sha": "142851326b66dd50a630b020eb17bda73f183702",
+  "branch_reconciled_main_sha": "fb8e31b8f5de6503b7476f2aac2e546c33803b22",
+  "source_alpha_factory_base_sha": "142851326b66dd50a630b020eb17bda73f183702",
   "source_pr": 546,
   "source_alpha_factory_run_id": 33013981378,
   "source_alpha_factory_artifact_id": 9623697821,
