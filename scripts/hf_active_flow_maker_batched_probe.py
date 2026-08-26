@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import urllib.parse
 from collections import defaultdict
@@ -60,6 +61,68 @@ def fetch_trades_batch(condition_ids: list[str], start_ts: int, end_ts: int,
     return dict(out), last_received_ms, errors
 
 
+def gate_inside_improvements(candidates: list[core.Candidate], books: dict[str, core.Book],
+                             flows: dict[str, list[core.Trade]], decision_ts: int,
+                             args: Any) -> tuple[list[core.Candidate], dict[str, int]]:
+    """Keep an inside-spread improvement only when its fill-weighted edge beats touch.
+
+    This is deliberately a local, paper-research comparison: the same public book,
+    same causal pre-entry tape, same toxicity penalty and same sizing envelope are
+    used for both alternatives. If paying one tick does not increase
+    P(fill)*post-cost-adjusted-edge, either revert to an eligible at-touch quote or
+    drop the candidate rather than manufacture fills by crossing deeper into the spread.
+    """
+    gated: list[core.Candidate] = []
+    stats = {"inside_considered": 0, "inside_kept": 0, "reverted_to_touch": 0, "dropped_inside": 0}
+    for candidate in candidates:
+        if candidate.improvement_ticks <= 0:
+            gated.append(candidate)
+            continue
+        stats["inside_considered"] += 1
+        book = books.get(candidate.token_id)
+        if book is None:
+            stats["dropped_inside"] += 1
+            continue
+        bid = book.best_bid()
+        if not math.isfinite(bid) or bid <= 0:
+            stats["dropped_inside"] += 1
+            continue
+        touch_shares = core.size_at_price(book, bid, args)
+        touch_queue = book.displayed_size(True, bid)
+        touch_flow = core.flow_stats(
+            flows.get(candidate.market.condition_id, []), candidate.token_id,
+            decision_ts, args.recent_lookback_seconds, bid,
+        )
+        touch_toxicity = args.toxicity_mult * book.spread() * max(0.0, -touch_flow.signed_imbalance)
+        touch_adjusted_edge = candidate.static_edge - touch_toxicity
+        touch_fill_probability = core.fill_probability_proxy(touch_flow, touch_queue, touch_shares)
+        touch_score = touch_fill_probability * max(0.0, touch_adjusted_edge)
+        inside_score = candidate.fill_probability_proxy * max(0.0, candidate.adjusted_edge)
+
+        if inside_score > touch_score + 1e-12:
+            gated.append(candidate)
+            stats["inside_kept"] += 1
+            continue
+
+        touch_eligible = (
+            touch_shares > 0
+            and touch_adjusted_edge > args.min_edge
+            and core.activity_eligible(touch_flow, touch_queue, touch_shares, args)
+        )
+        if touch_eligible:
+            gated.append(core.Candidate(
+                candidate.arm, candidate.market, candidate.side, candidate.token_id,
+                candidate.tick_size, bid, touch_shares, touch_queue,
+                candidate.static_edge, touch_adjusted_edge, candidate.confidence, 0,
+                touch_flow, touch_fill_probability, touch_score,
+            ))
+            stats["reverted_to_touch"] += 1
+        else:
+            stats["dropped_inside"] += 1
+    gated.sort(key=lambda x: x.score, reverse=True)
+    return gated, stats
+
+
 def run_batched(args: Any) -> dict[str, Any]:
     started = core.now_s()
     markets = core.discover_markets(args.markets, args.min_liquidity)
@@ -79,7 +142,8 @@ def run_batched(args: Any) -> dict[str, Any]:
 
     books = core.fetch_books([token for m in active_markets for token in (m.yes_token, m.no_token)]) if active_markets else {}
     decision_ts = core.now_s()
-    baseline, active = core.build_candidates(active_markets, books, flows, decision_ts, active_ids, args)
+    baseline, active_raw = core.build_candidates(active_markets, books, flows, decision_ts, active_ids, args)
+    active, improvement_gate = gate_inside_improvements(active_raw, books, flows, decision_ts, args)
     selected = {
         "baseline_active_universe": core.select_with_caps(baseline, args.max_orders_per_arm, args),
         "active_flow": core.select_with_caps(active, args.max_orders_per_arm, args),
@@ -186,7 +250,7 @@ def run_batched(args: Any) -> dict[str, Any]:
         }
 
     return {
-        "schema": "hf_active_flow_maker_batched_probe_v1",
+        "schema": "hf_active_flow_maker_batched_probe_v2",
         "paper_only": True,
         "authenticated_execution": False,
         "real_money_execution": False,
@@ -211,6 +275,8 @@ def run_batched(args: Any) -> dict[str, Any]:
             "min_sell_prints": args.min_sell_prints,
             "min_fill_probability": args.min_fill_probability,
             "max_sell_toxicity": args.max_sell_toxicity,
+            "inside_spread_gate": "require P(fill)*adjusted_edge strictly above at-touch counterfactual",
+            "improvement_gate": improvement_gate,
             "order_ttl_seconds": args.order_ttl_seconds,
             "trade_index_lag_seconds": args.trade_index_lag_seconds,
             "markout_seconds": args.markout_seconds,
@@ -238,9 +304,11 @@ def markdown(result: dict[str, Any]) -> str:
     for arm, data in result["arms"].items():
         pps = data["fill_conditioned_pnl_per_share"]
         lines.append(f"| {arm} | {data['orders']} | {data['fill_orders']} | {data['filled_shares']:.6f} | {data['fill_conditioned_pnl']:.6f} | {'' if pps is None else f'{pps:.8f}'} |")
+    gate = result.get("method", {}).get("improvement_gate", {})
     lines += ["", f"- discovered: {result['universe']['discovered_markets']} markets",
               f"- conditions with indexed public trades: {result['universe']['conditions_with_indexed_trades']}",
               f"- active books evaluated: {result['universe']['active_markets_evaluated']}",
+              f"- inside-spread gate: considered={gate.get('inside_considered', 0)}, kept={gate.get('inside_kept', 0)}, reverted={gate.get('reverted_to_touch', 0)}, dropped={gate.get('dropped_inside', 0)}",
               "- no authenticated orders are submitted; fills are FIFO public-tape counterfactuals."]
     return "\n".join(lines) + "\n"
 
