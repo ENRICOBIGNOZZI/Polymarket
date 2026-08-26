@@ -1,44 +1,143 @@
-# Stable telemetry contract
+# V7 telemetry contract
 
-Grafana must not be coupled to a trading-engine version. `monitoring/exporter_latest.py` auto-selects the highest `runs/paper_v*` runtime and exports stable `polymarket_runtime_*` metrics consumed by the default dashboard and alerts.
+The operational telemetry contract is V7-only. `monitoring/exporter_v7.py` reads the canonical V7 runtime under `runs/paper_v7_live` and exposes the metrics consumed by Grafana, Prometheus alerts, deployment verification and server health.
 
-## Future-version rule
+## Canonical runtime state
 
-A future engine (V5, V6, ...) can change its internal files freely. To become immediately visible in the default Grafana dashboard it should publish this atomic JSON file in its run root:
+The execution supervisor writes:
+
+```text
+runs/paper_v7_live/execution/runtime_status.json
+```
+
+with schema:
 
 ```json
 {
-  "schema": "polymarket_runtime_status_v1",
-  "equity": 10005.0,
-  "pnl": 5.0,
-  "drawdown": 0.002,
+  "schema": "polymarket_v7_runtime_status_v1",
+  "timestamp": 0,
+  "version": 7,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "starting_capital": 10000.0,
+  "cash": 0.0,
+  "equity": 0.0,
+  "peak_equity": 0.0,
+  "pnl": 0.0,
+  "drawdown": 0.0,
   "killed": false,
-  "live_units": 1,
-  "reserved_cash": 20.0,
-  "gross_exposure": 40.0,
-  "realized_pnl": 3.2,
-  "execution_imbalance": 0.10,
-  "execution_staleness": 4.0,
-  "oos": {
-    "trades": 35,
-    "net_pnl": 12.0,
-    "stressed_net_pnl": 6.0,
-    "max_drawdown": 0.04,
-    "bootstrap_pvalue": 0.03,
-    "eligible_for_tiny_pilot": true,
-    "production_threshold": 0.003
-  }
+  "live_units": 0,
+  "reserved_cash": 0.0,
+  "gross_exposure": 0.0,
+  "realized_pnl": 0.0,
+  "execution_imbalance": 0.0,
+  "execution_staleness": 0.0,
+  "strategies": {}
 }
 ```
 
-Write `runtime_status.json` atomically (`tmp` + rename). Version-specific detailed exporters are optional; this canonical contract is sufficient for the stable home dashboard and risk alerts.
+The file is written atomically. `version`, `paper_only`, `authenticated_execution` and the V7 schema are hard health invariants.
 
-## Current compatibility
+## Allocator and strategy state
 
-V4 predates the contract file, so `exporter_latest.py` derives the same canonical fields from `multileg_equity.csv`, `multileg_legs.csv`, `bundle_ledger.csv`, `trade_tape.csv`, and `walk_forward.json`. This fallback can remain for historical runs.
+The same execution root contains:
 
-## Stable Prometheus namespace
+```text
+allocator_status.json
+strategy_status.csv
+```
 
-The home dashboard and critical alerts use only `polymarket_runtime_*`, including equity, PnL, drawdown, kill switch, execution staleness/imbalance, realized paper PnL, OOS results and live-escalation eligibility.
+`allocator_status.json` uses schema `polymarket_v7_allocator_status_v1` and reports expected/alive strategy books, reserve fraction, gross limit/fraction and timestamp.
 
-Do not rename these metrics when the strategy engine version changes. Add new version-specific metrics separately when needed.
+`strategy_status.csv` contains the five canonical V7 books:
+
+```text
+micro_maker
+micro_taker
+relative_value
+hard_arb
+external
+```
+
+with equity/PnL, positions, fills, liveness, staleness, drawdown and gross-exposure fields used by the V7 exporter.
+
+## Market proxy state
+
+```text
+runs/paper_v7_live/execution/market_proxy_status.json
+```
+
+must use schema:
+
+```text
+polymarket_v7_market_proxy_status_v1
+```
+
+The public cache uses:
+
+```text
+polymarket_v7_market_proxy_cache_v1
+```
+
+No predecessor cache/status schema is accepted.
+
+## Supervisor state
+
+Outer runtime:
+
+```text
+runs/paper_v7_live/v7_supervisor.json
+```
+
+Execution child:
+
+```text
+runs/paper_v7_live/execution/v7_execution_supervisor.json
+```
+
+Health requires fresh timestamps plus live execution and shadow children.
+
+## Prometheus namespace
+
+Canonical runtime metrics:
+
+```text
+polymarket_runtime_info
+polymarket_runtime_equity_usd
+polymarket_runtime_pnl_usd
+polymarket_runtime_drawdown_ratio
+polymarket_runtime_kill_switch
+polymarket_runtime_live_units
+polymarket_runtime_reserved_cash_usd
+polymarket_runtime_gross_exposure_usd
+polymarket_runtime_realized_pnl_usd_total
+polymarket_runtime_execution_imbalance_ratio
+polymarket_runtime_execution_staleness_seconds
+```
+
+Allocator and strategy metrics:
+
+```text
+polymarket_allocator_state_present
+polymarket_allocator_models_expected
+polymarket_allocator_models_alive
+polymarket_allocator_global_gross_fraction
+polymarket_model_info
+polymarket_model_pnl_usd
+polymarket_model_equity_usd
+polymarket_model_open_positions
+polymarket_model_fills_total
+polymarket_model_alive
+polymarket_model_staleness_seconds
+polymarket_model_kill_switch
+polymarket_model_drawdown_ratio
+polymarket_model_gross_exposure_usd
+```
+
+V7 research/diagnostic metrics use the `polymarket_v7_*` namespace.
+
+## No compatibility fallback
+
+The exporter does not infer state from retired runtime layouts and does not auto-select a numerically highest run directory. A run name other than `paper_v7_live` is rejected by the V7 monitoring entrypoint.
+
+Historical telemetry remains available through Git history or retained external evidence, not through runtime compatibility code in the current repository.
