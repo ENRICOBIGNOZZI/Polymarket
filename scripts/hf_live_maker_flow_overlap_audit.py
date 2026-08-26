@@ -124,12 +124,36 @@ def audit(
     signal_tokens = {_token(row, "token_id") for row in first_tick_rows if _token(row, "token_id")}
     any_tape_signal_tokens = {token for token in signal_tokens if tape_by_token.get(token)}
     causal_signal_tokens: set[str] = set()
+    compatible_signal_tokens: set[str] = set()
+    clearable_signal_tokens: set[str] = set()
+    signal_flow_details: list[dict[str, Any]] = []
+    max_clearance_ratio = 0.0
     for row in first_tick_rows:
         token = _token(row, "token_id")
         if not token or first_tick is None:
             continue
-        if causal_recent_trades(tape_by_token.get(token, []), first_tick, lookback_seconds):
+        recent = causal_recent_trades(tape_by_token.get(token, []), first_tick, lookback_seconds)
+        if recent:
             causal_signal_tokens.add(token)
+        sells = [trade for trade in recent if compatible_sell(trade, _float(row.get("limit_price")))]
+        sell_volume = sum(_float(trade.get("size")) for trade in sells)
+        burden = _float(row.get("queue_ahead")) + _float(row.get("remaining_shares"))
+        clearance_ratio = sell_volume / burden if burden > 1e-12 else 0.0
+        max_clearance_ratio = max(max_clearance_ratio, clearance_ratio)
+        if sells:
+            compatible_signal_tokens.add(token)
+            signal_flow_details.append({
+                "market_id": row.get("market_id", ""),
+                "slug": row.get("slug", ""),
+                "action": row.get("action", ""),
+                "token_id": token,
+                "compatible_sell_rows": len(sells),
+                "compatible_sell_volume": sell_volume,
+                "queue_plus_own_shares": burden,
+                "observed_clearance_ratio": clearance_ratio,
+            })
+        if clearance_ratio >= 1.0:
+            clearable_signal_tokens.add(token)
 
     tape_healthy_enough = len(tape) >= min_tape_rows and bool(tape_by_token)
     if not tape_healthy_enough:
@@ -154,6 +178,10 @@ def audit(
             "signal_tokens": len(signal_tokens),
             "signal_tokens_with_any_tape_trade": len(any_tape_signal_tokens),
             "signal_tokens_with_causal_recent_trade": len(causal_signal_tokens),
+            "signal_tokens_with_compatible_sell": len(compatible_signal_tokens),
+            "signal_tokens_with_observed_queue_clearance": len(clearable_signal_tokens),
+            "max_observed_clearance_ratio": max_clearance_ratio,
+            "compatible_flow_details": signal_flow_details,
             "post_rows": sum(str(row.get("action", "")).upper() == "POST" for row in first_tick_rows),
             "queue_skipped_rows": sum(str(row.get("action", "")).upper() == "SKIP_QUEUE" for row in first_tick_rows),
         },
@@ -168,7 +196,9 @@ def audit(
         "interpretation": (
             "Static executable-edge selection is reserving paper capital on tokens with no "
             "causal recent same-token activity in an otherwise non-empty public tape. "
-            "Seed/rank HF maker candidates by causal recent activity before queue/fill and toxicity."
+            "The observed candidate flow also fails to clear queue-plus-own-size. "
+            "Seed/rank HF maker candidates by causal recent activity and flow-to-queue clearance "
+            "before fill-conditioned edge and toxicity."
             if state == "STATIC_MAKER_ACTIVITY_MISMATCH"
             else "No static-maker activity mismatch is established by this sample."
         ),
