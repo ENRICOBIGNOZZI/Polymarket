@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "base_main_sha": "a20d12f511cbd388e5ee28865eb9977ddc5fd8b6",
+  "source_local_factor_pr": 464,
+  "source_local_factor_head": "3aabfd92d36edc1789e29075c5de8f7c93c4205c",
+  "source_pair_hypotheses": 1322,
+  "nominal_bh_q": 0.1,
+  "harmonic_number_h_m": 7.7644948524570365,
+  "arbitrary_dependence_sharp_global_null_fdr": 0.7764494852457037,
+  "benjamini_yekutieli_effective_q_for_nominal_10pct": 0.012879137909191284,
+  "finding": "The V7 Local Factor repair now produces marginal null-preserving pair p-values, but ordinary BH at q=0.10 is not automatically FDR-valid for the strongly overlapping pair family. Pair tests share targets, controls, factors and bootstrap panels. Valid marginal p-values are necessary but not sufficient; ordinary BH additionally needs an independence/PRDS-type dependence condition. A sharp arbitrary-dependence construction with exactly 1322 valid marginal null p-values has global-null FDR q*H_m = 0.77645 under BH q=0.10.",
+  "required_successor_contract": [
+    "Preserve the pair-common factor, null-preserving increment bootstrap, intersection-union marginal pair p-values and all timing/TTR/hedge repairs in PR 464.",
+    "Before interpreting BH q as calibrated FDR, either establish a justified positive-dependence/PRDS condition for the tested pair family or use a dependence-robust multiplicity procedure.",
+    "Use Benjamini-Yekutieli only as a conservative baseline; prefer a resampling/hierarchical procedure that exploits the already joint panel bootstrap and pre-specified event/relation families without screening on realized prices, residual z-scores or economic edge.",
+    "Only after the multiplicity layer is calibrated should shorter common samples, lower z thresholds or higher FDR levels be compared on common chronological data.",
+    "Promotion still requires prospective joint fill-state evidence, partial-fill abort/unwind economics and positive fill-conditioned PnL at 1x/1.5x/2x costs."
+  ],
+  "latest_public_live_context": {
+    "telemetry_sha": "a20d12f511cbd388e5ee28865eb9977ddc5fd8b6",
+    "trade_recorder_status": "healthy",
+    "trade_rows": 149,
+    "trade_age_seconds": 91,
+    "graph_rv_bundles": 1,
+    "graph_rv_legs": 3,
+    "graph_rv_max_quoted_edge": 0.010000000000000009,
+    "graph_rv_completed": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_pnl_usd": 0.0
+  },
+  "safety": {
+    "paper_only": true,
+    "production_changed": false,
+    "authenticated_execution": false,
+    "max_drawdown_unchanged": 0.15,
+    "kill_switch_unchanged": true,
+    "authorized_aggressive_paper_envelope_unchanged": true
+  }
+}
