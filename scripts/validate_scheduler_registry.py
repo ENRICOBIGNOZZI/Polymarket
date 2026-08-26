@@ -13,8 +13,7 @@ REQUIRED_IDS = {
     "monitoring-validation", "live-paper-validation", "paper-server-deploy", "paper-server-health",
     "forward-maker-research", "alpha-factory", "meta-supervisor", "fast-arb-shadow-research",
     "arb-theory-research", "external-intelligence", "live-api-smoke",
-    "v7-cross-sectional-ranking-research", "v7-point-in-time-universe-archive",
-    "v7-unified-paper-evidence", "v7-market-cache-relay",
+    "v7-cross-sectional-ranking-research", "v7-point-in-time-universe-archive", "v7-market-cache-relay",
 }
 PRIVATE_VALIDATION_WORKFLOW = ".github/workflows/private-runtime-single-writer-validation.yml"
 OPERATOR_AUTHORITY_WORKFLOW = ".github/workflows/operator-authority-gate.yml"
@@ -33,6 +32,7 @@ RETIRED_TOKENS = (
     "v4-live-paper-smoke", "v4-live-smoke.yml",
     "v6-live-data-research", "v6-market-cache-relay",
     "scripts/v4_", "scripts/v5_", "scripts/v6_",
+    "v7-unified-paper-evidence", "v7_evidence_runtime.json", "v7_champion_candidate.json",
 )
 
 
@@ -101,8 +101,10 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         if not workflow_has_periodic_schedule(path): errors.append(f"{workflow} must define periodic schedule")
         normalized.append(item)
 
-    if REQUIRED_IDS.difference(ids): errors.append("missing scheduler ids: " + ", ".join(sorted(REQUIRED_IDS.difference(ids))))
-    if ids.difference(REQUIRED_IDS): errors.append("unrecognized scheduler ids: " + ", ".join(sorted(ids.difference(REQUIRED_IDS))))
+    missing_ids = REQUIRED_IDS.difference(ids)
+    extra_ids = ids.difference(REQUIRED_IDS)
+    if missing_ids: errors.append("missing scheduler ids: " + ", ".join(sorted(missing_ids)))
+    if extra_ids: errors.append("unrecognized scheduler ids: " + ", ".join(sorted(extra_ids)))
 
     workflow_dir = root / ".github" / "workflows"
     actual = {str(path.relative_to(root)) for path in workflow_dir.iterdir() if path.is_file() and path.suffix in {".yml", ".yaml"}}
@@ -122,8 +124,10 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             if "permissions:\n  contents: read\n  pull-requests: read\n" not in text: errors.append("operator authority gate must stay read-only")
 
     managed = actual.difference(NON_SCHEDULER_WORKFLOWS)
-    if managed.difference(workflows): errors.append("unregistered workflows: " + ", ".join(sorted(managed.difference(workflows))))
-    if workflows.difference(actual): errors.append("registry references missing workflows: " + ", ".join(sorted(workflows.difference(actual))))
+    unregistered = managed.difference(workflows)
+    stale = workflows.difference(actual)
+    if unregistered: errors.append("unregistered workflows: " + ", ".join(sorted(unregistered)))
+    if stale: errors.append("registry references missing workflows: " + ", ".join(sorted(stale)))
 
     merge_ids = [str(i["id"]) for i in normalized if i["merge_authority"] is True]
     deploy_ids = [str(i["id"]) for i in normalized if i["deploy_authority"] is True]
@@ -138,6 +142,8 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         text = (root / str(bridge["workflow"])).read_text(encoding="utf-8")
         for required in ('"ci"','"monitoring"','"V7 live PAPER smoke"','"Private runtime single-writer validation"','"Polymarket Promotion Controller"',"gh workflow run promotion-controller.yml --ref main","gh workflow run integration-merge.yml --ref main"):
             if required not in text: errors.append(f"control-plane-event-bridge missing contract: {required}")
+        if "v7-unified-paper-evidence" in text or "pulls/546" in text:
+            errors.append("control-plane-event-bridge retains obsolete pre-cutover V7 evidence routing")
 
     post_merge = by_id.get("post-merge-validation")
     if post_merge:
