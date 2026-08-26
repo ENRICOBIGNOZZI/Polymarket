@@ -10,6 +10,7 @@ on:
       - "scripts/v7_cross_sectional_rank.py"
       - "scripts/v7_cross_sectional_rank_core.py"
       - "scripts/v7_cross_sectional_rank_fast.py"
+      - "scripts/v7_cross_sectional_rank_frozen.py"
       - "scripts/v7_cross_sectional_rank_inference.py"
       - "scripts/v7_cross_sectional_history.py"
       - "scripts/v7_cross_sectional_relative.py"
@@ -47,6 +48,7 @@ jobs:
             scripts/v7_cross_sectional_rank.py
             scripts/v7_cross_sectional_rank_core.py
             scripts/v7_cross_sectional_rank_fast.py
+            scripts/v7_cross_sectional_rank_frozen.py
             scripts/v7_cross_sectional_rank_inference.py
             scripts/v7_cross_sectional_history.py
             scripts/v7_cross_sectional_relative.py
@@ -82,6 +84,7 @@ jobs:
           python3 -m py_compile \
             scripts/v7_cross_sectional_rank_core.py \
             scripts/v7_cross_sectional_rank_fast.py \
+            scripts/v7_cross_sectional_rank_frozen.py \
             scripts/v7_cross_sectional_rank_inference.py \
             scripts/v7_cross_sectional_rank.py \
             scripts/v7_cross_sectional_history.py \
@@ -122,7 +125,15 @@ jobs:
           assert report["history_data_healthy"] is True
           assert report["forward_holdout_start_ts"] > report["discovery_cutoff_ts"]
           assert report["frozen_horizons_minutes"] == [120, 360]
+          assert report["frozen_holdout_fit_validated"] is True
           assert len(report["horizons"]) == 2
+          for horizon in report["horizons"]:
+              assert horizon["fit_mode"] == "frozen_at_holdout_start"
+              assert horizon["frozen_fit_asof_ts"] == report["forward_holdout_start_ts"]
+              assert horizon["frozen_training_label_cutoff_ts"] == report["frozen_training_label_cutoff_ts"]
+              assert horizon["frozen_fit_validated"] is True
+              assert horizon["fit"] is not None
+              assert horizon["fit"]["train_end_ts"] <= report["frozen_training_label_cutoff_ts"]
           PY
 
       - name: Publish relative-tail summary
@@ -142,13 +153,15 @@ jobs:
           print(f"- history data healthy: {r['history_data_healthy']}")
           print(f"- authoritative fee books: {r['authoritative_fee_book_count']}")
           print(f"- frozen horizons: {r['frozen_horizons_minutes']}")
+          print(f"- frozen fit validated: {r['frozen_holdout_fit_validated']}")
+          print(f"- frozen training label cutoff: {r['frozen_training_label_cutoff_ts']}")
           print(f"- tail fraction: {r['tail_fraction']}")
           print(f"- forward days observed: {r['forward_days_observed']}")
           print(f"- current relative pair candidates: {r['current_relative_pair_candidates']}")
           print(f"- absolute single-leg mapping disabled: {r['absolute_single_leg_mapping_disabled']}")
           for h in r['horizons']:
               b=h['forward_blocked_inference']
-              print(f"- {h['horizon_minutes']}m: forward_gate={h['forward_gate']}, reasons={h['forward_gate_reasons']}, days={b['days']}, daily_IC={b['mean_daily_rank_ic']:.4f}, daily_tail={b['mean_daily_top_bottom_logit_spread']:.6f}, pIC={b['rank_ic_bootstrap_p_mean_nonpositive']}, pTail={b['top_bottom_bootstrap_p_mean_nonpositive']}, pairs={h['relative_pair_candidates']}")
+              print(f"- {h['horizon_minutes']}m: frozen_fit={h['frozen_fit_validated']}, train_end={None if h['fit'] is None else h['fit']['train_end_ts']}, forward_gate={h['forward_gate']}, reasons={h['forward_gate_reasons']}, days={b['days']}, daily_IC={b['mean_daily_rank_ic']:.4f}, daily_tail={b['mean_daily_top_bottom_logit_spread']:.6f}, pIC={b['rank_ic_bootstrap_p_mean_nonpositive']}, pTail={b['top_bottom_bootstrap_p_mean_nonpositive']}, pairs={h['relative_pair_candidates']}")
           PY
           else
             echo '- report missing' >> "$GITHUB_STEP_SUMMARY"
