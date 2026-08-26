@@ -22,7 +22,7 @@
   },
   "forecast_horizons_minutes": {
     "pca_stat_arb": [30, 60, 120, 360],
-    "cross_sectional_rank": [120, 360]
+    "cross_sectional_rank": [30, 60, 120, 360]
   },
   "local_factor_fidelity_minutes": [30, 60],
   "evidence_rules": {
