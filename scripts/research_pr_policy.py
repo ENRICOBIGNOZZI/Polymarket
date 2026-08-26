@@ -29,6 +29,22 @@ EXACT_APPROVED_HEAD_PATTERN = re.compile(
 APPROVED_RESEARCH_VERDICTS = {"INTEGRATION_READY", "APPROVED_FOR_INTEGRATION"}
 TRUSTED_GOVERNANCE_AUTHOR_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 MODEL_BODY_TERMS = ("alpha","model","strategy","signal","stat-arb","stat arb","pca","maker","opportunity","portfolio","paper champion","candidate bundle")
+
+# These files define what the operator has authorized, rather than a model or
+# experiment. The autonomous research/integration plane may read and enforce
+# them, but may not redefine them. A change must be isolated on operator/* and
+# explicitly state that it reflects the latest direct user instruction.
+OPERATOR_AUTHORITY_SURFACES = {
+    "config/operator_directives.json",
+    "config/project_context.json",
+    "scripts/hard_safety_policy.py",
+    "scripts/project_context_snapshot.py",
+    "scripts/validate_project_context.py",
+    "tests/test_hard_safety_policy.py",
+    "tests/test_v7_authorized_paper_envelope.py",
+}
+OPERATOR_AUTHORIZATION_MARKER = "operator authorization change: latest explicit user instruction"
+
 LIVE_MODEL_SURFACE_PATTERNS = (
     re.compile(r"^config/live_champion\.json$"), re.compile(r"^config/paper_v\d+\.json$"),
     re.compile(r"^config/v\d+_model_architecture\.json$"),
@@ -176,9 +192,27 @@ def evaluate(
     body = str(pr.get("body") or ""); draft = bool(pr.get("draft")); labels = label_names(pr)
     manifest_changed = "config/live_champion.json" in changed_files
     model_surface_files = sorted(path for path in changed_files if is_sensitive_model_surface(path))
+    operator_surface_files = sorted(path for path in changed_files if path in OPERATOR_AUTHORITY_SURFACES)
+    operator_marker = OPERATOR_AUTHORIZATION_MARKER in body.lower()
     opaque_model_bootstrap = is_opaque_model_bootstrap(changed_files, body)
     forbidden_shadow_files = shadow_forbidden_files(changed_files) if "shadow-isolated" in labels else []
     errors: list[str] = []
+
+    # Operator authority is deliberately outside the autonomous research ->
+    # integration promotion path. This prevents a scheduler/remediation PR from
+    # redefining the user's current instruction and then rewriting its own tests
+    # to make that redefinition look valid.
+    if operator_surface_files:
+        if not head.startswith("operator/"):
+            errors.append(
+                "operator authority surfaces may change only on operator/* after a direct user instruction; blocked: "
+                + ", ".join(operator_surface_files)
+            )
+        elif not operator_marker:
+            errors.append(
+                "operator/* PR changing authority surfaces must contain the exact marker "
+                f"`{OPERATOR_AUTHORIZATION_MARKER}`"
+            )
 
     numbered_match = SOURCE_RESEARCH_PR_PATTERN.search(body)
     linked_source_number = int(numbered_match.group(1)) if numbered_match else None
@@ -232,6 +266,15 @@ def evaluate(
                 errors.append(
                     f"integration cited source commit is not the trusted approved head: cited {linked_source_commit}, approved {approved_source_head}"
                 )
+    elif head.startswith("operator/"):
+        # Operator-only changes are administrative authority updates, not alpha
+        # promotion. They can coexist with ordinary documentation/policy tests,
+        # but must not mutate the live champion directly.
+        if manifest_changed:
+            errors.append("operator authority PRs may not change the live champion manifest; promotion remains integration/* only")
+        misplaced = sorted(labels.intersection(INTEGRATION_ONLY_LABELS | {"research-approved"}))
+        if misplaced:
+            errors.append("operator authority PRs cannot carry research/integration promotion labels: " + ", ".join(misplaced))
     else:
         misplaced = sorted(labels.intersection(INTEGRATION_ONLY_LABELS | {"research-approved"}))
         if misplaced: errors.append("research/integration labels are valid only on their dedicated branch classes: " + ", ".join(misplaced))
@@ -246,7 +289,9 @@ def evaluate(
 
     summary = {
         "branch": head, "draft": draft, "labels": sorted(labels), "manifest_changed": manifest_changed,
-        "model_surface_files": model_surface_files, "opaque_model_bootstrap": opaque_model_bootstrap,
+        "model_surface_files": model_surface_files, "operator_surface_files": operator_surface_files,
+        "operator_authorization_marker": operator_marker,
+        "opaque_model_bootstrap": opaque_model_bootstrap,
         "shadow_forbidden_files": forbidden_shadow_files, "changed_files": len(changed_files),
         "source_research_pr": linked_source_number if linked_source_number is not None else "none",
         "source_research_branch": linked_source_branch or "none",
@@ -262,10 +307,10 @@ def evaluate(
 def render(summary: dict[str, Any], errors: list[str]) -> str:
     lines = ["# Research pull-request policy", ""]
     for key in (
-        "branch","draft","labels","manifest_changed","model_surface_files","opaque_model_bootstrap",
-        "shadow_forbidden_files","changed_files","source_research_pr","source_research_branch",
-        "source_research_commit","source_research_verdict","source_research_approved_sha",
-        "automatic_paper_promotion","manual_approval_labels_required","policy",
+        "branch","draft","labels","manifest_changed","model_surface_files","operator_surface_files",
+        "operator_authorization_marker","opaque_model_bootstrap","shadow_forbidden_files","changed_files",
+        "source_research_pr","source_research_branch","source_research_commit","source_research_verdict",
+        "source_research_approved_sha","automatic_paper_promotion","manual_approval_labels_required","policy",
     ):
         value = summary.get(key, "unknown")
         if isinstance(value, list): value = ", ".join(str(item) for item in value) or "none"
@@ -275,7 +320,7 @@ def render(summary: dict[str, Any], errors: list[str]) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Enforce Polymarket research/integration PR policy")
+    parser = argparse.ArgumentParser(description="Enforce Polymarket research/integration/operator PR policy")
     parser.add_argument("--event", required=True); parser.add_argument("--changed-files", required=True)
     parser.add_argument("--manifest-existed-on-base", choices=("true", "false"), required=True); parser.add_argument("--output", required=True)
     parser.add_argument("--source-research-json")

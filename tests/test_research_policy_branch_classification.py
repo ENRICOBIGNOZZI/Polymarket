@@ -139,6 +139,49 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
         self.assertIn("automatic_paper_promotion: `True`", accepted.stdout)
         self.assertIn("manual_approval_labels_required: `False`", accepted.stdout)
 
+    def test_autopilot_branches_cannot_redefine_operator_authority(self):
+        changed = [
+            "config/operator_directives.json",
+            "scripts/hard_safety_policy.py",
+            "tests/test_v7_authorized_paper_envelope.py",
+        ]
+        for branch in (
+            "fix/restore-authorized-v7-paper-envelope",
+            "research/reinterpret-v7-policy",
+            "integration/rewrite-operator-policy",
+        ):
+            result = self.run_policy(branch, "Reinterpret the current V7 authorization.", changed, draft=branch.startswith("research/"))
+            self.assertNotEqual(result.returncode, 0, branch)
+            self.assertIn("operator authority surfaces may change only on operator/*", result.stdout)
+
+    def test_operator_authority_change_requires_explicit_user_instruction_marker(self):
+        changed = ["config/operator_directives.json", "scripts/hard_safety_policy.py"]
+        missing = self.run_policy(
+            "operator/update-v7-authority",
+            "Update operator policy.",
+            changed,
+        )
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("must contain the exact marker", missing.stdout)
+
+        allowed = self.run_policy(
+            "operator/update-v7-authority",
+            "Operator authorization change: latest explicit user instruction\nApply the direct user instruction exactly.",
+            changed,
+        )
+        self.assertEqual(allowed.returncode, 0, allowed.stdout + allowed.stderr)
+        self.assertIn("operator_authorization_marker: `True`", allowed.stdout)
+        self.assertIn("policy: `pass`", allowed.stdout)
+
+    def test_operator_authority_branch_cannot_change_live_champion(self):
+        result = self.run_policy(
+            "operator/update-v7-authority",
+            "Operator authorization change: latest explicit user instruction",
+            ["config/operator_directives.json", "config/live_champion.json"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("operator authority PRs may not change the live champion manifest", result.stdout)
+
     def test_data_transport_fix_is_not_misclassified_as_model_work(self):
         result = self.run_policy("fix/api-data-freshness","Fail stale shadow market data before accepting research evidence.",["src/http.cpp","scripts/validate_fast_data_health.py"])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr); self.assertIn("policy: `pass`", result.stdout)
