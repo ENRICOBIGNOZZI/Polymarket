@@ -125,7 +125,7 @@ while true; do
     last_taker=$now
   fi
   if (( now-last_hard >= HARD_SECONDS )); then
-    python3 scripts/v6_hard_arb_paper.py --config "$RUN_ROOT/hard_arb_config.json" --run-dir "$RUN_ROOT/hard_arb" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --max-events "$HARD_EVENTS" --min-edge "$HARD_EDGE" --max-trade-usd "$HARD_TRADE" --slippage-bps 5 >>"$RUN_ROOT/hard_arb.log" 2>&1 || true
+    python3 scripts/v7_hard_arb_guard.py --config "$RUN_ROOT/hard_arb_config.json" --run-dir "$RUN_ROOT/hard_arb" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --max-events "$HARD_EVENTS" --min-edge "$HARD_EDGE" --max-trade-usd "$HARD_TRADE" --slippage-bps 5 --leg-latency-ms 100 --max-leg-age-ms 2000 --max-cross-leg-skew-ms 1000 --max-exchange-snapshot-age-ms 5000 --max-exchange-snapshot-skew-ms 1000 >>"$RUN_ROOT/hard_arb.log" 2>&1 || true
     last_hard=$now
   fi
   if (( now-last_graph >= GRAPH_SECONDS )); then run_graph; last_graph=$now; fi
