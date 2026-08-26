@@ -22,7 +22,8 @@ def test_maker_uses_fill_conditioned_toxicity_objective_and_dual_clock():
 
 def test_taker_uses_complete_round_trip_contract():
     text = (ROOT / "scripts/v7_micro_taker_worker.py").read_text(encoding="utf-8")
-    assert "complete_round_trip_executable_ev" in text
+    assert "causal_flow_depth_complete_round_trip_ev" in text
+    assert "depth_adjusted_economics" in text
     assert "expected_exit_price" in text
     assert "uncertainty_z" in text
     assert "adverse_markout_bps" in text
