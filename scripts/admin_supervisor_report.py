@@ -18,10 +18,25 @@ def labels(pr: dict[str, Any]) -> set[str]:
     return {str(item.get("name")) for item in pr.get("labels", []) if item.get("name")}
 
 
+def run_is_production(run: dict[str, Any]) -> bool:
+    event = str(run.get("event") or "").lower()
+    head_branch = str(run.get("headBranch") or "")
+    if event == "pull_request" or head_branch.startswith("refs/pull/"):
+        return False
+    # Scheduler health is a production-control-plane view. Manual or other runs
+    # on research/experiment/fix branches are useful validation evidence, but a
+    # newer failure there must not replace the latest main production state.
+    # Some schedule/repository-dispatch payloads omit headBranch, so preserve
+    # those runs rather than treating missing branch metadata as a failure.
+    if head_branch and head_branch != "main":
+        return False
+    return True
+
+
 def latest_by_workflow(runs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     latest: dict[str, dict[str, Any]] = {}
     for run in runs:
-        if str(run.get("event") or "").lower() == "pull_request":
+        if not run_is_production(run):
             continue
         name = str(run.get("workflowName") or run.get("name") or "")
         if not name:
