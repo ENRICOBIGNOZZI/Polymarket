@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "source_pr": 462,
+  "source_pr_head": "523d83c30bb52e1b0902c2e3e06c497c6e218e1d",
+  "base_main": "f0bc531ceb053b88ea4589d5faac57ac76658f59",
+  "finding": "The sign of a cross-sectionally residualized future logit move does not identify the sign of the absolute single-leg YES/NO markout.",
+  "current_target": "delta_logit_i_minus_cross_sectional_or_group_baseline",
+  "current_execution_mapping_under_audit": "positive forecast -> BUY YES; negative forecast -> BUY NO",
+  "counterexamples": [
+    {
+      "name": "negative_relative_but_positive_absolute_yes_move",
+      "current_yes": [0.5, 0.5, 0.5],
+      "future_yes": [0.7, 0.65, 0.6],
+      "absolute_logit_moves": [0.8472978603872034, 0.6190392084062236, 0.4054651081081642],
+      "cross_sectional_mode": 0.6190392084062236,
+      "relative_targets": [0.22825865198097983, 0.0, -0.2135741002980594],
+      "mapped_bottom_side": "NO",
+      "bottom_single_leg_zero_cost_markout": -0.1
+    },
+    {
+      "name": "positive_relative_but_negative_absolute_yes_move",
+      "current_yes": [0.5, 0.5, 0.5],
+      "future_yes": [0.4, 0.35, 0.3],
+      "absolute_logit_moves": [-0.4054651081081643, -0.6190392084062235, -0.8472978603872036],
+      "cross_sectional_mode": -0.6190392084062235,
+      "relative_targets": [0.21357410029805923, 0.0, -0.22825865198098005],
+      "mapped_top_side": "YES",
+      "top_single_leg_zero_cost_markout": -0.1
+    }
+  ],
+  "paired_relative_value_example": {
+    "current_yes": [0.5, 0.5, 0.5],
+    "future_yes": [0.7, 0.65, 0.6],
+    "top_action": "BUY YES on first market",
+    "bottom_action": "BUY NO on third market",
+    "zero_cost_pair_markout": 0.1
+  },
+  "required_successor_contract": [
+    "Keep the residualized target for rank IC and decile diagnostics.",
+    "For single-leg execution, estimate the market/group future mode independently and add it back before converting a forecast into an absolute expected exit price.",
+    "Alternatively execute relative top-bottom portfolios and evaluate their joint fill, partial-fill abort/unwind and cost-stressed PnL as a basket.",
+    "Do not treat relative directional hit rate as absolute YES/NO directional hit rate.",
+    "Require prospective shared-ledger fill-conditioned PnL before integration."
+  ],
+  "production_changed": false,
+  "authenticated_execution": false
+}
