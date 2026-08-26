@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-08-26T21:28:00Z",
+  "paper_only": true,
+  "research_only": true,
+  "authenticated_execution": false,
+  "operator_directive_source": {
+    "path": "config/operator_directives.json",
+    "main_commit": "03d5159a3926dd4c188bc2ccf228b9574d1dd668",
+    "blob_sha": "6cbeae826d0646c21459ccb0ac69bdad2b7a4d77",
+    "uncertainty_penalty": 0.0,
+    "market_limit": 1000,
+    "minimum_liquidity_usd": 2.0,
+    "minimum_post_cost_edge": 0.00005,
+    "fractional_kelly_ceiling": 0.25,
+    "fixed_dollar_trade_cap_enabled": false,
+    "max_drawdown": 0.15
+  },
+  "pca": {
+    "finding": "monte_carlo_pvalue_resolution_is_too_coarse_to_interpret_zero_BY_discoveries_for_large_predeclared_families",
+    "bootstrap_repetitions_current": 300,
+    "minimum_attainable_plus_one_pvalue": 0.0033222591362126247,
+    "fdr_q": 0.1,
+    "formulae": {
+      "minimum_attainable_pvalue": "1/(B+1)",
+      "BY_first_rank_threshold": "q/(m*H_m)",
+      "singleton_resolution_required_repetitions": "ceil(m*H_m/q)-1",
+      "minimum_floor_rank": "ceil((1/(B+1))*m*H_m/q)"
+    },
+    "diagnostics": [
+      {
+        "family_size": 150,
+        "harmonic_number": 5.591180588643879,
+        "first_rank_BY_threshold": 0.00011923540227277194,
+        "repetitions_required_for_singleton_resolution": 8386,
+        "minimum_rank_needed_if_pvalues_hit_300_rep_floor": 28
+      },
+      {
+        "family_size": 200,
+        "harmonic_number": 5.878030948121444,
+        "first_rank_BY_threshold": 0.00008506249871988079,
+        "repetitions_required_for_singleton_resolution": 11756,
+        "minimum_rank_needed_if_pvalues_hit_300_rep_floor": 40
+      },
+      {
+        "family_size": 500,
+        "harmonic_number": 6.792823429990524,
+        "first_rank_BY_threshold": 0.000029442838027703452,
+        "repetitions_required_for_singleton_resolution": 33964,
+        "minimum_rank_needed_if_pvalues_hit_300_rep_floor": 113
+      },
+      {
+        "family_size": 1000,
+        "harmonic_number": 7.485470860550345,
+        "first_rank_BY_threshold": 0.000013359213049244017,
+        "repetitions_required_for_singleton_resolution": 74854,
+        "minimum_rank_needed_if_pvalues_hit_300_rep_floor": 249
+      }
+    ],
+    "interpretation": "A zero-survivor PCA result under the current 300-repetition bootstrap is not strong evidence of no alpha when the predeclared BY family is large. The procedure is conservative but can be numerically unable to resolve an isolated true signal. Promotion must fail closed on inadequate Monte Carlo resolution rather than treating zero selections as substantive evidence.",
+    "policy_alignment_change": {
+      "path": "config/research_v7_pca_stat_arb.json",
+      "uncertainty_z_before": 1.0,
+      "uncertainty_z_after": 0.0,
+      "reason": "current operator directive explicitly sets uncertainty penalty to zero"
+    },
+    "required_successor": [
+      "report BY Monte Carlo resolution against the actual predeclared family size",
+      "fail promotion closed when the p-value floor is coarser than the relevant BY tail",
+      "use an efficient valid higher-resolution or sequential bootstrap before interpreting broad-universe zero selections",
+      "keep PCA single-leg statistical arbitrage with no portfolio hedge and no terminal-probability interpretation"
+    ]
+  },
+  "ranking_forward_holdout": {
+    "workflow_run_id": 33015012315,
+    "source_head": "e419bf72df4f887b8d14bf6279c939d02d775385",
+    "artifact_id": 9624139556,
+    "frozen_horizons_minutes": [120, 360],
+    "forward_days_observed": 1,
+    "current_relative_pair_candidates": 0,
+    "horizon_120m": {
+      "forward_cross_sections": 17,
+      "mean_daily_rank_ic": -0.1093845645734036,
+      "mean_daily_top_bottom_logit_spread": -0.020375504074811285,
+      "forward_gate": false
+    },
+    "horizon_360m": {
+      "forward_cross_sections": 9,
+      "mean_daily_rank_ic": 0.016565877311375404,
+      "mean_daily_top_bottom_logit_spread": -0.021611929298754304,
+      "forward_gate": false
+    },
+    "interpretation": "The first frozen forward UTC day is not positive evidence: 2h is negative in both rank IC and tail spread; 6h has only a tiny positive IC and a negative tail spread. One day is insufficient for blocked inference, and there are no current executable relative-pair candidates."
+  },
+  "public_execution_context": {
+    "telemetry_branch_commit": "7ebe88a63326808110d78df1720de4d94bf8e818",
+    "incumbent_git_sha": "fb8e31b8f5de6503b7476f2aac2e546c33803b22",
+    "trade_recorder_status": "healthy",
+    "new_public_trades": 622,
+    "graph_bundles": 2,
+    "graph_legs": 8,
+    "graph_max_quote_edge": 0.010000000000000009,
+    "graph_complete": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_pnl_usd": 0.0
+  },
+  "decision": "MORE_EVIDENCE_REQUIRED"
+}
