@@ -75,25 +75,5 @@
     "shared_execution_ledger_required": true,
     "joint_fill_state_required_for_multileg": true,
     "authenticated_execution": false
-  },
-  "v6": {
-    "paper_only": true,
-    "compatibility_only": true,
-    "micro_maker_capital_fraction": 0.22,
-    "micro_taker_capital_fraction": 0.12,
-    "relative_value_capital_fraction": 0.34,
-    "hard_arb_capital_fraction": 0.22,
-    "external_capital_fraction": 0.08,
-    "reserve_fraction": 0.02,
-    "intent_min_edge": 0.00005,
-    "relation_scan_seconds": 30,
-    "factor_scan_seconds": 60,
-    "micro_taker_seconds": 5,
-    "external_refresh_seconds": 60,
-    "report_seconds": 60,
-    "structural_min_similarity": 0.25,
-    "structural_max_bundles": 100,
-    "hard_arb_max_events": 80,
-    "hard_arb_min_net_edge": 0.00005
   }
 }
