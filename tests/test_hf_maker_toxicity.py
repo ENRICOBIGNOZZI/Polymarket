@@ -10,6 +10,7 @@ from scripts.v6_micro_maker_v3 import (
     microprice_displacement,
     toxicity_adjusted_fill_probability,
 )
+from scripts.v6_micro_maker_v4 import persistence_gated_fill_probability
 
 
 class FakeBook:
@@ -137,6 +138,58 @@ class MakerToxicityTest(unittest.TestCase):
         self.assertGreater(microprice_displacement(bullish), 0.0)
         self.assertLess(microprice_displacement(bearish), 0.0)
         self.assertTrue(math.isfinite(microprice_displacement(bearish)))
+
+    def test_inside_improvement_requires_three_independent_flow_bursts(self):
+        self.assertEqual(
+            persistence_gated_fill_probability(
+                0.42,
+                queue_ahead=0.0,
+                burst_count=2,
+                newest_event_age_seconds=5.0,
+                min_inside_bursts=3,
+                max_inside_event_age_seconds=30.0,
+            ),
+            0.0,
+        )
+
+    def test_inside_improvement_rejects_stale_flow_even_with_three_bursts(self):
+        self.assertEqual(
+            persistence_gated_fill_probability(
+                0.42,
+                queue_ahead=0.0,
+                burst_count=3,
+                newest_event_age_seconds=31.0,
+                min_inside_bursts=3,
+                max_inside_event_age_seconds=30.0,
+            ),
+            0.0,
+        )
+
+    def test_inside_improvement_accepts_fresh_persistent_flow(self):
+        self.assertAlmostEqual(
+            persistence_gated_fill_probability(
+                0.42,
+                queue_ahead=0.0,
+                burst_count=3,
+                newest_event_age_seconds=12.0,
+                min_inside_bursts=3,
+                max_inside_event_age_seconds=30.0,
+            ),
+            0.42,
+        )
+
+    def test_persistence_gate_does_not_remove_at_touch_fill_hazard(self):
+        self.assertAlmostEqual(
+            persistence_gated_fill_probability(
+                0.208014985,
+                queue_ahead=21129.8,
+                burst_count=1,
+                newest_event_age_seconds=90.0,
+                min_inside_bursts=3,
+                max_inside_event_age_seconds=30.0,
+            ),
+            0.208014985,
+        )
 
 
 if __name__ == "__main__":
