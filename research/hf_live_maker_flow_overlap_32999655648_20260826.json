@@ -1,0 +1,58 @@
+{
+  "schema": "polymarket_hf_live_maker_flow_overlap_v1",
+  "research_only": true,
+  "source": {
+    "workflow_run_id": "32999655648",
+    "git_sha": "700ee6919bd3f0d4002e86d1dc5b035d298a6cdb",
+    "artifact": "champion-live-paper-smoke-32999655648"
+  },
+  "trade_tape": {
+    "rows": 580,
+    "distinct_token_ids": 79,
+    "distinct_condition_ids": 65,
+    "recorder_health": "healthy",
+    "request_errors": 0
+  },
+  "maker_first_tick": {
+    "signals": 39,
+    "posted": 6,
+    "queue_skipped": 33,
+    "fills": 0,
+    "reserved_paper_usd": 160.921,
+    "signal_tokens_with_any_tape_activity": 2,
+    "signal_tokens_with_causal_pre_entry_activity": 2,
+    "signal_tokens_with_compatible_sell_at_or_below_bid": 0,
+    "posted_tokens_with_any_tape_activity": 1,
+    "posted_tokens_with_compatible_sell_at_or_below_bid": 0
+  },
+  "examples": [
+    {
+      "action": "POST",
+      "market_id": "601827",
+      "slug": "will-ronaldo-caiado-win-the-2026-brazilian-presidential-election",
+      "limit_price": 0.003,
+      "own_shares": 4424.75,
+      "queue_ahead": 17699.0,
+      "same_token_tape_rows": 1,
+      "last_causal_event_age_seconds": 57,
+      "compatible_sell_rows": 0
+    },
+    {
+      "action": "SKIP_QUEUE",
+      "slug": "strait-of-hormuz-traffic-returns-to-normal-by-september-30-20260702154339440",
+      "limit_price": 0.09,
+      "own_shares": 211.994,
+      "queue_ahead": 86564.7,
+      "same_token_tape_rows": 7,
+      "last_causal_event_age_seconds": 147,
+      "compatible_sell_rows": 0
+    }
+  ],
+  "decision": "STATIC_MAKER_ACTIVITY_MISMATCH_REPLICATED",
+  "interpretation": "The current maker again allocates paper capital primarily to signal tokens without observed causal same-token contra-flow at the passive bid. Lowering the already-authorized 0.5 bp post-cost edge floor cannot create a fill path when compatible SELL flow is absent. Candidate ranking should prioritize recent causal activity and compatible-flow/queue clearance before static edge.",
+  "safety": {
+    "max_drawdown_ratio": 0.15,
+    "authenticated_execution": false,
+    "real_money_execution": false
+  }
+}
