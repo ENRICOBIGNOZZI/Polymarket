@@ -57,6 +57,7 @@ def fill(**overrides):
         opportunity_id="opp-1",
         bundle_id="bundle-1",
         order_id="order-1",
+        fill_id="fill-1",
         leg_id="leg-1",
         market_id="market-1",
         token_id="token-yes",
@@ -67,7 +68,27 @@ def fill(**overrides):
         fee_rate=0.005,
         fee_source="authoritative_clob_fee",
         slippage=0.02,
-        markouts={"1s": -0.01, "10s": 0.0, "45s": 0.01},
+    )
+    values.update(overrides)
+    return ledger.LedgerEvent(**values)
+
+
+def markout(**overrides):
+    values = dict(
+        event_type="MARKOUT",
+        strategy="FAST_STRUCTURAL_ARB",
+        model_sha=SHA_A,
+        recorded_ts_ms=3_030,
+        exchange_ts_ms=3_000,
+        receive_ts_ms=3_010,
+        order_id="order-1",
+        fill_id="fill-1",
+        leg_id="leg-1",
+        market_id="market-1",
+        token_id="token-yes",
+        book_snapshot_id="book-markout-1",
+        executable_liquidation_value=1.95,
+        markouts={"1s": -0.01},
     )
     values.update(overrides)
     return ledger.LedgerEvent(**values)
@@ -90,36 +111,55 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
         fill().validate()
         with self.assertRaisesRegex(ledger.LedgerContractError, "missing_exchange_receive_clock"):
             fill(exchange_ts_ms=None).validate()
+        with self.assertRaisesRegex(ledger.LedgerContractError, "missing_fill_id"):
+            fill(fill_id=None).validate()
         with self.assertRaisesRegex(ledger.LedgerContractError, "missing_price"):
             fill(fill_price=None).validate()
         with self.assertRaisesRegex(ledger.LedgerContractError, "missing_authoritative_fee"):
             fill(fee_source=None).validate()
         with self.assertRaisesRegex(ledger.LedgerContractError, "missing_positive_size"):
             fill(filled_size=0.0).validate()
+        with self.assertRaisesRegex(ledger.LedgerContractError, "only_markout_events"):
+            fill(markouts={"1s": -0.01}).validate()
+
+    def test_markout_is_append_only_and_fill_linked(self) -> None:
+        markout().validate()
+        with self.assertRaisesRegex(ledger.LedgerContractError, "missing_fill_id"):
+            markout(fill_id=None).validate()
+        with self.assertRaisesRegex(ledger.LedgerContractError, "missing_causal_book"):
+            markout(exchange_ts_ms=None).validate()
+        with self.assertRaisesRegex(ledger.LedgerContractError, "missing_executable_liquidation_value"):
+            markout(executable_liquidation_value=None).validate()
+        with self.assertRaisesRegex(ledger.LedgerContractError, "requires_single_horizon"):
+            markout(markouts={}).validate()
+        with self.assertRaisesRegex(ledger.LedgerContractError, "requires_single_horizon"):
+            markout(markouts={"1s": -0.01, "10s": 0.0}).validate()
+        with self.assertRaisesRegex(ledger.LedgerContractError, "unsupported_horizon"):
+            markout(markouts={"30s": 0.01}).validate()
 
     def test_position_mark_requires_causal_executable_liquidation_value(self) -> None:
-        mark = ledger.LedgerEvent(
+        position_mark = ledger.LedgerEvent(
             event_type="POSITION_MARK",
             strategy="MICRO_TAKER",
             model_sha=SHA_A,
-            recorded_ts_ms=3_030,
-            exchange_ts_ms=3_000,
-            receive_ts_ms=3_010,
-            book_snapshot_id="book-mark-1",
+            recorded_ts_ms=4_030,
+            exchange_ts_ms=4_000,
+            receive_ts_ms=4_010,
+            book_snapshot_id="book-position-1",
             position_id="position-1",
             executable_liquidation_value=4.75,
             unrealized_pnl=-0.10,
         )
-        mark.validate()
+        position_mark.validate()
         with self.assertRaisesRegex(ledger.LedgerContractError, "missing_executable_liquidation_value"):
             ledger.LedgerEvent(
                 event_type="POSITION_MARK",
                 strategy="MICRO_TAKER",
                 model_sha=SHA_A,
-                recorded_ts_ms=3_030,
-                exchange_ts_ms=3_000,
-                receive_ts_ms=3_010,
-                book_snapshot_id="book-mark-1",
+                recorded_ts_ms=4_030,
+                exchange_ts_ms=4_000,
+                receive_ts_ms=4_010,
+                book_snapshot_id="book-position-1",
                 position_id="position-1",
             ).validate()
         with self.assertRaisesRegex(ledger.LedgerContractError, "missing_causal_book"):
@@ -127,9 +167,9 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
                 event_type="POSITION_MARK",
                 strategy="MICRO_TAKER",
                 model_sha=SHA_A,
-                recorded_ts_ms=3_030,
-                receive_ts_ms=3_010,
-                book_snapshot_id="book-mark-1",
+                recorded_ts_ms=4_030,
+                receive_ts_ms=4_010,
+                book_snapshot_id="book-position-1",
                 position_id="position-1",
                 executable_liquidation_value=4.75,
             ).validate()
@@ -176,9 +216,7 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
             with self.assertRaisesRegex(ledger.LedgerContractError, "safety:not_paper_only"):
                 ledger.load_events(path, expected_model_sha=SHA_A)
 
-    def test_markout_horizons_and_price_ranges_fail_closed(self) -> None:
-        with self.assertRaisesRegex(ledger.LedgerContractError, "unsupported_horizon"):
-            fill(markouts={"30s": 0.01}).validate()
+    def test_price_ranges_fail_closed(self) -> None:
         with self.assertRaisesRegex(ledger.LedgerContractError, "fill_price:out_of_range"):
             fill(fill_price=1.01).validate()
 
@@ -187,7 +225,7 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
             event_type="FINAL",
             strategy="GRAPH_RV",
             model_sha=SHA_A,
-            recorded_ts_ms=4_000,
+            recorded_ts_ms=5_000,
             final_pnl=-0.25,
             capital_duration_ms=10_000,
         ).validate()
@@ -196,7 +234,7 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
                 event_type="FINAL",
                 strategy="GRAPH_RV",
                 model_sha=SHA_A,
-                recorded_ts_ms=4_000,
+                recorded_ts_ms=5_000,
             ).validate()
 
 

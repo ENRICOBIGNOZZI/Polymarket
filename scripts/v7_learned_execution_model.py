@@ -2,8 +2,9 @@
 """Read-only learned execution research on the canonical V7 PAPER ledger.
 
 Predictors come only from ORDER_SUBMITTED state. Labels come only from later
-resolved order/fill events. Multi-leg execution is learned as a direct joint
-state distribution; products of marginal fill probabilities are benchmark-only.
+resolved order/fill/markout events. Missing executable-book inputs are excluded,
+not silently converted to zero. Multi-leg execution is learned as a direct
+joint state distribution; products of marginal fill probabilities are benchmark-only.
 """
 from __future__ import annotations
 
@@ -26,7 +27,8 @@ EPS = 1e-12
 FEATURES = (
     "log_queue_plus_one", "log_bid_depth_plus_one", "log_ask_depth_plus_one",
     "spread", "book_imbalance", "size_to_min_touch_depth",
-    "decision_receive_latency_s", "timeout_s", "predicted_alpha", "expected_ev",
+    "decision_receive_latency_s", "timeout_s", "timeout_present",
+    "predicted_alpha", "predicted_alpha_present", "expected_ev", "expected_ev_present",
     "action_cross", "action_join", "action_improve", "action_fade",
     "action_taker", "action_maker", "action_cancel_replace",
 )
@@ -42,14 +44,16 @@ class ExecutionModelError(ValueError):
 @dataclass(frozen=True)
 class OrderExample:
     order_id: str
-    group_id: str | None
+    bundle_id: str | None
     leg_id: str | None
     ts_ms: int
+    label_ts_ms: int
     x: tuple[float, ...]
     fill: int
     complete: int
     state: str
     markouts: dict[str, float]
+    markout_ts_ms: dict[str, int]
 
 
 @dataclass(frozen=True)
@@ -57,6 +61,7 @@ class JointExample:
     group_id: str
     leg_count: int
     ts_ms: int
+    label_ts_ms: int
     x: tuple[float, ...]
     state: str
 
@@ -65,32 +70,78 @@ def get(event: Any, name: str, default: Any = None) -> Any:
     return event.get(name, default) if isinstance(event, dict) else getattr(event, name, default)
 
 
-def finite(value: Any, default: float = 0.0) -> float:
+def finite_optional(value: Any) -> float | None:
+    if value is None:
+        return None
     try:
         out = float(value)
     except (TypeError, ValueError, OverflowError):
-        return default
-    return out if math.isfinite(out) else default
+        return None
+    return out if math.isfinite(out) else None
+
+
+def required_finite(event: Any, name: str, *, nonnegative: bool = False, positive: bool = False) -> float:
+    value = finite_optional(get(event, name))
+    if value is None:
+        raise ExecutionModelError(f"features:missing_or_nonfinite:{name}")
+    if nonnegative and value < 0.0:
+        raise ExecutionModelError(f"features:negative:{name}")
+    if positive and value <= 0.0:
+        raise ExecutionModelError(f"features:nonpositive:{name}")
+    return value
+
+
+def optional_value(event: Any, name: str, *, nonnegative: bool = False) -> tuple[float, float]:
+    raw = get(event, name)
+    if raw is None:
+        return 0.0, 0.0
+    value = finite_optional(raw)
+    if value is None or (nonnegative and value < 0.0):
+        raise ExecutionModelError(f"features:invalid_optional:{name}")
+    return value, 1.0
 
 
 def features(event: Any) -> tuple[float, ...]:
-    bid, ask = finite(get(event, "bid")), finite(get(event, "ask"))
-    bd, ad = max(0.0, finite(get(event, "bid_depth"))), max(0.0, finite(get(event, "ask_depth")))
-    queue, size = max(0.0, finite(get(event, "queue_ahead"))), max(0.0, finite(get(event, "intended_size")))
-    touch = min(bd, ad) if bd > 0.0 and ad > 0.0 else max(bd, ad, 1.0)
+    if not str(get(event, "book_snapshot_id", "") or "").strip():
+        raise ExecutionModelError("features:missing_book_snapshot_id")
+    bid = required_finite(event, "bid", nonnegative=True)
+    ask = required_finite(event, "ask", nonnegative=True)
+    bd = required_finite(event, "bid_depth", nonnegative=True)
+    ad = required_finite(event, "ask_depth", nonnegative=True)
+    queue = required_finite(event, "queue_ahead", nonnegative=True)
+    size = required_finite(event, "intended_size", positive=True)
+    if bid > ask:
+        raise ExecutionModelError("features:crossed_book")
     receive = int(get(event, "receive_ts_ms", 0) or 0)
     decision = int(get(event, "decision_ts_ms", 0) or 0)
-    timeout = max(0, int(get(event, "timeout_ms", 0) or 0))
-    action = str(get(event, "intended_action", "") or "").upper()
+    if receive <= 0 or decision <= 0 or decision < receive:
+        raise ExecutionModelError("features:invalid_receive_decision_clock")
+    action = str(get(event, "intended_action", "") or "").upper().strip()
+    if not action:
+        raise ExecutionModelError("features:missing_action")
+    timeout, timeout_present = optional_value(event, "timeout_ms", nonnegative=True)
+    alpha, alpha_present = optional_value(event, "predicted_alpha")
+    ev, ev_present = optional_value(event, "expected_ev")
+    touch = min(bd, ad) if bd > 0.0 and ad > 0.0 else max(bd, ad)
+    if touch <= 0.0:
+        raise ExecutionModelError("features:zero_executable_touch_depth")
     depth = bd + ad
+    if depth <= 0.0:
+        raise ExecutionModelError("features:zero_book_depth")
     flags = tuple(float(token in action) for token in ("CROSS", "JOIN", "IMPROVE", "FADE", "TAKER", "MAKER"))
     return (
-        math.log1p(queue), math.log1p(bd), math.log1p(ad), max(0.0, ask - bid),
-        (bd - ad) / depth if depth > 0.0 else 0.0, size / max(touch, 1e-9),
-        max(0, decision - receive) / 1000.0 if receive > 0 and decision > 0 else 0.0,
-        timeout / 1000.0, finite(get(event, "predicted_alpha")), finite(get(event, "expected_ev")),
+        math.log1p(queue), math.log1p(bd), math.log1p(ad), ask - bid,
+        (bd - ad) / depth, size / touch, (decision - receive) / 1000.0,
+        timeout / 1000.0, timeout_present, alpha, alpha_present, ev, ev_present,
         *flags, float("CANCEL" in action or "REPLACE" in action),
     )
+
+
+def event_ts(event: Any) -> int:
+    ts = int(get(event, "recorded_ts_ms", 0) or 0)
+    if ts <= 0:
+        raise ExecutionModelError("event:missing_recorded_ts_ms")
+    return ts
 
 
 def validate_stream(events: Sequence[Any], sha: str) -> None:
@@ -111,12 +162,11 @@ def build_orders(events: Sequence[Any], sha: str) -> tuple[list[OrderExample], d
     later: dict[str, list[Any]] = defaultdict(list)
     stats: Counter[str] = Counter()
     for event in events:
-        typ, oid = str(get(event, "event_type", "")).upper(), str(get(event, "order_id", "") or "")
+        typ = str(get(event, "event_type", "")).upper()
+        oid = str(get(event, "order_id", "") or "")
         if typ == "ORDER_SUBMITTED":
             if not oid or oid in submitted:
                 raise ExecutionModelError("submission:missing_or_duplicate_order_id")
-            if int(get(event, "receive_ts_ms", 0) or 0) <= 0 or int(get(event, "decision_ts_ms", 0) or 0) <= 0:
-                raise ExecutionModelError(f"submission:missing_causal_clock:{oid}")
             submitted[oid] = event
             stats["submissions"] += 1
         elif oid:
@@ -124,53 +174,110 @@ def build_orders(events: Sequence[Any], sha: str) -> tuple[list[OrderExample], d
 
     out: list[OrderExample] = []
     for oid, sub in submitted.items():
-        intended = max(0.0, finite(get(sub, "intended_size")))
-        if intended <= 0.0:
-            stats["invalid_intended_size"] += 1
+        try:
+            x = features(sub)
+        except ExecutionModelError:
+            stats["excluded_missing_or_invalid_features"] += 1
             continue
-        filled, terminal, explicit_complete = 0.0, False, False
-        num, den = Counter(), Counter()
-        for event in later.get(oid, []):
-            typ, state = str(get(event, "event_type", "")).upper(), str(get(event, "order_state", "") or "").upper()
+        intended = required_finite(sub, "intended_size", positive=True)
+        decision_ts = int(get(sub, "decision_ts_ms", 0) or 0)
+        filled = 0.0
+        terminal = False
+        explicit_complete = False
+        resolution_ts = 0
+        fill_info: dict[str, tuple[float, int, int]] = {}
+        events_for_order = later.get(oid, [])
+
+        # Pass 1: establish execution outcomes and immutable fill identities.
+        for event in events_for_order:
+            typ = str(get(event, "event_type", "")).upper()
+            state = str(get(event, "order_state", "") or "").upper()
+            ts = event_ts(event)
             if typ == "FILL":
-                qty = max(0.0, finite(get(event, "filled_size")))
+                fid = str(get(event, "fill_id", "") or "")
+                if not fid:
+                    raise ExecutionModelError(f"fill:missing_fill_id:{oid}")
+                if fid in fill_info:
+                    raise ExecutionModelError(f"fill:duplicate_fill_id:{fid}")
+                qty = required_finite(event, "filled_size", positive=True)
+                ex_ts = int(get(event, "exchange_ts_ms", 0) or 0)
+                if ex_ts <= 0:
+                    raise ExecutionModelError(f"fill:missing_exchange_ts:{fid}")
+                fill_info[fid] = (qty, ts, ex_ts)
                 filled += qty
-                marks = get(event, "markouts", {}) or {}
-                if isinstance(marks, dict) and qty > 0.0:
-                    for horizon in MARKOUTS:
-                        value = marks.get(horizon)
-                        try:
-                            value = float(value)
-                        except (TypeError, ValueError, OverflowError):
-                            continue
-                        if math.isfinite(value):
-                            num[horizon] += qty * value
-                            den[horizon] += qty
+                if get(event, "complete", None) is True:
+                    explicit_complete = True
+                    terminal = True
+                    resolution_ts = max(resolution_ts, ts)
+                if filled >= intended * (1.0 - 1e-9):
+                    terminal = True
+                    resolution_ts = max(resolution_ts, ts)
+            if state in TERMINAL:
+                terminal = True
+                resolution_ts = max(resolution_ts, ts)
             if get(event, "complete", None) is True:
-                explicit_complete, terminal = True, True
-            terminal = terminal or state in TERMINAL
+                explicit_complete = True
+
         complete = explicit_complete or filled >= intended * (1.0 - 1e-9)
-        terminal = terminal or complete
-        if not terminal:
+        if complete and resolution_ts <= 0:
+            resolution_ts = max((info[1] for info in fill_info.values()), default=0)
+        if not terminal or resolution_ts <= 0:
             stats["unresolved_orders"] += 1
             continue
+
+        # Pass 2: read append-only MARKOUT labels linked to stable fill_id.
+        num: Counter[str] = Counter()
+        den: Counter[str] = Counter()
+        markout_ts: dict[str, int] = {}
+        seen_markout: set[tuple[str, str]] = set()
+        for event in events_for_order:
+            if str(get(event, "event_type", "")).upper() != "MARKOUT":
+                continue
+            fid = str(get(event, "fill_id", "") or "")
+            if fid not in fill_info:
+                raise ExecutionModelError(f"markout:orphan_fill_id:{fid or 'missing'}")
+            marks = get(event, "markouts", {}) or {}
+            if not isinstance(marks, dict) or len(marks) != 1:
+                raise ExecutionModelError(f"markout:invalid_horizon_payload:{fid}")
+            horizon, raw_value = next(iter(marks.items()))
+            if horizon not in MARKOUTS:
+                raise ExecutionModelError(f"markout:unsupported_horizon:{horizon}")
+            key = (fid, horizon)
+            if key in seen_markout:
+                raise ExecutionModelError(f"markout:duplicate_fill_horizon:{fid}:{horizon}")
+            seen_markout.add(key)
+            value = finite_optional(raw_value)
+            if value is None:
+                raise ExecutionModelError(f"markout:nonfinite:{fid}:{horizon}")
+            qty, fill_recorded_ts, fill_exchange_ts = fill_info[fid]
+            mark_recorded_ts = event_ts(event)
+            mark_exchange_ts = int(get(event, "exchange_ts_ms", 0) or 0)
+            if mark_exchange_ts <= 0 or mark_recorded_ts < fill_recorded_ts or mark_exchange_ts < fill_exchange_ts:
+                raise ExecutionModelError(f"markout:noncausal_clock:{fid}:{horizon}")
+            num[horizon] += qty * value
+            den[horizon] += qty
+            markout_ts[horizon] = max(markout_ts.get(horizon, 0), mark_recorded_ts)
+
         state = "COMPLETE" if complete else "PARTIAL" if filled > 0.0 else "NO_FILL"
-        group = str(get(sub, "candidate_id", "") or get(sub, "opportunity_id", "") or "") or None
+        bundle = str(get(sub, "bundle_id", "") or "") or None
         leg = str(get(sub, "leg_id", "") or "") or None
         marks = {h: num[h] / den[h] for h in MARKOUTS if den[h] > 0.0}
-        out.append(OrderExample(oid, group, leg, int(get(sub, "decision_ts_ms")), features(sub), int(filled > 0.0), int(complete), state, marks))
+        out.append(OrderExample(oid, bundle, leg, decision_ts, resolution_ts, x, int(filled > 0.0), int(complete), state, marks, markout_ts))
         stats[f"state_{state.lower()}"] += 1
     out.sort(key=lambda row: (row.ts_ms, row.order_id))
-    stats["resolved_orders"] = len(out)
+    stats["resolved_feature_complete_orders"] = len(out)
     return out, dict(stats)
 
 
 def build_joint(orders: Sequence[OrderExample]) -> tuple[list[JointExample], dict[str, int]]:
     groups: dict[str, list[OrderExample]] = defaultdict(list)
+    stats: Counter[str] = Counter()
     for order in orders:
-        if order.group_id:
-            groups[order.group_id].append(order)
-    out, stats = [], Counter()
+        if order.bundle_id:
+            groups[order.bundle_id].append(order)
+        else:
+            stats["skipped_missing_bundle_id"] += 1
+    out: list[JointExample] = []
     for gid, legs in groups.items():
         if len(legs) < 2:
             continue
@@ -180,7 +287,7 @@ def build_joint(orders: Sequence[OrderExample]) -> tuple[list[JointExample], dic
         legs = sorted(legs, key=lambda row: str(row.leg_id))
         mean = tuple(statistics.fmean(row.x[j] for row in legs) for j in range(len(FEATURES)))
         x = mean + (float(len(legs)), max(row.x[0] for row in legs), max(row.x[5] for row in legs))
-        out.append(JointExample(gid, len(legs), max(row.ts_ms for row in legs), x, "|".join(row.state for row in legs)))
+        out.append(JointExample(gid, len(legs), max(row.ts_ms for row in legs), max(row.label_ts_ms for row in legs), x, "|".join(row.state for row in legs)))
     out.sort(key=lambda row: (row.ts_ms, row.group_id))
     stats["joint_examples"] = len(out)
     return out, dict(stats)
@@ -194,9 +301,11 @@ def split(rows: Sequence[Any], min_train: int, min_test: int, test_fraction: flo
         raise ExecutionModelError("split:insufficient_examples")
     cut = min(max(min_train, int(len(rows) * (1.0 - test_fraction))), len(rows) - min_test)
     test = list(rows[cut:])
-    train = [row for row in rows[:cut] if row.ts_ms <= test[0].ts_ms - max(0, embargo_ms)]
+    test_start = int(test[0].ts_ms)
+    cutoff = test_start - max(0, embargo_ms)
+    train = [row for row in rows[:cut] if int(getattr(row, "label_ts_ms", row.ts_ms)) <= cutoff]
     if len(train) < min_train:
-        raise ExecutionModelError("split:embargo_removed_training_sample")
+        raise ExecutionModelError("split:embargo_or_label_maturity_removed_training_sample")
     return train, test
 
 
@@ -223,6 +332,8 @@ class Kernel:
         return cls(norm, mean, tuple(scale), bandwidth)
 
     def weights(self, row: Sequence[float]) -> list[float]:
+        if len(row) != len(self.mean):
+            raise ExecutionModelError("kernel:prediction_shape_mismatch")
         z = tuple((value - mu) / sd for value, mu, sd in zip(row, self.mean, self.scale))
         raw = [math.exp(-sum((a - b) ** 2 for a, b in zip(z, train)) / (2.0 * self.bandwidth ** 2)) for train in self.train_x]
         total = sum(raw)
@@ -265,10 +376,12 @@ def binary_report(train: Sequence[OrderExample], test: Sequence[OrderExample], a
     return {"state": "OOS_SCORED", "train_n": len(train), "test_n": len(test), "oos_log_loss": logloss(probs), "baseline_log_loss": logloss([base] * len(test)), "oos_brier": brier(probs), "baseline_brier": brier([base] * len(test)), "test_positive_rate": statistics.fmean(y_test)}
 
 
-def markout_report(train: Sequence[OrderExample], test: Sequence[OrderExample], bandwidth: float, min_train: int, min_test: int) -> dict[str, Any]:
-    out = {}
+def markout_report(train: Sequence[OrderExample], test: Sequence[OrderExample], bandwidth: float, min_train: int, min_test: int, embargo_ms: int) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    test_start = min(row.ts_ms for row in test)
+    label_cutoff = test_start - max(0, embargo_ms)
     for horizon in MARKOUTS:
-        a = [(row.x, row.markouts[horizon]) for row in train if horizon in row.markouts]
+        a = [(row.x, row.markouts[horizon]) for row in train if horizon in row.markouts and row.markout_ts_ms.get(horizon, 0) <= label_cutoff]
         b = [(row.x, row.markouts[horizon]) for row in test if horizon in row.markouts]
         if len(a) < min_train or len(b) < min_test:
             out[horizon] = {"state": "INSUFFICIENT_EVIDENCE", "train_n": len(a), "test_n": len(b)}
@@ -285,7 +398,7 @@ def joint_report(rows: Sequence[JointExample], bandwidth: float, test_fraction: 
     grouped: dict[int, list[JointExample]] = defaultdict(list)
     for row in rows:
         grouped[row.leg_count].append(row)
-    out = {}
+    out: dict[str, Any] = {}
     for nlegs, sample in sorted(grouped.items()):
         try:
             train, test = split(sample, min_train, min_test, test_fraction, embargo_ms)
@@ -311,16 +424,28 @@ def analyze(events: Sequence[Any], sha: str, *, test_fraction: float = 0.25, emb
     train, test = split(orders, min_order_train, min_order_test, test_fraction, embargo_ms)
     joint, joint_stats = build_joint(orders)
     return {
-        "schema": "polymarket_v7_learned_execution_research_v1", "model_sha": sha,
+        "schema": "polymarket_v7_learned_execution_research_v2", "model_sha": sha,
         "paper_only": True, "authenticated_execution": False, "read_only": True,
         "promotion_allowed": False, "decision": "MORE_EVIDENCE_REQUIRED",
-        "causal_contract": {"predictors_from": "ORDER_SUBMITTED_only", "labels_from_future_events": True, "chronological_split": True, "embargo_ms": max(0, embargo_ms), "mixed_sha_allowed": False, "joint_model": "direct_kernel_joint_state_distribution", "product_of_marginals_role": "benchmark_only"},
+        "causal_contract": {
+            "predictors_from": "ORDER_SUBMITTED_only",
+            "missing_executable_book_inputs": "exclude_not_zero_impute",
+            "labels_from_future_events": True,
+            "training_labels_mature_before_test_start": True,
+            "markout_source": "append_only_MARKOUT_by_fill_id",
+            "chronological_split": True,
+            "embargo_ms": max(0, embargo_ms),
+            "mixed_sha_allowed": False,
+            "joint_grouping": "bundle_id_with_unique_leg_id",
+            "joint_model": "direct_kernel_joint_state_distribution",
+            "product_of_marginals_role": "benchmark_only",
+        },
         "feature_names": list(FEATURES), "joint_feature_names": list(JOINT_FEATURES),
         "order_stats": order_stats, "joint_stats": joint_stats,
         "train_n": len(train), "test_n": len(test), "train_end_ts_ms": max(row.ts_ms for row in train), "test_start_ts_ms": min(row.ts_ms for row in test),
         "fill_model": binary_report(train, test, "fill", bandwidth),
         "completion_model": binary_report(train, test, "complete", bandwidth),
-        "markout_models": markout_report(train, test, bandwidth, min_markout_train, min_markout_test),
+        "markout_models": markout_report(train, test, bandwidth, min_markout_train, min_markout_test, embargo_ms),
         "joint_state_models": joint_report(joint, bandwidth, test_fraction, embargo_ms, min_joint_train, min_joint_test),
     }
 
@@ -338,19 +463,39 @@ def atomic_json(path: Path, value: dict[str, Any]) -> None:
     fd, tmp = tempfile.mkstemp(prefix=path.name + ".tmp.", dir=str(path.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, indent=2, sort_keys=True); handle.write("\n"); handle.flush(); os.fsync(handle.fileno())
+            json.dump(value, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp, path)
     finally:
-        if os.path.exists(tmp): os.unlink(tmp)
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ledger", required=True, type=Path); parser.add_argument("--model-sha", required=True); parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--test-fraction", type=float, default=0.25); parser.add_argument("--embargo-ms", type=int, default=0); parser.add_argument("--bandwidth", type=float, default=1.0)
-    parser.add_argument("--min-order-train", type=int, default=50); parser.add_argument("--min-order-test", type=int, default=20); parser.add_argument("--min-markout-train", type=int, default=20); parser.add_argument("--min-markout-test", type=int, default=10); parser.add_argument("--min-joint-train", type=int, default=30); parser.add_argument("--min-joint-test", type=int, default=10)
+    parser.add_argument("--ledger", required=True, type=Path)
+    parser.add_argument("--model-sha", required=True)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--test-fraction", type=float, default=0.25)
+    parser.add_argument("--embargo-ms", type=int, default=0)
+    parser.add_argument("--bandwidth", type=float, default=1.0)
+    parser.add_argument("--min-order-train", type=int, default=50)
+    parser.add_argument("--min-order-test", type=int, default=20)
+    parser.add_argument("--min-markout-train", type=int, default=20)
+    parser.add_argument("--min-markout-test", type=int, default=10)
+    parser.add_argument("--min-joint-train", type=int, default=30)
+    parser.add_argument("--min-joint-test", type=int, default=10)
     args = parser.parse_args()
-    report = analyze(load_ledger(args.ledger, args.model_sha), args.model_sha, test_fraction=args.test_fraction, embargo_ms=args.embargo_ms, min_order_train=args.min_order_train, min_order_test=args.min_order_test, min_markout_train=args.min_markout_train, min_markout_test=args.min_markout_test, min_joint_train=args.min_joint_train, min_joint_test=args.min_joint_test, bandwidth=args.bandwidth)
+    report = analyze(
+        load_ledger(args.ledger, args.model_sha), args.model_sha,
+        test_fraction=args.test_fraction, embargo_ms=args.embargo_ms,
+        min_order_train=args.min_order_train, min_order_test=args.min_order_test,
+        min_markout_train=args.min_markout_train, min_markout_test=args.min_markout_test,
+        min_joint_train=args.min_joint_train, min_joint_test=args.min_joint_test,
+        bandwidth=args.bandwidth,
+    )
     atomic_json(args.output, report)
     print(json.dumps({"output": str(args.output), "decision": report["decision"], "train_n": report["train_n"], "test_n": report["test_n"]}, sort_keys=True))
     return 0
