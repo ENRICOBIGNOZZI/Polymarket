@@ -50,13 +50,13 @@ def test_v7_config_has_no_binding_fixed_dollar_trade_cap_and_100_percent_hard_ce
     assert cfg["v7"]["authenticated_execution"] is False
 
 
-def test_frequency_matrix_has_hf_and_30m_to_6h_without_pooling():
+def test_frequency_matrix_has_hf_pca_30m_to_6h_and_ranking_2h_6h_without_pooling():
     cfg = load("config/v7_frequency_matrix.json")
     maker = cfg["execution_cadences_seconds"]["micro_maker"]
     assert min(maker) <= 1
     assert max(maker) >= 10
     assert cfg["forecast_horizons_minutes"]["pca_stat_arb"] == [30, 60, 120, 360]
-    assert cfg["forecast_horizons_minutes"]["cross_sectional_rank"] == [30, 60, 120, 360]
+    assert cfg["forecast_horizons_minutes"]["cross_sectional_rank"] == [120, 360]
     assert cfg["local_factor_fidelity_minutes"] == [30, 60]
     rules = cfg["evidence_rules"]
     assert rules["separate_state_by_frequency"] is True
