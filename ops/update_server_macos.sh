@@ -8,6 +8,13 @@ CACHE_DIR="${POLYMARKET_DEPLOY_CACHE:-$HOME/.cache/polymarket-deploy}"
 STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
 STATUS_FILE="$STATE_DIR/autoupdate_status.env"
 RUNTIME_HEALTH_ATTEMPTS="${POLYMARKET_RUNTIME_HEALTH_ATTEMPTS:-180}"
+DEPLOY_LOCK_DIR="${POLYMARKET_DEPLOY_LOCK_DIR:-$CACHE_DIR/update.lock}"
+DEPLOY_LOCK_WAIT_SECONDS="${POLYMARKET_DEPLOY_LOCK_WAIT_SECONDS:-900}"
+DEPLOY_LOCK_STALE_SECONDS="${POLYMARKET_DEPLOY_LOCK_STALE_SECONDS:-3600}"
+POLYMARKET_DEPLOY_LOCK_V1=1
+DEPLOY_LOCK_HELD=0
+DEPLOY_LOCK_TOKEN=""
+APP_UPDATER_LOCK_AWARE=0
 
 log() { printf '[mac-deploy] %s\n' "$*"; }
 fail() { printf '[mac-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -22,6 +29,73 @@ find_brew() {
   else
     return 1
   fi
+}
+
+release_deploy_lock() {
+  if [[ "$DEPLOY_LOCK_HELD" != "1" || -z "$DEPLOY_LOCK_TOKEN" ]]; then
+    return 0
+  fi
+  local recorded=""
+  if [[ -f "$DEPLOY_LOCK_DIR/owner.env" ]]; then
+    recorded="$(sed -n 's/^token=//p' "$DEPLOY_LOCK_DIR/owner.env" | head -n 1)"
+  fi
+  if [[ "$recorded" == "$DEPLOY_LOCK_TOKEN" ]]; then
+    rm -rf "$DEPLOY_LOCK_DIR"
+    log "Released deployment mutex token=$DEPLOY_LOCK_TOKEN"
+  fi
+  DEPLOY_LOCK_HELD=0
+}
+
+acquire_deploy_lock() {
+  mkdir -p "$CACHE_DIR"
+  local now deadline acquired owner token
+  now="$(date +%s)"
+  deadline=$((now + DEPLOY_LOCK_WAIT_SECONDS))
+  token="updater-$$-$now"
+  while ! mkdir "$DEPLOY_LOCK_DIR" 2>/dev/null; do
+    now="$(date +%s)"
+    acquired="$(sed -n 's/^acquired_ts=//p' "$DEPLOY_LOCK_DIR/owner.env" 2>/dev/null | head -n 1 || true)"
+    owner="$(sed -n 's/^token=//p' "$DEPLOY_LOCK_DIR/owner.env" 2>/dev/null | head -n 1 || true)"
+    if [[ "$acquired" =~ ^[0-9]+$ ]] && (( now - acquired > DEPLOY_LOCK_STALE_SECONDS )); then
+      log "Reclaiming stale deployment mutex token=${owner:-unknown} age_seconds=$((now-acquired))"
+      rm -rf "$DEPLOY_LOCK_DIR"
+      continue
+    fi
+    if (( now >= deadline )); then
+      fail "deployment mutex busy token=${owner:-unknown}; refusing overlapping checkout mutation"
+    fi
+    sleep 2
+  done
+  DEPLOY_LOCK_TOKEN="$token"
+  DEPLOY_LOCK_HELD=1
+  {
+    printf 'token=%s\n' "$DEPLOY_LOCK_TOKEN"
+    printf 'pid=%s\n' "$$"
+    printf 'acquired_ts=%s\n' "$now"
+    printf 'deploy_ref=%s\n' "$DEPLOY_REF"
+  } > "$DEPLOY_LOCK_DIR/owner.env"
+  log "Acquired deployment mutex token=$DEPLOY_LOCK_TOKEN"
+}
+
+wait_for_legacy_updater() {
+  [[ "$APP_UPDATER_LOCK_AWARE" == "0" ]] || return 0
+  local deadline now pids pid other
+  deadline=$(( $(date +%s) + DEPLOY_LOCK_WAIT_SECONDS ))
+  while :; do
+    other=""
+    pids="$(/usr/bin/pgrep -f "$APP_DIR/ops/update_server_macos.sh" 2>/dev/null || true)"
+    for pid in $pids; do
+      [[ "$pid" == "$$" ]] && continue
+      other="${other}${other:+,}$pid"
+    done
+    [[ -z "$other" ]] && return 0
+    now="$(date +%s)"
+    if (( now >= deadline )); then
+      fail "legacy pre-mutex updater still running pid=${other}; refusing concurrent checkout mutation"
+    fi
+    log "Waiting for pre-mutex launchd updater pid=${other} to finish"
+    sleep 2
+  done
 }
 
 write_status() {
@@ -176,6 +250,14 @@ wait_for_runtime_health() {
 [[ -d "$APP_DIR/.git" ]] || fail "$APP_DIR is not a git checkout"
 [[ -f "$APP_DIR/.server_bootstrapped_macos" ]] || fail "run ops/bootstrap_macos.sh interactively once first"
 BREW_BIN="$(find_brew)" || fail "Homebrew is required (checked PATH, /opt/homebrew/bin/brew, /usr/local/bin/brew)"
+[[ "$DEPLOY_LOCK_WAIT_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_LOCK_WAIT_SECONDS must be a positive integer"
+[[ "$DEPLOY_LOCK_STALE_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_LOCK_STALE_SECONDS must be a positive integer"
+if grep -q '^POLYMARKET_DEPLOY_LOCK_V1=1$' "$APP_DIR/ops/update_server_macos.sh" 2>/dev/null; then
+  APP_UPDATER_LOCK_AWARE=1
+fi
+acquire_deploy_lock
+trap release_deploy_lock EXIT
+wait_for_legacy_updater
 
 BREW_PREFIX="$("$BREW_BIN" --prefix)"
 export PATH="$BREW_PREFIX/bin:$BREW_PREFIX/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -224,6 +306,7 @@ CONFIG_BACKUP="$STAGE/config-backup"
 cleanup() {
   git -C "$APP_DIR" worktree remove --force "$STAGE_SRC" >/dev/null 2>&1 || true
   rm -rf "$STAGE"
+  release_deploy_lock
 }
 trap cleanup EXIT
 
@@ -256,6 +339,7 @@ bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_l
 "$PYTHON_BIN" -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
 
 log "Candidate validation passed; staging production build"
+wait_for_legacy_updater
 cd "$APP_DIR"
 git checkout "$LOCAL_BRANCH"
 git reset --hard "$NEW_SHA"
@@ -317,6 +401,10 @@ if ! wait_for_runtime_health; then
   rollback "post-deploy paper runtime health checks failed"
 fi
 
+FINAL_SHA="$(git -C "$APP_DIR" rev-parse HEAD)"
+if [[ "$FINAL_SHA" != "$NEW_SHA" ]]; then
+  rollback "checkout moved during serialized deployment: actual=$FINAL_SHA expected=$NEW_SHA"
+fi
 rm -rf build.previous
 write_status deployed "$NEW_SHA" "$NEW_SHA" "$MAIN_SHA"
 meta="$(champion_meta)"
