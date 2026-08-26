@@ -13,7 +13,7 @@ void usage(){
 
 int main(int argc,char**argv){
     try{
-        std::string config="config/paper.example.json";
+        std::string config="config/v7_live_smoke.json";
         bool once=true,loop=false,paper=false,scan=false;
         std::optional<std::size_t> markets;
         std::optional<double> min_liq;
