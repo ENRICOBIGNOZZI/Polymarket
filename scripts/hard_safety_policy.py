@@ -56,6 +56,7 @@ RUNTIME_HARD_SAFETY_WRITE_RE = re.compile(
 # targets. Historical 2.5% / 8% / 45% caps are deliberately not immutable V6
 # safety limits. The economic envelope may be used only through normal
 # research -> trusted governance -> integration provenance.
+V6_AUTHORIZED_MARKET_LIMIT = 1000.0
 V6_AUTHORIZED_CEILINGS = {
     "max_drawdown": 0.15,
     "max_market_fraction": 0.05,
@@ -74,14 +75,15 @@ V6_AUTHORIZED_FLOORS = {
     "intent_min_edge": 0.00005,
     "hard_arb_min_net_edge": 0.00005,
 }
-V6_CAPITAL_FRACTIONS = (
-    "micro_maker_capital_fraction",
-    "micro_taker_capital_fraction",
-    "relative_value_capital_fraction",
-    "hard_arb_capital_fraction",
-    "external_capital_fraction",
-    "reserve_fraction",
-)
+V6_AUTHORIZED_CAPITAL_CEILINGS = {
+    "micro_maker_capital_fraction": 0.22,
+    "micro_taker_capital_fraction": 0.12,
+    "relative_value_capital_fraction": 0.34,
+    "hard_arb_capital_fraction": 0.22,
+    "external_capital_fraction": 0.08,
+    "reserve_fraction": 0.02,
+}
+V6_CAPITAL_FRACTIONS = tuple(V6_AUTHORIZED_CAPITAL_CEILINGS)
 
 
 def _number(value: Any) -> float | None:
@@ -229,6 +231,13 @@ def compare_paper_config(base: dict[str, Any], current: dict[str, Any], path: st
                     )
 
     if _is_v6(path):
+        _compare_limit(
+            errors,
+            f"{path}:market_limit",
+            None,
+            current.get("market_limit"),
+            ceiling=V6_AUTHORIZED_MARKET_LIMIT,
+        )
         for key in ("min_liquidity", "min_net_edge", "uncertainty_penalty"):
             _compare_floor(errors, f"{path}:{key}", current.get(key), V6_AUTHORIZED_FLOORS[key])
         for key in ("fractional_kelly", "max_trade_usd"):
@@ -259,6 +268,13 @@ def compare_paper_config(base: dict[str, Any], current: dict[str, Any], path: st
                 errors.append(f"invalid V6 capital allocation: {path}:v6.{key}")
             else:
                 fractions.append(value)
+                _compare_limit(
+                    errors,
+                    f"{path}:v6.{key}",
+                    None,
+                    value,
+                    ceiling=V6_AUTHORIZED_CAPITAL_CEILINGS[key],
+                )
         if len(fractions) == len(V6_CAPITAL_FRACTIONS) and sum(fractions) > 1.0 + 1e-12:
             errors.append(f"V6 paper capital allocations exceed 100%: {path}:v6 total={sum(fractions):g}")
 
@@ -366,7 +382,8 @@ def render(errors: list[str], checked: list[str]) -> str:
         "",
         f"- paper/runtime surfaces checked: {len(checked)}",
         f"- hard-safety violations: {len(errors)}",
-        "- V6 authorized PAPER envelope: drawdown <=15%, market <=5%, event <=15%, gross <=70%, Kelly <=25%, max trade <=$125",
+        "- V6 authorized PAPER envelope: market universe <=1000, drawdown <=15%, market <=5%, event <=15%, gross <=70%, Kelly <=25%, max trade <=$125",
+        "- V6 authorized sleeve ceilings: maker <=22%, taker <=12%, RV <=34%, hard <=22%, external <=8%, reserve <=2%",
         "- V6 executable admission floors: min liquidity >=$2, post-cost min edge >=0.5 bp, uncertainty penalty >=0",
         "- historical 2.5% / 8% / 45% values are not immutable V6 caps; the authorized envelope still requires normal research/governance/integration provenance",
         "- runtime rule: protected drawdown/concentration/gross/paper-only controls may be inherited from versioned config, not newly hidden in runtime/materialization overrides",
