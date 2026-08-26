@@ -23,18 +23,19 @@ class PointInTimeArchiveWorkflowContractTest(unittest.TestCase):
         self.assertIn("point-in-time", responsibility)
         self.assertIn("without champion, execution, pnl or risk mutation", responsibility)
 
-    def test_workflow_reads_existing_cache_and_exact_validated_helper(self) -> None:
+    def test_workflow_reads_only_v7_cache_and_exact_validated_helper(self) -> None:
         workflow = (ROOT / ".github/workflows/v7-point-in-time-universe-archive.yml").read_text()
         self.assertIn('cron: "11,41 * * * *"', workflow)
         self.assertIn("git fetch -q origin paper-validated", workflow)
         self.assertIn("git rev-parse origin/paper-validated", workflow)
         self.assertIn('git show "${validated_sha}:config/live_champion.json"', workflow)
-        self.assertIn('version not in {6,7}', workflow)
-        self.assertIn('git cat-file -e "${validated_sha}:${helper_path}"', workflow)
+        self.assertIn('version != 7', workflow)
         self.assertIn('git show "${validated_sha}:${helper_path}"', workflow)
-        self.assertIn('cache="$run_root/market_proxy_cache.json"', workflow)
+        self.assertIn('cache="$run_root/execution/market_proxy_cache.json"', workflow)
+        self.assertIn("polymarket_v7_market_proxy_cache_v1", workflow)
         self.assertIn("--cadence-seconds 1800", workflow)
         self.assertIn("--retention-days 45", workflow)
+        self.assertNotIn("polymarket_v6", workflow)
         self.assertNotIn("gamma-api.polymarket.com", workflow)
         self.assertNotIn("clob.polymarket.com", workflow)
         self.assertNotIn("batch-prices-history", workflow)
