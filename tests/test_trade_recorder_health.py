@@ -76,6 +76,21 @@ class TradeRecorderHealthTest(unittest.TestCase):
         report = MODULE.evaluate(self.fields(last_trade_ts=1_000_100), 1_000_000, 1200, 30)
         self.assertIn("trade_timestamp_in_future", report["failures"])
 
+    def test_recorder_request_uses_documented_filters_not_server_side_window(self) -> None:
+        source = (ROOT / "src" / "trade_recorder.cpp").read_text(encoding="utf-8")
+        self.assertIn('"&takerOnly=true&market=" << market_query', source)
+        self.assertNotIn('"&takerOnly=true&start="', source)
+        self.assertNotIn('"&end=" << end', source)
+
+    def test_recorder_enforces_overlap_window_locally_before_dedup(self) -> None:
+        source = (ROOT / "src" / "trade_recorder.cpp").read_text(encoding="utf-8")
+        window = "if (t.ts < start || t.ts > end) continue;"
+        condition = "if (!by_condition.count(t.condition_id)) continue;"
+        dedup = "const auto key = trade_key(t);"
+        self.assertIn(window, source)
+        self.assertLess(source.index(window), source.index(condition))
+        self.assertLess(source.index(window), source.index(dedup))
+
 
 if __name__ == "__main__":
     unittest.main()
