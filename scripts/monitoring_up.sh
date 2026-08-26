@@ -19,5 +19,5 @@ docker compose -f docker-compose.monitoring.yml up -d
 echo "Grafana:    http://127.0.0.1:${GRAFANA_PORT:-3000}"
 echo "Prometheus: http://127.0.0.1:${PROMETHEUS_PORT:-9090}"
 echo "Exporter:   http://127.0.0.1:${EXPORTER_PORT:-9108}/metrics"
-echo "Runtime:    ${POLYMARKET_RUN_NAME:-auto} (auto selects highest paper_v* run)"
+echo "Runtime:    ${POLYMARKET_RUN_NAME:-paper_v7_live} (canonical V7 PAPER runtime)"
 echo "Default Grafana login: ${GRAFANA_ADMIN_USER:-admin} / ${GRAFANA_ADMIN_PASSWORD:-polymarket-paper}"
