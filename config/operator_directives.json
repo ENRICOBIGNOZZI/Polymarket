@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 1,
   "directive_epoch": "2026-08-26T20:20:00+02:00",
   "operator_instruction_id": "user-v7-paper-100pct-20260826",
   "authority": "latest_explicit_user_instruction",
