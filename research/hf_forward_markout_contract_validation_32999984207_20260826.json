@@ -1,0 +1,58 @@
+{
+  "schema": "polymarket_hf_forward_markout_contract_validation_v1",
+  "research_only": true,
+  "source": {
+    "workflow_run_id": "32999984207",
+    "head_sha": "9c492802983521dfcd63f7396231ffd17028814c",
+    "artifact": "forward-maker-alpha-32999984207"
+  },
+  "validation": {
+    "research_policy": "success",
+    "monitoring": "success",
+    "ci_release": "success",
+    "ci_debug": "success",
+    "public_live_paper_smoke": "success",
+    "forward_maker_workflow": "success",
+    "deterministic_strict_contract_tests": "success"
+  },
+  "markout_contract": {
+    "name": "strict_horizon_observed_v1",
+    "horizons_seconds": [45, 60, 300],
+    "legacy_markouts_excluded": true,
+    "legacy_fill_and_pnl_evidence_retained": true,
+    "valid_sessions": 65,
+    "strict_markout_sessions": 1,
+    "legacy_sessions": 64
+  },
+  "fresh_strict_session": {
+    "duration_seconds": 180,
+    "probes_per_policy": 9,
+    "join_fills": 0,
+    "improve1_fills": 0,
+    "fade1_fills": 0,
+    "observed_45s_markout_filled_shares": 0,
+    "observed_60s_markout_filled_shares": 0,
+    "observed_300s_markout_filled_shares": 0
+  },
+  "improve1_cumulative": {
+    "sessions": 65,
+    "probes": 940,
+    "any_fills": 10,
+    "one_sided_fills": 10,
+    "paired_fills": 0,
+    "total_pnl_ex_rewards_usd": -5.744892566366351,
+    "moving_block_bootstrap_ucb_mean_pnl_ex_rewards_per_probe_usd": -0.0018905614269636895,
+    "strict_markout_sessions": 1,
+    "legacy_markout_bearing_sessions_excluded": 8,
+    "strict_markout_45_bid_per_share": null,
+    "strict_markout_60_bid_per_share": null,
+    "strict_markout_300_bid_per_share": null
+  },
+  "decision": "HISTORICAL_MARKOUT_CONTAMINATION_REPAIRED_AND_VALIDATED_MORE_EVIDENCE_REQUIRED",
+  "interpretation": "The unconditional one-tick inside-spread improve1 policy remains economically rejected from realized ex-reward PnL and block-bootstrap evidence alone. Legacy 60s/300s markouts are no longer allowed to support or weaken that conclusion. New 45s/60s/300s statistics remain censored until a strict tagged session obtains a fill and genuinely reaches the requested horizon.",
+  "safety": {
+    "max_drawdown_ratio": 0.15,
+    "authenticated_execution": false,
+    "real_money_execution": false
+  }
+}
