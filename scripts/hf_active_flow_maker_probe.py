@@ -79,13 +79,14 @@ def _valid_trade_rows(rows: list[object], start_ts: int, end_ts: int) -> list[di
 
 def fetch_trades_batch(condition_ids: list[str], start_ts: int, end_ts: int,
                        batch_size: int = 5) -> tuple[dict[str, list[core.Trade]], int, list[str]]:
-    """Fetch recent public trade history with a global-tape sanity fallback.
+    """Fetch recent public trade history and fail closed on a stale global tape.
 
     Data API `/trades` documents `market`, `limit`, `offset`, and `takerOnly`; event
     time is filtered locally. Retryable failures are recursively split to single
     conditions. If a large universe returns a clean but empty filtered response,
-    one unfiltered recent public page is used as a causal sanity benchmark and as
-    a fallback only for condition IDs already inside the authorized universe.
+    an unfiltered public page is used to distinguish a genuinely quiet selected
+    universe from an empty/stale Data API index. A stale global page is evidence of
+    a data defect, not economic evidence of zero HF activity.
     """
     global _ACTIVITY_DIAGNOSTICS
     out: dict[str, list[core.Trade]] = defaultdict(list)
@@ -99,10 +100,15 @@ def fetch_trades_batch(condition_ids: list[str], start_ts: int, end_ts: int,
         _ACTIVITY_DIAGNOSTICS = {
             "activity_universe_prior": "gamma_volume24hr_desc_then_causal_recent_trade_gate",
             "filtered_batch_recent_rows": 0,
+            "global_sanity_checked": False,
+            "global_sanity_raw_rows": 0,
             "global_sanity_recent_rows": 0,
             "global_sanity_recent_conditions": 0,
             "global_sanity_overlap_conditions": 0,
+            "global_sanity_newest_trade_ts": None,
+            "global_sanity_newest_age_seconds": None,
             "global_sanity_fallback_used": False,
+            "global_trade_tape_state": "not_checked",
         }
 
     def consume_rows(rows: list[object], chunk: list[str]) -> int:
@@ -172,8 +178,8 @@ def fetch_trades_batch(condition_ids: list[str], start_ts: int, end_ts: int,
     if len(unique_conditions) >= _GLOBAL_SANITY_MIN_CONDITIONS:
         _ACTIVITY_DIAGNOSTICS["filtered_batch_recent_rows"] = filtered_recent_rows
 
-    # A clean 0/1000 after the prior static-universe rejection is not sufficient
-    # evidence of a genuinely dead market. Compare it with the current global tape.
+    # A clean 0/1000 is not sufficient evidence of a dead market universe.
+    # Inspect the newest rows from the entire public tape and record their event age.
     if not out and not errors and len(unique_conditions) >= _GLOBAL_SANITY_MIN_CONDITIONS:
         query = f"limit={_PAGE_LIMIT}&offset=0&takerOnly=true"
         try:
@@ -182,13 +188,34 @@ def fetch_trades_batch(condition_ids: list[str], start_ts: int, end_ts: int,
             rows = raw if isinstance(raw, list) else raw.get("data", []) if isinstance(raw, dict) else []
             if not isinstance(rows, list):
                 raise RuntimeError("unexpected global trade response")
-            recent = _valid_trade_rows(rows, start_ts, end_ts)
+            raw_rows = [item for item in rows if isinstance(item, dict)]
+            raw_timestamps = [
+                int(core.number(item.get("timestamp"), 0))
+                for item in raw_rows
+                if int(core.number(item.get("timestamp"), 0)) > 0
+            ]
+            newest_ts = max(raw_timestamps) if raw_timestamps else None
+            newest_age = max(0, end_ts - newest_ts) if newest_ts is not None else None
+            recent = _valid_trade_rows(raw_rows, start_ts, end_ts)
             recent_conditions = {str(x.get("conditionId") or "") for x in recent if x.get("conditionId")}
             overlap = recent_conditions.intersection(unique_conditions)
+            if not raw_rows:
+                tape_state = "empty_global_page"
+            elif not recent:
+                tape_state = "stale_for_hf_window"
+            elif overlap:
+                tape_state = "recent_with_universe_overlap"
+            else:
+                tape_state = "recent_without_universe_overlap"
             _ACTIVITY_DIAGNOSTICS.update({
+                "global_sanity_checked": True,
+                "global_sanity_raw_rows": len(raw_rows),
                 "global_sanity_recent_rows": len(recent),
                 "global_sanity_recent_conditions": len(recent_conditions),
                 "global_sanity_overlap_conditions": len(overlap),
+                "global_sanity_newest_trade_ts": newest_ts,
+                "global_sanity_newest_age_seconds": newest_age,
+                "global_trade_tape_state": tape_state,
             })
             before = sum(len(v) for v in out.values())
             consume_rows(recent, unique_conditions)
@@ -219,15 +246,20 @@ def activity_data_healthy(result: dict[str, object]) -> bool:
     active = int(universe.get("active_markets_evaluated") or 0)
     errors = universe.get("flow_errors")
     error_count = len(errors) if isinstance(errors, list) else 0
+    checked = bool(universe.get("global_sanity_checked"))
+    global_raw = int(universe.get("global_sanity_raw_rows") or 0)
     global_recent = int(universe.get("global_sanity_recent_rows") or 0)
     global_overlap = int(universe.get("global_sanity_overlap_conditions") or 0)
     if discovered > 0 and active == 0 and error_count > 0:
         return False
-    # If the public global tape is live but the authorized 1000-market universe has
-    # zero overlap, this is a universe-selection/coverage defect, not valid zero-flow
-    # evidence. Fail closed so the scheduler repairs selection instead of declaring
-    # the maker economically inactive.
-    if discovered > 0 and active == 0 and global_recent > 0 and global_overlap == 0:
+    # A large discovered universe plus an unfiltered global tape that is empty or
+    # stale for the requested HF lookback cannot support an economic zero-activity
+    # conclusion. Treat it as a blocking tape-freshness/indexing defect.
+    if discovered > 0 and active == 0 and checked and (global_raw == 0 or global_recent == 0):
+        return False
+    # If the global tape is recent but has no overlap with the selected universe,
+    # the candidate-universe prior is still wrong for HF purposes.
+    if discovered > 0 and active == 0 and checked and global_recent > 0 and global_overlap == 0:
         return False
     return True
 
@@ -237,14 +269,32 @@ def _deterministic_contract_checks() -> None:
     assert q.get("order") == ["volume24hr"]
     assert q.get("ascending") == ["false"]
     assert q.get("liquidity_num_min") == ["2"]
+    # Not checked means there is no contradictory global evidence yet.
     assert activity_data_healthy({"universe": {
         "discovered_markets": 1000, "active_markets_evaluated": 0,
-        "flow_errors": [], "global_sanity_recent_rows": 0,
+        "flow_errors": [], "global_sanity_checked": False,
+        "global_sanity_raw_rows": 0, "global_sanity_recent_rows": 0,
         "global_sanity_overlap_conditions": 0,
     }})
+    # A checked empty global tape is not usable HF evidence.
     assert not activity_data_healthy({"universe": {
         "discovered_markets": 1000, "active_markets_evaluated": 0,
-        "flow_errors": [], "global_sanity_recent_rows": 100,
+        "flow_errors": [], "global_sanity_checked": True,
+        "global_sanity_raw_rows": 0, "global_sanity_recent_rows": 0,
+        "global_sanity_overlap_conditions": 0,
+    }})
+    # A populated but stale global page is likewise invalid for a 5-minute HF gate.
+    assert not activity_data_healthy({"universe": {
+        "discovered_markets": 1000, "active_markets_evaluated": 0,
+        "flow_errors": [], "global_sanity_checked": True,
+        "global_sanity_raw_rows": 1000, "global_sanity_recent_rows": 0,
+        "global_sanity_overlap_conditions": 0,
+    }})
+    # A live global tape with zero overlap identifies universe-selection failure.
+    assert not activity_data_healthy({"universe": {
+        "discovered_markets": 1000, "active_markets_evaluated": 0,
+        "flow_errors": [], "global_sanity_checked": True,
+        "global_sanity_raw_rows": 1000, "global_sanity_recent_rows": 100,
         "global_sanity_overlap_conditions": 0,
     }})
 
@@ -268,7 +318,9 @@ def main() -> int:
     (out / "result.md").write_text(batched.markdown(result), encoding="utf-8")
     print(batched.markdown(result), end="")
     if not healthy:
-        print("HF activity discovery is unhealthy; refusing to treat a live global tape or transport failures as zero activity.")
+        state = universe.get("global_trade_tape_state") if isinstance(universe, dict) else None
+        age = universe.get("global_sanity_newest_age_seconds") if isinstance(universe, dict) else None
+        print(f"HF activity discovery is unhealthy: global_trade_tape_state={state} newest_age_seconds={age}; refusing zero-activity evidence.")
         return 2
     return 0
 
