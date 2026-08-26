@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - "scripts/v7_local_factor_core.py"
+      - "scripts/v7_local_factor_inference.py"
       - "scripts/v7_local_factor_research.py"
       - "config/research_v7_local_factor.json"
       - "tests/test_v7_local_factor_core.py"
@@ -29,7 +30,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest tests/test_v7_local_factor_core.py -v
-          python3 -m py_compile scripts/v7_local_factor_core.py scripts/v7_local_factor_research.py
+          python3 -m py_compile scripts/v7_local_factor_core.py scripts/v7_local_factor_inference.py scripts/v7_local_factor_research.py
           python3 -m json.tool config/research_v7_local_factor.json >/dev/null
 
       - name: Public-data repaired Local Factor challenger
@@ -59,6 +60,7 @@ jobs:
           assert r['history_data_healthy'] is True
           assert r['histories'] >= r['history_required_market_count']
           assert r['pair_hypotheses'] > 0
+          assert r['pair_pvalue_method'] == 'intersection_union_max_marginal_null_preserving_bootstrap_pvalue'
           PY
 
       - name: Publish Local Factor summary
@@ -76,6 +78,7 @@ jobs:
           print(f"- histories: {r['histories']} / required {r['history_required_market_count']}")
           print(f"- history data healthy: {r['history_data_healthy']}")
           print(f"- history chunk days: {r['history_window_days']}")
+          print(f"- pair p-value method: {r['pair_pvalue_method']}")
           print(f"- pair hypotheses: {r['pair_hypotheses']}")
           print(f"- BH-selected pairs: {r['bh_selected_pairs']}")
           print(f"- post-BH pair signals: {r['post_bh_pair_signals']}")
