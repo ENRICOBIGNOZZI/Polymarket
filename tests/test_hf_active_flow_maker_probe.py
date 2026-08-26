@@ -4,9 +4,12 @@ import argparse
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str((Path(__file__).resolve().parents[1] / "scripts")))
 
+import hf_active_flow_maker_probe as entrypoint  # noqa: E402
+from hf_active_flow_maker_batched_probe import fetch_trades_batch  # noqa: E402
 from hf_active_flow_maker_probe import (  # noqa: E402
     Book,
     Candidate,
@@ -61,6 +64,33 @@ def book(token: str, bid: float = 0.48, ask: float = 0.50,
 
 
 class ActiveFlowMakerProbeTest(unittest.TestCase):
+    def test_entrypoint_routes_to_batched_active_universe_probe(self):
+        self.assertEqual(entrypoint.main.__module__, "hf_active_flow_maker_batched_probe")
+
+    def test_batched_trade_fetch_groups_conditions_and_deduplicates(self):
+        rows = [
+            {"conditionId": "c1", "asset": "yes-m1", "side": "SELL", "timestamp": 990,
+             "price": 0.48, "size": 10.0, "transactionHash": "h1"},
+            {"conditionId": "c2", "asset": "yes-m2", "side": "BUY", "timestamp": 991,
+             "price": 0.51, "size": 7.0, "transactionHash": "h2"},
+            {"conditionId": "c1", "asset": "yes-m1", "side": "SELL", "timestamp": 990,
+             "price": 0.48, "size": 10.0, "transactionHash": "h1"},
+            {"conditionId": "outside", "asset": "x", "side": "SELL", "timestamp": 992,
+             "price": 0.40, "size": 99.0, "transactionHash": "h3"},
+        ]
+        with patch("hf_active_flow_maker_batched_probe.core.request_json") as request:
+            request.return_value = (rows, 1_234_500)
+            grouped, received_ms, errors = fetch_trades_batch(["c1", "c2"], 900, 1000, batch_size=20)
+        self.assertEqual(errors, [])
+        self.assertEqual(received_ms, 1_234_500)
+        self.assertEqual(len(grouped["c1"]), 1)
+        self.assertEqual(len(grouped["c2"]), 1)
+        self.assertNotIn("outside", grouped)
+        url = request.call_args.args[0]
+        self.assertIn("market=c1,c2", url)
+        self.assertIn("start=900", url)
+        self.assertIn("end=1000", url)
+
     def test_fee_formula_matches_engine_per_share_contract(self):
         fee = Fee(0.07, 1.0, True, "test")
         self.assertAlmostEqual(fee_per_share(0.4, fee), 0.07 * 0.4 * 0.6)
@@ -161,7 +191,6 @@ class ActiveFlowMakerProbeTest(unittest.TestCase):
             candidates.append(Candidate("active_flow", m, "YES", m.yes_token, 0.01, 0.5,
                                         100.0, 0.0, 0.01, 0.01, 0.5, 0, f, 0.5, 0.005))
         selected = select_with_caps(candidates, 10, a)
-        # Each order is $50 and event cap is $180, so at most three can share the event.
         self.assertEqual(len(selected), 3)
         self.assertLessEqual(sum(c.shares * c.limit_price for c in selected), a.max_event_fraction * a.starting_capital)
 
