@@ -58,7 +58,7 @@ def test_arrival_latency_applies_to_both_order_clocks():
 def test_maker_core_replays_before_residual_ttl_cancel_and_tracks_markouts():
     source = maker_core_source()
     replay = source.index("for row in tape:")
-    residual_cancel = source.index("# Only residual, still-unfilled orders can now be cancelled")
+    residual_cancel = source.index("for market_id, order in list(orders.items()):", replay)
     ttl_cancel = source.index('"action": "CANCEL_TTL"', residual_cancel)
     assert replay < residual_cancel < ttl_cancel
     assert "maker_markouts.csv" in source
