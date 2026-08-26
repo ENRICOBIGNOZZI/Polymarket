@@ -75,15 +75,74 @@ def source_number(candidate: dict[str, Any]) -> int | None:
     return int(value) if value else None
 
 
+def _check_name(check: dict[str, Any]) -> str:
+    return str(check.get("name") or check.get("context") or check.get("__typename", "unknown"))
+
+
+def _check_timestamp(check: dict[str, Any]) -> str:
+    for field in ("completedAt", "updatedAt", "startedAt", "createdAt"):
+        value = str(check.get(field) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _check_signature(check: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(check.get("__typename") or ""),
+        str(check.get("status") or check.get("state") or ""),
+        str(check.get("conclusion") or ""),
+    )
+
+
+def authoritative_check_attempts(
+    checks: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Collapse superseded attempts while staying fail-closed on ambiguity.
+
+    GitHub's ``statusCheckRollup`` can contain multiple attempts for the same
+    logical check on one exact head (for example an older CANCELLED run followed
+    by a successful rerun). Treating every historical attempt as current makes a
+    recovered exact-head check impossible to promote. Prefer the most recent
+    timestamped attempt per logical name. If duplicate attempts cannot be ordered
+    and disagree, report ambiguity instead of guessing that a success is current.
+    """
+
+    grouped: dict[str, list[tuple[int, dict[str, Any], str]]] = {}
+    for index, check in enumerate(checks):
+        if not isinstance(check, dict):
+            continue
+        grouped.setdefault(_check_name(check), []).append((index, check, _check_timestamp(check)))
+
+    selected: list[dict[str, Any]] = []
+    ambiguous: list[str] = []
+    for name, attempts in grouped.items():
+        if len(attempts) == 1:
+            selected.append(attempts[0][1])
+            continue
+        if all(timestamp for _, _, timestamp in attempts):
+            _, check, _ = max(attempts, key=lambda item: (item[2], item[0]))
+            selected.append(check)
+            continue
+        signatures = {_check_signature(check) for _, check, _ in attempts}
+        if len(signatures) == 1:
+            selected.append(attempts[-1][1])
+        else:
+            ambiguous.append(name)
+    return selected, sorted(set(ambiguous))
+
+
 def check_errors(
     checks: list[dict[str, Any]], required: tuple[str, ...], prefix: str
 ) -> list[str]:
     errors: list[str] = []
+    current_checks, ambiguous = authoritative_check_attempts(checks)
+    for name in ambiguous:
+        errors.append(f"{prefix}check {name} has ambiguous duplicate attempts")
+
     names: list[str] = []
-    for check in checks:
-        if not isinstance(check, dict):
-            continue
-        name = str(check.get("name") or check.get("context") or check.get("__typename", "unknown"))
+    for check in current_checks:
+        name = _check_name(check)
         names.append(name)
         if check.get("__typename") == "CheckRun":
             if check.get("status") != "COMPLETED":
@@ -317,7 +376,6 @@ def validate_evidence(evidence: dict[str, Any], candidate: dict[str, Any], sourc
     min_folds = integer(gates.get("min_active_folds"), 2)
     min_positive_fraction = finite(gates.get("min_positive_fold_fraction"), 0.50)
     min_incremental = finite(gates.get("min_incremental_utility"), 0.0)
-
     if integer(metrics.get("oos_trades")) < min_trades:
         errors.append("oos_trade_gate")
     if finite(metrics.get("oos_net_pnl_usd")) <= 0.0:
