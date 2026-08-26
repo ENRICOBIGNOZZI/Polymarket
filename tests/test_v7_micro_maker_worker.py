@@ -113,11 +113,11 @@ def test_exit_requirement_covers_position_plus_residual_order_and_markout_watch_
         }
         (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
         required = maker._exit_requirements(root)
-        # The markout watch refers to already-filled shares represented by the live
-        # position, so adding it would double-count liquidation depth. Cover the
-        # live position plus the residual order, or the watch amount if larger.
+        # Cover the live position plus its residual order, or the already-filled
+        # markout watch if larger. A never-filled resting order has no liquidation
+        # requirement while the system is not killed.
         assert required["x"] == 10.0
-        assert required["z"] == 4.0
+        assert "z" not in required
 
 
 def test_kill_switch_closes_positions_before_resting_orders():
