@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,6 +21,7 @@ from hf_active_flow_maker_probe import (  # noqa: E402
     Market,
     ShadowOrder,
     Trade,
+    activity_data_healthy,
     activity_eligible,
     build_candidates,
     consume,
@@ -95,8 +97,35 @@ class ActiveFlowMakerProbeTest(unittest.TestCase):
         self.assertNotIn("outside", grouped)
         url = request.call_args.args[0]
         self.assertIn("market=c1,c2", url)
+        self.assertIn("limit=1000", url)
         self.assertNotIn("start=", url)
         self.assertNotIn("end=", url)
+
+    def test_retryable_batch_timeout_splits_to_single_conditions(self):
+        rows1 = [{"conditionId": "c1", "asset": "t1", "side": "SELL", "timestamp": 990,
+                  "price": 0.48, "size": 10.0, "transactionHash": "a"}]
+        rows2 = [{"conditionId": "c2", "asset": "t2", "side": "BUY", "timestamp": 991,
+                  "price": 0.51, "size": 7.0, "transactionHash": "b"}]
+        timeout = urllib.error.HTTPError("https://data-api.polymarket.com/trades", 408, "timeout", {}, None)
+        with patch("hf_active_flow_maker_probe.core.request_json") as request:
+            request.side_effect = [timeout, (rows1, 1_000_100), (rows2, 1_000_200)]
+            grouped, received_ms, errors = fetch_trades_batch(["c1", "c2"], 900, 1000, batch_size=2)
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual(errors, [])
+        self.assertEqual(received_ms, 1_000_200)
+        self.assertEqual(len(grouped["c1"]), 1)
+        self.assertEqual(len(grouped["c2"]), 1)
+
+    def test_transport_errors_cannot_silently_become_zero_activity_evidence(self):
+        bad = {"universe": {"discovered_markets": 1000, "active_markets_evaluated": 0,
+                             "flow_errors": ["batch=0:HTTPError:408"]}}
+        self.assertFalse(activity_data_healthy(bad))
+        real_zero = {"universe": {"discovered_markets": 1000, "active_markets_evaluated": 0,
+                                   "flow_errors": []}}
+        self.assertTrue(activity_data_healthy(real_zero))
+        active = {"universe": {"discovered_markets": 1000, "active_markets_evaluated": 12,
+                                "flow_errors": ["one recoverable single-condition failure"]}}
+        self.assertTrue(activity_data_healthy(active))
 
     def test_fee_formula_matches_engine_per_share_contract(self):
         fee = Fee(0.07, 1.0, True, "test")
