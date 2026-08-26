@@ -94,6 +94,13 @@ jobs:
           set -euo pipefail
           cd ~/polymarket
           git fetch -q origin main paper-validated
+          shallow_before="$(git rev-parse --is-shallow-repository)"
+          if [[ "$shallow_before" == "true" ]]; then
+            git fetch -q --unshallow origin
+            git fetch -q origin main paper-validated
+          fi
+          shallow_after="$(git rev-parse --is-shallow-repository)"
+          test "$shallow_after" = false
           main_sha="$(git rev-parse origin/main)"
           paper_validated_sha="$(git rev-parse origin/paper-validated)"
           head_sha="$(git rev-parse HEAD)"
@@ -107,6 +114,8 @@ jobs:
             # descendant of the deployed head and still on the current main
             # lineage. Main may legitimately be ahead while its newest commit is
             # awaiting validation; that must not starve paper-validated of data.
+            # The server checkout can be shallow after deploy/rollback; ancestry
+            # must only be evaluated after restoring enough Git history to prove it.
             git merge-base --is-ancestor "$paper_validated_sha" "$main_sha"
             git merge-base --is-ancestor "$head_sha" "$paper_validated_sha"
             bootstrap=true
@@ -115,6 +124,8 @@ jobs:
           printf 'main_sha=%s\n' "$main_sha"
           printf 'paper_validated_sha=%s\n' "$paper_validated_sha"
           printf 'server_head_sha=%s\n' "$head_sha"
+          printf 'server_repo_shallow_before=%s\n' "$shallow_before"
+          printf 'server_repo_shallow_after=%s\n' "$shallow_after"
           printf 'bootstrap=%s\n' "$bootstrap"
           MANIFEST_JSON="$manifest_json" python3 - <<'PY'
           import json,os,re
