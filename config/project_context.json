@@ -12,7 +12,7 @@
     "require_full_worktree_inventory": true,
     "require_operator_directives": true,
     "inventory_command": "git ls-files",
-    "rule": "The repository is in an explicitly authorized no-champion V7 transition. V3-V6 runtime surfaces are retired and must not be restored for compatibility."
+    "rule": "V7 is the single final destination. The repository is in temporary post-cleanup repair: do not restore V3-V6 wholesale and do not delete further cutover dependencies. Recover only required primitives into V7/common/control-plane, then require one exact SHA through tests, same-SHA PAPER, main, paper-validated, deploy and server health before any remaining legacy retirement."
   },
   "required_surfaces": [
     ".github/workflows",
@@ -33,14 +33,15 @@
     "port": 22,
     "remote_root": "~/polymarket",
     "ssh_config_source": "ops/ssh_config_polymarket",
-    "active_champion": false
+    "active_champion": false,
+    "state": "v7_cutover_repair_required"
   },
   "grafana": {
     "canonical_operator_url": "http://mamma-portfolio.tail1bae85.ts.net",
     "active": false,
     "dashboard_uid": null,
     "dashboard_file": null,
-    "rule": "No champion-specific dashboard is canonical while the operational champion is disabled. V7 may install a new dashboard only with its validated integration."
+    "rule": "Legacy champion dashboards are not canonical. Rebuild one V7 economic monitoring plane as part of the same-SHA cutover; monitoring absence is a blocker to deployment readiness, not a successful steady state."
   },
   "security": {
     "private_keys_in_repository": false,
