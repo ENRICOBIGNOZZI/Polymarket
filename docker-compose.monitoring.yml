@@ -6,7 +6,7 @@ services:
     command:
       - python
       - -B
-      - /app/exporter_latest.py
+      - /app/exporter_latest_v7.py
       - --runs-base
       - /runs
       - --run-name
