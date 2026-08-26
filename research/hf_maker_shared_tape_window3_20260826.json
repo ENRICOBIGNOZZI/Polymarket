@@ -37,7 +37,8 @@
     "unique_tokens": 37,
     "candidate_tokens_present_anywhere_in_shared_tape": 0,
     "candidate_activity_rate": 0.0,
-    "interpretation": "The entire static maker signal candidate pool again had zero overlap with a large independent public trade tape. The candidate-selection defect therefore replicated in a later common-window run and remains upstream of the queue gate."
+    "candidate_markets_2028_presidential_nomination": 34,
+    "interpretation": "The entire static maker signal candidate pool again had zero overlap with a large independent public trade tape. Thirty-four of 37 unique candidates were long-dated 2028 presidential nomination contracts. The candidate-selection defect therefore replicated in a later common-window run and remains upstream of the queue gate."
   },
   "at_touch": {
     "posts": 35,
