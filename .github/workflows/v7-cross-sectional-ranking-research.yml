@@ -125,6 +125,8 @@ jobs:
           assert report["history_data_healthy"] is True
           assert report["forward_holdout_start_ts"] > report["discovery_cutoff_ts"]
           assert report["frozen_horizons_minutes"] == [120, 360]
+          assert report["frozen_history_request_anchored"] is True
+          assert report["history_request_start_ts"] <= report["frozen_required_history_start_ts"]
           assert report["frozen_holdout_fit_validated"] is True
           assert len(report["horizons"]) == 2
           for horizon in report["horizons"]:
@@ -153,6 +155,8 @@ jobs:
           print(f"- history data healthy: {r['history_data_healthy']}")
           print(f"- authoritative fee books: {r['authoritative_fee_book_count']}")
           print(f"- frozen horizons: {r['frozen_horizons_minutes']}")
+          print(f"- frozen history request anchored: {r['frozen_history_request_anchored']}")
+          print(f"- frozen required history start: {r['frozen_required_history_start_ts']}")
           print(f"- frozen fit validated: {r['frozen_holdout_fit_validated']}")
           print(f"- frozen training label cutoff: {r['frozen_training_label_cutoff_ts']}")
           print(f"- tail fraction: {r['tail_fraction']}")
