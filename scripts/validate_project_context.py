@@ -10,6 +10,11 @@ EXPECTED_CLEANUP_SEQUENCE = (
     "v7_implementation_then_tests_then_same_sha_paper_then_main_then_"
     "paper_validated_then_deploy_then_server_health_then_legacy_deletion"
 )
+EXPECTED_V7_PATHS = {
+    "canonical_loop": "scripts/paper_v7_loop.sh",
+    "canonical_config": "config/paper_v7.json",
+    "canonical_run_root": "runs/paper_v7_live",
+}
 
 
 def load(path: Path) -> dict[str, Any]:
@@ -73,6 +78,17 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     if policy.get("require_operator_directives") is not True:
         errors.append("operator directives must be required")
 
+    cutover = context.get("cutover") if isinstance(context.get("cutover"), dict) else {}
+    if cutover.get("target_version") != 7:
+        errors.append("project context cutover target_version must be 7")
+    if cutover.get("required_sequence") != EXPECTED_CLEANUP_SEQUENCE:
+        errors.append("project context cutover sequence must match the V7 master lifecycle")
+    for key, expected in EXPECTED_V7_PATHS.items():
+        if cutover.get(key) != expected:
+            errors.append(f"project context cutover requires {key}={expected}")
+    if not isinstance(cutover.get("current_state"), str) or not cutover.get("current_state"):
+        errors.append("project context cutover current_state is required")
+
     if directives.get("schema_version") != 1:
         errors.append("operator directives schema_version must equal 1")
     if directives.get("authority") != "latest_explicit_user_instruction":
@@ -107,9 +123,9 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
         if champion.get("version") != 7:
             errors.append("enabled operational champion must be version 7")
         expected_paths = {
-            "loop": "scripts/paper_v7_loop.sh",
-            "config": "config/paper_v7.json",
-            "run_root": "runs/paper_v7_live",
+            "loop": EXPECTED_V7_PATHS["canonical_loop"],
+            "config": EXPECTED_V7_PATHS["canonical_config"],
+            "run_root": EXPECTED_V7_PATHS["canonical_run_root"],
         }
         for key, expected in expected_paths.items():
             if champion.get(key) != expected:
