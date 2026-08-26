@@ -129,7 +129,8 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     if not isinstance(priorities, list) or len(priorities) < 8:
         errors.append("operator directives must provide the complete V7 priority sequence")
     forbidden = directives.get("forbidden_regressions")
-    if not isinstance(forbidden, list) or not any("100%" in str(item) and "$125" in str(item) for item in forbidden):
+    forbidden_text = "\n".join(str(item) for item in forbidden) if isinstance(forbidden, list) else ""
+    if not isinstance(forbidden, list) or "100%" not in forbidden_text or "$125" not in forbidden_text or "5%/15%/70%" not in forbidden_text:
         errors.append("operator directives must explicitly forbid the superseded unbounded V7 policy")
 
     for rel in [str(item) for item in context.get("required_surfaces", [])]:
