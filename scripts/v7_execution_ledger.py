@@ -179,6 +179,8 @@ class LedgerEvent:
 
         if self.receive_ts_ms is not None and self.recorded_ts_ms < self.receive_ts_ms:
             raise LedgerContractError("clock:recorded_before_receive")
+        if self.decision_ts_ms is not None and self.recorded_ts_ms < self.decision_ts_ms:
+            raise LedgerContractError("clock:recorded_before_decision")
         if (
             self.decision_ts_ms is not None
             and self.receive_ts_ms is not None
@@ -249,8 +251,8 @@ class LedgerEvent:
             raise LedgerContractError("predicted_fill_probability:out_of_range")
 
         if self.event_type in {"CANDIDATE", "ORDER_SUBMITTED"}:
-            if self.decision_ts_ms is None or self.receive_ts_ms is None:
-                raise LedgerContractError("decision:missing_receive_clock")
+            if self.exchange_ts_ms is None or self.receive_ts_ms is None or self.decision_ts_ms is None:
+                raise LedgerContractError("decision:missing_exchange_receive_decision_clock")
             if not self.book_snapshot_id:
                 raise LedgerContractError("decision:missing_book_snapshot_id")
 
@@ -275,7 +277,7 @@ class LedgerEvent:
                 raise LedgerContractError("position_mark:missing_position_id")
             if self.executable_liquidation_value is None:
                 raise LedgerContractError("position_mark:missing_executable_liquidation_value")
-            if self.receive_ts_ms is None or not self.book_snapshot_id:
+            if self.exchange_ts_ms is None or self.receive_ts_ms is None or not self.book_snapshot_id:
                 raise LedgerContractError("position_mark:missing_causal_book")
         if self.event_type == "FINAL" and self.final_pnl is None:
             raise LedgerContractError("final:missing_pnl")
