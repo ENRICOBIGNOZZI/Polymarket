@@ -22,6 +22,7 @@ spec.loader.exec_module(pairs)
 class Market:
     market_id: str
     question: str
+    event_id: str = ""
 
 
 class StructuralPairGraphTest(unittest.TestCase):
@@ -99,6 +100,39 @@ class StructuralPairGraphTest(unittest.TestCase):
         )
         self.assertEqual(graph.method, "insufficient_controls")
         self.assertEqual(graph.pairs, ())
+
+    def test_predeclared_controls_are_deterministic_bounded_and_metadata_only(self) -> None:
+        markets = [
+            Market("a", "Will BTC be above $90,000 by 2026?", "btc"),
+            Market("b", "Will BTC be above $100,000 by 2026?", "btc"),
+            Market("c", "Will BTC be above $110,000 by 2026?", "btc"),
+            Market("d", "Will BTC be above $120,000 by 2026?", "btc"),
+            Market("e", "Will rainfall exceed 10 inches?", "weather"),
+        ]
+        first = pairs.predeclare_pair_controls(
+            markets, [("a", "b")], min_controls=2, max_controls=2
+        )
+        second = pairs.predeclare_pair_controls(
+            list(reversed(markets)), [("b", "a")], min_controls=2, max_controls=2
+        )
+        self.assertEqual(first[("a", "b")], ("c", "d"))
+        self.assertEqual(first, second)
+        self.assertNotIn("e", first[("a", "b")])
+
+    def test_predeclared_controls_respect_maximum_without_ex_post_fallback(self) -> None:
+        markets = [
+            Market("a", "Will Alice win the election?", "e1"),
+            Market("b", "Will Bob win the election?", "e1"),
+            Market("c", "Will Carol win the election?", "e1"),
+            Market("d", "Will Dan win the election?", "e1"),
+            Market("e", "Will Eve win the election?", "e1"),
+            Market("f", "Will Frank win the election?", "e1"),
+        ]
+        plan = pairs.predeclare_pair_controls(
+            markets, [("a", "b")], min_controls=2, max_controls=3
+        )
+        self.assertEqual(len(plan[("a", "b")]), 3)
+        self.assertTrue(set(plan[("a", "b")]).issubset({"c", "d", "e", "f"}))
 
 
 if __name__ == "__main__":
