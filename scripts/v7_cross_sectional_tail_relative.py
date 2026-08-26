@@ -61,8 +61,8 @@ def forward_gate(blocked: dict[str, object], config: dict[str, Any]) -> tuple[bo
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Frozen 2h/6h finance-style cross-sectional relative tail challenger")
-    parser.add_argument("--config", type=Path, default=Path("config/research_v7_cross_sectional_rank.json"))
+    parser = argparse.ArgumentParser(description="Frozen V7 finance-style cross-sectional relative tail challenger")
+    parser.add_argument("--config", type=Path, default=Path("config/research_v7_cross_sectional_rank_frozen.json"))
     parser.add_argument("--gamma-url", default="https://gamma-api.polymarket.com")
     parser.add_argument("--clob-url", default="https://clob.polymarket.com")
     parser.add_argument("--market-limit", type=int, default=150)
@@ -75,8 +75,11 @@ def main() -> int:
         raise SystemExit("relative tail challenger must remain paper/research-only with live intents disabled")
     if cfg.get("target") != "cross_sectional_tail_relative_logit_spread":
         raise SystemExit("relative tail challenger target contract is not frozen")
-    if list(cfg.get("horizons_minutes") or []) != [120, 360]:
-        raise SystemExit("relative tail challenger horizons must remain frozen at 2h and 6h")
+    horizons_minutes = [int(value) for value in (cfg.get("horizons_minutes") or [])]
+    if not horizons_minutes or any(value <= 0 for value in horizons_minutes):
+        raise SystemExit("relative tail challenger requires at least one positive frozen horizon")
+    if len(set(horizons_minutes)) != len(horizons_minutes):
+        raise SystemExit("relative tail challenger horizons must be unique")
     if cfg.get("frequency_registration", {}).get("frozen_holdout_only") is not True:
         raise SystemExit("relative tail challenger requires frozen_holdout_only=true")
     pair_contract = cfg["relative_pair_contract"]
@@ -89,6 +92,10 @@ def main() -> int:
     execution_cfg = cfg["execution_shadow"]
     discovery_cfg = cfg["discovery"]
     fidelity_minutes = int(history_cfg["fidelity_minutes"])
+    if fidelity_minutes <= 0:
+        raise SystemExit("history fidelity must be positive")
+    if any(value % fidelity_minutes != 0 for value in horizons_minutes):
+        raise SystemExit("every frozen horizon must be an integer multiple of history fidelity")
     bucket_seconds = fidelity_minutes * 60
     training_window_seconds = int(history_cfg["training_window_days"]) * 86400
     embargo_seconds = int(history_cfg["purge_embargo_buckets"]) * bucket_seconds
@@ -165,7 +172,7 @@ def main() -> int:
     horizon_reports: list[dict[str, Any]] = []
     pair_rows: list[dict[str, Any]] = []
 
-    for horizon_minutes in cfg["horizons_minutes"]:
+    for horizon_minutes in horizons_minutes:
         horizon_steps = int(horizon_minutes) // fidelity_minutes
         rows = core.build_training_rows(
             histories,
@@ -207,11 +214,7 @@ def main() -> int:
 
         score_ts = base.latest_score_time(histories, metadata, bucket_seconds, minimum_cross_section)
         current_pairs: list[relative.RelativePairCandidate] = []
-        if (
-            frozen_fit_valid
-            and score_ts > 0
-            and received_ts - score_ts <= 2 * bucket_seconds
-        ):
+        if frozen_fit_valid and score_ts > 0 and received_ts - score_ts <= 2 * bucket_seconds:
             snapshot = core.score_snapshot(
                 histories,
                 metadata,
@@ -277,7 +280,9 @@ def main() -> int:
         "live_intents_enabled": False,
         "submitted_orders": 0,
         "target": cfg["target"],
-        "frozen_horizons_minutes": list(cfg["horizons_minutes"]),
+        "frozen_horizons_minutes": horizons_minutes,
+        "history_fidelity_minutes": fidelity_minutes,
+        "pool_evidence_across_horizons": False,
         "tail_fraction": float(model_cfg["tail_fraction"]),
         "discovery_source_head": discovery_cfg["source_head"],
         "discovery_cutoff_ts": int(discovery_cfg["discovery_cutoff_ts"]),
@@ -311,7 +316,7 @@ def main() -> int:
             "point_in_time_universe_not_yet_attached",
             "empirical_joint_fill_states_not_yet_attached",
             "partial_fill_abort_unwind_economics_not_yet_attached",
-            "shared_execution_ledger_cost_stressed_pnl_not_yet_attached",
+            "canonical_v7_execution_ledger_cost_stressed_pnl_not_yet_attached",
             "research_branch_cannot_mutate_live_champion",
         ]
         + ([] if frozen_holdout_fit_validated else ["frozen_holdout_fit_not_validated"])
