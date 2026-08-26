@@ -43,7 +43,7 @@ class V6MarketCacheRelayContractTests(unittest.TestCase):
         self.assertIn('if [[ "$BOOTSTRAP" == "true" ]]; then', workflow)
         self.assertIn("relay_bootstrap_staged=true", workflow)
         self.assertIn("relay_bootstrap_waits_for_validated_deploy=true", workflow)
-        self.assertIn('time.time()-float(value["timestamp"]) <= 180', workflow)
+        self.assertIn("time.time()-float(value['timestamp']) <= 180", workflow)
 
     def test_relay_fails_closed_unless_running_proxy_consumes_installed_cache(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
