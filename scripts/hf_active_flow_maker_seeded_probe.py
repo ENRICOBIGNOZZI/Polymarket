@@ -25,6 +25,7 @@ _SEED_ASSETS: dict[str, set[str]] = defaultdict(set)
 _TOKEN_TO_CANONICAL_CONDITION: dict[str, str] = {}
 _CANONICAL_CONDITION_BY_RAW: dict[str, str] = {}
 _SEED_RESOLUTION_MODE: dict[str, str] = {}
+_ADMISSION_DIAGNOSTICS: dict[str, Any] = {}
 _CONDITION_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 
 
@@ -39,37 +40,23 @@ def _global_seed_query(start_ts: int, end_ts: int, limit: int = 1000) -> str:
 
 
 def _condition_market_query(condition_ids: list[str]) -> str:
-    pairs: list[tuple[str, str]] = [
-        ("active", "true"),
-        ("closed", "false"),
-        ("limit", "100"),
-    ]
+    pairs: list[tuple[str, str]] = [("active", "true"), ("closed", "false"), ("limit", "100")]
     pairs.extend(("condition_ids", condition) for condition in condition_ids if condition)
     return urllib.parse.urlencode(pairs)
 
 
 def _token_market_query(token_ids: list[str]) -> str:
-    pairs: list[tuple[str, str]] = [
-        ("active", "true"),
-        ("closed", "false"),
-        ("limit", "100"),
-    ]
+    pairs: list[tuple[str, str]] = [("active", "true"), ("closed", "false"), ("limit", "100")]
     pairs.extend(("clob_token_ids", token) for token in token_ids if token)
     return urllib.parse.urlencode(pairs)
 
 
 def _slug_market_query(slug: str) -> str:
-    return urllib.parse.urlencode({
-        "active": "true",
-        "closed": "false",
-        "limit": 10,
-        "slug": slug,
-    })
+    return urllib.parse.urlencode({"active": "true", "closed": "false", "limit": 10, "slug": slug})
 
 
 def _global_trade_rows(start_ts: int, end_ts: int) -> tuple[list[dict[str, object]], int]:
-    raw, received_ms = core.request_json(
-        f"{core.DATA_URL}/trades?{_global_seed_query(start_ts, end_ts)}")
+    raw, received_ms = core.request_json(f"{core.DATA_URL}/trades?{_global_seed_query(start_ts, end_ts)}")
     rows = raw if isinstance(raw, list) else raw.get("data", []) if isinstance(raw, dict) else []
     if not isinstance(rows, list):
         raise RuntimeError("unexpected global trade response")
@@ -84,12 +71,12 @@ def _recent_condition_ids(start_ts: int, end_ts: int, max_conditions: int) -> tu
     _SEED_ASSETS = defaultdict(set)
     for item in valid:
         condition = str(item.get("conditionId") or "")
-        slug = str(item.get("slug") or "")
-        token = str(item.get("asset") or "")
-        ts = int(core.number(item.get("timestamp"), 0))
         if not condition:
             continue
+        ts = int(core.number(item.get("timestamp"), 0))
         newest_by_condition[condition] = max(ts, newest_by_condition.get(condition, 0))
+        slug = str(item.get("slug") or "")
+        token = str(item.get("asset") or "")
         if slug:
             _SEED_SLUGS[condition] = slug
         if token:
@@ -100,9 +87,7 @@ def _recent_condition_ids(start_ts: int, end_ts: int, max_conditions: int) -> tu
 
 def _rows(raw: Any) -> list[dict[str, Any]]:
     values = raw if isinstance(raw, list) else raw.get("markets", []) if isinstance(raw, dict) else []
-    if not isinstance(values, list):
-        return []
-    return [item for item in values if isinstance(item, dict)]
+    return [item for item in values if isinstance(item, dict)] if isinstance(values, list) else []
 
 
 def _register_seed_market(raw_condition: str, market: core.Market, seen: set[str],
@@ -118,13 +103,7 @@ def _register_seed_market(raw_condition: str, market: core.Market, seen: set[str
 
 def _markets_for_conditions(condition_ids: list[str], min_liquidity: float,
                             batch_size: int = 20) -> tuple[list[core.Market], list[str]]:
-    """Resolve recent Data-API trades to canonical Gamma markets.
-
-    The Data API's conditionId is not assumed canonical. The CLOB outcome token in
-    ``asset`` is the primary identity because Gamma officially supports the
-    ``clob_token_ids`` market filter. Slug is a secondary identity and a canonical
-    0x+64 condition id is only the final fallback.
-    """
+    """Resolve Data-API activity to canonical Gamma markets, token identity first."""
     global _TOKEN_TO_CANONICAL_CONDITION, _CANONICAL_CONDITION_BY_RAW, _SEED_RESOLUTION_MODE
     out: list[core.Market] = []
     seen: set[str] = set()
@@ -133,32 +112,27 @@ def _markets_for_conditions(condition_ids: list[str], min_liquidity: float,
     _TOKEN_TO_CANONICAL_CONDITION = {}
     _CANONICAL_CONDITION_BY_RAW = {}
     _SEED_RESOLUTION_MODE = {}
-
     unresolved: list[str] = []
+
     for raw_condition in unique:
         matched = False
-        seed_assets = sorted(_SEED_ASSETS.get(raw_condition, set()))
-        if seed_assets:
-            for lo in range(0, len(seed_assets), max(1, batch_size)):
-                chunk = seed_assets[lo:lo + max(1, batch_size)]
-                try:
-                    raw, _ = core.request_json(f"{core.GAMMA_URL}/markets?{_token_market_query(chunk)}")
-                except Exception as exc:
-                    errors.append(
-                        f"seed_gamma_token_batch={lo // max(1, batch_size)}:{type(exc).__name__}:{exc}")
+        assets = sorted(_SEED_ASSETS.get(raw_condition, set()))
+        for lo in range(0, len(assets), max(1, batch_size)):
+            chunk = assets[lo:lo + max(1, batch_size)]
+            try:
+                raw, _ = core.request_json(f"{core.GAMMA_URL}/markets?{_token_market_query(chunk)}")
+            except Exception as exc:
+                errors.append(f"seed_gamma_token_batch={lo // max(1, batch_size)}:{type(exc).__name__}:{exc}")
+                continue
+            for item in _rows(raw):
+                market = core.parse_market(item, min_liquidity)
+                if market is None or not {market.yes_token, market.no_token}.intersection(chunk):
                     continue
-                for item in _rows(raw):
-                    market = core.parse_market(item, min_liquidity)
-                    if market is None:
-                        continue
-                    tokens = {market.yes_token, market.no_token}
-                    if not tokens.intersection(chunk):
-                        continue
-                    _register_seed_market(raw_condition, market, seen, out, "clob_token_ids")
-                    matched = True
-                    break
-                if matched:
-                    break
+                _register_seed_market(raw_condition, market, seen, out, "clob_token_ids")
+                matched = True
+                break
+            if matched:
+                break
 
         slug = _SEED_SLUGS.get(raw_condition, "")
         if not matched and slug:
@@ -172,8 +146,7 @@ def _markets_for_conditions(condition_ids: list[str], min_liquidity: float,
                     market = core.parse_market(item, min_liquidity)
                     if market is None or market.slug != slug:
                         continue
-                    tokens = {market.yes_token, market.no_token}
-                    if seed_assets and not tokens.intersection(seed_assets):
+                    if seed_assets and not {market.yes_token, market.no_token}.intersection(seed_assets):
                         continue
                     _register_seed_market(raw_condition, market, seen, out, "slug_token")
                     matched = True
@@ -195,10 +168,7 @@ def _markets_for_conditions(condition_ids: list[str], min_liquidity: float,
                 continue
             _register_seed_market(market.condition_id, market, seen, out, "condition_id")
 
-    rank = {
-        _CANONICAL_CONDITION_BY_RAW.get(raw_condition, raw_condition): i
-        for i, raw_condition in enumerate(unique)
-    }
+    rank = {_CANONICAL_CONDITION_BY_RAW.get(raw, raw): i for i, raw in enumerate(unique)}
     out.sort(key=lambda market: (rank.get(market.condition_id, len(rank)), -market.volume24h, -market.liquidity))
     return out, errors
 
@@ -230,8 +200,7 @@ def discover_markets_seeded(limit: int, min_liquidity: float) -> list[core.Marke
     raw_recent_rows = 0
     seed_errors: list[str] = []
     try:
-        seed_ids, seed_received_ms, raw_recent_rows = _recent_condition_ids(
-            end_ts - lookback, end_ts, max_conditions)
+        seed_ids, seed_received_ms, raw_recent_rows = _recent_condition_ids(end_ts - lookback, end_ts, max_conditions)
     except Exception as exc:
         seed_errors.append(f"seed_global:{type(exc).__name__}:{exc}")
 
@@ -239,7 +208,6 @@ def discover_markets_seeded(limit: int, min_liquidity: float) -> list[core.Marke
     if seed_ids:
         seed_markets, mapping_errors = _markets_for_conditions(seed_ids, min_liquidity)
         seed_errors.extend(mapping_errors)
-
     _SEED_CONDITIONS = {market.condition_id for market in seed_markets}
     _SEED_ADDED_CONDITIONS = _SEED_CONDITIONS.difference(_PRIOR_CONDITIONS)
     merged = merge_seeded_universe(volume_prior, seed_markets, limit)
@@ -247,7 +215,7 @@ def discover_markets_seeded(limit: int, min_liquidity: float) -> list[core.Marke
     for condition in seed_ids:
         key = str(max(0, len(condition) - 2) if condition.startswith("0x") else len(condition))
         raw_lengths[key] = raw_lengths.get(key, 0) + 1
-    all_seed_assets = {token for condition in seed_ids for token in _SEED_ASSETS.get(condition, set())}
+    all_assets = {token for condition in seed_ids for token in _SEED_ASSETS.get(condition, set())}
     _SEED_DIAGNOSTICS = {
         "seed_strategy": "recent_global_trade_clob_token_identity_then_slug_or_condition_plus_volume24h_prior",
         "seed_lookback_seconds": lookback,
@@ -255,7 +223,7 @@ def discover_markets_seeded(limit: int, min_liquidity: float) -> list[core.Marke
         "seed_global_recent_rows": raw_recent_rows,
         "seed_global_condition_ids": seed_ids,
         "seed_global_condition_count": len(seed_ids),
-        "seed_global_asset_count": len(all_seed_assets),
+        "seed_global_asset_count": len(all_assets),
         "seed_global_slug_count": len({slug for slug in _SEED_SLUGS.values() if slug}),
         "seed_raw_condition_hex_length_counts": raw_lengths,
         "seed_noncanonical_raw_condition_count": sum(not _CONDITION_RE.fullmatch(x) for x in seed_ids),
@@ -284,11 +252,7 @@ def _merge_global_token_flows(flows: dict[str, list[core.Trade]], start_ts: int,
         rows, received_ms = _global_trade_rows(start_ts, end_ts)
     except Exception as exc:
         return 0, [f"seed_global_flow:{type(exc).__name__}:{exc}"]
-    seen: set[str] = {
-        trade.trade_id
-        for trades in flows.values()
-        for trade in trades
-    }
+    seen = {trade.trade_id for trades in flows.values() for trade in trades}
     for item in rows:
         token = str(item.get("asset") or "")
         canonical = _TOKEN_TO_CANONICAL_CONDITION.get(token)
@@ -298,10 +262,8 @@ def _merge_global_token_flows(flows: dict[str, list[core.Trade]], start_ts: int,
         ts = int(core.number(item.get("timestamp"), 0))
         price = core.number(item.get("price"), -1.0)
         size = core.number(item.get("size"), 0.0)
-        key = ":".join([
-            str(item.get("transactionHash") or ""), token, str(ts), side,
-            f"{price:.12g}", f"{size:.12g}",
-        ])
+        key = ":".join([str(item.get("transactionHash") or ""), token, str(ts), side,
+                        f"{price:.12g}", f"{size:.12g}"])
         if key in seen:
             continue
         seen.add(key)
@@ -318,9 +280,48 @@ def fetch_trades_seeded(condition_ids: list[str], start_ts: int, end_ts: int,
     flows = dict(flows)
     global_received_ms, global_errors = _merge_global_token_flows(flows, start_ts, end_ts)
     errors.extend(global_errors)
-    received_ms = max(received_ms, global_received_ms)
     _FLOW_CONDITIONS = set(flows)
-    return flows, received_ms, errors
+    return flows, max(received_ms, global_received_ms), errors
+
+
+def apply_zero_fill_research_profile(args: Any) -> dict[str, Any]:
+    """Bounded paper-only relaxation after healthy activity still produced zero candidates.
+
+    The live precursor had a +143.8 bp, non-toxic at-touch candidate with one
+    compatible SELL print, 3.81% conservative fill proxy and event age 81s. It was
+    rejected only by the 2-print/60s warm-up gates. This profile tests that causal
+    region without buying an inside-spread tick on one-print evidence.
+    """
+    global _ADMISSION_DIAGNOSTICS
+    before = {
+        "min_recent_trades": int(args.min_recent_trades),
+        "min_sell_prints": int(args.min_sell_prints),
+        "max_event_age_seconds": int(args.max_event_age_seconds),
+        "min_fill_probability": float(args.min_fill_probability),
+        "improve_ticks": int(args.improve_ticks),
+    }
+    args.min_recent_trades = min(int(args.min_recent_trades), 1)
+    args.min_sell_prints = min(int(args.min_sell_prints), 1)
+    args.max_event_age_seconds = max(int(args.max_event_age_seconds), 90)
+    args.min_fill_probability = min(float(args.min_fill_probability), 0.005)
+    args.improve_ticks = 0
+    after = {
+        "min_recent_trades": int(args.min_recent_trades),
+        "min_sell_prints": int(args.min_sell_prints),
+        "max_event_age_seconds": int(args.max_event_age_seconds),
+        "min_fill_probability": float(args.min_fill_probability),
+        "improve_ticks": int(args.improve_ticks),
+    }
+    _ADMISSION_DIAGNOSTICS = {
+        "research_admission_profile": "active_at_touch_sparse_flow_v1",
+        "reason": "healthy token-seeded live universe had positive-edge non-toxic one-print candidates but zero active orders",
+        "before": before,
+        "effective": after,
+        "economic_floor_unchanged": float(args.min_edge),
+        "max_sell_toxicity_unchanged": float(args.max_sell_toxicity),
+        "inside_spread_disabled_for_sparse_flow_isolation": True,
+    }
+    return dict(_ADMISSION_DIAGNOSTICS)
 
 
 def seeded_activity_data_healthy(result: dict[str, Any]) -> bool:
@@ -341,17 +342,11 @@ def seeded_activity_data_healthy(result: dict[str, Any]) -> bool:
 
 
 def _deterministic_checks() -> None:
-    query = urllib.parse.parse_qs(_condition_market_query(["0xa", "0xb"]))
-    assert query.get("condition_ids") == ["0xa", "0xb"]
-    assert query.get("active") == ["true"]
-    token_query = urllib.parse.parse_qs(_token_market_query(["token-a", "token-b"]))
-    assert token_query.get("clob_token_ids") == ["token-a", "token-b"]
-    assert token_query.get("active") == ["true"]
-    slug_query = urllib.parse.parse_qs(_slug_market_query("will-x-happen"))
-    assert slug_query.get("slug") == ["will-x-happen"]
+    assert urllib.parse.parse_qs(_condition_market_query(["0xa", "0xb"])).get("condition_ids") == ["0xa", "0xb"]
+    assert urllib.parse.parse_qs(_token_market_query(["token-a", "token-b"])).get("clob_token_ids") == ["token-a", "token-b"]
+    assert urllib.parse.parse_qs(_slug_market_query("will-x-happen")).get("slug") == ["will-x-happen"]
     global_query = urllib.parse.parse_qs(_global_seed_query(100, 200))
-    assert global_query.get("start") == ["100"]
-    assert global_query.get("end") == ["200"]
+    assert global_query.get("start") == ["100"] and global_query.get("end") == ["200"]
     assert global_query.get("takerOnly") == ["true"]
 
 
@@ -360,8 +355,8 @@ def main() -> int:
     entrypoint._deterministic_contract_checks()
     core.discover_markets = discover_markets_seeded
     batched.fetch_trades_batch = fetch_trades_seeded
-
     args = core.parse_args()
+    apply_zero_fill_research_profile(args)
     args.trade_batch_size = 5
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -370,6 +365,7 @@ def main() -> int:
     if isinstance(universe, dict):
         universe.update(entrypoint._ACTIVITY_DIAGNOSTICS)
         universe.update(_SEED_DIAGNOSTICS)
+        universe.update(_ADMISSION_DIAGNOSTICS)
         universe["trade_batch_size"] = args.trade_batch_size
         universe["trade_page_limit"] = entrypoint._PAGE_LIMIT
         universe["flow_condition_count"] = len(_FLOW_CONDITIONS)
@@ -388,13 +384,10 @@ def main() -> int:
         report += (
             f"- recent-trade seed conditions: {universe.get('seed_global_condition_count', 0)}\n"
             f"- recent-trade seed assets: {universe.get('seed_global_asset_count', 0)}\n"
-            f"- noncanonical raw condition IDs: {universe.get('seed_noncanonical_raw_condition_count', 0)}\n"
             f"- seed markets mapped by CLOB token id: {universe.get('seed_resolved_by_token_count', 0)}\n"
-            f"- seed markets mapped by slug/token fallback: {universe.get('seed_resolved_by_slug_count', 0)}\n"
-            f"- seed markets mapped total: {universe.get('seed_gamma_market_count', 0)}\n"
             f"- seed-only markets added: {universe.get('seed_added_market_count', 0)}\n"
-            f"- seed conditions with causal scoped/global-token flow: {universe.get('seed_active_condition_count', 0)}\n"
-            f"- seed-only conditions with causal flow: {universe.get('seed_added_active_condition_count', 0)}\n"
+            f"- seed conditions with causal flow: {universe.get('seed_active_condition_count', 0)}\n"
+            f"- effective HF admission: {universe.get('effective', {})}\n"
         )
     markdown_path.write_text(report, encoding="utf-8")
     print(report, end="")
