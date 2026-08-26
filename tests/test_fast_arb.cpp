@@ -55,7 +55,7 @@ int main(){
     assert(probe.has_value());
     assert(!paper::entry_due(*probe, 1012));
     assert(paper::entry_due(*probe, 1013));
-    auto y_future = book("y", .47, .49, 1000.0);
+    auto y_future = book("y", .47, .48, 1000.0);
     FeeDetails fee{};
     paper::attempt_entry(*probe, &y_future, &fee, p, 1013, 10);
     assert(probe->next_leg == 1);
@@ -67,6 +67,14 @@ int main(){
     assert(completed.joint_state == "ALL_LEGS_FILLED_OPEN");
     assert(completed.locked_terminal_pnl.has_value());
     assert(!completed.net_pnl.has_value()); // locked edge is not realized PnL.
+
+    // A worse future ask cannot be chased beyond the detection-time economic cap.
+    auto capped_probe = paper::start_probe(b, model_sha, 1500, 10, 5000);
+    assert(capped_probe.has_value());
+    auto worse_y = book("y", .47, .49, 1000.0);
+    paper::attempt_entry(*capped_probe, &worse_y, &fee, p, 1510, 10);
+    assert(capped_probe->entry_failed);
+    assert(capped_probe->legs[0].filled_shares == 0.0);
 
     // If a later leg cannot complete, every acquired share is unwound against
     // the then-current bid depth and the resulting loss is realized explicitly.
