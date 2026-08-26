@@ -6,7 +6,7 @@ import json
 import math
 import statistics
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 
 def standardize(values: Sequence[float]) -> list[float]:
@@ -52,12 +52,18 @@ def shared_pair_factor_loadings(
     return loading_on(series[target_a], factor), loading_on(series[target_b], factor)
 
 
-def deterministic_fixture(points: int = 240) -> dict[str, list[float]]:
+def latent_components(points: int) -> tuple[list[float], list[float], list[float]]:
     if points < 24:
         raise ValueError("fixture requires at least 24 points")
     common = [math.sin(2.0 * math.pi * t / points) for t in range(points)]
     contaminant = [math.cos(4.0 * math.pi * t / points) for t in range(points)]
     control_noise = [math.sin(6.0 * math.pi * t / points) for t in range(points)]
+    return common, contaminant, control_noise
+
+
+def deterministic_fixture(points: int = 240) -> dict[str, list[float]]:
+    """Fixture where incompatible LOO bases falsely reject a common-factor pair."""
+    common, contaminant, control_noise = latent_components(points)
     raw = {
         "A": [common[i] + 5.0 * contaminant[i] for i in range(points)],
         "B": [common[i] - 2.0 * contaminant[i] for i in range(points)],
@@ -67,8 +73,19 @@ def deterministic_fixture(points: int = 240) -> dict[str, list[float]]:
     return {name: standardize(values) for name, values in raw.items()}
 
 
-def run_audit(points: int = 240) -> dict[str, float | bool | str]:
-    series = deterministic_fixture(points)
+def false_admission_fixture(points: int = 240) -> dict[str, list[float]]:
+    """Fixture where incompatible LOO bases can admit a non-neutral pair."""
+    common, contaminant, control_noise = latent_components(points)
+    raw = {
+        "A": [common[i] - 10.0 * contaminant[i] for i in range(points)],
+        "B": [-common[i] - 5.0 * contaminant[i] for i in range(points)],
+        "C": [common[i] + 0.2 * control_noise[i] for i in range(points)],
+        "D": [common[i] - 0.2 * control_noise[i] for i in range(points)],
+    }
+    return {name: standardize(values) for name, values in raw.items()}
+
+
+def summarize_fixture(series: Mapping[str, Sequence[float]]) -> dict[str, float | bool]:
     loo_a = target_specific_loo_loading(series, "A")
     loo_b = target_specific_loo_loading(series, "B")
     shared_a, shared_b = shared_pair_factor_loadings(series, "A", "B")
@@ -77,8 +94,6 @@ def run_audit(points: int = 240) -> dict[str, float | bool | str]:
     ratio_distortion = max(loo_ratio, shared_ratio) / min(loo_ratio, shared_ratio)
     sign_disagreement = (loo_a * loo_b) * (shared_a * shared_b) < 0.0
     return {
-        "schema": "lf_v6_pair_factor_basis_audit_v1",
-        "points": points,
         "target_specific_loo_loading_a": loo_a,
         "target_specific_loo_loading_b": loo_b,
         "shared_leave_pair_out_loading_a": shared_a,
@@ -87,6 +102,17 @@ def run_audit(points: int = 240) -> dict[str, float | bool | str]:
         "shared_abs_ratio": shared_ratio,
         "ratio_distortion": ratio_distortion,
         "pair_factor_sign_relation_changes": sign_disagreement,
+    }
+
+
+def run_audit(points: int = 240) -> dict[str, Any]:
+    false_rejection = summarize_fixture(deterministic_fixture(points))
+    false_admission = summarize_fixture(false_admission_fixture(points))
+    return {
+        "schema": "lf_v6_pair_factor_basis_audit_v2",
+        "points": points,
+        "false_rejection_fixture": false_rejection,
+        "false_admission_fixture": false_admission,
         "finding": "target-specific leave-one-out loadings are not commensurable pair hedge coefficients",
     }
 
