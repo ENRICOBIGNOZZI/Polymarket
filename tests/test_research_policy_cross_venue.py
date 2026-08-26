@@ -105,6 +105,7 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
     def test_normal_branch_cannot_bypass_versioned_model_specific_runtime_surfaces(self):
         changed = [
             "scripts/v6_external_bridge.py",
+            "scripts/v6_hard_arb_guard.py",
             "scripts/v6_hard_arb_paper.py",
             "scripts/v6_intent_guard.py",
             "scripts/v6_local_factor_intents.py",
@@ -131,7 +132,7 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
     def test_shadow_label_rejects_versioned_model_specific_runtime_surfaces(self):
         completed = self.run_policy(
             "research/v6-runtime-shadow",
-            ["scripts/v6_external_bridge.py", "scripts/v6_intent_guard.py"],
+            ["scripts/v6_external_bridge.py", "scripts/v6_hard_arb_guard.py", "scripts/v6_intent_guard.py"],
             labels=["shadow-isolated"],
             draft=False,
             body="V6 shadow model measurement",
@@ -139,6 +140,7 @@ class CrossVenueResearchPolicyTest(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("shadow-isolated code cannot modify", completed.stdout)
         self.assertIn("scripts/v6_external_bridge.py", completed.stdout)
+        self.assertIn("scripts/v6_hard_arb_guard.py", completed.stdout)
         self.assertIn("scripts/v6_intent_guard.py", completed.stdout)
 
     def test_sensitive_integration_cannot_leave_draft_with_unapproved_source(self):
