@@ -52,6 +52,7 @@ jobs:
             tests/test_grafana_fast_paper_contract.py \
             tests/test_grafana_multi_strategy_contract.py \
             tests/test_grafana_v6_operations_contract.py \
+            tests/test_public_live_data_health_gate.py \
             tests/test_server_health_readonly.py -v
           python3 -m py_compile \
             scripts/compact_strategy_logs.py scripts/v6_runtime_status.py \
