@@ -21,12 +21,29 @@ class V6MarketCacheRelayContractTests(unittest.TestCase):
         self.assertIn('mv "$incoming" "$target"', workflow)
         self.assertIn('time.time()-float(value["timestamp"]) <= 120', workflow)
         self.assertIn('paper_validated_sha="$(git rev-parse origin/paper-validated)"', workflow)
-        self.assertIn('test "$(git rev-parse HEAD)" = "$paper_validated_sha"', workflow)
+        self.assertIn('main_sha="$(git rev-parse origin/main)"', workflow)
+        self.assertIn('head_sha="$(git rev-parse HEAD)"', workflow)
+        self.assertIn('if [[ "$head_sha" == "$paper_validated_sha" ]]; then', workflow)
+        self.assertIn('test "$paper_validated_sha" = "$main_sha"', workflow)
+        self.assertIn('git merge-base --is-ancestor "$head_sha" "$paper_validated_sha"', workflow)
+        self.assertIn('manifest_json="$(git show "$paper_validated_sha:config/live_champion.json")"', workflow)
+        self.assertIn('bootstrap=true', workflow)
         self.assertIn('git checkout --detach "$PAPER_VALIDATED_SHA"', workflow)
         self.assertIn('test "$(git rev-parse HEAD)" = "$PAPER_VALIDATED_SHA"', workflow)
         self.assertIn('paper_validated_sha=', workflow)
         for forbidden in ("gh pr merge", "git push origin", "POLYMARKET_DEPLOY_REF=", "contents: write"):
             self.assertNotIn(forbidden, workflow)
+
+    def test_predeploy_bootstrap_is_bounded_to_current_validated_revision(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn('test "$paper_validated_sha" = "$main_sha"', workflow)
+        self.assertIn('git merge-base --is-ancestor "$head_sha" "$paper_validated_sha"', workflow)
+        self.assertIn('echo "bootstrap=$bootstrap" >> "$GITHUB_OUTPUT"', workflow)
+        self.assertIn("BOOTSTRAP: ${{ steps.target.outputs.bootstrap }}", workflow)
+        self.assertIn('if [[ "$BOOTSTRAP" == "true" ]]; then', workflow)
+        self.assertIn("relay_bootstrap_staged=true", workflow)
+        self.assertIn("relay_bootstrap_waits_for_validated_deploy=true", workflow)
+        self.assertIn("time.time()-float(value['timestamp']) <= 180", workflow)
 
     def test_relay_fails_closed_unless_running_proxy_consumes_installed_cache(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -41,8 +58,6 @@ class V6MarketCacheRelayContractTests(unittest.TestCase):
         self.assertIn("cache_age_seconds", workflow)
         self.assertIn("live_proxy_cache_consumed=true", workflow)
         self.assertIn("relay-evidence/live-proxy-consumption.txt", workflow)
-        # A failed read-only proof must leave actionable process/cache evidence
-        # instead of only a sequence of opaque retry counters.
         self.assertIn("proxy_diagnostics()", workflow)
         self.assertIn("relay_proxy_listener_pid=", workflow)
         self.assertIn('("status", sys.argv[1])', workflow)
