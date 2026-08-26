@@ -13,7 +13,7 @@ REQUIRED_IDS = {
     "monitoring-validation", "live-paper-validation", "paper-server-deploy", "paper-server-health",
     "forward-maker-research", "v6-live-data-research", "alpha-factory", "meta-supervisor",
     "fast-arb-shadow-research", "arb-theory-research", "external-intelligence", "live-api-smoke",
-    "v6-market-cache-relay",
+    "v7-point-in-time-universe-archive", "v6-market-cache-relay",
 }
 PRIVATE_VALIDATION_WORKFLOW = ".github/workflows/private-runtime-single-writer-validation.yml"
 NON_SCHEDULER_WORKFLOWS = {
