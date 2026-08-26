@@ -1,0 +1,52 @@
+{
+  "schema": "v7_external_multiplicity_current_evidence_v1",
+  "captured_from": "telemetry/latest-external-intelligence.json@telemetry",
+  "source_generated_utc": "2026-08-26T23:16:26+00:00",
+  "source_report_schema": "polymarket_external_intelligence_report_v1",
+  "candidate_family_size": 21,
+  "research_q": 0.1,
+  "harmonic_number_21": 3.6453587047627294,
+  "bh_rank1_threshold": 0.004761904761904762,
+  "by_rank1_threshold": 0.001306292507149775,
+  "selected_candidate": {
+    "candidate_id": "external:binance:return_5m:86400s",
+    "raw_gate_pass": true,
+    "raw_bootstrap_pvalue": 0.004995004995004995,
+    "bonferroni_adjusted_pvalue": 0.1048951048951049,
+    "oos_predictions": 84,
+    "trades": 79,
+    "net_pnl_per_share": 1.3439999999999999,
+    "reported_two_x_cost_stressed_pnl_per_share": 1.24,
+    "profit_factor": 2.9823008849557517,
+    "positive_fold_fraction": 1.0,
+    "mse_improvement": 0.0005143106116632136,
+    "bh_q_rejected": false,
+    "by_q_rejected": false
+  },
+  "next_smallest_raw_pvalue_observed_in_sorted_nonpassing_family": 0.28771228771228774,
+  "current_state": "STRONG_RAW_LEAD_MULTIPLICITY_BLOCKED_MORE_EVIDENCE_REQUIRED",
+  "interpretation": [
+    "The Binance return_5m / 24h candidate is the strongest current external raw lead, but its raw p-value is slightly above the ordinary BH rank-1 threshold for the 21-candidate pre-specified family at q=10%.",
+    "It therefore does not currently survive even ordinary BH family multiplicity; it also fails the dependence-robust BY threshold.",
+    "This is not evidence that the economic effect is absent. It is a blocker on interpreting the current raw bootstrap p-value as multiplicity-adjusted external alpha evidence.",
+    "The current external backtester also reselects trades separately at each cost multiplier, so reported 1.5x/2x stress remains a re-optimized frontier rather than frozen-trade robustness until separately repaired.",
+    "Historical price-history backfill uses synthetic spreads and does not contain historical full-depth CLOB books. Exact executable replay and incumbent/no-external ablation remain mandatory.",
+    "q_external remains null and must not be synthesized from Binance return features."
+  ],
+  "required_successor_contract": [
+    "pre-specify the candidate family before evaluating the holdout",
+    "apply family-level multiplicity correction to external candidate p-values",
+    "use dependence-robust multiplicity or justify the dependence assumption",
+    "freeze the 1x trade/side set before 1.5x and 2x cost repricing",
+    "run exact point-in-time executable CLOB entry/exit replay with depth, authoritative fees, slippage and latency",
+    "compare against the no-external incumbent on the same chronological sample",
+    "materialize q_external only from an approved direct probability source"
+  ],
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "operator_directives_modified": false,
+    "main_modified": false,
+    "paper_validated_modified": false
+  }
+}
