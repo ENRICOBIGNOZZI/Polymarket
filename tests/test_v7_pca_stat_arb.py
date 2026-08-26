@@ -11,6 +11,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+import lf_v7_pca_current_state_z_audit as pca_z_audit
 import v7_pca_stat_arb_core as pca
 import v7_pca_stat_arb_inference as inference
 
@@ -141,6 +142,20 @@ class V7PcaStatArbTests(unittest.TestCase):
         self.assertIn("resolve_fee_details", source)
         self.assertIn("uncertainty_penalty", source)
         self.assertIn('"unestimable_pvalue": 1.0', source)
+
+    def test_current_state_z_gate_audit_reproduces_training_endpoint_mismatch(self) -> None:
+        report = pca_z_audit.audit()
+        self.assertEqual(report["status"], "STRUCTURAL_BLOCKER")
+        contract = report["source_contract"]
+        self.assertTrue(contract["uses_training_endpoint_for_post_multiplicity_z_gate"])
+        self.assertFalse(contract["uses_current_scored_residual_z_for_post_multiplicity_gate"])
+        self.assertTrue(contract["score_current_is_computed_after_training_endpoint_gate"])
+        stale_pass = report["counterexamples"]["historical_extreme_currently_mean_reverted"]
+        self.assertTrue(stale_pass["incumbent_passes"])
+        self.assertFalse(stale_pass["current_state_should_pass"])
+        stale_reject = report["counterexamples"]["historical_mild_currently_extreme"]
+        self.assertFalse(stale_reject["incumbent_passes"])
+        self.assertTrue(stale_reject["current_state_should_pass"])
 
 
 if __name__ == "__main__":
