@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import random
 import sys
 import unittest
 from pathlib import Path
@@ -22,6 +23,50 @@ sys.modules[NAME] = inference
 SPEC.loader.exec_module(inference)
 
 
+def _ar1(rng: random.Random, n: int, phi: float, scale: float = 1.0) -> list[float]:
+    out = [0.0]
+    for _ in range(1, n):
+        out.append(phi * out[-1] + rng.gauss(0.0, scale))
+    return out
+
+
+def _random_walk(rng: random.Random, n: int, scale: float = 1.0) -> list[float]:
+    out = [0.0]
+    for _ in range(1, n):
+        out.append(out[-1] + rng.gauss(0.0, scale))
+    return out
+
+
+def _mixed_null_panel(seed: int, controls_mode: str, n: int = 72) -> core.StandardizedPanel:
+    rng = random.Random(seed)
+    controls: dict[str, list[float]] = {}
+    if controls_mode == "stationary":
+        for j in range(4):
+            controls[f"c{j}"] = _ar1(rng, n, 0.6)
+    elif controls_mode == "i1":
+        common = _random_walk(rng, n)
+        for j in range(4):
+            idio = _random_walk(rng, n, 0.4)
+            controls[f"c{j}"] = [a + b for a, b in zip(common, idio)]
+    elif controls_mode == "cointegrated":
+        common = _random_walk(rng, n)
+        for j in range(4):
+            stationary = _ar1(rng, n, 0.5, 0.5)
+            controls[f"c{j}"] = [a + b for a, b in zip(common, stationary)]
+    else:
+        raise ValueError(controls_mode)
+
+    factor = [sum(controls[mid][t] for mid in controls) / len(controls) for t in range(n)]
+    a_residual = _random_walk(rng, n)
+    b_residual = _ar1(rng, n, 0.6)
+    levels = dict(controls)
+    levels["A"] = [0.8 * f + u for f, u in zip(factor, a_residual)]
+    levels["B"] = [-0.5 * f + u for f, u in zip(factor, b_residual)]
+    panel = core.standardize_levels(levels, tuple(range(n)))
+    assert panel is not None
+    return panel
+
+
 class V7LocalFactorInferenceTests(unittest.TestCase):
     def test_intersection_union_uses_max_marginal_pvalue(self) -> None:
         self.assertEqual(inference.intersection_union_pvalue(0.01, 0.20), 0.20)
@@ -40,6 +85,47 @@ class V7LocalFactorInferenceTests(unittest.TestCase):
         self.assertLessEqual(
             diagnostics["minimum_attainable_pvalue"], diagnostics["first_rank_bh_threshold"]
         )
+
+    def test_marginal_null_is_invariant_to_other_target_path(self) -> None:
+        panel = _mixed_null_panel(101, "cointegrated")
+        first = inference.marginal_residual_unit_root_pvalue(
+            panel, ("A", "B"), "A", reps=99, seed=17
+        )
+        self.assertIsNotNone(first)
+
+        values = dict(panel.values)
+        replacement_b = tuple(reversed(panel.values["B"]))
+        values["B"] = replacement_b
+        changed = core.StandardizedPanel(panel.times, values, dict(panel.means), dict(panel.scales))
+        second = inference.marginal_residual_unit_root_pvalue(
+            changed, ("A", "B"), "A", reps=99, seed=17
+        )
+        self.assertIsNotNone(second)
+        assert first is not None and second is not None
+        self.assertAlmostEqual(first[1], second[1], places=15)
+
+    def test_mixed_null_size_is_not_grossly_inflated_across_control_regimes(self) -> None:
+        # A has an I(1) residual by construction while B is stationary.  The
+        # controls vary from stationary to I(1) to cointegrated.  This is the
+        # mixed composite-null configuration that an all-series-I(1) bootstrap
+        # did not establish.  The deterministic Monte Carlo tolerance is wider
+        # than nominal 10% because the regression test intentionally stays small.
+        for mode in ("stationary", "i1", "cointegrated"):
+            rejects = 0
+            trials = 24
+            for i in range(trials):
+                panel = _mixed_null_panel(1000 + 100 * len(mode) + i, mode)
+                result = inference.marginal_residual_unit_root_pvalue(
+                    panel,
+                    ("A", "B"),
+                    "A",
+                    reps=99,
+                    seed=9000 + i,
+                )
+                self.assertIsNotNone(result)
+                assert result is not None
+                rejects += int(result[1] <= 0.10)
+            self.assertLessEqual(rejects, 5, msg=f"mixed-null size too large for {mode}: {rejects}/{trials}")
 
 
 if __name__ == "__main__":
