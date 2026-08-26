@@ -33,8 +33,6 @@ def test_v7_config_has_no_binding_fixed_dollar_trade_cap_and_100_percent_hard_ce
     assert abs(cfg["min_net_edge"] - 0.00005) < 1e-12
     assert cfg["fractional_kelly"] == 0.25
     assert cfg["fixed_dollar_trade_cap_enabled"] is False
-    # Legacy numeric fields remain only for parsers that still require them and
-    # must be far above any percentage-constrained PAPER capital amount.
     assert float(cfg["max_trade_usd"]) > 1e50
     assert cfg["max_trade_fraction"] == 1.0
     assert cfg["max_market_fraction"] == 1.0
@@ -84,14 +82,18 @@ def test_v7_entrypoint_has_one_execution_owner_and_separate_shadow_scheduler():
     assert text.count("start_execution") >= 2
 
 
-def test_v7_execution_loop_uses_corrected_workers_and_prospective_joint_state_gate():
+def test_v7_execution_loop_uses_corrected_workers_and_roundtrip_joint_state_gate():
     text = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
     assert "v7_micro_maker_worker.py" in text
     assert "v7_micro_taker_worker.py" in text
     assert "v7_multileg_broker_runner.py" in text
     assert "v7_capacity_lock.py" in text
     assert "v6_bundle_quote_optimizer.py" in text  # compatibility adapter -> V7 optimizer
-    assert "v7_graph_forward_guard.py" in text
+    assert "v7_graph_roundtrip_guard.py" in text
+    assert "graph_roundtrip_state.json" in text
+    graph_block = text[text.index("run_graph(){"):text.index("reap_stale_proxy")]
+    assert "v7_graph_forward_guard.py" not in graph_block
+    assert "v7_graph_execution_guard.py" not in graph_block
     assert "v6_bundle_state_guard.py" not in text
     assert "polymarket_multileg_paper" not in text
     assert "runtime_primary_seconds" in text
