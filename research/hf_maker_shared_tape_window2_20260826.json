@@ -29,6 +29,14 @@
     "unique_tokens_with_trades": 157,
     "local_receive_timestamps_present": true
   },
+  "static_candidate_pool": {
+    "rows_post_plus_queue_skip": 185,
+    "unique_markets": 37,
+    "unique_tokens": 37,
+    "candidate_tokens_present_anywhere_in_shared_tape": 0,
+    "candidate_markets_2028_presidential_nomination": 34,
+    "interpretation": "The entire maker signal candidate pool in this chronological window had zero overlap with tokens that printed anywhere in the independent shared public tape. Thirty-four of 37 unique candidate markets were long-dated 2028 presidential nomination contracts. This is a candidate-selection/fillability defect, not merely a queue threshold issue."
+  },
   "at_touch": {
     "posts": 35,
     "unique_posted_tokens": 7,
@@ -71,9 +79,9 @@
   "interpretation": {
     "fill_evidence_gap_due_to_per_order_trade_api": false,
     "zero_fill_confirmed_by_independent_shared_tape": true,
-    "selection_problem": "Both static maker arms repeatedly posted seven tokens with no public trades anywhere in a 1440-row shared tape that contained trades in 157 other tokens. Static edge plus queue-multiple gating is selecting economically inactive books for a fill-seeking HF sleeve.",
+    "selection_problem": "Both static maker arms repeatedly posted seven tokens with no public trades anywhere in a 1440-row shared tape that contained trades in 157 other tokens. More strongly, all 37 unique signal candidates represented by POST or SKIP_QUEUE actions had zero overlap with traded tokens. Static edge plus book confidence is selecting economically inactive books for a fill-seeking HF sleeve.",
     "inside_spread_result": "The improve1 arm made zero actual inside-spread improvements because no candidate had enough post-cost edge to pay one tick; lowering the 0.5 bp floor cannot fix this tick-size constraint.",
-    "next_challenger": "Require causal recent token-level flow before admission and rank by fill-conditioned EV using queue ahead, recent compatible flow, microprice/depth imbalance and toxicity. Keep selective improvement only when incremental expected fill benefit exceeds the paid tick plus adverse-selection penalty."
+    "next_challenger": "Require causal recent token-level flow before admission and rank the full universe by fill-conditioned EV using queue ahead, recent compatible flow, microprice/depth imbalance and toxicity. Do not merely tighten the queue multiple, because the observed defect precedes queue gating: the signal candidate set itself is concentrated in no-flow contracts. Keep selective improvement only when incremental expected fill benefit exceeds the paid tick plus adverse-selection penalty."
   },
   "other_hf_planes": {
     "micro_taker": {
