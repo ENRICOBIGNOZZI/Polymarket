@@ -1,0 +1,52 @@
+{
+  "as_of_utc": "2026-08-26T14:52:00Z",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "scope": "research_only",
+  "v7_base_pr": 506,
+  "graph_transport_pr": 517,
+  "finding": {
+    "name": "iid_session_bootstrap_under_serial_dependence",
+    "severity": "promotion_blocker_for_graph_rv_confidence_bound",
+    "description": "v7_graph_forward_guard.bootstrap_lower() resamples completed sessions independently. Adjacent sessions for the same structural signature can share the same event, queue regime, liquidity state and market-flow regime, so row-wise iid resampling is not a dependence-robust lower confidence bound."
+  },
+  "deterministic_counterexample": {
+    "sessions": 40,
+    "chronological_blocks": 4,
+    "block_length_sessions": 10,
+    "block_means": [1.0, 1.0, 0.5, -1.0],
+    "overall_mean_pnl": 0.375,
+    "iid_bootstrap_lower_10pct": 0.2125,
+    "block_bootstrap_lower_10pct": -0.125,
+    "interpretation": "The same chronological PnL sequence passes a positive 10% lower bound under iid resampling and fails under a simple regime-preserving block bootstrap. This is a dependence counterexample, not an estimate of actual Polymarket serial correlation."
+  },
+  "required_successor_contract": [
+    "persist chronological session timestamps and do not reorder evidence",
+    "estimate dependence on a predeclared session/time scale and use moving/circular block bootstrap or another dependence-robust confidence procedure",
+    "do not count heavily overlapping windows as independent effective sessions",
+    "apply the same dependence-aware inference to 1x/1.5x/2x executable PnL after correcting full-completion and partial-state cashflows",
+    "condition or fail-closed transport evidence on the current execution state before using the lower bound for routing"
+  ],
+  "current_exact_main_context": {
+    "main_sha": "fccbdd036093c2f7973635c3c47431ad8381b261",
+    "live_smoke_run_id": 32980190232,
+    "trade_recorder_status": "healthy",
+    "fetched_trades": 287,
+    "trade_age_seconds": 82,
+    "graph_rv_bundles": 1,
+    "graph_rv_legs": 5,
+    "max_quoted_edge": 0.002,
+    "completed_bundles": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_pnl_usd": 0.0
+  },
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "authorized_max_trade_usd": 125.0,
+    "authorized_market_fraction": 0.05,
+    "authorized_event_fraction": 0.15,
+    "authorized_gross_fraction": 0.70,
+    "authorized_max_drawdown": 0.15
+  }
+}
