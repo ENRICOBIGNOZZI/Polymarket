@@ -30,14 +30,34 @@ def required_finite(value: Any, field: str) -> float:
     return out
 
 
+def validate_aggregate_policy(policy: str, metrics: dict[str, Any]) -> None:
+    probes = required_int(metrics.get("probes"), f"{policy}.probes")
+    pair_rate = required_finite(metrics.get("pair_fill_rate"), f"{policy}.pair_fill_rate")
+    one_sided_rate = required_finite(
+        metrics.get("one_sided_only_rate"), f"{policy}.one_sided_only_rate"
+    )
+    required_finite(
+        metrics.get("conservative_pnl_ex_rewards_usd"),
+        f"{policy}.conservative_pnl_ex_rewards_usd",
+    )
+    if not 0.0 <= pair_rate <= 1.0:
+        raise ValueError(f"pair_fill_rate outside [0,1] for policy {policy}")
+    if not 0.0 <= one_sided_rate <= 1.0:
+        raise ValueError(f"one_sided_only_rate outside [0,1] for policy {policy}")
+    if probes == 0 and (pair_rate != 0.0 or one_sided_rate != 0.0):
+        raise ValueError(f"nonzero fill rate with zero probes for policy {policy}")
+
+
 def normalize_run(run: dict[str, Any]) -> dict[str, Any] | None:
     aggregate = run.get("aggregate_by_policy")
     if aggregate is not None:
         if not isinstance(aggregate, dict) or not aggregate:
             raise ValueError("aggregate_by_policy must be a non-empty object")
         for policy, metrics in aggregate.items():
-            if not str(policy).strip() or not isinstance(metrics, dict):
+            policy_name = str(policy).strip()
+            if not policy_name or not isinstance(metrics, dict):
                 raise ValueError("aggregate_by_policy contains an invalid policy row")
+            validate_aggregate_policy(policy_name, metrics)
         return run
 
     summaries = run.get("policy_summaries")
