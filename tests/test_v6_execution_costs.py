@@ -16,6 +16,8 @@ qf = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = qf
 spec.loader.exec_module(qf)
 
+from v6_micro_target import label_matured_samples
+
 
 class V6ExecutionMeasurementTest(unittest.TestCase):
     def test_explicit_fee_disabled_never_falls_back(self) -> None:
@@ -78,6 +80,53 @@ class V6ExecutionMeasurementTest(unittest.TestCase):
         self.assertIn("scripts/v6_queue_filter.py hard", workflow)
         self.assertIn("scripts/v6_queue_filter.py micro", workflow)
         self.assertIn("--leg-latency-ms 100", workflow)
+
+    def test_broad_micro_smoke_uses_observable_causal_horizon(self) -> None:
+        workflow = (ROOT / ".github/workflows/v6-research-smoke.yml").read_text()
+        self.assertIn(
+            "--markets 300 --min-liquidity 2 --horizon-seconds 10 "
+            "--max-target-staleness-seconds 5",
+            workflow,
+        )
+        self.assertNotIn(
+            "--markets 300 --min-liquidity 2 --horizon-seconds 5 "
+            "--max-target-staleness-seconds 3",
+            workflow,
+        )
+        self.assertIn(
+            "int(x.get('target_observation_ts') or 0)>int(x.get('ts') or 0)+10",
+            workflow,
+        )
+
+    def test_causal_target_does_not_borrow_post_horizon_snapshot(self) -> None:
+        too_fast = [
+            {"market_id": "m", "ts": 100, "mid": 0.50, "y": None},
+            {"market_id": "m", "ts": 107, "mid": 0.51, "y": None},
+        ]
+        stats = label_matured_samples(
+            too_fast,
+            now=110,
+            horizon_seconds=5,
+            max_target_staleness_seconds=3,
+        )
+        self.assertEqual(stats["newly_labeled"], 0)
+        self.assertEqual(stats["missing_pre_horizon_observation"], 1)
+        self.assertIsNone(too_fast[0]["y"])
+
+        observable = [
+            {"market_id": "m", "ts": 100, "mid": 0.50, "y": None},
+            {"market_id": "m", "ts": 107, "mid": 0.51, "y": None},
+        ]
+        stats = label_matured_samples(
+            observable,
+            now=110,
+            horizon_seconds=10,
+            max_target_staleness_seconds=5,
+        )
+        self.assertEqual(stats["newly_labeled"], 1)
+        self.assertEqual(observable[0]["target_observation_ts"], 107)
+        self.assertEqual(observable[0]["target_staleness_seconds"], 3)
+        self.assertAlmostEqual(observable[0]["y"], 0.01)
 
 
 if __name__ == "__main__":
