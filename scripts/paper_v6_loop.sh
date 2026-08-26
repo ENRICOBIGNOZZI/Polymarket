@@ -7,10 +7,28 @@ cd "$ROOT"
 CONFIG="${1:-config/paper_v6.json}"
 BASE_CONFIG="$CONFIG"
 RUN_ROOT="${2:-runs/paper_v6_live}"
-MIN_LIQUIDITY="${V6_MIN_LIQUIDITY:-10}"
-MARKETS="${V6_MARKETS:-700}"
-RECORDER_MARKETS="${V6_RECORDER_MARKETS:-1200}"
-INTENT_MIN_EDGE="${V6_INTENT_MIN_EDGE:-0.00020}"
+read -r CONFIG_MARKETS CONFIG_MIN_LIQUIDITY CONFIG_INTENT_MIN_EDGE CONFIG_MAX_TRADE_USD CONFIG_HARD_ARB_MIN_EDGE CONFIG_HARD_ARB_MAX_TRADE_USD < <(python3 - "$BASE_CONFIG" <<'PY'
+import json, sys
+from pathlib import Path
+cfg=json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+v6=cfg['v6']
+print(
+    int(cfg['market_limit']),
+    float(cfg['min_liquidity']),
+    float(v6['intent_min_edge']),
+    float(cfg['max_trade_usd']),
+    float(v6['hard_arb_min_net_edge']),
+    float(v6['hard_arb_max_trade_usd']),
+)
+PY
+)
+MIN_LIQUIDITY="${V6_MIN_LIQUIDITY:-$CONFIG_MIN_LIQUIDITY}"
+MARKETS="${V6_MARKETS:-$CONFIG_MARKETS}"
+RECORDER_MARKETS="${V6_RECORDER_MARKETS:-$MARKETS}"
+INTENT_MIN_EDGE="${V6_INTENT_MIN_EDGE:-$CONFIG_INTENT_MIN_EDGE}"
+MAX_TRADE_USD="${V6_MAX_TRADE_USD:-$CONFIG_MAX_TRADE_USD}"
+HARD_ARB_MIN_EDGE="${V6_HARD_ARB_MIN_EDGE:-$CONFIG_HARD_ARB_MIN_EDGE}"
+HARD_ARB_MAX_TRADE_USD="${V6_HARD_ARB_MAX_TRADE_USD:-$CONFIG_HARD_ARB_MAX_TRADE_USD}"
 RUNTIME_PARENT_PID="${POLYMARKET_RUNTIME_PARENT_PID:-}"
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/micro_taker" "$RUN_ROOT/hard_arb" "$RUN_ROOT/external"
 
@@ -50,11 +68,9 @@ for name,frac in alloc:
     child={k:x for k,x in cfg.items() if k not in {'v6','multi_strategy'}}
     child['starting_capital']=total*float(frac); child['run_dir']=str(root/name)
     child['expert_weights']={'micro':0.0,'pca':0.0,'graph':0.0,'semantic':0.0,'external':0.0}
-    # Keep the global $/trade ceiling economically reachable inside the smaller
-    # maker sleeve instead of accidentally shrinking it to 2.5% of sleeve NAV.
-    if name=='maker' and child['starting_capital']>0:
-        trade_cap=float(cfg.get('max_trade_usd',60.0))
-        child['max_market_fraction']=max(float(child.get('max_market_fraction',0.0)),min(1.0,trade_cap/child['starting_capital']))
+    # Dollar trade limits are ceilings, not a reason to inflate the configured
+    # market-fraction cap inside a smaller sleeve. Each child therefore inherits
+    # the parent 5% market cap and also observes the explicit $/trade ceiling.
     if name=='external':
         child['external_signals_file']=str(root/'external_signals.csv'); child['expert_weights']['external']=1.0; child['uncertainty_penalty']=0.0
     (root/f'{name}_config.json').write_text(json.dumps(child,indent=2,sort_keys=True)+'\n')
@@ -108,7 +124,7 @@ is_same_repository_v6_loop(){
   [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
   command_line="$(process_command "$pid")"
   [[ "$command_line" == *"paper_v6_loop.sh"* ]] || return 1
-  # Current launchers use an absolute script path.  Older macOS launchd
+  # Current launchers use an absolute script path. Older macOS launchd
   # instances can retain `bash scripts/paper_v6_loop.sh`; accept that form
   # only after the process working directory proves it is this repository.
   [[ "$command_line" == *"$ROOT/scripts/paper_v6_loop.sh"* ]] && return 0
@@ -247,7 +263,7 @@ while true;do
 
   # Micro maker: edge-aware inside-spread improvement plus FIFO queue gating.
   # Do not fake fills: the actual paper fill still requires compatible taker SELL flow.
-  ./build/polymarket_maker_paper --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-order-usd 60 --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.10 "${MAKER_QUEUE_ARGS[@]}" --once >>"$RUN_ROOT/maker.log" 2>&1||true
+  ./build/polymarket_maker_paper --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-order-usd "$MAX_TRADE_USD" --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.10 "${MAKER_QUEUE_ARGS[@]}" --once >>"$RUN_ROOT/maker.log" 2>&1||true
 
   # Micro taker: online short-horizon markout model; mandatory horizon exit.
   if ((now-last_micro_taker>=5));then
@@ -258,7 +274,7 @@ while true;do
   # Hard graph arbitrage: complete non-augmented NegRisk sets only. Admission is
   # all-or-none against displayed ask depth in one snapshot, after fee/slippage.
   if ((now-last_hard_arb>=10));then
-    python3 scripts/v6_hard_arb_paper.py --config "$RUN_ROOT/hard_arb_config.json" --run-dir "$RUN_ROOT/hard_arb" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --max-events 80 --min-edge 0.00020 --max-trade-usd 60 --slippage-bps 5 >>"$RUN_ROOT/hard_arb.log" 2>&1||true
+    python3 scripts/v6_hard_arb_paper.py --config "$RUN_ROOT/hard_arb_config.json" --run-dir "$RUN_ROOT/hard_arb" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --max-events 80 --min-edge "$HARD_ARB_MIN_EDGE" --max-trade-usd "$HARD_ARB_MAX_TRADE_USD" --slippage-bps 5 >>"$RUN_ROOT/hard_arb.log" 2>&1||true
     last_hard_arb=$now
   fi
 
@@ -267,13 +283,13 @@ while true;do
     # Legacy B1 is diagnostic only under strict gates and cannot generate V6 intents.
     ./build/polymarket_stat_arb --config "$RUN_ROOT/broker_config.json" --markets "$MARKETS" --history-universe 300 --lookback-hours 720 --fidelity-minutes 30 --min-z 1.25 --min-t-reversion 2.00 --max-half-life-hours 168 --top 150 --csv "$RUN_ROOT/stat_arb_pairs_diagnostic.csv" >"$RUN_ROOT/stat_arb_pairs_diagnostic.log" 2>"$RUN_ROOT/stat_arb_pairs_errors.log"||true
     # Production mean reversion: local panel, common sample and BH-FDR controlled.
-    python3 scripts/v6_local_factor_intents.py --config "$CONFIG" --output "$RUN_ROOT/local_factor_intents.csv" --status "$RUN_ROOT/local_factor_status.json" --markets 400 --min-liquidity "$MIN_LIQUIDITY" --lookback-hours 336 --fidelity-minutes 60 --max-clusters 15 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 --slippage-bps 5 >"$RUN_ROOT/local_factor_latest.log" 2>"$RUN_ROOT/local_factor_errors.log"||true
+    python3 scripts/v6_local_factor_intents.py --config "$CONFIG" --output "$RUN_ROOT/local_factor_intents.csv" --status "$RUN_ROOT/local_factor_status.json" --markets 400 --min-liquidity "$MIN_LIQUIDITY" --lookback-hours 336 --fidelity-minutes 60 --max-clusters 15 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge "$INTENT_MIN_EDGE" --max-trade-usd "$MAX_TRADE_USD" --slippage-bps 5 >"$RUN_ROOT/local_factor_latest.log" 2>"$RUN_ROOT/local_factor_errors.log"||true
     rebuild_intents;last_factor=$now
   fi
 
   if ((now-last_relation>=30));then
     # Semantic parsing discovers relations only. Maker bundles are GRAPH_RV, not hard arb.
-    python3 scripts/v6_relation_intents.py --config "$CONFIG" --output "$RUN_ROOT/relation_intents_raw.csv" --status "$RUN_ROOT/relation_status.json" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 --max-events 80 >"$RUN_ROOT/relation_latest.log" 2>"$RUN_ROOT/relation_errors.log"||true
+    python3 scripts/v6_relation_intents.py --config "$CONFIG" --output "$RUN_ROOT/relation_intents_raw.csv" --status "$RUN_ROOT/relation_status.json" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-trade-usd "$MAX_TRADE_USD" --max-events 80 >"$RUN_ROOT/relation_latest.log" 2>"$RUN_ROOT/relation_errors.log"||true
     python3 scripts/v6_intent_guard.py --input "$RUN_ROOT/relation_intents_raw.csv" --output "$RUN_ROOT/relation_intents.csv" --status "$RUN_ROOT/relation_guard_status.json" --min-edge "$INTENT_MIN_EDGE" --stress-bps 10 --max-age-seconds 240 >>"$RUN_ROOT/relation_guard.log" 2>&1||true
     rebuild_intents;last_relation=$now
   fi
