@@ -10,6 +10,7 @@ on:
       - "scripts/v7_local_factor_research.py"
       - "config/research_v7_local_factor.json"
       - "tests/test_v7_local_factor_core.py"
+      - "tests/test_v7_local_factor_inference.py"
       - ".github/workflows/v7-local-factor-research.yml"
 
 permissions:
@@ -29,7 +30,7 @@ jobs:
       - name: Deterministic final-LF contracts
         run: |
           set -euo pipefail
-          python3 -m unittest tests/test_v7_local_factor_core.py -v
+          python3 -m unittest tests/test_v7_local_factor_core.py tests/test_v7_local_factor_inference.py -v
           python3 -m py_compile scripts/v7_local_factor_core.py scripts/v7_local_factor_inference.py scripts/v7_local_factor_research.py
           python3 -m json.tool config/research_v7_local_factor.json >/dev/null
 
@@ -38,9 +39,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p lf_evidence
-          # PR smoke uses 59 bootstrap replications to verify the full generated-
-          # regressor pipeline on live public data without turning CI into a long
-          # simulation job. Promotion-grade research keeps the configured 300 reps.
+          # 59 replications are a fast public-data execution smoke, not a claim
+          # that absence of BH survivors has high power. Tail resolution is
+          # measured explicitly below; promotion-grade inference must resolve it.
           python3 scripts/v7_local_factor_research.py \
             --config config/research_v7_local_factor.json \
             --paper-config config/paper_v6.json \
@@ -49,8 +50,12 @@ jobs:
             | tee lf_evidence/run.log
           python3 - <<'PY'
           import json
+          import sys
           from pathlib import Path
-          r=json.loads(Path('lf_evidence/report.json').read_text())
+          sys.path.insert(0, 'scripts')
+          import v7_local_factor_inference as inference
+          report_path=Path('lf_evidence/report.json')
+          r=json.loads(report_path.read_text())
           assert r['paper_only'] is True
           assert r['research_only'] is True
           assert r['live_intents_enabled'] is False
@@ -61,6 +66,17 @@ jobs:
           assert r['histories'] >= r['history_required_market_count']
           assert r['pair_hypotheses'] > 0
           assert r['pair_pvalue_method'] == 'intersection_union_max_marginal_null_preserving_bootstrap_pvalue'
+          resolution=inference.bh_resolution_diagnostics(
+              r['pair_hypotheses'], r['bootstrap_repetitions'], r['bh_fdr']
+          )
+          observed=[row['pvalue'] for row in r.get('tests', [])]
+          resolution['minimum_observed_pvalue']=min(observed) if observed else None
+          resolution['zero_bh_survivors_is_high_power_evidence']=bool(
+              resolution['singleton_bh_resolution_adequate']
+          )
+          Path('lf_evidence/inference_resolution.json').write_text(
+              json.dumps(resolution, indent=2, sort_keys=True) + '\n'
+          )
           PY
 
       - name: Publish Local Factor summary
@@ -83,6 +99,12 @@ jobs:
           print(f"- BH-selected pairs: {r['bh_selected_pairs']}")
           print(f"- post-BH pair signals: {r['post_bh_pair_signals']}")
           print(f"- bootstrap reps: {r['bootstrap_repetitions']}")
+          if Path('lf_evidence/inference_resolution.json').exists():
+              d=json.loads(Path('lf_evidence/inference_resolution.json').read_text())
+              print(f"- minimum attainable p-value: {d['minimum_attainable_pvalue']:.6g}")
+              print(f"- first-rank BH threshold: {d['first_rank_bh_threshold']:.6g}")
+              print(f"- singleton BH tail resolved: {d['singleton_bh_resolution_adequate']}")
+              print(f"- reps needed for singleton BH resolution: {d['repetitions_required_for_singleton_bh_resolution']}")
           print(f"- joint execution validated: {r['execution_joint_state_validated']}")
           PY
           else
