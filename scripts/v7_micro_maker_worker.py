@@ -32,6 +32,31 @@ def causal_after_order(row: dict[str, str], order: dict[str, Any]) -> bool:
     return event_ms > int(finite(order.get("created_event_ms"), 0.0)) and received_ms > int(finite(order.get("created_received_ms"), 0.0))
 
 
+def causal_fill_eligible(
+    row: dict[str, str],
+    order: dict[str, Any],
+    *,
+    processing_ms: int,
+    ttl_seconds: int,
+) -> bool:
+    """Credit only a trade that occurred while the order was live and is known now.
+
+    Receive time is the causal availability clock. Event time is the market/order
+    lifetime clock. A delayed REST row may therefore fill a paper order after the
+    wall-clock TTL has elapsed if its market event happened before expiry, but a
+    future-received row or a post-expiry market event can never fill it.
+    """
+    event_ms = int(finite(row.get("timestamp"), 0.0) * 1000)
+    received_ms = int(finite(row.get("received_ms"), 0.0))
+    arrival_event_ms = int(finite(order.get("created_event_ms"), 0.0))
+    arrival_received_ms = int(finite(order.get("created_received_ms"), 0.0))
+    if event_ms <= arrival_event_ms or received_ms <= arrival_received_ms:
+        return False
+    if received_ms <= 0 or received_ms > int(processing_ms):
+        return False
+    return event_ms <= arrival_event_ms + max(0, int(ttl_seconds)) * 1000
+
+
 def broker_owned_tokens(execution_root: Path) -> set[str]:
     tokens: set[str] = set()
     path = execution_root / "multileg_legs.csv"
@@ -122,12 +147,13 @@ def main() -> int:
     args.run_dir.mkdir(parents=True, exist_ok=True)
     execution_root = args.run_dir.parent
     state_path = args.run_dir / "state.json"
-    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {"cash": starting, "peak": starting, "killed": False, "orders": {}, "positions": {}, "seen_trade_ids": []}
+    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {"cash": starting, "peak": starting, "killed": False, "orders": {}, "positions": {}, "seen_trade_ids": [], "markout_watch": {}}
     cash = finite(state.get("cash"), starting)
     peak = max(starting, finite(state.get("peak"), starting))
     killed = bool(state.get("killed"))
     orders = state.get("orders") if isinstance(state.get("orders"), dict) else {}
     positions = state.get("positions") if isinstance(state.get("positions"), dict) else {}
+    markout_watch = state.get("markout_watch") if isinstance(state.get("markout_watch"), dict) else {}
     realized_pnl = finite(state.get("realized_pnl"), 0.0)
     seen_trade_ids = set(str(value) for value in state.get("seen_trade_ids", []) if value)
 
@@ -139,42 +165,53 @@ def main() -> int:
         state["failure"] = f"market_data:{type(exc).__name__}:{exc}"
     by_id = {market.id: market for market in markets}
     flow = TapeFlow.from_csv(args.trade_tape, lookback_seconds=args.flow_lookback_seconds, now=now)
-    tape = load_tape(args.trade_tape, now - max(args.flow_lookback_seconds, args.ttl_seconds + 30), now)
+    tape_cutoff = now - max(args.flow_lookback_seconds, args.ttl_seconds + 30)
+    if orders:
+        oldest_arrival = min(int(finite(order.get("created_event_ms"), current_ms)) // 1000 for order in orders.values())
+        tape_cutoff = min(tape_cutoff, oldest_arrival - 1)
+    tape = load_tape(args.trade_tape, tape_cutoff, now)
     broker_tokens = broker_owned_tokens(execution_root)
 
     order_fields = ["timestamp", "action", "market_id", "slug", "side", "token_id", "limit_price", "remaining_shares", "queue_ahead", "signal_edge", "confidence", "fill_probability", "expected_value", "toxicity_score", "flow_rate", "fee_source"]
     fill_fields = ["timestamp", "market_id", "slug", "action", "side", "shares", "price", "fee", "pnl", "reason"]
     decision_fields = ["timestamp", "market_id", "slug", "side", "limit_price", "fill_probability", "conditional_net_pnl_per_share", "expected_value", "toxicity_score", "action"]
+    markout_fields = ["observation_ts", "fill_event_ts", "fill_received_ms", "market_id", "slug", "side", "token_id", "horizon_seconds", "observed_age_seconds", "shares", "entry_cost_per_share", "exit_bid", "exit_fee_per_share", "slippage_bps", "net_markout_per_share"]
 
+    # Cross-sleeve token ownership is authoritative immediately. Other resting
+    # cancellations intentionally happen only after replaying market events that
+    # occurred while the maker order was still live.
     for market_id, order in list(orders.items()):
-        created = int(finite(order.get("created_ts"), now))
         token = str(order.get("token_id") or "")
         if token in broker_tokens:
             base.append_csv(args.run_dir / "maker_order_log.csv", order_fields, {**order, "timestamp": now, "action": "CANCEL_TOKEN_OWNED_BY_MULTILEG"})
             del orders[market_id]
-            continue
-        if now - created >= args.ttl_seconds:
-            base.append_csv(args.run_dir / "maker_order_log.csv", order_fields, {**order, "timestamp": now, "action": "CANCEL_TTL"})
-            del orders[market_id]
-            continue
-        limit = finite(order.get("limit_price"), 0.0)
-        recent = flow.compatible_sell_volume(token, limit, lookback_seconds=min(args.flow_lookback_seconds, max(20, now - created)))
-        if now - created >= 20 and recent <= 1e-12:
-            base.append_csv(args.run_dir / "maker_order_log.csv", order_fields, {**order, "timestamp": now, "action": "CANCEL_ZERO_CAUSAL_FLOW"})
-            del orders[market_id]
 
+    # Replay all newly known public trades against orders using market event time
+    # for order lifetime and receive time only for causal availability. This must
+    # precede TTL/dead-queue cancellation so delayed REST delivery cannot create a
+    # false zero-fill for a trade that happened before order expiry.
     for row in tape:
+        row_received_ms = int(finite(row.get("received_ms"), 0.0))
+        if row_received_ms <= 0 or row_received_ms > current_ms:
+            continue
         identity = trade_id(row)
         if identity in seen_trade_ids:
             continue
-        seen_trade_ids.add(identity)
         if str(row.get("side") or "").upper() != "SELL":
+            seen_trade_ids.add(identity)
             continue
         remaining = max(0.0, finite(row.get("size"), 0.0))
         candidates = sorted(
-            [(mid, order) for mid, order in orders.items() if causal_after_order(row, order) and str(order.get("token_id") or "") == str(row.get("asset_id") or "") and finite(row.get("price"), 2.0) <= finite(order.get("limit_price"), 0.0) + 1e-12],
+            [
+                (mid, order)
+                for mid, order in orders.items()
+                if causal_fill_eligible(row, order, processing_ms=current_ms, ttl_seconds=args.ttl_seconds)
+                and str(order.get("token_id") or "") == str(row.get("asset_id") or "")
+                and finite(row.get("price"), 2.0) <= finite(order.get("limit_price"), 0.0) + 1e-12
+            ],
             key=lambda item: (int(finite(item[1].get("created_received_ms"), 0.0)), item[0]),
         )
+        seen_trade_ids.add(identity)
         for market_id, order in candidates:
             if remaining <= 1e-12 or market_id not in orders:
                 break
@@ -199,15 +236,94 @@ def main() -> int:
             cash -= cost
             remaining -= fill
             order["remaining_shares"] = max(0.0, float(order["remaining_shares"]) - fill)
-            position = positions.get(market_id) if isinstance(positions.get(market_id), dict) else {"market_id": market_id, "event_id": market.event, "slug": market.slug, "side": order["side"], "token_id": order["token_id"], "shares": 0.0, "cost": 0.0, "entry_ts": now}
+            fill_event_ts = int(finite(row.get("timestamp"), now))
+            fill_event_ms = fill_event_ts * 1000
+            position = positions.get(market_id) if isinstance(positions.get(market_id), dict) else {"market_id": market_id, "event_id": market.event, "slug": market.slug, "side": order["side"], "token_id": order["token_id"], "shares": 0.0, "cost": 0.0, "entry_ts": fill_event_ts, "entry_event_ms": fill_event_ms, "entry_received_ms": row_received_ms}
             position["shares"] = finite(position.get("shares"), 0.0) + fill
             position["cost"] = finite(position.get("cost"), 0.0) + cost
+            position["entry_ts"] = min(int(finite(position.get("entry_ts"), fill_event_ts)), fill_event_ts)
+            position["entry_event_ms"] = min(int(finite(position.get("entry_event_ms"), fill_event_ms)), fill_event_ms)
+            position["entry_received_ms"] = min(int(finite(position.get("entry_received_ms"), row_received_ms)), row_received_ms)
             positions[market_id] = position
-            base.append_csv(args.run_dir / "maker_fills.csv", fill_fields, {"timestamp": now, "market_id": market_id, "slug": market.slug, "action": "BUY_MAKER", "side": order["side"], "shares": fill, "price": price, "fee": fee, "pnl": 0.0, "reason": "dual_clock_shared_capacity_fill"})
+            watch_id = f"{market_id}|{identity}"
+            markout_watch[watch_id] = {
+                "market_id": market_id,
+                "slug": market.slug,
+                "side": order["side"],
+                "token_id": order["token_id"],
+                "shares": fill,
+                "entry_cost_per_share": cost / max(fill, 1e-12),
+                "fill_event_ts": fill_event_ts,
+                "fill_received_ms": row_received_ms,
+                "done_horizons": [],
+            }
+            base.append_csv(args.run_dir / "maker_fills.csv", fill_fields, {"timestamp": fill_event_ts, "market_id": market_id, "slug": market.slug, "action": "BUY_MAKER", "side": order["side"], "shares": fill, "price": price, "fee": fee, "pnl": 0.0, "reason": "dual_clock_shared_capacity_fill"})
             if order["remaining_shares"] <= 1e-12:
                 del orders[market_id]
 
+    # Only residual, still-unfilled orders can now be cancelled for TTL or a dead
+    # queue. This ordering is a hard execution contract.
+    for market_id, order in list(orders.items()):
+        created = int(finite(order.get("created_ts"), now))
+        token = str(order.get("token_id") or "")
+        if now - created >= args.ttl_seconds:
+            base.append_csv(args.run_dir / "maker_order_log.csv", order_fields, {**order, "timestamp": now, "action": "CANCEL_TTL"})
+            del orders[market_id]
+            continue
+        limit = finite(order.get("limit_price"), 0.0)
+        recent = flow.compatible_sell_volume(token, limit, lookback_seconds=min(args.flow_lookback_seconds, max(20, now - created)))
+        if now - created >= 20 and recent <= 1e-12:
+            base.append_csv(args.run_dir / "maker_order_log.csv", order_fields, {**order, "timestamp": now, "action": "CANCEL_ZERO_CAUSAL_FLOW"})
+            del orders[market_id]
+
     slip = max(0.0, args.slippage_bps) / 10000.0
+
+    # Keep post-fill executable markout watches even after the economic position
+    # exits, so 45s/60s/300s adverse-selection evidence is not lost.
+    for watch_id, watch in list(markout_watch.items()):
+        token = str(watch.get("token_id") or "")
+        market_id = str(watch.get("market_id") or "")
+        market = by_id.get(market_id)
+        book = books.get(token)
+        if market is None or book is None or not math.isfinite(book.bid):
+            continue
+        fill_event_ts = int(finite(watch.get("fill_event_ts"), now))
+        age = max(0, now - fill_event_ts)
+        done = {int(value) for value in watch.get("done_horizons", [])}
+        details = resolve_fee_details(market.raw, clob, market.condition, token)
+        if not details.verified:
+            continue
+        for horizon in (45, 60, 300):
+            if horizon in done or age < horizon:
+                continue
+            exit_bid = max(1e-6, book.bid * (1.0 - slip))
+            exit_fee = fee_per_share(exit_bid, details, taker=True)
+            entry_cost = finite(watch.get("entry_cost_per_share"), math.inf)
+            if not math.isfinite(entry_cost):
+                continue
+            net_markout = exit_bid - exit_fee - entry_cost
+            base.append_csv(args.run_dir / "maker_markouts.csv", markout_fields, {
+                "observation_ts": now,
+                "fill_event_ts": fill_event_ts,
+                "fill_received_ms": int(finite(watch.get("fill_received_ms"), 0.0)),
+                "market_id": market_id,
+                "slug": str(watch.get("slug") or ""),
+                "side": str(watch.get("side") or ""),
+                "token_id": token,
+                "horizon_seconds": horizon,
+                "observed_age_seconds": age,
+                "shares": finite(watch.get("shares"), 0.0),
+                "entry_cost_per_share": entry_cost,
+                "exit_bid": exit_bid,
+                "exit_fee_per_share": exit_fee,
+                "slippage_bps": args.slippage_bps,
+                "net_markout_per_share": net_markout,
+            })
+            done.add(horizon)
+        watch["done_horizons"] = sorted(done)
+        if 300 in done:
+            del markout_watch[watch_id]
+
     for market_id, position in list(positions.items()):
         market = by_id.get(market_id)
         book = books.get(str(position.get("token_id") or ""))
@@ -294,11 +410,12 @@ def main() -> int:
             if shares + 1e-12 < book.min_order:
                 continue
             decision = maker_fill_conditioned_ev(chosen)
+            arrival_ms = current_ms + 100
             order = {
                 "market_id": market.id, "event_id": market.event, "condition_id": market.condition, "slug": market.slug,
                 "side": side, "token_id": token, "limit_price": chosen.limit_price, "remaining_shares": shares,
-                "queue_ahead": chosen.queue_ahead, "created_ts": now, "created_event_ms": current_ms,
-                "created_received_ms": current_ms + 100, "signal_edge": decision.conditional_net_pnl_per_share,
+                "queue_ahead": chosen.queue_ahead, "created_ts": now, "created_event_ms": arrival_ms,
+                "created_received_ms": arrival_ms, "signal_edge": decision.conditional_net_pnl_per_share,
                 "confidence": confidence, "fill_probability": decision.fill_probability, "expected_value": ev_value,
                 "toxicity_score": decision.toxicity_score,
                 "flow_rate": flow.compatible_sell_rate(token, chosen.limit_price, lookback_seconds=args.flow_lookback_seconds),
@@ -317,16 +434,16 @@ def main() -> int:
     output = {
         "timestamp": now, "paper_only": True, "authenticated_execution": False, "cash": cash, "equity": equity,
         "peak": peak, "drawdown": drawdown, "killed": killed, "orders": orders, "positions": positions,
-        "realized_pnl": realized_pnl, "signals": signals, "posted": posted, "resting_orders": len(orders),
-        "open_positions": len(positions), "reserved_cash": reserved(),
+        "markout_watch": markout_watch, "realized_pnl": realized_pnl, "signals": signals, "posted": posted,
+        "resting_orders": len(orders), "open_positions": len(positions), "reserved_cash": reserved(),
         "best_fill_conditioned_ev": best_ev if math.isfinite(best_ev) else 0.0, "best_fill_probability": best_fill,
         "fee_unverified_markets": fee_unverified, "seen_trade_ids": list(seen_trade_ids)[-5000:],
-        "decision_contract": "fill_conditioned_net_pnl_with_toxicity_partial_unwind_capital_time_and_cross_sleeve_token_ownership",
+        "decision_contract": "event_time_replay_before_cancel_fill_conditioned_net_pnl_with_45_60_300_markout_watch",
     }
     base.atomic_json(state_path, output)
     base.atomic_json(args.run_dir / "status.json", output)
     base.atomic_csv(args.run_dir / "maker_orders.csv", ["market_id", "event_id", "condition_id", "slug", "side", "token_id", "limit_price", "remaining_shares", "queue_ahead", "created_ts", "created_event_ms", "created_received_ms", "signal_edge", "confidence", "fill_probability", "expected_value", "toxicity_score", "flow_rate", "fee_source"], list(orders.values()))
-    base.atomic_csv(args.run_dir / "maker_positions.csv", ["market_id", "event_id", "slug", "side", "token_id", "shares", "cost", "entry_ts"], list(positions.values()))
+    base.atomic_csv(args.run_dir / "maker_positions.csv", ["market_id", "event_id", "slug", "side", "token_id", "shares", "cost", "entry_ts", "entry_event_ms", "entry_received_ms"], list(positions.values()))
     base.append_csv(args.run_dir / "maker_equity.csv", ["timestamp", "cash", "equity", "reserved_cash", "resting_orders", "positions", "peak_equity", "drawdown", "killed", "realized_pnl", "signals", "posted", "best_fill_conditioned_ev", "best_fill_probability"], {"timestamp": now, "cash": cash, "equity": equity, "reserved_cash": reserved(), "resting_orders": len(orders), "positions": len(positions), "peak_equity": peak, "drawdown": drawdown, "killed": 1 if killed else 0, "realized_pnl": realized_pnl, "signals": signals, "posted": posted, "best_fill_conditioned_ev": output["best_fill_conditioned_ev"], "best_fill_probability": best_fill})
     print(json.dumps({key: output[key] for key in ("signals", "posted", "resting_orders", "open_positions", "equity", "realized_pnl", "best_fill_conditioned_ev", "best_fill_probability", "fee_unverified_markets", "killed")}, sort_keys=True))
     return 0
