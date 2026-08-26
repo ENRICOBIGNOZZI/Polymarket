@@ -7,9 +7,11 @@ on:
     paths:
       - "scripts/v7_cross_sectional_rank.py"
       - "scripts/v7_cross_sectional_rank_core.py"
+      - "scripts/v7_cross_sectional_rank_fast.py"
       - "scripts/v7_cross_sectional_history.py"
       - "config/research_v7_cross_sectional_rank.json"
       - "tests/test_v7_cross_sectional_rank.py"
+      - "tests/test_v7_cross_sectional_rank_fast.py"
       - "tests/test_v7_cross_sectional_history.py"
       - "docs/V7_CROSS_SECTIONAL_RANKING.md"
       - ".github/workflows/v7-cross-sectional-ranking-research.yml"
@@ -31,8 +33,15 @@ jobs:
       - name: Deterministic ranking contracts
         run: |
           set -euo pipefail
-          python3 -m unittest tests/test_v7_cross_sectional_rank.py tests/test_v7_cross_sectional_history.py -v
-          python3 -m py_compile scripts/v7_cross_sectional_rank_core.py scripts/v7_cross_sectional_rank.py scripts/v7_cross_sectional_history.py
+          python3 -m unittest \
+            tests/test_v7_cross_sectional_rank.py \
+            tests/test_v7_cross_sectional_rank_fast.py \
+            tests/test_v7_cross_sectional_history.py -v
+          python3 -m py_compile \
+            scripts/v7_cross_sectional_rank_core.py \
+            scripts/v7_cross_sectional_rank_fast.py \
+            scripts/v7_cross_sectional_rank.py \
+            scripts/v7_cross_sectional_history.py
           python3 -m json.tool config/research_v7_cross_sectional_rank.json >/dev/null
 
       - name: Live public-data cross-sectional research
@@ -40,10 +49,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ranking_evidence
-          # Keep the full 30-day sample and all statistical gates. Only independent
-          # 7-day public history batches are fetched concurrently (max six workers).
-          # Per-token fallback remains disabled so batch-data health is fail-closed.
-          python3 -c 'import sys; sys.path.insert(0,"scripts"); import v7_cross_sectional_rank as m, v7_cross_sectional_history as h; m.fetch_histories=h.fetch_histories; m.HISTORY_SINGLE_FALLBACK_BUDGET_PER_WINDOW=0; raise SystemExit(m.main())' \
+          # Preserve the full 30-day information set and all statistical gates.
+          # Independent 7-day history batches use bounded parallel reads, while
+          # walk-forward ridge uses an exact-beta rolling sufficient-statistics path.
+          # The equivalence test above binds the rolling path to the canonical fit.
+          python3 -c 'import sys; sys.path.insert(0,"scripts"); import v7_cross_sectional_rank as m, v7_cross_sectional_history as h, v7_cross_sectional_rank_fast as f; m.fetch_histories=h.fetch_histories; m.core.walk_forward_evaluate=f.walk_forward_evaluate; m.HISTORY_SINGLE_FALLBACK_BUDGET_PER_WINDOW=0; raise SystemExit(m.main())' \
             --config config/research_v7_cross_sectional_rank.json \
             --market-limit 150 \
             --output-json ranking_evidence/report.json \
