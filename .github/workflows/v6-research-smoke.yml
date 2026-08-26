@@ -12,10 +12,14 @@ on:
       - "scripts/paper_v6_loop.sh"
       - "scripts/v6_*.py"
       - "scripts/hf_active_flow_maker_probe.py"
+      - "scripts/hf_active_flow_maker_batched_probe.py"
+      - "scripts/hf_active_flow_maker_core.py"
+      - "scripts/hf_active_flow_maker_seeded_probe.py"
       - "tests/test_v6_model_contracts.py"
       - "tests/test_v6_runtime_contract.py"
       - "tests/test_v6_execution_costs.py"
       - "tests/test_hf_active_flow_maker_probe.py"
+      - "tests/test_hf_active_flow_maker_seeded_probe.py"
       - ".github/workflows/v6-research-smoke.yml"
 
 permissions:
@@ -89,13 +93,19 @@ jobs:
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
-          python3 -m py_compile scripts/v6_queue_filter.py scripts/hf_active_flow_maker_probe.py
+          python3 -m py_compile \
+            scripts/v6_queue_filter.py \
+            scripts/hf_active_flow_maker_probe.py \
+            scripts/hf_active_flow_maker_batched_probe.py \
+            scripts/hf_active_flow_maker_core.py \
+            scripts/hf_active_flow_maker_seeded_probe.py
           python3 scripts/v6_queue_filter.py self-test
           python3 -m unittest \
             tests/test_v6_model_contracts.py \
             tests/test_v6_runtime_contract.py \
             tests/test_v6_execution_costs.py \
-            tests/test_hf_active_flow_maker_probe.py -v
+            tests/test_hf_active_flow_maker_probe.py \
+            tests/test_hf_active_flow_maker_seeded_probe.py -v
 
       - name: Live public-data relation probes
         shell: bash
@@ -136,9 +146,12 @@ jobs:
 
       - name: HF causal active-flow maker challenger
         shell: bash
+        env:
+          HF_SEED_LOOKBACK_SECONDS: 180
+          HF_SEED_MAX_CONDITIONS: 50
         run: |
           set -euo pipefail
-          python3 scripts/hf_active_flow_maker_probe.py \
+          python3 scripts/hf_active_flow_maker_seeded_probe.py \
             --output-dir v6_evidence/hf_active_flow \
             --markets 1000 \
             --activity-scan-markets 120 \
