@@ -91,6 +91,7 @@
     "arb-theory-research": "Derive structural/Graph opportunities under the v3 joint-state/fixed-horizon execution contract, not marginal-fill products or assumed terminal payout floors.",
     "external-intelligence": "Collect, store and chronologically validate public information; publish research evidence only and keep probability mapping fail-closed.",
     "live-api-smoke": "Read-only connectivity only; no policy mutation.",
+    "v7-point-in-time-universe-archive": "Every 30 minutes archive the exact paper-validated public universe from the existing compatibility cache into immutable point-in-time snapshots for causal V7 PCA, Local Factor and ranking research. Remain read-only with respect to champion, orders, PnL and risk state.",
     "v6-market-cache-relay": "Keep the compatibility cache fresh only; do not mutate V7 model policy or champion selection."
   },
   "forbidden_regressions": [
