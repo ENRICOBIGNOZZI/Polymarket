@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "directive_epoch": "2026-08-27T01:01:00+02:00",
+  "directive_epoch": "2026-08-27T01:10:00+02:00",
   "operator_instruction_id": "user-v7-master-multi-agent-operating-prompt-20260827",
   "authority": "latest_explicit_user_instruction",
   "supersedes_prs": [513, 516, 519, 537, 547, 595, 596, 605],
@@ -106,7 +106,7 @@
     "external-intelligence": "Collect and chronologically validate point-in-time public external information in parallel; reuse existing/portfolio data read-only where provenance-safe and keep probability mapping fail closed.",
     "live-api-smoke": "Read-only Gamma/CLOB connectivity and freshness only; no model, policy, champion or execution mutation.",
     "v7-point-in-time-universe-archive": "Maintain immutable V7 point-in-time universes for causal PCA/LF/ranking research; archive must not create a competing market-data fetch path.",
-    "v7-unified-paper-evidence": "Reconcile only exact-green V7 research heads into isolated per-SHA PAPER evidence; never pool evidence across code revisions or mutate main/paper-validated/champion.",
+    "v7-unified-paper-evidence": "Reconcile only exact-green V7 research heads into isolated per-SHA PAPER evidence; never merge/deploy, never pool evidence across code revisions, and never mutate main/paper-validated/champion.",
     "v7-cross-sectional-ranking-research": "Repair frozen-holdout semantics first, then collect horizon-separated relative ranking evidence including the new 15m challenger; frozen and adaptive observers remain distinct and no live mutation is authorized.",
     "v6-market-cache-relay": "Transitional cutover dependency only; do not expand V6. Preserve it only while V7 point-in-time/archive/runtime consumers still require its verified cache, then migrate the primitive to V7/common before gated retirement."
   },
