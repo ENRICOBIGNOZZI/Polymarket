@@ -14,6 +14,12 @@ def load_json(path: Path) -> dict[str, Any]:
     return data
 
 
+def number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
 def validate(root: Path) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     notes: list[str] = []
@@ -29,6 +35,13 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
 
     context = load_json(context_path)
     registry = load_json(registry_path)
+    directives_rel = str(context.get("operator_directives") or "")
+    directives_path = root / directives_rel if directives_rel else None
+    if directives_path is None or not directives_path.is_file():
+        errors.append("config/project_context.json must point to an existing operator_directives manifest")
+        return errors, notes
+    directives = load_json(directives_path)
+
     if context.get("schema_version") != 1:
         errors.append("config/project_context.json schema_version must equal 1")
     if context.get("repository") != "ENRICOBIGNOZZI/Polymarket":
@@ -43,6 +56,65 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
         errors.append("scheduler context scope must be entire_repository")
     if policy.get("require_full_worktree_inventory") is not True:
         errors.append("full worktree inventory must be required")
+    if policy.get("require_operator_directives") is not True:
+        errors.append("operator directives must be required scheduler context")
+
+    if directives.get("schema_version") != 1:
+        errors.append("operator directives schema_version must equal 1")
+    if directives.get("authority") != "latest_explicit_user_instruction":
+        errors.append("operator directives must declare latest_explicit_user_instruction authority")
+    if directives.get("repository") != "ENRICOBIGNOZZI/Polymarket":
+        errors.append("operator directives repository mismatch")
+
+    authorization = directives.get("paper_v7_authorization") if isinstance(directives.get("paper_v7_authorization"), dict) else {}
+    exact = {
+        "max_trade_fraction": 1.0,
+        "max_market_fraction": 1.0,
+        "max_event_fraction": 1.0,
+        "max_gross_fraction": 1.0,
+        "hard_arb_max_trade_fraction": 1.0,
+    }
+    if authorization.get("paper_only") is not True:
+        errors.append("operator V7 authorization must remain PAPER-only")
+    if authorization.get("authenticated_execution") is not False:
+        errors.append("operator V7 authorization must keep authenticated execution disabled")
+    if authorization.get("fixed_dollar_trade_cap_enabled") is not False:
+        errors.append("operator V7 authorization must keep the fixed-dollar trade cap disabled")
+    if authorization.get("hard_arb_fixed_dollar_trade_cap_enabled") is not False:
+        errors.append("operator V7 hard-arb fixed-dollar cap must remain disabled")
+    for key, expected in exact.items():
+        value = number(authorization.get(key))
+        if value is None or abs(value - expected) > 1e-12:
+            errors.append(f"operator V7 authorization requires {key}=1.0")
+    if number(authorization.get("fractional_kelly_ceiling")) != 0.25:
+        errors.append("operator V7 fractional Kelly ceiling must remain 0.25")
+    if number(authorization.get("max_drawdown")) != 0.15:
+        errors.append("operator V7 drawdown kill must remain 0.15")
+
+    schedulers = registry.get("schedulers")
+    if not isinstance(schedulers, list):
+        errors.append("scheduler registry does not contain a scheduler list")
+        return errors, notes
+    scheduler_ids = {
+        str(raw.get("id")) for raw in schedulers if isinstance(raw, dict) and raw.get("id")
+    }
+    assignments = directives.get("scheduler_assignments")
+    if not isinstance(assignments, dict):
+        errors.append("operator directives must contain scheduler_assignments")
+        assignments = {}
+    missing_assignments = sorted(scheduler_ids.difference(assignments))
+    extra_assignments = sorted(set(assignments).difference(scheduler_ids))
+    if missing_assignments:
+        errors.append("operator directives missing scheduler assignments: " + ", ".join(missing_assignments))
+    if extra_assignments:
+        errors.append("operator directives reference unknown schedulers: " + ", ".join(extra_assignments))
+
+    priorities = directives.get("current_priority_order")
+    if not isinstance(priorities, list) or len(priorities) < 8:
+        errors.append("operator directives must provide the complete V7 priority sequence")
+    forbidden = directives.get("forbidden_regressions")
+    if not isinstance(forbidden, list) or not any("$125" in str(item) for item in forbidden):
+        errors.append("operator directives must explicitly forbid the obsolete V7 $125 policy rollback")
 
     for rel in [str(item) for item in context.get("required_surfaces", [])]:
         if not (root / rel).exists():
@@ -70,11 +142,6 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     if grafana.get("dashboard_uid") != "polymarket-multi-strategy-v5":
         errors.append("canonical Grafana dashboard must be polymarket-multi-strategy-v5")
 
-    schedulers = registry.get("schedulers")
-    if not isinstance(schedulers, list):
-        errors.append("scheduler registry does not contain a scheduler list")
-        return errors, notes
-
     for raw in schedulers:
         if not isinstance(raw, dict):
             continue
@@ -92,7 +159,10 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
         if not local_checkout and not remote_checkout:
             errors.append(f"{scheduler_id} has no complete repository worktree available")
         else:
-            notes.append(f"{scheduler_id}: {'runner checkout' if local_checkout else 'canonical remote checkout'}")
+            assignment = str(assignments.get(scheduler_id) or "")
+            notes.append(
+                f"{scheduler_id}: {'runner checkout' if local_checkout else 'canonical remote checkout'}; directive={assignment}"
+            )
     return errors, notes
 
 
@@ -100,23 +170,23 @@ def render(errors: list[str], notes: list[str]) -> str:
     lines = [
         "# Scheduler project-context validation",
         "",
-        f"- schedulers with verified full-worktree access: {len(notes)}",
+        f"- schedulers with verified full-worktree access and assignments: {len(notes)}",
         f"- errors: {len(errors)}",
-        "- policy: every scheduler sees a complete project worktree before narrowing to its bounded responsibility",
+        "- policy: every scheduler sees a complete project worktree and the current explicit operator directive before narrowing to its bounded responsibility",
         "",
-        "## Visibility",
+        "## Visibility and assignment",
     ]
     lines.extend(f"- {note}" for note in notes)
     if errors:
         lines.extend(["", "## Errors"])
         lines.extend(f"- {error}" for error in errors)
     else:
-        lines.extend(["", "All registered schedulers have complete repository visibility and canonical runtime/Grafana context is consistent."])
+        lines.extend(["", "All registered schedulers have complete repository visibility, a current operator assignment and consistent runtime/Grafana context."])
     return "\n".join(lines) + "\n"
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate project-wide context availability for Polymarket schedulers")
+    parser = argparse.ArgumentParser(description="Validate project-wide context and explicit operator assignments for Polymarket schedulers")
     parser.add_argument("--root", default=".")
     parser.add_argument("--output", default="project-context-validation.md")
     args = parser.parse_args()
