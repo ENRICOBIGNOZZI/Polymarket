@@ -23,7 +23,7 @@
   "max_gross_fraction": 0.70,
   "max_drawdown": 0.15,
   "history_bootstrap": true,
-  "bootstrap_market_limit": 1000,
+  "bootstrap_market_limit": 500,
   "history_lookback_hours": 720,
   "history_fidelity_minutes": 30,
   "pca_window": 720,
@@ -47,7 +47,7 @@
     "paper_only": true,
     "global_max_drawdown": 0.15,
     "global_max_gross_fraction": 0.70,
-    "description": "V6 capital-isolated model-specific paper sleeves; authorized aggressive PAPER envelope with hard safety preserved."
+    "description": "V6 capital-isolated model-specific paper sleeves; no operational fair-value mixture."
   },
   "v6": {
     "paper_only": true,
