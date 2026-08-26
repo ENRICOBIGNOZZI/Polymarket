@@ -15,6 +15,7 @@ import hf_active_flow_maker_probe as entrypoint
 
 _ORIGINAL_DISCOVER = entrypoint.discover_markets_activity_prior
 _ORIGINAL_FETCH = entrypoint.fetch_trades_batch
+_ORIGINAL_ACTIVITY_ELIGIBLE = core.activity_eligible
 _SEED_DIAGNOSTICS: dict[str, Any] = {}
 _FLOW_CONDITIONS: set[str] = set()
 _PRIOR_CONDITIONS: set[str] = set()
@@ -287,10 +288,10 @@ def fetch_trades_seeded(condition_ids: list[str], start_ts: int, end_ts: int,
 def apply_zero_fill_research_profile(args: Any) -> dict[str, Any]:
     """Bounded paper-only relaxation after healthy activity still produced zero candidates.
 
-    The live precursor had a +143.8 bp, non-toxic at-touch candidate with one
-    compatible SELL print, 3.81% conservative fill proxy and event age 81s. It was
-    rejected only by the 2-print/60s warm-up gates. This profile tests that causal
-    region without buying an inside-spread tick on one-print evidence.
+    The live precursor had a large positive post-cost edge, at-touch placement, one
+    compatible SELL print, a nontrivial conservative fill proxy and event age below
+    90s. The previous 2-print/60s warm-up rejected that causal region. This profile
+    tests sparse at-touch flow without buying an inside-spread tick.
     """
     global _ADMISSION_DIAGNOSTICS
     before = {
@@ -313,15 +314,39 @@ def apply_zero_fill_research_profile(args: Any) -> dict[str, Any]:
         "improve_ticks": int(args.improve_ticks),
     }
     _ADMISSION_DIAGNOSTICS = {
-        "research_admission_profile": "active_at_touch_sparse_flow_v1",
-        "reason": "healthy token-seeded live universe had positive-edge non-toxic one-print candidates but zero active orders",
+        "research_admission_profile": "active_at_touch_sparse_flow_v2_reliability_gated_toxicity",
+        "reason": "one compatible SELL print is fill evidence but raw signed imbalance is degenerate at minus one and is not yet reliable enough for a hard toxicity veto",
         "before": before,
         "effective": after,
         "economic_floor_unchanged": float(args.min_edge),
         "max_sell_toxicity_unchanged": float(args.max_sell_toxicity),
+        "hard_toxicity_min_trade_observations": 2,
+        "sparse_flow_toxicity_still_soft_penalized_in_adjusted_edge": True,
         "inside_spread_disabled_for_sparse_flow_isolation": True,
     }
     return dict(_ADMISSION_DIAGNOSTICS)
+
+
+def activity_eligible_reliability_gated_toxicity(
+    flow: core.Flow, queue: float, shares: float, args: Any
+) -> bool:
+    """Do not turn a single fill-side print into a statistically certain toxicity veto.
+
+    A one-print SELL tape necessarily has signed imbalance -1, so the old hard
+    max-sell-toxicity gate contradicted the sparse-flow admission experiment: every
+    immediately fill-relevant one-print candidate was rejected as maximally toxic.
+    Sparse flow remains at-touch only and still pays the full toxicity penalty in
+    adjusted edge; the hard imbalance veto starts once at least two tape events exist.
+    """
+    if flow.trade_count < args.min_recent_trades or flow.compatible_sell_prints < args.min_sell_prints:
+        return False
+    if flow.last_event_age is None or flow.last_event_age > args.max_event_age_seconds:
+        return False
+    if core.fill_probability_proxy(flow, queue, shares) < args.min_fill_probability:
+        return False
+    if flow.trade_count < 2:
+        return int(args.improve_ticks) == 0
+    return max(0.0, -flow.signed_imbalance) <= args.max_sell_toxicity
 
 
 def seeded_activity_data_healthy(result: dict[str, Any]) -> bool:
@@ -354,6 +379,7 @@ def main() -> int:
     _deterministic_checks()
     entrypoint._deterministic_contract_checks()
     core.discover_markets = discover_markets_seeded
+    core.activity_eligible = activity_eligible_reliability_gated_toxicity
     batched.fetch_trades_batch = fetch_trades_seeded
     args = core.parse_args()
     apply_zero_fill_research_profile(args)
