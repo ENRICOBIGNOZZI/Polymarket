@@ -1,0 +1,65 @@
+{
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "evidence_type": "current-main public live-paper structural defect",
+  "observed_at_utc": "2026-08-26T04:22:53Z",
+  "main_sha": "e417dfefd99312712c1f9e33efa8e2e847b492e5",
+  "github_run_id": "32929822866",
+  "telemetry_source": "telemetry/latest-live-smoke.json",
+  "trade_recorder": {
+    "status": "unhealthy",
+    "failures": [
+      "no_public_trades_fetched",
+      "missing_last_trade_timestamp"
+    ],
+    "markets": 220,
+    "conditions": 220,
+    "requests": 6,
+    "errors": 0,
+    "fetched": 0,
+    "new_trades": 0,
+    "last_trade_ts": 0,
+    "seen": 0
+  },
+  "graph_rv": {
+    "bundles": 1,
+    "intent_rows": 3,
+    "event_id": "842328",
+    "expected_edge": 0.030000000000000027,
+    "leg_prices": [0.74, 0.15, 0.08],
+    "max_notional_usd": 60.0,
+    "broker_state": "RESTING",
+    "broker_reserved_usd": 60.0,
+    "trades_processed": 0,
+    "complete": 0
+  },
+  "maker": {
+    "first_tick_signals": 42,
+    "posted": 7,
+    "queue_skipped": 35,
+    "resting": 7,
+    "positions": 0,
+    "reserved_usd": 151.175
+  },
+  "runtime": {
+    "equity_usd": 10000.0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_pnl_usd": 0.0,
+    "kill_switch": false,
+    "drawdown_ratio": 0.0
+  },
+  "source_contract": {
+    "v6_live_smoke_invokes_trade_recorder_health_validator_before_graph_broker": false,
+    "persistent_v6_loop_invokes_trade_recorder_health_validator_before_rebuilding_graph_intents": false,
+    "health_validator_exists_and_classifies_fetched_zero_or_missing_last_trade_as_unhealthy": true
+  },
+  "finding": "The current exact-main public smoke can create a new GRAPH_RV intent, reserve broker capital, and leave a bundle RESTING while the trade tape is explicitly unhealthy and uninitialized. The persistent loop likewise keeps the recorder and broker alive and rebuilds relation intents without an admission-time call to the trade-recorder health validator. Runtime health/recovery and strategy admission are therefore separate contracts: the former is fail-closed, while tape-dependent Graph/RV execution evidence is not yet fail-closed at admission.",
+  "required_next_test": "On common chronological public data, compare current admission with a tape-health-gated challenger. When recorder evidence is unhealthy, no new Graph/RV or other tape-dependent queue/joint-completion intent may reserve capital. After health recovers, admission may resume using candidate-specific queue, joint completion, partial-fill abort/unwind economics, and fill-conditioned PnL. Existing resting state must be handled separately without fabricating fills or violating state integrity.",
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "max_drawdown_unchanged": 0.15,
+    "kill_switch_unchanged": true,
+    "authorized_aggressive_paper_envelope_unchanged": true
+  }
+}
