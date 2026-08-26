@@ -13,6 +13,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import v7_maker_cancel_latency as cancel
+import v7_micro_maker_worker as maker
 
 
 def base_order() -> dict:
@@ -54,12 +55,14 @@ def test_delayed_pre_cancel_trade_is_allowed_during_grace() -> None:
 
 def test_cancel_aware_delete_intercepts_only_requested_cancel() -> None:
     request = {"reason": ""}
+
     def on_cancel(_key: str, order: dict) -> bool:
         if not request["reason"]:
             return False
         cancel.request_cancel(order, processing_ms=10_000, latency_ms=100, grace_ms=30_000, reason=request["reason"])
         request["reason"] = ""
         return True
+
     orders = cancel.CancelAwareOrders({"m1": base_order()}, on_cancel=on_cancel)
     request["reason"] = "CANCEL_TTL"
     del orders["m1"]
@@ -82,7 +85,8 @@ def test_finalize_waits_for_latency_plus_grace_and_syncs_exports() -> None:
         status_path.write_text(json.dumps({"orders": {"m1": order}, "resting_orders": 1}), encoding="utf-8")
         with orders_path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=["market_id", "token_id"])
-            writer.writeheader(); writer.writerow({"market_id": "m1", "token_id": "tok"})
+            writer.writeheader()
+            writer.writerow({"market_id": "m1", "token_id": "tok"})
         assert cancel.finalize_due_cancels(run_dir, processing_ms=40_099) == []
         rows = cancel.finalize_due_cancels(run_dir, processing_ms=40_100)
         assert len(rows) == 1
@@ -92,6 +96,48 @@ def test_finalize_waits_for_latency_plus_grace_and_syncs_exports() -> None:
         assert state["resting_orders"] == 0 and status["resting_orders"] == 0
         with orders_path.open(newline="", encoding="utf-8") as handle:
             assert list(csv.DictReader(handle)) == []
+
+
+def test_tracked_state_requires_market_and_book_continuity_before_replay() -> None:
+    state = {
+        "orders": {"m1": {"market_id": "m1", "token_id": "tok1"}},
+        "positions": {"m2": {"market_id": "m2", "token_id": "tok2"}},
+        "markout_watch": {"w3": {"market_id": "m3", "token_id": "tok3"}},
+    }
+    assert maker.tracked_market_token_pairs(state) == {
+        ("m1", "tok1"),
+        ("m2", "tok2"),
+        ("m3", "tok3"),
+    }
+    gaps = maker.replay_continuity_gaps(
+        state,
+        discovered_market_ids={"m1", "m2"},
+        book_tokens={"tok1", "tok2"},
+    )
+    assert gaps == {"missing_market_ids": ["m3"], "missing_book_tokens": ["tok3"]}
+    assert maker.replay_continuity_gaps(
+        state,
+        discovered_market_ids={"m1", "m2", "m3"},
+        book_tokens={"tok1", "tok2", "tok3"},
+    ) == {"missing_market_ids": [], "missing_book_tokens": []}
+
+
+def test_empty_or_untracked_state_does_not_block_research_discovery() -> None:
+    assert maker.tracked_market_token_pairs({}) == set()
+    assert maker.replay_continuity_gaps(
+        {}, discovered_market_ids=set(), book_tokens=set()
+    ) == {"missing_market_ids": [], "missing_book_tokens": []}
+
+
+def test_canonical_worker_fails_closed_before_replay_when_continuity_is_missing() -> None:
+    text = (SCRIPTS / "v7_micro_maker_worker.py").read_text(encoding="utf-8")
+    assert "REPLAY_CONTINUITY_CONTRACT" in text
+    assert "tracked_market_and_token_book_required_before_tape_replay" in text
+    assert "event.load_tape = patched_load_tape" in text
+    assert "raise ReplayContinuityError" in text
+    assert "FAIL_CLOSED_NO_REPLAY_NO_CANCEL" in text
+    assert text.index("event.load_tape = patched_load_tape") < text.index("rc = depth.main()")
+    assert text.index("continuity_block is not None") < text.index("finalize_due_cancels")
 
 
 def test_canonical_worker_replays_before_finalizing_pending_cancel() -> None:

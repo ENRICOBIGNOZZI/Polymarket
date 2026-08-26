@@ -53,13 +53,17 @@ def bh_resolution_diagnostics(hypotheses: int, reps: int, q: float) -> dict[str,
 
 
 def _pair_factor(panel: core.StandardizedPanel, pair: tuple[str, str], min_controls: int) -> tuple[float, ...] | None:
+    """Return the same pair-excluded orientation-invariant factor used by fit_pair.
+
+    Marginal null calibration must condition on the identical nuisance-factor
+    construction as the observed statistic.  Using an arithmetic control mean
+    here would reintroduce YES/NO sign-coding cancellation inside the bootstrap
+    even though the observed PairFit uses orientation-invariant temporal PC1.
+    """
     controls = tuple(sorted(mid for mid in panel.values if mid not in set(pair)))
     if len(controls) < min_controls:
         return None
-    return tuple(
-        statistics.fmean(panel.values[mid][j] for mid in controls)
-        for j in range(len(panel.times))
-    )
+    return core.orientation_invariant_pc1({mid: panel.values[mid] for mid in controls})
 
 
 def _standardize(values: Sequence[float]) -> tuple[float, ...] | None:
@@ -134,10 +138,11 @@ def marginal_residual_unit_root_pvalue(
 
     The nuisance path of the *other* target is irrelevant because both targets
     are excluded from the common factor.  Controls are conditioned on exactly as
-    observed; the tested target is generated under its residual-unit-root null.
-    This directly covers mixed composite-null configurations such as one target
-    I(1) and the other stationary, without assuming that every series in the
-    panel is I(1).
+    observed through the same orientation-invariant temporal PC1 used by the
+    observed PairFit; the tested target is generated under its residual-unit-root
+    null.  This directly covers mixed composite-null configurations such as one
+    target I(1) and the other stationary, without assuming that every series in
+    the panel is I(1).
     """
     fit = core.fit_pair(panel, pair[0], pair[1], min_controls=min_controls)
     if fit is None or target not in pair:
@@ -187,7 +192,8 @@ def panel_pair_iut_pvalues(
 ) -> dict[tuple[str, str], tuple[core.PairFit, float]]:
     """Calibrate marginal residual-unit-root nulls, then form IUT pair p-values.
 
-    Each marginal bootstrap conditions on the observed pair-excluded controls and
+    Each marginal bootstrap conditions on the observed pair-excluded controls
+    through the same orientation-invariant factor basis as the observed fit and
     imposes I(1) only on the residual of the target being tested.  The other
     target is a nuisance path and cannot contaminate that marginal calibration.
     Pair p-values are then max(p_A,p_B).  Dependence across pair p-values is left
