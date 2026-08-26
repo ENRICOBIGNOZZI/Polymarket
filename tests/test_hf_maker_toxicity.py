@@ -12,7 +12,7 @@ from scripts.v6_micro_maker_v3 import (
     microprice_displacement,
     toxicity_adjusted_fill_probability,
 )
-from scripts.v6_micro_maker_v4 import persistence_gated_fill_probability
+from scripts.v6_micro_maker_v4 import bounded_patient_ttl, persistence_gated_fill_probability
 
 
 class FakeBook:
@@ -193,9 +193,17 @@ class MakerToxicityTest(unittest.TestCase):
             0.208014985,
         )
 
+    def test_patient_ttl_extends_short_research_quote_but_is_bounded(self):
+        self.assertEqual(bounded_patient_ttl(60, 300), 300)
+        self.assertEqual(bounded_patient_ttl(60, 600), 300)
+
+    def test_patient_ttl_never_shortens_explicit_longer_ttl(self):
+        self.assertEqual(bounded_patient_ttl(360, 300), 360)
+
     def test_persistence_runtime_composes_directional_toxicity_and_markouts(self):
         source = inspect.getsource(v4.main)
         self.assertIn("result = v3.main()", source)
+        self.assertIn("v2._replace_arg(\"--ttl-seconds\", str(effective_ttl_seconds))", source)
         self.assertIs(v4.base, v4.v3.base)
         self.assertIs(v4.v2, v4.v3.v2)
 
