@@ -36,11 +36,17 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     context = load_json(context_path)
     registry = load_json(registry_path)
     directives_rel = str(context.get("operator_directives") or "")
+    architecture_rel = str(context.get("model_architecture_manifest") or "")
     directives_path = root / directives_rel if directives_rel else None
+    architecture_path = root / architecture_rel if architecture_rel else None
     if directives_path is None or not directives_path.is_file():
         errors.append("config/project_context.json must point to an existing operator_directives manifest")
         return errors, notes
+    if architecture_path is None or not architecture_path.is_file():
+        errors.append("config/project_context.json must point to the canonical V7 architecture manifest")
+        return errors, notes
     directives = load_json(directives_path)
+    architecture = load_json(architecture_path)
 
     if context.get("schema_version") != 1:
         errors.append("config/project_context.json schema_version must equal 1")
@@ -50,6 +56,10 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
         errors.append("canonical branch must be main")
     if context.get("deployment_ref") != "paper-validated":
         errors.append("deployment ref must be paper-validated")
+    if context.get("live_champion_manifest") != "config/live_champion.json":
+        errors.append("project context must use config/live_champion.json")
+    if architecture_rel != "config/v7_model_architecture.json":
+        errors.append("project context must use config/v7_model_architecture.json")
 
     policy = context.get("context_policy") or {}
     if policy.get("scope") != "entire_repository":
@@ -58,6 +68,35 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
         errors.append("full worktree inventory must be required")
     if policy.get("require_operator_directives") is not True:
         errors.append("operator directives must be required scheduler context")
+
+    if architecture.get("engine_version") != 7:
+        errors.append("canonical architecture manifest must declare engine_version=7")
+    if architecture.get("paper_only") is not True:
+        errors.append("canonical architecture manifest must be PAPER-only")
+    if architecture.get("authenticated_execution") is not False:
+        errors.append("canonical architecture manifest must keep authenticated execution disabled")
+    if architecture.get("legacy_runtime_supported") is not False:
+        errors.append("canonical architecture manifest must reject legacy runtime support")
+    runtime_arch = architecture.get("runtime") if isinstance(architecture.get("runtime"), dict) else {}
+    if runtime_arch.get("entrypoint") != "scripts/paper_v7_loop.sh":
+        errors.append("canonical architecture entrypoint must be scripts/paper_v7_loop.sh")
+    if runtime_arch.get("execution_loop") != "scripts/paper_v7_execution_loop.sh":
+        errors.append("canonical architecture execution loop must be scripts/paper_v7_execution_loop.sh")
+    for key in ("single_runtime_owner", "single_execution_ledger", "single_broker_authority"):
+        if runtime_arch.get(key) is not True:
+            errors.append(f"canonical architecture must require {key}")
+
+    champion = load_json(root / "config/live_champion.json")
+    if int(champion.get("version") or 0) != 7:
+        errors.append("live champion must be V7")
+    if champion.get("loop") != runtime_arch.get("entrypoint"):
+        errors.append("live champion loop must match the V7 architecture manifest")
+    if champion.get("config") != "config/paper_v7.json":
+        errors.append("live champion config must be config/paper_v7.json")
+    if champion.get("run_root") != runtime_arch.get("run_root"):
+        errors.append("live champion run root must match the V7 architecture manifest")
+    if champion.get("paper_only") is not True or champion.get("authenticated_execution") is not False:
+        errors.append("live champion must remain PAPER-only with authenticated execution disabled")
 
     if directives.get("schema_version") != 1:
         errors.append("operator directives schema_version must equal 1")
@@ -91,13 +130,18 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     if number(authorization.get("max_drawdown")) != 0.15:
         errors.append("operator V7 drawdown kill must remain 0.15")
 
+    architecture_directive = directives.get("architecture") if isinstance(directives.get("architecture"), dict) else {}
+    if architecture_directive.get("legacy_runtime_supported") is not False:
+        errors.append("operator directives must explicitly disable legacy runtime support")
+    for key in ("single_execution_ledger", "single_runtime_owner", "single_broker_authority", "single_live_champion"):
+        if architecture_directive.get(key) is not True:
+            errors.append(f"operator directives must require {key}")
+
     schedulers = registry.get("schedulers")
     if not isinstance(schedulers, list):
         errors.append("scheduler registry does not contain a scheduler list")
         return errors, notes
-    scheduler_ids = {
-        str(raw.get("id")) for raw in schedulers if isinstance(raw, dict) and raw.get("id")
-    }
+    scheduler_ids = {str(raw.get("id")) for raw in schedulers if isinstance(raw, dict) and raw.get("id")}
     assignments = directives.get("scheduler_assignments")
     if not isinstance(assignments, dict):
         errors.append("operator directives must contain scheduler_assignments")
@@ -110,11 +154,16 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
         errors.append("operator directives reference unknown schedulers: " + ", ".join(extra_assignments))
 
     priorities = directives.get("current_priority_order")
-    if not isinstance(priorities, list) or len(priorities) < 8:
-        errors.append("operator directives must provide the complete V7 priority sequence")
+    if not isinstance(priorities, list) or len(priorities) < 4 or not all(str(item).strip() for item in priorities):
+        errors.append("operator directives must provide a non-empty canonical V7 priority sequence")
     forbidden = directives.get("forbidden_regressions")
-    if not isinstance(forbidden, list) or not any("$125" in str(item) for item in forbidden):
-        errors.append("operator directives must explicitly forbid the obsolete V7 $125 policy rollback")
+    forbidden_text = "\n".join(str(item).lower() for item in forbidden) if isinstance(forbidden, list) else ""
+    if "retired runtime" not in forbidden_text and "legacy runtime" not in forbidden_text:
+        errors.append("operator directives must explicitly forbid reintroducing retired runtime generations")
+    if "fixed-dollar" not in forbidden_text:
+        errors.append("operator directives must explicitly forbid restoring a binding fixed-dollar V7 cap")
+    if "authenticated" not in forbidden_text and "real-money" not in forbidden_text:
+        errors.append("operator directives must explicitly forbid authenticated/real-money execution")
 
     for rel in [str(item) for item in context.get("required_surfaces", [])]:
         if not (root / rel).exists():
@@ -139,8 +188,12 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     grafana = context.get("grafana") or {}
     if grafana.get("canonical_operator_url") != "http://mamma-portfolio.tail1bae85.ts.net":
         errors.append("canonical Grafana URL changed unexpectedly")
-    if grafana.get("dashboard_uid") != "polymarket-multi-strategy-v5":
-        errors.append("canonical Grafana dashboard must be polymarket-multi-strategy-v5")
+    if grafana.get("dashboard_uid") != "polymarket-v7":
+        errors.append("canonical Grafana dashboard UID must be polymarket-v7")
+    if grafana.get("dashboard_file") != "monitoring/grafana/dashboards/polymarket-v7.json":
+        errors.append("canonical Grafana dashboard file must be the V7 dashboard")
+    if not (root / str(grafana.get("dashboard_file") or "")).is_file():
+        errors.append("canonical Grafana V7 dashboard file is missing")
 
     for raw in schedulers:
         if not isinstance(raw, dict):
@@ -160,9 +213,7 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
             errors.append(f"{scheduler_id} has no complete repository worktree available")
         else:
             assignment = str(assignments.get(scheduler_id) or "")
-            notes.append(
-                f"{scheduler_id}: {'runner checkout' if local_checkout else 'canonical remote checkout'}; directive={assignment}"
-            )
+            notes.append(f"{scheduler_id}: {'runner checkout' if local_checkout else 'canonical remote checkout'}; directive={assignment}")
     return errors, notes
 
 
@@ -172,7 +223,7 @@ def render(errors: list[str], notes: list[str]) -> str:
         "",
         f"- schedulers with verified full-worktree access and assignments: {len(notes)}",
         f"- errors: {len(errors)}",
-        "- policy: every scheduler sees a complete project worktree and the current explicit operator directive before narrowing to its bounded responsibility",
+        "- policy: every scheduler sees the complete repository, the canonical V7 architecture and the current explicit operator directive before narrowing to its bounded responsibility",
         "",
         "## Visibility and assignment",
     ]
@@ -181,12 +232,12 @@ def render(errors: list[str], notes: list[str]) -> str:
         lines.extend(["", "## Errors"])
         lines.extend(f"- {error}" for error in errors)
     else:
-        lines.extend(["", "All registered schedulers have complete repository visibility, a current operator assignment and consistent runtime/Grafana context."])
+        lines.extend(["", "All registered schedulers have complete repository visibility, a current operator assignment and consistent V7 runtime/Grafana context."])
     return "\n".join(lines) + "\n"
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate project-wide context and explicit operator assignments for Polymarket schedulers")
+    parser = argparse.ArgumentParser(description="Validate canonical V7 project context and explicit operator assignments for Polymarket schedulers")
     parser.add_argument("--root", default=".")
     parser.add_argument("--output", default="project-context-validation.md")
     args = parser.parse_args()
