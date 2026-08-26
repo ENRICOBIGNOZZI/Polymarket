@@ -97,7 +97,7 @@ def test_depth_aware_bid_is_quantity_specific_and_invalid_when_depth_insufficien
         maker._DEPTH_EXIT_SHARES.clear()
 
 
-def test_exit_requirement_covers_position_plus_residual_order_and_markout_watch():
+def test_exit_requirement_covers_position_plus_residual_order_and_markout_watch_without_double_counting_fill():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         state = {
@@ -111,8 +111,12 @@ def test_exit_requirement_covers_position_plus_residual_order_and_markout_watch(
                 "w1": {"token_id": "x", "shares": 5.0},
             },
         }
-        required = maker.required_exit_shares(state)
-        assert required["x"] == 15.0
+        (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+        required = maker._exit_requirements(root)
+        # The markout watch refers to already-filled shares represented by the live
+        # position, so adding it would double-count liquidation depth. Cover the
+        # live position plus the residual order, or the watch amount if larger.
+        assert required["x"] == 10.0
         assert required["z"] == 4.0
 
 
