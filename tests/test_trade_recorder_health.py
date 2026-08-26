@@ -91,6 +91,21 @@ class TradeRecorderHealthTest(unittest.TestCase):
         self.assertLess(source.index(window), source.index(condition))
         self.assertLess(source.index(window), source.index(dedup))
 
+    def test_recorder_caps_data_api_page_and_batch_sizes(self) -> None:
+        source = (ROOT / "src" / "trade_recorder.cpp").read_text(encoding="utf-8")
+        self.assertIn("constexpr std::size_t page_limit = 1000;", source)
+        self.assertIn("constexpr std::size_t max_offset = 10000;", source)
+        self.assertIn("std::min<std::size_t>(batch_size_, 5)", source)
+        self.assertNotIn("constexpr std::size_t page_limit = 10000;", source)
+
+    def test_recorder_splits_retryable_transport_failures_before_counting_terminal_error(self) -> None:
+        source = (ROOT / "src" / "trade_recorder.cpp").read_text(encoding="utf-8")
+        self.assertIn("status == 408 || status == 429 || status >= 500", source)
+        self.assertIn("return fetch_batch(lo, mid) && fetch_batch(mid, hi);", source)
+        split = source.index("if (hi - lo > 1)")
+        terminal_error = source.index("++errors;", split)
+        self.assertLess(split, terminal_error)
+
 
 if __name__ == "__main__":
     unittest.main()
