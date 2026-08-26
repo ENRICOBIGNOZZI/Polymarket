@@ -1,0 +1,52 @@
+{
+  "schema": "alpha_factory_forward_history_current_evidence_v1",
+  "captured_date": "2026-08-26",
+  "base_main_sha": "ac75976b68b560e21efe12b2a7bc3c21b90b284a",
+  "canonical_live": {
+    "git_sha": "ac75976b68b560e21efe12b2a7bc3c21b90b284a",
+    "trade_recorder_status": "healthy",
+    "public_trades": 126,
+    "maker_signals": 42,
+    "maker_resting_orders": 6,
+    "maker_positions": 0,
+    "graph_rv_bundles": 1,
+    "graph_rv_complete": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0
+  },
+  "forward_maker_calibration": {
+    "valid_sessions": 55,
+    "probes_per_policy": 806,
+    "pair_fills_per_policy": 0,
+    "policies": {
+      "join": {
+        "any_fills": 1,
+        "total_pnl_ex_rewards_usd": -0.13894351315407616,
+        "markout_60_bid_per_share": -0.0020000000000000018,
+        "eligible_for_paper_shadow": false
+      },
+      "improve1": {
+        "any_fills": 5,
+        "total_pnl_ex_rewards_usd": -3.8927998032640785,
+        "markout_60_bid_per_share": -0.004064287820701861,
+        "markout_300_bid_per_share": -0.004176870748299324,
+        "bootstrap_ucb_mean_pnl_ex_rewards_per_probe_usd": -0.0007190521759100208,
+        "eligible_for_paper_shadow": false
+      },
+      "fade1": {
+        "any_fills": 1,
+        "total_pnl_ex_rewards_usd": -0.45605470219999944,
+        "markout_60_bid_per_share": 0.0,
+        "eligible_for_paper_shadow": false
+      }
+    }
+  },
+  "alpha_factory_before_repair": {
+    "forward_maker_candidates_present": false,
+    "next_experiment_contains_accumulate_forward_execution_evidence": true,
+    "accumulate_trigger": "fewer than 24 forward runs per policy"
+  },
+  "blocking_defect": "The persisted forward-maker session schema uses policy_summaries while alpha_factory.forward_candidates consumes aggregate_by_policy. Current Alpha Factory therefore omits 55 chronological sessions and can schedule an obsolete run-shortage experiment.",
+  "decision": "BLOCKING_EVIDENCE_INGESTION_DEFECT",
+  "economic_conclusion": "Generic join/improve1/fade1 maker policies remain unapproved; improve1 is materially negative after fills and adverse markout. The repair changes evidence ingestion only and must not alter the authorized PAPER envelope or authenticated execution boundary."
+}
