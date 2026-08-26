@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
-import math
 import re
 import subprocess
 from pathlib import Path
@@ -33,7 +32,9 @@ RUNTIME_HARD_SAFETY_WRITE_RE = re.compile(
     rf"|\b(?:{_RUNTIME_ENV_ALT})\s*=)"
 )
 
-# V6 remains frozen at the previously authorized PAPER envelope.
+# Current user-authorized PAPER envelope. These are hard ceilings/floors, not
+# targets. Both V6 and V7 research remain PAPER-only and must preserve these
+# bounds through the normal research -> governance -> integration path.
 V6_AUTHORIZED_MARKET_LIMIT = 1000.0
 V6_AUTHORIZED_CEILINGS = {
     "max_drawdown": 0.15,
@@ -46,24 +47,8 @@ V6_AUTHORIZED_CEILINGS = {
     "max_trade_usd": 125.0,
     "hard_arb_max_trade_usd": 125.0,
 }
-
-# V7 is a PAPER-only sandbox with the user-authorized 100% economic ceiling.
-# A fixed-dollar cap is deliberately disabled: the effective hard ceiling is the
-# available sleeve capital (100%). Authenticated execution must remain disabled.
 V7_AUTHORIZED_MARKET_LIMIT = 1000.0
-V7_AUTHORIZED_CEILINGS = {
-    "max_drawdown": 0.15,
-    "max_market_fraction": 1.0,
-    "max_event_fraction": 1.0,
-    "max_gross_fraction": 1.0,
-    "global_max_drawdown": 0.15,
-    "global_max_gross_fraction": 1.0,
-    "fractional_kelly": 0.25,
-    "max_trade_usd": math.inf,
-    "hard_arb_max_trade_usd": math.inf,
-    "max_trade_fraction": 1.0,
-    "hard_arb_max_trade_fraction": 1.0,
-}
+V7_AUTHORIZED_CEILINGS = dict(V6_AUTHORIZED_CEILINGS)
 
 V6_AUTHORIZED_FLOORS = {
     "min_liquidity": 2.0,
@@ -196,12 +181,10 @@ def _validate_v7_paper_boundary(errors: list[str], current: dict[str, Any]) -> N
         errors.append("paper-only separation weakened: config/paper_v7.json:v7.paper_only must remain true")
     if section.get("authenticated_execution") is not False:
         errors.append("V7 PAPER authenticated execution must remain disabled: config/paper_v7.json:v7.authenticated_execution=false")
-    if current.get("fixed_dollar_trade_cap_enabled") is not False:
-        errors.append("V7 PAPER fixed-dollar trade cap must remain disabled; sizing ceiling is 100% of sleeve capital")
-    if section.get("hard_arb_fixed_dollar_trade_cap_enabled") is not False:
-        errors.append("V7 PAPER hard-arb fixed-dollar trade cap must remain disabled")
-    _compare_limit(errors, "config/paper_v7.json:max_trade_fraction", None, current.get("max_trade_fraction"), ceiling=1.0)
-    _compare_limit(errors, "config/paper_v7.json:v7.hard_arb_max_trade_fraction", None, section.get("hard_arb_max_trade_fraction"), ceiling=1.0)
+    if current.get("fixed_dollar_trade_cap_enabled") is not True:
+        errors.append("V7 PAPER fixed-dollar trade cap must remain enabled at <=$125")
+    if section.get("hard_arb_fixed_dollar_trade_cap_enabled") is not True:
+        errors.append("V7 PAPER hard-arb fixed-dollar trade cap must remain enabled at <=$125")
 
 
 def compare_paper_config(base: dict[str, Any], current: dict[str, Any], path: str) -> list[str]:
@@ -342,8 +325,7 @@ def render(errors: list[str], checked: list[str]) -> str:
         "# Hard-safety paper policy", "",
         f"- paper/runtime surfaces checked: {len(checked)}",
         f"- hard-safety violations: {len(errors)}",
-        "- V6 PAPER envelope unchanged: universe <=1000, drawdown <=15%, market <=5%, event <=15%, gross <=70%, Kelly <=25%, max trade <=$125",
-        "- V7 PAPER sandbox: universe <=1000, drawdown <=15%, market/event/gross/trade ceiling <=100% of sleeve capital, Kelly <=25%, no fixed-dollar trade cap",
+        "- V6/V7 PAPER envelope: universe <=1000, drawdown <=15%, market <=5%, event <=15%, gross <=70%, Kelly <=25%, max trade <=$125",
         "- V7 authenticated execution is forbidden; v7.authenticated_execution must be false",
         "- V6/V7 sleeve allocation ceilings remain maker<=22%, taker<=12%, RV<=34%, hard<=22%, external<=8%, reserve<=2%",
         "- V6/V7 admission floors remain min liquidity >=$2, post-cost min edge >=0.5 bp, uncertainty penalty >=0",
