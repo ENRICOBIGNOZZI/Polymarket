@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-import math
+import sys
 import unittest
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts.lf_v6_history_spacing_audit import half_life_steps, source_contract, spacing_case
 
@@ -25,8 +29,7 @@ class LocalFactorHistorySpacingTest(unittest.TestCase):
         self.assertGreater(case.reversion_overstatement, 6.0)
 
     def test_current_source_does_not_validate_adjacent_spacing(self) -> None:
-        root = Path(__file__).resolve().parents[1]
-        contract = source_contract(root / "scripts" / "v6_local_factor_intents.py")
+        contract = source_contract(ROOT / "scripts" / "v6_local_factor_intents.py")
         self.assertTrue(contract["intersects_timestamps"])
         self.assertTrue(contract["fits_ar_without_timestamps"])
         self.assertTrue(contract["uses_configured_fidelity_for_hold"])
