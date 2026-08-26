@@ -2,9 +2,11 @@
 """Fail-closed single-owner supervisor for the paper runtime.
 
 The launcher retains the advisory lock itself and supervises one isolated child
-process group.  Letting the descriptor cross ``exec`` into every descendant
-made a stopped wrapper capable of leaving an orphan child that still held the
-runtime lock indefinitely.
+process group. Letting the descriptor cross ``exec`` into every descendant made
+a stopped wrapper capable of leaving an orphan child that still held the runtime
+lock indefinitely. The supervisor also drains the complete owned process group
+when the direct wrapper exits so recorder/proxy/broker descendants cannot survive
+as stale writers or fixed-port listeners for the next validated runtime.
 """
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -25,29 +28,67 @@ def _current_owner(fd: int) -> str:
         return ""
 
 
-def _forward_to_child_group(child: subprocess.Popen[object], signum: int) -> None:
-    """Forward a service signal to the owned runtime group, if it still exists."""
+def _signal_child_group(group_id: int, signum: int) -> None:
+    """Signal the isolated runtime group, including orphaned descendants."""
 
-    if child.poll() is not None:
-        return
     try:
-        os.killpg(child.pid, signum)
+        os.killpg(group_id, signum)
     except ProcessLookupError:
         pass
 
 
+def _child_group_exists(group_id: int) -> bool:
+    try:
+        os.killpg(group_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # An owned runtime group unexpectedly becoming unsignalable is not
+        # evidence that it disappeared; keep cleanup fail-closed.
+        return True
+    return True
+
+
+def _drain_child_group(group_id: int, timeout_seconds: float = 5.0) -> None:
+    """Retire every process left in the runtime's private process group.
+
+    ``Popen.wait()`` only reaps the direct wrapper. If that wrapper exits before
+    one of its proxy/broker/recorder descendants, checking ``child.poll()`` and
+    skipping cleanup leaves the descendant alive. That stale process can keep a
+    fixed localhost port or state writer across a validated deploy handoff.
+    """
+
+    if not _child_group_exists(group_id):
+        return
+    _signal_child_group(group_id, signal.SIGTERM)
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not _child_group_exists(group_id):
+            return
+        time.sleep(0.05)
+
+    _signal_child_group(group_id, signal.SIGKILL)
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not _child_group_exists(group_id):
+            return
+        time.sleep(0.05)
+    raise RuntimeError(f"runtime child process group {group_id} did not terminate")
+
+
 def _supervise(command: list[str]) -> int:
-    # start_new_session makes the direct child the process-group leader.  This
-    # lets launchd stop the complete paper tree through this supervisor without
-    # putting its singleton fd in child processes.
-    child: subprocess.Popen[object] | None = subprocess.Popen(
+    # start_new_session makes the direct child the process-group/session leader.
+    # The group id is stable for the lifetime of any descendants even when that
+    # direct wrapper exits first, so cleanup can still retire the complete tree.
+    child: subprocess.Popen[object] = subprocess.Popen(
         command,
         close_fds=True,
         start_new_session=True,
     )
+    group_id = child.pid
 
     def forward(signum: int, _frame: object) -> None:
-        _forward_to_child_group(child, signum)
+        _signal_child_group(group_id, signum)
 
     previous_handlers: dict[int, object] = {}
     for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
@@ -57,13 +98,7 @@ def _supervise(command: list[str]) -> int:
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
-        if child.poll() is None:
-            _forward_to_child_group(child, signal.SIGTERM)
-            try:
-                child.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                _forward_to_child_group(child, signal.SIGKILL)
-                child.wait(timeout=5)
+        _drain_child_group(group_id)
 
 
 def main() -> int:
@@ -92,8 +127,8 @@ def main() -> int:
     os.ftruncate(fd, 0)
     os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
     os.fsync(fd)
-    # The supervisor, not its descendants, is the sole lock holder.  The
-    # marker remains readable for a bounded, provenance-checked deploy handoff.
+    # The supervisor, not its descendants, is the sole lock holder. The marker
+    # remains readable for a bounded, provenance-checked deploy handoff.
     os.set_inheritable(fd, False)
     try:
         return _supervise(command)
