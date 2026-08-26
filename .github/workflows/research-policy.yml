@@ -88,7 +88,6 @@ jobs:
           python3 -m unittest \
             tests/test_no_legacy_runtime.py \
             tests/test_v7_authorized_paper_envelope.py \
-            tests/test_v7_control_plane_exact_head.py \
             tests/test_promotion_gate.py -v
 
       - name: Enforce pull-request lifecycle

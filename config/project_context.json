@@ -20,7 +20,7 @@
     "canonical_config": "config/paper_v7.json",
     "canonical_run_root": "runs/paper_v7_live",
     "required_sequence": "v7_implementation_then_tests_then_same_sha_paper_then_main_then_paper_validated_then_deploy_then_server_health_then_legacy_deletion",
-    "current_state": "recovery_pending_validated_v7"
+    "current_state": "control_plane_repaired_waiting_v7_candidate"
   },
   "required_surfaces": [
     ".github/workflows",
