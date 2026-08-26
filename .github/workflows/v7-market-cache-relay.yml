@@ -1,0 +1,323 @@
+name: V7 market cache relay
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/v7-market-cache-relay.yml"
+      - "config/live_champion.json"
+      - "config/paper_v7.json"
+      - "scripts/v7_market_proxy.py"
+      - "scripts/v7_market_proxy_base.py"
+      - "scripts/v7_market_snapshot.py"
+      - "tests/test_v7_point_in_time_archive_workflow.py"
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: polymarket-v7-market-cache-relay
+  cancel-in-progress: false
+
+jobs:
+  relay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Select existing Tailscale credential mode
+        id: tailscale_auth
+        shell: bash
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${TS_AUTHKEY:-}" ]]; then
+            mode=authkey
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
+            test -n "${TS_TAGS:-}"
+            mode=oauth
+          else
+            echo "No visible Tailscale credential set" >&2
+            exit 1
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Join private tailnet with auth key
+        if: steps.tailscale_auth.outputs.mode == 'authkey'
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Join private tailnet with OAuth
+        if: steps.tailscale_auth.outputs.mode == 'oauth'
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Configure SSH identity
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}" || { echo "missing POLYMARKET_SERVER_SSH_KEY" >&2; exit 1; }
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_relay
+          chmod 600 ~/.ssh/polymarket_relay
+          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
+
+      - name: Resolve manifest-selected V7 cache target
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$(ssh -i ~/.ssh/polymarket_relay -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd ~/polymarket
+          git fetch -q origin main paper-validated
+          if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
+            git fetch -q --unshallow origin
+            git fetch -q origin main paper-validated
+          fi
+          main_sha="$(git rev-parse origin/main)"
+          paper_validated_sha="$(git rev-parse origin/paper-validated)"
+          head_sha="$(git rev-parse HEAD)"
+          bootstrap=false
+          if [[ "$head_sha" != "$paper_validated_sha" ]]; then
+            git merge-base --is-ancestor "$paper_validated_sha" "$main_sha"
+            git merge-base --is-ancestor "$head_sha" "$paper_validated_sha"
+            bootstrap=true
+          fi
+          manifest_json="$(git show "$paper_validated_sha:config/live_champion.json")"
+          printf 'main_sha=%s\n' "$main_sha"
+          printf 'paper_validated_sha=%s\n' "$paper_validated_sha"
+          printf 'server_head_sha=%s\n' "$head_sha"
+          printf 'bootstrap=%s\n' "$bootstrap"
+          MANIFEST_JSON="$manifest_json" python3 - <<'PY'
+          import json,os,re
+          manifest=json.loads(os.environ['MANIFEST_JSON'])
+          version=int(manifest.get('version') or 0)
+          if version != 7:
+              print('active=false')
+              print('version='+str(version))
+          else:
+              root=str(manifest.get('run_root') or '')
+              assert re.fullmatch(r'runs/[A-Za-z0-9._-]+',root), root
+              print('active=true')
+              print('version=7')
+              print('run_root='+root)
+          PY
+          REMOTE
+          )"
+          printf '%s\n' "$target"
+          active="$(printf '%s\n' "$target" | sed -n 's/^active=//p' | tail -n1)"
+          [[ "$active" == "true" || "$active" == "false" ]]
+          echo "active=$active" >> "$GITHUB_OUTPUT"
+          if [[ "$active" == "true" ]]; then
+            root="$(printf '%s\n' "$target" | sed -n 's/^run_root=//p' | tail -n1)"
+            [[ "$root" =~ ^runs/[A-Za-z0-9._-]+$ ]]
+            echo "run_root=$root" >> "$GITHUB_OUTPUT"
+            validated="$(printf '%s\n' "$target" | sed -n 's/^paper_validated_sha=//p' | tail -n1)"
+            [[ "$validated" =~ ^[0-9a-f]{40}$ ]]
+            echo "paper_validated_sha=$validated" >> "$GITHUB_OUTPUT"
+            bootstrap="$(printf '%s\n' "$target" | sed -n 's/^bootstrap=//p' | tail -n1)"
+            [[ "$bootstrap" == "true" || "$bootstrap" == "false" ]]
+            echo "bootstrap=$bootstrap" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build fresh verified V7 public market cache
+        if: steps.target.outputs.active == 'true'
+        shell: bash
+        env:
+          PAPER_VALIDATED_SHA: ${{ steps.target.outputs.paper_validated_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$PAPER_VALIDATED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch -q origin paper-validated
+          git checkout --detach "$PAPER_VALIDATED_SHA"
+          test "$(git rev-parse HEAD)" = "$PAPER_VALIDATED_SHA"
+          mkdir -p relay-evidence
+          python3 scripts/v7_market_snapshot.py \
+            --output relay-evidence/market_proxy_cache.json \
+            --status relay-evidence/market_proxy_status.json \
+            --markets 300 --min-markets 100 --min-liquidity 10 \
+            --max-cache-age-seconds 90 | tee relay-evidence/snapshot-summary.json
+          python3 - relay-evidence/market_proxy_cache.json relay-evidence/market_proxy_status.json <<'PY'
+          import json,sys,time
+          cache=json.load(open(sys.argv[1],encoding='utf-8'))
+          status=json.load(open(sys.argv[2],encoding='utf-8'))
+          assert cache.get('schema') == 'polymarket_v7_market_proxy_cache_v1'
+          assert status.get('schema') == 'polymarket_v7_market_proxy_status_v1'
+          assert time.time()-float(cache['timestamp']) <= 90
+          rows=cache.get('markets') or []
+          assert len(rows) >= 100
+          assert all(isinstance(row,dict) and str(row.get('id') or '') and str(row.get('conditionId') or '') and float(row.get('liquidityNum')) >= 10 for row in rows)
+          PY
+
+      - name: Transfer cache atomically to private V7 execution runtime
+        if: steps.target.outputs.active == 'true'
+        shell: bash
+        env:
+          RUN_ROOT_REL: ${{ steps.target.outputs.run_root }}
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ROOT_REL" =~ ^runs/[A-Za-z0-9._-]+$ ]]
+          execution_root="$RUN_ROOT_REL/execution"
+          incoming="market_proxy_cache.json.relay.${GITHUB_RUN_ID}"
+          ssh -i ~/.ssh/polymarket_relay -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            "EXECUTION_ROOT='$execution_root' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd ~/polymarket
+          [[ "$EXECUTION_ROOT" =~ ^runs/[A-Za-z0-9._-]+/execution$ ]]
+          mkdir -p "$EXECUTION_ROOT"
+          REMOTE
+          scp -i ~/.ssh/polymarket_relay -o IdentitiesOnly=yes -o BatchMode=yes \
+            -P "$SERVER_PORT" relay-evidence/market_proxy_cache.json \
+            "$SERVER_USER@$SERVER_HOST:polymarket/${execution_root}/${incoming}"
+          ssh -i ~/.ssh/polymarket_relay -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            "EXECUTION_ROOT='$execution_root' INCOMING='$incoming' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd ~/polymarket
+          [[ "$EXECUTION_ROOT" =~ ^runs/[A-Za-z0-9._-]+/execution$ ]]
+          [[ "$INCOMING" =~ ^market_proxy_cache\.json\.relay\.[0-9]+$ ]]
+          target="$EXECUTION_ROOT/market_proxy_cache.json"
+          incoming="$EXECUTION_ROOT/$INCOMING"
+          python3 - "$incoming" <<'PY'
+          import json,sys,time
+          value=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert value.get('schema') == 'polymarket_v7_market_proxy_cache_v1'
+          assert time.time()-float(value['timestamp']) <= 120
+          rows=value.get('markets') or []
+          assert len(rows) >= 100
+          assert all(isinstance(row,dict) and str(row.get('id') or '') and str(row.get('conditionId') or '') and float(row.get('liquidityNum')) >= 10 for row in rows)
+          PY
+          previous_mtime_ns="$(python3 - "$target" <<'PY'
+          import os,sys
+          try: print(os.stat(sys.argv[1]).st_mtime_ns)
+          except FileNotFoundError: print(0)
+          PY
+          )"
+          mv "$incoming" "$target"
+          python3 - "$target" "$previous_mtime_ns" <<'PY'
+          import os,sys,time
+          path=sys.argv[1]; previous=int(sys.argv[2]); stat=os.stat(path)
+          refreshed=max(time.time_ns(), previous+1, stat.st_mtime_ns+1)
+          os.utime(path, ns=(stat.st_atime_ns, refreshed))
+          PY
+          printf 'relay_cache_installed=%s\n' "$target"
+          REMOTE
+
+      - name: Verify running V7 proxy consumes installed cache
+        if: steps.target.outputs.active == 'true'
+        shell: bash
+        env:
+          RUN_ROOT_REL: ${{ steps.target.outputs.run_root }}
+          BOOTSTRAP: ${{ steps.target.outputs.bootstrap }}
+        run: |
+          set -euo pipefail
+          execution_root="$RUN_ROOT_REL/execution"
+          mkdir -p relay-evidence
+          ssh -i ~/.ssh/polymarket_relay -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            "EXECUTION_ROOT='$execution_root' BOOTSTRAP='$BOOTSTRAP' bash -s" <<'REMOTE' | tee relay-evidence/live-proxy-consumption.txt
+          set -euo pipefail
+          cd ~/polymarket
+          [[ "$EXECUTION_ROOT" =~ ^runs/[A-Za-z0-9._-]+/execution$ ]]
+          python3 - "$EXECUTION_ROOT/market_proxy_cache.json" <<'PY'
+          import json,sys,time
+          value=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert value.get('schema') == 'polymarket_v7_market_proxy_cache_v1'
+          assert time.time()-float(value['timestamp']) <= 180
+          assert len(value.get('markets') or []) >= 100
+          PY
+          if [[ "$BOOTSTRAP" == "true" ]]; then
+            printf 'relay_bootstrap_staged=true\n'
+            printf 'relay_bootstrap_waits_for_validated_deploy=true\n'
+            exit 0
+          fi
+          proxy_url="$(python3 - "$EXECUTION_ROOT/runtime_config.json" <<'PY'
+          import json,sys,urllib.parse
+          cfg=json.load(open(sys.argv[1],encoding='utf-8'))
+          url=str(cfg.get('gamma_url') or '')
+          parsed=urllib.parse.urlsplit(url)
+          assert parsed.scheme == 'http' and parsed.hostname in {'127.0.0.1','localhost'} and parsed.port is not None, url
+          print(f'http://127.0.0.1:{parsed.port}')
+          PY
+          )"
+          verified=false
+          for attempt in {1..18}; do
+            if health="$(curl -fsS --max-time 3 "$proxy_url/healthz" 2>/dev/null)" && \
+               response="$(curl -fsS --max-time 5 "$proxy_url/markets?active=true&closed=false&limit=1&offset=0&order=liquidityNum&ascending=false&liquidity_num_min=10" 2>/dev/null)" && \
+               python3 - "$response" "$EXECUTION_ROOT/market_proxy_status.json" <<'PY'
+          import json,sys,time
+          rows=json.loads(sys.argv[1]); assert isinstance(rows,list) and rows
+          row=rows[0]; assert str(row.get('id') or '') and str(row.get('conditionId') or '') and float(row.get('liquidityNum')) >= 10.0
+          status=json.load(open(sys.argv[2],encoding='utf-8'))
+          assert status.get('schema') == 'polymarket_v7_market_proxy_status_v1'
+          assert str(status.get('source') or '').endswith('_cache'), status
+          assert int(status.get('markets') or 0) >= 1
+          assert float(status.get('cache_age_seconds') or 0.0) <= 180.0
+          assert time.time()-float(status.get('timestamp') or 0) <= 30.0
+          print('live_proxy_cache_consumed=true')
+          print('live_proxy_source='+str(status.get('source')))
+          PY
+            then
+              printf 'proxy_health=%s\n' "$health"
+              printf 'relay_verify_attempt=%s\n' "$attempt"
+              verified=true
+              break
+            fi
+            printf 'relay_verify_retry=%s\n' "$attempt"
+            sleep 5
+          done
+          test "$verified" = true
+          REMOTE
+
+      - name: Publish relay summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## V7 public-data cache relay" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "${{ steps.target.outputs.active }}" != "true" ]]; then
+            echo "Manifest-selected champion is not V7; relay skipped." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ -s relay-evidence/snapshot-summary.json ]]; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat relay-evidence/snapshot-summary.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -s relay-evidence/live-proxy-consumption.txt ]]; then
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            cat relay-evidence/live-proxy-consumption.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload relay evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v7-market-cache-relay-${{ github.run_id }}
+          path: relay-evidence/
+          if-no-files-found: warn
+          retention-days: 7
