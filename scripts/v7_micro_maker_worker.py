@@ -19,6 +19,7 @@ MARKOUT_LABEL_CONTRACT = "event_time_horizon_with_bounded_observation_delay"
 EXIT_LIQUIDITY_CONTRACT = "shares_specific_full_visible_bid_depth_vwap_fail_closed"
 REPLAY_CONTINUITY_CONTRACT = "execution_state_market_and_token_book_required_before_tape_replay"
 MARKOUT_CONTINUITY_CONTRACT = "measurement_gap_never_blocks_execution_and_labels_remain_bounded_delay"
+SELECTIVE_IMPROVEMENT_FALLBACK_CONTRACT = "inside_spread_must_pass_configured_edge_fill_and_ev_floors_or_fall_back_to_touch"
 full_depth_sell_vwap = depth.full_depth_sell_vwap
 if depth.MAX_MARKOUT_LABEL_DELAY_SECONDS != MAX_MARKOUT_LABEL_DELAY_SECONDS:
     raise RuntimeError("maker depth-core markout delay contract drift")
@@ -46,6 +47,44 @@ def _consume_int_option(argv: list[str], name: str, default: int) -> int:
         raise SystemExit(f"invalid {name}")
     del argv[index:index + 2]
     return value
+
+
+def _peek_float_option(argv: list[str], name: str, default: float) -> float:
+    if name not in argv:
+        return float(default)
+    index = argv.index(name)
+    try:
+        return float(argv[index + 1])
+    except (IndexError, ValueError):
+        raise SystemExit(f"invalid {name}")
+
+
+def selective_improvement_is_economic(
+    current: Any,
+    improved: Any,
+    *,
+    min_edge: float,
+    min_fill_probability: float,
+    tick_cost_usd: float = 0.0,
+    base_check: Any | None = None,
+) -> bool:
+    """Reject an inside-spread quote that would fail the configured admission floors.
+
+    The event-time core evaluates the chosen quote only after deciding whether to
+    improve. Without this guard an improved quote could have higher total EV but
+    fall below the configured residual edge/fill floor, causing a later SKIP even
+    when the original touch quote was admissible. In that case we must retain the
+    touch quote rather than manufacture a zero-fill by discarding it.
+    """
+    checker = base_check or depth.core.quote_improvement_is_economic
+    decision = depth.core.maker_fill_conditioned_ev(improved)
+    if decision.expected_value <= 0.0:
+        return False
+    if decision.fill_probability + 1e-15 < max(0.0, float(min_fill_probability)):
+        return False
+    if decision.conditional_net_pnl_per_share + 1e-15 < max(0.0, float(min_edge)):
+        return False
+    return bool(checker(current, improved, tick_cost_usd=tick_cost_usd))
 
 
 def _load_state(run_dir: Path | None) -> dict[str, Any]:
@@ -146,6 +185,8 @@ def main() -> int:
     argv = list(sys.argv)
     latency_ms = max(0, _consume_int_option(argv, "--cancel-latency-ms", cancel.DEFAULT_CANCEL_LATENCY_MS))
     grace_ms = max(0, _consume_int_option(argv, "--cancel-tape-grace-ms", cancel.DEFAULT_TAPE_GRACE_MS))
+    min_edge = max(0.0, _peek_float_option(argv, "--min-edge", 0.0))
+    min_fill_probability = max(0.0, _peek_float_option(argv, "--min-fill-probability", 0.0))
     run_dir = _run_dir(argv)
     processing_ms = time.time_ns() // 1_000_000
     tracked_state = _load_state(run_dir)
@@ -155,6 +196,7 @@ def main() -> int:
     original_json = event.json
     original_append = event.base.append_csv
     original_eligible = event.causal_fill_eligible
+    original_improvement = event.quote_improvement_is_economic
     original_discover = event.base.discover
     original_fetch_books = event.base.fetch_books
     original_load_tape = event.load_tape
@@ -200,6 +242,16 @@ def main() -> int:
     def patched_eligible(row: dict[str, str], order: dict[str, Any], *, processing_ms: int, ttl_seconds: int) -> bool:
         return cancel.causal_fill_eligible(row, order, processing_ms=processing_ms, ttl_seconds=ttl_seconds)
 
+    def patched_improvement(current: Any, improved: Any, tick_cost_usd: float = 0.0) -> bool:
+        return selective_improvement_is_economic(
+            current,
+            improved,
+            min_edge=min_edge,
+            min_fill_probability=min_fill_probability,
+            tick_cost_usd=tick_cost_usd,
+            base_check=original_improvement,
+        )
+
     def patched_discover(*args: Any, **kwargs: Any) -> Any:
         markets = original_discover(*args, **kwargs)
         discovered_market_ids.clear()
@@ -233,6 +285,7 @@ def main() -> int:
     event.json = _JsonProxy(original_json, patched_loads)
     event.base.append_csv = patched_append
     event.causal_fill_eligible = patched_eligible
+    event.quote_improvement_is_economic = patched_improvement
     event.base.discover = patched_discover
     event.base.fetch_books = patched_fetch_books
     event.load_tape = patched_load_tape
@@ -259,6 +312,7 @@ def main() -> int:
         event.json = original_json
         event.base.append_csv = original_append
         event.causal_fill_eligible = original_eligible
+        event.quote_improvement_is_economic = original_improvement
         event.base.discover = original_discover
         event.base.fetch_books = original_fetch_books
         event.load_tape = original_load_tape
