@@ -87,20 +87,24 @@ jobs:
           target="$(MANIFEST_JSON="$manifest_json" python3 - <<'PY'
           import json,os,re
           manifest=json.loads(os.environ['MANIFEST_JSON'])
-          if int(manifest.get('version') or 0) != 6:
+          version=int(manifest.get('version') or 0)
+          if version not in {6,7}:
               print('active=false')
+              print('version='+str(version))
           else:
               root=str(manifest.get('run_root') or '')
               assert re.fullmatch(r'runs/[A-Za-z0-9._-]+',root), root
               print('active=true')
+              print('version='+str(version))
               print('run_root='+root)
           PY
           )"
           printf 'validated_sha=%s\n' "$validated_sha"
           printf '%s\n' "$target"
           active="$(printf '%s\n' "$target" | sed -n 's/^active=//p' | tail -n1)"
+          version="$(printf '%s\n' "$target" | sed -n 's/^version=//p' | tail -n1)"
           if [[ "$active" != "true" ]]; then
-            printf 'archive_skipped=non_v6_validated_champion\n'
+            printf 'archive_skipped=unsupported_validated_champion version=%s\n' "${version:-unknown}"
             exit 0
           fi
           run_root="$(printf '%s\n' "$target" | sed -n 's/^run_root=//p' | tail -n1)"
@@ -112,6 +116,8 @@ jobs:
           import json,sys,time
           path=sys.argv[1]
           value=json.load(open(path,encoding='utf-8'))
+          # V7 deliberately consumes the same fail-closed compatibility cache
+          # schema during migration; the archived snapshot has its own V7 schema.
           assert value.get('schema') == 'polymarket_v6_market_proxy_cache_v1'
           assert time.time()-float(value.get('timestamp') or 0) <= 600.0
           rows=value.get('markets') or []
