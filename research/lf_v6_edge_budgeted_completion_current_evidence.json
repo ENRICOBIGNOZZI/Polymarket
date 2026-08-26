@@ -1,0 +1,62 @@
+{
+  "schema": "lf_v6_edge_budgeted_completion_audit_v1",
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "base_main_sha": "df3ea75ad49686e8aeb6194ac93cadd621d79fdb",
+  "live_smoke": {
+    "github_run_id": "32921750426",
+    "git_sha": "df3ea75ad49686e8aeb6194ac93cadd621d79fdb",
+    "generated_ts": 1787710429,
+    "trade_recorder_status": "healthy",
+    "new_trades": 235,
+    "trade_recorder_errors": 0,
+    "graph_rv_bundles": 1,
+    "graph_rv_legs": 3,
+    "bundle_event_id": "842328",
+    "bundle_prices": [0.74, 0.15, 0.09],
+    "bundle_max_notional": 60.0,
+    "bundle_expected_edge": 0.020000000000000018,
+    "completed_bundles": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0
+  },
+  "broker_contract": {
+    "completion_threshold": 0.75,
+    "max_leg_risk_usd": 12.0,
+    "completion_statistic": "minimum per-leg filled fraction",
+    "completion_transition": "RESTING -> COMPLETE once minimum fill fraction reaches threshold; residual resting orders are cancelled",
+    "unmatched_risk_gate": "absolute unmatched entry-cost risk <= max_leg_risk_usd"
+  },
+  "deterministic_fixture": {
+    "interpretation": "exhaustive mutually-exclusive YES basket; exactly one outcome pays one dollar per share",
+    "target_units_if_fully_sized": 61.224489795918366,
+    "fill_fractions": [1.0, 0.75, 0.75],
+    "entry_cash_usd": 56.3265306122449,
+    "unmatched_entry_risk_usd": 11.326530612244898,
+    "passes_completion_threshold": true,
+    "passes_max_leg_risk_gate": true,
+    "terminal_pnl_by_winning_leg_usd": [
+      4.897959183673464,
+      -10.40816326530613,
+      -10.40816326530613
+    ],
+    "full_bundle_guaranteed_profit_usd": 1.224489795918368,
+    "worst_loss_to_full_profit_ratio": 8.5,
+    "advertised_edge_dollars_at_max_notional": 1.2
+  },
+  "finding": "A fixed 75% minimum-fill completion threshold plus a $12 absolute unmatched-risk budget can label an economically unhedged structural basket COMPLETE. In the current three-leg Graph/RV price geometry, a 100%/75%/75% fill pattern passes both gates while two terminal states lose about $10.41, despite the fully matched basket having only about $1.22 of guaranteed structural profit.",
+  "required_successor_contract": [
+    "Separate operational fill progress from economic hedge completion.",
+    "After residual cancels become effective, recompute common matched units and residual exposure from actual fills.",
+    "For structural baskets, require the guaranteed terminal payoff after entry costs, verified fees, slippage and residual unwind to remain positive before holding a bundle as economically complete.",
+    "If residual exposure erases the structural edge, rebalance or unwind rather than treating the basket as complete.",
+    "Report operational completion and economic completion separately in fill-conditioned PnL evidence."
+  ],
+  "safety": {
+    "paper_only": true,
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "state_integrity_unchanged": true,
+    "authenticated_execution": false,
+    "real_money_execution": false
+  }
+}
