@@ -12,10 +12,12 @@ on:
       - "scripts/paper_v6_loop.sh"
       - "scripts/v6_*.py"
       - "scripts/hf_maker_ab_summary.py"
+      - "scripts/hf_maker_tape_audit.py"
       - "tests/test_v6_model_contracts.py"
       - "tests/test_v6_runtime_contract.py"
       - "tests/test_v6_execution_costs.py"
       - "tests/test_hf_maker_ab_summary.py"
+      - "tests/test_hf_maker_tape_audit.py"
       - ".github/workflows/v6-research-smoke.yml"
 
 permissions:
@@ -89,13 +91,14 @@ jobs:
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
-          python3 -m py_compile scripts/v6_queue_filter.py scripts/hf_maker_ab_summary.py
+          python3 -m py_compile scripts/v6_queue_filter.py scripts/hf_maker_ab_summary.py scripts/hf_maker_tape_audit.py
           python3 scripts/v6_queue_filter.py self-test
           python3 -m unittest \
             tests/test_v6_model_contracts.py \
             tests/test_v6_runtime_contract.py \
             tests/test_v6_execution_costs.py \
-            tests/test_hf_maker_ab_summary.py -v
+            tests/test_hf_maker_ab_summary.py \
+            tests/test_hf_maker_tape_audit.py -v
 
       - name: Live public-data relation probes
         shell: bash
@@ -134,12 +137,12 @@ jobs:
           mkdir -p v6_evidence/maker
           ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once > v6_evidence/maker.log 2>&1 || true
 
-      - name: HF maker authorized-envelope common-window A/B
+      - name: HF maker authorized-envelope common-window A/B with shared tape
         shell: bash
         run: |
           set -euo pipefail
           root=v6_evidence/hf_maker_ab
-          mkdir -p "$root/at_touch" "$root/improve1"
+          mkdir -p "$root/at_touch" "$root/improve1" "$root/shared"
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -169,6 +172,31 @@ jobs:
 
           duration=300
           if [[ "$GITHUB_EVENT_NAME" == "schedule" || "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then duration=600; fi
+
+          ./build/polymarket_trade_recorder \
+            --config "$root/config.json" \
+            --run-dir "$root/shared" \
+            --markets 600 \
+            --min-liquidity 2 \
+            --batch 40 \
+            --lookback-seconds 360 \
+            --once > "$root/shared/recorder-bootstrap.log" 2>&1 || true
+
+          ./build/polymarket_trade_recorder \
+            --config "$root/config.json" \
+            --run-dir "$root/shared" \
+            --markets 600 \
+            --min-liquidity 2 \
+            --batch 40 \
+            --lookback-seconds 360 \
+            --interval 10 \
+            --loop > "$root/shared/recorder.log" 2>&1 &
+          recorder_pid=$!
+          cleanup_recorder() {
+            kill "$recorder_pid" 2>/dev/null || true
+            wait "$recorder_pid" 2>/dev/null || true
+          }
+          trap cleanup_recorder EXIT
 
           run_arm() {
             local name="$1" improve="$2"
@@ -204,12 +232,70 @@ jobs:
             fi
           done
 
+          sleep 15
+          cleanup_recorder
+          trap - EXIT
+
+          python3 - <<'PY'
+          import csv
+          from pathlib import Path
+          p=Path('v6_evidence/hf_maker_ab/shared/trade_tape.csv')
+          if not p.exists() or p.stat().st_size == 0:
+              raise SystemExit('shared trade tape is missing or empty')
+          with p.open(newline='',encoding='utf-8') as fh:
+              rows=list(csv.DictReader(fh))
+          if not rows:
+              raise SystemExit('shared trade tape has no rows')
+          if not any(int(float(r.get('received_ms') or 0)) > 0 for r in rows):
+              raise SystemExit('shared trade tape has no local receive timestamps')
+          print(f'shared_tape_rows={len(rows)}')
+          PY
+
           python3 scripts/hf_maker_ab_summary.py \
             --arm at_touch:"$root/at_touch" \
             --arm improve1:"$root/improve1" \
             --output-json "$root/summary.json" \
             --output-markdown "$root/summary.md"
+
+          for arm in at_touch improve1; do
+            python3 scripts/hf_maker_tape_audit.py \
+              --order-log "$root/$arm/maker_order_log.csv" \
+              --trade-tape "$root/shared/trade_tape.csv" \
+              --ttl-seconds 60 \
+              --output "$root/$arm/shared_tape_audit.json" \
+              > "$root/$arm/shared_tape_audit.log"
+          done
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('v6_evidence/hf_maker_ab')
+          summary=json.loads((root/'summary.json').read_text())
+          actual={str(x.get('arm')):int(x.get('maker_fill_events') or 0) for x in summary.get('arms',[])}
+          payload={'schema':'hf_maker_fill_evidence_gap_v1','paper_only':True,'authenticated_execution':False,'arms':{}}
+          for arm in ('at_touch','improve1'):
+              audit=json.loads((root/arm/'shared_tape_audit.json').read_text())
+              causal=int(audit.get('causal_fill_orders') or 0)
+              eventual=int(audit.get('event_time_fill_orders') or 0)
+              observed=int(actual.get(arm,0))
+              payload['arms'][arm]={
+                  'maker_engine_fill_events':observed,
+                  'shared_tape_causal_fill_orders':causal,
+                  'shared_tape_eventual_fill_orders':eventual,
+                  'causal_fill_evidence_gap':max(0,causal-observed),
+                  'delayed_only_fill_orders':int(audit.get('delayed_only_fill_orders') or 0),
+                  'causal_filled_shares':float(audit.get('causal_filled_shares') or 0.0),
+                  'causal_filled_notional':float(audit.get('causal_filled_notional') or 0.0),
+              }
+          (root/'fill_evidence_gap.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(payload,indent=2,sort_keys=True))
+          PY
+
           cat "$root/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          echo '## Shared-tape fill evidence gap' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat "$root/fill_evidence_gap.json" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Live public-data micro-taker causal warmup/markout probe
         shell: bash
@@ -244,6 +330,9 @@ jobs:
               'hard_arb':js('hard_arb/status.json'),
               'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0,
               'hf_maker_ab':js('hf_maker_ab/summary.json'),
+              'hf_maker_fill_evidence_gap':js('hf_maker_ab/fill_evidence_gap.json'),
+              'hf_maker_at_touch_shared_tape':js('hf_maker_ab/at_touch/shared_tape_audit.json'),
+              'hf_maker_improve1_shared_tape':js('hf_maker_ab/improve1/shared_tape_audit.json'),
           }
           state=root/'micro_taker/state.json'
           if state.exists():
