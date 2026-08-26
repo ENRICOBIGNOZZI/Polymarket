@@ -90,13 +90,11 @@ run_graph(){
   python3 scripts/v6_relation_intents.py --config "$RUNTIME_CONFIG" --output "$RUN_ROOT/relation_intents_raw.csv" --status "$RUN_ROOT/relation_status.json" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$MIN_EDGE" --max-trade-usd "$MAX_TRADE" --max-events "$HARD_EVENTS" >>"$RUN_ROOT/relation.log" 2>&1 || true
   python3 scripts/v6_intent_guard.py --input "$RUN_ROOT/relation_intents_raw.csv" --output "$RUN_ROOT/relation_intents_static.csv" --status "$RUN_ROOT/relation_static_guard.json" --min-edge "$MIN_EDGE" --stress-bps 10 --max-age-seconds 240 >>"$RUN_ROOT/relation_static_guard.log" 2>&1 || true
   python3 scripts/v6_bundle_quote_optimizer.py --config "$RUNTIME_CONFIG" --input "$RUN_ROOT/relation_intents_static.csv" --output "$RUN_ROOT/relation_intents_optimized.csv" --status "$RUN_ROOT/relation_quote_optimizer.json" --trade-tape "$RUN_ROOT/trade_tape.csv" --min-edge "$MIN_EDGE" --reserve-bps 0.5 --min-leg-fill-probability 0.001 --min-joint-fill-probability 0 --target-leg-fill-probability 0.10 >>"$RUN_ROOT/relation_quote_optimizer.log" 2>&1 || true
-  # Final Graph/RV admission is prospective, executable and dependence-robust.
-  # A complete basket uses a proved non-augmented NegRisk terminal payout floor
-  # minus executed entry prices, verified fees and capital time. Partial states
-  # are unwound against contemporaneous depth. Historical sessions must be no
-  # easier than the current execution state and inference uses chronological
-  # circular blocks rather than iid row resampling.
-  python3 scripts/v7_graph_execution_guard.py --config "$RUNTIME_CONFIG" --input "$RUN_ROOT/relation_intents_optimized.csv" --output "$RUN_ROOT/relation_intents.csv" --state "$RUN_ROOT/graph_execution_state.json" --status "$RUN_ROOT/relation_joint_state_guard.json" --trade-tape "$RUN_ROOT/trade_tape.csv" --window-seconds 180 --min-sessions 4 --slippage-bps 5 --capital-cost-bps-per-hour 0.25 --bootstrap-reps 800 --bootstrap-quantile 0.10 >>"$RUN_ROOT/relation_joint_state_guard.log" 2>&1 || true
+  # Final Graph/RV evidence never assumes an unproved terminal payout floor.
+  # Full and partial fill states are both liquidated at the same fixed forward
+  # horizon against contemporaneous depth. Admission remains state-comparable,
+  # joint-state based and dependence-robust under chronological circular blocks.
+  python3 scripts/v7_graph_roundtrip_guard.py --config "$RUNTIME_CONFIG" --input "$RUN_ROOT/relation_intents_optimized.csv" --output "$RUN_ROOT/relation_intents.csv" --state "$RUN_ROOT/graph_roundtrip_state.json" --status "$RUN_ROOT/relation_joint_state_guard.json" --trade-tape "$RUN_ROOT/trade_tape.csv" --window-seconds 180 --min-sessions 4 --slippage-bps 5 --capital-cost-bps-per-hour 0.25 --bootstrap-reps 800 --bootstrap-quantile 0.10 >>"$RUN_ROOT/relation_joint_state_guard.log" 2>&1 || true
   rebuild_intents
 }
 
