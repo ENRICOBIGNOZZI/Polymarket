@@ -170,6 +170,104 @@ def ols_loading(target: Sequence[float], factor: Sequence[float]) -> float | Non
     return sum((y - tm) * (x - fm) for y, x in zip(target, factor)) / fvar
 
 
+def _matvec(matrix: Sequence[Sequence[float]], vector: Sequence[float]) -> list[float]:
+    return [sum(float(a) * float(b) for a, b in zip(row, vector)) for row in matrix]
+
+
+def _normalize(vector: Sequence[float]) -> list[float] | None:
+    norm = math.sqrt(sum(float(x) * float(x) for x in vector))
+    if norm <= 1e-12 or not math.isfinite(norm):
+        return None
+    return [float(x) / norm for x in vector]
+
+
+def _leading_symmetric_eigenvector(matrix: Sequence[Sequence[float]]) -> tuple[float, ...] | None:
+    k = len(matrix)
+    if k <= 0 or any(len(row) != k for row in matrix):
+        return None
+    seeds: list[list[float]] = [[1.0 if i == j else 0.0 for i in range(k)] for j in range(k)]
+    seeds.append([1.0] * k)
+    best_vector: list[float] | None = None
+    best_value = -math.inf
+    for seed in seeds:
+        vector = _normalize(seed)
+        if vector is None:
+            continue
+        for _ in range(96):
+            candidate = _normalize(_matvec(matrix, vector))
+            if candidate is None:
+                break
+            if abs(abs(sum(a * b for a, b in zip(candidate, vector))) - 1.0) <= 1e-12:
+                vector = candidate
+                break
+            vector = candidate
+        mv = _matvec(matrix, vector)
+        value = sum(a * b for a, b in zip(vector, mv))
+        if value > best_value + 1e-12:
+            best_value = value
+            best_vector = vector
+    if best_vector is None or best_value <= 1e-10:
+        return None
+    for value in best_vector:
+        if abs(value) > 1e-12:
+            if value < 0.0:
+                best_vector = [-x for x in best_vector]
+            break
+    return tuple(best_vector)
+
+
+def control_pc1_factor(
+    panel: StandardizedPanel,
+    controls: Sequence[str],
+) -> tuple[float, ...] | None:
+    ids = tuple(sorted(controls))
+    if len(ids) < 2 or any(mid not in panel.values for mid in ids):
+        return None
+    n = len(panel.times)
+    if n < 4:
+        return None
+    covariance = [
+        [
+            sum(panel.values[a][t] * panel.values[b][t] for t in range(n)) / max(1, n - 1)
+            for b in ids
+        ]
+        for a in ids
+    ]
+    weights = _leading_symmetric_eigenvector(covariance)
+    if weights is None:
+        return None
+    score = [
+        sum(panel.values[mid][t] * weight for mid, weight in zip(ids, weights))
+        for t in range(n)
+    ]
+    mu = statistics.fmean(score)
+    sd = stdev(score)
+    if sd <= 1e-10:
+        return None
+    factor = [(x - mu) / sd for x in score]
+    for value in factor:
+        if abs(value) > 1e-12:
+            if value < 0.0:
+                factor = [-x for x in factor]
+            break
+    return tuple(factor)
+
+
+def pair_control_factor(
+    panel: StandardizedPanel,
+    market_a: str,
+    market_b: str,
+    min_controls: int = 2,
+) -> tuple[tuple[str, ...], tuple[float, ...]] | None:
+    controls = tuple(sorted(mid for mid in panel.values if mid not in {market_a, market_b}))
+    if len(controls) < min_controls:
+        return None
+    factor = control_pc1_factor(panel, controls)
+    if factor is None:
+        return None
+    return controls, factor
+
+
 def ar1_fit(levels: Sequence[float]) -> tuple[float, float, float]:
     if len(levels) < 12:
         return 1.0, statistics.fmean(levels) if levels else 0.0, stdev(levels)
@@ -204,13 +302,10 @@ def adf_t_stat(levels: Sequence[float]) -> float:
 def fit_pair(panel: StandardizedPanel, market_a: str, market_b: str, min_controls: int = 2) -> PairFit | None:
     if market_a == market_b or market_a not in panel.values or market_b not in panel.values:
         return None
-    controls = tuple(sorted(mid for mid in panel.values if mid not in {market_a, market_b}))
-    if len(controls) < min_controls:
+    factor_result = pair_control_factor(panel, market_a, market_b, min_controls=min_controls)
+    if factor_result is None:
         return None
-    n = len(panel.times)
-    # One pair-excluded factor is shared by both target regressions.  This is the
-    # basis on which loading signs and hedge weights may be compared.
-    factor = tuple(statistics.fmean(panel.values[mid][j] for mid in controls) for j in range(n))
+    controls, factor = factor_result
     loading_a = ols_loading(panel.values[market_a], factor)
     loading_b = ols_loading(panel.values[market_b], factor)
     if loading_a is None or loading_b is None:
@@ -223,7 +318,6 @@ def fit_pair(panel: StandardizedPanel, market_a: str, market_b: str, min_control
         return None
     adf_a = adf_t_stat(residual_a)
     adf_b = adf_t_stat(residual_b)
-    # Intersection null: a usable pair requires both residuals to reject a unit root.
     pair_stat = max(adf_a, adf_b)
     return PairFit(
         market_a=market_a,
@@ -277,9 +371,6 @@ def null_panel_bootstrap(
         diffs = [vals[i] - vals[i - 1] for i in range(1, n)]
         drift[mid] = statistics.fmean(diffs)
         increments[mid] = [x - drift[mid] for x in diffs]
-    # Resample time blocks jointly across the entire panel so contemporaneous
-    # cross-sectional dependence is retained while each reconstructed level path
-    # is I(1).  The first-stage standardization/factor/loadings are then re-estimated.
     indices = _joint_block_indices(ninc, block, rng)
     levels: dict[str, list[float]] = {mid: [panel.values[mid][0]] for mid in mids}
     for idx in indices:
@@ -295,9 +386,6 @@ def panel_pair_bootstrap_pvalues(
     seed: int = 20260826,
     min_controls: int = 2,
 ) -> dict[tuple[str, str], tuple[PairFit, float]]:
-    # Crucially, p-values are computed for all pair hypotheses before residual-z,
-    # phi or economic screening.  This prevents those data-dependent screens from
-    # entering BH as if they were pre-specified hypotheses.
     pairs = list(pairs or all_pairs(panel))
     observed: dict[tuple[str, str], PairFit] = {}
     for pair in pairs:
