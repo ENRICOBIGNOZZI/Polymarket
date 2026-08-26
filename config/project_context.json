@@ -4,7 +4,7 @@
   "canonical_branch": "main",
   "deployment_ref": "paper-validated",
   "live_champion_manifest": "config/live_champion.json",
-  "model_architecture_manifest": "config/v6_model_architecture.json",
+  "model_architecture_manifest": "config/paper_v7.json",
   "scheduler_registry": "config/scheduler_registry.json",
   "operator_directives": "config/operator_directives.json",
   "context_policy": {
@@ -12,7 +12,7 @@
     "require_full_worktree_inventory": true,
     "require_operator_directives": true,
     "inventory_command": "git ls-files",
-    "rule": "Every scheduler must begin from the complete repository state for its checked-out revision, load config/operator_directives.json as the latest explicit operator authority, then read the live champion, scheduler registry and architecture manifests. When older PR text, tests, comments or inferred policy conflict with the operator directives, the directives win. Research that reintroduces live expert averaging, semantic-price averaging, heterogeneous global PCA, an obsolete V7 bounded-policy rollback, or cleanup before validated V7 deployment is non-promotable."
+    "rule": "Every scheduler must begin from the complete repository state for its checked-out revision, load config/operator_directives.json as the latest explicit operator authority, then read the V7 live champion, scheduler registry and architecture manifest. Older PR text, comments or inferred policy never override config/operator_directives.json. Retired predecessor runtime surfaces and multi-version adapters must not be reintroduced."
   },
   "required_surfaces": [
     ".github/workflows",
@@ -37,9 +37,9 @@
   },
   "grafana": {
     "canonical_operator_url": "http://mamma-portfolio.tail1bae85.ts.net",
-    "dashboard_uid": "polymarket-multi-strategy-v5",
+    "dashboard_uid": "polymarket-multi-strategy-v7",
     "dashboard_file": "monitoring/grafana/dashboards/polymarket-multi-strategy.json",
-    "rule": "The canonical URL and dashboard UID remain stable while the dashboard data source follows the manifest-selected paper champion."
+    "rule": "The canonical V7 dashboard follows the V7 PAPER runtime only."
   },
   "security": {
     "private_keys_in_repository": false,
