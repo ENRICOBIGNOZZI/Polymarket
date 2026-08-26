@@ -25,19 +25,22 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Download recent fast-shadow evidence
+      - name: Download same-SHA fast-shadow evidence
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p evidence
+          target_sha="$(git rev-parse HEAD)"
+          echo "TARGET_SHA=$target_sha" >> "$GITHUB_ENV"
           gh run list \
             --workflow fast-arb-hourly.yml \
+            --branch main \
             --status success \
-            --limit 30 \
-            --json databaseId \
-            --jq '.[].databaseId' > evidence/run-ids.txt
+            --limit 100 \
+            --json databaseId,headSha \
+            --jq ".[] | select(.headSha == \"$target_sha\") | .databaseId" > evidence/run-ids.txt
           while IFS= read -r run_id; do
             [[ -n "$run_id" ]] || continue
             mkdir -p "evidence/run-$run_id"
@@ -45,28 +48,34 @@ jobs:
               --name "fast-arb-evidence-$run_id" \
               --dir "evidence/run-$run_id" || true
           done < evidence/run-ids.txt
-          python3 - <<'PY'
+          TARGET_SHA="$target_sha" python3 - <<'PY'
           import json
+          import os
           import shutil
           from pathlib import Path
 
           valid = 0
+          target_sha = os.environ["TARGET_SHA"]
           for status_path in list(Path("evidence").rglob("fast_arb_status.json")):
               try:
                   status = json.loads(status_path.read_text())
+                  candidate_path = status_path.parent / "fast_arb_candidate.json"
+                  candidate = json.loads(candidate_path.read_text()) if candidate_path.is_file() else {}
               except (OSError, json.JSONDecodeError):
-                  status = {}
+                  status, candidate = {}, {}
               is_valid = (
                   status.get("mode") == "shadow"
                   and status.get("real_order_submission") is False
                   and int(status.get("ws_messages", 0)) > 0
                   and int(status.get("book_updates", 0)) > 0
+                  and candidate.get("model_sha") == target_sha
+                  and candidate.get("promotion_ready") is False
               )
               if is_valid:
                   valid += 1
               else:
                   shutil.rmtree(status_path.parent, ignore_errors=True)
-          print(f"valid fast-shadow evidence runs: {valid}")
+          print(f"valid same-SHA fast-shadow evidence runs: {valid} sha={target_sha}")
           PY
 
       - name: Re-derive identities, stress costs and materialize candidate code
@@ -81,17 +90,32 @@ jobs:
             --output-json research-output/config/candidates/fast_arb_candidate.json \
             --output-markdown research-output/docs/generated/fast_arb_theory_report.md \
             --output-header research-output/include/pm/generated/fast_arb_candidate_policy.hpp
+          python3 scripts/v7_fast_structural_gate.py \
+            --candidate research-output/config/candidates/fast_arb_candidate.json \
+            --expected-sha "$TARGET_SHA" \
+            --generated-header research-output/include/pm/generated/fast_arb_candidate_policy.hpp
           python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
-          report = json.loads(Path("research-output/config/candidates/fast_arb_candidate.json").read_text())
+          report_path = Path("research-output/config/candidates/fast_arb_candidate.json")
+          report = json.loads(report_path.read_text())
           base_policy = json.loads(Path("config/fast_arb_policy.json").read_text())
           assert report["real_order_submission"] is False
           assert report["candidate_policy"]["real_order_submission"] is False
           assert report["candidate_policy"]["min_net_edge"] >= base_policy["min_net_edge"]
+          assert report["model_sha"] == os.environ["TARGET_SHA"]
+          assert report["promotion_ready"] is False
+          assert "joint_execution_evidence_missing" in report["promotion_gate"]["reasons"]
           with Path("research-output/gates.env").open("w") as handle:
               handle.write(f"RESEARCH_READY={str(report['research_ready']).lower()}\n")
-              handle.write(f"PROMOTION_READY={str(report['promotion_ready']).lower()}\n")
+              handle.write("PROMOTION_READY=false\n")
+          with Path("research-output/docs/generated/fast_arb_theory_report.md").open("a", encoding="utf-8") as handle:
+              handle.write("\n## Authoritative V7 economic promotion gate\n\n")
+              handle.write(f"- model_sha: `{report['model_sha']}`\n")
+              handle.write(f"- quoted_theory_promotion_ready: `{report['quoted_theory_promotion_ready']}`\n")
+              handle.write("- promotion_ready: `false`\n")
+              handle.write("- reason: same-SHA realized joint-state PAPER execution evidence is required; quoted snapshot profit cannot promote.\n")
           PY
           cat research-output/gates.env >> "$GITHUB_ENV"
           cat research-output/docs/generated/fast_arb_theory_report.md >> "$GITHUB_STEP_SUMMARY"
@@ -149,14 +173,15 @@ jobs:
           cat > research-output/pr-body.md <<'EOF'
           ## Automated research candidate
 
-          This draft is regenerated from hourly read-only/shadow evidence.
+          This draft is regenerated from same-SHA hourly read-only/shadow evidence.
 
           - It updates only generated candidate policy code, candidate evidence, and a research report.
           - It cannot submit orders and does not change `config/live_champion.json`.
+          - `research_ready` is only a quoted/depth-walk research pre-screen.
+          - `promotion_ready` is fail-closed unless same-SHA realized joint-state PAPER execution evidence exists, includes partial/unwind accounting, and remains positive at 1.5x and 2x cost stress.
           - It must remain a research PR until evidence is reviewed and a separate `integration/*` PR is approved.
-          - Promotion-ready in the generated report is evidence for review, not authorization to merge.
 
-          Source research PR/branch/commit: research/auto-fast-arb-policy
+          Source research branch: research/auto-fast-arb-policy
           EOF
           if [[ -z "$pr_number" ]]; then
             set +e
