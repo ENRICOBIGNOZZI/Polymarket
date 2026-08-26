@@ -34,15 +34,27 @@ class CoordinatedBroker(Broker):
     def active_tokens(self) -> set[str]:
         return {leg.token_id for leg in self.live_legs()} | self.maker_owned_tokens()
 
-    def apply_trades(self, trades: list[dict[str, object]]) -> None:
-        # The base broker stamps local order arrival at decision + submit latency,
-        # but historical V7 legs can carry an earlier event-clock arrival stamp.
-        # Never allow the event-time gate to begin before the simulated order is
-        # actually live. This is deliberately fail-closed: a trade whose event
-        # timestamp falls inside submit latency cannot become a PAPER fill merely
-        # because the recorder receives it after local arrival.
-        for leg in self.live_legs():
+    @staticmethod
+    def _floor_event_arrival_to_local_arrival(legs: list) -> None:
+        for leg in legs:
             leg.arrival_event_ms = max(leg.arrival_event_ms, leg.arrival_ms)
+
+    def admit(self, current_equity: float) -> None:
+        previous_leg_count = len(self.legs)
+        super().admit(current_equity)
+        # The order cannot exist on the exchange/event clock before its
+        # latency-adjusted simulated local arrival. Normalize before the runner
+        # persists ownership under the capacity lock, so restart and in-memory
+        # semantics agree even for historical state files that do not carry a
+        # separate arrival_event_ms column.
+        self._floor_event_arrival_to_local_arrival(self.legs[previous_leg_count:])
+
+    def apply_trades(self, trades: list[dict[str, object]]) -> None:
+        # Defense in depth for state produced by older V7 revisions. Never allow
+        # the event-time gate to begin before the simulated order is actually
+        # live. A trade whose event timestamp falls inside submit latency cannot
+        # become a PAPER fill merely because it is received after local arrival.
+        self._floor_event_arrival_to_local_arrival(self.live_legs())
         super().apply_trades(trades)
 
     def tick(self) -> None:
