@@ -147,7 +147,7 @@ def bundle_edge(legs: list[Leg], clob: str) -> tuple[float, bool]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="V7 per-leg queue/flow quote optimizer; joint completion is delegated to the prospective state guard")
+    parser = argparse.ArgumentParser(description="V7 per-leg queue/flow quote optimizer; final joint completion/economics are delegated to the v3 round-trip state guard")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--input", type=Path, action="append", required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -231,8 +231,6 @@ def main() -> int:
             new_edge, verified = bundle_edge(legs, clob)
             own = units * max(0.0, finite(leg.row.get("weight"), 1.0))
             update_fill_probability(leg, flow, own, args.horizon_seconds, args.flow_lookback_seconds)
-            # This local quote decision can use the leg's own fillability. It may
-            # never estimate multi-leg completion by multiplying marginals.
             incremental_fill_value = new_edge * leg.fill_probability - edge * old_probability
             if not verified or new_edge < floor_edge - 1e-12 or incremental_fill_value <= 0.0:
                 leg.price = old_price
@@ -250,7 +248,7 @@ def main() -> int:
             "minimum_marginal_fill_probability": min_fill,
             "bottleneck_quote_priority_score": bottleneck_score,
             "improved": changed, "ticks_spent": sum(ticks_used),
-            "final_joint_completion_estimator": "v7_graph_forward_guard_empirical_same_window_state",
+            "final_joint_completion_estimator": "v7_graph_roundtrip_guard_empirical_fixed_horizon_joint_state",
             "marginal_product_used_for_admission": False,
         })
         if edge <= args.min_edge:
@@ -270,7 +268,7 @@ def main() -> int:
         "accepted_rows": len(accepted_rows), "improved_bundles": improved_bundles,
         "rejections": dict(sorted(reject.items())), "diagnostics": diagnostics[:50],
         "joint_completion_estimator": "none_in_quote_optimizer",
-        "joint_completion_owner": "v7_graph_forward_guard.py",
+        "joint_completion_owner": "v7_graph_roundtrip_guard.py",
         "product_of_marginals_forbidden": True,
     }
     atomic_json(args.status, status)
