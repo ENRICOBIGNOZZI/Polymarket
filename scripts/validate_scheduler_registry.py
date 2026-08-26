@@ -13,7 +13,7 @@ REQUIRED_IDS = {
     "monitoring-validation", "live-paper-validation", "paper-server-deploy", "paper-server-health",
     "forward-maker-research", "v6-live-data-research", "alpha-factory", "meta-supervisor",
     "fast-arb-shadow-research", "arb-theory-research", "external-intelligence", "live-api-smoke",
-    "v7-point-in-time-universe-archive", "v6-market-cache-relay",
+    "v7-point-in-time-universe-archive", "v7-unified-paper-evidence", "v6-market-cache-relay",
 }
 PRIVATE_VALIDATION_WORKFLOW = ".github/workflows/private-runtime-single-writer-validation.yml"
 NON_SCHEDULER_WORKFLOWS = {
@@ -179,6 +179,35 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             if required not in text: errors.append(f"control-plane-event-bridge is missing fallback contract: {required}")
         for forbidden in ("gh pr merge", "POLYMARKET_DEPLOY_REF=", "git push origin paper-validated", "repository_dispatch", "authenticated_execution"):
             if forbidden in text: errors.append(f"control-plane-event-bridge contains forbidden authority: {forbidden}")
+
+    evidence_runtime = by_id.get("v7-unified-paper-evidence")
+    if evidence_runtime:
+        text = (root / str(evidence_runtime["workflow"])).read_text(encoding="utf-8")
+        for required in (
+            "config/v7_evidence_runtime.json",
+            "research/v7-unified-final-evidence-20260826",
+            "V7_MARKET_PROXY_PORT",
+            "runtime_singleton_launcher.py",
+            "source_sha",
+            "by-sha",
+            "Private runtime single-writer validation",
+            "actions: read",
+            "contents: read",
+            "pull-requests: read",
+        ):
+            if required not in text:
+                errors.append(f"v7-unified-paper-evidence is missing isolated evidence contract: {required}")
+        for forbidden in (
+            "gh pr merge",
+            "git push origin main",
+            "git push origin paper-validated",
+            "gh workflow run integration-merge.yml",
+            "gh workflow run promotion-controller.yml",
+            "POLYMARKET_DEPLOY_REF=",
+            "contents: write",
+        ):
+            if forbidden in text:
+                errors.append(f"v7-unified-paper-evidence contains forbidden authority: {forbidden}")
 
     meta = by_id.get("meta-supervisor")
     if meta:
