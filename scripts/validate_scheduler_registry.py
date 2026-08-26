@@ -16,9 +16,11 @@ REQUIRED_IDS = {
     "v7-point-in-time-universe-archive", "v7-unified-paper-evidence", "v6-market-cache-relay",
 }
 PRIVATE_VALIDATION_WORKFLOW = ".github/workflows/private-runtime-single-writer-validation.yml"
+OPERATOR_AUTHORITY_WORKFLOW = ".github/workflows/operator-authority-gate.yml"
 NON_SCHEDULER_WORKFLOWS = {
     ".github/workflows/grafana-access.yml",
     PRIVATE_VALIDATION_WORKFLOW,
+    OPERATOR_AUTHORITY_WORKFLOW,
 }
 NON_SCHEDULER_FORBIDDEN_TOKENS = (
     "gh pr merge",
@@ -125,6 +127,27 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             for forbidden_permission in PRIVATE_VALIDATION_FORBIDDEN_PERMISSIONS:
                 if forbidden_permission in text:
                     errors.append(f"private runtime validation contains forbidden GitHub permission: {forbidden_permission}")
+        if relative == OPERATOR_AUTHORITY_WORKFLOW:
+            if "\n  pull_request_target:\n" not in text:
+                errors.append("operator authority gate must use pull_request_target from the protected base revision")
+            for forbidden_trigger in ("\n  push:\n", "\n  pull_request:\n", "\n  workflow_run:\n", "\n  repository_dispatch:\n", "\n  workflow_dispatch:\n"):
+                if forbidden_trigger in text:
+                    errors.append(f"operator authority gate contains forbidden trigger: {forbidden_trigger.strip()}")
+            if "permissions:\n  contents: read\n  pull-requests: read\n" not in text:
+                errors.append("operator authority gate must keep GitHub permissions read-only")
+            for required in (
+                "config/operator_directives.json",
+                "scripts/hard_safety_policy.py",
+                "tests/test_v7_authorized_paper_envelope.py",
+                ".github/workflows/operator-authority-gate.yml",
+                "operator authority surfaces are immutable through pull requests",
+            ):
+                if required not in text:
+                    errors.append(f"operator authority gate is missing immutable authority contract: {required}")
+            for forbidden in ("APPROVE", "review", "authorAssociation", "author_association", "OWNER"):
+                if forbidden in text:
+                    errors.append(f"operator authority gate must not contain a PR-review bypass: {forbidden}")
+
     managed_workflows = actual_workflows.difference(NON_SCHEDULER_WORKFLOWS)
     unregistered = sorted(managed_workflows.difference(workflows)); stale = sorted(workflows.difference(actual_workflows))
     if unregistered: errors.append("unregistered workflows: " + ", ".join(unregistered))
