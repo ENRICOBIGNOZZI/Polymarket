@@ -8,12 +8,16 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/live-smoke.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/live-smoke.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: live-api-smoke
+  group: live-api-smoke-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
