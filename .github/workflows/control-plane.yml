@@ -21,6 +21,7 @@ on:
       - ".github/workflows/research-queue.yml"
       - ".github/workflows/research-policy.yml"
       - ".github/workflows/promotion-controller.yml"
+      - ".github/workflows/v7-live-paper-validation.yml"
       - "docs/ALPHA_FACTORY.md"
   pull_request:
     branches: [main]
@@ -39,6 +40,7 @@ on:
       - ".github/workflows/research-queue.yml"
       - ".github/workflows/research-policy.yml"
       - ".github/workflows/promotion-controller.yml"
+      - ".github/workflows/v7-live-paper-validation.yml"
       - "docs/ALPHA_FACTORY.md"
 
 permissions:
@@ -105,7 +107,7 @@ jobs:
           Path("control_plane/snapshot.json").write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
           PY
 
-      - name: Coordinate System Watch, Alpha Factory, research, validation, and promotion decisions
+      - name: Coordinate V7 research, validation, and promotion decisions
         shell: bash
         run: |
           set -euo pipefail
@@ -128,7 +130,7 @@ jobs:
           while IFS= read -r workflow; do
             [[ -n "$workflow" ]] || continue
             case "$workflow" in
-              ci.yml|monitoring.yml|v4-live-smoke.yml|forward-maker-research.yml|alpha-factory.yml|research-queue.yml|research-policy.yml|promotion-controller.yml)
+              ci.yml|monitoring.yml|v7-live-paper-validation.yml|forward-maker-research.yml|alpha-factory.yml|research-queue.yml|research-policy.yml|promotion-controller.yml)
                 gh workflow run "$workflow" --ref main
                 printf 'dispatched=%s ref=main\n' "$workflow" | tee -a control_plane/dispatch-results.txt
                 ;;
