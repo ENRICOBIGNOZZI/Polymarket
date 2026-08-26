@@ -45,6 +45,17 @@ class AdminSupervisorProductionRunTest(unittest.TestCase):
         self.assertEqual(latest["ci"]["headBranch"], "main")
         self.assertEqual(MODULE.scheduler_state(latest["ci"]), "success")
 
+    def test_fix_branch_dispatch_is_not_production(self) -> None:
+        run = self.run(
+            workflow="monitoring",
+            event="workflow_dispatch",
+            branch="fix/example",
+            created="2026-08-26T16:00:00Z",
+            conclusion="failure",
+        )
+        self.assertFalse(MODULE.run_is_production(run))
+        self.assertNotIn("monitoring", MODULE.latest_by_workflow([run]))
+
     def test_main_manual_failure_remains_visible(self) -> None:
         runs = [
             self.run(
