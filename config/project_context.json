@@ -12,7 +12,15 @@
     "require_full_worktree_inventory": true,
     "require_operator_directives": true,
     "inventory_command": "git ls-files",
-    "rule": "The repository is in an explicitly authorized no-champion V7 transition. V3-V6 runtime surfaces are retired and must not be restored for compatibility."
+    "rule": "The repository is recovering from premature legacy cleanup. Do not restore V3-V6 for compatibility. Port only required primitives into V7/common/control-plane, and move from the current no-champion state to one canonical V7 champion only through exact-SHA PAPER validation, main, paper-validated, deploy and server-health convergence."
+  },
+  "cutover": {
+    "target_version": 7,
+    "canonical_loop": "scripts/paper_v7_loop.sh",
+    "canonical_config": "config/paper_v7.json",
+    "canonical_run_root": "runs/paper_v7_live",
+    "required_sequence": "v7_implementation_then_tests_then_same_sha_paper_then_main_then_paper_validated_then_deploy_then_server_health_then_legacy_deletion",
+    "current_state": "control_plane_repaired_waiting_v7_candidate"
   },
   "required_surfaces": [
     ".github/workflows",
@@ -40,7 +48,7 @@
     "active": false,
     "dashboard_uid": null,
     "dashboard_file": null,
-    "rule": "No champion-specific dashboard is canonical while the operational champion is disabled. V7 may install a new dashboard only with its validated integration."
+    "rule": "No champion-specific dashboard is canonical while the operational champion is disabled. The validated V7 integration must install one V7-native canonical dashboard before server-health can pass."
   },
   "security": {
     "private_keys_in_repository": false,
