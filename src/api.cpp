@@ -3,6 +3,7 @@
 #include <boost/json.hpp>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <ctime>
 #include <iomanip>
 #include <set>
@@ -197,13 +198,13 @@ std::optional<Market> parse_market_object(const json::object& o,
     m.no_token = tokens[static_cast<std::size_t>(ni)];
     m.resolved_yes = m.closed ? resolution_from_market(o, outcomes) : std::nullopt;
 
-    if (auto it = o.find("feeSchedule"); it != o.end() && it->value().is_object()) {
+    if (auto it = o.find("feesEnabled"); it != o.end() && !as_bool(it->value(), false)) {
+        m.fee_rate = 0.0;
+    } else if (auto it = o.find("feeSchedule"); it != o.end() && it->value().is_object()) {
         const auto& fs = it->value().as_object();
         if (auto x = fs.find("rate"); x != fs.end()) m.fee_rate = as_double(x->value(), -1.0);
         if (auto x = fs.find("exponent"); x != fs.end()) m.fee_exponent = as_double(x->value(), 1.0);
         if (auto x = fs.find("takerOnly"); x != fs.end()) m.fee_taker_only = as_bool(x->value(), true);
-    } else if (auto it = o.find("feesEnabled"); it != o.end() && !as_bool(it->value(), false)) {
-        m.fee_rate = 0.0;
     }
 
     if (m.id.empty() || m.condition_id.empty() || m.yes_token.empty() || m.no_token.empty()) return std::nullopt;
@@ -508,7 +509,6 @@ FeeDetails PolymarketApi::fetch_fee_details(const Market& market) const {
     if (market.fee_rate >= 0.0) {
         return FeeDetails{market.fee_rate, market.fee_exponent, market.fee_taker_only};
     }
-    FeeDetails fd{0.07, 1.0, true};
     try {
         const auto r = http_.get(cfg_.clob_url + "/clob-markets/" + market.condition_id);
         if (r.status >= 200 && r.status < 300) {
@@ -517,25 +517,22 @@ FeeDetails PolymarketApi::fetch_fee_details(const Market& market) const {
                 auto it = root.as_object().find("fd");
                 if (it != root.as_object().end() && it->value().is_object()) {
                     const auto& f = it->value().as_object();
-                    if (auto x = f.find("r"); x != f.end()) fd.rate = as_double(x->value(), 0.0);
-                    if (auto x = f.find("e"); x != f.end()) fd.exponent = as_double(x->value(), 1.0);
-                    if (auto x = f.find("to"); x != f.end()) fd.taker_only = as_bool(x->value(), true);
-                    return fd;
+                    auto rate = f.find("r");
+                    if (rate == f.end()) rate = f.find("rate");
+                    if (rate != f.end()) {
+                        FeeDetails fd;
+                        fd.rate = as_double(rate->value(), -1.0);
+                        if (auto x = f.find("e"); x != f.end()) fd.exponent = as_double(x->value(), 1.0);
+                        else if (auto x = f.find("exponent"); x != f.end()) fd.exponent = as_double(x->value(), 1.0);
+                        if (auto x = f.find("to"); x != f.end()) fd.taker_only = as_bool(x->value(), true);
+                        else if (auto x = f.find("takerOnly"); x != f.end()) fd.taker_only = as_bool(x->value(), true);
+                        if (std::isfinite(fd.rate) && fd.rate >= 0.0) return fd;
+                    }
                 }
             }
         }
     } catch (...) {}
-    try {
-        const auto r = http_.get(cfg_.clob_url + "/fee-rate?token_id=" + market.yes_token);
-        if (r.status >= 200 && r.status < 300) {
-            const auto root = json::parse(r.body);
-            if (root.is_object()) {
-                auto it = root.as_object().find("base_fee");
-                if (it != root.as_object().end()) fd.rate = as_double(it->value()) / 10000.0;
-            }
-        }
-    } catch (...) {}
-    return fd;
+    throw std::runtime_error("Per-market fee schedule unavailable for " + market.condition_id);
 }
 
 } // namespace pm
