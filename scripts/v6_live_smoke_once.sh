@@ -14,6 +14,9 @@ python3 scripts/v6_materialize_configs.py --config "$CONFIG" --run-root "$R" > "
   --config "$CONFIG" --run-dir "$R" --markets "$MARKETS" --batch 40 \
   --min-liquidity "$MIN_LIQUIDITY" --lookback-seconds 900 --once \
   | tee "$R/trade_recorder_latest.log"
+python3 scripts/validate_trade_recorder_health.py \
+  --log "$R/trade_recorder_latest.log" --max-trade-age-seconds 1200 \
+  --max-future-skew-seconds 30 --output "$R/trade_recorder_health.json"
 
 # Validate the same aggressive execution contract used by the persistent V6
 # launcher: edge-aware one-tick improvement, no giant FIFO queues, and the
