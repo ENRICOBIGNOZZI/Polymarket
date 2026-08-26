@@ -11,9 +11,12 @@ on:
       - "config/v6_model_architecture.json"
       - "scripts/paper_v6_loop.sh"
       - "scripts/v6_*.py"
+      - "scripts/hf_active_token_gate.py"
       - "tests/test_v6_model_contracts.py"
       - "tests/test_v6_runtime_contract.py"
       - "tests/test_v6_execution_costs.py"
+      - "tests/test_hf_active_token_gate.py"
+      - "tests/test_v6_hf_active_maker.py"
       - ".github/workflows/v6-research-smoke.yml"
 
 permissions:
@@ -75,9 +78,14 @@ jobs:
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
-          python3 -m py_compile scripts/v6_queue_filter.py
+          python3 -m py_compile scripts/v6_queue_filter.py scripts/hf_active_token_gate.py scripts/v6_hf_active_maker.py
           python3 scripts/v6_queue_filter.py self-test
-          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py tests/test_v6_execution_costs.py -v
+          python3 -m unittest \
+            tests/test_v6_model_contracts.py \
+            tests/test_v6_runtime_contract.py \
+            tests/test_v6_execution_costs.py \
+            tests/test_hf_active_token_gate.py \
+            tests/test_v6_hf_active_maker.py -v
       - name: Live public-data relation probes
         shell: bash
         run: |
@@ -108,6 +116,133 @@ jobs:
           set -euo pipefail
           mkdir -p v6_evidence/maker
           ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once > v6_evidence/maker.log 2>&1 || true
+      - name: HF active-flow maker chronological A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=v6_evidence/hf_active_maker
+          mkdir -p "$root/shared" "$root/static" "$root/active"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          cfg=json.loads(Path('config/paper_v6.json').read_text())
+          cfg['starting_capital']=1200.0
+          cfg['min_liquidity']=2.0
+          cfg['min_net_edge']=0.00005
+          cfg['fractional_kelly']=0.25
+          cfg['max_trade_usd']=125.0
+          cfg['max_market_fraction']=0.05
+          cfg['max_event_fraction']=0.15
+          cfg['max_gross_fraction']=0.70
+          cfg['max_drawdown']=0.15
+          cfg['slippage_bps']=5.0
+          cfg['multi_strategy']['global_max_drawdown']=0.15
+          cfg['multi_strategy']['global_max_gross_fraction']=0.70
+          Path('v6_evidence/hf_active_maker/config.json').write_text(json.dumps(cfg,indent=2,sort_keys=True)+'\n')
+          assert cfg['fractional_kelly'] == 0.25
+          assert cfg['max_trade_usd'] == 125.0
+          assert cfg['max_market_fraction'] == 0.05
+          assert cfg['max_event_fraction'] == 0.15
+          assert cfg['max_gross_fraction'] == 0.70
+          assert cfg['max_drawdown'] == 0.15
+          assert cfg['min_liquidity'] == 2.0
+          assert cfg['min_net_edge'] == 0.00005
+          PY
+
+          ./build/polymarket_trade_recorder \
+            --config "$root/config.json" --run-dir "$root/shared" \
+            --markets 800 --min-liquidity 2 --batch 40 --lookback-seconds 180 --once \
+            > "$root/shared/bootstrap.log" 2>&1 || true
+
+          ./build/polymarket_trade_recorder \
+            --config "$root/config.json" --run-dir "$root/shared" \
+            --markets 800 --min-liquidity 2 --batch 40 --lookback-seconds 180 --interval 10 --loop \
+            > "$root/shared/recorder.log" 2>&1 &
+          recorder_pid=$!
+          cleanup() {
+            kill "$recorder_pid" 2>/dev/null || true
+            wait "$recorder_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          common=(
+            --config "$root/config.json"
+            --trade-tape "$root/shared/trade_tape.csv"
+            --markets 800
+            --min-liquidity 2
+            --min-edge 0.00005
+            --max-order-usd 125
+            --starting-capital 1200
+            --max-market-fraction 0.05
+            --max-event-fraction 0.15
+            --max-gross-fraction 0.70
+            --max-drawdown 0.15
+            --ttl-seconds 60
+            --hold-seconds 60
+            --slippage-bps 5
+            --adverse-selection-mult 0.15
+            --max-queue-multiple 8
+            --entry-seconds 180
+            --tail-seconds 320
+            --interval-seconds 10
+          )
+
+          set +e
+          timeout --signal=TERM --kill-after=5s 540s python3 scripts/v6_hf_active_maker.py \
+            "${common[@]}" --run-dir "$root/static" --improve-ticks 0 \
+            > "$root/static/run.log" 2>&1 &
+          static_pid=$!
+          timeout --signal=TERM --kill-after=5s 540s python3 scripts/v6_hf_active_maker.py \
+            "${common[@]}" --run-dir "$root/active" --activity-gate --improve-ticks 1 \
+            --activity-lookback-seconds 120 --min-recent-trades 2 --min-recent-sell-shares 5 \
+            --min-sell-share 0.05 --max-sell-share 0.80 --max-active-tokens 250 \
+            --min-pfill-proxy 0.005 --dead-queue-grace-seconds 30 --dead-queue-pfill 0.02 \
+            > "$root/active/run.log" 2>&1 &
+          active_pid=$!
+          wait "$static_pid"; rc_static=$?
+          wait "$active_pid"; rc_active=$?
+          set -e
+          for rc in "$rc_static" "$rc_active"; do
+            if [[ "$rc" -ne 0 && "$rc" -ne 124 && "$rc" -ne 143 ]]; then
+              echo "HF maker arm failed rc=$rc" >&2
+              exit "$rc"
+            fi
+          done
+          cleanup
+          trap - EXIT
+
+          python3 - <<'PY'
+          import csv,json
+          from pathlib import Path
+          root=Path('v6_evidence/hf_active_maker')
+          tape=root/'shared/trade_tape.csv'
+          if not tape.exists() or tape.stat().st_size == 0:
+              raise SystemExit('shared trade tape missing')
+          with tape.open(newline='',encoding='utf-8') as fh: rows=list(csv.DictReader(fh))
+          if not rows or not any(int(float(r.get('received_ms') or 0))>0 for r in rows):
+              raise SystemExit('shared trade tape lacks causal receive timestamps')
+          out={'schema':'hf_active_maker_ab_v1','paper_only':True,'authenticated_execution':False,
+               'shared_tape_rows':len(rows),'unique_trade_tokens':len({r.get('asset_id') for r in rows if r.get('asset_id')})}
+          for arm in ('static','active'):
+              p=root/arm/'summary.json'
+              out[arm]=json.loads(p.read_text()) if p.exists() else {'missing':True}
+              if out[arm].get('authenticated_execution') is not False:
+                  raise SystemExit(f'{arm} violated paper-only execution contract')
+              env=out[arm].get('authorized_envelope') or {}
+              assert float(env.get('max_drawdown',1)) <= 0.15
+              assert float(env.get('max_market_fraction',1)) <= 0.05
+              assert float(env.get('max_event_fraction',1)) <= 0.15
+              assert float(env.get('max_gross_fraction',1)) <= 0.70
+              assert float(env.get('max_trade_usd',999)) <= 125.0
+              assert float(env.get('min_liquidity',0)) >= 2.0
+              assert float(env.get('min_edge',0)) >= 0.00005
+          (root/'comparison.json').write_text(json.dumps(out,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(out,indent=2,sort_keys=True))
+          PY
+          echo '## HF active-flow maker A/B' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat "$root/comparison.json" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
       - name: Live public-data micro-taker causal warmup/markout probe
         shell: bash
         run: |
@@ -131,7 +266,7 @@ jobs:
               except Exception:return {}
           hard=(root/'graph_hard_taker_scan.csv').read_text(errors='ignore') if (root/'graph_hard_taker_scan.csv').exists() else ''
           m=re.search(r'net_positive_pre_gas=(\d+)',hard)
-          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'local_factor':js('local_factor_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0}
+          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'local_factor':js('local_factor_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0,'hf_active_maker':js('hf_active_maker/comparison.json')}
           state=root/'micro_taker/state.json'
           if state.exists():
               try:
