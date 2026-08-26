@@ -15,6 +15,13 @@ python3 scripts/v6_materialize_configs.py --config "$CONFIG" --run-root "$R" > "
   --min-liquidity "$MIN_LIQUIDITY" --lookback-seconds 900 --once \
   | tee "$R/trade_recorder_latest.log"
 
+if grep -Eq 'trade_recorder .*fetched=0([[:space:]]|$)' "$R/trade_recorder_latest.log"; then
+  python3 scripts/diagnose_trade_api_empty_tape.py \
+    --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --lookback-seconds 900 \
+    --sample-conditions 5 --output "$R/trade_api_empty_tape_diagnostic.json" \
+    | tee "$R/trade_api_empty_tape_diagnostic.log"
+fi
+
 # Validate the same aggressive execution contract used by the persistent V6
 # launcher: edge-aware one-tick improvement, no giant FIFO queues, and the
 # configured $60/trade ceiling. Run several ticks so the smoke actually tests
