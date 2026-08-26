@@ -14,6 +14,7 @@ from pathlib import Path
 
 DEFAULT_SIGNALS = "https://raw.githubusercontent.com/ENRICOBIGNOZZI/Polymarket/telemetry/telemetry/latest-external-signals.jsonl"
 DEFAULT_REPORT = "https://raw.githubusercontent.com/ENRICOBIGNOZZI/Polymarket/telemetry/telemetry/latest-external-intelligence.json"
+EMPTY_FEED = "market_key,q_yes,confidence,source,timestamp\n"
 
 
 def fetch_text(url: str, timeout: int = 20) -> str:
@@ -37,8 +38,42 @@ def atomic_write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
+def approved_direct_models(report: dict, *, allow_unvalidated: bool = False) -> set[tuple[str, str]]:
+    candidates = ((report.get("backtest") or {}).get("candidates") or [])
+    candidate_passing: list[dict] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or candidate.get("gate_pass") is not True:
+            continue
+        if str(candidate.get("feature_name") or "") != "external_probability":
+            continue
+        candidate_passing.append(candidate)
+
+    if allow_unvalidated:
+        return {
+            (str(candidate.get("source") or ""), "external_probability")
+            for candidate in candidate_passing
+            if str(candidate.get("source") or "")
+        }
+
+    evidence = report.get("alpha_factory_evidence") or {}
+    if not isinstance(evidence, dict) or evidence.get("integration_evidence_pass") is not True:
+        return set()
+    approved_candidate_id = str(evidence.get("candidate_id") or "")
+    if not approved_candidate_id:
+        return set()
+
+    approved: set[tuple[str, str]] = set()
+    for candidate in candidate_passing:
+        if str(candidate.get("candidate_id") or "") != approved_candidate_id:
+            continue
+        source = str(candidate.get("source") or "")
+        if source:
+            approved.add((source, "external_probability"))
+    return approved
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Materialize only OOS-approved external probabilities for V6 paper trading")
+    ap = argparse.ArgumentParser(description="Materialize only integration-approved external probabilities for V6 paper trading")
     ap.add_argument("--signals-url", default=DEFAULT_SIGNALS)
     ap.add_argument("--report-url", default=DEFAULT_REPORT)
     ap.add_argument("--output", type=Path, required=True)
@@ -49,17 +84,56 @@ def main() -> int:
     args = ap.parse_args()
 
     now = int(time.time())
+
+    # Revoke any previously materialized probability before touching remote
+    # evidence. If the bridge is interrupted, killed, or crashes during I/O,
+    # the runtime sees an explicit abstention rather than a stale signal.
+    atomic_write(args.output, EMPTY_FEED)
+    if args.status:
+        atomic_write(
+            args.status,
+            json.dumps(
+                {
+                    "timestamp": now,
+                    "report_status": "initializing",
+                    "candidate_passing_direct_models": 0,
+                    "integration_evidence_pass": False,
+                    "approved_candidate_id": "",
+                    "approved_direct_models": 0,
+                    "passing_direct_models": 0,
+                    "materialized_signals": 0,
+                    "failures": ["bridge_incomplete"],
+                    "paper_only": True,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+        )
+
     failures: list[str] = []
     accepted: dict[str, tuple[float, float, str, int]] = {}
-    passing: set[tuple[str, str]] = set()
+    approved: set[tuple[str, str]] = set()
+    candidate_passing_direct_models = 0
+    integration_evidence_pass = False
+    approved_candidate_id = ""
     report_status = "missing"
 
     try:
         report = json.loads(fetch_text(args.report_url))
         report_status = str(report.get("status") or "unknown")
-        for candidate in ((report.get("backtest") or {}).get("candidates") or []):
-            if candidate.get("gate_pass"):
-                passing.add((str(candidate.get("source") or ""), str(candidate.get("feature_name") or "")))
+        candidate_passing_direct_models = sum(
+            1
+            for candidate in ((report.get("backtest") or {}).get("candidates") or [])
+            if isinstance(candidate, dict)
+            and candidate.get("gate_pass") is True
+            and str(candidate.get("feature_name") or "") == "external_probability"
+        )
+        evidence = report.get("alpha_factory_evidence") or {}
+        if isinstance(evidence, dict):
+            integration_evidence_pass = evidence.get("integration_evidence_pass") is True
+            approved_candidate_id = str(evidence.get("candidate_id") or "")
+        approved = approved_direct_models(report, allow_unvalidated=args.allow_unvalidated)
     except Exception as exc:
         failures.append(f"report:{type(exc).__name__}:{exc}")
 
@@ -83,10 +157,12 @@ def main() -> int:
             if confidence < args.min_confidence or observed <= 0 or now - observed > args.max_age_seconds:
                 continue
             # Direct terminal probabilities only. Feature rows (returns, volatility,
-            # GDELT tone) stay research inputs until their own calibrated forecast is promoted.
+            # GDELT tone) stay research inputs until a calibrated probability model
+            # has explicit integration evidence. A candidate-local gate is never
+            # sufficient authorization for the champion feed.
             if feature != "external_probability":
                 continue
-            if not args.allow_unvalidated and (source, feature) not in passing:
+            if (source, feature) not in approved:
                 continue
             current = accepted.get(market_id)
             item = (q, confidence, f"{source}:{feature}", observed)
@@ -105,7 +181,11 @@ def main() -> int:
     status = {
         "timestamp": now,
         "report_status": report_status,
-        "passing_direct_models": len(passing),
+        "candidate_passing_direct_models": candidate_passing_direct_models,
+        "integration_evidence_pass": integration_evidence_pass,
+        "approved_candidate_id": approved_candidate_id,
+        "approved_direct_models": len(approved),
+        "passing_direct_models": len(approved),
         "materialized_signals": len(accepted),
         "failures": failures,
         "paper_only": True,
