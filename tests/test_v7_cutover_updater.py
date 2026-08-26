@@ -63,6 +63,24 @@ class V7CutoverUpdaterContractTest(unittest.TestCase):
         stop_after = text.rfind("stop_v7_runtime", 0, health_fail)
         self.assertGreater(stop_after, checkout)
 
+    def test_deploy_and_health_workflows_require_same_sha_identity(self) -> None:
+        deploy = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text(encoding="utf-8")
+        health = (ROOT / ".github/workflows/v7-paper-server-health.yml").read_text(encoding="utf-8")
+        for text in (deploy, health):
+            self.assertIn('test "$main_sha" = "$EXPECTED_VALIDATED_SHA"', text)
+            self.assertIn('test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"', text)
+            self.assertNotIn('git merge-base --is-ancestor "$validated_sha" "$main_sha"', text)
+        self.assertIn('git show "$validated_sha:ops/update_server_v7.sh"', deploy)
+        self.assertNotIn("update_server_macos.sh", deploy)
+        self.assertNotIn("updater_path=ops/update_server.sh", deploy)
+
+    def test_health_uses_v7_monitoring_manifest_not_legacy_project_context(self) -> None:
+        health = (ROOT / ".github/workflows/v7-paper-server-health.yml").read_text(encoding="utf-8")
+        self.assertIn("monitoring/v7_monitoring_manifest.json", health)
+        self.assertIn("polymarket_v7_monitoring_manifest_v1", health)
+        self.assertIn("polymarket_v7_ledger_", health)
+        self.assertNotIn("config/project_context.json", health)
+
 
 if __name__ == "__main__":
     unittest.main()
