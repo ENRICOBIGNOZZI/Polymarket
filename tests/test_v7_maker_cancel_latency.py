@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import csv
 import json
 import sys
 import tempfile
@@ -47,7 +48,6 @@ def test_fill_before_effective_cancel_remains_valid() -> None:
 def test_delayed_pre_cancel_trade_is_allowed_during_grace() -> None:
     order = base_order()
     cancel.request_cancel(order, processing_ms=10_000, latency_ms=100, grace_ms=30_000, reason="CANCEL_TTL")
-    # Event occurred before the effective cancel but REST receipt is much later.
     row = {"timestamp": "10.09", "received_ms": "25000"}
     assert cancel.causal_fill_eligible(row, order, processing_ms=25_000, ttl_seconds=1)
 
@@ -70,20 +70,31 @@ def test_cancel_aware_delete_intercepts_only_requested_cancel() -> None:
     assert "m1" not in orders
 
 
-def test_finalize_waits_for_latency_plus_grace() -> None:
+def test_finalize_waits_for_latency_plus_grace_and_syncs_exports() -> None:
     with tempfile.TemporaryDirectory() as temp:
-        path = Path(temp) / "state.json"
+        run_dir = Path(temp)
+        state_path = run_dir / "state.json"
+        status_path = run_dir / "status.json"
+        orders_path = run_dir / "maker_orders.csv"
         order = base_order()
         cancel.request_cancel(order, processing_ms=10_000, latency_ms=100, grace_ms=30_000, reason="CANCEL_TTL")
-        path.write_text(json.dumps({"orders": {"m1": order}}), encoding="utf-8")
-        assert cancel.finalize_due_cancels(path, processing_ms=40_099) == []
-        rows = cancel.finalize_due_cancels(path, processing_ms=40_100)
+        state_path.write_text(json.dumps({"orders": {"m1": order}, "resting_orders": 1}), encoding="utf-8")
+        status_path.write_text(json.dumps({"orders": {"m1": order}, "resting_orders": 1}), encoding="utf-8")
+        with orders_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["market_id", "token_id"])
+            writer.writeheader(); writer.writerow({"market_id": "m1", "token_id": "tok"})
+        assert cancel.finalize_due_cancels(run_dir, processing_ms=40_099) == []
+        rows = cancel.finalize_due_cancels(run_dir, processing_ms=40_100)
         assert len(rows) == 1
-        value = json.loads(path.read_text(encoding="utf-8"))
-        assert value["orders"] == {}
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        assert state["orders"] == {} and status["orders"] == {}
+        assert state["resting_orders"] == 0 and status["resting_orders"] == 0
+        with orders_path.open(newline="", encoding="utf-8") as handle:
+            assert list(csv.DictReader(handle)) == []
 
 
-def test_canonical_worker_wraps_depth_core_with_cancel_state() -> None:
+def test_canonical_worker_replays_before_finalizing_pending_cancel() -> None:
     text = (SCRIPTS / "v7_micro_maker_worker.py").read_text(encoding="utf-8")
     assert "v7_micro_maker_worker_depth_core" in text
     assert "v7_maker_cancel_latency" in text
@@ -91,6 +102,7 @@ def test_canonical_worker_wraps_depth_core_with_cancel_state() -> None:
     assert "CancelAwareOrders" in text
     assert "--cancel-latency-ms" in text
     assert "--cancel-tape-grace-ms" in text
+    assert text.index("rc = depth.main()") < text.index("finalize_due_cancels")
 
 
 if __name__ == "__main__":
