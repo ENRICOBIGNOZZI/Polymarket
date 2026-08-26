@@ -109,6 +109,49 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     if extra_assignments:
         errors.append("operator directives reference unknown schedulers: " + ", ".join(extra_assignments))
 
+    # Enforce the current explicit operator assignment for the event bridge:
+    # validator completions may dispatch the Promotion Controller, and only a
+    # successful Promotion Controller may dispatch Integration Merge. The bridge
+    # must not gain a third direct workflow target by PR-local interpretation.
+    bridge = next(
+        (
+            raw
+            for raw in schedulers
+            if isinstance(raw, dict) and str(raw.get("id") or "") == "control-plane-event-bridge"
+        ),
+        None,
+    )
+    if bridge is None:
+        errors.append("scheduler registry must contain control-plane-event-bridge")
+    else:
+        bridge_rel = str(bridge.get("workflow") or "")
+        bridge_path = root / bridge_rel
+        if not bridge_path.is_file():
+            errors.append("control-plane-event-bridge workflow is missing")
+        else:
+            allowed_bridge_dispatches = {"promotion-controller.yml", "integration-merge.yml"}
+            observed_bridge_dispatches: set[str] = set()
+            for raw_line in bridge_path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                marker = "gh workflow run "
+                if not line.startswith(marker):
+                    continue
+                target = line[len(marker) :].split(None, 1)[0].strip("'\"")
+                if target:
+                    observed_bridge_dispatches.add(target)
+            unexpected = sorted(observed_bridge_dispatches.difference(allowed_bridge_dispatches))
+            missing = sorted(allowed_bridge_dispatches.difference(observed_bridge_dispatches))
+            if unexpected:
+                errors.append(
+                    "control-plane-event-bridge exceeds its explicit operator dispatch assignment: "
+                    + ", ".join(unexpected)
+                )
+            if missing:
+                errors.append(
+                    "control-plane-event-bridge is missing required bounded dispatches: "
+                    + ", ".join(missing)
+                )
+
     priorities = directives.get("current_priority_order")
     if not isinstance(priorities, list) or len(priorities) < 8:
         errors.append("operator directives must provide the complete V7 priority sequence")
