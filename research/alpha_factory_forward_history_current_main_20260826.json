@@ -9,7 +9,18 @@
     "triggering_evidence": "fewer than 24 forward runs per policy",
     "defect": "persisted forward-maker history is legacy policy_summaries while Alpha Factory consumes aggregate_by_policy"
   },
-  "forward_maker_calibration": {
+  "forward_maker_history_current": {
+    "telemetry_rows": 62,
+    "latest_run_id": 32991390877,
+    "latest_generated_ts": 1787764341,
+    "latest_session_probes_per_policy": 15,
+    "latest_session_any_fills": 0,
+    "latest_session_pair_fills": 0,
+    "latest_session_one_sided_fills": 0,
+    "latest_session_pnl_ex_rewards_usd": 0.0,
+    "cumulative_probes_per_policy_from_prior_calibration_plus_latest": 902
+  },
+  "forward_maker_calibration_prior_snapshot": {
     "source_run_id": 32986792947,
     "source_completed_utc": "2026-08-26T16:21:19Z",
     "valid_sessions": 61,
