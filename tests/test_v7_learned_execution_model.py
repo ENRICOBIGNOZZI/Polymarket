@@ -286,10 +286,12 @@ def test_joint_examples_use_bundle_id_keep_partial_and_require_leg_ids():
         submit("b", 1_001, 5.0, bundle="bundle-c", candidate="same", leg="2"),
         fill("b", 1_101, 4.0),
         timeout("b", 1_200),
+        # Same candidate but no bundle: must not be coalesced into a synthetic multi-leg group.
         submit("x", 2_000, 5.0, candidate="same", leg="1"),
         timeout("x", 2_100),
         submit("y", 2_001, 5.0, candidate="same", leg="2"),
         timeout("y", 2_101),
+        # Explicit bundle with missing leg identity is rejected from joint evidence.
         submit("u", 3_000, 5.0, bundle="bundle-bad"),
         timeout("u", 3_100),
         submit("v", 3_001, 5.0, bundle="bundle-bad"),
