@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.sha }}
+      VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
     strategy:
       fail-fast: false
       matrix:
@@ -35,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.expected_sha || github.sha }}
+          ref: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
       - name: Verify exact validation revision
         shell: bash
         run: |
