@@ -51,12 +51,23 @@ class ActiveFlowMakerSeededProbeTest(unittest.TestCase):
         seeded._PRIOR_CONDITIONS = set()
         seeded._SEED_CONDITIONS = set()
         seeded._SEED_ADDED_CONDITIONS = set()
+        seeded._SEED_SLUGS = {}
+        seeded._SEED_ASSETS.clear()
+        seeded._TOKEN_TO_CANONICAL_CONDITION = {}
+        seeded._CANONICAL_CONDITION_BY_RAW = {}
 
     def test_gamma_condition_query_repeats_condition_ids(self):
-        query = urllib.parse.parse_qs(seeded._condition_market_query(["0xa", "0xb"]))
-        self.assertEqual(query["condition_ids"], ["0xa", "0xb"])
+        query = urllib.parse.parse_qs(seeded._condition_market_query(["0x" + "a" * 64, "0x" + "b" * 64]))
+        self.assertEqual(query["condition_ids"], ["0x" + "a" * 64, "0x" + "b" * 64])
         self.assertEqual(query["active"], ["true"])
         self.assertEqual(query["closed"], ["false"])
+
+    def test_gamma_slug_query_is_bounded_and_active_only(self):
+        query = urllib.parse.parse_qs(seeded._slug_market_query("slug-hot"))
+        self.assertEqual(query["slug"], ["slug-hot"])
+        self.assertEqual(query["active"], ["true"])
+        self.assertEqual(query["closed"], ["false"])
+        self.assertEqual(query["limit"], ["10"])
 
     def test_merge_seeded_universe_injects_recent_market_and_respects_cap(self):
         prior = [market("m1", "c1", 100), market("m2", "c2", 90), market("m3", "c3", 80)]
@@ -65,27 +76,49 @@ class ActiveFlowMakerSeededProbeTest(unittest.TestCase):
         self.assertEqual([m.condition_id for m in merged], ["c-hot", "c2", "c1"])
         self.assertEqual(len(merged), 3)
 
-    def test_recent_global_trade_condition_is_mapped_into_capped_universe(self):
+    def test_malformed_data_condition_is_resolved_by_slug_and_token_identity(self):
         prior = [market("m1", "c1", 100), market("m2", "c2", 90)]
+        raw_condition = "0x" + "3" * 62
+        canonical = "0x" + "a" * 64
         global_rows = [
-            {"conditionId": "c-hot", "asset": "yes-hot", "side": "SELL",
-             "timestamp": 995, "price": 0.40, "size": 12.0, "transactionHash": "h"},
+            {"conditionId": raw_condition, "asset": "yes-hot", "side": "SELL",
+             "timestamp": 995, "price": 0.40, "size": 12.0, "transactionHash": "h",
+             "slug": "slug-hot"},
         ]
         with patch.object(seeded, "_ORIGINAL_DISCOVER", return_value=prior), \
              patch.object(seeded.core, "now_s", return_value=1000), \
              patch.object(seeded.core, "request_json") as request:
             request.side_effect = [
                 (global_rows, 1_000_100),
-                ([gamma_row("hot", "c-hot", 1)], 1_000_200),
+                ([gamma_row("hot", canonical, 1)], 1_000_200),
             ]
             merged = seeded.discover_markets_seeded(2, 2.0)
-        self.assertEqual([m.condition_id for m in merged], ["c-hot", "c1"])
+        self.assertEqual([m.condition_id for m in merged], [canonical, "c1"])
         self.assertEqual(seeded._SEED_DIAGNOSTICS["seed_global_condition_count"], 1)
+        self.assertEqual(seeded._SEED_DIAGNOSTICS["seed_noncanonical_raw_condition_count"], 1)
         self.assertEqual(seeded._SEED_DIAGNOSTICS["seed_gamma_market_count"], 1)
         self.assertEqual(seeded._SEED_DIAGNOSTICS["seed_added_market_count"], 1)
+        self.assertEqual(seeded._CANONICAL_CONDITION_BY_RAW[raw_condition], canonical)
+        self.assertEqual(seeded._TOKEN_TO_CANONICAL_CONDITION["yes-hot"], canonical)
         self.assertTrue(seeded._SEED_DIAGNOSTICS["authorized_market_cap_respected"])
         gamma_url = request.call_args_list[1].args[0]
-        self.assertIn("condition_ids=c-hot", gamma_url)
+        self.assertIn("slug=slug-hot", gamma_url)
+
+    def test_global_token_flow_is_rekeyed_to_canonical_condition(self):
+        canonical = "0x" + "a" * 64
+        seeded._TOKEN_TO_CANONICAL_CONDITION = {"yes-hot": canonical}
+        rows = [
+            {"conditionId": "0x" + "3" * 62, "asset": "yes-hot", "side": "SELL",
+             "timestamp": 995, "price": 0.40, "size": 12.0, "transactionHash": "h",
+             "slug": "slug-hot"},
+        ]
+        with patch.object(seeded.core, "request_json", return_value=(rows, 1_000_300)):
+            flows: dict[str, list[core.Trade]] = {}
+            received_ms, errors = seeded._merge_global_token_flows(flows, 900, 1000)
+        self.assertEqual(errors, [])
+        self.assertEqual(received_ms, 1_000_300)
+        self.assertEqual(len(flows[canonical]), 1)
+        self.assertEqual(flows[canonical][0].token_id, "yes-hot")
 
     def test_seed_mapping_failure_fails_closed_if_no_active_market(self):
         result = {
@@ -96,7 +129,7 @@ class ActiveFlowMakerSeededProbeTest(unittest.TestCase):
                 "global_sanity_checked": False,
                 "seed_global_condition_count": 2,
                 "seed_gamma_market_count": 0,
-                "seed_errors": ["seed_gamma_batch=0:HTTPError:500"],
+                "seed_errors": ["seed_gamma_slug=x:HTTPError:500"],
             }
         }
         self.assertFalse(seeded.seeded_activity_data_healthy(result))
