@@ -26,28 +26,35 @@ def test_research_manifest_keeps_incumbent_v6_and_defines_exact_v7_candidate():
     assert candidate["promotion_contract"] == "research_head_must_be_exact-head-approved_then_integrated"
 
 
-def test_v7_config_has_no_binding_fixed_dollar_trade_cap_and_100_percent_hard_ceiling():
+def test_v7_config_matches_current_bounded_paper_authority():
     cfg = load("config/paper_v7.json")
     directives = load("config/operator_directives.json")["paper_v7_authorization"]
     assert cfg["engine_version"] == 7
     assert cfg["paper_only"] is True
-    assert cfg["market_limit"] == directives["market_limit"]
-    assert cfg["min_liquidity"] == directives["min_liquidity"]
+    assert cfg["market_limit"] == directives["market_limit"] == 1000
+    assert cfg["min_liquidity"] == directives["min_liquidity"] == 2.0
     assert abs(cfg["min_net_edge"] - directives["min_net_edge"]) < 1e-12
-    assert cfg["fractional_kelly"] == directives["fractional_kelly_ceiling"]
-    assert cfg["fixed_dollar_trade_cap_enabled"] is False
-    assert float(cfg["max_trade_usd"]) > 1e50
-    for key in ("max_trade_fraction", "max_market_fraction", "max_event_fraction", "max_gross_fraction"):
-        assert cfg[key] == directives[key] == 1.0
-    assert cfg["multi_strategy"]["global_max_gross_fraction"] == 1.0
+    assert cfg["uncertainty_penalty"] == directives["uncertainty_penalty"] == 0.0
+    assert cfg["fractional_kelly"] == directives["fractional_kelly_ceiling"] == 0.25
+    assert cfg["fixed_dollar_trade_cap_enabled"] is directives["fixed_dollar_trade_cap_enabled"] is True
+    assert cfg["max_trade_usd"] == directives["max_trade_usd"] == 125.0
+    assert cfg["max_trade_fraction"] == directives["max_trade_fraction"] == 1.0
+    assert cfg["max_market_fraction"] == directives["max_market_fraction"] == 0.05
+    assert cfg["max_event_fraction"] == directives["max_event_fraction"] == 0.15
+    assert cfg["max_gross_fraction"] == directives["max_gross_fraction"] == 0.70
+    assert cfg["multi_strategy"]["global_max_gross_fraction"] == directives["max_gross_fraction"] == 0.70
     assert cfg["max_drawdown"] == directives["max_drawdown"] == 0.15
-    assert cfg["v7"]["hard_arb_fixed_dollar_trade_cap_enabled"] is False
-    assert float(cfg["v7"]["hard_arb_max_trade_usd"]) > 1e50
-    assert cfg["v7"]["hard_arb_max_trade_fraction"] == 1.0
+    assert cfg["v7"]["hard_arb_fixed_dollar_trade_cap_enabled"] is directives["hard_arb_fixed_dollar_trade_cap_enabled"] is True
+    assert cfg["v7"]["hard_arb_max_trade_usd"] == directives["hard_arb_max_trade_usd"] == 125.0
+    assert cfg["v7"]["hard_arb_max_trade_fraction"] == directives["hard_arb_max_trade_fraction"] == 1.0
     assert cfg["v7"]["authoritative_fee_required"] is True
     assert cfg["v7"]["shared_execution_ledger_required"] is True
     assert cfg["v7"]["joint_fill_state_required_for_multileg"] is True
     assert cfg["v7"]["authenticated_execution"] is False
+    allocations = directives["capital_allocations"]
+    for key, value in allocations.items():
+        assert cfg["v7"][key] == value
+    assert abs(sum(allocations.values()) - 1.0) < 1e-12
 
 
 def test_frequency_matrix_has_hf_and_30m_to_6h_without_pooling():
@@ -93,7 +100,7 @@ def test_v7_execution_loop_uses_corrected_workers_and_roundtrip_joint_state_gate
     assert "v7_hard_arb_guard.py" in text
     assert "v7_multileg_broker_runner.py" in text
     assert "v7_capacity_lock.py" in text
-    assert "v6_bundle_quote_optimizer.py" in text  # compatibility adapter -> V7 optimizer
+    assert "v6_bundle_quote_optimizer.py" in text  # compatibility adapter -> V7 optimizer; removed after healthy V7 deploy
     assert "v7_graph_roundtrip_guard.py" in text
     assert "graph_roundtrip_state.json" in text
     graph_block = text[text.index("run_graph(){"):text.index("reap_stale_proxy")]

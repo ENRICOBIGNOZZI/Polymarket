@@ -78,6 +78,7 @@ def render_markdown(snapshot: dict[str, Any]) -> str:
     runtime = snapshot.get("runtime", {})
     directives = snapshot.get("operator_directives", {}) if isinstance(snapshot.get("operator_directives"), dict) else {}
     v7 = directives.get("paper_v7_authorization", {}) if isinstance(directives.get("paper_v7_authorization"), dict) else {}
+    allocations = v7.get("capital_allocations", {}) if isinstance(v7.get("capital_allocations"), dict) else {}
     priorities = directives.get("current_priority_order", []) if isinstance(directives.get("current_priority_order"), list) else []
     lines = [
         "# Project context snapshot",
@@ -98,9 +99,10 @@ def render_markdown(snapshot: dict[str, Any]) -> str:
         "## Current operator authorization",
         "",
         f"- V7 PAPER only: `{v7.get('paper_only')}`; authenticated execution: `{v7.get('authenticated_execution')}`",
-        f"- fixed-dollar trade cap enabled: `{v7.get('fixed_dollar_trade_cap_enabled')}`",
-        f"- trade / market / event / gross ceilings: `{v7.get('max_trade_fraction')}` / `{v7.get('max_market_fraction')}` / `{v7.get('max_event_fraction')}` / `{v7.get('max_gross_fraction')}`",
+        f"- fixed-dollar trade cap enabled: `{v7.get('fixed_dollar_trade_cap_enabled')}`; max trade USD: `{v7.get('max_trade_usd')}`",
+        f"- market / event / gross ceilings: `{v7.get('max_market_fraction')}` / `{v7.get('max_event_fraction')}` / `{v7.get('max_gross_fraction')}`",
         f"- fractional Kelly ceiling: `{v7.get('fractional_kelly_ceiling')}`; drawdown kill: `{v7.get('max_drawdown')}`",
+        f"- sleeve allocations maker/taker/RV/hard/external/reserve: `{allocations.get('micro_maker_capital_fraction')}` / `{allocations.get('micro_taker_capital_fraction')}` / `{allocations.get('relative_value_capital_fraction')}` / `{allocations.get('hard_arb_capital_fraction')}` / `{allocations.get('external_capital_fraction')}` / `{allocations.get('reserve_fraction')}`",
         "- older PR descriptions, comments and tests do not override this directive epoch",
         "",
         "## Current priority order",

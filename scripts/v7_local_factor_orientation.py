@@ -35,11 +35,19 @@ def orientation_invariant_pc1(
     if not all(math.isfinite(x) for row in rows for x in row):
         return None
 
-    # Work with X'X implicitly: G v = sum_i x_i (x_i' v).  Starting from the
-    # diagonal energy vector is itself invariant to row sign flips and avoids a
-    # coding-dependent initialization.
+    # Work with X'X implicitly: G v = sum_i x_i (x_i' v).  A previous seed
+    # used diag(G), which is sign-invariant but can be exactly orthogonal to the
+    # leading eigenvector for symmetric factors (for example two controls coded
+    # as exact opposites).  Seed instead from the highest-energy column G e_j.
+    # Each entry sum_i x_i[t] * x_i[j] is itself unchanged by independently
+    # flipping any control row, and for a rank-one nonzero factor this seed is
+    # immediately proportional to the factor rather than orthogonal to it.
     diagonal = [sum(row[j] * row[j] for row in rows) for j in range(n)]
-    v = _normalize(diagonal)
+    pivot = max(range(n), key=lambda j: (diagonal[j], -j))
+    if not math.isfinite(diagonal[pivot]) or diagonal[pivot] <= 1e-12:
+        return None
+    seed = [sum(row[j] * row[pivot] for row in rows) for j in range(n)]
+    v = _normalize(seed)
     if v is None:
         return None
     for _ in range(max(5, int(max_iterations))):
