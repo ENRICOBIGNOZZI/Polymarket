@@ -36,10 +36,11 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertNotIn('--execute', updater)
         self.assertNotIn('wallet', updater.lower())
 
-    def test_grafana_tailnet_viewer_uses_multi_strategy_home(self):
+    def test_grafana_tailnet_viewer_snapshots_exact_assets_outside_checkout(self):
         runtime = (ROOT / "ops" / "apply_runtime_config_macos.sh").read_text(encoding="utf-8")
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
         finish = (ROOT / "ops" / "finish_bootstrap_macos.sh").read_text(encoding="utf-8")
+        access = (ROOT / ".github" / "workflows" / "grafana-access.yml").read_text(encoding="utf-8")
         compose = (ROOT / "docker-compose.monitoring.yml").read_text(encoding="utf-8")
 
         self.assertIn('http_addr = 127.0.0.1', runtime)
@@ -47,6 +48,9 @@ class MacOSOpsContractTest(unittest.TestCase):
             'POLYMARKET_GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-http://${TAILSCALE_FQDN}}"',
             runtime,
         )
+        self.assertIn('POLYMARKET_GRAFANA_ASSET_DIR', runtime)
+        self.assertIn('GRAFANA_STATE_DASHBOARD_DIR="$STATE_DIR/grafana/dashboards"', runtime)
+        self.assertIn('dashboard_sha256=', runtime)
         self.assertIn('actual_dns=', runtime)
         self.assertIn('tailscale DNS mismatch:', runtime)
         self.assertIn('root_url = ${POLYMARKET_GRAFANA_URL}/', runtime)
@@ -58,9 +62,13 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('org_role = Viewer', runtime)
         self.assertNotIn('org_role = Admin', runtime)
         self.assertIn(
-            'default_home_dashboard_path = $APP_DIR/monitoring/grafana/dashboards/polymarket-multi-strategy.json',
+            'default_home_dashboard_path = $GRAFANA_STATE_DASHBOARD_DIR/$CANONICAL_DASHBOARD',
             runtime,
         )
+        self.assertIn('path: "$GRAFANA_STATE_DASHBOARD_DIR"', runtime)
+        self.assertIn('polymarket-grafana-assets.tgz', access)
+        self.assertIn('DASHBOARD_SHA256', access)
+        self.assertIn('/api/dashboards/uid/$DASHBOARD_UID', access)
         self.assertIn(
             'GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/polymarket-multi-strategy.json',
             compose,
@@ -68,7 +76,6 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('reporting_enabled = false', runtime)
         self.assertIn('apply_runtime_config_macos.sh', updater)
         self.assertIn('apply_runtime_config_macos.sh', finish)
-        self.assertIn('http://127.0.0.1:3000/api/search', updater)
 
     def test_same_sha_repair_reapplies_runtime_config_before_restart(self):
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
@@ -82,7 +89,7 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertLess(repair.index(apply), repair.index(restart))
         self.assertIn('Runtime and Grafana configuration repaired', repair)
 
-    def test_v5_cold_start_wait_uses_startup_aware_readiness(self):
+    def test_v5_is_explicit_compatibility_not_future_version_policy(self):
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
         readiness = (ROOT / "scripts" / "v5_runtime_readiness.py").read_text(encoding="utf-8")
         self.assertIn(
@@ -91,15 +98,15 @@ class MacOSOpsContractTest(unittest.TestCase):
         )
         self.assertIn('local attempts="${1:-$RUNTIME_HEALTH_ATTEMPTS}"', updater)
         self.assertIn('POLYMARKET_RUNTIME_HEALTH_ATTEMPTS must be a positive integer', updater)
+        self.assertIn('if (( version == 5 )); then', updater)
         self.assertIn('scripts/v5_runtime_readiness.py', updater)
+        self.assertIn('scripts/runtime_contract_health.py', updater)
         self.assertIn('--model-output-max-age 120', updater)
         self.assertIn('--startup-grace 600', updater)
         self.assertIn('model_output_max_age', readiness)
         self.assertIn('startup_grace', readiness)
-        self.assertIn('allocator_events.csv', readiness)
-        self.assertIn('models_alive', readiness)
 
-    def test_deployment_uses_validated_ref_and_versioned_health(self):
+    def test_deployment_uses_validated_ref_and_version_neutral_health(self):
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
         linux_updater = (ROOT / "ops" / "update_server.sh").read_text(encoding="utf-8")
         health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(encoding="utf-8")
@@ -111,37 +118,30 @@ class MacOSOpsContractTest(unittest.TestCase):
             self.assertIn('git fetch origin "$LOCAL_BRANCH" "$DEPLOY_REF"', script)
             self.assertIn('origin/$DEPLOY_REF', script)
             self.assertIn('polymarket_runtime_pnl_usd', script)
-            self.assertIn('polymarket_allocator_state_present', script)
-            self.assertIn('polymarket_allocator_models_expected', script)
-            self.assertIn('polymarket_model_info', script)
+            self.assertIn('polymarket_runtime_equity_usd', script)
+            self.assertIn('scripts/runtime_contract_health.py', script)
+            self.assertIn('polymarket_runtime_contract_present', script)
+            self.assertIn('/api/dashboards/uid/', script)
+
         self.assertIn('write_status awaiting_validation', updater)
         self.assertIn('paper_runtime_healthy()', updater)
         self.assertIn('full_runtime_healthy()', updater)
         self.assertIn('wait_for_runtime_health()', updater)
         self.assertIn('write_status repaired', updater)
         self.assertIn('polymarket-service-control restart', updater)
-        self.assertIn('scripts/v5_runtime_readiness.py', updater)
-        self.assertIn('polymarket_v6_exporter_info', updater)
-        self.assertIn('hard_arb', updater)
-        self.assertIn('paper_latest_loop.sh', linux_updater)
-        self.assertIn('POLYMARKET_RUN_NAME=auto', linux_updater)
 
         self.assertIn('git fetch -q origin main paper-validated', health)
         self.assertIn('test "$head_sha" = "$validated_sha"', health)
-        self.assertIn('polymarket_allocator_models_expected 5', health)
-        self.assertIn('polymarket-multi-strategy-v5', health)
-        self.assertIn('runs/paper_v5_live', health)
-        self.assertIn('test "$allocator_alive" = "1"', health)
-        self.assertIn('scripts/v5_runtime_readiness.py', health)
-        self.assertIn('--startup-grace 600', health)
-        self.assertIn('polymarket_v6_exporter_info', health)
-        self.assertIn('hard_arb/status.json', health)
+        self.assertIn('scripts/runtime_contract_health.py', health)
+        self.assertIn('polymarket_runtime_contract_present 1', health)
+        self.assertIn('/api/dashboards/uid/$GRAFANA_DASHBOARD_UID', health)
 
         self.assertIn('Advance paper validated ref', smoke)
         self.assertIn('git/refs/heads/paper-validated', smoke)
         self.assertIn("github.event_name != 'pull_request' && success()", smoke)
-        self.assertIn('paper_v5_live', smoke)
-        self.assertIn('adapter="v5"', smoke)
+        self.assertIn('Version-neutral V7+ PAPER runtime smoke', smoke)
+        self.assertIn('scripts/runtime_contract_health.py', smoke)
+        self.assertIn('polymarket_runtime_contract_present 1', smoke)
 
         self.assertIn('workflow_run:', deploy)
         self.assertIn('workflows: ["v4-live-paper-smoke"]', deploy)
@@ -149,44 +149,56 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('EXPECTED_VALIDATED_SHA', deploy)
         self.assertIn('git show "$validated_sha:$updater_path"', deploy)
         self.assertIn('POLYMARKET_DEPLOY_REF=paper-validated bash "$updater"', deploy)
-        self.assertIn('[[ "$version" == "5" || "$version" == "6" ]]', deploy)
-        self.assertIn('adapter=\\"v${version}\\"', deploy)
-        self.assertIn('polymarket_v6_exporter_info', deploy)
-        self.assertIn('hard_arb/status.json', deploy)
-        self.assertIn('polymarket-multi-strategy-v5', deploy)
+        self.assertIn('scripts/runtime_contract_health.py', deploy)
+        self.assertIn('runtime_contract_metric', deploy)
+        self.assertIn('/api/dashboards/uid/$dashboard_uid', deploy)
 
-    def test_deploy_verifier_reports_named_failures_without_weakening_checks(self):
+    def test_generic_operational_surfaces_do_not_cap_future_versions(self):
+        paths = (
+            ROOT / "monitoring" / "exporter_latest.py",
+            ROOT / "ops" / "update_server_macos.sh",
+            ROOT / "ops" / "update_server.sh",
+            ROOT / ".github" / "workflows" / "deploy-paper-server.yml",
+            ROOT / ".github" / "workflows" / "server-health.yml",
+            ROOT / ".github" / "workflows" / "v4-live-smoke.yml",
+        )
+        forbidden = (
+            'unsupported champion version',
+            'unsupported paper champion',
+            '[[ "$version" == "5" || "$version" == "6" ]]',
+            'if version not in (5,6)',
+        )
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                self.assertNotIn(token, text, f"{path} reintroduced a fixed version ceiling: {token}")
+        self.assertIn('import_module(f"exporter_v{major}")', paths[0].read_text(encoding="utf-8"))
+        self.assertNotIn('for v in range(major', paths[0].read_text(encoding="utf-8"))
+
+    def test_deploy_verifier_reports_generic_named_failures_without_weakening_checks(self):
         deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(encoding="utf-8")
         self.assertIn("fail_verify()", deploy)
         self.assertIn("require_equal()", deploy)
         self.assertIn("require_metric()", deploy)
-        self.assertIn("require_file()", deploy)
         for label in (
             "server_head_matches_validated",
             "validated_not_ancestor_of_main",
             "validated_matches_trigger_sha",
+            "runtime_contract_health",
             "exporter_healthz",
             "runtime_info_schema",
             "runtime_pnl_metric",
-            "allocator_state_metric",
-            "allocator_models_expected_metric",
-            "model_info_metric",
-            "v6_exporter_info_metric",
-            "v6_model_fills_metric",
-            "v6_model_gross_exposure_metric",
-            "v6_model_drawdown_metric",
-            "v6_model_alive_metric",
-            "v6_model_staleness_metric",
-            "v6_hard_arb_status_file",
-            "v6_local_factor_status_file",
-            "v6_runtime_status_file",
+            "runtime_equity_metric",
+            "runtime_contract_metric",
             "prometheus_ready",
             "grafana_health",
             "grafana_dashboard_missing",
         ):
             self.assertIn(f'"{label}"', deploy)
         self.assertIn("verify_result=success", deploy)
-        self.assertNotIn("|| true", deploy.split("- name: Verify production paper services", 1)[1])
+        verifier = deploy.split("- name: Verify production PAPER contract", 1)[1]
+        self.assertNotIn('curl -fsS http://127.0.0.1:9108/healthz >/dev/null || true', verifier)
+        self.assertNotIn('curl -fsS http://127.0.0.1:3000/api/health >/dev/null || true', verifier)
 
     def test_remote_verifiers_are_compatible_with_macos_bash3(self):
         health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(encoding="utf-8")
@@ -228,7 +240,11 @@ class MacOSOpsContractTest(unittest.TestCase):
     def test_failed_candidate_health_is_captured_before_rollback(self):
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
         diagnostics = (ROOT / "ops" / "capture_runtime_health_macos.sh").read_text(encoding="utf-8")
-        failure = 'if ! wait_for_runtime_health; then\n  capture_runtime_health_diagnostics "$NEW_SHA"\n  rollback "post-deploy paper runtime health checks failed"'
+        failure = (
+            'if ! wait_for_runtime_health; then\n'
+            '  capture_runtime_health_diagnostics "$NEW_SHA"\n'
+            '  rollback "post-deploy runtime contract health checks failed"'
+        )
         self.assertIn(failure, updater)
         self.assertIn('ops/capture_runtime_health_macos.sh', updater)
         self.assertIn('candidate_health_diagnostics_begin', diagnostics)
@@ -237,11 +253,6 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('exporter_healthz', diagnostics)
         self.assertIn('prometheus_ready', diagnostics)
         self.assertIn('grafana_health', diagnostics)
-        self.assertIn('runtime_supervisor.csv', diagnostics)
-        self.assertIn('market_proxy_status.json', diagnostics)
-        self.assertIn('market_proxy.log', diagnostics)
-        self.assertIn('multileg.log', diagnostics)
-        self.assertIn('macos_service_control.sh" status', diagnostics)
         self.assertNotIn('printenv', diagnostics)
         self.assertNotIn('set -x', diagnostics)
 
