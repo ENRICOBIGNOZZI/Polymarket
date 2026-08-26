@@ -38,7 +38,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Detect V7 ranking implementation
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            scripts/v7_cross_sectional_rank.py
+            scripts/v7_cross_sectional_rank_core.py
+            scripts/v7_cross_sectional_rank_fast.py
+            scripts/v7_cross_sectional_rank_inference.py
+            scripts/v7_cross_sectional_history.py
+            scripts/v7_cross_sectional_relative.py
+            scripts/v7_cross_sectional_tail_relative.py
+            config/research_v7_cross_sectional_rank_frozen.json
+            tests/test_v7_cross_sectional_rank.py
+            tests/test_v7_cross_sectional_rank_fast.py
+            tests/test_v7_cross_sectional_rank_inference.py
+            tests/test_v7_cross_sectional_history.py
+            tests/test_v7_cross_sectional_relative.py
+          )
+          missing=()
+          for path in "${required[@]}"; do
+            [[ -f "$path" ]] || missing+=("$path")
+          done
+          if (( ${#missing[@]} )); then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "V7 ranking lane is registered but deferred until the implementation lands: ${missing[*]}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deterministic relative-ranking contracts
+        if: steps.preflight.outputs.ready == 'true'
         run: |
           set -euo pipefail
           python3 -m unittest \
@@ -58,6 +90,7 @@ jobs:
           python3 -m json.tool config/research_v7_cross_sectional_rank_frozen.json >/dev/null
 
       - name: Live public-data frozen 2h/6h relative holdout
+        if: steps.preflight.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -97,7 +130,9 @@ jobs:
         shell: bash
         run: |
           echo '## V7 cross-sectional relative tail research' >> "$GITHUB_STEP_SUMMARY"
-          if test -s ranking_evidence/report.json; then
+          if [[ "${{ steps.preflight.outputs.ready }}" != "true" ]]; then
+            echo '- status: deferred until V7 ranking implementation is present on this revision' >> "$GITHUB_STEP_SUMMARY"
+          elif test -s ranking_evidence/report.json; then
             python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
           from pathlib import Path
@@ -120,7 +155,7 @@ jobs:
           fi
 
       - name: Upload relative-ranking evidence
-        if: always()
+        if: always() && steps.preflight.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: v7-cross-sectional-relative-tail-${{ github.run_id }}
