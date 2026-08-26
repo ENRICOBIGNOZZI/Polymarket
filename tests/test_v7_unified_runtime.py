@@ -11,20 +11,19 @@ def load(path: str):
     return json.loads((ROOT / path).read_text(encoding="utf-8"))
 
 
-def test_integration_manifest_selects_unified_v7_paper_champion():
-    champion = load("config/live_champion.json")
+def test_research_manifest_keeps_incumbent_v6_and_defines_exact_v7_candidate():
+    incumbent = load("config/live_champion.json")
     candidate = load("config/v7_champion_candidate.json")
-    assert champion["version"] == 7
-    assert champion["loop"] == "scripts/paper_v7_loop.sh"
-    assert champion["config"] == "config/paper_v7.json"
-    assert champion["run_root"] == "runs/paper_v7_live"
-    assert champion["paper_only"] is True
-    assert champion["authenticated_execution"] is False
+    assert incumbent["version"] == 6
+    assert incumbent["loop"] == "scripts/paper_v6_loop.sh"
+    assert incumbent["config"] == "config/paper_v6.json"
     assert candidate["version"] == 7
-    assert candidate["loop"] == champion["loop"]
-    assert candidate["config"] == champion["config"]
+    assert candidate["loop"] == "scripts/paper_v7_loop.sh"
+    assert candidate["config"] == "config/paper_v7.json"
+    assert candidate["run_root"] == "runs/paper_v7_live"
     assert candidate["paper_only"] is True
     assert candidate["authenticated_execution"] is False
+    assert candidate["promotion_contract"] == "research_head_must_be_exact-head-approved_then_integrated"
 
 
 def test_v7_config_has_no_binding_fixed_dollar_trade_cap_and_100_percent_hard_ceiling():
@@ -121,4 +120,4 @@ if __name__ == "__main__":
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
     for test in tests:
         test()
-    print(f"ok {len(tests)} unified V7 runtime tests")
+    print(f"ok {len(tests)} unified V7 research/runtime tests")
