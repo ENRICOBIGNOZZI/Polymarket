@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import v6_local_factor_intents as base
 import v7_local_factor_core as core
+import v7_local_factor_inference as inference
 
 HISTORY_WINDOW_SECONDS = 7 * 24 * 60 * 60
 
@@ -71,7 +72,7 @@ def fetch_histories_chunked(
     """Reuse the V6 parser/transport on bounded absolute history windows.
 
     Long 30-minute-fidelity absolute ranges are known to be rejected by the public
-    CLOB history service.  Chunking is a data-acquisition invariant, not a model
+    CLOB history service. Chunking is a data-acquisition invariant, not a model
     change; merge by timestamp so boundary observations are deterministic.
     """
     histories: dict[str, dict[int, float]] = {}
@@ -154,7 +155,7 @@ def main() -> int:
         )
         if panel is None:
             continue
-        boot = core.panel_pair_bootstrap_pvalues(
+        boot = inference.panel_pair_iut_pvalues(
             panel,
             reps=reps,
             seed=20260826 + sum(ord(ch) for ch in cluster_key),
@@ -231,6 +232,7 @@ def main() -> int:
         "history_required_market_count": history_required_market_count,
         "history_data_healthy": history_data_healthy,
         "history_window_days": HISTORY_WINDOW_SECONDS // 86400,
+        "pair_pvalue_method": "intersection_union_max_marginal_null_preserving_bootstrap_pvalue",
         "pair_hypotheses": len(pvalues),
         "bootstrap_repetitions": reps,
         "bh_fdr": float(inference_cfg["bh_fdr"]),
