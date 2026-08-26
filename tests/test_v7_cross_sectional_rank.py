@@ -2,18 +2,20 @@
 from __future__ import annotations
 
 import importlib.util
-import math
 import random
+import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+MODULE_NAME = "v7_cross_sectional_rank_core"
 SPEC = importlib.util.spec_from_file_location(
-    "v7_cross_sectional_rank_core",
+    MODULE_NAME,
     ROOT / "scripts" / "v7_cross_sectional_rank_core.py",
 )
 assert SPEC is not None and SPEC.loader is not None
 xr = importlib.util.module_from_spec(SPEC)
+sys.modules[MODULE_NAME] = xr
 SPEC.loader.exec_module(xr)
 
 
@@ -114,6 +116,9 @@ class V7CrossSectionalRankTests(unittest.TestCase):
         )
         yes = xr.candidate_from_score(yes_score, yes_book, 3600, 100, 0, 0, 0, 30)
         no = xr.candidate_from_score(no_score, no_book, 3600, 100, 0, 0, 0, 30)
+        self.assertIsNotNone(yes)
+        self.assertIsNotNone(no)
+        assert yes is not None and no is not None
         self.assertEqual(yes.side, "YES")
         self.assertEqual(no.side, "NO")
 
