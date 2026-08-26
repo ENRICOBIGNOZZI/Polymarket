@@ -100,3 +100,5 @@ else:
 
 if __name__ == "__main__":
     unittest.main()
+
+# Revalidation sentinel: forces synchronize hooks for the exact process-group drain tree.
