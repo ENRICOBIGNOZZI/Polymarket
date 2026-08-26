@@ -235,10 +235,19 @@ jobs:
           gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/main" \
             -f sha="$expected_head" -F force=false > integration-merge/ref-update.json
           test "$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$expected_head"
-          gh pr close "$PR_NUMBER" --delete-branch \
-            --comment "Integrated by exact-head fast-forward at \`$expected_head\`. No squash or merge commit was created, preserving same-SHA PAPER/main/paper-validated/deploy provenance. Authenticated real-money execution remains disabled."
           integrated_sha="$expected_head"
           echo "INTEGRATED_SHA=$integrated_sha" >> "$GITHUB_ENV"
+
+          # A direct fast-forward can make GitHub close/recognize the PR before
+          # this step executes. Cleanup is therefore idempotent and must never
+          # block the exact-SHA repository_dispatch after the ref move succeeded.
+          pr_state="$(gh pr view "$PR_NUMBER" --json state --jq .state 2>/dev/null || true)"
+          if [[ "$pr_state" == "OPEN" ]]; then
+            gh pr close "$PR_NUMBER" --delete-branch \
+              --comment "Integrated by exact-head fast-forward at \`$expected_head\`. No squash or merge commit was created, preserving same-SHA PAPER/main/paper-validated/deploy provenance. Authenticated real-money execution remains disabled."
+          else
+            echo "PR $PR_NUMBER already non-open after exact-head fast-forward: ${pr_state:-unknown}"
+          fi
 
           python3 - "$integrated_sha" "$PR_NUMBER" > integration-merge/integration-dispatch.json <<'PY'
           import json,sys
