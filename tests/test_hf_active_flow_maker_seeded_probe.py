@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import sys
 import unittest
 import urllib.parse
@@ -42,6 +43,18 @@ def gamma_row(mid: str, condition: str, volume: float = 10.0) -> dict[str, objec
         "slug": "slug-" + mid,
         "feesEnabled": False,
     }
+
+
+def research_args() -> argparse.Namespace:
+    return argparse.Namespace(
+        min_recent_trades=2,
+        min_sell_prints=2,
+        max_event_age_seconds=60,
+        min_fill_probability=0.02,
+        max_sell_toxicity=0.80,
+        improve_ticks=1,
+        min_edge=0.00005,
+    )
 
 
 class ActiveFlowMakerSeededProbeTest(unittest.TestCase):
@@ -199,6 +212,43 @@ class ActiveFlowMakerSeededProbeTest(unittest.TestCase):
         self.assertEqual(query["end"], ["200"])
         self.assertEqual(query["limit"], ["1000"])
         self.assertEqual(query["takerOnly"], ["true"])
+
+    def test_sparse_one_print_fill_evidence_is_not_hard_rejected_as_certain_toxicity(self):
+        a = research_args()
+        seeded.apply_zero_fill_research_profile(a)
+        sparse_sell = core.Flow(
+            trade_count=1,
+            buy_volume=0.0,
+            sell_volume=12.72,
+            compatible_sell_volume=12.72,
+            compatible_sell_prints=1,
+            last_event_age=73,
+            signed_imbalance=-1.0,
+        )
+        self.assertGreater(core.fill_probability_proxy(sparse_sell, 57.3, 14.325), 0.005)
+        self.assertTrue(seeded.activity_eligible_reliability_gated_toxicity(sparse_sell, 57.3, 14.325, a))
+        self.assertEqual(a.improve_ticks, 0)
+
+    def test_recurrent_sell_toxicity_still_fails_closed(self):
+        a = research_args()
+        seeded.apply_zero_fill_research_profile(a)
+        recurrent_toxic = core.Flow(
+            trade_count=2,
+            buy_volume=0.0,
+            sell_volume=100.0,
+            compatible_sell_volume=100.0,
+            compatible_sell_prints=2,
+            last_event_age=1,
+            signed_imbalance=-1.0,
+        )
+        self.assertFalse(seeded.activity_eligible_reliability_gated_toxicity(recurrent_toxic, 10.0, 10.0, a))
+
+    def test_sparse_flow_cannot_authorize_inside_spread_improvement(self):
+        a = research_args()
+        seeded.apply_zero_fill_research_profile(a)
+        a.improve_ticks = 1
+        sparse_sell = core.Flow(1, 0.0, 100.0, 100.0, 1, 1, -1.0)
+        self.assertFalse(seeded.activity_eligible_reliability_gated_toxicity(sparse_sell, 10.0, 10.0, a))
 
 
 if __name__ == "__main__":
