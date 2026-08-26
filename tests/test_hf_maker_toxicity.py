@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import inspect
 import math
 import unittest
 
 from scripts import v6_micro_maker_v2 as v2
+from scripts import v6_micro_maker_v4 as v4
 from scripts.v6_micro_maker_v3 import (
     depth_imbalance,
     maker_toxicity_score,
@@ -190,6 +192,12 @@ class MakerToxicityTest(unittest.TestCase):
             ),
             0.208014985,
         )
+
+    def test_persistence_runtime_composes_directional_toxicity_and_markouts(self):
+        source = inspect.getsource(v4.main)
+        self.assertIn("result = v3.main()", source)
+        self.assertIs(v4.base, v4.v3.base)
+        self.assertIs(v4.v2, v4.v3.v2)
 
 
 if __name__ == "__main__":
