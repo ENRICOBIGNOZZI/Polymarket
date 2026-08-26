@@ -1,0 +1,108 @@
+{
+  "schema": "hf_fill_conditioned_router_evidence_v1",
+  "research_state": "STATIC_ACTIVITY_AGGRESSION_REJECTED_FILL_CONDITIONED_ROUTER_CHALLENGER",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_money_execution": false,
+  "base_main_sha": "a20d12f511cbd388e5ee28865eb9977ddc5fd8b6",
+  "authorized_envelope": {
+    "market_limit_max": 1000,
+    "min_liquidity_floor_usd": 2.0,
+    "post_cost_min_edge_floor": 0.00005,
+    "fractional_kelly_max": 0.25,
+    "max_trade_usd": 125.0,
+    "max_market_fraction": 0.05,
+    "max_event_fraction": 0.15,
+    "max_gross_fraction": 0.70,
+    "max_drawdown": 0.15
+  },
+  "current_live_snapshot": {
+    "source": "telemetry/latest-live-smoke.json",
+    "git_sha": "a20d12f511cbd388e5ee28865eb9977ddc5fd8b6",
+    "trade_recorder_status": "healthy",
+    "trade_recorder_markets": 220,
+    "trade_recorder_new_trades": 149,
+    "trade_recorder_errors": 0,
+    "trade_age_seconds": 91,
+    "maker_signals_first_tick": 41,
+    "maker_posted_first_tick": 6,
+    "maker_queue_skipped_first_tick": 35,
+    "maker_resting": 6,
+    "maker_positions": 0,
+    "maker_reserved_usd": 148.077,
+    "realized_pnl_usd": 0.0,
+    "drawdown": 0.0,
+    "kill_switch": false
+  },
+  "current_main_paper_config_is_inside_but_below_authorized_aggression": {
+    "market_limit": 700,
+    "min_liquidity_usd": 10.0,
+    "min_net_edge": 0.00020,
+    "fractional_kelly": 0.12,
+    "max_trade_usd": 60.0,
+    "max_market_fraction": 0.025,
+    "max_event_fraction": 0.08,
+    "max_gross_fraction": 0.45
+  },
+  "forward_complete_set_control": {
+    "source": "telemetry/latest-forward-maker-calibration.json",
+    "sessions": 52,
+    "history_span_seconds": 138687,
+    "probes_per_policy": 765,
+    "improve1_any_fills": 5,
+    "improve1_pair_fills": 0,
+    "improve1_one_sided_given_fill_rate": 1.0,
+    "improve1_total_pnl_ex_rewards_usd": -3.8927998032640785,
+    "improve1_markout_60_bid_per_share": -0.004064287820701861,
+    "improve1_markout_300_bid_per_share": -0.004176870748299324,
+    "improve1_bootstrap_lcb_mean_pnl_per_probe_usd": -0.010640470945501216,
+    "improve1_bootstrap_ucb_mean_pnl_per_probe_usd": -0.0007678838837181803,
+    "join_any_fills": 1,
+    "join_pair_fills": 0,
+    "join_total_pnl_ex_rewards_usd": -0.13894351315407616,
+    "join_markout_60_bid_per_share": -0.0020000000000000018,
+    "warning": "This complete-set strategy is a separate execution class; its fill rates are not transferred to Micro Maker. It is used only as evidence against generic one-tick improvement without fill-conditioned adverse-selection control."
+  },
+  "prior_micro_maker_activity_funnel": {
+    "source_branch": "research/hf-active-flow-maker-v1-20260826",
+    "source_evidence": "research/hf_active_flow_admission_bottleneck_20260826_0904z.json",
+    "data_healthy": true,
+    "baseline_economic_candidates": 22,
+    "baseline_orders_selected": 8,
+    "baseline_fills": 0,
+    "selected_without_compatible_sell_print": 7,
+    "selected_with_compatible_sell_print": 1,
+    "only_compatible_candidate_recent_sell_volume": 0.02,
+    "only_compatible_candidate_queue_ahead": 67.4,
+    "only_compatible_candidate_own_shares": 16.85,
+    "only_compatible_candidate_clearance_proxy": 0.0000791295746785361,
+    "prior_research_fill_probability_floor": 0.005,
+    "branch_status": "diverged_from_current_main"
+  },
+  "decision": {
+    "reject": [
+      "lowering the 0.5 bp post-cost edge floor merely to create orders",
+      "generic one-tick inside-spread improvement based only on static edge",
+      "static-liquidity ranking that ignores contemporaneous compatible contra-flow",
+      "forcing Micro Taker trades when executable forward edge is not positive"
+    ],
+    "challenger": "fill-conditioned maker router",
+    "router_order": [
+      "positive post-cost edge at or above 0.5 bp",
+      "recent causal activity",
+      "compatible SELL contra-flow",
+      "recent flow capacity relative to queue plus own size",
+      "recurrent directional-toxicity veto",
+      "calibrated fill probability",
+      "positive fill-conditioned at-touch EV",
+      "inside-spread only if incremental fill-conditioned EV pays the tick and remains positive"
+    ],
+    "promotion_metrics": [
+      "actual causal FIFO maker fills",
+      "positive realized fill-conditioned PnL",
+      "executable markout at 45s, 60s and 300s",
+      "positive PnL under 1x, 1.5x and 2x cost stress",
+      "dead-queue capital recycling without removing queues that later clear"
+    ]
+  }
+}
