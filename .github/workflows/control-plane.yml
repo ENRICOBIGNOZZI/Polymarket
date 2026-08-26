@@ -11,7 +11,7 @@ on:
       - "config/research_director.json"
       - "config/promotion_policy.json"
       - "scripts/meta_supervisor.py"
-      - "scripts/meta_supervisor_v2.py"
+      - "scripts/meta_supervisor_health.py"
       - "scripts/research_director.py"
       - "tests/test_meta_supervisor.py"
       - "tests/test_autonomous_meta_supervisor.py"
@@ -30,7 +30,7 @@ on:
       - "config/research_director.json"
       - "config/promotion_policy.json"
       - "scripts/meta_supervisor.py"
-      - "scripts/meta_supervisor_v2.py"
+      - "scripts/meta_supervisor_health.py"
       - "scripts/research_director.py"
       - "tests/test_meta_supervisor.py"
       - "tests/test_autonomous_meta_supervisor.py"
@@ -66,7 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest tests/test_meta_supervisor.py tests/test_autonomous_meta_supervisor.py tests/test_research_director.py -v
-          python3 -m py_compile scripts/meta_supervisor.py scripts/meta_supervisor_v2.py scripts/research_director.py
+          python3 -m py_compile scripts/meta_supervisor.py scripts/meta_supervisor_health.py scripts/research_director.py
           python3 -m json.tool config/alpha_factory.json >/dev/null
           python3 -m json.tool config/research_director.json >/dev/null
           python3 -m json.tool config/promotion_policy.json >/dev/null
@@ -111,7 +111,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/meta_supervisor_v2.py \
+          python3 scripts/meta_supervisor_health.py \
             --config config/alpha_factory.json \
             --snapshot control_plane/snapshot.json \
             --output-json control_plane/latest-control-plane.json \
