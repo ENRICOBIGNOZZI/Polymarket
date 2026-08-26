@@ -13,7 +13,7 @@ REQUIRED_IDS = {
     "monitoring-validation", "alpha-factory", "meta-supervisor", "fast-arb-shadow-research",
     "arb-theory-research", "external-intelligence", "live-api-smoke",
     "v7-cross-sectional-ranking-research", "v7-point-in-time-universe-archive",
-    "v7-unified-paper-evidence",
+    "v7-unified-paper-evidence", "v7-paper-deploy", "v7-server-health",
 }
 NON_SCHEDULER_WORKFLOWS = {
     ".github/workflows/private-runtime-single-writer-validation.yml",
@@ -51,6 +51,22 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         errors.append("administrator.paper_promotion_mode must be automatic_objective_gates")
     if admin.get("manual_approval_required") is not False:
         errors.append("administrator.manual_approval_required must be false")
+
+    champion: dict[str, Any] = {}
+    champion_enabled = False
+    champion_path = root / str(admin.get("live_champion_manifest") or "config/live_champion.json")
+    try:
+        champion = load(champion_path)
+        champion_enabled = champion.get("enabled") is True
+    except Exception as exc:
+        errors.append(f"live champion manifest invalid: {exc}")
+    if champion_enabled:
+        if champion.get("version") != 7:
+            errors.append("enabled champion must be V7")
+        if champion.get("paper_only") is not True or champion.get("authenticated_execution") is not False:
+            errors.append("enabled champion must preserve PAPER/authenticated-execution boundary")
+        if champion.get("deployment_ref") != "paper-validated":
+            errors.append("enabled champion must deploy from paper-validated")
 
     raw_items = data.get("schedulers")
     if not isinstance(raw_items, list):
@@ -108,7 +124,10 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
     dispatch_ids = [str(i["id"]) for i in items if i["validation_dispatch_authority"] is True]
     if merge_ids != ["integration-merge"]:
         errors.append(f"merge authority must belong only to integration-merge; found {merge_ids}")
-    if deploy_ids:
+    if champion_enabled:
+        if deploy_ids != ["v7-paper-deploy"]:
+            errors.append(f"enabled V7 champion requires sole deploy authority v7-paper-deploy; found {deploy_ids}")
+    elif deploy_ids:
         errors.append(f"no deployment authority is allowed while champion is disabled; found {deploy_ids}")
     if dispatch_ids != ["post-merge-validation"]:
         errors.append(f"validation dispatch authority must belong only to post-merge-validation; found {dispatch_ids}")
@@ -162,6 +181,20 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         for forbidden in ("contents: write", "git push origin paper-validated", "POLYMARKET_DEPLOY_REF="):
             if forbidden in text: errors.append(f"V7 evidence runtime contains forbidden authority: {forbidden}")
 
+    deploy = root / str(by_id.get("v7-paper-deploy", {}).get("workflow", ""))
+    if deploy.is_file():
+        text = deploy.read_text(encoding="utf-8")
+        for required in ("paper-validated", "POLYMARKET_EXPECTED_SHA", "manifest.get('version') != 7", "--require-monitoring"):
+            if required not in text: errors.append(f"V7 deploy workflow missing contract: {required}")
+        for forbidden in ("v4-live-paper-smoke", "paper_v6_loop.sh", "authenticated_execution=true"):
+            if forbidden in text: errors.append(f"V7 deploy workflow contains retired/unsafe contract: {forbidden}")
+
+    health = root / str(by_id.get("v7-server-health", {}).get("workflow", ""))
+    if health.is_file():
+        text = health.read_text(encoding="utf-8")
+        for required in ("paper-validated", "scripts/v7_server_health.py", "--require-monitoring", "health_result=no_operational_champion"):
+            if required not in text: errors.append(f"V7 server health workflow missing contract: {required}")
+
     return errors, items
 
 
@@ -170,7 +203,7 @@ def render(items: list[dict[str, Any]], errors: list[str]) -> str:
     if errors:
         lines += ["", "## Errors", *[f"- {e}" for e in errors]]
     else:
-        lines += ["", "Registry is valid: V3-V6 schedulers are absent and deployment authority is intentionally disabled until V7 promotion."]
+        lines += ["", "Registry is valid: V3-V6 schedulers are absent; V7 deploy/health are registered and deployment authority follows the champion manifest."]
     return "\n".join(lines) + "\n"
 
 
