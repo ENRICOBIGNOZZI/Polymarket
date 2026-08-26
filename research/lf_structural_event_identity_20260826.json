@@ -1,0 +1,46 @@
+{
+  "schema": "lf_structural_event_identity_audit_v1",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "exact_main_sha": "fccbdd036093c2f7973635c3c47431ad8381b261",
+  "defect": {
+    "path": "scripts/v6_relation_intents.py",
+    "expression": "event_id = \"STRUCT:\" + str(abs(hash((family, direction))))",
+    "finding": "Python hash randomization makes the synthetic structural event identity restart-variant.",
+    "pythonhashseed_examples": {
+      "1": "STRUCT:5563531974556691143",
+      "2": "STRUCT:8603285751153122665",
+      "3": "STRUCT:7412083270077211201"
+    },
+    "stable_comparator": "STRUCT:4e1cbfae127906df0ccec3fe"
+  },
+  "risk_implication": {
+    "state_integrity": "The same structural relation can be assigned a different event_id after a process restart.",
+    "event_concentration": "If event-level exposure is keyed by the synthetic event_id, restart-variant IDs can fragment one economic relation across multiple risk buckets.",
+    "deduplication": "Restart-variant IDs also make cross-run deduplication and evidence lineage ambiguous."
+  },
+  "live_context": {
+    "latest_live_smoke_sha": "fccbdd036093c2f7973635c3c47431ad8381b261",
+    "trade_recorder_status": "healthy",
+    "public_trades_fetched": 287,
+    "graph_rv_bundles": 1,
+    "graph_rv_legs": 5,
+    "graph_rv_max_quote_edge": 0.002,
+    "graph_rv_completions": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "interpretation": "The current live bundle is GRAPH_HARD with a canonical Gamma event_id, so this audit does not reinterpret its zero completion. The defect is a promotion blocker for STRUCTURAL relations and any event-level state keyed by their synthetic IDs."
+  },
+  "successor_contract": [
+    "Construct structural risk_event_id from deterministic canonical relation metadata using a stable digest.",
+    "Keep risk_event_id stable across restarts, machines and Python versions.",
+    "Persist the canonical identity through scanner, intent ledger, broker and state recovery.",
+    "Fail closed when canonical relation identity cannot be reconstructed.",
+    "Do not alter the authorized PAPER envelope or hard-risk limits to compensate for identity instability."
+  ],
+  "safety": {
+    "production_modified": false,
+    "authenticated_execution": false,
+    "real_money_execution": false,
+    "hard_limits_modified": false
+  }
+}
