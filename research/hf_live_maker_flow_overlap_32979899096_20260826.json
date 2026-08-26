@@ -1,0 +1,149 @@
+{
+  "schema": "hf_live_maker_flow_overlap_evidence_v1",
+  "generated_for_date": "2026-08-26",
+  "source": {
+    "repository": "ENRICOBIGNOZZI/Polymarket",
+    "live_smoke_run_id": 32979899096,
+    "live_smoke_git_sha": "9b3ca02c748d8ff7595c72e55ba33ef7ab839981",
+    "artifact": "champion-live-paper-smoke-32979899096",
+    "trade_recorder_status": "healthy",
+    "trade_recorder_requests": 6,
+    "trade_recorder_errors": 0
+  },
+  "tape": {
+    "rows": 282,
+    "unique_tokens": 64,
+    "unique_conditions": 56,
+    "event_first_ts": 1787753337,
+    "event_last_ts": 1787754232,
+    "event_span_seconds": 895,
+    "received_first_ms": 1787754237321,
+    "received_last_ms": 1787754238237
+  },
+  "maker": {
+    "decision_ts": 1787754240,
+    "signal_rows_first_tick": 41,
+    "signal_tokens_first_tick": 41,
+    "post_rows_first_tick": 5,
+    "queue_skipped_rows_first_tick": 36,
+    "signal_tokens_with_any_tape_trade": 2,
+    "signal_token_tape_overlap_fraction": 0.04878048780487805,
+    "resting_orders": 5,
+    "resting_orders_with_any_tape_trade": 0,
+    "resting_order_tape_overlap_fraction": 0.0,
+    "resting_reserved_notional_usd": 147.69644,
+    "fills": 0
+  },
+  "resting_order_details": [
+    {
+      "market_id": 562003,
+      "slug": "will-kim-kardashian-win-the-2028-republican-presidential-nomination",
+      "side": "YES",
+      "token_id": "10651968542740640896482407431367624536081358925965856338872110525887291512129",
+      "limit_price": 0.003,
+      "remaining_shares": 6394.54,
+      "queue_ahead": 25578.2,
+      "created_ts": 1787754240,
+      "reserved_notional_usd": 19.18362,
+      "same_token_trade_rows": 0,
+      "same_token_total_volume": 0.0,
+      "causal_recent_same_token_rows": 0,
+      "compatible_sell_rows_pre_decision": 0
+    },
+    {
+      "market_id": 559670,
+      "slug": "will-gina-raimondo-win-the-2028-democratic-presidential-nomination-676",
+      "side": "YES",
+      "token_id": "35165603539035270209469650915267170915291414186795231160733227083640059691764",
+      "limit_price": 0.002,
+      "remaining_shares": 4812.75,
+      "queue_ahead": 19251.0,
+      "created_ts": 1787754240,
+      "reserved_notional_usd": 9.6255,
+      "same_token_trade_rows": 0,
+      "same_token_total_volume": 0.0,
+      "causal_recent_same_token_rows": 0,
+      "compatible_sell_rows_pre_decision": 0
+    },
+    {
+      "market_id": 562004,
+      "slug": "will-marjorie-taylor-greene-win-the-2028-republican-presidential-nomination",
+      "side": "YES",
+      "token_id": "65830295349944471218641822318218876930376684645620468557619951782520997909982",
+      "limit_price": 0.003,
+      "remaining_shares": 18423.3,
+      "queue_ahead": 73693.2,
+      "created_ts": 1787754240,
+      "reserved_notional_usd": 55.2699,
+      "same_token_trade_rows": 0,
+      "same_token_total_volume": 0.0,
+      "causal_recent_same_token_rows": 0,
+      "compatible_sell_rows_pre_decision": 0
+    },
+    {
+      "market_id": 561984,
+      "slug": "will-robert-f-kennedy-jr-win-the-2028-republican-presidential-nomination",
+      "side": "YES",
+      "token_id": "85795532452312461688342921814235563171225750416821603832877839950165564679042",
+      "limit_price": 0.004,
+      "remaining_shares": 904.355,
+      "queue_ahead": 3617.42,
+      "created_ts": 1787754240,
+      "reserved_notional_usd": 3.61742,
+      "same_token_trade_rows": 0,
+      "same_token_total_volume": 0.0,
+      "causal_recent_same_token_rows": 0,
+      "compatible_sell_rows_pre_decision": 0
+    },
+    {
+      "market_id": 559679,
+      "slug": "will-bernie-sanders-win-the-2028-democratic-presidential-nomination-879",
+      "side": "YES",
+      "token_id": "113510300123120868861281132282742729065975487298059944817273881893086209196585",
+      "limit_price": 0.004,
+      "remaining_shares": 15000.0,
+      "queue_ahead": 71437.5,
+      "created_ts": 1787754240,
+      "reserved_notional_usd": 60.0,
+      "same_token_trade_rows": 0,
+      "same_token_total_volume": 0.0,
+      "causal_recent_same_token_rows": 0,
+      "compatible_sell_rows_pre_decision": 0
+    }
+  ],
+  "first_tick_signal_tokens_with_tape_activity": [
+    {
+      "market_id": 2774057,
+      "slug": "strait-of-hormuz-traffic-returns-to-normal-by-september-30-20260702154339440",
+      "action": "SKIP_QUEUE",
+      "side": "YES",
+      "token_id": "23545193122217391289335133742859160842475987880562465754342378273033942179195",
+      "limit_price": 0.1,
+      "queue_ahead": 7283.09,
+      "signal_edge": 0.00393174,
+      "tape_rows": 1
+    },
+    {
+      "market_id": 2176270,
+      "slug": "strait-of-hormuz-traffic-returns-to-normal-by-december-31",
+      "action": "SKIP_QUEUE",
+      "side": "YES",
+      "token_id": "83783489454659420807679723574840032660002326710045123865554753994450797728825",
+      "limit_price": 0.37,
+      "queue_ahead": 29568.8,
+      "signal_edge": 0.00168438,
+      "tape_rows": 1
+    }
+  ],
+  "decision": {
+    "state": "STATIC_MAKER_ACTIVITY_MISMATCH",
+    "materiality": "All five posted/resting orders reserved paper capital on tokens absent from an otherwise healthy non-empty public trade tape. Only two of 41 first-tick signal tokens appeared anywhere in the tape, and both were rejected by queue burden.",
+    "interpretation": "Do not lower the 0.5 bp post-cost edge floor to manufacture fills. Seed/rank HF maker candidates by causal recent same-token activity before edge, queue and toxicity, then measure fill-conditioned markout prospectively.",
+    "promotion": "MORE_EVIDENCE_REQUIRED"
+  },
+  "safety": {
+    "paper_only": true,
+    "max_drawdown_unchanged": 0.15,
+    "authenticated_real_money_execution": false
+  }
+}
