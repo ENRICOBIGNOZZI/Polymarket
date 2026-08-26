@@ -11,13 +11,17 @@ def load(path: str):
     return json.loads((ROOT / path).read_text(encoding="utf-8"))
 
 
-def test_live_champion_is_v7_and_paper_only():
-    champion = load("config/live_champion.json")
-    assert champion["version"] == 7
-    assert champion["loop"] == "scripts/paper_v7_loop.sh"
-    assert champion["config"] == "config/paper_v7.json"
-    assert champion["paper_only"] is True
-    assert champion["authenticated_execution"] is False
+def test_research_branch_keeps_incumbent_manifest_and_defines_v7_candidate():
+    incumbent = load("config/live_champion.json")
+    candidate = load("config/v7_champion_candidate.json")
+    assert incumbent["version"] == 6
+    assert incumbent["loop"] == "scripts/paper_v6_loop.sh"
+    assert candidate["version"] == 7
+    assert candidate["loop"] == "scripts/paper_v7_loop.sh"
+    assert candidate["config"] == "config/paper_v7.json"
+    assert candidate["paper_only"] is True
+    assert candidate["authenticated_execution"] is False
+    assert candidate["promotion_contract"] == "research_head_must_be_exact-head-approved_then_integrated"
 
 
 def test_v7_config_keeps_authorized_aggressive_envelope_and_hard_safety():
