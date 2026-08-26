@@ -5,6 +5,7 @@ on:
   push:
     branches: [main]
     paths:
+      - monitoring/grafana/**
       - ops/apply_runtime_config_macos.sh
       - .github/workflows/grafana-access.yml
 
@@ -26,8 +27,39 @@ jobs:
       GRAFANA_HOSTNAME: mamma-portfolio
       GRAFANA_FQDN: mamma-portfolio.tail1bae85.ts.net
       GRAFANA_URL: http://mamma-portfolio.tail1bae85.ts.net
+      CANONICAL_DASHBOARD: polymarket-multi-strategy.json
     steps:
       - uses: actions/checkout@v4
+
+      - name: Validate exact-SHA Grafana bundle
+        id: bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > /tmp/grafana-bundle.env
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("monitoring/grafana/dashboards")
+          canonical = root / "polymarket-multi-strategy.json"
+          files = sorted(root.glob("*.json"))
+          assert files, "no Grafana dashboards"
+          for path in files:
+              payload = json.loads(path.read_text(encoding="utf-8"))
+              assert isinstance(payload, dict), path
+          payload = json.loads(canonical.read_text(encoding="utf-8"))
+          uid = str(payload["uid"])
+          title = str(payload["title"])
+          digest = hashlib.sha256(canonical.read_bytes()).hexdigest()
+          print(f"dashboard_uid={uid}")
+          print(f"dashboard_title={title}")
+          print(f"dashboard_sha256={digest}")
+          PY
+          cat /tmp/grafana-bundle.env
+          cat /tmp/grafana-bundle.env >> "$GITHUB_OUTPUT"
+          tar -C monitoring/grafana/dashboards -czf /tmp/polymarket-grafana-assets.tgz .
+          test -s /tmp/polymarket-grafana-assets.tgz
 
       - name: Select existing Tailscale credential mode
         id: tailscale_auth
@@ -110,40 +142,75 @@ jobs:
             test -s ~/.ssh/known_hosts
           } 2>&1 | tee grafana-ssh.log
 
-      - name: Apply Grafana and Tailscale access only
+      - name: Apply exact-SHA Grafana bundle
         id: apply
         continue-on-error: true
         shell: bash
+        env:
+          DASHBOARD_UID: ${{ steps.bundle.outputs.dashboard_uid }}
+          DASHBOARD_TITLE: ${{ steps.bundle.outputs.dashboard_title }}
+          DASHBOARD_SHA256: ${{ steps.bundle.outputs.dashboard_sha256 }}
         run: |
           set -euo pipefail
           {
             scp -i ~/.ssh/polymarket_grafana -o IdentitiesOnly=yes -o BatchMode=yes \
-              -P "$SERVER_PORT" ops/apply_runtime_config_macos.sh \
-              "$SERVER_USER@$SERVER_HOST:/tmp/polymarket-apply-grafana.sh"
+              -P "$SERVER_PORT" \
+              ops/apply_runtime_config_macos.sh /tmp/polymarket-grafana-assets.tgz \
+              "$SERVER_USER@$SERVER_HOST:/tmp/"
 
             ssh -i ~/.ssh/polymarket_grafana -o IdentitiesOnly=yes -o BatchMode=yes \
               -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-              -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "bash -s" <<'REMOTE'
+              -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+              "DASHBOARD_UID='$DASHBOARD_UID' DASHBOARD_TITLE='$DASHBOARD_TITLE' DASHBOARD_SHA256='$DASHBOARD_SHA256' bash -s" <<'REMOTE'
             set -euo pipefail
-            chmod 700 /tmp/polymarket-apply-grafana.sh
+            assets="$(mktemp -d /tmp/polymarket-grafana-assets.XXXXXX)"
+            cleanup() {
+              rm -rf "$assets"
+              rm -f /tmp/polymarket-grafana-assets.tgz /tmp/apply_runtime_config_macos.sh
+            }
+            trap cleanup EXIT INT TERM
+            tar -xzf /tmp/polymarket-grafana-assets.tgz -C "$assets"
+
+            chmod 700 /tmp/apply_runtime_config_macos.sh
             POLYMARKET_TAILSCALE_HOSTNAME=mamma-portfolio \
             POLYMARKET_TAILSCALE_FQDN=mamma-portfolio.tail1bae85.ts.net \
             POLYMARKET_GRAFANA_URL=http://mamma-portfolio.tail1bae85.ts.net \
-              bash /tmp/polymarket-apply-grafana.sh
-            rm -f /tmp/polymarket-apply-grafana.sh
+            POLYMARKET_GRAFANA_ASSET_DIR="$assets" \
+              bash /tmp/apply_runtime_config_macos.sh
+
+            expected="$DASHBOARD_SHA256"
+            actual="$(python3 - "$HOME/.config/polymarket/grafana/dashboards/polymarket-multi-strategy.json" <<'PY'
+            import hashlib
+            import sys
+            from pathlib import Path
+            print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
+            PY
+            )"
+            test "$actual" = "$expected"
+            printf 'dashboard_sha256_verified=%s\n' "$actual"
 
             sudo -n /usr/local/sbin/polymarket-service-control restart
 
             for i in {1..30}; do
               if curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 && \
-                 curl -fsS http://127.0.0.1:3000/api/search >/dev/null 2>&1; then
+                 curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$DASHBOARD_UID" >/tmp/grafana-dashboard.json 2>/dev/null; then
                 break
               fi
               sleep 2
             done
             curl -fsS http://127.0.0.1:3000/api/health
-            curl -fsS http://127.0.0.1:3000/api/search >/dev/null
-            grep -F 'root_url = http://mamma-portfolio.tail1bae85.ts.net/' "$HOME/.config/polymarket/grafana.ini"
+            curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$DASHBOARD_UID" >/tmp/grafana-dashboard.json
+            python3 - "$DASHBOARD_UID" "$DASHBOARD_TITLE" /tmp/grafana-dashboard.json <<'PY'
+            import json
+            import sys
+            uid, title, path = sys.argv[1:]
+            payload = json.load(open(path, encoding="utf-8"))
+            dashboard = payload.get("dashboard") or {}
+            assert dashboard.get("uid") == uid, dashboard.get("uid")
+            assert dashboard.get("title") == title, dashboard.get("title")
+            PY
+            grep -F 'default_home_dashboard_path = '"$HOME"'/.config/polymarket/grafana/dashboards/polymarket-multi-strategy.json' \
+              "$HOME/.config/polymarket/grafana.ini"
 
             TS=/Applications/Tailscale.app/Contents/MacOS/Tailscale
             if [[ ! -x "$TS" ]]; then TS="$(command -v tailscale)"; fi
@@ -152,25 +219,38 @@ jobs:
           REMOTE
           } 2>&1 | tee grafana-apply.log
 
-      - name: Verify permanent operator URL from another tailnet node
+      - name: Verify exact dashboard from another tailnet node
         id: verify
         continue-on-error: true
         shell: bash
+        env:
+          DASHBOARD_UID: ${{ steps.bundle.outputs.dashboard_uid }}
+          DASHBOARD_TITLE: ${{ steps.bundle.outputs.dashboard_title }}
         run: |
           set -euo pipefail
           {
             tailscale ping --until-direct=false --c 1 --timeout=10s "$GRAFANA_HOSTNAME"
             getent hosts "$GRAFANA_FQDN"
             for i in {1..30}; do
-              if curl -fsS --max-time 5 "$GRAFANA_URL/api/health" >/tmp/grafana-health.json 2>/dev/null; then
+              if curl -fsS --max-time 5 "$GRAFANA_URL/api/health" >/tmp/grafana-health.json 2>/dev/null && \
+                 curl -fsS --max-time 5 "$GRAFANA_URL/api/dashboards/uid/$DASHBOARD_UID" >/tmp/grafana-dashboard.json 2>/dev/null; then
                 break
               fi
               sleep 2
             done
             cat /tmp/grafana-health.json
             grep -q '"database"' /tmp/grafana-health.json
-            curl -fsSI --max-time 5 "$GRAFANA_URL/" | sed -n '1,12p'
+            python3 - "$DASHBOARD_UID" "$DASHBOARD_TITLE" /tmp/grafana-dashboard.json <<'PY'
+            import json
+            import sys
+            uid, title, path = sys.argv[1:]
+            payload = json.load(open(path, encoding="utf-8"))
+            dashboard = payload.get("dashboard") or {}
+            assert dashboard.get("uid") == uid
+            assert dashboard.get("title") == title
+            PY
             echo "canonical_operator_url=$GRAFANA_URL" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "dashboard_uid=$DASHBOARD_UID" | tee -a "$GITHUB_STEP_SUMMARY"
           } 2>&1 | tee grafana-verify.log
 
       - name: Publish access deployment evidence
@@ -182,28 +262,36 @@ jobs:
           SSH_OUTCOME: ${{ steps.ssh.outcome }}
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
           VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          DASHBOARD_UID: ${{ steps.bundle.outputs.dashboard_uid }}
+          DASHBOARD_SHA256: ${{ steps.bundle.outputs.dashboard_sha256 }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, os
+          import json
+          import os
           from pathlib import Path
+
           def tail(path):
-              p=Path(path)
-              if not p.exists(): return ''
-              return '\n'.join(p.read_text(errors='replace').splitlines()[-80:])
-          payload={
-              'sha': os.environ['GITHUB_SHA'],
-              'run_id': os.environ['GITHUB_RUN_ID'],
-              'canonical_url': os.environ['GRAFANA_URL'],
-              'tailnet_outcome': os.environ.get('TAILNET_OUTCOME',''),
-              'ssh_outcome': os.environ.get('SSH_OUTCOME',''),
-              'apply_outcome': os.environ.get('APPLY_OUTCOME',''),
-              'verify_outcome': os.environ.get('VERIFY_OUTCOME',''),
-              'ssh_log': tail('grafana-ssh.log'),
-              'apply_log': tail('grafana-apply.log'),
-              'verify_log': tail('grafana-verify.log'),
+              target = Path(path)
+              if not target.exists():
+                  return ""
+              return "\n".join(target.read_text(errors="replace").splitlines()[-80:])
+
+          payload = {
+              "sha": os.environ["GITHUB_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "canonical_url": os.environ["GRAFANA_URL"],
+              "dashboard_uid": os.environ.get("DASHBOARD_UID", ""),
+              "dashboard_sha256": os.environ.get("DASHBOARD_SHA256", ""),
+              "tailnet_outcome": os.environ.get("TAILNET_OUTCOME", ""),
+              "ssh_outcome": os.environ.get("SSH_OUTCOME", ""),
+              "apply_outcome": os.environ.get("APPLY_OUTCOME", ""),
+              "verify_outcome": os.environ.get("VERIFY_OUTCOME", ""),
+              "ssh_log": tail("grafana-ssh.log"),
+              "apply_log": tail("grafana-apply.log"),
+              "verify_log": tail("grafana-verify.log"),
           }
-          Path('grafana-access-status.json').write_text(json.dumps(payload, indent=2))
+          Path("grafana-access-status.json").write_text(json.dumps(payload, indent=2))
           PY
           endpoint="repos/${GITHUB_REPOSITORY}/contents/telemetry/grafana-access-status.json"
           content="$(base64 -w0 grafana-access-status.json)"
