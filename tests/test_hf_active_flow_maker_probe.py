@@ -8,8 +8,9 @@ from unittest.mock import patch
 
 sys.path.insert(0, str((Path(__file__).resolve().parents[1] / "scripts")))
 
+import hf_active_flow_maker_batched_probe as batched  # noqa: E402
 import hf_active_flow_maker_probe as entrypoint  # noqa: E402
-from hf_active_flow_maker_batched_probe import fetch_trades_batch, gate_inside_improvements  # noqa: E402
+from hf_active_flow_maker_batched_probe import gate_inside_improvements  # noqa: E402
 from hf_active_flow_maker_probe import (  # noqa: E402
     Book,
     Candidate,
@@ -23,6 +24,7 @@ from hf_active_flow_maker_probe import (  # noqa: E402
     build_candidates,
     consume,
     fee_per_share,
+    fetch_trades_batch,
     fill_probability_proxy,
     flow_stats,
     select_with_caps,
@@ -64,32 +66,37 @@ def book(token: str, bid: float = 0.48, ask: float = 0.50,
 
 
 class ActiveFlowMakerProbeTest(unittest.TestCase):
-    def test_entrypoint_routes_to_batched_active_universe_probe(self):
-        self.assertEqual(entrypoint.main.__module__, "hf_active_flow_maker_batched_probe")
+    def test_entrypoint_injects_documented_trade_adapter_into_batched_runner(self):
+        self.assertIs(batched.fetch_trades_batch, entrypoint.fetch_trades_batch)
 
-    def test_batched_trade_fetch_groups_conditions_and_deduplicates(self):
+    def test_batched_trade_fetch_uses_supported_query_and_filters_window_locally(self):
         rows = [
+            {"conditionId": "c1", "asset": "yes-m1", "side": "SELL", "timestamp": 899,
+             "price": 0.48, "size": 99.0, "transactionHash": "old"},
             {"conditionId": "c1", "asset": "yes-m1", "side": "SELL", "timestamp": 990,
              "price": 0.48, "size": 10.0, "transactionHash": "h1"},
             {"conditionId": "c2", "asset": "yes-m2", "side": "BUY", "timestamp": 991,
              "price": 0.51, "size": 7.0, "transactionHash": "h2"},
             {"conditionId": "c1", "asset": "yes-m1", "side": "SELL", "timestamp": 990,
              "price": 0.48, "size": 10.0, "transactionHash": "h1"},
+            {"conditionId": "c1", "asset": "yes-m1", "side": "SELL", "timestamp": 1001,
+             "price": 0.47, "size": 88.0, "transactionHash": "future"},
             {"conditionId": "outside", "asset": "x", "side": "SELL", "timestamp": 992,
              "price": 0.40, "size": 99.0, "transactionHash": "h3"},
         ]
-        with patch("hf_active_flow_maker_batched_probe.core.request_json") as request:
+        with patch("hf_active_flow_maker_probe.core.request_json") as request:
             request.return_value = (rows, 1_234_500)
             grouped, received_ms, errors = fetch_trades_batch(["c1", "c2"], 900, 1000, batch_size=20)
         self.assertEqual(errors, [])
         self.assertEqual(received_ms, 1_234_500)
         self.assertEqual(len(grouped["c1"]), 1)
+        self.assertEqual(grouped["c1"][0].trade_id.split(":")[0], "h1")
         self.assertEqual(len(grouped["c2"]), 1)
         self.assertNotIn("outside", grouped)
         url = request.call_args.args[0]
         self.assertIn("market=c1,c2", url)
-        self.assertIn("start=900", url)
-        self.assertIn("end=1000", url)
+        self.assertNotIn("start=", url)
+        self.assertNotIn("end=", url)
 
     def test_fee_formula_matches_engine_per_share_contract(self):
         fee = Fee(0.07, 1.0, True, "test")
