@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import importlib.util
 import random
 import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-NAME = "v7_pca_stat_arb_core"
-SPEC = importlib.util.spec_from_file_location(NAME, ROOT / "scripts" / "v7_pca_stat_arb_core.py")
-assert SPEC is not None and SPEC.loader is not None
-pca = importlib.util.module_from_spec(SPEC)
-sys.modules[NAME] = pca
-SPEC.loader.exec_module(pca)
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+import v7_pca_stat_arb_core as pca
+import v7_pca_stat_arb_inference as inference
 
 
 class V7PcaStatArbTests(unittest.TestCase):
@@ -62,8 +61,16 @@ class V7PcaStatArbTests(unittest.TestCase):
         self.assertLess(model.phi, 0.95)
         self.assertLess(model.adf_t, 0.0)
 
-    def test_generated_factor_bootstrap_reestimates_pca(self) -> None:
-        result = pca.target_bootstrap_pvalue(self._panel(), "target", reps=59, seed=3)
+    def test_conditional_residual_bootstrap_reestimates_target_and_keeps_controls_fixed(self) -> None:
+        panel = self._panel()
+        observed = pca.fit_target(panel, "target")
+        assert observed is not None
+        boot = inference.conditional_null_panel(panel, observed, random.Random(3))
+        assert boot is not None
+        for control in observed.controls:
+            self.assertEqual(boot.values[control], panel.values[control])
+        self.assertNotEqual(boot.values["target"], panel.values["target"])
+        result = inference.conditional_target_bootstrap_pvalue(panel, "target", reps=59, seed=3)
         self.assertIsNotNone(result)
         assert result is not None
         model, pvalue = result
@@ -71,18 +78,33 @@ class V7PcaStatArbTests(unittest.TestCase):
         self.assertLessEqual(pvalue, 1.0)
         self.assertEqual(model.target, "target")
 
+    def test_by_is_dependence_robust_and_stricter_than_bh_fixture(self) -> None:
+        pvalues = {"a": 0.03, "b": 0.06, "c": 0.09}
+        self.assertEqual(pca.bh_selected(pvalues, 0.10), {"a", "b", "c"})
+        self.assertEqual(inference.benjamini_yekutieli_selected(pvalues, 0.10), set())
+        self.assertLess(inference.by_effective_q(3, 0.10), 0.10)
+
     def test_phi_power_h_changes_prediction_with_horizon(self) -> None:
         panel = self._panel()
         model = pca.fit_target(panel, "target")
         assert model is not None
         current = {mid: values[-1] for mid, values in panel.values.items()}
-        # Create a current residual displacement without changing the control factor.
         current["target"] += 0.6
         short = pca.score_current(model, current, 1)
         long = pca.score_current(model, current, 6)
         assert short is not None and long is not None
         self.assertNotAlmostEqual(short.predicted_logit_move, long.predicted_logit_move)
         self.assertGreaterEqual(long.sigma_logit, short.sigma_logit)
+
+    def test_total_single_leg_risk_never_falls_below_residual_only_risk(self) -> None:
+        panel = self._panel()
+        model = pca.fit_target(panel, "target")
+        assert model is not None
+        current = {mid: values[-1] for mid, values in panel.values.items()}
+        residual_only = pca.score_current(model, current, 4)
+        total = inference.score_with_total_single_leg_risk(panel, model, current, 4)
+        assert residual_only is not None and total is not None
+        self.assertGreaterEqual(total.sigma_logit, residual_only.sigma_logit)
 
     def test_executable_candidate_is_single_leg(self) -> None:
         score = pca.PcaScore("m", 0.50, 1.0, 2.0, 0.45, 0.08, 2)
@@ -109,6 +131,16 @@ class V7PcaStatArbTests(unittest.TestCase):
         self.assertIsNotNone(panel)
         assert panel is not None
         self.assertEqual(panel.times, (480, 540, 600))
+
+    def test_driver_uses_predeclared_controls_by_and_uncertainty_deduction(self) -> None:
+        source = (ROOT / "scripts" / "v7_pca_stat_arb_research.py").read_text(encoding="utf-8")
+        self.assertIn("predeclare_target_controls", source)
+        self.assertIn("conditional_target_bootstrap_pvalue", source)
+        self.assertIn("benjamini_yekutieli_selected", source)
+        self.assertIn("score_with_total_single_leg_risk", source)
+        self.assertIn("resolve_fee_details", source)
+        self.assertIn("uncertainty_penalty", source)
+        self.assertIn('"unestimable_pvalue": 1.0', source)
 
 
 if __name__ == "__main__":
