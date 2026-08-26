@@ -7,13 +7,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_maker_uses_fill_conditioned_toxicity_objective_and_dual_clock():
-    text = (ROOT / "scripts/v7_micro_maker_worker.py").read_text(encoding="utf-8")
-    assert "maker_fill_conditioned_ev" in text
-    assert "toxicity_score" in text
-    assert "created_received_ms" in text
-    assert "created_event_ms" in text
-    assert "received_ms" in text
-    assert "broker_owned_tokens" in text
+    adapter = (ROOT / "scripts/v7_micro_maker_worker.py").read_text(encoding="utf-8")
+    core = (ROOT / "scripts/v7_micro_maker_worker_eventtime_core.py").read_text(encoding="utf-8")
+    assert "maker_fill_conditioned_ev" in core
+    assert "toxicity_score" in core
+    assert "created_received_ms" in core
+    assert "created_event_ms" in core
+    assert "received_ms" in core
+    assert "broker_owned_tokens" in core
+    assert "full_depth_sell_vwap" in adapter
+    assert "shares_specific_full_visible_bid_depth_vwap_fail_closed" in adapter
+    assert "MAX_MARKOUT_LABEL_DELAY_SECONDS = 15" in adapter
 
 
 def test_taker_uses_complete_round_trip_contract():
@@ -23,6 +27,7 @@ def test_taker_uses_complete_round_trip_contract():
     assert "uncertainty_z" in text
     assert "adverse_markout_bps" in text
     assert "capital_cost_bps_per_hour" in text
+    assert "full_visible_depth_entry_and_forecast_shifted_exit_vwap" in text
 
 
 if __name__ == "__main__":
