@@ -12,7 +12,7 @@
     "require_full_worktree_inventory": true,
     "require_operator_directives": true,
     "inventory_command": "git ls-files",
-    "rule": "Every scheduler must begin from the complete repository state for its checked-out revision, load config/operator_directives.json as the latest explicit operator authority, then read the V7 live champion, scheduler registry and architecture manifest. V3-V6 runtime/config/workflow surfaces are retired and must not be reintroduced. Research that reintroduces live expert averaging, semantic-price averaging, heterogeneous global PCA or an obsolete bounded-policy rollback is non-promotable."
+    "rule": "Every scheduler must begin from the complete repository state for its checked-out revision, load config/operator_directives.json as the latest explicit operator authority, then read the V7 live champion, scheduler registry and architecture manifest. Retired runtime/config/workflow surfaces must not be reintroduced. Research that reintroduces live expert averaging, semantic-price averaging, heterogeneous global PCA or an obsolete bounded-policy rollback is non-promotable."
   },
   "required_surfaces": [
     ".github/workflows",
@@ -37,7 +37,7 @@
   },
   "grafana": {
     "canonical_operator_url": "http://mamma-portfolio.tail1bae85.ts.net",
-    "dashboard_uid": "polymarket-v7",
+    "dashboard_uid": "polymarket-v7-paper",
     "dashboard_file": "monitoring/grafana/dashboards/polymarket-v7.json",
     "rule": "The canonical operator URL serves the V7 dashboard and exact deployed V7 telemetry."
   },
