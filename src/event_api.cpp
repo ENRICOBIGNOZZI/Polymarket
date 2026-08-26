@@ -40,7 +40,8 @@ std::optional<Market> parse_event_market(const json::object&o,const std::string&
     if(tokens.size()<2)return std::nullopt;int yi=0,ni=1;
     for(std::size_t i=0;i<outcomes.size()&&i<tokens.size();++i){auto s=outcomes[i];std::transform(s.begin(),s.end(),s.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});if(s=="yes")yi=static_cast<int>(i);else if(s=="no")ni=static_cast<int>(i);}
     m.yes_token=tokens[yi];m.no_token=tokens[ni];
-    if(auto it=o.find("feeSchedule");it!=o.end()&&it->value().is_object()){auto const&f=it->value().as_object();if(auto x=f.find("rate");x!=f.end())m.fee_rate=number(x->value(),-1.0);if(auto x=f.find("exponent");x!=f.end())m.fee_exponent=number(x->value(),1.0);if(auto x=f.find("takerOnly");x!=f.end())m.fee_taker_only=boolean(x->value(),true);}
+    if(auto it=o.find("feesEnabled");it!=o.end()&&!boolean(it->value(),false))m.fee_rate=0.0;
+    else if(auto it=o.find("feeSchedule");it!=o.end()&&it->value().is_object()){auto const&f=it->value().as_object();if(auto x=f.find("rate");x!=f.end())m.fee_rate=number(x->value(),-1.0);if(auto x=f.find("exponent");x!=f.end())m.fee_exponent=number(x->value(),1.0);if(auto x=f.find("takerOnly");x!=f.end())m.fee_taker_only=boolean(x->value(),true);}
     if(m.id.empty()||m.condition_id.empty()||m.yes_token.empty()||m.no_token.empty())return std::nullopt;
     if(!m.active||m.closed||!m.enable_order_book)return std::nullopt;
     return m;

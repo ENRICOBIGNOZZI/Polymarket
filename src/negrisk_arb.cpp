@@ -225,6 +225,18 @@ int main(int argc, char** argv) {
                 ++skipped_incomplete;
                 continue;
             }
+            for (const auto& m : markets) {
+                try {
+                    (void)fee_for(m, api, fee_cache);
+                } catch (...) {
+                    valid = false;
+                    break;
+                }
+            }
+            if (!valid) {
+                ++skipped_incomplete;
+                continue;
+            }
             ++scanned_events;
 
             // Structure 1: buy one YES in every mutually-exclusive outcome. For a
