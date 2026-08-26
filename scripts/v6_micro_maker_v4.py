@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import Any
 
 try:
-    import v6_micro_maker_v2 as v2
+    import v6_micro_maker_v3 as v3
 except ModuleNotFoundError:
-    from scripts import v6_micro_maker_v2 as v2
+    from scripts import v6_micro_maker_v3 as v3
 
-base = v2.base
+v2 = v3.v2
+base = v3.base
 
 
 def _finite(value: Any, default: float = 0.0) -> float:
@@ -48,11 +49,12 @@ def persistence_gated_fill_probability(
 ) -> float:
     """Suppress only inside-spread fill uplift unsupported by persistent fresh flow.
 
-    The public-trade evidence is bursty.  A couple of prints separated by only
-    a few seconds are not enough to estimate a 60-second prospective fill
-    hazard, especially when the newest event is already old by quote time.
-    At-touch quotes keep their existing causal queue model; this gate applies
-    only when zero displayed queue indicates a price-improving quote.
+    The public-trade evidence is bursty. A couple of prints separated by only
+    a few seconds are not enough to estimate a prospective fill hazard,
+    especially when the newest market event is already stale by quote time.
+    At-touch quotes retain the recurrence-shrunk queue model from
+    ``v6_market_common``; this extra gate applies only when zero displayed queue
+    identifies a price-improving quote.
     """
     raw = max(0.0, min(1.0, _finite(raw_fill_probability, 0.0)))
     if _finite(queue_ahead, 0.0) > 1e-12:
@@ -73,7 +75,14 @@ def install_flow_persistence_gate(
     burst_gap_seconds: int,
     max_inside_event_age_seconds: float,
 ) -> dict[str, Any]:
-    """Install a research-only persistence gate around the V6 maker fill proxy."""
+    """Install persistence before V3 toxicity so both filters compose.
+
+    The resulting V4 arm requires recurrence-shrunk causal flow, fresh
+    multi-burst evidence for inside-spread improvement, and V3's directional
+    toxicity/microstructure protection. The previous V4 arm omitted toxicity,
+    which made it possible for improved fillability to reintroduce the same
+    adverse-selection pattern already observed in filled paper windows.
+    """
     original_tape_flow = base.TapeFlow
     original_fill_probability = base.fill_probability_proxy
     context: dict[str, Any] = {
@@ -86,6 +95,7 @@ def install_flow_persistence_gate(
         "min_inside_bursts": max(1, int(min_inside_bursts)),
         "burst_gap_seconds": max(1, int(burst_gap_seconds)),
         "max_inside_event_age_seconds": max(0.0, float(max_inside_event_age_seconds)),
+        "toxicity_composed": True,
     }
 
     class PersistentTapeFlow(original_tape_flow):
@@ -144,12 +154,18 @@ def main() -> int:
         burst_gap_seconds=burst_gap_seconds,
         max_inside_event_age_seconds=max_inside_event_age_seconds,
     )
-    result = v2.main()
+
+    # V3 installs the causal directional toxicity filter on top of this wrapper,
+    # then V2 installs the inside-confidence gate. V3 also persists 45/60/300s
+    # executable markouts under 1x/1.5x/2x slippage stress.
+    result = v3.main()
     if run_dir_text:
         payload = {
             "paper_only": True,
             "authenticated_execution": False,
             **context,
+            "toxicity_status_file": "toxicity_status.json",
+            "markout_file": "maker_markouts.csv",
         }
         path = Path(run_dir_text) / "flow_persistence_status.json"
         path.parent.mkdir(parents=True, exist_ok=True)
