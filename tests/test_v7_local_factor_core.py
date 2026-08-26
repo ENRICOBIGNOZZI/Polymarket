@@ -15,6 +15,15 @@ lf = importlib.util.module_from_spec(SPEC)
 sys.modules[NAME] = lf
 SPEC.loader.exec_module(lf)
 
+INFERENCE_NAME = "v7_local_factor_inference"
+INFERENCE_SPEC = importlib.util.spec_from_file_location(
+    INFERENCE_NAME, ROOT / "scripts" / "v7_local_factor_inference.py"
+)
+assert INFERENCE_SPEC is not None and INFERENCE_SPEC.loader is not None
+inference = importlib.util.module_from_spec(INFERENCE_SPEC)
+sys.modules[INFERENCE_NAME] = inference
+INFERENCE_SPEC.loader.exec_module(inference)
+
 
 class V7LocalFactorCoreTests(unittest.TestCase):
     def test_regular_suffix_does_not_treat_gap_as_one_bar(self) -> None:
@@ -46,6 +55,11 @@ class V7LocalFactorCoreTests(unittest.TestCase):
     def test_frechet_bounds_are_not_a_joint_estimator(self) -> None:
         self.assertEqual(lf.frechet_joint_bounds(0.10, 0.10), (0.0, 0.10))
 
+    def test_pair_pvalue_is_intersection_union_max_of_marginals(self) -> None:
+        self.assertAlmostEqual(inference.intersection_union_pvalue(0.01, 0.20), 0.20)
+        self.assertAlmostEqual(inference.intersection_union_pvalue(0.30, 0.02), 0.30)
+        self.assertAlmostEqual(inference.intersection_union_pvalue(0.04, 0.03), 0.04)
+
     def test_stationary_pair_is_detected_by_panel_level_null_bootstrap_fixture(self) -> None:
         rng = random.Random(4)
         n = 90
@@ -66,11 +80,11 @@ class V7LocalFactorCoreTests(unittest.TestCase):
             {"a": a, "b": b, "c1": common, "c2": c2}, tuple(range(n))
         )
         assert panel is not None
-        output = lf.panel_pair_bootstrap_pvalues(panel, [("a", "b")], reps=79, seed=5)
+        output = inference.panel_pair_iut_pvalues(panel, [("a", "b")], reps=79, seed=5)
         self.assertIn(("a", "b"), output)
         fit, pvalue = output[("a", "b")]
         self.assertLess(fit.pair_stat, -2.0)
-        self.assertLess(pvalue, 0.25)
+        self.assertLess(pvalue, 0.35)
 
     def test_pair_signal_uses_price_exposure_and_ttr(self) -> None:
         rng = random.Random(7)
