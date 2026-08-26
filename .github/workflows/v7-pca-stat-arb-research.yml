@@ -37,11 +37,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p pca_evidence
+          # Keep the same 300-market sample as the prior smoke but use enough
+          # null replications to resolve the q=0.10 BH tail for ~10 hypotheses.
           python3 scripts/v7_pca_stat_arb_research.py \
             --config config/research_v7_pca_stat_arb.json \
             --paper-config config/paper_v6.json \
             --market-limit 300 \
-            --bootstrap-reps 59 \
+            --bootstrap-reps 599 \
             --output-json pca_evidence/report.json \
             | tee pca_evidence/run.log
           python3 - <<'PY'
@@ -81,6 +83,7 @@ jobs:
           print(f"- history chunk days: {r['history_window_days']}")
           print(f"- target hypotheses: {r['target_hypotheses']}")
           print(f"- BH-selected hypotheses: {r['bh_selected_hypotheses']}")
+          print(f"- bootstrap reps: {r['bootstrap_repetitions']}")
           print(f"- hedge legs allowed: {r['hedge_legs_allowed']}")
           for h in r['horizons']:
               print(f"- {h['horizon_minutes']}m: scored={h['scored_hypotheses']}, candidates={len(h['shadow_candidates'])}")
