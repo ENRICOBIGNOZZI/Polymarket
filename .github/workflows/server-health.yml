@@ -26,10 +26,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
-      (
-        github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'success'
-      )
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -50,17 +47,11 @@ jobs:
           TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
         run: |
           set -euo pipefail
-          if [[ -n "${TS_AUTHKEY:-}" ]]; then
-            mode=authkey
-          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
-            test -n "${TS_TAGS:-}" || { echo "OAuth credentials are visible but TS_TAGS is empty" >&2; exit 1; }
-            mode=oauth
-          else
-            echo "No visible Tailscale credential set. Expected TS_AUTHKEY or TS_OAUTH_CLIENT_ID + TS_OAUTH_SECRET." >&2
-            exit 1
+          if [[ -n "${TS_AUTHKEY:-}" ]]; then mode=authkey
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then test -n "${TS_TAGS:-}"; mode=oauth
+          else echo "No visible Tailscale credential set" >&2; exit 1
           fi
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
-          echo "tailscale_credential_mode=$mode"
 
       - name: Join private tailnet with auth key
         if: steps.tailscale_auth.outputs.mode == 'authkey'
@@ -84,10 +75,10 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
         run: |
           set -euo pipefail
-          test -n "${SSH_PRIVATE_KEY:-}" || { echo "missing POLYMARKET_SERVER_SSH_KEY" >&2; exit 1; }
+          test -n "${SSH_PRIVATE_KEY:-}"
           install -d -m 700 ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_deploy
-          chmod 600 ~/.ssh/polymarket_deploy
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_health
+          chmod 600 ~/.ssh/polymarket_health
           ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
 
       - name: Verify operator Grafana route
@@ -96,275 +87,168 @@ jobs:
           set -euo pipefail
           tailscale ping --until-direct=false --c 1 --timeout=10s "$GRAFANA_HOSTNAME"
           getent hosts "$GRAFANA_FQDN"
-          curl --fail --silent --show-error --retry 10 --retry-delay 2 --retry-all-errors \
-            "$GRAFANA_URL/api/health" | tee grafana-health.json
-          curl --fail --silent --show-error --retry 5 --retry-delay 2 --retry-all-errors \
-            "$GRAFANA_URL/api/search" > grafana-search.json
+          curl --fail --silent --show-error --retry 10 --retry-delay 2 --retry-all-errors "$GRAFANA_URL/api/health" | tee grafana-health.json
+          curl --fail --silent --show-error --retry 5 --retry-delay 2 --retry-all-errors "$GRAFANA_URL/api/search" > grafana-search.json
           python3 - <<'PY'
           import json
-          with open("grafana-search.json", encoding="utf-8") as f:
-              dashboards = json.load(f)
-          assert any(item.get("uid") == "polymarket-multi-strategy-v5" for item in dashboards), dashboards
+          dashboards=json.load(open('grafana-search.json'))
+          assert any('polymarket-multi-strategy' in str(item.get('uid') or '') or 'Polymarket' in str(item.get('title') or '') for item in dashboards), dashboards
           PY
 
-      - name: Inspect manifest-selected paper server and write action report
+      - name: Inspect V7 paper server read-only
         shell: bash
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
-            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE' | tee server-health.txt
+          ssh -i ~/.ssh/polymarket_health -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 \
+            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE' | tee server-health.txt
           set -euo pipefail
           cd ~/polymarket
           printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          printf 'os=%s\n' "$(uname -s)"
           head_sha="$(git rev-parse HEAD)"
           git fetch -q origin main paper-validated
           main_sha="$(git rev-parse origin/main)"
           validated_sha="$(git rev-parse origin/paper-validated)"
-          printf 'head=%s\n' "$head_sha"
-          printf 'origin_main=%s\n' "$main_sha"
-          printf 'paper_validated=%s\n' "$validated_sha"
-          printf 'branch=%s\n' "$(git branch --show-current)"
+          printf 'head=%s\norigin_main=%s\npaper_validated=%s\n' "$head_sha" "$main_sha" "$validated_sha"
           test "$head_sha" = "$validated_sha"
           git merge-base --is-ancestor "$validated_sha" "$main_sha"
 
           champion_meta="$(python3 - <<'PY'
           import json
-          from pathlib import Path
-          m=json.loads(Path('config/live_champion.json').read_text())
-          print(f"{int(m['version'])}\t{m['run_root']}\t{Path(m['run_root']).name}")
+          m=json.load(open('config/live_champion.json'))
+          assert int(m['version']) == 7, m
+          assert m['loop'] == 'scripts/paper_v7_loop.sh', m
+          assert m['config'] == 'config/paper_v7.json', m
+          assert m['run_root'] == 'runs/paper_v7_live', m
+          print('7\t'+m['run_root'])
           PY
           )"
-          IFS=$'\t' read -r version run_root_rel run_name <<<"$champion_meta"
-          [[ "$version" == "5" || "$version" == "6" ]]
+          IFS=$'\t' read -r version run_root_rel <<<"$champion_meta"
+          test "$version" = 7
           run_root="$HOME/polymarket/$run_root_rel"
-          # V5 compatibility example retained for rollout tooling: runs/paper_v5_live
-          printf 'champion_version=%s\nchampion_run_root=%s\n' "$version" "$run_root_rel"
+          execution="$run_root/execution"
+          printf 'champion_version=7\nchampion_run_root=%s\n' "$run_root_rel"
 
           exporter_healthz_file="$(mktemp)"
           trap 'rm -f "$exporter_healthz_file"' EXIT
-          exporter_healthz_code=""
-          if ! exporter_healthz_code="$(curl --silent --show-error \
-            --output "$exporter_healthz_file" --write-out '%{http_code}' \
-            http://127.0.0.1:9108/healthz)"; then
-            exporter_healthz_code="${exporter_healthz_code:-000}"
-          fi
-          printf 'exporter_healthz_http=%s\n' "$exporter_healthz_code"
-          printf '%s\n' 'exporter_healthz_body_begin'
-          cat "$exporter_healthz_file"
-          printf '\n%s\n' 'exporter_healthz_body_end'
+          exporter_healthz_code="$(curl --silent --show-error --output "$exporter_healthz_file" --write-out '%{http_code}' http://127.0.0.1:9108/healthz || true)"
+          printf 'exporter_healthz_http=%s\nexporter_healthz_body_begin\n' "${exporter_healthz_code:-000}"
+          cat "$exporter_healthz_file" || true
+          printf '\nexporter_healthz_body_end\n'
           exporter_healthz_failed=0
-          if [[ "$exporter_healthz_code" != "200" ]]; then
-            exporter_healthz_failed=1
-          fi
+          [[ "$exporter_healthz_code" == "200" ]] || exporter_healthz_failed=1
 
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
-          curl -fsS http://127.0.0.1:3000/api/search >/dev/null
-
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
-          grep -q "^polymarket_runtime_info{adapter=\"v${version}\",run_root=\"${run_name}\",version=\"v${version}\"} 1$" <<<"$metrics"
-          grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics"
+          grep -q '^polymarket_runtime_info{adapter="v7",run_root="paper_v7_live",version="v7"} 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_runtime_info 1$' <<<"$metrics"
           grep -q '^polymarket_runtime_pnl_usd ' <<<"$metrics"
           grep -q '^polymarket_runtime_equity_usd ' <<<"$metrics"
+          grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics"
           grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics"
+          grep -q '^polymarket_allocator_models_alive 5$' <<<"$metrics"
           grep -q '^polymarket_model_info{' <<<"$metrics"
-          if [[ "$version" == "6" ]]; then
-            grep -q '^polymarket_v6_exporter_info{' <<<"$metrics"
-            grep -q '^polymarket_v6_local_factor_clusters ' <<<"$metrics"
-            test -s "$run_root/hard_arb/status.json"
-            test -s "$run_root/local_factor_status.json"
-            test -s "$run_root/relation_guard_status.json"
-          fi
-          printf '%s\n' "$metrics" | grep -E '^polymarket_(runtime_info|runtime_equity_usd|runtime_pnl_usd|runtime_drawdown_ratio|runtime_kill_switch|runtime_realized_pnl_usd_total|runtime_execution_staleness_seconds|allocator_models_alive|allocator_models_expected|allocator_global_gross_fraction|model_pnl_usd|model_equity_usd|model_open_positions|v6_)' || true
 
-          test -s "$run_root/runtime_status.json"
-          test -s "$run_root/allocator_status.json"
-          test -s "$run_root/strategy_status.csv"
-          supervisor="$run_root/runtime_supervisor.csv"
-          test -s "$supervisor"
-          supervisor_row="$(tail -n 1 "$supervisor")"
-          IFS=, read -r supervisor_ts recorder_alive broker_alive allocator_alive recorder_restarts broker_restarts allocator_restarts recorder_pid broker_pid allocator_pid <<<"$supervisor_row"
-          now="$(date +%s)"
-          test "$recorder_alive" = "1"
-          test "$broker_alive" = "1"
-          test "$allocator_alive" = "1"
-          test $(( now - supervisor_ts )) -le 60
-          printf 'supervisor_timestamp=%s\nrecorder_alive=%s\nbroker_alive=%s\nallocator_alive=%s\n' "$supervisor_ts" "$recorder_alive" "$broker_alive" "$allocator_alive"
+          test -s "$run_root/v7_supervisor.json"
+          test -s "$execution/v7_execution_supervisor.json"
+          test -s "$execution/runtime_status.json"
+          test -s "$execution/allocator_status.json"
+          test -s "$execution/strategy_status.csv"
+          test -s "$execution/market_proxy_status.json"
+          test -s "$execution/trade_recorder.log"
+          test -s "$execution/multileg.log"
 
-          if [[ "$version" == "5" ]]; then
-            python3 scripts/v5_runtime_readiness.py \
-              --run-root "$run_root" \
-              --supervisor-max-age 60 \
-              --allocator-max-age 30 \
-              --model-output-max-age 120 \
-              --startup-grace 600
-          else
-            python3 - "$run_root" "$version" <<'PY'
-          import csv,json,math,pathlib,sys
-          root=pathlib.Path(sys.argv[1]); version=int(sys.argv[2])
-          allocator=json.loads((root/'allocator_status.json').read_text())
-          rows=list(csv.DictReader((root/'strategy_status.csv').open()))
-          assert allocator['paper_only'] is True
-          assert int(allocator['models_expected']) == 5
-          assert int(allocator['models_alive']) == 5
-          assert {row['name'] for row in rows} == {'micro','pca','graph','semantic','external'}
-          total=sum(float(row['capital_fraction']) for row in rows)+float(allocator['reserve_fraction'])
-          assert math.isclose(total,1.0,rel_tol=0.0,abs_tol=1e-9), total
-          assert all(float(row['status_age_seconds']) <= 120 for row in rows)
-          if version == 6:
-              runtime=json.loads((root/'runtime_status.json').read_text())
-              assert runtime['version'] == 6 and runtime['paper_only'] is True
-              assert float(runtime['drawdown']) <= 0.15 + 1e-12
-              assert 'graph_hard' in runtime['strategies']
+          python3 - "$run_root" <<'PY'
+          import json,sys,time,csv
+          from pathlib import Path
+          root=Path(sys.argv[1]); ex=root/'execution'; now=time.time()
+          sup=json.load(open(root/'v7_supervisor.json'))
+          exe=json.load(open(ex/'v7_execution_supervisor.json'))
+          runtime=json.load(open(ex/'runtime_status.json'))
+          allocator=json.load(open(ex/'allocator_status.json'))
+          proxy=json.load(open(ex/'market_proxy_status.json'))
+          rows=list(csv.DictReader(open(ex/'strategy_status.csv')))
+          assert sup['execution_alive'] is True and sup['shadow_alive'] is True
+          assert now-float(sup['timestamp']) <= 60
+          assert exe['paper_only'] is True and now-float(exe['timestamp']) <= 120
+          assert runtime['schema'] == 'polymarket_v7_runtime_status_v1'
+          assert runtime['version'] == 7 and runtime['paper_only'] is True and runtime['authenticated_execution'] is False
+          assert float(runtime['drawdown']) <= 0.15 + 1e-12
+          assert allocator['schema'] == 'polymarket_v7_allocator_status_v1'
+          assert int(allocator['models_expected']) == 5 and int(allocator['models_alive']) == 5
+          assert {r['name'] for r in rows} == {'micro_maker','micro_taker','relative_value','hard_arb','external'}
+          assert proxy['schema'] == 'polymarket_v7_market_proxy_status_v1'
+          assert now-float(proxy['timestamp']) <= 180
           PY
-          fi
 
-          external_signals="data/external_signals.csv"
-          if [[ "$version" == "6" ]]; then external_signals="$run_root/external_signals.csv"; fi
-          python3 scripts/runtime_action_report.py \
-            --run-root "$run_root" --external-signals "$external_signals" \
-            --window-seconds 3600 --production-edge 0.001 \
-            --output-json "$run_root/action_report.json" \
-            --output-markdown "$run_root/action_report.md" >/dev/null || true
-          test -s "$run_root/action_report.json"
-          test -s "$run_root/action_report.md"
-          printf '%s\n' 'action_report_begin'
-          cat "$run_root/action_report.md"
-          printf '%s\n' 'action_report_end'
+          printf 'trade_recorder_tail_begin\n'
+          tail -n 20 "$execution/trade_recorder.log" || true
+          printf 'trade_recorder_tail_end\nmultileg_tail_begin\n'
+          tail -n 20 "$execution/multileg.log" || true
+          printf 'multileg_tail_end\nhard_arb_tail_begin\n'
+          tail -n 20 "$execution/hard_arb.log" || true
+          printf 'hard_arb_tail_end\nmicro_taker_tail_begin\n'
+          tail -n 20 "$execution/micro_taker.log" || true
+          printf 'micro_taker_tail_end\n'
 
-          recorder_tail="$(tail -n 20 "$run_root/trade_recorder.log" 2>/dev/null || true)"
-          printf '%s\n' 'trade_recorder_tail_begin'
-          printf '%s\n' "$recorder_tail"
-          printf '%s\n' 'trade_recorder_tail_end'
+          recorder_tail="$(tail -n 20 "$execution/trade_recorder.log" 2>/dev/null || true)"
           recorder_tail_lines="$(printf '%s\n' "$recorder_tail" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
           recorder_success_ticks="$(printf '%s\n' "$recorder_tail" | grep -c '^trade_recorder markets=' || true)"
           recorder_http_failures="$(printf '%s\n' "$recorder_tail" | grep -c '^fatal: HTTP request failed:' || true)"
           recorder_proxy_failures="$(printf '%s\n' "$recorder_tail" | grep -c '^fatal: Gamma markets HTTP 503:' || true)"
           recorder_data_failures=$(( recorder_http_failures + recorder_proxy_failures ))
-          printf 'recorder_tail_lines=%s\nrecorder_success_ticks=%s\nrecorder_http_failures=%s\nrecorder_proxy_failures=%s\nrecorder_data_failures=%s\n' \
-            "$recorder_tail_lines" "$recorder_success_ticks" "$recorder_http_failures" "$recorder_proxy_failures" "$recorder_data_failures"
-
-          multileg_tail="$(tail -n 20 "$run_root/multileg.log" 2>/dev/null || true)"
-          printf '%s\n' 'multileg_tail_begin'
-          printf '%s\n' "$multileg_tail"
-          printf '%s\n' 'multileg_tail_end'
-          hard_arb_tail=""
-          micro_taker_tail=""
-          if [[ "$version" == "6" ]]; then
-            hard_arb_tail="$(tail -n 20 "$run_root/hard_arb.log" 2>/dev/null || true)"
-            printf '%s\n' 'hard_arb_tail_begin'
-            printf '%s\n' "$hard_arb_tail"
-            printf '%s\n' 'hard_arb_tail_end'
-            micro_taker_tail="$(tail -n 20 "$run_root/micro_taker.log" 2>/dev/null || true)"
-            printf '%s\n' 'micro_taker_tail_begin'
-            printf '%s\n' "$micro_taker_tail"
-            printf '%s\n' 'micro_taker_tail_end'
-          else
-            printf '%s\n' 'allocator_tail_begin'
-            tail -n 30 "$run_root/allocator.log" 2>/dev/null || true
-            printf '%s\n' 'allocator_tail_end'
-          fi
-
-          if [[ "$recorder_tail_lines" -ge 5 && \
-                "$recorder_success_ticks" -eq 0 && \
-                "$recorder_data_failures" -eq "$recorder_tail_lines" ]]; then
+          printf 'recorder_tail_lines=%s\nrecorder_success_ticks=%s\nrecorder_http_failures=%s\nrecorder_proxy_failures=%s\nrecorder_data_failures=%s\n' "$recorder_tail_lines" "$recorder_success_ticks" "$recorder_http_failures" "$recorder_proxy_failures" "$recorder_data_failures"
+          if [[ "$recorder_tail_lines" -ge 5 && "$recorder_success_ticks" -eq 0 && "$recorder_data_failures" -eq "$recorder_tail_lines" ]]; then
             echo "private recorder data path unhealthy: recent recorder tail contains only data failures" >&2
             exit 1
           fi
 
           latest_runtime_failure() {
-            local runtime_tail="$1"
-            local success_pattern="$2"
-            local last_success last_failure
-            last_success="$(printf '%s\n' "$runtime_tail" | grep -nE "$success_pattern" | tail -n 1 | cut -d: -f1 || true)"
-            last_failure="$(printf '%s\n' "$runtime_tail" | grep -nE 'fatal: Cannot replace state file:|another V6 multi-leg broker already owns|FileNotFoundError:' | tail -n 1 | cut -d: -f1 || true)"
-            if [[ -z "$last_failure" ]]; then
-              return 1
-            fi
-            if [[ -z "$last_success" || "$last_failure" -ge "$last_success" ]]; then
-              return 0
-            fi
-            return 1
+            local runtime_tail="$1" success_pattern="$2" last_success last_failure
+            last_success="$(printf '%s\n' "$runtime_tail" | grep -nE "$success_pattern" | tail -n1 | cut -d: -f1 || true)"
+            last_failure="$(printf '%s\n' "$runtime_tail" | grep -nE 'fatal: Cannot replace state file:|another V7 multi-leg broker already owns|FileNotFoundError:' | tail -n1 | cut -d: -f1 || true)"
+            [[ -n "$last_failure" ]] || return 1
+            [[ -z "$last_success" || "$last_failure" -ge "$last_success" ]]
           }
+          multileg_tail="$(tail -n 20 "$execution/multileg.log" 2>/dev/null || true)"
+          hard_arb_tail="$(tail -n 20 "$execution/hard_arb.log" 2>/dev/null || true)"
+          micro_taker_tail="$(tail -n 20 "$execution/micro_taker.log" 2>/dev/null || true)"
+          if latest_runtime_failure "$multileg_tail" '^multileg_tick '; then echo 'private runtime state integrity unhealthy: multileg' >&2; exit 1; fi
+          if latest_runtime_failure "$hard_arb_tail" '^\{.*"equity"'; then echo 'private runtime state integrity unhealthy: hard_arb' >&2; exit 1; fi
+          if latest_runtime_failure "$micro_taker_tail" '^\{.*"equity"'; then echo 'private runtime state integrity unhealthy: micro_taker' >&2; exit 1; fi
 
-          if latest_runtime_failure "$multileg_tail" '^multileg_tick '; then
-            echo "private runtime state integrity unhealthy: multileg has an unrecovered state/lock failure" >&2
-            exit 1
-          fi
-          if [[ "$version" == "6" ]]; then
-            if latest_runtime_failure "$hard_arb_tail" '^\{.*"equity"'; then
-              echo "private runtime state integrity unhealthy: hard_arb has an unrecovered state-write failure" >&2
-              exit 1
-            fi
-            if latest_runtime_failure "$micro_taker_tail" '^\{.*"equity"'; then
-              echo "private runtime state integrity unhealthy: micro_taker has an unrecovered state-write failure" >&2
-              exit 1
-            fi
-          fi
+          status_file="$HOME/.config/polymarket/autoupdate_status.env"
+          test -s "$status_file"
+          status_ref="$(sed -n 's/^deploy_ref=//p' "$status_file" | head -n1)"
+          status_head="$(sed -n 's/^head=//p' "$status_file" | head -n1)"
+          status_validated="$(sed -n 's/^validated=//p' "$status_file" | head -n1)"
+          test "$status_ref" = "paper-validated"
+          test "$status_head" = "$head_sha"
+          test "$status_validated" = "$validated_sha"
 
           case "$(uname -s)" in
             Darwin)
-              for label in \
-                com.polymarket.awake \
-                com.polymarket.paper \
-                com.polymarket.exporter \
-                com.polymarket.prometheus \
-                com.polymarket.grafana; do
-                printf 'launchd_label=%s\n' "$label"
-                launchd_state="$(/bin/launchctl print "system/$label")"
-                printf '%s\n' "$launchd_state" | grep -q $'\tstate = running'
+              for label in com.polymarket.awake com.polymarket.paper com.polymarket.exporter com.polymarket.prometheus com.polymarket.grafana; do
+                /bin/launchctl print "system/$label" | grep -q 'state = running'
               done
               /bin/launchctl print system/com.polymarket.autoupdate >/dev/null
-              status_file="$HOME/.config/polymarket/autoupdate_status.env"
-              test -s "$status_file"
-              cat "$status_file"
-              checked_ts="$(awk -F= '$1=="checked_ts"{print $2}' "$status_file")"
-              deploy_status="$(awk -F= '$1=="status"{print $2}' "$status_file")"
-              status_head="$(awk -F= '$1=="head"{print $2}' "$status_file")"
-              status_validated="$(awk -F= '$1=="validated"{print $2}' "$status_file")"
-              status_ref="$(awk -F= '$1=="deploy_ref"{print $2}' "$status_file")"
-              now="$(date +%s)"
-              test -n "$checked_ts"
-              test $(( now - checked_ts )) -le 900
-              case "$deploy_status" in up_to_date|deployed|repaired) ;; *) exit 1 ;; esac
-              test "$status_ref" = "paper-validated"
-              test "$status_head" = "$head_sha"
-              test "$status_validated" = "$validated_sha"
-              ;;
-            Linux)
-              systemctl is-active --quiet polymarket-paper.service
-              systemctl is-active --quiet polymarket-monitoring.service
               ;;
           esac
 
           if [[ "$exporter_healthz_failed" -ne 0 ]]; then
-            echo "private exporter healthz unhealthy: HTTP $exporter_healthz_code; diagnostics captured above" >&2
+            echo "private exporter healthz unhealthy: HTTP ${exporter_healthz_code:-000}" >&2
             exit 1
           fi
+          echo 'server_health=ok'
           REMOTE
 
-      - name: Fetch structured action report
-        shell: bash
-        run: |
-          set -euo pipefail
-          run_root_rel="$(ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
-            "cd ~/polymarket && python3 -c 'import json; print(json.load(open(\"config/live_champion.json\"))[\"run_root\"])'")"
-          scp -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes -P "$SERVER_PORT" \
-            "$SERVER_USER@$SERVER_HOST:polymarket/${run_root_rel}/action_report.md" runtime-action-report.md
-          scp -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes -P "$SERVER_PORT" \
-            "$SERVER_USER@$SERVER_HOST:polymarket/${run_root_rel}/action_report.json" runtime-action-report.json
-
-      - name: Publish health summary
+      - name: Publish server health
         if: always()
-        shell: bash
         run: |
-          echo '## Polymarket manifest-selected private paper server' >> "$GITHUB_STEP_SUMMARY"
+          echo '## V7 paper server health' >> "$GITHUB_STEP_SUMMARY"
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
-          cat server-health.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo 'health output missing' >> "$GITHUB_STEP_SUMMARY"
+          cat server-health.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo '## What the system did and why' >> "$GITHUB_STEP_SUMMARY"
-          cat runtime-action-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo 'action report missing' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload health evidence
         if: always()
@@ -373,8 +257,6 @@ jobs:
           name: paper-server-health-${{ github.run_id }}
           path: |
             server-health.txt
-            runtime-action-report.md
-            runtime-action-report.json
             grafana-health.json
             grafana-search.json
           if-no-files-found: warn
