@@ -17,6 +17,7 @@ REQUIRED_IDS = {
 PRIVATE_VALIDATION_WORKFLOW = ".github/workflows/private-runtime-single-writer-validation.yml"
 NON_SCHEDULER_WORKFLOWS = {
     ".github/workflows/grafana-access.yml",
+    ".github/workflows/v7-cross-sectional-ranking-research.yml",
     PRIVATE_VALIDATION_WORKFLOW,
 }
 NON_SCHEDULER_FORBIDDEN_TOKENS = (
