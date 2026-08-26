@@ -57,23 +57,51 @@ def normalize_run(run: dict[str, Any]) -> dict[str, Any] | None:
     return output
 
 
-def normalize_history(text: str) -> tuple[list[dict[str, Any]], int]:
+def empty_stats() -> dict[str, int]:
+    return {
+        "nonempty_rows": 0,
+        "parsed_json_rows": 0,
+        "dict_rows": 0,
+        "supported_rows": 0,
+        "unsupported_rows": 0,
+        "malformed_rows": 0,
+        "non_dict_rows": 0,
+    }
+
+
+def normalize_history(text: str) -> tuple[list[dict[str, Any]], dict[str, int]]:
     records: list[dict[str, Any]] = []
-    parsed_dicts = 0
+    stats = empty_stats()
     for raw in text.splitlines():
         if not raw.strip():
             continue
+        stats["nonempty_rows"] += 1
         try:
             value = json.loads(raw)
         except json.JSONDecodeError:
+            stats["malformed_rows"] += 1
             continue
+        stats["parsed_json_rows"] += 1
         if not isinstance(value, dict):
+            stats["non_dict_rows"] += 1
             continue
-        parsed_dicts += 1
+        stats["dict_rows"] += 1
         normalized = normalize_run(value)
-        if normalized is not None:
-            records.append(normalized)
-    return records, parsed_dicts
+        if normalized is None:
+            stats["unsupported_rows"] += 1
+            continue
+        stats["supported_rows"] += 1
+        records.append(normalized)
+    return records, stats
+
+
+def history_integrity_errors(stats: dict[str, int]) -> list[str]:
+    errors: list[str] = []
+    for key in ("malformed_rows", "non_dict_rows", "unsupported_rows"):
+        count = int(stats.get(key, 0))
+        if count:
+            errors.append(f"{key}={count}")
+    return errors
 
 
 def main() -> int:
@@ -87,27 +115,33 @@ def main() -> int:
     source = Path(args.input)
     target = Path(args.output)
     text = source.read_text(encoding="utf-8") if source.exists() else ""
-    records, parsed_dicts = normalize_history(text)
+    records, stats = normalize_history(text)
+    errors = history_integrity_errors(stats)
 
-    if parsed_dicts and not records:
+    report = dict(stats)
+    report["normalized_records"] = len(records)
+    report["output"] = str(target)
+    report["integrity_status"] = "fail_closed" if errors else "ok"
+    report["integrity_errors"] = errors
+    print(json.dumps(report, sort_keys=True))
+
+    if errors:
+        target.unlink(missing_ok=True)
         raise SystemExit(
-            "forward-maker history contained JSON records but none matched a supported evidence schema"
+            "forward-maker history integrity failure; refusing reduced evidence sample: "
+            + ", ".join(errors)
+        )
+
+    if stats["nonempty_rows"] != len(records):
+        target.unlink(missing_ok=True)
+        raise SystemExit(
+            "forward-maker history row accounting mismatch; refusing evidence normalization"
         )
 
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
         encoding="utf-8",
-    )
-    print(
-        json.dumps(
-            {
-                "input_json_records": parsed_dicts,
-                "normalized_records": len(records),
-                "output": str(target),
-            },
-            sort_keys=True,
-        )
     )
     return 0
 
