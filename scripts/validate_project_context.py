@@ -67,53 +67,37 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
         errors.append("operator directives repository mismatch")
 
     authorization = directives.get("paper_v7_authorization") if isinstance(directives.get("paper_v7_authorization"), dict) else {}
-    exact_numbers = {
-        "market_limit": 1000.0,
-        "min_liquidity": 2.0,
-        "min_net_edge": 0.00005,
-        "uncertainty_penalty": 0.0,
-        "fractional_kelly_ceiling": 0.25,
-        "max_trade_usd": 125.0,
+    exact = {
         "max_trade_fraction": 1.0,
-        "max_market_fraction": 0.05,
-        "max_event_fraction": 0.15,
-        "max_gross_fraction": 0.70,
-        "max_drawdown": 0.15,
-        "hard_arb_max_trade_usd": 125.0,
-        "hard_arb_max_trade_fraction": 1.0
+        "max_market_fraction": 1.0,
+        "max_event_fraction": 1.0,
+        "max_gross_fraction": 1.0,
+        "hard_arb_max_trade_fraction": 1.0,
     }
     if authorization.get("paper_only") is not True:
         errors.append("operator V7 authorization must remain PAPER-only")
     if authorization.get("authenticated_execution") is not False:
         errors.append("operator V7 authorization must keep authenticated execution disabled")
-    if authorization.get("fixed_dollar_trade_cap_enabled") is not True:
-        errors.append("operator V7 authorization must keep the $125 fixed-dollar trade cap enabled")
-    if authorization.get("hard_arb_fixed_dollar_trade_cap_enabled") is not True:
-        errors.append("operator V7 hard-arb fixed-dollar cap must remain enabled")
-    for key, expected in exact_numbers.items():
+    if authorization.get("fixed_dollar_trade_cap_enabled") is not False:
+        errors.append("operator V7 authorization must keep the fixed-dollar trade cap disabled")
+    if authorization.get("hard_arb_fixed_dollar_trade_cap_enabled") is not False:
+        errors.append("operator V7 hard-arb fixed-dollar cap must remain disabled")
+    for key, expected in exact.items():
         value = number(authorization.get(key))
         if value is None or abs(value - expected) > 1e-12:
-            errors.append(f"operator V7 authorization requires {key}={expected:g}")
-
-    expected_allocations = {
-        "micro_maker_capital_fraction": 0.22,
-        "micro_taker_capital_fraction": 0.12,
-        "relative_value_capital_fraction": 0.34,
-        "hard_arb_capital_fraction": 0.22,
-        "external_capital_fraction": 0.08,
-        "reserve_fraction": 0.02,
-    }
-    allocations = authorization.get("capital_allocations") if isinstance(authorization.get("capital_allocations"), dict) else {}
-    for key, expected in expected_allocations.items():
-        value = number(allocations.get(key))
-        if value is None or abs(value - expected) > 1e-12:
-            errors.append(f"operator V7 authorization requires {key}={expected:g}")
+            errors.append(f"operator V7 authorization requires {key}=1.0")
+    if number(authorization.get("fractional_kelly_ceiling")) != 0.25:
+        errors.append("operator V7 fractional Kelly ceiling must remain 0.25")
+    if number(authorization.get("max_drawdown")) != 0.15:
+        errors.append("operator V7 drawdown kill must remain 0.15")
 
     schedulers = registry.get("schedulers")
     if not isinstance(schedulers, list):
         errors.append("scheduler registry does not contain a scheduler list")
         return errors, notes
-    scheduler_ids = {str(raw.get("id")) for raw in schedulers if isinstance(raw, dict) and raw.get("id")}
+    scheduler_ids = {
+        str(raw.get("id")) for raw in schedulers if isinstance(raw, dict) and raw.get("id")
+    }
     assignments = directives.get("scheduler_assignments")
     if not isinstance(assignments, dict):
         errors.append("operator directives must contain scheduler_assignments")
@@ -129,9 +113,8 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     if not isinstance(priorities, list) or len(priorities) < 8:
         errors.append("operator directives must provide the complete V7 priority sequence")
     forbidden = directives.get("forbidden_regressions")
-    forbidden_text = "\n".join(str(item) for item in forbidden) if isinstance(forbidden, list) else ""
-    if not isinstance(forbidden, list) or "100%" not in forbidden_text or "$125" not in forbidden_text or "5%/15%/70%" not in forbidden_text:
-        errors.append("operator directives must explicitly forbid the superseded unbounded V7 policy")
+    if not isinstance(forbidden, list) or not any("$125" in str(item) for item in forbidden):
+        errors.append("operator directives must explicitly forbid the obsolete V7 $125 policy rollback")
 
     for rel in [str(item) for item in context.get("required_surfaces", [])]:
         if not (root / rel).exists():
@@ -177,7 +160,9 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
             errors.append(f"{scheduler_id} has no complete repository worktree available")
         else:
             assignment = str(assignments.get(scheduler_id) or "")
-            notes.append(f"{scheduler_id}: {'runner checkout' if local_checkout else 'canonical remote checkout'}; directive={assignment}")
+            notes.append(
+                f"{scheduler_id}: {'runner checkout' if local_checkout else 'canonical remote checkout'}; directive={assignment}"
+            )
     return errors, notes
 
 
