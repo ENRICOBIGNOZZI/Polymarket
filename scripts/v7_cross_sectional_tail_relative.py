@@ -90,6 +90,7 @@ def main() -> int:
     discovery_cfg = cfg["discovery"]
     fidelity_minutes = int(history_cfg["fidelity_minutes"])
     bucket_seconds = fidelity_minutes * 60
+    training_window_seconds = int(history_cfg["training_window_days"]) * 86400
     embargo_seconds = int(history_cfg["purge_embargo_buckets"]) * bucket_seconds
     holdout_start = int(discovery_cfg["forward_holdout_start_ts"])
     frozen_training_label_cutoff = holdout_start - embargo_seconds
@@ -101,7 +102,16 @@ def main() -> int:
         args.market_limit,
         float(execution_cfg["minimum_liquidity_usd"]),
     )
-    start_ts = now - int(history_cfg["lookback_hours"]) * 3600
+    start_ts, frozen_required_history_start_ts = frozen.history_start_for_frozen_fit(
+        now_ts=now,
+        holdout_start_ts=holdout_start,
+        rolling_lookback_seconds=int(history_cfg["lookback_hours"]) * 3600,
+        training_window_seconds=training_window_seconds,
+        bucket_seconds=bucket_seconds,
+    )
+    frozen_history_request_anchored = start_ts <= frozen_required_history_start_ts
+    if not frozen_history_request_anchored:
+        raise SystemExit("frozen history request no longer covers the fixed pre-holdout training window")
     histories, history_failures = history_transport.fetch_histories(
         args.clob_url,
         markets,
@@ -169,7 +179,7 @@ def main() -> int:
         fit, forward_metrics = frozen.evaluate(
             rows,
             holdout_start_ts=holdout_start,
-            window_seconds=int(history_cfg["training_window_days"]) * 86400,
+            window_seconds=training_window_seconds,
             embargo_seconds=embargo_seconds,
             ridge=float(model_cfg["ridge_penalty"]),
             half_life_seconds=int(history_cfg["recency_half_life_days"]) * 86400,
@@ -180,6 +190,7 @@ def main() -> int:
         frozen_fit_valid = (
             fit is not None
             and int(fit.train_end_ts) <= int(frozen_training_label_cutoff)
+            and frozen_history_request_anchored
         )
         blocked = inference.blocked_inference(
             forward_metrics,
@@ -271,6 +282,9 @@ def main() -> int:
         "discovery_source_head": discovery_cfg["source_head"],
         "discovery_cutoff_ts": int(discovery_cfg["discovery_cutoff_ts"]),
         "forward_holdout_start_ts": holdout_start,
+        "history_request_start_ts": start_ts,
+        "frozen_required_history_start_ts": frozen_required_history_start_ts,
+        "frozen_history_request_anchored": frozen_history_request_anchored,
         "frozen_training_label_cutoff_ts": frozen_training_label_cutoff,
         "frozen_holdout_fit_validated": frozen_holdout_fit_validated,
         "forward_days_observed": forward_days_observed,
@@ -301,6 +315,7 @@ def main() -> int:
             "research_branch_cannot_mutate_live_champion",
         ]
         + ([] if frozen_holdout_fit_validated else ["frozen_holdout_fit_not_validated"])
+        + ([] if frozen_history_request_anchored else ["frozen_history_request_not_anchored"])
         + ([] if history_data_healthy else ["price_history_data_health_unhealthy"]),
     }
     atomic_json(args.output_json, report)
