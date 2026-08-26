@@ -12,6 +12,8 @@ import v7_graph_roundtrip_guard_core as core
 
 core.Counter = Counter
 _original_attach = core.attach_roundtrip_descriptor
+_original_mature = core.mature_session
+MAX_LIQUIDATION_LABEL_DELAY_MS = 45_000
 
 
 def attach_roundtrip_descriptor(session, clob, window_seconds):
@@ -48,15 +50,43 @@ def attach_roundtrip_descriptor(session, clob, window_seconds):
     return enriched, reason
 
 
+def mature_session(session, tape, gamma, clob, slippage_bps, capital_cost_bps_per_hour):
+    """Reject sessions whose liquidation snapshot is no longer a 180s label."""
+    deadline = int(session.get("deadline_received_ms") or 0)
+    now = core.v2.base.now_ms()
+    if deadline <= 0 or now < deadline:
+        return None
+    if now - deadline > MAX_LIQUIDATION_LABEL_DELAY_MS:
+        return None
+    outcome = _original_mature(
+        session, tape, gamma, clob, slippage_bps, capital_cost_bps_per_hour
+    )
+    if outcome is None:
+        return None
+    observed = int(outcome.get("liquidation_book_received_ms") or now)
+    delay = max(0, observed - deadline)
+    if delay > MAX_LIQUIDATION_LABEL_DELAY_MS:
+        return None
+    outcome["liquidation_label_delay_ms"] = delay
+    outcome["effective_liquidation_horizon_seconds"] = max(
+        0.0,
+        (observed - int(session.get("origin_received_ms") or observed)) / 1000.0,
+    )
+    return outcome
+
+
 # Patch the core namespace used by core.main() so CLI and imported semantics are
-# identical. Evidence returns are now normalized by actual optimized target cash.
+# identical. Evidence returns are normalized by actual optimized target cash and
+# only bounded-delay forward labels are admitted.
 core.attach_roundtrip_descriptor = attach_roundtrip_descriptor
+core.mature_session = mature_session
 
 for _name in dir(core):
     if not _name.startswith("__"):
         globals()[_name] = getattr(core, _name)
-# Preserve the patched wrapper after the re-export loop.
+# Preserve patched wrappers after the re-export loop.
 globals()["attach_roundtrip_descriptor"] = attach_roundtrip_descriptor
+globals()["mature_session"] = mature_session
 
 
 if __name__ == "__main__":
