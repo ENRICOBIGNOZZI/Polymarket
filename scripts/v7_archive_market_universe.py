@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-SOURCE_SCHEMA = "polymarket_v6_market_proxy_cache_v1"
+SOURCE_SCHEMA = "polymarket_v7_market_proxy_cache_v1"
 ARCHIVE_SCHEMA = "polymarket_v7_point_in_time_universe_v1"
 
 
@@ -24,9 +24,9 @@ def finite_number(value: Any) -> float | None:
 
 def validate_cache(payload: Any) -> tuple[int, list[dict[str, Any]]]:
     if not isinstance(payload, dict) or payload.get("schema") != SOURCE_SCHEMA:
-        raise ValueError("market cache schema is invalid")
-    ts = finite_number(payload.get("timestamp"))
-    if ts is None or ts <= 0:
+        raise ValueError("V7 market cache schema is invalid")
+    timestamp = finite_number(payload.get("timestamp"))
+    if timestamp is None or timestamp <= 0:
         raise ValueError("market cache timestamp is invalid")
     rows = payload.get("markets")
     if not isinstance(rows, list) or not rows:
@@ -35,19 +35,17 @@ def validate_cache(payload: Any) -> tuple[int, list[dict[str, Any]]]:
     for row in rows:
         if not isinstance(row, dict):
             raise ValueError("market cache contains a non-object market")
-        market_id = str(row.get("id") or "")
-        condition_id = str(row.get("conditionId") or "")
-        if not market_id or not condition_id:
+        if not str(row.get("id") or "") or not str(row.get("conditionId") or ""):
             raise ValueError("market cache row is missing stable identifiers")
         clean.append(row)
-    return int(ts), clean
+    return int(timestamp), clean
 
 
 def archive_payload(source: dict[str, Any], cadence_seconds: int) -> tuple[int, dict[str, Any]]:
     source_ts, rows = validate_cache(source)
     cadence = max(60, int(cadence_seconds))
     bucket_ts = (source_ts // cadence) * cadence
-    payload = {
+    return bucket_ts, {
         "schema": ARCHIVE_SCHEMA,
         "bucket_timestamp": bucket_ts,
         "snapshot_timestamp": source_ts,
@@ -57,7 +55,6 @@ def archive_payload(source: dict[str, Any], cadence_seconds: int) -> tuple[int, 
         "market_count": len(rows),
         "markets": rows,
     }
-    return bucket_ts, payload
 
 
 def encoded_snapshot(payload: dict[str, Any]) -> bytes:
@@ -92,35 +89,25 @@ def archive_once(
     archive_dir.mkdir(parents=True, exist_ok=True)
     target = archive_dir / snapshot_filename(bucket_ts)
     created = False
-
-    # First snapshot observed in a bucket is immutable. The relay may run every five
-    # minutes, but the point-in-time research universe is sampled once per 30-minute
-    # bucket and is never overwritten by later survivor information from that bucket.
     if not target.exists():
-        tmp = archive_dir / f".{target.name}.tmp.{os.getpid()}"
-        tmp.write_bytes(encoded_snapshot(payload))
+        temporary = archive_dir / f".{target.name}.tmp.{os.getpid()}"
+        temporary.write_bytes(encoded_snapshot(payload))
         try:
-            # Atomic no-clobber publication on a normal local/server filesystem.
-            os.link(tmp, target)
+            os.link(temporary, target)
             created = True
         except FileExistsError:
             created = False
         finally:
-            try:
-                tmp.unlink()
-            except FileNotFoundError:
-                pass
+            temporary.unlink(missing_ok=True)
 
     reference_now = int(now_ts if now_ts is not None else time.time())
-    retention_seconds = max(86400, int(float(retention_days) * 86400))
-    cutoff = reference_now - retention_seconds
+    cutoff = reference_now - max(86400, int(float(retention_days) * 86400))
     removed = 0
     for candidate in archive_dir.glob("universe-*.json.gz"):
-        ts = _snapshot_timestamp(candidate)
-        if ts is not None and ts < cutoff:
+        timestamp = _snapshot_timestamp(candidate)
+        if timestamp is not None and timestamp < cutoff:
             candidate.unlink(missing_ok=True)
             removed += 1
-
     return {
         "schema": "polymarket_v7_point_in_time_universe_archive_status_v1",
         "source_cache": str(cache_path),
@@ -138,18 +125,13 @@ def archive_once(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Archive immutable point-in-time Polymarket universe snapshots")
+    parser = argparse.ArgumentParser(description="Archive immutable V7 point-in-time Polymarket universes")
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--archive-dir", type=Path, required=True)
     parser.add_argument("--cadence-seconds", type=int, default=1800)
     parser.add_argument("--retention-days", type=float, default=45.0)
     args = parser.parse_args()
-    summary = archive_once(
-        args.cache,
-        args.archive_dir,
-        cadence_seconds=args.cadence_seconds,
-        retention_days=args.retention_days,
-    )
+    summary = archive_once(args.cache, args.archive_dir, cadence_seconds=args.cadence_seconds, retention_days=args.retention_days)
     print(json.dumps(summary, sort_keys=True))
     return 0
 

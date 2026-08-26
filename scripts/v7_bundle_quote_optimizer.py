@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from v6_market_common import (
+from v7_market_common import (
     TapeFlow,
     fee_per_share,
     fill_probability_proxy,
@@ -147,7 +147,7 @@ def bundle_edge(legs: list[Leg], clob: str) -> tuple[float, bool]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="V7 per-leg queue/flow quote optimizer; final joint completion/economics are delegated to the v3 round-trip state guard")
+    parser = argparse.ArgumentParser(description="V7 per-leg queue/flow quote optimizer; final joint completion and economics belong to the V7 round-trip guard")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--input", type=Path, action="append", required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -244,10 +244,13 @@ def main() -> int:
         changed = any(abs(leg.price - initial) > 1e-12 for leg, initial in zip(legs, initial_prices))
         improved_bundles += int(changed)
         diagnostics.append({
-            "bundle_id": bundle_id, "strategy": strategy, "edge": edge,
+            "bundle_id": bundle_id,
+            "strategy": strategy,
+            "edge": edge,
             "minimum_marginal_fill_probability": min_fill,
             "bottleneck_quote_priority_score": bottleneck_score,
-            "improved": changed, "ticks_spent": sum(ticks_used),
+            "improved": changed,
+            "ticks_spent": sum(ticks_used),
             "final_joint_completion_estimator": "v7_graph_roundtrip_guard_empirical_fixed_horizon_joint_state",
             "marginal_product_used_for_admission": False,
         })
@@ -262,11 +265,15 @@ def main() -> int:
 
     atomic_csv(args.output, accepted_rows)
     status = {
-        "timestamp": now, "paper_only": True,
+        "schema": "polymarket_v7_bundle_quote_optimizer_status_v1",
+        "timestamp": now,
+        "paper_only": True,
         "input_bundles": len(grouped),
         "accepted_for_prospective_joint_observation": len({row["bundle_id"] for row in accepted_rows}),
-        "accepted_rows": len(accepted_rows), "improved_bundles": improved_bundles,
-        "rejections": dict(sorted(reject.items())), "diagnostics": diagnostics[:50],
+        "accepted_rows": len(accepted_rows),
+        "improved_bundles": improved_bundles,
+        "rejections": dict(sorted(reject.items())),
+        "diagnostics": diagnostics[:50],
         "joint_completion_estimator": "none_in_quote_optimizer",
         "joint_completion_owner": "v7_graph_roundtrip_guard.py",
         "product_of_marginals_forbidden": True,
