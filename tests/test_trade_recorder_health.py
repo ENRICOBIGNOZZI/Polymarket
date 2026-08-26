@@ -12,6 +12,13 @@ assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
+DIAG_SPEC = importlib.util.spec_from_file_location(
+    "diagnose_trade_api_empty_tape", ROOT / "scripts" / "diagnose_trade_api_empty_tape.py"
+)
+assert DIAG_SPEC and DIAG_SPEC.loader
+DIAG = importlib.util.module_from_spec(DIAG_SPEC)
+DIAG_SPEC.loader.exec_module(DIAG)
+
 
 class TradeRecorderHealthTest(unittest.TestCase):
     def fields(self, **updates: int) -> dict[str, int]:
@@ -104,6 +111,51 @@ class TradeRecorderHealthTest(unittest.TestCase):
         split = source.index("if (hi - lo > 1)")
         terminal_error = source.index("++errors;", split)
         self.assertLess(split, terminal_error)
+
+    def test_empty_tape_diagnostic_builds_documented_query_shapes(self) -> None:
+        windowed = DIAG.trades_url(conditions=["a", "b"], start=100, end=200)
+        self.assertIn("limit=1000", windowed)
+        self.assertIn("offset=0", windowed)
+        self.assertIn("takerOnly=true", windowed)
+        self.assertIn("start=100", windowed)
+        self.assertIn("end=200", windowed)
+        self.assertIn("market=a,b", windowed)
+        unwindowed = DIAG.trades_url(conditions=["a", "b"])
+        self.assertNotIn("start=", unwindowed)
+        self.assertNotIn("end=", unwindowed)
+        self.assertIn("market=a,b", unwindowed)
+        global_url = DIAG.trades_url()
+        self.assertNotIn("market=", global_url)
+
+    def test_empty_tape_diagnostic_classifies_filter_and_universe_controls(self) -> None:
+        empty = {
+            "batch_windowed": {"local_window_discovered_matches": 0},
+            "batch_unwindowed": {"local_window_discovered_matches": 0},
+            "single_windowed": {"local_window_discovered_matches": 0},
+            "global_recent": {"local_window_rows": 4, "local_window_discovered_matches": 0},
+        }
+        self.assertEqual(
+            DIAG.classify(empty),
+            "global_tape_active_but_sampled_universe_has_no_recent_matches",
+        )
+        window_interaction = {
+            **empty,
+            "batch_unwindowed": {"local_window_discovered_matches": 2},
+        }
+        self.assertEqual(DIAG.classify(window_interaction), "server_window_filter_interaction")
+        csv_interaction = {
+            **empty,
+            "single_windowed": {"local_window_discovered_matches": 1},
+        }
+        self.assertEqual(DIAG.classify(csv_interaction), "csv_market_filter_interaction")
+
+    def test_live_smoke_runs_bounded_diagnostic_only_after_empty_recorder(self) -> None:
+        source = (ROOT / "scripts" / "v6_live_smoke_once.sh").read_text(encoding="utf-8")
+        self.assertIn("trade_recorder_latest.log", source)
+        self.assertIn("diagnose_trade_api_empty_tape.py", source)
+        self.assertIn("trade_api_empty_tape_diagnostic.json", source)
+        self.assertIn("fetched=0", source)
+        self.assertLess(source.index("polymarket_trade_recorder"), source.index("diagnose_trade_api_empty_tape.py"))
 
 
 if __name__ == "__main__":
