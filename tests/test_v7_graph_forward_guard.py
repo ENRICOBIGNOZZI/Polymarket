@@ -11,6 +11,7 @@ if str(SCRIPTS) not in sys.path:
 
 import v7_graph_forward_guard as guard
 from test_v7_graph_transport_guard import *  # noqa: F401,F403
+from test_v7_graph_execution_guard import *  # noqa: F401,F403
 
 
 def test_signature_is_stable_and_event_scoped():
@@ -62,4 +63,4 @@ if __name__ == "__main__":
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
     for test in tests:
         test()
-    print(f"ok {len(tests)} graph forward/transport guard tests")
+    print(f"ok {len(tests)} graph forward/transport/executable guard tests")
