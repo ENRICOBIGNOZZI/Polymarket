@@ -1,0 +1,61 @@
+{
+  "schema": "lf_v6_history_spacing_audit_v1",
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "base_main_sha": "9f694b3ef24cfa6ddf68f733a871c4e0c31e1489",
+  "repaired_frontier_pr": 374,
+  "repaired_frontier_head": "24559447d60a3d17cd1e17f8c48c19becea47d16",
+  "finding": "Local Factor intersects available timestamps but does not require adjacent common timestamps to be separated by the configured fidelity. AR persistence and half-life are then estimated per observed row while wall-clock conversion still assumes one configured-fidelity bar per row.",
+  "deterministic_counterexample": {
+    "true_hourly_phi": 0.95,
+    "true_half_life_hours": 13.513407333964874,
+    "six_hour_observation_gaps": {
+      "phi_seen_as_one_step": 0.7350918906249998,
+      "modeled_half_life_hours_if_fidelity_is_60m": 2.252234555660812,
+      "two_modeled_half_lives_hold_hours": 4.504469111321624,
+      "modeled_reversion_fraction": 0.75,
+      "true_reversion_fraction_over_same_wall_clock": 0.2062994740159002,
+      "reversion_overstatement_ratio": 3.6354915763973055
+    },
+    "twelve_hour_observation_gaps": {
+      "phi_seen_as_one_step": 0.5403600876626367,
+      "modeled_half_life_hours_if_fidelity_is_60m": 1.126117277830406,
+      "two_modeled_half_lives_hold_hours": 2.252234555660812,
+      "modeled_reversion_fraction": 0.75,
+      "true_reversion_fraction_over_same_wall_clock": 0.10910128185966073,
+      "reversion_overstatement_ratio": 6.874346361619662
+    }
+  },
+  "current_execution_evidence": {
+    "canonical_live_smoke_sha": "9f694b3ef24cfa6ddf68f733a871c4e0c31e1489",
+    "trade_recorder_status": "unhealthy",
+    "trade_recorder_failures": [
+      "no_public_trades_fetched",
+      "missing_last_trade_timestamp"
+    ],
+    "public_trades_fetched": 0,
+    "graph_rv_bundles": 1,
+    "graph_rv_rows": 3,
+    "graph_rv_max_quote_edge": 0.030000000000000027,
+    "completed_bundles": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "economic_interpretation": "zero fills/completions are not valid economic evidence while the canonical public tape is unhealthy"
+  },
+  "required_successor_contract": [
+    "build a regular common timestamp grid at the requested fidelity and reject or explicitly model gaps",
+    "estimate persistence/mean-reversion speed in wall-clock units when observations are irregular",
+    "do not count a k-bar gap as one AR transition",
+    "exclude or separately handle the incomplete current bucket",
+    "use actual elapsed time in the null-preserving bootstrap and n-step forecast",
+    "rerun common chronological incumbent/repaired/aggressive comparisons only after this temporal repair",
+    "preserve pair-common-factor, price-PnL hedge, TTR, joint-fill and abort/unwind requirements from the other LF blockers"
+  ],
+  "safety": {
+    "paper_only": true,
+    "max_drawdown": 0.15,
+    "kill_switch_required": true,
+    "authenticated_execution": false,
+    "real_money_execution": false,
+    "authorized_paper_envelope_unchanged": true
+  }
+}
