@@ -1,0 +1,62 @@
+{
+  "schema": "lf_external_frozen_trade_stress_current_evidence_v1",
+  "generated_utc": "2026-08-26T04:21:19+00:00",
+  "base_sha": "e417dfefd99312712c1f9e33efa8e2e847b492e5",
+  "status": "BLOCKING_EVIDENCE_DEFECT",
+  "boundary": "research_only_no_authenticated_execution",
+  "current_external_candidate": {
+    "candidate_id": "external:gdelt:news_count_recent:3600s",
+    "telemetry_generated_utc": "2026-08-26T03:41:46+00:00",
+    "oos_predictions": 134,
+    "trades_at_1x": 80,
+    "reported_cost_stress_net_pnl_per_share": {
+      "1.0": 0.41,
+      "1.5": 0.545,
+      "2.0": 0.513
+    },
+    "bootstrap_pvalue": 0.26673326673326675,
+    "positive_fold_fraction": 0.25,
+    "profit_factor": 1.5099502487562184,
+    "mse_improvement": 0.0000560001183988728,
+    "gate_pass": false,
+    "existing_gate_failures": [
+      "bootstrap_gate",
+      "fold_stability_gate"
+    ]
+  },
+  "defect": {
+    "location": "scripts/external_intelligence.py:evaluate_candidate",
+    "description": "The backtester calls trade_pnl independently for each cost multiplier. Because trade_pnl includes the admission threshold, the 1.5x and 2x trade sets are reselected instead of holding the 1x trade set fixed.",
+    "consequence": "Reported higher-cost PnL can increase because marginal losing trades disappear. The metric is a re-optimized admission frontier, not robustness of the executed trade set.",
+    "observed_symptom": "The current GDELT 1h candidate reports 0.41 PnL/share at 1x but 0.545 at 1.5x despite higher costs.",
+    "promotion_impact": "Do not interpret positive 1.5x/2x values as cost robustness until frozen-trade stress is computed. q_external remains fail-closed."
+  },
+  "deterministic_counterexample": {
+    "base_extra_cost": 0.002,
+    "reselected_frontier": {
+      "1.0": {"trades": 2, "pnl": 0.016},
+      "1.5": {"trades": 1, "pnl": 0.037},
+      "2.0": {"trades": 1, "pnl": 0.036}
+    },
+    "frozen_1x_trade_set": {
+      "1.0": {"trades": 2, "pnl": 0.016},
+      "1.5": {"trades": 2, "pnl": 0.014},
+      "2.0": {"trades": 2, "pnl": 0.012}
+    }
+  },
+  "successor_contract": {
+    "required_primary_metric": "frozen_1x_trade_set_pnl_under_1x_1.5x_2x_costs",
+    "secondary_diagnostic": "reoptimized_admission_frontier_by_cost_multiplier",
+    "required_execution_upgrade": "exact_point_in_time_CLOB_entry_and_horizon_exit_quotes_with_depth_fee_latency_and_slippage",
+    "required_ablation": "same chronological decisions with and without external feature",
+    "coordination": "Complements PR #385, which owns the separate midpoint-target versus horizon-executable-hurdle defect; do not duplicate that work.",
+    "promotion_gate": "No external candidate is evidence-ready until frozen-trade stress, exact-CLOB replay, bootstrap and fold-stability gates all pass."
+  },
+  "safety": {
+    "authenticated_execution": false,
+    "real_money_execution": false,
+    "live_champion_mutation": false,
+    "paper_risk_limits_changed": false,
+    "max_drawdown_changed": false
+  }
+}
