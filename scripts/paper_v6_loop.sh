@@ -7,28 +7,10 @@ cd "$ROOT"
 CONFIG="${1:-config/paper_v6.json}"
 BASE_CONFIG="$CONFIG"
 RUN_ROOT="${2:-runs/paper_v6_live}"
-read -r CONFIG_MARKETS CONFIG_MIN_LIQUIDITY CONFIG_INTENT_MIN_EDGE CONFIG_MAX_TRADE_USD CONFIG_HARD_ARB_MIN_EDGE CONFIG_HARD_ARB_MAX_TRADE_USD < <(python3 - "$BASE_CONFIG" <<'PY'
-import json, sys
-from pathlib import Path
-cfg=json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
-v6=cfg['v6']
-print(
-    int(cfg['market_limit']),
-    float(cfg['min_liquidity']),
-    float(v6['intent_min_edge']),
-    float(cfg['max_trade_usd']),
-    float(v6['hard_arb_min_net_edge']),
-    float(v6['hard_arb_max_trade_usd']),
-)
-PY
-)
-MIN_LIQUIDITY="${V6_MIN_LIQUIDITY:-$CONFIG_MIN_LIQUIDITY}"
-MARKETS="${V6_MARKETS:-$CONFIG_MARKETS}"
-RECORDER_MARKETS="${V6_RECORDER_MARKETS:-$MARKETS}"
-INTENT_MIN_EDGE="${V6_INTENT_MIN_EDGE:-$CONFIG_INTENT_MIN_EDGE}"
-MAX_TRADE_USD="${V6_MAX_TRADE_USD:-$CONFIG_MAX_TRADE_USD}"
-HARD_ARB_MIN_EDGE="${V6_HARD_ARB_MIN_EDGE:-$CONFIG_HARD_ARB_MIN_EDGE}"
-HARD_ARB_MAX_TRADE_USD="${V6_HARD_ARB_MAX_TRADE_USD:-$CONFIG_HARD_ARB_MAX_TRADE_USD}"
+MIN_LIQUIDITY="${V6_MIN_LIQUIDITY:-10}"
+MARKETS="${V6_MARKETS:-700}"
+RECORDER_MARKETS="${V6_RECORDER_MARKETS:-1200}"
+INTENT_MIN_EDGE="${V6_INTENT_MIN_EDGE:-0.00020}"
 RUNTIME_PARENT_PID="${POLYMARKET_RUNTIME_PARENT_PID:-}"
 mkdir -p "$RUN_ROOT" "$RUN_ROOT/maker" "$RUN_ROOT/micro_taker" "$RUN_ROOT/hard_arb" "$RUN_ROOT/external"
 
@@ -68,9 +50,11 @@ for name,frac in alloc:
     child={k:x for k,x in cfg.items() if k not in {'v6','multi_strategy'}}
     child['starting_capital']=total*float(frac); child['run_dir']=str(root/name)
     child['expert_weights']={'micro':0.0,'pca':0.0,'graph':0.0,'semantic':0.0,'external':0.0}
-    # Dollar trade limits are ceilings, not a reason to inflate the configured
-    # market-fraction cap inside a smaller sleeve. Each child therefore inherits
-    # the parent 5% market cap and also observes the explicit $/trade ceiling.
+    # Keep the global $/trade ceiling economically reachable inside the smaller
+    # maker sleeve instead of accidentally shrinking it to 2.5% of sleeve NAV.
+    if name=='maker' and child['starting_capital']>0:
+        trade_cap=float(cfg.get('max_trade_usd',60.0))
+        child['max_market_fraction']=max(float(child.get('max_market_fraction',0.0)),min(1.0,trade_cap/child['starting_capital']))
     if name=='external':
         child['external_signals_file']=str(root/'external_signals.csv'); child['expert_weights']['external']=1.0; child['uncertainty_penalty']=0.0
     (root/f'{name}_config.json').write_text(json.dumps(child,indent=2,sort_keys=True)+'\n')
@@ -85,14 +69,6 @@ proxy_restarts=0; rec_restarts=0; broker_restarts=0; external_restarts=0
 start_proxy(){ PYTHONUNBUFFERED=1 python3 scripts/v6_market_proxy.py --host 127.0.0.1 --port "$MARKET_PROXY_PORT" --gamma "$GAMMA_URL" --clob "$CLOB_URL" --cache "$RUN_ROOT/market_proxy_cache.json" --status "$RUN_ROOT/market_proxy_status.json" >>"$RUN_ROOT/market_proxy.log" 2>&1 & proxy_pid=$!; }
 start_recorder(){ ./build/polymarket_trade_recorder --config "$CONFIG" --run-dir "$RUN_ROOT" --markets "$RECORDER_MARKETS" --batch 40 --min-liquidity "$MIN_LIQUIDITY" --lookback-seconds 900 --interval 5 --loop >>"$RUN_ROOT/trade_recorder.log" 2>&1 & rec_pid=$!; }
 start_broker(){ python3 scripts/v6_multileg_launcher.py --lock "$RUN_ROOT/multileg.lock" -- ./build/polymarket_multileg_paper --config "$RUN_ROOT/broker_config.json" --run-dir "$RUN_ROOT" --intents "$RUN_ROOT/intents.csv" --trade-tape "$RUN_ROOT/trade_tape.csv" --min-edge "$INTENT_MIN_EDGE" --completion-threshold 0.75 --submit-latency-ms 100 --cancel-latency-ms 100 --max-replaces 6 --max-leg-risk-usd 12 --adverse-horizon-seconds 45 --interval 1 --loop >>"$RUN_ROOT/multileg.log" 2>&1 & broker_pid=$!; }
-refresh_external_feed(){
-  python3 scripts/v6_external_bridge.py --output "$RUN_ROOT/external_signals.csv" --status "$RUN_ROOT/external_bridge_status.json" --max-age-seconds 21600 --min-confidence 0.35 >"$RUN_ROOT/external_bridge.log" 2>&1 || true
-  if [[ ! -s "$RUN_ROOT/external_signals.csv" ]]; then
-    local tmp="$RUN_ROOT/external_signals.csv.tmp.${BASHPID:-$$}"
-    printf 'market_key,q_yes,confidence,source,timestamp\n' >"$tmp"
-    mv "$tmp" "$RUN_ROOT/external_signals.csv"
-  fi
-}
 start_external(){ ./build/polymarket_engine --config "$RUN_ROOT/external_config.json" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --paper --loop >>"$RUN_ROOT/external/engine.log" 2>&1 & external_pid=$!; }
 write_supervisor(){
   local ra=0 ba=0 ea=0; kill -0 "$rec_pid" 2>/dev/null&&ra=1||true; kill -0 "$broker_pid" 2>/dev/null&&ba=1||true; kill -0 "$external_pid" 2>/dev/null&&ea=1||true
@@ -132,7 +108,7 @@ is_same_repository_v6_loop(){
   [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
   command_line="$(process_command "$pid")"
   [[ "$command_line" == *"paper_v6_loop.sh"* ]] || return 1
-  # Current launchers use an absolute script path. Older macOS launchd
+  # Current launchers use an absolute script path.  Older macOS launchd
   # instances can retain `bash scripts/paper_v6_loop.sh`; accept that form
   # only after the process working directory proves it is this repository.
   [[ "$command_line" == *"$ROOT/scripts/paper_v6_loop.sh"* ]] && return 0
@@ -179,6 +155,20 @@ is_same_repository_v6_proxy_listener(){
   cwd="$(process_cwd "$pid")"
   [[ "$cwd" == "$ROOT" ]]
 }
+is_v6_broker_for_run(){
+  local pid="$1" command_line executable
+  [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" != "$$" ]] || return 1
+  command_line="$(process_command "$pid")"
+  executable="$(process_executable "$pid")"
+  [[ "$executable" == *"polymarket_multileg_paper"* ]] || return 1
+  [[ "$command_line" == *"--run-dir"* && "$command_line" == *"$RUN_ROOT"* ]]
+}
+is_same_repository_v6_broker(){
+  local pid="$1" cwd
+  is_v6_broker_for_run "$pid" || return 1
+  cwd="$(process_cwd "$pid")"
+  [[ "$cwd" == "$ROOT" ]]
+}
 reap_stale_v6_proxy_listener(){
   # A loop that died before its child process group could be collected leaves a
   # live old proxy on the fixed localhost port.  Merely curling /healthz would
@@ -209,6 +199,35 @@ reap_stale_v6_proxy_listener(){
   echo "fatal: stale V6 proxy listener did not exit before startup" >&2
   return 1
 }
+reap_stale_v6_brokers(){
+  # The multi-leg launcher owns a lock, but an older orphan may still be
+  # writing shared state before that lock is observed.  Retire only an exact
+  # same-repository broker for this run root outside the active owner tree.
+  [[ -n "$RUNTIME_PARENT_PID" ]] || return 0
+  command -v pgrep >/dev/null 2>&1 || return 0
+  command -v lsof >/dev/null 2>&1 || { echo "fatal: V6 broker ownership requires lsof" >&2; return 1; }
+  local pid remaining attempt
+  for ((attempt=1; attempt<=25; ++attempt)); do
+    remaining=0
+    while IFS= read -r pid; do
+      is_v6_broker_for_run "$pid" || continue
+      is_current_runtime_descendant "$pid" && continue
+      if ! is_same_repository_v6_broker "$pid"; then
+        echo "fatal: V6 multi-leg broker for $RUN_ROOT is owned by unverified pid=$pid" >&2
+        return 1
+      fi
+      remaining=1
+      if (( attempt == 1 )); then
+        echo "stale_v6_broker_reaped=$pid" >&2
+        kill -TERM "$pid" 2>/dev/null || true
+      fi
+    done < <(pgrep -f 'polymarket_multileg_paper' 2>/dev/null || true)
+    (( remaining == 0 )) && return 0
+    sleep 0.2
+  done
+  echo "fatal: stale V6 multi-leg broker did not exit before startup" >&2
+  return 1
+}
 proxy_pid_owns_port(){
   [[ "$proxy_pid" =~ ^[1-9][0-9]*$ ]] || return 1
   kill -0 "$proxy_pid" 2>/dev/null || return 1
@@ -233,13 +252,9 @@ trap cleanup EXIT
 trap shutdown INT TERM
 reap_stale_v6_loops
 reap_stale_v6_proxy_listener
-# Stale multi-leg ownership is recovered only by v6_multileg_launcher.py,
-# whose lock-owner PID, command, repository cwd and runtime ancestry checks were
-# separately approved and validated. Do not add a second broad process-kill path
-# here without an exact-head private canary that proves the real broker cases.
+reap_stale_v6_brokers
 start_proxy
 wait_for_owned_proxy || { echo "fatal: V6 market proxy failed to start with verified port ownership" >&2; exit 1; }
-refresh_external_feed
 start_recorder;start_broker;start_external;write_supervisor
 
 # Backward-safe deployment: new queue-aware flags are used as soon as the rebuilt
@@ -249,7 +264,7 @@ if ./build/polymarket_maker_paper --help 2>&1 | grep -q -- '--improve-ticks'; th
   MAKER_QUEUE_ARGS=(--improve-ticks 1 --max-queue-multiple 6)
 fi
 
-last_factor=0;last_relation=0;last_external="$(date +%s)";last_report=0;last_micro_taker=0;last_hard_arb=0
+last_factor=0;last_relation=0;last_external=0;last_report=0;last_micro_taker=0;last_hard_arb=0
 rebuild_intents(){ python3 scripts/merge_v4_intents.py --input "$RUN_ROOT/local_factor_intents.csv" --input "$RUN_ROOT/relation_intents.csv" --output "$RUN_ROOT/intents.csv" --min-edge "$INTENT_MIN_EDGE" --max-age-seconds 240 --max-bundles 120 >>"$RUN_ROOT/intent_merge.log" 2>&1||true; }
 
 while true;do
@@ -272,7 +287,7 @@ while true;do
 
   # Micro maker: edge-aware inside-spread improvement plus FIFO queue gating.
   # Do not fake fills: the actual paper fill still requires compatible taker SELL flow.
-  ./build/polymarket_maker_paper --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-order-usd "$MAX_TRADE_USD" --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.10 "${MAKER_QUEUE_ARGS[@]}" --once >>"$RUN_ROOT/maker.log" 2>&1||true
+  ./build/polymarket_maker_paper --config "$RUN_ROOT/maker_config.json" --run-dir "$RUN_ROOT/maker" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-order-usd 60 --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.10 "${MAKER_QUEUE_ARGS[@]}" --once >>"$RUN_ROOT/maker.log" 2>&1||true
 
   # Micro taker: online short-horizon markout model; mandatory horizon exit.
   if ((now-last_micro_taker>=5));then
@@ -283,7 +298,7 @@ while true;do
   # Hard graph arbitrage: complete non-augmented NegRisk sets only. Admission is
   # all-or-none against displayed ask depth in one snapshot, after fee/slippage.
   if ((now-last_hard_arb>=10));then
-    python3 scripts/v6_hard_arb_paper.py --config "$RUN_ROOT/hard_arb_config.json" --run-dir "$RUN_ROOT/hard_arb" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --max-events 80 --min-edge "$HARD_ARB_MIN_EDGE" --max-trade-usd "$HARD_ARB_MAX_TRADE_USD" --slippage-bps 5 >>"$RUN_ROOT/hard_arb.log" 2>&1||true
+    python3 scripts/v6_hard_arb_paper.py --config "$RUN_ROOT/hard_arb_config.json" --run-dir "$RUN_ROOT/hard_arb" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --max-events 80 --min-edge 0.00020 --max-trade-usd 60 --slippage-bps 5 >>"$RUN_ROOT/hard_arb.log" 2>&1||true
     last_hard_arb=$now
   fi
 
@@ -292,19 +307,19 @@ while true;do
     # Legacy B1 is diagnostic only under strict gates and cannot generate V6 intents.
     ./build/polymarket_stat_arb --config "$RUN_ROOT/broker_config.json" --markets "$MARKETS" --history-universe 300 --lookback-hours 720 --fidelity-minutes 30 --min-z 1.25 --min-t-reversion 2.00 --max-half-life-hours 168 --top 150 --csv "$RUN_ROOT/stat_arb_pairs_diagnostic.csv" >"$RUN_ROOT/stat_arb_pairs_diagnostic.log" 2>"$RUN_ROOT/stat_arb_pairs_errors.log"||true
     # Production mean reversion: local panel, common sample and BH-FDR controlled.
-    python3 scripts/v6_local_factor_intents.py --config "$CONFIG" --output "$RUN_ROOT/local_factor_intents.csv" --status "$RUN_ROOT/local_factor_status.json" --markets 400 --min-liquidity "$MIN_LIQUIDITY" --lookback-hours 336 --fidelity-minutes 60 --max-clusters 15 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge "$INTENT_MIN_EDGE" --max-trade-usd "$MAX_TRADE_USD" --slippage-bps 5 >"$RUN_ROOT/local_factor_latest.log" 2>"$RUN_ROOT/local_factor_errors.log"||true
+    python3 scripts/v6_local_factor_intents.py --config "$CONFIG" --output "$RUN_ROOT/local_factor_intents.csv" --status "$RUN_ROOT/local_factor_status.json" --markets 400 --min-liquidity "$MIN_LIQUIDITY" --lookback-hours 336 --fidelity-minutes 60 --max-clusters 15 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 --slippage-bps 5 >"$RUN_ROOT/local_factor_latest.log" 2>"$RUN_ROOT/local_factor_errors.log"||true
     rebuild_intents;last_factor=$now
   fi
 
   if ((now-last_relation>=30));then
     # Semantic parsing discovers relations only. Maker bundles are GRAPH_RV, not hard arb.
-    python3 scripts/v6_relation_intents.py --config "$CONFIG" --output "$RUN_ROOT/relation_intents_raw.csv" --status "$RUN_ROOT/relation_status.json" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-trade-usd "$MAX_TRADE_USD" --max-events 80 >"$RUN_ROOT/relation_latest.log" 2>"$RUN_ROOT/relation_errors.log"||true
+    python3 scripts/v6_relation_intents.py --config "$CONFIG" --output "$RUN_ROOT/relation_intents_raw.csv" --status "$RUN_ROOT/relation_status.json" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$INTENT_MIN_EDGE" --max-trade-usd 60 --max-events 80 >"$RUN_ROOT/relation_latest.log" 2>"$RUN_ROOT/relation_errors.log"||true
     python3 scripts/v6_intent_guard.py --input "$RUN_ROOT/relation_intents_raw.csv" --output "$RUN_ROOT/relation_intents.csv" --status "$RUN_ROOT/relation_guard_status.json" --min-edge "$INTENT_MIN_EDGE" --stress-bps 10 --max-age-seconds 240 >>"$RUN_ROOT/relation_guard.log" 2>&1||true
     rebuild_intents;last_relation=$now
   fi
 
   if ((now-last_external>=60));then
-    refresh_external_feed
+    python3 scripts/v6_external_bridge.py --output "$RUN_ROOT/external_signals.csv" --status "$RUN_ROOT/external_bridge_status.json" --max-age-seconds 21600 --min-confidence 0.35 >"$RUN_ROOT/external_bridge.log" 2>&1||true
     last_external=$now
   fi
 
