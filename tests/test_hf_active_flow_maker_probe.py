@@ -1,0 +1,170 @@
+from __future__ import annotations
+
+import argparse
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str((Path(__file__).resolve().parents[1] / "scripts")))
+
+from hf_active_flow_maker_probe import (  # noqa: E402
+    Book,
+    Candidate,
+    Fee,
+    Flow,
+    Level,
+    Market,
+    ShadowOrder,
+    Trade,
+    activity_eligible,
+    build_candidates,
+    consume,
+    fee_per_share,
+    fill_probability_proxy,
+    flow_stats,
+    select_with_caps,
+)
+
+
+def args() -> argparse.Namespace:
+    return argparse.Namespace(
+        starting_capital=1200.0,
+        max_order_usd=125.0,
+        max_market_fraction=0.05,
+        max_event_fraction=0.15,
+        max_gross_fraction=0.70,
+        max_drawdown=0.15,
+        max_spread=0.15,
+        min_confidence=0.10,
+        slippage_bps=5.0,
+        adverse_selection_mult=0.15,
+        toxicity_mult=0.25,
+        improve_ticks=1,
+        recent_lookback_seconds=120,
+        min_recent_trades=2,
+        min_sell_prints=2,
+        max_event_age_seconds=60,
+        min_fill_probability=0.02,
+        max_sell_toxicity=0.80,
+        min_edge=0.00005,
+    )
+
+
+def market(mid: str = "m1", event: str = "e1") -> Market:
+    return Market(mid, "c-" + mid, event, "slug-" + mid, "yes-" + mid, "no-" + mid,
+                  1000.0, 5000.0, Fee(0.0, 1.0, True, "test"))
+
+
+def book(token: str, bid: float = 0.48, ask: float = 0.50,
+         bid_size: float = 100.0, ask_size: float = 100.0, tick: float = 0.01) -> Book:
+    return Book(token, [Level(bid, bid_size)], [Level(ask, ask_size)], tick, 1.0)
+
+
+class ActiveFlowMakerProbeTest(unittest.TestCase):
+    def test_fee_formula_matches_engine_per_share_contract(self):
+        fee = Fee(0.07, 1.0, True, "test")
+        self.assertAlmostEqual(fee_per_share(0.4, fee), 0.07 * 0.4 * 0.6)
+        self.assertEqual(fee_per_share(0.4, Fee(0.0, 1.0, True, "zero")), 0.0)
+
+    def test_fill_proxy_requires_recurrence_not_one_large_print(self):
+        one = Flow(1, 0.0, 1000.0, 1000.0, 1, 1, -1.0)
+        three = Flow(3, 0.0, 1000.0, 1000.0, 3, 1, -1.0)
+        self.assertAlmostEqual(fill_probability_proxy(one, 100.0, 10.0), 1.0 / 3.0)
+        self.assertEqual(fill_probability_proxy(three, 100.0, 10.0), 1.0)
+
+    def test_activity_gate_rejects_dead_and_extremely_toxic_flow(self):
+        a = args()
+        dead = Flow(0, 0.0, 0.0, 0.0, 0, None, 0.0)
+        self.assertFalse(activity_eligible(dead, 10.0, 10.0, a))
+        toxic = Flow(4, 0.0, 100.0, 100.0, 4, 1, -1.0)
+        self.assertFalse(activity_eligible(toxic, 10.0, 10.0, a))
+        healthy = Flow(4, 60.0, 40.0, 40.0, 2, 1, 0.2)
+        self.assertTrue(activity_eligible(healthy, 10.0, 10.0, a))
+
+    def test_flow_stats_uses_event_time_window_and_compatible_sell_price(self):
+        rows = [
+            Trade("old", "tok", "SELL", 0.48, 100.0, 870),
+            Trade("s1", "tok", "SELL", 0.48, 10.0, 950),
+            Trade("s2", "tok", "SELL", 0.51, 20.0, 980),
+            Trade("b1", "tok", "BUY", 0.50, 30.0, 990),
+            Trade("future", "tok", "SELL", 0.47, 100.0, 1001),
+        ]
+        flow = flow_stats(rows, "tok", 1000, 120, 0.49)
+        self.assertEqual(flow.trade_count, 3)
+        self.assertEqual(flow.compatible_sell_prints, 1)
+        self.assertAlmostEqual(flow.compatible_sell_volume, 10.0)
+        self.assertEqual(flow.last_event_age, 10)
+
+    def test_baseline_can_select_static_book_but_active_requires_recent_flow(self):
+        a = args()
+        m = market()
+        books = {m.yes_token: book(m.yes_token), m.no_token: book(m.no_token)}
+        baseline, active = build_candidates([m], books, {}, 1000, {m.market_id}, a)
+        self.assertGreaterEqual(len(baseline), 1)
+        self.assertEqual(active, [])
+
+    def test_active_flow_candidate_is_created_from_recurrent_balanced_flow(self):
+        a = args()
+        m = market()
+        books = {m.yes_token: book(m.yes_token), m.no_token: book(m.no_token)}
+        trades = [
+            Trade("s1", m.yes_token, "SELL", 0.48, 40.0, 980),
+            Trade("s2", m.yes_token, "SELL", 0.48, 40.0, 990),
+            Trade("b1", m.yes_token, "BUY", 0.50, 40.0, 985),
+            Trade("b2", m.yes_token, "BUY", 0.50, 40.0, 995),
+        ]
+        _, active = build_candidates([m], books, {m.condition_id: trades}, 1000, {m.market_id}, a)
+        self.assertTrue(any(c.side == "YES" for c in active))
+        yes = next(c for c in active if c.side == "YES")
+        self.assertGreater(yes.fill_probability_proxy, 0.02)
+        self.assertGreater(yes.adjusted_edge, a.min_edge)
+
+    def test_inside_spread_is_not_taken_when_tick_consumes_edge(self):
+        a = args()
+        m = market()
+        books = {m.yes_token: book(m.yes_token, 0.48, 0.50), m.no_token: book(m.no_token, 0.48, 0.50)}
+        trades = [
+            Trade("s1", m.yes_token, "SELL", 0.48, 50.0, 990),
+            Trade("s2", m.yes_token, "SELL", 0.48, 50.0, 995),
+            Trade("b1", m.yes_token, "BUY", 0.50, 100.0, 996),
+        ]
+        _, active = build_candidates([m], books, {m.condition_id: trades}, 1000, {m.market_id}, a)
+        yes = next(c for c in active if c.side == "YES")
+        self.assertEqual(yes.improvement_ticks, 0)
+        self.assertAlmostEqual(yes.limit_price, 0.48)
+
+    def test_fifo_consumption_is_post_decision_and_respects_actual_tick(self):
+        a = args()
+        m = market()
+        flow = Flow(4, 20.0, 20.0, 20.0, 2, 1, 0.0)
+        c = Candidate("active_flow", m, "YES", m.yes_token, 0.001, 0.500, 5.0, 10.0,
+                      0.01, 0.01, 0.5, 0, flow, 0.2, 0.002)
+        order = ShadowOrder(c, 1000, 1000000, 1060, 5.0, 10.0)
+        trades = [
+            Trade("old", m.yes_token, "SELL", 0.5000, 100.0, 1000),
+            Trade("too-high", m.yes_token, "SELL", 0.5003, 100.0, 1001),
+            Trade("q", m.yes_token, "SELL", 0.5000, 8.0, 1002),
+            Trade("fill", m.yes_token, "SELL", 0.5000, 6.0, 1003),
+        ]
+        consume(order, trades, 1010)
+        self.assertAlmostEqual(order.queue_ahead, 0.0)
+        self.assertAlmostEqual(order.filled, 4.0)
+        self.assertAlmostEqual(order.remaining, 1.0)
+        self.assertEqual(order.first_fill_event_ts, 1003)
+
+    def test_portfolio_selection_enforces_event_and_gross_caps(self):
+        a = args()
+        f = Flow(4, 50, 50, 50, 2, 1, 0)
+        candidates = []
+        for i in range(10):
+            m = market(f"m{i}", "same-event")
+            candidates.append(Candidate("active_flow", m, "YES", m.yes_token, 0.01, 0.5,
+                                        100.0, 0.0, 0.01, 0.01, 0.5, 0, f, 0.5, 0.005))
+        selected = select_with_caps(candidates, 10, a)
+        # Each order is $50 and event cap is $180, so at most three can share the event.
+        self.assertEqual(len(selected), 3)
+        self.assertLessEqual(sum(c.shares * c.limit_price for c in selected), a.max_event_fraction * a.starting_capital)
+
+
+if __name__ == "__main__":
+    unittest.main()
