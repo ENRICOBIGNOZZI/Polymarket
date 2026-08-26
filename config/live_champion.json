@@ -1,13 +1,9 @@
 {
   "schema_version": 1,
-  "enabled": false,
-  "version": null,
-  "loop": null,
-  "config": null,
-  "run_root": null,
+  "version": 6,
+  "loop": "scripts/paper_v6_loop.sh",
+  "config": "config/paper_v6.json",
+  "run_root": "runs/paper_v6_live",
   "deployment_ref": "paper-validated",
-  "promotion_policy": "automatic validated integration",
-  "paper_only": true,
-  "authenticated_execution": false,
-  "reason": "V3-V6 retired immediately by operator directive; no operational champion until a V7 revision is validated and promoted."
+  "promotion_policy": "automatic validated integration"
 }

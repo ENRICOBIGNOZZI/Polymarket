@@ -1,0 +1,295 @@
+name: Grafana Permanent Access
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - monitoring/grafana/**
+      - ops/apply_runtime_config_macos.sh
+      - .github/workflows/grafana-access.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: polymarket-grafana-access
+  cancel-in-progress: false
+
+jobs:
+  deploy-grafana-access:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+      GRAFANA_HOSTNAME: mamma-portfolio
+      GRAFANA_FQDN: mamma-portfolio.tail1bae85.ts.net
+      GRAFANA_URL: http://mamma-portfolio.tail1bae85.ts.net
+      CANONICAL_DASHBOARD: polymarket-multi-strategy.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate exact-SHA Grafana bundle
+        id: bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > /tmp/grafana-bundle.env
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("monitoring/grafana/dashboards")
+          canonical = root / "polymarket-multi-strategy.json"
+          files = sorted(root.glob("*.json"))
+          assert files, "no Grafana dashboards"
+          for path in files:
+              payload = json.loads(path.read_text(encoding="utf-8"))
+              assert isinstance(payload, dict), path
+          payload = json.loads(canonical.read_text(encoding="utf-8"))
+          uid = str(payload["uid"])
+          title = str(payload["title"])
+          digest = hashlib.sha256(canonical.read_bytes()).hexdigest()
+          print(f"dashboard_uid={uid}")
+          print(f"dashboard_title={title}")
+          print(f"dashboard_sha256={digest}")
+          PY
+          cat /tmp/grafana-bundle.env
+          cat /tmp/grafana-bundle.env >> "$GITHUB_OUTPUT"
+          tar -C monitoring/grafana/dashboards -czf /tmp/polymarket-grafana-assets.tgz .
+          test -s /tmp/polymarket-grafana-assets.tgz
+
+      - name: Select existing Tailscale credential mode
+        id: tailscale_auth
+        continue-on-error: true
+        shell: bash
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${TS_AUTHKEY:-}" ]]; then
+            mode=authkey
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
+            test -n "${TS_TAGS:-}" || { echo "OAuth credentials are visible but TS_TAGS is empty" >&2; exit 1; }
+            mode=oauth
+          else
+            echo "No visible Tailscale credential set. Expected TS_AUTHKEY or TS_OAUTH_CLIENT_ID + TS_OAUTH_SECRET." >&2
+            exit 1
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "tailscale_credential_mode=$mode"
+
+      - name: Join private tailnet with auth key
+        id: tailnet_authkey
+        if: steps.tailscale_auth.outputs.mode == 'authkey'
+        continue-on-error: true
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Join private tailnet with OAuth
+        id: tailnet_oauth
+        if: steps.tailscale_auth.outputs.mode == 'oauth'
+        continue-on-error: true
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Normalize tailnet outcome
+        id: tailnet
+        continue-on-error: true
+        shell: bash
+        env:
+          MODE: ${{ steps.tailscale_auth.outputs.mode }}
+          AUTHKEY_OUTCOME: ${{ steps.tailnet_authkey.outcome }}
+          OAUTH_OUTCOME: ${{ steps.tailnet_oauth.outcome }}
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            authkey) test "$AUTHKEY_OUTCOME" = success ;;
+            oauth) test "$OAUTH_OUTCOME" = success ;;
+            *) exit 1 ;;
+          esac
+
+      - name: Configure SSH identity
+        id: ssh
+        continue-on-error: true
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          {
+            test -n "${SSH_PRIVATE_KEY:-}" || { echo "POLYMARKET_SERVER_SSH_KEY secret is required" >&2; exit 1; }
+            install -d -m 700 ~/.ssh
+            printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_grafana
+            chmod 600 ~/.ssh/polymarket_grafana
+            for i in {1..20}; do
+              if ssh-keyscan -T 3 -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
+                break
+              fi
+              sleep 2
+            done
+            test -s ~/.ssh/known_hosts
+          } 2>&1 | tee grafana-ssh.log
+
+      - name: Apply exact-SHA Grafana bundle
+        id: apply
+        continue-on-error: true
+        shell: bash
+        env:
+          DASHBOARD_UID: ${{ steps.bundle.outputs.dashboard_uid }}
+          DASHBOARD_TITLE: ${{ steps.bundle.outputs.dashboard_title }}
+          DASHBOARD_SHA256: ${{ steps.bundle.outputs.dashboard_sha256 }}
+        run: |
+          set -euo pipefail
+          {
+            scp -i ~/.ssh/polymarket_grafana -o IdentitiesOnly=yes -o BatchMode=yes \
+              -P "$SERVER_PORT" \
+              ops/apply_runtime_config_macos.sh /tmp/polymarket-grafana-assets.tgz \
+              "$SERVER_USER@$SERVER_HOST:/tmp/"
+
+            ssh -i ~/.ssh/polymarket_grafana -o IdentitiesOnly=yes -o BatchMode=yes \
+              -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+              -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+              "DASHBOARD_UID='$DASHBOARD_UID' DASHBOARD_TITLE='$DASHBOARD_TITLE' DASHBOARD_SHA256='$DASHBOARD_SHA256' bash -s" <<'REMOTE'
+            set -euo pipefail
+            assets="$(mktemp -d /tmp/polymarket-grafana-assets.XXXXXX)"
+            cleanup() {
+              rm -rf "$assets"
+              rm -f /tmp/polymarket-grafana-assets.tgz /tmp/apply_runtime_config_macos.sh
+            }
+            trap cleanup EXIT INT TERM
+            tar -xzf /tmp/polymarket-grafana-assets.tgz -C "$assets"
+
+            chmod 700 /tmp/apply_runtime_config_macos.sh
+            POLYMARKET_TAILSCALE_HOSTNAME=mamma-portfolio \
+            POLYMARKET_TAILSCALE_FQDN=mamma-portfolio.tail1bae85.ts.net \
+            POLYMARKET_GRAFANA_URL=http://mamma-portfolio.tail1bae85.ts.net \
+            POLYMARKET_GRAFANA_ASSET_DIR="$assets" \
+              bash /tmp/apply_runtime_config_macos.sh
+
+            expected="$DASHBOARD_SHA256"
+            actual="$(python3 -c 'import hashlib,sys; from pathlib import Path; print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())' "$HOME/.config/polymarket/grafana/dashboards/polymarket-multi-strategy.json")"
+            test "$actual" = "$expected"
+            printf 'dashboard_sha256_verified=%s\n' "$actual"
+
+            sudo -n /usr/local/sbin/polymarket-service-control restart
+
+            for i in {1..30}; do
+              if curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 && \
+                 curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$DASHBOARD_UID" >/tmp/grafana-dashboard.json 2>/dev/null; then
+                break
+              fi
+              sleep 2
+            done
+            curl -fsS http://127.0.0.1:3000/api/health
+            curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$DASHBOARD_UID" >/tmp/grafana-dashboard.json
+            python3 -c 'import json,sys; uid,title,path=sys.argv[1:]; payload=json.load(open(path,encoding="utf-8")); dashboard=payload.get("dashboard") or {}; assert dashboard.get("uid") == uid, dashboard.get("uid"); assert dashboard.get("title") == title, dashboard.get("title")' "$DASHBOARD_UID" "$DASHBOARD_TITLE" /tmp/grafana-dashboard.json
+            grep -F 'default_home_dashboard_path = '"$HOME"'/.config/polymarket/grafana/dashboards/polymarket-multi-strategy.json' \
+              "$HOME/.config/polymarket/grafana.ini"
+
+            TS=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+            if [[ ! -x "$TS" ]]; then TS="$(command -v tailscale)"; fi
+            "$TS" status || true
+            "$TS" serve status || true
+          REMOTE
+          } 2>&1 | tee grafana-apply.log
+
+      - name: Verify exact dashboard from another tailnet node
+        id: verify
+        continue-on-error: true
+        shell: bash
+        env:
+          DASHBOARD_UID: ${{ steps.bundle.outputs.dashboard_uid }}
+          DASHBOARD_TITLE: ${{ steps.bundle.outputs.dashboard_title }}
+        run: |
+          set -euo pipefail
+          {
+            tailscale ping --until-direct=false --c 1 --timeout=10s "$GRAFANA_HOSTNAME"
+            getent hosts "$GRAFANA_FQDN"
+            for i in {1..30}; do
+              if curl -fsS --max-time 5 "$GRAFANA_URL/api/health" >/tmp/grafana-health.json 2>/dev/null && \
+                 curl -fsS --max-time 5 "$GRAFANA_URL/api/dashboards/uid/$DASHBOARD_UID" >/tmp/grafana-dashboard.json 2>/dev/null; then
+                break
+              fi
+              sleep 2
+            done
+            cat /tmp/grafana-health.json
+            grep -q '"database"' /tmp/grafana-health.json
+            python3 -c 'import json,sys; uid,title,path=sys.argv[1:]; payload=json.load(open(path,encoding="utf-8")); dashboard=payload.get("dashboard") or {}; assert dashboard.get("uid") == uid, dashboard.get("uid"); assert dashboard.get("title") == title, dashboard.get("title")' "$DASHBOARD_UID" "$DASHBOARD_TITLE" /tmp/grafana-dashboard.json
+            echo "canonical_operator_url=$GRAFANA_URL" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "dashboard_uid=$DASHBOARD_UID" | tee -a "$GITHUB_STEP_SUMMARY"
+          } 2>&1 | tee grafana-verify.log
+
+      - name: Publish access deployment evidence
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAILNET_OUTCOME: ${{ steps.tailnet.outcome }}
+          SSH_OUTCOME: ${{ steps.ssh.outcome }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          DASHBOARD_UID: ${{ steps.bundle.outputs.dashboard_uid }}
+          DASHBOARD_SHA256: ${{ steps.bundle.outputs.dashboard_sha256 }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          def tail(path):
+              target = Path(path)
+              if not target.exists():
+                  return ""
+              return "\n".join(target.read_text(errors="replace").splitlines()[-80:])
+
+          payload = {
+              "sha": os.environ["GITHUB_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "canonical_url": os.environ["GRAFANA_URL"],
+              "dashboard_uid": os.environ.get("DASHBOARD_UID", ""),
+              "dashboard_sha256": os.environ.get("DASHBOARD_SHA256", ""),
+              "tailnet_outcome": os.environ.get("TAILNET_OUTCOME", ""),
+              "ssh_outcome": os.environ.get("SSH_OUTCOME", ""),
+              "apply_outcome": os.environ.get("APPLY_OUTCOME", ""),
+              "verify_outcome": os.environ.get("VERIFY_OUTCOME", ""),
+              "ssh_log": tail("grafana-ssh.log"),
+              "apply_log": tail("grafana-apply.log"),
+              "verify_log": tail("grafana-verify.log"),
+          }
+          Path("grafana-access-status.json").write_text(json.dumps(payload, indent=2))
+          PY
+          endpoint="repos/${GITHUB_REPOSITORY}/contents/telemetry/grafana-access-status.json"
+          content="$(base64 -w0 grafana-access-status.json)"
+          current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
+          args=("$endpoint" --method PUT -f message="Update Grafana access status" -f content="$content" -f branch=telemetry)
+          if [[ -n "$current_sha" ]]; then args+=(-f sha="$current_sha"); fi
+          gh api "${args[@]}" >/dev/null
+          cat grafana-access-status.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce successful private access
+        if: always()
+        shell: bash
+        env:
+          TAILNET_OUTCOME: ${{ steps.tailnet.outcome }}
+          SSH_OUTCOME: ${{ steps.ssh.outcome }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+        run: |
+          set -euo pipefail
+          test "$TAILNET_OUTCOME" = success
+          test "$SSH_OUTCOME" = success
+          test "$APPLY_OUTCOME" = success
+          test "$VERIFY_OUTCOME" = success
