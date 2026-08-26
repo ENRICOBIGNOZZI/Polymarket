@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import urllib.error
 import urllib.parse
 from collections import defaultdict
 
@@ -9,62 +10,93 @@ import hf_active_flow_maker_core as core
 from hf_active_flow_maker_core import *  # noqa: F401,F403
 
 
-def fetch_trades_batch(condition_ids: list[str], start_ts: int, end_ts: int,
-                       batch_size: int = 20) -> tuple[dict[str, list[core.Trade]], int, list[str]]:
-    """Fetch supported Data-API fields, then enforce the event-time window locally.
+_RETRYABLE_HTTP = {408, 429, 500, 502, 503, 504}
+_PAGE_LIMIT = 1000
 
-    The public Data API documents `market` as a comma-separated condition-id list,
-    but does not document `start`/`end` query parameters. Passing those unsupported
-    fields returned empty successful responses in the live probe, creating a false
-    zero-activity universe. Causality is preserved by filtering returned trade
-    timestamps locally to [start_ts, end_ts].
+
+def fetch_trades_batch(condition_ids: list[str], start_ts: int, end_ts: int,
+                       batch_size: int = 5) -> tuple[dict[str, list[core.Trade]], int, list[str]]:
+    """Fetch recent public trade history without unsupported time query fields.
+
+    Data API `/trades` documents `market`, `limit`, `offset`, and `takerOnly`, but
+    not `start`/`end`. The prior implementation requested up to 10,000 rows for
+    20 conditions at once; live evidence showed widespread 408/500 responses and
+    a false zero-activity universe. This adapter keeps the documented contract,
+    uses a bounded recent page, and recursively splits retryable failing batches
+    down to individual conditions. Event-time [start_ts, end_ts] filtering remains
+    local; the request receive time is retained as the causal availability time.
     """
     out: dict[str, list[core.Trade]] = defaultdict(list)
     last_received_ms = 0
     errors: list[str] = []
     unique_conditions = list(dict.fromkeys(x for x in condition_ids if x))
-    for lo in range(0, len(unique_conditions), batch_size):
-        chunk = unique_conditions[lo:lo + batch_size]
+
+    def consume_rows(rows: list[object], chunk: list[str], received_ms: int) -> None:
+        allowed = set(chunk)
+        seen = {t.trade_id for condition in chunk for t in out.get(condition, [])}
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            condition = str(item.get("conditionId") or "")
+            token = str(item.get("asset") or "")
+            side = str(item.get("side") or "").upper()
+            ts = int(core.number(item.get("timestamp"), 0))
+            price = core.number(item.get("price"), -1.0)
+            size = core.number(item.get("size"), 0.0)
+            if condition not in allowed or not token or not (start_ts <= ts <= end_ts):
+                continue
+            if not (0 < price < 1) or size <= 0:
+                continue
+            key = ":".join([
+                str(item.get("transactionHash") or ""), token, str(ts), side,
+                f"{price:.12g}", f"{size:.12g}",
+            ])
+            if key in seen:
+                continue
+            seen.add(key)
+            out[condition].append(core.Trade(key, token, side, price, size, ts))
+
+    def request_chunk(chunk: list[str], label: str) -> None:
+        nonlocal last_received_ms
+        if not chunk:
+            return
         market_value = ",".join(chunk)
-        seen: set[str] = set()
-        for offset in (0, 10000):
-            query = (
-                f"limit=10000&offset={offset}&takerOnly=true"
-                f"&market={urllib.parse.quote(market_value, safe=',')}"
-            )
-            try:
-                raw, received_ms = core.request_json(f"{core.DATA_URL}/trades?{query}")
-                last_received_ms = max(last_received_ms, received_ms)
-            except Exception as exc:
-                errors.append(f"batch={lo // batch_size}:{type(exc).__name__}:{exc}")
-                break
-            rows = raw if isinstance(raw, list) else raw.get("data", []) if isinstance(raw, dict) else []
-            if not isinstance(rows, list):
-                errors.append(f"batch={lo // batch_size}:unexpected_response")
-                break
-            for item in rows:
-                if not isinstance(item, dict):
-                    continue
-                condition = str(item.get("conditionId") or "")
-                token = str(item.get("asset") or "")
-                side = str(item.get("side") or "").upper()
-                ts = int(core.number(item.get("timestamp"), 0))
-                price = core.number(item.get("price"), -1.0)
-                size = core.number(item.get("size"), 0.0)
-                if condition not in chunk or not token or not (start_ts <= ts <= end_ts):
-                    continue
-                if not (0 < price < 1) or size <= 0:
-                    continue
-                key = ":".join([str(item.get("transactionHash") or ""), token, str(ts), side,
-                                f"{price:.12g}", f"{size:.12g}"])
-                if key in seen:
-                    continue
-                seen.add(key)
-                out[condition].append(core.Trade(key, token, side, price, size, ts))
-            if len(rows) < 10000:
-                break
-        for condition in chunk:
-            out[condition].sort(key=lambda x: (x.ts, x.trade_id))
+        query = (
+            f"limit={_PAGE_LIMIT}&offset=0&takerOnly=true"
+            f"&market={urllib.parse.quote(market_value, safe=',')}"
+        )
+        try:
+            raw, received_ms = core.request_json(f"{core.DATA_URL}/trades?{query}")
+            last_received_ms = max(last_received_ms, received_ms)
+        except urllib.error.HTTPError as exc:
+            if exc.code in _RETRYABLE_HTTP and len(chunk) > 1:
+                mid = max(1, len(chunk) // 2)
+                request_chunk(chunk[:mid], label + "a")
+                request_chunk(chunk[mid:], label + "b")
+                return
+            errors.append(f"batch={label}:HTTPError:{exc.code}:conditions={len(chunk)}")
+            return
+        except Exception as exc:
+            if len(chunk) > 1:
+                mid = max(1, len(chunk) // 2)
+                request_chunk(chunk[:mid], label + "a")
+                request_chunk(chunk[mid:], label + "b")
+                return
+            errors.append(f"batch={label}:{type(exc).__name__}:{exc}:conditions={len(chunk)}")
+            return
+
+        rows = raw if isinstance(raw, list) else raw.get("data", []) if isinstance(raw, dict) else []
+        if not isinstance(rows, list):
+            errors.append(f"batch={label}:unexpected_response:conditions={len(chunk)}")
+            return
+        consume_rows(rows, chunk, received_ms)
+
+    step = max(1, batch_size)
+    for lo in range(0, len(unique_conditions), step):
+        request_chunk(unique_conditions[lo:lo + step], str(lo // step))
+
+    for condition in unique_conditions:
+        out[condition].sort(key=lambda x: (x.ts, x.trade_id))
     return dict(out), last_received_ms, errors
 
 
