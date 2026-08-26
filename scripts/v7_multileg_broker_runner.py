@@ -34,6 +34,17 @@ class CoordinatedBroker(Broker):
     def active_tokens(self) -> set[str]:
         return {leg.token_id for leg in self.live_legs()} | self.maker_owned_tokens()
 
+    def apply_trades(self, trades: list[dict[str, object]]) -> None:
+        # The base broker stamps local order arrival at decision + submit latency,
+        # but historical V7 legs can carry an earlier event-clock arrival stamp.
+        # Never allow the event-time gate to begin before the simulated order is
+        # actually live. This is deliberately fail-closed: a trade whose event
+        # timestamp falls inside submit latency cannot become a PAPER fill merely
+        # because the recorder receives it after local arrival.
+        for leg in self.live_legs():
+            leg.arrival_event_ms = max(leg.arrival_event_ms, leg.arrival_ms)
+        super().apply_trades(trades)
+
     def tick(self) -> None:
         tokens = sorted({leg.token_id for leg in self.live_legs()})
         books = self.books(tokens)
@@ -78,7 +89,7 @@ class CoordinatedBroker(Broker):
             "reserved_cash": self.reserved_cash(), "gross_entry_cash": self.gross_entry_cash(),
             "maker_owned_tokens": len(self.maker_owned_tokens()),
             "bundles": {key: bundle.status for key, bundle in self.bundles.items()},
-            "contracts": ["dual_clock_forward_fill", "cross_sleeve_token_capacity_lock", "one_live_owner_per_token", "shared_trade_capacity", "canonical_market_event_risk", "100_percent_completion", "explicit_abort_unwind", "settling_preserves_complete_structural_payoff"],
+            "contracts": ["dual_clock_forward_fill", "submit_latency_event_time_floor", "cross_sleeve_token_capacity_lock", "one_live_owner_per_token", "shared_trade_capacity", "canonical_market_event_risk", "100_percent_completion", "explicit_abort_unwind", "settling_preserves_complete_structural_payoff"],
         })
 
 
