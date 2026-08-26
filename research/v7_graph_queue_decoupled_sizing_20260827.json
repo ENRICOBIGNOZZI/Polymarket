@@ -1,0 +1,68 @@
+{
+  "schema": "polymarket_v7_graph_queue_decoupled_sizing_research_v1",
+  "decision": "BLOCKING_EXECUTION_SIZING_DEFECT_MORE_EVIDENCE_REQUIRED",
+  "source_v7_pr": 546,
+  "source_v7_head_sha": "cd2f26e34cf658ad482510033c520b0b2ee28442",
+  "current_main_sha": "63d33148a40b82824f5958f78bed95d64d5c93b3",
+  "current_paper_validated_sha": "63d33148a40b82824f5958f78bed95d64d5c93b3",
+  "finding": {
+    "source": "scripts/v7_multileg_broker.py",
+    "incumbent_formula": "units=min(units,0.25*max(1,queue_at(limit))/weight)",
+    "problem": "same-side queue ahead mechanically grants target capacity; larger queue can create a larger target even when risk budget and executable unwind depth are unchanged",
+    "economic_implication": "queue should reduce fill/completion attractiveness rather than increase target capacity; tying target size to queue can increase required clearing flow exactly when completion is less likely",
+    "predecessor": "closed research PR #417 identified the analogous V6 mechanism but was not merged; the current unified V7 candidate reintroduces the same monotonicity"
+  },
+  "deterministic_fixture": {
+    "risk_units": 1000.0,
+    "weight": 1.0,
+    "fixed_unwind_depth_shares": 80.0,
+    "incumbent": {
+      "queue_20_target_units": 5.0,
+      "queue_1000_target_units": 250.0
+    },
+    "queue_decoupled_challenger": {
+      "max_unwind_depth_fraction": 0.25,
+      "queue_20_target_units": 20.0,
+      "queue_1000_target_units": 20.0
+    }
+  },
+  "fresh_public_context": {
+    "live_smoke_run_id": 33018193225,
+    "trade_recorder_status": "healthy",
+    "fresh_trades": 519,
+    "recorder_errors": 0,
+    "graph_rv_bundles": 2,
+    "graph_rv_legs": 8,
+    "max_quoted_edge": 0.010000000000000009,
+    "completed_bundles": 0,
+    "closed_bundles": 0,
+    "unwound_bundles": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_pnl_usd": 0.0,
+    "note": "This context does not prove queue-coupled sizing caused the current zero completions because the public summary does not expose point-in-time per-leg queue/depth. It makes the V7 source monotonicity an execution blocker that must be tested prospectively on common candidates."
+  },
+  "challenger_contract": {
+    "target_capacity": "risk budget plus independently measured cumulative executable unwind depth; never queue ahead",
+    "queue_role": "separate causal fill/joint-completion variable",
+    "common_sample": true,
+    "required_forward_metrics": [
+      "all_leg_completion",
+      "partial_state_distribution",
+      "abort_unwind_loss",
+      "filled_notional_per_capital_hour",
+      "fill_conditioned_net_pnl",
+      "markout_45s",
+      "markout_60s",
+      "markout_300s"
+    ],
+    "cost_stress": [1.0, 1.5, 2.0],
+    "promotion_rule": "no promotion from quoted edge or order count; require positive audited fill-conditioned post-cost PnL under the prospective joint-state contract"
+  },
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "max_drawdown": 0.15,
+    "operator_directives_unchanged": true,
+    "main_or_paper_validated_mutation": false
+  }
+}
