@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Read-only aggregation for the canonical V7 execution ledger JSONL contract."""
+"""Read-only aggregation for the canonical V7 execution ledger JSONL contract.
+
+This reader intentionally mirrors the public phase-1 ledger semantics instead of
+inventing monitoring-only event meanings. In particular, markouts are separate
+``MARKOUT`` events; attaching markout payloads to fills is rejected so Grafana
+cannot silently reinterpret a non-canonical side format as execution evidence.
+"""
 from __future__ import annotations
 
 import json
@@ -15,10 +21,12 @@ EVENT_TYPES = {
     "ORDER_SUBMITTED",
     "ORDER_STATE",
     "FILL",
+    "MARKOUT",
     "POSITION_MARK",
     "EXIT",
     "FINAL",
 }
+MARKOUT_HORIZONS = ("1s", "10s", "45s", "60s", "300s")
 
 
 def _finite(value: Any) -> float | None:
@@ -37,14 +45,33 @@ def _blank() -> dict[str, Any]:
         "fills": 0,
         "complete_fills": 0,
         "partial_fills": 0,
+        "markouts": 0,
         "exits": 0,
         "finals": 0,
         "unwinds": 0,
         "final_pnl": 0.0,
         "capital_duration_ms": 0.0,
-        "markout_sum": {h: 0.0 for h in ("1s", "10s", "45s", "60s", "300s")},
-        "markout_count": {h: 0 for h in ("1s", "10s", "45s", "60s", "300s")},
+        "markout_sum": {h: 0.0 for h in MARKOUT_HORIZONS},
+        "markout_count": {h: 0 for h in MARKOUT_HORIZONS},
     }
+
+
+def _canonical_markout(row: dict[str, Any], event_type: str) -> tuple[str, float] | None:
+    raw = row.get("markouts")
+    markouts = raw if isinstance(raw, dict) else {}
+    if event_type != "MARKOUT":
+        if markouts:
+            raise ValueError("markouts_only_allowed_on_markout_event")
+        return None
+    if len(markouts) != 1:
+        raise ValueError("markout_event_requires_one_horizon")
+    horizon, raw_value = next(iter(markouts.items()))
+    if horizon not in MARKOUT_HORIZONS:
+        raise ValueError("unsupported_markout_horizon")
+    value = _finite(raw_value)
+    if value is None:
+        raise ValueError("nonfinite_markout")
+    return horizon, value
 
 
 def summarize_ledger(path: Path) -> dict[str, Any]:
@@ -94,6 +121,12 @@ def summarize_ledger(path: Path) -> dict[str, Any]:
             ):
                 result["invalid_rows"] += 1
                 continue
+            try:
+                markout = _canonical_markout(row, event_type)
+            except ValueError:
+                result["invalid_rows"] += 1
+                continue
+
             shas.add(model_sha)
             target = strategies.setdefault(strategy, _blank())
             for aggregate in (target, result["total"]):
@@ -109,10 +142,13 @@ def summarize_ledger(path: Path) -> dict[str, Any]:
                         aggregate["complete_fills"] += 1
                     else:
                         aggregate["partial_fills"] += 1
+                elif event_type == "MARKOUT":
+                    aggregate["markouts"] += 1
                 elif event_type == "EXIT":
                     aggregate["exits"] += 1
                 elif event_type == "FINAL":
                     aggregate["finals"] += 1
+
                 unwind = _finite(row.get("unwind_loss"))
                 if unwind is not None and abs(unwind) > 0.0:
                     aggregate["unwinds"] += 1
@@ -123,15 +159,16 @@ def summarize_ledger(path: Path) -> dict[str, Any]:
                     duration = _finite(row.get("capital_duration_ms"))
                     if duration is not None and duration >= 0.0:
                         aggregate["capital_duration_ms"] += duration
-                markouts = row.get("markouts") if isinstance(row.get("markouts"), dict) else {}
-                for horizon in aggregate["markout_sum"]:
-                    value = _finite(markouts.get(horizon))
-                    if value is None:
-                        continue
+                if markout is not None:
+                    horizon, value = markout
                     aggregate["markout_sum"][horizon] += value
                     aggregate["markout_count"][horizon] += 1
 
     result["model_shas"] = sorted(shas)
     result["strategies"] = strategies
-    result["valid"] = result["invalid_rows"] == 0 and len(shas) <= 1
+    result["valid"] = (
+        result["rows"] > 0
+        and result["invalid_rows"] == 0
+        and len(shas) == 1
+    )
     return result
