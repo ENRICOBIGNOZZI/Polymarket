@@ -10,6 +10,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import v7_hard_arb_core as core
+import v7_hard_arb_guard as guard
 
 
 def _book(ask: float, shares: float = 100.0) -> dict[str, object]:
@@ -83,6 +84,45 @@ def test_unwind_book_walk_can_report_residual_without_assumed_fill():
     assert fill.fee > 0.0
 
 
+def test_abort_mark_requires_full_executable_depth_and_fails_closed():
+    original_books = guard.q.books
+    aborting = {
+        "event": {
+            "legs": [
+                {
+                    "token": "yes-a",
+                    "shares": 5.0,
+                    "market": {"feesEnabled": False},
+                }
+            ]
+        }
+    }
+    try:
+        guard.q.books = lambda _clob, _tokens: {"yes-a": {"bids": [(0.49, 2.0)]}}
+        stats: dict[str, int] = {}
+        assert guard.executable_abort_mark(
+            "https://clob.invalid",
+            aborting,
+            slippage_bps=5.0,
+            stats=stats,
+        ) == 0.0
+        assert stats["abort_mark_unmarkable_legs"] == 1
+
+        guard.q.books = lambda _clob, _tokens: {"yes-a": {"bids": [(0.49, 10.0)]}}
+        stats = {}
+        value = guard.executable_abort_mark(
+            "https://clob.invalid",
+            aborting,
+            slippage_bps=5.0,
+            stats=stats,
+        )
+        assert 0.0 < value < 5.0 * 0.49
+        assert stats["abort_mark_marked_legs"] == 1
+        assert stats["abort_mark_unmarkable_legs"] == 0
+    finally:
+        guard.q.books = original_books
+
+
 def test_hard_arb_runtime_closure_has_no_legacy_imports():
     core_source = (SCRIPTS / "v7_hard_arb_core.py").read_text(encoding="utf-8")
     guard_source = (SCRIPTS / "v7_hard_arb_guard.py").read_text(encoding="utf-8")
@@ -93,6 +133,8 @@ def test_hard_arb_runtime_closure_has_no_legacy_imports():
     assert "import v7_hard_arb_core as q" in guard_source
     assert "authenticated_execution\": False" in core_source
     assert "sequential_leg_revalidation\": True" in core_source
+    assert '"abort_mark_mode": "full_depth_executable_liquidation"' in guard_source
+    assert '"abort_mark_fail_closed": True' in guard_source
 
 
 if __name__ == "__main__":
