@@ -11,28 +11,26 @@ DASHBOARD = ROOT / "monitoring" / "grafana" / "dashboards" / "polymarket-multi-s
 
 
 class GrafanaMultiStrategyContractTests(unittest.TestCase):
-    def test_dashboard_has_total_and_each_strategy_views(self) -> None:
+    def test_dashboard_is_v7_only_and_has_total_and_strategy_views(self) -> None:
         dashboard = json.loads(DASHBOARD.read_text(encoding="utf-8"))
-        # UID is deliberately retained for in-place Grafana upgrades; changing it
-        # would create a second dashboard on already-provisioned servers.
-        self.assertEqual(dashboard["uid"], "polymarket-multi-strategy-v5")
-        self.assertEqual(dashboard["title"], "Polymarket Multi-Strategy")
-        self.assertNotIn("v5", {str(tag).lower() for tag in dashboard.get("tags", [])})
+        self.assertEqual(dashboard["uid"], "polymarket-multi-strategy-v7")
+        self.assertEqual(dashboard["title"], "Polymarket V7 Multi-Strategy")
+        self.assertIn("v7", {str(tag).lower() for tag in dashboard.get("tags", [])})
         panels = dashboard["panels"]
         self.assertEqual(len({panel["id"] for panel in panels}), len(panels))
         titles = {panel["title"] for panel in panels}
         for required in (
             "TOTAL PAPER PNL",
-            "PnL by Independent Strategy",
-            "Equity by Independent Strategy",
-            "Gross Exposure by Strategy",
-            "Drawdown by Strategy",
-            "Positions and Fills by Strategy",
-            "Signal Funnel by Strategy",
-            "Model Health and Staleness",
-            "V7 Evidence Eligibility by Model",
-            "V7 Evidence Observation Coverage",
-            "V7 Stress-tested Evidence PnL & Calibration",
+            "PnL by V7 Strategy",
+            "Equity by V7 Strategy",
+            "Gross Exposure by V7 Strategy",
+            "Drawdown by V7 Strategy",
+            "Positions and Fills by V7 Strategy",
+            "V7 Strategy Health",
+            "V7 PCA Shadow Selection",
+            "V7 Local Factor Signals",
+            "V7 Cross-sectional Ranking",
+            "V7 HF Queue Clearability",
         ):
             self.assertIn(required, titles)
 
@@ -51,75 +49,62 @@ class GrafanaMultiStrategyContractTests(unittest.TestCase):
             "polymarket_model_drawdown_ratio",
             "polymarket_model_gross_exposure_usd",
             "polymarket_model_fills_total",
-            "polymarket_model_signals_total",
+            "polymarket_model_open_positions",
             "polymarket_model_alive",
-            "polymarket_model_execution_evidence_eligible",
-            "polymarket_model_execution_evidence_fills",
-            "polymarket_model_execution_evidence_pnl_observations",
-            "polymarket_model_execution_evidence_markout_observations",
-            "polymarket_model_execution_evidence_stressed_net_pnl_usd",
-            "polymarket_model_execution_evidence_bootstrap_pvalue",
-            "polymarket_model_execution_evidence_brier_improvement",
+            "polymarket_model_kill_switch",
+            "polymarket_model_staleness_seconds",
+            "polymarket_v7_pca_bh_survivors",
+            "polymarket_v7_local_factor_signals",
+            "polymarket_v7_rank_mean_ic",
+            "polymarket_v7_hf_maker_clearable_fraction",
         ):
             self.assertIn(metric, joined)
-        self.assertIn('polymarket_model_fills_total{model=~"$model",action="all"}', joined)
+        self.assertNotIn('action="all"', joined)
+        self.assertNotIn("polymarket_model_signals_total", joined)
+        self.assertNotIn("polymarket_model_execution_evidence_", joined)
 
         variables = dashboard["templating"]["list"]
         self.assertEqual([item["name"] for item in variables], ["model"])
         self.assertTrue(variables[0]["includeAll"])
         self.assertTrue(variables[0]["multi"])
 
-    def test_dashboard_queries_are_exported_by_selected_live_adapter(self) -> None:
+    def test_every_dashboard_metric_is_published_by_v7_exporter(self) -> None:
         dashboard = json.loads(DASHBOARD.read_text(encoding="utf-8"))
         champion = json.loads((ROOT / "config" / "live_champion.json").read_text(encoding="utf-8"))
-        version = int(champion["version"])
-        exporter_path = ROOT / "monitoring" / f"exporter_v{version}.py"
-        self.assertTrue(exporter_path.is_file(), f"missing exporter for selected live V{version}")
-        exporter = exporter_path.read_text(encoding="utf-8")
+        self.assertEqual(champion["version"], 7)
+        exporter = (ROOT / "monitoring" / "exporter_v7.py").read_text(encoding="utf-8")
         compose = (ROOT / "docker-compose.monitoring.yml").read_text(encoding="utf-8")
-        self.assertIn(
-            "GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/polymarket-multi-strategy.json",
-            compose,
-        )
+        self.assertIn("/app/exporter_latest_v7.py", compose)
+        self.assertIn("GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/polymarket-multi-strategy.json", compose)
         expressions = "\n".join(
             target["expr"]
             for panel in dashboard["panels"]
             for target in panel.get("targets", [])
             if isinstance(target, dict) and "expr" in target
         )
-        model_metrics = set(re.findall(r"\b(polymarket_model_[a-z0-9_]+)\b", expressions))
-        for metric in model_metrics:
-            self.assertIn(metric, exporter, f"Grafana queries {metric} but V{version} exporter does not publish it")
+        metrics = set(re.findall(r"\b(polymarket_[a-z0-9_]+)\b", expressions))
+        for metric in metrics:
+            self.assertIn(metric, exporter, f"Grafana queries {metric} but V7 exporter does not publish it")
 
-        # The dashboard's total-fill query is label-sensitive. This exact schema
-        # mismatch previously made V6 fills appear as zero/absent even with ledger
-        # fills, so keep it as a hard contract rather than a visual smoke check.
-        if 'action="all"' in expressions:
-            self.assertIn('"polymarket_model_fills_total"', exporter)
-            self.assertIn('labels={**labels, "action": action}', exporter)
-            self.assertIn('(\"all\", \"fills\")', exporter)
-
-    def test_prometheus_alerts_cover_allocator_and_each_model(self) -> None:
+    def test_prometheus_alerts_are_v7_only(self) -> None:
         alerts = (ROOT / "monitoring" / "prometheus" / "alerts.yml").read_text(encoding="utf-8")
         for alert in (
-            "PolymarketV5AllocatorDown",
-            "PolymarketV5ModelProcessMissing",
-            "PolymarketV5ModelStateStale",
-            "PolymarketV5ModelKillSwitchActive",
-            "PolymarketV5GrossLimitBreach",
+            "PolymarketV7ExporterDown",
+            "PolymarketV7RuntimeDrawdownWarning",
+            "PolymarketV7RuntimeDrawdownLimit",
+            "PolymarketV7KillSwitchActive",
+            "PolymarketV7AllocatorMissing",
+            "PolymarketV7StrategyMissing",
+            "PolymarketV7StrategyStateStale",
+            "PolymarketV7StrategyKillSwitchActive",
+            "PolymarketV7GrossLimitBreach",
         ):
             self.assertIn(f"alert: {alert}", alerts)
-        self.assertIn(
-            "polymarket_allocator_models_alive < polymarket_allocator_models_expected",
-            alerts,
-        )
-        self.assertIn("max(polymarket_model_alert_staleness_seconds) > 60", alerts)
-        self.assertNotIn("max(polymarket_model_status_age_seconds) > 60", alerts)
+        self.assertIn("polymarket_allocator_models_alive < polymarket_allocator_models_expected", alerts)
+        self.assertIn("max(polymarket_model_staleness_seconds) > 120", alerts)
         self.assertIn("max(polymarket_model_kill_switch) == 1", alerts)
-        self.assertIn(
-            "polymarket_allocator_global_gross_fraction > polymarket_allocator_global_max_gross_fraction",
-            alerts,
-        )
+        for token in ("PolymarketV5", "PolymarketV6", "simulated-live", "legacy"):
+            self.assertNotIn(token, alerts)
 
 
 if __name__ == "__main__":
