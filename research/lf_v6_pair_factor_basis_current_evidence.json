@@ -1,0 +1,59 @@
+{
+  "schema": "lf_v6_pair_factor_basis_current_evidence_v1",
+  "generated_utc": "2026-08-26T05:23:43Z",
+  "base_main_sha": "e417dfefd99312712c1f9e33efa8e2e847b492e5",
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "source_repaired_frontier": {
+    "pull_request": 374,
+    "head_sha": "24559447d60a3d17cd1e17f8c48c19becea47d16",
+    "path": "scripts/v6_local_factor_v3.py",
+    "finding": "each target is correctly excluded from its own factor, but each target therefore receives a different leave-one-out factor; build_pair later compares and ratios those target-specific loadings as if they were coefficients on one common regressor"
+  },
+  "deterministic_counterexample": {
+    "points": 240,
+    "target_specific_loo_loading_a": -0.18396376504012038,
+    "target_specific_loo_loading_b": 0.046856524319142695,
+    "shared_leave_pair_out_loading_a": 0.20000000000000004,
+    "shared_leave_pair_out_loading_b": 0.45607017003965533,
+    "target_specific_abs_ratio": 3.9261077878318877,
+    "shared_abs_ratio": 0.43852900965351455,
+    "ratio_distortion": 8.952903231952519,
+    "pair_factor_sign_relation_changes": true,
+    "interpretation": "target-specific LOO loadings can change both the relative hedge ratio and the inferred sign relationship versus coefficients estimated on a single pair-excluded common factor"
+  },
+  "current_live_context": {
+    "telemetry_run_id": "32932828422",
+    "telemetry_sha": "e417dfefd99312712c1f9e33efa8e2e847b492e5",
+    "trade_recorder_status": "unhealthy",
+    "trade_recorder_failures": [
+      "no_public_trades_fetched",
+      "missing_last_trade_timestamp"
+    ],
+    "public_trades_fetched": 0,
+    "graph_rv_bundles": 1,
+    "graph_rv_rows": 3,
+    "graph_rv_max_quoted_edge": 0.030000000000000027,
+    "completed_graph_bundles": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_pnl_usd": 0.0,
+    "economic_interpretation": "current zero fills/completions are not eligible LF execution evidence while the canonical public tape is unhealthy"
+  },
+  "required_successor_contract": [
+    "Use target-level leave-one-out factors only as leakage-free screening, not as a common hedge basis.",
+    "For every candidate pair, rebuild one factor using controls that exclude both prospective legs; require at least two independent controls or fail closed.",
+    "Refit both pair loadings and residuals on that same pair-excluded factor before comparing signs or constructing a hedge ratio.",
+    "Recompute null-preserving increment-bootstrap p-values on the pair-refit residuals and apply multiplicity correction over the tested pair hypotheses before economic admission.",
+    "Only after a common statistical factor basis exists, convert both exposures to price/PnL units using p*(1-p)*yes_sd*loading as studied in PR 398.",
+    "Then apply actual-fidelity n-step/TTR handling and queue-aware same-window joint/partial fill plus abort/unwind economics before threshold aggression.",
+    "Do not treat current unhealthy-tape zero-fill observations as economic evidence."
+  ],
+  "safety": {
+    "paper_only": true,
+    "max_drawdown": 0.15,
+    "kill_switch_required": true,
+    "authenticated_execution": false,
+    "real_money_execution": false,
+    "authorized_paper_envelope_unchanged": true
+  }
+}
