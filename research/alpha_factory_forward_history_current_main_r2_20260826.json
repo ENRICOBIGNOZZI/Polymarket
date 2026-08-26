@@ -1,0 +1,90 @@
+{
+  "schema": "alpha_factory_forward_history_current_main_v2",
+  "captured_utc": "2026-08-26T18:26:00Z",
+  "current_main_sha": "6c11cd7804f2900132f40b5809b3157179885edd",
+  "paper_validated_sha": "055f910bb4dc6344027f83588769cb14ca458413",
+  "live_champion_version": 6,
+  "alpha_factory_observation": {
+    "latest_report_generated_utc": "2026-08-26T16:23:35Z",
+    "false_next_experiment": "accumulate_forward_execution_evidence",
+    "false_triggering_evidence": "fewer than 24 forward runs per policy",
+    "defect": "persisted forward-maker history is legacy policy_summaries while Alpha Factory consumes aggregate_by_policy"
+  },
+  "forward_maker_history_current": {
+    "telemetry_rows": 64,
+    "latest_run_id": 32997806270,
+    "latest_generated_ts": 1787768543,
+    "latest_two_sessions_probes_per_policy": 29,
+    "latest_two_sessions_any_fills": 0,
+    "latest_two_sessions_pair_fills": 0,
+    "latest_two_sessions_one_sided_fills": 0,
+    "latest_two_sessions_pnl_ex_rewards_usd": 0.0,
+    "cumulative_probes_per_policy": 931
+  },
+  "forward_maker_calibration_prior_snapshot": {
+    "valid_sessions": 61,
+    "probes_per_policy": 887,
+    "join": {
+      "pair_fills": 0,
+      "total_pnl_ex_rewards_usd": -0.13894351315407616,
+      "eligible_for_paper_shadow": false
+    },
+    "improve1": {
+      "any_fills": 10,
+      "one_sided_only": 10,
+      "pair_fills": 0,
+      "total_pnl_ex_rewards_usd": -5.744892566366351,
+      "markout_60_per_share": -0.0034036496350365055,
+      "markout_300_per_share": -0.0027398311588641617,
+      "bootstrap_ucb_mean_pnl_per_probe_usd": -0.0019956289330349815,
+      "decision": "REJECT_UNCONDITIONAL_INSIDE_SPREAD_CURRENT_SAMPLE",
+      "eligible_for_paper_shadow": false
+    },
+    "fade1": {
+      "pair_fills": 0,
+      "total_pnl_ex_rewards_usd": -0.45605470219999944,
+      "eligible_for_paper_shadow": false
+    },
+    "selected_policy_for_paper_shadow": null
+  },
+  "latest_public_live_smoke": {
+    "git_sha": "055f910bb4dc6344027f83588769cb14ca458413",
+    "trade_recorder_status": "healthy",
+    "public_trades": 582,
+    "maker_initial_signals": 39,
+    "maker_resting_orders": 5,
+    "maker_positions": 0,
+    "maker_reserved_usd": 147.646,
+    "graph_rv_bundles": 2,
+    "graph_rv_legs": 8,
+    "graph_rv_best_quoted_edge": 0.020000000000000018,
+    "graph_rv_complete": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_pnl_usd": 0.0
+  },
+  "authorized_paper_envelope": {
+    "markets_approx": 1000,
+    "min_liquidity_usd": 2.0,
+    "min_post_cost_edge_bps": 0.5,
+    "uncertainty_penalty": 0.0,
+    "kelly_max": 0.25,
+    "max_trade_usd": 125.0,
+    "market_cap_fraction": 0.05,
+    "event_cap_fraction": 0.15,
+    "gross_cap_fraction": 0.70,
+    "sleeves": {
+      "maker": 0.22,
+      "taker": 0.12,
+      "relative_value": 0.34,
+      "hard_arb": 0.22,
+      "external": 0.08,
+      "reserve": 0.02
+    },
+    "max_drawdown": 0.15,
+    "paper_only": true,
+    "authenticated_execution": false
+  },
+  "research_state": "BLOCKING_EVIDENCE_INGESTION_DEFECT_MORE_EVIDENCE_REQUIRED",
+  "economic_conclusion": "The factory is still spending research budget on a false maker sample-shortage diagnosis. Generic one-tick improvement is already rejected on repeated chronological evidence; future maker research should target candidate-specific causal fillability, dead-queue recycling and positive fill-conditioned executable markout rather than accumulating generic join/improve/fade windows."
+}
