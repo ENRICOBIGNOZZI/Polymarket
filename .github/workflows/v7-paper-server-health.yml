@@ -31,6 +31,7 @@ jobs:
       GRAFANA_HOSTNAME: mamma-portfolio
       GRAFANA_FQDN: mamma-portfolio.tail1bae85.ts.net
       GRAFANA_URL: http://mamma-portfolio.tail1bae85.ts.net
+      EXPECTED_VALIDATED_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,17 +47,37 @@ jobs:
           validated_sha="$(git rev-parse origin/paper-validated)"
           main_sha="$(git rev-parse origin/main)"
           test "$(git rev-parse HEAD)" = "$validated_sha"
-          git merge-base --is-ancestor "$validated_sha" "$main_sha"
+          if [[ "$main_sha" != "$validated_sha" ]]; then
+            if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
+              echo "ready=false" >> "$GITHUB_OUTPUT"
+              printf 'health_result=awaiting_same_sha\nvalidated_sha=%s\nmain_sha=%s\n' "$validated_sha" "$main_sha" | tee server-health.txt
+              exit 0
+            fi
+            echo "V7 health blocked: main and paper-validated are not the same SHA" >&2
+            exit 1
+          fi
+          if [[ -n "$EXPECTED_VALIDATED_SHA" ]]; then
+            [[ "$EXPECTED_VALIDATED_SHA" =~ ^[0-9a-f]{40}$ ]]
+            test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
+            test "$main_sha" = "$EXPECTED_VALIDATED_SHA"
+          fi
           if python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$validated_sha" --github-env "$GITHUB_ENV"; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
             uid="$(python3 - <<'PY'
           import json
           from pathlib import Path
-          print(json.loads(Path('config/project_context.json').read_text(encoding='utf-8'))['grafana']['dashboard_uid'])
+          m=json.loads(Path('monitoring/v7_monitoring_manifest.json').read_text(encoding='utf-8'))
+          assert m.get('schema') == 'polymarket_v7_monitoring_manifest_v1'
+          assert m.get('version') == 7
+          assert m.get('paper_only') is True
+          assert m.get('authenticated_execution') is False
+          print(str((m.get('grafana') or {}).get('dashboard_uid') or ''))
           PY
           )"
             test -n "$uid"
             echo "GRAFANA_DASHBOARD_UID=$uid" >> "$GITHUB_ENV"
+            printf 'health_preflight=same_sha\nvalidated_sha=%s\nmain_sha=%s\ndashboard_uid=%s\n' \
+              "$validated_sha" "$main_sha" "$uid" | tee server-health.txt
           elif [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
             printf 'health_result=awaiting_v7_champion\nvalidated_sha=%s\nmain_sha=%s\n' "$validated_sha" "$main_sha" | tee server-health.txt
@@ -127,19 +148,30 @@ jobs:
           validated_sha="$(git rev-parse origin/paper-validated)"
           ssh -i ~/.ssh/polymarket_health -o IdentitiesOnly=yes -o BatchMode=yes \
             -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
-            "EXPECTED_VALIDATED_SHA='$validated_sha' GRAFANA_DASHBOARD_UID='$GRAFANA_DASHBOARD_UID' bash -s" <<'REMOTE' | tee server-health.txt
+            "EXPECTED_VALIDATED_SHA='$validated_sha' GRAFANA_DASHBOARD_UID='$GRAFANA_DASHBOARD_UID' bash -s" <<'REMOTE' | tee -a server-health.txt
           set -euo pipefail
           cd ~/polymarket
-          git fetch -q origin main paper-validated
+          git fetch -q --no-tags origin main paper-validated
           head_sha="$(git rev-parse HEAD)"
           main_sha="$(git rev-parse origin/main)"
           validated_sha="$(git rev-parse origin/paper-validated)"
           test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
-          test "$head_sha" = "$validated_sha"
-          git merge-base --is-ancestor "$validated_sha" "$main_sha"
-          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$validated_sha" >/dev/null
+          test "$main_sha" = "$EXPECTED_VALIDATED_SHA"
+          test "$head_sha" = "$EXPECTED_VALIDATED_SHA"
+          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$EXPECTED_VALIDATED_SHA" >/dev/null
+          python3 - "$GRAFANA_DASHBOARD_UID" <<'PY'
+          import json,sys
+          from pathlib import Path
+          uid=sys.argv[1]
+          m=json.loads(Path('monitoring/v7_monitoring_manifest.json').read_text(encoding='utf-8'))
+          assert m.get('schema') == 'polymarket_v7_monitoring_manifest_v1'
+          assert m.get('version') == 7
+          assert m.get('paper_only') is True
+          assert m.get('authenticated_execution') is False
+          assert str((m.get('grafana') or {}).get('dashboard_uid') or '') == uid
+          PY
 
-          legacy_processes="$(ps -axo command= | grep -E '[p]aper_v(3|4|5|6)_loop\.sh' || true)"
+          legacy_processes="$(ps -axo command= | grep -E '[p]aper_v(3|4|5|6)_loop\.sh|[p]aper_latest_loop\.sh' || true)"
           test -z "$legacy_processes"
           v7_owner_count="$(ps -axo command= | grep -c '[s]cripts/paper_v7_loop\.sh' || true)"
           execution_owner_count="$(ps -axo command= | grep -c '[s]cripts/paper_v7_execution_loop\.sh' || true)"
@@ -185,6 +217,7 @@ jobs:
           grep -q '^polymarket_runtime_pnl_usd ' <<<"$metrics"
           grep -q '^polymarket_runtime_equity_usd ' <<<"$metrics"
           grep -q '^polymarket_runtime_drawdown_ratio ' <<<"$metrics"
+          grep -q '^polymarket_v7_ledger_' <<<"$metrics"
           printf 'health_result=success\nhead=%s\npaper_validated=%s\norigin_main=%s\nv7_owner_count=%s\nexecution_owner_count=%s\nrecorder_count=%s\nbroker_count=%s\n' \
             "$head_sha" "$validated_sha" "$main_sha" "$v7_owner_count" "$execution_owner_count" "$recorder_count" "$broker_count"
           REMOTE
