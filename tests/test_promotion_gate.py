@@ -18,6 +18,16 @@ def checks(names: tuple[str, ...]) -> list[dict]:
     return [{"__typename":"CheckRun","name":name,"status":"COMPLETED","conclusion":"SUCCESS"} for name in names]
 
 
+def check_attempt(name: str, conclusion: str, completed_at: str) -> dict:
+    return {
+        "__typename": "CheckRun",
+        "name": name,
+        "status": "COMPLETED",
+        "conclusion": conclusion,
+        "completedAt": completed_at,
+    }
+
+
 class PromotionGateTests(unittest.TestCase):
     def fixture(self):
         source_sha = "a" * 40
@@ -209,6 +219,30 @@ class PromotionGateTests(unittest.TestCase):
         self.assertTrue(MODULE.requires_source_content_match("scripts/paper_v6_loop.sh"))
         self.assertFalse(MODULE.requires_source_content_match("config/live_champion.json"))
         self.assertFalse(MODULE.requires_source_content_match("docs/OPERATIONS.md"))
+
+    def test_superseded_cancelled_check_does_not_block_later_success(self):
+        rollup = [
+            check_attempt("build-test (Release)", "CANCELLED", "2026-08-26T20:00:00Z"),
+            check_attempt("build-test (Release)", "SUCCESS", "2026-08-26T20:05:00Z"),
+        ]
+        self.assertEqual(MODULE.check_errors(rollup, ("build-test (Release)",), "candidate "), [])
+
+    def test_latest_failed_check_still_blocks_after_old_success(self):
+        rollup = [
+            check_attempt("build-test (Release)", "SUCCESS", "2026-08-26T20:00:00Z"),
+            check_attempt("build-test (Release)", "FAILURE", "2026-08-26T20:05:00Z"),
+        ]
+        errors = MODULE.check_errors(rollup, ("build-test (Release)",), "candidate ")
+        self.assertIn("candidate check build-test (Release) concluded FAILURE", errors)
+
+    def test_conflicting_duplicate_checks_without_timestamps_fail_closed(self):
+        rollup = [
+            {"__typename":"CheckRun","name":"enforce","status":"COMPLETED","conclusion":"SUCCESS"},
+            {"__typename":"CheckRun","name":"enforce","status":"COMPLETED","conclusion":"FAILURE"},
+        ]
+        errors = MODULE.check_errors(rollup, ("enforce",), "candidate ")
+        self.assertIn("candidate check enforce has ambiguous duplicate attempts", errors)
+        self.assertIn("candidate required check matching 'enforce' is missing", errors)
 
 
 if __name__ == "__main__":
