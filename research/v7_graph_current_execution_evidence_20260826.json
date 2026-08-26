@@ -1,0 +1,157 @@
+{
+  "authenticated_execution": false,
+  "bundles": [
+    {
+      "bundle_id": "GRAPH_HARD-1787760312-0",
+      "legs": [
+        {
+          "bundle_id": "GRAPH_HARD-1787760312-0",
+          "compatible_sell_rate_per_second_300s": 0.0,
+          "compatible_sell_trades_300s": 0,
+          "expected_compatible_flow_180s_with_capped_prior": 0.0,
+          "limit_price": 0.79,
+          "market_id": "3558749",
+          "max_compatible_sell_volume_any_180s_window_in_900s_tape": 0.0,
+          "queue_ahead": 1003520.0,
+          "required_flow_over_max_180s_flow": null,
+          "required_flow_shares": 1003581.2245,
+          "target_shares": 61.2245,
+          "v7_marginal_fill_proxy": 0.0
+        },
+        {
+          "bundle_id": "GRAPH_HARD-1787760312-0",
+          "compatible_sell_rate_per_second_300s": 0.0,
+          "compatible_sell_trades_300s": 0,
+          "expected_compatible_flow_180s_with_capped_prior": 0.0,
+          "limit_price": 0.13,
+          "market_id": "3558750",
+          "max_compatible_sell_volume_any_180s_window_in_900s_tape": 0.0,
+          "queue_ahead": 636281.0,
+          "required_flow_over_max_180s_flow": null,
+          "required_flow_shares": 636342.2245,
+          "target_shares": 61.2245,
+          "v7_marginal_fill_proxy": 0.0
+        },
+        {
+          "bundle_id": "GRAPH_HARD-1787760312-0",
+          "compatible_sell_rate_per_second_300s": 0.019300419476241722,
+          "compatible_sell_trades_300s": 1,
+          "expected_compatible_flow_180s_with_capped_prior": 4.07407550572351,
+          "limit_price": 0.06,
+          "market_id": "3558751",
+          "max_compatible_sell_volume_any_180s_window_in_900s_tape": 11.43,
+          "queue_ahead": 135424.0,
+          "required_flow_over_max_180s_flow": 11853.475459317586,
+          "required_flow_shares": 135485.2245,
+          "target_shares": 61.2245,
+          "v7_marginal_fill_proxy": 3.0069352698383784e-05
+        }
+      ],
+      "minimum_v7_marginal_fill_proxy": 0.0,
+      "passes_v7_min_leg_fill_gate_at_captured_limits": false,
+      "quoted_expected_edge": 0.02
+    },
+    {
+      "bundle_id": "GRAPH_HARD-1787760312-1",
+      "legs": [
+        {
+          "bundle_id": "GRAPH_HARD-1787760312-1",
+          "compatible_sell_rate_per_second_300s": 0.0,
+          "compatible_sell_trades_300s": 0,
+          "expected_compatible_flow_180s_with_capped_prior": 0.0,
+          "limit_price": 0.003,
+          "market_id": "2252242",
+          "max_compatible_sell_volume_any_180s_window_in_900s_tape": 0.0,
+          "queue_ahead": 80304.9,
+          "required_flow_over_max_180s_flow": null,
+          "required_flow_shares": 80365.14099999999,
+          "target_shares": 60.241,
+          "v7_marginal_fill_proxy": 0.0
+        },
+        {
+          "bundle_id": "GRAPH_HARD-1787760312-1",
+          "compatible_sell_rate_per_second_300s": 0.0,
+          "compatible_sell_trades_300s": 0,
+          "expected_compatible_flow_180s_with_capped_prior": 0.0,
+          "limit_price": 0.01,
+          "market_id": "2252243",
+          "max_compatible_sell_volume_any_180s_window_in_900s_tape": 0.0,
+          "queue_ahead": 25430.3,
+          "required_flow_over_max_180s_flow": null,
+          "required_flow_shares": 25490.541,
+          "target_shares": 60.241,
+          "v7_marginal_fill_proxy": 0.0
+        },
+        {
+          "bundle_id": "GRAPH_HARD-1787760312-1",
+          "compatible_sell_rate_per_second_300s": 2.5548149456080447,
+          "compatible_sell_trades_300s": 4,
+          "expected_compatible_flow_180s_with_capped_prior": 460.4666902094481,
+          "limit_price": 0.64,
+          "market_id": "2252244",
+          "max_compatible_sell_volume_any_180s_window_in_900s_tape": 867.98,
+          "queue_ahead": 346886.0,
+          "required_flow_over_max_180s_flow": 399.71686098758033,
+          "required_flow_shares": 346946.241,
+          "target_shares": 60.241,
+          "v7_marginal_fill_proxy": 0.0013254398375636917
+        },
+        {
+          "bundle_id": "GRAPH_HARD-1787760312-1",
+          "compatible_sell_rate_per_second_300s": 0.0,
+          "compatible_sell_trades_300s": 0,
+          "expected_compatible_flow_180s_with_capped_prior": 0.0,
+          "limit_price": 0.34,
+          "market_id": "2252245",
+          "max_compatible_sell_volume_any_180s_window_in_900s_tape": 0.0,
+          "queue_ahead": 116053.0,
+          "required_flow_over_max_180s_flow": null,
+          "required_flow_shares": 116113.241,
+          "target_shares": 60.241,
+          "v7_marginal_fill_proxy": 0.0
+        },
+        {
+          "bundle_id": "GRAPH_HARD-1787760312-1",
+          "compatible_sell_rate_per_second_300s": 0.0,
+          "compatible_sell_trades_300s": 0,
+          "expected_compatible_flow_180s_with_capped_prior": 0.0,
+          "limit_price": 0.003,
+          "market_id": "2252246",
+          "max_compatible_sell_volume_any_180s_window_in_900s_tape": 0.0,
+          "queue_ahead": 922465.0,
+          "required_flow_over_max_180s_flow": null,
+          "required_flow_shares": 922525.241,
+          "target_shares": 60.241,
+          "v7_marginal_fill_proxy": 0.0
+        }
+      ],
+      "minimum_v7_marginal_fill_proxy": 0.0,
+      "passes_v7_min_leg_fill_gate_at_captured_limits": false,
+      "quoted_expected_edge": 0.004
+    }
+  ],
+  "conclusion": {
+    "captured_limit_result": "both Graph/RV snapshots fail the V7 0.001 minimum marginal fill-proxy gate at their captured maker limits because at least one leg has zero compatible sell flow",
+    "interpretation": "The quoted +2.0% and +0.4% edges are not executable fill evidence. A V7 successor must either spend some edge on a causally justified quote improvement and then re-pass every leg, or abstain. Prospective joint-state sessions and fill-conditioned 1x/1.5x/2x PnL remain required before profitability claims.",
+    "main_v6_multileg_status": "2 bundles RESTING, 0 complete, $0 realized PnL"
+  },
+  "method": {
+    "compatible_trade": "SELL on same token at price <= maker YES limit",
+    "execution_horizon_seconds": 180,
+    "fill_proxy": "v6_market_common.fill_probability_proxy(queue_ahead, target_shares, exponentially_decayed_compatible_sell_rate, 180s, prior=1/300s capped by observed_rate)",
+    "flow_lookback_seconds": 300,
+    "note": "Pre-arrival recent-flow capacity at the captured V6 maker limits. The artifact does not freeze the full contemporaneous ask/tick book needed to replay V7's optional one-tick improvement. target_shares is used as own_shares; if min_order were larger, the proxy would only decrease. This is not a forward fill label and not PnL evidence.",
+    "v7_quote_optimizer_min_leg_fill_probability": 0.001
+  },
+  "paper_only": true,
+  "schema": "v7_graph_current_execution_evidence_v1",
+  "source": {
+    "github_run_id": "32986656332",
+    "live_snapshot_generated_ts": 1787760332,
+    "main_sha": "fccbdd036093c2f7973635c3c47431ad8381b261",
+    "trade_age_seconds": 77,
+    "trade_recorder_errors": 0,
+    "trade_recorder_status": "healthy",
+    "trade_tape_rows": 483
+  }
+}
