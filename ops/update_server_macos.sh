@@ -14,94 +14,54 @@ DEPLOY_LOCK_STALE_SECONDS="${POLYMARKET_DEPLOY_LOCK_STALE_SECONDS:-3600}"
 POLYMARKET_DEPLOY_LOCK_V1=1
 DEPLOY_LOCK_HELD=0
 DEPLOY_LOCK_TOKEN=""
-APP_UPDATER_LOCK_AWARE=0
 
 log() { printf '[mac-deploy] %s\n' "$*"; }
 fail() { printf '[mac-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 
 find_brew() {
-  if command -v brew >/dev/null 2>&1; then
-    command -v brew
-  elif [[ -x /opt/homebrew/bin/brew ]]; then
-    printf '%s\n' /opt/homebrew/bin/brew
-  elif [[ -x /usr/local/bin/brew ]]; then
-    printf '%s\n' /usr/local/bin/brew
-  else
-    return 1
+  if command -v brew >/dev/null 2>&1; then command -v brew
+  elif [[ -x /opt/homebrew/bin/brew ]]; then printf '%s\n' /opt/homebrew/bin/brew
+  elif [[ -x /usr/local/bin/brew ]]; then printf '%s\n' /usr/local/bin/brew
+  else return 1
   fi
 }
 
 release_deploy_lock() {
-  if [[ "$DEPLOY_LOCK_HELD" != "1" || -z "$DEPLOY_LOCK_TOKEN" ]]; then
-    return 0
-  fi
+  [[ "$DEPLOY_LOCK_HELD" == "1" && -n "$DEPLOY_LOCK_TOKEN" ]] || return 0
   local recorded=""
-  if [[ -f "$DEPLOY_LOCK_DIR/owner.env" ]]; then
-    recorded="$(sed -n 's/^token=//p' "$DEPLOY_LOCK_DIR/owner.env" | head -n 1)"
-  fi
-  if [[ "$recorded" == "$DEPLOY_LOCK_TOKEN" ]]; then
-    rm -rf "$DEPLOY_LOCK_DIR"
-    log "Released deployment mutex token=$DEPLOY_LOCK_TOKEN"
-  fi
+  [[ -f "$DEPLOY_LOCK_DIR/owner.env" ]] && recorded="$(sed -n 's/^token=//p' "$DEPLOY_LOCK_DIR/owner.env" | head -n1)"
+  if [[ "$recorded" == "$DEPLOY_LOCK_TOKEN" ]]; then rm -rf "$DEPLOY_LOCK_DIR"; fi
   DEPLOY_LOCK_HELD=0
 }
 
 acquire_deploy_lock() {
   mkdir -p "$CACHE_DIR"
   local now deadline acquired owner token
-  now="$(date +%s)"
-  deadline=$((now + DEPLOY_LOCK_WAIT_SECONDS))
-  token="updater-$$-$now"
+  now="$(date +%s)"; deadline=$((now + DEPLOY_LOCK_WAIT_SECONDS)); token="updater-$$-$now"
   while ! mkdir "$DEPLOY_LOCK_DIR" 2>/dev/null; do
     now="$(date +%s)"
-    acquired="$(sed -n 's/^acquired_ts=//p' "$DEPLOY_LOCK_DIR/owner.env" 2>/dev/null | head -n 1 || true)"
-    owner="$(sed -n 's/^token=//p' "$DEPLOY_LOCK_DIR/owner.env" 2>/dev/null | head -n 1 || true)"
+    acquired="$(sed -n 's/^acquired_ts=//p' "$DEPLOY_LOCK_DIR/owner.env" 2>/dev/null | head -n1 || true)"
+    owner="$(sed -n 's/^token=//p' "$DEPLOY_LOCK_DIR/owner.env" 2>/dev/null | head -n1 || true)"
     if [[ "$acquired" =~ ^[0-9]+$ ]] && (( now - acquired > DEPLOY_LOCK_STALE_SECONDS )); then
-      log "Reclaiming stale deployment mutex token=${owner:-unknown} age_seconds=$((now-acquired))"
+      log "Reclaiming stale deployment mutex token=${owner:-unknown}"
       rm -rf "$DEPLOY_LOCK_DIR"
       continue
     fi
-    if (( now >= deadline )); then
-      fail "deployment mutex busy token=${owner:-unknown}; refusing overlapping checkout mutation"
-    fi
+    (( now < deadline )) || fail "deployment mutex busy token=${owner:-unknown}"
     sleep 2
   done
-  DEPLOY_LOCK_TOKEN="$token"
-  DEPLOY_LOCK_HELD=1
+  DEPLOY_LOCK_TOKEN="$token"; DEPLOY_LOCK_HELD=1
   {
-    printf 'token=%s\n' "$DEPLOY_LOCK_TOKEN"
+    printf 'token=%s\n' "$token"
     printf 'pid=%s\n' "$$"
     printf 'acquired_ts=%s\n' "$now"
     printf 'deploy_ref=%s\n' "$DEPLOY_REF"
   } > "$DEPLOY_LOCK_DIR/owner.env"
-  log "Acquired deployment mutex token=$DEPLOY_LOCK_TOKEN"
-}
-
-wait_for_legacy_updater() {
-  [[ "$APP_UPDATER_LOCK_AWARE" == "0" ]] || return 0
-  local deadline now pids pid other
-  deadline=$(( $(date +%s) + DEPLOY_LOCK_WAIT_SECONDS ))
-  while :; do
-    other=""
-    pids="$(/usr/bin/pgrep -f "$APP_DIR/ops/update_server_macos.sh" 2>/dev/null || true)"
-    for pid in $pids; do
-      [[ "$pid" == "$$" ]] && continue
-      other="${other}${other:+,}$pid"
-    done
-    [[ -z "$other" ]] && return 0
-    now="$(date +%s)"
-    if (( now >= deadline )); then
-      fail "legacy pre-mutex updater still running pid=${other}; refusing concurrent checkout mutation"
-    fi
-    log "Waiting for pre-mutex launchd updater pid=${other} to finish"
-    sleep 2
-  done
 }
 
 write_status() {
-  local status="$1" head_sha="$2" validated_sha="$3" main_sha="$4"
+  local status="$1" head_sha="$2" validated_sha="$3" main_sha="$4" tmp
   mkdir -p "$STATE_DIR"
-  local tmp
   tmp="$(mktemp "$STATE_DIR/autoupdate_status.XXXXXX")"
   {
     printf 'checked_ts=%s\n' "$(date +%s)"
@@ -117,11 +77,14 @@ write_status() {
 
 champion_meta() {
   "$PYTHON_BIN" - "$APP_DIR/config/live_champion.json" <<'PY'
-import json
-import sys
+import json,sys
 from pathlib import Path
-m = json.loads(Path(sys.argv[1]).read_text())
-print(f"{m['version']}\t{m['run_root']}\t{m['config']}\t{m['loop']}")
+m=json.loads(Path(sys.argv[1]).read_text())
+assert int(m['version']) == 7, m
+assert m['loop'] == 'scripts/paper_v7_loop.sh', m
+assert m['config'] == 'config/paper_v7.json', m
+assert m['run_root'] == 'runs/paper_v7_live', m
+print(f"7\t{m['run_root']}\t{m['config']}\t{m['loop']}")
 PY
 }
 
@@ -129,150 +92,90 @@ request_runtime_handoff() {
   local target_sha="$1" meta version run_root_rel config_rel loop_rel marker tmp
   meta="$(champion_meta)" || return 1
   IFS=$'\t' read -r version run_root_rel config_rel loop_rel <<<"$meta"
-  [[ "$run_root_rel" =~ ^runs/[A-Za-z0-9._-]+$ ]] || return 1
   marker="$APP_DIR/$run_root_rel/runtime_handoff.request"
-  mkdir -p "$(dirname "$marker")"
-  tmp="$marker.tmp.$$"
+  mkdir -p "$(dirname "$marker")"; tmp="$marker.tmp.$$"
   {
     printf 'target_sha=%s\n' "$target_sha"
     printf 'requested_ts=%s\n' "$(date +%s)"
     printf 'reason=validated_deploy_handoff\n'
   } > "$tmp"
   mv "$tmp" "$marker"
-  log "Requested bounded runtime-owner handoff for $run_root_rel"
 }
 
 clear_runtime_handoff() {
-  local meta version run_root_rel config_rel loop_rel marker
+  local meta version run_root_rel config_rel loop_rel
   meta="$(champion_meta)" || return 1
   IFS=$'\t' read -r version run_root_rel config_rel loop_rel <<<"$meta"
-  [[ "$run_root_rel" =~ ^runs/[A-Za-z0-9._-]+$ ]] || return 1
-  marker="$APP_DIR/$run_root_rel/runtime_handoff.request"
-  rm -f "$marker"
+  rm -f "$APP_DIR/$run_root_rel/runtime_handoff.request"
 }
 
 paper_runtime_healthy() {
-  local meta version run_root_rel config_rel loop_rel supervisor
+  local meta version run_root_rel config_rel loop_rel root execution metrics grafana_search
   meta="$(champion_meta 2>/dev/null)" || return 1
   IFS=$'\t' read -r version run_root_rel config_rel loop_rel <<<"$meta"
-  [[ "$version" == "5" || "$version" == "6" ]] || return 1
-  supervisor="$APP_DIR/$run_root_rel/runtime_supervisor.csv"
-  [[ -s "$supervisor" ]] || return 1
-
-  if (( version == 5 )); then
-    "$PYTHON_BIN" "$APP_DIR/scripts/v5_runtime_readiness.py" \
-      --run-root "$APP_DIR/$run_root_rel" \
-      --supervisor-max-age 60 \
-      --allocator-max-age 30 \
-      --model-output-max-age 120 \
-      --startup-grace 600 >/dev/null
-    return
-  fi
-
-  "$PYTHON_BIN" - "$supervisor" "$version" "$APP_DIR/$run_root_rel" <<'PY'
-import csv
-import json
-import math
-import sys
-import time
+  [[ "$version" == "7" ]] || return 1
+  root="$APP_DIR/$run_root_rel"; execution="$root/execution"
+  "$PYTHON_BIN" - "$root" <<'PY'
+import json,sys,time
 from pathlib import Path
-supervisor = Path(sys.argv[1])
-version = int(sys.argv[2])
-run_root = Path(sys.argv[3])
-with supervisor.open(newline='', encoding='utf-8') as handle:
-    rows = list(csv.DictReader(handle))
-assert rows
-row = rows[-1]
-assert row.get('recorder_alive') == '1'
-assert row.get('broker_alive') == '1'
-assert row.get('allocator_alive') == '1'
-assert time.time() - float(row['timestamp']) <= 60
-allocator = json.loads((run_root / 'allocator_status.json').read_text())
-with (run_root / 'strategy_status.csv').open(newline='', encoding='utf-8') as handle:
-    strategies = list(csv.DictReader(handle))
-assert allocator.get('paper_only') is True
-assert int(allocator.get('models_expected', 0)) == 5
-assert int(allocator.get('models_alive', 0)) == 5
-assert {item.get('name') for item in strategies} == {'micro', 'pca', 'graph', 'semantic', 'external'}
-total = float(allocator.get('reserve_fraction', 0.0)) + sum(float(item['capital_fraction']) for item in strategies)
-assert math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9)
-assert all(float(item['status_age_seconds']) <= 120 for item in strategies)
-if version >= 6:
-    runtime = json.loads((run_root / 'runtime_status.json').read_text())
-    assert runtime.get('version') == 6 and runtime.get('paper_only') is True
-    assert float(runtime.get('drawdown', 1.0)) <= 0.15 + 1e-12
-    assert 'graph_hard' in runtime.get('strategies', {})
-    assert (run_root / 'hard_arb' / 'status.json').is_file()
-    assert (run_root / 'local_factor_status.json').is_file()
+root=Path(sys.argv[1]); ex=root/'execution'; now=time.time()
+sup=json.loads((root/'v7_supervisor.json').read_text())
+exe=json.loads((ex/'v7_execution_supervisor.json').read_text())
+runtime=json.loads((ex/'runtime_status.json').read_text())
+proxy=json.loads((ex/'market_proxy_status.json').read_text())
+allocator=json.loads((ex/'allocator_status.json').read_text())
+assert sup['execution_alive'] is True and sup['shadow_alive'] is True
+assert now-float(sup['timestamp']) <= 60
+assert now-float(exe['timestamp']) <= 120 and exe['paper_only'] is True
+assert runtime['schema'] == 'polymarket_v7_runtime_status_v1'
+assert runtime['version'] == 7 and runtime['paper_only'] is True and runtime['authenticated_execution'] is False
+assert float(runtime['drawdown']) <= 0.15 + 1e-12
+assert proxy['schema'] == 'polymarket_v7_market_proxy_status_v1'
+assert now-float(proxy['timestamp']) <= 180
+assert int(allocator['models_expected']) == 5 and int(allocator['models_alive']) == 5
+assert (ex/'strategy_status.csv').is_file()
 PY
-}
-
-full_runtime_healthy() {
-  local meta version run_root_rel config_rel loop_rel run_name metrics grafana_search
-  meta="$(champion_meta 2>/dev/null)" || return 1
-  IFS=$'\t' read -r version run_root_rel config_rel loop_rel <<<"$meta"
-  run_name="$(basename "$run_root_rel")"
   curl -fsS http://127.0.0.1:9108/healthz >/dev/null 2>&1 || return 1
   metrics="$(curl -fsS http://127.0.0.1:9108/metrics 2>/dev/null)" || return 1
-  grep -q "^polymarket_runtime_info{adapter=\"v$version\",run_root=\"$run_name\",version=\"v$version\"} 1$" <<<"$metrics" || return 1
+  grep -q '^polymarket_runtime_info{adapter="v7",run_root="paper_v7_live",version="v7"} 1$' <<<"$metrics" || return 1
+  grep -q '^polymarket_v7_runtime_info 1$' <<<"$metrics" || return 1
   grep -q '^polymarket_runtime_pnl_usd ' <<<"$metrics" || return 1
-  if (( version >= 5 )); then
-    grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics" || return 1
-    grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics" || return 1
-    grep -q '^polymarket_model_info{' <<<"$metrics" || return 1
-  fi
-  if (( version >= 6 )); then
-    grep -q '^polymarket_v6_exporter_info{' <<<"$metrics" || return 1
-    grep -q '^polymarket_v6_local_factor_clusters ' <<<"$metrics" || return 1
-  fi
+  grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics" || return 1
+  grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics" || return 1
+  grep -q '^polymarket_model_info{' <<<"$metrics" || return 1
   curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1 || return 1
   curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 || return 1
   grafana_search="$(curl -fsS http://127.0.0.1:3000/api/search 2>/dev/null)" || return 1
-  if (( version >= 5 )); then
-    grep -q 'polymarket-multi-strategy-v5' <<<"$grafana_search" || return 1
-  fi
-  paper_runtime_healthy
+  grep -q 'polymarket-multi-strategy' <<<"$grafana_search" || return 1
 }
 
+full_runtime_healthy() { paper_runtime_healthy; }
+
 wait_for_runtime_health() {
-  local attempts="${1:-$RUNTIME_HEALTH_ATTEMPTS}"
-  local i
-  for ((i=0; i<attempts; ++i)); do
-    if full_runtime_healthy; then
-      return 0
-    fi
-    sleep 2
-  done
+  local attempts="${1:-$RUNTIME_HEALTH_ATTEMPTS}" i
+  for ((i=0; i<attempts; ++i)); do full_runtime_healthy && return 0; sleep 2; done
   return 1
 }
 
 capture_runtime_health_diagnostics() {
   local target_sha="$1"
-  if [[ -f "$APP_DIR/ops/capture_runtime_health_macos.sh" ]]; then
-    bash "$APP_DIR/ops/capture_runtime_health_macos.sh" "$target_sha" || log "candidate health diagnostics collector failed"
-  else
-    log "candidate health diagnostics collector missing"
-  fi
+  [[ -f "$APP_DIR/ops/capture_runtime_health_macos.sh" ]] && bash "$APP_DIR/ops/capture_runtime_health_macos.sh" "$target_sha" || true
 }
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "This updater is for macOS only"
 [[ -d "$APP_DIR/.git" ]] || fail "$APP_DIR is not a git checkout"
 [[ -f "$APP_DIR/.server_bootstrapped_macos" ]] || fail "run ops/bootstrap_macos.sh interactively once first"
-BREW_BIN="$(find_brew)" || fail "Homebrew is required (checked PATH, /opt/homebrew/bin/brew, /usr/local/bin/brew)"
-[[ "$DEPLOY_LOCK_WAIT_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_LOCK_WAIT_SECONDS must be a positive integer"
-[[ "$DEPLOY_LOCK_STALE_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_LOCK_STALE_SECONDS must be a positive integer"
-if grep -q '^POLYMARKET_DEPLOY_LOCK_V1=1$' "$APP_DIR/ops/update_server_macos.sh" 2>/dev/null; then
-  APP_UPDATER_LOCK_AWARE=1
-fi
+BREW_BIN="$(find_brew)" || fail "Homebrew is required"
+[[ "$DEPLOY_LOCK_WAIT_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_LOCK_WAIT_SECONDS must be positive"
+[[ "$DEPLOY_LOCK_STALE_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_LOCK_STALE_SECONDS must be positive"
 acquire_deploy_lock
 trap release_deploy_lock EXIT
-wait_for_legacy_updater
 
 BREW_PREFIX="$("$BREW_BIN" --prefix)"
 export PATH="$BREW_PREFIX/bin:$BREW_PREFIX/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PKG_CONFIG_PATH="$("$BREW_BIN" --prefix curl)/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 PYTHON_BIN="$BREW_PREFIX/bin/python3"
-[[ "$RUNTIME_HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS must be a positive integer"
+[[ "$RUNTIME_HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS must be positive"
 
 cd "$APP_DIR"
 OLD_SHA="$(git rev-parse HEAD)"
@@ -281,38 +184,23 @@ MAIN_SHA="$(git rev-parse "origin/$LOCAL_BRANCH")"
 NEW_SHA="$(git rev-parse "origin/$DEPLOY_REF")"
 
 if [[ "$OLD_SHA" == "$NEW_SHA" ]]; then
-  if full_runtime_healthy; then
-    write_status up_to_date "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
-    log "Already deployed and healthy at validated commit $NEW_SHA"
-    exit 0
-  fi
-  log "Validated code is current but runtime is unhealthy; reapplying runtime configuration before service repair"
-  if ! bash "$APP_DIR/ops/apply_runtime_config_macos.sh"; then
-    write_status unhealthy "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
-    fail "validated code is current but runtime configuration repair failed"
-  fi
+  if full_runtime_healthy; then write_status up_to_date "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"; exit 0; fi
+  bash "$APP_DIR/ops/apply_runtime_config_macos.sh" || { write_status unhealthy "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"; fail "runtime configuration repair failed"; }
   request_runtime_handoff "$NEW_SHA" || fail "could not request runtime-owner handoff"
   sudo -n /usr/local/sbin/polymarket-service-control restart || true
-  if wait_for_runtime_health; then
-    write_status repaired "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
-    log "Runtime and Grafana configuration repaired at validated commit $NEW_SHA"
-    exit 0
-  fi
+  if wait_for_runtime_health; then write_status repaired "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"; exit 0; fi
   capture_runtime_health_diagnostics "$NEW_SHA"
   write_status unhealthy "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
-  fail "validated code is current and automatic configuration/service repair did not restore health"
+  fail "automatic V7 runtime repair did not restore health"
 fi
 
 if git merge-base --is-ancestor "$NEW_SHA" "$OLD_SHA" 2>/dev/null; then
   write_status awaiting_validation "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
-  log "Current checkout is ahead of validated ref; waiting for live-smoke validation"
   exit 0
 fi
 
 mkdir -p "$CACHE_DIR"
-STAGE="$(mktemp -d "$CACHE_DIR/stage.XXXXXX")"
-STAGE_SRC="$STAGE/src"
-CONFIG_BACKUP="$STAGE/config-backup"
+STAGE="$(mktemp -d "$CACHE_DIR/stage.XXXXXX")"; STAGE_SRC="$STAGE/src"; CONFIG_BACKUP="$STAGE/config-backup"
 cleanup() {
   git -C "$APP_DIR" worktree remove --force "$STAGE_SRC" >/dev/null 2>&1 || true
   rm -rf "$STAGE"
@@ -320,36 +208,27 @@ cleanup() {
 }
 trap cleanup EXIT
 
-log "Validating candidate $NEW_SHA from $DEPLOY_REF in isolated worktree"
 git -C "$APP_DIR" worktree add --detach "$STAGE_SRC" "$NEW_SHA" >/dev/null
 cd "$STAGE_SRC"
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$BREW_PREFIX"
 JOBS="$(sysctl -n hw.logicalcpu 2>/dev/null || echo 2)"
 cmake --build build --parallel "$JOBS"
 ctest --test-dir build --output-on-failure
-"$PYTHON_BIN" -m unittest \
-  tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py \
-  tests/test_monitoring_latest_exporter.py tests/test_monitoring_v5_exporter.py \
-  tests/test_grafana_fast_paper_contract.py tests/test_grafana_multi_strategy_contract.py \
-  tests/test_multi_strategy_paper.py tests/test_v5_runtime_readiness.py \
-  tests/test_v4_monitoring_contract.py tests/test_v6_runtime_contract.py \
-  tests/test_v6_model_contracts.py -v
-"$PYTHON_BIN" -m py_compile \
-  monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_v5.py \
-  monitoring/exporter_v6.py monitoring/exporter_latest.py \
-  scripts/multi_strategy_paper.py scripts/v5_runtime_readiness.py \
-  scripts/build_v4_intents.py scripts/merge_v4_intents.py \
-  scripts/walk_forward_v4.py scripts/tiny_live_pilot.py scripts/v6_*.py
-bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh \
-  scripts/v6_live_smoke_once.sh ops/apply_runtime_config_macos.sh ops/capture_runtime_health_macos.sh
+"$PYTHON_BIN" -m unittest tests/test_monitoring_v7_exporter.py tests/test_v7_unified_runtime.py tests/test_v7_point_in_time_archive_workflow.py -v
+"$PYTHON_BIN" -m py_compile monitoring/exporter.py monitoring/exporter_v7.py monitoring/exporter_latest_v7.py scripts/v7_*.py
+bash -n scripts/paper_v7_loop.sh scripts/paper_v7_execution_loop.sh ops/apply_runtime_config_macos.sh ops/capture_runtime_health_macos.sh
 "$PYTHON_BIN" -m json.tool config/live_champion.json >/dev/null
-"$PYTHON_BIN" -m json.tool config/paper_v5.json >/dev/null
-"$PYTHON_BIN" -m json.tool config/paper_v6.json >/dev/null
-"$PYTHON_BIN" -m json.tool config/v6_model_architecture.json >/dev/null
-"$PYTHON_BIN" -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
+"$PYTHON_BIN" -m json.tool config/paper_v7.json >/dev/null
+"$PYTHON_BIN" - <<'PY'
+import json
+m=json.load(open('config/live_champion.json'))
+assert int(m['version']) == 7
+assert m['loop'] == 'scripts/paper_v7_loop.sh'
+assert m['config'] == 'config/paper_v7.json'
+assert m['run_root'] == 'runs/paper_v7_live'
+PY
 
 log "Candidate validation passed; staging production build"
-wait_for_legacy_updater
 cd "$APP_DIR"
 git checkout "$LOCAL_BRANCH"
 git reset --hard "$NEW_SHA"
@@ -357,37 +236,19 @@ rm -rf build.next
 cmake -S . -B build.next -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$BREW_PREFIX"
 cmake --build build.next --parallel "$JOBS"
 
-log "Snapshotting runtime config"
-mkdir -p "$CONFIG_BACKUP/grafana/provisioning/datasources" \
-  "$CONFIG_BACKUP/grafana/provisioning/dashboards"
-for rel in \
-  grafana.ini \
-  grafana/provisioning/datasources/prometheus.yml \
-  grafana/provisioning/dashboards/dashboards.yml; do
-  if [[ -f "$STATE_DIR/$rel" ]]; then
-    mkdir -p "$CONFIG_BACKUP/$(dirname "$rel")"
-    cp "$STATE_DIR/$rel" "$CONFIG_BACKUP/$rel"
-  fi
+mkdir -p "$CONFIG_BACKUP/grafana/provisioning/datasources" "$CONFIG_BACKUP/grafana/provisioning/dashboards"
+for rel in grafana.ini grafana/provisioning/datasources/prometheus.yml grafana/provisioning/dashboards/dashboards.yml; do
+  if [[ -f "$STATE_DIR/$rel" ]]; then mkdir -p "$CONFIG_BACKUP/$(dirname "$rel")"; cp "$STATE_DIR/$rel" "$CONFIG_BACKUP/$rel"; fi
 done
 
 rollback() {
   local reason="$1"
   log "ROLLBACK: $reason"
-  cd "$APP_DIR"
-  git reset --hard "$OLD_SHA" || true
-  if [[ -d build.previous ]]; then
-    rm -rf build
-    mv build.previous build
-  fi
-  for rel in \
-    grafana.ini \
-    grafana/provisioning/datasources/prometheus.yml \
-    grafana/provisioning/dashboards/dashboards.yml; do
+  cd "$APP_DIR"; git reset --hard "$OLD_SHA" || true
+  if [[ -d build.previous ]]; then rm -rf build; mv build.previous build; fi
+  for rel in grafana.ini grafana/provisioning/datasources/prometheus.yml grafana/provisioning/dashboards/dashboards.yml; do
     rm -f "$STATE_DIR/$rel"
-    if [[ -f "$CONFIG_BACKUP/$rel" ]]; then
-      mkdir -p "$STATE_DIR/$(dirname "$rel")"
-      cp "$CONFIG_BACKUP/$rel" "$STATE_DIR/$rel"
-    fi
+    if [[ -f "$CONFIG_BACKUP/$rel" ]]; then mkdir -p "$STATE_DIR/$(dirname "$rel")"; cp "$CONFIG_BACKUP/$rel" "$STATE_DIR/$rel"; fi
   done
   write_status rollback "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
   clear_runtime_handoff || true
@@ -396,34 +257,15 @@ rollback() {
 }
 
 rm -rf build.previous
-if [[ -d build ]]; then mv build build.previous; fi
+[[ -d build ]] && mv build build.previous
 mv build.next build
-
-log "Applying manifest-aware runtime configuration"
 bash "$APP_DIR/ops/apply_runtime_config_macos.sh" || rollback "runtime configuration failed"
-
-log "Restarting manifest-selected paper services"
 request_runtime_handoff "$NEW_SHA" || rollback "could not request runtime-owner handoff"
 sudo -n /usr/local/sbin/polymarket-service-control restart || rollback "service restart failed"
-
-log "Waiting for production health (up to $((RUNTIME_HEALTH_ATTEMPTS * 2)) seconds for process/readiness confirmation)"
-if ! wait_for_runtime_health; then
-  capture_runtime_health_diagnostics "$NEW_SHA"
-  rollback "post-deploy paper runtime health checks failed"
-fi
-
+if ! wait_for_runtime_health; then capture_runtime_health_diagnostics "$NEW_SHA"; rollback "post-deploy V7 PAPER runtime health checks failed"; fi
 FINAL_SHA="$(git -C "$APP_DIR" rev-parse HEAD)"
-if [[ "$FINAL_SHA" != "$NEW_SHA" ]]; then
-  rollback "checkout moved during serialized deployment: actual=$FINAL_SHA expected=$NEW_SHA"
-fi
+[[ "$FINAL_SHA" == "$NEW_SHA" ]] || rollback "checkout moved during serialized deployment: actual=$FINAL_SHA expected=$NEW_SHA"
 rm -rf build.previous
 write_status deployed "$NEW_SHA" "$NEW_SHA" "$MAIN_SHA"
-meta="$(champion_meta)"
-IFS=$'\t' read -r version run_root_rel config_rel loop_rel <<<"$meta"
-printf 'deployed_sha=%s\n' "$NEW_SHA"
-printf 'validated_ref=%s\n' "$DEPLOY_REF"
-printf 'main_sha=%s\n' "$MAIN_SHA"
-printf 'previous_sha=%s\n' "$OLD_SHA"
-printf 'champion_version=%s\n' "$version"
-printf 'champion_run_root=%s\n' "$run_root_rel"
-log "Deployment healthy"
+printf 'deployed_sha=%s\nvalidated_ref=%s\nmain_sha=%s\nprevious_sha=%s\nchampion_version=7\nchampion_run_root=runs/paper_v7_live\n' "$NEW_SHA" "$DEPLOY_REF" "$MAIN_SHA" "$OLD_SHA"
+log "V7 deployment healthy"
