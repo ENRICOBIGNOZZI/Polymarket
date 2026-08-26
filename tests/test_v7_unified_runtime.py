@@ -24,25 +24,24 @@ def test_research_branch_keeps_incumbent_manifest_and_defines_v7_candidate():
     assert candidate["promotion_contract"] == "research_head_must_be_exact-head-approved_then_integrated"
 
 
-def test_v7_config_has_no_binding_fixed_dollar_trade_cap_and_100_percent_hard_ceiling():
+def test_v7_config_has_authorized_aggressive_envelope_and_hard_safety():
     cfg = load("config/paper_v7.json")
     assert cfg["engine_version"] == 7
     assert cfg["paper_only"] is True
     assert cfg["market_limit"] == 1000
     assert cfg["min_liquidity"] == 2.0
     assert abs(cfg["min_net_edge"] - 0.00005) < 1e-12
+    assert cfg["uncertainty_penalty"] == 0.0
     assert cfg["fractional_kelly"] == 0.25
-    assert cfg["fixed_dollar_trade_cap_enabled"] is False
-    assert float(cfg["max_trade_usd"]) > 1e50
-    assert cfg["max_trade_fraction"] == 1.0
-    assert cfg["max_market_fraction"] == 1.0
-    assert cfg["max_event_fraction"] == 1.0
-    assert cfg["max_gross_fraction"] == 1.0
-    assert cfg["multi_strategy"]["global_max_gross_fraction"] == 1.0
+    assert cfg["fixed_dollar_trade_cap_enabled"] is True
+    assert cfg["max_trade_usd"] == 125.0
+    assert cfg["max_market_fraction"] == 0.05
+    assert cfg["max_event_fraction"] == 0.15
+    assert cfg["max_gross_fraction"] == 0.70
+    assert cfg["multi_strategy"]["global_max_gross_fraction"] == 0.70
     assert cfg["max_drawdown"] == 0.15
-    assert cfg["v7"]["hard_arb_fixed_dollar_trade_cap_enabled"] is False
-    assert float(cfg["v7"]["hard_arb_max_trade_usd"]) > 1e50
-    assert cfg["v7"]["hard_arb_max_trade_fraction"] == 1.0
+    assert cfg["v7"]["hard_arb_fixed_dollar_trade_cap_enabled"] is True
+    assert cfg["v7"]["hard_arb_max_trade_usd"] == 125.0
     assert cfg["v7"]["authoritative_fee_required"] is True
     assert cfg["v7"]["shared_execution_ledger_required"] is True
     assert cfg["v7"]["joint_fill_state_required_for_multileg"] is True
