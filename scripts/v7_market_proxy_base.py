@@ -28,11 +28,12 @@ FRESH_CACHE_SECONDS = 300.0
 STALE_CACHE_SECONDS = 3600.0
 FALLBACK_MARKETS = 300
 GAMMA_TIMEOUT_SECONDS = 1.5
-GAMMA_LEGACY_TIMEOUT_SECONDS = 8.0
+GAMMA_OFFSET_TIMEOUT_SECONDS = 8.0
 CLOB_TIMEOUT_SECONDS = 5.0
 CLOB_DISCOVERY_BUDGET_SECONDS = 10.0
 BOOK_WORKERS = 8
-CACHE_SCHEMA = "polymarket_v6_market_proxy_cache_v1"
+CACHE_SCHEMA = "polymarket_v7_market_proxy_cache_v1"
+STATUS_SCHEMA = "polymarket_v7_market_proxy_status_v1"
 
 
 def f(x: Any, d: float = 0.0) -> float:
@@ -75,7 +76,7 @@ def atomic(path: Path, obj: Any) -> None:
 def req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT_SECONDS) -> Any:
     data = None if payload is None else json.dumps(payload, separators=(",", ":")).encode()
     headers = {
-        "User-Agent": "polymarket-v6-market-proxy/2",
+        "User-Agent": "polymarket-v7-market-proxy/1",
         "Accept": "application/json",
         "Accept-Encoding": "gzip",
     }
@@ -113,7 +114,7 @@ def curl_req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT
         "--max-time",
         str(max(1, math.ceil(timeout))),
         "--user-agent",
-        "polymarket-v6-market-proxy/2",
+        "polymarket-v7-market-proxy/1",
         "--header",
         "Accept: application/json",
     ]
@@ -139,8 +140,6 @@ def curl_req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT
 
 
 def clob_req(url: str, payload: Any | None = None, timeout: float = CLOB_TIMEOUT_SECONDS) -> Any:
-    # Curl is preferred for public CLOB traffic: it uses compressed transfers and
-    # a forced IPv4 route, avoiding a slow/broken IPv6 connect from the private node.
     if shutil.which("curl"):
         return curl_req(url, payload, timeout)
     return req(url, payload, timeout)
@@ -209,8 +208,6 @@ class Proxy:
         rows = [dict(row) for row in markets]
         mapping = value.get("gamma_to_condition")
         with self.state_lock:
-            # Cache timestamps are integer seconds, so accept a newer atomic file
-            # written in the same second but never roll state back materially.
             if timestamp + 1.0 < self.ts:
                 self.cache_mtime_ns = metadata.st_mtime_ns
                 return False
@@ -226,7 +223,7 @@ class Proxy:
         atomic(
             self.status,
             {
-                "schema": "polymarket_v6_market_proxy_status_v1",
+                "schema": STATUS_SCHEMA,
                 "timestamp": int(time.time()),
                 "source": source,
                 "markets": n,
@@ -313,7 +310,7 @@ class Proxy:
             raise RuntimeError("Gamma keyset returned no markets")
         return out[:n]
 
-    def gamma_legacy_rows(self, n: int, query: dict[str, list[str]]) -> list[dict[str, Any]]:
+    def gamma_offset_rows(self, n: int, query: dict[str, list[str]]) -> list[dict[str, Any]]:
         params = {
             key: value[-1]
             for key, value in query.items()
@@ -329,12 +326,12 @@ class Proxy:
             request_params["offset"] = str(offset)
             url = self.gamma + "/markets?" + urllib.parse.urlencode(request_params)
             value = (
-                curl_req(url, timeout=GAMMA_LEGACY_TIMEOUT_SECONDS)
+                curl_req(url, timeout=GAMMA_OFFSET_TIMEOUT_SECONDS)
                 if shutil.which("curl")
-                else req(url, timeout=GAMMA_LEGACY_TIMEOUT_SECONDS)
+                else req(url, timeout=GAMMA_OFFSET_TIMEOUT_SECONDS)
             )
             if not isinstance(value, list):
-                raise RuntimeError("bad Gamma legacy markets response")
+                raise RuntimeError("bad Gamma offset markets response")
             return offset, [row for row in value if isinstance(row, dict)]
 
         pages: dict[int, list[dict[str, Any]]] = {}
@@ -349,7 +346,7 @@ class Proxy:
                     continue
                 pages[offset] = batch
         if failures or set(pages) != set(offsets):
-            raise RuntimeError("Gamma legacy offset discovery incomplete: " + "; ".join(failures))
+            raise RuntimeError("Gamma offset discovery incomplete: " + "; ".join(failures))
 
         out: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -360,7 +357,7 @@ class Proxy:
                     seen.add(key)
                     out.append(row)
         if len(out) < n:
-            raise RuntimeError(f"Gamma legacy returned only {len(out)} of {n} requested markets")
+            raise RuntimeError(f"Gamma offset discovery returned only {len(out)} of {n} requested markets")
         return out[:n]
 
     def clob_candidates(self, n: int, path: str, deadline: float) -> list[dict[str, Any]]:
@@ -501,13 +498,13 @@ class Proxy:
 
         target = min(FALLBACK_MARKETS, max(FALLBACK_MARKETS, offset + limit))
         try:
-            rows = self.gamma_legacy_rows(target, query)
+            rows = self.gamma_offset_rows(target, query)
             self.error = ""
             self.save(rows)
-            self.stat("gamma_legacy", len(rows), True)
-        except Exception as legacy_error:
+            self.stat("gamma_offset", len(rows), True)
+        except Exception as offset_error:
             self.failures += 1
-            self.error = str(legacy_error)
+            self.error = str(offset_error)
             try:
                 rows = self.gamma_rows(target, query)
                 self.error = ""
@@ -546,13 +543,11 @@ class Proxy:
             try:
                 self._refresh_locked(query, limit, offset, min_liquidity)
             except Exception:
-                # The bounded stale cache has already been served to the caller.
-                # A later request will retry; errors remain in the status file.
                 pass
             finally:
                 self.refresh_lock.release()
 
-        worker = threading.Thread(target=refresh, name="v6-market-refresh", daemon=True)
+        worker = threading.Thread(target=refresh, name="v7-market-refresh", daemon=True)
         try:
             worker.start()
         except Exception:
@@ -568,11 +563,6 @@ class Proxy:
         if cached is not None:
             return cached
 
-        # A relay cache can be safely used for a bounded period even when it is
-        # no longer fresh.  Return it immediately: synchronously probing Gamma
-        # and CLOB here lets the C++ reader time out before the cache fallback is
-        # reached.  One background refresh remains in flight so the proxy still
-        # self-heals whenever upstream access recovers.
         if self.refresh_lock.acquire(blocking=False):
             cached = self.cached_page(limit, offset, min_liquidity, STALE_CACHE_SECONDS)
             if cached is not None:
@@ -697,7 +687,7 @@ def main() -> int:
     args = parser.parse_args()
     H.proxy = Proxy(args.gamma, args.clob, args.cache, args.status)
     server = ThreadingHTTPServer((args.host, args.port), H)
-    print(f"v6 market proxy listening on http://{args.host}:{args.port}", flush=True)
+    print(f"v7 market proxy listening on http://{args.host}:{args.port}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
