@@ -55,16 +55,22 @@ def test_roundtrip_accounting_does_not_use_terminal_payout():
         capital_time_cash=0.25,
         cost_multiplier=2.0,
     )
-    assert abs(pnl + 0.5) < 1e-12
+    assert abs(pnl + 2.5) < 1e-12
 
 
 def test_full_and_partial_states_share_same_pnl_contract():
-    text = (ROOT / "scripts/v7_graph_roundtrip_guard.py").read_text(encoding="utf-8")
+    text = (ROOT / "scripts/v7_graph_roundtrip_guard_core.py").read_text(encoding="utf-8")
     assert "terminal_payout_floor_assumed\": False" in text
     assert "neg_risk_exactly_one_yes_assumed\": False" in text
     assert "full_and_partial_states_share_executable_liquidation_accounting\": True" in text
     assert "fixed_horizon_depth_aware_roundtrip_liquidation" in text
     assert "verified_terminal_payout_floor" not in text
+
+
+def test_runtime_adapter_binds_core_counter_explicitly():
+    text = (ROOT / "scripts/v7_graph_roundtrip_guard.py").read_text(encoding="utf-8")
+    assert "core.Counter = Counter" in text
+    assert "raise SystemExit(core.main())" in text
 
 
 def test_v2_terminal_floor_evidence_cannot_enter_v3():
