@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import statistics
@@ -12,9 +13,20 @@ from typing import Any
 import v6_micro_taker as base
 import v7_micro_taker_core as economics
 
+FLOW_FEATURE_DIM = 8
+
+
+def _finite(value: Any, default: float = math.nan) -> float:
+    try:
+        out = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return out if math.isfinite(out) else default
+
 
 def residual_sigma(samples: list[dict[str, Any]], beta: list[float]) -> float:
     residuals: list[float] = []
+    p = len(beta)
     for row in samples[-10000:]:
         if row.get("y") is None:
             continue
@@ -23,11 +35,144 @@ def residual_sigma(samples: list[dict[str, Any]], beta: list[float]) -> float:
             y = float(row["y"])
         except (KeyError, TypeError, ValueError):
             continue
+        if len(x) != p:
+            continue
         prediction = sum(a * b for a, b in zip(beta, x))
         residuals.append(y - prediction)
     if len(residuals) < 20:
         return 0.02
     return max(1e-4, statistics.stdev(residuals))
+
+
+def solve_ridge(samples: list[dict[str, Any]], ridge: float, feature_dim: int) -> list[float]:
+    """Ridge fit that never mixes incompatible historical feature schemas."""
+    labeled: list[dict[str, Any]] = []
+    for row in samples:
+        if row.get("y") is None:
+            continue
+        try:
+            x = [float(v) for v in row["x"]]
+            float(row["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if len(x) == feature_dim:
+            labeled.append(row)
+    if len(labeled) < 40:
+        return [0.0] * feature_dim
+    p = feature_dim
+    matrix = [[0.0] * p for _ in range(p)]
+    rhs = [0.0] * p
+    for row in labeled[-10000:]:
+        x = [float(v) for v in row["x"]]
+        target = float(row["y"])
+        for i in range(p):
+            rhs[i] += x[i] * target
+            for j in range(p):
+                matrix[i][j] += x[i] * x[j]
+    for i in range(1, p):
+        matrix[i][i] += ridge
+    for i in range(p):
+        pivot = max(range(i, p), key=lambda r: abs(matrix[r][i]))
+        if abs(matrix[pivot][i]) < 1e-12:
+            return [0.0] * p
+        matrix[i], matrix[pivot] = matrix[pivot], matrix[i]
+        rhs[i], rhs[pivot] = rhs[pivot], rhs[i]
+        diagonal = matrix[i][i]
+        matrix[i] = [value / diagonal for value in matrix[i]]
+        rhs[i] /= diagonal
+        for r in range(p):
+            if r == i:
+                continue
+            q = matrix[r][i]
+            if abs(q) < 1e-14:
+                continue
+            matrix[r] = [matrix[r][c] - q * matrix[i][c] for c in range(p)]
+            rhs[r] -= q * rhs[i]
+    return rhs
+
+
+def causal_flow_features(
+    trade_tape: Path,
+    token_ids: set[str],
+    *,
+    now: int,
+    lookback_seconds: int,
+    half_life_seconds: float,
+) -> dict[str, dict[str, float]]:
+    """Receive-time causal, event-time decayed taker flow for selected tokens."""
+    out = {token: {"signed_imbalance": 0.0, "weighted_gross": 0.0, "prints": 0.0} for token in token_ids}
+    if not token_ids or not trade_tape.exists():
+        return out
+    signed: dict[str, float] = {token: 0.0 for token in token_ids}
+    gross: dict[str, float] = {token: 0.0 for token in token_ids}
+    prints: dict[str, int] = {token: 0 for token in token_ids}
+    now_ms = int(now) * 1000
+    decay_scale = math.log(2.0) / max(1e-6, float(half_life_seconds))
+    try:
+        with trade_tape.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                token = str(row.get("asset_id") or "")
+                if token not in token_ids:
+                    continue
+                event_ts = int(_finite(row.get("timestamp"), 0.0))
+                received_ms = int(_finite(row.get("received_ms"), 0.0))
+                if event_ts <= 0 or received_ms <= 0 or received_ms > now_ms or event_ts > now:
+                    continue
+                age = now - event_ts
+                if age < 0 or age > max(1, int(lookback_seconds)):
+                    continue
+                size = max(0.0, _finite(row.get("size"), 0.0))
+                side = str(row.get("side") or "").upper()
+                if size <= 0.0 or side not in {"BUY", "SELL"}:
+                    continue
+                weight = math.exp(-decay_scale * age)
+                signed[token] += weight * size * (1.0 if side == "BUY" else -1.0)
+                gross[token] += weight * size
+                prints[token] += 1
+    except OSError:
+        return out
+    for token in token_ids:
+        g = gross[token]
+        out[token] = {
+            "signed_imbalance": signed[token] / g if g > 1e-12 else 0.0,
+            "weighted_gross": g,
+            "prints": float(prints[token]),
+        }
+    return out
+
+
+def augment_features(
+    feature: tuple[list[float], float, float],
+    yes_flow: dict[str, float],
+    no_flow: dict[str, float],
+) -> tuple[list[float], float, float]:
+    x, mid, spread = feature
+    return list(x) + [
+        max(-1.0, min(1.0, float(yes_flow.get("signed_imbalance", 0.0)))),
+        max(-1.0, min(1.0, float(no_flow.get("signed_imbalance", 0.0)))),
+    ], mid, spread
+
+
+def full_depth_vwap(levels: list[tuple[float, float]], shares: float, *, buy: bool) -> float | None:
+    """Full displayed-depth VWAP; insufficient depth fails closed."""
+    target = max(0.0, float(shares))
+    if target <= 1e-12:
+        return None
+    remaining = target
+    notional = 0.0
+    ordered = sorted(levels, key=lambda item: item[0], reverse=not buy)
+    for price, size in ordered:
+        px = _finite(price)
+        qty = max(0.0, _finite(size, 0.0))
+        if not math.isfinite(px) or not 0.0 < px < 1.0 or qty <= 0.0:
+            continue
+        take = min(remaining, qty)
+        notional += take * px
+        remaining -= take
+        if remaining <= 1e-12:
+            return notional / target
+    return None
 
 
 def fee_spec(details: Any) -> economics.FeeSpec:
@@ -48,6 +193,74 @@ def book_snapshot(yes: base.Book, no: base.Book, liquidity: float, received_ts: 
     return snapshot if economics.valid_book(snapshot) else None
 
 
+def depth_adjusted_economics(
+    candidate: economics.RoundTripEconomics,
+    *,
+    book: base.Book,
+    predicted_yes_mid: float,
+    fee: economics.FeeSpec,
+    shares: float,
+    slippage_bps_per_leg: float,
+    adverse_markout_penalty_bps: float,
+    capital_cost_bps_per_hour: float,
+) -> economics.RoundTripEconomics | None:
+    """Re-price the candidate at quantity-specific full visible depth.
+
+    Entry walks the current asks. Expected exit walks the current bids for the
+    same quantity and shifts that full-depth liquidation curve only by the
+    predicted side-mid move. This is still a forecast, but no candidate can be
+    admitted on top-of-book depth that cannot carry its own PAPER size.
+    """
+    if shares <= 0.0 or not fee.authoritative:
+        return None
+    entry_vwap = full_depth_vwap(list(book.asks), shares, buy=True)
+    exit_vwap_now = full_depth_vwap(list(book.bids), shares, buy=False)
+    current_side_mid = book.mid()
+    if entry_vwap is None or exit_vwap_now is None or not math.isfinite(current_side_mid):
+        return None
+    predicted_side_mid = predicted_yes_mid if candidate.side == "YES" else 1.0 - predicted_yes_mid
+    shift = predicted_side_mid - current_side_mid
+    slip = max(0.0, float(slippage_bps_per_leg)) / 10000.0
+    entry_price = economics.clamp_probability(entry_vwap * (1.0 + slip))
+    expected_exit_price = economics.clamp_probability((exit_vwap_now + shift) * (1.0 - slip))
+    entry_fee = economics.fee_per_share(entry_price, fee, taker=True)
+    exit_fee = economics.fee_per_share(expected_exit_price, fee, taker=True)
+    capital_per_share = entry_price + entry_fee
+    adverse_penalty = max(0.0, float(adverse_markout_penalty_bps)) / 10000.0 * capital_per_share
+    capital_time_cost = (
+        max(0.0, float(capital_cost_bps_per_hour))
+        / 10000.0
+        * (float(candidate.horizon_seconds) / 3600.0)
+        * capital_per_share
+    )
+    gross_markout = expected_exit_price - entry_price
+    net_pnl = (
+        gross_markout
+        - entry_fee
+        - exit_fee
+        - candidate.uncertainty_penalty_per_share
+        - adverse_penalty
+        - capital_time_cost
+    )
+    net_edge = net_pnl / max(capital_per_share, 1e-12)
+    return economics.RoundTripEconomics(
+        side=candidate.side,
+        horizon_seconds=candidate.horizon_seconds,
+        entry_price=entry_price,
+        expected_exit_price=expected_exit_price,
+        entry_fee_per_share=entry_fee,
+        exit_fee_per_share=exit_fee,
+        gross_markout_per_share=gross_markout,
+        uncertainty_penalty_per_share=candidate.uncertainty_penalty_per_share,
+        adverse_markout_penalty_per_share=adverse_penalty,
+        capital_time_cost_per_share=capital_time_cost,
+        net_pnl_per_share=net_pnl,
+        capital_per_share=capital_per_share,
+        net_edge=net_edge,
+        economic_score=net_edge / max(candidate.uncertainty_penalty_per_share, 1e-4),
+    )
+
+
 def append_fill(run_dir: Path, **row: Any) -> None:
     base.append_csv(
         run_dir / "fills.csv",
@@ -57,9 +270,12 @@ def append_fill(run_dir: Path, **row: Any) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="V7 fixed-horizon Micro Taker with complete executable round-trip admission")
+    parser = argparse.ArgumentParser(description="V7 fixed-horizon Micro Taker with causal flow and depth-aware round-trip admission")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument("--trade-tape", type=Path)
+    parser.add_argument("--flow-lookback-seconds", type=int, default=60)
+    parser.add_argument("--flow-half-life-seconds", type=float, default=15.0)
     parser.add_argument("--markets", type=int, default=250)
     parser.add_argument("--min-liquidity", type=float, default=2.0)
     parser.add_argument("--horizon-seconds", type=int, default=30)
@@ -81,6 +297,7 @@ def main() -> int:
     max_market_fraction = float(cfg.get("max_market_fraction", 0.05))
     now = int(time.time())
     args.run_dir.mkdir(parents=True, exist_ok=True)
+    trade_tape = args.trade_tape or (args.run_dir.parent / "trade_tape.csv")
     state_path = args.run_dir / "state.json"
     state = (
         json.loads(state_path.read_text(encoding="utf-8"))
@@ -110,13 +327,21 @@ def main() -> int:
         markets, books = [], {}
         failures.append(f"market_data:{type(exc).__name__}:{exc}")
 
+    token_ids = {token for market in markets for token in (market.yes, market.no) if token}
+    flow = causal_flow_features(
+        trade_tape,
+        token_ids,
+        now=now,
+        lookback_seconds=args.flow_lookback_seconds,
+        half_life_seconds=args.flow_half_life_seconds,
+    )
     current: dict[str, tuple[base.Market, base.Book, base.Book, tuple[list[float], float, float]]] = {}
     for market in markets:
         yes, no = books.get(market.yes), books.get(market.no)
         if yes and no:
             feature = base.features(yes, no)
             if feature:
-                current[market.id] = (market, yes, no, feature)
+                current[market.id] = (market, yes, no, augment_features(feature, flow.get(market.yes, {}), flow.get(market.no, {})))
 
     label_stats = base.label_matured_samples(
         samples,
@@ -124,7 +349,11 @@ def main() -> int:
         horizon_seconds=args.horizon_seconds,
         max_target_staleness_seconds=args.max_target_staleness_seconds,
     )
-    beta = base.solve_ridge(samples, 1e-2)
+    beta = solve_ridge(samples, 1e-2, FLOW_FEATURE_DIM)
+    model_labeled = sum(
+        row.get("y") is not None and isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM
+        for row in samples
+    )
     sigma = residual_sigma(samples, beta)
     slip = max(0.0, args.slippage_bps) / 10000.0
 
@@ -136,16 +365,18 @@ def main() -> int:
         market, yes, no, feature = current_row
         side = str(position["side"])
         book = yes if side == "YES" else no
-        bid = book.bid()
-        if not math.isfinite(bid) or market.fee is None:
+        shares = float(position["shares"])
+        bid_vwap = full_depth_vwap(list(book.bids), shares, buy=False)
+        if bid_vwap is None or market.fee is None:
+            if len(failures) < 30:
+                failures.append(f"exit_depth:{market_id}")
             continue
         prediction = sum(a * b for a, b in zip(beta, feature[0]))
         prediction = max(-2 * feature[2], min(2 * feature[2], prediction))
         predicted_yes_mid = max(0.001, min(0.999, feature[1] + prediction))
         flip = (side == "YES" and predicted_yes_mid <= feature[1]) or (side == "NO" and predicted_yes_mid >= feature[1])
         if now - int(position["entry_ts"]) >= args.horizon_seconds or flip or bool(state.get("killed")):
-            exit_price = max(1e-6, bid * (1.0 - slip))
-            shares = float(position["shares"])
+            exit_price = max(1e-6, bid_vwap * (1.0 - slip))
             fee = base.fee_per_share(exit_price, market.fee) * shares
             proceeds = exit_price * shares - fee
             pnl = proceeds - float(position["cost"])
@@ -168,8 +399,9 @@ def main() -> int:
                 value += float(position["shares"]) * float(position["entry_price"])
                 continue
             book = current_row[1] if position["side"] == "YES" else current_row[2]
-            bid = book.bid()
-            value += float(position["shares"]) * (bid if math.isfinite(bid) else float(position["entry_price"]))
+            shares = float(position["shares"])
+            bid_vwap = full_depth_vwap(list(book.bids), shares, buy=False)
+            value += shares * (bid_vwap if bid_vwap is not None else 0.0)
         return value
 
     equity = marked_equity()
@@ -181,9 +413,8 @@ def main() -> int:
     opened = 0
     best_edge = 0.0
     admission_rows: list[dict[str, Any]] = []
-    labeled = sum(row.get("y") is not None for row in samples)
-    if not killed and labeled >= 40:
-        ranked: list[tuple[float, Any, str, base.Book, economics.RoundTripEconomics]] = []
+    if not killed and model_labeled >= 40:
+        ranked: list[tuple[float, Any, str, base.Book, economics.RoundTripEconomics, float]] = []
         for market_id, (market, yes, no, feature) in current.items():
             if market_id in positions or market.fee is None:
                 continue
@@ -210,32 +441,86 @@ def main() -> int:
             if candidate is None:
                 continue
             book = yes if candidate.side == "YES" else no
-            ranked.append((candidate.economic_score, market, candidate.side, book, candidate))
+            room_probe = max(0.0, min(args.max_trade_usd, max_market_fraction * equity, cash))
+            shares_probe = room_probe / max(candidate.capital_per_share, 1e-9)
+            adjusted = depth_adjusted_economics(
+                candidate,
+                book=book,
+                predicted_yes_mid=predicted_yes_mid,
+                fee=fee_spec(market.fee),
+                shares=shares_probe,
+                slippage_bps_per_leg=args.slippage_bps,
+                adverse_markout_penalty_bps=args.adverse_markout_bps,
+                capital_cost_bps_per_hour=args.capital_cost_bps_per_hour,
+            )
+            if adjusted is None:
+                continue
+            shares_probe = room_probe / max(adjusted.capital_per_share, 1e-9)
+            adjusted = depth_adjusted_economics(
+                adjusted,
+                book=book,
+                predicted_yes_mid=predicted_yes_mid,
+                fee=fee_spec(market.fee),
+                shares=shares_probe,
+                slippage_bps_per_leg=args.slippage_bps,
+                adverse_markout_penalty_bps=args.adverse_markout_bps,
+                capital_cost_bps_per_hour=args.capital_cost_bps_per_hour,
+            )
+            if adjusted is None or adjusted.net_edge < args.min_edge or adjusted.net_pnl_per_share <= 0.0:
+                continue
+            ranked.append((adjusted.economic_score, market, adjusted.side, book, adjusted, predicted_yes_mid))
             admission_rows.append({
                 "market_id": market.id,
-                "side": candidate.side,
-                "net_edge": candidate.net_edge,
-                "net_pnl_per_share": candidate.net_pnl_per_share,
-                "entry_price": candidate.entry_price,
-                "expected_exit_price": candidate.expected_exit_price,
-                "entry_fee_per_share": candidate.entry_fee_per_share,
-                "exit_fee_per_share": candidate.exit_fee_per_share,
-                "uncertainty_penalty_per_share": candidate.uncertainty_penalty_per_share,
-                "adverse_markout_penalty_per_share": candidate.adverse_markout_penalty_per_share,
-                "capital_time_cost_per_share": candidate.capital_time_cost_per_share,
+                "side": adjusted.side,
+                "net_edge": adjusted.net_edge,
+                "net_pnl_per_share": adjusted.net_pnl_per_share,
+                "entry_price": adjusted.entry_price,
+                "expected_exit_price": adjusted.expected_exit_price,
+                "entry_fee_per_share": adjusted.entry_fee_per_share,
+                "exit_fee_per_share": adjusted.exit_fee_per_share,
+                "uncertainty_penalty_per_share": adjusted.uncertainty_penalty_per_share,
+                "adverse_markout_penalty_per_share": adjusted.adverse_markout_penalty_per_share,
+                "capital_time_cost_per_share": adjusted.capital_time_cost_per_share,
+                "yes_flow_imbalance": feature[0][-2],
+                "no_flow_imbalance": feature[0][-1],
+                "depth_contract": "full_visible_depth_entry_and_forecast_shifted_exit_vwap",
             })
         ranked.sort(reverse=True, key=lambda row: row[0])
         signals = len(ranked)
         best_edge = max((row[4].net_edge for row in ranked), default=0.0)
-        for _score, market, side, book, candidate in ranked:
+        for _score, market, side, book, candidate, predicted_yes_mid in ranked:
             if len(positions) >= args.max_positions:
                 break
-            if market.id in positions:
+            if market.id in positions or market.fee is None:
                 continue
             room = max(0.0, min(args.max_trade_usd, max_market_fraction * equity, cash))
-            per_share_cost = candidate.entry_price + candidate.entry_fee_per_share
-            shares = room / max(per_share_cost, 1e-9)
+            shares = room / max(candidate.capital_per_share, 1e-9)
+            candidate = depth_adjusted_economics(
+                candidate,
+                book=book,
+                predicted_yes_mid=predicted_yes_mid,
+                fee=fee_spec(market.fee),
+                shares=shares,
+                slippage_bps_per_leg=args.slippage_bps,
+                adverse_markout_penalty_bps=args.adverse_markout_bps,
+                capital_cost_bps_per_hour=args.capital_cost_bps_per_hour,
+            )
+            if candidate is None or candidate.net_edge < args.min_edge or candidate.net_pnl_per_share <= 0.0:
+                continue
+            shares = room / max(candidate.capital_per_share, 1e-9)
             if shares < book.min_order:
+                continue
+            candidate = depth_adjusted_economics(
+                candidate,
+                book=book,
+                predicted_yes_mid=predicted_yes_mid,
+                fee=fee_spec(market.fee),
+                shares=shares,
+                slippage_bps_per_leg=args.slippage_bps,
+                adverse_markout_penalty_bps=args.adverse_markout_bps,
+                capital_cost_bps_per_hour=args.capital_cost_bps_per_hour,
+            )
+            if candidate is None or candidate.net_edge < args.min_edge or candidate.net_pnl_per_share <= 0.0:
                 continue
             fee = candidate.entry_fee_per_share * shares
             cost = candidate.entry_price * shares + fee
@@ -267,6 +552,10 @@ def main() -> int:
     drawdown = max(0.0, 1.0 - equity / peak) if peak > 0.0 else 0.0
     killed = killed or drawdown >= max_drawdown
     labeled = sum(row.get("y") is not None for row in samples)
+    model_labeled = sum(
+        row.get("y") is not None and isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM
+        for row in samples
+    )
 
     new_state = {
         "timestamp": now,
@@ -282,42 +571,46 @@ def main() -> int:
         "beta": beta,
         "prediction_sigma_probability": sigma,
         "labeled_samples": labeled,
+        "model_labeled_samples": model_labeled,
         "label_stats_last_tick": label_stats,
         "signals": signals,
         "opened": opened,
         "best_edge": best_edge,
         "realized_pnl_last_tick": realized_last_tick,
         "realized_pnl_total": realized_total,
-        "admission_contract": "complete_round_trip_executable_ev",
+        "admission_contract": "causal_flow_depth_complete_round_trip_ev",
+        "feature_contract": "book_microprice_depth_parity_plus_receive_causal_event_decayed_yes_no_taker_flow",
+        "exit_liquidity_contract": "shares_specific_full_visible_bid_depth_vwap_fail_closed",
         "failures": failures,
     }
     base.atomic_json(state_path, new_state)
     base.atomic_json(args.run_dir / "status.json", {k: new_state[k] for k in (
         "timestamp", "paper_only", "authenticated_execution", "cash", "equity", "peak", "drawdown", "killed",
-        "prediction_sigma_probability", "labeled_samples", "signals", "opened", "best_edge",
-        "realized_pnl_last_tick", "realized_pnl_total", "admission_contract", "failures"
+        "prediction_sigma_probability", "labeled_samples", "model_labeled_samples", "signals", "opened", "best_edge",
+        "realized_pnl_last_tick", "realized_pnl_total", "admission_contract", "feature_contract", "exit_liquidity_contract", "failures"
     )} | {"open_positions": len(positions)})
     base.atomic_json(args.run_dir / "admission_latest.json", {
         "timestamp": now,
         "paper_only": True,
-        "contract": "expected_exit_bid-entry_ask-entry_fee-exit_fee-uncertainty-adverse-capital_time",
+        "contract": "causal-flow + full-depth-entry/exit + fees/slippage/uncertainty/adverse/capital-time",
         "rows": admission_rows[:100],
     })
     base.append_csv(
         args.run_dir / "equity.csv",
-        ["timestamp", "cash", "equity", "drawdown", "open_positions", "signals", "opened", "best_edge", "labeled_samples", "realized_pnl_total", "prediction_sigma_probability"],
+        ["timestamp", "cash", "equity", "drawdown", "open_positions", "signals", "opened", "best_edge", "labeled_samples", "model_labeled_samples", "realized_pnl_total", "prediction_sigma_probability"],
         {
             "timestamp": now, "cash": cash, "equity": equity, "drawdown": drawdown,
             "open_positions": len(positions), "signals": signals, "opened": opened,
-            "best_edge": best_edge, "labeled_samples": labeled,
+            "best_edge": best_edge, "labeled_samples": labeled, "model_labeled_samples": model_labeled,
             "realized_pnl_total": realized_total, "prediction_sigma_probability": sigma,
         },
     )
     print(json.dumps({
-        "markets": len(markets), "labeled": labeled, "signals": signals, "opened": opened,
-        "positions": len(positions), "equity": equity, "realized_pnl_total": realized_total,
-        "best_edge": best_edge, "prediction_sigma_probability": sigma, "killed": killed,
-        "admission_contract": "complete_round_trip_executable_ev",
+        "markets": len(markets), "labeled": labeled, "model_labeled": model_labeled,
+        "signals": signals, "opened": opened, "positions": len(positions), "equity": equity,
+        "realized_pnl_total": realized_total, "best_edge": best_edge,
+        "prediction_sigma_probability": sigma, "killed": killed,
+        "admission_contract": "causal_flow_depth_complete_round_trip_ev",
     }, sort_keys=True))
     return 0
 
