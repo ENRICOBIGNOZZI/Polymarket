@@ -2,7 +2,7 @@ name: Operator Authority Gate
 
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, edited, ready_for_review]
+    types: [opened, reopened, synchronize, edited]
 
 permissions:
   contents: read
