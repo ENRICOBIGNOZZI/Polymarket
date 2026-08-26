@@ -51,6 +51,18 @@ class V7ExactShaIntegrationContractTest(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, self.workflow)
 
+    def test_dispatch_is_bound_to_the_exact_integrated_head(self) -> None:
+        required = (
+            'test "$expected_base" = "$current_main"',
+            'integrated_sha="$expected_head"',
+            "'sha':sys.argv[1]",
+            "'exact_head_fast_forward':True",
+            'gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches"',
+        )
+        for token in required:
+            with self.subTest(token=token):
+                self.assertIn(token, self.workflow)
+
     def test_registry_validator_enforces_same_contract(self) -> None:
         for token in (
             'git merge-base --is-ancestor "$current_main" "$expected_head"',
