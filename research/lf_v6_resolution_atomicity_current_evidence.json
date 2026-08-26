@@ -1,0 +1,66 @@
+{
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "base_main_sha": "b0fd8ca317100733746d83df3653e08f5aaf2c98",
+  "live_smoke": {
+    "github_run_id": "32925312333",
+    "git_sha": "b0fd8ca317100733746d83df3653e08f5aaf2c98",
+    "trade_recorder_status": "healthy",
+    "new_trades": 173,
+    "graph_rv_bundles": 1,
+    "graph_bundle_id": "GRAPH_HARD-1787713812-0",
+    "event_id": "842328",
+    "prices": [0.74, 0.15, 0.09],
+    "quoted_edge": 0.020000000000000018,
+    "max_notional": 60.0,
+    "completed_bundles": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0
+  },
+  "deterministic_exhaustive_basket_counterexample": {
+    "sum_entry_prices": 0.98,
+    "target_units_at_60_usd": 61.224489795918366,
+    "guaranteed_terminal_profit_if_fully_matched_and_held_to_resolution": 1.2244897959183685,
+    "assumption_for_transition_fixture": "one losing leg is reported closed first; all remaining still-tradable legs are unwound at unchanged entry bids before exit fee/slippage",
+    "loser_first_cases": [
+      {
+        "first_closed_leg_price": 0.74,
+        "transition_pnl_before_exit_fee_slippage": -45.30612244897959,
+        "loss_to_guaranteed_profit_ratio": 37.0
+      },
+      {
+        "first_closed_leg_price": 0.15,
+        "transition_pnl_before_exit_fee_slippage": -9.183673469387754,
+        "loss_to_guaranteed_profit_ratio": 7.5
+      },
+      {
+        "first_closed_leg_price": 0.09,
+        "transition_pnl_before_exit_fee_slippage": -5.5102040816326525,
+        "loss_to_guaranteed_profit_ratio": 4.5
+      }
+    ]
+  },
+  "source_finding": {
+    "individual_closed_leg_settlement": true,
+    "any_closed_leg_aborts_resting_or_complete_bundle": true,
+    "abort_path_unwinds_still_tradable_filled_legs": true,
+    "graph_hold_deadline_can_extend_past_market_end": true,
+    "bundle_level_settling_barrier": false
+  },
+  "interpretation": "This does not claim the current resting Graph/RV basket has filled or encountered asynchronous resolution. It is a deterministic source-level settlement defect: a fully matched structural payoff can be converted into a taker unwind solely because closed/resolution metadata arrives leg by leg.",
+  "required_successor_contract": [
+    "separate SETTLING from ABORTING for structurally matched units",
+    "preserve matched structural units when only a subset of legs reports closed",
+    "use an authoritative event-level terminal barrier or require every matched leg to have terminal outcome before final settlement",
+    "unwind only residual unmatched exposure when closure metadata is partial",
+    "separate operational fill completion, economic hedge completion and terminal settlement in the ledger",
+    "do not treat a post-end hold deadline as an executable-book exit path for terminal structural baskets"
+  ],
+  "safety": {
+    "paper_only": true,
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "authorized_aggressive_envelope_unchanged": true,
+    "authenticated_execution": false,
+    "real_money_execution": false
+  }
+}
