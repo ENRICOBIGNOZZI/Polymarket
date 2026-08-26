@@ -1,0 +1,98 @@
+{
+  "schema": "lf_v6_active_flow_universe_current_evidence_v1",
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "base_main_sha": "643772495bcf65673485932b2c04786ad5f8afcf",
+  "observed_at_utc": "2026-08-26T06:44:39Z",
+  "material_finding": "The global public trade tape is active, but the nominal V6 discovered universe has zero recent overlap with it. Tape-dependent zero-fill observations from that universe are not economic fillability evidence.",
+  "canonical_live_smoke": {
+    "trade_recorder_status": "unhealthy",
+    "trade_recorder_failures": [
+      "no_public_trades_fetched",
+      "missing_last_trade_timestamp"
+    ],
+    "discovered_markets": 220,
+    "discovered_conditions": 220,
+    "canonical_fetched": 0,
+    "canonical_new_trades": 0,
+    "canonical_errors": 0,
+    "canonical_last_trade_ts": 0,
+    "graph_rv_bundles": 1,
+    "graph_rv_legs": 3,
+    "graph_rv_nominal_quote_edge": 0.03,
+    "graph_rv_reserved_usd": 60.0,
+    "graph_rv_completed": 0,
+    "multileg_trades_processed": 0,
+    "maker_resting_orders": 7,
+    "maker_positions": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_pnl_usd": 0.0,
+    "kill_switch": false
+  },
+  "bounded_trade_api_diagnostic": {
+    "classification": "global_tape_active_but_sampled_universe_has_no_recent_matches",
+    "global_recent": {
+      "http_status": 200,
+      "response_rows": 1000,
+      "local_window_rows": 16,
+      "local_window_discovered_matches": 0
+    },
+    "sampled_batch_unwindowed": {
+      "condition_count": 5,
+      "http_status": 200,
+      "response_rows": 1000,
+      "discovered_condition_matches": 1000,
+      "local_window_rows": 0,
+      "local_window_discovered_matches": 0,
+      "max_event_ts": 1787716570
+    },
+    "sampled_single_unwindowed": {
+      "condition_count": 1,
+      "http_status": 200,
+      "response_rows": 1000,
+      "discovered_condition_matches": 1000,
+      "local_window_rows": 0,
+      "local_window_discovered_matches": 0,
+      "max_event_ts": 1787715045
+    },
+    "sampled_batch_windowed_rows": 0,
+    "sampled_single_windowed_rows": 0
+  },
+  "interpretation": [
+    "The Data API is not globally silent: the bounded global probe observed 16 rows inside the recent causal window.",
+    "The selected 220-condition execution universe had zero recent matches in that global activity sample.",
+    "Unwindowed per-condition queries return historical rows for sampled conditions, so the zero recent overlap is not explained by nonexistent condition identifiers.",
+    "Therefore the current zero Graph completion and zero maker fill counts cannot be used as fill-probability estimates for LF/Graph execution while the selected universe has no recent-flow overlap.",
+    "This does not prove that the selected markets can never trade; it proves that recent causal public flow is absent from the measured selection window."
+  ],
+  "successor_contract": [
+    "Keep global tape health and selected-universe active-flow coverage as separate diagnostics.",
+    "Before tape-dependent Graph/RV or Local-Factor reservations, require candidate legs to belong to a universe with recent causal public-flow evidence, or fail closed when the required evidence is absent.",
+    "Use recent-flow conditions as an execution-eligibility layer, not as alpha and not as a standalone fair-value feature.",
+    "Do not infer fill probabilities from zero overlap; classify it as active-universe mismatch and collect forward evidence after selection is repaired.",
+    "For Graph/RV, retain strong event identity and then require queue-aware per-leg/joint completion plus partial-fill abort/unwind economics.",
+    "For Local Factor, retain the full statistical repair chain before any z/FDR/common-sample aggression; flow eligibility is an execution layer after valid signal construction.",
+    "Compare nominal-liquidity discovery versus active-flow-eligible discovery on the same chronological snapshots using candidate count, capital-hours, queue burden, completion states, abort/unwind loss and fill-conditioned net PnL.",
+    "Preserve the authorized paper envelope and hard safety limits; no authenticated or real-money execution."
+  ],
+  "paper_envelope": {
+    "markets_approx": 1000,
+    "min_liquidity_usd": 2.0,
+    "min_post_cost_edge": 0.00005,
+    "fractional_kelly": 0.25,
+    "max_trade_usd": 125.0,
+    "market_cap_fraction": 0.05,
+    "event_cap_fraction": 0.15,
+    "gross_cap_fraction": 0.70,
+    "max_drawdown_fraction": 0.15
+  },
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "real_money_execution": false,
+    "kill_switch_required": true,
+    "state_integrity_required": true,
+    "explicit_executable_prices_fees_slippage_required": true,
+    "q_external_fail_closed": true
+  }
+}
