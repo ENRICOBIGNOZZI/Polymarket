@@ -68,6 +68,8 @@
     "report_seconds": 60,
     "hard_arb_max_events": 80,
     "hard_arb_min_net_edge": 0.00005,
+    "hard_arb_fixed_dollar_trade_cap_enabled": false,
+    "hard_arb_max_trade_usd": 1e100,
     "hard_arb_max_trade_fraction": 1.0,
     "authoritative_fee_required": true,
     "shared_execution_ledger_required": true,
