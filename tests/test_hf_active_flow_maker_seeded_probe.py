@@ -55,12 +55,20 @@ class ActiveFlowMakerSeededProbeTest(unittest.TestCase):
         seeded._SEED_ASSETS.clear()
         seeded._TOKEN_TO_CANONICAL_CONDITION = {}
         seeded._CANONICAL_CONDITION_BY_RAW = {}
+        seeded._SEED_RESOLUTION_MODE = {}
 
     def test_gamma_condition_query_repeats_condition_ids(self):
         query = urllib.parse.parse_qs(seeded._condition_market_query(["0x" + "a" * 64, "0x" + "b" * 64]))
         self.assertEqual(query["condition_ids"], ["0x" + "a" * 64, "0x" + "b" * 64])
         self.assertEqual(query["active"], ["true"])
         self.assertEqual(query["closed"], ["false"])
+
+    def test_gamma_token_query_repeats_clob_token_ids(self):
+        query = urllib.parse.parse_qs(seeded._token_market_query(["token-a", "token-b"]))
+        self.assertEqual(query["clob_token_ids"], ["token-a", "token-b"])
+        self.assertEqual(query["active"], ["true"])
+        self.assertEqual(query["closed"], ["false"])
+        self.assertEqual(query["limit"], ["100"])
 
     def test_gamma_slug_query_is_bounded_and_active_only(self):
         query = urllib.parse.parse_qs(seeded._slug_market_query("slug-hot"))
@@ -76,14 +84,13 @@ class ActiveFlowMakerSeededProbeTest(unittest.TestCase):
         self.assertEqual([m.condition_id for m in merged], ["c-hot", "c2", "c1"])
         self.assertEqual(len(merged), 3)
 
-    def test_malformed_data_condition_is_resolved_by_slug_and_token_identity(self):
+    def test_malformed_data_condition_without_slug_is_resolved_by_clob_token(self):
         prior = [market("m1", "c1", 100), market("m2", "c2", 90)]
         raw_condition = "0x" + "3" * 62
         canonical = "0x" + "a" * 64
         global_rows = [
             {"conditionId": raw_condition, "asset": "yes-hot", "side": "SELL",
-             "timestamp": 995, "price": 0.40, "size": 12.0, "transactionHash": "h",
-             "slug": "slug-hot"},
+             "timestamp": 995, "price": 0.40, "size": 12.0, "transactionHash": "h"},
         ]
         with patch.object(seeded, "_ORIGINAL_DISCOVER", return_value=prior), \
              patch.object(seeded.core, "now_s", return_value=1000), \
@@ -95,22 +102,37 @@ class ActiveFlowMakerSeededProbeTest(unittest.TestCase):
             merged = seeded.discover_markets_seeded(2, 2.0)
         self.assertEqual([m.condition_id for m in merged], [canonical, "c1"])
         self.assertEqual(seeded._SEED_DIAGNOSTICS["seed_global_condition_count"], 1)
+        self.assertEqual(seeded._SEED_DIAGNOSTICS["seed_global_asset_count"], 1)
         self.assertEqual(seeded._SEED_DIAGNOSTICS["seed_noncanonical_raw_condition_count"], 1)
         self.assertEqual(seeded._SEED_DIAGNOSTICS["seed_gamma_market_count"], 1)
+        self.assertEqual(seeded._SEED_DIAGNOSTICS["seed_resolved_by_token_count"], 1)
         self.assertEqual(seeded._SEED_DIAGNOSTICS["seed_added_market_count"], 1)
         self.assertEqual(seeded._CANONICAL_CONDITION_BY_RAW[raw_condition], canonical)
         self.assertEqual(seeded._TOKEN_TO_CANONICAL_CONDITION["yes-hot"], canonical)
+        self.assertEqual(seeded._SEED_RESOLUTION_MODE[raw_condition], "clob_token_ids")
         self.assertTrue(seeded._SEED_DIAGNOSTICS["authorized_market_cap_respected"])
         gamma_url = request.call_args_list[1].args[0]
-        self.assertIn("slug=slug-hot", gamma_url)
+        self.assertIn("clob_token_ids=yes-hot", gamma_url)
+        self.assertNotIn("condition_ids=", gamma_url)
+
+    def test_slug_fallback_remains_available_without_asset(self):
+        raw_condition = "0x" + "4" * 62
+        canonical = "0x" + "b" * 64
+        seeded._SEED_SLUGS = {raw_condition: "slug-hot"}
+        seeded._SEED_ASSETS.clear()
+        with patch.object(seeded.core, "request_json", return_value=([gamma_row("hot", canonical, 1)], 1000)) as request:
+            markets, errors = seeded._markets_for_conditions([raw_condition], 2.0)
+        self.assertEqual(errors, [])
+        self.assertEqual([m.condition_id for m in markets], [canonical])
+        self.assertEqual(seeded._SEED_RESOLUTION_MODE[raw_condition], "slug_token")
+        self.assertIn("slug=slug-hot", request.call_args.args[0])
 
     def test_global_token_flow_is_rekeyed_to_canonical_condition(self):
         canonical = "0x" + "a" * 64
         seeded._TOKEN_TO_CANONICAL_CONDITION = {"yes-hot": canonical}
         rows = [
             {"conditionId": "0x" + "3" * 62, "asset": "yes-hot", "side": "SELL",
-             "timestamp": 995, "price": 0.40, "size": 12.0, "transactionHash": "h",
-             "slug": "slug-hot"},
+             "timestamp": 995, "price": 0.40, "size": 12.0, "transactionHash": "h"},
         ]
         with patch.object(seeded.core, "request_json", return_value=(rows, 1_000_300)):
             flows: dict[str, list[core.Trade]] = {}
@@ -127,22 +149,45 @@ class ActiveFlowMakerSeededProbeTest(unittest.TestCase):
                 "active_markets_evaluated": 0,
                 "flow_errors": [],
                 "global_sanity_checked": False,
+                "seed_global_recent_rows": 4,
                 "seed_global_condition_count": 2,
+                "seed_global_asset_count": 2,
                 "seed_gamma_market_count": 0,
-                "seed_errors": ["seed_gamma_slug=x:HTTPError:500"],
+                "seed_resolved_by_token_count": 0,
+                "seed_errors": ["seed_gamma_token_batch=0:HTTPError:500"],
             }
         }
         self.assertFalse(seeded.seeded_activity_data_healthy(result))
 
-    def test_seed_diagnostics_do_not_invalidate_healthy_nonzero_activity(self):
+    def test_unmapped_recent_assets_fail_closed_even_without_transport_error(self):
+        result = {
+            "universe": {
+                "discovered_markets": 1000,
+                "active_markets_evaluated": 1,
+                "flow_errors": [],
+                "global_sanity_checked": False,
+                "seed_global_recent_rows": 4,
+                "seed_global_condition_count": 2,
+                "seed_global_asset_count": 2,
+                "seed_gamma_market_count": 0,
+                "seed_resolved_by_token_count": 0,
+                "seed_errors": [],
+            }
+        }
+        self.assertFalse(seeded.seeded_activity_data_healthy(result))
+
+    def test_seed_diagnostics_do_not_invalidate_healthy_nonzero_activity_without_seed_rows(self):
         result = {
             "universe": {
                 "discovered_markets": 1000,
                 "active_markets_evaluated": 5,
                 "flow_errors": [],
                 "global_sanity_checked": False,
+                "seed_global_recent_rows": 0,
                 "seed_global_condition_count": 0,
+                "seed_global_asset_count": 0,
                 "seed_gamma_market_count": 0,
+                "seed_resolved_by_token_count": 0,
                 "seed_errors": ["seed_global:TimeoutError"],
             }
         }
