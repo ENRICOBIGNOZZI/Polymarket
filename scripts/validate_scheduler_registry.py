@@ -13,12 +13,14 @@ REQUIRED_IDS = {
     "monitoring-validation", "live-paper-validation", "paper-server-deploy", "paper-server-health",
     "forward-maker-research", "v6-live-data-research", "alpha-factory", "meta-supervisor",
     "fast-arb-shadow-research", "arb-theory-research", "external-intelligence", "live-api-smoke",
-    "v7-point-in-time-universe-archive", "v6-market-cache-relay",
+    "v7-point-in-time-universe-archive", "v7-unified-paper-evidence", "v6-market-cache-relay",
 }
 PRIVATE_VALIDATION_WORKFLOW = ".github/workflows/private-runtime-single-writer-validation.yml"
+OPERATOR_AUTHORITY_WORKFLOW = ".github/workflows/operator-authority-gate.yml"
 NON_SCHEDULER_WORKFLOWS = {
     ".github/workflows/grafana-access.yml",
     PRIVATE_VALIDATION_WORKFLOW,
+    OPERATOR_AUTHORITY_WORKFLOW,
 }
 NON_SCHEDULER_FORBIDDEN_TOKENS = (
     "gh pr merge",
@@ -125,6 +127,27 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             for forbidden_permission in PRIVATE_VALIDATION_FORBIDDEN_PERMISSIONS:
                 if forbidden_permission in text:
                     errors.append(f"private runtime validation contains forbidden GitHub permission: {forbidden_permission}")
+        if relative == OPERATOR_AUTHORITY_WORKFLOW:
+            if "\n  pull_request_target:\n" not in text:
+                errors.append("operator authority gate must use pull_request_target from the protected base revision")
+            for forbidden_trigger in ("\n  push:\n", "\n  pull_request:\n", "\n  workflow_run:\n", "\n  repository_dispatch:\n", "\n  workflow_dispatch:\n"):
+                if forbidden_trigger in text:
+                    errors.append(f"operator authority gate contains forbidden trigger: {forbidden_trigger.strip()}")
+            if "permissions:\n  contents: read\n  pull-requests: read\n" not in text:
+                errors.append("operator authority gate must keep GitHub permissions read-only")
+            for required in (
+                "config/operator_directives.json",
+                "scripts/hard_safety_policy.py",
+                "tests/test_v7_authorized_paper_envelope.py",
+                ".github/workflows/operator-authority-gate.yml",
+                "operator authority surfaces are immutable through pull requests",
+            ):
+                if required not in text:
+                    errors.append(f"operator authority gate is missing immutable authority contract: {required}")
+            for forbidden in ("APPROVE", "review", "authorAssociation", "author_association", "OWNER"):
+                if forbidden in text:
+                    errors.append(f"operator authority gate must not contain a PR-review bypass: {forbidden}")
+
     managed_workflows = actual_workflows.difference(NON_SCHEDULER_WORKFLOWS)
     unregistered = sorted(managed_workflows.difference(workflows)); stale = sorted(workflows.difference(actual_workflows))
     if unregistered: errors.append("unregistered workflows: " + ", ".join(unregistered))
@@ -179,6 +202,35 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             if required not in text: errors.append(f"control-plane-event-bridge is missing fallback contract: {required}")
         for forbidden in ("gh pr merge", "POLYMARKET_DEPLOY_REF=", "git push origin paper-validated", "repository_dispatch", "authenticated_execution"):
             if forbidden in text: errors.append(f"control-plane-event-bridge contains forbidden authority: {forbidden}")
+
+    evidence_runtime = by_id.get("v7-unified-paper-evidence")
+    if evidence_runtime:
+        text = (root / str(evidence_runtime["workflow"])).read_text(encoding="utf-8")
+        for required in (
+            "config/v7_evidence_runtime.json",
+            "research/v7-unified-final-evidence-20260826",
+            "V7_MARKET_PROXY_PORT",
+            "runtime_singleton_launcher.py",
+            "source_sha",
+            "by-sha",
+            "Private runtime single-writer validation",
+            "actions: read",
+            "contents: read",
+            "pull-requests: read",
+        ):
+            if required not in text:
+                errors.append(f"v7-unified-paper-evidence is missing isolated evidence contract: {required}")
+        for forbidden in (
+            "gh pr merge",
+            "git push origin main",
+            "git push origin paper-validated",
+            "gh workflow run integration-merge.yml",
+            "gh workflow run promotion-controller.yml",
+            "POLYMARKET_DEPLOY_REF=",
+            "contents: write",
+        ):
+            if forbidden in text:
+                errors.append(f"v7-unified-paper-evidence contains forbidden authority: {forbidden}")
 
     meta = by_id.get("meta-supervisor")
     if meta:
