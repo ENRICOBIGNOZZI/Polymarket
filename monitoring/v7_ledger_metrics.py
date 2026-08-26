@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any
 
+SHA40 = re.compile(r"^[0-9a-f]{40}$")
 EVENT_TYPES = {
     "OPPORTUNITY",
     "CANDIDATE",
@@ -61,7 +63,6 @@ def summarize_ledger(path: Path) -> dict[str, Any]:
     result["present"] = True
     shas: set[str] = set()
     strategies: dict[str, dict[str, Any]] = {}
-
     try:
         handle = path.open("r", encoding="utf-8")
     except OSError:
@@ -87,7 +88,7 @@ def summarize_ledger(path: Path) -> dict[str, Any]:
             if (
                 event_type not in EVENT_TYPES
                 or not strategy
-                or len(model_sha) != 40
+                or not SHA40.fullmatch(model_sha)
                 or row.get("paper_only") is not True
                 or row.get("authenticated_execution") is not False
             ):
