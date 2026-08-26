@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "engine_version": 7,
   "paper_only": true,
   "gamma_url": "https://gamma-api.polymarket.com",
@@ -20,10 +20,10 @@
   "uncertainty_penalty": 0.0,
   "slippage_bps": 5.0,
   "fractional_kelly": 0.25,
-  "max_trade_usd": 125.0,
-  "max_market_fraction": 0.05,
-  "max_event_fraction": 0.15,
-  "max_gross_fraction": 0.70,
+  "max_trade_fraction": 1.0,
+  "max_market_fraction": 1.0,
+  "max_event_fraction": 1.0,
+  "max_gross_fraction": 1.0,
   "max_drawdown": 0.15,
   "history_bootstrap": true,
   "bootstrap_market_limit": 1000,
@@ -41,11 +41,11 @@
     "external": 1.0
   },
   "multi_strategy": {
-    "schema_version": 2,
+    "schema_version": 3,
     "paper_only": true,
     "global_max_drawdown": 0.15,
-    "global_max_gross_fraction": 0.70,
-    "description": "Unified V7 capital-isolated paper execution plus separate multi-frequency shadow research. No fair-value mixture."
+    "global_max_gross_fraction": 1.0,
+    "description": "Unified V7 capital-isolated PAPER execution plus separate multi-frequency shadow research. No fixed dollar trade cap; hard percentage ceiling is 100%."
   },
   "v7": {
     "paper_only": true,
@@ -66,7 +66,7 @@
     "report_seconds": 60,
     "hard_arb_max_events": 80,
     "hard_arb_min_net_edge": 0.00005,
-    "hard_arb_max_trade_usd": 125.0,
+    "hard_arb_max_trade_fraction": 1.0,
     "authoritative_fee_required": true,
     "shared_execution_ledger_required": true,
     "joint_fill_state_required_for_multileg": true,
@@ -90,7 +90,6 @@
     "structural_min_similarity": 0.25,
     "structural_max_bundles": 100,
     "hard_arb_max_events": 80,
-    "hard_arb_min_net_edge": 0.00005,
-    "hard_arb_max_trade_usd": 125.0
+    "hard_arb_min_net_edge": 0.00005
   }
 }
