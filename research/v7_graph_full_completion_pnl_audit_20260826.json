@@ -1,0 +1,59 @@
+{
+  "as_of_utc": "2026-08-26T14:52:00Z",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "scope": "research_only",
+  "v7_base_pr": 506,
+  "graph_transport_pr": 517,
+  "finding": {
+    "name": "full_completion_uses_unstressed_gross_expected_edge",
+    "severity": "promotion_blocker_for_graph_rv_fill_conditioned_pnl",
+    "description": "v7_graph_forward_guard.mature_session() assigns units * expected_edge to a fully completed session at 1x, 1.5x and 2x. The relation-intent source defines expected_edge as 1 minus the sum of passive bid prices, while snapshot_candidate separately resolves and stores verified maker entry fees. The full-completion path therefore does not recompute executable PnL from payout minus executed entry costs and does not actually apply the requested cost stress to full completions."
+  },
+  "deterministic_counterexample": {
+    "complete_set_payout_per_unit": 1.0,
+    "limit_prices": [0.49, 0.49],
+    "gross_quote_edge": 0.02,
+    "maker_entry_fee_per_share": [0.006, 0.006],
+    "incumbent_stress_pnl_per_unit": {
+      "1x": 0.02,
+      "1.5x": 0.02,
+      "2x": 0.02
+    },
+    "executed_entry_cost_stress_pnl_per_unit": {
+      "1x": 0.008,
+      "1.5x": 0.002,
+      "2x": -0.004
+    },
+    "interpretation": "A history session can be labelled positive at 2x by the incumbent shortcut even though payout minus stressed verified entry costs is negative. This is a structural counterexample, not a claim about the fee schedule of the latest live basket."
+  },
+  "current_exact_main_context": {
+    "main_sha": "fccbdd036093c2f7973635c3c47431ad8381b261",
+    "live_smoke_run_id": 32980190232,
+    "trade_recorder_status": "healthy",
+    "fetched_trades": 287,
+    "trade_age_seconds": 82,
+    "graph_rv_bundles": 1,
+    "graph_rv_legs": 5,
+    "max_quoted_edge": 0.002,
+    "completed_bundles": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_pnl_usd": 0.0
+  },
+  "required_successor_contract": [
+    "persist actual per-leg fill prices and verified fee semantics for every completed session",
+    "for a guaranteed-payoff structural basket compute full-completion PnL as terminal payout floor minus executed entry cash and fees, not units times quoted expected_edge",
+    "apply 1x/1.5x/2x cost stress to the actual cost components rather than relabelling one identical PnL three times",
+    "for non-guaranteed relative-value baskets do not substitute quoted expected_edge for realized or markout PnL",
+    "combine corrected full-completion economics with candidate-state transportability, empirical both/partial/none states and abort/unwind PnL before routing"
+  ],
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "authorized_max_trade_usd": 125.0,
+    "authorized_market_fraction": 0.05,
+    "authorized_event_fraction": 0.15,
+    "authorized_gross_fraction": 0.70,
+    "authorized_max_drawdown": 0.15
+  }
+}
