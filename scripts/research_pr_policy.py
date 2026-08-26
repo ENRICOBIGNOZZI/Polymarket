@@ -5,341 +5,386 @@ import argparse
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 RESEARCH_PREFIXES = ("research/", "experiment/", "diagnostic/")
-INTEGRATION_ONLY_LABELS = {
-    "approved-for-integration",
-    "single-model-reviewed",
-    "administrator-approved",
-    "autonomous-promotion-approved",
-}
-SOURCE_RESEARCH_PR_PATTERN = re.compile(r"source research pr/branch/commit:\s*#(\d+)\b", flags=re.IGNORECASE)
-SOURCE_RESEARCH_FULL_PATTERN = re.compile(
-    r"(?im)^\s*source research pr/branch/commit:\s*#(\d+)\s*/\s*`?([^`\n]+?)`?\s*/\s*`?([0-9a-f]{40})`?\s*$"
+INTEGRATION_ONLY_LABELS = {"autonomous-promotion-approved"}
+APPROVED_RESEARCH_VERDICTS = {"APPROVED_FOR_INTEGRATION", "APPROVED_FOR_PAPER_PROMOTION"}
+RESEARCH_VERDICTS = APPROVED_RESEARCH_VERDICTS | {"MORE_EVIDENCE_REQUIRED", "REJECTED"}
+TRUSTED_VERDICT_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+VERDICT_MARKER_RE = re.compile(
+    r"Research Governance(?: correction)?\s*(?:—|:|-)\s*(APPROVED_FOR_INTEGRATION|APPROVED_FOR_PAPER_PROMOTION|MORE_EVIDENCE_REQUIRED|REJECTED)\b",
+    re.IGNORECASE,
 )
-RESEARCH_VERDICT_PATTERN = re.compile(
-    r"(?im)^\s*(?:#{1,6}\s*)?Research Governance"
-    r"(?:\s+(?:evidence state|correction|decision))?\s*(?:—|–|-|:)\s*"
-    r"[`*_~]*(INTEGRATION_READY|APPROVED_FOR_INTEGRATION|MORE_EVIDENCE_REQUIRED|REJECTED|SHADOW_ONLY)\b"
+VERDICT_EXACT_SHA_RE = re.compile(r"Exact validated head:\s*`?([0-9a-fA-F]{40})`?", re.IGNORECASE)
+SOURCE_PROVENANCE_RE = re.compile(
+    r"Source research PR/branch/commit:\s*#(\d+)\s*/\s*`?([^\s/`]+/[^\s`]+)`?\s*/\s*`?([0-9a-fA-F]{40})`?",
+    re.IGNORECASE,
 )
-EXACT_APPROVED_HEAD_PATTERN = re.compile(
-    r"(?i)\b(?:exact(?:\s+validated)?\s+head|validated\s+source\s+head)\s*[:=]?\s*`?([0-9a-f]{40})`?"
+
+LIVE_MODEL_SURFACE_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"^config/live_champion\.json$",
+        r"^config/paper_v7\.json$",
+        r"^config/research_v7_.*\.json$",
+        r"^config/v7_frequency_matrix\.json$",
+        r"^config/v7_execution_evidence\.json$",
+        r"^scripts/paper_v7_(?:loop|execution_loop)\.sh$",
+        r"^scripts/v7_.*\.py$",
+        r"^scripts/runtime_action_report\.py$",
+        r"^scripts/runtime_plane_supervisor\.py$",
+        r"^scripts/runtime_singleton_launcher\.py$",
+        r"^scripts/polymarket_fees\.py$",
+        r"^src/(?:engine|maker_paper|multileg_paper|negrisk_arb|pca_stat_arb|stat_arb|fast_arb|fast_arb_main)\.cpp$",
+        r"^include/pm/(?:engine|fast_arb|market_relation|execution|trade_identity)\.hpp$",
+    )
 )
-APPROVED_RESEARCH_VERDICTS = {"INTEGRATION_READY", "APPROVED_FOR_INTEGRATION"}
-TRUSTED_GOVERNANCE_AUTHOR_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
-MODEL_BODY_TERMS = ("alpha","model","strategy","signal","stat-arb","stat arb","pca","maker","opportunity","portfolio","paper champion","candidate bundle")
-
-# These files define what the operator has authorized, rather than a model or
-# experiment. The autonomous research/integration plane may read and enforce
-# them, but may not redefine them. A change must be isolated on operator/* and
-# explicitly state that it reflects the latest direct user instruction.
-OPERATOR_AUTHORITY_SURFACES = {
-    "config/operator_directives.json",
-    "config/project_context.json",
-    "scripts/hard_safety_policy.py",
-    "scripts/project_context_snapshot.py",
-    "scripts/validate_project_context.py",
-    "tests/test_hard_safety_policy.py",
-    "tests/test_v7_authorized_paper_envelope.py",
-}
-OPERATOR_AUTHORIZATION_MARKER = "operator authorization change: latest explicit user instruction"
-
-LIVE_MODEL_SURFACE_PATTERNS = (
-    re.compile(r"^config/live_champion\.json$"), re.compile(r"^config/paper_v\d+\.json$"),
-    re.compile(r"^config/v\d+_model_architecture\.json$"),
-    re.compile(r"^config/research_v\d+_(?:cross_sectional_rank|local_factor|pca_stat_arb)\.json$"),
-    re.compile(r"^config/(?:cross_venue|portfolio_supervisor)\.json$"), re.compile(r"^config/cross_venue_pairs\.csv$"),
-    re.compile(r"^scripts/paper_latest_loop\.sh$"), re.compile(r"^scripts/paper_v\d+_(?:loop|once)(?:_v\d+)?\.sh$"), re.compile(r"^scripts/multi_strategy_paper\.py$"),
-    re.compile(r"^scripts/build_v\d+_intents\.py$"), re.compile(r"^scripts/merge_v\d+_intents\.py$"),
-    re.compile(r"^scripts/build_global_opportunity_book\.py$"), re.compile(r"^scripts/filter_coherent_hedges\.py$"),
-    re.compile(r"^scripts/walk_forward_v\d+\.py$"), re.compile(r"^scripts/runtime_action_report\.py$"),
-    re.compile(r"^scripts/portfolio_supervisor\.py$"), re.compile(r"^scripts/(?:cross_venue_loop|prediction_market_system_loop)\.sh$"),
-    re.compile(r"^scripts/v\d+_(?:cross_sectional(?:_[a-z0-9]+)*|local_factor(?:_[a-z0-9]+)*|pca_stat_arb(?:_[a-z0-9]+)*)\.py$"),
-    re.compile(r"^scripts/v\d+_(?:dynamic_factor_intents|execution_model|external_bridge|global_risk|hard_arb_guard|hard_arb_paper|intent_guard|intent_queue_filter|local_factor_intents|local_factor|market_common|materialize_configs|multileg_launcher|micro_maker|micro_taker|micro_taker_institutional|queue_filter|relation_intents|runtime_status|typed_structural)(?:_v\d+)?\.py$"),
+OPERATOR_AUTHORITY_SURFACE_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"^config/operator_directives\.json$",
+        r"^scripts/hard_safety_policy\.py$",
+        r"^tests/test_v7_authorized_paper_envelope\.py$",
+        r"^\.github/workflows/operator-authority-gate\.yml$",
+    )
 )
-MODEL_CODE_SURFACE_PATTERNS = (
-    re.compile(r"^(?:src|include)(?:/.*)?/(?:engine|fast_arb|maker_paper|multileg_paper|negrisk_arb|pca_stat_arb|stat_arb|rewards_scan)\.(?:cpp|cc|cxx|h|hpp)$"),
-    re.compile(r"^src/(?:engine|fast_arb|maker_paper|multileg_paper|negrisk_arb|pca_stat_arb|stat_arb|rewards_scan)\.(?:cpp|cc|cxx|h|hpp)$"),
-    re.compile(r"^(?:src|include)(?:/.*)?/cross_venue(?:\.(?:cpp|cc|cxx|h|hpp)|_runtime/.*\.inc)$"),
+OPERATOR_AUTHORIZATION_MARKER = "Operator authorization change: latest explicit user instruction"
+SHADOW_FORBIDDEN_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"^config/live_champion\.json$",
+        r"^config/paper_v7\.json$",
+        r"^scripts/paper_v7_(?:loop|execution_loop)\.sh$",
+        r"^scripts/runtime_action_report\.py$",
+        r"^scripts/runtime_plane_supervisor\.py$",
+        r"^scripts/runtime_singleton_launcher\.py$",
+        r"^scripts/v7_(?:multileg_broker|multileg_broker_runner|micro_maker_worker|micro_taker_worker|hard_arb_execution|hard_arb_guard|runtime_status|capacity_lock|merge_intents|intent_guard|bundle_quote_optimizer|relation_intents|external_bridge)\.py$",
+        r"^src/(?:engine|maker_paper|multileg_paper|negrisk_arb|pca_stat_arb|stat_arb|fast_arb|fast_arb_main)\.cpp$",
+        r"^include/pm/(?:engine|fast_arb|market_relation|execution|trade_identity)\.hpp$",
+    )
 )
-SHADOW_FORBIDDEN_TOKENS = ("intent","broker","execution","risk","pnl","realized","drawdown","oos","kill","credential","auth","account","order","portfolio","supervisor","allocation","allocator","capital","sizing","position","exposure","wallet","secret","private_key","submit")
+OPAQUE_BOOTSTRAP_SUFFIXES = (".b64", ".base64", ".enc", ".blob")
 
 
-def label_names(pr: dict[str, Any]) -> set[str]:
-    return {str(item.get("name")) for item in pr.get("labels", []) if item.get("name")}
+def read_event(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
-def has_model_intent(body: str) -> bool:
-    normalized = body.lower(); return any(term in normalized for term in MODEL_BODY_TERMS)
+def read_changed_files(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    return {line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()}
 
 
-def is_live_model_surface(path: str) -> bool:
-    return any(pattern.search(path) for pattern in LIVE_MODEL_SURFACE_PATTERNS)
+def branch_kind(head: str) -> str:
+    if head == "main":
+        return "main"
+    if head.startswith("integration/"):
+        return "integration"
+    if head.startswith("operator/"):
+        return "operator"
+    if head.startswith(RESEARCH_PREFIXES):
+        return "research"
+    return "feature"
 
 
-def is_model_code_surface(path: str) -> bool:
-    return any(pattern.search(path) for pattern in MODEL_CODE_SURFACE_PATTERNS)
+def matches_any(path: str, patterns: Iterable[re.Pattern[str]]) -> bool:
+    return any(pattern.search(path) for pattern in patterns)
 
 
-def is_sensitive_model_surface(path: str) -> bool:
-    return is_live_model_surface(path) or is_model_code_surface(path)
+def model_surface_files(changed: set[str]) -> list[str]:
+    return sorted(path for path in changed if matches_any(path, LIVE_MODEL_SURFACE_PATTERNS))
 
 
-def is_opaque_model_bootstrap(changed_files: set[str], body: str) -> bool:
-    bootstrap_workflow = any(path.startswith(".github/workflows/bootstrap-") and path.endswith((".yml", ".yaml")) for path in changed_files)
-    opaque_payload = any(path.startswith("ops/") and path.endswith((".b64", ".tar.gz", ".tgz", ".zip")) for path in changed_files)
-    return bootstrap_workflow and opaque_payload and has_model_intent(body)
+def operator_authority_files(changed: set[str]) -> list[str]:
+    return sorted(path for path in changed if matches_any(path, OPERATOR_AUTHORITY_SURFACE_PATTERNS))
 
 
-def shadow_forbidden_files(changed_files: set[str]) -> list[str]:
-    forbidden: list[str] = []
-    for path in sorted(changed_files):
-        lowered = path.lower()
-        if lowered.startswith(".github/workflows/") and lowered.endswith((".yml", ".yaml")):
-            forbidden.append(path)
+def shadow_forbidden_files(changed: set[str]) -> list[str]:
+    return sorted(path for path in changed if matches_any(path, SHADOW_FORBIDDEN_PATTERNS))
+
+
+def opaque_bootstrap_files(changed: set[str]) -> list[str]:
+    out: list[str] = []
+    for path in changed:
+        lower = path.lower()
+        name = Path(lower).name
+        if lower.endswith(OPAQUE_BOOTSTRAP_SUFFIXES):
+            out.append(path)
             continue
-        if is_sensitive_model_surface(path): forbidden.append(path); continue
-        if not lowered.startswith(("config/", "scripts/", "src/", "include/", "ops/")): continue
-        if any(token in lowered for token in SHADOW_FORBIDDEN_TOKENS): forbidden.append(path)
-    return forbidden
+        if any(token in name for token in ("payload", "bootstrap", "patch")) and ("alpha" in lower or "model" in lower or "paper" in lower):
+            out.append(path)
+    return sorted(out)
 
 
-def author_association(item: dict[str, Any]) -> str:
-    return str(item.get("authorAssociation") or item.get("author_association") or "").upper()
+def labels(pr: dict[str, Any]) -> set[str]:
+    values = pr.get("labels", [])
+    result: set[str] = set()
+    for value in values:
+        if isinstance(value, dict):
+            name = str(value.get("name", "")).strip()
+        else:
+            name = str(value).strip()
+        if name:
+            result.add(name)
+    return result
 
 
-def _trusted_verdict_records(source: dict[str, Any] | None) -> list[tuple[str, int, int, str, str | None]]:
-    if not isinstance(source, dict):
-        return []
-    verdicts: list[tuple[str, int, int, str, str | None]] = []
-    ordinal = 0
-    for key, timestamp_keys in (
-        ("comments", ("createdAt", "created_at")),
-        ("reviews", ("submittedAt", "submitted_at", "createdAt", "created_at")),
-    ):
-        for item in source.get(key) or []:
-            if not isinstance(item, dict):
-                continue
-            if author_association(item) not in TRUSTED_GOVERNANCE_AUTHOR_ASSOCIATIONS:
-                continue
-            timestamp = ""
-            for timestamp_key in timestamp_keys:
-                value = item.get(timestamp_key)
-                if value:
-                    timestamp = str(value)
-                    break
-            text = str(item.get("body") or "")
-            approved_head_match = EXACT_APPROVED_HEAD_PATTERN.search(text)
-            approved_head = approved_head_match.group(1).lower() if approved_head_match else None
-            for match_order, match in enumerate(RESEARCH_VERDICT_PATTERN.finditer(text)):
-                verdicts.append((timestamp, ordinal, match_order, match.group(1).upper(), approved_head))
-            ordinal += 1
-    verdicts.sort(key=lambda item: (item[0], item[1], item[2]))
-    return verdicts
-
-
-def research_verdict(source: dict[str, Any] | None) -> str | None:
-    verdicts = _trusted_verdict_records(source)
-    return verdicts[-1][3] if verdicts else None
-
-
-def research_approved_head(source: dict[str, Any] | None) -> str | None:
-    verdicts = _trusted_verdict_records(source)
-    if not verdicts or verdicts[-1][3] not in APPROVED_RESEARCH_VERDICTS:
+def parse_source_provenance(body: str) -> tuple[int, str, str] | None:
+    match = SOURCE_PROVENANCE_RE.search(body or "")
+    if not match:
         return None
-    return verdicts[-1][4]
+    return int(match.group(1)), match.group(2), match.group(3).lower()
 
 
-def source_branch(source: dict[str, Any] | None) -> str:
-    if not isinstance(source, dict):
-        return ""
-    direct = str(source.get("headRefName") or "")
-    if direct:
-        return direct
-    head = source.get("head")
-    return str(head.get("ref") or "") if isinstance(head, dict) else ""
+def _source_head(source: dict[str, Any]) -> tuple[str, str]:
+    branch = str(source.get("headRefName") or "")
+    sha = str(source.get("headRefOid") or "")
+    if branch and sha:
+        return branch, sha.lower()
+    head = source.get("head") if isinstance(source.get("head"), dict) else {}
+    return str(head.get("ref") or ""), str(head.get("sha") or "").lower()
 
 
-def source_sha(source: dict[str, Any] | None) -> str:
-    if not isinstance(source, dict):
-        return ""
-    direct = str(source.get("headRefOid") or "")
-    if direct:
-        return direct.lower()
-    head = source.get("head")
-    return str(head.get("sha") or "").lower() if isinstance(head, dict) else ""
+def _comment_fields(row: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(row.get("createdAt") or row.get("created_at") or ""),
+        str(row.get("authorAssociation") or row.get("author_association") or "").upper(),
+        str(row.get("body") or ""),
+    )
 
 
-def source_number(source: dict[str, Any] | None) -> int | None:
-    if not isinstance(source, dict):
-        return None
-    try:
-        return int(source.get("number"))
-    except (TypeError, ValueError):
-        return None
+def _review_fields(row: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(row.get("submittedAt") or row.get("submitted_at") or ""),
+        str(row.get("authorAssociation") or row.get("author_association") or "").upper(),
+        str(row.get("body") or ""),
+    )
+
+
+def _trusted_verdict_candidates(source: dict[str, Any]) -> list[tuple[str, str, str, str]]:
+    candidates: list[tuple[str, str, str, str]] = []
+    for row in source.get("comments", []) if isinstance(source.get("comments"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        created, association, body = _comment_fields(row)
+        if association not in TRUSTED_VERDICT_ASSOCIATIONS:
+            continue
+        marker = VERDICT_MARKER_RE.search(body)
+        if marker:
+            candidates.append((created, "comment", marker.group(1).upper(), body))
+    for row in source.get("reviews", []) if isinstance(source.get("reviews"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        created, association, body = _review_fields(row)
+        if association not in TRUSTED_VERDICT_ASSOCIATIONS:
+            continue
+        marker = VERDICT_MARKER_RE.search(body)
+        if marker:
+            candidates.append((created, "review", marker.group(1).upper(), body))
+    return sorted(candidates, key=lambda item: (item[0], item[1]))
+
+
+def extract_source_verdict(source: dict[str, Any]) -> tuple[str, str, str]:
+    candidates = _trusted_verdict_candidates(source)
+    if not candidates:
+        return "", "", ""
+    _, source_kind, verdict, body = candidates[-1]
+    sha_match = VERDICT_EXACT_SHA_RE.search(body)
+    approved_sha = sha_match.group(1).lower() if sha_match else ""
+    return verdict, approved_sha, source_kind
+
+
+def evaluate_source_research(source: dict[str, Any], provenance: tuple[int, str, str] | None) -> tuple[list[str], dict[str, Any]]:
+    errors: list[str] = []
+    verdict, approved_sha, verdict_source = extract_source_verdict(source)
+    source_number = int(source.get("number") or 0)
+    source_branch, source_head_sha = _source_head(source)
+    summary = {
+        "source_research_number": source_number,
+        "source_research_branch": source_branch,
+        "source_research_head_sha": source_head_sha,
+        "source_research_verdict": verdict,
+        "source_research_approved_sha": approved_sha,
+        "source_research_verdict_source": verdict_source,
+    }
+    if provenance is None:
+        errors.append("integration PR must bind exact source provenance: Source research PR/branch/commit: #<n> / research/<branch> / <40-char-sha>")
+        return errors, summary
+    number, branch, sha = provenance
+    if source_number and source_number != number:
+        errors.append(f"integration source PR mismatch: body cites #{number} but source metadata is #{source_number}")
+    if source_branch and source_branch != branch:
+        errors.append(f"integration source branch mismatch: body cites {branch} but source metadata is {source_branch}")
+    if source_head_sha and source_head_sha != sha:
+        errors.append(f"integration source commit mismatch: body cites {sha} but source head is {source_head_sha}")
+    if not verdict:
+        errors.append("source research PR has no trusted structured governance verdict; latest trusted source verdict: none")
+    elif verdict not in APPROVED_RESEARCH_VERDICTS:
+        errors.append(f"source research PR is not approved for integration; latest trusted source verdict: {verdict}")
+    else:
+        if not approved_sha:
+            errors.append("positive source research verdict must bind an exact validated source head SHA")
+        elif source_head_sha and approved_sha != source_head_sha:
+            errors.append(f"source research changed after approval: approved {approved_sha}, current head {source_head_sha}")
+        elif approved_sha != sha:
+            errors.append(f"integration source commit mismatch: body cites {sha} but approved source head is {approved_sha}")
+    return errors, summary
 
 
 def evaluate(
     event: dict[str, Any],
-    changed_files: set[str],
+    changed: set[str],
     manifest_existed_on_base: bool,
     source_research: dict[str, Any] | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
-    pr = event.get("pull_request")
-    if not isinstance(pr, dict): return ["event does not contain pull_request metadata"], {}
-    head = str(pr.get("head", {}).get("ref") or pr.get("headRefName") or "")
-    body = str(pr.get("body") or ""); draft = bool(pr.get("draft")); labels = label_names(pr)
-    manifest_changed = "config/live_champion.json" in changed_files
-    model_surface_files = sorted(path for path in changed_files if is_sensitive_model_surface(path))
-    operator_surface_files = sorted(path for path in changed_files if path in OPERATOR_AUTHORITY_SURFACES)
-    operator_marker = OPERATOR_AUTHORIZATION_MARKER in body.lower()
-    opaque_model_bootstrap = is_opaque_model_bootstrap(changed_files, body)
-    forbidden_shadow_files = shadow_forbidden_files(changed_files) if "shadow-isolated" in labels else []
+    pr = event.get("pull_request", {}) if isinstance(event, dict) else {}
+    head = str(pr.get("head", {}).get("ref", ""))
+    draft = bool(pr.get("draft", False))
+    body = str(pr.get("body") or "")
+    label_names = labels(pr)
+    kind = branch_kind(head)
     errors: list[str] = []
+    models = model_surface_files(changed)
+    authority = operator_authority_files(changed)
+    opaque = opaque_bootstrap_files(changed)
+    shadow_forbidden = shadow_forbidden_files(changed)
+    manifest_changed = "config/live_champion.json" in changed
+    operator_marker = OPERATOR_AUTHORIZATION_MARKER in body
 
-    # Operator authority is deliberately outside the autonomous research ->
-    # integration promotion path. This prevents a scheduler/remediation PR from
-    # redefining the user's current instruction and then rewriting its own tests
-    # to make that redefinition look valid.
-    if operator_surface_files:
-        if not head.startswith("operator/"):
-            errors.append(
-                "operator authority surfaces may change only on operator/* after a direct user instruction; blocked: "
-                + ", ".join(operator_surface_files)
-            )
-        elif not operator_marker:
-            errors.append(
-                "operator/* PR changing authority surfaces must contain the exact marker "
-                f"`{OPERATOR_AUTHORIZATION_MARKER}`"
-            )
+    if kind == "research" and not draft:
+        errors.append("unapproved research/experiment/diagnostic work must remain draft until integrated through the approved V7 lifecycle")
+    if kind not in {"research", "integration"} and models:
+        errors.append("unapproved model/runtime work cannot change live V7 model surfaces outside research/* or integration/*: " + ", ".join(models))
+    if kind not in {"research", "integration"} and opaque:
+        errors.append("opaque bootstrap payload cannot hide model/runtime work outside research/* or integration/*: " + ", ".join(opaque))
+    if "shadow-isolated" in label_names and shadow_forbidden:
+        errors.append("shadow-isolated code cannot modify production intents, PnL, risk or execution surfaces: " + ", ".join(shadow_forbidden))
+    if kind == "research" and manifest_changed:
+        errors.append("research branches must not change config/live_champion.json")
+    if kind != "operator" and authority:
+        errors.append("operator authority surfaces may change only on operator/* with the latest explicit user instruction: " + ", ".join(authority))
+    if kind == "operator" and manifest_changed:
+        errors.append("operator authority PRs may not change the live champion manifest; use the V7 integration/promotion path")
+    if kind == "operator" and authority and not operator_marker:
+        errors.append(f"operator authority changes must contain the exact marker: {OPERATOR_AUTHORIZATION_MARKER}")
 
-    numbered_match = SOURCE_RESEARCH_PR_PATTERN.search(body)
-    linked_source_number = int(numbered_match.group(1)) if numbered_match else None
-    full_match = SOURCE_RESEARCH_FULL_PATTERN.search(body)
-    linked_source_branch = full_match.group(2).strip().strip("`") if full_match else ""
-    linked_source_commit = full_match.group(3).lower() if full_match else ""
-    latest_source_verdict = research_verdict(source_research)
-    approved_source_head = research_approved_head(source_research)
+    integration_only_found = sorted(INTEGRATION_ONLY_LABELS.intersection(label_names))
+    if kind != "integration" and integration_only_found:
+        errors.append("integration-only machine promotion labels are invalid on non-integration branches: " + ", ".join(integration_only_found))
 
-    if head.startswith(RESEARCH_PREFIXES):
-        forbidden = sorted(labels.intersection(INTEGRATION_ONLY_LABELS))
-        if forbidden: errors.append("research/experiment/diagnostic PRs cannot carry integration/administrator labels: " + ", ".join(forbidden))
-        if not draft and "shadow-isolated" not in labels:
-            errors.append("research PRs that are not shadow-isolated must remain draft; promotion happens through an integration/* candidate after objective validation")
-        if manifest_changed: errors.append("research and diagnostic branches may never change the live champion manifest")
-    elif head.startswith("integration/"):
-        if full_match is None:
-            errors.append(
-                "integration PR must bind exact source provenance as `Source research PR/branch/commit: #<number> / <research-branch> / <40-char-head-sha>`"
-            )
-        if source_research is None:
-            errors.append("integration PRs must provide trusted source research metadata before work may move onto integration/*")
+    source_provenance = parse_source_provenance(body) if kind == "integration" else None
+    source_summary: dict[str, Any] = {
+        "source_research_number": 0,
+        "source_research_branch": "",
+        "source_research_head_sha": "",
+        "source_research_verdict": "",
+        "source_research_approved_sha": "",
+        "source_research_verdict_source": "",
+    }
+    if kind == "integration" and not draft:
+        if source_provenance is None:
+            errors.append("non-draft integration PR must bind exact source provenance: Source research PR/branch/commit: #<n> / research/<branch> / <40-char-sha>")
+        elif source_research is None:
+            errors.append("non-draft integration PR is missing source research metadata for exact approval verification")
         else:
-            actual_source_number = source_number(source_research)
-            actual_source_branch = source_branch(source_research)
-            actual_source_sha = source_sha(source_research)
-            if linked_source_number is not None and actual_source_number != linked_source_number:
-                errors.append("integration source research PR does not match the numbered source in the candidate body")
-            if not actual_source_branch.startswith(RESEARCH_PREFIXES):
-                errors.append("integration source must come from research/*, experiment/*, or diagnostic/*")
-            if full_match is not None and linked_source_branch != actual_source_branch:
-                errors.append(
-                    f"integration source branch mismatch: cited {linked_source_branch or 'none'}, current source {actual_source_branch or 'none'}"
-                )
-            if full_match is not None and linked_source_commit != actual_source_sha:
-                errors.append(
-                    f"integration source commit mismatch: cited {linked_source_commit or 'none'}, current source {actual_source_sha or 'none'}"
-                )
-            if latest_source_verdict not in APPROVED_RESEARCH_VERDICTS:
-                errors.append(
-                    "unapproved work must remain in research until the latest trusted Research Governance verdict is APPROVED_FOR_INTEGRATION or INTEGRATION_READY; "
-                    f"latest trusted source verdict: {latest_source_verdict or 'none'}"
-                )
-            elif approved_source_head is None:
-                errors.append("trusted positive Research Governance verdict must bind an exact validated source head SHA")
-            elif actual_source_sha != approved_source_head:
-                errors.append(
-                    f"source research changed after approval or approval targeted another head: approved {approved_source_head}, current {actual_source_sha or 'none'}"
-                )
-            elif full_match is not None and linked_source_commit != approved_source_head:
-                errors.append(
-                    f"integration cited source commit is not the trusted approved head: cited {linked_source_commit}, approved {approved_source_head}"
-                )
-    elif head.startswith("operator/"):
-        # Operator-only changes are administrative authority updates, not alpha
-        # promotion. They can coexist with ordinary documentation/policy tests,
-        # but must not mutate the live champion directly.
-        if manifest_changed:
-            errors.append("operator authority PRs may not change the live champion manifest; promotion remains integration/* only")
-        misplaced = sorted(labels.intersection(INTEGRATION_ONLY_LABELS | {"research-approved"}))
-        if misplaced:
-            errors.append("operator authority PRs cannot carry research/integration promotion labels: " + ", ".join(misplaced))
-    else:
-        misplaced = sorted(labels.intersection(INTEGRATION_ONLY_LABELS | {"research-approved"}))
-        if misplaced: errors.append("research/integration labels are valid only on their dedicated branch classes: " + ", ".join(misplaced))
-        if manifest_changed and manifest_existed_on_base: errors.append("an existing live champion manifest may change only on integration/*")
-        if model_surface_files:
-            errors.append("unapproved model/runtime work cannot change known live model/runtime/code surfaces on normal feature/fix branches; use research/*, experiment/*, or diagnostic/* for evidence and integration/* for automatic paper promotion. Sensitive change: " + ", ".join(model_surface_files))
-        elif opaque_model_bootstrap:
-            errors.append("opaque model/runtime bootstrap work must use research/*, experiment/*, or diagnostic/*; paper champion integration must use integration/*. Sensitive change: opaque bootstrap payload")
+            source_errors, source_summary = evaluate_source_research(source_research, source_provenance)
+            errors.extend(source_errors)
+    elif kind == "integration" and source_research is not None:
+        source_errors, source_summary = evaluate_source_research(source_research, source_provenance)
+        errors.extend(source_errors)
 
-    if forbidden_shadow_files:
-        errors.append("shadow-isolated code cannot modify production decision, model, execution, PnL, risk, OOS, credential, account, order, portfolio-allocation, sizing, exposure, kill, or workflow/control-plane surfaces: " + ", ".join(forbidden_shadow_files))
+    if manifest_changed and not manifest_existed_on_base and kind != "integration":
+        errors.append("initial live champion creation must occur on integration/*")
 
+    integrated_from_approved_research = (
+        kind == "integration"
+        and source_summary.get("source_research_verdict") in APPROVED_RESEARCH_VERDICTS
+        and bool(source_summary.get("source_research_approved_sha"))
+        and not any("source research" in error.lower() or "integration source" in error.lower() for error in errors)
+    )
     summary = {
-        "branch": head, "draft": draft, "labels": sorted(labels), "manifest_changed": manifest_changed,
-        "model_surface_files": model_surface_files, "operator_surface_files": operator_surface_files,
+        "head": head,
+        "kind": kind,
+        "draft": draft,
+        "labels": sorted(label_names),
+        "changed_file_count": len(changed),
+        "model_surface_files": models,
+        "operator_authority_files": authority,
+        "opaque_bootstrap_files": opaque,
+        "shadow_forbidden_files": shadow_forbidden,
+        "manifest_changed": manifest_changed,
+        "manifest_existed_on_base": manifest_existed_on_base,
         "operator_authorization_marker": operator_marker,
-        "opaque_model_bootstrap": opaque_model_bootstrap,
-        "shadow_forbidden_files": forbidden_shadow_files, "changed_files": len(changed_files),
-        "source_research_pr": linked_source_number if linked_source_number is not None else "none",
-        "source_research_branch": linked_source_branch or "none",
-        "source_research_commit": linked_source_commit or "none",
-        "source_research_verdict": latest_source_verdict or "none",
-        "source_research_approved_sha": approved_source_head or "none",
-        "automatic_paper_promotion": head.startswith("integration/"), "manual_approval_labels_required": False,
+        "source_provenance": source_provenance,
+        "integrated_from_approved_research": integrated_from_approved_research,
+        "automatic_paper_promotion": kind == "integration",
+        "manual_approval_labels_required": False,
+        **source_summary,
         "policy": "pass" if not errors else "fail",
     }
     return errors, summary
 
 
-def render(summary: dict[str, Any], errors: list[str]) -> str:
-    lines = ["# Research pull-request policy", ""]
-    for key in (
-        "branch","draft","labels","manifest_changed","model_surface_files","operator_surface_files",
-        "operator_authorization_marker","opaque_model_bootstrap","shadow_forbidden_files","changed_files",
-        "source_research_pr","source_research_branch","source_research_commit","source_research_verdict",
-        "source_research_approved_sha","automatic_paper_promotion","manual_approval_labels_required","policy",
-    ):
-        value = summary.get(key, "unknown")
-        if isinstance(value, list): value = ", ".join(str(item) for item in value) or "none"
-        lines.append(f"- {key}: `{value}`")
-    if errors: lines.extend(["", "## Policy errors"]); lines.extend(f"- {error}" for error in errors)
+def render(errors: list[str], summary: dict[str, Any]) -> str:
+    lines = [
+        "# Research PR policy", "",
+        f"- head: `{summary['head']}`",
+        f"- kind: `{summary['kind']}`",
+        f"- draft: `{summary['draft']}`",
+        f"- labels: `{', '.join(summary['labels']) or 'none'}`",
+        f"- changed files: `{summary['changed_file_count']}`",
+        f"- model/runtime surfaces changed: `{len(summary['model_surface_files'])}`",
+        f"- operator authority surfaces changed: `{len(summary['operator_authority_files'])}`",
+        f"- opaque bootstrap surfaces changed: `{len(summary['opaque_bootstrap_files'])}`",
+        f"- shadow-forbidden surfaces changed: `{len(summary['shadow_forbidden_files'])}`",
+        f"- live champion changed: `{summary['manifest_changed']}`",
+        f"- live champion existed on base: `{summary['manifest_existed_on_base']}`",
+        f"- operator_authorization_marker: `{summary['operator_authorization_marker']}`",
+        f"- integrated from approved research: `{summary['integrated_from_approved_research']}`",
+        f"- automatic_paper_promotion: `{summary['automatic_paper_promotion']}`",
+        f"- manual_approval_labels_required: `{summary['manual_approval_labels_required']}`",
+    ]
+    if summary.get("source_provenance"):
+        lines.append(f"- source provenance: `{summary['source_provenance']}`")
+    lines.extend(
+        [
+            f"- source_research_verdict: `{summary.get('source_research_verdict') or 'none'}`",
+            f"- source_research_head_sha: `{summary.get('source_research_head_sha') or 'none'}`",
+            f"- source_research_approved_sha: `{summary.get('source_research_approved_sha') or 'none'}`",
+            f"- source_research_verdict_source: `{summary.get('source_research_verdict_source') or 'none'}`",
+        ]
+    )
+    if summary["model_surface_files"]:
+        lines.extend(["", "## V7 model/runtime surfaces"]); lines.extend(f"- `{path}`" for path in summary["model_surface_files"])
+    if summary["operator_authority_files"]:
+        lines.extend(["", "## Operator authority surfaces"]); lines.extend(f"- `{path}`" for path in summary["operator_authority_files"])
+    if summary["opaque_bootstrap_files"]:
+        lines.extend(["", "## Opaque bootstrap surfaces"]); lines.extend(f"- `{path}`" for path in summary["opaque_bootstrap_files"])
+    if summary["shadow_forbidden_files"]:
+        lines.extend(["", "## Shadow-forbidden surfaces"]); lines.extend(f"- `{path}`" for path in summary["shadow_forbidden_files"])
+    lines.extend(["", "## Result", f"- policy: `{summary['policy']}`"])
+    if errors:
+        lines.extend(f"- {error}" for error in errors)
     return "\n".join(lines) + "\n"
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Enforce Polymarket research/integration/operator PR policy")
-    parser.add_argument("--event", required=True); parser.add_argument("--changed-files", required=True)
-    parser.add_argument("--manifest-existed-on-base", choices=("true", "false"), required=True); parser.add_argument("--output", required=True)
-    parser.add_argument("--source-research-json")
-    args = parser.parse_args()
-
-    source_research = None
-    if args.source_research_json:
-        source_research = json.loads(Path(args.source_research_json).read_text(encoding="utf-8"))
-
-    event = json.loads(Path(args.event).read_text(encoding="utf-8"))
-    changed = {line.strip() for line in Path(args.changed_files).read_text(encoding="utf-8").splitlines() if line.strip()}
-    errors, summary = evaluate(
-        event,
-        changed,
-        manifest_existed_on_base=args.manifest_existed_on_base == "true",
-        source_research=source_research,
-    )
-    report = render(summary, errors); Path(args.output).write_text(report, encoding="utf-8"); print(report, end="")
-    for error in errors: print(f"::error::{error}")
+    ap = argparse.ArgumentParser(description="Enforce V7 research/integration/authority PR policy")
+    ap.add_argument("--event", type=Path, required=True)
+    ap.add_argument("--changed-files", type=Path, required=True)
+    ap.add_argument("--manifest-existed-on-base", choices=("true", "false"), required=True)
+    ap.add_argument("--output", type=Path, required=True)
+    ap.add_argument("--source-research-json", type=Path)
+    args = ap.parse_args()
+    event = read_event(args.event)
+    changed = read_changed_files(args.changed_files)
+    source_research = read_event(args.source_research_json) if args.source_research_json and args.source_research_json.exists() else None
+    errors, summary = evaluate(event, changed, args.manifest_existed_on_base == "true", source_research)
+    report = render(errors, summary)
+    args.output.write_text(report, encoding="utf-8")
+    print(report, end="")
     return 1 if errors else 0
 
 
