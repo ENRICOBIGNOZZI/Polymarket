@@ -47,6 +47,10 @@ class CoordinatedBroker(Broker):
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
             self.admit(eq)
+            # Publish new broker token ownership while the lock is still held.
+            # A maker admission starting immediately after unlock therefore sees
+            # the same atomic owner set that the broker used for its decision.
+            self.persist()
         finally:
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
