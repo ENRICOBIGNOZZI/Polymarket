@@ -55,6 +55,8 @@ jobs:
           assert report["promotion_ready"] is False
           assert report["economic_pnl_validated"] is False
           assert report["survivorship_safe"] is False
+          assert report["history_data_healthy"] is True
+          assert report["history_market_count"] >= report["history_required_market_count"]
           assert len(report["horizons"]) == 4
           PY
 
@@ -69,7 +71,9 @@ jobs:
           from pathlib import Path
           r=json.loads(Path('ranking_evidence/report.json').read_text())
           print(f"- markets: {r['market_count']}")
-          print(f"- history markets: {r['history_market_count']}")
+          print(f"- history markets: {r['history_market_count']} / required {r['history_required_market_count']}")
+          print(f"- history data healthy: {r['history_data_healthy']}")
+          print(f"- history chunk days: {r['history_window_days']}")
           print(f"- books: {r['book_market_count']}")
           print(f"- authoritative fee books: {r['authoritative_fee_book_count']}")
           print(f"- shadow intents: {r['shadow_intent_rows']}")
