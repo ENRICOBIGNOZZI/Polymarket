@@ -1,0 +1,118 @@
+name: V7 Local Factor BY evidence
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "config/research_v7_local_factor.json"
+      - "scripts/v7_local_factor_*.py"
+      - "tests/test_v7_local_factor_*.py"
+      - ".github/workflows/v7-local-factor-by-evidence.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v7-local-factor-by-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deterministic BY contracts
+        run: |
+          set -euo pipefail
+          python3 -m unittest \
+            tests/test_v7_local_factor_core.py \
+            tests/test_v7_local_factor_inference.py \
+            tests/test_v7_local_factor_pairs.py \
+            tests/test_v7_local_factor_multiplicity.py \
+            tests/test_v7_local_factor_by_contract.py -v
+          python3 -m py_compile \
+            scripts/v7_local_factor_core.py \
+            scripts/v7_local_factor_inference.py \
+            scripts/v7_local_factor_pairs.py \
+            scripts/v7_local_factor_multiplicity.py \
+            scripts/v7_local_factor_research.py
+      - name: Build bounded live evidence config
+        run: |
+          set -euo pipefail
+          mkdir -p lf_by_evidence
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          cfg=json.loads(Path('config/research_v7_local_factor.json').read_text())
+          cfg['universe']['maximum_markets']=300
+          cfg['universe']['maximum_clusters']=15
+          cfg['inference']['maximum_bootstrap_repetitions']=8000
+          Path('lf_by_evidence/config.json').write_text(json.dumps(cfg,indent=2,sort_keys=True)+'\n')
+          PY
+      - name: Live public-data sparse BY inference
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/v7_local_factor_research.py \
+            --config lf_by_evidence/config.json \
+            --paper-config config/paper_v6.json \
+            --output-json lf_by_evidence/report.json \
+            | tee lf_by_evidence/run.log
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          r=json.loads(Path('lf_by_evidence/report.json').read_text())
+          assert r['schema_version']==2
+          assert r['paper_only'] is True
+          assert r['research_only'] is True
+          assert r['live_intents_enabled'] is False
+          assert r['submitted_orders']==0
+          assert r['promotion_ready'] is False
+          assert r['multiplicity_method']=='benjamini_yekutieli_arbitrary_dependence'
+          assert r['pair_hypotheses']==r['predeclared_pair_count']
+          assert r['testable_pair_hypotheses']<=r['predeclared_pair_count']
+          assert r['unestimable_predeclared_hypotheses']==r['predeclared_pair_count']-r['testable_pair_hypotheses']
+          assert r['unestimable_predeclared_pvalue']==1.0
+          assert r['history_data_healthy'] is True
+          assert r['survivorship_safe'] is False
+          assert r['execution_joint_state_validated'] is False
+          assert r['fill_conditioned_pnl_validated'] is False
+          PY
+      - name: Publish LF BY summary
+        if: always()
+        shell: bash
+        run: |
+          echo '## V7 Local Factor sparse BY evidence' >> "$GITHUB_STEP_SUMMARY"
+          if test -s lf_by_evidence/report.json; then
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          r=json.loads(Path('lf_by_evidence/report.json').read_text())
+          d=r['bootstrap_resolution']
+          print(f"- markets: {r['markets']}")
+          print(f"- clusters: {r['clusters']}")
+          print(f"- histories: {r['histories']}")
+          print(f"- predeclared pairs: {r['predeclared_pair_count']}")
+          print(f"- testable pairs: {r['testable_pair_hypotheses']}")
+          print(f"- bootstrap reps: {r['bootstrap_repetitions']}")
+          print(f"- BY effective q: {d['by_effective_q']:.8f}")
+          print(f"- first BY threshold: {d['first_rank_by_threshold']:.8g}")
+          print(f"- minimum attainable p: {d['minimum_attainable_pvalue']:.8g}")
+          print(f"- singleton resolution adequate: {d['singleton_by_resolution_adequate']}")
+          print(f"- minimum observed testable p: {r['minimum_testable_pair_pvalue']}")
+          print(f"- BY selected pairs: {r['by_selected_pairs']}")
+          print(f"- post-multiplicity signals: {r['post_multiplicity_pair_signals']}")
+          PY
+          else
+            echo '- report missing' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload LF BY evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v7-local-factor-by-${{ github.run_id }}
+          path: lf_by_evidence/
+          if-no-files-found: warn
+          retention-days: 30
