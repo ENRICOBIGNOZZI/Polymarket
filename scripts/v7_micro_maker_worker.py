@@ -10,6 +10,17 @@ from typing import Any
 import v7_maker_cancel_latency as cancel
 import v7_micro_maker_worker_depth_core as depth
 
+# The canonical maker is a cancel-latency wrapper around the frozen depth-aware
+# core. Keep the safety-critical depth/markout contract explicit at this public
+# adapter boundary rather than relying only on dynamic symbol re-export.
+MAX_MARKOUT_LABEL_DELAY_SECONDS = 15
+MARKOUT_REJECTION_REASON = "late_markout_label"
+MARKOUT_LABEL_CONTRACT = "event_time_horizon_with_bounded_observation_delay"
+EXIT_LIQUIDITY_CONTRACT = "shares_specific_full_visible_bid_depth_vwap_fail_closed"
+full_depth_sell_vwap = depth.full_depth_sell_vwap
+if depth.MAX_MARKOUT_LABEL_DELAY_SECONDS != MAX_MARKOUT_LABEL_DELAY_SECONDS:
+    raise RuntimeError("maker depth-core markout delay contract drift")
+
 for _name in dir(depth):
     if not _name.startswith("__") and _name != "main":
         globals()[_name] = getattr(depth, _name)
