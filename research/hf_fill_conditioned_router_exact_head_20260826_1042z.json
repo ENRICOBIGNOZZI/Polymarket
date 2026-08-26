@@ -1,0 +1,101 @@
+{
+  "schema": "hf_fill_conditioned_router_exact_head_evidence_v1",
+  "research_state": "ZERO_EDGE_FLOW_INTERSECTION_MORE_EVIDENCE_REQUIRED",
+  "source_head": "a9b4bb04595c77ea139eed793022f44706a51fc0",
+  "workflow_run_id": 32958720051,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_money_execution": false,
+  "primary_objective": "actual paper fills and positive fill-conditioned PnL",
+  "authorized_paper_envelope": {
+    "markets_max": 1000,
+    "min_liquidity_usd": 2.0,
+    "post_cost_min_edge": 0.00005,
+    "kelly_max": 0.25,
+    "max_trade_usd": 125.0,
+    "market_fraction_max": 0.05,
+    "event_fraction_max": 0.15,
+    "gross_fraction_max": 0.70,
+    "max_drawdown": 0.15
+  },
+  "universe": {
+    "discovered_markets": 1000,
+    "active_books_evaluated": 120,
+    "recent_global_trade_rows": 1000,
+    "recent_seed_conditions": 50,
+    "seed_markets_resolved_by_clob_token": 49,
+    "seed_only_markets_added": 32,
+    "seed_conditions_with_causal_flow": 20,
+    "poll_errors": 0,
+    "markout_book_errors": 0
+  },
+  "effective_activity_admission": {
+    "min_recent_trades": 1,
+    "min_compatible_sell_prints": 1,
+    "max_event_age_seconds": 90,
+    "min_fill_probability_proxy": 0.005,
+    "improve_ticks_max": 1,
+    "max_sell_toxicity": 0.80
+  },
+  "baseline_active_universe": {
+    "economic_candidates": 19,
+    "orders": 8,
+    "fill_orders": 0,
+    "filled_shares": 0.0,
+    "realized_round_trips": 0,
+    "fill_conditioned_pnl": 0.0,
+    "top_selected_orders_with_compatible_sell_prints": 0,
+    "interpretation": "The eight highest-ranked selected economic candidates had zero same-token compatible SELL prints at or below their passive bid during the causal lookback."
+  },
+  "fill_conditioned_router": {
+    "live_wired": true,
+    "candidates": 0,
+    "orders": 0,
+    "fill_orders": 0,
+    "filled_shares": 0.0,
+    "realized_round_trips": 0,
+    "fill_conditioned_pnl": 0.0,
+    "inside_spread_considered": 0,
+    "inside_spread_kept": 0,
+    "inside_spread_reverted": 0,
+    "inside_spread_dropped": 0,
+    "at_touch_markout_prior_per_share": 0.0,
+    "inside_markout_prior_per_share": -0.017787054548749986,
+    "future_current_window_markout_used_for_admission": false
+  },
+  "micro_taker": {
+    "samples": 534,
+    "causal_labels": 356,
+    "nonzero_labels": 0,
+    "post_horizon_labels": 0,
+    "signals_last_tick": 0,
+    "opened_last_tick": 0,
+    "open_positions": 0,
+    "realized_pnl_total": 0.0,
+    "execution_model": "depth_vwap_plus_latency_stress"
+  },
+  "hard_arb": {
+    "scanned_events": 4,
+    "verified_fee_schedules_last_tick": 38,
+    "positive_candidates": 0,
+    "entered": 0,
+    "realized_pnl": 0.0,
+    "atomic_snapshot_assumption": false,
+    "sequential_leg_revalidation": true,
+    "leg_latency_ms": 100
+  },
+  "decision": {
+    "maker": "The prospective fill-conditioned router is now genuinely wired into the chronological live-data experiment, so the previous wiring blocker is resolved. In this exact window it still produced zero candidates even after bounded activity-gate relaxation. The binding empirical problem is the intersection of executable positive edge and causal compatible contra-flow, not the 0.5 bp economic floor.",
+    "micro_taker": "Do not lower taker gates on this sample; all 356 causal labels are flat and executable edge is absent.",
+    "hard_arb": "Do not lower hard-arb gates on this sample; no positive executable candidate survived verified fees and sequential leg revalidation.",
+    "next_test": "Broaden the recent-flow-seeded candidate set before changing the economic floor, then add prospective resting-order hazard revalidation with a static-TTL audit twin so dead-queue capital recycling can be measured without hiding later fills."
+  },
+  "hard_safety_unchanged": [
+    "15_percent_max_drawdown",
+    "kill_switch",
+    "state_integrity",
+    "5_15_70_concentration_caps",
+    "authenticated_execution_prohibited",
+    "real_money_execution_prohibited"
+  ]
+}
