@@ -100,6 +100,18 @@ class LiveMakerFlowOverlapAuditTest(unittest.TestCase):
         self.assertEqual(report["resting"]["orders_with_compatible_sell"], 1)
         self.assertEqual(report["orders"][0]["compatible_sell_rows_pre_decision"], 1)
         self.assertEqual(report["orders"][0]["compatible_sell_volume_pre_decision"], 3.0)
+        self.assertEqual(report["first_tick"]["signal_tokens_with_compatible_sell"], 1)
+        self.assertEqual(report["first_tick"]["signal_tokens_with_observed_queue_clearance"], 0)
+        self.assertAlmostEqual(report["first_tick"]["max_observed_clearance_ratio"], 0.1)
+
+    def test_observed_flow_must_clear_queue_plus_own_size(self) -> None:
+        report = audit(
+            [order("A", price=0.40)],
+            [log("A")],
+            [trade("A", side="SELL", price=0.39, size=31)],
+        )
+        self.assertEqual(report["first_tick"]["signal_tokens_with_observed_queue_clearance"], 1)
+        self.assertGreater(report["first_tick"]["max_observed_clearance_ratio"], 1.0)
 
     def test_empty_tape_is_inconclusive_not_zero_activity_evidence(self) -> None:
         report = audit([order("A")], [log("A")], [])
