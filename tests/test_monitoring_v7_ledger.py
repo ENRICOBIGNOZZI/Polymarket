@@ -37,15 +37,17 @@ class V7LedgerMonitoringTest(unittest.TestCase):
             "markouts": markouts or {},
         }
 
-    def test_read_only_ledger_summary_counts_partial_complete_unwind_and_pnl(self) -> None:
+    def test_read_only_ledger_summary_matches_canonical_markout_contract(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "ledger" / "execution.jsonl"
             path.parent.mkdir(parents=True)
             events = [
                 self._event("OPPORTUNITY"),
                 self._event("ORDER_SUBMITTED"),
-                self._event("FILL", complete=False, markouts={"10s": -0.01}),
-                self._event("FILL", complete=True, markouts={"10s": 0.03}),
+                self._event("FILL", complete=False),
+                self._event("MARKOUT", markouts={"10s": -0.01}),
+                self._event("FILL", complete=True),
+                self._event("MARKOUT", markouts={"10s": 0.03}),
                 self._event("EXIT", unwind_loss=1.5),
                 self._event("FINAL", final_pnl=2.25, capital_duration_ms=7_200_000),
             ]
@@ -60,11 +62,29 @@ class V7LedgerMonitoringTest(unittest.TestCase):
             self.assertEqual(total["fills"], 2)
             self.assertEqual(total["partial_fills"], 1)
             self.assertEqual(total["complete_fills"], 1)
+            self.assertEqual(total["markouts"], 2)
             self.assertEqual(total["unwinds"], 1)
             self.assertAlmostEqual(total["final_pnl"], 2.25)
             self.assertAlmostEqual(total["capital_duration_ms"] / 3_600_000, 2.0)
             self.assertEqual(total["markout_count"]["10s"], 2)
             self.assertAlmostEqual(total["markout_sum"]["10s"] / 2, 0.01)
+
+    def test_noncanonical_fill_markout_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "execution.jsonl"
+            path.write_text(json.dumps(self._event("FILL", complete=True, markouts={"10s": 0.01})) + "\n", encoding="utf-8")
+            summary = v7_ledger_metrics.summarize_ledger(path)
+            self.assertFalse(summary["valid"])
+            self.assertEqual(summary["invalid_rows"], 1)
+
+    def test_empty_ledger_is_not_valid_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "execution.jsonl"
+            path.write_text("", encoding="utf-8")
+            summary = v7_ledger_metrics.summarize_ledger(path)
+            self.assertTrue(summary["present"])
+            self.assertFalse(summary["valid"])
+            self.assertEqual(summary["rows"], 0)
 
     def test_mixed_sha_or_non_paper_row_invalidates_ledger_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -90,7 +110,7 @@ class V7LedgerMonitoringTest(unittest.TestCase):
             "ledger": {
                 "present": True,
                 "valid": True,
-                "rows": 6,
+                "rows": 8,
                 "invalid_rows": 0,
                 "model_shas": ["a" * 40],
                 "total": {
@@ -99,6 +119,7 @@ class V7LedgerMonitoringTest(unittest.TestCase):
                     "fills": 1,
                     "complete_fills": 0,
                     "partial_fills": 1,
+                    "markouts": 1,
                     "unwinds": 1,
                     "final_pnl": -0.5,
                     "capital_duration_ms": 3_600_000,
