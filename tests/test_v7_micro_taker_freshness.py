@@ -11,7 +11,6 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-import v7_micro_taker_core as core
 import v7_micro_taker_data as data
 import v7_micro_taker_worker as worker
 
@@ -47,51 +46,30 @@ class MicroTakerBookFreshnessTest(unittest.TestCase):
         self.assertEqual(books["no-token"].exchange_ts, NOW - 1)
         self.assertEqual(books["no-token"].received_ts, NOW)
 
+    def test_fresh_pair_is_admitted_with_oldest_causal_timestamp(self) -> None:
+        yes = data.Book(raw_book("yes", str((NOW - 2) * 1000)), received_ts=NOW)
+        no = data.Book(raw_book("no", str((NOW - 1) * 1000)), received_ts=NOW)
+        snapshot = worker.book_snapshot(yes, no, liquidity=1000.0, now=NOW, max_age_seconds=5)
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(snapshot.received_ts, NOW - 2)
+
     def test_stale_exchange_snapshot_is_not_rejuvenated_by_decision_time(self) -> None:
         yes = data.Book(raw_book("yes", str((NOW - 8) * 1000)), received_ts=NOW)
         no = data.Book(raw_book("no", str((NOW - 1) * 1000)), received_ts=NOW)
-        snapshot = worker.book_snapshot(yes, no, liquidity=1000.0)
-        self.assertIsNotNone(snapshot)
-        assert snapshot is not None
-        self.assertEqual(snapshot.received_ts, NOW - 8)
-        candidate = core.round_trip_economics(
-            side="YES",
-            book=snapshot,
-            predicted_yes_mid=0.60,
-            prediction_sigma_probability=0.0,
-            fee=core.FeeSpec(False, 0.0, authoritative=True),
-            horizon_seconds=60,
-            now=NOW,
-            slippage_bps_per_leg=0.0,
-            uncertainty_z=0.0,
-            adverse_markout_penalty_bps=0.0,
-            capital_cost_bps_per_hour=0.0,
-            max_book_age_seconds=5,
-        )
-        self.assertIsNone(candidate)
+        self.assertIsNone(worker.book_snapshot(yes, no, liquidity=1000.0, now=NOW, max_age_seconds=5))
 
     def test_missing_exchange_timestamp_fails_closed(self) -> None:
         yes = data.Book(raw_book("yes", ""), received_ts=NOW)
         no = data.Book(raw_book("no", str(NOW * 1000)), received_ts=NOW)
-        snapshot = worker.book_snapshot(yes, no, liquidity=1000.0)
-        self.assertIsNotNone(snapshot)
-        assert snapshot is not None
-        self.assertEqual(snapshot.received_ts, 0)
-        candidate = core.round_trip_economics(
-            side="YES",
-            book=snapshot,
-            predicted_yes_mid=0.60,
-            prediction_sigma_probability=0.0,
-            fee=core.FeeSpec(False, 0.0, authoritative=True),
-            horizon_seconds=60,
-            now=NOW,
-            slippage_bps_per_leg=0.0,
-            uncertainty_z=0.0,
-            adverse_markout_penalty_bps=0.0,
-            capital_cost_bps_per_hour=0.0,
-            max_book_age_seconds=5,
-        )
-        self.assertIsNone(candidate)
+        self.assertIsNone(worker.book_snapshot(yes, no, liquidity=1000.0, now=NOW, max_age_seconds=5))
+
+    def test_future_exchange_or_receive_timestamp_fails_closed(self) -> None:
+        future_exchange = data.Book(raw_book("yes", str((NOW + 2) * 1000)), received_ts=NOW)
+        normal = data.Book(raw_book("no", str(NOW * 1000)), received_ts=NOW)
+        self.assertIsNone(worker.book_snapshot(future_exchange, normal, liquidity=1000.0, now=NOW, max_age_seconds=5))
+        future_receive = data.Book(raw_book("yes", str(NOW * 1000)), received_ts=NOW + 2)
+        self.assertIsNone(worker.book_snapshot(future_receive, normal, liquidity=1000.0, now=NOW, max_age_seconds=5))
 
 
 if __name__ == "__main__":
