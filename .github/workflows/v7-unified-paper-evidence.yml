@@ -183,17 +183,21 @@ jobs:
           set -euo pipefail
           APP="$HOME/polymarket"
           BASE="$HOME/${BASE_REL}"
+          REPO="$HOME/.cache/polymarket-v7-evidence/repo"
           WORKTREES="$BASE/worktrees"
           RUNS="$BASE/by-sha"
           ACTIVE="$BASE/active.env"
-          mkdir -p "$WORKTREES" "$RUNS"
-          cd "$APP"
-          git fetch -q origin main "$SOURCE_BRANCH"
-          test "$(git rev-parse "origin/$SOURCE_BRANCH")" = "$SOURCE_SHA"
-          main_sha="$(git rev-parse origin/main)"
+          mkdir -p "$(dirname "$REPO")" "$WORKTREES" "$RUNS"
+          if [[ ! -d "$REPO/.git" ]]; then
+            remote_url="$(git -C "$APP" remote get-url origin)"
+            git clone --no-checkout -q "$remote_url" "$REPO"
+          fi
+          git -C "$REPO" fetch -q origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/$SOURCE_BRANCH:refs/remotes/origin/$SOURCE_BRANCH"
+          test "$(git -C "$REPO" rev-parse "origin/$SOURCE_BRANCH")" = "$SOURCE_SHA"
+          main_sha="$(git -C "$REPO" rev-parse origin/main)"
 
-          # The research head may change model/runtime code but may not redefine
-          # operator/control-plane authority or select itself as live champion.
           for path in \
             config/operator_directives.json \
             config/scheduler_registry.json \
@@ -202,16 +206,16 @@ jobs:
             tests/test_research_policy_branch_classification.py \
             .github/workflows/control-plane-event-bridge.yml \
             .github/workflows/v7-point-in-time-universe-archive.yml; do
-            test "$(git rev-parse "origin/main:$path")" = "$(git rev-parse "$SOURCE_SHA:$path")"
+            test "$(git -C "$REPO" rev-parse "origin/main:$path")" = "$(git -C "$REPO" rev-parse "$SOURCE_SHA:$path")"
           done
-          git show "$SOURCE_SHA:config/live_champion.json" | python3 -c 'import json,sys; m=json.load(sys.stdin); assert int(m["version"]) == 6; assert m["loop"] == "scripts/paper_v6_loop.sh"'
-          git show "$SOURCE_SHA:config/paper_v7.json" | python3 -c 'import json,sys; c=json.load(sys.stdin); assert c["paper_only"] is True; assert c["v7"]["authenticated_execution"] is False; assert c["fixed_dollar_trade_cap_enabled"] is False; assert c["max_trade_fraction"] == c["max_market_fraction"] == c["max_event_fraction"] == c["max_gross_fraction"] == 1.0'
+          git -C "$REPO" show "$SOURCE_SHA:config/live_champion.json" | python3 -c 'import json,sys; m=json.load(sys.stdin); assert int(m["version"]) == 6; assert m["loop"] == "scripts/paper_v6_loop.sh"'
+          git -C "$REPO" show "$SOURCE_SHA:config/paper_v7.json" | python3 -c 'import json,sys; c=json.load(sys.stdin); assert c["paper_only"] is True; assert c["v7"]["authenticated_execution"] is False; assert c["fixed_dollar_trade_cap_enabled"] is False; assert c["max_trade_fraction"] == c["max_market_fraction"] == c["max_event_fraction"] == c["max_gross_fraction"] == 1.0'
 
           worktree="$WORKTREES/$SOURCE_SHA"
           run_root="$RUNS/$SOURCE_SHA"
           if [[ ! -d "$worktree/.git" && ! -f "$worktree/.git" ]]; then
             rm -rf "$worktree"
-            git worktree add --detach "$worktree" "$SOURCE_SHA" >/dev/null
+            git -C "$REPO" worktree add --detach "$worktree" "$SOURCE_SHA" >/dev/null
           fi
           test "$(git -C "$worktree" rev-parse HEAD)" = "$SOURCE_SHA"
           mkdir -p "$run_root"
@@ -223,11 +227,14 @@ jobs:
           fi
           if [[ "$old_sha" != "$SOURCE_SHA" && "$old_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$old_pid" 2>/dev/null; then
             kill -TERM "$old_pid" 2>/dev/null || true
-            for _ in $(seq 1 100); do
+            for _ in $(seq 1 200); do
               kill -0 "$old_pid" 2>/dev/null || break
               sleep 0.1
             done
-            kill -0 "$old_pid" 2>/dev/null && kill -KILL "$old_pid" 2>/dev/null || true
+            if kill -0 "$old_pid" 2>/dev/null; then
+              echo "fatal: prior isolated runtime did not drain; refusing duplicate owner" >&2
+              exit 1
+            fi
           fi
 
           cd "$worktree"
@@ -262,7 +269,6 @@ jobs:
           } > "$tmp"
           mv "$tmp" "$ACTIVE"
 
-          # Wait only for a bounded health sample; the runtime itself persists.
           for _ in $(seq 1 120); do
             if [[ -s "$run_root/v7_supervisor.json" && -s "$run_root/execution/v7_execution_supervisor.json" ]]; then
               break
@@ -306,7 +312,7 @@ jobs:
         run: |
           set -euo pipefail
           BASE_REL="$(python3 -c 'import json; print(json.load(open("config/v7_evidence_runtime.json"))["runtime_root"])')"
-          REMOTE_ROOT="$HOME/$BASE_REL/by-sha/$SOURCE_SHA"
+          REMOTE_ROOT="~/$BASE_REL/by-sha/$SOURCE_SHA"
           for rel in \
             isolated_runtime_status.json \
             v7_supervisor.json \
@@ -350,7 +356,7 @@ jobs:
             cat v7-evidence/reconcile-summary.json >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           elif test -s v7-evidence/check-gate.json; then
-            echo 'Exact research head is not fully green yet; incumbent V7 evidence runtime is left untouched.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'Exact research head is not fully green yet; an already-running prior exact-SHA evidence runtime is left partitioned and untouched.' >> "$GITHUB_STEP_SUMMARY"
             echo '```json' >> "$GITHUB_STEP_SUMMARY"
             cat v7-evidence/check-gate.json >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
