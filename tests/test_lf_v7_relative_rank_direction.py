@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import sys
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -10,6 +11,7 @@ SCRIPT = ROOT / "scripts" / "lf_v7_relative_rank_direction_audit.py"
 spec = importlib.util.spec_from_file_location("lf_v7_relative_rank_direction_audit", SCRIPT)
 mod = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
+sys.modules[spec.name] = mod
 spec.loader.exec_module(mod)
 
 
