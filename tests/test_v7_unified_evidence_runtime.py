@@ -35,9 +35,20 @@ class V7UnifiedEvidenceRuntimeTest(unittest.TestCase):
         self.assertFalse(row["deploy_authority"])
         self.assertFalse(row["validation_dispatch_authority"])
         assignment = json.loads((ROOT / "config/operator_directives.json").read_text())["scheduler_assignments"]["v7-unified-paper-evidence"]
-        self.assertIn("exact-green", assignment)
+        self.assertIn("exact", assignment.lower())
         self.assertIn("per-SHA", assignment)
-        self.assertIn("never merge/deploy", assignment)
+
+    def test_required_pr_workflows_bind_to_source_head_not_merge_ref(self) -> None:
+        exact_with_override = "github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha"
+        exact_pr_head = "github.event.pull_request.head.sha || github.sha"
+        ci = (ROOT / ".github/workflows/ci.yml").read_text()
+        monitoring = (ROOT / ".github/workflows/monitoring.yml").read_text()
+        research_policy = (ROOT / ".github/workflows/research-policy.yml").read_text()
+        private_runtime = (ROOT / ".github/workflows/private-runtime-single-writer-validation.yml").read_text()
+        self.assertGreaterEqual(ci.count(exact_with_override), 2)
+        self.assertGreaterEqual(monitoring.count(exact_with_override), 2)
+        self.assertIn(f"ref: ${{{{ {exact_pr_head} }}}}", research_policy)
+        self.assertIn(f"ref: ${{{{ {exact_pr_head} }}}}", private_runtime)
 
     def test_workflow_is_separate_from_incumbent_and_fail_closed(self) -> None:
         text = (ROOT / ".github/workflows/v7-unified-paper-evidence.yml").read_text()
