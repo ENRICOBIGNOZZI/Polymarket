@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import socket
 import tempfile
 import time
 import unittest
@@ -115,6 +116,21 @@ class V6AtomicCacheReloadTests(unittest.TestCase):
 
     def test_reconciliation_preserves_nonblocking_stale_cache_reader(self) -> None:
         self.assertTrue(hasattr(proxy_mod.Proxy, "_refresh_stale_cache_in_background"))
+
+    def test_runtime_server_enables_reuseaddr_for_rapid_validated_restart(self) -> None:
+        self.assertIs(proxy_mod._impl.ThreadingHTTPServer, proxy_mod.ReusableThreadingHTTPServer)
+        self.assertTrue(proxy_mod.ReusableThreadingHTTPServer.allow_reuse_address)
+        server = proxy_mod.ReusableThreadingHTTPServer(
+            ("127.0.0.1", 0), proxy_mod.H, bind_and_activate=False
+        )
+        try:
+            server.server_bind()
+            self.assertEqual(
+                server.socket.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR),
+                1,
+            )
+        finally:
+            server.server_close()
 
 
 if __name__ == "__main__":

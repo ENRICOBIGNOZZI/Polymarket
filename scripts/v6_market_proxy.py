@@ -5,9 +5,9 @@ This module keeps the currently deployed non-blocking stale-cache reader intact 
 repairing atomic relay consumption.  The hosted relay installs a validated cache by
 rename, so file identity rather than monotone mtime is the correct change detector.
 The split is deliberately narrow: ``v6_market_proxy_base.py`` is the exact previous
-implementation and this shim overrides only cache identity/save semantics and the
-bounded IPv4 Gamma transport.  It can be collapsed back into one file after the
-runtime incident is closed without changing behavior.
+implementation and this shim overrides only cache identity/save semantics, rapid
+loopback rebinding, and the bounded IPv4 Gamma transport.  It can be collapsed back
+into one file after the runtime incident is closed without changing behavior.
 """
 from __future__ import annotations
 
@@ -115,10 +115,22 @@ class Proxy(_impl.Proxy):
             self.cache_signature = None
 
 
-# Base methods resolve ``req`` and ``Proxy`` through their module globals.  Rebind
-# only those names so we retain the latest non-blocking stale-cache implementation.
+class ReusableThreadingHTTPServer(_impl.ThreadingHTTPServer):
+    """Permit immediate validated restart after the prior loopback socket closes."""
+
+    # macOS can retain the prior 127.0.0.1:9120 socket in TIME_WAIT after a clean
+    # runtime handoff.  The ownership checks in paper_v6_loop.sh already fail closed
+    # on any live/unknown listener; SO_REUSEADDR addresses only the no-listener socket
+    # transition and does not permit two active bind owners.
+    allow_reuse_address = True
+
+
+# Base methods resolve these names through their module globals.  Rebind only the
+# narrowly reconciled components so the latest non-blocking cache implementation and
+# all existing ownership checks remain unchanged.
 _impl.req = gamma_req
 _impl.Proxy = Proxy
+_impl.ThreadingHTTPServer = ReusableThreadingHTTPServer
 H = _impl.H
 
 
