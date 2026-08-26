@@ -7,7 +7,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
     types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft, labeled, unlabeled]
 
 permissions:
@@ -74,6 +73,7 @@ jobs:
       - name: Test research, promotion and hard-safety policy regressions
         run: >-
           python3 -m unittest
+          tests/test_research_policy_all_pr_bases.py
           tests/test_research_policy_cross_venue.py
           tests/test_research_policy_v7_model_families.py
           tests/test_research_verdict_provenance.py
@@ -107,13 +107,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin main
-          git diff --name-only origin/main...HEAD | sort -u > changed-files.txt
+          base_sha="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["base"]["sha"])')"
+          head_sha="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["sha"])')"
+          [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "$base_sha^{commit}" 2>/dev/null || git fetch --no-tags origin "$base_sha"
+          git cat-file -e "$head_sha^{commit}" 2>/dev/null || git fetch --no-tags origin "$head_sha"
+          git diff --name-only "$base_sha...$head_sha" | sort -u > changed-files.txt
           manifest_existed=false
-          if git cat-file -e origin/main:config/live_champion.json 2>/dev/null; then manifest_existed=true; fi
+          if git cat-file -e "$base_sha:config/live_champion.json" 2>/dev/null; then manifest_existed=true; fi
 
           python3 scripts/hard_safety_policy.py \
-            --base-ref origin/main \
+            --base-ref "$base_sha" \
             --changed-files changed-files.txt \
             --root . \
             --output hard-safety-policy-report.md
