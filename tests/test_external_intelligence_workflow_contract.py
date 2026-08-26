@@ -36,8 +36,15 @@ class ExternalIntelligenceWorkflowContractTest(unittest.TestCase):
         )
         self.assertIn('cron: "17 * * * *"', workflow)
         self.assertNotIn('cron: "17,47 * * * *"', workflow)
+
+    def test_collection_runtime_budget_cannot_regress_to_old_timeout(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "external-intelligence.yml").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("timeout-minutes: 55", workflow)
         self.assertNotIn("timeout-minutes: 25", workflow)
+        self.assertIn("Collect, store and backtest public external information", workflow)
+        self.assertIn("python3 scripts/run_external_intelligence.py", workflow)
 
     def test_workflow_runs_this_contract_test(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "external-intelligence.yml").read_text(
