@@ -51,8 +51,12 @@ jobs:
           forbidden=set(cfg['forbidden_workflows'])
           owners=set(cfg['owner_workflows'])
           assert not owners & forbidden
-          assert 'deploy-paper-server.yml' not in owners
-          assert 'integration-merge.yml' not in owners
+          assert set(owners) == {
+              'forward-maker-research.yml',
+              'external-intelligence.yml',
+              'fast-arb-hourly.yml',
+              'arb-theory-hourly.yml',
+          }
           PY
 
       - name: Materialize durable research evidence
@@ -91,7 +95,7 @@ jobs:
             --branches research-director/input/research-branches.json \
             --output research-director/output/research-queue-report.md
 
-      - name: Allocate adaptive research budget
+      - name: Allocate adaptive V7 research budget
         shell: bash
         run: |
           set -euo pipefail
@@ -106,7 +110,7 @@ jobs:
             --dispatch-file research-director/output/dispatch-plan.txt \
             | tee research-director/output/research-director.log
 
-      - name: Dispatch bounded evidence-producing workers
+      - name: Dispatch bounded V7 evidence-producing workers
         if: github.event_name != 'pull_request' && success()
         shell: bash
         env:
@@ -117,7 +121,7 @@ jobs:
           while IFS= read -r workflow; do
             [[ -n "$workflow" ]] || continue
             case "$workflow" in
-              forward-maker-research.yml|external-intelligence.yml|v6-research-smoke.yml|fast-arb-hourly.yml|arb-theory-hourly.yml)
+              forward-maker-research.yml|external-intelligence.yml|fast-arb-hourly.yml|arb-theory-hourly.yml)
                 gh workflow run "$workflow" --ref main
                 printf 'dispatched=%s ref=main\n' "$workflow" | tee -a research-director/output/dispatch-results.txt
                 ;;
@@ -127,7 +131,7 @@ jobs:
                 ;;
             esac
           done < research-director/output/dispatch-plan.txt
-          if grep -Eq 'integration-merge|deploy-paper-server|server-health|promotion-controller|post-merge-validation' research-director/output/dispatch-results.txt; then
+          if grep -Eq 'integration-merge|deploy-paper-server|server-health|promotion-controller|post-merge-validation|live-paper-validation' research-director/output/dispatch-results.txt; then
             echo 'non-research authority escaped the Research Director allowlist' >&2
             exit 1
           fi
@@ -172,13 +176,13 @@ jobs:
           }
           publish_file research-director/output/latest-research-director.json \
             telemetry/latest-research-director.json \
-            "Update autonomous Research Director product"
+            "Update autonomous V7 Research Director product"
           publish_file research-director/output/latest-research-director.md \
             telemetry/latest-research-director.md \
-            "Update autonomous Research Director report"
+            "Update autonomous V7 Research Director report"
           publish_file research-director/output/research-director-state.json \
             telemetry/research-director-state.json \
-            "Update adaptive Research Director state"
+            "Update adaptive V7 Research Director state"
 
       - name: Upload research-director evidence
         if: always()
