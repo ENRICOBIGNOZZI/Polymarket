@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import sys
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -10,6 +11,7 @@ SCRIPT = ROOT / "scripts" / "lf_v7_cluster_complete_case_audit.py"
 spec = importlib.util.spec_from_file_location("lf_v7_cluster_complete_case_audit", SCRIPT)
 assert spec and spec.loader
 mod = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = mod
 spec.loader.exec_module(mod)
 
 
