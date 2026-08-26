@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "research_state": "UNCONDITIONAL_INSIDE_SPREAD_REJECTED_SELECTIVE_FALLBACK_FIX_MORE_EVIDENCE_REQUIRED",
+  "base_research_pr": 546,
+  "base_research_sha": "cd2f26e34cf658ad482510033c520b0b2ee28442",
+  "operator_authority": {
+    "source": "config/operator_directives.json",
+    "directive_epoch": "2026-08-26T20:20:00+02:00",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "market_limit": 1000,
+    "min_liquidity": 2.0,
+    "min_net_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "fixed_dollar_trade_cap_enabled": false,
+    "max_trade_fraction": 1.0,
+    "max_market_fraction": 1.0,
+    "max_event_fraction": 1.0,
+    "max_gross_fraction": 1.0,
+    "max_drawdown": 0.15,
+    "hard_arb_max_trade_fraction": 1.0
+  },
+  "latest_forward_maker_shadow_evidence": {
+    "independent_sessions": 68,
+    "history_span_seconds": 185460,
+    "probes_per_policy": 982,
+    "improve1": {
+      "fills": 12,
+      "one_sided_fills": 12,
+      "paired_fills": 0,
+      "total_ex_reward_pnl_usd": -9.85280473644135,
+      "mean_ex_reward_pnl_per_probe_usd": -0.0100334,
+      "moving_block_bootstrap_lcb_mean_pnl_per_probe_usd": -0.0182617,
+      "moving_block_bootstrap_ucb_mean_pnl_per_probe_usd": -0.003325718,
+      "positive_active_session_rate": 0.0,
+      "fill_weighted_markout_60s_per_share": -0.011611664,
+      "fill_weighted_markout_300s_per_share": -0.002391159,
+      "markout_60s_observed_shares": 397.8,
+      "markout_300s_observed_shares": 149.3,
+      "decision": "REJECT_CURRENT_UNCONDITIONAL_INSIDE_SPREAD_SAMPLE"
+    },
+    "join": {
+      "fills": 2,
+      "one_sided_fills": 2,
+      "paired_fills": 0,
+      "total_ex_reward_pnl_usd": -2.139241382462557,
+      "fill_weighted_markout_60s_per_share": -0.04547813,
+      "decision": "MORE_EVIDENCE_REQUIRED"
+    },
+    "fade1": {
+      "fills": 2,
+      "one_sided_fills": 2,
+      "paired_fills": 0,
+      "total_ex_reward_pnl_usd": -3.3100082054,
+      "fill_weighted_markout_60s_per_share": -0.03571429,
+      "decision": "MORE_EVIDENCE_REQUIRED"
+    }
+  },
+  "structural_defect": {
+    "name": "inside_spread_selection_without_admission_floor_fallback",
+    "description": "The V7 event-time core selected an improved quote when total fill-conditioned EV increased, then applied configured min-edge/min-fill admission only after the selection. An inside quote could therefore be selected and later SKIP even when the original touch quote remained admissible, creating an avoidable paper zero-fill.",
+    "fix": "Patch the V7 maker adapter so inside-spread improvement must itself pass the configured conditional post-cost edge floor, fill-probability floor and positive EV before replacing the touch quote. Otherwise retain the touch quote and let normal admission evaluate it.",
+    "operator_authority_changed": false,
+    "main_or_paper_validated_mutated": false
+  },
+  "next_required_evidence": [
+    "chronological V7 paper A/B on identical public data: old selector vs configured-floor fallback",
+    "actual FIFO paper fills and audited realized post-cost PnL",
+    "strict depth-aware 45s/60s/300s markouts with bounded observation delay",
+    "inside-spread improvement only when fill-conditioned EV beats touch after toxicity, fees, slippage, cancel latency and unwind risk"
+  ]
+}
