@@ -19,6 +19,8 @@ if str(SCRIPT_DIR) not in sys.path:
 import v6_local_factor_intents as base
 import v7_pca_stat_arb_core as core
 
+HISTORY_WINDOW_SECONDS = 7 * 24 * 60 * 60
+
 
 def atomic_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -66,6 +68,35 @@ def market_end_ts(raw: dict[str, Any]) -> int | None:
             except ValueError:
                 continue
     return None
+
+
+def fetch_histories_chunked(
+    clob: str,
+    token_by_market: dict[str, str],
+    start_ts: int,
+    end_ts: int,
+    fidelity_minutes: int,
+) -> tuple[dict[str, dict[int, float]], list[str]]:
+    """Fetch fixed-fidelity CLOB history in seven-day absolute windows."""
+    histories: dict[str, dict[int, float]] = {}
+    failures: list[str] = []
+    window_start = start_ts
+    while window_start < end_ts:
+        window_end = min(end_ts, window_start + HISTORY_WINDOW_SECONDS)
+        partial, partial_failures = base.fetch_histories(
+            clob,
+            token_by_market,
+            window_start,
+            window_end,
+            fidelity_minutes,
+        )
+        for market_id, series in partial.items():
+            histories.setdefault(market_id, {}).update(series)
+        failures.extend(
+            f"{window_start}:{window_end}:{failure}" for failure in partial_failures
+        )
+        window_start = window_end
+    return histories, failures
 
 
 def explicit_gamma_fee(raw: dict[str, Any]) -> tuple[bool, float, float]:
@@ -119,14 +150,16 @@ def main() -> int:
 
     selected = {market.market_id: market for _key, group in clusters for market in group}
     start = now - int(history_cfg["lookback_hours"]) * 3600
-    histories, history_failures = base.fetch_histories(
+    histories, history_failures = fetch_histories_chunked(
         clob,
         {market.market_id: market.yes for market in selected.values()},
         start,
         now,
         fidelity_minutes,
     ) if selected else ({}, [])
-    failures.extend(history_failures[:30])
+    failures.extend(history_failures[:50])
+    history_required_market_count = int(universe_cfg["minimum_cluster_markets"])
+    history_data_healthy = len(histories) >= history_required_market_count
 
     try:
         token_books = base.fetch_books(clob, list(selected.values())) if selected else {}
@@ -250,8 +283,6 @@ def main() -> int:
             score_rows.append({"hypothesis": identity, "pvalue": pvalue, **asdict(score)})
             if candidate is not None and candidate.net_edge >= float(execution_cfg["minimum_net_edge"]) and candidate.economic_score > 0.0:
                 candidates.append(candidate)
-        # A target can occur in multiple structural clusters.  Keep the strongest
-        # economic thesis per target/event; do not stack duplicate exposures.
         best_by_event: dict[str, core.SingleLegCandidate] = {}
         for candidate in sorted(candidates, key=lambda item: item.economic_score, reverse=True):
             current = best_by_event.get(candidate.event_id)
@@ -281,6 +312,9 @@ def main() -> int:
         "markets": len(markets),
         "clusters": len(clusters),
         "histories": len(histories),
+        "history_required_market_count": history_required_market_count,
+        "history_data_healthy": history_data_healthy,
+        "history_window_days": HISTORY_WINDOW_SECONDS // 86400,
         "books": len(books_by_market),
         "authoritative_fee_books": authoritative_fees,
         "bootstrap_repetitions": reps,
@@ -297,7 +331,7 @@ def main() -> int:
             "shared_execution_ledger_forward_pnl_not_yet_attached",
             "fill_conditioned_cost_stressed_pnl_not_yet_attached",
             "research_branch_cannot_mutate_live_champion"
-        ]
+        ] + ([] if history_data_healthy else ["price_history_data_health_unhealthy"])
     }
     atomic_json(args.output_json, report)
     print(json.dumps(report, sort_keys=True))
