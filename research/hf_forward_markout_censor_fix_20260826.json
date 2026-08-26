@@ -1,0 +1,39 @@
+{
+  "schema": "polymarket_hf_forward_markout_censor_fix_v1",
+  "generated_date": "2026-08-26",
+  "source_main_sha": "db44c828b4bd76232811e1d4a1bc3608062e3fa5",
+  "read_only": true,
+  "real_money_eligible": false,
+  "defect": {
+    "component": "scripts/forward_maker_probe.py::snapshot_after",
+    "severity": "blocking_evidence_defect",
+    "description": "When no token book exists at or after a requested markout horizon, the legacy helper returns the final snapshot even if that snapshot is before the horizon. This violates the probe's stated censoring contract and can label a censored 60s/300s markout as observed.",
+    "affected_evidence": "historical forward-maker horizon markouts produced before the strict wrapper; ex-reward realized PnL and fill counts are not changed by this defect",
+    "repair": "run the existing FIFO replay through a strict horizon wrapper that returns null unless a snapshot at or after the exact horizon exists, and add a 45-second executable-bid markout alongside 60s and 300s"
+  },
+  "latest_pre_fix_calibration": {
+    "sessions": 62,
+    "probes_per_policy": 902,
+    "history_span_seconds": 169408,
+    "eligible_for_paper_shadow": false,
+    "improve1": {
+      "fills": 10,
+      "one_sided_fills": 10,
+      "paired_fills": 0,
+      "total_ex_reward_pnl_usd": -5.744892566366351,
+      "block_bootstrap_ucb_mean_pnl_ex_rewards_per_probe_usd": -0.0019183529783028588,
+      "reported_fill_weighted_markout_60_bid_per_share": -0.0034036496350365055,
+      "reported_fill_weighted_markout_300_bid_per_share": -0.0027398311588641617
+    }
+  },
+  "interpretation": "The unconditional improve1 policy remains rejected even if all pre-fix 300s markout evidence is discarded: all 10 observed fills are one-sided, total ex-reward PnL is materially negative, and the moving-block bootstrap upper confidence bound remains below zero. The 300s markout statistic itself is not relied upon until regenerated under strict horizon censoring.",
+  "research_state": "BLOCKING_MARKOUT_CENSOR_DEFECT_REPAIRED_MORE_EVIDENCE_REQUIRED",
+  "next_gate": "fresh chronological strict-probe sessions with FIFO fills and executable-bid 45s/60s/300s markouts; inside-spread remains conditional on positive incremental fill-conditioned EV and the 0.5 bp residual edge floor",
+  "hard_safety": {
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "state_integrity_unchanged": true,
+    "authenticated_execution": false,
+    "real_money_execution": false
+  }
+}
