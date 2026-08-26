@@ -32,12 +32,14 @@ MODEL_BODY_TERMS = ("alpha","model","strategy","signal","stat-arb","stat arb","p
 LIVE_MODEL_SURFACE_PATTERNS = (
     re.compile(r"^config/live_champion\.json$"), re.compile(r"^config/paper_v\d+\.json$"),
     re.compile(r"^config/v\d+_model_architecture\.json$"),
+    re.compile(r"^config/research_v\d+_(?:cross_sectional_rank|local_factor|pca_stat_arb)\.json$"),
     re.compile(r"^config/(?:cross_venue|portfolio_supervisor)\.json$"), re.compile(r"^config/cross_venue_pairs\.csv$"),
     re.compile(r"^scripts/paper_latest_loop\.sh$"), re.compile(r"^scripts/paper_v\d+_(?:loop|once)(?:_v\d+)?\.sh$"), re.compile(r"^scripts/multi_strategy_paper\.py$"),
     re.compile(r"^scripts/build_v\d+_intents\.py$"), re.compile(r"^scripts/merge_v\d+_intents\.py$"),
     re.compile(r"^scripts/build_global_opportunity_book\.py$"), re.compile(r"^scripts/filter_coherent_hedges\.py$"),
     re.compile(r"^scripts/walk_forward_v\d+\.py$"), re.compile(r"^scripts/runtime_action_report\.py$"),
     re.compile(r"^scripts/portfolio_supervisor\.py$"), re.compile(r"^scripts/(?:cross_venue_loop|prediction_market_system_loop)\.sh$"),
+    re.compile(r"^scripts/v\d+_(?:cross_sectional_rank|local_factor|pca_stat_arb)(?:_core|_research)?\.py$"),
     re.compile(r"^scripts/v\d+_(?:dynamic_factor_intents|execution_model|external_bridge|global_risk|hard_arb_guard|hard_arb_paper|intent_guard|intent_queue_filter|local_factor_intents|local_factor|market_common|materialize_configs|multileg_launcher|micro_maker|micro_taker|micro_taker_institutional|queue_filter|relation_intents|runtime_status|typed_structural)(?:_v\d+)?\.py$"),
 )
 MODEL_CODE_SURFACE_PATTERNS = (
