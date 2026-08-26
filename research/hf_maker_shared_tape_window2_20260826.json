@@ -1,0 +1,113 @@
+{
+  "schema": "hf_maker_shared_tape_window_v1",
+  "research_state": "CURRENT_STATIC_MAKER_SELECTION_REJECTED_MORE_EVIDENCE_REQUIRED",
+  "source": {
+    "workflow_run_id": 32924402302,
+    "head_sha": "f3b841c676d39f37bea6454a8efda545865d3c1c",
+    "branch": "research/hf-maker-authorized-ab-current-20260826",
+    "date": "2026-08-26"
+  },
+  "paper_only": true,
+  "authenticated_execution": false,
+  "authorized_envelope": {
+    "markets": 600,
+    "min_liquidity_usd": 2.0,
+    "post_cost_min_edge": 0.00005,
+    "fractional_kelly": 0.25,
+    "max_trade_usd": 125.0,
+    "market_fraction_cap": 0.05,
+    "event_fraction_cap": 0.15,
+    "gross_fraction_cap": 0.70,
+    "max_drawdown": 0.15,
+    "ttl_seconds": 60,
+    "hold_seconds": 60,
+    "slippage_bps": 5.0,
+    "max_queue_multiple": 8.0
+  },
+  "shared_public_tape": {
+    "rows": 1440,
+    "unique_tokens_with_trades": 157,
+    "local_receive_timestamps_present": true
+  },
+  "at_touch": {
+    "posts": 35,
+    "unique_posted_tokens": 7,
+    "posted_tokens_present_anywhere_in_shared_tape": 0,
+    "posts_with_causal_pre_entry_trade_in_prior_120s": 0,
+    "posts_with_any_causal_post_entry_trade_within_ttl": 0,
+    "posts_with_eligible_post_entry_sell_within_ttl": 0,
+    "maker_engine_fill_events": 0,
+    "shared_tape_causal_fill_orders": 0,
+    "shared_tape_event_time_fill_orders": 0,
+    "realized_fill_conditioned_pnl": 0.0,
+    "ttl_cancels": 28,
+    "queue_skips": 150,
+    "reserved_capital_seconds": 49140.0,
+    "posted_notional": 899.99964,
+    "median_queue_ahead_shares": 22912.4,
+    "median_own_order_shares": 5728.11,
+    "median_queue_to_own_size": 4.0000022
+  },
+  "improve1": {
+    "posts": 35,
+    "unique_posted_tokens": 7,
+    "posted_tokens_present_anywhere_in_shared_tape": 0,
+    "posts_with_causal_pre_entry_trade_in_prior_120s": 0,
+    "posts_with_any_causal_post_entry_trade_within_ttl": 0,
+    "posts_with_eligible_post_entry_sell_within_ttl": 0,
+    "actual_inside_spread_improvements": 0,
+    "maker_engine_fill_events": 0,
+    "shared_tape_causal_fill_orders": 0,
+    "shared_tape_event_time_fill_orders": 0,
+    "realized_fill_conditioned_pnl": 0.0,
+    "ttl_cancels": 28,
+    "queue_skips": 150,
+    "reserved_capital_seconds": 49500.0,
+    "posted_notional": 899.99964,
+    "median_queue_ahead_shares": 22912.4,
+    "median_own_order_shares": 5728.11,
+    "median_queue_to_own_size": 4.0000022
+  },
+  "interpretation": {
+    "fill_evidence_gap_due_to_per_order_trade_api": false,
+    "zero_fill_confirmed_by_independent_shared_tape": true,
+    "selection_problem": "Both static maker arms repeatedly posted seven tokens with no public trades anywhere in a 1440-row shared tape that contained trades in 157 other tokens. Static edge plus queue-multiple gating is selecting economically inactive books for a fill-seeking HF sleeve.",
+    "inside_spread_result": "The improve1 arm made zero actual inside-spread improvements because no candidate had enough post-cost edge to pay one tick; lowering the 0.5 bp floor cannot fix this tick-size constraint.",
+    "next_challenger": "Require causal recent token-level flow before admission and rank by fill-conditioned EV using queue ahead, recent compatible flow, microprice/depth imbalance and toxicity. Keep selective improvement only when incremental expected fill benefit exceeds the paid tick plus adverse-selection penalty."
+  },
+  "other_hf_planes": {
+    "micro_taker": {
+      "samples": 546,
+      "causal_labels": 364,
+      "post_horizon_labels": 0,
+      "signals": 0,
+      "trades": 0,
+      "realized_pnl": 0.0,
+      "best_edge_last_tick": 0.0
+    },
+    "hard_arb": {
+      "scanned_events": 4,
+      "verified_fee_schedules_last_tick": 29,
+      "positive_candidates": 0,
+      "entries": 0,
+      "realized_pnl": 0.0,
+      "sequential_leg_revalidation": true
+    },
+    "fast_shadow_latest": {
+      "workflow_run_id": 32924080178,
+      "ws_messages": 9678,
+      "book_updates": 9553,
+      "final_feed_stale_ms": 36,
+      "hard_executable_observations": 0,
+      "research_ready": false,
+      "promotion_ready": false
+    }
+  },
+  "safety": {
+    "max_drawdown_unchanged": 0.15,
+    "kill_switch_unchanged": true,
+    "state_integrity_unchanged": true,
+    "authenticated_execution": false,
+    "real_money_execution": false
+  }
+}
