@@ -12,11 +12,13 @@ REQUIRED_IDS = {
     "integration-merge", "post-merge-validation", "code-validation", "monitoring-validation",
     "live-paper-validation", "paper-server-deploy", "paper-server-health", "forward-maker-research",
     "v6-live-data-research", "alpha-factory", "meta-supervisor", "fast-arb-shadow-research",
-    "arb-theory-research", "external-intelligence", "live-api-smoke", "v6-market-cache-relay",
+    "arb-theory-research", "external-intelligence", "live-api-smoke", "v7-point-in-time-universe-archive",
+    "v6-market-cache-relay",
 }
 PRIVATE_VALIDATION_WORKFLOW = ".github/workflows/private-runtime-single-writer-validation.yml"
 NON_SCHEDULER_WORKFLOWS = {
     ".github/workflows/grafana-access.yml",
+    ".github/workflows/v7-cross-sectional-ranking-research.yml",
     PRIVATE_VALIDATION_WORKFLOW,
 }
 NON_SCHEDULER_FORBIDDEN_TOKENS = (
