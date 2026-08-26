@@ -1,182 +1,123 @@
-# Polymarket System Watch: distributed administration and model evolution
+# Polymarket V7 System Watch
 
-System Watch is a **control plane**, not one monolithic scheduler. The complete operating model is defined in [`SCHEDULER_CONTROL_PLANE.md`](SCHEDULER_CONTROL_PLANE.md) and registered in [`config/scheduler_registry.json`](../config/scheduler_registry.json).
+System Watch is the V7 control plane. The authoritative scheduler registry is `config/scheduler_registry.json`; current operator authority is `config/operator_directives.json`.
 
-The project administrator owns the evolution of the live system. Specialized schedulers execute bounded, auditable duties; none receives general authority over research, merging, validation, deployment and runtime at the same time.
+## Invariants
 
-## Non-negotiable invariant: one live champion
-
-At every point in time there is exactly **one live champion**:
-
-- `main` is the authoritative integrated code line;
-- `config/live_champion.json` selects the single live entry point, configuration and run root;
-- `paper-validated` is the exact `main` revision that passed public live-paper validation;
-- the private paper server deploys `paper-validated`, never a research branch or arbitrary `main` revision.
-
-A single champion does not collapse distinct economic objects. Structural constraints, terminal probabilities, mark-to-market relative value, external information and execution estimates retain their own semantics. They are combined through one shared model registry/orchestrator, one portfolio/risk allocator and one execution broker.
-
-Creating `paper_v5`, `paper_v6` or a numerically newer experiment does not promote it. Promotion requires an explicit, rollback-safe integration decision.
-
-## Distributed responsibility
-
-The old all-in-one model-governance workflow has been removed. Responsibility is split as follows:
-
-1. **Administrator Supervisor** observes the champion, workflow health, research queue, integration queue and blockers. It cannot approve, merge, dispatch validation or deploy.
-2. **Research Policy** enforces branch, label, manifest and shadow-isolation rules. It cannot select a model or merge it.
-3. **Research Queue** inventories evidence and reports what is rejected, collecting evidence, shadow-only or approved. It cannot make the approval decision.
-4. **Integration Merge** may merge at most one approved integration PR at a time, only after explicit administrator approval and all required checks. It cannot perform research evaluation or deployment.
-5. **Post-Merge Validation** dispatches CI, monitoring and live-paper validation for the exact merged SHA. It cannot merge or deploy.
-6. **CI**, **Monitoring Validation** and **Live-Paper Validation** independently validate code, observability and paper behavior.
-7. **Paper Server Deploy** deploys only `paper-validated`.
-8. **Paper Server Health** observes the deployed system, processes, PnL/risk/OOS and observability evidence without modifying code.
-9. Dedicated research workflows collect evidence for a specific hypothesis and remain isolated from production decisions.
-
-The complete lifecycle remains:
+The operational system has exactly one PAPER runtime:
 
 ```text
-research -> evidence -> approval -> integration -> validation -> single live champion
+main -> exact validation -> paper-validated -> deployed V7
 ```
 
-The difference is that no individual scheduler owns the entire chain.
+`config/live_champion.json` must select:
 
-## Administrator authority
+```text
+version=7
+loop=scripts/paper_v7_loop.sh
+config=config/paper_v7.json
+run_root=runs/paper_v7_live
+```
 
-An integration can be merged automatically only when a non-draft `integration/*` PR carries all of:
+Retired predecessor runtimes, multi-version selectors, compatibility adapters and duplicate execution owners are forbidden.
 
-- `approved-for-integration`;
-- `single-model-reviewed`;
-- `administrator-approved`.
-
-`administrator-approved` is the explicit production-evolution decision. It is valid only for the exact reviewed integration PR and can be removed at any time before merge. No scheduler uses `--admin`, bypasses failed checks or lowers economic/risk thresholds to manufacture eligibility.
-
-## Branch policy
-
-### `main`
-
-`main` contains integrated production-quality paper code. It is not a research notebook and not a collection of alternative complete models. Focused fixes and infrastructure changes still enter through pull requests and must preserve the champion contract.
-
-### `research/*`
-
-Unapproved research belongs here: hypotheses, estimators, features, alpha sleeves and parameter studies. A research PR is an evidence source, not a production model. It normally remains draft or closes after a durable decision is recorded.
-
-### `experiment/*` and `diagnostic/*`
-
-Use these for temporary forward tests, measurement workflows and fault isolation. Preserve the conclusion, then close. Generated evidence is history; temporary scaffolding is not merged merely to preserve it.
-
-### `integration/*`
-
-This is the only branch class for approved research integration. It must start from current `main`, link the source evidence, port only reusable reviewed code, reconcile overlap and remove or retire superseded paths.
-
-### Focused implementation branches
-
-`feat/*`, `fix/*`, `improve/*` and `ops/*` remain appropriate for bounded implementation, risk, execution and infrastructure changes that are not research promotion. They cannot change an existing `config/live_champion.json`; that remains an integration action.
-
-## Keep unapproved research isolated
-
-Unapproved model logic must not alter:
-
-- production intents or admitted bundles;
-- booked PnL;
-- sizing or exposure;
-- drawdown budgets or kill switches;
-- OOS eligibility;
-- authenticated execution;
-- `config/live_champion.json`.
-
-### Shadow-only exception
-
-Reusable measurement code may enter `main` before economic approval only with `shadow-isolated` and deterministic proof that:
-
-- it writes separate files, state and telemetry;
-- it cannot emit production intents or authenticated orders;
-- hypothetical fills, rewards and markouts are not booked as realized PnL;
-- production thresholds, sizing, exposure, drawdown, kill switches and OOS gates are unchanged;
-- failure is visible but cannot corrupt or block the production decision path.
-
-Shadow is for measurement, not hidden promotion.
-
-## Research approval gate
-
-`research-approved` may be applied only when the applicable evidence supports the following.
-
-### Technical validity
-
-- deterministic/replayable inputs and decisions;
-- no look-ahead, resolution leakage, duplicate observations or hidden reset;
-- correct event-time alignment and persistent restart behavior;
-- unit, integration and regression coverage.
-
-### Statistical validity
-
-- chronological train/calibration/test separation with embargo where needed;
-- common information set and sample for incumbent-versus-candidate comparison;
-- uncertainty, multiple testing and regime instability considered;
-- enough observations, otherwise `MORE_EVIDENCE_REQUIRED`.
-
-### Economic validity
-
-- executable prices rather than midpoint claims;
-- spread, fee, slippage, depth, queue/fill probability, latency, adverse selection, uncertainty and capital time included;
-- normal and stressed costs reported;
-- no improvement obtained by weakening an incumbent safety gate without evidence.
-
-### Portfolio and operational validity
-
-- incremental value measured after correlation and event concentration;
-- drawdown and worst-case open loss remain within the operating budget;
-- state migration, rollback, telemetry and failure behavior documented;
-- model approval never authorizes real-money execution.
-
-Research decisions are recorded as `REJECTED`, `MORE_EVIDENCE_REQUIRED`, `APPROVED_FOR_INTEGRATION` or `SHADOW_ONLY`.
-
-## Mandatory integration procedure
-
-For every approved result:
-
-1. Create `integration/<research-slug>` from the latest `main`.
-2. Link the research PR, branch or commit.
-3. Port only reusable reviewed code and tests.
-4. Map the candidate into the existing semantic interface: structural, terminal, relative-value, external-information, execution or portfolio/risk input.
-5. Preserve one shared model registry/orchestrator, intent schema, allocator, risk state and broker.
-6. Remove duplicated or superseded implementation/config/state/telemetry, or document a short compatibility path with a deletion condition.
-7. Re-run integrated incumbent-versus-candidate evidence and ablations.
-8. Update `config/live_champion.json` only when the entry point/version deliberately changes.
-9. Open a non-draft integration PR with `approved-for-integration`, `single-model-reviewed` and `administrator-approved`.
-10. Require Release, Debug, deterministic tests, monitoring validation and live-paper smoke to succeed.
-11. Merge at most one administrator-approved integration PR at a time; no second integration starts while `main != paper-validated`.
-12. Hand the exact merged SHA to the separate post-merge validation scheduler.
-13. Require `main == paper-validated == deployed HEAD` before the promotion is considered complete.
-14. Close source research and delete short-lived branches when safe.
-
-## Fail-closed behavior
-
-A failed, missing, ambiguous or stale gate leaves the incumbent champion live. Integration, validation and deployment are separate state transitions:
+The states remain distinct:
 
 ```text
 merged != validated != deployed != healthy
 ```
 
-The supervisor reports these states but cannot repair them by bypassing the responsible scheduler.
+No scheduler may collapse those transitions by assumption.
 
-## Automation labels
+## Authority split
 
-- `research-approved`: evidence is approved and requires semantic integration;
-- `approved-for-integration`: the consolidated implementation passed the research/integration review;
-- `single-model-reviewed`: one orchestrator/config/risk/execution path has been verified;
-- `administrator-approved`: the project administrator authorizes this exact integration;
-- `shadow-isolated`: measurement-only code cannot affect production decisions, PnL or risk.
+Only the registered workflows may act, and authority is intentionally narrow:
 
-Research labels belong on research evidence. Integration and administrator labels belong only on `integration/*` PRs.
+- **Administrator Supervisor** — observes control-plane state and blockers.
+- **Research Policy** — enforces branch/provenance/operator-directive/shadow-isolation rules.
+- **Research Director** — allocates bounded research work.
+- **Promotion Controller** — decides whether an integration is objectively promotable from current evidence.
+- **Integration Merge** — sole merge authority; merges only a controller-authorized integration after immediate revalidation.
+- **Post-Merge Validation** — sole validation-dispatch authority; dispatches exact-SHA CI, monitoring and V7 live PAPER smoke.
+- **CI** — deterministic code/V7-only repository validation.
+- **Monitoring** — V7 observability/runtime-contract validation.
+- **V7 live PAPER smoke** — exact-SHA public-data runtime validation and the only workflow that may advance `paper-validated` after success.
+- **Paper Server Deploy** — sole deployment authority; deploys only `paper-validated`.
+- **Paper Server Health** — read-only verification of deployed SHA, process ownership, execution state and monitoring.
+- **Research workflows** — evidence collection only; no merge/deploy/champion/authenticated-execution authority.
+
+Manual approval is not required for PAPER promotion. Automatic promotion remains subject to the current operator directives, exact provenance, technical gates, executable-cost evidence, statistical stability, data health and risk constraints.
+
+## Branch policy
+
+### `main`
+
+Contains the single integrated V7 code line. It must not contain alternate complete runtimes or compatibility copies of retired versions.
+
+### `research/*`, `experiment/*`, `diagnostic/*`
+
+Contain unapproved hypotheses, measurements or fault isolation. They do not own production intents, booked PnL, sizing, risk or deployment.
+
+### `integration/*`
+
+The only class for consolidating an approved change into current V7. An integration branch starts from current `main`, carries exact source provenance, removes superseded implementation, and remains one V7 runtime after the change.
+
+Focused `fix/*`, `feat/*`, `improve/*` and `ops/*` branches may change bounded implementation/infrastructure but cannot create a second live runtime.
+
+## Research gate
+
+A promotable change must satisfy, as applicable:
+
+- causal/time-correct data and deterministic/replayable decisions;
+- chronological train/calibration/test separation;
+- no leakage or post-hoc frequency pooling;
+- dependence/multiple-testing controls where relevant;
+- executable prices, depth, fees, slippage, queue/fill, latency, adverse markout and capital-time economics;
+- explicit partial-fill/unwind economics for multi-leg strategies;
+- stable OOS evidence and incremental portfolio utility;
+- data-health and state-integrity checks;
+- 15% aggregate PAPER drawdown hard limit;
+- PAPER-only/authenticated-execution-disabled separation.
+
+Insufficient evidence means no promotion. Thresholds are not weakened merely to manufacture fills or PnL.
+
+## Integration procedure
+
+For an approved research result:
+
+1. Start from current `main`.
+2. Bind the integration to exact source evidence and source code.
+3. Port only the reviewed reusable change into current V7.
+4. Preserve one runtime owner, execution ledger, broker authority and risk state.
+5. Delete superseded code/config/tests/workflows immediately; do not add a compatibility path for retired runtimes.
+6. Re-run deterministic and integrated evidence.
+7. Let the Promotion Controller issue an ephemeral authorization only if current gates pass.
+8. Let Integration Merge merge exactly that authorized head after current-base/exact-head revalidation.
+9. Dispatch CI, Monitoring and V7 live PAPER smoke for the exact merged SHA.
+10. Advance `paper-validated` only after exact-SHA V7 smoke success.
+11. Deploy only that `paper-validated` revision.
+12. Require server health to prove the deployed V7 state.
+13. Delete short-lived branches/scaffolding when they are no longer needed.
+
+## Shadow research
+
+Shadow research is allowed only when it is isolated from execution state and booked PnL. It may write its own files/metrics but cannot:
+
+- emit production intents;
+- submit authenticated orders;
+- change sizing/exposure/drawdown/kill state;
+- alter `config/live_champion.json`;
+- block execution because a measurement-only artifact is missing.
 
 ## Reporting
 
-The Administrator Supervisor publishes an hourly report containing:
+Administrator Supervisor reports:
 
-- current `main`, `paper-validated` and validation relation;
-- champion version, loop, config and run root;
-- latest state of every registered scheduler;
-- open research, approved-research and integration queues;
-- conflicting integration candidates;
-- control-plane blockers and warnings.
+- current `main`, `paper-validated` and their relation;
+- V7 loop/config/run root;
+- latest state of registered schedulers;
+- research/integration queue;
+- exact validation/deployment blockers;
+- any attempted reintroduction of retired runtime surfaces.
 
-Silence is not evidence of health. A no-change run must explain why the incumbent remains live.
+No-change runs must state why no transition was taken. Silence is not health evidence.
