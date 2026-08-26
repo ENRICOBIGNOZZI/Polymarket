@@ -5,11 +5,13 @@
   "defect": {
     "path": "scripts/v6_relation_intents.py",
     "expression": "event_id = \"STRUCT:\" + str(abs(hash((family, direction))))",
+    "audited_family": "will bitcoin be <direction> <threshold> by <year>|august 2026",
+    "audited_direction": "UP",
     "finding": "Python hash randomization makes the synthetic structural event identity restart-variant.",
     "pythonhashseed_examples": {
-      "1": "STRUCT:5563531974556691143",
-      "2": "STRUCT:8603285751153122665",
-      "3": "STRUCT:7412083270077211201"
+      "1": "STRUCT:8709687349009793868",
+      "2": "STRUCT:1969714976051237175",
+      "3": "STRUCT:5678577088978489697"
     },
     "stable_comparator": "STRUCT:4e1cbfae127906df0ccec3fe"
   },
