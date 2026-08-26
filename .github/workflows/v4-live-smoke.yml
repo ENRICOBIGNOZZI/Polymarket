@@ -161,6 +161,7 @@ jobs:
           PY
 
       - name: Verify selected champion telemetry
+        if: env.CHAMPION_VERSION != '6' || github.event_name != 'pull_request' || steps.v6_smoke.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
