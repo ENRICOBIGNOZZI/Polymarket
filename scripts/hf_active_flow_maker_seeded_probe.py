@@ -24,6 +24,7 @@ _SEED_SLUGS: dict[str, str] = {}
 _SEED_ASSETS: dict[str, set[str]] = defaultdict(set)
 _TOKEN_TO_CANONICAL_CONDITION: dict[str, str] = {}
 _CANONICAL_CONDITION_BY_RAW: dict[str, str] = {}
+_SEED_RESOLUTION_MODE: dict[str, str] = {}
 _CONDITION_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 
 
@@ -44,6 +45,16 @@ def _condition_market_query(condition_ids: list[str]) -> str:
         ("limit", "100"),
     ]
     pairs.extend(("condition_ids", condition) for condition in condition_ids if condition)
+    return urllib.parse.urlencode(pairs)
+
+
+def _token_market_query(token_ids: list[str]) -> str:
+    pairs: list[tuple[str, str]] = [
+        ("active", "true"),
+        ("closed", "false"),
+        ("limit", "100"),
+    ]
+    pairs.extend(("clob_token_ids", token) for token in token_ids if token)
     return urllib.parse.urlencode(pairs)
 
 
@@ -94,28 +105,63 @@ def _rows(raw: Any) -> list[dict[str, Any]]:
     return [item for item in values if isinstance(item, dict)]
 
 
+def _register_seed_market(raw_condition: str, market: core.Market, seen: set[str],
+                          out: list[core.Market], mode: str) -> None:
+    if market.market_id not in seen:
+        seen.add(market.market_id)
+        out.append(market)
+    _CANONICAL_CONDITION_BY_RAW[raw_condition] = market.condition_id
+    _SEED_RESOLUTION_MODE[raw_condition] = mode
+    for token in (market.yes_token, market.no_token):
+        _TOKEN_TO_CANONICAL_CONDITION[token] = market.condition_id
+
+
 def _markets_for_conditions(condition_ids: list[str], min_liquidity: float,
                             batch_size: int = 20) -> tuple[list[core.Market], list[str]]:
     """Resolve recent Data-API trades to canonical Gamma markets.
 
-    Data API rows expose market slugs and token IDs in addition to conditionId. We
-    prefer slug+token identity because it remains auditable even if a returned raw
-    condition string is malformed or non-canonical. Canonical Gamma condition IDs
-    are then used for scoped queries and book discovery.
+    The Data API's conditionId is not assumed canonical. The CLOB outcome token in
+    ``asset`` is the primary identity because Gamma officially supports the
+    ``clob_token_ids`` market filter. Slug is a secondary identity and a canonical
+    0x+64 condition id is only the final fallback.
     """
-    global _TOKEN_TO_CANONICAL_CONDITION, _CANONICAL_CONDITION_BY_RAW
+    global _TOKEN_TO_CANONICAL_CONDITION, _CANONICAL_CONDITION_BY_RAW, _SEED_RESOLUTION_MODE
     out: list[core.Market] = []
     seen: set[str] = set()
     errors: list[str] = []
     unique = list(dict.fromkeys(x for x in condition_ids if x))
     _TOKEN_TO_CANONICAL_CONDITION = {}
     _CANONICAL_CONDITION_BY_RAW = {}
+    _SEED_RESOLUTION_MODE = {}
 
     unresolved: list[str] = []
     for raw_condition in unique:
-        slug = _SEED_SLUGS.get(raw_condition, "")
         matched = False
-        if slug:
+        seed_assets = sorted(_SEED_ASSETS.get(raw_condition, set()))
+        if seed_assets:
+            for lo in range(0, len(seed_assets), max(1, batch_size)):
+                chunk = seed_assets[lo:lo + max(1, batch_size)]
+                try:
+                    raw, _ = core.request_json(f"{core.GAMMA_URL}/markets?{_token_market_query(chunk)}")
+                except Exception as exc:
+                    errors.append(
+                        f"seed_gamma_token_batch={lo // max(1, batch_size)}:{type(exc).__name__}:{exc}")
+                    continue
+                for item in _rows(raw):
+                    market = core.parse_market(item, min_liquidity)
+                    if market is None:
+                        continue
+                    tokens = {market.yes_token, market.no_token}
+                    if not tokens.intersection(chunk):
+                        continue
+                    _register_seed_market(raw_condition, market, seen, out, "clob_token_ids")
+                    matched = True
+                    break
+                if matched:
+                    break
+
+        slug = _SEED_SLUGS.get(raw_condition, "")
+        if not matched and slug:
             try:
                 raw, _ = core.request_json(f"{core.GAMMA_URL}/markets?{_slug_market_query(slug)}")
             except Exception as exc:
@@ -129,12 +175,7 @@ def _markets_for_conditions(condition_ids: list[str], min_liquidity: float,
                     tokens = {market.yes_token, market.no_token}
                     if seed_assets and not tokens.intersection(seed_assets):
                         continue
-                    if market.market_id not in seen:
-                        seen.add(market.market_id)
-                        out.append(market)
-                    _CANONICAL_CONDITION_BY_RAW[raw_condition] = market.condition_id
-                    for token in tokens:
-                        _TOKEN_TO_CANONICAL_CONDITION[token] = market.condition_id
+                    _register_seed_market(raw_condition, market, seen, out, "slug_token")
                     matched = True
                     break
         if not matched:
@@ -152,12 +193,7 @@ def _markets_for_conditions(condition_ids: list[str], min_liquidity: float,
             market = core.parse_market(item, min_liquidity)
             if market is None or market.condition_id not in chunk:
                 continue
-            if market.market_id not in seen:
-                seen.add(market.market_id)
-                out.append(market)
-            _CANONICAL_CONDITION_BY_RAW[market.condition_id] = market.condition_id
-            for token in (market.yes_token, market.no_token):
-                _TOKEN_TO_CANONICAL_CONDITION[token] = market.condition_id
+            _register_seed_market(market.condition_id, market, seen, out, "condition_id")
 
     rank = {
         _CANONICAL_CONDITION_BY_RAW.get(raw_condition, raw_condition): i
@@ -211,18 +247,24 @@ def discover_markets_seeded(limit: int, min_liquidity: float) -> list[core.Marke
     for condition in seed_ids:
         key = str(max(0, len(condition) - 2) if condition.startswith("0x") else len(condition))
         raw_lengths[key] = raw_lengths.get(key, 0) + 1
+    all_seed_assets = {token for condition in seed_ids for token in _SEED_ASSETS.get(condition, set())}
     _SEED_DIAGNOSTICS = {
-        "seed_strategy": "recent_global_trade_slug_token_identity_plus_volume24h_prior",
+        "seed_strategy": "recent_global_trade_clob_token_identity_then_slug_or_condition_plus_volume24h_prior",
         "seed_lookback_seconds": lookback,
         "seed_max_conditions": max_conditions,
         "seed_global_recent_rows": raw_recent_rows,
         "seed_global_condition_ids": seed_ids,
         "seed_global_condition_count": len(seed_ids),
+        "seed_global_asset_count": len(all_seed_assets),
         "seed_global_slug_count": len({slug for slug in _SEED_SLUGS.values() if slug}),
         "seed_raw_condition_hex_length_counts": raw_lengths,
         "seed_noncanonical_raw_condition_count": sum(not _CONDITION_RE.fullmatch(x) for x in seed_ids),
         "seed_gamma_market_count": len(seed_markets),
         "seed_canonical_condition_count": len(_SEED_CONDITIONS),
+        "seed_resolved_by_token_count": sum(mode == "clob_token_ids" for mode in _SEED_RESOLUTION_MODE.values()),
+        "seed_resolved_by_slug_count": sum(mode == "slug_token" for mode in _SEED_RESOLUTION_MODE.values()),
+        "seed_resolved_by_condition_count": sum(mode == "condition_id" for mode in _SEED_RESOLUTION_MODE.values()),
+        "seed_resolution_mode": dict(_SEED_RESOLUTION_MODE),
         "seed_overlap_with_volume_prior": len(_SEED_CONDITIONS.intersection(_PRIOR_CONDITIONS)),
         "seed_added_market_count": len(_SEED_ADDED_CONDITIONS),
         "seed_received_ms": seed_received_ms,
@@ -247,7 +289,6 @@ def _merge_global_token_flows(flows: dict[str, list[core.Trade]], start_ts: int,
         for trades in flows.values()
         for trade in trades
     }
-    accepted = 0
     for item in rows:
         token = str(item.get("asset") or "")
         canonical = _TOKEN_TO_CANONICAL_CONDITION.get(token)
@@ -265,7 +306,6 @@ def _merge_global_token_flows(flows: dict[str, list[core.Trade]], start_ts: int,
             continue
         seen.add(key)
         flows.setdefault(canonical, []).append(core.Trade(key, token, side, price, size, ts))
-        accepted += 1
     for condition in flows:
         flows[condition].sort(key=lambda trade: (trade.ts, trade.trade_id))
     return max(0, received_ms), []
@@ -295,6 +335,8 @@ def seeded_activity_data_healthy(result: dict[str, Any]) -> bool:
         return False
     if int(universe.get("seed_global_condition_count") or 0) > 0 and int(universe.get("seed_gamma_market_count") or 0) == 0:
         return False
+    if int(universe.get("seed_global_recent_rows") or 0) > 0 and int(universe.get("seed_global_asset_count") or 0) > 0 and int(universe.get("seed_resolved_by_token_count") or 0) == 0:
+        return False
     return True
 
 
@@ -302,6 +344,9 @@ def _deterministic_checks() -> None:
     query = urllib.parse.parse_qs(_condition_market_query(["0xa", "0xb"]))
     assert query.get("condition_ids") == ["0xa", "0xb"]
     assert query.get("active") == ["true"]
+    token_query = urllib.parse.parse_qs(_token_market_query(["token-a", "token-b"]))
+    assert token_query.get("clob_token_ids") == ["token-a", "token-b"]
+    assert token_query.get("active") == ["true"]
     slug_query = urllib.parse.parse_qs(_slug_market_query("will-x-happen"))
     assert slug_query.get("slug") == ["will-x-happen"]
     global_query = urllib.parse.parse_qs(_global_seed_query(100, 200))
@@ -342,8 +387,11 @@ def main() -> int:
     if isinstance(universe, dict):
         report += (
             f"- recent-trade seed conditions: {universe.get('seed_global_condition_count', 0)}\n"
+            f"- recent-trade seed assets: {universe.get('seed_global_asset_count', 0)}\n"
             f"- noncanonical raw condition IDs: {universe.get('seed_noncanonical_raw_condition_count', 0)}\n"
-            f"- seed markets mapped by slug/token identity: {universe.get('seed_gamma_market_count', 0)}\n"
+            f"- seed markets mapped by CLOB token id: {universe.get('seed_resolved_by_token_count', 0)}\n"
+            f"- seed markets mapped by slug/token fallback: {universe.get('seed_resolved_by_slug_count', 0)}\n"
+            f"- seed markets mapped total: {universe.get('seed_gamma_market_count', 0)}\n"
             f"- seed-only markets added: {universe.get('seed_added_market_count', 0)}\n"
             f"- seed conditions with causal scoped/global-token flow: {universe.get('seed_active_condition_count', 0)}\n"
             f"- seed-only conditions with causal flow: {universe.get('seed_added_active_condition_count', 0)}\n"
