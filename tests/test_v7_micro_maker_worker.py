@@ -129,8 +129,23 @@ def test_kill_switch_closes_positions_before_resting_orders():
 
 
 def test_hard_arb_guard_rejects_stale_book():
-    assert not hard.book_is_fresh({"timestamp": 1}, now=100, max_age_seconds=10)
-    assert hard.book_is_fresh({"timestamp": 95}, now=100, max_age_seconds=10)
+    live = {"token": {"received_ms": 95_000}}
+    ok, reason, age, _ = hard.local_book_freshness(
+        live,
+        ["token"],
+        now_ms=100_000,
+        max_leg_age_ms=10_000,
+        max_cross_leg_skew_ms=1_000,
+    )
+    assert ok and reason == "ok" and age == 5_000
+    ok, reason, age, _ = hard.local_book_freshness(
+        live,
+        ["token"],
+        now_ms=120_000,
+        max_leg_age_ms=10_000,
+        max_cross_leg_skew_ms=1_000,
+    )
+    assert not ok and reason == "max_leg_age" and age == 25_000
 
 
 def test_taker_worker_uses_depth_and_round_trip_economics():
