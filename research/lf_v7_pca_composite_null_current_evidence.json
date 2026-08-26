@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "generated_for_date": "2026-08-26",
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "source": {
+    "pr": 466,
+    "head_sha": "918f83f23b4fc586747457dcd9d7ef2dd9ddcbbb",
+    "source_decision": "REJECTED_CURRENT_ACTIVE_SURVIVOR_SAMPLE",
+    "source_histories": 147,
+    "source_clusters": 14,
+    "source_target_hypotheses": 10,
+    "source_bootstrap_repetitions": 599,
+    "source_best_bootstrap_p": 0.0817,
+    "source_selected_after_bh": 0
+  },
+  "structural_finding": {
+    "current_bootstrap": "joint_all_series_increment_i1",
+    "issue": "The source bootstrap reconstructs every target and control level as I(1). The marginal residual-unit-root null for one target does not imply that the target-excluded nuisance controls are all I(1). For stationary, mixed-order or cointegrated controls this changes the nuisance factor process rather than conditioning on it.",
+    "candidate_bootstrap": "conditional_target_residual_increment_i1",
+    "candidate_contract": "Hold the target-excluded control panel fixed, block-resample increments of the fitted target residual, reconstruct a unit-root residual path, add it back to the fitted common component, and re-estimate the target regression/residual statistic in each replication.",
+    "multiplicity_note": "Dependence-robust multiplicity remains a separate requirement; ordinary BH dependence was already audited in PR 474."
+  },
+  "deterministic_stationary_control_fixture": {
+    "points": 96,
+    "outer_paths": 40,
+    "bootstrap_repetitions": 79,
+    "alpha": 0.1,
+    "cells": [
+      {
+        "target_residual": "unit_root_null",
+        "joint_all_i1_rejections": 2,
+        "conditional_target_residual_rejections": 1,
+        "joint_all_i1_median_p": 0.61875,
+        "conditional_target_residual_median_p": 0.4
+      },
+      {
+        "target_residual": "ar1_phi_0.90",
+        "joint_all_i1_rejections": 9,
+        "conditional_target_residual_rejections": 14,
+        "joint_all_i1_median_p": 0.35,
+        "conditional_target_residual_median_p": 0.16875
+      },
+      {
+        "target_residual": "ar1_phi_0.80",
+        "joint_all_i1_rejections": 16,
+        "conditional_target_residual_rejections": 30,
+        "joint_all_i1_median_p": 0.125,
+        "conditional_target_residual_median_p": 0.0625
+      }
+    ],
+    "interpretation": "The fixture is synthetic size/power evidence only. It does not estimate Polymarket false-discovery rate or PnL. It demonstrates that forcing stationary nuisance controls to I(1) can materially reduce power even while the target residual alternative is unchanged."
+  },
+  "current_main_live_context": {
+    "main_sha": "e47129bc9b9986bec901f6975e7c28da68739832",
+    "trade_recorder_status": "healthy",
+    "fresh_public_trades": 230,
+    "recorder_errors": 0,
+    "graph_rv_bundles": 1,
+    "graph_rv_quote_edge": 0.01,
+    "graph_rv_completed": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_pnl_usd": 0.0
+  },
+  "required_successor_test": [
+    "Do not reopen the rejected PR 466 unchanged.",
+    "If PCA is revisited, compare its frozen all-series-I1 p-values with conditional target-residual unit-root p-values on the identical pre-specified chronological panel.",
+    "Use a dependence-robust multiplicity procedure or prove a valid dependence condition before threshold aggression.",
+    "For a single-leg implementation include common-factor forecast variance/covariance in the horizon PnL distribution; residual variance alone is not total single-leg risk.",
+    "Require point-in-time/forward universe evidence and shared-ledger fill-conditioned PnL at 1x, 1.5x and 2x costs before integration."
+  ],
+  "safety": {
+    "paper_only": true,
+    "live_intents_enabled": false,
+    "authenticated_execution": false,
+    "real_money_execution": false,
+    "max_drawdown_unchanged": 0.15,
+    "authorized_paper_envelope_unchanged": true
+  }
+}

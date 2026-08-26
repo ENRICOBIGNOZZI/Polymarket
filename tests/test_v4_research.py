@@ -45,7 +45,6 @@ class V4ResearchTests(unittest.TestCase):
                 w.writerow(dict(market="t",half_life_h=1.5,maker_entry_net_edge=.006,executable_notional=20,
                                 legs="t:NO:1|h1:YES:0.4|h2:NO:0.2",
                                 coherence_scope="same_event:1.0000:0|semantic:0.5000:3"))
-                # A profitable raw PCA row without a coherence certificate must never become an intent.
                 w.writerow(dict(market="raw",half_life_h=1.5,maker_entry_net_edge=.02,executable_notional=100,
                                 legs="raw:NO:1|unrelated:YES:0.4",coherence_scope=""))
             completed = subprocess.run([sys.executable, str(BUILD), "--strategy", "B2", "--input", str(b2_scan), "--output", str(b2_out),
@@ -81,7 +80,6 @@ class V4ResearchTests(unittest.TestCase):
                 w = csv.DictWriter(f, fieldnames=FIELDS); w.writeheader()
                 for market, side in [("m1","YES"),("m2","NO")]:
                     w.writerow(dict(bundle_id="good",strategy="B1",event_id="e",created_ts=now-10,mode="MAKER",expected_edge=.004,max_notional=50,market_id=market,side=side,weight=1,limit_price=.4,execution_deadline_ts=now+100,hold_deadline_ts=now+500))
-                # Single-leg/malformed bundle must be rejected as incomplete.
                 w.writerow(dict(bundle_id="bad",strategy="B1",event_id="e",created_ts=now-10,mode="MAKER",expected_edge=.010,max_notional=50,market_id="m3",side="YES",weight=1,limit_price=.4,execution_deadline_ts=now+100,hold_deadline_ts=now+500))
             with b.open("w", newline="") as f:
                 csv.DictWriter(f, fieldnames=FIELDS).writeheader()
@@ -96,7 +94,6 @@ class V4ResearchTests(unittest.TestCase):
             w = csv.DictWriter(f, fieldnames=LEDGER); w.writeheader()
             for i in range(160):
                 capital = 100.0
-                # Deterministic but non-constant returns so SE/bootstrap are meaningful.
                 if positive:
                     net = 0.80 + (i % 5) * 0.08
                     gross, fees, slip = net + 0.20, 0.10, 0.10
@@ -130,6 +127,15 @@ class V4ResearchTests(unittest.TestCase):
                 else:
                     self.assertFalse(r["eligible_for_tiny_pilot"])
                     self.assertLess(r["oos"]["net_pnl"], 0)
+
+    def test_v7_pca_composite_null_audit_regression(self):
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "tests" / "test_lf_v7_pca_composite_null_audit.py")],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("OK", result.stderr)
 
 
 if __name__ == "__main__":
