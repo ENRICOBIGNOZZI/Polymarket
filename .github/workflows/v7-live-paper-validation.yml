@@ -41,20 +41,22 @@ jobs:
           test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
           echo "validation_sha=$VALIDATION_SHA"
 
-      - name: Resolve V7 PAPER manifest
+      - name: Resolve canonical V7 PAPER manifest
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY' >> "$GITHUB_ENV"
-          import json, os
+          import json
           from pathlib import Path
-          manifest_path = Path('config/v7_champion_candidate.json') if os.environ.get('GITHUB_EVENT_NAME') == 'pull_request' else Path('config/live_champion.json')
+          manifest_path = Path('config/live_champion.json')
           manifest=json.loads(manifest_path.read_text())
           version=int(manifest['version'])
           if version != 7:
               raise SystemExit(f'V7 validation refuses non-V7 champion: V{version}')
-          if manifest.get('paper_only') is False or manifest.get('authenticated_execution') is True:
-              raise SystemExit('V7 validation refuses authenticated execution')
+          if manifest.get('paper_only') is not True or manifest.get('authenticated_execution') is not False:
+              raise SystemExit('V7 validation requires PAPER-only and authenticated execution disabled')
+          if manifest.get('loop') != 'scripts/paper_v7_loop.sh' or manifest.get('config') != 'config/paper_v7.json':
+              raise SystemExit('V7 validation refuses a non-canonical runtime selector')
           print('CHAMPION_VERSION=7')
           print(f'CHAMPION_CONFIG={manifest["config"]}')
           print(f'CHAMPION_RUN_ROOT={manifest["run_root"]}')
@@ -75,7 +77,7 @@ jobs:
           cmake --build build --parallel 2
           ctest --test-dir build --output-on-failure
           bash -n scripts/paper_v7_loop.sh scripts/paper_v7_execution_loop.sh
-          python3 -m py_compile scripts/v7_*.py monitoring/exporter_v7.py monitoring/exporter_latest_v7.py
+          python3 -m py_compile scripts/v7_*.py monitoring/exporter_v7.py
           python3 scripts/v7_hard_arb_guard.py self-test
 
       - name: Fresh public-data V7 PAPER smoke
