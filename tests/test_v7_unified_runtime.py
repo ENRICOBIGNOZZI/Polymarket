@@ -24,7 +24,7 @@ def test_research_branch_keeps_incumbent_manifest_and_defines_v7_candidate():
     assert candidate["promotion_contract"] == "research_head_must_be_exact-head-approved_then_integrated"
 
 
-def test_v7_config_keeps_aggressive_research_surface_without_unapproved_concentration_increase():
+def test_v7_config_has_no_binding_fixed_dollar_trade_cap_and_100_percent_hard_ceiling():
     cfg = load("config/paper_v7.json")
     assert cfg["engine_version"] == 7
     assert cfg["paper_only"] is True
@@ -32,14 +32,19 @@ def test_v7_config_keeps_aggressive_research_surface_without_unapproved_concentr
     assert cfg["min_liquidity"] == 2.0
     assert abs(cfg["min_net_edge"] - 0.00005) < 1e-12
     assert cfg["fractional_kelly"] == 0.25
-    assert cfg["max_trade_usd"] == 125.0
-    # Concentration remains at the incumbent hard-safety envelope until a
-    # separate exact-head economic promotion authorizes wider PAPER caps.
-    assert cfg["max_market_fraction"] == 0.025
-    assert cfg["max_event_fraction"] == 0.08
-    assert cfg["max_gross_fraction"] == 0.45
-    assert cfg["multi_strategy"]["global_max_gross_fraction"] == 0.45
+    assert cfg["fixed_dollar_trade_cap_enabled"] is False
+    # Legacy numeric fields remain only for parsers that still require them and
+    # must be far above any percentage-constrained PAPER capital amount.
+    assert float(cfg["max_trade_usd"]) > 1e50
+    assert cfg["max_trade_fraction"] == 1.0
+    assert cfg["max_market_fraction"] == 1.0
+    assert cfg["max_event_fraction"] == 1.0
+    assert cfg["max_gross_fraction"] == 1.0
+    assert cfg["multi_strategy"]["global_max_gross_fraction"] == 1.0
     assert cfg["max_drawdown"] == 0.15
+    assert cfg["v7"]["hard_arb_fixed_dollar_trade_cap_enabled"] is False
+    assert float(cfg["v7"]["hard_arb_max_trade_usd"]) > 1e50
+    assert cfg["v7"]["hard_arb_max_trade_fraction"] == 1.0
     assert cfg["v7"]["authoritative_fee_required"] is True
     assert cfg["v7"]["shared_execution_ledger_required"] is True
     assert cfg["v7"]["joint_fill_state_required_for_multileg"] is True
@@ -70,8 +75,6 @@ def test_v7_entrypoint_has_one_execution_owner_and_separate_shadow_scheduler():
     assert "runtime_handoff.request" in selector
     assert "request_runtime_handoff()" in updater
     assert "clear_runtime_handoff()" in updater
-    # V7 is the champion plane below the incumbent singleton, never a second
-    # singleton owner of its own.
     assert "runtime_singleton_launcher.py" not in text
     assert "runtime_owner.lock" not in text
     assert "paper_v7_execution_loop.sh" in text
@@ -81,14 +84,15 @@ def test_v7_entrypoint_has_one_execution_owner_and_separate_shadow_scheduler():
     assert text.count("start_execution") >= 2
 
 
-def test_v7_execution_loop_uses_corrected_workers_and_joint_state_gate():
+def test_v7_execution_loop_uses_corrected_workers_and_prospective_joint_state_gate():
     text = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
     assert "v7_micro_maker_worker.py" in text
     assert "v7_micro_taker_worker.py" in text
     assert "v7_multileg_broker_runner.py" in text
     assert "v7_capacity_lock.py" in text
-    assert "v6_bundle_quote_optimizer.py" in text
-    assert "v6_bundle_state_guard.py" in text
+    assert "v6_bundle_quote_optimizer.py" in text  # compatibility adapter -> V7 optimizer
+    assert "v7_graph_forward_guard.py" in text
+    assert "v6_bundle_state_guard.py" not in text
     assert "polymarket_multileg_paper" not in text
     assert "runtime_primary_seconds" in text
     assert "sleep 1" in text
