@@ -225,6 +225,26 @@ class MacOSOpsContractTest(unittest.TestCase):
         )
         self.assertNotIn("Darwin) sudo -n /usr/local/sbin/polymarket-service-control status ;;", deploy)
 
+    def test_failed_candidate_health_is_captured_before_rollback(self):
+        updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
+        diagnostics = (ROOT / "ops" / "capture_runtime_health_macos.sh").read_text(encoding="utf-8")
+        failure = 'if ! wait_for_runtime_health; then\n  capture_runtime_health_diagnostics "$NEW_SHA"\n  rollback "post-deploy paper runtime health checks failed"'
+        self.assertIn(failure, updater)
+        self.assertIn('ops/capture_runtime_health_macos.sh', updater)
+        self.assertIn('candidate_health_diagnostics_begin', diagnostics)
+        self.assertIn('candidate_expected_sha=', diagnostics)
+        self.assertIn('candidate_actual_sha=', diagnostics)
+        self.assertIn('exporter_healthz', diagnostics)
+        self.assertIn('prometheus_ready', diagnostics)
+        self.assertIn('grafana_health', diagnostics)
+        self.assertIn('runtime_supervisor.csv', diagnostics)
+        self.assertIn('market_proxy_status.json', diagnostics)
+        self.assertIn('market_proxy.log', diagnostics)
+        self.assertIn('multileg.log', diagnostics)
+        self.assertIn('macos_service_control.sh" status', diagnostics)
+        self.assertNotIn('printenv', diagnostics)
+        self.assertNotIn('set -x', diagnostics)
+
     def test_bootstrap_services_follow_the_champion_manifest(self):
         linux = (ROOT / "ops" / "bootstrap_server.sh").read_text(encoding="utf-8")
         mac = (ROOT / "ops" / "bootstrap_macos.sh").read_text(encoding="utf-8")
