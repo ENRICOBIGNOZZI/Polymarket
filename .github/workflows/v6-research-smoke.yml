@@ -14,6 +14,7 @@ on:
       - "tests/test_v6_model_contracts.py"
       - "tests/test_v6_runtime_contract.py"
       - "tests/test_v6_execution_costs.py"
+      - "tests/test_v6_hard_arb_guard.py"
       - ".github/workflows/v6-research-smoke.yml"
 
 permissions:
@@ -75,9 +76,10 @@ jobs:
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
-          python3 -m py_compile scripts/v6_queue_filter.py
+          python3 -m py_compile scripts/v6_queue_filter.py scripts/v6_hard_arb_guard.py
           python3 scripts/v6_queue_filter.py self-test
-          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py tests/test_v6_execution_costs.py -v
+          python3 scripts/v6_hard_arb_guard.py self-test
+          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py tests/test_v6_execution_costs.py tests/test_v6_hard_arb_guard.py -v
       - name: Live public-data relation probes
         shell: bash
         run: |
@@ -96,7 +98,7 @@ jobs:
           from pathlib import Path
           cfg=json.loads(Path('config/paper_v6.json').read_text()); cfg['starting_capital']=1500.0; cfg['run_dir']='v6_evidence/hard_arb'; Path('v6_evidence/hard_arb_config.json').write_text(json.dumps(cfg,indent=2,sort_keys=True)+'\n')
           PY
-          python3 scripts/v6_queue_filter.py hard --config v6_evidence/hard_arb_config.json --run-dir v6_evidence/hard_arb --markets 300 --min-liquidity 10 --max-events 50 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 --leg-latency-ms 100 > v6_evidence/hard_arb.log 2>&1 || true
+          python3 scripts/v6_hard_arb_guard.py --config v6_evidence/hard_arb_config.json --run-dir v6_evidence/hard_arb --markets 1000 --min-liquidity 2 --max-events 120 --min-edge 0.00005 --max-trade-usd 125 --slippage-bps 5 --leg-latency-ms 100 --max-leg-age-ms 2000 --max-cross-leg-skew-ms 1000 > v6_evidence/hard_arb.log 2>&1 || true
       - name: Live public-data FDR local-factor probe
         shell: bash
         run: |
