@@ -1,10 +1,17 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "paper_only": true,
   "research_only": true,
   "live_intents_enabled": false,
   "target": "cross_sectional_tail_relative_logit_spread",
-  "horizons_minutes": [120, 360],
+  "horizons_minutes": [30, 60, 120, 360],
+  "frequency_registration": {
+    "legacy_discovery_selected_horizons_minutes": [120, 360],
+    "new_prospective_challenger_horizons_minutes": [30, 60],
+    "registration_date": "2026-08-26",
+    "pool_evidence_across_horizons": false,
+    "select_new_horizon_on_pre_registration_history": false
+  },
   "discovery": {
     "source_branch": "research/v7-cross-sectional-ranking-20260826",
     "source_head": "bb631666712cb506f86768caf90bf1c9009576a7",
@@ -65,7 +72,8 @@
     "require_positive_first_half_tail_spread": true,
     "require_positive_second_half_tail_spread": true,
     "require_execution_ledger_validation_before_integration": true,
-    "require_point_in_time_universe_before_integration": true
+    "require_point_in_time_universe_before_integration": true,
+    "evaluate_each_horizon_separately": true
   },
   "execution_shadow": {
     "mode": "RELATIVE_PAIR_TAKER_SHADOW",
