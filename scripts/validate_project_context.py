@@ -25,9 +25,10 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     notes: list[str] = []
     context_path = root / "config/project_context.json"
     registry_path = root / "config/scheduler_registry.json"
+    champion_path = root / "config/live_champion.json"
     ssh_path = root / "ops/ssh_config_polymarket"
     snapshot_script = root / "scripts/project_context_snapshot.py"
-    for path in (context_path, registry_path, ssh_path, snapshot_script):
+    for path in (context_path, registry_path, champion_path, ssh_path, snapshot_script):
         if not path.is_file():
             errors.append(f"missing context surface: {path.relative_to(root)}")
     if errors:
@@ -35,6 +36,7 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
 
     context = load_json(context_path)
     registry = load_json(registry_path)
+    champion = load_json(champion_path)
     directives_rel = str(context.get("operator_directives") or "")
     directives_path = root / directives_rel if directives_rel else None
     if directives_path is None or not directives_path.is_file():
@@ -50,6 +52,22 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
         errors.append("canonical branch must be main")
     if context.get("deployment_ref") != "paper-validated":
         errors.append("deployment ref must be paper-validated")
+    if context.get("live_champion_manifest") != "config/live_champion.json":
+        errors.append("live champion manifest must be config/live_champion.json")
+    if context.get("model_architecture_manifest") != "config/paper_v7.json":
+        errors.append("model architecture manifest must be config/paper_v7.json")
+    architecture_path = root / str(context.get("model_architecture_manifest") or "")
+    if not architecture_path.is_file():
+        errors.append("V7 architecture manifest is missing")
+
+    if int(champion.get("version") or 0) != 7:
+        errors.append("live champion must be V7")
+    if champion.get("loop") != "scripts/paper_v7_loop.sh":
+        errors.append("live champion loop must be scripts/paper_v7_loop.sh")
+    if champion.get("config") != "config/paper_v7.json":
+        errors.append("live champion config must be config/paper_v7.json")
+    if champion.get("run_root") != "runs/paper_v7_live":
+        errors.append("live champion run_root must be runs/paper_v7_live")
 
     policy = context.get("context_policy") or {}
     if policy.get("scope") != "entire_repository":
@@ -95,9 +113,7 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     if not isinstance(schedulers, list):
         errors.append("scheduler registry does not contain a scheduler list")
         return errors, notes
-    scheduler_ids = {
-        str(raw.get("id")) for raw in schedulers if isinstance(raw, dict) and raw.get("id")
-    }
+    scheduler_ids = {str(raw.get("id")) for raw in schedulers if isinstance(raw, dict) and raw.get("id")}
     assignments = directives.get("scheduler_assignments")
     if not isinstance(assignments, dict):
         errors.append("operator directives must contain scheduler_assignments")
@@ -113,8 +129,8 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     if not isinstance(priorities, list) or len(priorities) < 8:
         errors.append("operator directives must provide the complete V7 priority sequence")
     forbidden = directives.get("forbidden_regressions")
-    if not isinstance(forbidden, list) or not any("$125" in str(item) for item in forbidden):
-        errors.append("operator directives must explicitly forbid the obsolete V7 $125 policy rollback")
+    if not isinstance(forbidden, list) or not any("retired predecessor" in str(item).lower() for item in forbidden):
+        errors.append("operator directives must forbid reintroduction of retired predecessor runtimes")
 
     for rel in [str(item) for item in context.get("required_surfaces", [])]:
         if not (root / rel).exists():
@@ -122,13 +138,8 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
 
     ssh_text = ssh_path.read_text(encoding="utf-8")
     for required in (
-        "Host polymarket",
-        "HostName 100.104.183.109",
-        "Port 22",
-        "User enrico",
-        "ServerAliveInterval 30",
-        "ServerAliveCountMax 3",
-        "RequestTTY yes",
+        "Host polymarket", "HostName 100.104.183.109", "Port 22", "User enrico",
+        "ServerAliveInterval 30", "ServerAliveCountMax 3", "RequestTTY yes",
         "RemoteCommand cd ~/polymarket && exec ${SHELL:-/bin/zsh} -l",
     ):
         if required not in ssh_text:
@@ -139,8 +150,25 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     grafana = context.get("grafana") or {}
     if grafana.get("canonical_operator_url") != "http://mamma-portfolio.tail1bae85.ts.net":
         errors.append("canonical Grafana URL changed unexpectedly")
-    if grafana.get("dashboard_uid") != "polymarket-multi-strategy-v5":
-        errors.append("canonical Grafana dashboard must be polymarket-multi-strategy-v5")
+    if grafana.get("dashboard_uid") != "polymarket-multi-strategy-v7":
+        errors.append("canonical Grafana dashboard must be polymarket-multi-strategy-v7")
+    dashboard_path = root / str(grafana.get("dashboard_file") or "")
+    if not dashboard_path.is_file():
+        errors.append("canonical Grafana dashboard file is missing")
+    else:
+        dashboard = load_json(dashboard_path)
+        if dashboard.get("uid") != "polymarket-multi-strategy-v7":
+            errors.append("Grafana dashboard file UID is not V7")
+
+    retired_names = (
+        "config/paper_v3.json", "config/paper_v4.json", "config/paper_v5.json", "config/paper_v6.json",
+        "monitoring/exporter_v4.py", "monitoring/exporter_v5.py", "monitoring/exporter_v6.py", "monitoring/exporter_latest.py",
+        ".github/workflows/v4-live-smoke.yml", ".github/workflows/v6-research-smoke.yml", ".github/workflows/v6-market-cache-relay.yml",
+        ".github/workflows/v7-unified-paper-evidence.yml", "config/v7_evidence_runtime.json", "config/v7_champion_candidate.json",
+    )
+    for rel in retired_names:
+        if (root / rel).exists():
+            errors.append(f"retired surface still exists: {rel}")
 
     for raw in schedulers:
         if not isinstance(raw, dict):
@@ -160,33 +188,28 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
             errors.append(f"{scheduler_id} has no complete repository worktree available")
         else:
             assignment = str(assignments.get(scheduler_id) or "")
-            notes.append(
-                f"{scheduler_id}: {'runner checkout' if local_checkout else 'canonical remote checkout'}; directive={assignment}"
-            )
+            notes.append(f"{scheduler_id}: {'runner checkout' if local_checkout else 'canonical remote checkout'}; directive={assignment}")
     return errors, notes
 
 
 def render(errors: list[str], notes: list[str]) -> str:
     lines = [
-        "# Scheduler project-context validation",
-        "",
+        "# Scheduler project-context validation", "",
         f"- schedulers with verified full-worktree access and assignments: {len(notes)}",
         f"- errors: {len(errors)}",
-        "- policy: every scheduler sees a complete project worktree and the current explicit operator directive before narrowing to its bounded responsibility",
-        "",
-        "## Visibility and assignment",
+        "- policy: every scheduler sees a complete V7 project worktree and current explicit operator directive before narrowing to its bounded responsibility",
+        "", "## Visibility and assignment",
     ]
     lines.extend(f"- {note}" for note in notes)
     if errors:
-        lines.extend(["", "## Errors"])
-        lines.extend(f"- {error}" for error in errors)
+        lines.extend(["", "## Errors"]); lines.extend(f"- {error}" for error in errors)
     else:
-        lines.extend(["", "All registered schedulers have complete repository visibility, a current operator assignment and consistent runtime/Grafana context."])
+        lines.extend(["", "All registered schedulers have complete V7 repository visibility, a current operator assignment and consistent runtime/Grafana context."])
     return "\n".join(lines) + "\n"
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate project-wide context and explicit operator assignments for Polymarket schedulers")
+    parser = argparse.ArgumentParser(description="Validate V7 project-wide context and explicit operator assignments")
     parser.add_argument("--root", default=".")
     parser.add_argument("--output", default="project-context-validation.md")
     args = parser.parse_args()
