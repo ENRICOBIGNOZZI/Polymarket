@@ -75,9 +75,18 @@ class V6ExecutionMeasurementTest(unittest.TestCase):
     def test_registered_smoke_uses_realistic_execution_probe(self) -> None:
         workflow = (ROOT / ".github/workflows/v6-research-smoke.yml").read_text()
         self.assertIn("scripts/v6_queue_filter.py self-test", workflow)
-        self.assertIn("scripts/v6_queue_filter.py hard", workflow)
+        strict_guard = "scripts/v6_hard_arb_guard.py" in workflow
+        legacy_guard = "scripts/v6_queue_filter.py hard" in workflow
+        self.assertTrue(strict_guard or legacy_guard)
         self.assertIn("scripts/v6_queue_filter.py micro", workflow)
         self.assertIn("--leg-latency-ms 100", workflow)
+        if strict_guard:
+            self.assertIn("--markets 1000", workflow)
+            self.assertIn("--min-liquidity 2", workflow)
+            self.assertIn("--min-edge 0.00005", workflow)
+            self.assertIn("--max-trade-usd 125", workflow)
+            self.assertIn("--max-leg-age-ms 2000", workflow)
+            self.assertIn("--max-cross-leg-skew-ms 1000", workflow)
 
 
 if __name__ == "__main__":
