@@ -44,40 +44,31 @@ jobs:
           set -euo pipefail
           python3 -m unittest \
             tests/test_compact_strategy_logs.py \
-            tests/test_monitoring_exporter.py \
             tests/test_monitoring_v7_exporter.py \
             tests/test_monitoring_hard_safety_contract.py \
-            tests/test_grafana_fast_paper_contract.py \
             tests/test_grafana_multi_strategy_contract.py \
             tests/test_server_health_readonly.py -v
           python3 -m py_compile \
             scripts/compact_strategy_logs.py scripts/v7_runtime_status.py \
             monitoring/exporter.py monitoring/exporter_v7.py monitoring/exporter_latest_v7.py
-          python3 -m json.tool monitoring/grafana/dashboards/polymarket-latest.json >/dev/null
-          python3 -m json.tool monitoring/grafana/dashboards/polymarket-fast-paper.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
           python3 -m json.tool config/paper_v7.json >/dev/null
           bash -n scripts/monitoring_up.sh scripts/monitoring_down.sh scripts/paper_v7_loop.sh scripts/paper_v7_execution_loop.sh
           docker compose -f docker-compose.monitoring.yml config >/dev/null
 
-      - name: Reject retired version surfaces
+      - name: Reject retired surfaces
         shell: bash
         run: |
           set -euo pipefail
-          test ! -e monitoring/exporter_v4.py
-          test ! -e monitoring/exporter_v5.py
-          test ! -e monitoring/exporter_v6.py
-          test ! -e monitoring/exporter_latest.py
-          test ! -e .github/workflows/v4-live-smoke.yml
-          test ! -e .github/workflows/v6-research-smoke.yml
-          test ! -e .github/workflows/v6-market-cache-relay.yml
-          test ! -e config/paper_v3.json
-          test ! -e config/paper_v4.json
-          test ! -e config/paper_v5.json
-          test ! -e config/paper_v6.json
-          test ! -e scripts/paper_v4_loop.sh
-          test ! -e scripts/paper_v5_loop.sh
-          test ! -e scripts/paper_v6_loop.sh
+          for path in \
+            monitoring/exporter_v4.py monitoring/exporter_v5.py monitoring/exporter_v6.py monitoring/exporter_latest.py \
+            monitoring/grafana/dashboards/polymarket-fast-paper.json monitoring/grafana/dashboards/polymarket-latest.json \
+            .github/workflows/v4-live-smoke.yml .github/workflows/v6-research-smoke.yml .github/workflows/v6-market-cache-relay.yml \
+            .github/workflows/v7-unified-paper-evidence.yml config/v7_evidence_runtime.json config/v7_champion_candidate.json \
+            config/paper_v3.json config/paper_v4.json config/paper_v5.json config/paper_v6.json \
+            scripts/paper_v4_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh; do
+            test ! -e "$path"
+          done
           if find scripts monitoring tests .github/workflows config -type f \( -name '*v3*' -o -name '*v4*' -o -name '*v5*' -o -name '*v6*' \) -print | grep -q .; then
             echo 'retired version-named files remain:' >&2
             find scripts monitoring tests .github/workflows config -type f \( -name '*v3*' -o -name '*v4*' -o -name '*v5*' -o -name '*v6*' \) -print >&2
