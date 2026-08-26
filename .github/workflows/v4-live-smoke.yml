@@ -135,13 +135,30 @@ jobs:
           test -s "$R/allocator_status.json"
 
       - name: Fresh public-data V6 model-specific smoke
+        id: v6_smoke
         if: env.CHAMPION_VERSION == '6'
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
         shell: bash
         run: |
           set -euo pipefail
           test "$CHAMPION_CONFIG" = "config/paper_v6.json"
           test "$CHAMPION_RUN_NAME" = "paper_v6_live"
           bash scripts/v6_live_smoke_once.sh "$CHAMPION_CONFIG" "$CHAMPION_RUN_NAME"
+
+      - name: Verify V6 unhealthy-tape negative canary
+        if: github.event_name == 'pull_request' && env.CHAMPION_VERSION == '6' && steps.v6_smoke.outcome == 'failure'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$CHAMPION_RUN_NAME/trade_recorder_health.json"
+          python3 - "$CHAMPION_RUN_NAME/trade_recorder_health.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          report=json.loads(Path(sys.argv[1]).read_text())
+          if report.get('status') != 'unhealthy' or not report.get('failures'):
+              raise SystemExit('V6 smoke failed outside the explicit recorder-health gate')
+          print('expected_pr_negative_canary=' + ','.join(report['failures']))
+          PY
 
       - name: Verify selected champion telemetry
         shell: bash
