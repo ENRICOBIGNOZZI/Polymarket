@@ -34,7 +34,45 @@
       "pair_fills": 0,
       "pnl_ex_rewards_usd": 0.0
     },
-    "interpretation": "On the same 480-second market window, one-tick improvement created two additional one-sided fills versus zero for join, but both incremental fills were economically adverse: zero paired completion, negative ex-reward PnL, negative 60s markout, and negative observed 300s markout. This is direct matched-window evidence against indiscriminate one-tick improvement."
+    "incremental_improve1_fill_cases": [
+      {
+        "market_id": "701762",
+        "question": "Will BNB reach $1100 by December 31, 2026?",
+        "source_locked_complete_set_edge_per_share": 0.08,
+        "join_quote_sum": 0.92,
+        "improve1_quote_sum": 0.94,
+        "improve1_residual_locked_edge_per_matched_share": 0.06,
+        "filled_outcome": "NO",
+        "filled_shares": 18.54,
+        "improve1_limit_price": 0.83,
+        "improve1_initial_queue_ahead": 0.0,
+        "compatible_sell_volume": 18.54,
+        "markout_60_bid_per_share": -0.01,
+        "markout_300_bid_per_share": null,
+        "exit_fees_usd": 0.1922354927992801,
+        "unmatched_liquidation_pnl_usd": -0.3928382927992846,
+        "interpretation": "Residual paired edge remained large, but only one leg filled; adverse markout plus unwind fees made the fill negative. Positive residual complete-set edge is therefore not sufficient for inside-spread improvement."
+      },
+      {
+        "market_id": "679018",
+        "question": "Will Marine Le Pen win the 2027 French presidential election?",
+        "source_locked_complete_set_edge_per_share": 0.002,
+        "join_quote_sum": 0.998,
+        "improve1_quote_sum": 1.0,
+        "improve1_residual_locked_edge_per_matched_share": 0.0,
+        "filled_outcome": "YES",
+        "filled_shares": 50.0,
+        "improve1_limit_price": 0.334,
+        "improve1_initial_queue_ahead": 0.0,
+        "compatible_sell_volume": 57.0,
+        "markout_60_bid_per_share": -0.001,
+        "markout_300_bid_per_share": -0.001,
+        "exit_fees_usd": 0.44399933422199994,
+        "unmatched_liquidation_pnl_usd": -0.5106493342219984,
+        "interpretation": "One tick of improvement on each leg consumed the entire 0.002/share complete-set edge before any fill occurred. A one-sided YES fill then paid unwind fee and negative markout. This exact case motivates a fail-closed residual-edge budget before any fill-probability comparison."
+      }
+    ],
+    "interpretation": "On the same 480-second market window, one-tick improvement created two additional one-sided fills versus zero for join, but both incremental fills were economically adverse: zero paired completion, negative ex-reward PnL, negative 60s markout, and negative observed 300s markout. One of the two fills also occurred only after the improvement had consumed the entire structural complete-set edge. This is direct matched-window evidence against indiscriminate one-tick improvement."
   },
   "policies": {
     "fade1": {
@@ -105,7 +143,13 @@
     "fade1": "MORE_EVIDENCE_REQUIRED",
     "improve1": "REJECT_CURRENT_SAMPLE",
     "join": "MORE_EVIDENCE_REQUIRED",
-    "rationale": "improve1 now has 8 observed fills across 57 sessions, all one-sided, zero pair fills, -$5.30694 ex-reward PnL, negative 60s/300s fill-weighted markout, and a strictly negative moving-block bootstrap upper confidence bound. The latest same-window comparison is especially adverse: improve1 created two fills while join created none, but the two incremental fills lost $0.90349 ex rewards and had negative observed markout."
+    "rationale": "improve1 now has 8 observed fills across 57 sessions, all one-sided, zero pair fills, -$5.30694 ex-reward PnL, negative 60s/300s fill-weighted markout, and a strictly negative moving-block bootstrap upper confidence bound. The latest same-window comparison is especially adverse: improve1 created two fills while join created none, but the two incremental fills lost $0.90349 ex rewards; one exact fill had the entire complete-set edge consumed by the quote improvement before the one-sided unwind loss occurred."
+  },
+  "structural_improvement_rule": {
+    "minimum_residual_edge_per_share": 0.00005,
+    "necessary_condition": "1 - improved_quote_sum >= minimum_residual_edge_per_share",
+    "sufficiency": false,
+    "additional_required_economics": "candidate-specific incremental P(fill) * E[net PnL | fill, state] after tick, verified fees, latency, toxicity/adverse markout, cancel and unwind risk must exceed the at-touch counterfactual"
   },
   "schema": "polymarket_hf_forward_maker_negative_fill_evidence_v1",
   "source_git_sha": "e47129bc9b9986bec901f6975e7c28da68739832",
