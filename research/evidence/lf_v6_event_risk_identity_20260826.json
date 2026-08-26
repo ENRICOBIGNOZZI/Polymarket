@@ -1,0 +1,57 @@
+{
+  "schema": "lf_v6_event_risk_identity_audit_v1",
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "base_main_sha": "f9a8bffeafe68c00a327dbb2cbfbb83f4a45d8e2",
+  "live_smoke_run_id": 32912648570,
+  "live_smoke_artifact_digest": "sha256:8a36b0f337d61da1bdfa978fc6908aad05a4dc24119dc8348c829cbd73a2ddc4",
+  "finding": "The multi-leg broker validates one shared intent event_id per bundle, but sizes the event cap and persists LegState.event_id from each fetched Market.event_id. Gamma /markets/{id} can omit event metadata, causing the C++ parser to fall back to condition_id. This fragments one economic event across condition-level risk buckets.",
+  "current_live_example": {
+    "bundle_id": "GRAPH_HARD-1787702068-0",
+    "strategy": "GRAPH_RV",
+    "intent_event_id": "842328",
+    "quoted_expected_edge": 0.020000000000000018,
+    "max_notional_usd": 60.0,
+    "markets": ["3558749", "3558750", "3558751"],
+    "persisted_leg_event_ids": [
+      "0x244594c21b55f9f07af5a288ff9f41ff77324aa24b6fcc6f8341337c23c62806",
+      "0xd946b50e437888851b9032e01ab2f52efb594b858650f07f06a1f4d941143c79",
+      "0x21602008dadb77fdfba0e192e30aea18ca8f485921eb5a04976130b6c08e7a48"
+    ],
+    "target_shares_per_leg": 61.2245,
+    "limit_prices": [0.74, 0.15, 0.09],
+    "committed_usd_by_persisted_bucket": [45.30613, 9.183675, 5.510205],
+    "canonical_event_commitment_usd": 60.00001,
+    "largest_fragment_usd": 45.30613,
+    "fragmentation_ratio": 1.3243243243243243,
+    "actual_event_cap_breach_observed": false,
+    "completion_observed": false,
+    "realized_pnl_usd": 0.0
+  },
+  "current_config": {
+    "max_event_fraction": 0.08,
+    "max_market_fraction": 0.025,
+    "max_gross_fraction": 0.45,
+    "max_drawdown": 0.15
+  },
+  "authorized_research_envelope": {
+    "max_event_fraction": 0.15,
+    "max_market_fraction": 0.05,
+    "max_gross_fraction": 0.70,
+    "max_drawdown": 0.15
+  },
+  "counterexample": {
+    "event_cap_usd": 100.0,
+    "condition_bucket_commitments_usd": [60.0, 60.0, 60.0],
+    "all_fragment_checks_pass": true,
+    "canonical_event_commitment_usd": 180.0,
+    "canonical_event_cap_breached": true
+  },
+  "required_successor_contract": [
+    "Persist a canonical risk_event_id independently from condition_id and independently from any research-cluster key.",
+    "For Graph/RV, require every leg to bind to the single validated event_id already carried by the bundle intent; fail closed on a contradictory fetched event id.",
+    "For Local Factor/PCA pairs spanning multiple events, derive and persist each leg's canonical Polymarket event identity from point-in-time discovery/event metadata and fail closed when unavailable rather than falling back to condition_id for event concentration.",
+    "Compute max_event_fraction against canonical event identities for both resting reservation and filled exposure.",
+    "Add a deterministic multi-bundle regression proving multiple conditions from one event cannot collectively exceed the event cap while each condition bucket stays below it.",
+    "Do not change the authorized paper envelope or any authenticated/real-money boundary as part of this audit."
+  ]
+}
