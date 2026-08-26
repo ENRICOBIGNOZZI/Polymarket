@@ -155,20 +155,6 @@ is_same_repository_v6_proxy_listener(){
   cwd="$(process_cwd "$pid")"
   [[ "$cwd" == "$ROOT" ]]
 }
-is_v6_broker_for_run(){
-  local pid="$1" command_line executable
-  [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" != "$$" ]] || return 1
-  command_line="$(process_command "$pid")"
-  executable="$(process_executable "$pid")"
-  [[ "$executable" == *"polymarket_multileg_paper"* ]] || return 1
-  [[ "$command_line" == *"--run-dir"* && "$command_line" == *"$RUN_ROOT"* ]]
-}
-is_same_repository_v6_broker(){
-  local pid="$1" cwd
-  is_v6_broker_for_run "$pid" || return 1
-  cwd="$(process_cwd "$pid")"
-  [[ "$cwd" == "$ROOT" ]]
-}
 reap_stale_v6_proxy_listener(){
   # A loop that died before its child process group could be collected leaves a
   # live old proxy on the fixed localhost port.  Merely curling /healthz would
@@ -199,35 +185,6 @@ reap_stale_v6_proxy_listener(){
   echo "fatal: stale V6 proxy listener did not exit before startup" >&2
   return 1
 }
-reap_stale_v6_brokers(){
-  # The multi-leg launcher owns a lock, but an older orphan may still be
-  # writing shared state before that lock is observed.  Retire only an exact
-  # same-repository broker for this run root outside the active owner tree.
-  [[ -n "$RUNTIME_PARENT_PID" ]] || return 0
-  command -v pgrep >/dev/null 2>&1 || return 0
-  command -v lsof >/dev/null 2>&1 || { echo "fatal: V6 broker ownership requires lsof" >&2; return 1; }
-  local pid remaining attempt
-  for ((attempt=1; attempt<=25; ++attempt)); do
-    remaining=0
-    while IFS= read -r pid; do
-      is_v6_broker_for_run "$pid" || continue
-      is_current_runtime_descendant "$pid" && continue
-      if ! is_same_repository_v6_broker "$pid"; then
-        echo "fatal: V6 multi-leg broker for $RUN_ROOT is owned by unverified pid=$pid" >&2
-        return 1
-      fi
-      remaining=1
-      if (( attempt == 1 )); then
-        echo "stale_v6_broker_reaped=$pid" >&2
-        kill -TERM "$pid" 2>/dev/null || true
-      fi
-    done < <(pgrep -f 'polymarket_multileg_paper' 2>/dev/null || true)
-    (( remaining == 0 )) && return 0
-    sleep 0.2
-  done
-  echo "fatal: stale V6 multi-leg broker did not exit before startup" >&2
-  return 1
-}
 proxy_pid_owns_port(){
   [[ "$proxy_pid" =~ ^[1-9][0-9]*$ ]] || return 1
   kill -0 "$proxy_pid" 2>/dev/null || return 1
@@ -252,7 +209,10 @@ trap cleanup EXIT
 trap shutdown INT TERM
 reap_stale_v6_loops
 reap_stale_v6_proxy_listener
-reap_stale_v6_brokers
+# Stale multi-leg ownership is recovered only by v6_multileg_launcher.py,
+# whose lock-owner PID, command, repository cwd and runtime ancestry checks were
+# separately approved and validated. Do not add a second broad process-kill path
+# here without an exact-head private canary that proves the real broker cases.
 start_proxy
 wait_for_owned_proxy || { echo "fatal: V6 market proxy failed to start with verified port ownership" >&2; exit 1; }
 start_recorder;start_broker;start_external;write_supervisor
