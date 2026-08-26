@@ -4,7 +4,6 @@ from __future__ import annotations
 import csv
 import json
 import os
-import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -42,10 +41,16 @@ def request_cancel(order: dict[str, Any], *, processing_ms: int, latency_ms: int
 
 
 def live_until_event_ms(order: dict[str, Any], ttl_seconds: int) -> int:
-    pending = int(float(order.get("cancel_effective_event_ms") or 0))
+    try:
+        pending = int(float(order.get("cancel_effective_event_ms") or 0))
+    except (TypeError, ValueError, OverflowError):
+        pending = 0
     if str(order.get("order_state") or "OPEN") == "CANCEL_PENDING" and pending > 0:
         return pending
-    arrival = int(float(order.get("created_event_ms") or 0))
+    try:
+        arrival = int(float(order.get("created_event_ms") or 0))
+    except (TypeError, ValueError, OverflowError):
+        arrival = 0
     return arrival + max(0, int(ttl_seconds)) * 1000
 
 
@@ -64,8 +69,44 @@ def causal_fill_eligible(row: dict[str, str], order: dict[str, Any], *, processi
     return event_ms <= live_until_event_ms(order, ttl_seconds)
 
 
-def finalize_due_cancels(state_path: Path, *, processing_ms: int) -> list[dict[str, Any]]:
-    """Remove only after cancel latency plus bounded delayed-tape grace."""
+def _atomic_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
+    tmp.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _rewrite_orders_csv(path: Path, live_market_ids: set[str]) -> None:
+    if not path.exists():
+        return
+    try:
+        with path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = list(reader.fieldnames or [])
+            rows = [dict(row) for row in reader]
+    except (OSError, csv.Error):
+        return
+    if not fields:
+        return
+    rows = [row for row in rows if str(row.get("market_id") or "") in live_market_ids]
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
+    with tmp.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows([{field: row.get(field, "") for field in fields} for row in rows])
+    os.replace(tmp, path)
+
+
+def finalize_due_cancels(run_dir: Path, *, processing_ms: int) -> list[dict[str, Any]]:
+    """Finalize only after the current invocation has replayed all known tape rows.
+
+    The order remains present through cancel latency plus the bounded receive-time
+    grace, so any trade whose event time was before the effective cancel can still
+    be credited when it becomes causally available.  Once the grace has elapsed,
+    state, status and the exported resting-order table are updated atomically
+    enough for the next single-writer invocation to see one consistent owner set.
+    """
+    state_path = run_dir / "state.json"
     try:
         state = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -84,11 +125,30 @@ def finalize_due_cancels(state_path: Path, *, processing_ms: int) -> list[dict[s
         if deadline > 0 and int(processing_ms) >= deadline:
             finalized.append({**order, "market_id": market_id})
             del orders[market_id]
-    if finalized:
-        state["orders"] = orders
-        tmp = state_path.with_name(state_path.name + f".tmp.{os.getpid()}")
-        tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(tmp, state_path)
+    if not finalized:
+        return []
+
+    state["orders"] = orders
+    state["resting_orders"] = len(orders)
+    state["reserved_cash"] = sum(
+        max(0.0, float(row.get("remaining_shares") or 0.0) * float(row.get("limit_price") or 0.0))
+        for row in orders.values()
+        if isinstance(row, dict)
+    )
+    _atomic_json(state_path, state)
+
+    status_path = run_dir / "status.json"
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        status = {}
+    if isinstance(status, dict):
+        status["orders"] = orders
+        status["resting_orders"] = len(orders)
+        status["reserved_cash"] = state["reserved_cash"]
+        _atomic_json(status_path, status)
+
+    _rewrite_orders_csv(run_dir / "maker_orders.csv", set(str(key) for key in orders))
     return finalized
 
 
@@ -115,6 +175,4 @@ def annotate_contract(run_dir: Path, *, latency_ms: int, grace_ms: int) -> None:
             isinstance(row, dict) and str(row.get("order_state") or "") == "CANCEL_PENDING"
             for row in orders.values()
         )
-        tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
-        tmp.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
+        _atomic_json(path, value)
