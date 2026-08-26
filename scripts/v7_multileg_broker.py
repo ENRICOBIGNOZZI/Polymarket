@@ -19,6 +19,17 @@ def now_ms() -> int:
     return time.time_ns() // 1_000_000
 
 
+def receive_time_active(received_ms: int, arrival_ms: int, cancel_effective_ms: int = 0) -> bool:
+    """Return whether locally observed flow belongs to the order's causal live window.
+
+    Exchange/event timestamps are intentionally not used for order causality: the public
+    trade feed can be delayed or second-granularity.  Missing receive time fails closed.
+    """
+    if received_ms <= 0 or received_ms < arrival_ms:
+        return False
+    return cancel_effective_ms <= 0 or received_ms < cancel_effective_ms
+
+
 def atomic_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
@@ -164,6 +175,7 @@ class Leg:
     queue_ahead: float
     arrival_ms: int
     arrival_event_ms: int
+    cancel_effective_ms: int = 0
     entry_cash: float = 0.0
     entry_fee: float = 0.0
     exit_cash: float = 0.0
@@ -206,7 +218,7 @@ class Bundle:
 
 class Broker:
     BUNDLE_FIELDS = ["bundle_id", "strategy", "event_id", "status", "created_ts", "expected_edge", "max_notional", "execution_deadline_ts", "hold_deadline_ts", "ledger_written", "abort_reason"]
-    LEG_FIELDS = ["bundle_id", "market_id", "event_id", "side", "token_id", "weight", "target_shares", "filled_shares", "limit_price", "queue_ahead", "arrival_ms", "cancel_effective_ms", "replace_count", "entry_cash", "entry_fee", "exit_cash", "exit_fee", "slippage_cost", "first_fill_ts", "last_fill_ts", "adverse_mark_pnl", "adverse_recorded", "order_state", "max_limit_price", "exited"]
+    LEG_FIELDS = ["bundle_id", "market_id", "event_id", "side", "token_id", "weight", "target_shares", "filled_shares", "limit_price", "queue_ahead", "arrival_ms", "arrival_event_ms", "cancel_effective_ms", "replace_count", "entry_cash", "entry_fee", "exit_cash", "exit_fee", "slippage_cost", "first_fill_ts", "last_fill_ts", "adverse_mark_pnl", "adverse_recorded", "order_state", "max_limit_price", "exited"]
     EVENT_FIELDS = ["timestamp", "event", "bundle_id", "market_id", "side", "shares", "price", "queue_ahead", "detail"]
     LEDGER_FIELDS = ["bundle_id", "strategy", "event_id", "created_ts", "closed_ts", "status", "expected_edge", "max_notional", "entry_cash", "gross_pnl", "fees", "slippage", "net_pnl", "return_on_capital", "fill_fraction", "adverse_mark_pnl", "abort_reason"]
     EQUITY_FIELDS = ["timestamp", "cash", "equity", "reserved_cash", "gross_entry_cash", "peak_equity", "drawdown", "killed", "live_bundles"]
@@ -240,9 +252,9 @@ class Broker:
             if not path.exists() or path.stat().st_size == 0:
                 atomic_csv(path, fields, [])
 
-    def event(self, name: str, bundle_id: str, leg: Leg | None = None, shares: float = 0.0, price: float = 0.0, detail: str = "") -> None:
+    def event(self, name: str, bundle_id: str, leg: Leg | None = None, shares: float = 0.0, price: float = 0.0, detail: str = "", timestamp: int | None = None) -> None:
         append_csv(self.run_dir / "multileg_events.csv", self.EVENT_FIELDS, {
-            "timestamp": int(time.time()), "event": name, "bundle_id": bundle_id,
+            "timestamp": int(time.time()) if timestamp is None else int(timestamp), "event": name, "bundle_id": bundle_id,
             "market_id": leg.market_id if leg else "", "side": leg.side if leg else "",
             "shares": shares, "price": price, "queue_ahead": leg.queue_ahead if leg else 0.0,
             "detail": detail,
@@ -272,9 +284,10 @@ class Broker:
                     bundle_id=row["bundle_id"], market_id=row["market_id"], risk_event_id=row.get("event_id") or "", side=row["side"], token_id=row["token_id"],
                     weight=float(row["weight"]), target_shares=float(row["target_shares"]), filled_shares=float(row["filled_shares"]),
                     limit_price=float(row["limit_price"]), queue_ahead=float(row["queue_ahead"]), arrival_ms=int(row["arrival_ms"]),
-                    arrival_event_ms=int(row.get("arrival_event_ms") or row["arrival_ms"]), entry_cash=float(row["entry_cash"]), entry_fee=float(row["entry_fee"]),
-                    exit_cash=float(row["exit_cash"]), exit_fee=float(row["exit_fee"]), slippage_cost=float(row["slippage_cost"]),
-                    first_fill_ts=int(row["first_fill_ts"]), last_fill_ts=int(row["last_fill_ts"]), adverse_mark_pnl=float(row["adverse_mark_pnl"]),
+                    arrival_event_ms=int(row.get("arrival_event_ms") or row["arrival_ms"]), cancel_effective_ms=int(row.get("cancel_effective_ms") or 0),
+                    entry_cash=float(row["entry_cash"]), entry_fee=float(row["entry_fee"]), exit_cash=float(row["exit_cash"]),
+                    exit_fee=float(row["exit_fee"]), slippage_cost=float(row["slippage_cost"]), first_fill_ts=int(row["first_fill_ts"]),
+                    last_fill_ts=int(row["last_fill_ts"]), adverse_mark_pnl=float(row["adverse_mark_pnl"]),
                     adverse_recorded=bool(int(row["adverse_recorded"])), order_state=row["order_state"], exited=bool(int(row.get("exited") or 0)),
                 ))
             except (KeyError, TypeError, ValueError):
@@ -290,8 +303,8 @@ class Broker:
             rows.append({
                 "bundle_id": leg.bundle_id, "market_id": leg.market_id, "event_id": leg.risk_event_id, "side": leg.side,
                 "token_id": leg.token_id, "weight": leg.weight, "target_shares": leg.target_shares, "filled_shares": leg.filled_shares,
-                "limit_price": leg.limit_price, "queue_ahead": leg.queue_ahead, "arrival_ms": leg.arrival_ms,
-                "cancel_effective_ms": 0, "replace_count": 0, "entry_cash": leg.entry_cash, "entry_fee": leg.entry_fee,
+                "limit_price": leg.limit_price, "queue_ahead": leg.queue_ahead, "arrival_ms": leg.arrival_ms, "arrival_event_ms": leg.arrival_event_ms,
+                "cancel_effective_ms": leg.cancel_effective_ms, "replace_count": 0, "entry_cash": leg.entry_cash, "entry_fee": leg.entry_fee,
                 "exit_cash": leg.exit_cash, "exit_fee": leg.exit_fee, "slippage_cost": leg.slippage_cost,
                 "first_fill_ts": leg.first_fill_ts, "last_fill_ts": leg.last_fill_ts, "adverse_mark_pnl": leg.adverse_mark_pnl,
                 "adverse_recorded": 1 if leg.adverse_recorded else 0, "order_state": leg.order_state,
@@ -321,7 +334,6 @@ class Broker:
         if not tokens:
             return output
         for start in range(0, len(tokens), 80):
-            received = now_ms()
             try:
                 root = request_json(f"{self.clob}/books", [{"token_id": token} for token in tokens[start:start + 80]])
             except Exception:
@@ -361,6 +373,8 @@ class Broker:
         return {leg.token_id for leg in self.live_legs() if leg.order_state == "RESTING"}
 
     def admit(self, current_equity: float) -> None:
+        if self.killed:
+            return
         now = int(time.time())
         active_tokens = self.active_tokens()
         for bundle_id, rows in self.read_intents().items():
@@ -450,9 +464,12 @@ class Broker:
         output = []
         for row in new:
             try:
+                received_ms = int(row.get("received_ms") or 0)
+                if received_ms <= 0:
+                    continue
                 output.append({
                     "event_ts_ms": int(float(row["timestamp"]) * 1000),
-                    "received_ms": int(row.get("received_ms") or 0),
+                    "received_ms": received_ms,
                     "asset_id": str(row["asset_id"]), "side": str(row["side"]).upper(),
                     "price": float(row["price"]), "size": float(row["size"]),
                 })
@@ -461,14 +478,25 @@ class Broker:
         output.sort(key=lambda row: (row["received_ms"], row["event_ts_ms"]))
         return output
 
+    def causal_cancel_ms(self, leg: Leg) -> int:
+        cancel_ms = leg.cancel_effective_ms
+        bundle = self.bundles.get(leg.bundle_id)
+        if bundle is not None and bundle.execution_deadline_ts > 0:
+            deadline_ms = bundle.execution_deadline_ts * 1000
+            cancel_ms = deadline_ms if cancel_ms <= 0 else min(cancel_ms, deadline_ms)
+        return cancel_ms
+
     def apply_trades(self, trades: list[dict[str, Any]]) -> None:
         for trade in trades:
-            if trade["side"] != "SELL" or trade["size"] <= 0.0:
+            if trade["side"] != "SELL" or trade["size"] <= 0.0 or trade["received_ms"] <= 0 or self.killed:
                 continue
-            candidates = sorted(
-                [leg for leg in self.live_legs() if leg.order_state == "RESTING" and leg.token_id == trade["asset_id"] and trade["price"] <= leg.limit_price + 1e-12 and trade["received_ms"] > leg.arrival_ms and trade["event_ts_ms"] > leg.arrival_event_ms],
-                key=lambda leg: (leg.arrival_ms, leg.bundle_id, leg.market_id),
-            )
+            candidates: list[Leg] = []
+            for leg in self.live_legs():
+                if leg.order_state != "RESTING" or leg.token_id != trade["asset_id"] or trade["price"] > leg.limit_price + 1e-12:
+                    continue
+                if receive_time_active(trade["received_ms"], leg.arrival_ms, self.causal_cancel_ms(leg)):
+                    candidates.append(leg)
+            candidates.sort(key=lambda leg: (leg.arrival_ms, leg.bundle_id, leg.market_id))
             remaining_trade = trade["size"]
             for leg in candidates:
                 if remaining_trade <= 1e-12:
@@ -491,24 +519,28 @@ class Broker:
                     continue
                 self.cash -= cost + fee
                 leg.filled_shares += fill; leg.entry_cash += cost; leg.entry_fee += fee
-                fill_ts = trade["event_ts_ms"] // 1000
+                fill_ts = trade["received_ms"] // 1000
                 if leg.first_fill_ts == 0: leg.first_fill_ts = fill_ts
                 leg.last_fill_ts = fill_ts
                 remaining_trade -= fill
                 if leg.remaining <= 1e-9: leg.order_state = "FILLED"
-                self.event("PARTIAL_FILL", leg.bundle_id, leg, fill, leg.limit_price, f"received_ms={trade['received_ms']};trade_event_ms={trade['event_ts_ms']}")
+                self.event("PARTIAL_FILL", leg.bundle_id, leg, fill, leg.limit_price, f"received_ms={trade['received_ms']};trade_event_ms={trade['event_ts_ms']}", timestamp=fill_ts)
 
     def abort(self, bundle_id: str, reason: str) -> None:
         bundle = self.bundles.get(bundle_id)
         if not bundle or bundle.status in {"CLOSED", "UNWOUND", "CANCELLED"}:
             return
+        cancel_ms = now_ms()
+        if reason == "execution_timeout" and bundle.execution_deadline_ts > 0:
+            cancel_ms = min(cancel_ms, bundle.execution_deadline_ts * 1000)
         if bundle.status != "ABORTING":
             bundle.status = "ABORTING"; bundle.abort_reason = reason
             self.event("ABORT", bundle_id, detail=reason)
         for leg in self.legs:
             if leg.bundle_id == bundle_id and leg.order_state == "RESTING":
+                leg.cancel_effective_ms = cancel_ms if leg.cancel_effective_ms <= 0 else min(leg.cancel_effective_ms, cancel_ms)
                 leg.order_state = "CANCELLED"
-                self.event("CANCEL_EFFECTIVE", bundle_id, leg, price=leg.limit_price, detail=reason)
+                self.event("CANCEL_EFFECTIVE", bundle_id, leg, price=leg.limit_price, detail=f"{reason};cancel_effective_ms={leg.cancel_effective_ms}")
 
     def bundle_legs(self, bundle_id: str) -> list[Leg]:
         return [leg for leg in self.legs if leg.bundle_id == bundle_id]
@@ -659,7 +691,7 @@ class Broker:
             "cash": self.cash, "equity": eq, "drawdown": drawdown, "killed": self.killed,
             "reserved_cash": self.reserved_cash(), "gross_entry_cash": self.gross_entry_cash(),
             "bundles": {key: bundle.status for key, bundle in self.bundles.items()},
-            "contracts": ["dual_clock_forward_fill", "one_live_order_per_token", "shared_trade_capacity", "canonical_market_event_risk", "100_percent_completion", "explicit_abort_unwind", "settling_preserves_complete_structural_payoff"],
+            "contracts": ["receive_time_causal_forward_fill", "exchange_time_metadata_only_for_fill_causality", "one_live_order_per_token", "shared_trade_capacity", "canonical_market_event_risk", "100_percent_completion", "explicit_abort_unwind", "settling_preserves_complete_structural_payoff"],
         })
 
 
