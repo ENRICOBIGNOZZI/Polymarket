@@ -98,7 +98,7 @@ def test_finalize_waits_for_latency_plus_grace_and_syncs_exports() -> None:
             assert list(csv.DictReader(handle)) == []
 
 
-def test_tracked_state_requires_market_and_book_continuity_before_replay() -> None:
+def test_execution_state_requires_market_and_book_continuity_before_replay() -> None:
     state = {
         "orders": {"m1": {"market_id": "m1", "token_id": "tok1"}},
         "positions": {"m2": {"market_id": "m2", "token_id": "tok2"}},
@@ -107,35 +107,56 @@ def test_tracked_state_requires_market_and_book_continuity_before_replay() -> No
     assert maker.tracked_market_token_pairs(state) == {
         ("m1", "tok1"),
         ("m2", "tok2"),
-        ("m3", "tok3"),
     }
+    assert maker.markout_market_token_pairs(state) == {("m3", "tok3")}
     gaps = maker.replay_continuity_gaps(
+        state,
+        discovered_market_ids={"m1"},
+        book_tokens={"tok1"},
+    )
+    assert gaps == {"missing_market_ids": ["m2"], "missing_book_tokens": ["tok2"]}
+    assert maker.replay_continuity_gaps(
         state,
         discovered_market_ids={"m1", "m2"},
         book_tokens={"tok1", "tok2"},
-    )
-    assert gaps == {"missing_market_ids": ["m3"], "missing_book_tokens": ["tok3"]}
+    ) == {"missing_market_ids": [], "missing_book_tokens": []}
+
+
+def test_markout_only_gap_does_not_block_execution_replay() -> None:
+    state = {
+        "orders": {"m1": {"market_id": "m1", "token_id": "tok1"}},
+        "markout_watch": {"w2": {"market_id": "m2", "token_id": "tok2"}},
+    }
     assert maker.replay_continuity_gaps(
         state,
-        discovered_market_ids={"m1", "m2", "m3"},
-        book_tokens={"tok1", "tok2", "tok3"},
+        discovered_market_ids={"m1"},
+        book_tokens={"tok1"},
     ) == {"missing_market_ids": [], "missing_book_tokens": []}
+    assert maker.markout_continuity_gaps(
+        state,
+        discovered_market_ids={"m1"},
+        book_tokens={"tok1"},
+    ) == {"missing_market_ids": ["m2"], "missing_book_tokens": ["tok2"]}
 
 
 def test_empty_or_untracked_state_does_not_block_research_discovery() -> None:
     assert maker.tracked_market_token_pairs({}) == set()
+    assert maker.markout_market_token_pairs({}) == set()
     assert maker.replay_continuity_gaps(
         {}, discovered_market_ids=set(), book_tokens=set()
     ) == {"missing_market_ids": [], "missing_book_tokens": []}
 
 
-def test_canonical_worker_fails_closed_before_replay_when_continuity_is_missing() -> None:
+def test_canonical_worker_fails_closed_before_replay_when_execution_continuity_is_missing() -> None:
     text = (SCRIPTS / "v7_micro_maker_worker.py").read_text(encoding="utf-8")
     assert "REPLAY_CONTINUITY_CONTRACT" in text
-    assert "tracked_market_and_token_book_required_before_tape_replay" in text
+    assert "execution_state_market_and_token_book_required_before_tape_replay" in text
+    assert "MARKOUT_CONTINUITY_CONTRACT" in text
+    assert "measurement_gap_never_blocks_execution_and_labels_remain_bounded_delay" in text
     assert "event.load_tape = patched_load_tape" in text
     assert "raise ReplayContinuityError" in text
     assert "FAIL_CLOSED_NO_REPLAY_NO_CANCEL" in text
+    assert "MARKOUT_GAP_DOES_NOT_BLOCK_EXECUTION" in text
     assert text.index("event.load_tape = patched_load_tape") < text.index("rc = depth.main()")
     assert text.index("continuity_block is not None") < text.index("finalize_due_cancels")
 

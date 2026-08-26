@@ -17,7 +17,8 @@ MAX_MARKOUT_LABEL_DELAY_SECONDS = 15
 MARKOUT_REJECTION_REASON = "late_markout_label"
 MARKOUT_LABEL_CONTRACT = "event_time_horizon_with_bounded_observation_delay"
 EXIT_LIQUIDITY_CONTRACT = "shares_specific_full_visible_bid_depth_vwap_fail_closed"
-REPLAY_CONTINUITY_CONTRACT = "tracked_market_and_token_book_required_before_tape_replay"
+REPLAY_CONTINUITY_CONTRACT = "execution_state_market_and_token_book_required_before_tape_replay"
+MARKOUT_CONTINUITY_CONTRACT = "measurement_gap_never_blocks_execution_and_labels_remain_bounded_delay"
 full_depth_sell_vwap = depth.full_depth_sell_vwap
 if depth.MAX_MARKOUT_LABEL_DELAY_SECONDS != MAX_MARKOUT_LABEL_DELAY_SECONDS:
     raise RuntimeError("maker depth-core markout delay contract drift")
@@ -57,9 +58,9 @@ def _load_state(run_dir: Path | None) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def tracked_market_token_pairs(state: dict[str, Any]) -> set[tuple[str, str]]:
+def _pairs_for_keys(state: dict[str, Any], keys: tuple[str, ...]) -> set[tuple[str, str]]:
     pairs: set[tuple[str, str]] = set()
-    for key in ("orders", "positions", "markout_watch"):
+    for key in keys:
         rows = state.get(key) if isinstance(state.get(key), dict) else {}
         for row in rows.values():
             if not isinstance(row, dict):
@@ -71,16 +72,53 @@ def tracked_market_token_pairs(state: dict[str, Any]) -> set[tuple[str, str]]:
     return pairs
 
 
+def tracked_market_token_pairs(state: dict[str, Any]) -> set[tuple[str, str]]:
+    # Only state that can still alter inventory/execution may block replay.
+    # markout_watch is measurement-only: if its book disappears temporarily,
+    # the strict bounded-delay markout contract must censor/reject that label
+    # rather than freezing unrelated order replay and cancellation.
+    return _pairs_for_keys(state, ("orders", "positions"))
+
+
+def markout_market_token_pairs(state: dict[str, Any]) -> set[tuple[str, str]]:
+    return _pairs_for_keys(state, ("markout_watch",))
+
+
+def _continuity_gaps(
+    tracked: set[tuple[str, str]],
+    *,
+    discovered_market_ids: set[str],
+    book_tokens: set[str],
+) -> dict[str, list[str]]:
+    missing_markets = sorted({market_id for market_id, _ in tracked if market_id not in discovered_market_ids})
+    missing_books = sorted({token_id for _, token_id in tracked if token_id not in book_tokens})
+    return {"missing_market_ids": missing_markets, "missing_book_tokens": missing_books}
+
+
 def replay_continuity_gaps(
     state: dict[str, Any],
     *,
     discovered_market_ids: set[str],
     book_tokens: set[str],
 ) -> dict[str, list[str]]:
-    tracked = tracked_market_token_pairs(state)
-    missing_markets = sorted({market_id for market_id, _ in tracked if market_id not in discovered_market_ids})
-    missing_books = sorted({token_id for _, token_id in tracked if token_id not in book_tokens})
-    return {"missing_market_ids": missing_markets, "missing_book_tokens": missing_books}
+    return _continuity_gaps(
+        tracked_market_token_pairs(state),
+        discovered_market_ids=discovered_market_ids,
+        book_tokens=book_tokens,
+    )
+
+
+def markout_continuity_gaps(
+    state: dict[str, Any],
+    *,
+    discovered_market_ids: set[str],
+    book_tokens: set[str],
+) -> dict[str, list[str]]:
+    return _continuity_gaps(
+        markout_market_token_pairs(state),
+        discovered_market_ids=discovered_market_ids,
+        book_tokens=book_tokens,
+    )
 
 
 def _write_continuity_audit(run_dir: Path, value: dict[str, Any]) -> None:
@@ -124,6 +162,7 @@ def main() -> int:
     discovered_market_ids: set[str] = set()
     book_tokens: set[str] = set()
     continuity_block: dict[str, Any] | None = None
+    observed_markout_gaps: dict[str, list[str]] = {"missing_market_ids": [], "missing_book_tokens": []}
 
     def on_cancel(market_id: str, order: dict[str, Any]) -> bool:
         reason = cancel_requests.pop(market_id, "")
@@ -175,7 +214,13 @@ def main() -> int:
         return books
 
     def patched_load_tape(path: Path, cutoff: int, now: int) -> list[dict[str, str]]:
+        nonlocal observed_markout_gaps
         gaps = replay_continuity_gaps(
+            tracked_state,
+            discovered_market_ids=discovered_market_ids,
+            book_tokens=book_tokens,
+        )
+        observed_markout_gaps = markout_continuity_gaps(
             tracked_state,
             discovered_market_ids=discovered_market_ids,
             book_tokens=book_tokens,
@@ -206,6 +251,7 @@ def main() -> int:
             "action": "FAIL_CLOSED_NO_REPLAY_NO_CANCEL",
             "details": std_json.loads(str(exc)),
             "tracked_pairs": sorted([list(pair) for pair in tracked_market_token_pairs(tracked_state)]),
+            "markout_measurement_gaps": observed_markout_gaps,
         }
         rc = 2
     finally:
@@ -224,6 +270,20 @@ def main() -> int:
         return rc
 
     if run_dir is not None:
+        if observed_markout_gaps["missing_market_ids"] or observed_markout_gaps["missing_book_tokens"]:
+            _write_continuity_audit(
+                run_dir,
+                {
+                    "timestamp_ms": processing_ms,
+                    "paper_only": True,
+                    "authenticated_execution": False,
+                    "contract": MARKOUT_CONTINUITY_CONTRACT,
+                    "action": "MARKOUT_GAP_DOES_NOT_BLOCK_EXECUTION",
+                    "details": observed_markout_gaps,
+                    "tracked_pairs": sorted([list(pair) for pair in tracked_market_token_pairs(tracked_state)]),
+                    "markout_pairs": sorted([list(pair) for pair in markout_market_token_pairs(tracked_state)]),
+                },
+            )
         after_replay_ms = time.time_ns() // 1_000_000
         finalized = cancel.finalize_due_cancels(run_dir, processing_ms=after_replay_ms)
         cancel.append_final_cancel_log(event.base, run_dir, finalized, timestamp=int(after_replay_ms // 1000))
