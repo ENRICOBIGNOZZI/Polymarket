@@ -31,15 +31,14 @@ class StructuralEventIdentityAuditTest(unittest.TestCase):
         source = (ROOT / "scripts" / "v6_relation_intents.py").read_text(encoding="utf-8")
         self.assertIn('abs(hash((family, direction)))', source)
 
-    def test_restart_variant_identity_can_fragment_event_risk_buckets(self) -> None:
+    def test_restart_variant_identity_fragments_any_cross_run_event_keyed_state(self) -> None:
         family = "will bitcoin be <direction> <threshold> by <year>|august 2026"
         first = AUDIT.legacy_event_id_for_seed(family, "UP", 1)
         second = AUDIT.legacy_event_id_for_seed(family, "UP", 2)
         self.assertNotEqual(first, second)
-        committed = {first: 1_000.0, second: 1_000.0}
-        event_cap = 1_500.0
-        self.assertTrue(all(value <= event_cap for value in committed.values()))
-        self.assertGreater(sum(committed.values()), event_cap)
+        evidence_rows = {first: 12, second: 15}
+        self.assertEqual(sum(evidence_rows.values()), 27)
+        self.assertEqual(max(evidence_rows.values()), 15)
 
 
 if __name__ == "__main__":
