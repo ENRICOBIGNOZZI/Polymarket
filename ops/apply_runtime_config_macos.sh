@@ -6,19 +6,10 @@ STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
 TAILSCALE_HOSTNAME="${POLYMARKET_TAILSCALE_HOSTNAME:-mamma-portfolio}"
 TAILSCALE_FQDN="${POLYMARKET_TAILSCALE_FQDN:-mamma-portfolio.tail1bae85.ts.net}"
 POLYMARKET_GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-http://${TAILSCALE_FQDN}}"
+DASHBOARD="$APP_DIR/monitoring/grafana/dashboards/polymarket-v7.json"
 
 [[ "$(uname -s)" == "Darwin" ]] || { echo "macOS only" >&2; exit 1; }
-if [[ -d "$APP_DIR/.git" ]]; then
-  git -C "$APP_DIR" config --replace-all remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
-fi
-[[ -d "$APP_DIR/monitoring/grafana/dashboards" ]] || {
-  echo "missing Grafana dashboards under $APP_DIR" >&2
-  exit 1
-}
-[[ -f "$APP_DIR/monitoring/grafana/dashboards/polymarket-multi-strategy.json" ]] || {
-  echo "missing V5 multi-strategy Grafana dashboard" >&2
-  exit 1
-}
+[[ -f "$DASHBOARD" ]] || { echo "missing V7 Grafana dashboard: $DASHBOARD" >&2; exit 1; }
 
 find_tailscale() {
   local candidate
@@ -26,48 +17,30 @@ find_tailscale() {
     /Applications/Tailscale.app/Contents/MacOS/Tailscale \
     /opt/homebrew/bin/tailscale \
     /usr/local/bin/tailscale; do
-    if [[ -x "$candidate" ]]; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
+    if [[ -x "$candidate" ]]; then printf '%s\n' "$candidate"; return 0; fi
   done
   command -v tailscale 2>/dev/null || return 1
 }
 
 find_python() {
   local candidate
-  for candidate in \
-    /opt/homebrew/bin/python3 \
-    /usr/local/bin/python3 \
-    /usr/bin/python3; do
-    if [[ -x "$candidate" ]]; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
+  for candidate in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+    if [[ -x "$candidate" ]]; then printf '%s\n' "$candidate"; return 0; fi
   done
   command -v python3 2>/dev/null || return 1
 }
 
 TAILSCALE_BIN="$(find_tailscale || true)"
-[[ -n "$TAILSCALE_BIN" ]] || {
-  echo "tailscale CLI not found; refusing to leave Grafana inaccessible" >&2
-  exit 1
-}
 PYTHON_BIN="$(find_python || true)"
-[[ -n "$PYTHON_BIN" ]] || {
-  echo "python3 not found; cannot verify Tailscale DNS identity" >&2
-  exit 1
-}
+[[ -n "$TAILSCALE_BIN" ]] || { echo "tailscale CLI not found" >&2; exit 1; }
+[[ -n "$PYTHON_BIN" ]] || { echo "python3 not found" >&2; exit 1; }
 
 tailscale_admin() {
-  if "$TAILSCALE_BIN" "$@"; then
-    return 0
-  fi
+  if "$TAILSCALE_BIN" "$@"; then return 0; fi
   sudo -n "$TAILSCALE_BIN" "$@"
 }
 
 tailscale_admin set --hostname="$TAILSCALE_HOSTNAME"
-
 actual_dns=""
 for _ in {1..20}; do
   actual_dns="$("$TAILSCALE_BIN" status --json 2>/dev/null | \
@@ -83,24 +56,19 @@ fi
 
 serve_log="$(mktemp)"
 trap 'rm -f "$serve_log"' EXIT
-if tailscale_admin serve --bg --http=80 localhost:3000 >"$serve_log" 2>&1; then
-  :
-else
+if ! tailscale_admin serve --bg --http=80 localhost:3000 >"$serve_log" 2>&1; then
   cat "$serve_log" >&2
   echo "failed to configure Tailscale Serve for Grafana" >&2
   exit 1
 fi
-
 serve_status="$("$TAILSCALE_BIN" serve status 2>&1 || true)"
 printf '%s\n' "$serve_status"
-if ! grep -Fq "http://${TAILSCALE_FQDN}" <<<"$serve_status"; then
+grep -Fq "http://${TAILSCALE_FQDN}" <<<"$serve_status" || {
   echo "Tailscale Serve did not publish expected URL http://${TAILSCALE_FQDN}" >&2
   exit 1
-fi
+}
 
-mkdir -p "$STATE_DIR/grafana/provisioning/datasources" \
-  "$STATE_DIR/grafana/provisioning/dashboards"
-
+mkdir -p "$STATE_DIR/grafana/provisioning/datasources" "$STATE_DIR/grafana/provisioning/dashboards"
 cat > "$STATE_DIR/grafana.ini" <<EOF
 [server]
 http_addr = 127.0.0.1
@@ -135,7 +103,7 @@ check_for_plugin_updates = false
 news_feed_enabled = false
 
 [dashboards]
-default_home_dashboard_path = $APP_DIR/monitoring/grafana/dashboards/polymarket-multi-strategy.json
+default_home_dashboard_path = $DASHBOARD
 EOF
 
 cat > "$STATE_DIR/grafana/provisioning/datasources/prometheus.yml" <<'EOF'
@@ -156,16 +124,16 @@ EOF
 cat > "$STATE_DIR/grafana/provisioning/dashboards/dashboards.yml" <<EOF
 apiVersion: 1
 providers:
-  - name: polymarket
+  - name: polymarket-v7
     orgId: 1
-    folder: Polymarket
+    folder: Polymarket V7
     type: file
     disableDeletion: false
-    allowUiUpdates: true
+    allowUiUpdates: false
     updateIntervalSeconds: 10
     options:
       path: "$APP_DIR/monitoring/grafana/dashboards"
 EOF
 
-printf 'grafana_mode=anonymous_viewer_no_login backend=127.0.0.1:3000 exposure=tailscale-serve operator_url=%s tailscale_hostname=%s tailscale_fqdn=%s dashboard=polymarket-multi-strategy-v5\n' \
+printf 'grafana_mode=anonymous_viewer_no_login backend=127.0.0.1:3000 exposure=tailscale-serve operator_url=%s tailscale_hostname=%s tailscale_fqdn=%s dashboard=polymarket-v7-paper\n' \
   "$POLYMARKET_GRAFANA_URL" "$TAILSCALE_HOSTNAME" "$TAILSCALE_FQDN"
