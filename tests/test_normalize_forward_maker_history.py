@@ -41,6 +41,20 @@ def legacy_row(ts: int = 1, policy: str = "improve1") -> dict:
     }
 
 
+def canonical_row(ts: int = 1, policy: str = "join") -> dict:
+    return {
+        "generated_ts": ts,
+        "aggregate_by_policy": {
+            policy: {
+                "probes": 10,
+                "pair_fill_rate": 0.2,
+                "one_sided_only_rate": 0.1,
+                "conservative_pnl_ex_rewards_usd": 0.5,
+            }
+        },
+    }
+
+
 class NormalizeForwardMakerHistoryTests(unittest.TestCase):
     def test_legacy_policy_summaries_become_alpha_factory_aggregate(self) -> None:
         normalized = normalizer.normalize_run(legacy_row())
@@ -52,29 +66,43 @@ class NormalizeForwardMakerHistoryTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["conservative_pnl_ex_rewards_usd"], -1.25)
 
     def test_canonical_aggregate_is_preserved_without_double_counting(self) -> None:
-        run = {
-            "generated_ts": 456,
-            "aggregate_by_policy": {
-                "join": {
-                    "probes": 10,
-                    "pair_fill_rate": 0.2,
-                    "one_sided_only_rate": 0.1,
-                    "conservative_pnl_ex_rewards_usd": 0.5,
-                }
-            },
-            "policy_summaries": [
-                {
-                    "policy": "join",
-                    "probes": 99,
-                    "pair_fills": 99,
-                    "one_sided": 99,
-                    "pnl_ex_rewards": 99,
-                }
-            ],
-        }
+        run = canonical_row(456)
+        run["policy_summaries"] = [
+            {
+                "policy": "join",
+                "probes": 99,
+                "pair_fills": 99,
+                "one_sided": 99,
+                "pnl_ex_rewards": 99,
+            }
+        ]
         normalized = normalizer.normalize_run(run)
         self.assertIs(normalized, run)
         self.assertEqual(normalized["aggregate_by_policy"]["join"]["probes"], 10)
+
+    def test_invalid_canonical_rates_fail_integrity(self) -> None:
+        bad = canonical_row()
+        bad["aggregate_by_policy"]["join"]["pair_fill_rate"] = 1.1
+        records, stats = normalizer.normalize_history(json.dumps(bad) + "\n")
+        self.assertEqual(records, [])
+        self.assertEqual(stats["invalid_supported_rows"], 1)
+        self.assertTrue(normalizer.history_integrity_errors(stats))
+
+    def test_nonfinite_canonical_pnl_fails_integrity(self) -> None:
+        bad = canonical_row()
+        bad["aggregate_by_policy"]["join"]["conservative_pnl_ex_rewards_usd"] = "nan"
+        records, stats = normalizer.normalize_history(json.dumps(bad) + "\n")
+        self.assertEqual(records, [])
+        self.assertEqual(stats["invalid_supported_rows"], 1)
+
+    def test_zero_probe_canonical_row_cannot_claim_fill_rate(self) -> None:
+        bad = canonical_row()
+        metrics = bad["aggregate_by_policy"]["join"]
+        metrics["probes"] = 0
+        metrics["pair_fill_rate"] = 0.1
+        records, stats = normalizer.normalize_history(json.dumps(bad) + "\n")
+        self.assertEqual(records, [])
+        self.assertEqual(stats["invalid_supported_rows"], 1)
 
     def test_empty_history_is_valid(self) -> None:
         records, stats = normalizer.normalize_history("\n")
