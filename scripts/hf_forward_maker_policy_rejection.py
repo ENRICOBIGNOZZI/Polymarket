@@ -7,6 +7,12 @@ on the current sample only when it has a minimum number of observed fills and
 the moving-block bootstrap upper confidence bound of ex-reward PnL per probe is
 strictly negative. Sparse-fill policies remain MORE_EVIDENCE_REQUIRED rather
 than being over-interpreted.
+
+The module also provides a deterministic structural guard for complete-set
+quote improvement: an inside-spread move must not consume the entire locked
+complete-set edge. This is only a necessary condition; positive residual edge
+does not establish positive fill-conditioned EV because one-sided fills,
+unwind costs, fees, latency and adverse selection still matter.
 """
 from __future__ import annotations
 
@@ -23,6 +29,50 @@ def finite(value: Any, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return default
     return out if math.isfinite(out) else default
+
+
+def audit_quote_improvement(
+    base_quote_sum: float,
+    improved_quote_sum: float,
+    *,
+    min_residual_edge_per_share: float = 0.00005,
+) -> dict[str, Any]:
+    """Audit whether a complete-set quote improvement preserves edge.
+
+    For a binary complete set with one YES and one NO share, the gross locked
+    edge per fully matched share is ``1 - quote_sum``. Moving either passive
+    quote toward the touch spends that edge directly. A quote that leaves no
+    strictly positive residual edge above the configured floor is rejected
+    before any fill-probability argument is considered.
+    """
+    base_sum = finite(base_quote_sum, math.nan)
+    improved_sum = finite(improved_quote_sum, math.nan)
+    floor = max(0.0, finite(min_residual_edge_per_share, 0.0))
+    if not math.isfinite(base_sum) or not math.isfinite(improved_sum):
+        raise ValueError("quote sums must be finite")
+    if base_sum <= 0.0 or improved_sum <= 0.0:
+        raise ValueError("quote sums must be positive")
+
+    base_edge = 1.0 - base_sum
+    improved_edge = 1.0 - improved_sum
+    improvement_cost = improved_sum - base_sum
+    edge_erasing = improved_edge < floor - 1e-12
+    return {
+        "base_quote_sum": base_sum,
+        "improved_quote_sum": improved_sum,
+        "base_locked_edge_per_matched_share": base_edge,
+        "improved_locked_edge_per_matched_share": improved_edge,
+        "improvement_cost_per_matched_share": improvement_cost,
+        "min_residual_edge_per_share": floor,
+        "edge_erasing_improvement": edge_erasing,
+        "research_state": (
+            "REJECT_EDGE_ERASING_IMPROVEMENT" if edge_erasing else "RESIDUAL_EDGE_PRESERVED_ONLY"
+        ),
+        "note": (
+            "preserving residual locked edge is necessary but not sufficient; "
+            "fill-conditioned adverse selection and unwind economics remain required"
+        ),
+    }
 
 
 def classify_policy(report: dict[str, Any], min_fills_for_rejection: int = 3) -> dict[str, Any]:
