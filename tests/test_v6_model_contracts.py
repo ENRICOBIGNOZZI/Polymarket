@@ -56,7 +56,7 @@ class V6ModelContracts(unittest.TestCase):
         self.assertNotIn("polymarket_pca_stat_arb",loop);self.assertNotIn("build_v4_intents.py --strategy B1",loop)
 
     def test_micro_target_uses_last_pre_horizon_observation(self):
-        target=load_script("v6_micro_target_test","scripts/v6_micro_target.py")
+        target=load_script("v7_micro_target_test","scripts/v7_micro_target.py")
         samples=[
             {"ts":100,"market_id":"m","mid":0.50,"x":[1,0,0,0,0,0],"y":None},
             {"ts":102,"market_id":"m","mid":0.51,"x":[1,0,0,0,0,0],"y":None},
@@ -71,7 +71,7 @@ class V6ModelContracts(unittest.TestCase):
         self.assertEqual(report["newly_labeled"],1)
 
     def test_micro_target_requires_post_origin_observation_and_staleness_bound(self):
-        target=load_script("v6_micro_target_stale_test","scripts/v6_micro_target.py")
+        target=load_script("v7_micro_target_stale_test","scripts/v7_micro_target.py")
         no_future=[{"ts":100,"market_id":"m","mid":0.50,"x":[1,0,0,0,0,0],"y":None}]
         report=target.label_matured_samples(no_future,now=106,horizon_seconds=5,max_target_staleness_seconds=5)
         self.assertIsNone(no_future[0]["y"]);self.assertEqual(report["missing_pre_horizon_observation"],1)
@@ -83,11 +83,16 @@ class V6ModelContracts(unittest.TestCase):
         self.assertIsNone(stale[0]["y"]);self.assertEqual(report["stale_pre_horizon_observation"],1)
 
     def test_micro_runtime_no_longer_uses_first_post_horizon_mark(self):
-        text=(ROOT/"scripts/v6_micro_taker.py").read_text()
-        self.assertIn("label_matured_samples",text)
-        self.assertIn("max-target-staleness-seconds",text)
-        self.assertNotIn("first observable mark after the forecast horizon",text)
-        self.assertIn("realized_pnl_total",text)
+        target=(ROOT/"scripts/v7_micro_target.py").read_text()
+        worker=(ROOT/"scripts/v7_micro_taker_worker.py").read_text()
+        adapter=(ROOT/"scripts/v6_micro_taker.py").read_text()
+        self.assertIn("label_matured_samples",target)
+        self.assertIn("obs_ts > target_ts",target)
+        self.assertIn("--max-target-staleness-seconds",worker)
+        self.assertIn("label_matured_samples",worker)
+        self.assertIn("v7_micro_target",adapter)
+        self.assertNotIn("first observable mark after the forecast horizon",target)
+        self.assertIn("realized_pnl_total",worker)
 
     def test_maker_graph_hard_is_demoted_and_unverified_structural_is_blocked(self):
         now=int(time.time())
