@@ -66,6 +66,30 @@ class NoLegacyRuntimeContractTest(unittest.TestCase):
         self.assertTrue(manifest["paper_only"])
         self.assertFalse(manifest["authenticated_execution"])
 
+    def test_live_smoke_is_v7_only_and_fail_closed(self) -> None:
+        cfg = json.loads((ROOT / "config/v7_live_smoke.json").read_text(encoding="utf-8"))
+        self.assertEqual(cfg["engine_version"], 7)
+        self.assertTrue(cfg["paper_only"])
+        self.assertFalse(cfg["authenticated_execution"])
+        self.assertTrue(cfg["scan_only"])
+        self.assertEqual(cfg["fractional_kelly"], 0.0)
+        self.assertTrue(cfg["expert_weights"])
+        self.assertTrue(all(float(value) == 0.0 for value in cfg["expert_weights"].values()))
+        self.assertNotIn("v6", cfg)
+        self.assertNotIn("legacy_compatibility", cfg)
+
+        workflow = (ROOT / ".github/workflows/live-smoke.yml").read_text(encoding="utf-8")
+        self.assertIn("--config config/v7_live_smoke.json", workflow)
+        self.assertIn("--paper --scan-only", workflow)
+        self.assertIn("fills.csv", workflow)
+        self.assertNotIn("config/paper.example.json", workflow)
+
+    def test_engine_default_config_is_existing_v7_smoke(self) -> None:
+        source = (ROOT / "src/main.cpp").read_text(encoding="utf-8")
+        self.assertIn('config/v7_live_smoke.json', source)
+        self.assertNotIn('config/paper.example.json', source)
+        self.assertTrue((ROOT / "config/v7_live_smoke.json").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
