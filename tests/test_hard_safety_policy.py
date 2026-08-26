@@ -93,18 +93,17 @@ def v7_envelope() -> dict:
             "min_net_edge": 0.00005,
             "uncertainty_penalty": 0.0,
             "fractional_kelly": 0.25,
-            "fixed_dollar_trade_cap_enabled": False,
-            "max_trade_usd": 1e100,
-            "max_trade_fraction": 1.0,
-            "max_market_fraction": 1.0,
-            "max_event_fraction": 1.0,
-            "max_gross_fraction": 1.0,
+            "fixed_dollar_trade_cap_enabled": True,
+            "max_trade_usd": 125.0,
+            "max_market_fraction": 0.05,
+            "max_event_fraction": 0.15,
+            "max_gross_fraction": 0.70,
             "max_drawdown": 0.15,
         }
     )
     current["multi_strategy"]["paper_only"] = True
     current["multi_strategy"]["global_max_drawdown"] = 0.15
-    current["multi_strategy"]["global_max_gross_fraction"] = 1.0
+    current["multi_strategy"]["global_max_gross_fraction"] = 0.70
     current["multi_strategy"]["strategies"] = []
     current["v7"] = {
         "paper_only": True,
@@ -117,9 +116,8 @@ def v7_envelope() -> dict:
         "reserve_fraction": 0.02,
         "intent_min_edge": 0.00005,
         "hard_arb_min_net_edge": 0.00005,
-        "hard_arb_fixed_dollar_trade_cap_enabled": False,
-        "hard_arb_max_trade_usd": 1e100,
-        "hard_arb_max_trade_fraction": 1.0,
+        "hard_arb_fixed_dollar_trade_cap_enabled": True,
+        "hard_arb_max_trade_usd": 125.0,
     }
     return current
 
@@ -234,45 +232,42 @@ class HardSafetyPolicyTest(unittest.TestCase):
         current["multi_strategy"]["strategies"][0]["overrides"]["max_drawdown"] = 0.10
         self.assertEqual(compare_paper_config(BASE, current, "config/paper_v6.json"), [])
 
-    def test_v7_authorized_100_percent_envelope_without_fixed_dollar_cap_is_allowed(self) -> None:
+    def test_v7_authorized_aggressive_envelope_is_allowed(self) -> None:
         self.assertEqual(compare_paper_config(BASE, v7_envelope(), "config/paper_v7.json"), [])
 
-    def test_v7_rejects_more_than_100_percent(self) -> None:
+    def test_v7_cannot_exceed_authorized_concentration_gross_or_trade_cap(self) -> None:
         current = v7_envelope()
-        current["max_trade_fraction"] = 1.001
-        current["max_market_fraction"] = 1.001
-        current["max_event_fraction"] = 1.001
-        current["max_gross_fraction"] = 1.001
-        current["multi_strategy"]["global_max_gross_fraction"] = 1.001
-        current["v7"]["hard_arb_max_trade_fraction"] = 1.001
+        current["max_market_fraction"] = 0.051
+        current["max_event_fraction"] = 0.151
+        current["max_gross_fraction"] = 0.701
+        current["multi_strategy"]["global_max_gross_fraction"] = 0.701
+        current["max_trade_usd"] = 125.01
+        current["v7"]["hard_arb_max_trade_usd"] = 125.01
         joined = "\n".join(compare_paper_config(BASE, current, "config/paper_v7.json"))
-        self.assertIn("max_trade_fraction allowed<=1", joined)
-        self.assertIn("max_market_fraction allowed<=1", joined)
-        self.assertIn("max_event_fraction allowed<=1", joined)
-        self.assertIn("max_gross_fraction allowed<=1", joined)
-        self.assertIn("global_max_gross_fraction allowed<=1", joined)
-        self.assertIn("hard_arb_max_trade_fraction allowed<=1", joined)
+        self.assertIn("max_market_fraction allowed<=0.05, got 0.051", joined)
+        self.assertIn("max_event_fraction allowed<=0.15, got 0.151", joined)
+        self.assertIn("max_gross_fraction allowed<=0.7, got 0.701", joined)
+        self.assertIn("global_max_gross_fraction allowed<=0.7, got 0.701", joined)
+        self.assertIn("max_trade_usd allowed<=125, got 125.01", joined)
+        self.assertIn("v7.hard_arb_max_trade_usd allowed<=125, got 125.01", joined)
 
-    def test_v7_has_no_binding_fixed_dollar_ceiling_but_keeps_kelly_drawdown_and_paper_boundary(self) -> None:
+    def test_v7_keeps_kelly_drawdown_fixed_cap_and_paper_boundary(self) -> None:
         current = v7_envelope()
-        current["max_trade_usd"] = 1e200
-        current["v7"]["hard_arb_max_trade_usd"] = 1e200
-        self.assertEqual(compare_paper_config(BASE, current, "config/paper_v7.json"), [])
         current["fractional_kelly"] = 0.251
         current["max_drawdown"] = 0.151
-        current["fixed_dollar_trade_cap_enabled"] = True
+        current["fixed_dollar_trade_cap_enabled"] = False
         current["v7"]["authenticated_execution"] = True
         joined = "\n".join(compare_paper_config(BASE, current, "config/paper_v7.json"))
         self.assertIn("fractional_kelly allowed<=0.25", joined)
         self.assertIn("max_drawdown allowed<=0.15", joined)
-        self.assertIn("fixed-dollar trade cap must remain disabled", joined)
+        self.assertIn("fixed-dollar trade cap must remain enabled", joined)
         self.assertIn("authenticated execution must remain disabled", joined)
 
-    def test_v7_hard_arb_fixed_dollar_cap_must_stay_disabled(self) -> None:
+    def test_v7_hard_arb_fixed_dollar_cap_must_stay_enabled(self) -> None:
         current = v7_envelope()
-        current["v7"]["hard_arb_fixed_dollar_trade_cap_enabled"] = True
+        current["v7"]["hard_arb_fixed_dollar_trade_cap_enabled"] = False
         joined = "\n".join(compare_paper_config(BASE, current, "config/paper_v7.json"))
-        self.assertIn("hard-arb fixed-dollar trade cap must remain disabled", joined)
+        self.assertIn("hard-arb fixed-dollar trade cap must remain enabled", joined)
 
     def test_runtime_hard_safety_surfaces_include_loop_and_materializer(self) -> None:
         self.assertTrue(is_runtime_hard_safety_surface("scripts/paper_v6_loop.sh"))
