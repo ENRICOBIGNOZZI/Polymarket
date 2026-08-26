@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-08-26T12:54:56Z",
+  "current_main_sha": "44745ded84bd7140e4175c6f79023da415bc7b6f",
+  "audited_v7_local_factor_pr": 481,
+  "audited_v7_local_factor_head": "e268aff381f42d3128be40dead78f6e9b1cee62d",
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "material_finding": "cluster_wide_complete_case_intersection_is_anti_monotone_under_universe_expansion",
+  "source_contract": {
+    "builder": "scripts/v7_local_factor_core.py::build_regular_panel",
+    "behavior": "intersects timestamps across every market in the cluster before pair-specific inference",
+    "driver": "scripts/v7_local_factor_research.py builds one full-cluster panel and reuses it for every predeclared pair"
+  },
+  "current_bounded_v7_evidence": {
+    "markets": 300,
+    "clusters": 15,
+    "histories": 150,
+    "predeclared_pairs": 67,
+    "testable_pairs": 5,
+    "unestimable_pairs": 62,
+    "testable_fraction": 0.07462686567164178,
+    "minimum_testable_pair_pvalue": 0.26768463695855405,
+    "by_selected_pairs": 0,
+    "post_multiplicity_signals": 0
+  },
+  "deterministic_counterexample": {
+    "bucket_seconds": 3600,
+    "minimum_regular_points": 48,
+    "baseline_cluster_markets": ["A", "B", "C", "D"],
+    "baseline_common_points": 60,
+    "broadened_cluster_adds_unrelated_sparse_market": "E",
+    "sparse_market_points": 5,
+    "broadened_cluster_common_points": 5,
+    "broadened_cluster_estimable": false,
+    "predeclared_pair": ["A", "B"],
+    "predeclared_controls": ["C", "D"],
+    "pair_local_common_points": 60,
+    "pair_local_estimable": true
+  },
+  "interpretation": "Adding an unrelated sparse market to a broad cluster can destroy every pair test that shares the cluster-wide complete-case panel, even when a predeclared pair and its predeclared controls retain a fully regular sample. This makes broader-universe aggression capable of reducing rather than increasing Local Factor statistical power.",
+  "required_successor_contract": [
+    "Freeze each pair hypothesis and its admissible control set from contract metadata before price history, residuals, p-values, edge or PnL are inspected.",
+    "Build the regular panel per predeclared pair/control set rather than from the entire broad cluster.",
+    "Do not choose controls ex post from realized missingness unless the missingness mechanism is separately justified; unavailable predeclared controls should fail that hypothesis closed or use a predeclared fallback hierarchy.",
+    "Keep every predeclared pair in BY multiplicity with p=1 when its own predeclared panel is unestimable.",
+    "Preserve the conditional residual unit-root bootstrap, pair-excluded common factor, actual-fidelity n-step forecast, TTR buffer and price/PnL hedge units.",
+    "Only after this power/testability repair compare broader universes, shorter common samples, lower z and higher FDR on identical chronological data.",
+    "Promotion still requires empirical joint fill states, partial abort/unwind economics and positive fill-conditioned PnL under 1x/1.5x/2x costs."
+  ],
+  "latest_exact_main_execution_context": {
+    "trade_recorder_status": "healthy",
+    "fresh_trade_rows": 180,
+    "graph_rv_bundles": 2,
+    "graph_rv_legs": 8,
+    "max_graph_quote_edge": 0.010000000000000009,
+    "completed_bundles": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_pnl_usd": 0.0
+  },
+  "safety": {
+    "paper_only": true,
+    "authorized_aggressive_envelope_unchanged": true,
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "authenticated_execution": false,
+    "real_money_execution": false
+  }
+}
