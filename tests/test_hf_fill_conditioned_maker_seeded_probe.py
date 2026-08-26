@@ -27,6 +27,8 @@ def args():
         recent_lookback_seconds=120,
         toxicity_mult=0.25,
         improve_ticks=1,
+        markets=1000,
+        activity_scan_markets=120,
     )
 
 
@@ -55,7 +57,20 @@ def source_candidate(confidence: float = 0.90) -> core.Candidate:
     )
 
 
+def resting_order(created_ts: int = 1000, queue: float = 100.0, shares: float = 10.0) -> core.ShadowOrder:
+    c = source_candidate()
+    c.limit_price = 0.50
+    c.shares = shares
+    c.queue_ahead = queue
+    c.adjusted_edge = 0.01
+    return core.ShadowOrder(c, created_ts, created_ts * 1000, created_ts + 60, shares, queue)
+
+
 class FillConditionedMakerSeededProbeTest(unittest.TestCase):
+    def tearDown(self):
+        probe._ACTIVE_ARGS = None
+        probe._REVALIDATION_STATS.clear()
+
     def test_prior_is_strictly_pre_decision(self):
         with self.assertRaises(RuntimeError):
             probe.fill_conditioned_gate([], {}, {}, probe.PRIOR_CUTOFF_TS, args())
@@ -107,7 +122,7 @@ class FillConditionedMakerSeededProbeTest(unittest.TestCase):
         self.assertEqual(routed, [])
         self.assertGreater(stats["router_reason_counts"].get("directional_sell_flow_too_toxic", 0), 0)
 
-    def test_profile_enables_only_one_tick_for_router_comparison(self):
+    def test_profile_broadens_recent_flow_scan_without_lowering_edge_floor(self):
         a = args()
         a.min_recent_trades = 2
         a.min_sell_prints = 2
@@ -116,8 +131,48 @@ class FillConditionedMakerSeededProbeTest(unittest.TestCase):
         a.improve_ticks = 3
         d = probe.apply_fill_conditioned_profile(a)
         self.assertEqual(a.improve_ticks, 1)
+        self.assertEqual(a.activity_scan_markets, 300)
+        self.assertEqual(a.min_edge, 0.00005)
         self.assertEqual(d["inside_markout_prior_per_share"], probe.INSIDE_MARKOUT_PRIOR)
         self.assertFalse(d["positive_at_touch_markout_credit"])
+
+    def test_collapsed_hazard_requests_cancel_but_order_stays_fillable_during_latency(self):
+        probe._ACTIVE_ARGS = args()
+        order = resting_order(queue=0.0, shares=10.0)
+        probe.rolling_revalidated_consume(order, [], 1030)
+        self.assertEqual(order.remaining, 10.0)
+        self.assertEqual(getattr(order, "hf_cancel_effective_ts"), 1031.0)
+
+        # A public SELL whose event-time precedes cancel effectiveness still fills,
+        # even though the next Data-API observation arrives after cancellation would
+        # have become effective locally.
+        trade = core.Trade("s-fill", "yes", "SELL", 0.50, 10.0, 1031)
+        probe.rolling_revalidated_consume(order, [trade], 1032)
+        self.assertEqual(order.remaining, 0.0)
+        self.assertEqual(order.filled, 10.0)
+
+    def test_trade_after_cancel_effective_time_does_not_fill(self):
+        probe._ACTIVE_ARGS = args()
+        order = resting_order(queue=0.0, shares=10.0)
+        probe.rolling_revalidated_consume(order, [], 1030)
+        trade = core.Trade("s-too-late", "yes", "SELL", 0.50, 10.0, 1032)
+        probe.rolling_revalidated_consume(order, [trade], 1032)
+        self.assertEqual(order.filled, 0.0)
+        self.assertEqual(order.remaining, 0.0)
+
+    def test_rolling_flow_can_preserve_queue_after_grace(self):
+        probe._ACTIVE_ARGS = args()
+        order = resting_order(queue=1000.0, shares=10.0)
+        trades = [
+            core.Trade("s1", "yes", "SELL", 0.50, 5.0, 1027),
+            core.Trade("s2", "yes", "SELL", 0.50, 5.0, 1028),
+            core.Trade("s3", "yes", "SELL", 0.50, 5.0, 1029),
+        ]
+        probe.rolling_revalidated_consume(order, trades, 1030)
+        self.assertFalse(hasattr(order, "hf_cancel_effective_ts"))
+        self.assertEqual(order.filled, 0.0)
+        self.assertLess(order.queue_ahead, 1000.0)
+        self.assertGreater(probe._REVALIDATION_STATS["kept"], 0)
 
 
 if __name__ == "__main__":
