@@ -68,6 +68,55 @@ class ResearchPolicyBranchClassificationTest(unittest.TestCase):
         result = self.run_policy("research/shadow-oos-report","Measurement-only shadow instrumentation.",["scripts/walk_forward_v4.py","scripts/runtime_action_report.py"],labels=["shadow-isolated"],draft=False)
         self.assertNotEqual(result.returncode, 0); self.assertIn("scripts/walk_forward_v4.py", result.stdout); self.assertIn("scripts/runtime_action_report.py", result.stdout)
 
+    def test_v7_research_model_surfaces_require_research_lifecycle(self):
+        changed = [
+            "config/research_v7_pca_stat_arb.json",
+            "config/research_v7_local_factor.json",
+            "config/research_v7_cross_sectional_rank.json",
+            "scripts/v7_pca_stat_arb_core.py",
+            "scripts/v7_pca_stat_arb_research.py",
+            "scripts/v7_local_factor_core.py",
+            "scripts/v7_local_factor_research.py",
+            "scripts/v7_cross_sectional_rank.py",
+            "scripts/v7_cross_sectional_rank_core.py",
+        ]
+        blocked = self.run_policy(
+            "fix/v7-model-helper",
+            "Adjust V7 PCA, local-factor and cross-sectional ranking model research.",
+            changed,
+        )
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn("model/runtime work cannot change", blocked.stdout)
+        for path in changed:
+            self.assertIn(path, blocked.stdout)
+
+        research = self.run_policy(
+            "research/v7-model-helper",
+            "V7 model research only.",
+            changed,
+            draft=True,
+        )
+        self.assertEqual(research.returncode, 0, research.stdout + research.stderr)
+        self.assertIn("policy: `pass`", research.stdout)
+
+    def test_shadow_isolated_cannot_mutate_v7_model_research_surfaces(self):
+        changed = [
+            "scripts/v7_pca_stat_arb_core.py",
+            "scripts/v7_local_factor_core.py",
+            "scripts/v7_cross_sectional_rank_core.py",
+        ]
+        result = self.run_policy(
+            "research/v7-model-shadow",
+            "Measurement-only V7 model shadow.",
+            changed,
+            labels=["shadow-isolated"],
+            draft=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("shadow-isolated code cannot modify production", result.stdout)
+        for path in changed:
+            self.assertIn(path, result.stdout)
+
     def test_non_draft_integration_requires_numbered_and_approved_source(self):
         rejected = self.run_policy("integration/alpha","No numbered provenance yet.",["config/paper_v5.json"],labels=[],draft=False)
         self.assertNotEqual(rejected.returncode, 0); self.assertIn("bind exact source provenance", rejected.stdout)
