@@ -70,7 +70,7 @@ jobs:
           chmod 600 ~/.ssh/polymarket_archive
           ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
 
-      - name: Archive exact paper-validated market universe
+      - name: Archive exact paper-validated V7 market universe
         shell: bash
         run: |
           set -euo pipefail
@@ -88,14 +88,14 @@ jobs:
           import json,os,re
           manifest=json.loads(os.environ['MANIFEST_JSON'])
           version=int(manifest.get('version') or 0)
-          if version not in {6,7}:
+          if version != 7:
               print('active=false')
               print('version='+str(version))
           else:
               root=str(manifest.get('run_root') or '')
               assert re.fullmatch(r'runs/[A-Za-z0-9._-]+',root), root
               print('active=true')
-              print('version='+str(version))
+              print('version=7')
               print('run_root='+root)
           PY
           )"
@@ -104,19 +104,20 @@ jobs:
           active="$(printf '%s\n' "$target" | sed -n 's/^active=//p' | tail -n1)"
           version="$(printf '%s\n' "$target" | sed -n 's/^version=//p' | tail -n1)"
           if [[ "$active" != "true" ]]; then
-            printf 'archive_skipped=unsupported_validated_champion version=%s\n' "${version:-unknown}"
+            printf 'archive_skipped=validated_champion_not_v7 version=%s\n' "${version:-unknown}"
             exit 0
           fi
           run_root="$(printf '%s\n' "$target" | sed -n 's/^run_root=//p' | tail -n1)"
           [[ "$run_root" =~ ^runs/[A-Za-z0-9._-]+$ ]]
-          cache="$run_root/market_proxy_cache.json"
-          archive_dir="$run_root/universe_snapshots"
+          execution_root="$run_root/execution"
+          cache="$execution_root/market_proxy_cache.json"
+          archive_dir="$execution_root/universe_snapshots"
 
           python3 - "$cache" <<'PY'
           import json,sys,time
           path=sys.argv[1]
           value=json.load(open(path,encoding='utf-8'))
-          assert value.get('schema') == 'polymarket_v6_market_proxy_cache_v1'
+          assert value.get('schema') == 'polymarket_v7_market_proxy_cache_v1'
           assert time.time()-float(value.get('timestamp') or 0) <= 600.0
           rows=value.get('markets') or []
           assert isinstance(rows,list) and len(rows) >= 100
@@ -128,7 +129,7 @@ jobs:
             printf 'archive_skipped=helper_not_yet_paper_validated\n'
             exit 0
           fi
-          tmp_helper="$run_root/.v7_archive_market_universe.${GITHUB_RUN_ID}.py"
+          tmp_helper="$execution_root/.v7_archive_market_universe.${GITHUB_RUN_ID}.py"
           git show "${validated_sha}:${helper_path}" > "$tmp_helper"
           trap 'rm -f "$tmp_helper"' EXIT
           python3 "$tmp_helper" \
