@@ -11,9 +11,10 @@ RUNTIME_HEALTH_ATTEMPTS="${POLYMARKET_RUNTIME_HEALTH_ATTEMPTS:-180}"
 DEPLOY_LOCK_DIR="${POLYMARKET_DEPLOY_LOCK_DIR:-$CACHE_DIR/update.lock}"
 DEPLOY_LOCK_WAIT_SECONDS="${POLYMARKET_DEPLOY_LOCK_WAIT_SECONDS:-900}"
 DEPLOY_LOCK_STALE_SECONDS="${POLYMARKET_DEPLOY_LOCK_STALE_SECONDS:-3600}"
-POLYMARKET_DEPLOY_LOCK_V2=1
+POLYMARKET_DEPLOY_LOCK_V1=1
 DEPLOY_LOCK_HELD=0
 DEPLOY_LOCK_TOKEN=""
+APP_UPDATER_LOCK_AWARE=0
 
 log() { printf '[mac-deploy] %s\n' "$*"; }
 fail() { printf '[mac-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -71,6 +72,27 @@ acquire_deploy_lock() {
     printf 'deploy_ref=%s\n' "$DEPLOY_REF"
   } > "$DEPLOY_LOCK_DIR/owner.env"
   log "Acquired deployment mutex token=$DEPLOY_LOCK_TOKEN"
+}
+
+wait_for_legacy_updater() {
+  [[ "$APP_UPDATER_LOCK_AWARE" == "0" ]] || return 0
+  local deadline now pids pid other
+  deadline=$(( $(date +%s) + DEPLOY_LOCK_WAIT_SECONDS ))
+  while :; do
+    other=""
+    pids="$(/usr/bin/pgrep -f "$APP_DIR/ops/update_server_macos.sh" 2>/dev/null || true)"
+    for pid in $pids; do
+      [[ "$pid" == "$$" ]] && continue
+      other="${other}${other:+,}$pid"
+    done
+    [[ -z "$other" ]] && return 0
+    now="$(date +%s)"
+    if (( now >= deadline )); then
+      fail "legacy pre-mutex updater still running pid=${other}; refusing concurrent checkout mutation"
+    fi
+    log "Waiting for pre-mutex launchd updater pid=${other} to finish"
+    sleep 2
+  done
 }
 
 write_status() {
@@ -178,7 +200,6 @@ full_runtime_healthy() {
   if (( version >= 6 )); then
     grep -q '^polymarket_runtime_contract_present 1$' <<<"$metrics" || return 1
   fi
-
   curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1 || return 1
   curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 || return 1
   curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$uid" >/dev/null 2>&1 || return 1
@@ -246,14 +267,18 @@ BREW_BIN="$(find_brew)" || fail "Homebrew is required (checked PATH, /opt/homebr
 [[ "$DEPLOY_LOCK_WAIT_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_LOCK_WAIT_SECONDS must be a positive integer"
 [[ "$DEPLOY_LOCK_STALE_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_LOCK_STALE_SECONDS must be a positive integer"
 [[ "$RUNTIME_HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS must be a positive integer"
+if grep -Eq '^POLYMARKET_DEPLOY_LOCK_V[0-9]+=1$' "$APP_DIR/ops/update_server_macos.sh" 2>/dev/null; then
+  APP_UPDATER_LOCK_AWARE=1
+fi
+
+acquire_deploy_lock
+trap release_deploy_lock EXIT INT TERM
+wait_for_legacy_updater
 
 BREW_PREFIX="$("$BREW_BIN" --prefix)"
 export PATH="$BREW_PREFIX/bin:$BREW_PREFIX/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PKG_CONFIG_PATH="$("$BREW_BIN" --prefix curl)/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 PYTHON_BIN="$BREW_PREFIX/bin/python3"
-
-acquire_deploy_lock
-trap release_deploy_lock EXIT INT TERM
 
 cd "$APP_DIR"
 OLD_SHA="$(git rev-parse HEAD)"
@@ -295,17 +320,19 @@ mkdir -p "$CACHE_DIR"
 STAGE="$(mktemp -d "$CACHE_DIR/stage.XXXXXX")"
 STAGE_SRC="$STAGE/src"
 CONFIG_BACKUP="$STAGE/state-backup"
-cleanup_stage() {
+cleanup() {
   git -C "$APP_DIR" worktree remove --force "$STAGE_SRC" >/dev/null 2>&1 || true
   rm -rf "$STAGE"
   release_deploy_lock
 }
-trap cleanup_stage EXIT INT TERM
+trap cleanup EXIT INT TERM
 
 log "Validating candidate $NEW_SHA in isolated worktree"
 git -C "$APP_DIR" worktree add --detach "$STAGE_SRC" "$NEW_SHA" >/dev/null
 validate_candidate "$STAGE_SRC"
 
+log "Candidate validation passed; staging production build"
+wait_for_legacy_updater
 JOBS="$(sysctl -n hw.logicalcpu 2>/dev/null || echo 2)"
 cd "$APP_DIR"
 git checkout "$LOCAL_BRANCH"
@@ -363,7 +390,9 @@ if ! wait_for_runtime_health; then
 fi
 
 FINAL_SHA="$(git -C "$APP_DIR" rev-parse HEAD)"
-[[ "$FINAL_SHA" == "$NEW_SHA" ]] || rollback "checkout moved during serialized deployment: actual=$FINAL_SHA expected=$NEW_SHA"
+if [[ "$FINAL_SHA" != "$NEW_SHA" ]]; then
+  rollback "checkout moved during serialized deployment: actual=$FINAL_SHA expected=$NEW_SHA"
+fi
 rm -rf build.previous
 write_status deployed "$NEW_SHA" "$NEW_SHA" "$MAIN_SHA"
 meta="$(champion_meta)"
