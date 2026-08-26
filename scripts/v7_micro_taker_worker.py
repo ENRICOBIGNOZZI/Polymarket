@@ -184,10 +184,11 @@ def fee_spec(details: Any) -> economics.FeeSpec:
     )
 
 
-def book_snapshot(yes: base.Book, no: base.Book, liquidity: float, received_ts: int) -> economics.BookSnapshot | None:
+def book_snapshot(yes: base.Book, no: base.Book, liquidity: float) -> economics.BookSnapshot | None:
+    freshness_ts = min(yes.freshness_ts(), no.freshness_ts())
     snapshot = economics.BookSnapshot(
         yes_bid=yes.bid(), yes_ask=yes.ask(), no_bid=no.bid(), no_ask=no.ask(),
-        liquidity=float(liquidity), received_ts=int(received_ts),
+        liquidity=float(liquidity), received_ts=int(freshness_ts),
     )
     return snapshot if economics.valid_book(snapshot) else None
 
@@ -306,7 +307,6 @@ def main() -> int:
     start_capital = float(cfg["starting_capital"])
     max_drawdown = float(cfg.get("max_drawdown", 0.15))
     max_market_fraction = float(cfg.get("max_market_fraction", 0.05))
-    now = int(time.time())
     args.run_dir.mkdir(parents=True, exist_ok=True)
     trade_tape = args.trade_tape or (args.run_dir.parent / "trade_tape.csv")
     state_path = args.run_dir / "state.json"
@@ -334,6 +334,7 @@ def main() -> int:
         markets, books = [], {}
         failures.append(f"market_data:{type(exc).__name__}:{exc}")
 
+    now = int(time.time())
     token_ids = {token for market in markets for token in (market.yes, market.no) if token}
     flow = causal_flow_features(trade_tape, token_ids, now=now, lookback_seconds=args.flow_lookback_seconds, half_life_seconds=args.flow_half_life_seconds)
     current: dict[str, tuple[base.Market, base.Book, base.Book, tuple[list[float], float, float]]] = {}
@@ -397,7 +398,7 @@ def main() -> int:
             prediction = sum(a * b for a, b in zip(beta, feature[0]))
             prediction = max(-2 * feature[2], min(2 * feature[2], prediction))
             predicted_yes_mid = max(0.001, min(0.999, feature[1] + prediction))
-            snapshot = book_snapshot(yes, no, market.liq, now)
+            snapshot = book_snapshot(yes, no, market.liq)
             if snapshot is None:
                 continue
             candidate = economics.choose_side(
