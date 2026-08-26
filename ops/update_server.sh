@@ -27,16 +27,21 @@ else
   git reset --hard "$NEW_SHA"
 fi
 
-readarray -t CHAMPION < <(python3 - <<'PY'
+champion_meta="$(python3 - <<'PY'
 import json
-from pathlib import Path
-m=json.loads(Path('config/live_champion.json').read_text())
-for key in ('version','loop','config','run_root'): print(m[key])
+from pathlib import Path, PurePosixPath
+m=json.loads(Path('config/live_champion.json').read_text(encoding='utf-8'))
+version=m.get('version')
+assert isinstance(version,int) and not isinstance(version,bool) and version>0
+values=[str(m.get(k,'')) for k in ('loop','config','run_root')]
+for value in values:
+    path=PurePosixPath(value)
+    assert not path.is_absolute() and '..' not in path.parts
+print('\t'.join((str(version),*values)))
 PY
-)
-VERSION="${CHAMPION[0]}"; LOOP_REL="${CHAMPION[1]}"; CONFIG_REL="${CHAMPION[2]}"; RUN_ROOT_REL="${CHAMPION[3]}"; RUN_NAME="$(basename "$RUN_ROOT_REL")"
-[[ "$VERSION" =~ ^[0-9]+$ ]] || fail "invalid champion version"
-[[ "$VERSION" == "5" || "$VERSION" == "6" ]] || fail "unsupported champion version V$VERSION"
+)"
+IFS=$'\t' read -r VERSION LOOP_REL CONFIG_REL RUN_ROOT_REL <<<"$champion_meta"
+RUN_NAME="$(basename "$RUN_ROOT_REL")"
 [[ -f "$LOOP_REL" && -f "$CONFIG_REL" ]] || fail "champion files are missing"
 
 log "Building and validating paper-validated V$VERSION"
@@ -44,23 +49,15 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel "$(nproc)"
 ctest --test-dir build --output-on-failure
 python3 -m unittest \
-  tests/test_monitoring_exporter.py tests/test_monitoring_v4_exporter.py \
-  tests/test_monitoring_latest_exporter.py tests/test_monitoring_v5_exporter.py \
-  tests/test_grafana_fast_paper_contract.py tests/test_grafana_multi_strategy_contract.py \
-  tests/test_multi_strategy_paper.py tests/test_v4_monitoring_contract.py \
-  tests/test_v6_runtime_contract.py tests/test_v6_model_contracts.py -v
+  tests/test_monitoring_exporter.py \
+  tests/test_monitoring_latest_exporter.py \
+  tests/test_runtime_contract_health.py \
+  tests/test_grafana_multi_strategy_contract.py -v
 python3 -m py_compile \
-  monitoring/exporter.py monitoring/exporter_v4.py monitoring/exporter_v5.py \
-  monitoring/exporter_v6.py monitoring/exporter_latest.py \
-  scripts/multi_strategy_paper.py scripts/build_v4_intents.py scripts/merge_v4_intents.py \
-  scripts/walk_forward_v4.py scripts/tiny_live_pilot.py scripts/v6_*.py
-bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh \
-  scripts/v6_live_smoke_once.sh scripts/monitoring_up.sh scripts/monitoring_down.sh
+  monitoring/exporter.py monitoring/exporter_latest.py scripts/runtime_contract_health.py
+bash -n scripts/paper_latest_loop.sh "$LOOP_REL" scripts/monitoring_up.sh scripts/monitoring_down.sh
 python3 -m json.tool "$CONFIG_REL" >/dev/null
 python3 -m json.tool config/live_champion.json >/dev/null
-if [[ "$VERSION" == "6" ]]; then
-  python3 -m json.tool config/v6_model_architecture.json >/dev/null
-fi
 python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
 sudo docker compose -f docker-compose.monitoring.yml config >/dev/null
 
@@ -128,49 +125,49 @@ log "Restarting V$VERSION paper and monitoring services"
 sudo systemctl restart polymarket-paper.service
 sudo systemctl restart polymarket-monitoring.service
 
+dashboard_uid="$(python3 - <<'PY'
+import json
+from pathlib import Path
+print(json.loads(Path('config/project_context.json').read_text(encoding='utf-8'))['grafana']['dashboard_uid'])
+PY
+)"
+
 healthy=0
-for _ in {1..75}; do
+metrics=""
+for _ in {1..90}; do
   if sudo systemctl is-active --quiet polymarket-paper.service && \
      sudo systemctl is-active --quiet polymarket-monitoring.service && \
-     curl -fsS http://127.0.0.1:9108/healthz >/dev/null 2>&1; then
+     curl -fsS http://127.0.0.1:9108/healthz >/dev/null 2>&1 && \
+     curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1 && \
+     curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 && \
+     curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$dashboard_uid" >/dev/null 2>&1; then
     metrics="$(curl -fsS http://127.0.0.1:9108/metrics 2>/dev/null || true)"
-    if grep -q "^polymarket_runtime_info{adapter=\"v$VERSION\",run_root=\"$RUN_NAME\",version=\"v$VERSION\"} 1$" <<<"$metrics"; then
-      healthy=1
-      break
+    if grep -Eq "^polymarket_runtime_info\\{adapter=\"[^\"]+\",run_root=\"$RUN_NAME\",version=\"v$VERSION\"\\} 1$" <<<"$metrics"; then
+      if (( VERSION == 5 )); then
+        if python3 scripts/v5_runtime_readiness.py \
+          --run-root "$APP_DIR/$RUN_ROOT_REL" \
+          --supervisor-max-age 60 --allocator-max-age 30 \
+          --model-output-max-age 120 --startup-grace 600 >/dev/null 2>&1; then
+          healthy=1
+          break
+        fi
+      elif python3 scripts/runtime_contract_health.py \
+        --manifest config/live_champion.json --repository-root . \
+        --max-age-seconds 180 >/dev/null 2>&1; then
+        healthy=1
+        break
+      fi
     fi
   fi
   sleep 2
 done
-[[ "$healthy" == "1" ]] || fail "V$VERSION runtime did not become healthy"
+[[ "$healthy" == "1" ]] || fail "V$VERSION runtime did not satisfy the version-neutral health contract"
 
 grep -q '^polymarket_runtime_pnl_usd ' <<<"$metrics"
-if (( VERSION >= 5 )); then
-  grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics"
-  grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics"
-  grep -q '^polymarket_model_info{' <<<"$metrics"
-fi
+grep -q '^polymarket_runtime_equity_usd ' <<<"$metrics"
 if (( VERSION >= 6 )); then
-  grep -q '^polymarket_v6_exporter_info{' <<<"$metrics"
-  grep -q '^polymarket_v6_local_factor_clusters ' <<<"$metrics"
-  test -s "$APP_DIR/$RUN_ROOT_REL/hard_arb/status.json"
-  test -s "$APP_DIR/$RUN_ROOT_REL/local_factor_status.json"
-  test -s "$APP_DIR/$RUN_ROOT_REL/runtime_status.json"
+  grep -q '^polymarket_runtime_contract_present 1$' <<<"$metrics"
 fi
-
-supervisor="$APP_DIR/$RUN_ROOT_REL/runtime_supervisor.csv"
-test -s "$supervisor"
-python3 - "$supervisor" "$VERSION" <<'PY'
-import csv,sys,time
-from pathlib import Path
-path=Path(sys.argv[1]); version=int(sys.argv[2])
-with path.open(newline='',encoding='utf-8') as h: rows=list(csv.DictReader(h))
-assert rows,'empty runtime supervisor'; row=rows[-1]
-assert row.get('recorder_alive')=='1',row
-assert row.get('broker_alive')=='1',row
-primary='allocator_alive' if version>=5 else 'terminal_alive'
-assert row.get(primary)=='1',row
-assert time.time()-float(row['timestamp'])<=60,row
-PY
 
 printf 'deployed_sha=%s\n' "$NEW_SHA"
 printf 'validated_ref=%s\n' "$DEPLOY_REF"
