@@ -15,7 +15,7 @@ shadow_pid=0
 
 start_execution(){
   POLYMARKET_RUNTIME_PARENT_PID="$$" \
-    bash scripts/paper_v6_loop.sh "$CONFIG" "$EXECUTION_ROOT" \
+    bash scripts/paper_v7_execution_loop.sh "$CONFIG" "$EXECUTION_ROOT" \
     >>"$RUN_ROOT/execution_supervisor.log" 2>&1 &
   execution_pid=$!
 }
