@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import csv
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts.hf_maker_tape_audit import summarize
 
@@ -32,20 +37,23 @@ class HFMakerTapeAuditTest(unittest.TestCase):
                 root / "tape.csv",
                 ["timestamp", "received_ms", "lag_ms", "condition_id", "asset_id", "outcome", "side", "price", "size", "transaction_hash", "slug", "event_slug"],
                 [
-                    # Queue 5 then fill 3 shares, observed before TTL.
                     {"timestamp": 120, "received_ms": 121000, "lag_ms": 1000, "condition_id": "c1", "asset_id": "t1", "outcome": "Yes", "side": "SELL", "price": 0.49, "size": 8, "transaction_hash": "a", "slug": "x", "event_slug": "e"},
-                    # Event is inside m2's TTL but the recorder sees it only after cancellation.
                     {"timestamp": 240, "received_ms": 270000, "lag_ms": 30000, "condition_id": "c2", "asset_id": "t2", "outcome": "No", "side": "SELL", "price": 0.39, "size": 10, "transaction_hash": "b", "slug": "y", "event_slug": "e"},
-                    # BUY must never fill our passive bid.
                     {"timestamp": 130, "received_ms": 131000, "lag_ms": 1000, "condition_id": "c1", "asset_id": "t1", "outcome": "Yes", "side": "BUY", "price": 0.49, "size": 100, "transaction_hash": "c", "slug": "x", "event_slug": "e"},
                 ],
             )
             out = summarize(root / "orders.csv", root / "tape.csv", 60)
+            self.assertEqual(out["schema"], "hf_maker_shared_tape_audit_v2")
             self.assertEqual(out["orders"], 2)
+            self.assertAlmostEqual(out["posted_notional"], 6.6)
             self.assertEqual(out["causal_fill_orders"], 1)
+            self.assertAlmostEqual(out["causal_fill_order_rate"], 0.5)
             self.assertAlmostEqual(out["causal_filled_shares"], 3.0)
+            self.assertAlmostEqual(out["causal_filled_notional"], 1.5)
             self.assertEqual(out["event_time_fill_orders"], 2)
+            self.assertAlmostEqual(out["event_time_fill_order_rate"], 1.0)
             self.assertAlmostEqual(out["event_time_filled_shares"], 7.0)
+            self.assertAlmostEqual(out["event_time_filled_notional"], 3.1)
             self.assertEqual(out["delayed_only_fill_orders"], 1)
 
 
