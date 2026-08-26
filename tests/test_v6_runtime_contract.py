@@ -143,6 +143,7 @@ class V6RuntimeContractTest(unittest.TestCase):
 
     def test_v6_runtime_requires_proven_proxy_port_and_single_broker_owner(self) -> None:
         loop = (ROOT / "scripts" / "paper_v6_loop.sh").read_text(encoding="utf-8")
+        launcher = (ROOT / "scripts" / "v6_multileg_launcher.py").read_text(encoding="utf-8")
         # A localhost health response alone is not evidence that it belongs to
         # this runtime: a pre-handoff proxy can otherwise retain the fixed port.
         self.assertIn("reap_stale_v6_proxy_listener", loop)
@@ -151,11 +152,14 @@ class V6RuntimeContractTest(unittest.TestCase):
         self.assertIn("wait_for_owned_proxy", loop)
         self.assertIn("failed to start with verified port ownership", loop)
         self.assertIn("lost verified listener ownership or health", loop)
-        # The same provenance guard applies to a stale broker writing the
-        # shared multi-leg state, without touching another run root.
-        self.assertIn("reap_stale_v6_brokers", loop)
-        self.assertIn("stale_v6_broker_reaped=", loop)
-        self.assertIn('"--run-dir"* && "$command_line" == *"$RUN_ROOT"', loop)
+        # Multi-leg recovery has one authority: the lock-owning launcher. It
+        # validates the recorded owner and fails closed rather than process-scan
+        # and terminate a second set of candidates from the outer V6 loop.
+        self.assertNotIn("reap_stale_v6_brokers", loop)
+        self.assertNotIn("stale_v6_broker_reaped=", loop)
+        self.assertIn("_recover_stale_owner", launcher)
+        self.assertIn("_safe_stale_owner", launcher)
+        self.assertIn("stale_v6_multileg_owner_reaped=", launcher)
 
     def test_maker_fill_replay_is_late_index_safe_and_queue_aware(self) -> None:
         source = (ROOT / "src" / "maker_paper.cpp").read_text(encoding="utf-8")
