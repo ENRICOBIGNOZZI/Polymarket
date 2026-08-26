@@ -93,7 +93,8 @@ def test_v7_execution_loop_uses_corrected_workers_and_roundtrip_joint_state_gate
     assert "v7_hard_arb_guard.py" in text
     assert "v7_multileg_broker_runner.py" in text
     assert "v7_capacity_lock.py" in text
-    assert "v6_bundle_quote_optimizer.py" in text  # compatibility adapter -> V7 optimizer
+    assert "v7_bundle_quote_optimizer.py" in text
+    assert "v6_bundle_quote_optimizer.py" not in text
     assert "v7_graph_roundtrip_guard.py" in text
     assert "graph_roundtrip_state.json" in text
     graph_block = text[text.index("run_graph(){"):text.index("reap_stale_proxy")]
