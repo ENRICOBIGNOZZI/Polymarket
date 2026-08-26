@@ -47,6 +47,8 @@ jobs:
             tests/test_monitoring_v4_exporter.py \
             tests/test_monitoring_latest_exporter.py \
             tests/test_monitoring_v5_exporter.py \
+            tests/test_monitoring_v6_exporter.py \
+            tests/test_monitoring_hard_safety_contract.py \
             tests/test_v4_monitoring_contract.py \
             tests/test_v6_runtime_contract.py \
             tests/test_grafana_fast_paper_contract.py \

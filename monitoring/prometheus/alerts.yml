@@ -93,6 +93,15 @@ groups:
           summary: Latest Polymarket paper runtime drawdown above 10%
           description: The auto-selected runtime has crossed the pre-kill drawdown warning level.
 
+      - alert: PolymarketV6HardDrawdownLimitBreach
+        expr: polymarket_runtime_drawdown_ratio >= polymarket_allocator_global_max_drawdown_ratio
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: V6 paper runtime breached its configured hard drawdown limit
+          description: Marked drawdown is at or above the configured aggregate max-drawdown threshold; risk visibility remains fail-closed even if the kill-switch metric has not updated yet.
+
       - alert: PolymarketLatestKillSwitchActive
         expr: polymarket_runtime_kill_switch == 1
         labels:
