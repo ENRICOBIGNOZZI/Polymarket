@@ -13,7 +13,7 @@ REQUIRED_IDS = {
     "monitoring-validation", "alpha-factory", "meta-supervisor", "fast-arb-shadow-research",
     "arb-theory-research", "external-intelligence", "live-api-smoke",
     "v7-cross-sectional-ranking-research", "v7-point-in-time-universe-archive",
-    "v7-unified-paper-evidence", "v7-paper-deploy", "v7-server-health",
+    "v7-unified-paper-evidence", "v7-paper-server-deploy", "v7-paper-server-health",
 }
 NON_SCHEDULER_WORKFLOWS = {
     ".github/workflows/private-runtime-single-writer-validation.yml",
@@ -125,8 +125,8 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
     if merge_ids != ["integration-merge"]:
         errors.append(f"merge authority must belong only to integration-merge; found {merge_ids}")
     if champion_enabled:
-        if deploy_ids != ["v7-paper-deploy"]:
-            errors.append(f"enabled V7 champion requires sole deploy authority v7-paper-deploy; found {deploy_ids}")
+        if deploy_ids != ["v7-paper-server-deploy"]:
+            errors.append(f"enabled V7 champion requires sole deploy authority v7-paper-server-deploy; found {deploy_ids}")
     elif deploy_ids:
         errors.append(f"no deployment authority is allowed while champion is disabled; found {deploy_ids}")
     if dispatch_ids != ["post-merge-validation"]:
@@ -181,7 +181,7 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         for forbidden in ("contents: write", "git push origin paper-validated", "POLYMARKET_DEPLOY_REF="):
             if forbidden in text: errors.append(f"V7 evidence runtime contains forbidden authority: {forbidden}")
 
-    deploy = root / str(by_id.get("v7-paper-deploy", {}).get("workflow", ""))
+    deploy = root / str(by_id.get("v7-paper-server-deploy", {}).get("workflow", ""))
     if deploy.is_file():
         text = deploy.read_text(encoding="utf-8")
         for required in ("paper-validated", "POLYMARKET_EXPECTED_SHA", "manifest.get('version') != 7", "--require-monitoring"):
@@ -189,7 +189,7 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         for forbidden in ("v4-live-paper-smoke", "paper_v6_loop.sh", "authenticated_execution=true"):
             if forbidden in text: errors.append(f"V7 deploy workflow contains retired/unsafe contract: {forbidden}")
 
-    health = root / str(by_id.get("v7-server-health", {}).get("workflow", ""))
+    health = root / str(by_id.get("v7-paper-server-health", {}).get("workflow", ""))
     if health.is_file():
         text = health.read_text(encoding="utf-8")
         for required in ("paper-validated", "scripts/v7_server_health.py", "--require-monitoring", "health_result=no_operational_champion"):
