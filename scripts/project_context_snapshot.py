@@ -33,7 +33,7 @@ def build_snapshot(root: Path, manifest_path: Path) -> dict[str, Any]:
     directives = load(root / directives_rel)
     workflows = sorted(x for x in tracked if x.startswith(".github/workflows/") and x.endswith((".yml", ".yaml")))
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "repository": manifest.get("repository"),
         "head": run_git(root, "rev-parse", "HEAD"),
         "branch": run_git(root, "branch", "--show-current"),
@@ -49,6 +49,7 @@ def build_snapshot(root: Path, manifest_path: Path) -> dict[str, Any]:
         "scheduler_count": len(registry.get("schedulers", [])),
         "runtime": manifest.get("runtime", {}),
         "grafana": manifest.get("grafana", {}),
+        "cutover": manifest.get("cutover", {}),
         "context_policy": manifest.get("context_policy", {}),
         "security": manifest.get("security", {}),
         "operator_directives_path": directives_rel,
@@ -60,6 +61,7 @@ def render(snapshot: dict[str, Any]) -> str:
     champion = snapshot["live_champion"]
     state = "disabled" if champion.get("enabled") is False else f"V{champion.get('version')}"
     directives = snapshot["operator_directives"]
+    cutover = snapshot.get("cutover") if isinstance(snapshot.get("cutover"), dict) else {}
     lines = [
         "# Project context snapshot", "",
         f"- repository: `{snapshot['repository']}`",
@@ -69,6 +71,9 @@ def render(snapshot: dict[str, Any]) -> str:
         f"- workflows: **{snapshot['workflow_count']}**",
         f"- schedulers: **{snapshot['scheduler_count']}**",
         f"- operational champion: **{state}**",
+        f"- target champion: **V{cutover.get('target_version', '?')}**",
+        f"- cutover state: `{cutover.get('current_state')}`",
+        f"- required cutover sequence: `{cutover.get('required_sequence')}`",
         f"- operator directive epoch: `{directives.get('directive_epoch')}`",
         "", "## Current priority order", "",
     ]
@@ -84,7 +89,7 @@ def main() -> int:
     snapshot = build_snapshot(root, manifest)
     Path(a.output_json).write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     Path(a.output_markdown).write_text(render(snapshot), encoding="utf-8")
-    print(json.dumps({"head": snapshot["head"], "tracked_file_count": snapshot["tracked_file_count"], "workflow_count": snapshot["workflow_count"], "scheduler_count": snapshot["scheduler_count"], "champion_enabled": snapshot["live_champion"].get("enabled"), "operator_directive_epoch": snapshot["operator_directives"].get("directive_epoch")}, sort_keys=True))
+    print(json.dumps({"head": snapshot["head"], "tracked_file_count": snapshot["tracked_file_count"], "workflow_count": snapshot["workflow_count"], "scheduler_count": snapshot["scheduler_count"], "champion_enabled": snapshot["live_champion"].get("enabled"), "cutover_state": snapshot.get("cutover", {}).get("current_state"), "operator_directive_epoch": snapshot["operator_directives"].get("directive_epoch")}, sort_keys=True))
     return 0
 
 
