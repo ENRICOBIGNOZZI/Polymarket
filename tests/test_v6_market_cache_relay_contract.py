@@ -47,6 +47,22 @@ class V6MarketCacheRelayContractTests(unittest.TestCase):
         self.assertIn("relay_bootstrap_waits_for_validated_deploy=true", workflow)
         self.assertIn("time.time()-float(value['timestamp']) <= 180", workflow)
 
+    def test_ancestry_proof_restores_shallow_server_history_first(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        shallow_probe = 'shallow_before="$(git rev-parse --is-shallow-repository)"'
+        unshallow = 'git fetch -q --unshallow origin'
+        first_ancestry = 'git merge-base --is-ancestor "$paper_validated_sha" "$main_sha"'
+        second_ancestry = 'git merge-base --is-ancestor "$head_sha" "$paper_validated_sha"'
+        self.assertIn(shallow_probe, workflow)
+        self.assertIn('if [[ "$shallow_before" == "true" ]]; then', workflow)
+        self.assertIn(unshallow, workflow)
+        self.assertIn('shallow_after="$(git rev-parse --is-shallow-repository)"', workflow)
+        self.assertIn('test "$shallow_after" = false', workflow)
+        self.assertIn('server_repo_shallow_before=', workflow)
+        self.assertIn('server_repo_shallow_after=', workflow)
+        self.assertLess(workflow.index(unshallow), workflow.index(first_ancestry))
+        self.assertLess(workflow.index(unshallow), workflow.index(second_ancestry))
+
     def test_relay_fails_closed_unless_running_proxy_consumes_installed_cache(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("Verify running proxy consumes installed cache", workflow)
