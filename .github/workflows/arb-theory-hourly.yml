@@ -69,7 +69,6 @@ jobs:
                   and int(status.get("ws_messages", 0)) > 0
                   and int(status.get("book_updates", 0)) > 0
                   and candidate.get("model_sha") == target_sha
-                  and candidate.get("promotion_ready") is False
               )
               if is_valid:
                   valid += 1
@@ -90,10 +89,46 @@ jobs:
             --output-json research-output/config/candidates/fast_arb_candidate.json \
             --output-markdown research-output/docs/generated/fast_arb_theory_report.md \
             --output-header research-output/include/pm/generated/fast_arb_candidate_policy.hpp
+
+          python3 - <<'PY'
+          import csv
+          from pathlib import Path
+
+          paths = sorted(Path("evidence").rglob("fast_arb_joint_execution.csv"))
+          output = Path("research-output/fast_arb_joint_execution.csv")
+          rows = []
+          fieldnames = None
+          for path in paths:
+              with path.open(newline="", encoding="utf-8", errors="replace") as handle:
+                  reader = csv.DictReader(handle)
+                  if reader.fieldnames and fieldnames is None:
+                      fieldnames = list(reader.fieldnames)
+                  for row in reader:
+                      if row:
+                          rows.append(dict(row))
+          if fieldnames and rows:
+              with output.open("w", newline="", encoding="utf-8") as handle:
+                  writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+                  writer.writeheader()
+                  writer.writerows(rows)
+              print(f"joint execution rows: {len(rows)} from {len(paths)} files")
+          else:
+              print("joint execution rows: 0")
+          PY
+
+          execution_args=()
+          if [[ -s research-output/fast_arb_joint_execution.csv ]]; then
+            python3 scripts/v7_fast_joint_execution_evidence.py \
+              --input research-output/fast_arb_joint_execution.csv \
+              --expected-sha "$TARGET_SHA" \
+              --output-json research-output/fast_arb_joint_execution_evidence.json
+            execution_args=(--execution-evidence research-output/fast_arb_joint_execution_evidence.json)
+          fi
           python3 scripts/v7_fast_structural_gate.py \
             --candidate research-output/config/candidates/fast_arb_candidate.json \
             --expected-sha "$TARGET_SHA" \
-            --generated-header research-output/include/pm/generated/fast_arb_candidate_policy.hpp
+            --generated-header research-output/include/pm/generated/fast_arb_candidate_policy.hpp \
+            "${execution_args[@]}"
           python3 - <<'PY'
           import json
           import os
@@ -101,21 +136,24 @@ jobs:
           report_path = Path("research-output/config/candidates/fast_arb_candidate.json")
           report = json.loads(report_path.read_text())
           base_policy = json.loads(Path("config/fast_arb_policy.json").read_text())
+          execution_path = Path("research-output/fast_arb_joint_execution_evidence.json")
           assert report["real_order_submission"] is False
           assert report["candidate_policy"]["real_order_submission"] is False
           assert report["candidate_policy"]["min_net_edge"] >= base_policy["min_net_edge"]
           assert report["model_sha"] == os.environ["TARGET_SHA"]
-          assert report["promotion_ready"] is False
-          assert "joint_execution_evidence_missing" in report["promotion_gate"]["reasons"]
+          if not execution_path.is_file():
+              assert report["promotion_ready"] is False
+              assert "joint_execution_evidence_missing" in report["promotion_gate"]["reasons"]
           with Path("research-output/gates.env").open("w") as handle:
               handle.write(f"RESEARCH_READY={str(report['research_ready']).lower()}\n")
-              handle.write("PROMOTION_READY=false\n")
+              handle.write(f"PROMOTION_READY={str(report['promotion_ready']).lower()}\n")
           with Path("research-output/docs/generated/fast_arb_theory_report.md").open("a", encoding="utf-8") as handle:
               handle.write("\n## Authoritative V7 economic promotion gate\n\n")
               handle.write(f"- model_sha: `{report['model_sha']}`\n")
               handle.write(f"- quoted_theory_promotion_ready: `{report['quoted_theory_promotion_ready']}`\n")
-              handle.write("- promotion_ready: `false`\n")
-              handle.write("- reason: same-SHA realized joint-state PAPER execution evidence is required; quoted snapshot profit cannot promote.\n")
+              handle.write(f"- promotion_ready: `{str(report['promotion_ready']).lower()}`\n")
+              reasons = report["promotion_gate"]["reasons"]
+              handle.write(f"- reasons: `{', '.join(reasons) if reasons else 'none'}`\n")
           PY
           cat research-output/gates.env >> "$GITHUB_ENV"
           cat research-output/docs/generated/fast_arb_theory_report.md >> "$GITHUB_STEP_SUMMARY"
