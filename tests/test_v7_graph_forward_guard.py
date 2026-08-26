@@ -10,6 +10,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import lf_v7_graph_evidence_transport_audit as transport
+import lf_v7_graph_full_completion_pnl_audit as completion_pnl
 import v7_graph_forward_guard as guard
 
 
@@ -98,6 +99,23 @@ def test_transportability_accepts_only_weakly_easier_higher_edge_current_state()
     assert transport.transportable_session(harder_queue, historical) is False
     assert transport.transportable_session(larger_target, historical) is False
     assert transport.transportable_session(wrong_horizon, historical) is False
+
+
+def test_full_completion_stress_audit_exposes_gross_edge_shortcut():
+    result = completion_pnl.deterministic_counterexample()
+    assert result["incumbent_2x_positive"] is True
+    assert result["executed_2x_negative"] is True
+    incumbent = result["incumbent_stress_pnl"]
+    executed = result["executed_entry_cost_stress_pnl"]
+    assert incumbent["1x"] == incumbent["1.5x"] == incumbent["2x"] == 0.02
+    assert executed["1x"] > 0.0
+    assert executed["2x"] < 0.0
+
+    guard_text = (ROOT / "scripts/v7_graph_forward_guard.py").read_text(encoding="utf-8")
+    relation_text = (ROOT / "scripts/v6_relation_intents.py").read_text(encoding="utf-8")
+    assert 'profit = float(session["units"]) * float(session["expected_edge"])' in guard_text
+    assert 'edge = 1.0 - cost' in relation_text
+    assert '"entry_fee_per_share": fee_per_share(limit, details, taker=False)' in guard_text
 
 
 def test_source_contract_is_dual_clock_and_prospective():
