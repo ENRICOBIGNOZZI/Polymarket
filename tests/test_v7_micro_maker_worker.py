@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import csv
+import json
+import math
 import sys
 import tempfile
 from pathlib import Path
@@ -65,6 +67,60 @@ def test_maker_core_replays_before_residual_ttl_cancel_and_tracks_markouts():
     assert '"created_received_ms": arrival_ms' in source
 
 
+def test_full_depth_sell_vwap_walks_levels_and_fails_closed():
+    levels = [(0.40, 5.0), (0.39, 10.0), (0.38, 20.0)]
+    assert abs(maker.full_depth_sell_vwap(levels, 10.0) - 0.395) < 1e-12
+    expected = (5.0 * 0.40 + 10.0 * 0.39 + 5.0 * 0.38) / 20.0
+    assert abs(maker.full_depth_sell_vwap(levels, 20.0) - expected) < 1e-12
+    assert maker.full_depth_sell_vwap(levels, 40.0) is None
+
+
+def test_depth_aware_bid_is_quantity_specific_and_invalid_when_depth_insufficient():
+    book = maker.core.base.Book({
+        "asset_id": "token",
+        "tick_size": 0.01,
+        "min_order_size": 1,
+        "bids": [
+            {"price": "0.40", "size": "5"},
+            {"price": "0.39", "size": "10"},
+        ],
+        "asks": [{"price": "0.41", "size": "10"}],
+    })
+    try:
+        maker._DEPTH_EXIT_SHARES["token"] = 10.0
+        assert abs(maker._depth_aware_bid(book) - 0.395) < 1e-12
+        maker._DEPTH_EXIT_SHARES["token"] = 20.0
+        assert math.isnan(maker._depth_aware_bid(book))
+    finally:
+        maker._DEPTH_EXIT_SHARES.clear()
+
+
+def test_exit_requirement_covers_position_plus_residual_order_and_markout_watch():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        state = {
+            "killed": False,
+            "positions": {
+                "m1": {"token_id": "x", "shares": 7.0},
+            },
+            "orders": {
+                "m1": {"token_id": "x", "remaining_shares": 3.0},
+                "m2": {"token_id": "z", "remaining_shares": 4.0},
+            },
+            "markout_watch": {
+                "w1": {"token_id": "x", "shares": 5.0},
+                "w2": {"token_id": "y", "shares": 6.0},
+            },
+        }
+        (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+        required = maker._exit_requirements(root)
+        assert required == {"x": 10.0, "y": 6.0}
+        state["killed"] = True
+        (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+        required = maker._exit_requirements(root)
+        assert required == {"x": 10.0, "y": 6.0, "z": 4.0}
+
+
 def test_late_maker_markouts_fail_closed_in_canonical_adapter():
     fields = [
         "observation_ts", "fill_event_ts", "fill_received_ms", "market_id", "slug", "side",
@@ -94,11 +150,13 @@ def test_late_maker_markouts_fail_closed_in_canonical_adapter():
         assert {row["reject_reason"] for row in rejected} == {"late_markout_label", "invalid_markout_clock"}
 
 
-def test_maker_adapter_declares_bounded_markout_contract():
+def test_maker_adapter_declares_bounded_markout_and_depth_contracts():
     source = (ROOT / "scripts" / "v7_micro_maker_worker.py").read_text(encoding="utf-8")
     assert "MAX_MARKOUT_LABEL_DELAY_SECONDS = 15" in source
     assert "late_markout_label" in source
     assert "event_time_horizon_with_bounded_observation_delay" in source
+    assert "shares_specific_full_visible_bid_depth_vwap_fail_closed" in source
+    assert "full_depth_sell_vwap" in source
 
 
 def test_maker_core_persists_trade_identity_and_respects_broker_token_ownership():
