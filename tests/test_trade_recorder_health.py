@@ -88,6 +88,10 @@ class TradeRecorderHealthTest(unittest.TestCase):
         self.assertIn("steps.v6_smoke.outcome == 'failure'", workflow)
         self.assertIn('test -s "$CHAMPION_RUN_NAME/trade_recorder_health.json"', workflow)
         self.assertIn("report.get('status') != 'unhealthy'", workflow)
+        self.assertIn(
+            "if: env.CHAMPION_VERSION != '6' || github.event_name != 'pull_request' || steps.v6_smoke.outcome == 'success'",
+            workflow,
+        )
         self.assertIn("if: github.event_name != 'pull_request' && success()", workflow)
         self.assertIn("- name: Advance paper validated ref", workflow)
 
