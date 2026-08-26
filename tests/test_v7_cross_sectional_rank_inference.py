@@ -10,6 +10,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+import audit_v7_ranking_frozen_holdout as holdout_audit
 import v7_cross_sectional_rank_inference as inference
 
 UTC_DAY_BASE = (1_700_000_000 // 86400) * 86400
@@ -77,6 +78,30 @@ class BlockedRankingInferenceTest(unittest.TestCase):
         ok, reasons = inference.discovery_robustness_gate(result)
         self.assertFalse(ok)
         self.assertIn("insufficient_day_blocks", reasons)
+
+    def test_frozen_holdout_audit_detects_advancing_training_cutoff(self) -> None:
+        holdout_start = 1_000_000
+        observed_score = holdout_start + 10 * 3600 + 30 * 60
+        two_hour = holdout_audit.audit_horizon(
+            horizon_minutes=120,
+            holdout_start_ts=holdout_start,
+            observed_score_ts=observed_score,
+            fidelity_minutes=30,
+            embargo_buckets=1,
+        )
+        six_hour = holdout_audit.audit_horizon(
+            horizon_minutes=360,
+            holdout_start_ts=holdout_start,
+            observed_score_ts=observed_score,
+            fidelity_minutes=30,
+            embargo_buckets=1,
+        )
+        self.assertTrue(two_hour.holdout_training_can_enter_by_observed_score)
+        self.assertTrue(six_hour.holdout_training_can_enter_by_observed_score)
+        self.assertEqual(two_hour.frozen_max_training_origin_ts, holdout_start - 9000)
+        self.assertEqual(six_hour.frozen_max_training_origin_ts, holdout_start - 23400)
+        self.assertGreater(two_hour.rolling_max_training_origin_at_observed_score_ts, holdout_start)
+        self.assertGreater(six_hour.rolling_max_training_origin_at_observed_score_ts, holdout_start)
 
 
 if __name__ == "__main__":
