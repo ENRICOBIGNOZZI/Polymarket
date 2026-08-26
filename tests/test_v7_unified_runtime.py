@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +114,31 @@ def test_v7_execution_loop_is_canonical_and_has_no_legacy_runtime_calls():
     )
     for marker in forbidden:
         assert marker not in text, marker
+
+
+def test_v7_hard_arb_is_native_no_legacy_and_self_tests():
+    path = ROOT / "scripts/v7_hard_arb_guard.py"
+    text = path.read_text(encoding="utf-8")
+    assert "import v6_" not in text
+    assert "from v6_" not in text
+    assert "hard_legacy" not in text
+    assert "micro_legacy" not in text
+    assert "v7_market_common" in text
+    assert '"legacy_runtime_dependency": False' in text
+    assert '"verified_fees_required": True' in text
+    assert '"sequential_leg_revalidation": True' in text
+    assert '"unwind_on_leg_failure": True' in text
+    completed = subprocess.run(
+        [sys.executable, str(path), "self-test"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "v7_hard_arb_guard_self_test=ok" in completed.stdout
 
 
 def test_shadow_scheduler_is_research_only_and_frequency_separated():
