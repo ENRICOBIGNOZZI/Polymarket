@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "generated_utc": "2026-08-26T23:25:00Z",
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "source_branch": "research/v7-unified-final-evidence-20260826",
+  "source_sha": "ffe3a4ef6d71959afbf4f118721026a48aab19d7",
+  "model": "V7 single-leg PCA residual statistical arbitrage",
+  "status": "STRUCTURAL_BLOCKER",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "finding": "The post-multiplicity residual-z threshold is applied to the last historical training residual before the current executable-book residual is scored.",
+  "current_source_behavior": {
+    "gate_expression": "abs((model.residual_last - model.residual_mean) / model.residual_sd)",
+    "current_score_function": "inference.score_with_total_single_leg_risk(panel, model, current_logits, horizon_steps)",
+    "ordering": "historical endpoint gate executes before current-book scoring",
+    "configured_minimum_abs_z": 1.0
+  },
+  "deterministic_counterexamples": {
+    "historical_extreme_currently_mean_reverted": {
+      "training_endpoint_z": 2.0,
+      "current_book_z": 0.2,
+      "incumbent_gate": true,
+      "correct_current_state_gate": false
+    },
+    "historical_mild_currently_extreme": {
+      "training_endpoint_z": 0.2,
+      "current_book_z": 2.0,
+      "incumbent_gate": false,
+      "correct_current_state_gate": true
+    }
+  },
+  "economic_interpretation": [
+    "This does not establish positive PCA alpha or PnL.",
+    "It can admit a residual opportunity after the residual has already mean-reverted at the current book.",
+    "It can reject a currently extreme residual because the training endpoint was mild.",
+    "The candidate filter is therefore not aligned with the state used for current single-leg execution economics."
+  ],
+  "required_successor": [
+    "Compute the current PCA score first and apply the residual-z floor to abs(score.residual_z).",
+    "Keep the historical endpoint z only as a diagnostic field.",
+    "Do not change target-excluded PCA, conditional target-residual I(1) bootstrap, BY multiplicity, total single-leg risk, TTR, authoritative fee, depth/slippage, or PAPER-only boundaries.",
+    "Re-run 30m, 1h, 2h and 6h separately on identical chronological data; do not pool horizons.",
+    "Require forward executable fills and positive fill-conditioned post-cost PnL before promotion."
+  ],
+  "operator_policy_preserved": {
+    "market_limit": 1000,
+    "minimum_liquidity_usd": 2.0,
+    "minimum_post_cost_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "max_drawdown": 0.15,
+    "paper_only": true,
+    "authenticated_execution": false
+  }
+}
