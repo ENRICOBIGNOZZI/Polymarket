@@ -8,6 +8,7 @@ import math
 import os
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
@@ -25,6 +26,9 @@ INTENT_FIELDS = [
     "max_notional", "market_id", "side", "weight", "limit_price",
     "execution_deadline_ts", "hold_deadline_ts",
 ]
+HISTORY_WINDOW_SECONDS = 7 * 24 * 60 * 60
+HISTORY_BATCH_SIZE = 20
+HISTORY_SINGLE_FALLBACK_BUDGET_PER_WINDOW = 40
 
 
 def finite(value: Any, default: float = math.nan) -> float:
@@ -48,14 +52,32 @@ def parse_array(value: Any) -> list[Any]:
 
 
 def request_json(url: str, payload: Any | None = None, timeout: int = 20) -> Any:
-    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    data = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    headers = {
+        "User-Agent": "polymarket-v7-xsec-research/2",
+        "Accept": "application/json",
+    }
+    if data is not None:
+        headers["Content-Type"] = "application/json"
     request = urllib.request.Request(
         url,
         data=data,
-        headers={"User-Agent": "polymarket-v7-xsec-research/1", "Content-Type": "application/json"},
+        headers=headers,
+        method="POST" if data is not None else "GET",
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def http_error_detail(exc: BaseException) -> str:
+    if not isinstance(exc, urllib.error.HTTPError):
+        return type(exc).__name__
+    detail = ""
+    try:
+        detail = exc.read(240).decode("utf-8", errors="replace").strip().replace("\n", " ")
+    except Exception:
+        pass
+    return f"HTTP{exc.code}" + (f":{detail}" if detail else "")
 
 
 def atomic_json(path: Path, value: Any) -> None:
@@ -171,6 +193,21 @@ def parse_history(rows: list[Any], fidelity_minutes: int) -> dict[int, float]:
     return out
 
 
+def _merge_history(
+    histories: dict[str, dict[int, float]],
+    market_id: str,
+    rows: list[Any],
+    fidelity_minutes: int,
+) -> int:
+    parsed = parse_history(rows, fidelity_minutes)
+    if not parsed:
+        return 0
+    target = histories.setdefault(market_id, {})
+    before = len(target)
+    target.update(parsed)
+    return len(target) - before
+
+
 def fetch_histories(
     clob: str,
     markets: list[Market],
@@ -178,45 +215,73 @@ def fetch_histories(
     end_ts: int,
     fidelity_minutes: int,
 ) -> tuple[dict[str, dict[int, float]], list[str]]:
+    """Fetch absolute CLOB history in bounded windows, with per-window fallback.
+
+    Long fine-fidelity absolute requests have previously returned HTTP 400 from the
+    public history service.  The production C++ path already solved this by chunking;
+    V7 research must use the same data-health contract rather than treating a long
+    request failure as an empty panel.
+    """
+    if end_ts <= start_ts or not markets:
+        return {}, []
     token_to_market = {market.yes_token: market.market_id for market in markets}
     tokens = list(token_to_market)
     histories: dict[str, dict[int, float]] = {}
     failures: list[str] = []
-    for index in range(0, len(tokens), 20):
-        batch = tokens[index : index + 20]
-        try:
-            raw = request_json(
-                clob.rstrip("/") + "/batch-prices-history",
-                {"markets": batch, "start_ts": start_ts, "end_ts": end_ts, "fidelity": fidelity_minutes},
-            )
-            history = raw.get("history", {}) if isinstance(raw, dict) else {}
-            if isinstance(history, dict):
-                for token, rows in history.items():
-                    market_id = token_to_market.get(str(token))
-                    if market_id and isinstance(rows, list):
-                        parsed = parse_history(rows, fidelity_minutes)
-                        if parsed:
-                            histories[market_id] = parsed
-        except Exception as exc:
-            failures.append(f"batch:{type(exc).__name__}")
-    # Bounded fallback only.  Avoid turning missing history into an API storm.
-    missing = [market for market in markets if market.market_id not in histories][:25]
-    for market in missing:
-        try:
-            query = urllib.parse.urlencode(
-                {
-                    "market": market.yes_token,
-                    "startTs": start_ts,
-                    "endTs": end_ts,
-                    "fidelity": fidelity_minutes,
-                }
-            )
-            raw = request_json(clob.rstrip("/") + "/prices-history?" + query)
-            parsed = parse_history(raw.get("history", []) if isinstance(raw, dict) else [], fidelity_minutes)
-            if parsed:
-                histories[market.market_id] = parsed
-        except Exception as exc:
-            failures.append(f"single:{market.market_id}:{type(exc).__name__}")
+
+    window_start = start_ts
+    while window_start < end_ts:
+        window_end = min(end_ts, window_start + HISTORY_WINDOW_SECONDS)
+        single_budget = HISTORY_SINGLE_FALLBACK_BUDGET_PER_WINDOW
+        for index in range(0, len(tokens), HISTORY_BATCH_SIZE):
+            batch = tokens[index : index + HISTORY_BATCH_SIZE]
+            before = {token: len(histories.get(token_to_market[token], {})) for token in batch}
+            try:
+                raw = request_json(
+                    clob.rstrip("/") + "/batch-prices-history",
+                    {
+                        "markets": batch,
+                        "start_ts": window_start,
+                        "end_ts": window_end,
+                        "fidelity": fidelity_minutes,
+                    },
+                )
+                history = raw.get("history", {}) if isinstance(raw, dict) else {}
+                if isinstance(history, dict):
+                    for token, rows in history.items():
+                        market_id = token_to_market.get(str(token))
+                        if market_id and isinstance(rows, list):
+                            _merge_history(histories, market_id, rows, fidelity_minutes)
+            except Exception as exc:
+                detail = http_error_detail(exc)
+                if isinstance(exc, urllib.error.HTTPError) and exc.code == 429:
+                    raise RuntimeError(f"price history rate limited at {window_start}-{window_end}: {detail}") from exc
+                failures.append(f"batch:{window_start}:{window_end}:{detail}")
+
+            for token in batch:
+                market_id = token_to_market[token]
+                if len(histories.get(market_id, {})) > before[token] or single_budget <= 0:
+                    continue
+                query = urllib.parse.urlencode(
+                    {
+                        "market": token,
+                        "startTs": window_start,
+                        "endTs": window_end,
+                        "fidelity": fidelity_minutes,
+                    }
+                )
+                try:
+                    raw = request_json(clob.rstrip("/") + "/prices-history?" + query)
+                    rows = raw.get("history", []) if isinstance(raw, dict) else []
+                    if isinstance(rows, list):
+                        _merge_history(histories, market_id, rows, fidelity_minutes)
+                except Exception as exc:
+                    detail = http_error_detail(exc)
+                    if isinstance(exc, urllib.error.HTTPError) and exc.code == 429:
+                        raise RuntimeError(f"price history rate limited for {market_id}: {detail}") from exc
+                    failures.append(f"single:{market_id}:{window_start}:{window_end}:{detail}")
+                single_budget -= 1
+        window_start = window_end
     return histories, failures
 
 
@@ -265,9 +330,6 @@ def fetch_books(clob: str, markets: list[Market]) -> dict[str, tuple[float, floa
 
 
 def authoritative_fee(raw: dict[str, Any]) -> tuple[bool, float, float, bool]:
-    # This research adapter intentionally accepts only explicit Gamma economics.
-    # If feeSchedule is absent it fails closed; the final integration will consume
-    # the shared canonical Gamma -> CLOB-fd resolver once that approved port lands.
     if raw.get("feesEnabled") is False:
         return True, 0.0, 1.0, True
     schedule = raw.get("feeSchedule")
@@ -393,9 +455,10 @@ def main() -> int:
             received_ts=received_ts,
         )
 
+    history_required = int(history_cfg["minimum_cross_section"])
+    history_data_healthy = len(histories) >= history_required
     horizon_reports: list[dict[str, Any]] = []
     all_shadow_intents: list[dict[str, Any]] = []
-    # Avoid stacking multiple horizon variants on the same event/side in one snapshot.
     selected_event_side: set[tuple[str, str]] = set()
     for horizon_minutes in cfg["horizons_minutes"]:
         if int(horizon_minutes) % fidelity_minutes != 0:
@@ -406,7 +469,7 @@ def main() -> int:
             metadata,
             bucket_seconds=bucket_seconds,
             horizon_steps=horizon_steps,
-            min_cross_section=int(history_cfg["minimum_cross_section"]),
+            min_cross_section=history_required,
             group_weight=float(history_cfg["group_neutralization_weight"]),
             min_group_size=int(history_cfg["minimum_group_size"]),
         )
@@ -422,7 +485,10 @@ def main() -> int:
             min_train_cross_sections=int(model_cfg["minimum_training_cross_sections"]),
         )
         gate_ok, gate_reasons = statistical_gate(report, cfg)
-        score_ts = latest_score_time(histories, metadata, bucket_seconds, int(history_cfg["minimum_cross_section"]))
+        if not history_data_healthy and "price_history_data_health" not in gate_reasons:
+            gate_reasons.insert(0, "price_history_data_health")
+            gate_ok = False
+        score_ts = latest_score_time(histories, metadata, bucket_seconds, history_required)
         selected: list[core.ExecutableCandidate] = []
         fit = None
         if gate_ok and score_ts > 0 and received_ts - score_ts <= 2 * bucket_seconds:
@@ -436,13 +502,7 @@ def main() -> int:
                 min_rows=int(model_cfg["minimum_training_rows"]),
                 min_cross_sections=int(model_cfg["minimum_training_cross_sections"]),
             )
-            snapshot = core.score_snapshot(
-                histories,
-                metadata,
-                score_ts,
-                bucket_seconds,
-                int(history_cfg["minimum_cross_section"]),
-            )
+            snapshot = core.score_snapshot(histories, metadata, score_ts, bucket_seconds, history_required)
             if fit is not None and snapshot:
                 scored = core.apply_fit(snapshot, fit, score_ts)
                 selected = core.select_candidates(
@@ -480,21 +540,24 @@ def main() -> int:
             }
         )
 
-    # Broker-compatible rows are emitted only to an isolated shadow artifact.
-    # Integration remains blocked until the shared execution ledger validates
-    # cost-stressed PnL on independent forward windows.
     atomic_csv(args.output_shadow_intents, all_shadow_intents)
+    universe_mode = str(cfg.get("universe_history", {}).get("current_research_mode") or "current_active_survivors")
     report = {
         "timestamp": received_ts,
         "paper_only": True,
         "research_only": True,
         "live_intents_enabled": False,
         "submitted_orders": 0,
+        "universe_backtest_mode": universe_mode,
+        "survivorship_safe": False,
         "market_count": len(markets),
         "history_market_count": len(histories),
+        "history_required_market_count": history_required,
+        "history_data_healthy": history_data_healthy,
+        "history_window_days": HISTORY_WINDOW_SECONDS // 86400,
         "book_market_count": len(raw_books),
         "authoritative_fee_book_count": authoritative,
-        "history_failures": history_failures[:30],
+        "history_failures": history_failures[:50],
         "feature_names": list(core.FEATURE_NAMES),
         "target": cfg["target"],
         "horizons": horizon_reports,
@@ -502,10 +565,11 @@ def main() -> int:
         "economic_pnl_validated": False,
         "promotion_ready": False,
         "promotion_blockers": [
+            "point_in_time_or_forward_universe_not_yet_attached",
             "shared_execution_ledger_cost_stressed_pnl_not_yet_attached",
             "research_branch_cannot_mutate_live_champion",
             "live_intents_disabled_by_config",
-        ],
+        ] + ([] if history_data_healthy else ["price_history_data_health_unhealthy"]),
     }
     atomic_json(args.output_json, report)
     print(json.dumps(report, sort_keys=True))
