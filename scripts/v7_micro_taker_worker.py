@@ -184,13 +184,25 @@ def fee_spec(details: Any) -> economics.FeeSpec:
     )
 
 
-def book_snapshot(yes: base.Book, no: base.Book, liquidity: float) -> economics.BookSnapshot | None:
+def book_snapshot(
+    yes: base.Book,
+    no: base.Book,
+    liquidity: float,
+    *,
+    now: int,
+    max_age_seconds: int,
+) -> economics.BookSnapshot | None:
     freshness_ts = min(yes.freshness_ts(), no.freshness_ts())
     snapshot = economics.BookSnapshot(
         yes_bid=yes.bid(), yes_ask=yes.ask(), no_bid=no.bid(), no_ask=no.ask(),
         liquidity=float(liquidity), received_ts=int(freshness_ts),
     )
-    return snapshot if economics.valid_book(snapshot) else None
+    if not economics.valid_book(snapshot):
+        return None
+    age = int(now) - snapshot.received_ts
+    if snapshot.received_ts <= 0 or age < 0 or age > max(0, int(max_age_seconds)):
+        return None
+    return snapshot
 
 
 def depth_adjusted_economics(
@@ -341,6 +353,9 @@ def main() -> int:
     for market in markets:
         yes, no = books.get(market.yes), books.get(market.no)
         if yes and no:
+            snapshot = book_snapshot(yes, no, market.liq, now=now, max_age_seconds=args.max_book_age_seconds)
+            if snapshot is None:
+                continue
             feature = base.features(yes, no)
             if feature:
                 current[market.id] = (market, yes, no, augment_features(feature, flow.get(market.yes, {}), flow.get(market.no, {})))
@@ -398,7 +413,7 @@ def main() -> int:
             prediction = sum(a * b for a, b in zip(beta, feature[0]))
             prediction = max(-2 * feature[2], min(2 * feature[2], prediction))
             predicted_yes_mid = max(0.001, min(0.999, feature[1] + prediction))
-            snapshot = book_snapshot(yes, no, market.liq)
+            snapshot = book_snapshot(yes, no, market.liq, now=now, max_age_seconds=args.max_book_age_seconds)
             if snapshot is None:
                 continue
             candidate = economics.choose_side(
