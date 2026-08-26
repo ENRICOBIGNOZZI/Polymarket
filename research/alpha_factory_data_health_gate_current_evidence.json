@@ -1,0 +1,66 @@
+{
+  "schema": "polymarket_alpha_factory_data_health_evidence_v1",
+  "generated_utc": "2026-08-26T05:14:00Z",
+  "base_main_sha": "e417dfefd99312712c1f9e33efa8e2e847b492e5",
+  "canonical_live_smoke": {
+    "generated_ts": 1787721003,
+    "generated_utc": "2026-08-26T05:10:03Z",
+    "git_sha": "e417dfefd99312712c1f9e33efa8e2e847b492e5",
+    "trade_recorder_status": "unhealthy",
+    "trade_recorder_failures": [
+      "no_public_trades_fetched",
+      "missing_last_trade_timestamp"
+    ],
+    "markets": 220,
+    "conditions": 220,
+    "requests": 6,
+    "request_errors": 0,
+    "public_trades_fetched": 0,
+    "new_public_trades": 0,
+    "last_trade_ts": 0,
+    "graph_rv_bundles": 1,
+    "graph_rv_legs": 3,
+    "graph_rv_max_expected_edge": 0.030000000000000027,
+    "multileg_trades_processed": 0,
+    "multileg_complete": 0,
+    "maker_signals_first_tick": 42,
+    "maker_posts_first_tick": 7,
+    "maker_positions": 0,
+    "maker_reserved_usd": 151.175,
+    "runtime_reserved_cash_usd": 711.175,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_pnl_usd": 0.0,
+    "drawdown_ratio": 0.0,
+    "kill_switch": 0
+  },
+  "source_contract_finding": {
+    "alpha_factory_freshness_check": "live_smoke_fresh only",
+    "trade_recorder_health_check": false,
+    "fresh_zero_oos_action": "execution_fillability_frontier is scheduled when selected_trades == 0",
+    "counterexample": "a fresh but unhealthy zero-trade tape is currently eligible to trigger an execution-fillability diagnosis"
+  },
+  "research_state": "BLOCKING_EVIDENCE_DEFECT_MORE_EVIDENCE_REQUIRED",
+  "interpretation": [
+    "The current zero-fill and zero-completion snapshot is not economic evidence because the canonical public trade tape is uninitialized/unhealthy.",
+    "The +3% Graph/RV quote edge is a discovery observation only; zero completion with trades_processed=0 cannot estimate joint completion probability.",
+    "The maker zero-position result in this snapshot cannot be used to calibrate fill hazard or adverse selection.",
+    "Independent workers may remain usable only when they prove their own data-health and causal-tape contracts separately."
+  ],
+  "successor_contract": [
+    "Alpha Factory diagnostics must expose canonical live-data health separately from freshness.",
+    "Fresh-but-unhealthy canonical live evidence must produce an explicit DEGRADED_DATA_HEALTH state.",
+    "Do not schedule live-derived execution-fillability, B1 or B2 economic experiments from an unhealthy canonical tape.",
+    "Do not advance live-derived candidate evidence or consecutive-pass state from an unhealthy canonical tape.",
+    "Recovery of the public tape must be demonstrated before zero-fill/completion observations again count as economic evidence.",
+    "Coordinate with PR #436 for Graph/LF admission and PR #440 for live-paper validation; do not duplicate those production boundaries."
+  ],
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "user_authorized_aggressive_envelope_unchanged": true,
+    "real_money_execution": false
+  }
+}
