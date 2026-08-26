@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "monitoring"))
 
+import exporter_latest_v7  # noqa: E402,F401  # applies V7 layout adapters
 from exporter_latest import LatestCollector  # noqa: E402
 
 
