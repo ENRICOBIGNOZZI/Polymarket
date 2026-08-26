@@ -1,79 +1,76 @@
-# Private paper-live server deployment
+# Private V7 PAPER server deployment
 
-The production paper node is intentionally private behind Tailscale. The current host is a macOS machine reached as `enrico@100.104.183.109:22`.
+The private server deploys only the exact revision referenced by `paper-validated`. The canonical runtime is V7 and authenticated order submission is disabled.
 
-## Runtime model
+## Runtime services
 
-The machine keeps these launchd services alive across reboots:
+The macOS node keeps these services alive across reboots:
 
 - `com.polymarket.awake` — prevents idle system sleep;
-- `com.polymarket.paper` — starts `scripts/paper_latest_loop.sh`;
-- `com.polymarket.exporter` — canonical latest-runtime metrics on `127.0.0.1:9108`;
-- `com.polymarket.prometheus` — local Prometheus on `127.0.0.1:9090`;
-- `com.polymarket.grafana` — local Grafana on `127.0.0.1:3000`.
+- `com.polymarket.paper` — starts `scripts/run_paper.sh`;
+- `com.polymarket.exporter` — V7 metrics on `127.0.0.1:9108`;
+- `com.polymarket.prometheus` — Prometheus on `127.0.0.1:9090`;
+- `com.polymarket.grafana` — Grafana on `127.0.0.1:3000`.
 
-`paper_latest_loop.sh` chooses the numerically newest committed `paper_vN_loop.sh` with a matching `config/paper_vN.json`, so V5/V6 do not require a new service definition.
-
-Monitoring is native on macOS (Homebrew Grafana + Prometheus) rather than Docker. Grafana remains bound to localhost and should normally be viewed through an SSH tunnel.
+`config/live_champion.json` must select V7, `scripts/paper_v7_loop.sh`, `config/paper_v7.json` and `runs/paper_v7_live`. Deployment fails closed if the validated revision does not satisfy that manifest contract.
 
 ## First bootstrap
 
-The repository must already exist at `~/polymarket` on the server. Then from the server checkout:
+The repository must already exist at `~/polymarket` on the server. From that checkout:
 
 ```bash
-git fetch origin main
-git reset --hard origin/main
+git fetch origin main paper-validated
 bash ops/bootstrap_macos.sh
 ```
 
-The bootstrap installs Homebrew dependencies, builds Release, runs deterministic tests, installs launchd services, creates a random Grafana admin password, and verifies exporter/Prometheus/Grafana health.
+Bootstrap installs required dependencies, builds the maintained binaries, runs deterministic tests, installs service definitions and configures local monitoring.
 
-The password is stored only on the server at:
-
-```text
-~/.config/polymarket/grafana-admin-password
-```
-
-## Local Grafana access
-
-From a trusted Mac already on the tailnet:
-
-```bash
-ssh -N -L 3000:127.0.0.1:3000 polymarket
-```
-
-Then open `http://127.0.0.1:3000` locally.
-
-## Safe updates
-
-After first bootstrap:
+## Safe update
 
 ```bash
 cd ~/polymarket
 bash ops/update_server_macos.sh
 ```
 
-The updater fetches `origin/main`, validates the candidate commit in an isolated worktree, builds/tests it, swaps the production build, restarts services and performs health checks. A failed post-deploy health check rolls the checkout/build back to the prior commit.
+The updater resolves the exact validated revision, builds and tests it in isolation, performs the runtime handoff under the singleton contract, updates the production checkout/build and verifies health. Failed post-deploy verification does not silently accept a different revision.
 
 ## GitHub Actions deployment
 
-`deploy-paper-server.yml` can update the server automatically after a successful merge to `main`. It requires:
+`.github/workflows/deploy-paper-server.yml` is the only deployment authority in the registered control plane. It deploys only `paper-validated` and can be triggered by successful exact-SHA V7 PAPER validation or by its gated reconciliation schedule.
 
-Repository secrets:
+Required repository credentials/variables are kept outside version control. The workflow supports the configured Tailscale authentication mode and a dedicated SSH deployment key. Never commit private keys, Tailscale credentials or wallet/exchange credentials.
 
-- `TS_AUTHKEY` — a Tailscale auth key allowed to reach the server;
-- `POLYMARKET_SERVER_SSH_KEY` — a dedicated SSH deployment private key.
+## Exact-SHA invariant
 
-Repository variables:
+A deployment is valid only when:
 
-- `POLYMARKET_SERVER_DEPLOY=true` to enable deployment on pushes to `main`;
-- optional `POLYMARKET_SERVER_HOST`, `POLYMARKET_SERVER_USER`, `POLYMARKET_SERVER_PORT` overrides.
+```text
+validated_sha == paper-validated == deployed HEAD
+```
 
-The matching deployment public key must be present in `~/.ssh/authorized_keys` for the server user. Never commit private keys or Tailscale auth keys.
+The deploy workflow also verifies that `paper-validated` is on the current `main` lineage and that the V7 manifest/config/runtime files belong to the same checkout. A successful SSH command or service restart alone is not deployment proof.
 
-`paper-server-health.yml` performs an hourly private health check through Tailscale and records server commit, service state, canonical runtime metrics, drawdown, kill switch, execution imbalance and OOS gate state.
+## Monitoring and health
 
-## Status and logs
+After deployment, `.github/workflows/server-health.yml` verifies:
+
+- exact deployed V7 SHA;
+- one runtime owner and no duplicate state writers;
+- recorder, broker and V7 market proxy liveness;
+- canonical `runtime_status.json` state;
+- PAPER-only and authenticated-execution-disabled boundaries;
+- drawdown/kill-switch and execution health;
+- V7 exporter and exact dashboard asset through the configured Tailscale route.
+
+The canonical Grafana operator URL is:
+
+```text
+http://mamma-portfolio.tail1bae85.ts.net
+```
+
+## Local status
+
+Typical server diagnostics:
 
 ```bash
 sudo /usr/local/sbin/polymarket-service-control status
@@ -82,4 +79,4 @@ tail -f ~/Library/Logs/Polymarket/paper.out.log
 tail -f ~/Library/Logs/Polymarket/paper.err.log
 ```
 
-The real-money pilot remains separate and is never started by launchd, CI, the paper loop, deployment, or health-check workflows.
+The deployment stack has no authenticated real-money execution path.
