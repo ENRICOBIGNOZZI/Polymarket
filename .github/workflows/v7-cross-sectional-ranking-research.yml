@@ -38,9 +38,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ranking_evidence
-          python3 scripts/v7_cross_sectional_rank.py \
+          # Evidence transport is deliberately bounded.  The 150-market scan is
+          # well above the model's 40-cross-section training minimum, while the
+          # per-token fallback is disabled for this run so a healthy 7-day batch
+          # path is required instead of silently generating hundreds of REST calls.
+          python3 -c 'import sys; sys.path.insert(0,"scripts"); import v7_cross_sectional_rank as m; m.HISTORY_SINGLE_FALLBACK_BUDGET_PER_WINDOW=0; raise SystemExit(m.main())' \
             --config config/research_v7_cross_sectional_rank.json \
-            --market-limit 300 \
+            --market-limit 150 \
             --output-json ranking_evidence/report.json \
             --output-shadow-intents ranking_evidence/shadow_intents.csv \
             | tee ranking_evidence/run.log
