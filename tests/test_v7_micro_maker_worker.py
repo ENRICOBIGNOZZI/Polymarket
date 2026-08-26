@@ -19,6 +19,45 @@ def test_causal_fill_requires_both_receive_and_event_clocks():
     assert not maker.causal_after_order({"timestamp": "2", "received_ms": "1000"}, order)
 
 
+def test_delayed_receipt_can_credit_pre_expiry_market_event():
+    order = {"created_event_ms": 10_000, "created_received_ms": 10_000}
+    row = {"timestamp": "10.050", "received_ms": "75000"}
+    assert maker.causal_fill_eligible(row, order, processing_ms=80_000, ttl_seconds=60)
+
+
+def test_post_expiry_market_event_never_fills_even_if_received_now():
+    order = {"created_event_ms": 10_000, "created_received_ms": 10_000}
+    row = {"timestamp": "70.001", "received_ms": "71000"}
+    assert not maker.causal_fill_eligible(row, order, processing_ms=80_000, ttl_seconds=60)
+
+
+def test_future_received_trade_never_fills_or_leaks_into_current_tick():
+    order = {"created_event_ms": 10_000, "created_received_ms": 10_000}
+    row = {"timestamp": "20", "received_ms": "81000"}
+    assert not maker.causal_fill_eligible(row, order, processing_ms=80_000, ttl_seconds=60)
+
+
+def test_arrival_latency_applies_to_both_order_clocks():
+    order = {"created_event_ms": 10_100, "created_received_ms": 10_100}
+    before_arrival = {"timestamp": "10.050", "received_ms": "10500"}
+    after_arrival = {"timestamp": "10.150", "received_ms": "10600"}
+    assert not maker.causal_fill_eligible(before_arrival, order, processing_ms=20_000, ttl_seconds=60)
+    assert maker.causal_fill_eligible(after_arrival, order, processing_ms=20_000, ttl_seconds=60)
+
+
+def test_maker_source_replays_before_residual_ttl_cancel_and_tracks_markouts():
+    source = (ROOT / "scripts" / "v7_micro_maker_worker.py").read_text(encoding="utf-8")
+    replay = source.index("for row in tape:")
+    residual_cancel = source.index("# Only residual, still-unfilled orders can now be cancelled")
+    ttl_cancel = source.index('"action": "CANCEL_TTL"', residual_cancel)
+    assert replay < residual_cancel < ttl_cancel
+    assert "maker_markouts.csv" in source
+    assert "for horizon in (45, 60, 300):" in source
+    assert '"entry_ts": fill_event_ts' in source
+    assert '"created_event_ms": arrival_ms' in source
+    assert '"created_received_ms": arrival_ms' in source
+
+
 def test_maker_source_persists_trade_identity_and_respects_broker_token_ownership():
     source = (ROOT / "scripts" / "v7_micro_maker_worker.py").read_text(encoding="utf-8")
     assert "seen_trade_ids" in source
