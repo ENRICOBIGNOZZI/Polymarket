@@ -16,15 +16,21 @@ class LiveMonitoringContractTest(unittest.TestCase):
         for producer in (once, loop, smoke):
             self.assertIn("structural_latest.csv", producer)
 
-    def test_live_smoke_resolves_the_champion_manifest(self):
+    def test_live_smoke_resolves_any_positive_champion_version(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
         self.assertIn("config/live_champion.json", smoke)
         self.assertIn("CHAMPION_VERSION", smoke)
         self.assertIn("CHAMPION_CONFIG", smoke)
+        self.assertIn("CHAMPION_RUN_ROOT", smoke)
         self.assertIn("CHAMPION_RUN_NAME", smoke)
-        self.assertIn("version not in (5,6)", smoke)
+        self.assertIn("isinstance(version,int)", smoke)
+        self.assertIn("version <= 0", smoke)
+        self.assertNotIn("version not in (5,6)", smoke)
+        self.assertNotIn("unsupported paper champion", smoke)
         self.assertIn("Fresh public-data V5 full-strategy smoke", smoke)
         self.assertIn("Fresh public-data V6 model-specific smoke", smoke)
+        self.assertIn("Version-neutral V7+ PAPER runtime smoke", smoke)
+        self.assertIn("scripts/runtime_contract_health.py", smoke)
 
     def test_v5_smoke_still_exercises_real_v5_children_when_selected(self):
         smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
