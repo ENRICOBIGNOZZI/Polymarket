@@ -173,15 +173,39 @@ jobs:
             -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
             "EXPECTED_VALIDATED_SHA='$EXPECTED_VALIDATED_SHA' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
           set -euo pipefail
+
+          fail_verify() {
+            printf 'verify_failure=%s\n' "$1" >&2
+            exit 1
+          }
+
+          require_equal() {
+            local name="$1" actual="$2" expected="$3"
+            if [[ "$actual" != "$expected" ]]; then
+              printf 'verify_failure=%s actual=%s expected=%s\n' "$name" "$actual" "$expected" >&2
+              exit 1
+            fi
+          }
+
+          require_metric() {
+            local name="$1" pattern="$2"
+            grep -q "$pattern" <<<"$metrics" || fail_verify "$name"
+          }
+
+          require_file() {
+            local name="$1" path="$2"
+            test -s "$path" || fail_verify "$name"
+          }
+
           cd ~/polymarket
-          git fetch origin main paper-validated
-          head_sha="$(git rev-parse HEAD)"
-          main_sha="$(git rev-parse origin/main)"
-          validated_sha="$(git rev-parse origin/paper-validated)"
-          test "$head_sha" = "$validated_sha"
-          git merge-base --is-ancestor "$validated_sha" "$main_sha"
+          git fetch origin main paper-validated || fail_verify "git_fetch_refs"
+          head_sha="$(git rev-parse HEAD)" || fail_verify "server_head_read"
+          main_sha="$(git rev-parse origin/main)" || fail_verify "main_sha_read"
+          validated_sha="$(git rev-parse origin/paper-validated)" || fail_verify "validated_sha_read"
+          require_equal "server_head_matches_validated" "$head_sha" "$validated_sha"
+          git merge-base --is-ancestor "$validated_sha" "$main_sha" || fail_verify "validated_not_ancestor_of_main"
           if [[ -n "${EXPECTED_VALIDATED_SHA:-}" ]]; then
-            test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
+            require_equal "validated_matches_trigger_sha" "$validated_sha" "$EXPECTED_VALIDATED_SHA"
           fi
 
           champion_meta="$(python3 - <<'PY'
@@ -190,48 +214,50 @@ jobs:
           m=json.loads(Path('config/live_champion.json').read_text())
           print(f"{int(m['version'])}\t{Path(m['run_root']).name}")
           PY
-          )"
+          )" || fail_verify "champion_manifest_read"
           IFS=$'\t' read -r version run_name <<<"$champion_meta"
-          [[ "$version" == "5" || "$version" == "6" ]]
+          [[ "$version" == "5" || "$version" == "6" ]] || fail_verify "unsupported_champion_version"
 
-          curl -fsS http://127.0.0.1:9108/healthz >/dev/null
-          metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
-          grep -q "^polymarket_runtime_info{adapter=\"v${version}\",run_root=\"${run_name}\",version=\"v${version}\"} 1$" <<<"$metrics"
-          grep -q '^polymarket_runtime_pnl_usd ' <<<"$metrics"
-          grep -q '^polymarket_allocator_state_present 1$' <<<"$metrics"
-          grep -q '^polymarket_allocator_models_expected 5$' <<<"$metrics"
-          grep -q '^polymarket_model_info{' <<<"$metrics"
+          curl -fsS http://127.0.0.1:9108/healthz >/dev/null || fail_verify "exporter_healthz"
+          metrics="$(curl -fsS http://127.0.0.1:9108/metrics)" || fail_verify "exporter_metrics_fetch"
+          require_metric "runtime_info_schema" "^polymarket_runtime_info{adapter=\"v${version}\",run_root=\"${run_name}\",version=\"v${version}\"} 1$"
+          require_metric "runtime_pnl_metric" '^polymarket_runtime_pnl_usd '
+          require_metric "allocator_state_metric" '^polymarket_allocator_state_present 1$'
+          require_metric "allocator_models_expected_metric" '^polymarket_allocator_models_expected 5$'
+          require_metric "model_info_metric" '^polymarket_model_info{'
           if [[ "$version" == "6" ]]; then
-            grep -q '^polymarket_v6_exporter_info{' <<<"$metrics"
+            require_metric "v6_exporter_info_metric" '^polymarket_v6_exporter_info{'
             # Grafana's V6 strategy panels depend on this exact Prometheus schema.
             # Fail deployment rather than silently provisioning a dashboard whose
             # fill/health panels resolve to empty vectors.
-            grep -q '^polymarket_model_fills_total{action="all",' <<<"$metrics"
-            grep -q '^polymarket_model_gross_exposure_usd{' <<<"$metrics"
-            grep -q '^polymarket_model_drawdown_ratio{' <<<"$metrics"
-            grep -q '^polymarket_model_alive{' <<<"$metrics"
-            grep -q '^polymarket_model_alert_staleness_seconds{' <<<"$metrics"
-            test -s "runs/${run_name}/hard_arb/status.json"
-            test -s "runs/${run_name}/local_factor_status.json"
-            test -s "runs/${run_name}/runtime_status.json"
+            require_metric "v6_model_fills_metric" '^polymarket_model_fills_total{action="all",'
+            require_metric "v6_model_gross_exposure_metric" '^polymarket_model_gross_exposure_usd{'
+            require_metric "v6_model_drawdown_metric" '^polymarket_model_drawdown_ratio{'
+            require_metric "v6_model_alive_metric" '^polymarket_model_alive{'
+            require_metric "v6_model_staleness_metric" '^polymarket_model_alert_staleness_seconds{'
+            require_file "v6_hard_arb_status_file" "runs/${run_name}/hard_arb/status.json"
+            require_file "v6_local_factor_status_file" "runs/${run_name}/local_factor_status.json"
+            require_file "v6_runtime_status_file" "runs/${run_name}/runtime_status.json"
           fi
-          curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
-          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
-          grafana_search="$(curl -fsS http://127.0.0.1:3000/api/search)"
-          grep -q 'polymarket-multi-strategy-v5' <<<"$grafana_search"
+          curl -fsS http://127.0.0.1:9090/-/ready >/dev/null || fail_verify "prometheus_ready"
+          curl -fsS http://127.0.0.1:3000/api/health >/dev/null || fail_verify "grafana_health"
+          grafana_search="$(curl -fsS http://127.0.0.1:3000/api/search)" || fail_verify "grafana_search_fetch"
+          grep -q 'polymarket-multi-strategy-v5' <<<"$grafana_search" || fail_verify "grafana_dashboard_missing"
+          printf 'verify_result=success\n'
           printf 'server_head=%s\n' "$head_sha"
           printf 'paper_validated=%s\n' "$validated_sha"
           printf 'origin_main=%s\n' "$main_sha"
           printf 'champion_version=%s\n' "$version"
           printf 'champion_run_root=%s\n' "$run_name"
           case "$(uname -s)" in
-            Darwin) bash ops/macos_service_control.sh status ;;
+            Darwin) bash ops/macos_service_control.sh status || fail_verify "macos_service_status" ;;
             Linux)
-              systemctl is-active --quiet polymarket-paper.service
-              systemctl is-active --quiet polymarket-monitoring.service
+              systemctl is-active --quiet polymarket-paper.service || fail_verify "linux_paper_service"
+              systemctl is-active --quiet polymarket-monitoring.service || fail_verify "linux_monitoring_service"
               systemctl --no-pager --full status polymarket-paper.service | sed -n '1,12p'
               systemctl --no-pager --full status polymarket-monitoring.service | sed -n '1,12p'
               ;;
+            *) fail_verify "unsupported_server_os" ;;
           esac
           REMOTE
 
