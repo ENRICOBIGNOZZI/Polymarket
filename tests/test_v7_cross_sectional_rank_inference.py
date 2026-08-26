@@ -114,12 +114,22 @@ class BlockedRankingInferenceTest(unittest.TestCase):
             target_logit=target,
         )
 
-    def test_frozen_fit_is_unchanged_by_holdout_origin_rows(self) -> None:
+    def test_frozen_fit_ignores_unmatured_and_holdout_rows(self) -> None:
         holdout_start = 1_000_000
         embargo_seconds = 1800
         pre_rows = [
             self._training_row(ts, ts + 3600, market)
             for ts in (990_000, 992_000, 994_000)
+            for market in range(6)
+        ]
+        late_label_pre_holdout_rows = [
+            self._training_row(
+                997_000,
+                999_000,
+                market,
+                target_scale=500.0,
+                feature_scale=50.0,
+            )
             for market in range(6)
         ]
         holdout_rows = [
@@ -145,7 +155,7 @@ class BlockedRankingInferenceTest(unittest.TestCase):
             min_train_cross_sections=2,
         )
         fit_contaminated_input = frozen.fit_at_holdout_boundary(
-            pre_rows + holdout_rows,
+            pre_rows + late_label_pre_holdout_rows + holdout_rows,
             holdout_start_ts=holdout_start,
             window_seconds=100_000,
             embargo_seconds=embargo_seconds,
