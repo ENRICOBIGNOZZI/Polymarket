@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3 curl
 
       - name: Build Release engine
         run: |
@@ -40,6 +40,74 @@ jobs:
           test -s live-smoke-output/status.json
           test -s live-smoke-output/signals.csv
 
+      - name: Read-only Data API trade-tape probe
+        run: |
+          set -euo pipefail
+          mkdir -p live-smoke-output
+          curl -fsS --connect-timeout 10 --max-time 30 \
+            -D live-smoke-output/data-api-trades.headers \
+            'https://data-api.polymarket.com/trades?limit=100' \
+            -o live-smoke-output/data-api-trades.json
+          python3 - <<'PY'
+          import json
+          import time
+          from pathlib import Path
+
+          path = Path('live-smoke-output/data-api-trades.json')
+          payload = json.loads(path.read_text(encoding='utf-8'))
+          if not isinstance(payload, list):
+              raise SystemExit('Data API /trades response is not an array')
+          if not payload:
+              raise SystemExit('Data API /trades returned zero public trades')
+
+          timestamps = []
+          malformed = 0
+          for row in payload:
+              if not isinstance(row, dict):
+                  malformed += 1
+                  continue
+              try:
+                  ts = int(row.get('timestamp', 0))
+              except (TypeError, ValueError):
+                  malformed += 1
+                  continue
+              if ts <= 0 or not row.get('conditionId') or not row.get('asset'):
+                  malformed += 1
+                  continue
+              timestamps.append(ts)
+
+          if not timestamps:
+              raise SystemExit('Data API /trades returned no structurally valid trade rows')
+
+          now = int(time.time())
+          latest = max(timestamps)
+          age = now - latest
+          future_skew = latest - now
+          health = {
+              'status': 'healthy',
+              'rows': len(payload),
+              'valid_rows': len(timestamps),
+              'malformed_rows': malformed,
+              'latest_trade_ts': latest,
+              'trade_age_seconds': age,
+              'future_skew_seconds': max(0, future_skew),
+          }
+          if future_skew > 120:
+              health['status'] = 'unhealthy'
+              health['failure'] = 'future_trade_timestamp'
+          elif age > 1200:
+              health['status'] = 'unhealthy'
+              health['failure'] = 'stale_global_trade_tape'
+
+          Path('live-smoke-output/data-api-trade-health.json').write_text(
+              json.dumps(health, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(health, sort_keys=True))
+          if health['status'] != 'healthy':
+              raise SystemExit(health['failure'])
+          PY
+
       - name: Publish status summary
         if: always()
         run: |
@@ -47,6 +115,14 @@ jobs:
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
           if test -s live-smoke-output/status.json; then
             python3 -m json.tool live-smoke-output/status.json >> "$GITHUB_STEP_SUMMARY" || cat live-smoke-output/status.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '{"status":"missing"}' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "## Public Data API trade tape" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          if test -s live-smoke-output/data-api-trade-health.json; then
+            cat live-smoke-output/data-api-trade-health.json >> "$GITHUB_STEP_SUMMARY"
           else
             echo '{"status":"missing"}' >> "$GITHUB_STEP_SUMMARY"
           fi
