@@ -9,8 +9,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-import v6_micro_maker as base
-from v6_market_common import TapeFlow, fee_per_share, finite, resolve_fee_details
+import v7_micro_market as base
+from v7_market_common import TapeFlow, fee_per_share, finite, resolve_fee_details
 from v7_execution_core import MakerState, maker_fill_conditioned_ev, quote_improvement_is_economic
 
 
@@ -39,13 +39,6 @@ def causal_fill_eligible(
     processing_ms: int,
     ttl_seconds: int,
 ) -> bool:
-    """Credit only a trade that occurred while the order was live and is known now.
-
-    Receive time is the causal availability clock. Event time is the market/order
-    lifetime clock. A delayed REST row may therefore fill a paper order after the
-    wall-clock TTL has elapsed if its market event happened before expiry, but a
-    future-received row or a post-expiry market event can never fill it.
-    """
     event_ms = int(finite(row.get("timestamp"), 0.0) * 1000)
     received_ms = int(finite(row.get("received_ms"), 0.0))
     arrival_event_ms = int(finite(order.get("created_event_ms"), 0.0))
@@ -177,19 +170,12 @@ def main() -> int:
     decision_fields = ["timestamp", "market_id", "slug", "side", "limit_price", "fill_probability", "conditional_net_pnl_per_share", "expected_value", "toxicity_score", "action"]
     markout_fields = ["observation_ts", "fill_event_ts", "fill_received_ms", "market_id", "slug", "side", "token_id", "horizon_seconds", "observed_age_seconds", "shares", "entry_cost_per_share", "exit_bid", "exit_fee_per_share", "slippage_bps", "net_markout_per_share"]
 
-    # Cross-sleeve token ownership is authoritative immediately. Other resting
-    # cancellations intentionally happen only after replaying market events that
-    # occurred while the maker order was still live.
     for market_id, order in list(orders.items()):
         token = str(order.get("token_id") or "")
         if token in broker_tokens:
             base.append_csv(args.run_dir / "maker_order_log.csv", order_fields, {**order, "timestamp": now, "action": "CANCEL_TOKEN_OWNED_BY_MULTILEG"})
             del orders[market_id]
 
-    # Replay all newly known public trades against orders using market event time
-    # for order lifetime and receive time only for causal availability. This must
-    # precede TTL/dead-queue cancellation so delayed REST delivery cannot create a
-    # false zero-fill for a trade that happened before order expiry.
     for row in tape:
         row_received_ms = int(finite(row.get("received_ms"), 0.0))
         if row_received_ms <= 0 or row_received_ms > current_ms:
@@ -261,8 +247,6 @@ def main() -> int:
             if order["remaining_shares"] <= 1e-12:
                 del orders[market_id]
 
-    # Only residual, still-unfilled orders can now be cancelled for TTL or a dead
-    # queue. This ordering is a hard execution contract.
     for market_id, order in list(orders.items()):
         created = int(finite(order.get("created_ts"), now))
         token = str(order.get("token_id") or "")
@@ -277,9 +261,6 @@ def main() -> int:
             del orders[market_id]
 
     slip = max(0.0, args.slippage_bps) / 10000.0
-
-    # Keep post-fill executable markout watches even after the economic position
-    # exits, so 45s/60s/300s adverse-selection evidence is not lost.
     for watch_id, watch in list(markout_watch.items()):
         token = str(watch.get("token_id") or "")
         market_id = str(watch.get("market_id") or "")

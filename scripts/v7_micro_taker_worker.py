@@ -10,10 +10,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-import v6_micro_taker as base
+import v7_micro_taker_data as base
 import v7_micro_taker_core as economics
 
 FLOW_FEATURE_DIM = 8
+COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT = "complete_round_trip_executable_ev"
 
 
 def _finite(value: Any, default: float = math.nan) -> float:
@@ -45,7 +46,6 @@ def residual_sigma(samples: list[dict[str, Any]], beta: list[float]) -> float:
 
 
 def solve_ridge(samples: list[dict[str, Any]], ridge: float, feature_dim: int) -> list[float]:
-    """Ridge fit that never mixes incompatible historical feature schemas."""
     labeled: list[dict[str, Any]] = []
     for row in samples:
         if row.get("y") is None:
@@ -99,7 +99,6 @@ def causal_flow_features(
     lookback_seconds: int,
     half_life_seconds: float,
 ) -> dict[str, dict[str, float]]:
-    """Receive-time causal, event-time decayed taker flow for selected tokens."""
     out = {token: {"signed_imbalance": 0.0, "weighted_gross": 0.0, "prints": 0.0} for token in token_ids}
     if not token_ids or not trade_tape.exists():
         return out
@@ -155,7 +154,6 @@ def augment_features(
 
 
 def full_depth_vwap(levels: list[tuple[float, float]], shares: float, *, buy: bool) -> float | None:
-    """Full displayed-depth VWAP; insufficient depth fails closed."""
     target = max(0.0, float(shares))
     if target <= 1e-12:
         return None
@@ -204,13 +202,6 @@ def depth_adjusted_economics(
     adverse_markout_penalty_bps: float,
     capital_cost_bps_per_hour: float,
 ) -> economics.RoundTripEconomics | None:
-    """Re-price the candidate at quantity-specific full visible depth.
-
-    Entry walks the current asks. Expected exit walks the current bids for the
-    same quantity and shifts that full-depth liquidation curve only by the
-    predicted side-mid move. This is still a forecast, but no candidate can be
-    admitted on top-of-book depth that cannot carry its own PAPER size.
-    """
     if shares <= 0.0 or not fee.authoritative:
         return None
     entry_vwap = full_depth_vwap(list(book.asks), shares, buy=True)
@@ -228,20 +219,11 @@ def depth_adjusted_economics(
     capital_per_share = entry_price + entry_fee
     adverse_penalty = max(0.0, float(adverse_markout_penalty_bps)) / 10000.0 * capital_per_share
     capital_time_cost = (
-        max(0.0, float(capital_cost_bps_per_hour))
-        / 10000.0
-        * (float(candidate.horizon_seconds) / 3600.0)
-        * capital_per_share
+        max(0.0, float(capital_cost_bps_per_hour)) / 10000.0
+        * (float(candidate.horizon_seconds) / 3600.0) * capital_per_share
     )
     gross_markout = expected_exit_price - entry_price
-    net_pnl = (
-        gross_markout
-        - entry_fee
-        - exit_fee
-        - candidate.uncertainty_penalty_per_share
-        - adverse_penalty
-        - capital_time_cost
-    )
+    net_pnl = gross_markout - entry_fee - exit_fee - candidate.uncertainty_penalty_per_share - adverse_penalty - capital_time_cost
     net_edge = net_pnl / max(capital_per_share, 1e-12)
     return economics.RoundTripEconomics(
         side=candidate.side,
@@ -299,11 +281,7 @@ def main() -> int:
     args.run_dir.mkdir(parents=True, exist_ok=True)
     trade_tape = args.trade_tape or (args.run_dir.parent / "trade_tape.csv")
     state_path = args.run_dir / "state.json"
-    state = (
-        json.loads(state_path.read_text(encoding="utf-8"))
-        if state_path.exists()
-        else {"cash": start_capital, "peak": start_capital, "killed": False, "positions": {}, "samples": []}
-    )
+    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {"cash": start_capital, "peak": start_capital, "killed": False, "positions": {}, "samples": []}
     cash = base.finite(state.get("cash"), start_capital)
     peak = max(start_capital, base.finite(state.get("peak"), start_capital))
     positions = state.get("positions") if isinstance(state.get("positions"), dict) else {}
@@ -328,13 +306,7 @@ def main() -> int:
         failures.append(f"market_data:{type(exc).__name__}:{exc}")
 
     token_ids = {token for market in markets for token in (market.yes, market.no) if token}
-    flow = causal_flow_features(
-        trade_tape,
-        token_ids,
-        now=now,
-        lookback_seconds=args.flow_lookback_seconds,
-        half_life_seconds=args.flow_half_life_seconds,
-    )
+    flow = causal_flow_features(trade_tape, token_ids, now=now, lookback_seconds=args.flow_lookback_seconds, half_life_seconds=args.flow_half_life_seconds)
     current: dict[str, tuple[base.Market, base.Book, base.Book, tuple[list[float], float, float]]] = {}
     for market in markets:
         yes, no = books.get(market.yes), books.get(market.no)
@@ -343,17 +315,9 @@ def main() -> int:
             if feature:
                 current[market.id] = (market, yes, no, augment_features(feature, flow.get(market.yes, {}), flow.get(market.no, {})))
 
-    label_stats = base.label_matured_samples(
-        samples,
-        now=now,
-        horizon_seconds=args.horizon_seconds,
-        max_target_staleness_seconds=args.max_target_staleness_seconds,
-    )
+    label_stats = base.label_matured_samples(samples, now=now, horizon_seconds=args.horizon_seconds, max_target_staleness_seconds=args.max_target_staleness_seconds)
     beta = solve_ridge(samples, 1e-2, FLOW_FEATURE_DIM)
-    model_labeled = sum(
-        row.get("y") is not None and isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM
-        for row in samples
-    )
+    model_labeled = sum(row.get("y") is not None and isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM for row in samples)
     sigma = residual_sigma(samples, beta)
     slip = max(0.0, args.slippage_bps) / 10000.0
 
@@ -382,12 +346,7 @@ def main() -> int:
             pnl = proceeds - float(position["cost"])
             cash += proceeds
             realized_last_tick += pnl
-            append_fill(
-                args.run_dir,
-                timestamp=now, market_id=market_id, slug=market.slug, action="SELL_TAKER",
-                side=side, shares=shares, price=exit_price, fee=fee, pnl=pnl,
-                net_edge=position.get("entry_net_edge", ""), expected_exit_price=position.get("expected_exit_price", ""),
-            )
+            append_fill(args.run_dir, timestamp=now, market_id=market_id, slug=market.slug, action="SELL_TAKER", side=side, shares=shares, price=exit_price, fee=fee, pnl=pnl, net_edge=position.get("entry_net_edge", ""), expected_exit_price=position.get("expected_exit_price", ""))
             del positions[market_id]
     realized_total += realized_last_tick
 
@@ -443,29 +402,11 @@ def main() -> int:
             book = yes if candidate.side == "YES" else no
             room_probe = max(0.0, min(args.max_trade_usd, max_market_fraction * equity, cash))
             shares_probe = room_probe / max(candidate.capital_per_share, 1e-9)
-            adjusted = depth_adjusted_economics(
-                candidate,
-                book=book,
-                predicted_yes_mid=predicted_yes_mid,
-                fee=fee_spec(market.fee),
-                shares=shares_probe,
-                slippage_bps_per_leg=args.slippage_bps,
-                adverse_markout_penalty_bps=args.adverse_markout_bps,
-                capital_cost_bps_per_hour=args.capital_cost_bps_per_hour,
-            )
+            adjusted = depth_adjusted_economics(candidate, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares_probe, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour)
             if adjusted is None:
                 continue
             shares_probe = room_probe / max(adjusted.capital_per_share, 1e-9)
-            adjusted = depth_adjusted_economics(
-                adjusted,
-                book=book,
-                predicted_yes_mid=predicted_yes_mid,
-                fee=fee_spec(market.fee),
-                shares=shares_probe,
-                slippage_bps_per_leg=args.slippage_bps,
-                adverse_markout_penalty_bps=args.adverse_markout_bps,
-                capital_cost_bps_per_hour=args.capital_cost_bps_per_hour,
-            )
+            adjusted = depth_adjusted_economics(adjusted, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares_probe, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour)
             if adjusted is None or adjusted.net_edge < args.min_edge or adjusted.net_pnl_per_share <= 0.0:
                 continue
             ranked.append((adjusted.economic_score, market, adjusted.side, book, adjusted, predicted_yes_mid))
@@ -495,31 +436,13 @@ def main() -> int:
                 continue
             room = max(0.0, min(args.max_trade_usd, max_market_fraction * equity, cash))
             shares = room / max(candidate.capital_per_share, 1e-9)
-            candidate = depth_adjusted_economics(
-                candidate,
-                book=book,
-                predicted_yes_mid=predicted_yes_mid,
-                fee=fee_spec(market.fee),
-                shares=shares,
-                slippage_bps_per_leg=args.slippage_bps,
-                adverse_markout_penalty_bps=args.adverse_markout_bps,
-                capital_cost_bps_per_hour=args.capital_cost_bps_per_hour,
-            )
+            candidate = depth_adjusted_economics(candidate, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour)
             if candidate is None or candidate.net_edge < args.min_edge or candidate.net_pnl_per_share <= 0.0:
                 continue
             shares = room / max(candidate.capital_per_share, 1e-9)
             if shares < book.min_order:
                 continue
-            candidate = depth_adjusted_economics(
-                candidate,
-                book=book,
-                predicted_yes_mid=predicted_yes_mid,
-                fee=fee_spec(market.fee),
-                shares=shares,
-                slippage_bps_per_leg=args.slippage_bps,
-                adverse_markout_penalty_bps=args.adverse_markout_bps,
-                capital_cost_bps_per_hour=args.capital_cost_bps_per_hour,
-            )
+            candidate = depth_adjusted_economics(candidate, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour)
             if candidate is None or candidate.net_edge < args.min_edge or candidate.net_pnl_per_share <= 0.0:
                 continue
             fee = candidate.entry_fee_per_share * shares
@@ -537,12 +460,7 @@ def main() -> int:
             }
             cash -= cost
             opened += 1
-            append_fill(
-                args.run_dir,
-                timestamp=now, market_id=market.id, slug=market.slug, action="BUY_TAKER",
-                side=side, shares=shares, price=candidate.entry_price, fee=fee, pnl=0.0,
-                net_edge=candidate.net_edge, expected_exit_price=candidate.expected_exit_price,
-            )
+            append_fill(args.run_dir, timestamp=now, market_id=market.id, slug=market.slug, action="BUY_TAKER", side=side, shares=shares, price=candidate.entry_price, fee=fee, pnl=0.0, net_edge=candidate.net_edge, expected_exit_price=candidate.expected_exit_price)
 
     for market_id, (_market, _yes, _no, feature) in current.items():
         samples.append({"ts": now, "market_id": market_id, "mid": feature[1], "spread": feature[2], "x": feature[0], "y": None})
@@ -552,10 +470,7 @@ def main() -> int:
     drawdown = max(0.0, 1.0 - equity / peak) if peak > 0.0 else 0.0
     killed = killed or drawdown >= max_drawdown
     labeled = sum(row.get("y") is not None for row in samples)
-    model_labeled = sum(
-        row.get("y") is not None and isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM
-        for row in samples
-    )
+    model_labeled = sum(row.get("y") is not None and isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM for row in samples)
 
     new_state = {
         "timestamp": now,
@@ -579,6 +494,7 @@ def main() -> int:
         "realized_pnl_last_tick": realized_last_tick,
         "realized_pnl_total": realized_total,
         "admission_contract": "causal_flow_depth_complete_round_trip_ev",
+        "execution_contract": COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT,
         "feature_contract": "book_microprice_depth_parity_plus_receive_causal_event_decayed_yes_no_taker_flow",
         "exit_liquidity_contract": "shares_specific_full_visible_bid_depth_vwap_fail_closed",
         "failures": failures,
@@ -587,12 +503,13 @@ def main() -> int:
     base.atomic_json(args.run_dir / "status.json", {k: new_state[k] for k in (
         "timestamp", "paper_only", "authenticated_execution", "cash", "equity", "peak", "drawdown", "killed",
         "prediction_sigma_probability", "labeled_samples", "model_labeled_samples", "signals", "opened", "best_edge",
-        "realized_pnl_last_tick", "realized_pnl_total", "admission_contract", "feature_contract", "exit_liquidity_contract", "failures"
+        "realized_pnl_last_tick", "realized_pnl_total", "admission_contract", "execution_contract", "feature_contract", "exit_liquidity_contract", "failures"
     )} | {"open_positions": len(positions)})
     base.atomic_json(args.run_dir / "admission_latest.json", {
         "timestamp": now,
         "paper_only": True,
-        "contract": "causal-flow + full-depth-entry/exit + fees/slippage/uncertainty/adverse/capital-time",
+        "contract": COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT,
+        "details": "causal-flow + full-depth-entry/exit + fees/slippage/uncertainty/adverse/capital-time",
         "rows": admission_rows[:100],
     })
     base.append_csv(
@@ -611,6 +528,7 @@ def main() -> int:
         "realized_pnl_total": realized_total, "best_edge": best_edge,
         "prediction_sigma_probability": sigma, "killed": killed,
         "admission_contract": "causal_flow_depth_complete_round_trip_ev",
+        "execution_contract": COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT,
     }, sort_keys=True))
     return 0
 
