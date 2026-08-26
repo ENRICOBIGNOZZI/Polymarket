@@ -99,3 +99,5 @@ if __name__ == "__main__":
     for test in tests:
         test()
     print(f"ok {len(tests)} graph forward/transport/executable/roundtrip/actual-notional guard groups")
+
+# Revalidation sentinel: this comment forces pull-request synchronize hooks on the exact Graph v3 tree.
