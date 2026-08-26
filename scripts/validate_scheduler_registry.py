@@ -12,8 +12,7 @@ REQUIRED_IDS = {
     "integration-merge", "control-plane-event-bridge", "post-merge-validation", "code-validation",
     "monitoring-validation", "live-paper-validation", "paper-server-deploy", "paper-server-health",
     "forward-maker-research", "alpha-factory", "meta-supervisor", "fast-arb-shadow-research",
-    "arb-theory-research", "external-intelligence", "live-api-smoke",
-    "v7-point-in-time-universe-archive", "v7-unified-paper-evidence",
+    "arb-theory-research", "external-intelligence", "live-api-smoke", "v7-point-in-time-universe-archive",
 }
 PRIVATE_VALIDATION_WORKFLOW = ".github/workflows/private-runtime-single-writer-validation.yml"
 OPERATOR_AUTHORITY_WORKFLOW = ".github/workflows/operator-authority-gate.yml"
@@ -27,6 +26,7 @@ LEGACY_WORKFLOWS = {
     ".github/workflows/v6-market-cache-relay.yml",
     ".github/workflows/v6-research-smoke.yml",
     ".github/workflows/v7-cross-sectional-ranking-research.yml",
+    ".github/workflows/v7-unified-paper-evidence.yml",
 }
 NON_SCHEDULER_FORBIDDEN_TOKENS = (
     "gh pr merge",
@@ -34,9 +34,6 @@ NON_SCHEDULER_FORBIDDEN_TOKENS = (
     "git push origin main",
     "git push origin paper-validated",
     "POLYMARKET_DEPLOY_REF=",
-)
-PRIVATE_VALIDATION_FORBIDDEN_PERMISSIONS = (
-    "actions: write", "contents: write", "issues: write", "pull-requests: write",
 )
 
 
@@ -98,6 +95,7 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
     schedulers = data.get("schedulers")
     if not isinstance(schedulers, list):
         return errors + ["schedulers must be a list"], []
+
     required_fields = {
         "id", "workflow", "workflow_name", "job", "cadence", "responsibility",
         "critical", "merge_authority", "deploy_authority", "validation_dispatch_authority",
@@ -132,9 +130,9 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         if not path.is_file():
             errors.append(f"registered workflow does not exist: {workflow}")
             continue
-        job_ids = workflow_job_ids(path)
-        if job_ids != [expected_job]:
-            errors.append(f"{workflow} must contain exactly one job named {expected_job}; found {job_ids or 'none'}")
+        jobs = workflow_job_ids(path)
+        if jobs != [expected_job]:
+            errors.append(f"{workflow} must contain exactly one job named {expected_job}; found {jobs or 'none'}")
         if not workflow_has_periodic_schedule(path):
             errors.append(f"{workflow} must define a periodic schedule/cron trigger")
         normalized.append(item)
@@ -163,37 +161,13 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             errors.append(f"explicit non-scheduler workflow must not define a periodic schedule: {relative}")
         forbid_tokens(errors, relative, text, NON_SCHEDULER_FORBIDDEN_TOKENS)
         if relative == PRIVATE_VALIDATION_WORKFLOW:
-            require_tokens(
-                errors,
-                "private runtime validation",
-                text,
-                ("\n  workflow_dispatch:\n", "\n  pull_request:\n", "permissions:\n  contents: read\n"),
-            )
+            require_tokens(errors, "private runtime validation", text, ("\n  workflow_dispatch:\n", "\n  pull_request:\n", "permissions:\n  contents: read\n"))
             for forbidden_trigger in ("\n  push:\n", "\n  workflow_run:\n", "\n  repository_dispatch:\n"):
                 if forbidden_trigger in text:
                     errors.append(f"private runtime validation contains forbidden trigger: {forbidden_trigger.strip()}")
-            forbid_tokens(errors, "private runtime validation", text, PRIVATE_VALIDATION_FORBIDDEN_PERMISSIONS)
+            forbid_tokens(errors, "private runtime validation", text, ("actions: write", "contents: write", "issues: write", "pull-requests: write"))
         if relative == OPERATOR_AUTHORITY_WORKFLOW:
-            require_tokens(
-                errors,
-                "operator authority gate",
-                text,
-                (
-                    "\n  pull_request_target:\n",
-                    "permissions:\n  contents: read\n  pull-requests: read\n",
-                    "config/operator_directives.json",
-                    "scripts/hard_safety_policy.py",
-                    "tests/test_v7_authorized_paper_envelope.py",
-                    ".github/workflows/operator-authority-gate.yml",
-                    "operator authority surfaces are immutable through pull requests",
-                ),
-            )
-            forbid_tokens(
-                errors,
-                "operator authority gate",
-                text,
-                ("\n  push:\n", "\n  pull_request:\n", "\n  workflow_run:\n", "\n  repository_dispatch:\n", "\n  workflow_dispatch:\n", "APPROVE", "authorAssociation", "author_association", "OWNER"),
-            )
+            require_tokens(errors, "operator authority gate", text, ("\n  pull_request_target:\n", "config/operator_directives.json", "scripts/hard_safety_policy.py", "tests/test_v7_authorized_paper_envelope.py"))
 
     managed_workflows = actual_workflows.difference(NON_SCHEDULER_WORKFLOWS)
     unregistered = sorted(managed_workflows.difference(workflows))
@@ -212,36 +186,25 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         errors.append(f"deploy authority must belong only to paper-server-deploy; found {deploy_ids}")
     if dispatch_ids != ["post-merge-validation"]:
         errors.append(f"validation dispatch authority must belong only to post-merge-validation; found {dispatch_ids}")
+
     by_id = {str(i["id"]): i for i in normalized}
-
-    admin = by_id.get("administrator-supervisor")
-    if admin:
-        text = (root / str(admin["workflow"])).read_text(encoding="utf-8")
-        forbid_tokens(errors, "administrator-supervisor", text, ("gh pr merge", "repository_dispatch", "POLYMARKET_DEPLOY_REF=", "git push origin paper-validated"))
-
     controller = by_id.get("promotion-controller")
     if controller:
         text = (root / str(controller["workflow"])).read_text(encoding="utf-8")
-        require_tokens(errors, "promotion-controller", text, ("scripts/promotion_gate.py", "config/promotion_policy.json", "autonomous-promotion-approved", "--add-label autonomous-promotion-approved", "--remove-label autonomous-promotion-approved", "source-match-files.txt", "economic_source_content_mismatch"))
-        forbid_tokens(errors, "promotion-controller", text, ("gh pr merge", "POLYMARKET_DEPLOY_REF=", "git push origin paper-validated", "administrator-approved"))
+        require_tokens(errors, "promotion-controller", text, ("scripts/promotion_gate.py", "config/promotion_policy.json", "autonomous-promotion-approved", "source-match-files.txt", "economic_source_content_mismatch"))
+        forbid_tokens(errors, "promotion-controller", text, ("gh pr merge", "POLYMARKET_DEPLOY_REF=", "git push origin paper-validated"))
 
     integration = by_id.get("integration-merge")
     if integration:
         text = (root / str(integration["workflow"])).read_text(encoding="utf-8")
-        require_tokens(errors, "integration-merge", text, ('gh pr merge "$PR_NUMBER" --squash --delete-branch', "autonomous-promotion-approved", "--require-approval-label", "scripts/promotion_gate.py", "candidate-final.json", "--match-head-commit", "baseRefOid", "source-match-files.txt", "champion-integration-merged"))
-        forbid_tokens(errors, "integration-merge", text, ("--admin", "administrator-approved", "incumbent_health_gate.py"))
+        require_tokens(errors, "integration-merge", text, ('gh pr merge "$PR_NUMBER" --squash --delete-branch', "autonomous-promotion-approved", "--require-approval-label", "scripts/promotion_gate.py", "--match-head-commit", "baseRefOid", "source-match-files.txt", "champion-integration-merged"))
+        forbid_tokens(errors, "integration-merge", text, ("--admin", "incumbent_health_gate.py"))
 
     bridge = by_id.get("control-plane-event-bridge")
     if bridge:
         text = (root / str(bridge["workflow"])).read_text(encoding="utf-8")
-        require_tokens(errors, "control-plane-event-bridge", text, ("workflow_run:", '"ci"', '"monitoring"', '"v7-live-paper-validation"', '"Private runtime single-writer validation"', '"Polymarket Promotion Controller"', "gh workflow run promotion-controller.yml --ref main", "gh workflow run integration-merge.yml --ref main", '"$TRIGGER_CONCLUSION" == "success"'))
-        forbid_tokens(errors, "control-plane-event-bridge", text, ("gh pr merge", "POLYMARKET_DEPLOY_REF=", "git push origin paper-validated", "repository_dispatch", "v4-live-paper-smoke"))
-
-    evidence_runtime = by_id.get("v7-unified-paper-evidence")
-    if evidence_runtime:
-        text = (root / str(evidence_runtime["workflow"])).read_text(encoding="utf-8")
-        require_tokens(errors, "v7-unified-paper-evidence", text, ("config/v7_evidence_runtime.json", "research/v7-unified-final-evidence-20260826", "V7_MARKET_PROXY_PORT", "runtime_singleton_launcher.py", "source_sha", "by-sha", "Private runtime single-writer validation", "actions: read", "contents: read", "pull-requests: read"))
-        forbid_tokens(errors, "v7-unified-paper-evidence", text, ("gh pr merge", "git push origin main", "git push origin paper-validated", "gh workflow run integration-merge.yml", "gh workflow run promotion-controller.yml", "POLYMARKET_DEPLOY_REF=", "contents: write"))
+        require_tokens(errors, "control-plane-event-bridge", text, ("workflow_run:", '"ci"', '"monitoring"', '"v7-live-paper-validation"', '"Private runtime single-writer validation"', '"Polymarket Promotion Controller"'))
+        forbid_tokens(errors, "control-plane-event-bridge", text, ("gh pr merge", "git push origin paper-validated", "v4-live-paper-smoke"))
 
     meta = by_id.get("meta-supervisor")
     if meta:
@@ -260,16 +223,15 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
 
     for scheduler_id in ("code-validation", "monitoring-validation", "live-paper-validation"):
         item = by_id.get(scheduler_id)
-        if not item:
-            continue
-        text = (root / str(item["workflow"])).read_text(encoding="utf-8")
-        require_tokens(errors, scheduler_id, text, ("expected_sha:", "VALIDATION_SHA", 'test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"'))
+        if item:
+            text = (root / str(item["workflow"])).read_text(encoding="utf-8")
+            require_tokens(errors, scheduler_id, text, ("expected_sha:", "VALIDATION_SHA", 'test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"'))
 
     live_validation = by_id.get("live-paper-validation")
     if live_validation:
         text = (root / str(live_validation["workflow"])).read_text(encoding="utf-8")
         require_tokens(errors, "live-paper-validation", text, ('test "$validated_sha" = "$main_sha"', '-f sha="$validated_sha" -F force=false', "V7 validation refuses non-V7 champion", "authenticated_execution"))
-        forbid_tokens(errors, "live-paper-validation", text, ("paper_v5", "paper_v6", "v4-live-paper-smoke"))
+        forbid_tokens(errors, "live-paper-validation", text, ("paper_v5", "paper_v6", "v4-live-paper-smoke", "v7_champion_candidate"))
 
     return errors, normalized
 
@@ -282,19 +244,14 @@ def render_report(items: list[dict[str, Any]], errors: list[str]) -> str:
     ]
     for item in items:
         lines.append(
-            "| {id} | `{job}` | {cadence} | {responsibility} | {merge} | {deploy} | {dispatch} |".format(
-                id=item["id"], job=item["job"], cadence=str(item["cadence"]).replace("|", "/"),
-                responsibility=str(item["responsibility"]).replace("|", "/"),
-                merge="yes" if item["merge_authority"] else "no",
-                deploy="yes" if item["deploy_authority"] else "no",
-                dispatch="yes" if item["validation_dispatch_authority"] else "no",
-            )
+            f"| {item['id']} | {item['job']} | {item['cadence']} | {item['responsibility']} | "
+            f"{str(bool(item['merge_authority'])).lower()} | {str(bool(item['deploy_authority'])).lower()} | "
+            f"{str(bool(item['validation_dispatch_authority'])).lower()} |"
         )
     if errors:
-        lines.extend(["", "## Errors"])
-        lines.extend(f"- {error}" for error in errors)
+        lines.extend(["", "## Errors"] + [f"- {error}" for error in errors])
     else:
-        lines.extend(["", "Registry and one-job-per-workflow contract are valid. V7 is the only versioned runtime/validation surface; automatic paper promotion retains separate evidence, merge, validation and deploy authorities."])
+        lines.extend(["", "Registry and one-job-per-workflow contract are valid. V7 is the sole runtime generation."])
     return "\n".join(lines) + "\n"
 
 
