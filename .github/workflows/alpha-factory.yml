@@ -12,8 +12,10 @@ on:
       - "config/external_intelligence.json"
       - "scripts/alpha_factory.py"
       - "scripts/attach_external_evidence.py"
+      - "scripts/normalize_forward_maker_history.py"
       - "tests/test_alpha_factory.py"
       - "tests/test_attach_external_evidence.py"
+      - "tests/test_normalize_forward_maker_history.py"
       - ".github/workflows/alpha-factory.yml"
       - ".github/workflows/external-intelligence.yml"
       - "docs/ALPHA_FACTORY.md"
@@ -26,8 +28,10 @@ on:
       - "config/external_intelligence.json"
       - "scripts/alpha_factory.py"
       - "scripts/attach_external_evidence.py"
+      - "scripts/normalize_forward_maker_history.py"
       - "tests/test_alpha_factory.py"
       - "tests/test_attach_external_evidence.py"
+      - "tests/test_normalize_forward_maker_history.py"
       - ".github/workflows/alpha-factory.yml"
       - ".github/workflows/external-intelligence.yml"
       - "docs/ALPHA_FACTORY.md"
@@ -57,10 +61,12 @@ jobs:
           set -euo pipefail
           python3 -m unittest \
             tests/test_alpha_factory.py \
-            tests/test_attach_external_evidence.py -v
+            tests/test_attach_external_evidence.py \
+            tests/test_normalize_forward_maker_history.py -v
           python3 -m py_compile \
             scripts/alpha_factory.py \
-            scripts/attach_external_evidence.py
+            scripts/attach_external_evidence.py \
+            scripts/normalize_forward_maker_history.py
           python3 -m json.tool config/alpha_factory.json >/dev/null
           python3 - <<'PY'
           import json
@@ -94,11 +100,16 @@ jobs:
           extract_or_empty telemetry/latest-forward-maker.json \
             alpha_factory/input/latest-forward-maker.json
           extract_or_empty telemetry/forward-maker-history.jsonl \
-            alpha_factory/input/forward-maker-history.jsonl
+            alpha_factory/input/forward-maker-history.raw.jsonl
           extract_or_empty telemetry/alpha-factory-state.json \
             alpha_factory/input/alpha-factory-state.json
           extract_or_empty telemetry/latest-external-intelligence.json \
             alpha_factory/input/latest-external-intelligence.json
+
+          python3 scripts/normalize_forward_maker_history.py \
+            --input alpha_factory/input/forward-maker-history.raw.jsonl \
+            --output alpha_factory/input/forward-maker-history.jsonl \
+            | tee alpha_factory/input/forward-maker-history-normalization.json
 
       - name: Diagnose bottlenecks and evaluate challengers
         shell: bash
@@ -151,6 +162,10 @@ jobs:
             cat alpha_factory/output/latest-alpha-factory.md >> "$GITHUB_STEP_SUMMARY"
           else
             echo 'Alpha Factory report is missing.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if test -s alpha_factory/input/forward-maker-history-normalization.json; then
+            echo '## Forward-maker history integrity' >> "$GITHUB_STEP_SUMMARY"
+            cat alpha_factory/input/forward-maker-history-normalization.json >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Publish latest registry and evidence to telemetry
