@@ -77,7 +77,8 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             errors.append(f"duplicate scheduler id: {sid}")
         if rel in workflows:
             errors.append(f"duplicate workflow registration: {rel}")
-        ids.add(sid); workflows.add(rel)
+        ids.add(sid)
+        workflows.add(rel)
         path = root / rel
         if not path.is_file():
             errors.append(f"registered workflow does not exist: {rel}")
@@ -92,8 +93,10 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
     if ids != REQUIRED_IDS:
         missing = sorted(REQUIRED_IDS.difference(ids))
         extra = sorted(ids.difference(REQUIRED_IDS))
-        if missing: errors.append("missing scheduler ids: " + ", ".join(missing))
-        if extra: errors.append("unrecognized scheduler ids: " + ", ".join(extra))
+        if missing:
+            errors.append("missing scheduler ids: " + ", ".join(missing))
+        if extra:
+            errors.append("unrecognized scheduler ids: " + ", ".join(extra))
 
     workflow_dir = root / ".github" / "workflows"
     actual = {str(p.relative_to(root)) for p in workflow_dir.iterdir() if p.is_file() and p.suffix in {".yml", ".yaml"}}
@@ -118,24 +121,40 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
     if controller.is_file():
         text = controller.read_text(encoding="utf-8")
         for required in ("scripts/promotion_gate.py", "autonomous-promotion-approved", "source-match-files.txt"):
-            if required not in text: errors.append(f"promotion-controller missing contract: {required}")
-        if "gh pr merge" in text: errors.append("promotion-controller must not merge")
+            if required not in text:
+                errors.append(f"promotion-controller missing contract: {required}")
+        if "gh pr merge" in text:
+            errors.append("promotion-controller must not merge")
 
     integration = root / str(by_id.get("integration-merge", {}).get("workflow", ""))
     if integration.is_file():
         text = integration.read_text(encoding="utf-8")
-        if 'gh pr merge "$PR_NUMBER" --squash --delete-branch' not in text:
-            errors.append("integration-merge must use bounded squash merge")
-        if "--admin" in text: errors.append("integration-merge must never use --admin")
+        required = (
+            'git merge-base --is-ancestor "$current_main" "$expected_head"',
+            'repos/${GITHUB_REPOSITORY}/git/refs/heads/main',
+            '-f sha="$expected_head" -F force=false',
+            'test "$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$expected_head"',
+            "'exact_head_fast_forward':True",
+        )
+        for token in required:
+            if token not in text:
+                errors.append(f"integration-merge missing exact-head fast-forward contract: {token}")
+        for forbidden in ("gh pr merge", "--squash", "--admin", "-F force=true"):
+            if forbidden in text:
+                errors.append(f"integration-merge contains SHA-changing/force authority: {forbidden}")
 
     bridge = root / str(by_id.get("control-plane-event-bridge", {}).get("workflow", ""))
     if bridge.is_file():
         text = bridge.read_text(encoding="utf-8")
-        for required in ('"ci"', '"monitoring"', '"Private runtime single-writer validation"', '"Polymarket Promotion Controller"',
-                         "gh workflow run promotion-controller.yml --ref main", "gh workflow run integration-merge.yml --ref main"):
-            if required not in text: errors.append(f"control-plane-event-bridge missing contract: {required}")
+        for required in (
+            '"ci"', '"monitoring"', '"Private runtime single-writer validation"', '"Polymarket Promotion Controller"',
+            "gh workflow run promotion-controller.yml --ref main", "gh workflow run integration-merge.yml --ref main",
+        ):
+            if required not in text:
+                errors.append(f"control-plane-event-bridge missing contract: {required}")
         for forbidden in ('"v4-live-paper-smoke"', "gh pr merge", "git push origin paper-validated"):
-            if forbidden in text: errors.append(f"control-plane-event-bridge contains retired/forbidden authority: {forbidden}")
+            if forbidden in text:
+                errors.append(f"control-plane-event-bridge contains retired/forbidden authority: {forbidden}")
 
     post = root / str(by_id.get("post-merge-validation", {}).get("workflow", ""))
     if post.is_file():
@@ -158,9 +177,11 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
     if evidence.is_file():
         text = evidence.read_text(encoding="utf-8")
         for required in ("config/v7_evidence_runtime.json", "by-sha", "Private runtime single-writer validation", "contents: read"):
-            if required not in text: errors.append(f"V7 evidence runtime missing contract: {required}")
+            if required not in text:
+                errors.append(f"V7 evidence runtime missing contract: {required}")
         for forbidden in ("contents: write", "git push origin paper-validated", "POLYMARKET_DEPLOY_REF="):
-            if forbidden in text: errors.append(f"V7 evidence runtime contains forbidden authority: {forbidden}")
+            if forbidden in text:
+                errors.append(f"V7 evidence runtime contains forbidden authority: {forbidden}")
 
     return errors, items
 
@@ -170,18 +191,25 @@ def render(items: list[dict[str, Any]], errors: list[str]) -> str:
     if errors:
         lines += ["", "## Errors", *[f"- {e}" for e in errors]]
     else:
-        lines += ["", "Registry is valid: V3-V6 schedulers are absent and deployment authority is intentionally disabled until V7 promotion."]
+        lines += ["", "Registry is valid: the single integration writer preserves the exact candidate SHA and deployment authority remains disabled until the V7 cutover lane is restored."]
     return "\n".join(lines) + "\n"
 
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--root", default="."); p.add_argument("--registry", default="config/scheduler_registry.json"); p.add_argument("--output")
-    a = p.parse_args(); root = Path(a.root).resolve(); registry = root / a.registry
-    try: errors, items = validate(root, registry)
-    except Exception as exc: errors, items = [str(exc)], []
+    p.add_argument("--root", default=".")
+    p.add_argument("--registry", default="config/scheduler_registry.json")
+    p.add_argument("--output")
+    a = p.parse_args()
+    root = Path(a.root).resolve()
+    registry = root / a.registry
+    try:
+        errors, items = validate(root, registry)
+    except Exception as exc:
+        errors, items = [str(exc)], []
     report = render(items, errors)
-    if a.output: Path(a.output).write_text(report, encoding="utf-8")
+    if a.output:
+        Path(a.output).write_text(report, encoding="utf-8")
     print(report, end="")
     return 1 if errors else 0
 

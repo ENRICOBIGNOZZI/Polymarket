@@ -25,16 +25,33 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Require current main to be publicly paper-validated
+      - name: Require a safe V7 integration base
         shell: bash
         run: |
           set -euo pipefail
           git fetch --no-tags origin main paper-validated
           main_sha="$(git rev-parse origin/main)"
           validated_sha="$(git rev-parse origin/paper-validated)"
-          test "$main_sha" = "$validated_sha"
           test "$(git rev-parse HEAD)" = "$main_sha"
-          echo "validated_base_sha=$main_sha"
+          git merge-base --is-ancestor "$validated_sha" "$main_sha"
+          if [[ "$main_sha" != "$validated_sha" ]]; then
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          champion = json.loads(Path('config/live_champion.json').read_text(encoding='utf-8'))
+          directives = json.loads(Path('config/operator_directives.json').read_text(encoding='utf-8'))
+          assert champion.get('enabled') is False, 'main may lead paper-validated only during the explicit no-champion V7 recovery state'
+          assert champion.get('paper_only') is True
+          assert champion.get('authenticated_execution') is False
+          assert directives.get('operator_instruction_id') == 'user-v7-master-multi-agent-operating-prompt-20260827'
+          sequence = str(directives.get('rule') or '')
+          assert 'same-SHA PAPER -> main -> paper-validated -> deploy -> server health' in sequence
+          PY
+            echo "recovery_base=true main=$main_sha paper_validated=$validated_sha"
+          else
+            echo "recovery_base=false main=$main_sha"
+          fi
 
       - name: Select exactly one controller-authorized integration
         shell: bash
@@ -86,10 +103,6 @@ jobs:
           base_sha="$(python3 -c 'import json; print(json.load(open("integration-merge/candidate.json"))["baseRefOid"])')"
           test "$base_sha" = "$current_main" || { echo "Authorized PR base $base_sha is stale versus main $current_main; wait for fresh checks." >&2; exit 1; }
 
-          # Re-run the trusted research lifecycle gate immediately before merge.
-          # Candidate status checks can become stale when source comments/reviews
-          # change, so the unique merge authority must independently re-fetch
-          # trusted governance evidence and re-bind the cited branch/head.
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${source_number}" \
             > integration-merge/source-pr.json
           gh api --paginate --slurp \
@@ -191,7 +204,7 @@ jobs:
             test "$candidate_blob" = "$source_blob" && test "$candidate_blob" = "$bound_blob" || { echo "Economic source-content mismatch: $path" >&2; exit 1; }
           done < integration-merge/source-match-files.txt
 
-      - name: Merge controller-authorized automatic paper-champion promotion
+      - name: Fast-forward main to the exact controller-authorized V7 head
         if: env.AUTHORIZED_COUNT == '1'
         shell: bash
         env:
@@ -209,29 +222,39 @@ jobs:
           labels={x.get('name') for x in json.load(open('integration-merge/candidate-final.json')).get('labels',[])}
           assert 'autonomous-promotion-approved' in labels
           PY
+          [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --quiet --no-tags origin "$expected_head"
+          git merge-base --is-ancestor "$current_main" "$expected_head"
 
-          gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$expected_head" | tee integration-merge/merge-result.txt
-          merged_sha="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq .mergeCommit.oid)"
-          [[ "$merged_sha" =~ ^[0-9a-f]{40}$ ]]
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$merged_sha"
-          echo "MERGED_SHA=$merged_sha" >> "$GITHUB_ENV"
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/main" \
+            -f sha="$expected_head" -F force=false > integration-merge/ref-update.json
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$expected_head"
+          integrated_sha="$expected_head"
+          echo "INTEGRATED_SHA=$integrated_sha" >> "$GITHUB_ENV"
 
-          python3 - "$merged_sha" "$PR_NUMBER" > integration-merge/integration-dispatch.json <<'PY'
+          pr_state="$(gh pr view "$PR_NUMBER" --json state --jq .state 2>/dev/null || true)"
+          if [[ "$pr_state" == "OPEN" ]]; then
+            gh pr close "$PR_NUMBER" --delete-branch \
+              --comment "Integrated by exact-head fast-forward at \`$expected_head\`. No squash or merge commit was created, preserving same-SHA PAPER/main/paper-validated/deploy provenance. Authenticated real-money execution remains disabled."
+          else
+            echo "PR $PR_NUMBER already non-open after exact-head fast-forward: ${pr_state:-unknown}"
+          fi
+
+          python3 - "$integrated_sha" "$PR_NUMBER" > integration-merge/integration-dispatch.json <<'PY'
           import json,sys
-          print(json.dumps({'event_type':'champion-integration-merged','client_payload':{'sha':sys.argv[1],'pr_number':int(sys.argv[2]),'automatic_promotion':True}}))
+          print(json.dumps({'event_type':'champion-integration-merged','client_payload':{'sha':sys.argv[1],'pr_number':int(sys.argv[2]),'automatic_promotion':True,'exact_head_fast_forward':True}}))
           PY
           gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" --input integration-merge/integration-dispatch.json
-          gh pr comment "$PR_NUMBER" --body "Automatically promoted at \`$merged_sha\` after Promotion Controller authorization and immediate fail-closed revalidation. Post-merge exact-SHA validation now owns \`paper-validated\` and deployment. Authenticated real-money execution remains disabled."
 
       - name: Publish integration action
         if: always()
         shell: bash
         run: |
-          echo '## Automatic integration merge' >> "$GITHUB_STEP_SUMMARY"
+          echo '## Automatic exact-head integration' >> "$GITHUB_STEP_SUMMARY"
           echo "- controller-authorized candidates: ${AUTHORIZED_COUNT:-unknown}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- merged PR: ${PR_NUMBER:-none}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- integrated PR: ${PR_NUMBER:-none}" >> "$GITHUB_STEP_SUMMARY"
           echo "- source research PR: ${SOURCE_PR_NUMBER:-none}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- merged SHA: ${MERGED_SHA:-none}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- exact integrated SHA: ${INTEGRATED_SHA:-none}" >> "$GITHUB_STEP_SUMMARY"
           cat integration-merge/research-policy.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           cat integration-merge/promotion-gate.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
