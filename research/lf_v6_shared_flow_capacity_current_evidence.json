@@ -1,0 +1,54 @@
+{
+  "schema": "lf_v6_shared_flow_capacity_audit_v1",
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "base_main_sha": "1d73eb3d05d027306228964536864c3761df6dfe",
+  "latest_live_smoke": {
+    "github_run_id": "32917866402",
+    "generated_ts": 1787706694,
+    "trade_tape_rows": 352,
+    "trade_recorder_errors": 0,
+    "graph_rv_bundles": 1,
+    "graph_rv_legs": 3,
+    "graph_rv_best_quote_edge": 0.020000000000000018,
+    "graph_rv_completed_bundles": 0,
+    "maker_resting_orders": 6,
+    "maker_positions": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_net_pnl_usd": 0.0,
+    "current_snapshot_cross_sleeve_token_overlap": 0,
+    "current_snapshot_multileg_duplicate_tokens": 0,
+    "interpretation": "The latest smoke does not itself exhibit overlapping passive claims on one token. The defect is a source-level capacity-accounting failure that becomes active whenever multiple paper legs/orders share a token-price flow stream."
+  },
+  "source_finding": {
+    "file": "src/multileg_paper.cpp",
+    "description": "apply_trades loops over every matching leg and passes the full t.size independently into consume_passive_buy. No shared remaining trade-capacity variable is decremented across matching paper orders.",
+    "impact": "A single observed public trade can clear the same external queue independently for multiple paper orders, so aggregate simulated fills and bundle completions can exceed the public flow that actually traded. This biases the primary objective: executable completion and fill-conditioned PnL."
+  },
+  "deterministic_counterexample": {
+    "external_queue_ahead": 100.0,
+    "orders": 2,
+    "target_shares_per_order": 10.0,
+    "observed_sell_trade_shares": 110.0,
+    "current_independent_replay_total_fill": 20.0,
+    "single_shared_capacity_total_fill": 10.0,
+    "overstatement_shares": 10.0
+  },
+  "required_successor_contract": [
+    "Treat each observed public trade as one finite liquidity-capacity event, not one capacity event per strategy/order.",
+    "Key the consumption ledger by token, executable price/side, receive-time ordering and a stable public-trade identity.",
+    "Allocate flow across own simultaneous paper orders with causal arrival/priority state; never let aggregate own fills exceed compatible observed flow after shared queue depletion.",
+    "Coordinate capacity claims across Local Factor, Graph/RV and maker sleeves when they can rest on the same token/price.",
+    "Combine shared-capacity fills with point-in-time queue/depth/fee state, joint completion bitmasks and partial-fill abort/unwind economics.",
+    "Require fill-conditioned PnL and completion evidence under 1x/1.5x/2x execution costs before promotion."
+  ],
+  "safety": {
+    "paper_only": true,
+    "max_drawdown": 0.15,
+    "authenticated_execution": false,
+    "real_money_execution": false,
+    "production_code_changed": false,
+    "champion_changed": false,
+    "risk_limits_changed": false
+  }
+}
