@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: Polymarket V7
+    orgId: 1
+    folder: Polymarket V7
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 10
+    options:
+      path: /Users/enrico/polymarket/monitoring/grafana/dashboards
+      foldersFromFilesStructure: false
