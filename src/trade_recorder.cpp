@@ -190,13 +190,13 @@ public:
         std::vector<Trade> rows;
         std::size_t requests = 0, errors = 0, fetched = 0, truncated_batches = 0, split_retries = 0;
 
-        // Large multi-market 10k-row calls have produced 408/5xx responses and
-        // opaque 20k-row pages with no current-window events. Keep public Data API
-        // calls modest, paginate within the documented offset bound, and split a
-        // retryable failing group until a single condition isolates the failure.
+        // Keep each Data API response bounded. The API supports start/end windows,
+        // market CSV filters and offsets through 10000, but large 40-condition / 10k
+        // row calls have been slow and brittle in live evidence. Start with at most
+        // 20 conditions and 1000 rows; recursively split retryable failures.
         constexpr std::size_t page_limit = 1000;
         constexpr std::size_t max_offset = 10000;
-        const std::size_t api_batch_size = std::min<std::size_t>(batch_size_, 5);
+        const std::size_t api_batch_size = std::min<std::size_t>(batch_size_, 20);
 
         std::function<bool(std::size_t,std::size_t)> fetch_batch;
         fetch_batch = [&](std::size_t lo, std::size_t hi) -> bool {
@@ -215,10 +215,9 @@ public:
 
             for (std::size_t offset = 0; offset <= max_offset; offset += page_limit) {
                 std::ostringstream url;
-                // The public Data API documents market/limit/offset/takerOnly for
-                // /trades, not start/end. Enforce the causal overlap window locally.
                 url << data_url_ << "/trades?limit=" << page_limit << "&offset=" << offset
-                    << "&takerOnly=true&market=" << market_query;
+                    << "&takerOnly=true&start=" << start << "&end=" << end
+                    << "&market=" << market_query;
                 ++requests;
 
                 try {
@@ -256,6 +255,8 @@ public:
                         t.slug = get_text(o, "slug");
                         t.event_slug = get_text(o, "eventSlug");
                         if (t.ts <= 0 || t.asset_id.empty() || t.price <= 0.0 || t.price >= 1.0 || t.size <= 0.0) continue;
+                        // Keep local verification even though the server is asked to
+                        // window results: it protects against boundary/API regressions.
                         if (t.ts < start || t.ts > end) continue;
                         if (!by_condition.count(t.condition_id)) continue;
                         const auto key = trade_key(t);
