@@ -37,7 +37,7 @@ def request_json(url: str, payload: Any | None = None, timeout: int = 20) -> Any
     req = urllib.request.Request(
         url,
         data=data,
-        headers={"User-Agent": "polymarket-v6-paper/3", "Content-Type": "application/json"},
+        headers={"User-Agent": "polymarket-v7-paper/1", "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
@@ -79,7 +79,15 @@ def resolve_fee_details(
     *,
     timeout: int = 10,
 ) -> FeeDetails:
-    """Resolve fee semantics with explicit provenance and fail-closed support."""
+    """Resolve PnL fee semantics from authoritative market descriptors only.
+
+    Gamma ``feeSchedule`` / explicit ``feesEnabled=false`` is preferred.  If it
+    is absent, the CLOB market descriptor ``fd`` may supply the same economic
+    schedule.  ``/fee-rate`` signing metadata and category-wide constants are
+    never used as PnL fallbacks. Unknown schedules are returned unverified so
+    every economic caller fails closed.
+    """
+    del token_id  # token signing metadata is intentionally not a PnL fallback.
     gamma = _fee_from_gamma(raw_market)
     if gamma is not None:
         return gamma
@@ -90,6 +98,8 @@ def resolve_fee_details(
                 f"{clob_url.rstrip('/')}/clob-markets/{urllib.parse.quote(condition_id)}",
                 timeout=timeout,
             )
+            if isinstance(root, dict) and root.get("feesEnabled") is False:
+                return FeeDetails(0.0, 1.0, True, True, "clob:fees_disabled")
             fd = root.get("fd") if isinstance(root, dict) else None
             if isinstance(fd, dict):
                 rate = finite(fd.get("r"))
@@ -105,25 +115,7 @@ def resolve_fee_details(
         except Exception:
             pass
 
-    if token_id:
-        try:
-            root = request_json(
-                f"{clob_url.rstrip('/')}/fee-rate?token_id={urllib.parse.quote(token_id)}",
-                timeout=timeout,
-            )
-            base_fee = finite(root.get("base_fee")) if isinstance(root, dict) else math.nan
-            if math.isfinite(base_fee) and base_fee >= 0.0:
-                return FeeDetails(
-                    rate=max(0.0, base_fee) / 10000.0,
-                    exponent=1.0,
-                    taker_only=True,
-                    verified=True,
-                    source="clob:fee-rate",
-                )
-        except Exception:
-            pass
-
-    return FeeDetails(0.07, 1.0, True, False, "legacy_unverified_fallback")
+    return FeeDetails(0.0, 1.0, True, False, "unverified_fee_schedule")
 
 
 def fee_per_share(price: float, details: FeeDetails, *, taker: bool = True) -> float:
@@ -197,13 +189,6 @@ class TapeFlow:
         return float(self.now - rows[-1].ts) if rows else math.inf
 
     def compatible_sell_rate(self, token_id: str, limit_price: float, *, lookback_seconds: int) -> float:
-        """Recency-weighted compatible volume hazard in shares/second.
-
-        A stale trade at the beginning of a long lookback should not imply the
-        same fill hazard as identical flow observed seconds ago. The exponential
-        kernel uses a half-life of one third of the requested window and divides
-        by its exact effective exposure time, retaining rate units.
-        """
         window = max(1.0, float(lookback_seconds))
         rows = self.compatible_sell_trades(token_id, limit_price, lookback_seconds=int(window))
         if not rows:
@@ -237,14 +222,7 @@ def fill_probability_proxy(
     horizon_seconds: float,
     prior_flow_per_second: float = 0.0,
 ) -> float:
-    """Conservative queue-capacity fill proxy, bounded in [0,1].
-
-    Positive probability requires observed compatible public flow. A requested
-    prior is capped by that observed rate, and queue + own size must be cleared.
-    `ratio/(1+ratio)` is deliberately less optimistic than treating expected
-    flow as a free exponential crossing probability; at expected flow equal to
-    required queue capacity it assigns 50%, not 63%.
-    """
+    """Conservative queue-capacity fill proxy, bounded in [0,1]."""
     q = max(0.0, queue_ahead)
     own = max(1e-9, own_shares)
     observed_rate = max(0.0, compatible_flow_per_second)
