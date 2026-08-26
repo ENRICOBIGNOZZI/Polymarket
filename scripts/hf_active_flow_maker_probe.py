@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import urllib.error
 import urllib.parse
 from collections import defaultdict
+from pathlib import Path
 
 import hf_active_flow_maker_batched_probe as batched
 import hf_active_flow_maker_core as core
@@ -31,7 +33,7 @@ def fetch_trades_batch(condition_ids: list[str], start_ts: int, end_ts: int,
     errors: list[str] = []
     unique_conditions = list(dict.fromkeys(x for x in condition_ids if x))
 
-    def consume_rows(rows: list[object], chunk: list[str], received_ms: int) -> None:
+    def consume_rows(rows: list[object], chunk: list[str]) -> None:
         allowed = set(chunk)
         seen = {t.trade_id for condition in chunk for t in out.get(condition, [])}
         for item in rows:
@@ -89,7 +91,7 @@ def fetch_trades_batch(condition_ids: list[str], start_ts: int, end_ts: int,
         if not isinstance(rows, list):
             errors.append(f"batch={label}:unexpected_response:conditions={len(chunk)}")
             return
-        consume_rows(rows, chunk, received_ms)
+        consume_rows(rows, chunk)
 
     step = max(1, batch_size)
     for lo in range(0, len(unique_conditions), step):
@@ -105,8 +107,42 @@ def fetch_trades_batch(condition_ids: list[str], start_ts: int, end_ts: int,
 batched.fetch_trades_batch = fetch_trades_batch
 
 
+def activity_data_healthy(result: dict[str, object]) -> bool:
+    universe = result.get("universe")
+    if not isinstance(universe, dict):
+        return False
+    discovered = int(universe.get("discovered_markets") or 0)
+    active = int(universe.get("active_markets_evaluated") or 0)
+    errors = universe.get("flow_errors")
+    error_count = len(errors) if isinstance(errors, list) else 0
+    # Zero recent activity can be economically real, but it may not be accepted as
+    # research evidence when the same scan suffered transport failures. That was the
+    # exact failure mode that previously turned 408/500s into a misleading 0-candidate
+    # result while the overall workflow still passed.
+    return not (discovered > 0 and active == 0 and error_count > 0)
+
+
 def main() -> int:
-    return batched.main()
+    args = core.parse_args()
+    # Start moderately batched; retryable failures are recursively split down to one
+    # condition. The bounded page avoids the 10k-row multi-condition timeout mode.
+    args.trade_batch_size = 5
+    out = Path(args.output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    result = batched.run_batched(args)
+    healthy = activity_data_healthy(result)
+    universe = result.setdefault("universe", {})
+    if isinstance(universe, dict):
+        universe["activity_data_healthy"] = healthy
+        universe["trade_batch_size"] = args.trade_batch_size
+        universe["trade_page_limit"] = _PAGE_LIMIT
+    (out / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (out / "result.md").write_text(batched.markdown(result), encoding="utf-8")
+    print(batched.markdown(result), end="")
+    if not healthy:
+        print("HF activity discovery is unhealthy; refusing to treat transport failures as zero activity.")
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
