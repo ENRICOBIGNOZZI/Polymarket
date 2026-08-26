@@ -1,17 +1,45 @@
 {
-  "generated_ts": 1787743751,
+  "generated_ts": 1787745836,
   "history": {
     "duplicate_sessions_dropped": 0,
     "first_generated_ts": 1787594933,
-    "history_span_seconds": 148818,
-    "last_generated_ts": 1787743751,
+    "history_span_seconds": 150903,
+    "last_generated_ts": 1787745836,
     "malformed_lines": 0,
-    "valid_sessions": 56
+    "valid_sessions": 57
+  },
+  "latest_same_window_comparison": {
+    "generated_ts": 1787745836,
+    "git_sha": "e47129bc9b9986bec901f6975e7c28da68739832",
+    "github_run_id": "32965325793",
+    "probes_per_policy": 14,
+    "join": {
+      "any_fills": 0,
+      "one_sided": 0,
+      "pair_fills": 0,
+      "pnl_ex_rewards_usd": 0.0
+    },
+    "improve1": {
+      "any_fills": 2,
+      "one_sided": 2,
+      "pair_fills": 0,
+      "pnl_ex_rewards_usd": -0.903487627021283,
+      "pnl_with_conditional_rewards_usd_not_booked": -0.8617016234800682,
+      "filled_share_weighted_markout_60_bid_per_share": -0.003434490808286001,
+      "filled_share_weighted_markout_300_bid_per_share": -0.0010000000000000009
+    },
+    "fade1": {
+      "any_fills": 0,
+      "one_sided": 0,
+      "pair_fills": 0,
+      "pnl_ex_rewards_usd": 0.0
+    },
+    "interpretation": "On the same 480-second market window, one-tick improvement created two additional one-sided fills versus zero for join, but both incremental fills were economically adverse: zero paired completion, negative ex-reward PnL, negative 60s markout, and negative observed 300s markout. This is direct matched-window evidence against indiscriminate one-tick improvement."
   },
   "policies": {
     "fade1": {
       "any_fills": 1,
-      "block_bootstrap_lcb_mean_pnl_ex_rewards_per_probe_usd": -0.0016603933332524252,
+      "block_bootstrap_lcb_mean_pnl_ex_rewards_per_probe_usd": -0.001628863859530519,
       "block_bootstrap_ucb_mean_pnl_ex_rewards_per_probe_usd": 0.0,
       "filled_share_weighted_markout_300_bid_per_share": null,
       "filled_share_weighted_markout_60_bid_per_share": 0.0,
@@ -22,19 +50,19 @@
         "excessive_one_sided_fill_risk",
         "nonpositive_ex_reward_bootstrap_lcb"
       ],
-      "mean_pnl_ex_rewards_per_probe_usd": -0.0005568433482295475,
+      "mean_pnl_ex_rewards_per_probe_usd": -0.0005474846364945971,
       "one_sided_only": 1,
       "pair_fills": 0,
-      "probes": 819,
-      "sessions": 56,
+      "probes": 833,
+      "sessions": 57,
       "total_pnl_ex_rewards_usd": -0.45605470219999944
     },
     "improve1": {
-      "any_fills": 6,
-      "block_bootstrap_lcb_mean_pnl_ex_rewards_per_probe_usd": -0.010634580911285874,
-      "block_bootstrap_ucb_mean_pnl_ex_rewards_per_probe_usd": -0.0013152042382870495,
-      "filled_share_weighted_markout_300_bid_per_share": -0.004176870748299324,
-      "filled_share_weighted_markout_60_bid_per_share": -0.0034597964175806864,
+      "any_fills": 8,
+      "block_bootstrap_lcb_mean_pnl_ex_rewards_per_probe_usd": -0.011810348231215842,
+      "block_bootstrap_ucb_mean_pnl_ex_rewards_per_probe_usd": -0.0017381730314179845,
+      "filled_share_weighted_markout_300_bid_per_share": -0.0028906882591093145,
+      "filled_share_weighted_markout_60_bid_per_share": -0.0034544099378882084,
       "gate_failures": [
         "insufficient_any_fills",
         "insufficient_pair_fills",
@@ -42,16 +70,16 @@
         "excessive_one_sided_fill_risk",
         "nonpositive_ex_reward_bootstrap_lcb"
       ],
-      "mean_pnl_ex_rewards_per_probe_usd": -0.005376616773487273,
-      "one_sided_only": 6,
+      "mean_pnl_ex_rewards_per_probe_usd": -0.00637087246639539,
+      "one_sided_only": 8,
       "pair_fills": 0,
-      "probes": 819,
-      "sessions": 56,
-      "total_pnl_ex_rewards_usd": -4.403449137486077
+      "probes": 833,
+      "sessions": 57,
+      "total_pnl_ex_rewards_usd": -5.30693676450736
     },
     "join": {
       "any_fills": 1,
-      "block_bootstrap_lcb_mean_pnl_ex_rewards_per_probe_usd": -0.0005127066906054471,
+      "block_bootstrap_lcb_mean_pnl_ex_rewards_per_probe_usd": -0.0005022054692316005,
       "block_bootstrap_ucb_mean_pnl_ex_rewards_per_probe_usd": 0.0,
       "filled_share_weighted_markout_300_bid_per_share": null,
       "filled_share_weighted_markout_60_bid_per_share": -0.0020000000000000018,
@@ -62,11 +90,11 @@
         "excessive_one_sided_fill_risk",
         "nonpositive_ex_reward_bootstrap_lcb"
       ],
-      "mean_pnl_ex_rewards_per_probe_usd": -0.0001696501992113262,
+      "mean_pnl_ex_rewards_per_probe_usd": -0.000166798935359035,
       "one_sided_only": 1,
       "pair_fills": 0,
-      "probes": 819,
-      "sessions": 56,
+      "probes": 833,
+      "sessions": 57,
       "total_pnl_ex_rewards_usd": -0.13894351315407616
     }
   },
@@ -77,9 +105,9 @@
     "fade1": "MORE_EVIDENCE_REQUIRED",
     "improve1": "REJECT_CURRENT_SAMPLE",
     "join": "MORE_EVIDENCE_REQUIRED",
-    "rationale": "improve1 now has 6 observed fills, all one-sided, zero pair fills, negative ex-reward PnL, negative 60s/300s fill-weighted markout, and a strictly negative moving-block bootstrap upper confidence bound for mean ex-reward PnL per probe."
+    "rationale": "improve1 now has 8 observed fills across 57 sessions, all one-sided, zero pair fills, -$5.30694 ex-reward PnL, negative 60s/300s fill-weighted markout, and a strictly negative moving-block bootstrap upper confidence bound. The latest same-window comparison is especially adverse: improve1 created two fills while join created none, but the two incremental fills lost $0.90349 ex rewards and had negative observed markout."
   },
   "schema": "polymarket_hf_forward_maker_negative_fill_evidence_v1",
-  "source_git_sha": "ac75976b68b560e21efe12b2a7bc3c21b90b284a",
+  "source_git_sha": "e47129bc9b9986bec901f6975e7c28da68739832",
   "source_telemetry": "telemetry/latest-forward-maker-calibration.json"
 }
