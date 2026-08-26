@@ -12,6 +12,13 @@ assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
+AUDIT_SPEC = importlib.util.spec_from_file_location(
+    "lf_v6_trade_tape_health_audit", ROOT / "scripts" / "lf_v6_trade_tape_health_audit.py"
+)
+assert AUDIT_SPEC and AUDIT_SPEC.loader
+AUDIT = importlib.util.module_from_spec(AUDIT_SPEC)
+AUDIT_SPEC.loader.exec_module(AUDIT)
+
 
 class TradeRecorderHealthTest(unittest.TestCase):
     def fields(self, **updates: int) -> dict[str, int]:
@@ -75,6 +82,28 @@ class TradeRecorderHealthTest(unittest.TestCase):
     def test_future_timestamp_fails_closed(self) -> None:
         report = MODULE.evaluate(self.fields(last_trade_ts=1_000_100), 1_000_000, 1200, 30)
         self.assertIn("trade_timestamp_in_future", report["failures"])
+
+    def test_unhealthy_tape_plus_new_graph_reservation_is_flagged(self) -> None:
+        snapshot = {
+            "data_health": {
+                "trade_recorder": {
+                    "status": "unhealthy",
+                    "failures": ["no_public_trades_fetched", "missing_last_trade_timestamp"],
+                    "fields": {"fetched": 0, "new_trades": 0, "last_trade_ts": 0, "seen": 0},
+                }
+            },
+            "intents": {"bundles": 1, "strategies": {"GRAPH_RV": 3}},
+            "logs": {
+                "multileg": [
+                    "multileg_tick bundles=1 resting=1 complete=0 aborting=0 closed=0 "
+                    "unwound=0 trades_processed=0 tape_cursor=0 reserved=60 cash=5000"
+                ]
+            },
+        }
+        report = AUDIT.analyze(snapshot)
+        self.assertEqual(report["status"], "FAIL_CLOSED_REQUIRED")
+        self.assertTrue(report["unsafe_graph_admission_with_unhealthy_tape"])
+        self.assertEqual(report["graph_rv"]["reserved_usd"], 60.0)
 
 
 if __name__ == "__main__":
