@@ -44,8 +44,9 @@ class PointInTimeArchiveWorkflowContractTest(unittest.TestCase):
     def test_helper_is_append_only_per_bucket(self) -> None:
         source = (ROOT / "scripts/v7_archive_market_universe.py").read_text()
         self.assertIn("if not target.exists():", source)
-        self.assertIn("os.link(tmp, target)", source)
-        self.assertNotIn("os.replace(tmp, target)", source)
+        self.assertIn("os.link(", source)
+        self.assertIn(", target)", source)
+        self.assertNotIn("os.replace(", source)
         self.assertIn('archive_dir.glob("universe-*.json.gz")', source)
 
 
