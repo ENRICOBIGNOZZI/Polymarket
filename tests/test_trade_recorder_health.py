@@ -12,6 +12,13 @@ assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
+FLOW_SPEC = importlib.util.spec_from_file_location(
+    "lf_v6_active_flow_universe_audit", ROOT / "scripts" / "lf_v6_active_flow_universe_audit.py"
+)
+assert FLOW_SPEC and FLOW_SPEC.loader
+FLOW_MODULE = importlib.util.module_from_spec(FLOW_SPEC)
+FLOW_SPEC.loader.exec_module(FLOW_MODULE)
+
 
 class TradeRecorderHealthTest(unittest.TestCase):
     def fields(self, **updates: int) -> dict[str, int]:
@@ -75,6 +82,25 @@ class TradeRecorderHealthTest(unittest.TestCase):
     def test_future_timestamp_fails_closed(self) -> None:
         report = MODULE.evaluate(self.fields(last_trade_ts=1_000_100), 1_000_000, 1200, 30)
         self.assertIn("trade_timestamp_in_future", report["failures"])
+
+    def test_active_global_tape_without_selected_universe_overlap_is_not_fill_evidence(self) -> None:
+        payload = {
+            "classification": "global_tape_active_but_sampled_universe_has_no_recent_matches",
+            "discovered_conditions": 220,
+            "probes": {
+                "global_recent": {
+                    "http_status": 200,
+                    "response_rows": 1000,
+                    "local_window_rows": 16,
+                    "local_window_discovered_matches": 0,
+                }
+            },
+        }
+        report = FLOW_MODULE.audit_diagnostic(payload)
+        self.assertEqual(report["classification"], "ACTIVE_UNIVERSE_MISMATCH")
+        self.assertFalse(report["execution_evidence_eligible"])
+        self.assertEqual(report["recent_global_rows"], 16)
+        self.assertEqual(report["recent_discovered_matches"], 0)
 
 
 if __name__ == "__main__":
