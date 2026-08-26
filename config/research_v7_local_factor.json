@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "paper_only": true,
   "research_only": true,
   "live_intents_enabled": false,
@@ -18,11 +18,15 @@
   "inference": {
     "minimum_pair_controls": 2,
     "bootstrap_repetitions": 300,
+    "maximum_bootstrap_repetitions": 15000,
     "bootstrap_type": "joint_panel_increment_blocks_reestimate_full_pair_factor",
     "pair_test_statistic": "intersection_union_max_of_two_marginal_null_preserving_adf_pvalues",
-    "bh_fdr": 0.10,
-    "apply_bh_before_residual_z_phi_and_economic_filters": true,
-    "minimum_abs_residual_z_after_bh": 0.75
+    "multiplicity_method": "benjamini_yekutieli_arbitrary_dependence",
+    "fdr_q": 0.10,
+    "structural_pair_minimum_text_similarity": 0.20,
+    "predeclared_unestimable_pair_pvalue": 1.0,
+    "apply_multiplicity_before_residual_z_phi_and_economic_filters": true,
+    "minimum_abs_residual_z_after_multiplicity": 0.75
   },
   "forecast": {
     "mean_reversion": "phi_power_h",
@@ -47,11 +51,12 @@
     "minimum_marginal_fill_is_joint_estimator": false
   },
   "promotion_gate": {
-    "require_valid_bh_survivors": true,
+    "require_dependence_robust_fdr_survivors": true,
     "require_common_pair_factor_basis": true,
     "require_price_pnl_hedge_units": true,
     "require_joint_completion_positive_ev": true,
     "require_positive_fill_conditioned_pnl_under_cost_stress": true,
-    "require_shared_execution_ledger": true
+    "require_shared_execution_ledger": true,
+    "require_point_in_time_survivorship_safe_universe": true
   }
 }
