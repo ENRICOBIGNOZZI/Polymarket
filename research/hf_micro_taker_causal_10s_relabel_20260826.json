@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "research_state": "CURRENT_LINEAR_MICRO_TAKER_NOT_SUPPORTED_ON_RELABELED_SAMPLE",
+  "source": {
+    "workflow_run_id": 32910817671,
+    "source_head_sha": "c3f6430d7614182b47870cc22ca56998cae10891",
+    "artifact": "v6-research-smoke-32910817671",
+    "note": "This is a causal counterfactual re-label of the saved eight-wave sample path, not a fresh independent live window."
+  },
+  "saved_grid": {
+    "samples": 1814,
+    "snapshot_waves": 8,
+    "wave_sizes": [227, 227, 227, 227, 227, 227, 227, 225],
+    "wave_intervals_seconds": [7, 8, 7, 6, 7, 6, 7]
+  },
+  "causal_10s_labels": {
+    "horizon_seconds": 10,
+    "max_target_staleness_seconds": 5,
+    "labeled": 1581,
+    "missing_pre_horizon_observation": 233,
+    "nonzero_labels": 28,
+    "nonzero_fraction": 0.017710309930423784,
+    "target_staleness_counts": {"2": 227, "3": 900, "4": 454},
+    "mean_target_staleness_seconds": 3.1435800126502214,
+    "max_target_staleness_seconds_observed": 4,
+    "mean_absolute_move": 0.00018848829854522465,
+    "absolute_move_quantiles": {"p50": 0.0, "p90": 0.0, "p95": 0.0, "p99": 0.005, "max": 0.075}
+  },
+  "chronological_ridge_replay": {
+    "method": "At each snapshot wave, fit the same six-feature ridge only on labels whose target observation timestamp was already available at that wave; evaluate the current wave only after at least 40 prior causal labels.",
+    "oos_rows": 1354,
+    "oos_nonzero_targets": 24,
+    "model_mse": 0.000006029081214354462,
+    "zero_forecast_mse": 0.0000060190177252585,
+    "mse_improvement_vs_zero": -0.0016719487390328691,
+    "prediction_target_correlation": -0.024107194932922037,
+    "mean_absolute_prediction": 0.0001031515394332672,
+    "absolute_prediction_quantiles": {"p50": 0.0000952637321, "p90": 0.000193164621, "p99": 0.000268947552, "max": 0.00031860866},
+    "decision": "REJECT_CURRENT_LINEAR_RIDGE_AS_ALPHA_EVIDENCE_ON_THIS_SAMPLE"
+  },
+  "interpretation": "Changing the research horizon from 5s to 10s repairs the measurement cadence and reveals that the target is not identically flat. It does not rescue the current linear micro-taker: chronological ridge prediction is slightly worse than the zero forecast and has negative target correlation on this saved sample. Do not force taker trades or lower executable-edge gates. Fresh forward evidence with richer receive-time flow/OFI features is still required.",
+  "hard_safety": {
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "state_integrity_unchanged": true,
+    "real_money_execution": false
+  }
+}
