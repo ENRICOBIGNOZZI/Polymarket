@@ -8,10 +8,12 @@ on:
       - "scripts/v7_cross_sectional_rank.py"
       - "scripts/v7_cross_sectional_rank_core.py"
       - "scripts/v7_cross_sectional_rank_fast.py"
+      - "scripts/v7_cross_sectional_rank_inference.py"
       - "scripts/v7_cross_sectional_history.py"
       - "config/research_v7_cross_sectional_rank.json"
       - "tests/test_v7_cross_sectional_rank.py"
       - "tests/test_v7_cross_sectional_rank_fast.py"
+      - "tests/test_v7_cross_sectional_rank_inference.py"
       - "tests/test_v7_cross_sectional_history.py"
       - "docs/V7_CROSS_SECTIONAL_RANKING.md"
       - ".github/workflows/v7-cross-sectional-ranking-research.yml"
@@ -36,10 +38,12 @@ jobs:
           python3 -m unittest \
             tests/test_v7_cross_sectional_rank.py \
             tests/test_v7_cross_sectional_rank_fast.py \
+            tests/test_v7_cross_sectional_rank_inference.py \
             tests/test_v7_cross_sectional_history.py -v
           python3 -m py_compile \
             scripts/v7_cross_sectional_rank_core.py \
             scripts/v7_cross_sectional_rank_fast.py \
+            scripts/v7_cross_sectional_rank_inference.py \
             scripts/v7_cross_sectional_rank.py \
             scripts/v7_cross_sectional_history.py
           python3 -m json.tool config/research_v7_cross_sectional_rank.json >/dev/null
@@ -49,11 +53,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ranking_evidence
-          # Preserve the full 30-day information set and all statistical gates.
-          # Independent 7-day history batches use bounded parallel reads, while
-          # walk-forward ridge uses an exact-beta rolling sufficient-statistics path.
-          # The equivalence test above binds the rolling path to the canonical fit.
-          python3 -c 'import sys; sys.path.insert(0,"scripts"); import v7_cross_sectional_rank as m, v7_cross_sectional_history as h, v7_cross_sectional_rank_fast as f; m.fetch_histories=h.fetch_histories; m.core.walk_forward_evaluate=f.walk_forward_evaluate; m.HISTORY_SINGLE_FALLBACK_BUDGET_PER_WINDOW=0; raise SystemExit(m.main())' \
+          # Preserve the full 30-day information set and all original statistical
+          # gates. Independent history batches are bounded-parallel. Walk-forward
+          # beta uses the exact rolling sufficient-statistics path. Daily-block
+          # inference is diagnostic only and cannot mutate the original gate.
+          python3 -c 'import sys; sys.path.insert(0,"scripts"); import v7_cross_sectional_rank as m, v7_cross_sectional_history as h, v7_cross_sectional_rank_inference as i; m.fetch_histories=h.fetch_histories; m.core.walk_forward_evaluate=i.walk_forward_evaluate; m.HISTORY_SINGLE_FALLBACK_BUDGET_PER_WINDOW=0; raise SystemExit(m.main())' \
             --config config/research_v7_cross_sectional_rank.json \
             --market-limit 150 \
             --output-json ranking_evidence/report.json \
@@ -73,6 +77,7 @@ jobs:
           assert report["history_data_healthy"] is True
           assert report["history_market_count"] >= report["history_required_market_count"]
           assert len(report["horizons"]) == 4
+          assert all("blocked_inference" in item["oos"] for item in report["horizons"])
           PY
 
       - name: Publish ranking summary
@@ -88,14 +93,12 @@ jobs:
           print(f"- markets: {r['market_count']}")
           print(f"- history markets: {r['history_market_count']} / required {r['history_required_market_count']}")
           print(f"- history data healthy: {r['history_data_healthy']}")
-          print(f"- history chunk days: {r['history_window_days']}")
           print(f"- books: {r['book_market_count']}")
           print(f"- authoritative fee books: {r['authoritative_fee_book_count']}")
-          print(f"- shadow intents: {r['shadow_intent_rows']}")
           print(f"- survivorship safe: {r['survivorship_safe']}")
           for h in r['horizons']:
-              o=h['oos']
-              print(f"- {h['horizon_minutes']}m: gate={h['statistical_gate']}, rows={h['training_rows']}, IC={o['median_rank_ic']:.4f}, +IC={o['positive_ic_fraction']:.3f}, decile_monotonicity={o['decile_monotonicity']:.3f}, top-bottom={o['median_top_bottom_logit_spread']:.6f}, candidates={len(h['shadow_candidates'])}")
+              o=h['oos']; b=o['blocked_inference']
+              print(f"- {h['horizon_minutes']}m: original_gate={h['statistical_gate']}, robustness={o['discovery_robustness_gate']}, median_IC={o['median_rank_ic']:.4f}, +IC={o['positive_ic_fraction']:.3f}, median_tail={o['median_top_bottom_logit_spread']:.6f}, daily_IC={b['mean_daily_rank_ic']:.4f}, daily_tail={b['mean_daily_top_bottom_logit_spread']:.6f}, pIC={b['rank_ic_bootstrap_p_mean_nonpositive']}, pTail={b['top_bottom_bootstrap_p_mean_nonpositive']}")
           PY
           else
             echo '- report missing' >> "$GITHUB_STEP_SUMMARY"
