@@ -17,10 +17,12 @@ on:
       - "config/fast_arb_*"
       - "scripts/arb_theory_scheduler.py"
       - "scripts/v7_fast_structural_gate.py"
+      - "scripts/v7_fast_joint_execution_evidence.py"
       - "scripts/validate_fast_data_health.py"
       - "scripts/paper_v7_loop.sh"
       - "tests/test_fast_*"
       - "tests/test_v7_fast_structural_gate.py"
+      - "tests/test_v7_fast_joint_execution_evidence.py"
       - "tests/test_arb_theory_scheduler.py"
       - ".github/workflows/fast-arb-hourly.yml"
       - ".github/workflows/arb-theory-hourly.yml"
@@ -50,7 +52,10 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j2
           ctest --test-dir build --output-on-failure
-          python3 -m unittest tests/test_fast_data_health.py tests/test_v7_fast_structural_gate.py -v
+          python3 -m unittest \
+            tests/test_fast_data_health.py \
+            tests/test_v7_fast_structural_gate.py \
+            tests/test_v7_fast_joint_execution_evidence.py -v
 
       - name: Run read-only V7 fast shadow probe
         shell: bash
@@ -85,10 +90,20 @@ jobs:
             --output-json runs/hourly-fast/fast_arb_candidate.json \
             --output-markdown runs/hourly-fast/fast_arb_theory_report.md \
             --output-header runs/hourly-fast/fast_arb_candidate_policy.hpp
+
+          execution_args=()
+          if [[ -s runs/hourly-fast/fast_arb_joint_execution.csv ]]; then
+            python3 scripts/v7_fast_joint_execution_evidence.py \
+              --input runs/hourly-fast/fast_arb_joint_execution.csv \
+              --expected-sha "$target_sha" \
+              --output-json runs/hourly-fast/fast_arb_joint_execution_evidence.json
+            execution_args=(--execution-evidence runs/hourly-fast/fast_arb_joint_execution_evidence.json)
+          fi
           python3 scripts/v7_fast_structural_gate.py \
             --candidate runs/hourly-fast/fast_arb_candidate.json \
             --expected-sha "$target_sha" \
-            --generated-header runs/hourly-fast/fast_arb_candidate_policy.hpp
+            --generated-header runs/hourly-fast/fast_arb_candidate_policy.hpp \
+            "${execution_args[@]}"
           python3 scripts/validate_fast_data_health.py \
             --status runs/hourly-fast/fast_arb_status.json \
             --errors runs/hourly-fast/fast_arb_errors.csv \
@@ -102,20 +117,23 @@ jobs:
           candidate_path = Path("runs/hourly-fast/fast_arb_candidate.json")
           candidate = json.loads(candidate_path.read_text())
           base_policy = json.loads(Path("config/fast_arb_policy.json").read_text())
+          execution_path = Path("runs/hourly-fast/fast_arb_joint_execution_evidence.json")
           assert status["mode"] == "shadow"
           assert status["real_order_submission"] is False
           assert candidate["mode"] == "research_only"
           assert candidate["real_order_submission"] is False
           assert candidate["model_sha"] == os.environ["TARGET_SHA"]
           assert candidate["candidate_policy"]["min_net_edge"] >= base_policy["min_net_edge"]
-          assert candidate["promotion_ready"] is False
-          assert "joint_execution_evidence_missing" in candidate["promotion_gate"]["reasons"]
+          if not execution_path.is_file():
+              assert candidate["promotion_ready"] is False
+              assert "joint_execution_evidence_missing" in candidate["promotion_gate"]["reasons"]
           with Path("runs/hourly-fast/fast_arb_theory_report.md").open("a", encoding="utf-8") as handle:
               handle.write("\n## Authoritative V7 economic promotion gate\n\n")
               handle.write(f"- model_sha: `{candidate['model_sha']}`\n")
               handle.write(f"- quoted_theory_promotion_ready: `{candidate['quoted_theory_promotion_ready']}`\n")
-              handle.write("- promotion_ready: `false`\n")
-              handle.write("- reason: same-SHA realized joint execution evidence is not produced by this shadow probe.\n")
+              handle.write(f"- promotion_ready: `{str(candidate['promotion_ready']).lower()}`\n")
+              reasons = candidate["promotion_gate"]["reasons"]
+              handle.write(f"- reasons: `{', '.join(reasons) if reasons else 'none'}`\n")
           PY
           cat runs/hourly-fast/fast_arb_theory_report.md >> "$GITHUB_STEP_SUMMARY"
 
