@@ -1,5 +1,5 @@
 {
-  "schema": "lf_v6_pair_factor_basis_current_evidence_v1",
+  "schema": "lf_v6_pair_factor_basis_current_evidence_v2",
   "generated_utc": "2026-08-26T05:23:43Z",
   "base_main_sha": "e417dfefd99312712c1f9e33efa8e2e847b492e5",
   "research_state": "MORE_EVIDENCE_REQUIRED",
@@ -9,17 +9,31 @@
     "path": "scripts/v6_local_factor_v3.py",
     "finding": "each target is correctly excluded from its own factor, but each target therefore receives a different leave-one-out factor; build_pair later compares and ratios those target-specific loadings as if they were coefficients on one common regressor"
   },
-  "deterministic_counterexample": {
-    "points": 240,
-    "target_specific_loo_loading_a": -0.18396376504012038,
-    "target_specific_loo_loading_b": 0.046856524319142695,
-    "shared_leave_pair_out_loading_a": 0.20000000000000004,
-    "shared_leave_pair_out_loading_b": 0.45607017003965533,
-    "target_specific_abs_ratio": 3.9261077878318877,
-    "shared_abs_ratio": 0.43852900965351455,
-    "ratio_distortion": 8.952903231952519,
-    "pair_factor_sign_relation_changes": true,
-    "interpretation": "target-specific LOO loadings can change both the relative hedge ratio and the inferred sign relationship versus coefficients estimated on a single pair-excluded common factor"
+  "deterministic_counterexamples": {
+    "false_rejection": {
+      "points": 240,
+      "target_specific_loo_loading_a": -0.18396376504012038,
+      "target_specific_loo_loading_b": 0.046856524319142695,
+      "shared_leave_pair_out_loading_a": 0.20000000000000004,
+      "shared_leave_pair_out_loading_b": 0.45607017003965533,
+      "target_specific_abs_ratio": 3.9261077878318877,
+      "shared_abs_ratio": 0.43852900965351455,
+      "ratio_distortion": 8.952903231952519,
+      "pair_factor_sign_relation_changes": true,
+      "interpretation": "target-specific bases imply opposite-signed factor loadings while one pair-excluded common factor implies same-signed exposures, so pair eligibility can be rejected for a basis artifact"
+    },
+    "false_admission": {
+      "points": 240,
+      "target_specific_loo_loading_a": 0.8472145158346557,
+      "target_specific_loo_loading_b": 0.32746558015825766,
+      "shared_leave_pair_out_loading_a": 0.10147428099262543,
+      "shared_leave_pair_out_loading_b": -0.20000000000000004,
+      "target_specific_abs_ratio": 2.5871864622389125,
+      "shared_abs_ratio": 0.507371404963127,
+      "ratio_distortion": 5.099196440577756,
+      "pair_factor_sign_relation_changes": true,
+      "interpretation": "target-specific bases imply same-signed factor loadings while the pair-excluded common factor implies opposite-signed exposures, so the current opposite-residual pair rule can admit a pair whose shared-factor exposure does not offset"
+    }
   },
   "current_live_context": {
     "telemetry_run_id": "32932828422",
@@ -41,7 +55,7 @@
   },
   "required_successor_contract": [
     "Use target-level leave-one-out factors only as leakage-free screening, not as a common hedge basis.",
-    "For every candidate pair, rebuild one factor using controls that exclude both prospective legs; require at least two independent controls or fail closed.",
+    "For every candidate pair, rebuild one factor using controls that exclude both prospective legs; require at least two independent controls or use a separately validated one-control/cross-fit model.",
     "Refit both pair loadings and residuals on that same pair-excluded factor before comparing signs or constructing a hedge ratio.",
     "Recompute null-preserving increment-bootstrap p-values on the pair-refit residuals and apply multiplicity correction over the tested pair hypotheses before economic admission.",
     "Only after a common statistical factor basis exists, convert both exposures to price/PnL units using p*(1-p)*yes_sd*loading as studied in PR 398.",
