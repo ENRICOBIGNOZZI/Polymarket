@@ -141,7 +141,23 @@ jobs:
           # V5 compatibility example retained for rollout tooling: runs/paper_v5_live
           printf 'champion_version=%s\nchampion_run_root=%s\n' "$version" "$run_root_rel"
 
-          curl -fsS http://127.0.0.1:9108/healthz >/dev/null
+          exporter_healthz_file="$(mktemp)"
+          trap 'rm -f "$exporter_healthz_file"' EXIT
+          exporter_healthz_code=""
+          if ! exporter_healthz_code="$(curl --silent --show-error \
+            --output "$exporter_healthz_file" --write-out '%{http_code}' \
+            http://127.0.0.1:9108/healthz)"; then
+            exporter_healthz_code="${exporter_healthz_code:-000}"
+          fi
+          printf 'exporter_healthz_http=%s\n' "$exporter_healthz_code"
+          printf '%s\n' 'exporter_healthz_body_begin'
+          cat "$exporter_healthz_file"
+          printf '\n%s\n' 'exporter_healthz_body_end'
+          exporter_healthz_failed=0
+          if [[ "$exporter_healthz_code" != "200" ]]; then
+            exporter_healthz_failed=1
+          fi
+
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
           curl -fsS http://127.0.0.1:3000/api/search >/dev/null
@@ -321,6 +337,11 @@ jobs:
               systemctl is-active --quiet polymarket-monitoring.service
               ;;
           esac
+
+          if [[ "$exporter_healthz_failed" -ne 0 ]]; then
+            echo "private exporter healthz unhealthy: HTTP $exporter_healthz_code; diagnostics captured above" >&2
+            exit 1
+          fi
           REMOTE
 
       - name: Fetch structured action report
