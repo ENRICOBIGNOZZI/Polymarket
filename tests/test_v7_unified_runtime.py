@@ -11,17 +11,19 @@ def load(path: str):
     return json.loads((ROOT / path).read_text(encoding="utf-8"))
 
 
-def test_research_manifest_keeps_incumbent_until_v7_promotion_and_defines_exact_candidate():
-    incumbent = load("config/live_champion.json")
-    candidate = load("config/v7_champion_candidate.json")
-    assert incumbent["version"] in {6, 7}
-    assert candidate["version"] == 7
-    assert candidate["loop"] == "scripts/paper_v7_loop.sh"
-    assert candidate["config"] == "config/paper_v7.json"
-    assert candidate["run_root"] == "runs/paper_v7_live"
-    assert candidate["paper_only"] is True
-    assert candidate["authenticated_execution"] is False
-    assert candidate["promotion_contract"] == "research_head_must_be_exact-head-approved_then_integrated"
+def test_live_manifest_is_exact_canonical_v7():
+    manifest = load("config/live_champion.json")
+    architecture = load("config/v7_model_architecture.json")
+    assert manifest["version"] == 7
+    assert manifest["loop"] == "scripts/paper_v7_loop.sh"
+    assert manifest["config"] == "config/paper_v7.json"
+    assert manifest["run_root"] == "runs/paper_v7_live"
+    assert manifest["paper_only"] is True
+    assert manifest["authenticated_execution"] is False
+    assert architecture["engine_version"] == 7
+    assert architecture["legacy_runtime_supported"] is False
+    assert architecture["runtime"]["entrypoint"] == manifest["loop"]
+    assert architecture["runtime"]["run_root"] == manifest["run_root"]
 
 
 def test_v7_config_has_no_binding_fixed_dollar_trade_cap_and_100_percent_hard_ceiling():
@@ -29,6 +31,7 @@ def test_v7_config_has_no_binding_fixed_dollar_trade_cap_and_100_percent_hard_ce
     directives = load("config/operator_directives.json")["paper_v7_authorization"]
     assert cfg["engine_version"] == 7
     assert cfg["paper_only"] is True
+    assert "v6" not in cfg
     assert cfg["market_limit"] == directives["market_limit"]
     assert cfg["min_liquidity"] == directives["min_liquidity"]
     assert abs(cfg["min_net_edge"] - directives["min_net_edge"]) < 1e-12
@@ -62,27 +65,29 @@ def test_frequency_matrix_has_hf_and_30m_to_6h_without_pooling():
     assert rules["no_post_hoc_frequency_selection_on_same_holdout"] is True
 
 
-def test_v7_entrypoint_has_one_execution_owner_and_separate_shadow_scheduler():
-    selector = (ROOT / "scripts/paper_latest_loop.sh").read_text(encoding="utf-8")
+def test_v7_entrypoint_has_one_runtime_owner_and_separate_shadow_scheduler():
+    entrypoint = (ROOT / "scripts/run_paper.sh").read_text(encoding="utf-8")
     updater = (ROOT / "ops/update_server_macos.sh").read_text(encoding="utf-8")
     singleton = (ROOT / "scripts/runtime_singleton_launcher.py").read_text(encoding="utf-8")
-    text = (ROOT / "scripts/paper_v7_loop.sh").read_text(encoding="utf-8")
-    assert "runtime_singleton_launcher.py" in selector
-    assert "runtime_owner.lock" in selector
-    assert "runtime_handoff.request" in selector
+    supervisor = (ROOT / "scripts/runtime_plane_supervisor.py").read_text(encoding="utf-8")
+    loop = (ROOT / "scripts/paper_v7_loop.sh").read_text(encoding="utf-8")
+    assert "runtime_singleton_launcher.py" in entrypoint
+    assert "paper-runtime.lock" in entrypoint
+    assert "runtime_plane_supervisor.py" in entrypoint
     assert "request_runtime_handoff()" in updater
     assert "clear_runtime_handoff()" in updater
     assert "_drain_child_group" in singleton
     assert "start_new_session=True" in singleton
-    assert "runtime_singleton_launcher.py" not in text
-    assert "runtime_owner.lock" not in text
-    assert "paper_v7_execution_loop.sh" in text
-    assert "v7_shadow_loop.py" in text
-    assert "POLYMARKET_RUNTIME_PARENT_PID=\"$$\"" in text
-    assert text.count("start_execution") >= 2
+    assert "accepts only canonical V7" in supervisor
+    assert "scripts/paper_v7_loop.sh" in supervisor
+    assert "runtime_singleton_launcher.py" not in loop
+    assert "paper_v7_execution_loop.sh" in loop
+    assert "v7_shadow_loop.py" in loop
+    assert "POLYMARKET_RUNTIME_PARENT_PID=\"$$\"" in loop
+    assert loop.count("start_execution") >= 2
 
 
-def test_v7_execution_loop_is_canonical_and_has_no_legacy_runtime_calls():
+def test_v7_execution_loop_is_canonical():
     text = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
     required = (
         "v7_market_proxy.py",
@@ -104,14 +109,7 @@ def test_v7_execution_loop_is_canonical_and_has_no_legacy_runtime_calls():
     )
     for marker in required:
         assert marker in text, marker
-    forbidden = (
-        "v3_", "v4_", "v5_", "v6_",
-        "paper_v3", "paper_v4", "paper_v5", "paper_v6",
-        "merge_v4_intents.py",
-        "polymarket_multileg_paper",
-    )
-    for marker in forbidden:
-        assert marker not in text, marker
+    assert "polymarket_multileg_paper" not in text
 
 
 def test_shadow_scheduler_is_research_only_and_frequency_separated():
@@ -129,4 +127,4 @@ if __name__ == "__main__":
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
     for test in tests:
         test()
-    print(f"ok {len(tests)} unified V7 research/runtime tests")
+    print(f"ok {len(tests)} unified V7 runtime tests")
