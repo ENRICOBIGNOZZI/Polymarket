@@ -58,11 +58,45 @@ def test_one_public_trade_capacity_is_conserved_across_own_orders():
     assert abs(value.legs[1].filled_shares - 5.0) < 1e-12
 
 
-def test_backfilled_pre_order_event_cannot_fill_new_order():
+def test_exchange_timestamp_is_metadata_not_order_causality():
     value = blank_broker()
     value.bundles = {"a": broker.Bundle("a", "GRAPH_RV", "event", "RESTING", 0, 0.01, 10, 9999999999, 9999999999)}
     value.legs = [broker.Leg("a", "m1", "event", "YES", "t", 1.0, 10.0, 0.0, 0.40, 0.0, 1000, 1000)]
-    value.apply_trades([{"side": "SELL", "size": 100.0, "asset_id": "t", "price": 0.39, "received_ms": 2000, "event_ts_ms": 900}])
+    value.apply_trades([{"side": "SELL", "size": 10.0, "asset_id": "t", "price": 0.39, "received_ms": 2000, "event_ts_ms": 900}])
+    assert value.legs[0].filled_shares == 10.0
+    assert value.legs[0].first_fill_ts == 2
+    assert value.legs[0].last_fill_ts == 2
+
+
+def test_pre_arrival_receive_cannot_fill_even_with_later_exchange_timestamp():
+    value = blank_broker()
+    value.bundles = {"a": broker.Bundle("a", "GRAPH_RV", "event", "RESTING", 0, 0.01, 10, 9999999999, 9999999999)}
+    value.legs = [broker.Leg("a", "m1", "event", "YES", "t", 1.0, 10.0, 0.0, 0.40, 0.0, 1000, 1000)]
+    value.apply_trades([{"side": "SELL", "size": 100.0, "asset_id": "t", "price": 0.39, "received_ms": 999, "event_ts_ms": 2000}])
+    assert value.legs[0].filled_shares == 0.0
+
+
+def test_missing_receive_time_fails_closed():
+    value = blank_broker()
+    value.bundles = {"a": broker.Bundle("a", "GRAPH_RV", "event", "RESTING", 0, 0.01, 10, 9999999999, 9999999999)}
+    value.legs = [broker.Leg("a", "m1", "event", "YES", "t", 1.0, 10.0, 0.0, 0.40, 0.0, 1000, 1000)]
+    value.apply_trades([{"side": "SELL", "size": 100.0, "asset_id": "t", "price": 0.39, "received_ms": 0, "event_ts_ms": 2000}])
+    assert value.legs[0].filled_shares == 0.0
+
+
+def test_receive_after_execution_deadline_cannot_fill_delayed_observation():
+    value = blank_broker()
+    value.bundles = {"a": broker.Bundle("a", "GRAPH_RV", "event", "RESTING", 0, 0.01, 10, 1, 9999999999)}
+    value.legs = [broker.Leg("a", "m1", "event", "YES", "t", 1.0, 10.0, 0.0, 0.40, 0.0, 500, 500)]
+    value.apply_trades([{"side": "SELL", "size": 100.0, "asset_id": "t", "price": 0.39, "received_ms": 1500, "event_ts_ms": 700}])
+    assert value.legs[0].filled_shares == 0.0
+
+
+def test_receive_at_or_after_explicit_cancel_is_ineligible():
+    value = blank_broker()
+    value.bundles = {"a": broker.Bundle("a", "GRAPH_RV", "event", "RESTING", 0, 0.01, 10, 9999999999, 9999999999)}
+    value.legs = [broker.Leg("a", "m1", "event", "YES", "t", 1.0, 10.0, 0.0, 0.40, 0.0, 1000, 1000, cancel_effective_ms=1500)]
+    value.apply_trades([{"side": "SELL", "size": 100.0, "asset_id": "t", "price": 0.39, "received_ms": 1500, "event_ts_ms": 1200}])
     assert value.legs[0].filled_shares == 0.0
 
 
@@ -87,7 +121,7 @@ def test_complete_bundle_enters_settling_instead_of_abort_on_async_close():
     assert value.legs[1].exited is False
 
 
-def test_v7_runtime_routes_to_coordinated_python_broker_not_legacy_cpp():
+def test_v7_runtime_routes_to_receive_time_causal_broker_not_legacy_cpp():
     source = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
     assert "v7_multileg_broker_runner.py" in source
     assert "--capacity-lock" in source
@@ -96,8 +130,11 @@ def test_v7_runtime_routes_to_coordinated_python_broker_not_legacy_cpp():
     runner_source = (ROOT / "scripts" / "v7_multileg_broker_runner.py").read_text(encoding="utf-8")
     assert 'bundle.status = "SETTLING"' in broker_source
     assert 'risk_event = market_event_id(raw)' in broker_source
-    assert 'trade["received_ms"] > leg.arrival_ms' in broker_source
-    assert 'trade["event_ts_ms"] > leg.arrival_event_ms' in broker_source
+    assert "receive_time_active" in broker_source
+    assert 'trade["received_ms"] > leg.arrival_ms' not in broker_source
+    assert 'trade["event_ts_ms"] > leg.arrival_event_ms' not in broker_source
+    assert 'fill_ts = trade["received_ms"] // 1000' in broker_source
+    assert "exchange_time_metadata_only_for_fill_causality" in broker_source
     assert "self.persist()" in runner_source
     assert "fcntl.LOCK_UN" in runner_source
     assert runner_source.index("self.persist()") < runner_source.index("fcntl.LOCK_UN")
