@@ -9,6 +9,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+import v7_hard_arb_guard as hard
 import v7_micro_maker_worker as maker
 
 
@@ -83,8 +84,57 @@ def test_maker_state_counts_exit_slippage_once():
     assert "fair_exit_price=executable_exit" not in source
 
 
+def test_hard_arb_dual_clock_freshness_rejects_stale_or_skewed_state():
+    live = {
+        "a": {"received_ms": 10_000, "exchange_ts_ms": 9_990},
+        "b": {"received_ms": 10_040, "exchange_ts_ms": 10_010},
+    }
+    ok, reason, age, skew = hard.local_book_freshness(
+        live, ["a", "b"], now_ms=10_100, max_leg_age_ms=200, max_cross_leg_skew_ms=100
+    )
+    assert ok and reason == "ok" and age == 100 and skew == 40
+    ok, reason, age, skew = hard.exchange_book_freshness(
+        live, ["a", "b"], now_ms=10_100, max_snapshot_age_ms=200, max_snapshot_skew_ms=100
+    )
+    assert ok and reason == "ok" and age == 110 and skew == 20
+    ok, reason, _, _ = hard.local_book_freshness(
+        live, ["a", "b"], now_ms=10_500, max_leg_age_ms=200, max_cross_leg_skew_ms=100
+    )
+    assert not ok and reason == "max_leg_age"
+    skewed = {
+        "a": {"received_ms": 10_000, "exchange_ts_ms": 9_000},
+        "b": {"received_ms": 10_040, "exchange_ts_ms": 10_010},
+    }
+    ok, reason, _, _ = hard.exchange_book_freshness(
+        skewed, ["a", "b"], now_ms=10_100, max_snapshot_age_ms=2_000, max_snapshot_skew_ms=500
+    )
+    assert not ok and reason == "exchange_snapshot_skew"
+
+
+def test_v7_runtime_uses_strict_hard_arb_guard_with_required_bounds():
+    source = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+    assert "python3 scripts/v7_hard_arb_guard.py" in source
+    assert "--max-leg-age-ms 2000" in source
+    assert "--max-cross-leg-skew-ms 1000" in source
+    assert "--max-exchange-snapshot-age-ms 5000" in source
+    assert "--max-exchange-snapshot-skew-ms 1000" in source
+    assert "--leg-latency-ms 100" in source
+    assert "python3 scripts/v6_hard_arb_paper.py --config \"$RUN_ROOT/hard_arb_config.json\"" not in source
+    hard_source = (ROOT / "scripts" / "v7_hard_arb_guard.py").read_text(encoding="utf-8")
+    assert '"atomic_snapshot_assumption": False' in hard_source
+    assert '"multi_level_depth": True' in hard_source
+    assert '"verified_fees_required": True' in hard_source
+    assert '"sequential_leg_revalidation": True' in hard_source
+    assert '"unwind_on_leg_failure": True' in hard_source
+
+
+def test_hard_arb_timestamp_normalization_accepts_seconds_and_milliseconds():
+    assert hard.normalize_timestamp_ms(1_787_700_000) == 1_787_700_000_000
+    assert hard.normalize_timestamp_ms(1_787_700_000_123) == 1_787_700_000_123
+
+
 if __name__ == "__main__":
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
     for test in tests:
         test()
-    print(f"ok {len(tests)} v7 micro maker worker tests")
+    print(f"ok {len(tests)} v7 HF execution tests")
