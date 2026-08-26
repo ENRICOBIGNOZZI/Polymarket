@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
 import unittest
 
@@ -11,6 +12,20 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
+
+AUDIT_SPEC = importlib.util.spec_from_file_location(
+    "alpha_factory_data_health_audit", ROOT / "scripts" / "alpha_factory_data_health_audit.py"
+)
+assert AUDIT_SPEC and AUDIT_SPEC.loader
+AUDIT = importlib.util.module_from_spec(AUDIT_SPEC)
+AUDIT_SPEC.loader.exec_module(AUDIT)
+
+ALPHA_SPEC = importlib.util.spec_from_file_location(
+    "alpha_factory", ROOT / "scripts" / "alpha_factory.py"
+)
+assert ALPHA_SPEC and ALPHA_SPEC.loader
+ALPHA = importlib.util.module_from_spec(ALPHA_SPEC)
+ALPHA_SPEC.loader.exec_module(ALPHA)
 
 
 class TradeRecorderHealthTest(unittest.TestCase):
@@ -75,6 +90,55 @@ class TradeRecorderHealthTest(unittest.TestCase):
     def test_future_timestamp_fails_closed(self) -> None:
         report = MODULE.evaluate(self.fields(last_trade_ts=1_000_100), 1_000_000, 1200, 30)
         self.assertIn("trade_timestamp_in_future", report["failures"])
+
+    def test_alpha_factory_audit_allows_healthy_live_execution_evidence(self) -> None:
+        live = {
+            "generated_ts": 1_800_000_000,
+            "data_health": {
+                "trade_recorder": {"status": "healthy", "failures": []}
+            },
+            "walk_forward": {"oos": {"trades": 0}},
+        }
+        result = AUDIT.evaluate(live)
+        self.assertTrue(result["execution_evidence_usable"])
+        self.assertEqual(result["decision"], "ALLOW_LIVE_EXECUTION_INFERENCE")
+
+    def test_alpha_factory_current_contract_misclassifies_fresh_unhealthy_zero_execution(self) -> None:
+        now = 1_800_000_000
+        live = {
+            "schema": "polymarket_public_live_smoke_v2",
+            "generated_ts": now - 60,
+            "git_sha": "fixture",
+            "data_health": {
+                "trade_recorder": {
+                    "status": "unhealthy",
+                    "failures": ["no_public_trades_fetched", "missing_last_trade_timestamp"],
+                }
+            },
+            "candidates": {"b1": [], "b2": [], "b3_rewards": []},
+            "walk_forward": {
+                "input_trades": 0,
+                "active_folds": 0,
+                "positive_active_folds": 0,
+                "bootstrap_one_sided_pvalue": 1.0,
+                "gate_failures": [],
+                "oos": {"trades": 0},
+            },
+        }
+        config = json.loads((ROOT / "config" / "alpha_factory.json").read_text(encoding="utf-8"))
+        champion = json.loads((ROOT / "config" / "live_champion.json").read_text(encoding="utf-8"))
+        report, _ = ALPHA.build_report(config, champion, live, {}, [], {}, now)
+        experiment_ids = {
+            row["experiment_id"] for row in report.get("next_experiments", [])
+        }
+        self.assertIn("execution_fillability_frontier", experiment_ids)
+        self.assertNotEqual(report["status"], "DEGRADED_DATA_HEALTH")
+
+        audit = AUDIT.evaluate(live, report)
+        self.assertFalse(audit["execution_evidence_usable"])
+        self.assertEqual(audit["decision"], "BLOCK_LIVE_EXECUTION_INFERENCE")
+        self.assertIn("execution_fillability_frontier", audit["contaminated_live_execution_experiments"])
+        self.assertIn("no_public_trades_fetched", audit["trade_recorder_failures"])
 
 
 if __name__ == "__main__":
