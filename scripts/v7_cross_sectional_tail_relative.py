@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
 import v7_cross_sectional_history as history_transport
 import v7_cross_sectional_rank as base
 import v7_cross_sectional_rank_core as core
+import v7_cross_sectional_rank_frozen as frozen
 import v7_cross_sectional_rank_inference as inference
 import v7_cross_sectional_relative as relative
 
@@ -76,6 +77,8 @@ def main() -> int:
         raise SystemExit("relative tail challenger target contract is not frozen")
     if list(cfg.get("horizons_minutes") or []) != [120, 360]:
         raise SystemExit("relative tail challenger horizons must remain frozen at 2h and 6h")
+    if cfg.get("frequency_registration", {}).get("frozen_holdout_only") is not True:
+        raise SystemExit("relative tail challenger requires frozen_holdout_only=true")
     pair_contract = cfg["relative_pair_contract"]
     if pair_contract.get("absolute_single_leg_direction_allowed") is not False:
         raise SystemExit("relative ranking cannot emit absolute single-leg directions")
@@ -87,7 +90,9 @@ def main() -> int:
     discovery_cfg = cfg["discovery"]
     fidelity_minutes = int(history_cfg["fidelity_minutes"])
     bucket_seconds = fidelity_minutes * 60
+    embargo_seconds = int(history_cfg["purge_embargo_buckets"]) * bucket_seconds
     holdout_start = int(discovery_cfg["forward_holdout_start_ts"])
+    frozen_training_label_cutoff = holdout_start - embargo_seconds
     if holdout_start <= int(discovery_cfg["discovery_cutoff_ts"]):
         raise SystemExit("forward holdout must begin strictly after the frozen discovery cutoff")
 
@@ -161,41 +166,49 @@ def main() -> int:
             group_weight=float(history_cfg["group_neutralization_weight"]),
             min_group_size=int(history_cfg["minimum_group_size"]),
         )
-        metrics = inference._rolling_section_metrics(
+        fit, forward_metrics = frozen.evaluate(
             rows,
-            bucket_seconds=bucket_seconds,
-            horizon_steps=horizon_steps,
+            holdout_start_ts=holdout_start,
             window_seconds=int(history_cfg["training_window_days"]) * 86400,
-            embargo_steps=int(history_cfg["purge_embargo_buckets"]),
+            embargo_seconds=embargo_seconds,
             ridge=float(model_cfg["ridge_penalty"]),
             half_life_seconds=int(history_cfg["recency_half_life_days"]) * 86400,
             min_train_rows=int(model_cfg["minimum_training_rows"]),
             min_train_cross_sections=int(model_cfg["minimum_training_cross_sections"]),
             tail_fraction=float(model_cfg["tail_fraction"]),
         )
-        forward_metrics = [row for row in metrics if int(row["ts"]) >= holdout_start]
-        blocked = inference.blocked_inference(forward_metrics, bootstrap_samples=4999, seed=20260826 + int(horizon_minutes))
+        frozen_fit_valid = (
+            fit is not None
+            and int(fit.train_end_ts) <= int(frozen_training_label_cutoff)
+        )
+        blocked = inference.blocked_inference(
+            forward_metrics,
+            bootstrap_samples=4999,
+            seed=20260826 + int(horizon_minutes),
+        )
         gate_ok, gate_reasons = forward_gate(blocked, cfg)
+        if not frozen_fit_valid:
+            gate_ok = False
+            gate_reasons = ["frozen_fit_unavailable_or_contaminated"] + gate_reasons
         if not history_data_healthy:
             gate_ok = False
             gate_reasons = ["price_history_data_health"] + gate_reasons
 
         score_ts = base.latest_score_time(histories, metadata, bucket_seconds, minimum_cross_section)
-        fit = None
         current_pairs: list[relative.RelativePairCandidate] = []
-        if score_ts > 0 and received_ts - score_ts <= 2 * bucket_seconds:
-            fit = core.fit_ridge(
-                rows,
-                asof_ts=score_ts,
-                window_seconds=int(history_cfg["training_window_days"]) * 86400,
-                embargo_seconds=int(history_cfg["purge_embargo_buckets"]) * bucket_seconds,
-                ridge=float(model_cfg["ridge_penalty"]),
-                half_life_seconds=int(history_cfg["recency_half_life_days"]) * 86400,
-                min_rows=int(model_cfg["minimum_training_rows"]),
-                min_cross_sections=int(model_cfg["minimum_training_cross_sections"]),
+        if (
+            frozen_fit_valid
+            and score_ts > 0
+            and received_ts - score_ts <= 2 * bucket_seconds
+        ):
+            snapshot = core.score_snapshot(
+                histories,
+                metadata,
+                score_ts,
+                bucket_seconds,
+                minimum_cross_section,
             )
-            snapshot = core.score_snapshot(histories, metadata, score_ts, bucket_seconds, minimum_cross_section)
-            if fit is not None and snapshot:
+            if snapshot:
                 scored = core.apply_fit(snapshot, fit, score_ts)
                 current_pairs = relative.select_relative_pairs(
                     scored,
@@ -228,13 +241,23 @@ def main() -> int:
                 "forward_gate": gate_ok,
                 "forward_gate_reasons": gate_reasons,
                 "score_timestamp": score_ts,
+                "fit_mode": "frozen_at_holdout_start",
+                "frozen_fit_asof_ts": holdout_start,
+                "frozen_training_label_cutoff_ts": frozen_training_label_cutoff,
+                "frozen_fit_validated": frozen_fit_valid,
                 "fit": None if fit is None else asdict(fit),
                 "relative_pair_candidates": len(current_pairs),
             }
         )
 
     atomic_json(args.output_pairs_json, pair_rows)
-    forward_days_observed = max((int(h["forward_blocked_inference"].get("days") or 0) for h in horizon_reports), default=0)
+    forward_days_observed = max(
+        (int(h["forward_blocked_inference"].get("days") or 0) for h in horizon_reports),
+        default=0,
+    )
+    frozen_holdout_fit_validated = bool(horizon_reports) and all(
+        bool(h.get("frozen_fit_validated")) for h in horizon_reports
+    )
     report = {
         "timestamp": received_ts,
         "schema_version": 2,
@@ -248,6 +271,8 @@ def main() -> int:
         "discovery_source_head": discovery_cfg["source_head"],
         "discovery_cutoff_ts": int(discovery_cfg["discovery_cutoff_ts"]),
         "forward_holdout_start_ts": holdout_start,
+        "frozen_training_label_cutoff_ts": frozen_training_label_cutoff,
+        "frozen_holdout_fit_validated": frozen_holdout_fit_validated,
         "forward_days_observed": forward_days_observed,
         "market_count": len(markets),
         "history_market_count": len(histories),
@@ -273,8 +298,10 @@ def main() -> int:
             "empirical_joint_fill_states_not_yet_attached",
             "partial_fill_abort_unwind_economics_not_yet_attached",
             "shared_execution_ledger_cost_stressed_pnl_not_yet_attached",
-            "research_branch_cannot_mutate_live_champion"
-        ] + ([] if history_data_healthy else ["price_history_data_health_unhealthy"]),
+            "research_branch_cannot_mutate_live_champion",
+        ]
+        + ([] if frozen_holdout_fit_validated else ["frozen_holdout_fit_not_validated"])
+        + ([] if history_data_healthy else ["price_history_data_health_unhealthy"]),
     }
     atomic_json(args.output_json, report)
     print(json.dumps(report, sort_keys=True))
