@@ -2,9 +2,9 @@
 """Fail-closed economic promotion gate for V7 Fast Structural Arbitrage.
 
 Quoted/depth-walk structural opportunity evidence is only a research pre-screen.
-Promotion requires same-SHA canonical-ledger joint execution evidence with positive
-realized fill-conditioned PAPER PnL after cost stress. This module is read-only with
-respect to runtime/champion/canonical refs.
+Promotion requires same-SHA canonical-ledger joint execution evidence with verified
+post-cost realized fill-conditioned PAPER PnL after cost stress. This module is
+read-only with respect to runtime/champion/canonical refs.
 """
 from __future__ import annotations
 
@@ -51,9 +51,13 @@ def atomic_json(path: Path, value: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-def execution_reasons(execution: dict[str, Any], *, expected_sha: str,
-                      min_realized_pnl_observations: int,
-                      min_complete_baskets: int) -> list[str]:
+def execution_reasons(
+    execution: dict[str, Any],
+    *,
+    expected_sha: str,
+    min_realized_pnl_observations: int,
+    min_complete_baskets: int,
+) -> list[str]:
     reasons: list[str] = []
     if not execution:
         return ["canonical_joint_execution_evidence_missing"]
@@ -75,6 +79,8 @@ def execution_reasons(execution: dict[str, Any], *, expected_sha: str,
         reasons.append("executable_depth_contract_missing")
     if execution.get("partial_unwind_accounted") is not True:
         reasons.append("partial_unwind_contract_missing")
+    if execution.get("post_cost_pnl_verified") is not True:
+        reasons.append("post_cost_pnl_contract_missing")
     if integer(execution.get("joint_state_observations")) < min_realized_pnl_observations:
         reasons.append("insufficient_joint_state_observations")
     if integer(execution.get("realized_pnl_observations")) < min_realized_pnl_observations:
@@ -90,9 +96,14 @@ def execution_reasons(execution: dict[str, Any], *, expected_sha: str,
     return reasons
 
 
-def gate_candidate(candidate: dict[str, Any], execution: dict[str, Any], *, expected_sha: str,
-                   min_realized_pnl_observations: int = 20,
-                   min_complete_baskets: int = 20) -> dict[str, Any]:
+def gate_candidate(
+    candidate: dict[str, Any],
+    execution: dict[str, Any],
+    *,
+    expected_sha: str,
+    min_realized_pnl_observations: int = 20,
+    min_complete_baskets: int = 20,
+) -> dict[str, Any]:
     if not SHA_RE.fullmatch(expected_sha):
         raise ValueError("expected_sha must be an exact 40-character lowercase Git SHA")
     if candidate.get("real_order_submission") is not False:
@@ -102,7 +113,8 @@ def gate_candidate(candidate: dict[str, Any], execution: dict[str, Any], *, expe
         raise ValueError("candidate policy must explicitly disable real order submission")
     quoted_theory_ready = bool(candidate.get("promotion_ready"))
     reasons = execution_reasons(
-        execution, expected_sha=expected_sha,
+        execution,
+        expected_sha=expected_sha,
         min_realized_pnl_observations=min_realized_pnl_observations,
         min_complete_baskets=min_complete_baskets,
     )
@@ -121,13 +133,16 @@ def gate_candidate(candidate: dict[str, Any], execution: dict[str, Any], *, expe
         "requires_canonical_ledger": True,
         "requires_joint_execution_states": True,
         "requires_realized_fill_conditioned_pnl": True,
+        "requires_post_cost_pnl_contract": True,
         "requires_cost_stress_1_5x_and_2x": True,
         "execution_ready": execution_ready,
         "reasons": reasons,
     }
     safe_policy = dict(policy)
     safe_policy["model_sha"] = expected_sha
-    safe_policy["quoted_theory_promotion_ready"] = bool(policy.get("promotion_ready", quoted_theory_ready))
+    safe_policy["quoted_theory_promotion_ready"] = bool(
+        policy.get("promotion_ready", quoted_theory_ready)
+    )
     safe_policy["promotion_ready"] = promotion_ready
     safe_policy["real_order_submission"] = False
     output["candidate_policy"] = safe_policy
@@ -137,8 +152,12 @@ def gate_candidate(candidate: dict[str, Any], execution: dict[str, Any], *, expe
 def rewrite_header(path: Path, *, promotion_ready: bool, expected_sha: str) -> None:
     text = path.read_text(encoding="utf-8")
     replacement = "true" if promotion_ready else "false"
-    text, count = re.subn(r"inline constexpr bool kPromotionReady = (?:true|false);",
-                          f"inline constexpr bool kPromotionReady = {replacement};", text, count=1)
+    text, count = re.subn(
+        r"inline constexpr bool kPromotionReady = (?:true|false);",
+        f"inline constexpr bool kPromotionReady = {replacement};",
+        text,
+        count=1,
+    )
     if count != 1:
         raise ValueError("generated header is missing kPromotionReady")
     marker = "// V7 promotion gate: canonical-ledger realized joint execution evidence required.\n"
@@ -146,7 +165,10 @@ def rewrite_header(path: Path, *, promotion_ready: bool, expected_sha: str) -> N
         text = text.replace("#pragma once\n", "#pragma once\n\n" + marker, 1)
     sha_decl = f'inline constexpr char kPromotionModelSha[] = "{expected_sha}";\n'
     if "kPromotionModelSha" not in text:
-        text = text.replace("} // namespace pm::fast::generated", sha_decl + "} // namespace pm::fast::generated")
+        text = text.replace(
+            "} // namespace pm::fast::generated",
+            sha_decl + "} // namespace pm::fast::generated",
+        )
     tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
@@ -170,17 +192,33 @@ def main() -> int:
     if not candidate:
         raise SystemExit("candidate JSON is missing or invalid")
     execution = read_json(args.execution_evidence)
-    gated = gate_candidate(candidate, execution, expected_sha=args.expected_sha,
-                           min_realized_pnl_observations=max(1, args.min_realized_pnl_observations),
-                           min_complete_baskets=max(1, args.min_complete_baskets))
+    gated = gate_candidate(
+        candidate,
+        execution,
+        expected_sha=args.expected_sha,
+        min_realized_pnl_observations=max(1, args.min_realized_pnl_observations),
+        min_complete_baskets=max(1, args.min_complete_baskets),
+    )
     atomic_json(args.output_json or args.candidate, gated)
     if args.generated_header is not None:
-        rewrite_header(args.generated_header, promotion_ready=bool(gated["promotion_ready"]),
-                       expected_sha=args.expected_sha)
-    print(json.dumps({"model_sha": args.expected_sha,
-                      "quoted_theory_promotion_ready": bool(gated.get("quoted_theory_promotion_ready")),
-                      "promotion_ready": bool(gated.get("promotion_ready")),
-                      "reasons": gated["promotion_gate"]["reasons"]}, sort_keys=True))
+        rewrite_header(
+            args.generated_header,
+            promotion_ready=bool(gated["promotion_ready"]),
+            expected_sha=args.expected_sha,
+        )
+    print(
+        json.dumps(
+            {
+                "model_sha": args.expected_sha,
+                "quoted_theory_promotion_ready": bool(
+                    gated.get("quoted_theory_promotion_ready")
+                ),
+                "promotion_ready": bool(gated.get("promotion_ready")),
+                "reasons": gated["promotion_gate"]["reasons"],
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 
