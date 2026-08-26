@@ -87,15 +87,20 @@ def test_complete_bundle_enters_settling_instead_of_abort_on_async_close():
     assert value.legs[1].exited is False
 
 
-def test_v7_runtime_routes_to_python_broker_not_legacy_cpp():
+def test_v7_runtime_routes_to_coordinated_python_broker_not_legacy_cpp():
     source = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
-    assert "v7_multileg_broker.py" in source
+    assert "v7_multileg_broker_runner.py" in source
+    assert "--capacity-lock" in source
     assert "polymarket_multileg_paper" not in source
     broker_source = (ROOT / "scripts" / "v7_multileg_broker.py").read_text(encoding="utf-8")
+    runner_source = (ROOT / "scripts" / "v7_multileg_broker_runner.py").read_text(encoding="utf-8")
     assert 'bundle.status = "SETTLING"' in broker_source
     assert 'risk_event = market_event_id(raw)' in broker_source
     assert 'trade["received_ms"] > leg.arrival_ms' in broker_source
     assert 'trade["event_ts_ms"] > leg.arrival_event_ms' in broker_source
+    assert "self.persist()" in runner_source
+    assert "fcntl.LOCK_UN" in runner_source
+    assert runner_source.index("self.persist()") < runner_source.index("fcntl.LOCK_UN")
 
 
 if __name__ == "__main__":
