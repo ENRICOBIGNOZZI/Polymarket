@@ -76,6 +76,12 @@ class TradeRecorderHealthTest(unittest.TestCase):
         report = MODULE.evaluate(self.fields(last_trade_ts=1_000_100), 1_000_000, 1200, 30)
         self.assertIn("trade_timestamp_in_future", report["failures"])
 
+    def test_v6_live_smoke_enforces_trade_recorder_health(self) -> None:
+        script = (ROOT / "scripts" / "v6_live_smoke_once.sh").read_text(encoding="utf-8")
+        self.assertIn("python3 scripts/validate_trade_recorder_health.py", script)
+        self.assertIn('--log "$R/trade_recorder_latest.log"', script)
+        self.assertNotIn("validate_trade_recorder_health.py || true", script)
+
 
 if __name__ == "__main__":
     unittest.main()
