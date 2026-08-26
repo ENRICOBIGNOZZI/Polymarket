@@ -27,6 +27,13 @@ class ShadowIsolationPolicyTest(unittest.TestCase):
         }
         self.assertEqual(policy.shadow_forbidden_files(changed), sorted(changed))
 
+    def test_shadow_label_rejects_any_workflow_surface(self):
+        changed = {
+            ".github/workflows/v6-research-smoke.yml",
+            ".github/workflows/diagnostic-only.yaml",
+        }
+        self.assertEqual(policy.shadow_forbidden_files(changed), sorted(changed))
+
     def test_shadow_label_allows_measurement_only_research_surfaces(self):
         changed = {
             "research/evidence/hf_forward_maker_fragility.json",
@@ -53,6 +60,44 @@ class ShadowIsolationPolicyTest(unittest.TestCase):
         self.assertEqual(summary["policy"], "fail")
         self.assertIn("scripts/portfolio_supervisor.py", summary["shadow_forbidden_files"])
         self.assertIn("config/portfolio_supervisor.json", summary["shadow_forbidden_files"])
+
+    def test_shadow_labeled_research_pr_fails_on_workflow_change(self):
+        event = {
+            "pull_request": {
+                "head": {"ref": "research/workflow-shadow"},
+                "draft": True,
+                "body": "measurement-only workflow experiment",
+                "labels": [{"name": "shadow-isolated"}],
+            }
+        }
+        errors, summary = policy.evaluate(
+            event,
+            {".github/workflows/v6-research-smoke.yml"},
+            manifest_existed_on_base=True,
+        )
+        self.assertNotEqual(errors, [])
+        self.assertEqual(summary["policy"], "fail")
+        self.assertEqual(
+            summary["shadow_forbidden_files"],
+            [".github/workflows/v6-research-smoke.yml"],
+        )
+
+    def test_draft_research_without_shadow_can_change_workflow(self):
+        event = {
+            "pull_request": {
+                "head": {"ref": "research/workflow-experiment"},
+                "draft": True,
+                "body": "research workflow experiment",
+                "labels": [],
+            }
+        }
+        errors, summary = policy.evaluate(
+            event,
+            {".github/workflows/v6-research-smoke.yml"},
+            manifest_existed_on_base=True,
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(summary["policy"], "pass")
 
     def test_normal_fix_branch_cannot_change_live_model_config_by_wording_around_it(self):
         event = {
