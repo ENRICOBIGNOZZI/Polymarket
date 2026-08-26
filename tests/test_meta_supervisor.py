@@ -70,11 +70,11 @@ class MetaSupervisorTests(unittest.TestCase):
         self.assertFalse(report["invariants"]["deployment_dispatched_directly"])
         self.assertFalse(report["invariants"]["authenticated_execution"])
 
-    def test_outdated_ci_and_monitoring_run_before_dependent_smoke(self) -> None:
+    def test_outdated_ci_and_monitoring_run_before_dependent_validation(self) -> None:
         old = "b" * 40
         runs = self.healthy_runs()
         for run in runs:
-            if run["workflowName"] in {"ci", "monitoring", "v4-live-paper-smoke"}:
+            if run["workflowName"] in {"ci", "monitoring", "v7-live-paper-validation"}:
                 run["headSha"] = old
         report = meta_supervisor.build_report(
             self.config, self.snapshot(runs, validated=old), self.now
@@ -82,8 +82,8 @@ class MetaSupervisorTests(unittest.TestCase):
         plan = [item["workflow_file"] for item in report["dispatch_plan"]]
         self.assertEqual(plan, ["ci.yml", "monitoring.yml"])
         blocked = {item["workflow_file"]: item["reason"] for item in report["blocked_actions"]}
-        self.assertIn("v4-live-smoke.yml", blocked)
-        self.assertIn("dependencies are not healthy", blocked["v4-live-smoke.yml"])
+        self.assertIn("v7-live-paper-validation.yml", blocked)
+        self.assertIn("dependencies are not healthy", blocked["v7-live-paper-validation.yml"])
 
     def test_stale_forward_research_is_restarted_but_alpha_factory_waits(self) -> None:
         runs = self.healthy_runs()
@@ -103,7 +103,7 @@ class MetaSupervisorTests(unittest.TestCase):
     def test_running_workflow_is_not_duplicated(self) -> None:
         runs = self.healthy_runs()
         for run in runs:
-            if run["workflowName"] == "v4-live-paper-smoke":
+            if run["workflowName"] == "v7-live-paper-validation":
                 run["status"] = "in_progress"
                 run["conclusion"] = ""
                 run["updatedAt"] = self.now - 10
@@ -111,10 +111,10 @@ class MetaSupervisorTests(unittest.TestCase):
             self.config, self.snapshot(runs), self.now
         )
         self.assertEqual(
-            report["workflow_status"]["v4-live-smoke.yml"]["state"], "running"
+            report["workflow_status"]["v7-live-paper-validation.yml"]["state"], "running"
         )
         self.assertNotIn(
-            "v4-live-smoke.yml",
+            "v7-live-paper-validation.yml",
             [item["workflow_file"] for item in report["dispatch_plan"]],
         )
 
