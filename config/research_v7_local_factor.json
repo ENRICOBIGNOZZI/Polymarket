@@ -19,7 +19,7 @@
     "minimum_pair_controls": 2,
     "bootstrap_repetitions": 300,
     "bootstrap_type": "joint_panel_increment_blocks_reestimate_full_pair_factor",
-    "pair_test_statistic": "max_of_two_adf_t_statistics",
+    "pair_test_statistic": "intersection_union_max_of_two_marginal_null_preserving_adf_pvalues",
     "bh_fdr": 0.10,
     "apply_bh_before_residual_z_phi_and_economic_filters": true,
     "minimum_abs_residual_z_after_bh": 0.75
