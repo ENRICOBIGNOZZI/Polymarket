@@ -103,9 +103,11 @@ jobs:
           else
             # A data-starved validated revision can otherwise deadlock deployment:
             # deploy waits for market-data health while relay waits for deploy.
-            # Permit only a forward cache bootstrap to the exact current validated
-            # main revision; never bootstrap arbitrary, diverged or unvalidated code.
-            test "$paper_validated_sha" = "$main_sha"
+            # Bootstrap only to the exact validated revision when it is both a
+            # descendant of the deployed head and still on the current main
+            # lineage. Main may legitimately be ahead while its newest commit is
+            # awaiting validation; that must not starve paper-validated of data.
+            git merge-base --is-ancestor "$paper_validated_sha" "$main_sha"
             git merge-base --is-ancestor "$head_sha" "$paper_validated_sha"
             bootstrap=true
           fi

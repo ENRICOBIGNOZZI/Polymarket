@@ -24,8 +24,9 @@ class V6MarketCacheRelayContractTests(unittest.TestCase):
         self.assertIn('main_sha="$(git rev-parse origin/main)"', workflow)
         self.assertIn('head_sha="$(git rev-parse HEAD)"', workflow)
         self.assertIn('if [[ "$head_sha" == "$paper_validated_sha" ]]; then', workflow)
-        self.assertIn('test "$paper_validated_sha" = "$main_sha"', workflow)
+        self.assertIn('git merge-base --is-ancestor "$paper_validated_sha" "$main_sha"', workflow)
         self.assertIn('git merge-base --is-ancestor "$head_sha" "$paper_validated_sha"', workflow)
+        self.assertNotIn('test "$paper_validated_sha" = "$main_sha"', workflow)
         self.assertIn('manifest_json="$(git show "$paper_validated_sha:config/live_champion.json")"', workflow)
         self.assertIn('bootstrap=true', workflow)
         self.assertIn('git checkout --detach "$PAPER_VALIDATED_SHA"', workflow)
@@ -34,10 +35,11 @@ class V6MarketCacheRelayContractTests(unittest.TestCase):
         for forbidden in ("gh pr merge", "git push origin", "POLYMARKET_DEPLOY_REF=", "contents: write"):
             self.assertNotIn(forbidden, workflow)
 
-    def test_predeploy_bootstrap_is_bounded_to_current_validated_revision(self) -> None:
+    def test_predeploy_bootstrap_is_bounded_to_validated_main_lineage(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn('test "$paper_validated_sha" = "$main_sha"', workflow)
+        self.assertIn('git merge-base --is-ancestor "$paper_validated_sha" "$main_sha"', workflow)
         self.assertIn('git merge-base --is-ancestor "$head_sha" "$paper_validated_sha"', workflow)
+        self.assertNotIn('test "$paper_validated_sha" = "$main_sha"', workflow)
         self.assertIn('echo "bootstrap=$bootstrap" >> "$GITHUB_OUTPUT"', workflow)
         self.assertIn("BOOTSTRAP: ${{ steps.target.outputs.bootstrap }}", workflow)
         self.assertIn('if [[ "$BOOTSTRAP" == "true" ]]; then', workflow)
