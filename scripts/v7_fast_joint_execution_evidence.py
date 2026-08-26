@@ -2,10 +2,10 @@
 """Aggregate raw V7 Fast Arb PAPER joint-execution outcomes.
 
 Input rows must describe prospective PAPER execution outcomes produced by the fast
-server event loop.  This script never infers fills from quoted opportunities and
-never accepts mixed-SHA evidence.  It only aggregates observed joint states, realized
-liquidation PnL, explicit costs, partial/unwind outcomes and capital duration into the
-contract consumed by ``v7_fast_structural_gate.py``.
+server event loop. This script never infers fills from quoted opportunities and never
+accepts mixed-SHA evidence. Completed structural baskets may carry a diagnostic locked
+terminal PnL, but they are not counted as realized PnL until a later settlement/close
+row supplies ``net_pnl``.
 """
 from __future__ import annotations
 
@@ -62,12 +62,15 @@ def aggregate(rows: list[dict[str, str]], *, expected_sha: str) -> dict[str, Any
         raise ValueError("mixed_or_wrong_sha_execution_rows")
 
     joint_counts: Counter[str] = Counter()
-    filled_rows: list[dict[str, str]] = []
+    realized_rows: list[dict[str, str]] = []
     explicit_cost_sum = 0.0
     net_pnl_sum = 0.0
-    capital_seconds = 0.0
+    realized_capital_seconds = 0.0
+    observed_capital_seconds = 0.0
     completed_baskets = 0
     partial_rows = 0
+    locked_terminal_pnl_sum = 0.0
+    locked_terminal_observations = 0
     partial_unwind_ok = True
     point_in_time = bool(rows)
     authoritative_fees = bool(rows)
@@ -78,11 +81,8 @@ def aggregate(rows: list[dict[str, str]], *, expected_sha: str) -> dict[str, Any
         joint_counts[state] += 1
         target_legs = max(0, integer(row.get("target_legs")))
         filled_legs = max(0, integer(row.get("filled_legs")))
-        pnl = finite(row.get("net_pnl"))
         cost = finite(row.get("explicit_cost"))
         duration = finite(row.get("capital_seconds"), 0.0)
-        if not math.isfinite(pnl):
-            continue
         if not math.isfinite(cost) or cost < 0.0:
             raise ValueError("execution row has invalid explicit_cost")
         if duration < 0.0 or not math.isfinite(duration):
@@ -91,21 +91,33 @@ def aggregate(rows: list[dict[str, str]], *, expected_sha: str) -> dict[str, Any
         point_in_time = point_in_time and boolean(row.get("point_in_time"))
         authoritative_fees = authoritative_fees and boolean(row.get("authoritative_fees"))
         depth_executable = depth_executable and boolean(row.get("depth_executable"))
+        observed_capital_seconds += duration
+
         is_partial = boolean(row.get("partial_unwind")) or (0 < filled_legs < target_legs)
         if is_partial:
             partial_rows += 1
             partial_unwind_ok = partial_unwind_ok and boolean(row.get("unwind_accounted"))
-        if filled_legs > 0:
-            filled_rows.append(row)
-            net_pnl_sum += pnl
-            explicit_cost_sum += cost
-            capital_seconds += duration
+
         if (
             boolean(row.get("completed_basket"))
             and target_legs > 0
             and filled_legs == target_legs
         ):
             completed_baskets += 1
+
+        locked = finite(row.get("locked_terminal_pnl"))
+        if math.isfinite(locked):
+            locked_terminal_observations += 1
+            locked_terminal_pnl_sum += locked
+
+        pnl = finite(row.get("net_pnl"))
+        if not math.isfinite(pnl):
+            continue
+        if filled_legs > 0:
+            realized_rows.append(row)
+            net_pnl_sum += pnl
+            explicit_cost_sum += cost
+            realized_capital_seconds += duration
 
     if not rows:
         partial_unwind_ok = False
@@ -120,18 +132,21 @@ def aggregate(rows: list[dict[str, str]], *, expected_sha: str) -> dict[str, Any
         "depth_executable": depth_executable,
         "partial_unwind_accounted": partial_unwind_ok,
         "joint_state_observations": len(rows),
-        "realized_pnl_observations": len(filled_rows),
+        "realized_pnl_observations": len(realized_rows),
         "completed_baskets": completed_baskets,
         "partial_unwind_observations": partial_rows,
         "joint_state_counts": dict(sorted(joint_counts.items())),
+        "locked_terminal_observations": locked_terminal_observations,
+        "locked_terminal_pnl_sum": locked_terminal_pnl_sum,
         "fill_conditioned_net_pnl": net_pnl_sum,
         "explicit_cost_sum": explicit_cost_sum,
         "cost_stress_1_5x_net_pnl": net_pnl_sum - 0.5 * explicit_cost_sum,
         "cost_stress_2x_net_pnl": net_pnl_sum - explicit_cost_sum,
-        "capital_hours": capital_seconds / 3600.0,
+        "observed_capital_hours": observed_capital_seconds / 3600.0,
+        "capital_hours": realized_capital_seconds / 3600.0,
         "pnl_per_capital_hour": (
-            net_pnl_sum / (capital_seconds / 3600.0)
-            if capital_seconds > 0.0
+            net_pnl_sum / (realized_capital_seconds / 3600.0)
+            if realized_capital_seconds > 0.0
             else None
         ),
     }
