@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +23,17 @@ from v7_execution_core import (
     quote_improvement_is_economic,
     structural_terminal_floor,
 )
+from v7_execution_ledger import (
+    CanonicalLedgerWriter,
+    LedgerContractError,
+    LedgerEvent,
+    LedgerOwnershipError,
+    canonical_ledger_path,
+    load_events,
+)
+
+
+LEDGER_SHA = "a" * 40
 
 
 def maker(**overrides):
@@ -51,6 +63,32 @@ def maker(**overrides):
     )
     values.update(overrides)
     return MakerState(**values)
+
+
+def ledger_candidate(**overrides):
+    values = dict(
+        event_type="CANDIDATE",
+        strategy="MICRO_TAKER",
+        model_sha=LEDGER_SHA,
+        recorded_ts_ms=1_030,
+        receive_ts_ms=1_010,
+        exchange_ts_ms=1_000,
+        decision_ts_ms=1_020,
+        book_snapshot_id="book-1",
+        market_id="m1",
+        candidate_id="c1",
+        bid=0.49,
+        ask=0.51,
+        bid_depth=100.0,
+        ask_depth=80.0,
+        predicted_alpha=0.02,
+        predicted_fill_probability=1.0,
+        expected_ev=0.005,
+        intended_action="BUY_TAKER",
+        intended_size=10.0,
+    )
+    values.update(overrides)
+    return LedgerEvent(**values)
 
 
 def test_fill_probability_is_not_fill_quality():
@@ -122,6 +160,89 @@ def test_operational_completion_is_not_economic_completion():
     floor = structural_terminal_floor(payout_matrix, shares, costs)
     assert floor < -10.0
     assert not economically_complete(payout_matrix, shares, costs)
+
+
+def test_canonical_ledger_is_paper_only_and_receive_time_causal():
+    ledger_candidate().validate()
+    for overrides in ({"authenticated_execution": True}, {"paper_only": False}):
+        try:
+            ledger_candidate(**overrides).validate()
+        except LedgerContractError as exc:
+            assert "safety:not_paper_only" in str(exc)
+        else:
+            raise AssertionError("ledger safety boundary must fail closed")
+
+    try:
+        ledger_candidate(decision_ts_ms=1_000, receive_ts_ms=1_010).validate()
+    except LedgerContractError as exc:
+        assert "decision_before_receive" in str(exc)
+    else:
+        raise AssertionError("decision must not precede the observed receive clock")
+
+
+def test_canonical_ledger_has_one_exact_sha_writer():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = canonical_ledger_path(Path(tmp))
+        first = CanonicalLedgerWriter(path, writer_id="paper-runtime", model_sha=LEDGER_SHA)
+        second = CanonicalLedgerWriter(path, writer_id="other-runtime", model_sha=LEDGER_SHA)
+        first.acquire()
+        try:
+            try:
+                second.acquire()
+            except LedgerOwnershipError as exc:
+                assert "ledger_already_owned" in str(exc)
+            else:
+                raise AssertionError("a second canonical ledger writer must fail closed")
+            first.append(ledger_candidate())
+            try:
+                first.append(ledger_candidate(model_sha="b" * 40))
+            except LedgerContractError as exc:
+                assert "model_sha:mixed_sha" in str(exc)
+            else:
+                raise AssertionError("mixed-SHA execution evidence must fail closed")
+        finally:
+            first.close()
+
+        events = load_events(path, expected_model_sha=LEDGER_SHA)
+        assert len(events) == 1
+        assert events[0].event_type == "CANDIDATE"
+
+
+def test_canonical_ledger_types_fill_final_and_markout_evidence():
+    fill = LedgerEvent(
+        event_type="FILL",
+        strategy="GRAPH_RV",
+        model_sha=LEDGER_SHA,
+        recorded_ts_ms=2_000,
+        order_id="ord-1",
+        filled_size=2.0,
+        fee=0.01,
+        slippage=0.02,
+        markouts={"1s": -0.01, "10s": 0.0, "45s": 0.01, "60s": 0.02, "300s": 0.03},
+    )
+    fill.validate()
+    LedgerEvent(
+        event_type="FINAL",
+        strategy="GRAPH_RV",
+        model_sha=LEDGER_SHA,
+        recorded_ts_ms=2_100,
+        final_pnl=-0.25,
+        capital_duration_ms=0,
+    ).validate()
+
+    try:
+        LedgerEvent(
+            event_type="FILL",
+            strategy="GRAPH_RV",
+            model_sha=LEDGER_SHA,
+            recorded_ts_ms=2_000,
+            order_id="ord-1",
+            filled_size=0.0,
+        ).validate()
+    except LedgerContractError as exc:
+        assert "fill:missing_positive_size" in str(exc)
+    else:
+        raise AssertionError("zero-size fill must fail closed")
 
 
 if __name__ == "__main__":
