@@ -28,7 +28,10 @@ import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
-import calibrate_forward_maker as base
+try:
+    import calibrate_forward_maker as base
+except ModuleNotFoundError:  # imported as scripts.forward_maker_evidence_contract in tests
+    from scripts import calibrate_forward_maker as base
 
 STRICT_MARKOUT_CONTRACT = "strict_horizon_observed_v1"
 MARKOUT_HORIZONS = (45, 60, 300)
