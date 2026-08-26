@@ -67,7 +67,7 @@ while true; do
     start_shadow
   fi
   tmp="$RUN_ROOT/v7_supervisor.json.tmp.${BASHPID:-$$}"
-  printf '{"timestamp":%s,"paper_only":true,"execution_pid":%s,"shadow_pid":%s,"execution_alive":true,"shadow_alive":true}\n' \
+  printf '{"timestamp":%s,"execution_pid":%s,"shadow_pid":%s,"execution_alive":true,"shadow_alive":true}\n' \
     "$(date +%s)" "$execution_pid" "$shadow_pid" >"$tmp"
   mv "$tmp" "$RUN_ROOT/v7_supervisor.json"
   sleep 5
