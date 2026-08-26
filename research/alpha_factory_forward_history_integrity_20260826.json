@@ -1,0 +1,27 @@
+{
+  "schema": "polymarket_alpha_factory_forward_history_integrity_v1",
+  "source_main_sha": "fccbdd036093c2f7973635c3c47431ad8381b261",
+  "observed_at_utc": "2026-08-26T15:20:00Z",
+  "current_alpha_factory_generated_utc": "2026-08-26T14:51:50+00:00",
+  "current_alpha_factory_defect": {
+    "scheduled_experiment": "accumulate_forward_execution_evidence",
+    "triggering_evidence": "fewer than 24 forward runs per policy",
+    "problem": "persisted forward-maker history uses policy_summaries while alpha_factory.py consumes aggregate_by_policy, so supported history is ignored unless normalized"
+  },
+  "known_forward_history_context": {
+    "prior_exact_head_audits_show_more_than_24_sessions": true,
+    "latest_forward_maker_generated_ts": 1787755380,
+    "latest_forward_maker_is_read_only": true,
+    "generic_improve1_status": "rejected_on_current_sample_by_existing_research_evidence"
+  },
+  "repair_contract": [
+    "normalize every supported legacy policy_summaries row to aggregate_by_policy before Alpha Factory evaluation",
+    "preserve canonical aggregate_by_policy rows without double counting",
+    "count nonempty, parsed-json, dict, supported, unsupported, malformed, non-dict and invalid-supported rows",
+    "fail closed if any nonempty evidence row is malformed, non-dict, unsupported or internally invalid",
+    "never substitute a reduced evidence sample silently",
+    "keep chronological row order",
+    "do not change champion, PAPER envelope, risk limits, deployment or authenticated execution"
+  ],
+  "decision": "BLOCKING_EVIDENCE_INGESTION_DEFECT_MORE_EVIDENCE_REQUIRED"
+}
