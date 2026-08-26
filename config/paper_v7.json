@@ -20,6 +20,8 @@
   "uncertainty_penalty": 0.0,
   "slippage_bps": 5.0,
   "fractional_kelly": 0.25,
+  "fixed_dollar_trade_cap_enabled": false,
+  "max_trade_usd": 1e100,
   "max_trade_fraction": 1.0,
   "max_market_fraction": 1.0,
   "max_event_fraction": 1.0,
@@ -45,7 +47,7 @@
     "paper_only": true,
     "global_max_drawdown": 0.15,
     "global_max_gross_fraction": 1.0,
-    "description": "Unified V7 capital-isolated PAPER execution plus separate multi-frequency shadow research. No fixed dollar trade cap; hard percentage ceiling is 100%."
+    "description": "Unified V7 capital-isolated PAPER execution plus separate multi-frequency shadow research. Fixed dollar trade cap disabled; hard percentage ceiling is 100%."
   },
   "v7": {
     "paper_only": true,
