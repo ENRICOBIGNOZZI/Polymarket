@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "research_state": "PROMISING_DEAD_QUEUE_RECYCLING_MORE_EVIDENCE_REQUIRED",
+  "source": {
+    "pull_request": 386,
+    "exact_tested_head": "8507c4fc025d5518e41b5f1698ad71da26bf2685",
+    "workflow_run_id": 32917527694,
+    "artifact_id": 9588959884,
+    "artifact_name": "v6-research-smoke-32917527694"
+  },
+  "challenger": {
+    "type": "offline causal resting-order hazard replay",
+    "decision_clock": "received_ms",
+    "fill_eligibility": "market event timestamp strictly after POST and locally received before decision",
+    "ttl_seconds": 60,
+    "grace_seconds": 20,
+    "stale_receive_seconds": 20,
+    "revalidate_seconds": 5,
+    "purpose": "replace frozen pre-entry flow-rate capital retention with causally refreshed resting-order flow freshness; research-only, no live mutation"
+  },
+  "common_sample_results": {
+    "current_flow_gate": {
+      "posted_orders": 3,
+      "static_fills": 0,
+      "dynamic_fills": 0,
+      "missed_fills_due_dynamic_cancel": 0,
+      "stale_hazard_cancels": 3,
+      "static_capital_seconds": 7139.363000000001,
+      "dynamic_capital_seconds": 2963.1210000000005,
+      "capital_seconds_saved": 4176.242,
+      "capital_time_reduction_fraction": 0.5849600307478412
+    },
+    "at_touch_no_improve": {
+      "posted_orders": 3,
+      "static_fills": 0,
+      "dynamic_fills": 0,
+      "missed_fills_due_dynamic_cancel": 0,
+      "stale_hazard_cancels": 3,
+      "capital_time_reduction_fraction": 0.5849600307478412
+    },
+    "confidence_gated_inside": {
+      "posted_orders": 3,
+      "static_fills": 0,
+      "dynamic_fills": 0,
+      "missed_fills_due_dynamic_cancel": 0,
+      "stale_hazard_cancels": 3,
+      "capital_time_reduction_fraction": 0.5775637787779161
+    },
+    "toxicity_adjusted": {
+      "posted_orders": 1,
+      "static_fills": 0,
+      "dynamic_fills": 0,
+      "missed_fills_due_dynamic_cancel": 0,
+      "stale_hazard_cancels": 1,
+      "capital_time_reduction_fraction": 0.6666666666666667
+    },
+    "persistence_plus_toxicity": {
+      "posted_orders": 1,
+      "static_fills": 0,
+      "dynamic_fills": 0,
+      "missed_fills_due_dynamic_cancel": 0,
+      "stale_hazard_cancels": 1,
+      "capital_time_reduction_fraction": 0.6666666666666666
+    }
+  },
+  "high_probability_case": {
+    "market_id": "3846368",
+    "recorded_fill_probability_proxy": 0.8949543481036147,
+    "queue_ahead_shares": 5.48,
+    "own_shares": 5.0,
+    "forward_compatible_shares_before_static_end": 5.48,
+    "static_fill": false,
+    "dynamic_cancel_seconds_after_post": 20,
+    "missed_fill_due_dynamic_cancel": false,
+    "interpretation": "The only later compatible print cleared displayed queue but never own size. A 20-second receive-time stale-hazard replay would have recycled this order before the late queue-only print without forfeiting a fill in the observed window."
+  },
+  "interpretation": {
+    "material_result": "Across every A/B/C/D/E arm in this exact prospective window, refreshing resting-order hazard by receive-time staleness would have reduced reserved capital-time by roughly 57.8%-66.7% while forfeiting zero fills relative to the observed static-TTL path. This is capital-efficiency evidence, not alpha or fill-PnL evidence.",
+    "limits": [
+      "one prospective common-sample window",
+      "the five policy arms share underlying market opportunities and are not independent samples",
+      "no fills occurred in either static or replayed path, so fill-conditioned PnL is unchanged",
+      "the 20-second staleness threshold is a bounded challenger parameter, not a promoted production setting"
+    ],
+    "next_gate": [
+      "run the refreshed-hazard policy prospectively on independent windows",
+      "measure actual fill-rate delta and missed-fill rate versus incumbent static hazard",
+      "measure filled notional per capital-hour and executable 45s/60s/300s markout",
+      "require positive fill-conditioned net PnL under 1x/1.5x/2x cost stress before promotion"
+    ]
+  },
+  "hard_safety": {
+    "authorized_envelope_unchanged": true,
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "state_integrity_required": true,
+    "authenticated_real_money_execution": false
+  }
+}
