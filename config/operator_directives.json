@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "directive_epoch": "2026-08-27T00:55:00+02:00",
+  "directive_epoch": "2026-08-27T01:05:00+02:00",
   "operator_instruction_id": "user-immediate-legacy-retirement-20260827",
   "authority": "latest_explicit_user_instruction",
   "supersedes_prs": [513, 516, 519, 537, 547, 595, 596],
@@ -80,11 +80,6 @@
     "post-merge-validation": "During no-champion cleanup, bind CI and monitoring to the exact merged SHA; live-paper validation resumes only with a V7 validator.",
     "code-validation": "Remove stale V4-V6 assumptions and validate the V7-only/no-champion transition.",
     "monitoring-validation": "Validate generic/V7 observability only; legacy exporter/dashboard compatibility is not required.",
-    "live-paper-validation": "RETIRED_IMMEDIATELY: remove the V4-named live-paper validator rather than preserving it as compatibility scaffolding.",
-    "paper-server-deploy": "RETIRED_IMMEDIATELY while no champion is active; V7 deployment authority may be reintroduced only with the validated V7 runtime.",
-    "paper-server-health": "RETIRED_IMMEDIATELY while no champion is active; retain no V6 health requirement.",
-    "forward-maker-research": "Collect prospective maker evidence only if it does not depend on retired V3-V6 runtime surfaces.",
-    "v6-live-data-research": "RETIRED_IMMEDIATELY: delete this scheduler and workflow.",
     "alpha-factory": "Rank V7 challengers by executable OOS economics and incremental utility; never restore legacy runtime.",
     "meta-supervisor": "Coordinate V7-only research and cleanup; never reinterpret stale PR text as requiring V6.",
     "fast-arb-shadow-research": "Keep read-only evidence only where it is version-neutral or V7-compatible.",
@@ -93,8 +88,7 @@
     "live-api-smoke": "Read-only connectivity only; no policy mutation.",
     "v7-point-in-time-universe-archive": "Keep V7 point-in-time archival research read-only.",
     "v7-unified-paper-evidence": "Reconcile only the exact V7 research head into isolated per-SHA PAPER evidence; never require an incumbent champion.",
-    "v7-cross-sectional-ranking-research": "Collect read-only frozen 2h/6h relative ranking evidence; no live mutation.",
-    "v6-market-cache-relay": "RETIRED_IMMEDIATELY: delete this scheduler and workflow."
+    "v7-cross-sectional-ranking-research": "Collect read-only frozen 2h/6h relative ranking evidence; no live mutation."
   },
   "forbidden_regressions": [
     "Do not reopen or restore the obsolete V7 $125 fixed trade cap or 5%/15%/70% caps.",
