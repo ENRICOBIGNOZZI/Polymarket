@@ -12,12 +12,14 @@ if str(SCRIPTS) not in sys.path:
 
 import v7_cross_sectional_rank_inference as inference
 
+UTC_DAY_BASE = (1_700_000_000 // 86400) * 86400
+
 
 class BlockedRankingInferenceTest(unittest.TestCase):
     def test_robust_positive_daily_process_passes(self) -> None:
         rng = random.Random(7)
         metrics = []
-        base = 1_700_000_000
+        base = UTC_DAY_BASE
         for day in range(30):
             for slot in range(8):
                 metrics.append(
@@ -38,7 +40,7 @@ class BlockedRankingInferenceTest(unittest.TestCase):
 
     def test_concentrated_or_unstable_signal_fails(self) -> None:
         metrics = []
-        base = 1_700_000_000
+        base = UTC_DAY_BASE
         for day in range(30):
             sign = 1.0 if day < 15 else -1.0
             for slot in range(4):
@@ -60,7 +62,7 @@ class BlockedRankingInferenceTest(unittest.TestCase):
         )
 
     def test_too_few_days_fails_even_if_positive(self) -> None:
-        base = 1_700_000_000
+        base = UTC_DAY_BASE
         metrics = [
             {
                 "ts": base + day * 86400,
