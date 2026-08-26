@@ -45,6 +45,7 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
+
           changed={line.strip() for line in Path('/tmp/direct-main-files.txt').read_text().splitlines() if line.strip()}
           directive_only={'config/operator_directives.json'}
           authority_package={
@@ -55,10 +56,17 @@ jobs:
           }
           if changed != directive_only and changed != authority_package:
               raise SystemExit(f'unauthorized direct-main operator package: {sorted(changed)}')
+
           d=json.loads(Path('config/operator_directives.json').read_text())
           assert d['authority']=='latest_explicit_user_instruction'
-          assert d['architecture']['cleanup_sequence']=='delete_legacy_immediately_then_promote_only_validated_v7'
+          assert d['operator_instruction_id']=='user-v7-master-multi-agent-operating-prompt-20260827'
+          assert d['architecture']['cleanup_sequence']==(
+              'v7_implementation_then_tests_then_same_sha_paper_then_main_then_'
+              'paper_validated_then_deploy_then_server_health_then_legacy_deletion'
+          )
           assert d['architecture']['operational_champion_may_be_absent'] is True
+          recovery=str(d['architecture'].get('recovery_after_premature_cleanup') or '')
+          assert 'Do not restore' in recovery and 'V7/common/control-plane' in recovery
           assert d['paper_v7_authorization']['authenticated_execution'] is False
           PY
           echo 'direct_operator_authority_update=true'
@@ -70,7 +78,7 @@ jobs:
           python3 scripts/validate_project_context.py --root . --output project-context-validation.md
           python3 scripts/project_context_snapshot.py --root . --manifest config/project_context.json --output-json project-context.json --output-markdown project-context.md
 
-      - name: Test current V7 and retirement policy contracts
+      - name: Test current V7 and cutover policy contracts
         run: |
           set -euo pipefail
           python3 -m unittest \
@@ -90,21 +98,32 @@ jobs:
           head_ref="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["ref"])')"
           git diff --name-only "$base_sha...$head_sha" | sort -u > changed-files.txt
 
+          # The premature-cleanup incident proved that cleanup cannot be a
+          # privileged bypass around the normal lifecycle. Until an exact V7
+          # SHA has machine-verifiable same-SHA PAPER -> main -> paper-validated
+          # -> deploy -> server-health evidence, cleanup branches fail closed.
           if [[ "$head_ref" == cleanup/* ]]; then
             python3 - <<'PY'
           import json
           from pathlib import Path
+
           d=json.loads(Path('config/operator_directives.json').read_text())
-          assert d['architecture']['cleanup_sequence']=='delete_legacy_immediately_then_promote_only_validated_v7'
-          assert d['architecture']['operational_champion_may_be_absent'] is True
+          expected=(
+              'v7_implementation_then_tests_then_same_sha_paper_then_main_then_'
+              'paper_validated_then_deploy_then_server_health_then_legacy_deletion'
+          )
+          assert d['architecture']['cleanup_sequence']==expected
           assert d['paper_v7_authorization']['authenticated_execution'] is False
           PY
-            python3 tests/test_no_legacy_runtime.py
-            echo '# Research pull-request policy' > research-policy-report.md
-            echo >> research-policy-report.md
-            echo '- policy: `pass`' >> research-policy-report.md
-            echo '- lifecycle: `operator-authorized immediate legacy retirement`' >> research-policy-report.md
-            exit 0
+            cat > research-policy-report.md <<'EOF'
+          # Research pull-request policy
+
+          - policy: `fail`
+          - lifecycle: `cleanup locked during V7 cutover repair`
+          - requirement: one exact V7 SHA must complete tests, same-SHA PAPER, main, paper-validated, deploy and server health before remaining legacy deletion can be authorized.
+          EOF
+            cat research-policy-report.md >&2
+            exit 1
           fi
 
           manifest_existed=false
@@ -115,7 +134,7 @@ jobs:
       - name: Write non-PR report
         if: github.event_name != 'pull_request'
         run: |
-          printf '# Research pull-request policy\n\n- event: `%s`\n- current V7/no-legacy policy validated\n' "$GITHUB_EVENT_NAME" > research-policy-report.md
+          printf '# Research pull-request policy\n\n- event: `%s`\n- current V7 same-SHA cutover policy validated\n' "$GITHUB_EVENT_NAME" > research-policy-report.md
 
       - name: Publish policy report
         if: always()
