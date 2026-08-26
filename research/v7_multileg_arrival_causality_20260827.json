@@ -39,6 +39,13 @@
     "exact-head CI and Research Policy green",
     "same-SHA prospective PAPER evidence collected after the fix before any Graph/RV completion or PnL is used for promotion"
   ],
+  "validation_contract": {
+    "exact_head_required": true,
+    "ci_workflow": ".github/workflows/ci.yml",
+    "research_policy_required": true,
+    "operator_authority_gate_required": true,
+    "no_mixed_sha_evidence": true
+  },
   "coordination": {
     "graph_queue_sizing_owned_by_pr": 600,
     "ranking_frozen_holdout_owned_by_pr": 601,
