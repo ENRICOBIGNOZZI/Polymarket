@@ -233,6 +233,25 @@ def test_hard_arb_timestamp_normalization_accepts_seconds_and_milliseconds():
     assert hard.normalize_timestamp_ms(1_787_700_000_123) == 1_787_700_000_123
 
 
+def test_v7_hf_research_uses_authorized_bounded_paper_envelope():
+    cfg = json.loads((ROOT / "config" / "paper_v7.json").read_text(encoding="utf-8"))
+    assert cfg["paper_only"] is True
+    assert cfg["market_limit"] == 1000
+    assert abs(float(cfg["min_liquidity"]) - 2.0) < 1e-12
+    assert abs(float(cfg["min_net_edge"]) - 0.00005) < 1e-12
+    assert abs(float(cfg["fractional_kelly"]) - 0.25) < 1e-12
+    assert cfg["fixed_dollar_trade_cap_enabled"] is True
+    assert abs(float(cfg["max_trade_usd"]) - 125.0) < 1e-12
+    assert abs(float(cfg["max_market_fraction"]) - 0.05) < 1e-12
+    assert abs(float(cfg["max_event_fraction"]) - 0.15) < 1e-12
+    assert abs(float(cfg["max_gross_fraction"]) - 0.70) < 1e-12
+    assert abs(float(cfg["multi_strategy"]["global_max_gross_fraction"]) - 0.70) < 1e-12
+    assert abs(float(cfg["max_drawdown"]) - 0.15) < 1e-12
+    assert cfg["v7"]["hard_arb_fixed_dollar_trade_cap_enabled"] is True
+    assert abs(float(cfg["v7"]["hard_arb_max_trade_usd"]) - 125.0) < 1e-12
+    assert cfg["v7"]["authenticated_execution"] is False
+
+
 if __name__ == "__main__":
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
     for test in tests:
