@@ -9,16 +9,15 @@ from typing import Any
 
 REQUIRED_IDS = {
     "administrator-supervisor", "research-policy", "research-queue", "promotion-controller",
-    "integration-merge", "post-merge-validation", "code-validation", "monitoring-validation",
-    "live-paper-validation", "paper-server-deploy", "paper-server-health", "forward-maker-research",
-    "v6-live-data-research", "alpha-factory", "meta-supervisor", "fast-arb-shadow-research",
-    "arb-theory-research", "external-intelligence", "live-api-smoke", "v7-point-in-time-universe-archive",
-    "v6-market-cache-relay",
+    "integration-merge", "control-plane-event-bridge", "post-merge-validation", "code-validation",
+    "monitoring-validation", "live-paper-validation", "paper-server-deploy", "paper-server-health",
+    "forward-maker-research", "v6-live-data-research", "alpha-factory", "meta-supervisor",
+    "fast-arb-shadow-research", "arb-theory-research", "external-intelligence", "live-api-smoke",
+    "v7-point-in-time-universe-archive", "v6-market-cache-relay",
 }
 PRIVATE_VALIDATION_WORKFLOW = ".github/workflows/private-runtime-single-writer-validation.yml"
 NON_SCHEDULER_WORKFLOWS = {
     ".github/workflows/grafana-access.yml",
-    ".github/workflows/v7-cross-sectional-ranking-research.yml",
     PRIVATE_VALIDATION_WORKFLOW,
 }
 NON_SCHEDULER_FORBIDDEN_TOKENS = (
@@ -162,6 +161,24 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         if "incumbent_health_gate.py" in text: errors.append("incumbent health must not replace candidate promotion evidence")
         for required in ("autonomous-promotion-approved","--require-approval-label","scripts/promotion_gate.py","candidate-final.json","--match-head-commit","baseRefOid","source-match-files.txt","champion-integration-merged"):
             if required not in text: errors.append(f"integration-merge is missing controller handoff contract: {required}")
+
+    bridge = by_id.get("control-plane-event-bridge")
+    if bridge:
+        text = (root / str(bridge["workflow"])).read_text(encoding="utf-8")
+        for required in (
+            "workflow_run:",
+            '"ci"',
+            '"monitoring"',
+            '"v4-live-paper-smoke"',
+            '"Private runtime single-writer validation"',
+            '"Polymarket Promotion Controller"',
+            "gh workflow run promotion-controller.yml --ref main",
+            "gh workflow run integration-merge.yml --ref main",
+            '"$TRIGGER_CONCLUSION" == "success"',
+        ):
+            if required not in text: errors.append(f"control-plane-event-bridge is missing fallback contract: {required}")
+        for forbidden in ("gh pr merge", "POLYMARKET_DEPLOY_REF=", "git push origin paper-validated", "repository_dispatch", "authenticated_execution"):
+            if forbidden in text: errors.append(f"control-plane-event-bridge contains forbidden authority: {forbidden}")
 
     meta = by_id.get("meta-supervisor")
     if meta:

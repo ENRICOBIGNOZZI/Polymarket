@@ -116,8 +116,6 @@ jobs:
           import json,sys,time
           path=sys.argv[1]
           value=json.load(open(path,encoding='utf-8'))
-          # V7 deliberately consumes the same fail-closed compatibility cache
-          # schema during migration; the archived snapshot has its own V7 schema.
           assert value.get('schema') == 'polymarket_v6_market_proxy_cache_v1'
           assert time.time()-float(value.get('timestamp') or 0) <= 600.0
           rows=value.get('markets') or []
