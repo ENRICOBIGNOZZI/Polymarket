@@ -8,7 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-import hf_active_flow_maker_probe as core
+import hf_active_flow_maker_core as core
 
 
 def fetch_trades_batch(condition_ids: list[str], start_ts: int, end_ts: int,
@@ -65,8 +65,6 @@ def run_batched(args: Any) -> dict[str, Any]:
     markets = core.discover_markets(args.markets, args.min_liquidity)
     conditions = [m.condition_id for m in markets]
 
-    # Query a wider overlap window to tolerate public-index delay, but the actual feature
-    # calculation below still enforces event-time lookback and maximum event age.
     query_lookback = max(args.recent_lookback_seconds + args.trade_index_lag_seconds, 300)
     query_end = core.now_s()
     flows, flow_received_ms, flow_errors = fetch_trades_batch(
@@ -79,8 +77,6 @@ def run_batched(args: Any) -> dict[str, Any]:
     active_markets = active_markets[:args.activity_scan_markets]
     active_ids = {m.market_id for m in active_markets}
 
-    # Only active markets need books for this experiment. Broad discovery is retained,
-    # but dead books are rejected before capital/queue analysis by construction.
     books = core.fetch_books([token for m in active_markets for token in (m.yes_token, m.no_token)]) if active_markets else {}
     decision_ts = core.now_s()
     baseline, active = core.build_candidates(active_markets, books, flows, decision_ts, active_ids, args)
@@ -88,7 +84,6 @@ def run_batched(args: Any) -> dict[str, Any]:
         "baseline_active_universe": core.select_with_caps(baseline, args.max_orders_per_arm, args),
         "active_flow": core.select_with_caps(active, args.max_orders_per_arm, args),
     }
-    # Rename baseline candidates so outputs remain unambiguous.
     for c in selected["baseline_active_universe"]:
         c.arm = "baseline_active_universe"
 
@@ -252,7 +247,6 @@ def markdown(result: dict[str, Any]) -> str:
 
 def main() -> int:
     args = core.parse_args()
-    # The batched collector needs no per-market request explosion.
     args.trade_batch_size = 20
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
