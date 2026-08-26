@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
-from typing import Iterable, Protocol
+from typing import Iterable, Protocol, Sequence
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.I)
 NUMBER_RE = re.compile(
@@ -60,13 +60,7 @@ def _numeric_value(raw: str, unit: str) -> float:
 
 
 def threshold_value(question: str) -> float | None:
-    """Return the most structurally plausible threshold encoded in the contract text.
-
-    This parser deliberately uses contract metadata only. Plain 4-digit calendar years
-    are ignored unless a unit/currency makes them unambiguously an economic threshold.
-    Candidates receive deterministic context scores; no market price, return, residual,
-    p-value, volume or liquidity enters the choice.
-    """
+    """Return the most structurally plausible threshold encoded in contract text."""
     text = question.lower()
     candidates: list[tuple[int, int, float]] = []
     for match in NUMBER_RE.finditer(text):
@@ -90,8 +84,6 @@ def threshold_value(question: str) -> float | None:
             score += 3
         if any(term in context for term in DIRECTION_TERMS):
             score += 2
-        # A bare number without threshold-like context is usually a date, ordinal or
-        # candidate label; do not use it to define adjacency.
         if score == 0:
             continue
         value = _numeric_value(raw, unit)
@@ -135,13 +127,15 @@ def _threshold_matching(markets: list[MarketLike]) -> tuple[list[tuple[str, str]
     parsed.sort(key=lambda item: (float(item[0]), item[1]))
     pairs: list[tuple[str, str]] = []
     used: set[str] = set()
-    # Greedy non-overlapping nearest-neighbour matching in threshold space. Each
-    # contract contributes to at most one hypothesis, sharply reducing multiplicity.
     remaining = list(parsed)
     while len(remaining) >= 2:
         best_index = min(
             range(len(remaining) - 1),
-            key=lambda i: (abs(float(remaining[i + 1][0]) - float(remaining[i][0])), remaining[i][1], remaining[i + 1][1]),
+            key=lambda i: (
+                abs(float(remaining[i + 1][0]) - float(remaining[i][0])),
+                remaining[i][1],
+                remaining[i + 1][1],
+            ),
         )
         left = remaining.pop(best_index)
         right = remaining.pop(best_index)
@@ -185,13 +179,7 @@ def build_structural_pair_graph(
     min_controls: int,
     minimum_text_similarity: float = 0.20,
 ) -> StructuralPairGraph:
-    """Freeze a sparse pair universe before any price history is inspected.
-
-    Threshold/payoff families use non-overlapping nearest-threshold matching. Any
-    remaining contracts, and generic event clusters, use a deterministic greedy
-    lexical matching. Pair construction depends only on IDs/question text/cluster
-    membership, so subsequent bootstrap/BH inference is not selected on returns.
-    """
+    """Freeze a sparse pair universe before any price history is inspected."""
     rows = sorted(list(markets), key=lambda market: str(market.market_id))
     if len(rows) < int(min_controls) + 2:
         return StructuralPairGraph("insufficient_controls", (), 0, 0)
@@ -210,3 +198,48 @@ def build_structural_pair_graph(
         threshold_markets=len(threshold_used),
         text_markets=2 * len(text_pairs),
     )
+
+
+def predeclare_pair_controls(
+    markets: Iterable[MarketLike],
+    pairs: Sequence[tuple[str, str]],
+    *,
+    min_controls: int,
+    max_controls: int,
+) -> dict[tuple[str, str], tuple[str, ...]]:
+    """Freeze a bounded metadata-only nuisance-control set for each pair.
+
+    Pair inference must not require complete cases from every market in a broad
+    cluster. Controls are therefore selected before any price history is read,
+    using only contract identity/text. The ranking favors controls structurally
+    similar to *both* targets and is deterministic under input permutation.
+    Missing predeclared controls later make only that pair unestimable; they are
+    never replaced ex post based on missingness, returns, p-values, edge or PnL.
+    """
+    minimum = max(1, int(min_controls))
+    maximum = max(minimum, int(max_controls))
+    rows = {str(market.market_id): market for market in markets}
+    fingerprints = {mid: structural_tokens(market.question) for mid, market in rows.items()}
+    event_ids = {mid: str(getattr(market, "event_id", "") or "") for mid, market in rows.items()}
+    output: dict[tuple[str, str], tuple[str, ...]] = {}
+
+    for raw_a, raw_b in sorted(set(_canonical_pair(str(a), str(b)) for a, b in pairs)):
+        if raw_a not in rows or raw_b not in rows:
+            output[(raw_a, raw_b)] = ()
+            continue
+        pair_tokens = fingerprints[raw_a] | fingerprints[raw_b]
+        target_events = {event_ids[raw_a], event_ids[raw_b]} - {""}
+        ranked: list[tuple[float, float, int, str]] = []
+        for mid in sorted(rows):
+            if mid in {raw_a, raw_b}:
+                continue
+            sim_a = jaccard(fingerprints[mid], fingerprints[raw_a])
+            sim_b = jaccard(fingerprints[mid], fingerprints[raw_b])
+            balanced_similarity = min(sim_a, sim_b)
+            pair_coverage = jaccard(fingerprints[mid], pair_tokens)
+            same_event = 1 if event_ids[mid] and event_ids[mid] in target_events else 0
+            ranked.append((-float(same_event), -balanced_similarity, -pair_coverage, mid))
+        ranked.sort()
+        chosen = tuple(item[3] for item in ranked[:maximum])
+        output[(raw_a, raw_b)] = chosen if len(chosen) >= minimum else ()
+    return output
