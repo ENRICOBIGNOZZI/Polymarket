@@ -104,13 +104,25 @@ class V6ExecutionMeasurementTest(unittest.TestCase):
         self.assertIn("scripts/v6_queue_filter.py micro", workflow)
         self.assertIn("--leg-latency-ms 100", workflow)
 
-    def test_v6_config_has_no_uniform_fee_fallback(self) -> None:
-        config = (ROOT / "config" / "paper_v6.json").read_text()
-        self.assertNotIn("assumed_fee_rate", config)
-        self.assertNotIn("assumed_fee_exponent", config)
+    def test_runtime_has_no_uniform_fee_fallback(self) -> None:
+        runtime_files = [
+            SCRIPTS / "forward_maker_probe.py",
+            SCRIPTS / "v6_hard_arb_paper.py",
+            SCRIPTS / "v6_local_factor_intents.py",
+            SCRIPTS / "v6_micro_taker.py",
+            SCRIPTS / "v6_queue_filter.py",
+        ]
+        for path in runtime_files:
+            text = path.read_text()
+            self.assertNotIn("assumed_fee_rate", text, path.name)
+            self.assertNotIn("assumed_fee_exponent", text, path.name)
+            self.assertNotIn("fallback:conservative", text, path.name)
         api = (ROOT / "src" / "api.cpp").read_text()
         self.assertNotIn("/fee-rate?token_id=", api)
         self.assertNotIn("FeeDetails fd{0.07", api)
+        resolver = (SCRIPTS / "polymarket_fees.py").read_text()
+        self.assertIn("FeeScheduleUnavailable", resolver)
+        self.assertNotIn("fallback_rate", resolver)
 
 
 if __name__ == "__main__":
