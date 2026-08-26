@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "finding": "frozen_holdout_training_cutoff_is_not_frozen",
+  "source_pr": 546,
+  "source_head": "cd2f26e34cf658ad482510033c520b0b2ee28442",
+  "source_workflow_run_id": 33015713667,
+  "registered_contract": {
+    "frozen_holdout_only": true,
+    "horizons_minutes": [120, 360],
+    "discovery_cutoff_ts": 1787740967,
+    "forward_holdout_start_ts": 1787742000,
+    "fidelity_minutes": 30,
+    "purge_embargo_buckets": 1,
+    "relative_pair_only": true
+  },
+  "current_code_path": {
+    "script": "scripts/v7_cross_sectional_tail_relative.py",
+    "forward_metric_builder": "v7_cross_sectional_rank_inference._rolling_section_metrics",
+    "rolling_training_upper_origin_rule": "eval_ts - embargo_seconds - horizon_seconds",
+    "strict_frozen_training_upper_origin_rule": "holdout_start_ts - embargo_seconds - horizon_seconds"
+  },
+  "latest_observed_forward_evidence": {
+    "score_timestamp": 1787779800,
+    "elapsed_since_holdout_seconds": 37800,
+    "forward_days_observed": 1,
+    "current_relative_pair_candidates": 0,
+    "horizons": [
+      {
+        "horizon_minutes": 120,
+        "forward_cross_sections": 18,
+        "forward_gate": false,
+        "mean_daily_rank_ic": -0.10010796012265585,
+        "mean_daily_top_bottom_logit_spread": -0.0043864152137397415,
+        "earliest_eval_when_holdout_origin_can_enter_training": 1787751000,
+        "rolling_max_training_origin_at_score": 1787770800,
+        "frozen_max_training_origin": 1787733000,
+        "holdout_training_can_enter_by_score": true
+      },
+      {
+        "horizon_minutes": 360,
+        "forward_cross_sections": 10,
+        "forward_gate": false,
+        "mean_daily_rank_ic": 0.009574749674179771,
+        "mean_daily_top_bottom_logit_spread": -0.04128348327175067,
+        "earliest_eval_when_holdout_origin_can_enter_training": 1787765400,
+        "rolling_max_training_origin_at_score": 1787756400,
+        "frozen_max_training_origin": 1787718600,
+        "holdout_training_can_enter_by_score": true
+      }
+    ]
+  },
+  "interpretation": {
+    "current_result": "negative_or_inconclusive",
+    "what_is_invalid": "Calling future statistics from this lane a frozen-holdout test while the model is allowed to refit on matured observations originating inside that holdout.",
+    "what_is_not_claimed": "The current negative ranking result is not turned positive by this finding; this is a promotion/evidence-identity blocker.",
+    "required_successor": "Fit each registered horizon once using only labels available before the frozen holdout boundary minus embargo. Keep the model fixed for all holdout predictions. Maintain any walk-forward online observer as a separate evidence stream and never pool it with frozen-holdout inference."
+  },
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "operator_directives_unchanged": true,
+    "main_unchanged": true,
+    "paper_validated_unchanged": true
+  }
+}
