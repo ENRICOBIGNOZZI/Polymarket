@@ -79,19 +79,16 @@ def exchange_book_freshness(
     max_snapshot_age_ms: int,
     max_snapshot_skew_ms: int,
 ) -> tuple[bool, str, int, int]:
-    """Validate the per-token exchange snapshot timestamps returned by CLOB.
-
-    A local timestamp taken after a REST request proves only when the response
-    arrived.  It cannot prove that the token books in that response describe a
-    sufficiently recent or mutually synchronous exchange state.  Hard-arb
-    evidence therefore requires both clocks.
-    """
+    """Validate normalized per-token exchange snapshot timestamps returned by CLOB."""
     stamps: list[int] = []
     for token in tokens:
         book = live.get(token)
         if not isinstance(book, dict):
             return False, "missing_book", 0, 0
-        exchange_ms = normalize_timestamp_ms(book.get("exchange_ts_ms"))
+        # exchange_ts_ms is normalized exactly once when the raw CLOB response
+        # is captured.  Re-normalizing an already-normalized small synthetic
+        # timestamp here would corrupt deterministic tests and is unnecessary.
+        exchange_ms = int(finite(book.get("exchange_ts_ms"), 0.0))
         if exchange_ms <= 0:
             return False, "missing_exchange_timestamp", 0, 0
         stamps.append(exchange_ms)
