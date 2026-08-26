@@ -1,1 +1,0 @@
-restore tests/test_fast_runtime_contract.py byte-for-byte from main after V7-only regressions are covered by separate V7 tests
