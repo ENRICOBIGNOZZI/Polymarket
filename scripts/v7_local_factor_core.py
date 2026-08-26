@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import importlib.util
+import math
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 
 def _load(name: str, filename: str) -> Any:
@@ -20,6 +22,78 @@ def _load(name: str, filename: str) -> Any:
 
 legacy = _load("v7_local_factor_core_mean_legacy_runtime", "v7_local_factor_core_mean_legacy.py")
 orientation = _load("v7_local_factor_orientation_runtime", "v7_local_factor_orientation.py")
+
+
+@dataclass(frozen=True)
+class PanelFreshness:
+    latest_bucket_start_ts: int | None
+    latest_completed_bucket_end_ts: int | None
+    state_age_seconds: int | None
+    maximum_state_age_seconds: int
+    current_bucket_start_ts: int
+    fresh: bool
+    reason: str
+
+
+def completed_history_view(
+    histories: Mapping[str, Mapping[int, float]],
+    *,
+    now: int,
+    bucket_seconds: int,
+) -> dict[str, dict[int, float]]:
+    """Return only fully completed fidelity buckets available at decision time.
+
+    History timestamps are bucket starts because the CLOB parser floors raw event
+    timestamps to the requested fidelity.  The bucket whose start equals the
+    current floor(now / bucket) is still incomplete and must never enter a fit.
+    """
+    bucket = int(bucket_seconds)
+    if bucket <= 0:
+        raise ValueError("bucket_seconds must be positive")
+    decision_ts = int(now)
+    current_bucket_start = (decision_ts // bucket) * bucket
+    out: dict[str, dict[int, float]] = {}
+    for market_id, series in histories.items():
+        completed: dict[int, float] = {}
+        for raw_ts, value in series.items():
+            ts = int(raw_ts)
+            if ts < current_bucket_start:
+                completed[ts] = float(value)
+        if completed:
+            out[str(market_id)] = completed
+    return out
+
+
+def assess_panel_freshness(
+    panel: Any,
+    *,
+    now: int,
+    bucket_seconds: int,
+    maximum_age_buckets: float = 2.0,
+) -> PanelFreshness:
+    """Fail closed unless a regular panel ends in a recent completed bucket."""
+    bucket = int(bucket_seconds)
+    decision_ts = int(now)
+    max_buckets = float(maximum_age_buckets)
+    if bucket <= 0 or not math.isfinite(max_buckets) or max_buckets < 0.0:
+        raise ValueError("invalid Local Factor freshness contract")
+    current_bucket_start = (decision_ts // bucket) * bucket
+    maximum_age_seconds = int(max_buckets * bucket)
+    times = tuple(int(t) for t in getattr(panel, "times", ()))
+    if not times:
+        return PanelFreshness(None, None, None, maximum_age_seconds, current_bucket_start, False, "missing_panel_times")
+    if any(b - a != bucket for a, b in zip(times, times[1:])):
+        return PanelFreshness(times[-1], None, None, maximum_age_seconds, current_bucket_start, False, "irregular_panel_times")
+    latest_start = times[-1]
+    if latest_start >= current_bucket_start:
+        return PanelFreshness(latest_start, latest_start + bucket, None, maximum_age_seconds, current_bucket_start, False, "incomplete_or_future_bucket")
+    latest_end = latest_start + bucket
+    age = decision_ts - latest_end
+    if age < 0:
+        return PanelFreshness(latest_start, latest_end, age, maximum_age_seconds, current_bucket_start, False, "future_history_state")
+    if age > maximum_age_seconds:
+        return PanelFreshness(latest_start, latest_end, age, maximum_age_seconds, current_bucket_start, False, "stale_history_state")
+    return PanelFreshness(latest_start, latest_end, age, maximum_age_seconds, current_bucket_start, True, "fresh_completed_regular_history")
 
 
 def fit_pair(panel, market_a: str, market_b: str, min_controls: int = 2):
@@ -77,3 +151,6 @@ for _name in dir(legacy):
         globals()[_name] = getattr(legacy, _name)
 globals()["fit_pair"] = fit_pair
 globals()["orientation_invariant_pc1"] = orientation.orientation_invariant_pc1
+globals()["PanelFreshness"] = PanelFreshness
+globals()["completed_history_view"] = completed_history_view
+globals()["assess_panel_freshness"] = assess_panel_freshness
