@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 import unittest
 from pathlib import Path
@@ -148,6 +147,26 @@ def authorized_config() -> dict[str, Any]:
 class V7AuthorizedPaperEnvelopeContractTest(unittest.TestCase):
     def test_authorized_envelope_is_valid(self) -> None:
         self.assertEqual(validate(authorized_config()), [])
+
+    def test_universe_admission_kelly_and_trade_bounds_are_fail_closed(self) -> None:
+        config = authorized_config()
+        config["market_limit"] = 1001
+        config["min_liquidity"] = 1.99
+        config["min_net_edge"] = 0.000049
+        config["uncertainty_penalty"] = -0.001
+        config["fractional_kelly"] = 0.251
+        config["max_trade_usd"] = 125.01
+        config["v7"]["intent_min_edge"] = 0.0
+        config["v7"]["hard_arb_min_net_edge"] = 0.000049
+        joined = "\n".join(validate(config))
+        self.assertIn("market_limit allowed<=1000, got 1001", joined)
+        self.assertIn("min_liquidity required>=2, got 1.99", joined)
+        self.assertIn("min_net_edge required>=5e-05, got 4.9e-05", joined)
+        self.assertIn("uncertainty_penalty required>=0, got -0.001", joined)
+        self.assertIn("fractional_kelly allowed<=0.25, got 0.251", joined)
+        self.assertIn("max_trade_usd allowed<=125, got 125.01", joined)
+        self.assertIn("v7.intent_min_edge required>=5e-05, got 0", joined)
+        self.assertIn("v7.hard_arb_min_net_edge required>=5e-05, got 4.9e-05", joined)
 
     def test_superseded_unbounded_v7_profile_is_rejected(self) -> None:
         config = authorized_config()
