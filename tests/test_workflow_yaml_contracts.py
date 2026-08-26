@@ -90,9 +90,11 @@ class WorkflowYamlContractTest(unittest.TestCase):
         self.assertIn('tailscale ping --until-direct=false --c 1 --timeout=10s "$GRAFANA_HOSTNAME"', health)
         self.assertIn('getent hosts "$GRAFANA_FQDN"', health)
         self.assertIn('"$GRAFANA_URL/api/health"', health)
-        self.assertIn('"$GRAFANA_URL/api/search"', health)
+        self.assertIn('"$GRAFANA_URL/api/dashboards/uid/$GRAFANA_DASHBOARD_UID"', health)
+        self.assertNotIn('"$GRAFANA_URL/api/search"', health)
         self.assertNotIn('"http://$SERVER_HOST:3000/api/health"', health)
-        self.assertNotIn('"http://$SERVER_HOST:3000/api/search"', health)
+        self.assertIn("scripts/runtime_contract_health.py", health)
+        self.assertIn("polymarket_runtime_contract_present 1", health)
 
     def test_scheduled_ci_backfills_api_updated_pr_heads_exactly_once(self) -> None:
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
@@ -125,6 +127,8 @@ class WorkflowYamlContractTest(unittest.TestCase):
         self.assertIn("sleep $((attempt * 2))", smoke)
         self.assertIn("- name: Advance paper validated ref", smoke)
         self.assertNotIn("continue-on-error: true", smoke)
+        self.assertIn("Version-neutral V7+ PAPER runtime smoke", smoke)
+        self.assertIn("scripts/runtime_contract_health.py", smoke)
 
     def test_meta_supervisor_retries_only_telemetry_cas_conflicts(self) -> None:
         control = (ROOT / ".github" / "workflows" / "control-plane.yml").read_text(
