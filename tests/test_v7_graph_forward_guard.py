@@ -9,8 +9,19 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+import test_v7_graph_transport_guard as transport_tests
 import v7_graph_forward_guard as guard
-from test_v7_graph_transport_guard import *  # noqa: F401,F403
+
+
+def test_transport_guard_regressions():
+    tests = [
+        value
+        for name, value in sorted(vars(transport_tests).items())
+        if name.startswith("test_") and callable(value)
+    ]
+    assert tests
+    for test in tests:
+        test()
 
 
 def test_signature_is_stable_and_event_scoped():
