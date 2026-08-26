@@ -7,6 +7,7 @@ on:
     paths:
       - "scripts/forward_maker_probe.py"
       - "scripts/forward_maker_probe_strict.py"
+      - "scripts/forward_maker_evidence_contract.py"
       - "scripts/select_forward_candidates.py"
       - "scripts/finalize_forward_probe.py"
       - "scripts/calibrate_forward_maker.py"
@@ -16,6 +17,7 @@ on:
       - "include/pm/rewards.hpp"
       - "tests/test_forward_maker_probe.py"
       - "tests/test_forward_maker_probe_strict.py"
+      - "tests/test_forward_maker_evidence_contract.py"
       - "tests/test_forward_candidate_selection.py"
       - "tests/test_finalize_forward_probe.py"
       - "tests/test_calibrate_forward_maker.py"
@@ -27,6 +29,7 @@ on:
     paths:
       - "scripts/forward_maker_probe.py"
       - "scripts/forward_maker_probe_strict.py"
+      - "scripts/forward_maker_evidence_contract.py"
       - "scripts/select_forward_candidates.py"
       - "scripts/finalize_forward_probe.py"
       - "scripts/calibrate_forward_maker.py"
@@ -36,6 +39,7 @@ on:
       - "include/pm/rewards.hpp"
       - "tests/test_forward_maker_probe.py"
       - "tests/test_forward_maker_probe_strict.py"
+      - "tests/test_forward_maker_evidence_contract.py"
       - "tests/test_forward_candidate_selection.py"
       - "tests/test_finalize_forward_probe.py"
       - "tests/test_calibrate_forward_maker.py"
@@ -70,6 +74,7 @@ jobs:
           cmake --build build --parallel 2
           ctest --test-dir build --output-on-failure
           python3 -m unittest tests/test_forward_maker_probe_strict.py -v
+          python3 -m unittest tests/test_forward_maker_evidence_contract.py -v
 
       - name: Run forward read-only maker experiment
         shell: bash
@@ -153,12 +158,12 @@ jobs:
 
           root = Path("forward_maker")
           sys.path.insert(0, str(Path("scripts").resolve()))
-          from calibrate_forward_maker import compact_session
+          from forward_maker_evidence_contract import compact_strict_session
 
           payload = json.loads((root / "forward_maker_probe.json").read_text(encoding="utf-8"))
           payload["git_sha"] = "${{ github.sha }}"
           payload["github_run_id"] = "${{ github.run_id }}"
-          compact = compact_session(payload)
+          compact = compact_strict_session(payload)
           (root / "forward_maker_history_line.jsonl").write_text(
               json.dumps(compact, separators=(",", ":")) + "\n",
               encoding="utf-8",
@@ -179,7 +184,7 @@ jobs:
           path.write_bytes((b"\n".join(lines) + b"\n") if lines else b"")
           PY
 
-          python3 scripts/calibrate_forward_maker.py \
+          python3 scripts/forward_maker_evidence_contract.py \
             --history "$R/forward-maker-history.jsonl" \
             --output "$R/forward_maker_calibration.json" \
             --min-sessions 12 --min-history-span-seconds 18000 \
