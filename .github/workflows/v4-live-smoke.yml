@@ -159,8 +159,10 @@ jobs:
               raise SystemExit('V6 smoke failed outside the explicit recorder-health gate')
           print('expected_pr_negative_canary=' + ','.join(report['failures']))
           PY
+          echo "V6_NEGATIVE_CANARY=true" >> "$GITHUB_ENV"
 
       - name: Verify selected champion telemetry
+        if: env.V6_NEGATIVE_CANARY != 'true'
         shell: bash
         run: |
           set -euo pipefail
