@@ -1,0 +1,105 @@
+{
+  "schema": "hf_active_flow_admission_bottleneck_v1",
+  "research_state": "DOMINANT_ADMISSION_BOTTLENECK_IDENTIFIED_ZERO_FILL_UNRESOLVED_MORE_EVIDENCE_REQUIRED",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_money_execution": false,
+  "source": {
+    "pull_request": 437,
+    "branch": "research/hf-active-flow-maker-v1-20260826",
+    "head_sha": "5ef9b5b1b6b9853881ab79cb82513b7bac8a16cc",
+    "workflow_run_id": 32950073833,
+    "artifact_id": 9600133420,
+    "artifact_sha256": "e9ff0e40c29ab1349e5f08250871cc2decb9b4d4e377cdf364ed6f6a88315f1c",
+    "artifact_created_utc": "2026-08-26T09:04:29Z"
+  },
+  "authorized_envelope_preserved": {
+    "markets_max": 1000,
+    "min_liquidity_usd": 2.0,
+    "min_post_cost_edge": 0.00005,
+    "max_trade_usd": 125.0,
+    "max_market_fraction": 0.05,
+    "max_event_fraction": 0.15,
+    "max_gross_fraction": 0.70,
+    "max_drawdown": 0.15
+  },
+  "data_health": {
+    "activity_data_healthy": true,
+    "discovered_markets": 1000,
+    "active_markets_evaluated": 120,
+    "books_evaluated": 240,
+    "global_recent_trade_rows": 1000,
+    "seed_conditions": 50,
+    "seed_conditions_resolved_by_clob_token": 50,
+    "seed_only_markets_added": 33,
+    "flow_conditions": 30,
+    "seed_flow_conditions": 27,
+    "seed_added_flow_conditions": 16,
+    "transport_errors": 0
+  },
+  "common_sample_result": {
+    "baseline_economic_candidates": 22,
+    "baseline_orders_selected": 8,
+    "baseline_fill_orders": 0,
+    "baseline_fill_conditioned_pnl_usd": 0.0,
+    "active_flow_candidates": 0,
+    "active_flow_orders": 0,
+    "active_flow_fill_orders": 0,
+    "active_flow_fill_conditioned_pnl_usd": 0.0,
+    "inside_spread_considered": 0,
+    "inside_spread_kept": 0
+  },
+  "selected_baseline_admission_funnel": {
+    "selected_orders": 8,
+    "no_compatible_sell_print": 7,
+    "has_compatible_sell_print": 1,
+    "passes_active_flow_admission": 0,
+    "dominant_first_failure": "compatible_contra_flow_absent",
+    "only_compatible_sell_candidate": {
+      "market_id": "3870253",
+      "slug": "bnb-updown-5m-1787734500",
+      "static_post_cost_edge": 0.007597669280236071,
+      "recent_trade_count": 12,
+      "compatible_sell_prints": 1,
+      "compatible_sell_volume": 0.02,
+      "last_event_age_seconds": 51,
+      "queue_ahead_shares": 67.4,
+      "own_shares": 16.85,
+      "conservative_fill_probability_proxy": 0.0000791295746785361,
+      "effective_min_fill_probability": 0.005,
+      "fill_probability_shortfall_multiple": 63.1875,
+      "signed_imbalance": -1.0,
+      "secondary_failure": "recurrent_sell_toxicity_and_queue_clearance"
+    }
+  },
+  "interpretation": [
+    "The healthy common sample contains economically positive static maker edges but no overlap with sufficient causal compatible contra-flow.",
+    "Seven of the eight capital-ranked baseline orders have zero compatible SELL prints in the causal lookback.",
+    "The only selected order with compatible SELL flow has a conservative queue-clearance proxy about 63x below the already relaxed 0.5% research fill-probability floor and recurrent fully sell-sided flow.",
+    "Lowering the 0.5 bp economic edge floor would not address this bottleneck and is not authorized by this evidence.",
+    "Generic inside-spread aggression is not supported by this sample; no candidate reached the improvement comparison after causal-flow admission."
+  ],
+  "next_bounded_experiment": {
+    "owner": "PR #437 / HF research",
+    "hypothesis": "Candidate construction should prioritize the intersection of positive post-cost edge with contemporaneous compatible contra-flow and queue-clearance capacity rather than static edge or nominal liquidity alone.",
+    "changes_allowed": [
+      "instrument the admission funnel on fresh common samples",
+      "rank candidate sides by conservative fill-conditioned EV after the unchanged 0.5 bp economic floor",
+      "recycle dead-queue capital when compatible event-time flow becomes stale",
+      "permit quote improvement only when incremental fill-conditioned EV pays for the tick and adverse-selection penalty"
+    ],
+    "changes_not_supported": [
+      "lowering the 0.5 bp post-cost edge floor",
+      "removing recurrent-flow toxicity controls",
+      "increasing posted-order count as a success criterion"
+    ],
+    "success_metrics": [
+      "actual causal FIFO fills",
+      "time_to_first_fill",
+      "filled_notional_per_capital_hour",
+      "executable_markout_45s_60s_300s",
+      "positive_fill_conditioned_pnl",
+      "positive_fill_conditioned_pnl_under_1x_1.5x_2x_cost_stress"
+    ]
+  }
+}
