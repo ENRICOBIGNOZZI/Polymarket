@@ -8,10 +8,14 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/live-smoke.yml"
+      - "config/v7_live_smoke.json"
+      - "src/main.cpp"
   pull_request:
     branches: [main]
     paths:
       - ".github/workflows/live-smoke.yml"
+      - "config/v7_live_smoke.json"
+      - "src/main.cpp"
 
 permissions:
   contents: read
@@ -38,15 +42,35 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
 
+      - name: Validate V7 read-only smoke contract
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('config/v7_live_smoke.json')
+          cfg = json.loads(path.read_text(encoding='utf-8'))
+          assert cfg.get('engine_version') == 7
+          assert cfg.get('paper_only') is True
+          assert cfg.get('authenticated_execution') is False
+          assert cfg.get('scan_only') is True
+          assert cfg.get('fractional_kelly') == 0.0
+          assert all(float(v) == 0.0 for v in cfg.get('expert_weights', {}).values())
+          assert 'v6' not in cfg
+          assert 'legacy_compatibility' not in cfg
+          PY
+
       - name: Read-only Gamma and CLOB scan
         run: |
           mkdir -p live-smoke-output
           ./build/polymarket_engine \
-            --config config/paper.example.json \
-            --once --scan-only --markets 10 --min-liquidity 100 \
+            --config config/v7_live_smoke.json \
+            --once --paper --scan-only --markets 10 --min-liquidity 100 \
             --run-dir live-smoke-output
           test -s live-smoke-output/status.json
           test -s live-smoke-output/signals.csv
+          test "$(($(wc -l < live-smoke-output/fills.csv) - 1))" -eq 0
 
       - name: Read-only Data API trade-tape probe
         run: |
@@ -119,7 +143,7 @@ jobs:
       - name: Publish status summary
         if: always()
         run: |
-          echo "## Read-only live API smoke" >> "$GITHUB_STEP_SUMMARY"
+          echo "## V7 read-only live API smoke" >> "$GITHUB_STEP_SUMMARY"
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
           if test -s live-smoke-output/status.json; then
             python3 -m json.tool live-smoke-output/status.json >> "$GITHUB_STEP_SUMMARY" || cat live-smoke-output/status.json >> "$GITHUB_STEP_SUMMARY"
