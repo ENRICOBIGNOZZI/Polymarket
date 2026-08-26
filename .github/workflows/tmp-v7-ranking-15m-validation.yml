@@ -1,0 +1,59 @@
+name: Temporary V7 15m ranking validation
+
+on:
+  push:
+    branches:
+      - research/v7-ranking-15m-20260827
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deterministic ranking contracts
+        run: |
+          set -euo pipefail
+          python3 -m unittest \
+            tests/test_v7_cross_sectional_rank_inference.py \
+            tests/test_v7_cross_sectional_rank_15m.py -v
+          python3 -m py_compile \
+            scripts/v7_cross_sectional_rank_frozen.py \
+            scripts/v7_cross_sectional_tail_relative.py
+          python3 -m json.tool config/research_v7_cross_sectional_rank_15m.json >/dev/null
+      - name: Backward-compatible frozen 2h/6h smoke
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ranking-evidence
+          python3 scripts/v7_cross_sectional_tail_relative.py \
+            --config config/research_v7_cross_sectional_rank_frozen.json \
+            --market-limit 100 \
+            --output-json /tmp/ranking-evidence/report.json \
+            --output-pairs-json /tmp/ranking-evidence/pairs.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          r=json.loads(Path('/tmp/ranking-evidence/report.json').read_text())
+          assert r['frozen_horizons_minutes'] == [120, 360]
+          assert r['history_fidelity_minutes'] == 30
+          assert r['adaptive_refit_mixed_into_frozen_evidence'] is False
+          assert r['pool_evidence_across_horizons'] is False
+          assert r['paper_only'] is True and r['submitted_orders'] == 0
+          PY
+      - name: Do not inspect preregistration 15m evidence
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,time
+          from pathlib import Path
+          cfg=json.loads(Path('config/research_v7_cross_sectional_rank_15m.json').read_text())
+          holdout=int(cfg['discovery']['forward_holdout_start_ts'])
+          print(f'holdout_start={holdout} now={int(time.time())}')
+          if int(time.time()) < holdout:
+              print('15m live-data evaluation intentionally skipped before preregistered holdout start')
+          else:
+              print('holdout has started; this temporary validator still does not perform 15m economic selection')
+          PY
