@@ -1,0 +1,37 @@
+{
+  "schema": "hf_public_fast_shadow_contrast_v1",
+  "observed_utc": "2026-08-26T19:16:48Z",
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "main_sha": "30c0475fe7362b21d1f7a0226de539009a44b92e",
+  "workflow_run_id": 33003903369,
+  "mode": "shadow_read_only",
+  "real_order_submission": false,
+  "probe": {
+    "duration_seconds": 180,
+    "markets": 600,
+    "min_liquidity_usd": 100,
+    "snapshot_refresh_seconds": 20,
+    "stress_bps": 10
+  },
+  "data_health": {
+    "passed": true,
+    "ws_messages": 48685,
+    "book_updates": 48103,
+    "feed_stale_ms": 19,
+    "rest_resyncs": 9
+  },
+  "research_result": {
+    "candidate_min_net_edge": 0.004,
+    "research_ready": false,
+    "promotion_ready": false,
+    "runs": 1
+  },
+  "interpretation": "Public GitHub-hosted Fast Shadow had a healthy fresh feed on the same main SHA while the private V6 market-discovery path was unhealthy. This supports classifying the private zero-activity snapshot as a runtime/proxy/data-path defect rather than market inactivity. It does not establish executable hard-arbitrage alpha and does not justify promotion.",
+  "next_fast_arb_requirement": "Broaden research coverage only together with per-token receive/exchange timestamps, bounded leg age/skew, multi-level depth, verified fees, sequential legging and unwind; do not infer alpha from healthy feed status alone.",
+  "hard_safety_unchanged": {
+    "max_drawdown": 0.15,
+    "kill_switch_required": true,
+    "state_integrity_required": true,
+    "real_money_execution": false
+  }
+}
