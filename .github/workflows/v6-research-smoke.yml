@@ -15,11 +15,15 @@ on:
       - "scripts/hf_active_flow_maker_batched_probe.py"
       - "scripts/hf_active_flow_maker_core.py"
       - "scripts/hf_active_flow_maker_seeded_probe.py"
+      - "scripts/hf_fill_conditioned_maker_router.py"
+      - "scripts/hf_fill_conditioned_maker_seeded_probe.py"
       - "tests/test_v6_model_contracts.py"
       - "tests/test_v6_runtime_contract.py"
       - "tests/test_v6_execution_costs.py"
       - "tests/test_hf_active_flow_maker_probe.py"
       - "tests/test_hf_active_flow_maker_seeded_probe.py"
+      - "tests/test_hf_fill_conditioned_maker_router.py"
+      - "tests/test_hf_fill_conditioned_maker_seeded_probe.py"
       - ".github/workflows/v6-research-smoke.yml"
 
 permissions:
@@ -98,14 +102,18 @@ jobs:
             scripts/hf_active_flow_maker_probe.py \
             scripts/hf_active_flow_maker_batched_probe.py \
             scripts/hf_active_flow_maker_core.py \
-            scripts/hf_active_flow_maker_seeded_probe.py
+            scripts/hf_active_flow_maker_seeded_probe.py \
+            scripts/hf_fill_conditioned_maker_router.py \
+            scripts/hf_fill_conditioned_maker_seeded_probe.py
           python3 scripts/v6_queue_filter.py self-test
           python3 -m unittest \
             tests/test_v6_model_contracts.py \
             tests/test_v6_runtime_contract.py \
             tests/test_v6_execution_costs.py \
             tests/test_hf_active_flow_maker_probe.py \
-            tests/test_hf_active_flow_maker_seeded_probe.py -v
+            tests/test_hf_active_flow_maker_seeded_probe.py \
+            tests/test_hf_fill_conditioned_maker_router.py \
+            tests/test_hf_fill_conditioned_maker_seeded_probe.py -v
 
       - name: Live public-data relation probes
         shell: bash
@@ -144,14 +152,14 @@ jobs:
           mkdir -p v6_evidence/maker
           ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once > v6_evidence/maker.log 2>&1 || true
 
-      - name: HF causal active-flow maker challenger
+      - name: HF prospective fill-conditioned maker challenger
         shell: bash
         env:
           HF_SEED_LOOKBACK_SECONDS: 180
           HF_SEED_MAX_CONDITIONS: 50
         run: |
           set -euo pipefail
-          python3 scripts/hf_active_flow_maker_seeded_probe.py \
+          python3 scripts/hf_fill_conditioned_maker_seeded_probe.py \
             --output-dir v6_evidence/hf_active_flow \
             --markets 1000 \
             --activity-scan-markets 120 \
@@ -202,6 +210,7 @@ jobs:
               except Exception:return {}
           hard=(root/'graph_hard_taker_scan.csv').read_text(errors='ignore') if (root/'graph_hard_taker_scan.csv').exists() else ''
           m=re.search(r'net_positive_pre_gas=(\d+)',hard)
+          maker_result=js('hf_active_flow/result.json')
           summary={
               'paper_only':True,
               'authenticated_execution':False,
@@ -210,7 +219,8 @@ jobs:
               'local_factor':js('local_factor_status.json'),
               'hard_arb':js('hard_arb/status.json'),
               'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0,
-              'hf_active_flow_maker':js('hf_active_flow/result.json'),
+              'hf_active_flow_maker':maker_result,
+              'hf_fill_conditioned_maker':maker_result,
           }
           state=root/'micro_taker/state.json'
           if state.exists():
