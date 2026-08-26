@@ -52,9 +52,9 @@ RUNTIME_HARD_SAFETY_WRITE_RE = re.compile(
     rf")"
 )
 
-# Current user-authorized V6 PAPER envelope. These are ceilings/floors, not
-# targets. Historical 2.5% / 8% / 45% caps are deliberately not immutable V6
-# safety limits. The economic envelope may be used only through normal
+# Current user-authorized PAPER envelope.  V6 is the incumbent and V7 is its
+# explicitly bounded successor; both use these exact ceilings/floors.  These are
+# ceilings/floors, not targets, and still require the normal
 # research -> trusted governance -> integration provenance.
 V6_AUTHORIZED_MARKET_LIMIT = 1000.0
 V6_AUTHORIZED_CEILINGS = {
@@ -151,8 +151,24 @@ def _is_v6(path: str) -> bool:
     return path == "config/paper_v6.json"
 
 
+def _is_v7(path: str) -> bool:
+    return path == "config/paper_v7.json"
+
+
+def _is_authorized_paper(path: str) -> bool:
+    return _is_v6(path) or _is_v7(path)
+
+
+def _version_section(path: str) -> str | None:
+    if _is_v6(path):
+        return "v6"
+    if _is_v7(path):
+        return "v7"
+    return None
+
+
 def _ceiling(path: str, key: str) -> float | None:
-    if not _is_v6(path):
+    if not _is_authorized_paper(path):
         return None
     return V6_AUTHORIZED_CEILINGS.get(key)
 
@@ -172,7 +188,7 @@ def compare_paper_config(base: dict[str, Any], current: dict[str, Any], path: st
     base_multi = base.get("multi_strategy") if isinstance(base.get("multi_strategy"), dict) else {}
     current_multi = current.get("multi_strategy") if isinstance(current.get("multi_strategy"), dict) else {}
 
-    if (_is_v6(path) or base_multi.get("paper_only") is True) and current_multi.get("paper_only") is not True:
+    if (_is_authorized_paper(path) or base_multi.get("paper_only") is True) and current_multi.get("paper_only") is not True:
         errors.append(f"paper-only separation weakened: {path}:multi_strategy.paper_only must remain true")
 
     for key in MULTI_STRATEGY_LIMITS:
@@ -212,7 +228,7 @@ def compare_paper_config(base: dict[str, Any], current: dict[str, Any], path: st
                     current_value,
                     ceiling=_ceiling(path, key),
                 )
-        if _is_v6(path):
+        if _is_authorized_paper(path):
             if "min_net_edge" in current_overrides:
                 _compare_floor(
                     errors,
@@ -230,7 +246,7 @@ def compare_paper_config(base: dict[str, Any], current: dict[str, Any], path: st
                         ceiling=V6_AUTHORIZED_CEILINGS[key],
                     )
 
-    if _is_v6(path):
+    if _is_authorized_paper(path):
         _compare_limit(
             errors,
             f"{path}:market_limit",
@@ -249,34 +265,38 @@ def compare_paper_config(base: dict[str, Any], current: dict[str, Any], path: st
                 ceiling=V6_AUTHORIZED_CEILINGS[key],
             )
 
-        v6 = current.get("v6") if isinstance(current.get("v6"), dict) else {}
-        if v6.get("paper_only") is not True:
-            errors.append(f"paper-only separation weakened: {path}:v6.paper_only must remain true")
+        section_name = _version_section(path)
+        section = current.get(section_name) if section_name and isinstance(current.get(section_name), dict) else {}
+        if not section_name or section.get("paper_only") is not True:
+            errors.append(f"paper-only separation weakened: {path}:{section_name or 'version'}.paper_only must remain true")
         for key in ("intent_min_edge", "hard_arb_min_net_edge"):
-            _compare_floor(errors, f"{path}:v6.{key}", v6.get(key), V6_AUTHORIZED_FLOORS[key])
+            _compare_floor(errors, f"{path}:{section_name}.{key}", section.get(key), V6_AUTHORIZED_FLOORS[key])
         _compare_limit(
             errors,
-            f"{path}:v6.hard_arb_max_trade_usd",
+            f"{path}:{section_name}.hard_arb_max_trade_usd",
             None,
-            v6.get("hard_arb_max_trade_usd"),
+            section.get("hard_arb_max_trade_usd"),
             ceiling=V6_AUTHORIZED_CEILINGS["hard_arb_max_trade_usd"],
         )
         fractions: list[float] = []
         for key in V6_CAPITAL_FRACTIONS:
-            value = _number(v6.get(key))
+            value = _number(section.get(key))
             if value is None or value < -1e-12:
-                errors.append(f"invalid V6 capital allocation: {path}:v6.{key}")
+                errors.append(f"invalid {section_name.upper()} capital allocation: {path}:{section_name}.{key}")
             else:
                 fractions.append(value)
                 _compare_limit(
                     errors,
-                    f"{path}:v6.{key}",
+                    f"{path}:{section_name}.{key}",
                     None,
                     value,
                     ceiling=V6_AUTHORIZED_CAPITAL_CEILINGS[key],
                 )
         if len(fractions) == len(V6_CAPITAL_FRACTIONS) and sum(fractions) > 1.0 + 1e-12:
-            errors.append(f"V6 paper capital allocations exceed 100%: {path}:v6 total={sum(fractions):g}")
+            errors.append(
+                f"{section_name.upper()} paper capital allocations exceed 100%: "
+                f"{path}:{section_name} total={sum(fractions):g}"
+            )
 
     return errors
 
@@ -382,10 +402,10 @@ def render(errors: list[str], checked: list[str]) -> str:
         "",
         f"- paper/runtime surfaces checked: {len(checked)}",
         f"- hard-safety violations: {len(errors)}",
-        "- V6 authorized PAPER envelope: market universe <=1000, drawdown <=15%, market <=5%, event <=15%, gross <=70%, Kelly <=25%, max trade <=$125",
-        "- V6 authorized sleeve ceilings: maker <=22%, taker <=12%, RV <=34%, hard <=22%, external <=8%, reserve <=2%",
-        "- V6 executable admission floors: min liquidity >=$2, post-cost min edge >=0.5 bp, uncertainty penalty >=0",
-        "- historical 2.5% / 8% / 45% values are not immutable V6 caps; the authorized envelope still requires normal research/governance/integration provenance",
+        "- V6/V7 authorized PAPER envelope: market universe <=1000, drawdown <=15%, market <=5%, event <=15%, gross <=70%, Kelly <=25%, max trade <=$125",
+        "- V6/V7 authorized sleeve ceilings: maker <=22%, taker <=12%, RV <=34%, hard <=22%, external <=8%, reserve <=2%",
+        "- V6/V7 executable admission floors: min liquidity >=$2, post-cost min edge >=0.5 bp, uncertainty penalty >=0",
+        "- historical 2.5% / 8% / 45% values are not immutable V6 caps; V7 may inherit only the same already-authorized envelope and still requires normal research/governance/integration provenance",
         "- runtime rule: protected drawdown/concentration/gross/paper-only controls may be inherited from versioned config, not newly hidden in runtime/materialization overrides",
     ]
     for item in checked:
