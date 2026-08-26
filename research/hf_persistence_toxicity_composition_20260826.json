@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "research_state": "STRUCTURAL_FIX_MORE_EVIDENCE_REQUIRED",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "pull_request": 386,
+  "problem": {
+    "description": "The prospective V4 persistence arm constrained inside-spread fill hazard using fresh recurrent event-time flow but called the V2 maker directly, so it omitted V3's directional toxicity filter and 45s/60s/300s executable markout tracker.",
+    "economic_risk": "A persistence-only challenger could improve fillability while reintroducing adverse selection already observed in filled paper windows, making fill count improve without improving fill-conditioned PnL.",
+    "primary_objective": "actual paper fills with positive fill-conditioned net PnL"
+  },
+  "supporting_evidence": {
+    "profitable_touch_fill": {
+      "market_id": "3825712",
+      "realized_pnl_usd": 1.366178589,
+      "realized_pnl_per_share": 0.010601546,
+      "signed_flow_30s": 1.0,
+      "counterfactual_toxicity_gate": "retain"
+    },
+    "losing_inside_fill": {
+      "market_id": "3524601",
+      "realized_pnl_usd": -0.480250473,
+      "realized_pnl_per_share": -0.017787055,
+      "confidence": 0.603633041,
+      "counterfactual_inside_confidence_gate": "block"
+    },
+    "losing_toxic_touch_fill": {
+      "market_id": "3128887",
+      "realized_pnl_usd": -0.985343325,
+      "realized_pnl_per_share": -0.020235,
+      "signed_flow_30s": -1.0,
+      "signed_flow_120s": -1.0,
+      "counterfactual_toxicity_gate": "block"
+    },
+    "latest_exact_head_before_fix": {
+      "workflow_run_id": 32915715985,
+      "maker_duration_seconds": 600,
+      "persistence_max_burst_count": 1,
+      "persistence_posts": 0,
+      "persistence_fills": 0,
+      "toxicity_posts": 1,
+      "toxicity_fills": 0,
+      "toxicity_max_score": 0.3360953491,
+      "micro_taker_signals": 0,
+      "hard_arb_positive_candidates": 0
+    }
+  },
+  "fix": {
+    "script": "scripts/v6_micro_maker_v4.py",
+    "composition_order": [
+      "event-time recurrence-shrunk causal flow",
+      "fresh multi-burst inside-spread persistence gate",
+      "receive-time directional toxicity and book-shape adjustment",
+      "inside-spread microstructure confidence gate"
+    ],
+    "markouts": [45, 60, 300],
+    "cost_stress_multiples": [1.0, 1.5, 2.0],
+    "inside_min_bursts": 3,
+    "inside_burst_gap_seconds": 30,
+    "inside_max_event_age_seconds": 30,
+    "toxicity_short_seconds": 30,
+    "toxicity_long_seconds": 120,
+    "toxicity_hard_block_threshold": 0.55,
+    "toxicity_discount_strength": 1.5
+  },
+  "decision": {
+    "promotion": false,
+    "reason": "The composition fix removes a structural evaluation gap but has not yet produced independent prospective positive fill-conditioned PnL.",
+    "next_gate": "Prospective common-sample fills plus positive realized fill-conditioned PnL and positive executable 45s/60s/300s markouts under stressed costs."
+  },
+  "hard_safety": {
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "state_integrity_required": true,
+    "market_event_gross_caps": [0.05, 0.15, 0.70],
+    "authenticated_real_money_execution": false
+  }
+}
