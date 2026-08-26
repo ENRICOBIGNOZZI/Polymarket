@@ -104,6 +104,64 @@ def test_late_maker_markouts_fail_closed():
         assert stats == {"kept": 1, "rejected_late": 1, "rejected_invalid": 1}
 
 
+def _maker_state(*, limit: float, queue: float) -> maker.MakerState:
+    return maker.MakerState(
+        side="BUY",
+        limit_price=limit,
+        fair_exit_price=0.50004,
+        queue_ahead=queue,
+        own_size=100.0,
+        compatible_flow=100.0,
+        flow_horizon_seconds=60.0,
+        ofi=0.0,
+        imbalance=0.0,
+        microprice=0.5,
+        midpoint=0.5,
+        displayed_depth=1_000_000.0,
+        entry_fee_per_share=0.0,
+        exit_fee_per_share=0.0,
+        slippage_per_share=0.0,
+        adverse_markout_per_share=0.0,
+        partial_unwind_loss_per_share=0.0,
+        expected_partial_fraction=0.0,
+        capital_usd=0.0,
+        capital_time_rate_per_second=0.0,
+        expected_rest_seconds=60.0,
+        latency_seconds=0.1,
+    )
+
+
+def test_inside_spread_falls_back_to_touch_when_residual_edge_fails_configured_floor():
+    touch = _maker_state(limit=0.49, queue=1_000_000.0)
+    improved = _maker_state(limit=0.50, queue=0.0)
+    touch_decision = maker.maker_fill_conditioned_ev(touch)
+    improved_decision = maker.maker_fill_conditioned_ev(improved)
+    assert touch_decision.conditional_net_pnl_per_share > 0.00005
+    assert improved_decision.conditional_net_pnl_per_share < 0.00005
+    assert maker.quote_improvement_is_economic(touch, improved)
+    assert not maker.selective_improvement_is_economic(
+        touch,
+        improved,
+        min_edge=0.00005,
+        min_fill_probability=0.001,
+        base_check=maker.quote_improvement_is_economic,
+    )
+
+
+def test_inside_spread_guard_preserves_configured_fill_floor():
+    touch = _maker_state(limit=0.49, queue=1_000_000.0)
+    improved = _maker_state(limit=0.50, queue=0.0)
+    improved_decision = maker.maker_fill_conditioned_ev(improved)
+    assert improved_decision.fill_probability > 0.001
+    assert not maker.selective_improvement_is_economic(
+        touch,
+        improved,
+        min_edge=0.0,
+        min_fill_probability=min(1.0, improved_decision.fill_probability + 0.01),
+        base_check=maker.quote_improvement_is_economic,
+    )
+
+
 def test_maker_adapter_declares_depth_and_markout_contracts():
     source = (ROOT / "scripts" / "v7_micro_maker_worker.py").read_text(encoding="utf-8")
     assert "MAX_MARKOUT_LABEL_DELAY_SECONDS = 15" in source
@@ -111,6 +169,7 @@ def test_maker_adapter_declares_depth_and_markout_contracts():
     assert "event_time_horizon_with_bounded_observation_delay" in source
     assert "shares_specific_full_visible_bid_depth_vwap_fail_closed" in source
     assert "full_depth_sell_vwap" in source
+    assert "inside_spread_must_pass_configured_edge_fill_and_ev_floors_or_fall_back_to_touch" in source
     assert "v6_" not in source
 
 
