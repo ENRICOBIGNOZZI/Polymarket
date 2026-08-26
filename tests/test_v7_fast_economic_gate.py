@@ -40,6 +40,7 @@ def good_execution() -> dict:
         "authoritative_fees": True,
         "depth_executable": True,
         "partial_unwind_accounted": True,
+        "post_cost_pnl_verified": True,
         "joint_state_observations": 30,
         "realized_pnl_observations": 30,
         "completed_baskets": 25,
@@ -58,6 +59,7 @@ def test_empty_canonical_ledger_is_fail_closed() -> None:
     assert report["point_in_time"] is False
     assert report["authoritative_fees"] is False
     assert report["depth_executable"] is False
+    assert report["post_cost_pnl_verified"] is False
 
 
 def test_quoted_theory_cannot_promote_without_canonical_execution() -> None:
@@ -79,6 +81,14 @@ def test_noncanonical_or_mixed_sha_evidence_is_rejected() -> None:
     gated = gate_candidate(theory(True), evidence, expected_sha=SHA)
     assert gated["promotion_ready"] is False
     assert "mixed_or_wrong_sha_execution_evidence" in gated["promotion_gate"]["reasons"]
+
+
+def test_post_cost_contract_is_required() -> None:
+    evidence = good_execution()
+    evidence["post_cost_pnl_verified"] = False
+    gated = gate_candidate(theory(True), evidence, expected_sha=SHA)
+    assert gated["promotion_ready"] is False
+    assert "post_cost_pnl_contract_missing" in gated["promotion_gate"]["reasons"]
 
 
 def test_both_theory_and_execution_contract_are_required() -> None:
