@@ -15,6 +15,7 @@ if str(SCRIPTS) not in sys.path:
 
 import v7_hard_arb_guard as hard
 import v7_micro_maker_worker as maker
+import v7_micro_taker_worker as taker
 
 
 def maker_core_source() -> str:
@@ -250,6 +251,53 @@ def test_v7_hf_research_uses_authorized_bounded_paper_envelope():
     assert cfg["v7"]["hard_arb_fixed_dollar_trade_cap_enabled"] is True
     assert abs(float(cfg["v7"]["hard_arb_max_trade_usd"]) - 125.0) < 1e-12
     assert cfg["v7"]["authenticated_execution"] is False
+
+
+def test_micro_taker_causal_flow_uses_receive_gate_and_event_age():
+    fields = ["timestamp", "received_ms", "lag_ms", "condition_id", "asset_id", "outcome", "side", "price", "size", "transaction_hash", "slug", "event_slug"]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "trade_tape.csv"
+        rows = [
+            {"timestamp": 990, "received_ms": 995000, "asset_id": "yes", "side": "BUY", "price": 0.50, "size": 10},
+            {"timestamp": 995, "received_ms": 1001000, "asset_id": "yes", "side": "SELL", "price": 0.49, "size": 50},
+            {"timestamp": 900, "received_ms": 999000, "asset_id": "yes", "side": "SELL", "price": 0.49, "size": 100},
+            {"timestamp": 999, "received_ms": 999500, "asset_id": "no", "side": "SELL", "price": 0.50, "size": 5},
+        ]
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({key: row.get(key, "") for key in fields})
+        flow = taker.causal_flow_features(path, {"yes", "no"}, now=1000, lookback_seconds=60, half_life_seconds=15)
+        assert flow["yes"]["prints"] == 1.0
+        assert abs(flow["yes"]["signed_imbalance"] - 1.0) < 1e-12
+        assert flow["no"]["prints"] == 1.0
+        assert abs(flow["no"]["signed_imbalance"] + 1.0) < 1e-12
+
+
+def test_micro_taker_full_depth_vwap_is_quantity_specific_and_fails_closed():
+    asks = [(0.40, 5.0), (0.41, 10.0)]
+    bids = [(0.39, 5.0), (0.38, 10.0)]
+    assert abs(taker.full_depth_vwap(asks, 10.0, buy=True) - 0.405) < 1e-12
+    assert abs(taker.full_depth_vwap(bids, 10.0, buy=False) - 0.385) < 1e-12
+    assert taker.full_depth_vwap(asks, 20.0, buy=True) is None
+    assert taker.full_depth_vwap(bids, 20.0, buy=False) is None
+
+
+def test_micro_taker_model_never_mixes_legacy_six_feature_rows_with_flow_schema():
+    legacy = [{"x": [1.0] * 6, "y": 0.01} for _ in range(100)]
+    beta = taker.solve_ridge(legacy, 1e-2, taker.FLOW_FEATURE_DIM)
+    assert beta == [0.0] * taker.FLOW_FEATURE_DIM
+
+
+def test_micro_taker_declares_causal_flow_and_full_depth_execution_contracts():
+    source = (ROOT / "scripts" / "v7_micro_taker_worker.py").read_text(encoding="utf-8")
+    assert "causal_flow_depth_complete_round_trip_ev" in source
+    assert "receive_causal_event_decayed_yes_no_taker_flow" in source
+    assert "full_visible_depth_entry_and_forecast_shifted_exit_vwap" in source
+    assert "shares_specific_full_visible_bid_depth_vwap_fail_closed" in source
+    assert "received_ms > now_ms" in source
+    assert "event_ts > now" in source
 
 
 if __name__ == "__main__":
