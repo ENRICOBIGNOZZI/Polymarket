@@ -88,7 +88,12 @@ def _supervise(command: list[str]) -> int:
     group_id = child.pid
 
     def forward(signum: int, _frame: object) -> None:
-        _signal_child_group(group_id, signum)
+        # Keep the established signal-forwarding contract explicit: the direct
+        # child is the process-group leader because start_new_session=True.
+        try:
+            os.killpg(child.pid, signum)
+        except ProcessLookupError:
+            pass
 
     previous_handlers: dict[int, object] = {}
     for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
