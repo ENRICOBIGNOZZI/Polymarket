@@ -38,22 +38,6 @@ def _consume_int_arg(flag: str, default: int) -> int:
     return max(1, int(round(_consume_float_arg(flag, float(default)))))
 
 
-def bounded_patient_ttl(requested_ttl_seconds: int, patient_ttl_seconds: int, *, hard_cap_seconds: int = 300) -> int:
-    """Return a bounded paper-research TTL for the guarded maker arm.
-
-    The latest forward window contained a low-toxicity at-touch order with
-    +52.8 bps post-cost modeled edge that saw no compatible flow inside 60s but
-    did see enough event-time compatible SELL volume to clear queue plus own
-    size by 274.866s of local observation time. A 300s challenger tests that
-    documented capital-vs-fillability trade-off without permitting an
-    unbounded stale quote. Dead-queue recycling remains active throughout.
-    """
-    requested = max(1, int(requested_ttl_seconds))
-    patient = max(1, int(patient_ttl_seconds))
-    cap = max(1, int(hard_cap_seconds))
-    return min(cap, max(requested, patient))
-
-
 def persistence_gated_fill_probability(
     raw_fill_probability: float,
     *,
@@ -162,11 +146,6 @@ def install_flow_persistence_gate(
 
 def main() -> int:
     run_dir_text = v2._arg_value("--run-dir")
-    requested_ttl_seconds = max(1, int(round(_finite(v2._arg_value("--ttl-seconds", "90"), 90.0))))
-    patient_ttl_seconds = _consume_int_arg("--patient-ttl-seconds", 300)
-    effective_ttl_seconds = bounded_patient_ttl(requested_ttl_seconds, patient_ttl_seconds)
-    v2._replace_arg("--ttl-seconds", str(effective_ttl_seconds))
-
     min_inside_bursts = _consume_int_arg("--min-inside-flow-bursts", 3)
     burst_gap_seconds = _consume_int_arg("--inside-flow-burst-gap-seconds", 30)
     max_inside_event_age_seconds = _consume_float_arg("--max-inside-flow-event-age-seconds", 30.0)
@@ -178,18 +157,18 @@ def main() -> int:
 
     # V3 installs the causal directional toxicity filter on top of this wrapper,
     # then V2 installs the inside-confidence gate. V3 also persists 45/60/300s
-    # executable markouts under 1x/1.5x/2x slippage stress.
+    # executable markouts under 1x/1.5x/2x slippage stress. The caller's TTL is
+    # deliberately left unchanged: the latest tape suggests a longer-lived
+    # at-touch quote could improve fillability, but extending TTL without
+    # causal resting-order revalidation would expose a stale quote after its
+    # original edge/toxicity state has changed.
     result = v3.main()
     if run_dir_text:
         payload = {
             "paper_only": True,
             "authenticated_execution": False,
             **context,
-            "requested_ttl_seconds": requested_ttl_seconds,
-            "patient_ttl_seconds": patient_ttl_seconds,
-            "effective_ttl_seconds": effective_ttl_seconds,
-            "patient_ttl_hard_cap_seconds": 300,
-            "dead_queue_recycling_active": True,
+            "ttl_policy": "caller_unchanged_until_resting_order_revalidation",
             "toxicity_status_file": "toxicity_status.json",
             "markout_file": "maker_markouts.csv",
         }
