@@ -1,0 +1,49 @@
+name: Temporary V7 frozen holdout validation
+
+on:
+  push:
+    branches:
+      - fix/v7-ranking-frozen-holdout-20260827
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deterministic frozen-holdout regression
+        run: |
+          set -euo pipefail
+          python3 -m unittest tests/test_v7_cross_sectional_rank_inference.py -v
+          python3 -m py_compile \
+            scripts/v7_cross_sectional_rank_frozen.py \
+            scripts/v7_cross_sectional_tail_relative.py
+      - name: Live public-data frozen smoke
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ranking-evidence
+          python3 scripts/v7_cross_sectional_tail_relative.py \
+            --config config/research_v7_cross_sectional_rank_frozen.json \
+            --market-limit 150 \
+            --output-json /tmp/ranking-evidence/report.json \
+            --output-pairs-json /tmp/ranking-evidence/pairs.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          r = json.loads(Path('/tmp/ranking-evidence/report.json').read_text())
+          assert r['paper_only'] is True
+          assert r['research_only'] is True
+          assert r['live_intents_enabled'] is False
+          assert r['submitted_orders'] == 0
+          assert r['holdout_model_mode'] == 'single_pre_holdout_fit_reused_for_all_forward_sections'
+          assert r['adaptive_refit_mixed_into_frozen_evidence'] is False
+          assert r['frozen_training_label_cutoff_ts'] < r['forward_holdout_start_ts']
+          for h in r['horizons']:
+              fit = h['frozen_fit']
+              assert fit is not None
+              assert h['frozen_fit_asof_ts'] == r['forward_holdout_start_ts']
+              assert fit['train_end_ts'] <= h['frozen_training_label_cutoff_ts']
+          PY
