@@ -9,6 +9,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+import lf_v7_graph_evidence_transport_audit as transport
 import v7_graph_forward_guard as guard
 
 
@@ -45,6 +46,58 @@ def test_no_full_completion_never_routes():
         for _ in range(10)
     ]
     assert guard.evidence_for("s", completed, 4, 200, 0.1)["accepted"] is False
+
+
+def test_structural_signature_can_transport_positive_history_to_incomparable_current_state():
+    signature = "GRAPH_RV|event|a:YES|b:YES"
+    completed = [
+        {
+            "signature": signature,
+            "window_seconds": 180,
+            "expected_edge": 0.02,
+            "required_flow": [100.0, 100.0],
+            "target_shares": [10.0, 10.0],
+            "full_completion": True,
+            "stress_pnl": {"1x": 1.0, "1.5x": 0.8, "2x": 0.5},
+        }
+        for _ in range(4)
+    ]
+    current = {
+        "signature": signature,
+        "window_seconds": 180,
+        "expected_edge": 0.00005,
+        "required_flow": [1000.0, 1000.0],
+        "target_shares": [50.0, 50.0],
+    }
+    assert guard.evidence_for(signature, completed, 4, 200, 0.1)["accepted"] is True
+    assert transport.transportable_sessions(current, completed) == []
+
+
+def test_transportability_accepts_only_weakly_easier_higher_edge_current_state():
+    signature = "GRAPH_RV|event|a:YES|b:YES"
+    historical = {
+        "signature": signature,
+        "window_seconds": 180,
+        "expected_edge": 0.02,
+        "required_flow": [100.0, 120.0],
+        "target_shares": [10.0, 12.0],
+    }
+    easier = {
+        "signature": signature,
+        "window_seconds": 180,
+        "expected_edge": 0.03,
+        "required_flow": [50.0, 100.0],
+        "target_shares": [5.0, 10.0],
+    }
+    lower_edge = dict(easier, expected_edge=0.01)
+    harder_queue = dict(easier, required_flow=[101.0, 100.0])
+    larger_target = dict(easier, target_shares=[11.0, 10.0])
+    wrong_horizon = dict(easier, window_seconds=300)
+    assert transport.transportable_session(easier, historical) is True
+    assert transport.transportable_session(lower_edge, historical) is False
+    assert transport.transportable_session(harder_queue, historical) is False
+    assert transport.transportable_session(larger_target, historical) is False
+    assert transport.transportable_session(wrong_horizon, historical) is False
 
 
 def test_source_contract_is_dual_clock_and_prospective():
