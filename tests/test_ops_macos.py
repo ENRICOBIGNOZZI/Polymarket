@@ -155,6 +155,39 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn('hard_arb/status.json', deploy)
         self.assertIn('polymarket-multi-strategy-v5', deploy)
 
+    def test_deploy_verifier_reports_named_failures_without_weakening_checks(self):
+        deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(encoding="utf-8")
+        self.assertIn("fail_verify()", deploy)
+        self.assertIn("require_equal()", deploy)
+        self.assertIn("require_metric()", deploy)
+        self.assertIn("require_file()", deploy)
+        for label in (
+            "server_head_matches_validated",
+            "validated_not_ancestor_of_main",
+            "validated_matches_trigger_sha",
+            "exporter_healthz",
+            "runtime_info_schema",
+            "runtime_pnl_metric",
+            "allocator_state_metric",
+            "allocator_models_expected_metric",
+            "model_info_metric",
+            "v6_exporter_info_metric",
+            "v6_model_fills_metric",
+            "v6_model_gross_exposure_metric",
+            "v6_model_drawdown_metric",
+            "v6_model_alive_metric",
+            "v6_model_staleness_metric",
+            "v6_hard_arb_status_file",
+            "v6_local_factor_status_file",
+            "v6_runtime_status_file",
+            "prometheus_ready",
+            "grafana_health",
+            "grafana_dashboard_missing",
+        ):
+            self.assertIn(f'"{label}"', deploy)
+        self.assertIn("verify_result=success", deploy)
+        self.assertNotIn("|| true", deploy.split("- name: Verify production paper services", 1)[1])
+
     def test_remote_verifiers_are_compatible_with_macos_bash3(self):
         health = (ROOT / ".github" / "workflows" / "server-health.yml").read_text(encoding="utf-8")
         deploy = (ROOT / ".github" / "workflows" / "deploy-paper-server.yml").read_text(encoding="utf-8")
@@ -186,7 +219,10 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn("/usr/bin/awk", control)
         self.assertIn("active count|path|state|program|pid|last exit code", control)
         self.assertNotIn("sed -n '1,30p'", control)
-        self.assertIn("Darwin) bash ops/macos_service_control.sh status ;;", deploy)
+        self.assertIn(
+            'Darwin) bash ops/macos_service_control.sh status || fail_verify "macos_service_status" ;;',
+            deploy,
+        )
         self.assertNotIn("Darwin) sudo -n /usr/local/sbin/polymarket-service-control status ;;", deploy)
 
     def test_bootstrap_services_follow_the_champion_manifest(self):
