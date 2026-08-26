@@ -91,6 +91,15 @@ class V7CutoverContractTest(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     self.validate(root)
 
+    def test_manifest_paper_auth_boundary_fails_closed(self) -> None:
+        for key, value in (("paper_only", False), ("authenticated_execution", True)):
+            with self.subTest(key=key):
+                temporary, root = self.make_tree()
+                self.addCleanup(temporary.cleanup)
+                self.mutate_json(root / "config/live_champion.json", lambda m, k=key, v=value: m.__setitem__(k, v))
+                with self.assertRaises(SystemExit):
+                    self.validate(root)
+
     def test_authenticated_or_non_paper_config_fails_closed(self) -> None:
         mutations = (
             lambda c: c["v7"].__setitem__("authenticated_execution", True),
