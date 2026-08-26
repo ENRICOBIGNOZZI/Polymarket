@@ -20,6 +20,7 @@ def row(**updates):
         "target_legs": "2",
         "filled_legs": "2",
         "net_pnl": "1.0",
+        "locked_terminal_pnl": "",
         "explicit_cost": "0.2",
         "capital_seconds": "60",
         "completed_basket": "true",
@@ -60,6 +61,26 @@ class FastJointExecutionEvidenceTest(unittest.TestCase):
         self.assertAlmostEqual(report["fill_conditioned_net_pnl"], 0.9)
         self.assertAlmostEqual(report["cost_stress_1_5x_net_pnl"], 0.775)
         self.assertAlmostEqual(report["cost_stress_2x_net_pnl"], 0.65)
+
+    def test_open_completed_basket_is_counted_but_not_called_realized(self):
+        report = module.aggregate(
+            [row(
+                joint_state="ALL_LEGS_FILLED_OPEN",
+                net_pnl="",
+                locked_terminal_pnl="0.8",
+                explicit_cost="0.1",
+                capital_seconds="0.12",
+            )],
+            expected_sha=SHA,
+        )
+        self.assertEqual(report["completed_baskets"], 1)
+        self.assertEqual(report["realized_pnl_observations"], 0)
+        self.assertEqual(report["locked_terminal_observations"], 1)
+        self.assertAlmostEqual(report["locked_terminal_pnl_sum"], 0.8)
+        self.assertAlmostEqual(report["fill_conditioned_net_pnl"], 0.0)
+        self.assertTrue(report["point_in_time"])
+        self.assertTrue(report["authoritative_fees"])
+        self.assertTrue(report["depth_executable"])
 
     def test_mixed_sha_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "mixed_or_wrong_sha"):
