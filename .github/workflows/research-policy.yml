@@ -75,6 +75,7 @@ jobs:
         run: >-
           python3 -m unittest
           tests/test_research_policy_cross_venue.py
+          tests/test_research_policy_v7_model_families.py
           tests/test_research_verdict_provenance.py
           tests/test_v5_allocator_policy.py
           tests/test_promotion_gate.py
