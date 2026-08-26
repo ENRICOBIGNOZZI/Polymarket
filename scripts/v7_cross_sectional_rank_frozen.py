@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Strict frozen-holdout evaluation for V7 cross-sectional ranking.
 
-The registered 2h/6h challenger is a fixed-model test.  Its ridge fit is built
+The registered 2h/6h challenger is a fixed-model test. Its ridge fit is built
 once at the pre-registered holdout boundary using only labels that were mature
-before that boundary minus the configured embargo.  The same coefficients are
-then reused for every holdout prediction.  Adaptive/walk-forward evaluation
+before that boundary minus the configured embargo. The same coefficients are
+then reused for every holdout prediction. Adaptive/walk-forward evaluation
 lives in v7_cross_sectional_rank_inference.py and is intentionally separate.
 """
 from __future__ import annotations
@@ -13,6 +13,32 @@ import statistics
 from typing import Sequence
 
 import v7_cross_sectional_rank_core as core
+
+
+def history_start_for_frozen_fit(
+    *,
+    now_ts: int,
+    holdout_start_ts: int,
+    rolling_lookback_seconds: int,
+    training_window_seconds: int,
+    bucket_seconds: int,
+    max_feature_lag_steps: int = 12,
+) -> tuple[int, int]:
+    """Return a fetch start that cannot drift through the frozen fit window.
+
+    `raw_features` needs the previous 12 buckets. A rolling 30-day fetch would
+    eventually move through the fixed pre-holdout training window, changing a
+    supposedly frozen fit across scheduler runs. Keep enough fixed history for
+    the complete training window plus feature warm-up, while preserving any
+    longer rolling lookback that is already available.
+    """
+    required_start = (
+        int(holdout_start_ts)
+        - int(training_window_seconds)
+        - int(max_feature_lag_steps) * int(bucket_seconds)
+    )
+    rolling_start = int(now_ts) - int(rolling_lookback_seconds)
+    return min(rolling_start, required_start), required_start
 
 
 def fit_at_holdout_boundary(
