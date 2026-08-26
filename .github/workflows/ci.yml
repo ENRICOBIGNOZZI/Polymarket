@@ -101,4 +101,5 @@ jobs:
           test -s /tmp/project-context.json; test -s /tmp/project-context.md
           python3 -m unittest tests/test_v6_runtime_contract.py tests/test_v6_model_contracts.py tests/test_v6_market_proxy_atomic_reload.py tests/test_v7_execution_evidence.py \
             tests/test_v7_authorized_paper_envelope.py tests/test_compact_strategy_logs.py tests/test_ops_macos.py tests/test_macos_deploy_mutex.py \
-            tests/test_server_health_diagnostics.py tests/test_workflow_yaml_contracts.py -v
+            tests/test_server_health_diagnostics.py tests/test_workflow_yaml_contracts.py \
+            tests/test_external_intelligence_workflow_contract.py -v
