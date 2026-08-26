@@ -18,6 +18,7 @@ TERMINAL_ACTIONS = {
     "CANCEL_CAPITAL",
     "CANCEL_LEGACY_STATE",
 }
+CANDIDATE_ACTIONS = {"POST", "SKIP_QUEUE"}
 
 
 def _f(value: Any, default: float = 0.0) -> float:
@@ -47,6 +48,14 @@ class OrderWindow:
 
 
 @dataclass
+class CandidateObservation:
+    action: str
+    market_id: str
+    token_id: str
+    ts: int
+
+
+@dataclass
 class TapeTrade:
     ts: int
     received_ms: int
@@ -54,6 +63,24 @@ class TapeTrade:
     side: str
     price: float
     size: float
+
+
+def read_candidates(path: Path) -> list[CandidateObservation]:
+    rows: list[CandidateObservation] = []
+    if not path.exists():
+        return rows
+    with path.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            action = (row.get("action") or "").upper()
+            if action not in CANDIDATE_ACTIONS:
+                continue
+            ts = _i(row.get("timestamp"))
+            token = row.get("token_id") or ""
+            market = row.get("market_id") or ""
+            if ts <= 0 or not token or not market:
+                continue
+            rows.append(CandidateObservation(action=action, market_id=market, token_id=token, ts=ts))
+    return rows
 
 
 def read_orders(path: Path, ttl_seconds: int) -> list[OrderWindow]:
@@ -152,7 +179,74 @@ def replay_one(order: OrderWindow, trades: list[TapeTrade], *, require_received_
     }
 
 
-def summarize(order_log: Path, tape_path: Path, ttl_seconds: int) -> dict[str, Any]:
+def _activity_summary(
+    candidates: list[CandidateObservation],
+    orders: list[OrderWindow],
+    trades: list[TapeTrade],
+    pre_entry_lookback_seconds: int,
+) -> dict[str, Any]:
+    tape_tokens = {t.asset_id for t in trades}
+    candidate_tokens = {x.token_id for x in candidates}
+    candidate_markets = {x.market_id for x in candidates}
+    posted_tokens = {x.token_id for x in candidates if x.action == "POST"}
+    candidate_active = candidate_tokens.intersection(tape_tokens)
+    posted_active = posted_tokens.intersection(tape_tokens)
+
+    by_token: dict[str, list[TapeTrade]] = {}
+    for trade in trades:
+        by_token.setdefault(trade.asset_id, []).append(trade)
+
+    pre_entry = 0
+    any_post_entry = 0
+    eligible_post_entry_sell = 0
+    lookback = max(0, int(pre_entry_lookback_seconds))
+    for order in orders:
+        token_trades = by_token.get(order.token_id, [])
+        has_pre = any(
+            order.posted_ts - lookback <= trade.ts <= order.posted_ts
+            and trade.received_ms <= order.posted_ts * 1000
+            for trade in token_trades
+        )
+        has_post = any(
+            order.posted_ts < trade.ts <= order.end_ts
+            and trade.received_ms <= order.end_ts * 1000
+            for trade in token_trades
+        )
+        has_eligible_sell = any(
+            order.posted_ts < trade.ts <= order.end_ts
+            and trade.received_ms <= order.end_ts * 1000
+            and trade.side == "SELL"
+            and trade.price <= order.limit_price + 1e-9
+            for trade in token_trades
+        )
+        pre_entry += int(has_pre)
+        any_post_entry += int(has_post)
+        eligible_post_entry_sell += int(has_eligible_sell)
+
+    return {
+        "tape_unique_tokens": len(tape_tokens),
+        "candidate_rows_post_plus_queue_skip": len(candidates),
+        "candidate_unique_markets": len(candidate_markets),
+        "candidate_unique_tokens": len(candidate_tokens),
+        "candidate_tokens_with_any_tape_trade": len(candidate_active),
+        "candidate_token_activity_rate": len(candidate_active) / len(candidate_tokens) if candidate_tokens else 0.0,
+        "posted_unique_tokens": len(posted_tokens),
+        "posted_tokens_with_any_tape_trade": len(posted_active),
+        "posted_token_activity_rate": len(posted_active) / len(posted_tokens) if posted_tokens else 0.0,
+        "pre_entry_lookback_seconds": lookback,
+        "posts_with_causal_pre_entry_trade": pre_entry,
+        "posts_with_any_causal_post_entry_trade": any_post_entry,
+        "posts_with_eligible_post_entry_sell": eligible_post_entry_sell,
+    }
+
+
+def summarize(
+    order_log: Path,
+    tape_path: Path,
+    ttl_seconds: int,
+    pre_entry_lookback_seconds: int = 120,
+) -> dict[str, Any]:
+    candidates = read_candidates(order_log)
     orders = read_orders(order_log, ttl_seconds)
     trades = read_tape(tape_path)
     causal_fill_orders = 0
@@ -193,7 +287,7 @@ def summarize(order_log: Path, tape_path: Path, ttl_seconds: int) -> dict[str, A
                 }
             )
     order_count = len(orders)
-    return {
+    payload = {
         "schema": "hf_maker_shared_tape_audit_v2",
         "paper_only": True,
         "authenticated_execution": False,
@@ -211,6 +305,8 @@ def summarize(order_log: Path, tape_path: Path, ttl_seconds: int) -> dict[str, A
         "delayed_only_fill_orders": delayed_only_orders,
         "details": details,
     }
+    payload.update(_activity_summary(candidates, orders, trades, pre_entry_lookback_seconds))
+    return payload
 
 
 def main() -> int:
@@ -218,9 +314,15 @@ def main() -> int:
     parser.add_argument("--order-log", required=True)
     parser.add_argument("--trade-tape", required=True)
     parser.add_argument("--ttl-seconds", type=int, required=True)
+    parser.add_argument("--pre-entry-lookback-seconds", type=int, default=120)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
-    payload = summarize(Path(args.order_log), Path(args.trade_tape), args.ttl_seconds)
+    payload = summarize(
+        Path(args.order_log),
+        Path(args.trade_tape),
+        args.ttl_seconds,
+        args.pre_entry_lookback_seconds,
+    )
     Path(args.output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
