@@ -111,6 +111,8 @@ class LedgerEvent:
     capital_cost: float | None = None
     latency_cost: float | None = None
     realized_cashflow: float | None = None
+    executable_liquidation_value: float | None = None
+    unrealized_pnl: float | None = None
     final_pnl: float | None = None
     capital_duration_ms: int | None = None
 
@@ -167,6 +169,8 @@ class LedgerEvent:
             ("capital_cost", self.capital_cost),
             ("latency_cost", self.latency_cost),
             ("realized_cashflow", self.realized_cashflow),
+            ("executable_liquidation_value", self.executable_liquidation_value),
+            ("unrealized_pnl", self.unrealized_pnl),
             ("final_pnl", self.final_pnl),
         ):
             _finite_optional(name, value)
@@ -203,8 +207,16 @@ class LedgerEvent:
 
         if self.event_type in {"ORDER_SUBMITTED", "ORDER_STATE", "FILL"} and not self.order_id:
             raise LedgerContractError("order_id:missing")
-        if self.event_type == "FILL" and (self.filled_size is None or self.filled_size <= 0):
-            raise LedgerContractError("fill:missing_positive_size")
+        if self.event_type == "FILL":
+            if self.exchange_ts_ms is None or self.receive_ts_ms is None:
+                raise LedgerContractError("fill:missing_exchange_receive_clock")
+            if self.filled_size is None or self.filled_size <= 0:
+                raise LedgerContractError("fill:missing_positive_size")
+        if self.event_type == "POSITION_MARK":
+            if self.executable_liquidation_value is None:
+                raise LedgerContractError("position_mark:missing_executable_liquidation_value")
+            if self.receive_ts_ms is None or not self.book_snapshot_id:
+                raise LedgerContractError("position_mark:missing_causal_book")
         if self.event_type == "FINAL" and self.final_pnl is None:
             raise LedgerContractError("final:missing_pnl")
 
