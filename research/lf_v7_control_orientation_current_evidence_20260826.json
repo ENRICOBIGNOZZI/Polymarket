@@ -1,0 +1,77 @@
+{
+  "schema": "lf_v7_control_orientation_evidence_v1",
+  "generated_utc": "2026-08-26T17:21:00Z",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "source": {
+    "current_main_sha": "db44c828b4bd76232811e1d4a1bc3608062e3fa5",
+    "local_factor_pr": 503,
+    "local_factor_head_sha": "5db5243cc706bcd53ecb057a49c635fcd8d6b973",
+    "local_factor_branch": "research/v7-local-factor-pair-specific-panels-20260826"
+  },
+  "structural_finding": {
+    "summary": "The V7 pair-specific Local Factor uses the arithmetic mean of standardized predeclared controls as the one common pair-excluded factor. That basis is not invariant to opposite probability coding of economically related controls and can collapse to zero even when every control is driven perfectly by the same latent factor.",
+    "code_contract": {
+      "factor_construction": "factor_t = mean_j standardized_control_j_t",
+      "control_selection": "metadata/text only; no return-orientation or sign-alignment condition is imposed",
+      "why_material": "predeclared controls can include contracts whose YES probabilities load with opposite signs on the same event state; equal-weight averaging then destroys the shared factor before loading, residual, unit-root and hedge inference"
+    },
+    "deterministic_counterexample": {
+      "observations": 72,
+      "controls": 4,
+      "control_loadings_on_latent_factor": [1.0, 1.0, -1.0, -1.0],
+      "raw_equal_factor_sd": 0.0,
+      "raw_equal_loading_a": null,
+      "raw_equal_loading_b": null,
+      "target_free_oriented_factor_sd": 1.0,
+      "target_free_oriented_latent_abs_correlation": 1.0,
+      "target_free_oriented_loading_a": 0.9829493941183742,
+      "target_free_oriented_loading_b": -0.9741808649610686,
+      "orientation_recode_abs_correlation": 1.0
+    },
+    "interpretation": "This is an identification/power defect, not alpha evidence. It can make broader universes anti-monotone: adding strongly related but oppositely coded controls can make a formerly identifiable common factor unestimable or unstable."
+  },
+  "required_common_sample_comparison": [
+    "incumbent equal-weight standardized control mean",
+    "target-excluded first principal component of the same frozen controls",
+    "another pre-specified control-only orientation rule used only as a diagnostic comparator"
+  ],
+  "promotion_gates_after_factor_repair": [
+    "pair/control graph frozen before target price inference",
+    "one common factor basis shared by both targets and invariant up to global sign to opposite control coding",
+    "conditional residual unit-root bootstrap that reconstructs level paths under the marginal null",
+    "dependence-robust multiplicity over the full predeclared family",
+    "price/PnL hedge units",
+    "actual-fidelity n-step forecast and TTR-minus-buffer exit",
+    "empirical both/A-only/B-only/none execution states",
+    "queue-aware partial abort/unwind economics",
+    "positive fill-conditioned PnL under 1x/1.5x/2x costs"
+  ],
+  "fresh_live_context": {
+    "telemetry_sha": "db44c828b4bd76232811e1d4a1bc3608062e3fa5",
+    "trade_recorder_status": "healthy",
+    "public_trades": 1227,
+    "trade_recorder_errors": 0,
+    "graph_bundles": 2,
+    "graph_legs": 8,
+    "graph_best_quote_edge": 0.020000000000000018,
+    "graph_complete": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_pnl_usd": 0.0
+  },
+  "safety": {
+    "authorized_paper_markets_approx": 1000,
+    "min_liquidity_usd": 2.0,
+    "min_post_cost_edge": 0.00005,
+    "fractional_kelly_max": 0.25,
+    "max_trade_usd": 125.0,
+    "max_market_fraction": 0.05,
+    "max_event_fraction": 0.15,
+    "max_gross_fraction": 0.70,
+    "max_drawdown_fraction": 0.15,
+    "kill_switch_required": true,
+    "paper_only": true,
+    "authenticated_execution": false,
+    "real_money_execution": false
+  }
+}
