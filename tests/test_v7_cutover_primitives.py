@@ -148,6 +148,18 @@ class V7CutoverPrimitiveTests(unittest.TestCase):
         self.assertIn("GRAFANA_ADMIN_PASSWORD:?", compose)
         self.assertNotIn("exporter_v6", compose)
 
+    def test_scheduler_ids_match_current_operator_authority(self) -> None:
+        registry = json.loads((ROOT / "config/scheduler_registry.json").read_text(encoding="utf-8"))
+        directives = json.loads((ROOT / "config/operator_directives.json").read_text(encoding="utf-8"))
+        schedulers = {item["id"]: item for item in registry["schedulers"]}
+        assignments = directives["scheduler_assignments"]
+        for scheduler_id in ("v7-paper-server-deploy", "v7-paper-server-health"):
+            self.assertIn(scheduler_id, schedulers)
+            self.assertIn(scheduler_id, assignments)
+        self.assertFalse(schedulers["v7-paper-server-deploy"]["deploy_authority"])
+        self.assertNotIn("v7-paper-deploy", schedulers)
+        self.assertNotIn("v7-server-health", schedulers)
+
 
 if __name__ == "__main__":
     unittest.main()
