@@ -41,8 +41,6 @@ class NoLegacyRuntimeContractTest(unittest.TestCase):
             "scripts/walk_forward_v4_lineage.py",
             "scripts/filter_coherent_hedges.py",
             ".github/workflows/forward-maker-research.yml",
-            ".github/workflows/deploy-paper-server.yml",
-            ".github/workflows/server-health.yml",
             ".github/workflows/grafana-access.yml",
             "monitoring/exporter.py",
             "monitoring/exporter_latest.py",
@@ -57,6 +55,21 @@ class NoLegacyRuntimeContractTest(unittest.TestCase):
         )
         offenders = [path for path in retired if (ROOT / path).exists()]
         self.assertEqual(offenders, [], "known compatibility entrypoints remain")
+
+    def test_cutover_workflows_are_v7_native_not_legacy_compatibility(self) -> None:
+        deploy = ROOT / ".github/workflows/deploy-paper-server.yml"
+        health = ROOT / ".github/workflows/server-health.yml"
+        if not deploy.is_file() and not health.is_file():
+            return
+        self.assertTrue(deploy.is_file(), "V7 deploy/health primitives must appear together")
+        self.assertTrue(health.is_file(), "V7 deploy/health primitives must appear together")
+        for path in (deploy, health):
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("paper-validated", text)
+            self.assertIn("version') != 7", text)
+            self.assertIn("authenticated_execution", text)
+            self.assertNotIn("v4-live-paper-smoke", text)
+            self.assertNotIn("paper_v6_loop.sh", text)
 
     def test_champion_is_explicitly_disabled(self) -> None:
         manifest = json.loads((ROOT / "config/live_champion.json").read_text(encoding="utf-8"))
