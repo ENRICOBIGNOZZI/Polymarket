@@ -13,7 +13,7 @@ SPEC.loader.exec_module(MODULE)
 
 
 class AdminSupervisorProductionRunTest(unittest.TestCase):
-    def run(self, *, workflow: str, event: str, branch: str | None, created: str, conclusion: str) -> dict:
+    def _make_run(self, *, workflow: str, event: str, branch: str | None, created: str, conclusion: str) -> dict:
         return {
             "workflowName": workflow,
             "event": event,
@@ -26,14 +26,14 @@ class AdminSupervisorProductionRunTest(unittest.TestCase):
 
     def test_newer_research_dispatch_does_not_replace_main_state(self) -> None:
         runs = [
-            self.run(
+            self._make_run(
                 workflow="ci",
                 event="push",
                 branch="main",
                 created="2026-08-26T15:00:00Z",
                 conclusion="success",
             ),
-            self.run(
+            self._make_run(
                 workflow="ci",
                 event="workflow_dispatch",
                 branch="research/v7-unified-paper-engine-20260826",
@@ -46,7 +46,7 @@ class AdminSupervisorProductionRunTest(unittest.TestCase):
         self.assertEqual(MODULE.scheduler_state(latest["ci"]), "success")
 
     def test_fix_branch_dispatch_is_not_production(self) -> None:
-        run = self.run(
+        run = self._make_run(
             workflow="monitoring",
             event="workflow_dispatch",
             branch="fix/example",
@@ -58,14 +58,14 @@ class AdminSupervisorProductionRunTest(unittest.TestCase):
 
     def test_main_manual_failure_remains_visible(self) -> None:
         runs = [
-            self.run(
+            self._make_run(
                 workflow="ci",
                 event="push",
                 branch="main",
                 created="2026-08-26T15:00:00Z",
                 conclusion="success",
             ),
-            self.run(
+            self._make_run(
                 workflow="ci",
                 event="workflow_dispatch",
                 branch="main",
@@ -77,7 +77,7 @@ class AdminSupervisorProductionRunTest(unittest.TestCase):
         self.assertEqual(MODULE.scheduler_state(latest["ci"]), "failure")
 
     def test_pull_request_run_is_never_production(self) -> None:
-        run = self.run(
+        run = self._make_run(
             workflow="monitoring",
             event="pull_request",
             branch="feature/example",
@@ -88,7 +88,7 @@ class AdminSupervisorProductionRunTest(unittest.TestCase):
         self.assertNotIn("monitoring", MODULE.latest_by_workflow([run]))
 
     def test_branchless_scheduled_run_remains_eligible(self) -> None:
-        run = self.run(
+        run = self._make_run(
             workflow="paper-server-health",
             event="schedule",
             branch=None,
