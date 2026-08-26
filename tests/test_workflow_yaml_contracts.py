@@ -114,8 +114,8 @@ class WorkflowYamlContractTest(unittest.TestCase):
         self.assertNotIn("paper-validated", ci)
         self.assertNotIn("POLYMARKET_DEPLOY_REF", ci)
 
-    def test_live_smoke_retries_telemetry_publish_before_failing_validation(self) -> None:
-        smoke = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(
+    def test_v7_live_validation_retries_telemetry_publish_before_failing_validation(self) -> None:
+        smoke = (ROOT / ".github" / "workflows" / "v7-live-paper-validation.yml").read_text(
             encoding="utf-8"
         )
         self.assertIn("for attempt in 1 2 3 4 5; do", smoke)
@@ -125,6 +125,8 @@ class WorkflowYamlContractTest(unittest.TestCase):
         self.assertIn("sleep $((attempt * 2))", smoke)
         self.assertIn("- name: Advance paper validated ref", smoke)
         self.assertNotIn("continue-on-error: true", smoke)
+        self.assertNotIn("v4-live-smoke", smoke)
+        self.assertNotIn("paper_v6", smoke)
 
     def test_meta_supervisor_retries_only_telemetry_cas_conflicts(self) -> None:
         control = (ROOT / ".github" / "workflows" / "control-plane.yml").read_text(
