@@ -191,9 +191,11 @@ public:
             const auto market_query = join_conditions(conditions, lo, hi);
             for (std::size_t offset : {std::size_t{0}, page_limit}) {
                 std::ostringstream url;
+                // The public Data API does not provide a reliable server-side time-window
+                // contract for /trades. Request by documented filters and enforce the
+                // overlap window locally after parsing each event timestamp.
                 url << data_url_ << "/trades?limit=" << page_limit << "&offset=" << offset
-                    << "&takerOnly=true&start=" << start << "&end=" << end
-                    << "&market=" << market_query;
+                    << "&takerOnly=true&market=" << market_query;
                 ++requests;
                 try {
                     const auto r = http_.get(url.str());
@@ -224,6 +226,7 @@ public:
                         t.slug = get_text(o, "slug");
                         t.event_slug = get_text(o, "eventSlug");
                         if (t.ts <= 0 || t.asset_id.empty() || t.price <= 0.0 || t.price >= 1.0 || t.size <= 0.0) continue;
+                        if (t.ts < start || t.ts > end) continue;
                         if (!by_condition.count(t.condition_id)) continue;
                         const auto key = trade_key(t);
                         if (seen_.insert(key).second) rows.push_back(std::move(t));
