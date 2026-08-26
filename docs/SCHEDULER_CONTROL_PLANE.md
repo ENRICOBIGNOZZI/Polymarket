@@ -1,120 +1,126 @@
-# Polymarket scheduler control plane
+# Polymarket V7 scheduler control plane
 
-The project no longer assigns research policy, evidence review, integration, validation, deployment and runtime supervision to one monolithic scheduler. Each workflow owns one bounded responsibility and exactly one GitHub Actions job. The machine-readable source of truth is [`config/scheduler_registry.json`](../config/scheduler_registry.json).
+Each registered GitHub Actions workflow owns one bounded responsibility and exactly one top-level job. The machine-readable source of truth is `config/scheduler_registry.json`.
 
-## Administrator contract
+The control plane is PAPER-only. Authenticated execution is disabled, and no workflow may create that authority for itself.
 
-The project administrator owns the evolution of the single live champion. Automation may collect evidence, enforce policy, merge a pre-approved integration and execute validation/deployment handoffs, but it may not create production authority for itself.
+## Authorities
 
-A model integration can be merged automatically only when all three labels are present:
+Three privileged actions are deliberately unique:
 
-- `approved-for-integration`: the reusable implementation passed the research gate;
-- `single-model-reviewed`: the change preserves one orchestrator, allocator, risk state and broker;
-- `administrator-approved`: the project administrator explicitly authorizes this exact integration.
+- `integration-merge` is the only merge authority;
+- `post-merge-validation` is the only validation-dispatch authority;
+- `paper-server-deploy` is the only deployment authority.
 
-Removing any label immediately removes automatic merge eligibility. No scheduler uses an administrative bypass.
+The Promotion Controller decides eligibility but does not merge. Server Health observes but does not mutate code or policy. Administrator Supervisor reports but has no production mutation authority.
 
-## One scheduler, one responsibility
+## Registered schedulers
 
-| Scheduler | Job | Responsibility | Explicitly forbidden |
-|---|---|---|---|
-| Administrator Supervisor | `supervise` | Observe champion, workflow health, PR queues and blockers | approve research, merge, dispatch validation, deploy |
-| Research Policy | `enforce` | Enforce branch/label/manifest/shadow policy | select alpha, merge, deploy |
-| Research Queue | `audit` | Inventory evidence and integration backlog | approve, merge, change live configuration |
-| Integration Merge | `merge` | Verify the incumbent is fully deployed/healthy, then merge at most one fully green administrator-approved `integration/*` PR | evaluate research, run validation, deploy |
-| Post-Merge Validation | `dispatch` | Dispatch CI, monitoring and live-paper validation for the exact merged SHA | merge, advance `paper-validated`, deploy |
-| CI | `build-test` | Release/Debug build and deterministic tests | merge, deploy |
-| Monitoring Validation | `validate` | Validate observability contracts | merge, deploy |
-| Live-Paper Validation | `live-paper-smoke` | Validate public-data paper behavior and advance `paper-validated` on success | merge research, deploy arbitrary refs |
-| Paper Server Deploy | `deploy` | Deploy only `paper-validated` and verify services | select models, change research decisions |
-| Paper Server Health | `health` | Inspect deployed runtime and risk/observability evidence | modify code or champion selection |
-| Forward Maker Research | `forward-shadow` | Collect isolated forward maker evidence | produce live intents, book hypothetical PnL, merge |
-| Fast Arbitrage Shadow | `shadow-evidence` | Collect event-driven read-only arbitrage and cost-stressed shadow evidence | submit orders, mutate champion state, book real PnL |
-| Arbitrage Theory Research | `research-cycle` | Re-derive candidate structures from valid shadow evidence and produce research-only proposals | approve itself, merge, deploy |
-| Live API Smoke | `live-api-smoke` | Test read-only API connectivity | modify models or state |
+| Scheduler | Responsibility |
+|---|---|
+| Administrator Supervisor | Observe control-plane state and blockers |
+| Research Policy | Enforce branch, provenance, operator authority and isolation |
+| Research Queue | Inventory V7 research/evidence and route bounded work |
+| Promotion Controller | Evaluate objective promotion gates and issue one ephemeral authorization |
+| Integration Merge | Revalidate and merge one authorized integration |
+| Control-Plane Event Bridge | Dispatch existing controller/merge workflows after successful prerequisite events |
+| Post-Merge Validation | Dispatch exact-SHA CI, monitoring and V7 PAPER validation |
+| CI | Build/test canonical V7 and generic infrastructure |
+| Monitoring Validation | Validate V7 exporter/dashboard/runtime telemetry |
+| V7 Live-Paper Validation | Validate public-data V7 PAPER behavior and advance `paper-validated` |
+| Paper Server Deploy | Deploy exact `paper-validated` V7 |
+| Paper Server Health | Verify deployed revision, ownership, data, risk and observability |
+| Forward Maker Research | Collect prospective maker queue/fill/markout evidence |
+| Alpha Factory | Rank V7 challengers by executable OOS economics |
+| Meta-Supervisor | Coordinate bounded research/remediation dispatches |
+| Fast Arbitrage Shadow | Collect strict freshness/depth/fee/legging evidence |
+| Arbitrage Theory Research | Derive structural/Graph candidates from valid evidence |
+| External Intelligence | Collect and chronologically validate public external information |
+| Live API Smoke | Read-only Gamma/CLOB connectivity |
+| V7 Point-in-Time Universe Archive | Archive immutable validated V7 market universes |
+
+Non-scheduled validation/access workflows are explicitly allowlisted by the registry validator and cannot acquire merge/deploy authority.
 
 ## Handoff graph
 
 ```text
-research implementation
+research / evidence
         |
         v
-Research Policy ---------> Research Queue
-        |                         |
-        | policy check            | evidence inventory
-        v                         v
-administrator research decision / labels
+Research Policy + objective evidence
         |
         v
-integration/* PR
+integration/* candidate
         |
         v
-Incumbent completion gate
-(main == paper-validated == deployed HEAD; fresh health; recorder/broker alive)
+Promotion Controller
+        |
+        | autonomous-promotion-approved (ephemeral)
+        v
+Integration Merge
         |
         v
-Integration Merge -- repository_dispatch --> Post-Merge Validation
-                                                |       |       |
-                                                v       v       v
-                                               CI   Monitoring  Live Paper
-                                                                  |
-                                                                  v
-                                                         paper-validated
-                                                                  |
-                                                                  v
-                                                            Deployment
-                                                                  |
-                                                                  v
-                                                             Runtime Health
-
-Administrator Supervisor observes every node and reports blockers; it mutates none of them.
+Post-Merge Validation
+        |--------------------|----------------------|
+        v                    v                      v
+       CI               Monitoring        V7 Live-Paper Validation
+                                                    |
+                                                    v
+                                            paper-validated
+                                                    |
+                                                    v
+                                                Deploy
+                                                    |
+                                                    v
+                                             Server Health
 ```
 
-## Incumbent completion gate
+The Control-Plane Event Bridge can dispatch the existing Promotion Controller after validator completion and the existing Integration Merge after a successful controller completion. It cannot itself decide, merge, deploy, move `paper-validated` or submit orders.
 
-When private server deployment is enabled, the integration scheduler runs ten minutes after the hourly server-health schedule, downloads the artifact from the latest successful `paper-server-health` run and verifies all of the following before even selecting a candidate:
+## Promotion Controller
+
+The controller evaluates open non-draft `integration/*` PRs against current `main`. It requires exact source research provenance and re-fetches trusted source comments/reviews so an untrusted PR body cannot spoof a governance verdict.
+
+For economic changes, the controller additionally validates machine-readable promotion evidence, including configured OOS trade/economic/statistical/data-health gates and exact source-content matching. The selected PR receives `autonomous-promotion-approved` only for the current cycle; stale authorizations are removed and recomputed.
+
+## Integration Merge
+
+The merge workflow does not trust the earlier controller decision blindly. Immediately before merge it re-fetches the candidate/source, requires the current authorization label, checks that the base and head have not moved, repeats promotion/source-content checks and merges exactly the expected head.
+
+## Exact-SHA validation
+
+Post-Merge Validation binds all downstream validators to one merged `main` SHA. If `main` advances, the older dispatch is superseded rather than being mistaken for current evidence.
+
+V7 live-paper validation advances `paper-validated` only when the validated SHA is exactly current `main` and has merged-PR provenance.
+
+## Deployment convergence
+
+Deployment consumes `paper-validated` and server health verifies the same revision. The operational target is:
 
 ```text
-main
-  == paper-validated
-  == server head
-  == server origin_main
-  == server paper_validated
+main == paper-validated == deployed HEAD
 ```
 
-It also requires `recorder_alive=1`, `broker_alive=1` and a server-health timestamp no older than 7,200 seconds. Missing, stale, future-dated or inconsistent health evidence blocks the cycle. A successful live-paper validation without a matching recent healthy deployment is therefore not enough to start the next champion change.
+with fresh V7 runtime/monitoring health evidence. Merge success alone is not enough.
 
-When private deployment is explicitly disabled, the server evidence requirement is skipped, but `main == paper-validated` remains mandatory.
+## Adding or modifying a scheduler
 
-## Fail-closed sequencing
+A managed workflow must:
 
-1. Unapproved work stays on `research/*`, `experiment/*` or `diagnostic/*`.
-2. Evidence collection cannot modify production intents, PnL, sizing, exposure, drawdown, kill switches, OOS gates or authenticated execution.
-3. Approved reusable code is rebuilt on a fresh `integration/*` branch based on current `main`.
-4. Integration is eligible only after all required PR checks and the three explicit labels are present.
-5. The integration scheduler refuses to merge until the incumbent is fully complete: `main == paper-validated`, and, when deployment is enabled, a fresh successful server-health artifact reports the same deployed SHA with live recorder and broker.
-6. The merge scheduler performs only the squash merge and emits a handoff event. It does not run or dispatch the validation stack itself.
-7. The post-merge scheduler binds validation to the exact merged SHA and dispatches CI, monitoring and live-paper validation.
-8. Live-paper validation alone may advance `paper-validated` after successful evidence publication.
-9. Deployment alone may install `paper-validated` on the private paper node.
-10. Server health separately verifies deployed revision, processes, monitoring and risk telemetry.
-11. Any failed, missing, stale or ambiguous gate leaves the preceding validated champion live.
+1. contain exactly one top-level job;
+2. be registered with a unique ID and workflow path;
+3. declare cadence, responsibility and authority flags;
+4. preserve unique merge/validation-dispatch/deploy authority;
+5. have deterministic contract coverage;
+6. remain read-only unless mutation is its narrowly defined responsibility;
+7. preserve PAPER-only/authenticated-disabled separation.
 
-## Why the split matters
+Validate with:
 
-The trading architecture already separates probability estimation, executable trade decisions, portfolio/risk allocation and execution. The control plane mirrors that separation. Research evidence cannot become a trade merely because it compiles; integration cannot become production merely because it merges; deployment cannot select a different model; runtime supervision cannot rewrite the system it monitors.
+```bash
+python3 scripts/validate_scheduler_registry.py \
+  --root . \
+  --registry config/scheduler_registry.json
+```
 
-This design keeps the long-run objective intact: one powerful live champion containing complementary experts, with a single portfolio/risk layer and execution path, while each research and operational function evolves independently behind explicit interfaces.
-
-## Adding a scheduler
-
-A new workflow must:
-
-1. have one top-level GitHub Actions job;
-2. have a unique responsibility not already owned by another scheduler;
-3. declare its cadence, authority and forbidden actions in `config/scheduler_registry.json`;
-4. preserve the unique merge, validation-dispatch and deploy authorities;
-5. include deterministic contract tests;
-6. remain read-only unless its mutation is the narrowly documented responsibility.
-
-`python3 scripts/validate_scheduler_registry.py` rejects unregistered workflows, multiple jobs, duplicate responsibilities with privileged authority, or movement of merge/deploy authority to the supervisor.
+Unregistered managed workflows, duplicate authority, stale workflow references or retired runtime surfaces fail closed.
