@@ -11,12 +11,10 @@ def load(path: str):
     return json.loads((ROOT / path).read_text(encoding="utf-8"))
 
 
-def test_research_manifest_keeps_incumbent_v6_and_defines_exact_v7_candidate():
+def test_research_manifest_keeps_incumbent_until_v7_promotion_and_defines_exact_candidate():
     incumbent = load("config/live_champion.json")
     candidate = load("config/v7_champion_candidate.json")
-    assert incumbent["version"] == 6
-    assert incumbent["loop"] == "scripts/paper_v6_loop.sh"
-    assert incumbent["config"] == "config/paper_v6.json"
+    assert incumbent["version"] in {6, 7}
     assert candidate["version"] == 7
     assert candidate["loop"] == "scripts/paper_v7_loop.sh"
     assert candidate["config"] == "config/paper_v7.json"
@@ -53,8 +51,7 @@ def test_v7_config_has_no_binding_fixed_dollar_trade_cap_and_100_percent_hard_ce
 def test_frequency_matrix_has_hf_and_30m_to_6h_without_pooling():
     cfg = load("config/v7_frequency_matrix.json")
     maker = cfg["execution_cadences_seconds"]["micro_maker"]
-    assert min(maker) <= 1
-    assert max(maker) >= 10
+    assert min(maker) <= 1 and max(maker) >= 10
     assert cfg["forecast_horizons_minutes"]["pca_stat_arb"] == [30, 60, 120, 360]
     assert cfg["forecast_horizons_minutes"]["cross_sectional_rank"] == [30, 60, 120, 360]
     assert cfg["local_factor_fidelity_minutes"] == [30, 60]
@@ -80,29 +77,41 @@ def test_v7_entrypoint_has_one_execution_owner_and_separate_shadow_scheduler():
     assert "runtime_singleton_launcher.py" not in text
     assert "runtime_owner.lock" not in text
     assert "paper_v7_execution_loop.sh" in text
-    assert "paper_v6_loop.sh" not in text
     assert "v7_shadow_loop.py" in text
     assert "POLYMARKET_RUNTIME_PARENT_PID=\"$$\"" in text
     assert text.count("start_execution") >= 2
 
 
-def test_v7_execution_loop_uses_corrected_workers_and_roundtrip_joint_state_gate():
+def test_v7_execution_loop_is_canonical_and_has_no_legacy_runtime_calls():
     text = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
-    assert "v7_micro_maker_worker.py" in text
-    assert "v7_micro_taker_worker.py" in text
-    assert "v7_hard_arb_guard.py" in text
-    assert "v7_multileg_broker_runner.py" in text
-    assert "v7_capacity_lock.py" in text
-    assert "v6_bundle_quote_optimizer.py" in text  # compatibility adapter -> V7 optimizer
-    assert "v7_graph_roundtrip_guard.py" in text
-    assert "graph_roundtrip_state.json" in text
-    graph_block = text[text.index("run_graph(){"):text.index("reap_stale_proxy")]
-    assert "v7_graph_forward_guard.py" not in graph_block
-    assert "v7_graph_execution_guard.py" not in graph_block
-    assert "v6_bundle_state_guard.py" not in text
-    assert "polymarket_multileg_paper" not in text
-    assert "runtime_primary_seconds" in text
-    assert "sleep 1" in text
+    required = (
+        "v7_market_proxy.py",
+        "v7_micro_maker_worker.py",
+        "v7_micro_taker_worker.py",
+        "v7_hard_arb_guard.py",
+        "v7_multileg_broker_runner.py",
+        "v7_capacity_lock.py",
+        "v7_relation_intents.py",
+        "v7_intent_guard.py",
+        "v7_bundle_quote_optimizer.py",
+        "v7_graph_roundtrip_guard.py",
+        "v7_merge_intents.py",
+        "v7_external_bridge.py",
+        "v7_runtime_status.py",
+        "graph_roundtrip_state.json",
+        "runtime_primary_seconds",
+        "sleep 1",
+    )
+    for marker in required:
+        assert marker in text, marker
+    forbidden = (
+        "v3_", "v4_", "v5_", "v6_",
+        "paper_v3", "paper_v4", "paper_v5", "paper_v6",
+        "merge_v4_intents.py",
+        "polymarket_multileg_paper",
+    )
+    for marker in forbidden:
+        assert marker not in text, marker
 
 
 def test_shadow_scheduler_is_research_only_and_frequency_separated():

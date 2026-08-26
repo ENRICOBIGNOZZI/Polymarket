@@ -90,15 +90,15 @@ def archive_once(
     target = archive_dir / snapshot_filename(bucket_ts)
     created = False
     if not target.exists():
-        temporary = archive_dir / f".{target.name}.tmp.{os.getpid()}"
-        temporary.write_bytes(encoded_snapshot(payload))
+        tmp = archive_dir / f".{target.name}.tmp.{os.getpid()}"
+        tmp.write_bytes(encoded_snapshot(payload))
         try:
-            os.link(temporary, target)
+            os.link(tmp, target)
             created = True
         except FileExistsError:
             created = False
         finally:
-            temporary.unlink(missing_ok=True)
+            tmp.unlink(missing_ok=True)
 
     reference_now = int(now_ts if now_ts is not None else time.time())
     cutoff = reference_now - max(86400, int(float(retention_days) * 86400))
