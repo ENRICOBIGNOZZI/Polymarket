@@ -94,6 +94,37 @@ class ForwardMakerEconomicRejectionTests(unittest.TestCase):
         self.assertEqual(audited["research_state"], "MORE_EVIDENCE_REQUIRED")
         self.assertFalse(audited["economically_rejected_on_current_sample"])
 
+    def test_edge_erasing_two_leg_improvement_is_rejected_before_fill_model(self):
+        # Exact shape from the 2026-08-26 Le Pen forward-maker window:
+        # join YES+NO = 0.998; improve1 spends one 0.001 tick on each leg,
+        # taking the complete-set quote sum to 1.000 and erasing all locked edge.
+        audited = MOD.audit_quote_improvement(
+            0.998,
+            1.0,
+            min_residual_edge_per_share=0.00005,
+        )
+        self.assertEqual(audited["research_state"], "REJECT_EDGE_ERASING_IMPROVEMENT")
+        self.assertTrue(audited["edge_erasing_improvement"])
+        self.assertAlmostEqual(audited["base_locked_edge_per_matched_share"], 0.002)
+        self.assertAlmostEqual(audited["improvement_cost_per_matched_share"], 0.002)
+        self.assertAlmostEqual(audited["improved_locked_edge_per_matched_share"], 0.0)
+
+    def test_positive_residual_edge_is_only_a_necessary_condition(self):
+        # Exact BNB shape from the same window: join sum 0.92, improve1 sum
+        # 0.94. The improvement preserves 6c/share locked pair edge, so the
+        # structural edge-budget guard alone does not reject it. The realized
+        # one-sided fill is nevertheless economically rejected by the forward
+        # PnL/markout audit, demonstrating why residual edge is not sufficient.
+        audited = MOD.audit_quote_improvement(
+            0.92,
+            0.94,
+            min_residual_edge_per_share=0.00005,
+        )
+        self.assertEqual(audited["research_state"], "RESIDUAL_EDGE_PRESERVED_ONLY")
+        self.assertFalse(audited["edge_erasing_improvement"])
+        self.assertAlmostEqual(audited["improved_locked_edge_per_matched_share"], 0.06)
+        self.assertIn("not sufficient", audited["note"])
+
     def test_audit_is_read_only_and_never_real_money_eligible(self):
         calibration = {
             "by_policy": {
