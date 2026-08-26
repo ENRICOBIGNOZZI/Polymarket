@@ -1,9 +1,11 @@
 {
-  "schema_version": 1,
-  "version": 6,
-  "loop": "scripts/paper_v6_loop.sh",
-  "config": "config/paper_v6.json",
-  "run_root": "runs/paper_v6_live",
+  "schema_version": 2,
+  "version": 7,
+  "loop": "scripts/paper_v7_loop.sh",
+  "config": "config/paper_v7.json",
+  "run_root": "runs/paper_v7_live",
   "deployment_ref": "paper-validated",
-  "promotion_policy": "automatic validated integration"
+  "promotion_policy": "automatic validated integration",
+  "paper_only": true,
+  "authenticated_execution": false
 }
