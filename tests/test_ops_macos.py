@@ -219,7 +219,10 @@ class MacOSOpsContractTest(unittest.TestCase):
         self.assertIn("/usr/bin/awk", control)
         self.assertIn("active count|path|state|program|pid|last exit code", control)
         self.assertNotIn("sed -n '1,30p'", control)
-        self.assertIn("Darwin) bash ops/macos_service_control.sh status ;;", deploy)
+        self.assertIn(
+            'Darwin) bash ops/macos_service_control.sh status || fail_verify "macos_service_status" ;;',
+            deploy,
+        )
         self.assertNotIn("Darwin) sudo -n /usr/local/sbin/polymarket-service-control status ;;", deploy)
 
     def test_bootstrap_services_follow_the_champion_manifest(self):
