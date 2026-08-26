@@ -6,7 +6,7 @@ from pathlib import Path
 
 from exporter import Metrics, _float, _read_json
 
-EXPORTER_V7_VERSION = "2.0.0"
+EXPORTER_V7_VERSION = "2.0.1"
 
 
 def _rows(path: Path) -> list[dict[str, str]]:
@@ -116,6 +116,7 @@ class V7Collector:
             metrics.sample("polymarket_model_fills_total", _float(row.get("fills")), help_text="V7 strategy PAPER fills.", labels=labels)
             metrics.sample("polymarket_model_alive", _float(row.get("alive")), help_text="V7 strategy liveness.", labels=labels)
             metrics.sample("polymarket_model_staleness_seconds", _float(row.get("status_age_seconds")), help_text="V7 strategy state age.", labels=labels)
+            metrics.sample("polymarket_model_kill_switch", _float(row.get("killed")), help_text="V7 strategy local kill-switch state.", labels=labels)
             metrics.sample("polymarket_model_drawdown_ratio", _float(row.get("drawdown")), help_text="V7 strategy drawdown.", labels=labels)
             metrics.sample("polymarket_model_gross_exposure_usd", _float(row.get("gross_exposure")), help_text="V7 strategy gross exposure.", labels=labels)
 
