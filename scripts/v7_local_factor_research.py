@@ -18,6 +18,8 @@ if str(SCRIPT_DIR) not in sys.path:
 import v6_local_factor_intents as base
 import v7_local_factor_core as core
 
+HISTORY_WINDOW_SECONDS = 7 * 24 * 60 * 60
+
 
 def atomic_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -59,6 +61,40 @@ def raw_market(gamma: str, market_id: str, cache: dict[str, dict[str, Any]]) -> 
     return None
 
 
+def fetch_histories_chunked(
+    clob: str,
+    token_by_market: dict[str, str],
+    start_ts: int,
+    end_ts: int,
+    fidelity_minutes: int,
+) -> tuple[dict[str, dict[int, float]], list[str]]:
+    """Reuse the V6 parser/transport on bounded absolute history windows.
+
+    Long 30-minute-fidelity absolute ranges are known to be rejected by the public
+    CLOB history service.  Chunking is a data-acquisition invariant, not a model
+    change; merge by timestamp so boundary observations are deterministic.
+    """
+    histories: dict[str, dict[int, float]] = {}
+    failures: list[str] = []
+    window_start = start_ts
+    while window_start < end_ts:
+        window_end = min(end_ts, window_start + HISTORY_WINDOW_SECONDS)
+        partial, partial_failures = base.fetch_histories(
+            clob,
+            token_by_market,
+            window_start,
+            window_end,
+            fidelity_minutes,
+        )
+        for market_id, series in partial.items():
+            histories.setdefault(market_id, {}).update(series)
+        failures.extend(
+            f"{window_start}:{window_end}:{failure}" for failure in partial_failures
+        )
+        window_start = window_end
+    return histories, failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Final repaired V7 Local Factor research challenger")
     parser.add_argument("--config", type=Path, default=Path("config/research_v7_local_factor.json"))
@@ -94,14 +130,16 @@ def main() -> int:
 
     selected = {market.market_id: market for _, group in cluster_rows for market in group}
     start = now - int(history_cfg["lookback_hours"]) * 3600
-    histories, history_failures = base.fetch_histories(
+    histories, history_failures = fetch_histories_chunked(
         clob,
         {market.market_id: market.yes for market in selected.values()},
         start,
         now,
         int(history_cfg["fidelity_minutes"]),
     ) if selected else ({}, [])
-    failures.extend(history_failures[:30])
+    failures.extend(history_failures[:50])
+    history_required_market_count = 2 + int(inference_cfg["minimum_pair_controls"])
+    history_data_healthy = len(histories) >= history_required_market_count
 
     tests: list[dict[str, Any]] = []
     pvalues: dict[tuple[str, str, str], float] = {}
@@ -190,6 +228,9 @@ def main() -> int:
         "markets": len(markets),
         "clusters": len(cluster_rows),
         "histories": len(histories),
+        "history_required_market_count": history_required_market_count,
+        "history_data_healthy": history_data_healthy,
+        "history_window_days": HISTORY_WINDOW_SECONDS // 86400,
         "pair_hypotheses": len(pvalues),
         "bootstrap_repetitions": reps,
         "bh_fdr": float(inference_cfg["bh_fdr"]),
@@ -206,7 +247,7 @@ def main() -> int:
             "partial_abort_unwind_economics_not_yet_attached",
             "fill_conditioned_cost_stressed_pnl_not_yet_attached",
             "research_branch_cannot_mutate_live_champion"
-        ]
+        ] + ([] if history_data_healthy else ["price_history_data_health_unhealthy"])
     }
     atomic_json(args.output_json, report)
     print(json.dumps(report, sort_keys=True))
