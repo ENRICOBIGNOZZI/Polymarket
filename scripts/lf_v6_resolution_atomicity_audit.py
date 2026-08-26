@@ -78,7 +78,7 @@ def source_contract(repo_root: Path) -> dict[str, bool]:
         "abort_path_sells_still_tradable_filled_legs": (
             "if(b.status==\"ABORTING\")" in compact_broker
             and "exit_bundle(id,books,markets,\"UNWOUND\")" in compact_broker
-            and "auto r=sell_all(bk->second,l->filled_shares,cfg_.slippage_bps,fee_for(mi->second));" in compact_broker
+            and "autor=sell_all(bk->second,l->filled_shares,cfg_.slippage_bps,fee_for(mi->second));" in compact_broker
         ),
         "graph_hold_deadline_can_extend_past_market_end": (
             "hold=max(now+3600,end_ts+3600ifend_tselsenow+7*86400)" in compact_relation
