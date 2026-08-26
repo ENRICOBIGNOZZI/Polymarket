@@ -30,7 +30,21 @@ def test_taker_uses_complete_round_trip_contract():
     assert "full_visible_depth_entry_and_forecast_shifted_exit_vwap" in text
 
 
+def test_taker_freezes_new_risk_when_open_positions_are_unmarkable():
+    text = (ROOT / "scripts/v7_micro_taker_worker.py").read_text(encoding="utf-8")
+    assert "full_depth_executable_bid_net_fee_or_zero_fail_closed" in text
+    assert '"reason": "missing_current_snapshot"' in text
+    assert '"reason": "insufficient_exit_depth"' in text
+    assert '"reason": "missing_authoritative_fee"' in text
+    assert "new_risk_frozen = bool(unmarkable_positions)" in text
+    assert "if not killed and not new_risk_frozen and model_labeled >= 40:" in text
+    assert '"new_risk_frozen": new_risk_frozen' in text
+    assert '"unmarkable_positions": unmarkable_positions' in text
+    assert 'value += float(position["shares"]) * float(position["entry_price"])' not in text
+
+
 if __name__ == "__main__":
     test_maker_uses_fill_conditioned_toxicity_objective_and_dual_clock()
     test_taker_uses_complete_round_trip_contract()
-    print("ok 2 v7 micro worker tests")
+    test_taker_freezes_new_risk_when_open_positions_are_unmarkable()
+    print("ok 3 v7 micro worker tests")
