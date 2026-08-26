@@ -13,6 +13,7 @@ on:
       - "scripts/v7_cross_sectional_relative.py"
       - "scripts/v7_cross_sectional_tail_relative.py"
       - "config/research_v7_cross_sectional_rank.json"
+      - "config/research_v7_cross_sectional_rank_frozen.json"
       - "tests/test_v7_cross_sectional_rank.py"
       - "tests/test_v7_cross_sectional_rank_fast.py"
       - "tests/test_v7_cross_sectional_rank_inference.py"
@@ -52,7 +53,7 @@ jobs:
             scripts/v7_cross_sectional_history.py \
             scripts/v7_cross_sectional_relative.py \
             scripts/v7_cross_sectional_tail_relative.py
-          python3 -m json.tool config/research_v7_cross_sectional_rank.json >/dev/null
+          python3 -m json.tool config/research_v7_cross_sectional_rank_frozen.json >/dev/null
 
       - name: Live public-data frozen 2h/6h relative holdout
         shell: bash
@@ -60,7 +61,7 @@ jobs:
           set -euo pipefail
           mkdir -p ranking_evidence
           python3 scripts/v7_cross_sectional_tail_relative.py \
-            --config config/research_v7_cross_sectional_rank.json \
+            --config config/research_v7_cross_sectional_rank_frozen.json \
             --market-limit 150 \
             --output-json ranking_evidence/report.json \
             --output-pairs-json ranking_evidence/pairs.json \
