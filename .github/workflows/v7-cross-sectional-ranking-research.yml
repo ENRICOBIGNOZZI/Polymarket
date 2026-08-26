@@ -7,8 +7,10 @@ on:
     paths:
       - "scripts/v7_cross_sectional_rank.py"
       - "scripts/v7_cross_sectional_rank_core.py"
+      - "scripts/v7_cross_sectional_history.py"
       - "config/research_v7_cross_sectional_rank.json"
       - "tests/test_v7_cross_sectional_rank.py"
+      - "tests/test_v7_cross_sectional_history.py"
       - "docs/V7_CROSS_SECTIONAL_RANKING.md"
       - ".github/workflows/v7-cross-sectional-ranking-research.yml"
 
@@ -29,8 +31,8 @@ jobs:
       - name: Deterministic ranking contracts
         run: |
           set -euo pipefail
-          python3 -m unittest tests/test_v7_cross_sectional_rank.py -v
-          python3 -m py_compile scripts/v7_cross_sectional_rank_core.py scripts/v7_cross_sectional_rank.py
+          python3 -m unittest tests/test_v7_cross_sectional_rank.py tests/test_v7_cross_sectional_history.py -v
+          python3 -m py_compile scripts/v7_cross_sectional_rank_core.py scripts/v7_cross_sectional_rank.py scripts/v7_cross_sectional_history.py
           python3 -m json.tool config/research_v7_cross_sectional_rank.json >/dev/null
 
       - name: Live public-data cross-sectional research
@@ -38,11 +40,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ranking_evidence
-          # Evidence transport is deliberately bounded.  The 150-market scan is
-          # well above the model's 40-cross-section training minimum, while the
-          # per-token fallback is disabled for this run so a healthy 7-day batch
-          # path is required instead of silently generating hundreds of REST calls.
-          python3 -c 'import sys; sys.path.insert(0,"scripts"); import v7_cross_sectional_rank as m; m.HISTORY_SINGLE_FALLBACK_BUDGET_PER_WINDOW=0; raise SystemExit(m.main())' \
+          # Keep the full 30-day sample and all statistical gates. Only independent
+          # 7-day public history batches are fetched concurrently (max six workers).
+          # Per-token fallback remains disabled so batch-data health is fail-closed.
+          python3 -c 'import sys; sys.path.insert(0,"scripts"); import v7_cross_sectional_rank as m, v7_cross_sectional_history as h; m.fetch_histories=h.fetch_histories; m.HISTORY_SINGLE_FALLBACK_BUDGET_PER_WINDOW=0; raise SystemExit(m.main())' \
             --config config/research_v7_cross_sectional_rank.json \
             --market-limit 150 \
             --output-json ranking_evidence/report.json \
