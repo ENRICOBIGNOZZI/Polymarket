@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-import v6_queue_filter as q
+import v7_hard_arb_execution as q
 
 
 def finite(value: Any, default: float = math.nan) -> float:
@@ -119,7 +119,7 @@ def install_guard(
         out: dict[str, dict[str, Any]] = {}
         receipts: list[int] = []
         for offset in range(0, len(tokens), 80):
-            raw = q.hard_legacy.get_json(
+            raw = q.hard_base.get_json(
                 clob.rstrip("/") + "/books",
                 [{"token_id": token} for token in tokens[offset : offset + 80]],
             )
