@@ -16,8 +16,8 @@ from scripts.lf_v6_pair_factor_basis_audit import (  # noqa: E402
 
 
 class PairFactorBasisAuditTest(unittest.TestCase):
-    def test_target_specific_loo_can_change_pair_loading_relation(self) -> None:
-        result = run_audit()
+    def test_target_specific_loo_can_false_reject_pair(self) -> None:
+        result = run_audit()["false_rejection_fixture"]
         self.assertLess(
             result["target_specific_loo_loading_a"] * result["target_specific_loo_loading_b"],
             0.0,
@@ -28,6 +28,19 @@ class PairFactorBasisAuditTest(unittest.TestCase):
         )
         self.assertTrue(result["pair_factor_sign_relation_changes"])
         self.assertGreater(result["ratio_distortion"], 8.0)
+
+    def test_target_specific_loo_can_false_admit_pair(self) -> None:
+        result = run_audit()["false_admission_fixture"]
+        self.assertGreater(
+            result["target_specific_loo_loading_a"] * result["target_specific_loo_loading_b"],
+            0.0,
+        )
+        self.assertLess(
+            result["shared_leave_pair_out_loading_a"] * result["shared_leave_pair_out_loading_b"],
+            0.0,
+        )
+        self.assertTrue(result["pair_factor_sign_relation_changes"])
+        self.assertGreater(result["ratio_distortion"], 5.0)
 
     def test_pair_factor_requires_independent_controls(self) -> None:
         series = deterministic_fixture()
