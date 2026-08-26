@@ -1,0 +1,78 @@
+{
+  "schema": "polymarket_alpha_factory_maker_history_repair_evidence_v1",
+  "generated_date": "2026-08-26",
+  "base_main_sha": "142851326b66dd50a630b020eb17bda73f183702",
+  "source_pr": 546,
+  "source_alpha_factory_run_id": 33013981378,
+  "source_alpha_factory_artifact_id": 9623697821,
+  "source_history_rows": 67,
+  "blocking_defect": {
+    "status": "BLOCKING_EVIDENCE_INGESTION_DEFECT",
+    "description": "Persisted forward-maker history uses policy_summaries while scripts/alpha_factory.py reads aggregate_by_policy, so the current exact-head Alpha Factory incorrectly schedules accumulate_forward_execution_evidence for fewer than 24 runs even though 67 chronological sessions are present.",
+    "false_experiment": "accumulate_forward_execution_evidence",
+    "current_false_trigger": "fewer than 24 forward runs per policy"
+  },
+  "policy_context": {
+    "authority": "current config/operator_directives.json plus latest explicit user instruction",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "market_limit": 1000,
+    "min_liquidity_usd": 2.0,
+    "min_post_cost_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "fixed_dollar_trade_cap_enabled": false,
+    "max_trade_fraction": 1.0,
+    "max_market_fraction": 1.0,
+    "max_event_fraction": 1.0,
+    "max_gross_fraction": 1.0,
+    "hard_arb_max_trade_fraction": 1.0,
+    "max_drawdown": 0.15,
+    "ranking_research_horizons_minutes_latest_user_override": [120, 360]
+  },
+  "maker_history": {
+    "join": {
+      "runs": 67,
+      "probes": 973,
+      "any_fills": 2,
+      "pair_fills": 0,
+      "one_sided_fills": 2,
+      "cumulative_pnl_ex_rewards_usd": -2.139241382462557,
+      "fill_weighted_markout_60s_per_share": -0.04547812971342385,
+      "fill_weighted_markout_300s_per_share": null
+    },
+    "improve1": {
+      "runs": 67,
+      "probes": 973,
+      "any_fills": 12,
+      "pair_fills": 0,
+      "one_sided_fills": 12,
+      "cumulative_pnl_ex_rewards_usd": -9.85280473644135,
+      "fill_weighted_markout_60s_per_share": -0.01161166415284063,
+      "fill_weighted_markout_300s_per_share": -0.002391158740790357
+    },
+    "fade1": {
+      "runs": 67,
+      "probes": 973,
+      "any_fills": 2,
+      "pair_fills": 0,
+      "one_sided_fills": 2,
+      "cumulative_pnl_ex_rewards_usd": -3.310008205399999,
+      "fill_weighted_markout_60s_per_share": -0.035714285714285726,
+      "fill_weighted_markout_300s_per_share": null
+    }
+  },
+  "economic_verdict": {
+    "generic_maker_policies_under_sampled": false,
+    "unconditional_one_tick_improvement": "REJECT_CURRENT_SAMPLE",
+    "promotion_ready": false,
+    "recommended_direction": "candidate-specific positive post-cost edge times causal fill probability times positive fill-conditioned net markout, with explicit queue state, cancel latency, dead-queue recycling, fees, depth, slippage and adverse-selection accounting"
+  },
+  "safety": {
+    "changes_operator_directives": false,
+    "changes_live_champion": false,
+    "changes_risk_limits": false,
+    "submits_orders": false,
+    "authenticated_execution": false
+  }
+}
