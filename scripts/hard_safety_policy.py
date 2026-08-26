@@ -17,6 +17,7 @@ RUNTIME_HARD_SAFETY_SURFACE_PATTERNS = (
 
 TOP_LEVEL_LIMITS = (
     "max_drawdown",
+    "max_trade_fraction",
     "max_market_fraction",
     "max_event_fraction",
     "max_gross_fraction",
@@ -33,6 +34,7 @@ CHILD_LIMITS = (
 )
 RUNTIME_PROTECTED_KEYS = (
     "max_drawdown",
+    "max_trade_fraction",
     "max_market_fraction",
     "max_event_fraction",
     "max_gross_fraction",
@@ -52,10 +54,8 @@ RUNTIME_HARD_SAFETY_WRITE_RE = re.compile(
     rf")"
 )
 
-# Current user-authorized V6 PAPER envelope. These are ceilings/floors, not
-# targets. Historical 2.5% / 8% / 45% caps are deliberately not immutable V6
-# safety limits. The economic envelope may be used only through normal
-# research -> trusted governance -> integration provenance.
+# V6 is a transitional compatibility runtime. Its envelope remains bounded and
+# independent from V7 authorization.
 V6_AUTHORIZED_MARKET_LIMIT = 1000.0
 V6_AUTHORIZED_CEILINGS = {
     "max_drawdown": 0.15,
@@ -70,7 +70,7 @@ V6_AUTHORIZED_CEILINGS = {
 }
 V6_AUTHORIZED_FLOORS = {
     "min_liquidity": 2.0,
-    "min_net_edge": 0.00005,  # 0.5 bp after executable costs
+    "min_net_edge": 0.00005,
     "uncertainty_penalty": 0.0,
     "intent_min_edge": 0.00005,
     "hard_arb_min_net_edge": 0.00005,
@@ -84,6 +84,31 @@ V6_AUTHORIZED_CAPITAL_CEILINGS = {
     "reserve_fraction": 0.02,
 }
 V6_CAPITAL_FRACTIONS = tuple(V6_AUTHORIZED_CAPITAL_CEILINGS)
+
+# V7 follows config/operator_directives.json. The explicit current PAPER
+# authorization has no binding fixed-dollar trade cap and uses 100% hard
+# percentage ceilings. These values are ceilings/permissions, not trade targets:
+# Kelly, executable depth/costs, state integrity and the drawdown kill remain.
+V7_AUTHORIZED_MARKET_LIMIT = 1000.0
+V7_AUTHORIZED_CEILINGS = {
+    "max_drawdown": 0.15,
+    "max_trade_fraction": 1.0,
+    "max_market_fraction": 1.0,
+    "max_event_fraction": 1.0,
+    "max_gross_fraction": 1.0,
+    "global_max_drawdown": 0.15,
+    "global_max_gross_fraction": 1.0,
+    "fractional_kelly": 0.25,
+    "hard_arb_max_trade_fraction": 1.0,
+}
+V7_AUTHORIZED_FLOORS = {
+    "min_liquidity": 2.0,
+    "min_net_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "intent_min_edge": 0.00005,
+    "hard_arb_min_net_edge": 0.00005,
+}
+V7_NONBINDING_DOLLAR_SENTINEL_MIN = 1e50
 
 
 def _number(value: Any) -> float | None:
@@ -125,6 +150,12 @@ def _compare_floor(errors: list[str], label: str, current_value: Any, floor: flo
         errors.append(f"authorized PAPER envelope violated: {label} required>={floor:g}, got {current_number:g}")
 
 
+def _require_exact(errors: list[str], label: str, current_value: Any, expected: float) -> None:
+    current_number = _number(current_value)
+    if current_number is None or abs(current_number - expected) > 1e-12:
+        errors.append(f"operator V7 directive violated: {label} required={expected:g}, got {current_value!r}")
+
+
 def _strategies(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     multi = config.get("multi_strategy")
     if not isinstance(multi, dict):
@@ -151,10 +182,16 @@ def _is_v6(path: str) -> bool:
     return path == "config/paper_v6.json"
 
 
+def _is_v7(path: str) -> bool:
+    return path == "config/paper_v7.json"
+
+
 def _ceiling(path: str, key: str) -> float | None:
-    if not _is_v6(path):
-        return None
-    return V6_AUTHORIZED_CEILINGS.get(key)
+    if _is_v6(path):
+        return V6_AUTHORIZED_CEILINGS.get(key)
+    if _is_v7(path):
+        return V7_AUTHORIZED_CEILINGS.get(key)
+    return None
 
 
 def compare_paper_config(base: dict[str, Any], current: dict[str, Any], path: str) -> list[str]:
@@ -172,7 +209,7 @@ def compare_paper_config(base: dict[str, Any], current: dict[str, Any], path: st
     base_multi = base.get("multi_strategy") if isinstance(base.get("multi_strategy"), dict) else {}
     current_multi = current.get("multi_strategy") if isinstance(current.get("multi_strategy"), dict) else {}
 
-    if (_is_v6(path) or base_multi.get("paper_only") is True) and current_multi.get("paper_only") is not True:
+    if (_is_v6(path) or _is_v7(path) or base_multi.get("paper_only") is True) and current_multi.get("paper_only") is not True:
         errors.append(f"paper-only separation weakened: {path}:multi_strategy.paper_only must remain true")
 
     for key in MULTI_STRATEGY_LIMITS:
@@ -278,6 +315,82 @@ def compare_paper_config(base: dict[str, Any], current: dict[str, Any], path: st
         if len(fractions) == len(V6_CAPITAL_FRACTIONS) and sum(fractions) > 1.0 + 1e-12:
             errors.append(f"V6 paper capital allocations exceed 100%: {path}:v6 total={sum(fractions):g}")
 
+    if _is_v7(path):
+        _compare_limit(
+            errors,
+            f"{path}:market_limit",
+            None,
+            current.get("market_limit"),
+            ceiling=V7_AUTHORIZED_MARKET_LIMIT,
+        )
+        for key in ("min_liquidity", "min_net_edge", "uncertainty_penalty"):
+            _compare_floor(errors, f"{path}:{key}", current.get(key), V7_AUTHORIZED_FLOORS[key])
+        _compare_limit(
+            errors,
+            f"{path}:fractional_kelly",
+            None,
+            current.get("fractional_kelly"),
+            ceiling=V7_AUTHORIZED_CEILINGS["fractional_kelly"],
+        )
+        _compare_limit(
+            errors,
+            f"{path}:max_drawdown",
+            None,
+            current.get("max_drawdown"),
+            ceiling=V7_AUTHORIZED_CEILINGS["max_drawdown"],
+        )
+        for key in ("max_trade_fraction", "max_market_fraction", "max_event_fraction", "max_gross_fraction"):
+            _require_exact(errors, f"{path}:{key}", current.get(key), 1.0)
+        _require_exact(
+            errors,
+            f"{path}:multi_strategy.global_max_gross_fraction",
+            current_multi.get("global_max_gross_fraction"),
+            1.0,
+        )
+        if current.get("fixed_dollar_trade_cap_enabled") is not False:
+            errors.append(f"operator V7 directive violated: {path}:fixed_dollar_trade_cap_enabled must be false")
+        max_trade_usd = _number(current.get("max_trade_usd"))
+        if max_trade_usd is None or max_trade_usd < V7_NONBINDING_DOLLAR_SENTINEL_MIN:
+            errors.append(f"operator V7 directive violated: {path}:max_trade_usd must be a nonbinding compatibility sentinel")
+
+        v7 = current.get("v7") if isinstance(current.get("v7"), dict) else {}
+        if v7.get("paper_only") is not True:
+            errors.append(f"paper-only separation weakened: {path}:v7.paper_only must remain true")
+        if v7.get("authenticated_execution") is not False:
+            errors.append(f"authenticated execution separation weakened: {path}:v7.authenticated_execution must remain false")
+        for key in ("authoritative_fee_required", "shared_execution_ledger_required", "joint_fill_state_required_for_multileg"):
+            if v7.get(key) is not True:
+                errors.append(f"V7 execution evidence requirement weakened: {path}:v7.{key} must remain true")
+        for key in ("intent_min_edge", "hard_arb_min_net_edge"):
+            _compare_floor(errors, f"{path}:v7.{key}", v7.get(key), V7_AUTHORIZED_FLOORS[key])
+        if v7.get("hard_arb_fixed_dollar_trade_cap_enabled") is not False:
+            errors.append(f"operator V7 directive violated: {path}:v7.hard_arb_fixed_dollar_trade_cap_enabled must be false")
+        _require_exact(
+            errors,
+            f"{path}:v7.hard_arb_max_trade_fraction",
+            v7.get("hard_arb_max_trade_fraction"),
+            1.0,
+        )
+        hard_max_usd = _number(v7.get("hard_arb_max_trade_usd"))
+        if hard_max_usd is None or hard_max_usd < V7_NONBINDING_DOLLAR_SENTINEL_MIN:
+            errors.append(f"operator V7 directive violated: {path}:v7.hard_arb_max_trade_usd must be a nonbinding compatibility sentinel")
+        fractions: list[float] = []
+        for key in (
+            "micro_maker_capital_fraction",
+            "micro_taker_capital_fraction",
+            "relative_value_capital_fraction",
+            "hard_arb_capital_fraction",
+            "external_capital_fraction",
+            "reserve_fraction",
+        ):
+            value = _number(v7.get(key))
+            if value is None or value < -1e-12:
+                errors.append(f"invalid V7 capital allocation: {path}:v7.{key}")
+            else:
+                fractions.append(value)
+        if len(fractions) == 6 and abs(sum(fractions) - 1.0) > 1e-9:
+            errors.append(f"V7 paper capital allocations must sum to 100%: {path}:v7 total={sum(fractions):g}")
+
     return errors
 
 
@@ -290,9 +403,9 @@ def compare_runtime_hard_safety(base_text: str, current_text: str, path: str) ->
 
     Paper-only alpha/admission aggression may change model thresholds, universe,
     warm-up, cadence, sizing parameters and execution logic inside the approved
-    envelope. Drawdown, concentration/gross ceilings and paper-only separation
-    must remain explicit in versioned configuration rather than being silently
-    weakened by new runtime/materialization overrides.
+    versioned envelope. Drawdown, concentration/gross ceilings and paper-only
+    separation must remain explicit in configuration rather than being silently
+    rewritten by runtime/materialization code.
     """
     errors: list[str] = []
     for diff_line in difflib.ndiff(base_text.splitlines(), current_text.splitlines()):
@@ -382,11 +495,11 @@ def render(errors: list[str], checked: list[str]) -> str:
         "",
         f"- paper/runtime surfaces checked: {len(checked)}",
         f"- hard-safety violations: {len(errors)}",
-        "- V6 authorized PAPER envelope: market universe <=1000, drawdown <=15%, market <=5%, event <=15%, gross <=70%, Kelly <=25%, max trade <=$125",
-        "- V6 authorized sleeve ceilings: maker <=22%, taker <=12%, RV <=34%, hard <=22%, external <=8%, reserve <=2%",
-        "- V6 executable admission floors: min liquidity >=$2, post-cost min edge >=0.5 bp, uncertainty penalty >=0",
-        "- historical 2.5% / 8% / 45% values are not immutable V6 caps; the authorized envelope still requires normal research/governance/integration provenance",
-        "- runtime rule: protected drawdown/concentration/gross/paper-only controls may be inherited from versioned config, not newly hidden in runtime/materialization overrides",
+        "- V6 compatibility envelope: universe <=1000, drawdown <=15%, market <=5%, event <=15%, gross <=70%, Kelly <=25%, max trade <=$125",
+        "- V7 current operator authorization: PAPER-only, authenticated execution disabled, no binding fixed-dollar cap, trade/market/event/gross hard percentage ceilings =100%, Kelly <=25%, drawdown <=15%",
+        "- V7 executable admission floors: min liquidity >=$2, post-cost min edge >=0.5 bp, uncertainty penalty >=0; authoritative fees, shared execution ledger and joint multi-leg fill-state evidence remain mandatory",
+        "- V7 100% values are ceilings, not trade targets; executable depth/costs, available capital, state integrity and the drawdown kill remain binding",
+        "- runtime rule: protected controls must be inherited from versioned config, not newly hidden in runtime/materialization overrides",
     ]
     for item in checked:
         lines.append(f"- checked: `{item}`")
@@ -397,7 +510,7 @@ def render(errors: list[str], checked: list[str]) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Prevent weakening hard safety in paper model/evaluation changes")
+    parser = argparse.ArgumentParser(description="Prevent weakening or contradicting versioned PAPER hard safety")
     parser.add_argument("--base-ref", default="origin/main")
     parser.add_argument("--changed-files", required=True)
     parser.add_argument("--root", default=".")
