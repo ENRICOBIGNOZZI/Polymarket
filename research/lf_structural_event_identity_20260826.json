@@ -15,10 +15,11 @@
     },
     "stable_comparator": "STRUCT:4e1cbfae127906df0ccec3fe"
   },
-  "risk_implication": {
-    "state_integrity": "The same structural relation can be assigned a different event_id after a process restart.",
-    "event_concentration": "If event-level exposure is keyed by the synthetic event_id, restart-variant IDs can fragment one economic relation across multiple risk buckets.",
-    "deduplication": "Restart-variant IDs also make cross-run deduplication and evidence lineage ambiguous."
+  "state_implication": {
+    "bundle_state": "BundleState persists the intent event_id, so the same structural relation can have a different persisted identity after restart.",
+    "evidence_lineage": "Any cross-run analysis keyed by the synthetic event_id can fragment one relation across multiple identities.",
+    "current_event_cap_caveat": "The current multileg broker computes event concentration from per-market Market.event_id rather than the synthetic intent id, so this audit does not claim the present event cap is bypassed by Python hash randomization. Canonical broker event-risk identity is a separate defect/frontier.",
+    "future_risk_contract": "A restart-variant synthetic id must not be adopted as a canonical risk_event_id in any successor implementation."
   },
   "live_context": {
     "latest_live_smoke_sha": "fccbdd036093c2f7973635c3c47431ad8381b261",
@@ -30,12 +31,12 @@
     "graph_rv_completions": 0,
     "realized_pnl_usd": 0.0,
     "oos_trades": 0,
-    "interpretation": "The current live bundle is GRAPH_HARD with a canonical Gamma event_id, so this audit does not reinterpret its zero completion. The defect is a promotion blocker for STRUCTURAL relations and any event-level state keyed by their synthetic IDs."
+    "interpretation": "The current live bundle is GRAPH_HARD with a canonical Gamma event_id, so this audit does not reinterpret its zero completion. The defect is a state/evidence-lineage blocker for STRUCTURAL relations."
   },
   "successor_contract": [
-    "Construct structural risk_event_id from deterministic canonical relation metadata using a stable digest.",
-    "Keep risk_event_id stable across restarts, machines and Python versions.",
-    "Persist the canonical identity through scanner, intent ledger, broker and state recovery.",
+    "Construct structural relation identity from deterministic canonical metadata using a stable digest.",
+    "Keep the relation identity stable across restarts, machines and Python versions.",
+    "Persist one canonical relation/risk identity through scanner, intent ledger, broker and state recovery before using it for event-level aggregation.",
     "Fail closed when canonical relation identity cannot be reconstructed.",
     "Do not alter the authorized PAPER envelope or hard-risk limits to compensate for identity instability."
   ],
