@@ -1,0 +1,42 @@
+{
+  "date": "2026-08-26",
+  "research_state": "BLOCKING_HARD_ARB_FRESHNESS_WIRING_REPAIRED_MORE_EVIDENCE_REQUIRED",
+  "scope": "V7 hard/fast arbitrage PAPER path",
+  "base_head": "d842a6664bef0b6b1011b532c9e4b4649995c9d3",
+  "material_defect": "The V7 execution loop invoked plain v6_hard_arb_paper.py, so the V7 runtime did not enforce the strict per-token receive/exchange freshness and cross-leg skew contract already shown necessary by prior hard-arb research.",
+  "prior_strict_research_evidence": {
+    "source_pr": 469,
+    "multi_leg_freshness_checks": 76,
+    "local_receive_age_or_skew_rejections": 0,
+    "exchange_freshness_rejections": 66,
+    "exchange_age_rejections": 60,
+    "exchange_skew_rejections": 6,
+    "max_exchange_snapshot_age_ms": 547966,
+    "max_exchange_snapshot_skew_ms": 544208,
+    "interpretation": "Fresh local HTTP receipt was not sufficient evidence of synchronized multi-leg market state."
+  },
+  "repair_contract": {
+    "max_markets": 1000,
+    "min_liquidity_usd": 2.0,
+    "post_cost_min_edge": 0.00005,
+    "max_trade_usd": 125.0,
+    "max_leg_receive_age_ms": 2000,
+    "max_cross_leg_receive_skew_ms": 1000,
+    "max_exchange_snapshot_age_ms": 5000,
+    "max_cross_leg_exchange_skew_ms": 1000,
+    "multi_level_depth": true,
+    "verified_fees_required": true,
+    "sequential_leg_revalidation": true,
+    "leg_latency_ms": 100,
+    "unwind_on_leg_failure": true,
+    "atomic_snapshot_assumption": false
+  },
+  "economic_interpretation": "Do not lower the hard-arb edge floor to manufacture activity. A candidate is not executable evidence unless every leg is simultaneously fresh on both local receive and exchange clocks and survives depth/fee/legging/unwind economics.",
+  "safety": {
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "state_integrity_unchanged": true,
+    "authenticated_execution": false,
+    "real_money_execution_prohibited": true
+  }
+}
