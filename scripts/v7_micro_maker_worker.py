@@ -10,7 +10,6 @@ from typing import Any
 import v7_maker_cancel_latency as cancel
 import v7_micro_maker_worker_depth_core as depth
 
-# Preserve the public helpers/tests from the already validated depth/markout layer.
 for _name in dir(depth):
     if not _name.startswith("__") and _name != "main":
         globals()[_name] = getattr(depth, _name)
@@ -53,10 +52,6 @@ def main() -> int:
     processing_ms = time.time_ns() // 1_000_000
 
     event = depth.core
-    if run_dir is not None:
-        finalized = cancel.finalize_due_cancels(run_dir / "state.json", processing_ms=processing_ms)
-        cancel.append_final_cancel_log(event.base, run_dir, finalized, timestamp=int(processing_ms // 1000))
-
     original_argv = list(sys.argv)
     original_json = event.json
     original_append = event.base.append_csv
@@ -104,6 +99,9 @@ def main() -> int:
     event.base.append_csv = patched_append
     event.causal_fill_eligible = patched_eligible
     try:
+        # Replay every currently known receive-causal row first. A cancel-pending
+        # order must still be present here so a delayed trade whose event time was
+        # before the effective cancel cannot be silently dropped.
         rc = depth.main()
     finally:
         sys.argv = original_argv
@@ -112,6 +110,9 @@ def main() -> int:
         event.causal_fill_eligible = original_eligible
 
     if run_dir is not None:
+        after_replay_ms = time.time_ns() // 1_000_000
+        finalized = cancel.finalize_due_cancels(run_dir, processing_ms=after_replay_ms)
+        cancel.append_final_cancel_log(event.base, run_dir, finalized, timestamp=int(after_replay_ms // 1000))
         cancel.annotate_contract(run_dir, latency_ms=latency_ms, grace_ms=grace_ms)
     return rc
 
