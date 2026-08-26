@@ -57,6 +57,9 @@ jobs:
           assert r['terminal_probability_interpretation'] is False
           assert r['promotion_ready'] is False
           assert r['survivorship_safe'] is False
+          assert r['history_data_healthy'] is True
+          assert r['histories'] >= r['history_required_market_count']
+          assert r['target_hypotheses'] > 0
           assert len(r['horizons']) == 4
           assert all(item['target_excluded'] for item in r['tests'])
           PY
@@ -73,7 +76,9 @@ jobs:
           r=json.loads(Path('pca_evidence/report.json').read_text())
           print(f"- markets: {r['markets']}")
           print(f"- clusters: {r['clusters']}")
-          print(f"- histories: {r['histories']}")
+          print(f"- histories: {r['histories']} / required {r['history_required_market_count']}")
+          print(f"- history data healthy: {r['history_data_healthy']}")
+          print(f"- history chunk days: {r['history_window_days']}")
           print(f"- target hypotheses: {r['target_hypotheses']}")
           print(f"- BH-selected hypotheses: {r['bh_selected_hypotheses']}")
           print(f"- hedge legs allowed: {r['hedge_legs_allowed']}")
