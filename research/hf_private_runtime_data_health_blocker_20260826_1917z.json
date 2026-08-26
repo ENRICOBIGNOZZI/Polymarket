@@ -1,0 +1,69 @@
+{
+  "schema": "hf_private_runtime_data_health_blocker_v1",
+  "observed_utc": "2026-08-26T19:17:54Z",
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "main_sha": "30c0475fe7362b21d1f7a0226de539009a44b92e",
+  "paper_validated_sha": "30c0475fe7362b21d1f7a0226de539009a44b92e",
+  "deployed_head_sha": "30c0475fe7362b21d1f7a0226de539009a44b92e",
+  "champion_version": 6,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "health_state": "BLOCKING_PRIVATE_MARKET_DATA_PATH_UNHEALTHY",
+  "exporter_health": {
+    "http_status": 503,
+    "body": "v6_market_proxy_unhealthy"
+  },
+  "trade_recorder_tail": {
+    "lines_checked": 20,
+    "success_ticks": 0,
+    "http_timeout_failures": 20,
+    "all_recent_lines_are_data_failures": true,
+    "failure_surfaces": [
+      "local V6 market proxy market-discovery request timeout",
+      "public Gamma market-discovery request timeout"
+    ]
+  },
+  "hf_runtime_effect": {
+    "micro_taker_recent_markets": 0,
+    "micro_taker_recent_labels": 0,
+    "micro_taker_recent_signals": 0,
+    "micro_taker_recent_opened": 0,
+    "hard_arb_recent_scanned_events": 0,
+    "hard_arb_recent_positive_candidates": 0,
+    "hard_arb_recent_entered": 0,
+    "runtime_realized_pnl_usd": 0.0,
+    "runtime_drawdown_ratio": 0.0,
+    "runtime_kill_switch": 0
+  },
+  "secondary_state_integrity_observation": {
+    "multileg_state_replace_failure_observed_in_recent_log_tail": true,
+    "failure_path_class": "runs/paper_v6_live/multileg_risk.csv",
+    "note": "Successful multileg ticks were also present; this is a separate intermittent state-integrity warning, not the primary health failure in this snapshot."
+  },
+  "evidence_eligibility": {
+    "private_runtime_zero_fill_is_economic_evidence": false,
+    "private_micro_taker_zero_signal_is_alpha_evidence": false,
+    "private_hard_arb_zero_candidate_is_alpha_evidence": false,
+    "reason": "The private market-data path is unhealthy, so zero activity is mechanically compatible with missing market discovery/data."
+  },
+  "public_worker_contrast": {
+    "note": "Independent GitHub-hosted public-data evidence on the same bounded main revision has recently observed a healthy nonzero public tape. This isolates the blocker to the private runtime/proxy/connectivity path rather than proving market inactivity."
+  },
+  "research_decision": "BLOCKING_DATA_EXECUTION_DEFECT_MORE_EVIDENCE_REQUIRED",
+  "required_before_new_hf_economic_inference": [
+    "restore a healthy private market proxy/exporter healthz",
+    "observe repeated successful trade-recorder ticks with fresh nonzero public data",
+    "retain event-time/receive-time causality and strict 45s/60s/300s markout contracts",
+    "only then interpret maker fills, micro-taker labels/signals, or hard-arb scans as economic evidence"
+  ],
+  "hard_safety_unchanged": {
+    "max_drawdown": 0.15,
+    "kill_switch_required": true,
+    "state_integrity_required": true,
+    "max_trade_usd": 125.0,
+    "market_fraction_cap": 0.05,
+    "event_fraction_cap": 0.15,
+    "gross_fraction_cap": 0.70,
+    "real_money_execution": false
+  }
+}
