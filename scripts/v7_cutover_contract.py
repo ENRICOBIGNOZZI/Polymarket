@@ -46,6 +46,10 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
     version = manifest.get("version")
     if isinstance(version, bool) or version != 7:
         _fail(f"V7 cutover blocked: champion version must be exactly 7, got {version!r}")
+    if manifest.get("paper_only") is not True:
+        _fail("V7 cutover blocked: champion manifest paper_only must be true")
+    if manifest.get("authenticated_execution") is not False:
+        _fail("V7 cutover blocked: champion manifest authenticated_execution must be false")
 
     loop_rel = _safe_relative(manifest.get("loop"), "champion loop")
     config_rel = _safe_relative(manifest.get("config"), "champion config")
