@@ -74,9 +74,9 @@ def test_quote_improvement_must_pay_incremental_tick():
 def test_joint_states_are_explicit_not_product_of_marginals():
     distribution = JointStateDistribution(2, {0: 0.80, 1: 0.10, 2: 0.10, 3: 0.0}, observations=100)
     ev = joint_bundle_ev(distribution, {0: 0.0, 1: -0.30, 2: -0.30, 3: 1.0})
-    assert ev.expected_value == -0.06
-    assert ev.full_completion_component == 0.0
-    assert ev.partial_state_component == -0.06
+    assert abs(ev.expected_value + 0.06) < 1e-12
+    assert abs(ev.full_completion_component) < 1e-12
+    assert abs(ev.partial_state_component + 0.06) < 1e-12
 
 
 def test_missing_joint_state_economics_fail_closed():
@@ -96,9 +96,9 @@ def test_public_trade_capacity_is_conserved_across_orders():
         RestingOrder("b", "token", "BUY", 0.40, 100.0, 10.0, 1_100, 1_100),
     ]
     fills = allocate_shared_trade_capacity(trade, orders)
-    assert sum(fills.values()) == 10.0
-    assert fills["a"] == 10.0
-    assert fills["b"] == 0.0
+    assert abs(sum(fills.values()) - 10.0) < 1e-12
+    assert abs(fills["a"] - 10.0) < 1e-12
+    assert abs(fills["b"]) < 1e-12
 
 
 def test_backfilled_old_trade_cannot_fill_new_order():
