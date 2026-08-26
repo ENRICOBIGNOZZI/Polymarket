@@ -114,6 +114,22 @@ def test_v7_execution_loop_is_canonical_and_has_no_legacy_runtime_calls():
         assert marker not in text, marker
 
 
+def test_v7_external_feed_is_fail_closed_and_materialized_before_external_start():
+    loop = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+    bridge = (ROOT / "scripts/v7_external_bridge.py").read_text(encoding="utf-8")
+    startup = loop.index("reap_stale_proxy")
+    refresh = loop.index("refresh_external\n", startup)
+    external_start = loop.index("start_external\n", startup)
+    assert refresh < external_start
+    assert 'external_signals_file' in loop
+    assert 'if (( now-last_external >= 60 )); then refresh_external;' in loop
+    assert 'atomic_write(args.output, EMPTY_FEED)' in bridge
+    assert 'integration_evidence_pass' in bridge
+    assert 'feature_name") or "") == "external_probability"' in bridge
+    assert '--allow-unvalidated' in bridge
+    assert 'never use in champion' in bridge
+
+
 def test_shadow_scheduler_is_research_only_and_frequency_separated():
     text = (ROOT / "scripts/v7_shadow_loop.py").read_text(encoding="utf-8")
     assert "v7_pca_stat_arb_research.py" in text
