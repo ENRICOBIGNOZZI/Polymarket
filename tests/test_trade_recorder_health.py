@@ -82,6 +82,15 @@ class TradeRecorderHealthTest(unittest.TestCase):
         self.assertIn('--log "$R/trade_recorder_latest.log"', script)
         self.assertNotIn("validate_trade_recorder_health.py || true", script)
 
+    def test_pr_canary_cannot_weaken_main_promotion_gate(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "v4-live-smoke.yml").read_text(encoding="utf-8")
+        self.assertIn("continue-on-error: ${{ github.event_name == 'pull_request' }}", workflow)
+        self.assertIn("steps.v6_smoke.outcome == 'failure'", workflow)
+        self.assertIn('test -s "$CHAMPION_RUN_NAME/trade_recorder_health.json"', workflow)
+        self.assertIn("report.get('status') != 'unhealthy'", workflow)
+        self.assertIn("if: github.event_name != 'pull_request' && success()", workflow)
+        self.assertIn("- name: Advance paper validated ref", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
