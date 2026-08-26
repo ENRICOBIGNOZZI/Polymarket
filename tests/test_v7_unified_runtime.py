@@ -69,11 +69,13 @@ def test_v7_entrypoint_has_one_execution_owner_and_separate_shadow_scheduler():
 
 def test_v7_execution_loop_uses_corrected_workers_and_joint_state_gate():
     text = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
-    assert "v6_micro_maker_v2.py" in text
+    assert "v7_micro_maker_worker.py" in text
     assert "v7_micro_taker_worker.py" in text
+    assert "v7_multileg_broker_runner.py" in text
+    assert "v7_capacity_lock.py" in text
     assert "v6_bundle_quote_optimizer.py" in text
     assert "v6_bundle_state_guard.py" in text
-    assert "--completion-threshold 1.0" in text
+    assert "polymarket_multileg_paper" not in text
     assert "runtime_primary_seconds" in text
     assert "sleep 1" in text
 
