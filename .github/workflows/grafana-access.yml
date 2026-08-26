@@ -179,13 +179,7 @@ jobs:
               bash /tmp/apply_runtime_config_macos.sh
 
             expected="$DASHBOARD_SHA256"
-            actual="$(python3 - "$HOME/.config/polymarket/grafana/dashboards/polymarket-multi-strategy.json" <<'PY'
-            import hashlib
-            import sys
-            from pathlib import Path
-            print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
-            PY
-            )"
+            actual="$(python3 -c 'import hashlib,sys; from pathlib import Path; print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())' "$HOME/.config/polymarket/grafana/dashboards/polymarket-multi-strategy.json")"
             test "$actual" = "$expected"
             printf 'dashboard_sha256_verified=%s\n' "$actual"
 
@@ -200,15 +194,7 @@ jobs:
             done
             curl -fsS http://127.0.0.1:3000/api/health
             curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$DASHBOARD_UID" >/tmp/grafana-dashboard.json
-            python3 - "$DASHBOARD_UID" "$DASHBOARD_TITLE" /tmp/grafana-dashboard.json <<'PY'
-            import json
-            import sys
-            uid, title, path = sys.argv[1:]
-            payload = json.load(open(path, encoding="utf-8"))
-            dashboard = payload.get("dashboard") or {}
-            assert dashboard.get("uid") == uid, dashboard.get("uid")
-            assert dashboard.get("title") == title, dashboard.get("title")
-            PY
+            python3 -c 'import json,sys; uid,title,path=sys.argv[1:]; payload=json.load(open(path,encoding="utf-8")); dashboard=payload.get("dashboard") or {}; assert dashboard.get("uid") == uid, dashboard.get("uid"); assert dashboard.get("title") == title, dashboard.get("title")' "$DASHBOARD_UID" "$DASHBOARD_TITLE" /tmp/grafana-dashboard.json
             grep -F 'default_home_dashboard_path = '"$HOME"'/.config/polymarket/grafana/dashboards/polymarket-multi-strategy.json' \
               "$HOME/.config/polymarket/grafana.ini"
 
@@ -240,15 +226,7 @@ jobs:
             done
             cat /tmp/grafana-health.json
             grep -q '"database"' /tmp/grafana-health.json
-            python3 - "$DASHBOARD_UID" "$DASHBOARD_TITLE" /tmp/grafana-dashboard.json <<'PY'
-            import json
-            import sys
-            uid, title, path = sys.argv[1:]
-            payload = json.load(open(path, encoding="utf-8"))
-            dashboard = payload.get("dashboard") or {}
-            assert dashboard.get("uid") == uid
-            assert dashboard.get("title") == title
-            PY
+            python3 -c 'import json,sys; uid,title,path=sys.argv[1:]; payload=json.load(open(path,encoding="utf-8")); dashboard=payload.get("dashboard") or {}; assert dashboard.get("uid") == uid, dashboard.get("uid"); assert dashboard.get("title") == title, dashboard.get("title")' "$DASHBOARD_UID" "$DASHBOARD_TITLE" /tmp/grafana-dashboard.json
             echo "canonical_operator_url=$GRAFANA_URL" | tee -a "$GITHUB_STEP_SUMMARY"
             echo "dashboard_uid=$DASHBOARD_UID" | tee -a "$GITHUB_STEP_SUMMARY"
           } 2>&1 | tee grafana-verify.log
