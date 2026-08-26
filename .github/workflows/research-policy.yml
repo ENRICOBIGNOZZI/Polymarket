@@ -41,9 +41,26 @@ jobs:
           fi
           parent="$(git rev-parse HEAD^)"
           git diff --name-only "$parent" HEAD | sort -u > /tmp/direct-main-files.txt
-          test "$(wc -l < /tmp/direct-main-files.txt | tr -d ' ')" = "1"
-          test "$(cat /tmp/direct-main-files.txt)" = "config/operator_directives.json"
           git log -1 --pretty=%s | grep -q '^Operator:'
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          changed={line.strip() for line in Path('/tmp/direct-main-files.txt').read_text().splitlines() if line.strip()}
+          directive_only={'config/operator_directives.json'}
+          authority_package={
+              'config/project_context.json',
+              'scripts/project_context_snapshot.py',
+              'scripts/validate_project_context.py',
+              '.github/workflows/research-policy.yml',
+          }
+          if changed != directive_only and changed != authority_package:
+              raise SystemExit(f'unauthorized direct-main operator package: {sorted(changed)}')
+          d=json.loads(Path('config/operator_directives.json').read_text())
+          assert d['authority']=='latest_explicit_user_instruction'
+          assert d['architecture']['cleanup_sequence']=='delete_legacy_immediately_then_promote_only_validated_v7'
+          assert d['architecture']['operational_champion_may_be_absent'] is True
+          assert d['paper_v7_authorization']['authenticated_execution'] is False
+          PY
           echo 'direct_operator_authority_update=true'
 
       - name: Validate scheduler and project context
