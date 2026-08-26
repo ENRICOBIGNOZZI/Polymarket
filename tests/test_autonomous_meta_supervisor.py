@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 SPEC = importlib.util.spec_from_file_location(
-    "meta_supervisor_v2", SCRIPTS / "meta_supervisor_v2.py"
+    "meta_supervisor_health", SCRIPTS / "meta_supervisor_health.py"
 )
 assert SPEC and SPEC.loader
 module = importlib.util.module_from_spec(SPEC)
