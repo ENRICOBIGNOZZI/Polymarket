@@ -76,13 +76,12 @@ class TradeRecorderHealthTest(unittest.TestCase):
         report = MODULE.evaluate(self.fields(last_trade_ts=1_000_100), 1_000_000, 1200, 30)
         self.assertIn("trade_timestamp_in_future", report["failures"])
 
-    def test_recorder_request_uses_documented_filters_not_server_side_window(self) -> None:
+    def test_recorder_uses_documented_server_window_and_market_filters(self) -> None:
         source = (ROOT / "src" / "trade_recorder.cpp").read_text(encoding="utf-8")
-        self.assertIn('"&takerOnly=true&market=" << market_query', source)
-        self.assertNotIn('"&takerOnly=true&start="', source)
-        self.assertNotIn('"&end=" << end', source)
+        self.assertIn('"&takerOnly=true&start=" << start << "&end=" << end', source)
+        self.assertIn('"&market=" << market_query', source)
 
-    def test_recorder_enforces_overlap_window_locally_before_dedup(self) -> None:
+    def test_recorder_verifies_server_window_locally_before_dedup(self) -> None:
         source = (ROOT / "src" / "trade_recorder.cpp").read_text(encoding="utf-8")
         window = "if (t.ts < start || t.ts > end) continue;"
         condition = "if (!by_condition.count(t.condition_id)) continue;"
@@ -95,7 +94,7 @@ class TradeRecorderHealthTest(unittest.TestCase):
         source = (ROOT / "src" / "trade_recorder.cpp").read_text(encoding="utf-8")
         self.assertIn("constexpr std::size_t page_limit = 1000;", source)
         self.assertIn("constexpr std::size_t max_offset = 10000;", source)
-        self.assertIn("std::min<std::size_t>(batch_size_, 5)", source)
+        self.assertIn("std::min<std::size_t>(batch_size_, 20)", source)
         self.assertNotIn("constexpr std::size_t page_limit = 10000;", source)
 
     def test_recorder_splits_retryable_transport_failures_before_counting_terminal_error(self) -> None:
