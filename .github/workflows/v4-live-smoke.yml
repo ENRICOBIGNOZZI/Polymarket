@@ -46,13 +46,19 @@ jobs:
           set -euo pipefail
           python3 - <<'PY' >> "$GITHUB_ENV"
           import json
-          from pathlib import Path
+          from pathlib import Path, PurePosixPath
           m=json.loads(Path('config/live_champion.json').read_text())
-          version=int(m['version'])
-          if version not in (5,6): raise SystemExit(f'unsupported paper champion V{version}')
+          version=m.get('version')
+          if isinstance(version,bool) or not isinstance(version,int) or version <= 0:
+              raise SystemExit(f'invalid paper champion version {version!r}')
+          for key in ('run_root','config','loop'):
+              value=str(m[key]); path=PurePosixPath(value)
+              if path.is_absolute() or '..' in path.parts:
+                  raise SystemExit(f'invalid champion {key}: {value}')
           run_name=Path(m['run_root']).name
           print(f'CHAMPION_VERSION={version}')
           print(f'CHAMPION_CONFIG={m["config"]}')
+          print(f'CHAMPION_RUN_ROOT={m["run_root"]}')
           print(f'CHAMPION_RUN_NAME={run_name}')
           print(f'CHAMPION_LOOP={m["loop"]}')
           PY
@@ -67,8 +73,11 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
           ctest --test-dir build --output-on-failure
-          bash -n scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh scripts/v6_live_smoke_once.sh
-          python3 -m py_compile scripts/v6_*.py monitoring/exporter_v6.py monitoring/exporter_latest.py
+          bash -n scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh scripts/v6_live_smoke_once.sh scripts/paper_latest_loop.sh "$CHAMPION_LOOP"
+          python3 -m py_compile scripts/v6_*.py scripts/runtime_contract_health.py monitoring/exporter_v6.py monitoring/exporter_latest.py
+          if [[ -f "monitoring/exporter_v${CHAMPION_VERSION}.py" ]]; then
+            python3 -m py_compile "monitoring/exporter_v${CHAMPION_VERSION}.py"
+          fi
 
       - name: Fresh public-data V5 full-strategy smoke
         if: env.CHAMPION_VERSION == '5'
@@ -133,6 +142,7 @@ jobs:
           test -s "$R/runtime_status.json"
           test -s "$R/strategy_status.csv"
           test -s "$R/allocator_status.json"
+          echo "SMOKE_RUN_ROOT=$R" >> "$GITHUB_ENV"
 
       - name: Fresh public-data V6 model-specific smoke
         id: v6_smoke
@@ -144,6 +154,7 @@ jobs:
           test "$CHAMPION_CONFIG" = "config/paper_v6.json"
           test "$CHAMPION_RUN_NAME" = "paper_v6_live"
           bash scripts/v6_live_smoke_once.sh "$CHAMPION_CONFIG" "$CHAMPION_RUN_NAME"
+          echo "SMOKE_RUN_ROOT=$CHAMPION_RUN_NAME" >> "$GITHUB_ENV"
 
       - name: Verify V6 unhealthy-tape negative canary
         if: github.event_name == 'pull_request' && env.CHAMPION_VERSION == '6' && steps.v6_smoke.outcome == 'failure'
@@ -159,16 +170,72 @@ jobs:
               raise SystemExit('V6 smoke failed outside the explicit recorder-health gate')
           print('expected_pr_negative_canary=' + ','.join(report['failures']))
           PY
+          echo "SMOKE_RUN_ROOT=$CHAMPION_RUN_NAME" >> "$GITHUB_ENV"
+
+      - name: Version-neutral V7+ PAPER runtime smoke
+        if: env.CHAMPION_VERSION != '5' && env.CHAMPION_VERSION != '6'
+        shell: bash
+        run: |
+          set -euo pipefail
+          R="$CHAMPION_RUN_ROOT"
+          rm -rf "$R"
+          mkdir -p "$R"
+          POLYMARKET_FAST_ARB_ENABLED=0 bash scripts/paper_latest_loop.sh >"$R/live_smoke_supervisor.log" 2>&1 &
+          owner=$!
+          cleanup() {
+            kill -TERM "$owner" 2>/dev/null || true
+            wait "$owner" 2>/dev/null || true
+          }
+          trap cleanup EXIT INT TERM
+          healthy=0
+          for _ in {1..360}; do
+            if ! kill -0 "$owner" 2>/dev/null; then
+              tail -n 120 "$R/live_smoke_supervisor.log" >&2 || true
+              exit 1
+            fi
+            if python3 scripts/runtime_contract_health.py \
+              --manifest config/live_champion.json --repository-root . \
+              --max-age-seconds 180 >/tmp/runtime-contract-health.txt 2>&1; then
+              healthy=1
+              break
+            fi
+            sleep 2
+          done
+          cat /tmp/runtime-contract-health.txt || true
+          test "$healthy" = 1
+          PYTHONPATH=monitoring python3 - "$R" "$CHAMPION_CONFIG" "$CHAMPION_VERSION" <<'PY'
+          import re,sys
+          from pathlib import Path
+          from exporter_latest import LatestCollector
+          root=Path(sys.argv[1]); config=sys.argv[2]; version=sys.argv[3]
+          text=LatestCollector(root.parent,Path('config'),root.name,config,20).collect()
+          pattern=rf'^polymarket_runtime_info\{{adapter="[^"]+",run_root="{re.escape(root.name)}",version="v{re.escape(version)}"\}} 1$'
+          assert re.search(pattern,text,re.MULTILINE), text[:2500]
+          assert 'polymarket_runtime_contract_present 1' in text
+          assert 'polymarket_runtime_pnl_usd ' in text
+          (root/'metrics.prom').write_text(text,encoding='utf-8')
+          PY
+          echo "SMOKE_RUN_ROOT=$R" >> "$GITHUB_ENV"
+          cleanup
+          trap - EXIT INT TERM
 
       - name: Verify selected champion telemetry
         if: env.CHAMPION_VERSION != '6' || github.event_name != 'pull_request' || steps.v6_smoke.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
-          R="$CHAMPION_RUN_NAME"
-          test -s "$R/runtime_status.json"
+          R="${SMOKE_RUN_ROOT:-$CHAMPION_RUN_NAME}"
           test -s "$R/metrics.prom"
-          grep -q "^polymarket_runtime_info{adapter=\"v${CHAMPION_VERSION}\",run_root=\"${R}\",version=\"v${CHAMPION_VERSION}\"} 1$" "$R/metrics.prom"
+          if [[ "$CHAMPION_VERSION" == "5" || "$CHAMPION_VERSION" == "6" ]]; then
+            test -s "$R/runtime_status.json"
+            grep -q "^polymarket_runtime_info{adapter=\"v${CHAMPION_VERSION}\",run_root=\"$(basename "$R")\",version=\"v${CHAMPION_VERSION}\"} 1$" "$R/metrics.prom"
+          else
+            grep -Eq "^polymarket_runtime_info\{adapter=\"[^\"]+\",run_root=\"$(basename "$R")\",version=\"v${CHAMPION_VERSION}\"\} 1$" "$R/metrics.prom"
+            grep -q '^polymarket_runtime_contract_present 1$' "$R/metrics.prom"
+            python3 scripts/runtime_contract_health.py \
+              --manifest config/live_champion.json --repository-root . \
+              --max-age-seconds 180
+          fi
           if [[ "$CHAMPION_VERSION" == "6" ]]; then
             grep -q '^polymarket_v6_exporter_info{' "$R/metrics.prom"
             test -s "$R/hard_arb/status.json"
@@ -181,25 +248,40 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          R="${CHAMPION_RUN_NAME:-paper_v5_live}"
-          python3 scripts/summarize_live_smoke.py \
-            --run-root "$R" --output "$R/live_snapshot.json" \
-            --git-sha "$VALIDATION_SHA" --run-id "$GITHUB_RUN_ID" \
-            --trade-lookback-seconds 900 || true
-          if [[ ! -s "$R/live_snapshot.json" && -s "$R/runtime_status.json" ]]; then
-            cp "$R/runtime_status.json" "$R/live_snapshot.json"
+          R="${SMOKE_RUN_ROOT:-${CHAMPION_RUN_NAME:-paper_v5_live}}"
+          if [[ "${CHAMPION_VERSION:-5}" == "5" || "${CHAMPION_VERSION:-5}" == "6" ]]; then
+            python3 scripts/summarize_live_smoke.py \
+              --run-root "$R" --output "$R/live_snapshot.json" \
+              --git-sha "$VALIDATION_SHA" --run-id "$GITHUB_RUN_ID" \
+              --trade-lookback-seconds 900 || true
+            if [[ ! -s "$R/live_snapshot.json" && -s "$R/runtime_status.json" ]]; then
+              cp "$R/runtime_status.json" "$R/live_snapshot.json"
+            fi
+          else
+            python3 - "$R" "$VALIDATION_SHA" "$GITHUB_RUN_ID" <<'PY'
+          import json,sys
+          from pathlib import Path
+          root=Path(sys.argv[1])
+          candidates=[root/'runtime_status.json']
+          if root.exists(): candidates += sorted(p/'runtime_status.json' for p in root.iterdir() if p.is_dir())
+          source=next((p for p in candidates if p.is_file()),None)
+          if source is None: raise SystemExit(0)
+          payload=json.loads(source.read_text(encoding='utf-8'))
+          payload['git_sha']=sys.argv[2]; payload['workflow_run_id']=sys.argv[3]
+          (root/'live_snapshot.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n',encoding='utf-8')
+          PY
           fi
 
       - name: Publish live summary
         if: always()
         shell: bash
         run: |
-          R="${CHAMPION_RUN_NAME:-paper_v5_live}"
+          R="${SMOKE_RUN_ROOT:-${CHAMPION_RUN_NAME:-paper_v5_live}}"
           echo "## V${CHAMPION_VERSION:-5} manifest-selected live paper smoke" >> "$GITHUB_STEP_SUMMARY"
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
-          cat "$R/runtime_status.json" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          cat "$R/live_snapshot.json" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          for f in "$R/trade_recorder_latest.log" "$R/maker_latest.log" "$R/micro_taker_latest.log" "$R/hard_arb_latest.log" "$R/local_factor_latest.log" "$R/relation_latest.log" "$R/multileg_latest.log"; do
+          for f in "$R/live_smoke_supervisor.log" "$R/trade_recorder_latest.log" "$R/maker_latest.log" "$R/micro_taker_latest.log" "$R/hard_arb_latest.log" "$R/local_factor_latest.log" "$R/relation_latest.log" "$R/multileg_latest.log"; do
             if [[ -s "$f" ]]; then
               echo "### $f" >> "$GITHUB_STEP_SUMMARY"
               echo '```text' >> "$GITHUB_STEP_SUMMARY"
@@ -215,7 +297,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          R="$CHAMPION_RUN_NAME"
+          R="${SMOKE_RUN_ROOT:-$CHAMPION_RUN_NAME}"
           test -s "$R/live_snapshot.json"
           endpoint="repos/${GITHUB_REPOSITORY}/contents/telemetry/latest-live-smoke.json"
           content="$(base64 -w0 "$R/live_snapshot.json")"
@@ -223,9 +305,7 @@ jobs:
           for attempt in 1 2 3 4 5; do
             current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
             args=("$endpoint" --method PUT -f message="Update public V${CHAMPION_VERSION} live smoke telemetry" -f content="$content" -f branch=telemetry)
-            if [[ -n "$current_sha" ]]; then
-              args+=(-f sha="$current_sha")
-            fi
+            if [[ -n "$current_sha" ]]; then args+=(-f sha="$current_sha"); fi
             if gh api "${args[@]}" >/dev/null 2>"$publish_error"; then
               rm -f "$publish_error"
               exit 0
@@ -243,8 +323,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: champion-live-paper-smoke-${{ github.run_id }}
-          path: ${{ env.CHAMPION_RUN_NAME }}/
-          if-no-files-found: error
+          path: ${{ env.SMOKE_RUN_ROOT || env.CHAMPION_RUN_NAME }}/
+          if-no-files-found: warn
           retention-days: 7
 
       - name: Advance paper validated ref
@@ -267,9 +347,7 @@ jobs:
               gh api "repos/${GITHUB_REPOSITORY}/commits/${validated_sha}/pulls" \
                 --jq '[.[] | select(.base.ref == "main" and .merged_at != null)] | first | .number // empty'
             )"
-            if [[ -n "$merged_pr" ]]; then
-              break
-            fi
+            if [[ -n "$merged_pr" ]]; then break; fi
             sleep 3
           done
           if [[ -z "$merged_pr" ]]; then

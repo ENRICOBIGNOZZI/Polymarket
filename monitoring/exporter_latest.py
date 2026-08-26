@@ -20,58 +20,66 @@ _RECORDER_FAILURE_PREFIXES = (
     "fatal: HTTP request failed:",
     "fatal: Gamma markets HTTP 503:",
 )
+_CANONICAL_RUNTIME_STATUS = "runtime_status.json"
 
 
 def _version_tuple(text: str) -> tuple[int, ...]:
-    m = _VERSION_RE.search(text)
-    if not m:
+    match = _VERSION_RE.search(text)
+    if not match:
         return ()
-    return tuple(int(x) for x in re.findall(r"\d+", m.group(1)))
+    return tuple(int(value) for value in re.findall(r"\d+", match.group(1)))
 
 
-def _version_label(v: tuple[int, ...]) -> str:
-    return "v" + ".".join(str(x) for x in v) if v else "unknown"
+def _version_label(version: tuple[int, ...]) -> str:
+    return "v" + ".".join(str(value) for value in version) if version else "unknown"
 
 
 def detect_run_root(runs_base: Path, run_name: str) -> tuple[Path, tuple[int, ...]]:
     if run_name and run_name.lower() != "auto":
         root = runs_base / run_name
         return root, _version_tuple(run_name)
-    candidates = [p for p in runs_base.iterdir() if p.is_dir() and _version_tuple(p.name)] if runs_base.exists() else []
+    candidates = [path for path in runs_base.iterdir() if path.is_dir() and _version_tuple(path.name)] if runs_base.exists() else []
     if not candidates:
         return runs_base / "paper_v4_live", (4,)
-    candidates.sort(key=lambda p: (_version_tuple(p.name), p.stat().st_mtime_ns, p.name))
+    candidates.sort(key=lambda path: (_version_tuple(path.name), path.stat().st_mtime_ns, path.name))
     root = candidates[-1]
     return root, _version_tuple(root.name)
 
 
 def detect_config(config_dir: Path, version: tuple[int, ...], explicit: str | None) -> Path:
+    """Return only the config belonging to the selected runtime version.
+
+    A missing exact config is intentionally *not* replaced with a previous
+    version's file. Silent config inheritance made a newly-created V7 run look
+    like a V6 runtime in monitoring.
+    """
     if explicit:
         return Path(explicit)
     if version:
-        exact = config_dir / f"paper_v{version[0]}.json"
-        if exact.exists():
-            return exact
-    configs = [p for p in config_dir.glob("paper_v*.json") if _version_tuple(p.name)]
+        return config_dir / f"paper_v{version[0]}.json"
+    configs = [path for path in config_dir.glob("paper_v*.json") if _version_tuple(path.name)]
     if configs:
-        configs.sort(key=lambda p: (_version_tuple(p.name), p.name))
+        configs.sort(key=lambda path: (_version_tuple(path.name), path.name))
         return configs[-1]
     return config_dir / "paper_v4.json"
 
 
 def collector_class(version: tuple[int, ...]):
-    # Detailed adapters are optional. The stable dashboard never depends on one:
-    # future engines can publish runtime_status.json and be monitored immediately.
+    """Load only an exact-version enrichment adapter.
+
+    The canonical runtime contract is version-neutral. Version adapters may
+    enrich it, but a future V(N) must never silently inherit exporter_v(N-1).
+    """
     major = version[0] if version else 0
-    for v in range(major, 3, -1):
+    if major >= 4:
         try:
-            module = importlib.import_module(f"exporter_v{v}")
+            module = importlib.import_module(f"exporter_v{major}")
         except ImportError:
-            continue
-        cls = getattr(module, "COLLECTOR_CLASS", None) or getattr(module, f"V{v}Collector", None)
+            return Collector, "contract"
+        cls = getattr(module, "COLLECTOR_CLASS", None) or getattr(module, f"V{major}Collector", None)
         if cls is not None:
-            return cls, f"v{v}"
-    return Collector, "base"
+            return cls, f"v{major}"
+    return Collector, "contract" if major else "base"
 
 
 def _recent_nonempty_lines(path: Path, limit: int = 20) -> list[str]:
@@ -83,28 +91,19 @@ def _recent_nonempty_lines(path: Path, limit: int = 20) -> list[str]:
 
 
 def v6_runtime_data_health(root: Path, *, proxy_port: int | None = None) -> tuple[bool, str]:
-    """Fail closed when the live V6 discovery path cannot serve a market row.
+    """V6-only data-path health check.
 
-    The updater, deploy verifier and server-health workflow all depend on the
-    latest exporter `/healthz`.  V6 therefore cannot be reported healthy merely
-    because its processes are alive while the recorder is receiving only data
-    failures.  This check is read-only and bounded; it never changes trading
-    admission, execution costs or portfolio risk.
+    This deliberately stays V6-specific. Future runtimes use their own exact
+    adapter plus the canonical runtime contract and are never routed through
+    this probe merely because their version number is greater than six.
     """
-
     if proxy_port is None:
         try:
             proxy_port = int(os.environ.get("V6_MARKET_PROXY_PORT", "9120"))
         except ValueError:
             return False, "invalid_v6_market_proxy_port"
     query = urllib.parse.urlencode(
-        {
-            "active": "true",
-            "closed": "false",
-            "limit": "1",
-            "offset": "0",
-            "liquidity_num_min": "0",
-        }
+        {"active": "true", "closed": "false", "limit": "1", "offset": "0", "liquidity_num_min": "0"}
     )
     request = urllib.request.Request(
         f"http://127.0.0.1:{proxy_port}/markets?{query}",
@@ -126,6 +125,71 @@ def v6_runtime_data_health(root: Path, *, proxy_port: int | None = None) -> tupl
         failures = sum(line.startswith(_RECORDER_FAILURE_PREFIXES) for line in recorder_tail)
         if successes == 0 and failures == len(recorder_tail):
             return False, "v6_recorder_data_path_unhealthy"
+    return True, "ok"
+
+
+def _contract_candidates(root: Path) -> list[Path]:
+    candidates: list[Path] = []
+    direct = root / _CANONICAL_RUNTIME_STATUS
+    if direct.is_file():
+        candidates.append(root)
+    try:
+        children = sorted(path for path in root.iterdir() if path.is_dir())
+    except OSError:
+        children = []
+    for child in children:
+        if (child / _CANONICAL_RUNTIME_STATUS).is_file():
+            candidates.append(child)
+    return candidates
+
+
+def runtime_state_root(root: Path) -> Path | None:
+    """Resolve a canonical status root without knowing a version's layout.
+
+    Direct status wins. Otherwise exactly one immediate child may own the
+    contract (V7 uses ``execution/``). Multiple child contracts are rejected as
+    ambiguous instead of selecting one by version-specific convention.
+    """
+    direct = root / _CANONICAL_RUNTIME_STATUS
+    if direct.is_file():
+        return root
+    candidates = [candidate for candidate in _contract_candidates(root) if candidate != root]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def runtime_contract_health(root: Path, version: tuple[int, ...]) -> tuple[bool, str]:
+    state_root = runtime_state_root(root)
+    if state_root is None:
+        if version and version[0] >= 7:
+            return False, "canonical_runtime_status_missing_or_ambiguous"
+        return True, "ok"
+
+    raw = _read_json(state_root / _CANONICAL_RUNTIME_STATUS)
+    if not raw:
+        return False, "canonical_runtime_status_invalid"
+
+    expected = version[0] if version else None
+    actual = raw.get("version")
+    if expected is not None and actual is not None:
+        try:
+            if int(actual) != expected:
+                return False, "canonical_runtime_version_mismatch"
+        except (TypeError, ValueError):
+            return False, "canonical_runtime_version_invalid"
+
+    if raw.get("paper_only") is not True:
+        return False, "canonical_runtime_not_paper"
+    if raw.get("authenticated_execution") is True:
+        return False, "canonical_runtime_authenticated_execution_enabled"
+
+    required_numeric = ("equity", "pnl", "drawdown", "live_units", "gross_exposure")
+    for key in required_numeric:
+        try:
+            value = float(raw[key])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return False, f"canonical_runtime_{key}_invalid"
+        if not (-float("inf") < value < float("inf")):
+            return False, f"canonical_runtime_{key}_invalid"
     return True, "ok"
 
 
@@ -152,21 +216,33 @@ class CanonicalStatus:
 
 
 def _canonical_from_contract(root: Path, now: float) -> CanonicalStatus | None:
-    raw = _read_json(root / "runtime_status.json")
+    state_root = runtime_state_root(root)
+    if state_root is None:
+        return None
+    status_path = state_root / _CANONICAL_RUNTIME_STATUS
+    raw = _read_json(status_path)
     if not raw:
         return None
     oos = raw.get("oos") if isinstance(raw.get("oos"), dict) else {}
     return CanonicalStatus(
-        equity=_float(raw.get("equity")), pnl=_float(raw.get("pnl")), drawdown=_float(raw.get("drawdown")),
-        killed=1.0 if bool(raw.get("killed")) else 0.0, live_units=_float(raw.get("live_units")),
-        reserved_cash=_float(raw.get("reserved_cash")), gross_exposure=_float(raw.get("gross_exposure")),
-        realized_pnl=_float(raw.get("realized_pnl")), execution_imbalance=_float(raw.get("execution_imbalance")),
-        execution_staleness=_float(raw.get("execution_staleness")), oos_trades=_float(oos.get("trades")),
-        oos_net_pnl=_float(oos.get("net_pnl")), oos_stressed_net_pnl=_float(oos.get("stressed_net_pnl")),
-        oos_drawdown=_float(oos.get("max_drawdown")), oos_pvalue=_float(oos.get("bootstrap_pvalue"), 1.0),
+        equity=_float(raw.get("equity")),
+        pnl=_float(raw.get("pnl")),
+        drawdown=_float(raw.get("drawdown")),
+        killed=1.0 if bool(raw.get("killed")) else 0.0,
+        live_units=_float(raw.get("live_units")),
+        reserved_cash=_float(raw.get("reserved_cash")),
+        gross_exposure=_float(raw.get("gross_exposure")),
+        realized_pnl=_float(raw.get("realized_pnl")),
+        execution_imbalance=_float(raw.get("execution_imbalance")),
+        execution_staleness=_float(raw.get("execution_staleness")),
+        oos_trades=_float(oos.get("trades")),
+        oos_net_pnl=_float(oos.get("net_pnl")),
+        oos_stressed_net_pnl=_float(oos.get("stressed_net_pnl")),
+        oos_drawdown=_float(oos.get("max_drawdown")),
+        oos_pvalue=_float(oos.get("bootstrap_pvalue"), 1.0),
         oos_eligible=1.0 if bool(oos.get("eligible_for_tiny_pilot")) else 0.0,
         production_threshold=_float(oos.get("production_threshold")),
-        oos_staleness=max(0.0, now - (_mtime(root / "runtime_status.json") or now)),
+        oos_staleness=max(0.0, now - (_mtime(status_path) or now)),
     )
 
 
@@ -182,18 +258,16 @@ def _canonical_fallback(root: Path, config: Path, now: float) -> CanonicalStatus
     if recorder_mtime is not None:
         component_ages.append(max(0.0, now - recorder_mtime))
 
-    # Fill imbalance is derived from durable leg state, so the canonical dashboard
-    # remains correct even when the detailed version adapter changes.
     imbalance = 0.0
     try:
         import csv
         by_bundle: dict[str, list[float]] = {}
-        with (root / "multileg_legs.csv").open(newline="", encoding="utf-8") as f:
-            for leg in csv.DictReader(f):
+        with (root / "multileg_legs.csv").open(newline="", encoding="utf-8") as handle:
+            for leg in csv.DictReader(handle):
                 target = max(0.0, _float(leg.get("target_shares")))
                 filled = max(0.0, _float(leg.get("filled_shares")))
-                frac = min(1.0, max(0.0, filled / target)) if target > 1e-12 else 0.0
-                by_bundle.setdefault(leg.get("bundle_id", ""), []).append(frac)
+                fraction = min(1.0, max(0.0, filled / target)) if target > 1e-12 else 0.0
+                by_bundle.setdefault(leg.get("bundle_id", ""), []).append(fraction)
         for fractions in by_bundle.values():
             if fractions:
                 imbalance = max(imbalance, max(fractions) - min(fractions))
@@ -203,8 +277,8 @@ def _canonical_fallback(root: Path, config: Path, now: float) -> CanonicalStatus
     realized = 0.0
     try:
         import csv
-        with (root / "bundle_ledger.csv").open(newline="", encoding="utf-8") as f:
-            realized = sum(_float(r.get("net_pnl")) for r in csv.DictReader(f))
+        with (root / "bundle_ledger.csv").open(newline="", encoding="utf-8") as handle:
+            realized = sum(_float(row.get("net_pnl")) for row in csv.DictReader(handle))
     except OSError:
         pass
 
@@ -241,14 +315,14 @@ class LatestCollector:
         self.run_name = run_name
         self.explicit_config = explicit_config
         self.top_opportunities = top_opportunities
-        self._delegate_key: tuple[str, str] | None = None
+        self._delegate_key: tuple[str, str, tuple[int, ...]] | None = None
         self._delegate = None
         self._adapter = "base"
 
     def _resolve(self):
         root, version = detect_run_root(self.runs_base, self.run_name)
         config = detect_config(self.config_dir, version, self.explicit_config)
-        key = (str(root), str(config))
+        key = (str(root), str(config), version)
         if self._delegate is None or key != self._delegate_key:
             cls, adapter = collector_class(version)
             self._delegate = cls(root, config, self.top_opportunities)
@@ -258,21 +332,47 @@ class LatestCollector:
 
     def health(self) -> tuple[bool, str]:
         root, version, _ = self._resolve()
-        if version and version[0] >= 6:
+        contract_ok, detail = runtime_contract_health(root, version)
+        if not contract_ok:
+            return contract_ok, detail
+        if version and version[0] == 6:
             return v6_runtime_data_health(root)
         return True, "ok"
 
     def collect(self) -> str:
         root, version, config = self._resolve()
         now = time.time()
+        adapter_error = 0
         try:
             detailed = self._delegate.collect()
         except Exception:
             detailed = ""
-        status = _canonical_from_contract(root, now) or _canonical_fallback(root, config, now)
+            adapter_error = 1
+
+        status = _canonical_from_contract(root, now)
+        contract_present = 1 if status is not None else 0
+        if status is None:
+            fallback_root = runtime_state_root(root) or root
+            status = _canonical_fallback(fallback_root, config, now)
+
         metrics = Metrics()
         labels = {"version": _version_label(version), "run_root": root.name, "adapter": self._adapter}
-        metrics.sample("polymarket_runtime_info", 1, help_text="Selected latest Polymarket runtime and monitoring adapter.", labels=labels)
+        metrics.sample(
+            "polymarket_runtime_info",
+            1,
+            help_text="Selected Polymarket runtime and exact monitoring adapter.",
+            labels=labels,
+        )
+        metrics.sample(
+            "polymarket_runtime_contract_present",
+            contract_present,
+            help_text="Whether the selected runtime publishes the canonical runtime_status.json contract.",
+        )
+        metrics.sample(
+            "polymarket_runtime_adapter_scrape_error",
+            adapter_error,
+            help_text="Whether the optional exact-version enrichment adapter failed during this scrape.",
+        )
         fields = {
             "polymarket_runtime_equity_usd": (status.equity, "Canonical latest-runtime marked equity."),
             "polymarket_runtime_pnl_usd": (status.pnl, "Canonical latest-runtime marked PnL."),
@@ -318,15 +418,15 @@ class LatestExporterHandler(ExporterHandler):
 
 
 def parse_latest_args(argv: Sequence[str] | None = None):
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--runs-base", type=Path, default=Path("runs"))
-    ap.add_argument("--run-name", default="auto", help="Versioned run directory name or 'auto'.")
-    ap.add_argument("--config-dir", type=Path, default=Path("config"))
-    ap.add_argument("--config", default=None, help="Optional explicit config path; otherwise selected by runtime version.")
-    ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=9108)
-    ap.add_argument("--top-opportunities", type=int, default=20)
-    return ap.parse_args(argv)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--runs-base", type=Path, default=Path("runs"))
+    parser.add_argument("--run-name", default="auto", help="Versioned run directory name or 'auto'.")
+    parser.add_argument("--config-dir", type=Path, default=Path("config"))
+    parser.add_argument("--config", default=None, help="Optional explicit config path; otherwise selected by runtime version.")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=9108)
+    parser.add_argument("--top-opportunities", type=int, default=20)
+    return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

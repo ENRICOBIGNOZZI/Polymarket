@@ -56,11 +56,10 @@ jobs:
             test -n "${TS_TAGS:-}" || { echo "OAuth credentials are visible but TS_TAGS is empty" >&2; exit 1; }
             mode=oauth
           else
-            echo "No visible Tailscale credential set. Expected existing TS_AUTHKEY or TS_OAUTH_CLIENT_ID + TS_OAUTH_SECRET." >&2
+            echo "No visible Tailscale credential set." >&2
             exit 1
           fi
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
-          echo "tailscale_credential_mode=$mode"
 
       - name: Join private tailnet with auth key
         if: steps.tailscale_auth.outputs.mode == 'authkey'
@@ -110,9 +109,7 @@ jobs:
               git fetch origin main paper-validated
               target_sha="$(git rev-parse origin/paper-validated)"
               head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
-              printf 'reconcile_event=periodic\n'
-              printf 'server_head=%s\n' "${head_sha:-missing}"
-              printf 'paper_validated=%s\n' "$target_sha"
+              printf 'reconcile_event=periodic\nserver_head=%s\npaper_validated=%s\n' "${head_sha:-missing}" "$target_sha"
               if [[ "$head_sha" == "$target_sha" ]]; then
                 printf 'need_deploy=false\n'
               else
@@ -148,13 +145,12 @@ jobs:
           if [[ -n "${EXPECTED_VALIDATED_SHA:-}" ]]; then
             test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
           fi
-          printf 'predeploy_origin_main=%s\n' "$main_sha"
-          printf 'predeploy_paper_validated=%s\n' "$validated_sha"
+          printf 'predeploy_origin_main=%s\npredeploy_paper_validated=%s\n' "$main_sha" "$validated_sha"
           printf 'trigger_expected_validated=%s\n' "${EXPECTED_VALIDATED_SHA:-periodic-or-manual}"
 
           case "$(uname -s)" in
             Darwin) updater_path=ops/update_server_macos.sh ;;
-            Linux)  updater_path=ops/update_server.sh ;;
+            Linux) updater_path=ops/update_server.sh ;;
             *) echo "unsupported server OS: $(uname -s)" >&2; exit 1 ;;
           esac
           updater="$(mktemp)"
@@ -164,7 +160,7 @@ jobs:
           POLYMARKET_DEPLOY_REF=paper-validated bash "$updater"
           REMOTE
 
-      - name: Verify production paper services
+      - name: Verify production PAPER contract
         if: env.NEED_DEPLOY == 'true'
         shell: bash
         run: |
@@ -178,23 +174,16 @@ jobs:
             printf 'verify_failure=%s\n' "$1" >&2
             exit 1
           }
-
           require_equal() {
             local name="$1" actual="$2" expected="$3"
-            if [[ "$actual" != "$expected" ]]; then
+            [[ "$actual" == "$expected" ]] || {
               printf 'verify_failure=%s actual=%s expected=%s\n' "$name" "$actual" "$expected" >&2
               exit 1
-            fi
+            }
           }
-
           require_metric() {
             local name="$1" pattern="$2"
-            grep -q "$pattern" <<<"$metrics" || fail_verify "$name"
-          }
-
-          require_file() {
-            local name="$1" path="$2"
-            test -s "$path" || fail_verify "$name"
+            grep -Eq "$pattern" <<<"$metrics" || fail_verify "$name"
           }
 
           cd ~/polymarket
@@ -211,51 +200,53 @@ jobs:
           champion_meta="$(python3 - <<'PY'
           import json
           from pathlib import Path
-          m=json.loads(Path('config/live_champion.json').read_text())
+          m=json.loads(Path('config/live_champion.json').read_text(encoding='utf-8'))
           print(f"{int(m['version'])}\t{Path(m['run_root']).name}")
           PY
           )" || fail_verify "champion_manifest_read"
           IFS=$'\t' read -r version run_name <<<"$champion_meta"
-          [[ "$version" == "5" || "$version" == "6" ]] || fail_verify "unsupported_champion_version"
+          [[ "$version" =~ ^[1-9][0-9]*$ ]] || fail_verify "invalid_champion_version"
+
+          if (( version == 5 )); then
+            python3 scripts/v5_runtime_readiness.py \
+              --run-root "runs/$run_name" \
+              --supervisor-max-age 60 --allocator-max-age 30 \
+              --model-output-max-age 120 --startup-grace 600 >/dev/null \
+              || fail_verify "runtime_contract_health"
+          else
+            python3 scripts/runtime_contract_health.py \
+              --manifest config/live_champion.json --repository-root . \
+              --max-age-seconds 180 || fail_verify "runtime_contract_health"
+          fi
 
           curl -fsS http://127.0.0.1:9108/healthz >/dev/null || fail_verify "exporter_healthz"
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)" || fail_verify "exporter_metrics_fetch"
-          require_metric "runtime_info_schema" "^polymarket_runtime_info{adapter=\"v${version}\",run_root=\"${run_name}\",version=\"v${version}\"} 1$"
+          require_metric "runtime_info_schema" "^polymarket_runtime_info\\{adapter=\"[^\"]+\",run_root=\"${run_name}\",version=\"v${version}\"\\} 1$"
           require_metric "runtime_pnl_metric" '^polymarket_runtime_pnl_usd '
-          require_metric "allocator_state_metric" '^polymarket_allocator_state_present 1$'
-          require_metric "allocator_models_expected_metric" '^polymarket_allocator_models_expected 5$'
-          require_metric "model_info_metric" '^polymarket_model_info{'
-          if [[ "$version" == "6" ]]; then
-            require_metric "v6_exporter_info_metric" '^polymarket_v6_exporter_info{'
-            # Grafana's V6 strategy panels depend on this exact Prometheus schema.
-            # Fail deployment rather than silently provisioning a dashboard whose
-            # fill/health panels resolve to empty vectors.
-            require_metric "v6_model_fills_metric" '^polymarket_model_fills_total{action="all",'
-            require_metric "v6_model_gross_exposure_metric" '^polymarket_model_gross_exposure_usd{'
-            require_metric "v6_model_drawdown_metric" '^polymarket_model_drawdown_ratio{'
-            require_metric "v6_model_alive_metric" '^polymarket_model_alive{'
-            require_metric "v6_model_staleness_metric" '^polymarket_model_alert_staleness_seconds{'
-            require_file "v6_hard_arb_status_file" "runs/${run_name}/hard_arb/status.json"
-            require_file "v6_local_factor_status_file" "runs/${run_name}/local_factor_status.json"
-            require_file "v6_runtime_status_file" "runs/${run_name}/runtime_status.json"
+          require_metric "runtime_equity_metric" '^polymarket_runtime_equity_usd '
+          if (( version >= 6 )); then
+            require_metric "runtime_contract_metric" '^polymarket_runtime_contract_present 1$'
           fi
+
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null || fail_verify "prometheus_ready"
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null || fail_verify "grafana_health"
-          grafana_search="$(curl -fsS http://127.0.0.1:3000/api/search)" || fail_verify "grafana_search_fetch"
-          grep -q 'polymarket-multi-strategy-v5' <<<"$grafana_search" || fail_verify "grafana_dashboard_missing"
+          dashboard_uid="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          print(json.loads(Path('config/project_context.json').read_text(encoding='utf-8'))['grafana']['dashboard_uid'])
+          PY
+          )" || fail_verify "grafana_dashboard_uid_read"
+          curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$dashboard_uid" >/dev/null \
+            || fail_verify "grafana_dashboard_missing"
+
           printf 'verify_result=success\n'
-          printf 'server_head=%s\n' "$head_sha"
-          printf 'paper_validated=%s\n' "$validated_sha"
-          printf 'origin_main=%s\n' "$main_sha"
-          printf 'champion_version=%s\n' "$version"
-          printf 'champion_run_root=%s\n' "$run_name"
+          printf 'server_head=%s\npaper_validated=%s\norigin_main=%s\n' "$head_sha" "$validated_sha" "$main_sha"
+          printf 'champion_version=%s\nchampion_run_root=%s\n' "$version" "$run_name"
           case "$(uname -s)" in
             Darwin) bash ops/macos_service_control.sh status || fail_verify "macos_service_status" ;;
             Linux)
               systemctl is-active --quiet polymarket-paper.service || fail_verify "linux_paper_service"
               systemctl is-active --quiet polymarket-monitoring.service || fail_verify "linux_monitoring_service"
-              systemctl --no-pager --full status polymarket-paper.service | sed -n '1,12p'
-              systemctl --no-pager --full status polymarket-monitoring.service | sed -n '1,12p'
               ;;
             *) fail_verify "unsupported_server_os" ;;
           esac

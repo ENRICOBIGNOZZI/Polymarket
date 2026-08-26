@@ -10,7 +10,14 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "monitoring"))
 
-from exporter_latest import LatestCollector, detect_run_root, v6_runtime_data_health
+from exporter_latest import (
+    LatestCollector,
+    collector_class,
+    detect_config,
+    detect_run_root,
+    runtime_state_root,
+    v6_runtime_data_health,
+)
 
 
 class _ProxyResponse:
@@ -32,6 +39,25 @@ class _ProxyResponse:
 class LatestExporterTest(unittest.TestCase):
     def _config(self, path: Path, capital: float = 10000.0):
         path.write_text(json.dumps({"starting_capital": capital, "max_drawdown": 0.15}), encoding="utf-8")
+
+    def _contract(self, version: int, **overrides):
+        payload = {
+            "version": version,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "equity": 10025.0,
+            "pnl": 25.0,
+            "drawdown": 0.01,
+            "killed": False,
+            "live_units": 2,
+            "reserved_cash": 12.0,
+            "gross_exposure": 40.0,
+            "realized_pnl": 18.0,
+            "execution_imbalance": 0.15,
+            "execution_staleness": 3.0,
+        }
+        payload.update(overrides)
+        return payload
 
     def test_auto_selects_highest_engine_version_and_contract(self):
         with tempfile.TemporaryDirectory() as td:
@@ -111,6 +137,57 @@ class LatestExporterTest(unittest.TestCase):
             self.assertIn("polymarket_runtime_execution_imbalance_ratio 0.5", text)
             self.assertIn("polymarket_runtime_realized_pnl_usd_total 2.5", text)
             self.assertIn("polymarket_runtime_oos_stressed_net_pnl_usd -1", text)
+
+    def test_future_version_never_inherits_previous_config(self):
+        with tempfile.TemporaryDirectory() as td:
+            config = Path(td)
+            self._config(config / "paper_v6.json")
+            selected = detect_config(config, (99,), None)
+            self.assertEqual(selected, config / "paper_v99.json")
+            self.assertFalse(selected.exists())
+
+    def test_future_version_never_inherits_previous_exporter(self):
+        with mock.patch("exporter_latest.importlib.import_module", side_effect=ImportError) as load:
+            _cls, adapter = collector_class((99,))
+        self.assertEqual(adapter, "contract")
+        load.assert_called_once_with("exporter_v99")
+
+    def test_future_nested_runtime_contract_is_layout_agnostic_and_skips_v6_health(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            runs, config = base / "runs", base / "config"
+            root = runs / "paper_v99_live"
+            execution = root / "execution"
+            execution.mkdir(parents=True)
+            config.mkdir()
+            self._config(config / "paper_v99.json")
+            (execution / "runtime_status.json").write_text(
+                json.dumps(self._contract(99, equity=10123.0, pnl=123.0)),
+                encoding="utf-8",
+            )
+            self.assertEqual(runtime_state_root(root), execution)
+            with mock.patch("exporter_latest.v6_runtime_data_health", side_effect=AssertionError("V6 health leaked")) as legacy:
+                collector = LatestCollector(runs, config, "auto", None, 10)
+                healthy, reason = collector.health()
+                text = collector.collect()
+            self.assertTrue(healthy)
+            self.assertEqual(reason, "ok")
+            legacy.assert_not_called()
+            self.assertIn('adapter="contract"', text)
+            self.assertIn('version="v99"', text)
+            self.assertIn("polymarket_runtime_contract_present 1", text)
+            self.assertIn("polymarket_runtime_equity_usd 10123", text)
+
+    def test_future_runtime_without_contract_fails_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            runs, config = base / "runs", base / "config"
+            (runs / "paper_v99_live").mkdir(parents=True)
+            config.mkdir()
+            self._config(config / "paper_v99.json")
+            healthy, reason = LatestCollector(runs, config, "auto", None, 10).health()
+            self.assertFalse(healthy)
+            self.assertEqual(reason, "canonical_runtime_status_missing_or_ambiguous")
 
     def test_v6_data_health_rejects_unreachable_proxy(self):
         with tempfile.TemporaryDirectory() as td:
