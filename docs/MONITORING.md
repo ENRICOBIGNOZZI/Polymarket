@@ -1,95 +1,61 @@
-# Grafana monitoring for the latest Polymarket runtime
+# V7 monitoring
 
-Grafana is deliberately version-agnostic. The monitoring stack auto-selects the highest `runs/paper_v*` runtime and exposes a stable `polymarket_runtime_*` namespace, so V5/V6/... can replace the engine without replacing the default dashboard.
+Monitoring is part of the canonical V7 runtime contract. It does not guess the active generation from directory names and it never falls back to an older exporter.
 
-## Architecture
+## Canonical components
 
-- `monitoring/exporter.py`: legacy/base metrics.
-- `monitoring/exporter_v4.py`: optional detailed V4 adapter.
-- `monitoring/exporter_latest.py`: stable front door; auto-selects the latest versioned runtime and emits canonical metrics.
-- `docs/TELEMETRY_CONTRACT.md`: the small `runtime_status.json` contract future versions should publish.
-- Prometheus: five-second scraping, local risk rules.
-- Grafana: `Polymarket — Latest Runtime` is the stable home dashboard.
-- `scripts/runtime_action_report.py`: explains the candidate funnel, hedge filtering, broker actions and abstention reasons in JSON and Markdown.
+- `monitoring/exporter_v7.py` — V7 Prometheus exporter;
+- `monitoring/grafana/dashboards/polymarket-v7.json` — canonical dashboard;
+- `docs/TELEMETRY_CONTRACT.md` — runtime telemetry contract;
+- `scripts/runtime_action_report.py` — strategy/action explanation;
+- `scripts/v7_runtime_status.py` — canonical atomic V7 runtime status.
 
-If a future runtime publishes `runtime_status.json`, the default dashboard works immediately even if all internal execution files changed. Version-specific exporters/dashboards are optional detail, not a dependency.
+The exporter reads the manifest-selected V7 state and exposes stable `polymarket_runtime_*` and V7 strategy metrics. Missing or incompatible runtime state fails closed rather than selecting another generation.
 
-## Start
+## Start locally
 
-Start whichever paper engine is current. For V4 today:
+Run the canonical PAPER engine:
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
-bash scripts/paper_v4_loop.sh config/paper_v4.json runs/paper_v4_live
+bash scripts/run_paper.sh
 ```
 
-Then, independently:
+Then start monitoring:
 
 ```bash
 bash scripts/monitoring_up.sh
 ```
 
-On the paper server, `ops/apply_runtime_config_macos.sh` keeps the Grafana backend bound to `127.0.0.1:3000`, pins the established Tailscale machine name `mamma-portfolio`, and publishes Grafana privately through Tailscale Serve on HTTP port 80.
+For local development Grafana is normally available at `http://localhost:3000`.
 
-The single canonical operator URL is:
+## Private server access
+
+On the PAPER server, Grafana stays bound to `127.0.0.1:3000` and is exposed privately through the configured Tailscale Serve route. The canonical operator URL is:
 
 ```text
 http://mamma-portfolio.tail1bae85.ts.net
 ```
 
-This exact FQDN is taken from the server's own `tailscale serve status`; it is not inferred from the SSH alias or from Grafana configuration. The runtime configuration verifies the actual Tailscale `Self.DNSName` and Serve URL before writing Grafana's `root_url`, so a DNS/Serve mismatch fails closed rather than publishing a dead bookmark.
+The machine opening the dashboard must be on the same tailnet. Prometheus and the exporter remain loopback-only.
 
-Do not bookmark `127.0.0.1`, the server's `100.x` Tailscale IP, `http://polymarket`, or a Grafana dashboard-specific path. The FQDN above is the supported operator entrypoint and is independent of the node's numeric Tailscale address.
+## Runtime health
 
-The machine opening the page must be connected to the same Tailscale tailnet with Tailscale DNS enabled. Grafana uses anonymous `Viewer` access: there is no login form and no editing/admin permission through this route. Prometheus and the exporter remain loopback-only.
+The health chain checks the exact deployed V7 revision and the canonical runtime root. Important evidence includes:
 
-For a purely local development installation, `http://localhost:3000` remains available on the machine running the local stack, but it is not the operator URL for the paper server. By default `POLYMARKET_RUN_NAME=auto`, which selects the numerically highest versioned `paper_v*` directory. Set `POLYMARKET_RUN_NAME` only when intentionally pinning an older/historical run.
+- single runtime owner and process-group integrity;
+- recorder, broker and market proxy liveness;
+- PAPER-only / authenticated-execution-disabled state;
+- cash, equity, realized/marked PnL and drawdown;
+- per-strategy PnL and fills;
+- queue/fill/markout evidence where applicable;
+- execution staleness and data health;
+- Grafana dashboard UID/content consistency with the deployed revision.
 
-## Hourly operational explanation
+A zero-trade interval is not interpreted as success or failure by itself. The action report must expose the admission/fill/economic reasons for abstention.
 
-The `paper-server-health` workflow runs at minute 23 of every hour. It verifies Grafana from a separate GitHub runner over the tailnet, not only from `localhost` on the server. It also generates and publishes:
+## Canonical metric family
 
-```text
-runs/paper_v4_live/action_report.md
-runs/paper_v4_live/action_report.json
-```
-
-The report states:
-
-- what B1, raw B2, coherent B2, NegRisk, rewards and the external expert found;
-- how many PCA baskets were rejected as economically incoherent;
-- which bundles passed the executable-edge gate;
-- whether the broker posted, waited, partially filled, closed, unwound or abstained;
-- the concrete blocking reason, such as costs, queue/fillability, missing external signals, conversion risk or broker-admission gaps.
-
-The workflow embeds the Markdown report in the GitHub Actions summary and uploads both formats as health evidence. A zero-trade hour is therefore no longer reported merely as “healthy”: it must include the reason for abstention.
-
-## B2 hedge coherence telemetry
-
-Global PCA remains available as a research diagnostic in:
-
-```text
-stat_arb_pca_raw.csv
-```
-
-Before any B2 row reaches the intent adapter, `scripts/filter_coherent_hedges.py` checks every hedge leg against public Gamma metadata. Only same-event or sufficiently strong semantic relations enter:
-
-```text
-stat_arb_pca.csv
-```
-
-Rejected cross-domain or metadata-unknown baskets are retained for diagnosis in:
-
-```text
-stat_arb_pca_rejected.csv
-```
-
-The filter and intent adapter are both fail-closed. A scanner, metadata or filter failure produces an empty execution-facing B2 set; it never reuses a stale CSV. Public live telemetry exposes `raw_rows`, `coherent_rows`, `rejected_rows` and the corresponding positive-edge counts.
-
-## Stable home-dashboard metrics
-
-The critical dashboard and alerts depend only on canonical metrics such as:
+The stable top-level namespace includes metrics such as:
 
 - `polymarket_runtime_info`
 - `polymarket_runtime_equity_usd`
@@ -101,57 +67,45 @@ The critical dashboard and alerts depend only on canonical metrics such as:
 - `polymarket_runtime_realized_pnl_usd_total`
 - `polymarket_runtime_execution_imbalance_ratio`
 - `polymarket_runtime_execution_staleness_seconds`
-- `polymarket_runtime_oos_trades`
-- `polymarket_runtime_oos_net_pnl_usd`
-- `polymarket_runtime_oos_stressed_net_pnl_usd`
-- `polymarket_runtime_oos_bootstrap_pvalue`
-- `polymarket_runtime_oos_eligible`
 
-These names are the long-lived contract. New engine versions may add detailed metrics but should not rename the canonical namespace.
-
-## V4 compatibility
-
-V4 is supported without a canonical JSON file: the latest exporter derives the canonical state from `multileg_equity.csv`, `multileg_legs.csv`, `bundle_ledger.csv`, `trade_tape.csv` and `walk_forward.json`. Future engines should prefer atomic `runtime_status.json` publishing.
+V7 may expose additional strategy/frequency labels without changing the meaning of the canonical top-level metrics.
 
 ## Alerts
 
-Critical/warning rules follow the auto-selected runtime rather than a version number. They cover exporter availability, execution staleness, drawdown, kill switch, execution imbalance and stale OOS evidence. Legacy single-market maker alerts remain available as secondary diagnostics.
+Prometheus alerts cover exporter availability, runtime/data staleness, drawdown, kill switch, execution imbalance and missing critical evidence. Alerts are keyed to canonical V7 state rather than a version-discovery heuristic.
 
 ## Security
 
-Grafana, Prometheus and the exporter bind to localhost. Remote Grafana access is proxied only through Tailscale Serve and receives Viewer permissions. No Grafana admin password, wallet credential, Alertmanager credential or authenticated Polymarket execution key is stored in the repository.
+Grafana, Prometheus and the exporter do not contain wallet credentials or authenticated Polymarket execution keys. Remote dashboard access is separated from trading authentication; the canonical runtime has authenticated execution disabled.
 
-## Stop / reset
+## Stop/reset
 
 ```bash
 bash scripts/monitoring_down.sh
 ```
 
-To remove Prometheus/Grafana history as well:
+To remove local Prometheus/Grafana history:
 
 ```bash
 docker compose -f docker-compose.monitoring.yml down -v
 ```
 
-This does not delete paper-run state under `runs/`.
+This does not delete PAPER state under `runs/`.
 
 ## Validation
 
 ```bash
 python3 -m unittest \
-  tests/test_monitoring_exporter.py \
-  tests/test_monitoring_v4_exporter.py \
-  tests/test_monitoring_latest_exporter.py \
-  tests/test_runtime_action_report.py \
-  tests/test_coherent_hedges.py -v
+  tests/test_monitoring_v7_exporter.py \
+  tests/test_grafana_v7_contract.py \
+  tests/test_server_health_readonly.py \
+  tests/test_runtime_action_report.py -v
 python3 -m py_compile \
-  monitoring/exporter.py \
-  monitoring/exporter_v4.py \
-  monitoring/exporter_latest.py \
-  scripts/runtime_action_report.py \
-  scripts/filter_coherent_hedges.py
-python3 -m json.tool monitoring/grafana/dashboards/polymarket-latest.json >/dev/null
-bash -n scripts/monitoring_up.sh scripts/monitoring_down.sh scripts/paper_v4_loop.sh
+  monitoring/exporter_v7.py \
+  scripts/v7_runtime_status.py \
+  scripts/runtime_action_report.py
+python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7.json >/dev/null
+bash -n scripts/monitoring_up.sh scripts/monitoring_down.sh
 ```
 
-The same contract is checked in CI and in the hourly private-server health workflow.
+The same contracts are exercised by `.github/workflows/monitoring.yml` and the private `server-health` workflow.
