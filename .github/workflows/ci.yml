@@ -76,29 +76,43 @@ jobs:
         run: cmake --build build-${{ matrix.build_type }} --parallel 2
       - name: Unit and mock integration tests (${{ matrix.build_type }})
         run: ctest --test-dir build-${{ matrix.build_type }} --output-on-failure
-      - name: Deployment, scheduler context, and V6 runtime contracts
+      - name: V7 deployment, scheduler, monitoring, and runtime contracts
         run: |
           set -euo pipefail
-          bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh \
+          bash -n \
+            scripts/paper_v7_loop.sh scripts/paper_v7_execution_loop.sh \
+            scripts/monitoring_up.sh scripts/monitoring_down.sh \
             ops/bootstrap_server.sh ops/update_server.sh ops/bootstrap_macos.sh ops/update_server_macos.sh \
             ops/macos_service_control.sh ops/install_autoupdate_macos.sh ops/finish_bootstrap_macos.sh ops/apply_runtime_config_macos.sh
           python3 -m py_compile \
-            scripts/multi_strategy_paper.py scripts/compact_strategy_logs.py scripts/project_context_snapshot.py \
+            scripts/compact_strategy_logs.py scripts/project_context_snapshot.py \
             scripts/validate_project_context.py scripts/validate_scheduler_registry.py \
-            scripts/v6_external_bridge.py scripts/v6_relation_intents.py scripts/v6_intent_guard.py \
-            scripts/v6_local_factor_intents.py scripts/v6_micro_taker.py scripts/v6_hard_arb_paper.py \
-            scripts/v6_runtime_status.py scripts/v7_execution_evidence.py monitoring/exporter_v5.py monitoring/exporter_v6.py monitoring/exporter_latest.py
-          python3 -m json.tool config/paper_v5.json >/dev/null
-          python3 -m json.tool config/paper_v6.json >/dev/null
-          python3 -m json.tool config/v6_model_architecture.json >/dev/null
+            scripts/runtime_plane_supervisor.py scripts/runtime_singleton_launcher.py \
+            scripts/runtime_action_report.py scripts/summarize_live_smoke.py \
+            scripts/polymarket_fees.py scripts/v7_*.py monitoring/exporter_v7.py
+          python3 -m json.tool config/paper_v7.json >/dev/null
+          python3 -m json.tool config/v7_model_architecture.json >/dev/null
           python3 -m json.tool config/v7_execution_evidence.json >/dev/null
+          python3 -m json.tool config/v7_frequency_matrix.json >/dev/null
           python3 -m json.tool config/live_champion.json >/dev/null
           python3 -m json.tool config/project_context.json >/dev/null
-          python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
+          python3 -m json.tool config/scheduler_registry.json >/dev/null
+          python3 -m json.tool config/operator_directives.json >/dev/null
+          python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7.json >/dev/null
           python3 scripts/validate_scheduler_registry.py --root . --registry config/scheduler_registry.json --output /tmp/scheduler-registry-report.md
           python3 scripts/validate_project_context.py --root . --output /tmp/project-context-validation.md
           python3 scripts/project_context_snapshot.py --root . --manifest config/project_context.json --output-json /tmp/project-context.json --output-markdown /tmp/project-context.md
-          test -s /tmp/project-context.json; test -s /tmp/project-context.md
-          python3 -m unittest tests/test_v6_runtime_contract.py tests/test_v6_model_contracts.py tests/test_v6_market_proxy_atomic_reload.py tests/test_v7_execution_evidence.py \
-            tests/test_v7_authorized_paper_envelope.py tests/test_compact_strategy_logs.py tests/test_ops_macos.py tests/test_macos_deploy_mutex.py \
-            tests/test_server_health_diagnostics.py tests/test_workflow_yaml_contracts.py -v
+          test -s /tmp/project-context.json
+          test -s /tmp/project-context.md
+          python3 -m unittest \
+            tests/test_v7_unified_runtime.py \
+            tests/test_v7_authorized_paper_envelope.py \
+            tests/test_hard_safety_policy.py \
+            tests/test_v7_execution_evidence.py \
+            tests/test_monitoring_v7_exporter.py \
+            tests/test_grafana_v7_contract.py \
+            tests/test_model_governance.py \
+            tests/test_ops_macos.py \
+            tests/test_macos_deploy_mutex.py \
+            tests/test_server_health_diagnostics.py \
+            tests/test_workflow_yaml_contracts.py -v
