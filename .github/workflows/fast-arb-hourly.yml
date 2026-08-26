@@ -15,9 +15,10 @@ on:
       - "src/fast_arb_main.cpp"
       - "src/fast_runtime/**"
       - "config/fast_arb_*"
+      - "config/operator_directives.json"
       - "scripts/arb_theory_scheduler.py"
       - "scripts/validate_fast_data_health.py"
-      - "scripts/paper_latest_loop.sh"
+      - "scripts/v7_fast_shadow_evidence_gate.py"
       - "tests/test_fast_*"
       - "tests/test_arb_theory_scheduler.py"
       - ".github/workflows/fast-arb-hourly.yml"
@@ -48,9 +49,9 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j2
           ctest --test-dir build --output-on-failure
-          python3 -m unittest tests/test_fast_data_health.py -v
+          python3 -m unittest tests/test_fast_data_health.py tests/test_fast_v7_shadow_authority.py -v
 
-      - name: Run read-only fast shadow probe
+      - name: Run read-only V7 fast shadow probe
         shell: bash
         run: |
           set -euo pipefail
@@ -58,15 +59,15 @@ jobs:
           duration=180
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then duration=45; fi
           ./build/polymarket_fast_arb_shadow \
-            --config config/paper_v4.json \
+            --config config/fast_arb_v7_shadow.json \
             --policy config/fast_arb_policy.json \
             --relations config/fast_arb_relations.csv \
             --external-signals data/external_signals.csv \
             --run-dir runs/hourly-fast \
-            --markets 600 \
-            --min-liquidity 100 \
+            --markets 1000 \
+            --min-liquidity 2 \
             --shard-size 200 \
-            --snapshot-refresh-seconds 20 \
+            --snapshot-refresh-seconds 5 \
             --duration-seconds "$duration" \
             --recycle-seconds 0
 
@@ -100,6 +101,18 @@ jobs:
           assert candidate["candidate_policy"]["min_net_edge"] >= base_policy["min_net_edge"]
           PY
           cat runs/hourly-fast/fast_arb_theory_report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce strict V7 hard-arb timestamp evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/v7_fast_shadow_evidence_gate.py \
+            --status runs/hourly-fast/fast_arb_status.json \
+            --opportunities runs/hourly-fast/fast_arb_opportunities.csv \
+            --policy config/fast_arb_policy.json \
+            --output runs/hourly-fast/v7_fast_shadow_evidence_gate.json
+          cat runs/hourly-fast/v7_fast_shadow_evidence_gate.json >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload hourly evidence
         if: always()
