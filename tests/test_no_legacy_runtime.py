@@ -19,6 +19,10 @@ class NoLegacyRuntimeContractTest(unittest.TestCase):
             ".github/workflows/v[3-6]*.yaml",
             "tests/test_v[3-6]_*.py",
             "monitoring/exporter_v[3-6].py",
+            "research/**/*v[3-6]*",
+            "research/**/*V[3-6]*",
+            "docs/**/*v[3-6]*",
+            "docs/**/*V[3-6]*",
         )
         offenders: list[str] = []
         for pattern in patterns:
