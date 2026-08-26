@@ -10,10 +10,11 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import v7_multileg_broker as broker
+import v7_multileg_broker_runner as broker_runner
 
 
-def blank_broker() -> broker.Broker:
-    value = broker.Broker.__new__(broker.Broker)
+def _blank_broker(cls: type[broker.Broker]) -> broker.Broker:
+    value = cls.__new__(cls)
     value.cash = 1000.0
     value.bundles = {}
     value.legs = []
@@ -34,6 +35,14 @@ def blank_broker() -> broker.Broker:
         "outcomes": ["Yes", "No"],
     }
     return value
+
+
+def blank_broker() -> broker.Broker:
+    return _blank_broker(broker.Broker)
+
+
+def blank_coordinated_broker() -> broker_runner.CoordinatedBroker:
+    return _blank_broker(broker_runner.CoordinatedBroker)  # type: ignore[return-value]
 
 
 def test_market_event_identity_never_falls_back_to_condition_id():
@@ -64,6 +73,27 @@ def test_backfilled_pre_order_event_cannot_fill_new_order():
     value.legs = [broker.Leg("a", "m1", "event", "YES", "t", 1.0, 10.0, 0.0, 0.40, 0.0, 1000, 1000)]
     value.apply_trades([{"side": "SELL", "size": 100.0, "asset_id": "t", "price": 0.39, "received_ms": 2000, "event_ts_ms": 900}])
     assert value.legs[0].filled_shares == 0.0
+
+
+def test_submit_latency_event_cannot_be_backfilled_as_post_arrival_fill():
+    value = blank_coordinated_broker()
+    value.bundles = {"a": broker.Bundle("a", "GRAPH_RV", "event", "RESTING", 0, 0.01, 10, 9999999999, 9999999999)}
+    # Simulate the historical V7 state: local order arrival includes 100 ms of
+    # submit latency, while the event-clock threshold was stamped at decision.
+    value.legs = [broker.Leg("a", "m1", "event", "YES", "t", 1.0, 10.0, 0.0, 0.40, 0.0, 1100, 1000)]
+
+    value.apply_trades([{
+        "side": "SELL", "size": 100.0, "asset_id": "t", "price": 0.39,
+        "received_ms": 1200, "event_ts_ms": 1050,
+    }])
+    assert value.legs[0].arrival_event_ms == 1100
+    assert value.legs[0].filled_shares == 0.0
+
+    value.apply_trades([{
+        "side": "SELL", "size": 10.0, "asset_id": "t", "price": 0.39,
+        "received_ms": 1200, "event_ts_ms": 1200,
+    }])
+    assert value.legs[0].filled_shares == 10.0
 
 
 def test_complete_bundle_enters_settling_instead_of_abort_on_async_close():
@@ -98,6 +128,8 @@ def test_v7_runtime_routes_to_coordinated_python_broker_not_legacy_cpp():
     assert 'risk_event = market_event_id(raw)' in broker_source
     assert 'trade["received_ms"] > leg.arrival_ms' in broker_source
     assert 'trade["event_ts_ms"] > leg.arrival_event_ms' in broker_source
+    assert "leg.arrival_event_ms = max(leg.arrival_event_ms, leg.arrival_ms)" in runner_source
+    assert '"submit_latency_event_time_floor"' in runner_source
     assert "self.persist()" in runner_source
     assert "fcntl.LOCK_UN" in runner_source
     assert runner_source.index("self.persist()") < runner_source.index("fcntl.LOCK_UN")
