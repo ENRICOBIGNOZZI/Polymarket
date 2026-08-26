@@ -272,7 +272,11 @@ def read_rows(path: Path) -> list[dict[str, str]]:
         raise FastArbSourceError("opportunities:unreadable") from exc
 
 
-def _candidate_ready(row: dict[str, str], legs: list[dict[str, Any]], model_sha: str) -> tuple[bool, list[str], dict[str, dict[str, Any]] | None]:
+def _candidate_ready(
+    row: dict[str, str],
+    legs: list[dict[str, Any]],
+    model_sha: str,
+) -> tuple[bool, list[str], dict[str, dict[str, Any]] | None]:
     blockers: list[str] = []
     source_sha = str(row.get("model_sha") or "").strip()
     if source_sha:
@@ -280,15 +284,29 @@ def _candidate_ready(row: dict[str, str], legs: list[dict[str, Any]], model_sha:
             raise FastArbSourceError("source_model_sha:mixed_sha")
     else:
         blockers.append("source_row_missing_model_sha")
+
     snapshot = str(row.get("book_snapshot_id") or "").strip()
     if not snapshot:
         blockers.append("missing_exact_book_snapshot_identity")
+
     context_raw = str(row.get("leg_context_json") or "").strip()
     context = None
     if not context_raw:
         blockers.append("missing_per_leg_clock_lineage")
     else:
         context = parse_leg_context(context_raw, legs)
+        oldest_exchange = min(int(item["exchange_ts_ms"]) for item in context.values())
+        latest_receive = max(int(item["receive_ts_ms"]) for item in context.values())
+        bundle_exchange = _positive_int(row, "exchange_ts_ms", required=False)
+        bundle_receive = _positive_int(row, "received_ts_ms", required=False)
+        decision = _positive_int(row, "decision_ts_ms", required=False)
+        if bundle_exchange != oldest_exchange:
+            blockers.append("bundle_exchange_not_oldest_required_leg")
+        if bundle_receive != latest_receive:
+            blockers.append("bundle_receive_not_latest_required_leg")
+        if decision is None or decision < latest_receive:
+            blockers.append("decision_before_latest_required_leg_receive")
+
     return not blockers, blockers, context
 
 
@@ -365,6 +383,7 @@ def ingest_rows(
             "candidate_contract_ready": candidate_ready,
             "candidate_blockers": blockers,
             "per_leg_context_required": True,
+            "bundle_clock_semantics": "oldest_leg_exchange/latest_leg_receive",
             "promotion_eligible": False,
         }
         writer.append(
@@ -389,7 +408,13 @@ def ingest_rows(
 
         if not executable:
             continue
-        if not candidate_ready or leg_context is None or receive is None or decision is None:
+        if (
+            not candidate_ready
+            or leg_context is None
+            or exchange is None
+            or receive is None
+            or decision is None
+        ):
             counts["candidate_rows_blocked"] += 1
             continue
 
@@ -458,7 +483,10 @@ def ingest_run(run_dir: Path, *, repo_root: Path, ledger_path: Path | None = Non
     model_sha = checkout_sha(repo_root)
     run_dir = Path(run_dir)
     session = load_session(run_dir / "fast_arb_ledger_session.json", expected_model_sha=model_sha)
-    status = load_status(run_dir / "fast_arb_status.json", session_started_ts_ms=int(session["started_ts_ms"]))
+    status = load_status(
+        run_dir / "fast_arb_status.json",
+        session_started_ts_ms=int(session["started_ts_ms"]),
+    )
     rows = read_rows(run_dir / "fast_arb_opportunities.csv")
     target = Path(ledger_path) if ledger_path is not None else canonical_ledger_path(run_dir)
     existing: set[str] = set()
@@ -468,19 +496,35 @@ def ingest_run(run_dir: Path, *, repo_root: Path, ledger_path: Path | None = Non
                 key = event.metadata.get("source_row_key")
                 if isinstance(key, str) and key:
                     existing.add(key)
-    with CanonicalLedgerWriter(target, writer_id="v7-fast-structural-ledger-producer", model_sha=model_sha) as writer:
-        return ingest_rows(rows, session=session, status=status, writer=writer, existing_row_keys=existing)
+    with CanonicalLedgerWriter(
+        target,
+        writer_id="v7-fast-structural-ledger-producer",
+        model_sha=model_sha,
+    ) as writer:
+        return ingest_rows(
+            rows,
+            session=session,
+            status=status,
+            writer=writer,
+            existing_row_keys=existing,
+        )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="V7 Fast Structural Arb -> canonical execution ledger")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    begin = sub.add_parser("begin", help="bind a fresh Fast Arb source session to the exact checkout SHA")
+    begin = sub.add_parser(
+        "begin",
+        help="bind a fresh Fast Arb source session to the exact checkout SHA",
+    )
     begin.add_argument("--run-dir", required=True, type=Path)
     begin.add_argument("--repo-root", default=Path("."), type=Path)
 
-    ingest = sub.add_parser("ingest", help="append fail-closed Fast Arb opportunity/candidate evidence")
+    ingest = sub.add_parser(
+        "ingest",
+        help="append fail-closed Fast Arb opportunity/candidate evidence",
+    )
     ingest.add_argument("--run-dir", required=True, type=Path)
     ingest.add_argument("--repo-root", default=Path("."), type=Path)
     ingest.add_argument("--ledger", type=Path)
