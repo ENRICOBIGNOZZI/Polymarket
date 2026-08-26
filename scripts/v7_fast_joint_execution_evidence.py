@@ -3,7 +3,8 @@
 
 No fill is inferred from quoted opportunity rows. A completed basket must reconcile to
 canonical per-leg FILL records on one exact SHA. Open locked edge is diagnostic only;
-realized promotion economics come only from canonical FINAL observations.
+realized promotion economics come only from canonical FINAL observations whose PnL is
+explicitly declared post-cost.
 """
 from __future__ import annotations
 
@@ -56,31 +57,53 @@ def _nonnegative_cost(name: str, value: float | None) -> float:
     return out
 
 
-def _observation_cost(event: LedgerEvent) -> float:
-    return sum((_nonnegative_cost("fee", event.fee),
-                _nonnegative_cost("slippage", event.slippage),
-                _nonnegative_cost("unwind_loss", event.unwind_loss),
-                _nonnegative_cost("capital_cost", event.capital_cost),
-                _nonnegative_cost("latency_cost", event.latency_cost)))
+def _fill_cost(event: LedgerEvent) -> float:
+    return _nonnegative_cost("fill_fee", event.fee) + _nonnegative_cost(
+        "fill_slippage", event.slippage
+    )
+
+
+def _terminal_incremental_cost(event: LedgerEvent) -> float:
+    # Fees/slippage belong to canonical FILL records so they are counted once.
+    # FINAL contributes only non-fill economic costs.
+    return sum(
+        (
+            _nonnegative_cost("unwind_loss", event.unwind_loss),
+            _nonnegative_cost("capital_cost", event.capital_cost),
+            _nonnegative_cost("latency_cost", event.latency_cost),
+        )
+    )
 
 
 def _candidate_is_point_in_time(candidate: LedgerEvent) -> bool:
-    return (candidate.exchange_ts_ms is not None and candidate.receive_ts_ms is not None
-            and candidate.decision_ts_ms is not None and candidate.book_snapshot_id is not None
-            and candidate.exchange_ts_ms > 0
-            and candidate.exchange_ts_ms <= candidate.receive_ts_ms <= candidate.decision_ts_ms
-            and candidate.recorded_ts_ms >= candidate.decision_ts_ms)
+    return (
+        candidate.exchange_ts_ms is not None
+        and candidate.receive_ts_ms is not None
+        and candidate.decision_ts_ms is not None
+        and candidate.book_snapshot_id is not None
+        and candidate.exchange_ts_ms > 0
+        and candidate.exchange_ts_ms <= candidate.receive_ts_ms <= candidate.decision_ts_ms
+        and candidate.recorded_ts_ms >= candidate.decision_ts_ms
+    )
 
 
 def _fill_is_point_in_time(fill: LedgerEvent) -> bool:
-    return (fill.exchange_ts_ms is not None and fill.receive_ts_ms is not None
-            and fill.exchange_ts_ms > 0
-            and fill.exchange_ts_ms <= fill.receive_ts_ms <= fill.recorded_ts_ms)
+    return (
+        fill.exchange_ts_ms is not None
+        and fill.receive_ts_ms is not None
+        and fill.exchange_ts_ms > 0
+        and fill.exchange_ts_ms <= fill.receive_ts_ms <= fill.recorded_ts_ms
+    )
 
 
 def _fill_has_authoritative_fee(fill: LedgerEvent) -> bool:
-    return (fill.fee is not None and math.isfinite(float(fill.fee)) and float(fill.fee) >= 0.0
-            and isinstance(fill.fee_source, str) and bool(fill.fee_source.strip()))
+    return (
+        fill.fee is not None
+        and math.isfinite(float(fill.fee))
+        and float(fill.fee) >= 0.0
+        and isinstance(fill.fee_source, str)
+        and bool(fill.fee_source.strip())
+    )
 
 
 def _choose_observation(events: list[LedgerEvent]) -> LedgerEvent:
@@ -89,8 +112,13 @@ def _choose_observation(events: list[LedgerEvent]) -> LedgerEvent:
     return max(pool, key=lambda event: (event.recorded_ts_ms, event.record_id))
 
 
-def aggregate_events(events: Iterable[LedgerEvent], *, expected_sha: str,
-                     strategy: str = DEFAULT_STRATEGY, ledger_files: int = 1) -> dict[str, Any]:
+def aggregate_events(
+    events: Iterable[LedgerEvent],
+    *,
+    expected_sha: str,
+    strategy: str = DEFAULT_STRATEGY,
+    ledger_files: int = 1,
+) -> dict[str, Any]:
     if not SHA_RE.fullmatch(expected_sha):
         raise ValueError("expected_sha must be an exact 40-character lowercase Git SHA")
     strategy = strategy.strip()
@@ -114,7 +142,10 @@ def aggregate_events(events: Iterable[LedgerEvent], *, expected_sha: str,
             if not event.candidate_id or not event.leg_id:
                 raise ValueError("fast_fill_missing_candidate_or_leg_id")
             fills_by_candidate[event.candidate_id].append(event)
-        elif event.event_type in OBSERVATION_TYPES and _truth(event.metadata, "joint_execution_observation"):
+        elif (
+            event.event_type in OBSERVATION_TYPES
+            and _truth(event.metadata, "joint_execution_observation")
+        ):
             if not event.candidate_id:
                 raise ValueError("fast_joint_observation_missing_candidate_id")
             observations_by_candidate[event.candidate_id].append(event)
@@ -133,6 +164,8 @@ def aggregate_events(events: Iterable[LedgerEvent], *, expected_sha: str,
     authoritative_fees = bool(observations_by_candidate)
     depth_executable = bool(observations_by_candidate)
     partial_unwind_accounted = bool(observations_by_candidate)
+    post_cost_pnl_verified = False
+    every_realized_pnl_post_cost = True
 
     for candidate_id, observation_events in sorted(observations_by_candidate.items()):
         candidate = candidates.get(candidate_id)
@@ -145,15 +178,25 @@ def aggregate_events(events: Iterable[LedgerEvent], *, expected_sha: str,
             raise ValueError(f"multileg_candidate_missing_bundle_id:{candidate_id}")
 
         fill_events = fills_by_candidate.get(candidate_id, [])
-        filled_leg_ids = {event.leg_id for event in fill_events if (event.filled_size or 0.0) > 0.0}
-        completed_leg_ids = {event.leg_id for event in fill_events
-                             if (event.filled_size or 0.0) > 0.0 and event.complete is True}
+        filled_leg_ids = {
+            event.leg_id for event in fill_events if (event.filled_size or 0.0) > 0.0
+        }
+        completed_leg_ids = {
+            event.leg_id
+            for event in fill_events
+            if (event.filled_size or 0.0) > 0.0 and event.complete is True
+        }
         if len(filled_leg_ids) > target_legs or len(completed_leg_ids) > target_legs:
             raise ValueError(f"fill_count_exceeds_target:{candidate_id}")
+        if target_legs > 1 and any(event.bundle_id != candidate.bundle_id for event in fill_events):
+            raise ValueError(f"fill_bundle_lineage_mismatch:{candidate_id}")
         if fill_events:
-            point_in_time = point_in_time and all(_fill_is_point_in_time(event) for event in fill_events)
+            point_in_time = point_in_time and all(
+                _fill_is_point_in_time(event) for event in fill_events
+            )
             authoritative_fees = authoritative_fees and all(
-                _fill_has_authoritative_fee(event) for event in fill_events)
+                _fill_has_authoritative_fee(event) for event in fill_events
+            )
 
         observation = _choose_observation(observation_events)
         metadata = observation.metadata
@@ -163,6 +206,8 @@ def aggregate_events(events: Iterable[LedgerEvent], *, expected_sha: str,
         reported_filled = _integer(metadata.get("filled_legs"), len(filled_leg_ids))
         if reported_filled != len(filled_leg_ids):
             raise ValueError(f"filled_leg_count_mismatch:{candidate_id}")
+        if target_legs > 1 and observation.bundle_id != candidate.bundle_id:
+            raise ValueError(f"observation_bundle_lineage_mismatch:{candidate_id}")
 
         completed = _truth(metadata, "completed_basket")
         if completed and len(completed_leg_ids) != target_legs:
@@ -170,11 +215,15 @@ def aggregate_events(events: Iterable[LedgerEvent], *, expected_sha: str,
         if not completed and len(completed_leg_ids) == target_legs:
             raise ValueError(f"all_legs_complete_but_basket_not_completed:{candidate_id}")
 
-        partial = _truth(metadata, "partial_unwind") or (0 < len(filled_leg_ids) < target_legs)
+        partial = _truth(metadata, "partial_unwind") or (
+            0 < len(filled_leg_ids) < target_legs
+        )
         if partial:
             partial_unwinds += 1
             partial_unwind_accounted = partial_unwind_accounted and (
-                observation.event_type == "FINAL" and _truth(metadata, "unwind_accounted"))
+                observation.event_type == "FINAL"
+                and _truth(metadata, "unwind_accounted")
+            )
         if completed:
             completed_baskets += 1
         joint_counts[joint_state] += 1
@@ -182,7 +231,10 @@ def aggregate_events(events: Iterable[LedgerEvent], *, expected_sha: str,
         point_in_time = point_in_time and _candidate_is_point_in_time(candidate)
         depth_executable = depth_executable and _truth(metadata, "depth_executable")
         if observation.event_type == "POSITION_MARK":
-            depth_executable = depth_executable and observation.executable_liquidation_value is not None
+            depth_executable = (
+                depth_executable
+                and observation.executable_liquidation_value is not None
+            )
 
         duration_seconds = max(0, observation.capital_duration_ms or 0) / 1000.0
         observed_capital_seconds += duration_seconds
@@ -191,25 +243,43 @@ def aggregate_events(events: Iterable[LedgerEvent], *, expected_sha: str,
             locked_terminal_observations += 1
             locked_terminal_pnl_sum += locked
 
-        pnl_realized = observation.event_type == "FINAL" and _truth(metadata, "pnl_realized")
+        pnl_realized = (
+            observation.event_type == "FINAL" and _truth(metadata, "pnl_realized")
+        )
         if pnl_realized and filled_leg_ids:
             if observation.final_pnl is None or not math.isfinite(float(observation.final_pnl)):
                 raise ValueError(f"realized_fast_final_missing_pnl:{candidate_id}")
-            cost = _observation_cost(observation)
+            is_post_cost = _truth(metadata, "pnl_is_post_cost")
+            every_realized_pnl_post_cost = every_realized_pnl_post_cost and is_post_cost
+            cost = sum(_fill_cost(event) for event in fill_events) + _terminal_incremental_cost(
+                observation
+            )
             realized_pnl_observations += 1
             fill_conditioned_net_pnl += float(observation.final_pnl)
             explicit_cost_sum += cost
             realized_capital_seconds += duration_seconds
 
+    post_cost_pnl_verified = (
+        realized_pnl_observations > 0 and every_realized_pnl_post_cost
+    )
     return {
-        "schema": SCHEMA, "source": SOURCE, "strategy": strategy, "model_sha": expected_sha,
-        "paper_only": True, "authenticated_execution": False, "ledger_files": ledger_files,
-        "candidate_count": len(candidates), "point_in_time": point_in_time,
-        "authoritative_fees": authoritative_fees, "depth_executable": depth_executable,
+        "schema": SCHEMA,
+        "source": SOURCE,
+        "strategy": strategy,
+        "model_sha": expected_sha,
+        "paper_only": True,
+        "authenticated_execution": False,
+        "ledger_files": ledger_files,
+        "candidate_count": len(candidates),
+        "point_in_time": point_in_time,
+        "authoritative_fees": authoritative_fees,
+        "depth_executable": depth_executable,
         "partial_unwind_accounted": partial_unwind_accounted,
+        "post_cost_pnl_verified": post_cost_pnl_verified,
         "joint_state_observations": sum(joint_counts.values()),
         "realized_pnl_observations": realized_pnl_observations,
-        "completed_baskets": completed_baskets, "partial_unwind_observations": partial_unwinds,
+        "completed_baskets": completed_baskets,
+        "partial_unwind_observations": partial_unwinds,
         "joint_state_counts": dict(sorted(joint_counts.items())),
         "locked_terminal_observations": locked_terminal_observations,
         "locked_terminal_pnl_sum": locked_terminal_pnl_sum,
@@ -219,8 +289,11 @@ def aggregate_events(events: Iterable[LedgerEvent], *, expected_sha: str,
         "cost_stress_2x_net_pnl": fill_conditioned_net_pnl - explicit_cost_sum,
         "observed_capital_hours": observed_capital_seconds / 3600.0,
         "capital_hours": realized_capital_seconds / 3600.0,
-        "pnl_per_capital_hour": (fill_conditioned_net_pnl / (realized_capital_seconds / 3600.0)
-                                 if realized_capital_seconds > 0.0 else None),
+        "pnl_per_capital_hour": (
+            fill_conditioned_net_pnl / (realized_capital_seconds / 3600.0)
+            if realized_capital_seconds > 0.0
+            else None
+        ),
     }
 
 
@@ -247,8 +320,12 @@ def main() -> int:
     events: list[LedgerEvent] = []
     for path in paths:
         events.extend(load_events(path, expected_model_sha=args.expected_sha))
-    report = aggregate_events(events, expected_sha=args.expected_sha, strategy=args.strategy,
-                              ledger_files=len(paths))
+    report = aggregate_events(
+        events,
+        expected_sha=args.expected_sha,
+        strategy=args.strategy,
+        ledger_files=len(paths),
+    )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     tmp = args.output_json.with_name(args.output_json.name + f".tmp.{os.getpid()}")
     tmp.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
