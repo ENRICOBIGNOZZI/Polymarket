@@ -61,8 +61,8 @@ def forward_gate(blocked: dict[str, object], config: dict[str, Any]) -> tuple[bo
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Frozen 2h/6h finance-style cross-sectional relative tail challenger")
-    parser.add_argument("--config", type=Path, default=Path("config/research_v7_cross_sectional_rank.json"))
+    parser = argparse.ArgumentParser(description="Frozen V7 finance-style cross-sectional relative tail challenger")
+    parser.add_argument("--config", type=Path, default=Path("config/research_v7_cross_sectional_rank_frozen.json"))
     parser.add_argument("--gamma-url", default="https://gamma-api.polymarket.com")
     parser.add_argument("--clob-url", default="https://clob.polymarket.com")
     parser.add_argument("--market-limit", type=int, default=150)
@@ -75,8 +75,11 @@ def main() -> int:
         raise SystemExit("relative tail challenger must remain paper/research-only with live intents disabled")
     if cfg.get("target") != "cross_sectional_tail_relative_logit_spread":
         raise SystemExit("relative tail challenger target contract is not frozen")
-    if list(cfg.get("horizons_minutes") or []) != [120, 360]:
-        raise SystemExit("relative tail challenger horizons must remain frozen at 2h and 6h")
+    horizons_minutes = [int(value) for value in (cfg.get("horizons_minutes") or [])]
+    if not horizons_minutes or any(value <= 0 for value in horizons_minutes):
+        raise SystemExit("relative tail challenger requires at least one positive frozen horizon")
+    if len(set(horizons_minutes)) != len(horizons_minutes):
+        raise SystemExit("relative tail challenger horizons must be unique")
     if cfg.get("frequency_registration", {}).get("frozen_holdout_only") is not True:
         raise SystemExit("relative tail challenger requires frozen_holdout_only=true")
     pair_contract = cfg["relative_pair_contract"]
@@ -89,6 +92,10 @@ def main() -> int:
     execution_cfg = cfg["execution_shadow"]
     discovery_cfg = cfg["discovery"]
     fidelity_minutes = int(history_cfg["fidelity_minutes"])
+    if fidelity_minutes <= 0:
+        raise SystemExit("history fidelity must be positive")
+    if any(value % fidelity_minutes != 0 for value in horizons_minutes):
+        raise SystemExit("every frozen horizon must be an integer multiple of history fidelity")
     bucket_seconds = fidelity_minutes * 60
     holdout_start = int(discovery_cfg["forward_holdout_start_ts"])
     if holdout_start <= int(discovery_cfg["discovery_cutoff_ts"]):
@@ -100,7 +107,7 @@ def main() -> int:
         float(execution_cfg["minimum_liquidity_usd"]),
     )
     # The frozen fit needs the complete pre-holdout training window even as the
-    # forward observer ages.  Keep the ordinary lookback, but never let its start
+    # forward observer ages. Keep the ordinary lookback, but never let its start
     # move past the fixed holdout training window (plus feature warm-up).
     rolling_start_ts = now - int(history_cfg["lookback_hours"]) * 3600
     frozen_training_start_ts = (
@@ -168,7 +175,7 @@ def main() -> int:
         embargo_steps=embargo_steps,
     )
 
-    for horizon_minutes in cfg["horizons_minutes"]:
+    for horizon_minutes in horizons_minutes:
         horizon_steps = int(horizon_minutes) // fidelity_minutes
         rows = core.build_training_rows(
             histories,
@@ -262,7 +269,8 @@ def main() -> int:
         "live_intents_enabled": False,
         "submitted_orders": 0,
         "target": cfg["target"],
-        "frozen_horizons_minutes": list(cfg["horizons_minutes"]),
+        "frozen_horizons_minutes": horizons_minutes,
+        "history_fidelity_minutes": fidelity_minutes,
         "tail_fraction": float(model_cfg["tail_fraction"]),
         "discovery_source_head": discovery_cfg["source_head"],
         "discovery_cutoff_ts": int(discovery_cfg["discovery_cutoff_ts"]),
@@ -270,6 +278,7 @@ def main() -> int:
         "frozen_training_label_cutoff_ts": frozen_label_cutoff,
         "holdout_model_mode": "single_pre_holdout_fit_reused_for_all_forward_sections",
         "adaptive_refit_mixed_into_frozen_evidence": False,
+        "pool_evidence_across_horizons": False,
         "forward_days_observed": forward_days_observed,
         "market_count": len(markets),
         "history_market_count": len(histories),
@@ -294,7 +303,7 @@ def main() -> int:
             "point_in_time_universe_not_yet_attached",
             "empirical_joint_fill_states_not_yet_attached",
             "partial_fill_abort_unwind_economics_not_yet_attached",
-            "shared_execution_ledger_cost_stressed_pnl_not_yet_attached",
+            "canonical_v7_execution_ledger_cost_stressed_pnl_not_yet_attached",
             "research_branch_cannot_mutate_live_champion"
         ] + ([] if history_data_healthy else ["price_history_data_health_unhealthy"]),
     }
