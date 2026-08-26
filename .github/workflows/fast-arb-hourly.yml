@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - "include/pm/fast_arb.hpp"
+      - "include/pm/fast_paper_execution.hpp"
       - "include/pm/fast_ws.hpp"
       - "include/pm/generated/fast_arb_candidate_policy.hpp"
       - "src/fast_arb.cpp"
@@ -64,6 +65,7 @@ jobs:
           mkdir -p runs/hourly-fast
           duration=180
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then duration=45; fi
+          POLYMARKET_MODEL_SHA="$(git rev-parse HEAD)" \
           ./build/polymarket_fast_arb_shadow \
             --config config/paper_v7.json \
             --policy config/fast_arb_policy.json \
