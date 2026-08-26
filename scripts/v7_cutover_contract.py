@@ -147,11 +147,12 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
             fail(f"V7 cutover blocked: v7.{key} must be true")
     if v7.get("authenticated_execution") is not False:
         fail("V7 cutover blocked: v7.authenticated_execution must be false")
-    hard = authorization.get("hard_arb") if isinstance(authorization.get("hard_arb"), dict) else {}
-    if v7.get("hard_arb_fixed_dollar_trade_cap_enabled") is not False:
-        fail("V7 cutover blocked: Hard Arb fixed-dollar trade cap must remain disabled")
+    if v7.get("hard_arb_fixed_dollar_trade_cap_enabled") is not authorization.get(
+        "hard_arb_fixed_dollar_trade_cap_enabled"
+    ):
+        fail("V7 cutover blocked: Hard Arb fixed-dollar cap setting does not match operator authority")
     if number(v7.get("hard_arb_max_trade_fraction"), "v7.hard_arb_max_trade_fraction") > number(
-        hard.get("max_trade_fraction"), "operator.hard_arb.max_trade_fraction"
+        authorization.get("hard_arb_max_trade_fraction"), "operator.hard_arb_max_trade_fraction"
     ) + 1e-12:
         fail("V7 cutover blocked: Hard Arb trade fraction exceeds the operator ceiling")
 
