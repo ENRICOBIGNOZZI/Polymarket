@@ -10,6 +10,8 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+import v7_cross_sectional_rank_core as core
+import v7_cross_sectional_rank_frozen as frozen
 import v7_cross_sectional_rank_inference as inference
 
 UTC_DAY_BASE = (1_700_000_000 // 86400) * 86400
@@ -77,6 +79,81 @@ class BlockedRankingInferenceTest(unittest.TestCase):
         ok, reasons = inference.discovery_robustness_gate(result)
         self.assertFalse(ok)
         self.assertIn("insufficient_day_blocks", reasons)
+
+
+class FrozenRankingHoldoutTest(unittest.TestCase):
+    @staticmethod
+    def _rows(start_ts: int, sections: int, bucket_seconds: int) -> list[core.TrainingRow]:
+        rows: list[core.TrainingRow] = []
+        for section in range(sections):
+            ts = start_ts + section * bucket_seconds
+            for market in range(10):
+                scale = 0.01 * (market + 1)
+                features = tuple(
+                    scale * (feature + 1) + 0.0001 * section
+                    for feature in range(len(core.FEATURE_NAMES))
+                )
+                target = 0.2 * features[0] - 0.1 * features[1] + 0.00001 * section
+                rows.append(
+                    core.TrainingRow(
+                        ts=ts,
+                        label_ts=ts + 2 * bucket_seconds,
+                        market_id=f"m{market}",
+                        event_id=f"e{market}",
+                        group="g",
+                        probability=0.5,
+                        features=features,
+                        target_logit=target,
+                    )
+                )
+        return rows
+
+    def test_frozen_fit_never_absorbs_holdout_rows(self) -> None:
+        bucket = 1800
+        holdout = UTC_DAY_BASE + 80 * bucket
+        rows = self._rows(holdout - 70 * bucket, 90, bucket)
+        metrics, fit = frozen.frozen_section_metrics(
+            rows,
+            holdout_start_ts=holdout,
+            bucket_seconds=bucket,
+            window_seconds=21 * 86400,
+            embargo_steps=1,
+            ridge=0.05,
+            half_life_seconds=7 * 86400,
+            min_train_rows=100,
+            min_train_cross_sections=20,
+            tail_fraction=0.2,
+        )
+        self.assertIsNotNone(fit)
+        assert fit is not None
+        cutoff = frozen.frozen_training_label_cutoff_ts(
+            holdout,
+            bucket_seconds=bucket,
+            embargo_steps=1,
+        )
+        self.assertLessEqual(fit.train_end_ts, cutoff)
+        self.assertTrue(metrics)
+        self.assertTrue(all(int(row["ts"]) >= holdout for row in metrics))
+
+        later_rows = rows + self._rows(holdout + 30 * bucket, 20, bucket)
+        later_metrics, later_fit = frozen.frozen_section_metrics(
+            later_rows,
+            holdout_start_ts=holdout,
+            bucket_seconds=bucket,
+            window_seconds=21 * 86400,
+            embargo_steps=1,
+            ridge=0.05,
+            half_life_seconds=7 * 86400,
+            min_train_rows=100,
+            min_train_cross_sections=20,
+            tail_fraction=0.2,
+        )
+        self.assertIsNotNone(later_fit)
+        assert later_fit is not None
+        self.assertEqual(fit.beta, later_fit.beta)
+        self.assertEqual(fit.train_start_ts, later_fit.train_start_ts)
+        self.assertEqual(fit.train_end_ts, later_fit.train_end_ts)
+        self.assertEqual(metrics, later_metrics[: len(metrics)])
 
 
 if __name__ == "__main__":
