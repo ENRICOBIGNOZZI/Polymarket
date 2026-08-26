@@ -246,6 +246,15 @@ wait_for_runtime_health() {
   return 1
 }
 
+capture_runtime_health_diagnostics() {
+  local target_sha="$1"
+  if [[ -f "$APP_DIR/ops/capture_runtime_health_macos.sh" ]]; then
+    bash "$APP_DIR/ops/capture_runtime_health_macos.sh" "$target_sha" || log "candidate health diagnostics collector failed"
+  else
+    log "candidate health diagnostics collector missing"
+  fi
+}
+
 [[ "$(uname -s)" == "Darwin" ]] || fail "This updater is for macOS only"
 [[ -d "$APP_DIR/.git" ]] || fail "$APP_DIR is not a git checkout"
 [[ -f "$APP_DIR/.server_bootstrapped_macos" ]] || fail "run ops/bootstrap_macos.sh interactively once first"
@@ -289,6 +298,7 @@ if [[ "$OLD_SHA" == "$NEW_SHA" ]]; then
     log "Runtime and Grafana configuration repaired at validated commit $NEW_SHA"
     exit 0
   fi
+  capture_runtime_health_diagnostics "$NEW_SHA"
   write_status unhealthy "$OLD_SHA" "$NEW_SHA" "$MAIN_SHA"
   fail "validated code is current and automatic configuration/service repair did not restore health"
 fi
@@ -331,7 +341,7 @@ ctest --test-dir build --output-on-failure
   scripts/build_v4_intents.py scripts/merge_v4_intents.py \
   scripts/walk_forward_v4.py scripts/tiny_live_pilot.py scripts/v6_*.py
 bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh \
-  scripts/v6_live_smoke_once.sh ops/apply_runtime_config_macos.sh
+  scripts/v6_live_smoke_once.sh ops/apply_runtime_config_macos.sh ops/capture_runtime_health_macos.sh
 "$PYTHON_BIN" -m json.tool config/live_champion.json >/dev/null
 "$PYTHON_BIN" -m json.tool config/paper_v5.json >/dev/null
 "$PYTHON_BIN" -m json.tool config/paper_v6.json >/dev/null
@@ -398,6 +408,7 @@ sudo -n /usr/local/sbin/polymarket-service-control restart || rollback "service 
 
 log "Waiting for production health (up to $((RUNTIME_HEALTH_ATTEMPTS * 2)) seconds for process/readiness confirmation)"
 if ! wait_for_runtime_health; then
+  capture_runtime_health_diagnostics "$NEW_SHA"
   rollback "post-deploy paper runtime health checks failed"
 fi
 
