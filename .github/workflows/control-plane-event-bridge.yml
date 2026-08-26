@@ -7,7 +7,6 @@ on:
   workflow_run:
     workflows:
       - "ci"
-      - "Polymarket Research Policy"
       - "monitoring"
       - "v4-live-paper-smoke"
       - "Private runtime single-writer validation"
@@ -17,7 +16,6 @@ on:
 permissions:
   actions: write
   contents: read
-  pull-requests: read
 
 concurrency:
   group: polymarket-control-plane-event-bridge
@@ -47,7 +45,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TRIGGER_NAME: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.name || '' }}
           TRIGGER_CONCLUSION: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion || '' }}
-          TRIGGER_HEAD_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" == "workflow_run" && "$TRIGGER_NAME" == "Polymarket Promotion Controller" ]]; then
@@ -58,19 +55,6 @@ jobs:
               echo "no_dispatch=integration-merge.yml reason=promotion-controller-${TRIGGER_CONCLUSION:-unknown}" >> "$GITHUB_STEP_SUMMARY"
             fi
           else
-            if [[ "$GITHUB_EVENT_NAME" == "workflow_run" && "$TRIGGER_CONCLUSION" == "success" ]]; then
-              case "$TRIGGER_NAME" in
-                "ci"|"Polymarket Research Policy"|"monitoring"|"Private runtime single-writer validation")
-                  SOURCE_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/546" --jq '.head.sha')"
-                  if [[ -n "$SOURCE_SHA" && "$TRIGGER_HEAD_SHA" == "$SOURCE_SHA" ]]; then
-                    gh workflow run v7-unified-paper-evidence.yml --ref main
-                    echo "dispatched=v7-unified-paper-evidence.yml reason=exact-v7-gate-success trigger=$TRIGGER_NAME source_sha=$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
-                  else
-                    echo "no_dispatch=v7-unified-paper-evidence.yml reason=non-v7-head trigger=$TRIGGER_NAME trigger_sha=${TRIGGER_HEAD_SHA:-none} source_sha=${SOURCE_SHA:-none}" >> "$GITHUB_STEP_SUMMARY"
-                  fi
-                  ;;
-              esac
-            fi
             gh workflow run promotion-controller.yml --ref main
             echo "dispatched=promotion-controller.yml trigger=${TRIGGER_NAME:-$GITHUB_EVENT_NAME} conclusion=${TRIGGER_CONCLUSION:-n/a}" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -80,4 +64,4 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_WORKFLOW" = "Polymarket Control-Plane Event Bridge"
-          echo 'The bridge may dispatch only the existing promotion/integration authorities and the isolated read-only V7 PAPER evidence reconciler. It has no merge, deploy, champion-ref, paper-validated-ref, credential or authenticated-execution authority of its own.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'The bridge may dispatch only the existing promotion and integration authorities; it has no merge, deploy, champion-ref, credential or execution authority.' >> "$GITHUB_STEP_SUMMARY"
