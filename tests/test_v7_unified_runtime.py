@@ -11,35 +11,37 @@ def load(path: str):
     return json.loads((ROOT / path).read_text(encoding="utf-8"))
 
 
-def test_research_branch_keeps_incumbent_manifest_and_defines_v7_candidate():
-    incumbent = load("config/live_champion.json")
+def test_integration_manifest_selects_unified_v7_paper_champion():
+    champion = load("config/live_champion.json")
     candidate = load("config/v7_champion_candidate.json")
-    assert incumbent["version"] == 6
-    assert incumbent["loop"] == "scripts/paper_v6_loop.sh"
+    assert champion["version"] == 7
+    assert champion["loop"] == "scripts/paper_v7_loop.sh"
+    assert champion["config"] == "config/paper_v7.json"
+    assert champion["run_root"] == "runs/paper_v7_live"
+    assert champion["paper_only"] is True
+    assert champion["authenticated_execution"] is False
     assert candidate["version"] == 7
-    assert candidate["loop"] == "scripts/paper_v7_loop.sh"
-    assert candidate["config"] == "config/paper_v7.json"
+    assert candidate["loop"] == champion["loop"]
+    assert candidate["config"] == champion["config"]
     assert candidate["paper_only"] is True
     assert candidate["authenticated_execution"] is False
-    assert candidate["promotion_contract"] == "research_head_must_be_exact-head-approved_then_integrated"
 
 
 def test_v7_config_has_no_binding_fixed_dollar_trade_cap_and_100_percent_hard_ceiling():
     cfg = load("config/paper_v7.json")
+    directives = load("config/operator_directives.json")["paper_v7_authorization"]
     assert cfg["engine_version"] == 7
     assert cfg["paper_only"] is True
-    assert cfg["market_limit"] == 1000
-    assert cfg["min_liquidity"] == 2.0
-    assert abs(cfg["min_net_edge"] - 0.00005) < 1e-12
-    assert cfg["fractional_kelly"] == 0.25
+    assert cfg["market_limit"] == directives["market_limit"]
+    assert cfg["min_liquidity"] == directives["min_liquidity"]
+    assert abs(cfg["min_net_edge"] - directives["min_net_edge"]) < 1e-12
+    assert cfg["fractional_kelly"] == directives["fractional_kelly_ceiling"]
     assert cfg["fixed_dollar_trade_cap_enabled"] is False
     assert float(cfg["max_trade_usd"]) > 1e50
-    assert cfg["max_trade_fraction"] == 1.0
-    assert cfg["max_market_fraction"] == 1.0
-    assert cfg["max_event_fraction"] == 1.0
-    assert cfg["max_gross_fraction"] == 1.0
+    for key in ("max_trade_fraction", "max_market_fraction", "max_event_fraction", "max_gross_fraction"):
+        assert cfg[key] == directives[key] == 1.0
     assert cfg["multi_strategy"]["global_max_gross_fraction"] == 1.0
-    assert cfg["max_drawdown"] == 0.15
+    assert cfg["max_drawdown"] == directives["max_drawdown"] == 0.15
     assert cfg["v7"]["hard_arb_fixed_dollar_trade_cap_enabled"] is False
     assert float(cfg["v7"]["hard_arb_max_trade_usd"]) > 1e50
     assert cfg["v7"]["hard_arb_max_trade_fraction"] == 1.0
@@ -67,12 +69,15 @@ def test_frequency_matrix_has_hf_and_30m_to_6h_without_pooling():
 def test_v7_entrypoint_has_one_execution_owner_and_separate_shadow_scheduler():
     selector = (ROOT / "scripts/paper_latest_loop.sh").read_text(encoding="utf-8")
     updater = (ROOT / "ops/update_server_macos.sh").read_text(encoding="utf-8")
+    singleton = (ROOT / "scripts/runtime_singleton_launcher.py").read_text(encoding="utf-8")
     text = (ROOT / "scripts/paper_v7_loop.sh").read_text(encoding="utf-8")
     assert "runtime_singleton_launcher.py" in selector
     assert "runtime_owner.lock" in selector
     assert "runtime_handoff.request" in selector
     assert "request_runtime_handoff()" in updater
     assert "clear_runtime_handoff()" in updater
+    assert "_drain_child_group" in singleton
+    assert "start_new_session=True" in singleton
     assert "runtime_singleton_launcher.py" not in text
     assert "runtime_owner.lock" not in text
     assert "paper_v7_execution_loop.sh" in text
@@ -86,6 +91,7 @@ def test_v7_execution_loop_uses_corrected_workers_and_roundtrip_joint_state_gate
     text = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
     assert "v7_micro_maker_worker.py" in text
     assert "v7_micro_taker_worker.py" in text
+    assert "v7_hard_arb_guard.py" in text
     assert "v7_multileg_broker_runner.py" in text
     assert "v7_capacity_lock.py" in text
     assert "v6_bundle_quote_optimizer.py" in text  # compatibility adapter -> V7 optimizer
