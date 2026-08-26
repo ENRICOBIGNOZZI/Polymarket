@@ -11,6 +11,17 @@ EXPECTED_CLEANUP_SEQUENCE = (
     "v7_implementation_then_tests_then_same_sha_paper_then_main_then_"
     "paper_validated_then_deploy_then_server_health_then_legacy_deletion"
 )
+EXPECTED_AUTHORITY = "latest_explicit_user_instruction"
+PLANNED_FORWARD_SCHEDULERS = {
+    "live-paper-validation",
+    "paper-server-deploy",
+    "paper-server-health",
+    "forward-maker-research",
+}
+LEGACY_ONLY_SCHEDULERS = {
+    "v6-live-data-research",
+    "v6-market-cache-relay",
+}
 
 
 def load(path: Path) -> dict[str, Any]:
@@ -79,7 +90,7 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
 
     if directives.get("schema_version") != 1:
         errors.append("operator directives schema_version must equal 1")
-    if directives.get("authority") != "latest_verified_explicit_user_instruction":
+    if directives.get("authority") != EXPECTED_AUTHORITY:
         errors.append("operator authority mismatch")
     if directives.get("repository") != "ENRICOBIGNOZZI/Polymarket":
         errors.append("operator repository mismatch")
@@ -89,8 +100,11 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     if architecture.get("cleanup_sequence") != EXPECTED_CLEANUP_SEQUENCE:
         errors.append("operator cleanup/cutover sequence does not match the current same-SHA lifecycle")
     legacy_rule = str(architecture.get("legacy_rule") or "")
-    if "restore V3/V4/V5/V6 wholesale" not in legacy_rule:
-        errors.append("operator legacy rule must prohibit wholesale V3-V6 restoration")
+    if "Do not add new logic to V3/V4/V5/V6" not in legacy_rule:
+        errors.append("operator legacy rule must forbid new V3-V6 development")
+    recovery = str(architecture.get("recovery_after_premature_cleanup") or "")
+    if "Do not restore" not in recovery or "V7/common/control-plane" not in recovery:
+        errors.append("operator architecture must require forward repair rather than wholesale legacy restoration")
 
     auth = directives.get("paper_v7_authorization") if isinstance(directives.get("paper_v7_authorization"), dict) else {}
     if auth.get("paper_only") is not True or auth.get("authenticated_execution") is not False:
@@ -117,31 +131,26 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     missing = sorted(active_ids.difference(assignments))
     if missing:
         errors.append("operator directives missing active scheduler assignments: " + ", ".join(missing))
-    extra = sorted(set(assignments).difference(active_ids))
-    for sid in extra:
-        if not str(assignments.get(sid, "")).startswith("RETIRED_IMMEDIATELY"):
-            errors.append(f"inactive scheduler assignment is not explicitly retired: {sid}")
 
-    # These are the deleted legacy scheduler identities. Forward repair must use
-    # V7/control-plane ownership rather than resurrecting the old IDs wholesale.
-    forbidden_ids = {
-        "v6-live-data-research",
-        "v6-market-cache-relay",
-        "live-paper-validation",
-        "paper-server-deploy",
-        "paper-server-health",
-        "forward-maker-research",
-    }
-    present = sorted(active_ids.intersection(forbidden_ids))
-    if present:
-        errors.append("retired scheduler identities restored instead of ported forward: " + ", ".join(present))
+    extra = set(assignments).difference(active_ids)
+    planned = sorted(extra.intersection(PLANNED_FORWARD_SCHEDULERS))
+    for sid in planned:
+        notes.append(f"{sid}: operator-owned V7 forward-repair scheduler not yet registered")
+    unexpected_extra = sorted(extra.difference(PLANNED_FORWARD_SCHEDULERS))
+    for sid in unexpected_extra:
+        if not str(assignments.get(sid, "")).startswith("RETIRED_IMMEDIATELY"):
+            errors.append(f"inactive scheduler assignment is neither planned forward repair nor explicitly retired: {sid}")
+
+    present_legacy = sorted(active_ids.intersection(LEGACY_ONLY_SCHEDULERS))
+    if present_legacy:
+        errors.append("legacy-only scheduler identities remain active: " + ", ".join(present_legacy))
 
     priorities = directives.get("current_priority_order")
     if not isinstance(priorities, list) or len(priorities) < 8:
         errors.append("complete current priority order is required")
     forbidden = directives.get("forbidden_regressions")
-    if not isinstance(forbidden, list) or not any("mass legacy deletion" in str(x) for x in forbidden):
-        errors.append("further pre-cutover mass legacy deletion must remain forbidden")
+    if not isinstance(forbidden, list) or not any("Do not delete or omit V7 cutover primitives" in str(x) for x in forbidden):
+        errors.append("V7 same-SHA cutover primitives must remain protected from premature deletion")
 
     for rel in [str(x) for x in context.get("required_surfaces", [])]:
         if not (root / rel).exists():
@@ -186,7 +195,7 @@ def render(errors: list[str], notes: list[str]) -> str:
     lines = [
         "# Scheduler project-context validation",
         "",
-        f"- active schedulers: {len(notes)}",
+        f"- active/planned scheduler notes: {len(notes)}",
         f"- errors: {len(errors)}",
         "- operational champion: temporarily disabled pending V7 cutover repair",
     ]
