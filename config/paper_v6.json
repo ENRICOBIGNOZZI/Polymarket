@@ -63,6 +63,8 @@
     "micro_taker_seconds": 5,
     "external_refresh_seconds": 60,
     "report_seconds": 60,
+    "assumed_fee_rate": 0.07,
+    "assumed_fee_exponent": 1.0,
     "structural_min_similarity": 0.25,
     "structural_max_bundles": 100,
     "hard_arb_max_events": 80,
