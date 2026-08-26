@@ -10,8 +10,17 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from collections import Counter
 from pathlib import Path
 from typing import Any
+
+import sys
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from polymarket_fees import FeeDetails, FeeScheduleUnavailable, fee_per_share, resolve_fee_details
 
 
 def finite(value: Any, default: float = math.nan) -> float:
@@ -46,12 +55,6 @@ def get_json(url: str, payload: Any | None = None, timeout: int = 20) -> Any:
     )
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.loads(response.read().decode())
-
-
-def fee_ps(px: float, rate: float, exp: float) -> float:
-    if not 0 < px < 1 or rate <= 0:
-        return 0.0
-    return rate * (px * (1 - px)) ** max(0.0, exp)
 
 
 def atomic_json(path: Path, obj: dict) -> None:
@@ -249,6 +252,8 @@ def main() -> int:
     candidates = 0
     entered = 0
     best_edge = 0.0
+    fee_sources: Counter[str] = Counter()
+    fee_unavailable = 0
 
     # One YES share in every outcome of a verified complete non-augmented NegRisk
     # event pays exactly $1. Until resolution, however, equity is conservatively
@@ -321,21 +326,13 @@ def main() -> int:
                     continue
 
                 tokens: list[str] = []
-                rates: list[tuple[float, float]] = []
+                fees: list[FeeDetails] = []
                 for market in markets:
                     yes, _ = market_tokens(market) or ("", "")
                     tokens.append(yes)
-                    fee_schedule = (
-                        market.get("feeSchedule")
-                        if isinstance(market.get("feeSchedule"), dict)
-                        else {}
-                    )
-                    rates.append(
-                        (
-                            max(0.0, finite(fee_schedule.get("rate"), 0.07)),
-                            max(0.0, finite(fee_schedule.get("exponent"), 1.0)),
-                        )
-                    )
+                    details = resolve_fee_details(market, clob, get_json)
+                    fee_sources[details.source] += 1
+                    fees.append(details)
 
                 live_books = books(clob, tokens)
                 if any(token not in live_books for token in tokens):
@@ -348,7 +345,7 @@ def main() -> int:
                     for token in tokens
                 ]
                 cost_per_share = sum(
-                    price + fee_ps(price, *rates[i])
+                    price + fee_per_share(price, fees[i])
                     for i, price in enumerate(prices)
                 )
                 edge = 1.0 - cost_per_share
@@ -413,6 +410,8 @@ def main() -> int:
                     },
                 )
             except Exception as exc:
+                if isinstance(exc, FeeScheduleUnavailable):
+                    fee_unavailable += 1
                 if len(failures) < 20:
                     failures.append(f"event:{event_id}:{type(exc).__name__}")
 
@@ -435,6 +434,8 @@ def main() -> int:
         "positive_candidates": candidates,
         "entered": entered,
         "best_edge": best_edge,
+        "fee_sources_last_tick": dict(fee_sources),
+        "fee_unavailable_last_tick": fee_unavailable,
         "failures": failures,
         "paper_only": True,
         "atomic_snapshot_assumption": True,

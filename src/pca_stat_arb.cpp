@@ -554,7 +554,13 @@ int main(int argc, char** argv) {
                 if (shares < 0.01 || shares > 6.0) return false;
                 const std::string side = standardized_weight >= 0.0 ? "YES" : "NO";
                 const auto& book = side == "YES" ? books.at(s[i].market->yes_token) : books.at(s[i].market->no_token);
-                legs.push_back({s[i].market, &book, api.fetch_fee_details(*s[i].market), side, shares, target});
+                pm::FeeDetails fee;
+                try {
+                    fee = api.fetch_fee_details(*s[i].market);
+                } catch (...) {
+                    return false;
+                }
+                legs.push_back({s[i].market, &book, fee, side, shares, target});
                 return true;
             };
 

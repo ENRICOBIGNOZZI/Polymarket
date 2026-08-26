@@ -14,6 +14,7 @@ import json
 import math
 import random
 import statistics
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -23,6 +24,12 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from polymarket_fees import resolve_fee_details
 
 
 def finite(value: Any, default: float = 0.0) -> float:
@@ -295,19 +302,6 @@ def gamma_eligible(gamma_url: str, market_id: str, end_ts: int, timeout: float) 
         start = start or parse_timestamp(obj.get("gameStartTime"))
         timed = timed or bool(str(obj.get("sportsMarketType") or "").strip()) or start > 0
     return not timed or start > end_ts + 60
-
-
-def fetch_fee_rate(clob_url: str, token: str, timeout: float) -> float:
-    try:
-        root = request_json(
-            clob_url.rstrip("/") + "/fee-rate?token_id=" + urllib.parse.quote(token, safe=""),
-            timeout=timeout,
-        )
-    except RuntimeError:
-        return 0.0
-    if not isinstance(root, dict):
-        return 0.0
-    return max(0.0, finite(root.get("base_fee"), 0.0) / 10000.0)
 
 
 def fetch_trades(
@@ -735,13 +729,25 @@ def main() -> int:
         except RuntimeError:
             trades_by_condition[condition] = []
 
-    fee_rates = {token: fetch_fee_rate(args.clob_url, token, args.timeout_seconds) for token in set(tokens)}
+    fee_by_condition = {}
+    for condition in {str(row["condition_id"]) for row in eligible}:
+        try:
+            fee_by_condition[condition] = resolve_fee_details(
+                {"conditionId": condition},
+                args.clob_url,
+                lambda url, *_args: request_json(url, timeout=args.timeout_seconds),
+            )
+        except Exception:
+            pass
     results: list[dict[str, Any]] = []
     for row, policy, yleg, nleg in definitions:
         condition = str(row["condition_id"])
+        fee = fee_by_condition.get(condition)
+        if fee is None:
+            continue
         trades = trades_by_condition.get(condition, [])
-        yes = simulate_leg(yleg, trades, snapshots, fee_rates.get(yleg.token_id, 0.0))
-        no = simulate_leg(nleg, trades, snapshots, fee_rates.get(nleg.token_id, 0.0))
+        yes = simulate_leg(yleg, trades, snapshots, fee.rate)
+        no = simulate_leg(nleg, trades, snapshots, fee.rate)
         eligibility = reward_eligibility_fraction(
             yleg.limit_price,
             nleg.limit_price,

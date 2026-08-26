@@ -105,7 +105,7 @@ class V6ModelContracts(unittest.TestCase):
 
     def test_hard_arb_executor_requires_complete_same_snapshot_depth(self):
         text=(ROOT/"scripts/v6_hard_arb_paper.py").read_text()
-        self.assertIn("negRiskAugmented",text);self.assertIn("all-or-none",text.lower());self.assertIn("min_size",text);self.assertIn("cost_per_share",text);self.assertIn("fee_ps",text)
+        self.assertIn("negRiskAugmented",text);self.assertIn("all-or-none",text.lower());self.assertIn("min_size",text);self.assertIn("cost_per_share",text);self.assertIn("fee_per_share",text);self.assertIn("resolve_fee_details",text)
 
     def test_hard_arb_discovery_respects_market_scan_budget(self):
         hard_arb=load_script("v6_hard_arb_pagination_test","scripts/v6_hard_arb_paper.py")

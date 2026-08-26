@@ -780,7 +780,13 @@ private:
             }
             auto bk=books.find(l->token_id);
             if (bk==books.end()) return false;
-            auto r=sell_all(bk->second,l->filled_shares,cfg_.slippage_bps,fee_for(mi->second));
+            pm::FeeDetails fee;
+            try {
+                fee=fee_for(mi->second);
+            } catch (...) {
+                return false;
+            }
+            auto r=sell_all(bk->second,l->filled_shares,cfg_.slippage_bps,fee);
             if (!r) return false;
             sells.push_back({l,*r});
         }

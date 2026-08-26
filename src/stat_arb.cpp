@@ -417,8 +417,13 @@ int main(int argc, char** argv) {
                     LegEval ly{side_y, &by, std::abs(dpy), qy};
                     LegEval lx{side_x, &bx, std::abs(dpx), qx};
 
-                    const pm::FeeDetails fdy = api.fetch_fee_details(*universe[j]);
-                    const pm::FeeDetails fdx = api.fetch_fee_details(*universe[i]);
+                    pm::FeeDetails fdy, fdx;
+                    try {
+                        fdy = api.fetch_fee_details(*universe[j]);
+                        fdx = api.fetch_fee_details(*universe[i]);
+                    } catch (...) {
+                        continue;
+                    }
                     auto ty = evaluate_taker_leg(ly, fdy, cfg.slippage_bps);
                     auto tx = evaluate_taker_leg(lx, fdx, cfg.slippage_bps);
                     auto my = evaluate_maker_entry_leg(ly, fdy, cfg.slippage_bps);
