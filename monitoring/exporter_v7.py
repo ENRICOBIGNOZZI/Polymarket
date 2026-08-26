@@ -6,7 +6,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Sequence
 
-from exporter import ExporterHandler, Metrics, _float, _mtime, _read_csv, _read_json
+from exporter_common import ExporterHandler, Metrics, _float, _mtime, _read_csv, _read_json
 
 EXPORTER_V7_VERSION = "2.0.0"
 
