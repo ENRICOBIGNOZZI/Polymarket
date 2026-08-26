@@ -159,9 +159,13 @@ def summarize(order_log: Path, tape_path: Path, ttl_seconds: int) -> dict[str, A
     event_fill_orders = 0
     causal_filled_shares = 0.0
     event_filled_shares = 0.0
+    causal_filled_notional = 0.0
+    event_filled_notional = 0.0
+    posted_notional = 0.0
     delayed_only_orders = 0
     details = []
     for order in orders:
+        posted_notional += max(0.0, order.shares) * max(0.0, order.limit_price)
         causal = replay_one(order, trades, require_received_before_end=True)
         event = replay_one(order, trades, require_received_before_end=False)
         cfill = float(causal["filled_shares"])
@@ -170,6 +174,8 @@ def summarize(order_log: Path, tape_path: Path, ttl_seconds: int) -> dict[str, A
         event_fill_orders += efill > 1e-12
         causal_filled_shares += cfill
         event_filled_shares += efill
+        causal_filled_notional += cfill * max(0.0, order.limit_price)
+        event_filled_notional += efill * max(0.0, order.limit_price)
         delayed_only_orders += efill > 1e-12 and cfill <= 1e-12
         if cfill > 1e-12 or efill > 1e-12:
             details.append(
@@ -186,16 +192,22 @@ def summarize(order_log: Path, tape_path: Path, ttl_seconds: int) -> dict[str, A
                     "event_time_eventually_observed": event,
                 }
             )
+    order_count = len(orders)
     return {
-        "schema": "hf_maker_shared_tape_audit_v1",
+        "schema": "hf_maker_shared_tape_audit_v2",
         "paper_only": True,
         "authenticated_execution": False,
-        "orders": len(orders),
+        "orders": order_count,
+        "posted_notional": posted_notional,
         "tape_trades": len(trades),
         "causal_fill_orders": causal_fill_orders,
+        "causal_fill_order_rate": causal_fill_orders / order_count if order_count else 0.0,
         "causal_filled_shares": causal_filled_shares,
+        "causal_filled_notional": causal_filled_notional,
         "event_time_fill_orders": event_fill_orders,
+        "event_time_fill_order_rate": event_fill_orders / order_count if order_count else 0.0,
         "event_time_filled_shares": event_filled_shares,
+        "event_time_filled_notional": event_filled_notional,
         "delayed_only_fill_orders": delayed_only_orders,
         "details": details,
     }
