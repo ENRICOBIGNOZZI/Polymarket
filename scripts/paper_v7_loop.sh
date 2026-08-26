@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-CONFIG="${1:-config/paper_v7.json}"
-RUN_ROOT="${2:-runs/paper_v7_live}"
+CONFIG="${1:-$ROOT/config/paper_v7.json}"
+RUN_ROOT="${2:-$ROOT/runs/paper_v7_live}"
 EXECUTION_ROOT="$RUN_ROOT/execution"
 SHADOW_ROOT="$RUN_ROOT/shadow"
 mkdir -p "$EXECUTION_ROOT" "$SHADOW_ROOT"
@@ -15,15 +15,15 @@ shadow_pid=0
 
 start_execution(){
   POLYMARKET_RUNTIME_PARENT_PID="$$" \
-    bash scripts/paper_v7_execution_loop.sh "$CONFIG" "$EXECUTION_ROOT" \
+    bash "$ROOT/scripts/paper_v7_execution_loop.sh" "$CONFIG" "$EXECUTION_ROOT" \
     >>"$RUN_ROOT/execution_supervisor.log" 2>&1 &
   execution_pid=$!
 }
 
 start_shadow(){
-  python3 scripts/v7_shadow_loop.py \
+  python3 "$ROOT/scripts/v7_shadow_loop.py" \
     --paper-config "$CONFIG" \
-    --frequency-config config/v7_frequency_matrix.json \
+    --frequency-config "$ROOT/config/v7_frequency_matrix.json" \
     --run-root "$RUN_ROOT" \
     >>"$RUN_ROOT/shadow_supervisor.log" 2>&1 &
   shadow_pid=$!
