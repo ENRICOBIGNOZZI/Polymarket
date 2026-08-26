@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load(path: str):
+    return json.loads((ROOT / path).read_text(encoding="utf-8"))
+
+
+def test_live_champion_is_v7_and_paper_only():
+    champion = load("config/live_champion.json")
+    assert champion["version"] == 7
+    assert champion["loop"] == "scripts/paper_v7_loop.sh"
+    assert champion["config"] == "config/paper_v7.json"
+    assert champion["paper_only"] is True
+    assert champion["authenticated_execution"] is False
+
+
+def test_v7_config_keeps_authorized_aggressive_envelope_and_hard_safety():
+    cfg = load("config/paper_v7.json")
+    assert cfg["engine_version"] == 7
+    assert cfg["paper_only"] is True
+    assert cfg["market_limit"] == 1000
+    assert cfg["min_liquidity"] == 2.0
+    assert abs(cfg["min_net_edge"] - 0.00005) < 1e-12
+    assert cfg["fractional_kelly"] == 0.25
+    assert cfg["max_trade_usd"] == 125.0
+    assert cfg["max_market_fraction"] == 0.05
+    assert cfg["max_event_fraction"] == 0.15
+    assert cfg["max_gross_fraction"] == 0.70
+    assert cfg["max_drawdown"] == 0.15
+    assert cfg["v7"]["authoritative_fee_required"] is True
+    assert cfg["v7"]["shared_execution_ledger_required"] is True
+    assert cfg["v7"]["joint_fill_state_required_for_multileg"] is True
+    assert cfg["v7"]["authenticated_execution"] is False
+
+
+def test_frequency_matrix_has_hf_and_30m_to_6h_without_pooling():
+    cfg = load("config/v7_frequency_matrix.json")
+    maker = cfg["execution_cadences_seconds"]["micro_maker"]
+    assert min(maker) <= 1
+    assert max(maker) >= 10
+    assert cfg["forecast_horizons_minutes"]["pca_stat_arb"] == [30, 60, 120, 360]
+    assert cfg["forecast_horizons_minutes"]["cross_sectional_rank"] == [30, 60, 120, 360]
+    assert cfg["local_factor_fidelity_minutes"] == [30, 60]
+    rules = cfg["evidence_rules"]
+    assert rules["separate_state_by_frequency"] is True
+    assert rules["separate_pnl_by_frequency"] is True
+    assert rules["no_pooling_across_horizons_for_pvalues"] is True
+    assert rules["no_post_hoc_frequency_selection_on_same_holdout"] is True
+
+
+def test_v7_entrypoint_has_one_execution_owner_and_separate_shadow_scheduler():
+    text = (ROOT / "scripts/paper_v7_loop.sh").read_text(encoding="utf-8")
+    assert "paper_v6_loop.sh" in text  # transitional compatibility layer until cleanup tranche
+    assert "v7_shadow_loop.py" in text
+    assert "POLYMARKET_RUNTIME_PARENT_PID=\"$$\"" in text
+    assert text.count("start_execution") >= 2
+    assert "authenticated" not in text.lower()
+
+
+def test_shadow_scheduler_is_research_only_and_frequency_separated():
+    text = (ROOT / "scripts/v7_shadow_loop.py").read_text(encoding="utf-8")
+    assert "v7_pca_stat_arb_research.py" in text
+    assert "v7_local_factor_research.py" in text
+    assert "research_v7_local_factor_60m.json" in text
+    assert "v7_cross_sectional_rank_forward_multifreq.py" in text
+    assert "v7_hf_frequency_probe.py" in text
+    assert "authenticated_execution\": False" in text
+    assert "len(active) >= 2" in text
+
+
+if __name__ == "__main__":
+    tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
+    for test in tests:
+        test()
+    print(f"ok {len(tests)} unified V7 runtime tests")
