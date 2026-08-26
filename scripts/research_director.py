@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Bounded paper-only research director for the Polymarket research plane.
+"""Bounded V7 research router driven by Alpha Factory evidence.
 
-The director turns Alpha Factory `next_experiments` into a small dispatch plan.
-It never merges, deploys, mutates the champion, or submits authenticated orders.
-It applies per-workflow cooldowns and experiment stagnation penalties so research
-budget moves toward experiments that are still producing new evidence.
+The Research Director owns no model, merge, validation, deployment, champion or
+execution authority. It only maps explicit V7 research experiments to the small
+set of registered evidence-producing workflows and enforces cooldown/budget
+constraints.
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -18,15 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA = "polymarket_research_director_report_v1"
+SCHEMA = "polymarket_research_director_v1"
 STATE_SCHEMA = "polymarket_research_director_state_v1"
-
-
-def integer(value: Any, default: int = 0) -> int:
-    try:
-        return int(float(value))
-    except (TypeError, ValueError, OverflowError):
-        return default
 
 
 def finite(value: Any, default: float = 0.0) -> float:
@@ -35,6 +27,13 @@ def finite(value: Any, default: float = 0.0) -> float:
     except (TypeError, ValueError, OverflowError):
         return default
     return out if math.isfinite(out) else default
+
+
+def integer(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 def parse_timestamp(value: Any) -> int:
@@ -67,155 +66,134 @@ def read_json(path: Path, default: Any) -> Any:
 
 def atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(text, encoding="utf-8")
+    os.replace(temporary, path)
 
 
-def atomic_json(path: Path, payload: Any) -> None:
-    atomic_write(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+def atomic_json(path: Path, value: Any) -> None:
+    atomic_write(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
 def validate_config(config: dict[str, Any]) -> None:
     errors: list[str] = []
-    if config.get("schema") != "polymarket_research_director_config_v1":
-        errors.append("unexpected research-director schema")
+    if config.get("schema_version") != 1:
+        errors.append("schema_version must equal 1")
     if config.get("paper_only") is not True:
         errors.append("paper_only must be true")
     if config.get("allow_authenticated_execution") is not False:
         errors.append("authenticated execution must remain disabled")
     if config.get("allow_direct_champion_mutation") is not False:
         errors.append("direct champion mutation must remain disabled")
-    owners = config.get("owner_workflows") or {}
-    forbidden = set(config.get("forbidden_workflows") or [])
+    owners = config.get("owner_workflows")
     if not isinstance(owners, dict) or not owners:
-        errors.append("owner_workflows must be non-empty")
+        errors.append("owner_workflows must contain registered V7 research workers")
+        owners = {}
+    forbidden = set(config.get("forbidden_workflows") or [])
     overlap = sorted(set(owners).intersection(forbidden))
     if overlap:
-        errors.append("owner workflow allowlist overlaps forbidden workflows: " + ", ".join(overlap))
-    hard_forbidden = {
-        "integration-merge.yml",
-        "deploy-paper-server.yml",
-        "server-health.yml",
-        "promotion-controller.yml",
+        errors.append("research owner overlaps forbidden authority: " + ", ".join(overlap))
+    expected = {
+        "forward-maker-research.yml",
+        "external-intelligence.yml",
+        "fast-arb-hourly.yml",
+        "arb-theory-hourly.yml",
     }
-    bad = sorted(set(owners).intersection(hard_forbidden))
-    if bad:
-        errors.append("merge/deploy/promotion workflows may not be research owners: " + ", ".join(bad))
+    if set(owners) != expected:
+        errors.append("owner_workflows must equal the canonical V7 research-worker set")
     if errors:
         raise ValueError("; ".join(errors))
 
 
-def canonical_hash(value: Any) -> str:
-    raw = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
+def normalize_run(raw: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "workflow_name": str(raw.get("workflowName") or raw.get("name") or ""),
+        "status": str(raw.get("status") or "").lower(),
+        "conclusion": str(raw.get("conclusion") or "").lower(),
+        "updated_ts": parse_timestamp(raw.get("updatedAt") or raw.get("updated_at") or raw.get("createdAt") or raw.get("created_at")),
+        "database_id": integer(raw.get("databaseId") or raw.get("id")),
+        "head_branch": str(raw.get("headBranch") or raw.get("head_branch") or ""),
+    }
 
 
-def normalized_runs(runs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def latest_runs(runs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     latest: dict[str, dict[str, Any]] = {}
     for raw in runs:
         if not isinstance(raw, dict):
             continue
-        name = str(raw.get("workflowName") or raw.get("name") or "")
+        run = normalize_run(raw)
+        if run["head_branch"] and run["head_branch"] != "main":
+            continue
+        name = run["workflow_name"]
         if not name:
             continue
-        branch = str(raw.get("headBranch") or raw.get("head_branch") or "")
-        if branch and branch != "main":
-            continue
-        updated = parse_timestamp(
-            raw.get("updatedAt") or raw.get("updated_at") or raw.get("createdAt") or raw.get("created_at")
-        )
-        current = latest.get(name)
-        if current is None or updated >= integer(current.get("_updated")):
-            latest[name] = {
-                "_updated": updated,
-                "status": str(raw.get("status") or "").lower(),
-                "conclusion": str(raw.get("conclusion") or "").lower(),
-            }
+        previous = latest.get(name)
+        if previous is None or (run["updated_ts"], run["database_id"]) > (previous["updated_ts"], previous["database_id"]):
+            latest[name] = run
     return latest
 
 
-def route_owner(experiment: dict[str, Any], config: dict[str, Any]) -> str:
-    """Resolve Alpha Factory logical owners onto actual evidence-producing workers."""
-    declared = str(experiment.get("owner_workflow") or "")
-    identifier = str(experiment.get("experiment_id") or "")
-    remap = config.get("owner_remap") or {}
-    if declared in remap:
-        declared = str(remap[declared])
-    prefix_remap = config.get("experiment_prefix_owner") or {}
-    for prefix, workflow in prefix_remap.items():
-        if identifier.startswith(str(prefix)):
-            return str(workflow)
-    return declared
+def resolve_owner(experiment: dict[str, Any], config: dict[str, Any]) -> str:
+    owners = config.get("owner_workflows") or {}
+    explicit = str(experiment.get("owner_workflow") or "")
+    remap = config.get("owner_remap") if isinstance(config.get("owner_remap"), dict) else {}
+    explicit = str(remap.get(explicit) or explicit)
+    if explicit in owners:
+        return explicit
+    experiment_id = str(experiment.get("experiment_id") or "")
+    prefixes = config.get("experiment_prefix_owner") if isinstance(config.get("experiment_prefix_owner"), dict) else {}
+    for prefix, owner in sorted(prefixes.items(), key=lambda item: len(str(item[0])), reverse=True):
+        if experiment_id.startswith(str(prefix)) and str(owner) in owners:
+            return str(owner)
+    return ""
+
+
+def _candidate_pnl(candidate: dict[str, Any]) -> float:
+    metrics = candidate.get("metrics") if isinstance(candidate.get("metrics"), dict) else {}
+    for key in (
+        "stressed_2_0x_net_pnl_usd",
+        "stressed_1_5x_net_pnl_usd",
+        "oos_net_pnl_usd",
+        "total_pnl_ex_rewards_usd",
+        "net_pnl_usd",
+    ):
+        if key in metrics:
+            return finite(metrics.get(key))
+    return 0.0
 
 
 def economic_progress(alpha: dict[str, Any], previous: dict[str, Any], now: int, config: dict[str, Any]) -> dict[str, Any]:
-    diagnostics = alpha.get("diagnostics") or {}
-    oos = diagnostics.get("oos") or {}
-    candidates = alpha.get("candidates") or []
-    candidates = candidates if isinstance(candidates, list) else []
-
-    oos_trades = integer(oos.get("selected_trades"))
-    ready = sum(
-        str(candidate.get("decision") or "") in {"integration_ready", "paper_canary_ready"}
-        for candidate in candidates
-        if isinstance(candidate, dict)
-    )
-    observations = sum(max(0, integer(candidate.get("observations"))) for candidate in candidates if isinstance(candidate, dict))
-    positive_pnl = 0
-    best_oos_pnl = 0.0
-    for candidate in candidates:
-        if not isinstance(candidate, dict):
-            continue
-        metrics = candidate.get("metrics") or {}
-        pnl_values = [
-            finite(metrics.get("oos_net_pnl_usd")),
-            finite(metrics.get("net_pnl_per_share")),
-            finite(metrics.get("total_pnl_ex_rewards_usd")),
-        ]
-        candidate_best = max(pnl_values, default=0.0)
-        best_oos_pnl = max(best_oos_pnl, candidate_best)
-        if candidate_best > 0:
-            positive_pnl += 1
-    external = diagnostics.get("external_intelligence") or {}
-    external_pass = integer(external.get("passing_candidates"))
-
-    vector = {
-        "oos_trades": oos_trades,
+    candidates = [row for row in (alpha.get("candidates") or []) if isinstance(row, dict)]
+    ready = sum(str(row.get("decision") or "") in {"integration_ready", "paper_canary_ready"} for row in candidates)
+    observations = sum(max(0, integer(row.get("observations"))) for row in candidates)
+    positive = sum(_candidate_pnl(row) > 0.0 for row in candidates)
+    diagnostics = alpha.get("diagnostics") if isinstance(alpha.get("diagnostics"), dict) else {}
+    runtime_fills = integer(diagnostics.get("runtime_total_fills"))
+    execution_eligible = integer(diagnostics.get("execution_evidence_eligible_models"))
+    signature = {
         "ready_candidates": ready,
         "candidate_observations": observations,
-        "positive_pnl_candidates": positive_pnl,
-        "best_observed_pnl": best_oos_pnl,
-        "external_passing_candidates": external_pass,
-        "b1_maker_positive": integer((diagnostics.get("b1") or {}).get("maker_positive")),
-        "b2_maker_positive": integer((diagnostics.get("b2") or {}).get("maker_positive")),
+        "positive_pnl_candidates": positive,
+        "runtime_total_fills": runtime_fills,
+        "execution_evidence_eligible_models": execution_eligible,
     }
-    score = (
-        10.0 * ready
-        + 2.0 * positive_pnl
-        + 0.5 * oos_trades
-        + math.log1p(max(0, observations)) / 10.0
-        + external_pass
-        + max(0.0, best_oos_pnl)
-    )
-    fingerprint = canonical_hash(vector)
-    prior_progress = previous.get("economic_progress") or {}
-    prior_fingerprint = str(prior_progress.get("fingerprint") or "")
-    last_change = integer(prior_progress.get("last_change_ts"), now)
-    if fingerprint != prior_fingerprint:
-        last_change = now
-        state = "LEARNING"
+    prior = previous.get("economic_progress") if isinstance(previous.get("economic_progress"), dict) else {}
+    prior_signature = prior.get("signature") if isinstance(prior.get("signature"), dict) else {}
+    changed = signature != prior_signature
+    previous_progress_ts = parse_timestamp(prior.get("last_progress_ts"))
+    if changed or previous_progress_ts <= 0:
+        last_progress_ts = now
     else:
-        stagnant_after = integer(config.get("economic_stagnation_seconds"), 7200)
-        state = "STAGNANT" if now - last_change >= stagnant_after else "ACCUMULATING"
-
+        last_progress_ts = previous_progress_ts
+    seconds_since = max(0, now - last_progress_ts)
+    stagnation = max(300, integer(config.get("stagnation_seconds"), 7200))
+    state = "PROGRESSING" if changed else ("STAGNANT" if seconds_since >= stagnation else "STEADY")
     return {
-        **vector,
-        "score": score,
-        "fingerprint": fingerprint,
-        "last_change_ts": last_change,
-        "seconds_since_progress": max(0, now - last_change),
         "state": state,
+        "signature": signature,
+        "last_progress_ts": last_progress_ts,
+        "seconds_since_progress": seconds_since,
+        **signature,
     }
 
 
@@ -227,143 +205,90 @@ def build_report(
     now: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     validate_config(config)
-    owners = config.get("owner_workflows") or {}
-    forbidden = set(config.get("forbidden_workflows") or [])
-    cooldown = max(0, integer(config.get("dispatch_cooldown_seconds"), 1800))
-    max_dispatches = max(0, integer(config.get("max_dispatches_per_cycle"), 2))
-    max_stagnant = max(1, integer(config.get("max_stagnant_cycles"), 4))
-    stagnation_retry = max(cooldown, integer(config.get("stagnation_retry_seconds"), 7200))
-    latest_runs = normalized_runs(runs)
-
     alpha_ts = parse_timestamp(alpha.get("generated_ts"))
     alpha_age = max(0, now - alpha_ts) if alpha_ts else None
-    max_alpha_age = max(1, integer(config.get("max_alpha_report_age_seconds"), 10800))
-    alpha_fresh = bool(alpha_ts and alpha_age is not None and alpha_age <= max_alpha_age)
-    experiments = alpha.get("next_experiments") or []
-    experiments = experiments if isinstance(experiments, list) else []
-    old_experiments = previous.get("experiments") or {}
-    old_experiments = old_experiments if isinstance(old_experiments, dict) else {}
+    alpha_limit = max(300, integer(config.get("alpha_factory_max_age_seconds"), 10800))
+    alpha_fresh = bool(alpha_ts and alpha_age is not None and alpha_age <= alpha_limit)
+    owners = config["owner_workflows"]
+    forbidden = set(config.get("forbidden_workflows") or [])
+    cooldowns = config.get("owner_cooldowns_seconds") if isinstance(config.get("owner_cooldowns_seconds"), dict) else {}
+    max_dispatches = max(0, integer(config.get("max_dispatches_per_cycle"), 2))
+    latest = latest_runs(runs)
 
-    ranked: list[dict[str, Any]] = []
-    next_state: dict[str, Any] = {}
-    diagnostics_fingerprint = canonical_hash(alpha.get("diagnostics") or {})
-    candidate_fingerprint = canonical_hash(
-        [
-            {
-                "candidate_id": row.get("candidate_id"),
-                "decision": row.get("decision"),
-                "observations": row.get("observations"),
-                "metrics": row.get("metrics"),
-                "reasons": row.get("reasons"),
-            }
-            for row in (alpha.get("candidates") or [])
-            if isinstance(row, dict)
-        ]
-    )
-
-    for raw in experiments:
+    prior_state = previous.get("experiments") if isinstance(previous.get("experiments"), dict) else {}
+    next_state = {key: dict(value) for key, value in prior_state.items() if isinstance(value, dict)}
+    frontier: list[dict[str, Any]] = []
+    for raw in alpha.get("next_experiments") or []:
         if not isinstance(raw, dict):
             continue
-        identifier = str(raw.get("experiment_id") or "").strip()
-        if not identifier:
+        experiment_id = str(raw.get("experiment_id") or "").strip()
+        if not experiment_id:
             continue
-        owner = route_owner(raw, config)
-        if owner not in owners or owner in forbidden:
-            ranked.append(
-                {
-                    "experiment_id": identifier,
-                    "owner_workflow": owner,
-                    "eligible": False,
-                    "reason": "owner_outside_research_allowlist",
-                    "effective_priority": 10_000,
-                }
-            )
-            continue
-
-        prior = old_experiments.get(identifier) if isinstance(old_experiments, dict) else {}
-        prior = prior if isinstance(prior, dict) else {}
-        fingerprint = canonical_hash(
-            {
-                "experiment": raw,
-                "diagnostics": diagnostics_fingerprint,
-                "candidates": candidate_fingerprint,
-            }
-        )
-        prior_alpha_ts = integer(prior.get("last_alpha_ts"))
-        prior_fingerprint = str(prior.get("fingerprint") or "")
-        stagnant = integer(prior.get("stagnant_cycles"))
-        if alpha_ts > prior_alpha_ts:
-            stagnant = stagnant + 1 if prior_fingerprint == fingerprint else 0
-
-        last_dispatch = integer(prior.get("last_dispatch_ts"))
-        workflow_spec = owners.get(owner) if isinstance(owners.get(owner), dict) else {}
-        workflow_name = str(workflow_spec.get("workflow_name") or owner)
-        latest = latest_runs.get(workflow_name) or {}
-        latest_age = max(0, now - integer(latest.get("_updated"))) if latest.get("_updated") else None
-        running = str(latest.get("status") or "") not in {"", "completed"}
-        recent = latest_age is not None and latest_age < cooldown
-        state_cooldown = last_dispatch > 0 and now - last_dispatch < cooldown
-        stagnation_hold = stagnant >= max_stagnant and last_dispatch > 0 and now - last_dispatch < stagnation_retry
-
-        base_priority = integer(raw.get("priority"), 100)
-        bias = integer(workflow_spec.get("priority_bias"), 0)
-        effective = base_priority + bias + (100 if stagnant >= max_stagnant else 0)
+        owner = resolve_owner(raw, config)
+        previous_row = next_state.get(experiment_id, {})
+        last_dispatch = parse_timestamp(previous_row.get("last_dispatch_ts"))
+        owner_spec = owners.get(owner) if owner else None
+        owner_name = str((owner_spec or {}).get("workflow_name") or "") if isinstance(owner_spec, dict) else ""
+        owner_run = latest.get(owner_name) if owner_name else None
+        owner_updated = integer((owner_run or {}).get("updated_ts"))
+        cooldown = max(0, integer(cooldowns.get(owner), 3600)) if owner else 0
+        age_since_dispatch = max(0, now - last_dispatch) if last_dispatch else None
+        age_since_owner_run = max(0, now - owner_updated) if owner_updated else None
+        eligible = bool(alpha_fresh and owner and owner not in forbidden)
         reasons: list[str] = []
-        if running:
-            reasons.append("owner_workflow_running")
-        if recent:
-            reasons.append(f"owner_workflow_recent:{latest_age}<{cooldown}")
-        if state_cooldown:
-            reasons.append(f"director_cooldown:{now-last_dispatch}<{cooldown}")
-        if stagnation_hold:
-            reasons.append(f"stagnation_backoff:{stagnant}>={max_stagnant}")
         if not alpha_fresh:
-            reasons.append("alpha_factory_report_missing_or_stale")
-
-        eligible = not reasons
-        next_state[identifier] = {
+            reasons.append("alpha_factory_stale_or_missing")
+        if not owner:
+            reasons.append("no_registered_v7_research_owner")
+        elif owner in forbidden:
+            reasons.append("owner_is_forbidden_authority")
+        if eligible and last_dispatch and age_since_dispatch is not None and age_since_dispatch < cooldown:
+            eligible = False
+            reasons.append(f"experiment_cooldown:{age_since_dispatch}<{cooldown}")
+        if eligible and owner_run and str(owner_run.get("status")) not in {"", "completed"}:
+            eligible = False
+            reasons.append("owner_workflow_already_running")
+        row = {
+            "experiment_id": experiment_id,
+            "priority": integer(raw.get("priority"), 999),
             "owner_workflow": owner,
-            "fingerprint": fingerprint,
-            "last_alpha_ts": alpha_ts,
-            "stagnant_cycles": stagnant,
+            "owner_workflow_name": owner_name,
+            "hypothesis": str(raw.get("hypothesis") or ""),
+            "triggering_evidence": str(raw.get("triggering_evidence") or ""),
+            "success_metric": str(raw.get("success_metric") or ""),
+            "eligible": eligible,
+            "reason": ", ".join(reasons) if reasons else "eligible",
             "last_dispatch_ts": last_dispatch,
+            "owner_last_run_age_seconds": age_since_owner_run,
         }
-        ranked.append(
-            {
-                **raw,
-                "experiment_id": identifier,
-                "owner_workflow": owner,
-                "workflow_name": workflow_name,
-                "eligible": eligible,
-                "effective_priority": effective,
-                "stagnant_cycles": stagnant,
-                "reason": "; ".join(reasons) if reasons else "eligible",
-            }
-        )
+        frontier.append(row)
+        state_row = dict(previous_row)
+        state_row.update({
+            "experiment_id": experiment_id,
+            "owner_workflow": owner,
+            "last_seen_ts": now,
+        })
+        next_state[experiment_id] = state_row
 
-    ranked.sort(key=lambda row: (integer(row.get("effective_priority"), 10_000), str(row.get("experiment_id") or "")))
+    frontier.sort(key=lambda row: (integer(row.get("priority"), 999), str(row.get("experiment_id"))))
     plan: list[dict[str, Any]] = []
-    selected_owners: set[str] = set()
-    for row in ranked:
+    used_owners: set[str] = set()
+    for row in frontier:
         if len(plan) >= max_dispatches:
             break
         owner = str(row.get("owner_workflow") or "")
-        if not row.get("eligible") or owner in selected_owners:
+        if not row.get("eligible") or not owner or owner in used_owners:
             continue
-        selected_owners.add(owner)
-        plan.append(
-            {
-                "workflow_file": owner,
-                "workflow_name": row.get("workflow_name"),
-                "experiment_id": row.get("experiment_id"),
-                "priority": row.get("effective_priority"),
-                "hypothesis": row.get("hypothesis"),
-                "success_metric": row.get("success_metric"),
-                "triggering_evidence": row.get("triggering_evidence"),
-            }
-        )
-        if row["experiment_id"] in next_state:
-            next_state[row["experiment_id"]]["last_dispatch_ts"] = now
+        used_owners.add(owner)
+        plan.append({
+            "workflow_file": owner,
+            "experiment_id": row["experiment_id"],
+            "priority": row["priority"],
+            "hypothesis": row["hypothesis"],
+            "success_metric": row["success_metric"],
+            "triggering_evidence": row["triggering_evidence"],
+        })
+        next_state[row["experiment_id"]]["last_dispatch_ts"] = now
 
     progress = economic_progress(alpha, previous, now, config)
     status = "HEALTHY" if alpha_fresh else "DEGRADED"
@@ -379,7 +304,7 @@ def build_report(
         "alpha_factory_fresh": alpha_fresh,
         "economic_progress": progress,
         "dispatch_plan": plan,
-        "experiments": ranked,
+        "experiments": frontier,
         "submitted_orders": 0,
         "authenticated_execution": False,
         "direct_champion_mutation": False,
@@ -392,6 +317,7 @@ def build_report(
             "actual_dispatches": len(plan),
             "forbidden_dispatches_excluded": all(row["workflow_file"] not in forbidden for row in plan),
             "unique_owner_per_cycle": len({row["workflow_file"] for row in plan}) == len(plan),
+            "canonical_v7_research_owners_only": all(row["workflow_file"] in owners for row in plan),
         },
     }
     state = {
@@ -407,7 +333,7 @@ def build_report(
 def render_markdown(report: dict[str, Any]) -> str:
     progress = report.get("economic_progress") or {}
     lines = [
-        "# Polymarket Research Director",
+        "# Polymarket V7 Research Director",
         "",
         f"- generated: `{report.get('generated_utc')}`",
         f"- status: **{report.get('status')}**",
@@ -416,10 +342,11 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "## Economic progress",
         "",
-        f"- OOS trades: {integer(progress.get('oos_trades'))}",
         f"- ready candidates: {integer(progress.get('ready_candidates'))}",
         f"- candidate observations: {integer(progress.get('candidate_observations'))}",
         f"- positive-PnL candidates: {integer(progress.get('positive_pnl_candidates'))}",
+        f"- V7 runtime fills: {integer(progress.get('runtime_total_fills'))}",
+        f"- execution-evidence eligible models: {integer(progress.get('execution_evidence_eligible_models'))}",
         f"- seconds since measured progress: {integer(progress.get('seconds_since_progress'))}",
         "",
         "## Research dispatch plan",
@@ -427,30 +354,21 @@ def render_markdown(report: dict[str, Any]) -> str:
     ]
     plan = report.get("dispatch_plan") or []
     if not plan:
-        lines.append("- No additional worker dispatch is justified this cycle.")
+        lines.append("- No additional V7 research worker dispatch is justified this cycle.")
     for row in plan:
-        lines.append(
-            f"- `{row.get('workflow_file')}` ← `{row.get('experiment_id')}` "
-            f"(priority {row.get('priority')}): {row.get('hypothesis')}"
-        )
+        lines.append(f"- `{row.get('workflow_file')}` ← `{row.get('experiment_id')}` (priority {row.get('priority')}): {row.get('hypothesis')}")
     lines.extend(["", "## Experiment frontier", ""])
     for row in report.get("experiments") or []:
-        lines.append(
-            f"- `{row.get('experiment_id')}` → `{row.get('owner_workflow')}`: "
-            f"{'eligible' if row.get('eligible') else 'hold'}; "
-            f"stagnant_cycles={integer(row.get('stagnant_cycles'))}; {row.get('reason')}"
-        )
-    lines.extend(
-        [
-            "",
-            "## Hard boundaries",
-            "",
-            "- No merge or deployment dispatch.",
-            "- No champion mutation.",
-            "- No credential use or authenticated order submission.",
-            "- Existing OOS, cost, drawdown, FDR and promotion gates remain authoritative.",
-        ]
-    )
+        lines.append(f"- `{row.get('experiment_id')}` → `{row.get('owner_workflow') or 'unroutable'}`: {'eligible' if row.get('eligible') else 'hold'}; {row.get('reason')}")
+    lines.extend([
+        "",
+        "## Hard boundaries",
+        "",
+        "- No merge, validation or deployment dispatch.",
+        "- No champion mutation.",
+        "- No credential use or authenticated order submission.",
+        "- Only registered V7 evidence-producing research workers may be dispatched.",
+    ])
     return "\n".join(lines) + "\n"
 
 
@@ -478,10 +396,7 @@ def main() -> int:
     atomic_json(Path(args.output_json), report)
     atomic_json(Path(args.state_out), state)
     atomic_write(Path(args.output_markdown), render_markdown(report))
-    atomic_write(
-        Path(args.dispatch_file),
-        "".join(f"{row['workflow_file']}\n" for row in report.get("dispatch_plan") or []),
-    )
+    atomic_write(Path(args.dispatch_file), "".join(f"{row['workflow_file']}\n" for row in report.get("dispatch_plan") or []))
     print(json.dumps(report, sort_keys=True))
     return 0
 
