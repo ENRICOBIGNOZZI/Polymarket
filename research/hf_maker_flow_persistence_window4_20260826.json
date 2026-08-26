@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "research_state": "REJECT_SHORT_GAP_STALE_FLOW_AS_INSIDE_SPREAD_HAZARD_MORE_EVIDENCE_REQUIRED",
+  "source": {
+    "pull_request": 386,
+    "evaluated_head_sha": "f4eda2acc736dd27d4ae786a8f8a012142423ce6",
+    "workflow_run_id": 32913731776,
+    "artifact_id": 9587687588,
+    "evidence_type": "common_sample_forward_public_paper",
+    "common_sample_seconds": 600
+  },
+  "paper_envelope": {
+    "markets": 1000,
+    "min_liquidity_usd": 2.0,
+    "post_cost_min_edge": 0.00005,
+    "fractional_kelly": 0.25,
+    "max_trade_usd": 125.0,
+    "max_market_fraction": 0.05,
+    "max_event_fraction": 0.15,
+    "max_gross_fraction": 0.70,
+    "max_drawdown": 0.15,
+    "authenticated_execution": false
+  },
+  "maker_flow_window": {
+    "decision": "ZERO_FILL_DESPITE_CAUSAL_FLOW",
+    "posted_orders": 2,
+    "maker_buy_events": 0,
+    "maker_buy_shares": 0.0,
+    "realized_closed_pnl_usd": 0.0,
+    "market_id": "3128886",
+    "side": "NO",
+    "token_id": "39147524522707536456910747992621671433032838141439193264830818731544404472030",
+    "limit_price": 0.232,
+    "own_shares": 5.0,
+    "prior_compatible_sell_shares": 22.53,
+    "prior_compatible_sell_trades": 2,
+    "prior_compatible_sell_event_times": [1787703358, 1787703370],
+    "event_time_gap_seconds": 12,
+    "post_1": {
+      "created_ts": 1787703421,
+      "newest_compatible_event_age_seconds": 51,
+      "post_cost_edge": 0.0013171945120986292,
+      "projected_clearance_45s": 1.68975,
+      "projected_clearance_60s": 2.253,
+      "projected_clearance_300s": 11.265,
+      "future_compatible_sell_shares_45s": 0.0,
+      "future_compatible_sell_shares_60s": 0.0,
+      "future_compatible_sell_shares_300s": 0.0
+    },
+    "post_2": {
+      "created_ts": 1787703461,
+      "newest_compatible_event_age_seconds": 91,
+      "post_cost_edge": 0.0014000431413569653,
+      "projected_clearance_45s": 1.68975,
+      "projected_clearance_60s": 2.253,
+      "projected_clearance_300s": 11.265,
+      "future_compatible_sell_shares_45s": 0.0,
+      "future_compatible_sell_shares_60s": 0.0,
+      "future_compatible_sell_shares_300s": 0.0
+    },
+    "diagnosis": "The two compatible SELL prints were only 12 seconds apart, so the existing 10-second burst separator treated one short flow cluster as two independent recurrence bursts. The first inside-spread post used a newest compatible event already 51 seconds old and the second reused the same flow at age 91 seconds. Despite modeled 60-second queue clearance of 2.253x, no compatible SELL flow recurred over the following 300 seconds. The current stationary-volume extrapolation is therefore not calibrated for inside-spread improvement on sparse short-gap flow."
+  },
+  "counterfactual_challenger": {
+    "name": "ttl_aware_inside_flow_persistence",
+    "research_wrapper": "scripts/v6_micro_maker_v4.py",
+    "inside_only": true,
+    "min_independent_flow_bursts": 3,
+    "burst_gap_seconds": 30,
+    "max_newest_event_age_seconds": 30,
+    "at_touch_hazard_unchanged": true,
+    "post_1_would_be_blocked": true,
+    "post_1_block_reasons": ["ONLY_ONE_BURST_AT_30S_GAP", "NEWEST_EVENT_AGE_51S_GT_30S"],
+    "post_2_would_be_blocked": true,
+    "post_2_block_reasons": ["ONLY_ONE_BURST_AT_30S_GAP", "NEWEST_EVENT_AGE_91S_GT_30S"],
+    "rationale": "Do not pay an inside-spread tick from a fill-probability uplift unless pre-entry compatible flow is both fresh and recurrent across enough event-time bursts to estimate persistence. At-touch opportunities retain the existing queue model so the challenger does not manufacture zero-fill behavior by globally removing maker participation."
+  },
+  "micro_taker_same_run": {
+    "samples": 1776,
+    "causal_labels": 1110,
+    "post_horizon_labels": 0,
+    "max_target_staleness_seconds": 2,
+    "signals_last_tick": 0,
+    "opened_last_tick": 0,
+    "realized_pnl_total": 0.0,
+    "decision": "DO_NOT_FORCE_TAKER_WITHOUT_POSITIVE_EXECUTABLE_EDGE"
+  },
+  "hard_arb_same_run": {
+    "scanned_events": 26,
+    "positive_candidates": 0,
+    "entered": 0,
+    "realized_pnl": 0.0,
+    "sequential_leg_revalidation": true,
+    "atomic_snapshot_assumption": false,
+    "verified_fee_schedules_last_tick": 187,
+    "decision": "NO_THRESHOLD_LOWERING_SUPPORTED_BY_THIS_SAMPLE"
+  },
+  "next_required_evidence": [
+    "Run the TTL-aware persistence arm prospectively on the same chronological public tape as the current flow/touch/confidence/toxicity controls.",
+    "Require actual paper fills and positive fill-conditioned PnL before considering integration.",
+    "For any fill, collect executable 45s/60s/300s markout at 1x/1.5x/2x cost stress.",
+    "Keep separate pre-entry toxicity and persistence diagnostics so improved fillability cannot hide adverse selection."
+  ],
+  "hard_safety": {
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "state_integrity_required": true,
+    "market_event_gross_caps": [0.05, 0.15, 0.70],
+    "authenticated_real_money_execution": false
+  }
+}
