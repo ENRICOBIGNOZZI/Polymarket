@@ -19,6 +19,7 @@ struct LegState {
     std::string token_id;
     std::string outcome;
     double target_shares = 0.0;
+    double max_all_in_unit_cost = 0.0;
     std::int64_t attempted_ts_ms = 0;
     double filled_shares = 0.0;
     double raw_entry_cost = 0.0;
@@ -115,11 +116,14 @@ inline std::optional<Probe> start_probe(const Opportunity& opportunity,
     probe.point_in_time = true;
     probe.legs.reserve(opportunity.legs.size());
     for (const auto& leg : opportunity.legs) {
+        const double cap = leg.all_in_cost / opportunity.executable_shares;
+        if (!std::isfinite(cap) || cap <= 0.0 || cap >= 1.5) return std::nullopt;
         probe.legs.push_back(LegState{
             leg.market_id,
             leg.token_id,
             leg.outcome,
             opportunity.executable_shares,
+            cap,
         });
     }
     return probe;
@@ -142,12 +146,33 @@ inline void attempt_entry(Probe& probe, const Book* book, const FeeDetails* fee,
         probe.entry_failed = true;
         return;
     }
-    const auto fill = walk_buy_shares(*book, leg.target_shares, policy.slippage_bps, *fee);
-    leg.filled_shares = fill.shares;
-    leg.raw_entry_cost = fill.raw_cost;
-    leg.entry_all_in_cost = fill.all_in_cost;
-    leg.entry_complete = fill.complete;
-    if (!fill.complete) {
+
+    auto asks = book->asks;
+    asks.erase(std::remove_if(asks.begin(), asks.end(), [](const Level& level) {
+        return !std::isfinite(level.price) || !std::isfinite(level.size) ||
+               level.price <= 0.0 || level.price >= 1.0 || level.size <= 0.0;
+    }), asks.end());
+    std::sort(asks.begin(), asks.end(), [](const Level& left, const Level& right) {
+        return left.price < right.price;
+    });
+
+    double remaining = leg.target_shares;
+    for (const auto& level : asks) {
+        const double execution_price = std::clamp(
+            level.price * (1.0 + std::max(0.0, policy.slippage_bps) / 10000.0),
+            1e-9, 1.0 - 1e-9);
+        const double unit_cost = execution_price + fee_per_share(execution_price, *fee);
+        if (unit_cost > leg.max_all_in_unit_cost + kEps) break;
+        const double quantity = std::min(remaining, level.size);
+        if (quantity <= 0.0) continue;
+        leg.filled_shares += quantity;
+        leg.raw_entry_cost += quantity * level.price;
+        leg.entry_all_in_cost += quantity * unit_cost;
+        remaining -= quantity;
+        if (remaining <= kEps) break;
+    }
+    leg.entry_complete = remaining <= kEps;
+    if (!leg.entry_complete) {
         probe.entry_failed = true;
         return;
     }
