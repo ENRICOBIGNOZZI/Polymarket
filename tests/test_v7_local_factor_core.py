@@ -57,6 +57,58 @@ class V7LocalFactorCoreTests(unittest.TestCase):
         assert fit is not None
         self.assertEqual(fit.controls, ("c1", "c2"))
 
+    def test_control_pc_survives_opposite_control_orientation(self) -> None:
+        times = tuple(range(40))
+        latent = [0.15 * i + (0.03 if i % 3 else -0.02) for i in times]
+        noise_a = [0.02 if i % 2 else -0.02 for i in times]
+        noise_b = [0.015 if i % 4 else -0.015 for i in times]
+        panel = lf.standardize_levels(
+            {
+                "a": [0.8 * f + e for f, e in zip(latent, noise_a)],
+                "b": [-0.7 * f + e for f, e in zip(latent, noise_b)],
+                "c1": latent,
+                "c2": [1.2 * f for f in latent],
+                "c3": [-0.9 * f for f in latent],
+                "c4": [-1.1 * f for f in latent],
+            },
+            times,
+        )
+        assert panel is not None
+        result = lf.pair_control_factor(panel, "a", "b")
+        self.assertIsNotNone(result)
+        assert result is not None
+        _controls, factor = result
+        latent_std = panel.values["c1"]
+        corr = sum(x * y for x, y in zip(factor, latent_std)) / (len(times) - 1)
+        self.assertGreater(abs(corr), 0.999)
+        fit = lf.fit_pair(panel, "a", "b")
+        self.assertIsNotNone(fit)
+
+    def test_control_pc_is_invariant_to_control_sign_recoding(self) -> None:
+        times = tuple(range(36))
+        latent = [0.11 * i + (0.04 if i % 5 else -0.03) for i in times]
+        base = {
+            "a": [0.6 * f + (0.01 if i % 2 else -0.01) for i, f in enumerate(latent)],
+            "b": [-0.5 * f + (0.012 if i % 3 else -0.012) for i, f in enumerate(latent)],
+            "c1": latent,
+            "c2": [0.8 * f for f in latent],
+            "c3": [-1.1 * f for f in latent],
+            "c4": [-0.7 * f for f in latent],
+        }
+        recoded = dict(base)
+        recoded["c2"] = [-x for x in base["c2"]]
+        recoded["c4"] = [-x for x in base["c4"]]
+        panel_a = lf.standardize_levels(base, times)
+        panel_b = lf.standardize_levels(recoded, times)
+        assert panel_a is not None and panel_b is not None
+        factor_a = lf.pair_control_factor(panel_a, "a", "b")
+        factor_b = lf.pair_control_factor(panel_b, "a", "b")
+        assert factor_a is not None and factor_b is not None
+        score_a = factor_a[1]
+        score_b = factor_b[1]
+        corr = sum(x * y for x, y in zip(score_a, score_b)) / (len(times) - 1)
+        self.assertGreater(abs(corr), 0.999999)
+
     def test_price_factor_hedge_units_counterexample(self) -> None:
         exposure_a = lf.price_factor_exposure("YES", 0.50, 0.10, 1.0)
         exposure_b = lf.price_factor_exposure("NO", 0.95, 0.30, 1.0)
