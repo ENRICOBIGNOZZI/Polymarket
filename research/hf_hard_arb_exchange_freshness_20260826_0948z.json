@@ -1,0 +1,71 @@
+{
+  "schema": "hf_hard_arb_exchange_freshness_evidence_v1",
+  "generated_utc": "2026-08-26T09:48:00Z",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_money_execution": false,
+  "base_main_sha": "a20d12f511cbd388e5ee28865eb9977ddc5fd8b6",
+  "research_head_sha": "6ad6ebddbdd4952a7c50f04039380836828ca775",
+  "source_run": 32954707696,
+  "authorized_probe": {
+    "market_limit": 1000,
+    "min_liquidity_usd": 2.0,
+    "post_cost_min_edge": 0.00005,
+    "max_trade_usd": 125.0,
+    "leg_latency_ms": 100,
+    "max_leg_receive_age_ms": 2000,
+    "max_cross_leg_receive_skew_ms": 1000,
+    "max_exchange_snapshot_age_ms": 5000,
+    "max_exchange_snapshot_skew_ms": 1000
+  },
+  "execution_contract": {
+    "per_token_receive_timestamps": true,
+    "exchange_snapshot_timestamps": true,
+    "multi_level_depth": true,
+    "verified_fees_required": true,
+    "sequential_leg_revalidation": true,
+    "unwind_on_leg_failure": true,
+    "atomic_snapshot_assumption": false
+  },
+  "result": {
+    "scanned_events": 38,
+    "verified_fee_schedules_last_tick": 407,
+    "positive_candidates": 0,
+    "entered": 0,
+    "realized_pnl_usd": 0.0,
+    "drawdown": 0.0,
+    "killed": false
+  },
+  "freshness_guard": {
+    "freshness_checks": 76,
+    "local_receive_freshness_rejections": 0,
+    "local_receive_age_rejections": 0,
+    "local_receive_skew_rejections": 0,
+    "max_observed_local_leg_age_ms": 2,
+    "max_observed_local_cross_leg_skew_ms": 0,
+    "exchange_freshness_rejections": 66,
+    "exchange_age_rejections": 60,
+    "exchange_skew_rejections": 6,
+    "missing_exchange_timestamp_rejections": 0,
+    "max_observed_exchange_snapshot_age_ms": 547966,
+    "max_observed_exchange_snapshot_skew_ms": 544208
+  },
+  "interpretation": {
+    "state": "BLOCKING_STALE_EXCHANGE_SNAPSHOT_EVIDENCE_MORE_EVIDENCE_REQUIRED",
+    "finding": "HTTP responses were locally fresh, but a large majority of evaluated hard-arb sets carried exchange snapshot timestamps that were too old or mutually skewed. Local receive freshness alone would therefore have admitted mixed/stale multi-leg state.",
+    "threshold_decision": "Do not lower the 0.5 bp hard-arb economic floor to create activity. The current binding defect is synchronized exchange-state freshness, not the edge floor.",
+    "next_required_experiment": [
+      "prefer event-driven per-token book state with exchange timestamp continuity over mixed REST snapshots",
+      "require all legs simultaneously inside receive-age and exchange-age/skew bounds",
+      "retain multi-level depth and authoritative fee schedules",
+      "revalidate sequentially before each paper leg and unwind partial acquisition on failure",
+      "only then evaluate recurrence and cost-stressed fill-conditioned PnL"
+    ]
+  },
+  "hard_safety": {
+    "max_drawdown": 0.15,
+    "kill_switch_unchanged": true,
+    "state_integrity_unchanged": true,
+    "authenticated_execution_prohibited": true
+  }
+}
