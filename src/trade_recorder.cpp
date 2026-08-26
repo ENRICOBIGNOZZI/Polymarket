@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <set>
@@ -123,6 +124,10 @@ std::string join_conditions(const std::vector<std::string>& ids, std::size_t lo,
     return os.str();
 }
 
+bool retryable_trade_status(int status) {
+    return status == 408 || status == 429 || status >= 500;
+}
+
 struct Trade {
     std::int64_t ts = 0;
     std::int64_t received_ms = 0;
@@ -183,31 +188,56 @@ public:
         // this overlapping replay idempotent.
         const std::int64_t start = std::max<std::int64_t>(0, end - lookback_s_);
         std::vector<Trade> rows;
-        std::size_t requests = 0, errors = 0, fetched = 0, truncated_batches = 0;
-        constexpr std::size_t page_limit = 10000;
+        std::size_t requests = 0, errors = 0, fetched = 0, truncated_batches = 0, split_retries = 0;
 
-        for (std::size_t lo = 0; lo < conditions.size(); lo += batch_size_) {
-            const std::size_t hi = std::min(conditions.size(), lo + batch_size_);
+        // Large multi-market 10k-row calls have produced 408/5xx responses and
+        // opaque 20k-row pages with no current-window events. Keep public Data API
+        // calls modest, paginate within the documented offset bound, and split a
+        // retryable failing group until a single condition isolates the failure.
+        constexpr std::size_t page_limit = 1000;
+        constexpr std::size_t max_offset = 10000;
+        const std::size_t api_batch_size = std::min<std::size_t>(batch_size_, 5);
+
+        std::function<bool(std::size_t,std::size_t)> fetch_batch;
+        fetch_batch = [&](std::size_t lo, std::size_t hi) -> bool {
             const auto market_query = join_conditions(conditions, lo, hi);
-            for (std::size_t offset : {std::size_t{0}, page_limit}) {
+            const auto split_or_fail = [&](const std::string& reason) -> bool {
+                if (hi - lo > 1) {
+                    ++split_retries;
+                    const std::size_t mid = lo + (hi - lo) / 2;
+                    return fetch_batch(lo, mid) && fetch_batch(mid, hi);
+                }
+                ++errors;
+                std::cerr << "trade recorder terminal batch failure condition="
+                          << market_query << " reason=" << reason << '\n';
+                return false;
+            };
+
+            for (std::size_t offset = 0; offset <= max_offset; offset += page_limit) {
                 std::ostringstream url;
-                // The public Data API does not provide a reliable server-side time-window
-                // contract for /trades. Request by documented filters and enforce the
-                // overlap window locally after parsing each event timestamp.
+                // The public Data API documents market/limit/offset/takerOnly for
+                // /trades, not start/end. Enforce the causal overlap window locally.
                 url << data_url_ << "/trades?limit=" << page_limit << "&offset=" << offset
                     << "&takerOnly=true&market=" << market_query;
                 ++requests;
+
                 try {
                     const auto r = http_.get(url.str());
                     if (r.status < 200 || r.status >= 300) {
+                        if (retryable_trade_status(r.status)) {
+                            return split_or_fail("http_" + std::to_string(r.status));
+                        }
                         ++errors;
-                        break;
+                        std::cerr << "trade recorder non-retryable HTTP status=" << r.status
+                                  << " market=" << market_query << '\n';
+                        return false;
                     }
+
                     auto root = json::parse(r.body);
                     if (!root.is_array()) {
-                        ++errors;
-                        break;
+                        return split_or_fail("unexpected_response");
                     }
+
                     const auto page_size = root.as_array().size();
                     fetched += page_size;
                     for (const auto& v : root.as_array()) {
@@ -231,14 +261,22 @@ public:
                         const auto key = trade_key(t);
                         if (seen_.insert(key).second) rows.push_back(std::move(t));
                     }
-                    if (page_size < page_limit) break;
-                    if (offset == page_limit) ++truncated_batches;
+
+                    if (page_size < page_limit) return true;
+                    if (offset == max_offset) {
+                        ++truncated_batches;
+                        return false;
+                    }
                 } catch (const std::exception& e) {
-                    ++errors;
-                    std::cerr << "trade recorder request failed: " << e.what() << '\n';
-                    break;
+                    return split_or_fail(std::string("exception:") + e.what());
                 }
             }
+            return true;
+        };
+
+        for (std::size_t lo = 0; lo < conditions.size(); lo += api_batch_size) {
+            const std::size_t hi = std::min(conditions.size(), lo + api_batch_size);
+            fetch_batch(lo, hi);
         }
 
         std::sort(rows.begin(), rows.end(), [](const Trade& a, const Trade& b) {
@@ -264,6 +302,7 @@ public:
                   << " requests=" << requests << " fetched=" << fetched << " new_trades=" << rows.size()
                   << " errors=" << errors << " truncated_batches=" << truncated_batches
                   << " last_trade_ts=" << last_trade_ts_ << " seen=" << seen_.size()
+                  << " api_batch=" << api_batch_size << " split_retries=" << split_retries
                   << " elapsed_ms=" << (now_ms() - started_ms) << '\n';
     }
 
