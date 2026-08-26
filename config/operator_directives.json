@@ -1,18 +1,27 @@
 {
   "schema_version": 1,
-  "directive_epoch": "2026-08-27T01:05:00+02:00",
-  "operator_instruction_id": "user-immediate-legacy-retirement-20260827",
+  "directive_epoch": "2026-08-27T01:01:00+02:00",
+  "operator_instruction_id": "user-v7-master-multi-agent-operating-prompt-20260827",
   "authority": "latest_explicit_user_instruction",
-  "supersedes_prs": [513, 516, 519, 537, 547, 595, 596],
+  "supersedes_prs": [
+    513,
+    516,
+    519,
+    537,
+    547,
+    595,
+    596,
+    605
+  ],
   "repository": "ENRICOBIGNOZZI/Polymarket",
   "scope": "all_registered_schedulers_and_paper_research",
-  "rule": "The latest explicit user instruction is authoritative. Retire V3-V6 and legacy adapters/workflows immediately; a temporary state with no operational champion is explicitly allowed. Do not retain or restore legacy code merely to satisfy stale validation assumptions. V7 remains PAPER-only and authenticated execution remains disabled.",
+  "rule": "V7 is the single final runtime destination. Keep PAPER-only operation and authenticated execution disabled. Do not mass-delete legacy in a way that blocks the V7 cutover: port any still-required behavior into V7/common, validate it, collect same-SHA PAPER evidence, integrate that exact SHA to main, advance paper-validated, deploy and pass server health, then delete the superseded legacy surface. Git history is the archive.",
   "paper_v7_authorization": {
     "paper_only": true,
     "authenticated_execution": false,
     "market_limit": 1000,
     "min_liquidity": 2.0,
-    "min_net_edge": 0.00005,
+    "min_net_edge": 5e-05,
     "uncertainty_penalty": 0.0,
     "fractional_kelly_ceiling": 0.25,
     "fixed_dollar_trade_cap_enabled": false,
@@ -23,9 +32,9 @@
     "max_drawdown": 0.15,
     "hard_arb_fixed_dollar_trade_cap_enabled": false,
     "hard_arb_max_trade_fraction": 1.0,
-    "max_trade_usd_compatibility_sentinel": 1e100,
-    "hard_arb_max_trade_usd_compatibility_sentinel": 1e100,
-    "interpretation": "100% is a hard ceiling, not a target. Kelly, executable depth, authoritative fees, slippage, adverse markout, state integrity and the 15% drawdown kill switch still bind."
+    "max_trade_usd_compatibility_sentinel": 1e+100,
+    "hard_arb_max_trade_usd_compatibility_sentinel": 1e+100,
+    "interpretation": "100% is a hard ceiling, not a target. Kelly, executable depth, authoritative fees, slippage, partial/unwind loss, adverse markout, state integrity, capital/latency cost and the 15% drawdown kill switch still bind."
   },
   "architecture": {
     "target": "one slim V7-only PAPER codebase",
@@ -34,68 +43,104 @@
     "single_broker_authority": true,
     "no_live_expert_averaging": true,
     "no_terminal_probability_interpretation_for_fixed_horizon_stat_arb": true,
-    "operational_champion_may_be_absent": true,
-    "cleanup_sequence": "delete_legacy_immediately_then_promote_only_validated_v7"
+    "operational_champion_may_be_absent_during_transition": true,
+    "cleanup_sequence": "v7_implementation_tests_same_sha_paper_main_paper_validated_deploy_server_health_then_legacy_deletion",
+    "subhour_runtime": "server_event_loop_not_github_actions"
   },
   "model_contracts": {
     "pca": "single-leg residual statistical arbitrage only; evaluate 30m, 1h, 2h and 6h separately; no mandatory hedge basket, terminal-probability semantics or binary Kelly",
-    "local_factor": "leave-targets-out factor basis, null-preserving inference, dependence-robust multiplicity, phi^h forecast and PnL-unit hedge ratios; evaluate 30m and 60m separately",
-    "cross_sectional_ranking": "relative top-vs-bottom executable ranking; evaluate 30m, 1h, 2h and 6h separately; do not pool inference across horizons",
-    "micro_maker": "optimize fill-conditioned net PnL, not fill probability; queue, OFI, imbalance, microprice, depth, toxicity and adverse markout are required; exits/markouts are quantity-specific depth-aware",
+    "local_factor": "leave-targets-out factor basis, null-preserving inference, dependence-robust multiplicity, phi^h forecast and PnL-unit hedge ratios; evaluate 30m and 60m separately unless a new horizon is prospectively justified",
+    "cross_sectional_ranking": "relative top-vs-bottom executable ranking; evaluate 15m, 30m, 1h, 2h and 6h separately; frozen holdout fits once before holdout_start-minus-embargo and never refits inside the frozen window; do not pool inference across horizons",
+    "micro_maker": "selective incentive-aware maker; optimize fill-conditioned net PnL rather than fill probability; queue, OFI, imbalance, microprice, depth, toxicity, adverse markout and reward separation are required; exits/markouts are quantity-specific depth-aware",
     "micro_taker": "complete executable round-trip target with entry ask VWAP, expected/realized exit bid VWAP, both authoritative fees, slippage, uncertainty, adverse markout and capital-time costs",
-    "graph_rv": "prospective dual-clock joint-state evidence only; no product/minimum of marginal fill probabilities; explicit partial-state unwind; fixed-horizon executable liquidation for full and partial states; dependence-robust chronological inference",
-    "external_intelligence": "fail closed; raw external features never become a synthetic terminal probability without approved probability mapping and evidence"
+    "graph_rv": "prospective dual-clock joint-state evidence only; queue ahead reduces fillability and never grants capital size; no product/minimum of marginal fill probabilities; explicit partial-state unwind; fixed-horizon executable liquidation for full and partial states; dependence-robust chronological inference",
+    "fast_structural_arb": "event-driven synchronized executable-book state; authoritative per-market fees, full depth, stale/sequence/reconnect guards, sequential or near-simultaneous completion accounting, partial/unwind loss and realized PAPER PnL; quoted edge alone is not profit",
+    "external_intelligence": "fail closed; raw external features never become a synthetic terminal probability without approved point-in-time probability mapping and evidence"
   },
   "frequency_research": {
     "execution_seconds": {
-      "micro_maker": [1, 2, 5, 10],
-      "micro_taker": [2, 5, 10, 30],
-      "hard_arb": [1, 2, 5, 10],
-      "graph_rv": [5, 15, 30, 60]
+      "micro_maker": [
+        1,
+        2,
+        5,
+        10
+      ],
+      "micro_taker": [
+        2,
+        5,
+        10,
+        30
+      ],
+      "hard_arb": [
+        1,
+        2,
+        5,
+        10
+      ],
+      "graph_rv": [
+        5,
+        15,
+        30,
+        60
+      ]
     },
-    "forecast_minutes": [30, 60, 120, 360],
+    "forecast_minutes": [
+      15,
+      30,
+      60,
+      120,
+      360
+    ],
     "rules": [
       "keep state, PnL, labels and inference separate by frequency",
       "do not select a new frequency post hoc on the same holdout",
-      "new frequencies require prospective chronological evidence"
+      "new frequencies require prospective chronological evidence",
+      "frozen holdout and adaptive walk-forward evidence must remain separate"
     ]
   },
   "current_priority_order": [
-    "Delete all V3/V4/V5/V6 runtime entrypoints, configs, adapters, workflows, monitoring surfaces and tests immediately.",
-    "Allow config/live_champion.json to represent no active champion until a V7 revision is validated.",
-    "Keep only generic control-plane/research infrastructure plus explicitly V7 research and evidence paths.",
-    "Remove stale validator assumptions that require V4/V5/V6 files or schedulers.",
-    "Keep V7 PAPER authorization, hard safety, exact-SHA evidence and authenticated-execution separation intact.",
-    "Fix External Intelligence runtime/timeout defects on the exact V7 research head without restoring legacy compatibility paths.",
-    "Promote a V7 operational champion only after exact-SHA technical and economic evidence is sufficient.",
-    "After V7 integration, continue shrinking duplicate or transitional surfaces rather than recreating retired versions."
+    "Fix any bug or authority conflict that invalidates economic evidence or can trigger a wrong cutover.",
+    "Fast Structural Arb / HFT on synchronized event-driven executable books.",
+    "Graph/RV joint completion and queue-decoupled execution sizing.",
+    "Cross-sectional ranking 15m with a genuinely frozen holdout.",
+    "Selective Micro Taker with complete round-trip executable EV.",
+    "External Intelligence / fair-value collection in parallel with point-in-time provenance.",
+    "Learned execution model for fill, joint completion and markout.",
+    "Selective incentive-aware Micro Maker; report trading PnL and rewards separately.",
+    "Category/regime specialization.",
+    "PCA and Local Factor refinements only where evidence warrants them.",
+    "Monitoring polish.",
+    "Delete each superseded legacy surface immediately after its V7 replacement is proven, and perform mass legacy retirement only after the V7 cutover sequence is complete."
   ],
   "scheduler_assignments": {
-    "administrator-supervisor": "Report conflicts with this directive and treat a temporary no-champion state as valid during immediate legacy retirement.",
-    "research-policy": "Treat immediate V3-V6 retirement as explicitly authorized. Reject attempts to restore retired runtime surfaces merely for compatibility. Continue enforcing PAPER-only and authenticated-execution separation.",
-    "research-queue": "Prioritize V7-only evidence and remediation; do not dispatch new V3-V6 work.",
-    "promotion-controller": "A missing operational champion during cleanup is not a reason to restore V6. Promotion remains evidence-gated.",
-    "integration-merge": "Merge only policy-compatible V7 integrations or immediate legacy-retirement infrastructure; never restore retired versions.",
-    "control-plane-event-bridge": "Dispatch only the existing Promotion Controller after validator completion and Integration Merge after a successful controller completion.",
-    "post-merge-validation": "During no-champion cleanup, bind CI and monitoring to the exact merged SHA; live-paper validation resumes only with a V7 validator.",
-    "code-validation": "Remove stale V4-V6 assumptions and validate the V7-only/no-champion transition.",
-    "monitoring-validation": "Validate generic/V7 observability only; legacy exporter/dashboard compatibility is not required.",
-    "alpha-factory": "Rank V7 challengers by executable OOS economics and incremental utility; never restore legacy runtime.",
-    "meta-supervisor": "Coordinate V7-only research and cleanup; never reinterpret stale PR text as requiring V6.",
-    "fast-arb-shadow-research": "Keep read-only evidence only where it is version-neutral or V7-compatible.",
-    "arb-theory-research": "Derive structural/Graph opportunities under V7 execution contracts.",
-    "external-intelligence": "Collect, store and chronologically validate public information; publish research evidence only and keep probability mapping fail-closed.",
-    "live-api-smoke": "Read-only connectivity only; no policy mutation.",
-    "v7-point-in-time-universe-archive": "Keep V7 point-in-time archival research read-only.",
-    "v7-unified-paper-evidence": "Reconcile only the exact V7 research head into isolated per-SHA PAPER evidence; never require an incumbent champion.",
-    "v7-cross-sectional-ranking-research": "Collect read-only frozen 2h/6h relative ranking evidence; no live mutation."
+    "administrator-supervisor": "Treat this V7 master directive as authoritative, report collisions, and block stale immediate-delete or compatibility-restoration instructions.",
+    "research-policy": "Require V7/common-only new logic, PAPER-only/authenticated separation, exact-SHA evidence, causal data and the safe cutover-before-mass-cleanup sequence.",
+    "research-queue": "Prioritize evidence-invalidating bugs, Fast Structural Arb, Graph/RV completion, Ranking 15m, Micro Taker and External Intelligence; do not dispatch new V3-V6 feature work.",
+    "promotion-controller": "Promote only on exact-SHA forward/OOS executable economic evidence; CI or quoted edge alone is insufficient.",
+    "integration-merge": "Single-writer V7 integration only. Do not merge premature mass legacy deletion that blocks cutover, and do not restore retired implementations once V7 replacements are proven.",
+    "control-plane-event-bridge": "Dispatch only registered control-plane work; do not reinterpret GitHub Actions as a realtime HFT engine.",
+    "post-merge-validation": "Validate the exact integrated SHA, advance paper-validated only for that SHA, then deploy and server-health check the same SHA.",
+    "code-validation": "Validate V7/common contracts and reject V7 dependencies on legacy versioned runtime when a native replacement is available.",
+    "monitoring-validation": "Validate one canonical V7 Grafana/runtime status surface with current SHA and executable economic metrics.",
+    "alpha-factory": "Rank challengers by forward/OOS executable economics and incremental utility; reject statistical or quoted-edge-only claims.",
+    "meta-supervisor": "Coordinate agents via GitHub, avoid duplicate lane ownership, and preserve single-writer authority surfaces.",
+    "fast-arb-shadow-research": "Prioritize synchronized event/exchange-time book state, executable depth, exact fees, latency, partial/unwind and cost-stressed PAPER evidence; server event loop owns sub-hour runtime.",
+    "arb-theory-research": "Derive structural/Graph opportunities under V7 execution contracts and explicit joint completion states.",
+    "external-intelligence": "Collect and chronologically validate public information in parallel; publish research evidence only and keep probability mapping fail-closed.",
+    "live-api-smoke": "Read-only connectivity only; no policy mutation or authenticated execution.",
+    "v7-point-in-time-universe-archive": "Keep V7 point-in-time archival research read-only and survivorship-safe.",
+    "v7-unified-paper-evidence": "Reconcile only an exact V7 source SHA into isolated PAPER evidence; do not mix evidence across SHAs.",
+    "v7-cross-sectional-ranking-research": "Keep frozen and adaptive ranking evidence separate; add 15m prospectively without pooling horizons."
   },
   "forbidden_regressions": [
-    "Do not reopen or restore the obsolete V7 $125 fixed trade cap or 5%/15%/70% caps.",
-    "Do not restore V3/V4/V5/V6 code, adapters, workflows, configs or tests merely because a stale validator expects them.",
-    "Do not treat absence of an operational champion as an error during the authorized cleanup transition.",
+    "Do not create V8/V9/V10 or another numbered runtime generation.",
+    "Do not mass-delete legacy before any still-required behavior has been ported and the V7 same-SHA cutover has passed deploy and server health.",
+    "Do not restore V3/V4/V5/V6 implementations after a tested V7/common replacement exists.",
     "Do not add authenticated or real-money execution.",
-    "Do not create a second live state writer, broker owner or execution ledger.",
-    "Do not write scheduler-generated code or artifacts outside this repository except explicitly registered private PAPER evidence/telemetry channels."
+    "Do not bypass kill switch, reconciliation, drawdown or state-integrity hard limits.",
+    "Do not create a second live state writer, broker owner, execution ledger or canonical scheduler owner.",
+    "Do not call assumed fills, quoted edge or in-sample statistics realized profit.",
+    "Do not use stale or point-in-time-invalid market/external data.",
+    "Do not write scheduler-generated code or artifacts outside authorized repository/runtime paths."
   ]
 }
