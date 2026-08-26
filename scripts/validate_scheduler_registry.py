@@ -9,15 +9,19 @@ from typing import Any
 
 REQUIRED_IDS = {
     "administrator-supervisor", "research-policy", "research-queue", "promotion-controller",
-    "integration-merge", "control-plane-event-bridge", "post-merge-validation", "code-validation",
-    "monitoring-validation", "alpha-factory", "meta-supervisor", "fast-arb-shadow-research",
-    "arb-theory-research", "external-intelligence", "live-api-smoke",
-    "v7-cross-sectional-ranking-research", "v7-point-in-time-universe-archive",
+    "integration-merge", "control-plane-event-bridge", "post-merge-validation",
+    "v7-live-paper-validation", "v7-paper-server-deploy", "v7-paper-server-health",
+    "code-validation", "monitoring-validation", "alpha-factory", "meta-supervisor",
+    "fast-arb-shadow-research", "arb-theory-research", "external-intelligence",
+    "live-api-smoke", "v7-cross-sectional-ranking-research", "v7-point-in-time-universe-archive",
     "v7-unified-paper-evidence",
 }
 NON_SCHEDULER_WORKFLOWS = {
     ".github/workflows/private-runtime-single-writer-validation.yml",
     ".github/workflows/operator-authority-gate.yml",
+}
+EVENT_DRIVEN_WORKFLOWS = {
+    ".github/workflows/v7-live-paper-validation.yml",
 }
 
 
@@ -77,7 +81,8 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             errors.append(f"duplicate scheduler id: {sid}")
         if rel in workflows:
             errors.append(f"duplicate workflow registration: {rel}")
-        ids.add(sid); workflows.add(rel)
+        ids.add(sid)
+        workflows.add(rel)
         path = root / rel
         if not path.is_file():
             errors.append(f"registered workflow does not exist: {rel}")
@@ -85,65 +90,140 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         observed_jobs = job_ids(path)
         if observed_jobs != [str(item["job"])]:
             errors.append(f"{rel} must contain exactly one job named {item['job']}; found {observed_jobs}")
-        if not has_schedule(path):
+        if rel not in EVENT_DRIVEN_WORKFLOWS and not has_schedule(path):
             errors.append(f"{rel} must retain a periodic recovery schedule")
+        if rel in EVENT_DRIVEN_WORKFLOWS and has_schedule(path):
+            errors.append(f"{rel} is an exact-SHA event-driven validator and must not run on a blind periodic schedule")
         items.append(item)
 
     if ids != REQUIRED_IDS:
         missing = sorted(REQUIRED_IDS.difference(ids))
         extra = sorted(ids.difference(REQUIRED_IDS))
-        if missing: errors.append("missing scheduler ids: " + ", ".join(missing))
-        if extra: errors.append("unrecognized scheduler ids: " + ", ".join(extra))
+        if missing:
+            errors.append("missing scheduler ids: " + ", ".join(missing))
+        if extra:
+            errors.append("unrecognized scheduler ids: " + ", ".join(extra))
 
     workflow_dir = root / ".github" / "workflows"
-    actual = {str(p.relative_to(root)) for p in workflow_dir.iterdir() if p.is_file() and p.suffix in {".yml", ".yaml"}}
+    actual = {
+        str(path.relative_to(root))
+        for path in workflow_dir.iterdir()
+        if path.is_file() and path.suffix in {".yml", ".yaml"}
+    }
     managed = actual.difference(NON_SCHEDULER_WORKFLOWS)
     if managed.difference(workflows):
         errors.append("unregistered workflows: " + ", ".join(sorted(managed.difference(workflows))))
     if workflows.difference(actual):
         errors.append("registry references missing workflows: " + ", ".join(sorted(workflows.difference(actual))))
 
-    merge_ids = [str(i["id"]) for i in items if i["merge_authority"] is True]
-    deploy_ids = [str(i["id"]) for i in items if i["deploy_authority"] is True]
-    dispatch_ids = [str(i["id"]) for i in items if i["validation_dispatch_authority"] is True]
+    merge_ids = [str(item["id"]) for item in items if item["merge_authority"] is True]
+    deploy_ids = [str(item["id"]) for item in items if item["deploy_authority"] is True]
+    dispatch_ids = [str(item["id"]) for item in items if item["validation_dispatch_authority"] is True]
     if merge_ids != ["integration-merge"]:
         errors.append(f"merge authority must belong only to integration-merge; found {merge_ids}")
-    if deploy_ids:
-        errors.append(f"no deployment authority is allowed while champion is disabled; found {deploy_ids}")
+    if deploy_ids != ["v7-paper-server-deploy"]:
+        errors.append(f"deploy authority must belong only to v7-paper-server-deploy; found {deploy_ids}")
     if dispatch_ids != ["post-merge-validation"]:
         errors.append(f"validation dispatch authority must belong only to post-merge-validation; found {dispatch_ids}")
 
-    by_id = {str(i["id"]): i for i in items}
+    by_id = {str(item["id"]): item for item in items}
     controller = root / str(by_id.get("promotion-controller", {}).get("workflow", ""))
     if controller.is_file():
         text = controller.read_text(encoding="utf-8")
         for required in ("scripts/promotion_gate.py", "autonomous-promotion-approved", "source-match-files.txt"):
-            if required not in text: errors.append(f"promotion-controller missing contract: {required}")
-        if "gh pr merge" in text: errors.append("promotion-controller must not merge")
+            if required not in text:
+                errors.append(f"promotion-controller missing contract: {required}")
+        if "gh pr merge" in text:
+            errors.append("promotion-controller must not merge")
 
     integration = root / str(by_id.get("integration-merge", {}).get("workflow", ""))
     if integration.is_file():
         text = integration.read_text(encoding="utf-8")
         if 'gh pr merge "$PR_NUMBER" --squash --delete-branch' not in text:
             errors.append("integration-merge must use bounded squash merge")
-        if "--admin" in text: errors.append("integration-merge must never use --admin")
+        if "--admin" in text:
+            errors.append("integration-merge must never use --admin")
 
     bridge = root / str(by_id.get("control-plane-event-bridge", {}).get("workflow", ""))
     if bridge.is_file():
         text = bridge.read_text(encoding="utf-8")
-        for required in ('"ci"', '"monitoring"', '"Private runtime single-writer validation"', '"Polymarket Promotion Controller"',
-                         "gh workflow run promotion-controller.yml --ref main", "gh workflow run integration-merge.yml --ref main"):
-            if required not in text: errors.append(f"control-plane-event-bridge missing contract: {required}")
+        for required in (
+            '"ci"', '"monitoring"', '"Private runtime single-writer validation"',
+            '"Polymarket Promotion Controller"',
+            "gh workflow run promotion-controller.yml --ref main",
+            "gh workflow run integration-merge.yml --ref main",
+        ):
+            if required not in text:
+                errors.append(f"control-plane-event-bridge missing contract: {required}")
         for forbidden in ('"v4-live-paper-smoke"', "gh pr merge", "git push origin paper-validated"):
-            if forbidden in text: errors.append(f"control-plane-event-bridge contains retired/forbidden authority: {forbidden}")
+            if forbidden in text:
+                errors.append(f"control-plane-event-bridge contains retired/forbidden authority: {forbidden}")
 
     post = root / str(by_id.get("post-merge-validation", {}).get("workflow", ""))
     if post.is_file():
         text = post.read_text(encoding="utf-8")
         if "ci.yml monitoring.yml" not in text or "v4-live-smoke.yml" in text:
-            errors.append("post-merge-validation must dispatch only CI and monitoring during no-champion transition")
+            errors.append("post-merge-validation must dispatch only exact-SHA CI and monitoring")
         if '-f expected_sha="$EXPECTED_SHA"' not in text:
             errors.append("post-merge-validation must pass exact SHA")
+        if "paper-validated" in text or "POLYMARKET_DEPLOY_REF=" in text:
+            errors.append("post-merge-validation must not advance paper-validated or deploy")
+
+    live_validation = root / str(by_id.get("v7-live-paper-validation", {}).get("workflow", ""))
+    if live_validation.is_file():
+        text = live_validation.read_text(encoding="utf-8")
+        for required in (
+            'workflows: ["ci", "monitoring"]',
+            "scripts/v7_cutover_contract.py",
+            "scripts/paper_v7_loop.sh",
+            "scripts/v7_execution_evidence_hardened.py",
+            "paper-validated",
+            "force=false",
+            "merged_pr",
+        ):
+            if required not in text:
+                errors.append(f"V7 live-PAPER validation missing contract: {required}")
+        for forbidden in ("POLYMARKET_DEPLOY_REF=", "gh pr merge", "--admin"):
+            if forbidden in text:
+                errors.append(f"V7 live-PAPER validation contains forbidden authority: {forbidden}")
+
+    deploy = root / str(by_id.get("v7-paper-server-deploy", {}).get("workflow", ""))
+    if deploy.is_file():
+        text = deploy.read_text(encoding="utf-8")
+        for required in (
+            "ref: paper-validated",
+            "scripts/v7_cutover_contract.py",
+            "EXPECTED_VALIDATED_SHA",
+            "POLYMARKET_DEPLOY_REF=paper-validated",
+            "V7 live PAPER validation",
+            "ops/update_server_macos.sh",
+            "ops/update_server.sh",
+        ):
+            if required not in text:
+                errors.append(f"V7 deploy workflow missing contract: {required}")
+        for forbidden in ("authenticated_execution: true", "git push", "gh pr merge", "force=true"):
+            if forbidden in text:
+                errors.append(f"V7 deploy workflow contains forbidden authority: {forbidden}")
+
+    health = root / str(by_id.get("v7-paper-server-health", {}).get("workflow", ""))
+    if health.is_file():
+        text = health.read_text(encoding="utf-8")
+        for required in (
+            "scripts/v7_cutover_contract.py",
+            "paper_v7_loop",
+            "paper_v7_execution_loop",
+            "v7_market_proxy_status",
+            "recorder_count",
+            "broker_count",
+            "polymarket_runtime_pnl_usd",
+            "polymarket_runtime_equity_usd",
+            "GRAFANA_DASHBOARD_UID",
+        ):
+            if required not in text:
+                errors.append(f"V7 server-health workflow missing contract: {required}")
+        for forbidden in ("POLYMARKET_DEPLOY_REF=", "gh pr merge", "git push"):
+            if forbidden in text:
+                errors.append(f"V7 server-health workflow contains forbidden authority: {forbidden}")
 
     for sid in ("code-validation", "monitoring-validation"):
         path = root / str(by_id.get(sid, {}).get("workflow", ""))
@@ -157,31 +237,50 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
     evidence = root / str(by_id.get("v7-unified-paper-evidence", {}).get("workflow", ""))
     if evidence.is_file():
         text = evidence.read_text(encoding="utf-8")
-        for required in ("config/v7_evidence_runtime.json", "by-sha", "Private runtime single-writer validation", "contents: read"):
-            if required not in text: errors.append(f"V7 evidence runtime missing contract: {required}")
+        for required in (
+            "config/v7_evidence_runtime.json", "by-sha",
+            "Private runtime single-writer validation", "contents: read",
+        ):
+            if required not in text:
+                errors.append(f"V7 evidence runtime missing contract: {required}")
         for forbidden in ("contents: write", "git push origin paper-validated", "POLYMARKET_DEPLOY_REF="):
-            if forbidden in text: errors.append(f"V7 evidence runtime contains forbidden authority: {forbidden}")
+            if forbidden in text:
+                errors.append(f"V7 evidence runtime contains forbidden authority: {forbidden}")
 
     return errors, items
 
 
 def render(items: list[dict[str, Any]], errors: list[str]) -> str:
-    lines = ["# Scheduler registry validation", "", f"- schedulers: {len(items)}", f"- errors: {len(errors)}"]
+    lines = [
+        "# Scheduler registry validation", "",
+        f"- schedulers: {len(items)}",
+        f"- errors: {len(errors)}",
+    ]
     if errors:
-        lines += ["", "## Errors", *[f"- {e}" for e in errors]]
+        lines += ["", "## Errors", *[f"- {error}" for error in errors]]
     else:
-        lines += ["", "Registry is valid: V3-V6 schedulers are absent and deployment authority is intentionally disabled until V7 promotion."]
+        lines += [
+            "",
+            "Registry is valid: V7 has one merge owner, one exact-SHA deploy owner, one server-health owner, and research/evidence schedulers have no deploy authority.",
+        ]
     return "\n".join(lines) + "\n"
 
 
 def main() -> int:
-    p = argparse.ArgumentParser()
-    p.add_argument("--root", default="."); p.add_argument("--registry", default="config/scheduler_registry.json"); p.add_argument("--output")
-    a = p.parse_args(); root = Path(a.root).resolve(); registry = root / a.registry
-    try: errors, items = validate(root, registry)
-    except Exception as exc: errors, items = [str(exc)], []
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", default=".")
+    parser.add_argument("--registry", default="config/scheduler_registry.json")
+    parser.add_argument("--output")
+    args = parser.parse_args()
+    root = Path(args.root).resolve()
+    registry = root / args.registry
+    try:
+        errors, items = validate(root, registry)
+    except Exception as exc:
+        errors, items = [str(exc)], []
     report = render(items, errors)
-    if a.output: Path(a.output).write_text(report, encoding="utf-8")
+    if args.output:
+        Path(args.output).write_text(report, encoding="utf-8")
     print(report, end="")
     return 1 if errors else 0
 
