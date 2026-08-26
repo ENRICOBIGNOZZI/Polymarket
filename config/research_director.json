@@ -1,50 +1,50 @@
 {
-  "schema": "polymarket_research_director_config_v1",
+  "schema_version": 1,
   "paper_only": true,
   "allow_authenticated_execution": false,
   "allow_direct_champion_mutation": false,
   "max_dispatches_per_cycle": 2,
-  "dispatch_cooldown_seconds": 1800,
-  "max_stagnant_cycles": 4,
-  "stagnation_retry_seconds": 7200,
-  "economic_stagnation_seconds": 7200,
-  "max_alpha_report_age_seconds": 10800,
+  "alpha_factory_max_age_seconds": 10800,
+  "stagnation_seconds": 7200,
   "owner_workflows": {
     "forward-maker-research.yml": {
       "workflow_name": "forward-maker-alpha-research",
-      "priority_bias": 0
+      "description": "Prospective V7 maker queue/fill/markout research"
     },
     "external-intelligence.yml": {
       "workflow_name": "Polymarket External Intelligence",
-      "priority_bias": 0
-    },
-    "v6-research-smoke.yml": {
-      "workflow_name": "V6 live-data research smoke",
-      "priority_bias": 0
+      "description": "Chronological public external-information research"
     },
     "fast-arb-hourly.yml": {
       "workflow_name": "Fast Arbitrage Hourly Shadow",
-      "priority_bias": 1
+      "description": "V7 hard-arbitrage freshness/depth/fee/legging evidence"
     },
     "arb-theory-hourly.yml": {
       "workflow_name": "Arbitrage Theory Hourly Research",
-      "priority_bias": 1
+      "description": "V7 Graph/relative-value structural research"
     }
   },
-  "owner_remap": {
-    "alpha-factory.yml": "v6-research-smoke.yml"
-  },
+  "owner_remap": {},
   "experiment_prefix_owner": {
+    "maker_": "forward-maker-research.yml",
+    "execution_": "forward-maker-research.yml",
     "external_": "external-intelligence.yml",
-    "b2_": "v6-research-smoke.yml",
-    "fast_arb_": "fast-arb-hourly.yml",
-    "arb_theory_": "arb-theory-hourly.yml"
+    "hard_arb_": "fast-arb-hourly.yml",
+    "graph_": "arb-theory-hourly.yml",
+    "relative_value_": "arb-theory-hourly.yml"
+  },
+  "owner_cooldowns_seconds": {
+    "forward-maker-research.yml": 1800,
+    "external-intelligence.yml": 3600,
+    "fast-arb-hourly.yml": 3600,
+    "arb-theory-hourly.yml": 3600
   },
   "forbidden_workflows": [
     "integration-merge.yml",
+    "promotion-controller.yml",
+    "post-merge-validation.yml",
     "deploy-paper-server.yml",
     "server-health.yml",
-    "promotion-controller.yml",
-    "post-merge-validation.yml"
+    "v7-live-paper-validation.yml"
   ]
 }
