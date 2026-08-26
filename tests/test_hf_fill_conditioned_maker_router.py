@@ -6,7 +6,14 @@ from pathlib import Path
 
 sys.path.insert(0, str((Path(__file__).resolve().parents[1] / "scripts").resolve()))
 
-from hf_fill_conditioned_maker_router import CandidateEvidence, RouterConfig, evaluate
+from hf_fill_conditioned_maker_router import (
+    CandidateEvidence,
+    RestingConfig,
+    RestingEvidence,
+    RouterConfig,
+    evaluate,
+    evaluate_resting,
+)
 
 
 def candidate(**overrides):
@@ -28,6 +35,21 @@ def candidate(**overrides):
     )
     values.update(overrides)
     return CandidateEvidence(**values)
+
+
+def resting(**overrides):
+    values = dict(
+        age_seconds=30.0,
+        current_post_cost_edge=0.0100,
+        remaining_fill_probability=0.20,
+        recent_trade_count=6,
+        recent_buy_volume=30.0,
+        recent_sell_volume=20.0,
+        conservative_markout_prior_per_share=0.0,
+        capital_latency_cost_per_share=0.0,
+    )
+    values.update(overrides)
+    return RestingEvidence(**values)
 
 
 class FillConditionedMakerRouterTest(unittest.TestCase):
@@ -81,6 +103,37 @@ class FillConditionedMakerRouterTest(unittest.TestCase):
         self.assertEqual(cfg.min_post_cost_edge, 0.00005)
         d = evaluate(candidate(post_cost_edge=0.000049))
         self.assertEqual(d.reason, "post_cost_edge_below_floor")
+
+    def test_resting_quote_keeps_queue_during_grace(self):
+        d = evaluate_resting(resting(age_seconds=10.0, remaining_fill_probability=0.0))
+        self.assertEqual(d.action, "KEEP")
+        self.assertEqual(d.reason, "grace_interval")
+
+    def test_resting_quote_cancels_when_rolling_fill_hazard_collapses(self):
+        d = evaluate_resting(resting(remaining_fill_probability=0.001))
+        self.assertEqual(d.action, "CANCEL_PENDING")
+        self.assertEqual(d.reason, "remaining_fill_probability_too_low")
+
+    def test_resting_quote_keeps_when_new_flow_supports_positive_ev(self):
+        d = evaluate_resting(resting(remaining_fill_probability=0.25, recent_buy_volume=40.0, recent_sell_volume=20.0))
+        self.assertEqual(d.action, "KEEP")
+        self.assertGreater(d.remaining_ev_per_share, 0.0)
+
+    def test_resting_quote_cancels_recurrent_toxic_sell_flow(self):
+        d = evaluate_resting(resting(recent_trade_count=8, recent_buy_volume=1.0, recent_sell_volume=99.0))
+        self.assertEqual(d.action, "CANCEL_PENDING")
+        self.assertEqual(d.reason, "resting_flow_too_toxic")
+
+    def test_resting_quote_cancels_if_edge_no_longer_pays_authorized_floor(self):
+        d = evaluate_resting(resting(current_post_cost_edge=0.000049))
+        self.assertEqual(d.action, "CANCEL_PENDING")
+        self.assertEqual(d.reason, "resting_edge_below_floor")
+
+    def test_resting_cancel_preserves_nonzero_cancel_latency(self):
+        cfg = RestingConfig(cancel_latency_seconds=1.0)
+        d = evaluate_resting(resting(remaining_fill_probability=0.001), cfg)
+        self.assertEqual(d.action, "CANCEL_PENDING")
+        self.assertEqual(d.cancel_latency_seconds, 1.0)
 
 
 if __name__ == "__main__":
