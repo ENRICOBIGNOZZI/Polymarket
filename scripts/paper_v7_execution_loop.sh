@@ -90,7 +90,11 @@ run_graph(){
   python3 scripts/v6_relation_intents.py --config "$RUNTIME_CONFIG" --output "$RUN_ROOT/relation_intents_raw.csv" --status "$RUN_ROOT/relation_status.json" --markets "$MARKETS" --min-liquidity "$MIN_LIQUIDITY" --min-edge "$MIN_EDGE" --max-trade-usd "$MAX_TRADE" --max-events "$HARD_EVENTS" >>"$RUN_ROOT/relation.log" 2>&1 || true
   python3 scripts/v6_intent_guard.py --input "$RUN_ROOT/relation_intents_raw.csv" --output "$RUN_ROOT/relation_intents_static.csv" --status "$RUN_ROOT/relation_static_guard.json" --min-edge "$MIN_EDGE" --stress-bps 10 --max-age-seconds 240 >>"$RUN_ROOT/relation_static_guard.log" 2>&1 || true
   python3 scripts/v6_bundle_quote_optimizer.py --config "$RUNTIME_CONFIG" --input "$RUN_ROOT/relation_intents_static.csv" --output "$RUN_ROOT/relation_intents_optimized.csv" --status "$RUN_ROOT/relation_quote_optimizer.json" --trade-tape "$RUN_ROOT/trade_tape.csv" --min-edge "$MIN_EDGE" --reserve-bps 0.5 --min-leg-fill-probability 0.001 --min-joint-fill-probability 0 --target-leg-fill-probability 0.10 >>"$RUN_ROOT/relation_quote_optimizer.log" 2>&1 || true
-  python3 scripts/v6_bundle_state_guard.py --config "$RUNTIME_CONFIG" --input "$RUN_ROOT/relation_intents_optimized.csv" --output "$RUN_ROOT/relation_intents.csv" --status "$RUN_ROOT/relation_joint_state_guard.json" --trade-tape "$RUN_ROOT/trade_tape.csv" --min-edge "$MIN_EDGE" --lookback-seconds 900 --window-seconds 180 --min-windows 4 --slippage-bps 5 --bootstrap-reps 400 --bootstrap-quantile 0.10 >>"$RUN_ROOT/relation_joint_state_guard.log" 2>&1 || true
+  # Final Graph/RV admission is prospective only. Each recurring candidate first
+  # snapshots point-in-time queue/depth/fee/target state, then matures on public
+  # trades received after origin with event timestamps after origin. Only prior
+  # completed sessions may authorize the current candidate.
+  python3 scripts/v7_graph_forward_guard.py --config "$RUNTIME_CONFIG" --input "$RUN_ROOT/relation_intents_optimized.csv" --output "$RUN_ROOT/relation_intents.csv" --state "$RUN_ROOT/graph_forward_state.json" --status "$RUN_ROOT/relation_joint_state_guard.json" --trade-tape "$RUN_ROOT/trade_tape.csv" --window-seconds 180 --min-sessions 4 --slippage-bps 5 --bootstrap-reps 400 --bootstrap-quantile 0.10 >>"$RUN_ROOT/relation_joint_state_guard.log" 2>&1 || true
   rebuild_intents
 }
 
