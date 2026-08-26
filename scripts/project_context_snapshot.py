@@ -33,7 +33,7 @@ def build_snapshot(root: Path, manifest_path: Path) -> dict[str, Any]:
     directives = load(root / directives_rel)
     workflows = sorted(x for x in tracked if x.startswith(".github/workflows/") and x.endswith((".yml", ".yaml")))
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "repository": manifest.get("repository"),
         "head": run_git(root, "rev-parse", "HEAD"),
         "branch": run_git(root, "branch", "--show-current"),
@@ -72,7 +72,7 @@ def render(snapshot: dict[str, Any]) -> str:
         f"- schedulers: **{snapshot['scheduler_count']}**",
         f"- operational champion: **{state}**",
         f"- target champion: **V{cutover.get('target_version', '?')}**",
-        f"- cutover state: `{cutover.get('current_state')}`",
+        f"- control-plane state: `{cutover.get('current_state')}`",
         f"- required cutover sequence: `{cutover.get('required_sequence')}`",
         f"- operator directive epoch: `{directives.get('directive_epoch')}`",
         "", "## Current priority order", "",
