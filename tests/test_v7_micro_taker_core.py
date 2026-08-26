@@ -136,6 +136,14 @@ class MicroTakerRoundTripTest(unittest.TestCase):
         self.assertIsNone(core.round_trip_economics(book=self.book, now=106, **common))
         self.assertIsNone(core.round_trip_economics(book=self.book, now=99, **common))
 
+    def test_full_depth_vwap_requires_full_requested_quantity(self) -> None:
+        levels = [(0.49, 2.0), (0.48, 3.0)]
+        self.assertIsNone(worker.full_depth_vwap(levels, 6.0, buy=False))
+        self.assertAlmostEqual(
+            worker.full_depth_vwap(levels, 5.0, buy=False),
+            (0.49 * 2.0 + 0.48 * 3.0) / 5.0,
+        )
+
 
 NOW = 1_800_000_000
 
