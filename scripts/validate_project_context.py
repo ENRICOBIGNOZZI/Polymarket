@@ -188,12 +188,17 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     grafana = context.get("grafana") or {}
     if grafana.get("canonical_operator_url") != "http://mamma-portfolio.tail1bae85.ts.net":
         errors.append("canonical Grafana URL changed unexpectedly")
-    if grafana.get("dashboard_uid") != "polymarket-v7":
-        errors.append("canonical Grafana dashboard UID must be polymarket-v7")
+    if grafana.get("dashboard_uid") != "polymarket-v7-paper":
+        errors.append("canonical Grafana dashboard UID must be polymarket-v7-paper")
     if grafana.get("dashboard_file") != "monitoring/grafana/dashboards/polymarket-v7.json":
         errors.append("canonical Grafana dashboard file must be the V7 dashboard")
-    if not (root / str(grafana.get("dashboard_file") or "")).is_file():
+    dashboard_path = root / str(grafana.get("dashboard_file") or "")
+    if not dashboard_path.is_file():
         errors.append("canonical Grafana V7 dashboard file is missing")
+    else:
+        dashboard = load_json(dashboard_path)
+        if dashboard.get("uid") != grafana.get("dashboard_uid"):
+            errors.append("canonical Grafana dashboard UID does not match project context")
 
     for raw in schedulers:
         if not isinstance(raw, dict):
