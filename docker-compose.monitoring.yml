@@ -1,4 +1,4 @@
-name: polymarket-monitoring
+name: polymarket-v7-monitoring
 
 services:
   exporter:
@@ -10,15 +10,13 @@ services:
       - --runs-base
       - /runs
       - --run-name
-      - ${POLYMARKET_RUN_NAME:-auto}
+      - paper_v7_live
       - --config-dir
       - /config
       - --host
       - 0.0.0.0
       - --port
       - "9108"
-      - --top-opportunities
-      - "20"
     working_dir: /app
     read_only: true
     volumes:
