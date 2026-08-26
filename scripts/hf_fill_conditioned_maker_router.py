@@ -22,6 +22,8 @@ class CandidateEvidence:
     at_touch_markout_per_share: float
     inside_fill_probability: float
     inside_markout_per_share: float
+    inside_post_cost_edge: float | None = None
+    confidence: float = 1.0
     capital_latency_cost_per_share: float = 0.0
 
 
@@ -34,6 +36,7 @@ class RouterConfig:
     toxicity_min_trades: int = 4
     max_sell_share: float = 0.90
     min_fill_probability: float = 0.005
+    min_inside_confidence: float = 0.80
 
 
 @dataclass(frozen=True)
@@ -60,7 +63,11 @@ def evaluate(candidate: CandidateEvidence, config: RouterConfig = RouterConfig()
     p_touch = _clamp01(candidate.at_touch_fill_probability)
     p_inside = _clamp01(candidate.inside_fill_probability)
     touch_payoff = candidate.post_cost_edge + candidate.at_touch_markout_per_share
-    inside_edge = candidate.post_cost_edge - max(0.0, candidate.tick_size)
+    inside_edge = (
+        float(candidate.inside_post_cost_edge)
+        if candidate.inside_post_cost_edge is not None
+        else candidate.post_cost_edge - max(0.0, candidate.tick_size)
+    )
     inside_payoff = inside_edge + candidate.inside_markout_per_share
     touch_ev = p_touch * touch_payoff - max(0.0, candidate.capital_latency_cost_per_share)
     inside_ev = p_inside * inside_payoff - max(0.0, candidate.capital_latency_cost_per_share)
@@ -87,7 +94,8 @@ def evaluate(candidate: CandidateEvidence, config: RouterConfig = RouterConfig()
     inside_has_fill_support = p_inside >= config.min_fill_probability
     inside_is_better = inside_ev > touch_ev and inside_ev > 0.0
     recurrent_support = candidate.recent_trade_count >= config.toxicity_min_trades
-    if inside_has_edge and inside_has_fill_support and inside_is_better and recurrent_support:
+    confidence_support = candidate.confidence >= config.min_inside_confidence
+    if inside_has_edge and inside_has_fill_support and inside_is_better and recurrent_support and confidence_support:
         return decision("IMPROVE_ONE_TICK", "incremental_fill_conditioned_ev_pays_tick")
     return decision("POST_AT_TOUCH", "positive_touch_fill_conditioned_ev")
 
