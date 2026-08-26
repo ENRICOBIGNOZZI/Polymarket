@@ -197,8 +197,8 @@ class MakerToxicityTest(unittest.TestCase):
         self.assertEqual(bounded_patient_ttl(60, 300), 300)
         self.assertEqual(bounded_patient_ttl(60, 600), 300)
 
-    def test_patient_ttl_never_shortens_explicit_longer_ttl(self):
-        self.assertEqual(bounded_patient_ttl(360, 300), 360)
+    def test_patient_ttl_hard_caps_explicit_longer_ttl(self):
+        self.assertEqual(bounded_patient_ttl(360, 300), 300)
 
     def test_persistence_runtime_composes_directional_toxicity_and_markouts(self):
         source = inspect.getsource(v4.main)
