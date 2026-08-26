@@ -232,7 +232,7 @@ jobs:
           set -euo pipefail
           mkdir -p v6_evidence/micro_taker
           for i in 1 2 3 4 5 6 7 8; do
-            python3 scripts/v6_queue_filter.py micro --config config/paper_v6.json --run-dir v6_evidence/micro_taker --markets 300 --min-liquidity 2 --horizon-seconds 5 --max-target-staleness-seconds 3 --max-trade-usd 125 --min-edge 0.00005 --slippage-bps 5 --max-positions 10 >> v6_evidence/micro_taker.log 2>&1 || true
+            python3 scripts/v6_queue_filter.py micro --config config/paper_v6.json --run-dir v6_evidence/micro_taker --markets 300 --min-liquidity 2 --horizon-seconds 10 --max-target-staleness-seconds 5 --max-trade-usd 125 --min-edge 0.00005 --slippage-bps 5 --max-positions 10 >> v6_evidence/micro_taker.log 2>&1 || true
             sleep 2
           done
 
@@ -265,7 +265,7 @@ jobs:
               try:
                   s=json.loads(state.read_text()); samples=s.get('samples') or []
                   labeled=[x for x in samples if isinstance(x,dict) and x.get('y') is not None]
-                  bad=[x for x in labeled if int(x.get('target_observation_ts') or 0)>int(x.get('ts') or 0)+5]
+                  bad=[x for x in labeled if int(x.get('target_observation_ts') or 0)>int(x.get('ts') or 0)+10]
                   lags=[int(x['target_staleness_seconds']) for x in labeled if x.get('target_staleness_seconds') is not None]
                   summary['micro_taker_samples']=len(samples)
                   summary['micro_taker_labeled']=len(labeled)
