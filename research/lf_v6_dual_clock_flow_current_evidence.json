@@ -1,0 +1,76 @@
+{
+  "schema": "lf_v6_dual_clock_flow_current_evidence_v1",
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "base_main_sha": "a20d12f511cbd388e5ee28865eb9977ddc5fd8b6",
+  "source_live_smoke_run_id": 32947240648,
+  "source_live_smoke_generated_ts": 1787732599,
+  "paper_only": true,
+  "material_finding": "The canonical recorder assigns received_ms at REST response processing time for every fetched trade. A backfill therefore compresses historical market activity into a few receive-time instants. received_ms is valid for causal information availability and ordering, but not by itself for measuring an execution-window market flow rate.",
+  "current_tape": {
+    "rows": 189,
+    "conditions_with_rows": 64,
+    "configured_conditions": 220,
+    "unique_received_ms": 6,
+    "receive_span_ms": 1210,
+    "event_span_seconds": 877,
+    "recorder_status": "healthy",
+    "recorder_trade_age_seconds": 99
+  },
+  "current_graph_bundle": {
+    "bundle_id": "GRAPH_HARD-1787732572-0",
+    "event_id": "842328",
+    "quoted_expected_edge": 0.01,
+    "max_notional_usd": 60.0,
+    "status": "RESTING",
+    "completed": 0,
+    "realized_pnl_usd": 0.0,
+    "legs": [
+      {
+        "market_id": "3558749",
+        "limit_price": 0.76,
+        "queue_plus_target_shares": 63091.9061,
+        "known_compatible_sell_rows": 2,
+        "receive_clock_max_180s_flow": 3.43,
+        "event_clock_max_180s_flow": 2.11,
+        "receive_over_event_flow_inflation": 1.6255924171,
+        "event_clock_capacity_ratio": 0.0000334433
+      },
+      {
+        "market_id": "3558750",
+        "limit_price": 0.15,
+        "queue_plus_target_shares": 77411.2061,
+        "known_compatible_sell_rows": 0,
+        "receive_clock_max_180s_flow": 0.0,
+        "event_clock_max_180s_flow": 0.0,
+        "event_clock_capacity_ratio": 0.0
+      },
+      {
+        "market_id": "3558751",
+        "limit_price": 0.08,
+        "queue_plus_target_shares": 19421.8061,
+        "known_compatible_sell_rows": 1,
+        "receive_clock_max_180s_flow": 40.0,
+        "event_clock_max_180s_flow": 40.0,
+        "event_clock_capacity_ratio": 0.0020595407
+      }
+    ]
+  },
+  "broader_tape_diagnostic": {
+    "largest_receive_over_event_180s_volume_ratio_observed": 2.6314555863,
+    "note": "This ratio is descriptive on the current 189-row tape and is not a fill-probability estimate."
+  },
+  "required_successor_contract": [
+    "Use received_ms only to establish what information was causally available to the decision and to order observations as they become known.",
+    "Estimate recent market activity, recurrence and queue-clearance capacity on exchange/event-time windows after filtering to rows already known by received_ms.",
+    "For forward fill credit require both causal receipt after order arrival and an exchange/event timestamp after order arrival and within the execution deadline; do not credit old backfilled trades.",
+    "Keep queue/depth/fee/target snapshots point-in-time and combine dual-clock flow with joint per-leg states plus partial-fill abort/unwind economics.",
+    "Re-run common chronological Graph/RV and repaired Local Factor execution experiments before using completion or fill-conditioned PnL for promotion."
+  ],
+  "safety": {
+    "authorized_paper_envelope_unchanged": true,
+    "max_drawdown_ratio": 0.15,
+    "market_event_gross_caps": [0.05, 0.15, 0.70],
+    "authenticated_execution": false,
+    "real_money_execution": false
+  }
+}
