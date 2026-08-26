@@ -53,8 +53,8 @@ class ExternalMultiplicityAuditTest(unittest.TestCase):
         self.assertEqual(flags, [True, True, False, False])
 
     def test_dependence_robust_by_is_stricter(self):
-        bh = step_up_rejections([0.01, 0.02, 0.8, 0.9], 0.10, dependence_robust=False)
-        by = step_up_rejections([0.01, 0.02, 0.8, 0.9], 0.10, dependence_robust=True)
+        bh = step_up_rejections([0.02, 0.04, 0.8, 0.9], 0.10, dependence_robust=False)
+        by = step_up_rejections([0.02, 0.04, 0.8, 0.9], 0.10, dependence_robust=True)
         self.assertEqual(bh, [True, True, False, False])
         self.assertEqual(by, [False, False, False, False])
 
