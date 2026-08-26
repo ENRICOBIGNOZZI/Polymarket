@@ -48,8 +48,8 @@ class LocalFactorBYContractTest(unittest.TestCase):
 
     def test_runner_builds_pair_specific_panel_not_cluster_wide_complete_case(self) -> None:
         source = (ROOT / "scripts/v7_local_factor_research.py").read_text()
-        self.assertIn("pair_market_ids = [a, b, *controls]", source)
-        self.assertIn("histories,\n                pair_market_ids,", source)
+        self.assertIn("pair_market_ids = [market_a, market_b, *controls]", source)
+        self.assertIn("core.build_regular_panel(completed_histories, pair_market_ids", source)
         self.assertIn("pair_controls_frozen_before_price_history", source)
         self.assertNotIn("market_ids = [market.market_id for market in group]", source)
         self.assertNotIn("histories,\n            market_ids,", source)
