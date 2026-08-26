@@ -67,6 +67,24 @@ def _mixed_null_panel(seed: int, controls_mode: str, n: int = 72) -> core.Standa
     return panel
 
 
+def _orientation_cancellation_panel(seed: int = 20260826, n: int = 72) -> core.StandardizedPanel:
+    rng = random.Random(seed)
+    common = _ar1(rng, n, 0.85, 0.8)
+    a_residual = _random_walk(rng, n, 0.45)
+    b_residual = _ar1(rng, n, 0.65, 0.45)
+    levels = {
+        "c0": list(common),
+        "c1": list(common),
+        "c2": [-x for x in common],
+        "c3": [-x for x in common],
+        "A": [0.9 * f + u for f, u in zip(common, a_residual)],
+        "B": [-0.7 * f + u for f, u in zip(common, b_residual)],
+    }
+    panel = core.standardize_levels(levels, tuple(range(n)))
+    assert panel is not None
+    return panel
+
+
 class V7LocalFactorInferenceTests(unittest.TestCase):
     def test_intersection_union_uses_max_marginal_pvalue(self) -> None:
         self.assertEqual(inference.intersection_union_pvalue(0.01, 0.20), 0.20)
@@ -85,6 +103,45 @@ class V7LocalFactorInferenceTests(unittest.TestCase):
         self.assertLessEqual(
             diagnostics["minimum_attainable_pvalue"], diagnostics["first_rank_bh_threshold"]
         )
+
+    def test_bootstrap_pair_factor_matches_observed_orientation_invariant_basis(self) -> None:
+        panel = _orientation_cancellation_panel()
+        pair = ("A", "B")
+        factor = inference._pair_factor(panel, pair, 2)
+        expected = core.orientation_invariant_pc1(
+            {mid: panel.values[mid] for mid in ("c0", "c1", "c2", "c3")}
+        )
+        self.assertIsNotNone(factor)
+        self.assertIsNotNone(expected)
+        assert factor is not None and expected is not None
+        self.assertGreater(max(abs(x) for x in factor), 0.1)
+        for got, want in zip(factor, expected):
+            self.assertAlmostEqual(got, want, places=12)
+
+        arithmetic_mean = tuple(
+            sum(panel.values[mid][j] for mid in ("c0", "c1", "c2", "c3")) / 4.0
+            for j in range(len(panel.times))
+        )
+        self.assertLess(max(abs(x) for x in arithmetic_mean), 1e-12)
+
+    def test_marginal_null_pvalue_is_invariant_to_control_sign_coding(self) -> None:
+        panel = _orientation_cancellation_panel()
+        first = inference.marginal_residual_unit_root_pvalue(
+            panel, ("A", "B"), "A", reps=99, seed=31
+        )
+        self.assertIsNotNone(first)
+
+        values = dict(panel.values)
+        values["c0"] = tuple(-x for x in values["c0"])
+        values["c2"] = tuple(-x for x in values["c2"])
+        flipped = core.StandardizedPanel(panel.times, values, dict(panel.means), dict(panel.scales))
+        second = inference.marginal_residual_unit_root_pvalue(
+            flipped, ("A", "B"), "A", reps=99, seed=31
+        )
+        self.assertIsNotNone(second)
+        assert first is not None and second is not None
+        self.assertAlmostEqual(first[1], second[1], places=15)
+        self.assertAlmostEqual(first[0].adf_a, second[0].adf_a, places=12)
 
     def test_marginal_null_is_invariant_to_other_target_path(self) -> None:
         panel = _mixed_null_panel(101, "cointegrated")
