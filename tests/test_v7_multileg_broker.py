@@ -9,6 +9,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+import v7_graph_queue_decoupled_sizing as sizing
 import v7_multileg_broker as broker
 
 
@@ -101,6 +102,35 @@ def test_v7_runtime_routes_to_coordinated_python_broker_not_legacy_cpp():
     assert "self.persist()" in runner_source
     assert "fcntl.LOCK_UN" in runner_source
     assert runner_source.index("self.persist()") < runner_source.index("fcntl.LOCK_UN")
+
+
+def test_current_v7_graph_capacity_increases_mechanically_with_queue_ahead():
+    low_queue = sizing.incumbent_queue_coupled_units(risk_units=1000.0, queue_ahead=20.0, weight=1.0)
+    deep_queue = sizing.incumbent_queue_coupled_units(risk_units=1000.0, queue_ahead=1000.0, weight=1.0)
+    assert low_queue == 5.0
+    assert deep_queue == 250.0
+    assert deep_queue > low_queue
+
+
+def test_queue_decoupled_challenger_is_invariant_to_queue_when_unwind_depth_is_fixed():
+    low_queue = sizing.compare_capacity(risk_units=1000.0, queue_ahead=20.0, unwind_depth_shares=80.0)
+    deep_queue = sizing.compare_capacity(risk_units=1000.0, queue_ahead=1000.0, unwind_depth_shares=80.0)
+    assert low_queue.challenger_units == 20.0
+    assert deep_queue.challenger_units == 20.0
+    assert low_queue.incumbent_units == 5.0
+    assert deep_queue.incumbent_units == 250.0
+
+
+def test_queue_decoupled_challenger_capacity_tracks_executable_unwind_depth():
+    thin = sizing.queue_decoupled_units(risk_units=1000.0, unwind_depth_shares=20.0, weight=1.0)
+    deep = sizing.queue_decoupled_units(risk_units=1000.0, unwind_depth_shares=200.0, weight=1.0)
+    assert thin == 5.0
+    assert deep == 50.0
+
+
+def test_source_contract_exposes_queue_coupled_capacity_as_research_blocker():
+    broker_source = (ROOT / "scripts" / "v7_multileg_broker.py").read_text(encoding="utf-8")
+    assert 'units = min(units, 0.25 * max(1.0, books[token].queue_at(limits[index])) / max(weight, 1e-12))' in broker_source
 
 
 if __name__ == "__main__":
