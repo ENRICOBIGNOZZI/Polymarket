@@ -124,9 +124,19 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
     integration = root / str(by_id.get("integration-merge", {}).get("workflow", ""))
     if integration.is_file():
         text = integration.read_text(encoding="utf-8")
-        if 'gh pr merge "$PR_NUMBER" --squash --delete-branch' not in text:
-            errors.append("integration-merge must use bounded squash merge")
-        if "--admin" in text: errors.append("integration-merge must never use --admin")
+        required = (
+            'git merge-base --is-ancestor "$current_main" "$expected_head"',
+            'repos/${GITHUB_REPOSITORY}/git/refs/heads/main',
+            '-f sha="$expected_head" -F force=false',
+            'test "$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)" = "$expected_head"',
+            "'exact_head_fast_forward':True",
+        )
+        for token in required:
+            if token not in text:
+                errors.append(f"integration-merge missing exact-head fast-forward contract: {token}")
+        for forbidden in ("gh pr merge", "--squash", "--admin", "-F force=true"):
+            if forbidden in text:
+                errors.append(f"integration-merge contains SHA-changing/force authority: {forbidden}")
 
     bridge = root / str(by_id.get("control-plane-event-bridge", {}).get("workflow", ""))
     if bridge.is_file():
@@ -170,7 +180,7 @@ def render(items: list[dict[str, Any]], errors: list[str]) -> str:
     if errors:
         lines += ["", "## Errors", *[f"- {e}" for e in errors]]
     else:
-        lines += ["", "Registry is valid: V3-V6 schedulers are absent and deployment authority is intentionally disabled until V7 promotion."]
+        lines += ["", "Registry is valid: the single integration writer preserves the exact candidate SHA and deployment authority remains disabled until the V7 cutover lane is restored."]
     return "\n".join(lines) + "\n"
 
 
