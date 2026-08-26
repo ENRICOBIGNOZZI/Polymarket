@@ -214,6 +214,8 @@ def test_canonical_ledger_types_fill_final_and_markout_evidence():
         strategy="GRAPH_RV",
         model_sha=LEDGER_SHA,
         recorded_ts_ms=2_000,
+        exchange_ts_ms=1_980,
+        receive_ts_ms=1_990,
         order_id="ord-1",
         filled_size=2.0,
         fee=0.01,
@@ -229,6 +231,18 @@ def test_canonical_ledger_types_fill_final_and_markout_evidence():
         final_pnl=-0.25,
         capital_duration_ms=0,
     ).validate()
+    LedgerEvent(
+        event_type="POSITION_MARK",
+        strategy="GRAPH_RV",
+        model_sha=LEDGER_SHA,
+        recorded_ts_ms=2_100,
+        receive_ts_ms=2_090,
+        exchange_ts_ms=2_080,
+        book_snapshot_id="book-mark-1",
+        position_id="pos-1",
+        executable_liquidation_value=4.75,
+        unrealized_pnl=-0.10,
+    ).validate()
 
     try:
         LedgerEvent(
@@ -236,6 +250,8 @@ def test_canonical_ledger_types_fill_final_and_markout_evidence():
             strategy="GRAPH_RV",
             model_sha=LEDGER_SHA,
             recorded_ts_ms=2_000,
+            exchange_ts_ms=1_980,
+            receive_ts_ms=1_990,
             order_id="ord-1",
             filled_size=0.0,
         ).validate()
