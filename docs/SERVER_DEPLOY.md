@@ -1,85 +1,103 @@
-# Private paper-live server deployment
+# V7 private PAPER server deployment
 
-The production paper node is intentionally private behind Tailscale. The current host is a macOS machine reached as `enrico@100.104.183.109:22`.
+The production PAPER node is private behind Tailscale. The canonical remote checkout is `~/polymarket`; deployment is pinned to `paper-validated`.
 
-## Runtime model
+## Runtime services
 
-The machine keeps these launchd services alive across reboots:
+On macOS, launchd keeps these services alive:
 
-- `com.polymarket.awake` — prevents idle system sleep;
-- `com.polymarket.paper` — starts `scripts/paper_latest_loop.sh`;
-- `com.polymarket.exporter` — canonical latest-runtime metrics on `127.0.0.1:9108`;
-- `com.polymarket.prometheus` — local Prometheus on `127.0.0.1:9090`;
-- `com.polymarket.grafana` — local Grafana on `127.0.0.1:3000`.
+- `com.polymarket.awake` — prevents idle sleep;
+- `com.polymarket.paper` — runs `scripts/paper_v7_loop.sh config/paper_v7.json runs/paper_v7_live`;
+- `com.polymarket.exporter` — runs `monitoring/exporter_latest_v7.py` on `127.0.0.1:9108`;
+- `com.polymarket.prometheus` — Prometheus on `127.0.0.1:9090`;
+- `com.polymarket.grafana` — Grafana on `127.0.0.1:3000`.
 
-`paper_latest_loop.sh` chooses the numerically newest committed `paper_vN_loop.sh` with a matching `config/paper_vN.json`, so V5/V6 do not require a new service definition.
+There is no runtime-version selector. The service definition starts V7 directly.
 
-Monitoring is native on macOS (Homebrew Grafana + Prometheus) rather than Docker. Grafana remains bound to localhost and should normally be viewed through an SSH tunnel.
+Linux deployment uses the equivalent `polymarket-paper.service` and `polymarket-monitoring.service` systemd units.
 
 ## First bootstrap
 
-The repository must already exist at `~/polymarket` on the server. Then from the server checkout:
+macOS:
 
 ```bash
-git fetch origin main
-git reset --hard origin/main
+cd ~/polymarket
 bash ops/bootstrap_macos.sh
 ```
 
-The bootstrap installs Homebrew dependencies, builds Release, runs deterministic tests, installs launchd services, creates a random Grafana admin password, and verifies exporter/Prometheus/Grafana health.
-
-The password is stored only on the server at:
-
-```text
-~/.config/polymarket/grafana-admin-password
-```
-
-## Local Grafana access
-
-From a trusted Mac already on the tailnet:
+Linux:
 
 ```bash
-ssh -N -L 3000:127.0.0.1:3000 polymarket
+bash ops/bootstrap_server.sh
 ```
 
-Then open `http://127.0.0.1:3000` locally.
+Both bootstraps require the checked-out live champion to be exactly V7, build/test the V7 repository, and install only V7 runtime/monitoring services.
+
+## Grafana
+
+Grafana remains bound to loopback. On the canonical macOS server, `ops/apply_runtime_config_macos.sh` publishes it privately through Tailscale Serve. The operator URL is:
+
+```text
+http://mamma-portfolio.tail1bae85.ts.net
+```
+
+The Tailscale DNS name and Serve route are verified before Grafana configuration is accepted.
 
 ## Safe updates
 
-After first bootstrap:
+The deployed revision comes from `paper-validated`, not from an arbitrary `main` checkout.
+
+macOS:
 
 ```bash
 cd ~/polymarket
 bash ops/update_server_macos.sh
 ```
 
-The updater fetches `origin/main`, validates the candidate commit in an isolated worktree, builds/tests it, swaps the production build, restarts services and performs health checks. A failed post-deploy health check rolls the checkout/build back to the prior commit.
+Linux:
+
+```bash
+cd ~/polymarket
+bash ops/update_server.sh
+```
+
+The macOS updater serializes checkout mutation with a deployment mutex, validates the exact candidate in an isolated worktree, builds/tests V7, requests a bounded runtime-owner handoff, restarts services and waits for V7 runtime health. A failed candidate is rolled back to the previous checkout/build after diagnostics are captured.
 
 ## GitHub Actions deployment
 
-`deploy-paper-server.yml` can update the server automatically after a successful merge to `main`. It requires:
+`.github/workflows/deploy-paper-server.yml` is the only registered deploy authority. It runs after a successful `V7 live PAPER smoke` or on its registered reconciliation schedule when enabled.
 
-Repository secrets:
+The workflow proves that:
 
-- `TS_AUTHKEY` — a Tailscale auth key allowed to reach the server;
-- `POLYMARKET_SERVER_SSH_KEY` — a dedicated SSH deployment private key.
+- `paper-validated` is on the current `main` lineage;
+- a workflow-triggered deploy matches the exact validated SHA;
+- `config/live_champion.json` selects V7;
+- the deployed checkout becomes exactly `paper-validated`;
+- exporter health is green;
+- V7 runtime/allocator/strategy/proxy files are present and valid;
+- drawdown is within the 15% hard limit;
+- Prometheus and Grafana are healthy;
+- the expected launchd/systemd services are active.
 
-Repository variables:
+Repository credentials such as the SSH private key and Tailscale credentials remain outside version control.
 
-- `POLYMARKET_SERVER_DEPLOY=true` to enable deployment on pushes to `main`;
-- optional `POLYMARKET_SERVER_HOST`, `POLYMARKET_SERVER_USER`, `POLYMARKET_SERVER_PORT` overrides.
+## Health workflow
 
-The matching deployment public key must be present in `~/.ssh/authorized_keys` for the server user. Never commit private keys or Tailscale auth keys.
+`.github/workflows/server-health.yml` is read-only. It verifies the deployed revision and V7 runtime invariants but does not repair code or reinterpret operator policy.
 
-`paper-server-health.yml` performs an hourly private health check through Tailscale and records server commit, service state, canonical runtime metrics, drawdown, kill switch, execution imbalance and OOS gate state.
-
-## Status and logs
+Useful local checks:
 
 ```bash
-sudo /usr/local/sbin/polymarket-service-control status
-curl -fsS http://127.0.0.1:9108/metrics | grep '^polymarket_runtime_'
-tail -f ~/Library/Logs/Polymarket/paper.out.log
-tail -f ~/Library/Logs/Polymarket/paper.err.log
+curl -fsS http://127.0.0.1:9108/healthz
+curl -fsS http://127.0.0.1:9108/metrics | grep '^polymarket_'
+curl -fsS http://127.0.0.1:9090/-/ready
+curl -fsS http://127.0.0.1:3000/api/health
 ```
 
-The real-money pilot remains separate and is never started by launchd, CI, the paper loop, deployment, or health-check workflows.
+On macOS:
+
+```bash
+bash ops/macos_service_control.sh status
+```
+
+Authenticated execution is disabled and no deployment/bootstrap service starts a real-money executor.
