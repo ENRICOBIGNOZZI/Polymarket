@@ -1,10 +1,12 @@
 {
-  "schema_version": 1,
-  "directive_epoch": "2026-08-26T17:35:00+02:00",
+  "schema_version": 2,
+  "directive_epoch": "2026-08-26T20:20:00+02:00",
+  "operator_instruction_id": "user-v7-paper-100pct-20260826",
   "authority": "latest_explicit_user_instruction",
+  "supersedes_prs": [513, 516, 519, 537, 547],
   "repository": "ENRICOBIGNOZZI/Polymarket",
   "scope": "all_registered_schedulers_and_paper_research",
-  "rule": "These directives supersede older PR descriptions, comments, tests, scheduler summaries and inferred policy whenever they conflict. Schedulers must not reinterpret an older artifact as newer authorization.",
+  "rule": "These directives encode the latest explicit user instruction and supersede older PR descriptions, comments, tests, scheduler summaries and inferred policy whenever they conflict. Autonomous research, remediation, promotion and integration workflows may enforce but may not redefine this file.",
   "paper_v7_authorization": {
     "paper_only": true,
     "authenticated_execution": false,
@@ -63,6 +65,7 @@
     "Validate and integrate runtime process-group draining so no proxy, recorder, broker or state-writer descendant survives its owner.",
     "Rebase the HF event-time/depth-aware maker, causal-flow/depth-aware taker and hard-arb freshness successor onto the authorized 100% V7 policy without carrying bounded-policy config changes.",
     "Consolidate PCA, Local Factor, cross-sectional ranking, Micro Maker, Micro Taker, Graph/RV, hard arb and External Intelligence into the single V7 structure.",
+    "Run the unified V7 candidate continuously in isolated PAPER research mode to accumulate machine-readable prospective execution evidence without mutating the incumbent champion.",
     "Create one fresh integration branch from current main, bind exact source SHA/provenance, merge to main only after deterministic and economic gates are satisfied.",
     "Run exact-SHA CI, monitoring, live-paper, private single-writer and server-health validation; advance paper-validated and deploy the same SHA for continuous PAPER operation.",
     "Only after the validated V7 deployment is healthy, delete superseded V3/V4/V5/V6 entrypoints, migration adapters, stale workflows, obsolete tests/configs and superseded research branches."
@@ -70,9 +73,10 @@
   "scheduler_assignments": {
     "administrator-supervisor": "Report any scheduler/PR that conflicts with this directive; never recommend an older sizing artifact as current authorization.",
     "research-policy": "Treat this file as the current operator authorization. Reject PRs that reintroduce a fixed-dollar V7 cap or reduce the V7 100% trade/market/event/gross ceilings as an alleged operator requirement. Continue enforcing PAPER-only and authenticated-execution separation.",
-    "research-queue": "Prioritize Graph v3, runtime process-group drain, HF successor on the 100% V7 base, multi-frequency PCA/LF/ranking evidence, then external-intelligence integration. Do not dispatch bounded-policy restoration work.",
+    "research-queue": "Prioritize Graph v3, runtime process-group drain, HF successor on the 100% V7 base, unified prospective V7 PAPER evidence, multi-frequency PCA/LF/ranking evidence, then external-intelligence integration. Do not dispatch bounded-policy restoration work.",
     "promotion-controller": "Do not treat the authorized V7 100% PAPER ceilings as a safety-policy violation. Promotion remains evidence-gated by exact source provenance, executable costs, OOS evidence, stability, data health and drawdown controls.",
     "integration-merge": "Merge only the single canonical V7 integration. Refuse bounded-policy rollback PRs, predecessor Graph guards, duplicate runtime owners and cleanup-before-deploy branches.",
+    "control-plane-event-bridge": "Dispatch only the existing Promotion Controller after validator completion and the existing Integration Merge after a successful controller completion. Never merge, deploy, mutate paper-validated, reinterpret operator directives, change model policy or execute orders directly.",
     "post-merge-validation": "Bind CI, monitoring and live-paper validation to the exact merged V7 SHA.",
     "code-validation": "Enforce this V7 authorization in deterministic tests; fixed-dollar-cap-disabled and 100% percentage ceilings are valid for PAPER V7.",
     "monitoring-validation": "Validate V7 per-strategy/frequency PnL, fills, markouts, queue/depth, process ownership and exact deployed revision.",
@@ -91,7 +95,7 @@
   },
   "forbidden_regressions": [
     "Do not reopen, recreate or merge a V7 policy whose purpose is to restore a $125 fixed trade cap or 5%/15%/70% market/event/gross caps as current authorization.",
-    "Do not use PR #513, #516, #519 or #537, or an equivalent bounded-policy successor, as V7 integration/governance source.",
+    "Do not use PR #513, #516, #519, #537 or #547, or an equivalent bounded-policy successor, as V7 integration/governance source.",
     "Do not delete legacy code before the unified V7 SHA is merged to main, validated, advanced to paper-validated and healthy on the PAPER server.",
     "Do not add authenticated or real-money execution.",
     "Do not create a second live state writer, broker owner or execution ledger.",
