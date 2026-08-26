@@ -1,0 +1,109 @@
+{
+  "schema": "hf_maker_shared_tape_window_v1",
+  "research_state": "CURRENT_STATIC_MAKER_SELECTION_REJECTED_REPLICATED",
+  "source": {
+    "workflow_run_id": 32925305438,
+    "artifact_id": 9591440605,
+    "tested_head_sha": "5e7fd40ba4fb1225b7d2930f8399fa86188a067a",
+    "branch": "research/hf-maker-authorized-ab-current-20260826",
+    "date": "2026-08-26"
+  },
+  "paper_only": true,
+  "authenticated_execution": false,
+  "authorized_envelope": {
+    "markets": 600,
+    "min_liquidity_usd": 2.0,
+    "post_cost_min_edge": 0.00005,
+    "fractional_kelly": 0.25,
+    "max_trade_usd": 125.0,
+    "market_fraction_cap": 0.05,
+    "event_fraction_cap": 0.15,
+    "gross_fraction_cap": 0.70,
+    "max_drawdown": 0.15,
+    "ttl_seconds": 60,
+    "hold_seconds": 60,
+    "slippage_bps": 5.0,
+    "max_queue_multiple": 8.0
+  },
+  "shared_public_tape": {
+    "rows": 3385,
+    "unique_tokens_with_trades": 149,
+    "unique_conditions_with_trades": 122,
+    "local_receive_timestamps_present": true
+  },
+  "static_candidate_pool": {
+    "rows_post_plus_queue_skip": 185,
+    "unique_markets": 37,
+    "unique_tokens": 37,
+    "candidate_tokens_present_anywhere_in_shared_tape": 0,
+    "candidate_activity_rate": 0.0,
+    "interpretation": "The entire static maker signal candidate pool again had zero overlap with a large independent public trade tape. The candidate-selection defect therefore replicated in a later common-window run and remains upstream of the queue gate."
+  },
+  "at_touch": {
+    "posts": 35,
+    "unique_posted_tokens": 7,
+    "posted_tokens_present_anywhere_in_shared_tape": 0,
+    "maker_engine_fill_events": 0,
+    "shared_tape_causal_fill_orders": 0,
+    "shared_tape_event_time_fill_orders": 0,
+    "realized_fill_conditioned_pnl": 0.0,
+    "ttl_cancels": 28,
+    "queue_skips": 150,
+    "reserved_capital_seconds": 51480.0
+  },
+  "improve1": {
+    "posts": 35,
+    "unique_posted_tokens": 7,
+    "posted_tokens_present_anywhere_in_shared_tape": 0,
+    "maker_engine_fill_events": 0,
+    "shared_tape_causal_fill_orders": 0,
+    "shared_tape_event_time_fill_orders": 0,
+    "realized_fill_conditioned_pnl": 0.0,
+    "ttl_cancels": 28,
+    "queue_skips": 150,
+    "reserved_capital_seconds": 51480.0
+  },
+  "replication": {
+    "prior_workflow_run_id": 32924402302,
+    "prior_shared_tape_rows": 1440,
+    "prior_unique_candidate_tokens": 37,
+    "prior_candidate_tokens_present_anywhere_in_shared_tape": 0,
+    "current_workflow_run_id": 32925305438,
+    "current_shared_tape_rows": 3385,
+    "current_unique_candidate_tokens": 37,
+    "current_candidate_tokens_present_anywhere_in_shared_tape": 0,
+    "decision": "REJECT_STATIC_EDGE_PLUS_BOOK_CONFIDENCE_AS_HF_ADMISSION_RULE_ON_CURRENT_SAMPLES"
+  },
+  "model_decision": {
+    "do_not_lower_positive_edge_floor_to_manufacture_activity": true,
+    "do_not_treat_queue_threshold_as_primary_defect": true,
+    "required_successor": "Gate or rank candidates on causal recent token-level activity before reserving capital, then optimize fill-conditioned EV using queue burden, compatible contra-flow, microprice/depth imbalance and toxicity. Preserve selective inside-spread improvement only when incremental expected fill benefit exceeds the paid tick plus adverse-selection penalty.",
+    "target": "P(fill | recent causal flow, queue, microprice, imbalance, latency) * E(net PnL | fill, toxicity) minus capital-time/cancel costs"
+  },
+  "other_hf_planes": {
+    "micro_taker": {
+      "samples": 546,
+      "causal_labels": 364,
+      "post_horizon_labels": 0,
+      "signals": 0,
+      "trades": 0,
+      "realized_pnl": 0.0
+    },
+    "hard_arb": {
+      "scanned_events": 4,
+      "verified_fee_schedules_last_tick": 29,
+      "positive_candidates": 0,
+      "entries": 0,
+      "realized_pnl": 0.0,
+      "sequential_leg_revalidation": true
+    }
+  },
+  "safety": {
+    "max_drawdown_unchanged": 0.15,
+    "kill_switch_unchanged": true,
+    "state_integrity_unchanged": true,
+    "market_event_gross_caps_unchanged": [0.05, 0.15, 0.70],
+    "authenticated_execution": false,
+    "real_money_execution": false
+  }
+}
