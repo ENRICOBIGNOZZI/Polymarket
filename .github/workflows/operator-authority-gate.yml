@@ -21,9 +21,8 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       HEAD_REF: ${{ github.event.pull_request.head.ref }}
-      REPO_OWNER: ${{ github.repository_owner }}
     steps:
-      - name: Enforce exact-head OWNER authorization
+      - name: Reject pull-request mutation of operator authority
         shell: bash
         run: |
           set -euo pipefail
@@ -31,19 +30,10 @@ jobs:
           gh api --paginate --slurp \
             "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
             > gate/files-pages.json
-          gh api --paginate --slurp \
-            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" \
-            > gate/reviews-pages.json
           python3 - <<'PY'
           import json
           import os
           from pathlib import Path
-
-          event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
-          pr = event['pull_request']
-          head_sha = os.environ['HEAD_SHA'].lower()
-          head_ref = os.environ['HEAD_REF']
-          owner = os.environ['REPO_OWNER'].lower()
 
           protected = {
               'config/operator_directives.json',
@@ -56,71 +46,21 @@ jobs:
               '.github/workflows/operator-authority-gate.yml',
           }
 
-          def flatten(path: str) -> list[dict]:
-              value = json.loads(Path(path).read_text())
-              if not isinstance(value, list):
-                  return []
-              if value and all(isinstance(page, list) for page in value):
-                  return [item for page in value for item in page if isinstance(item, dict)]
-              return [item for item in value if isinstance(item, dict)]
-
-          files = flatten('gate/files-pages.json')
-          changed = {str(item.get('filename') or '') for item in files}
-          protected_changed = sorted(changed & protected)
+          pages = json.loads(Path('gate/files-pages.json').read_text())
+          files = [item for page in pages for item in page] if pages and all(isinstance(page, list) for page in pages) else pages
+          changed = {str(item.get('filename') or '') for item in files if isinstance(item, dict)}
+          blocked = sorted(changed & protected)
           report = {
-              'head_sha': head_sha,
-              'head_ref': head_ref,
-              'protected_changed': protected_changed,
-              'owner': owner,
-              'authorization_required': bool(protected_changed),
+              'head_sha': os.environ['HEAD_SHA'].lower(),
+              'head_ref': os.environ['HEAD_REF'],
+              'protected_changed': blocked,
+              'policy': 'fail' if blocked else 'pass',
+              'rule': 'operator authority is immutable through pull requests; autonomous schedulers may enforce but may not redefine it',
           }
-          if not protected_changed:
-              Path('gate/report.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
-              print(json.dumps(report, indent=2, sort_keys=True))
-              raise SystemExit(0)
-
-          errors: list[str] = []
-          if not head_ref.startswith('operator/'):
-              errors.append('operator authority surfaces may change only on operator/*')
-
-          body = str(pr.get('body') or '')
-          if 'operator authorization change: latest explicit user instruction' not in body.lower():
-              errors.append('operator authority PR is missing the explicit user-instruction marker')
-
-          reviews = flatten('gate/reviews-pages.json')
-          exact_owner_reviews = []
-          for review in reviews:
-              user = review.get('user') if isinstance(review.get('user'), dict) else {}
-              login = str(user.get('login') or '').lower()
-              commit_id = str(review.get('commit_id') or '').lower()
-              if login == owner and commit_id == head_sha:
-                  exact_owner_reviews.append(review)
-          exact_owner_reviews.sort(key=lambda item: (str(item.get('submitted_at') or ''), int(item.get('id') or 0)))
-          latest = exact_owner_reviews[-1] if exact_owner_reviews else None
-          required_line = f'Operator Directive Approval: {head_sha}'
-          if latest is None:
-              errors.append('missing OWNER review bound to the exact current head SHA')
-          else:
-              if str(latest.get('state') or '').upper() != 'APPROVED':
-                  errors.append('latest OWNER review on the exact head is not APPROVED')
-              review_body = str(latest.get('body') or '')
-              if required_line not in review_body:
-                  errors.append('latest OWNER approval does not contain the exact-head directive marker')
-
-          report['required_review_line'] = required_line
-          report['latest_exact_owner_review'] = None if latest is None else {
-              'id': latest.get('id'),
-              'state': latest.get('state'),
-              'commit_id': latest.get('commit_id'),
-              'submitted_at': latest.get('submitted_at'),
-          }
-          report['errors'] = errors
-          report['policy'] = 'pass' if not errors else 'fail'
           Path('gate/report.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
           print(json.dumps(report, indent=2, sort_keys=True))
-          if errors:
-              for error in errors:
-                  print(f'::error::{error}')
+          if blocked:
+              print('::error::operator authority surfaces are immutable through pull requests: ' + ', '.join(blocked))
               raise SystemExit(1)
           PY
 
