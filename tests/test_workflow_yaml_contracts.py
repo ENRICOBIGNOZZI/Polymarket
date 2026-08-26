@@ -17,6 +17,23 @@ class WorkflowYamlContractTest(unittest.TestCase):
                     offenders.append(f"{path.relative_to(ROOT)}:{line_number}:{line!r}")
         self.assertEqual(offenders, [], "workflow heredoc terminator escaped its YAML block scalar")
 
+    def test_grafana_remote_verification_never_nests_python_heredocs(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "grafana-access.yml").read_text(encoding="utf-8")
+        apply = workflow.split("- name: Apply exact-SHA Grafana bundle", 1)[1].split(
+            "- name: Verify exact dashboard from another tailnet node", 1
+        )[0]
+        verify = workflow.split("- name: Verify exact dashboard from another tailnet node", 1)[1].split(
+            "- name: Publish access deployment evidence", 1
+        )[0]
+        for block in (apply, verify):
+            self.assertNotIn("<<'PY'", block)
+            self.assertIn("python3 -c", block)
+        self.assertIn("hashlib.sha256", apply)
+        self.assertIn('dashboard.get("uid") == uid', apply)
+        self.assertIn('dashboard.get("title") == title', apply)
+        self.assertIn('dashboard.get("uid") == uid', verify)
+        self.assertIn('dashboard.get("title") == title', verify)
+
     def test_explicit_non_scheduler_workflows_are_unscheduled_and_non_authoritative(self) -> None:
         validator = (ROOT / "scripts" / "validate_scheduler_registry.py").read_text(encoding="utf-8")
         explicit = (
