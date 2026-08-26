@@ -30,41 +30,21 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.expected_sha || github.sha }}
-
       - name: Verify exact validation revision
-        shell: bash
         run: |
           set -euo pipefail
           [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
-          echo "validation_sha=$VALIDATION_SHA"
-
-      - name: Validate version-neutral exporter, runtime contract and dashboards
+      - name: Validate no-champion V7 transition
         run: |
+          set -euo pipefail
           python3 -m unittest \
-            tests/test_compact_strategy_logs.py \
-            tests/test_monitoring_exporter.py \
-            tests/test_monitoring_v4_exporter.py \
-            tests/test_monitoring_latest_exporter.py \
-            tests/test_monitoring_v5_exporter.py \
-            tests/test_monitoring_v6_exporter.py \
-            tests/test_monitoring_hard_safety_contract.py \
-            tests/test_runtime_contract_health.py \
-            tests/test_v4_monitoring_contract.py \
-            tests/test_v6_runtime_contract.py \
-            tests/test_grafana_fast_paper_contract.py \
-            tests/test_grafana_multi_strategy_contract.py \
-            tests/test_grafana_v6_operations_contract.py \
-            tests/test_server_health_readonly.py -v
-          python3 -m py_compile \
-            scripts/compact_strategy_logs.py scripts/v6_runtime_status.py scripts/runtime_contract_health.py \
-            monitoring/exporter.py monitoring/exporter_v4.py \
-            monitoring/exporter_v5.py monitoring/exporter_v6.py monitoring/exporter_latest.py
-          python3 -m json.tool monitoring/grafana/dashboards/polymarket-latest.json >/dev/null
-          python3 -m json.tool monitoring/grafana/dashboards/polymarket-fast-paper.json >/dev/null
-          python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
-          python3 -m json.tool monitoring/grafana/dashboards/polymarket-v6-model-operations.json >/dev/null
-          python3 -m json.tool config/paper_v6.json >/dev/null
-          bash -n scripts/monitoring_up.sh scripts/monitoring_down.sh scripts/v6_live_smoke_once.sh \
-            ops/apply_runtime_config_macos.sh
-          docker compose -f docker-compose.monitoring.yml config >/dev/null
+            tests/test_no_legacy_runtime.py \
+            tests/test_v7_authorized_paper_envelope.py \
+            tests/test_external_intelligence_workflow_contract.py -v
+          python3 -m json.tool config/live_champion.json >/dev/null
+          python3 -m json.tool config/project_context.json >/dev/null
+          python3 -m json.tool config/operator_directives.json >/dev/null
+          python3 scripts/validate_scheduler_registry.py --root . --registry config/scheduler_registry.json
+          python3 scripts/validate_project_context.py --root . --output /tmp/project-context-validation.md
+          test -s /tmp/project-context-validation.md
