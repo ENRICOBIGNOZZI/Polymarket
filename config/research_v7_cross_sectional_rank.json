@@ -4,10 +4,10 @@
   "research_only": true,
   "live_intents_enabled": false,
   "target": "cross_sectional_tail_relative_logit_spread",
-  "horizons_minutes": [30, 60, 120, 360],
+  "horizons_minutes": [120, 360],
   "frequency_registration": {
     "legacy_discovery_selected_horizons_minutes": [120, 360],
-    "new_prospective_challenger_horizons_minutes": [30, 60],
+    "new_prospective_challenger_horizons_minutes": [],
     "registration_date": "2026-08-26",
     "pool_evidence_across_horizons": false,
     "select_new_horizon_on_pre_registration_history": false
