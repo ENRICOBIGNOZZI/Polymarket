@@ -5,6 +5,10 @@ private:
     pm::fast::Policy policy_;
     Options options_;
     fs::path run_dir_;
+    std::string paper_model_sha_ = [] {
+        const char* value = std::getenv("POLYMARKET_MODEL_SHA");
+        return value == nullptr ? std::string{} : std::string(value);
+    }();
     std::unordered_map<std::string, pm::Market> markets_;
     std::unordered_map<std::string, pm::Book> books_;
     std::unordered_map<std::string, pm::FeeDetails> fees_;
@@ -19,11 +23,14 @@ private:
     std::unordered_map<std::string, pm::fast::Opportunity> latest_;
     std::unordered_map<std::string, std::string> signatures_;
     std::unordered_map<std::string, std::int64_t> last_log_ms_;
+    std::unordered_map<std::string, pm::fast::paper::Probe> paper_probes_;
+    std::unordered_map<std::string, std::int64_t> paper_last_start_ms_;
     std::deque<double> feed_latency_ms_;
     std::deque<double> decision_latency_us_;
     std::ofstream opportunity_log_;
     std::ofstream latency_log_;
     std::ofstream error_log_;
+    std::ofstream joint_execution_log_;
     mutable std::mutex mutex_;
     std::int64_t initialized_ms_ = 0;
     std::int64_t last_message_ms_ = 0;
@@ -32,12 +39,28 @@ private:
     std::uint64_t evaluations_ = 0;
     std::uint64_t executable_observations_ = 0;
     std::uint64_t hard_executable_observations_ = 0;
+    std::uint64_t joint_execution_observations_ = 0;
+    std::uint64_t completed_basket_observations_ = 0;
+    std::uint64_t partial_unwind_observations_ = 0;
+
+    static constexpr std::int64_t kPaperLegDispatchMs = 50;
+    static constexpr std::int64_t kPaperUnwindDelayMs = 50;
+    static constexpr std::int64_t kPaperMaxFeedAgeMs = 5000;
+    static constexpr std::int64_t kPaperProbeCooldownMs = 5000;
 
     static std::string opportunity_header() {
         return "observed_ts_ms,kind,id,event_id,hard_arbitrage,executable,risk_class,"
                "reject_reason,payoff_floor,raw_edge_per_share,net_edge_per_share,"
                "executable_shares,capital_required,expected_profit,exchange_ts_ms,"
                "received_ts_ms,decision_ts_ms,feed_latency_ms,legs";
+    }
+
+    static std::string joint_execution_header() {
+        return "model_sha,opportunity_id,event_id,kind,decision_ts_ms,closed_ts_ms,"
+               "joint_state,target_legs,filled_legs,target_shares,entry_cost,"
+               "exit_proceeds,net_pnl,locked_terminal_pnl,explicit_cost,capital_seconds,"
+               "completed_basket,partial_unwind,unwind_accounted,point_in_time,"
+               "authoritative_fees,depth_executable,legs";
     }
 
     static std::string leg_string(const pm::fast::Opportunity& opportunity) {
@@ -48,6 +71,20 @@ private:
             out << leg.market_id << ':' << leg.token_id << ':' << leg.outcome << ':'
                 << leg.shares << ':' << leg.average_price << ':' << leg.fee_per_share << ':'
                 << leg.all_in_cost;
+        }
+        return out.str();
+    }
+
+    static std::string paper_leg_string(const pm::fast::paper::Outcome& outcome) {
+        std::ostringstream out;
+        for (std::size_t i = 0; i < outcome.legs.size(); ++i) {
+            if (i) out << '|';
+            const auto& leg = outcome.legs[i];
+            out << leg.market_id << ':' << leg.token_id << ':' << leg.outcome << ':'
+                << leg.target_shares << ':' << leg.max_all_in_unit_cost << ':'
+                << leg.attempted_ts_ms << ':' << leg.filled_shares << ':'
+                << leg.entry_all_in_cost << ':' << (leg.entry_complete ? 1 : 0) << ':'
+                << leg.exit_net_proceeds << ':' << (leg.exit_complete ? 1 : 0);
         }
         return out.str();
     }
@@ -73,6 +110,27 @@ private:
             << feed_latency << ',' << csv_escape(leg_string(opportunity)) << '\n';
     }
 
+    static void write_joint_execution(std::ostream& out,
+                                      const pm::fast::paper::Outcome& outcome) {
+        out << csv_escape(outcome.model_sha) << ',' << csv_escape(outcome.opportunity_id) << ','
+            << csv_escape(outcome.event_id) << ',' << csv_escape(outcome.kind) << ','
+            << outcome.decision_ts_ms << ',' << outcome.closed_ts_ms << ','
+            << csv_escape(outcome.joint_state) << ',' << outcome.target_legs << ','
+            << outcome.filled_legs << ',' << outcome.target_shares << ','
+            << outcome.entry_cost << ',' << outcome.exit_proceeds << ',';
+        if (outcome.net_pnl.has_value()) out << *outcome.net_pnl;
+        out << ',';
+        if (outcome.locked_terminal_pnl.has_value()) out << *outcome.locked_terminal_pnl;
+        out << ',' << outcome.explicit_cost << ',' << outcome.capital_seconds << ','
+            << (outcome.completed_basket ? 1 : 0) << ','
+            << (outcome.partial_unwind ? 1 : 0) << ','
+            << (outcome.unwind_accounted ? 1 : 0) << ','
+            << (outcome.point_in_time ? 1 : 0) << ','
+            << (outcome.authoritative_fees ? 1 : 0) << ','
+            << (outcome.depth_executable ? 1 : 0) << ','
+            << csv_escape(paper_leg_string(outcome)) << '\n';
+    }
+
     void ensure_logs() {
         const auto opportunity_path = run_dir_ / "fast_arb_opportunities.csv";
         if (!fs::exists(opportunity_path) || fs::file_size(opportunity_path) == 0) {
@@ -90,11 +148,22 @@ private:
             std::ofstream out(error_path);
             out << "timestamp_ms,component,message\n";
         }
+        const auto joint_path = run_dir_ / "fast_arb_joint_execution.csv";
+        if (!fs::exists(joint_path) || fs::file_size(joint_path) == 0) {
+            std::ofstream out(joint_path);
+            out << joint_execution_header() << '\n';
+        }
         opportunity_log_.open(opportunity_path, std::ios::app);
         latency_log_.open(latency_path, std::ios::app);
         error_log_.open(error_path, std::ios::app);
-        if (!opportunity_log_ || !latency_log_ || !error_log_) {
+        joint_execution_log_.open(joint_path, std::ios::app);
+        if (!opportunity_log_ || !latency_log_ || !error_log_ || !joint_execution_log_) {
             throw std::runtime_error("cannot open fast-arb runtime logs");
+        }
+        if (!pm::fast::paper::valid_model_sha(paper_model_sha_)) {
+            error_log_ << now_ms()
+                       << ",paper_execution,disabled: POLYMARKET_MODEL_SHA must be exact lowercase 40-char SHA\n";
+            error_log_.flush();
         }
     }
 
@@ -225,6 +294,82 @@ private:
         }
     }
 
+    const pm::Book* paper_book(const std::string& token_id) const {
+        const auto it = books_.find(token_id);
+        return it == books_.end() ? nullptr : &it->second;
+    }
+
+    const pm::FeeDetails* paper_fee(const std::string& market_id) const {
+        const auto market = markets_.find(market_id);
+        if (market == markets_.end()) return nullptr;
+        const auto fee = fees_.find(market->second.condition_id);
+        return fee == fees_.end() ? nullptr : &fee->second;
+    }
+
+    void write_paper_outcome_locked(const pm::fast::paper::Outcome& outcome) {
+        write_joint_execution(joint_execution_log_, outcome);
+        joint_execution_log_.flush();
+        ++joint_execution_observations_;
+        if (outcome.completed_basket) ++completed_basket_observations_;
+        if (outcome.partial_unwind) ++partial_unwind_observations_;
+    }
+
+    void unwind_paper_probe_locked(pm::fast::paper::Probe& probe) {
+        for (auto& leg : probe.legs) {
+            const auto* book = paper_book(leg.token_id);
+            const auto* fee = paper_fee(leg.market_id);
+            if (book == nullptr) probe.depth_executable = false;
+            if (fee == nullptr) probe.authoritative_fees = false;
+            pm::fast::paper::apply_unwind(leg, book, fee, policy_);
+        }
+    }
+
+    void advance_paper_probe_locked(const std::string& opportunity_id,
+                                    std::int64_t timestamp) {
+        const auto it = paper_probes_.find(opportunity_id);
+        if (it == paper_probes_.end()) return;
+        auto& probe = it->second;
+
+        if (probe.entry_failed) {
+            if (timestamp < probe.next_action_ts_ms) return;
+            unwind_paper_probe_locked(probe);
+            write_paper_outcome_locked(pm::fast::paper::finalize_probe(probe, timestamp));
+            paper_probes_.erase(it);
+            return;
+        }
+        if (!pm::fast::paper::entry_due(probe, timestamp)) return;
+
+        auto& leg = probe.legs.at(probe.next_leg);
+        const auto* book = paper_book(leg.token_id);
+        const auto* fee = paper_fee(leg.market_id);
+        pm::fast::paper::attempt_entry(
+            probe, book, fee, policy_, timestamp, kPaperLegDispatchMs);
+        if (probe.entry_failed) {
+            probe.next_action_ts_ms = timestamp + kPaperUnwindDelayMs;
+            return;
+        }
+        if (probe.next_leg == probe.legs.size()) {
+            write_paper_outcome_locked(pm::fast::paper::finalize_probe(probe, timestamp));
+            paper_probes_.erase(it);
+        }
+    }
+
+    void maybe_start_paper_probe_locked(const pm::fast::Opportunity& opportunity,
+                                        std::int64_t timestamp) {
+        if (paper_probes_.count(opportunity.id)) return;
+        const auto last = paper_last_start_ms_.find(opportunity.id);
+        if (last != paper_last_start_ms_.end() &&
+            timestamp - last->second < kPaperProbeCooldownMs) {
+            return;
+        }
+        auto probe = pm::fast::paper::start_probe(
+            opportunity, paper_model_sha_, timestamp, kPaperLegDispatchMs,
+            kPaperMaxFeedAgeMs);
+        if (!probe.has_value()) return;
+        paper_last_start_ms_[opportunity.id] = timestamp;
+        paper_probes_.emplace(opportunity.id, std::move(*probe));
+    }
+
     void evaluate_single_locked(const pm::Market& market, std::int64_t exchange_ms,
                                 std::int64_t received_ms) {
         const auto yes = books_.find(market.yes_token);
@@ -330,6 +475,7 @@ private:
             if (opportunity.hard_arbitrage) ++hard_executable_observations_;
         }
         const auto timestamp = now_ms();
+        advance_paper_probe_locked(opportunity.id, timestamp);
         const auto edge_bucket = static_cast<long long>(
             std::floor(opportunity.net_edge_per_share * 100000.0));
         const auto shares_bucket = static_cast<long long>(
@@ -346,6 +492,7 @@ private:
             write_opportunity(opportunity_log_, timestamp, opportunity);
             last_log_ms_[opportunity.id] = timestamp;
         }
+        maybe_start_paper_probe_locked(opportunity, timestamp);
     }
 
     void push_latency_locked(double feed_ms, double decision_us) {
