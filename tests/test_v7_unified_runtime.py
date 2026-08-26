@@ -24,7 +24,7 @@ def test_research_branch_keeps_incumbent_manifest_and_defines_v7_candidate():
     assert candidate["promotion_contract"] == "research_head_must_be_exact-head-approved_then_integrated"
 
 
-def test_v7_config_keeps_authorized_aggressive_envelope_and_hard_safety():
+def test_v7_config_keeps_aggressive_research_surface_without_unapproved_concentration_increase():
     cfg = load("config/paper_v7.json")
     assert cfg["engine_version"] == 7
     assert cfg["paper_only"] is True
@@ -33,9 +33,12 @@ def test_v7_config_keeps_authorized_aggressive_envelope_and_hard_safety():
     assert abs(cfg["min_net_edge"] - 0.00005) < 1e-12
     assert cfg["fractional_kelly"] == 0.25
     assert cfg["max_trade_usd"] == 125.0
-    assert cfg["max_market_fraction"] == 0.05
-    assert cfg["max_event_fraction"] == 0.15
-    assert cfg["max_gross_fraction"] == 0.70
+    # Concentration remains at the incumbent hard-safety envelope until a
+    # separate exact-head economic promotion authorizes wider PAPER caps.
+    assert cfg["max_market_fraction"] == 0.025
+    assert cfg["max_event_fraction"] == 0.08
+    assert cfg["max_gross_fraction"] == 0.45
+    assert cfg["multi_strategy"]["global_max_gross_fraction"] == 0.45
     assert cfg["max_drawdown"] == 0.15
     assert cfg["v7"]["authoritative_fee_required"] is True
     assert cfg["v7"]["shared_execution_ledger_required"] is True
@@ -59,7 +62,18 @@ def test_frequency_matrix_has_hf_and_30m_to_6h_without_pooling():
 
 
 def test_v7_entrypoint_has_one_execution_owner_and_separate_shadow_scheduler():
+    selector = (ROOT / "scripts/paper_latest_loop.sh").read_text(encoding="utf-8")
+    updater = (ROOT / "ops/update_server_macos.sh").read_text(encoding="utf-8")
     text = (ROOT / "scripts/paper_v7_loop.sh").read_text(encoding="utf-8")
+    assert "runtime_singleton_launcher.py" in selector
+    assert "runtime_owner.lock" in selector
+    assert "runtime_handoff.request" in selector
+    assert "request_runtime_handoff()" in updater
+    assert "clear_runtime_handoff()" in updater
+    # V7 is the champion plane below the incumbent singleton, never a second
+    # singleton owner of its own.
+    assert "runtime_singleton_launcher.py" not in text
+    assert "runtime_owner.lock" not in text
     assert "paper_v7_execution_loop.sh" in text
     assert "paper_v6_loop.sh" not in text
     assert "v7_shadow_loop.py" in text
