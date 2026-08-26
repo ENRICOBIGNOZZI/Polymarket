@@ -10,10 +10,18 @@ on:
       - "config/alpha_factory.json"
       - "config/live_champion.json"
       - "config/external_intelligence.json"
+      - "config/research_v7_cross_sectional_rank.json"
       - "scripts/alpha_factory.py"
       - "scripts/attach_external_evidence.py"
+      - "scripts/v7_cross_sectional_rank.py"
+      - "scripts/v7_cross_sectional_rank_core.py"
+      - "scripts/v7_cross_sectional_history.py"
+      - "scripts/v7_cross_sectional_rank_forward.py"
       - "tests/test_alpha_factory.py"
       - "tests/test_attach_external_evidence.py"
+      - "tests/test_v7_cross_sectional_rank.py"
+      - "tests/test_v7_cross_sectional_history.py"
+      - "tests/test_v7_cross_sectional_rank_forward.py"
       - ".github/workflows/alpha-factory.yml"
       - ".github/workflows/external-intelligence.yml"
       - "docs/ALPHA_FACTORY.md"
@@ -24,10 +32,18 @@ on:
       - "config/alpha_factory.json"
       - "config/live_champion.json"
       - "config/external_intelligence.json"
+      - "config/research_v7_cross_sectional_rank.json"
       - "scripts/alpha_factory.py"
       - "scripts/attach_external_evidence.py"
+      - "scripts/v7_cross_sectional_rank.py"
+      - "scripts/v7_cross_sectional_rank_core.py"
+      - "scripts/v7_cross_sectional_history.py"
+      - "scripts/v7_cross_sectional_rank_forward.py"
       - "tests/test_alpha_factory.py"
       - "tests/test_attach_external_evidence.py"
+      - "tests/test_v7_cross_sectional_rank.py"
+      - "tests/test_v7_cross_sectional_history.py"
+      - "tests/test_v7_cross_sectional_rank_forward.py"
       - ".github/workflows/alpha-factory.yml"
       - ".github/workflows/external-intelligence.yml"
       - "docs/ALPHA_FACTORY.md"
@@ -45,7 +61,7 @@ concurrency:
 jobs:
   evaluate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
         with:
@@ -57,19 +73,31 @@ jobs:
           set -euo pipefail
           python3 -m unittest \
             tests/test_alpha_factory.py \
-            tests/test_attach_external_evidence.py -v
+            tests/test_attach_external_evidence.py \
+            tests/test_v7_cross_sectional_rank.py \
+            tests/test_v7_cross_sectional_history.py \
+            tests/test_v7_cross_sectional_rank_forward.py -v
           python3 -m py_compile \
             scripts/alpha_factory.py \
-            scripts/attach_external_evidence.py
+            scripts/attach_external_evidence.py \
+            scripts/v7_cross_sectional_rank_core.py \
+            scripts/v7_cross_sectional_rank.py \
+            scripts/v7_cross_sectional_history.py \
+            scripts/v7_cross_sectional_rank_forward.py
           python3 -m json.tool config/alpha_factory.json >/dev/null
+          python3 -m json.tool config/research_v7_cross_sectional_rank.json >/dev/null
           python3 - <<'PY'
           import json
           from pathlib import Path
           cfg = json.loads(Path("config/alpha_factory.json").read_text())
+          rank = json.loads(Path("config/research_v7_cross_sectional_rank.json").read_text())
           assert cfg["paper_only"] is True
           assert cfg["allow_authenticated_execution"] is False
           assert cfg["allow_direct_champion_mutation"] is False
           assert "deploy-paper-server.yml" not in cfg["coordination"]["allowlisted_dispatches"]
+          assert rank["paper_only"] is True
+          assert rank["research_only"] is True
+          assert rank["live_intents_enabled"] is False
           PY
 
       - name: Materialize latest empirical evidence
@@ -99,6 +127,8 @@ jobs:
             alpha_factory/input/alpha-factory-state.json
           extract_or_empty telemetry/latest-external-intelligence.json \
             alpha_factory/input/latest-external-intelligence.json
+          extract_or_empty telemetry/ranking-forward-state.json \
+            alpha_factory/input/ranking-forward-state.json
 
       - name: Diagnose bottlenecks and evaluate challengers
         shell: bash
@@ -142,6 +172,33 @@ jobs:
           assert (state.get("invariants") or {}).get("external_direct_champion_mutation") is False
           PY
 
+      - name: Collect prospective 2h and 6h ranking evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/v7_cross_sectional_rank_forward.py \
+            --config config/research_v7_cross_sectional_rank.json \
+            --state-in alpha_factory/input/ranking-forward-state.json \
+            --state-out alpha_factory/output/ranking-forward-state.json \
+            --output-json alpha_factory/output/latest-ranking-forward.json \
+            --market-limit 150 \
+            | tee alpha_factory/output/ranking-forward.log
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("alpha_factory/output/latest-ranking-forward.json").read_text())
+          state = json.loads(Path("alpha_factory/output/ranking-forward-state.json").read_text())
+          assert report["paper_only"] is True
+          assert report["research_only"] is True
+          assert report["submitted_orders"] == 0
+          assert report["authenticated_execution"] is False
+          assert report["live_intents_enabled"] is False
+          assert report["point_in_time_universe"] is True
+          assert report["promotion_ready"] is False
+          assert state["submitted_orders"] == 0
+          assert state["authenticated_execution"] is False
+          PY
+
       - name: Publish Alpha Factory summary
         if: always()
         shell: bash
@@ -151,6 +208,22 @@ jobs:
             cat alpha_factory/output/latest-alpha-factory.md >> "$GITHUB_STEP_SUMMARY"
           else
             echo 'Alpha Factory report is missing.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '### V7 2h/6h forward ranking observer' >> "$GITHUB_STEP_SUMMARY"
+          if test -s alpha_factory/output/latest-ranking-forward.json; then
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          r=json.loads(Path('alpha_factory/output/latest-ranking-forward.json').read_text())
+          print(f"- point-in-time universe: {r['point_in_time_universe']}")
+          print(f"- data healthy: {r['history_data_healthy']} ({r['history_market_count']} histories)")
+          print(f"- new/open/completed/invalid sections: {r['new_sections']}/{r['open_sections']}/{r['completed_sections']}/{r['invalid_sections']}")
+          for h in r['forward']:
+              print(f"- {h['horizon_minutes']}m: days={h['days']}, sections={h['completed_sections']}, median IC={h['median_rank_ic']:.4f}, +IC={h['positive_rank_ic_fraction']:.3f}, median tail={h['median_top_bottom_logit_spread']:.6f}, +tail={h['positive_top_bottom_fraction']:.3f}, gate={h['forward_statistical_gate']}")
+          PY
+          else
+            echo '- forward observer report missing' >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Publish latest registry and evidence to telemetry
@@ -185,6 +258,12 @@ jobs:
           publish_file alpha_factory/output/alpha-factory-state.json \
             telemetry/alpha-factory-state.json \
             "Update Alpha Factory candidate registry"
+          publish_file alpha_factory/output/latest-ranking-forward.json \
+            telemetry/latest-ranking-forward.json \
+            "Update V7 forward ranking evidence"
+          publish_file alpha_factory/output/ranking-forward-state.json \
+            telemetry/ranking-forward-state.json \
+            "Update V7 forward ranking state"
 
       - name: Upload durable Alpha Factory evidence
         if: always()
