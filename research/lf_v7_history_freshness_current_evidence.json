@@ -1,0 +1,58 @@
+{
+  "schema": "lf_v7_history_freshness_current_evidence_v1",
+  "generated_date_utc": "2026-08-26",
+  "research_only": true,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "current_main_sha": "30c0475fe7362b21d1f7a0226de539009a44b92e",
+  "source_local_factor_pr": 503,
+  "source_local_factor_head": "7c625870083d389e7891bccbda5efc17779f1b6b",
+  "finding": {
+    "classification": "STRUCTURAL_TEMPORAL_STATE_DEFECT",
+    "summary": "The repaired V7 Local Factor can fit a long regular pair panel whose latest common history point is stale, then combine the stale residual endpoint with a current executable book because no per-pair latest-history age gate is applied before build_pair_signal.",
+    "source_contract": [
+      "build_regular_panel validates regular spacing and minimum points but has no reference to current decision time",
+      "v7_local_factor_research stores the fitted panel and later fetches current books for statistically selected pairs",
+      "build_pair_signal uses the fitted residual endpoint for n-step residual change while current book midpoints enter the price/PnL hedge exposure",
+      "now is used for TTR room but not to validate panel.times[-1] freshness"
+    ]
+  },
+  "deterministic_counterexample": {
+    "fidelity_minutes": 60,
+    "regular_points": 60,
+    "latest_history_age_hours": 12,
+    "minimum_points_can_still_pass": true,
+    "ar_phi": 0.8,
+    "stale_origin_residual_sd": 2.0,
+    "expected_current_residual_sd_after_12_bars": 0.13743895347200008,
+    "hold_bars": 6,
+    "forecast_change_from_stale_origin_sd": -1.4757119999999997,
+    "forecast_change_from_expected_current_origin_sd": -0.10141015645303607,
+    "absolute_forecast_overstatement_ratio": 14.551915228366843,
+    "interpretation": "The example is not a Polymarket PnL estimate. It shows that regularity plus warmup length does not make an old residual endpoint a valid state for a current entry."
+  },
+  "current_execution_context": {
+    "telemetry_sha": "30c0475fe7362b21d1f7a0226de539009a44b92e",
+    "trade_recorder_status": "healthy",
+    "fresh_public_trades": 200,
+    "trade_recorder_errors": 0,
+    "graph_rv_bundles": 2,
+    "graph_rv_legs": 8,
+    "best_static_quote_edge": 0.020000000000000018,
+    "completed_bundles": 0,
+    "realized_pnl_usd": 0.0,
+    "oos_trades": 0,
+    "oos_pnl_usd": 0.0,
+    "interpretation": "No positive LF/Graph fill-conditioned PnL evidence exists in the current exact-main public smoke."
+  },
+  "required_successor_contract": [
+    "Expose latest common panel timestamp and age for every predeclared pair hypothesis.",
+    "Predeclare a bounded maximum history-state age in fidelity buckets and fail the pair closed when exceeded.",
+    "Use completed regular buckets only; do not silently treat an incomplete current bucket as a completed transition.",
+    "Never combine a stale residual endpoint with a current executable book or current p*(1-p) hedge sensitivity.",
+    "Preserve the pair-specific control plan, target-excluded control PC1, conditional residual-unit-root increment bootstrap, IUT and BY family.",
+    "After the freshness repair, rerun common chronological 300/700/~1000-market tests before shortening warmups or lowering z/FDR gates.",
+    "Any selected pair still requires empirical both/A-only/B-only/none fills, partial abort/unwind economics and positive frozen-execution PnL under 1x/1.5x/2x costs."
+  ],
+  "decision": "MORE_EVIDENCE_REQUIRED"
+}
