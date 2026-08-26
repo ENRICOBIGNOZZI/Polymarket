@@ -6,6 +6,7 @@ import json
 import math
 import os
 import threading
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -21,6 +22,20 @@ def finite(value: Any, default: float = math.nan) -> float:
     except (TypeError, ValueError, OverflowError):
         return default
     return x if math.isfinite(x) else default
+
+
+def epoch_seconds(value: Any) -> int:
+    """Normalize public API timestamps to whole Unix seconds, failing closed on invalid values."""
+    x = finite(value)
+    if not math.isfinite(x) or x <= 0.0:
+        return 0
+    if x >= 1e17:  # nanoseconds
+        x /= 1e9
+    elif x >= 1e14:  # microseconds
+        x /= 1e6
+    elif x >= 1e11:  # milliseconds
+        x /= 1e3
+    return int(x) if 0.0 < x < 1e11 else 0
 
 
 def request_json(url: str, payload: Any | None = None, timeout: int = 20) -> Any:
@@ -90,8 +105,11 @@ class Market:
 
 
 class Book:
-    def __init__(self, raw: dict[str, Any]):
+    def __init__(self, raw: dict[str, Any], received_ts: int | None = None):
         self.token = str(raw.get("asset_id") or "")
+        self.exchange_ts = epoch_seconds(raw.get("timestamp"))
+        local_received = time.time() if received_ts is None else finite(received_ts)
+        self.received_ts = int(local_received) if math.isfinite(local_received) and local_received > 0.0 else 0
         self.tick = max(1e-6, finite(raw.get("tick_size"), 0.01))
         self.min_order = max(1.0, finite(raw.get("min_order_size"), 1.0))
         self.bids: list[tuple[float, float]] = []
@@ -108,6 +126,11 @@ class Book:
                     self.asks.append((price, size))
         self.bids.sort(reverse=True)
         self.asks.sort()
+
+    def freshness_ts(self) -> int:
+        if self.exchange_ts <= 0 or self.received_ts <= 0:
+            return 0
+        return min(self.exchange_ts, self.received_ts)
 
     def bid(self) -> float:
         return self.bids[0][0] if self.bids else math.nan
@@ -177,10 +200,11 @@ def fetch_books(clob: str, markets: list[Market]) -> dict[str, Book]:
     out: dict[str, Book] = {}
     for i in range(0, len(tokens), 80):
         raw = request_json(clob.rstrip("/") + "/books", [{"token_id": token} for token in tokens[i : i + 80]])
+        received_ts = int(time.time())
         for row in raw if isinstance(raw, list) else []:
             if not isinstance(row, dict):
                 continue
-            book = Book(row)
+            book = Book(row, received_ts=received_ts)
             if book.token and book.bids and book.asks:
                 out[book.token] = book
     return out
