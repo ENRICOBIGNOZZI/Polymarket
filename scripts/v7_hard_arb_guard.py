@@ -29,6 +29,67 @@ def consume_int(flag: str, default: int) -> int:
     return max(0, int(finite(raw, float(default))))
 
 
+def peek_float(flag: str, default: float) -> float:
+    try:
+        index = sys.argv.index(flag)
+    except ValueError:
+        return float(default)
+    raw = sys.argv[index + 1] if index + 1 < len(sys.argv) else str(default)
+    return finite(raw, float(default))
+
+
+def executable_abort_mark(
+    clob: str,
+    aborting: dict[str, Any],
+    *,
+    slippage_bps: float,
+    stats: dict[str, Any] | None = None,
+) -> float:
+    """Full-depth, post-fee executable liquidation mark for abort residuals.
+
+    If a residual cannot be fully liquidated on visible bid depth or its fee
+    schedule cannot be verified, its mark is zero (fail closed).
+    """
+    value = 0.0
+    marked = 0
+    unmarkable = 0
+    for bundle in aborting.values():
+        legs = bundle.get("legs", []) if isinstance(bundle, dict) else []
+        for leg in legs if isinstance(legs, list) else []:
+            if not isinstance(leg, dict):
+                unmarkable += 1
+                continue
+            token = str(leg.get("token") or "")
+            shares = max(0.0, finite(leg.get("shares"), 0.0))
+            market = leg.get("market") if isinstance(leg.get("market"), dict) else {}
+            if not token or shares <= 0.0 or not market:
+                unmarkable += 1
+                continue
+            try:
+                book = q.books(clob, [token]).get(token)
+                if not book or not book.get("bids"):
+                    raise RuntimeError("missing_bid_depth")
+                details = q.resolve_fee_details(market, clob, q.get_json)
+                fill = q.walk_book_for_shares(
+                    book["bids"],
+                    shares,
+                    details,
+                    buy=False,
+                    slippage_bps=slippage_bps,
+                    require_full=True,
+                )
+                if fill is None or not fill.complete:
+                    raise RuntimeError("insufficient_full_depth")
+                value += max(0.0, fill.stressed_cash - fill.fee)
+                marked += 1
+            except Exception:
+                unmarkable += 1
+    if stats is not None:
+        stats["abort_mark_marked_legs"] = int(stats.get("abort_mark_marked_legs", 0)) + marked
+        stats["abort_mark_unmarkable_legs"] = int(stats.get("abort_mark_unmarkable_legs", 0)) + unmarkable
+    return value
+
+
 def normalize_timestamp_ms(value: Any) -> int:
     ts = finite(value, 0.0)
     if ts <= 0.0:
@@ -98,6 +159,7 @@ def install_guard(
     max_cross_leg_skew_ms: int,
     max_exchange_snapshot_age_ms: int,
     max_exchange_snapshot_skew_ms: int,
+    abort_slippage_bps: float,
 ) -> dict[str, Any]:
     original_plan = q._plan
     original_hard_fee = q._hard_fee
@@ -108,6 +170,8 @@ def install_guard(
         "receive_rejections": 0,
         "exchange_rejections": 0,
         "unverified_fee_rejections": 0,
+        "abort_mark_marked_legs": 0,
+        "abort_mark_unmarkable_legs": 0,
         "max_observed_leg_age_ms": 0,
         "max_observed_cross_leg_skew_ms": 0,
         "max_observed_exchange_snapshot_age_ms": 0,
@@ -197,6 +261,12 @@ def install_guard(
     q.books = timestamped_books
     q._plan = guarded_plan
     q._hard_fee = verified_hard_fee
+    q._abort_mark = lambda clob, aborting: executable_abort_mark(
+        clob,
+        aborting,
+        slippage_bps=abort_slippage_bps,
+        stats=stats,
+    )
     return stats
 
 
@@ -231,6 +301,8 @@ def annotate_status(
             "verified_fees_required": True,
             "sequential_leg_revalidation": True,
             "unwind_on_leg_failure": True,
+            "abort_mark_mode": "full_depth_executable_liquidation",
+            "abort_mark_fail_closed": True,
             "freshness_guard": stats,
         }
     )
@@ -276,6 +348,7 @@ def main() -> int:
         run_dir_text = sys.argv[index + 1]
     except (ValueError, IndexError):
         pass
+    abort_slippage_bps = max(0.0, peek_float("--slippage-bps", 5.0))
     max_leg_age_ms = consume_int("--max-leg-age-ms", 2000)
     max_cross_leg_skew_ms = consume_int("--max-cross-leg-skew-ms", 1000)
     max_exchange_snapshot_age_ms = consume_int("--max-exchange-snapshot-age-ms", 5000)
@@ -285,6 +358,7 @@ def main() -> int:
         max_cross_leg_skew_ms=max_cross_leg_skew_ms,
         max_exchange_snapshot_age_ms=max_exchange_snapshot_age_ms,
         max_exchange_snapshot_skew_ms=max_exchange_snapshot_skew_ms,
+        abort_slippage_bps=abort_slippage_bps,
     )
     sys.argv = [sys.argv[0], "hard", *sys.argv[1:]]
     rc = q.main()
