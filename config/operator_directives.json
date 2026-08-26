@@ -98,7 +98,7 @@
     "v6-market-cache-relay": "Keep the compatibility cache fresh only; do not mutate V7 model policy or champion selection."
   },
   "forbidden_regressions": [
-    "Do not reopen, recreate or merge a V7 policy whose purpose is to disable the $125 fixed trade cap or widen market/event/gross caps above 5%/15%/70% as current authorization.",
+    "Do not reopen, recreate or merge the superseded unbounded V7 policy: the current PAPER authorization requires the $125 fixed trade cap and forbids restoring 100% market/event/gross ceilings above 5%/15%/70%.",
     "Do not use the superseded 100%/no-fixed-cap directive or older PR text as the current V7 sizing authority.",
     "Do not delete legacy code before the unified V7 SHA is merged to main, validated, advanced to paper-validated and healthy on the PAPER server.",
     "Do not add authenticated or real-money execution.",
