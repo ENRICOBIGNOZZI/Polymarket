@@ -94,13 +94,29 @@ jobs:
           set -euo pipefail
           cd ~/polymarket
           git fetch -q origin main paper-validated
+          main_sha="$(git rev-parse origin/main)"
           paper_validated_sha="$(git rev-parse origin/paper-validated)"
-          test "$(git rev-parse HEAD)" = "$paper_validated_sha"
+          head_sha="$(git rev-parse HEAD)"
+          bootstrap=false
+          if [[ "$head_sha" == "$paper_validated_sha" ]]; then
+            bootstrap=false
+          else
+            # A data-starved validated revision can otherwise deadlock deployment:
+            # deploy waits for market-data health while relay waits for deploy.
+            # Permit only a forward cache bootstrap to the exact current validated
+            # main revision; never bootstrap arbitrary, diverged or unvalidated code.
+            test "$paper_validated_sha" = "$main_sha"
+            git merge-base --is-ancestor "$head_sha" "$paper_validated_sha"
+            bootstrap=true
+          fi
+          manifest_json="$(git show "$paper_validated_sha:config/live_champion.json")"
+          printf 'main_sha=%s\n' "$main_sha"
           printf 'paper_validated_sha=%s\n' "$paper_validated_sha"
-          python3 - <<'PY'
-          import json,re
-          from pathlib import Path
-          manifest=json.loads(Path("config/live_champion.json").read_text(encoding="utf-8"))
+          printf 'server_head_sha=%s\n' "$head_sha"
+          printf 'bootstrap=%s\n' "$bootstrap"
+          MANIFEST_JSON="$manifest_json" python3 - <<'PY'
+          import json,os,re
+          manifest=json.loads(os.environ["MANIFEST_JSON"])
           if int(manifest["version"]) != 6:
               print("active=false")
           else:
@@ -122,6 +138,9 @@ jobs:
             paper_validated_sha="$(printf '%s\n' "$target" | sed -n 's/^paper_validated_sha=//p' | tail -n 1)"
             [[ "$paper_validated_sha" =~ ^[0-9a-f]{40}$ ]]
             echo "paper_validated_sha=$paper_validated_sha" >> "$GITHUB_OUTPUT"
+            bootstrap="$(printf '%s\n' "$target" | sed -n 's/^bootstrap=//p' | tail -n 1)"
+            [[ "$bootstrap" == "true" || "$bootstrap" == "false" ]]
+            echo "bootstrap=$bootstrap" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build fresh verified public market cache
@@ -164,6 +183,14 @@ jobs:
           set -euo pipefail
           [[ "$RUN_ROOT_REL" =~ ^runs/[A-Za-z0-9._-]+$ ]]
           incoming="market_proxy_cache.json.relay.${GITHUB_RUN_ID}"
+          ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            "RUN_ROOT_REL='$RUN_ROOT_REL' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd ~/polymarket
+          [[ "$RUN_ROOT_REL" =~ ^runs/[A-Za-z0-9._-]+$ ]]
+          mkdir -p "$RUN_ROOT_REL"
+          REMOTE
           scp -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
             -P "$SERVER_PORT" relay-evidence/market_proxy_cache.json \
             "$SERVER_USER@$SERVER_HOST:polymarket/${RUN_ROOT_REL}/${incoming}"
@@ -199,9 +226,6 @@ jobs:
           PY
           )"
           mv "$incoming" "$target"
-          # The currently deployed proxy reloads a relay cache only when mtime
-          # advances. Atomic replacement can preserve/regress the incoming file
-          # mtime, so force this verified install strictly past the previous file.
           python3 - "$target" "$previous_mtime_ns" <<'PY'
           import os,sys,time
           path=sys.argv[1]
@@ -218,15 +242,35 @@ jobs:
         shell: bash
         env:
           RUN_ROOT_REL: ${{ steps.target.outputs.run_root }}
+          BOOTSTRAP: ${{ steps.target.outputs.bootstrap }}
         run: |
           set -euo pipefail
           mkdir -p relay-evidence
           ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
             -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
-            "RUN_ROOT_REL='$RUN_ROOT_REL' bash -s" <<'REMOTE' | tee relay-evidence/live-proxy-consumption.txt
+            "RUN_ROOT_REL='$RUN_ROOT_REL' BOOTSTRAP='$BOOTSTRAP' bash -s" <<'REMOTE' | tee relay-evidence/live-proxy-consumption.txt
           set -euo pipefail
           cd ~/polymarket
           [[ "$RUN_ROOT_REL" =~ ^runs/[A-Za-z0-9._-]+$ ]]
+          [[ "$BOOTSTRAP" == "true" || "$BOOTSTRAP" == "false" ]]
+          python3 - "$RUN_ROOT_REL/market_proxy_cache.json" <<'PY'
+          import json,sys,time
+          value=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert value.get('schema') == 'polymarket_v6_market_proxy_cache_v1'
+          assert time.time()-float(value['timestamp']) <= 180
+          assert len(value.get('markets') or []) >= 100
+          assert all(
+              isinstance(row,dict) and str(row.get('id') or '')
+              and str(row.get('conditionId') or '')
+              and float(row.get('liquidityNum')) >= 10
+              for row in value['markets']
+          )
+          PY
+          if [[ "$BOOTSTRAP" == "true" ]]; then
+            printf 'relay_bootstrap_staged=true\n'
+            printf 'relay_bootstrap_waits_for_validated_deploy=true\n'
+            exit 0
+          fi
           proxy_url="$(python3 - "$RUN_ROOT_REL/runtime_config.json" <<'PY'
           import json,sys,urllib.parse
           cfg=json.load(open(sys.argv[1],encoding='utf-8'))
@@ -240,9 +284,6 @@ jobs:
           )"
           proxy_port="${proxy_url##*:}"
           proxy_diagnostics() {
-            # The relay remains read-only with respect to the service.  When a
-            # consumption proof fails, capture just enough local provenance to
-            # distinguish a stale listener from a stale cache or an HTTP stall.
             local health_probe response_probe pid command_line
             health_probe="$(curl --silent --show-error --max-time 3 "$proxy_url/healthz" 2>&1 || true)"
             response_probe="$(curl --silent --show-error --max-time 5 "$proxy_url/markets?active=true&closed=false&limit=1&offset=0&order=liquidityNum&ascending=false&liquidity_num_min=10" 2>&1 || true)"
