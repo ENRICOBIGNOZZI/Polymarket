@@ -11,6 +11,7 @@ if str(SCRIPTS) not in sys.path:
 
 import lf_v7_graph_evidence_transport_audit as transport
 import lf_v7_graph_full_completion_pnl_audit as completion_pnl
+import lf_v7_graph_session_dependence_audit as session_dependence
 import v7_graph_forward_guard as guard
 
 
@@ -116,6 +117,18 @@ def test_full_completion_stress_audit_exposes_gross_edge_shortcut():
     assert 'profit = float(session["units"]) * float(session["expected_edge"])' in guard_text
     assert 'edge = 1.0 - cost' in relation_text
     assert '"entry_fee_per_share": fee_per_share(limit, details, taker=False)' in guard_text
+
+
+def test_iid_session_bootstrap_can_overstate_lower_confidence_bound():
+    result = session_dependence.deterministic_counterexample()
+    assert result["iid_accepts_positive_lower"] is True
+    assert result["block_rejects_positive_lower"] is True
+    assert result["iid_bootstrap_lower_10pct"] == 0.2125
+    assert result["block_bootstrap_lower_10pct"] == -0.125
+
+    source = (ROOT / "scripts/v7_graph_forward_guard.py").read_text(encoding="utf-8")
+    assert "values[rng.randrange(n)]" in source
+    assert "rows = rows[-100:]" in source
 
 
 def test_source_contract_is_dual_clock_and_prospective():
