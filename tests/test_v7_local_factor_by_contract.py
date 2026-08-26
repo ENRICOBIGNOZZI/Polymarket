@@ -19,6 +19,8 @@ class LocalFactorBYContractTest(unittest.TestCase):
         self.assertEqual(inf["predeclared_unestimable_pair_pvalue"], 1.0)
         self.assertTrue(inf["apply_multiplicity_before_residual_z_phi_and_economic_filters"])
         self.assertGreaterEqual(inf["maximum_bootstrap_repetitions"], 12000)
+        self.assertGreaterEqual(inf["maximum_pair_controls"], inf["minimum_pair_controls"])
+        self.assertLessEqual(inf["maximum_pair_controls"], 6)
         evidence = cfg["execution_evidence"]
         self.assertFalse(evidence["marginal_fill_product_is_joint_estimator"])
         self.assertFalse(evidence["minimum_marginal_fill_is_joint_estimator"])
@@ -36,11 +38,21 @@ class LocalFactorBYContractTest(unittest.TestCase):
         self.assertIn('"execution_joint_state_validated": False', source)
         self.assertIn('"fill_conditioned_pnl_validated": False', source)
 
-    def test_pair_graph_is_frozen_before_price_history_fetch(self) -> None:
+    def test_pair_graph_and_controls_are_frozen_before_price_history_fetch(self) -> None:
         source = (ROOT / "scripts/v7_local_factor_research.py").read_text()
         graph_pos = source.index("pair_graphs: dict")
+        controls_pos = source.index("pair_control_plans: dict")
         history_pos = source.index("histories, history_failures = fetch_histories_chunked")
-        self.assertLess(graph_pos, history_pos)
+        self.assertLess(graph_pos, controls_pos)
+        self.assertLess(controls_pos, history_pos)
+
+    def test_runner_builds_pair_specific_panel_not_cluster_wide_complete_case(self) -> None:
+        source = (ROOT / "scripts/v7_local_factor_research.py").read_text()
+        self.assertIn("pair_market_ids = [a, b, *controls]", source)
+        self.assertIn("histories,\n                pair_market_ids,", source)
+        self.assertIn("pair_controls_frozen_before_price_history", source)
+        self.assertNotIn("market_ids = [market.market_id for market in group]", source)
+        self.assertNotIn("histories,\n            market_ids,", source)
 
 
 if __name__ == "__main__":

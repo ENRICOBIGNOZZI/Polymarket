@@ -17,9 +17,10 @@
   },
   "inference": {
     "minimum_pair_controls": 2,
+    "maximum_pair_controls": 4,
     "bootstrap_repetitions": 300,
     "maximum_bootstrap_repetitions": 15000,
-    "bootstrap_type": "joint_panel_increment_blocks_reestimate_full_pair_factor",
+    "bootstrap_type": "conditional_target_residual_increment_blocks_reestimate_pair_factor",
     "pair_test_statistic": "intersection_union_max_of_two_marginal_null_preserving_adf_pvalues",
     "multiplicity_method": "benjamini_yekutieli_arbitrary_dependence",
     "fdr_q": 0.10,

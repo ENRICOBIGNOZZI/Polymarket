@@ -29,6 +29,22 @@ class V7LocalFactorCoreTests(unittest.TestCase):
     def test_regular_suffix_does_not_treat_gap_as_one_bar(self) -> None:
         self.assertEqual(lf.longest_regular_suffix([0, 60, 120, 480, 540, 600], 60), (480, 540, 600))
 
+    def test_pair_specific_complete_case_survives_unrelated_sparse_market(self) -> None:
+        times = tuple(i * 1800 for i in range(60))
+        histories = {
+            "a": {t: 0.10 * i + (0.01 if i % 2 else -0.01) for i, t in enumerate(times)},
+            "b": {t: 0.12 * i + (0.015 if i % 3 else -0.015) for i, t in enumerate(times)},
+            "c": {t: 0.08 * i + (0.02 if i % 4 else -0.02) for i, t in enumerate(times)},
+            "d": {t: 0.09 * i + (0.025 if i % 5 else -0.025) for i, t in enumerate(times)},
+            "e": {t: 0.20 * i for i, t in enumerate(times[-5:], start=55)},
+        }
+        pair_panel = lf.build_regular_panel(histories, ["a", "b", "c", "d"], 1800, 48)
+        broad_cluster_panel = lf.build_regular_panel(histories, ["a", "b", "c", "d", "e"], 1800, 48)
+        self.assertIsNotNone(pair_panel)
+        assert pair_panel is not None
+        self.assertEqual(len(pair_panel.times), 60)
+        self.assertIsNone(broad_cluster_panel)
+
     def test_pair_factor_excludes_both_targets(self) -> None:
         times = tuple(range(20))
         c1 = [i * 0.1 for i in times]
