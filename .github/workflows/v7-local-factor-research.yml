@@ -1,0 +1,91 @@
+name: V7 final Local Factor research
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/v7_local_factor_core.py"
+      - "scripts/v7_local_factor_research.py"
+      - "config/research_v7_local_factor.json"
+      - "tests/test_v7_local_factor_core.py"
+      - ".github/workflows/v7-local-factor-research.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v7-local-factor-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deterministic final-LF contracts
+        run: |
+          set -euo pipefail
+          python3 -m unittest tests/test_v7_local_factor_core.py -v
+          python3 -m py_compile scripts/v7_local_factor_core.py scripts/v7_local_factor_research.py
+          python3 -m json.tool config/research_v7_local_factor.json >/dev/null
+
+      - name: Public-data repaired Local Factor challenger
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p lf_evidence
+          # PR smoke uses 59 bootstrap replications to verify the full generated-
+          # regressor pipeline on live public data without turning CI into a long
+          # simulation job. Promotion-grade research keeps the configured 300 reps.
+          python3 scripts/v7_local_factor_research.py \
+            --config config/research_v7_local_factor.json \
+            --paper-config config/paper_v6.json \
+            --bootstrap-reps 59 \
+            --output-json lf_evidence/report.json \
+            | tee lf_evidence/run.log
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          r=json.loads(Path('lf_evidence/report.json').read_text())
+          assert r['paper_only'] is True
+          assert r['research_only'] is True
+          assert r['live_intents_enabled'] is False
+          assert r['submitted_orders'] == 0
+          assert r['promotion_ready'] is False
+          assert r['execution_joint_state_validated'] is False
+          PY
+
+      - name: Publish Local Factor summary
+        if: always()
+        shell: bash
+        run: |
+          echo '## V7 final Local Factor research' >> "$GITHUB_STEP_SUMMARY"
+          if test -s lf_evidence/report.json; then
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          r=json.loads(Path('lf_evidence/report.json').read_text())
+          print(f"- markets: {r['markets']}")
+          print(f"- clusters: {r['clusters']}")
+          print(f"- histories: {r['histories']}")
+          print(f"- pair hypotheses: {r['pair_hypotheses']}")
+          print(f"- BH-selected pairs: {r['bh_selected_pairs']}")
+          print(f"- post-BH pair signals: {r['post_bh_pair_signals']}")
+          print(f"- bootstrap reps: {r['bootstrap_repetitions']}")
+          print(f"- joint execution validated: {r['execution_joint_state_validated']}")
+          PY
+          else
+            echo '- report missing' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload Local Factor evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v7-local-factor-${{ github.run_id }}
+          path: lf_evidence/
+          if-no-files-found: warn
+          retention-days: 30
