@@ -15,6 +15,7 @@ import v7_micro_taker_core as economics
 
 FLOW_FEATURE_DIM = 8
 COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT = "complete_round_trip_executable_ev"
+CONSERVATIVE_MARKING_CONTRACT = "full_depth_executable_bid_net_fee_or_zero_fail_closed"
 
 
 def _finite(value: Any, default: float = math.nan) -> float:
@@ -243,6 +244,34 @@ def depth_adjusted_economics(
     )
 
 
+def conservative_marked_equity(
+    cash: float,
+    positions: dict[str, Any],
+    current: dict[str, tuple[base.Market, base.Book, base.Book, tuple[list[float], float, float]]],
+) -> tuple[float, list[dict[str, str]]]:
+    """Mark open risk only at executable full-depth liquidation value; otherwise mark zero."""
+    value = float(cash)
+    unmarkable: list[dict[str, str]] = []
+    for market_id, position in positions.items():
+        current_row = current.get(market_id)
+        if not current_row:
+            unmarkable.append({"market_id": market_id, "reason": "missing_current_snapshot"})
+            continue
+        market, yes, no, _feature = current_row
+        if market.fee is None:
+            unmarkable.append({"market_id": market_id, "reason": "missing_authoritative_fee"})
+            continue
+        book = yes if position["side"] == "YES" else no
+        shares = float(position["shares"])
+        bid_vwap = full_depth_vwap(list(book.bids), shares, buy=False)
+        if bid_vwap is None:
+            unmarkable.append({"market_id": market_id, "reason": "insufficient_exit_depth"})
+            continue
+        exit_fee = base.fee_per_share(bid_vwap, market.fee) * shares
+        value += max(0.0, shares * bid_vwap - exit_fee)
+    return value, unmarkable
+
+
 def append_fill(run_dir: Path, **row: Any) -> None:
     base.append_csv(
         run_dir / "fills.csv",
@@ -350,20 +379,8 @@ def main() -> int:
             del positions[market_id]
     realized_total += realized_last_tick
 
-    def marked_equity() -> float:
-        value = cash
-        for market_id, position in positions.items():
-            current_row = current.get(market_id)
-            if not current_row:
-                value += float(position["shares"]) * float(position["entry_price"])
-                continue
-            book = current_row[1] if position["side"] == "YES" else current_row[2]
-            shares = float(position["shares"])
-            bid_vwap = full_depth_vwap(list(book.bids), shares, buy=False)
-            value += shares * (bid_vwap if bid_vwap is not None else 0.0)
-        return value
-
-    equity = marked_equity()
+    equity, unmarkable_positions = conservative_marked_equity(cash, positions, current)
+    new_risk_frozen = bool(unmarkable_positions)
     peak = max(peak, equity)
     drawdown = max(0.0, 1.0 - equity / peak) if peak > 0.0 else 0.0
     killed = bool(state.get("killed")) or drawdown >= max_drawdown
@@ -372,7 +389,7 @@ def main() -> int:
     opened = 0
     best_edge = 0.0
     admission_rows: list[dict[str, Any]] = []
-    if not killed and model_labeled >= 40:
+    if not killed and not new_risk_frozen and model_labeled >= 40:
         ranked: list[tuple[float, Any, str, base.Book, economics.RoundTripEconomics, float]] = []
         for market_id, (market, yes, no, feature) in current.items():
             if market_id in positions or market.fee is None:
@@ -465,7 +482,8 @@ def main() -> int:
     for market_id, (_market, _yes, _no, feature) in current.items():
         samples.append({"ts": now, "market_id": market_id, "mid": feature[1], "spread": feature[2], "x": feature[0], "y": None})
     samples = samples[-50000:]
-    equity = marked_equity()
+    equity, unmarkable_positions = conservative_marked_equity(cash, positions, current)
+    new_risk_frozen = bool(unmarkable_positions)
     peak = max(peak, equity)
     drawdown = max(0.0, 1.0 - equity / peak) if peak > 0.0 else 0.0
     killed = killed or drawdown >= max_drawdown
@@ -481,6 +499,9 @@ def main() -> int:
         "peak": peak,
         "drawdown": drawdown,
         "killed": killed,
+        "new_risk_frozen": new_risk_frozen,
+        "unmarkable_positions": unmarkable_positions,
+        "marking_contract": CONSERVATIVE_MARKING_CONTRACT,
         "positions": positions,
         "samples": samples,
         "beta": beta,
@@ -502,6 +523,7 @@ def main() -> int:
     base.atomic_json(state_path, new_state)
     base.atomic_json(args.run_dir / "status.json", {k: new_state[k] for k in (
         "timestamp", "paper_only", "authenticated_execution", "cash", "equity", "peak", "drawdown", "killed",
+        "new_risk_frozen", "unmarkable_positions", "marking_contract",
         "prediction_sigma_probability", "labeled_samples", "model_labeled_samples", "signals", "opened", "best_edge",
         "realized_pnl_last_tick", "realized_pnl_total", "admission_contract", "execution_contract", "feature_contract", "exit_liquidity_contract", "failures"
     )} | {"open_positions": len(positions)})
@@ -510,6 +532,8 @@ def main() -> int:
         "paper_only": True,
         "contract": COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT,
         "details": "causal-flow + full-depth-entry/exit + fees/slippage/uncertainty/adverse/capital-time",
+        "new_risk_frozen": new_risk_frozen,
+        "unmarkable_positions": unmarkable_positions,
         "rows": admission_rows[:100],
     })
     base.append_csv(
@@ -527,6 +551,8 @@ def main() -> int:
         "signals": signals, "opened": opened, "positions": len(positions), "equity": equity,
         "realized_pnl_total": realized_total, "best_edge": best_edge,
         "prediction_sigma_probability": sigma, "killed": killed,
+        "new_risk_frozen": new_risk_frozen, "unmarkable_positions": len(unmarkable_positions),
+        "marking_contract": CONSERVATIVE_MARKING_CONTRACT,
         "admission_contract": "causal_flow_depth_complete_round_trip_ev",
         "execution_contract": COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT,
     }, sort_keys=True))
