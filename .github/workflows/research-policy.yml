@@ -70,17 +70,17 @@ jobs:
             --output-json project-context.json \
             --output-markdown project-context.md
 
-      - name: Test research, promotion and hard-safety policy regressions
+      - name: Test V7 research, promotion and hard-safety policy regressions
         run: >-
           python3 -m unittest
           tests/test_research_policy_all_pr_bases.py
+          tests/test_research_policy_branch_classification.py
           tests/test_research_policy_cross_venue.py
           tests/test_research_policy_v7_model_families.py
           tests/test_research_verdict_provenance.py
-          tests/test_v5_allocator_policy.py
           tests/test_promotion_gate.py
           tests/test_hard_safety_policy.py
-          tests/test_v6_effective_caps.py
+          tests/test_v7_authorized_paper_envelope.py
           -v
 
       - name: Ensure research-isolation labels exist
@@ -182,11 +182,11 @@ jobs:
             echo '# Research pull-request policy'
             echo
             echo "- event: \`$GITHUB_EVENT_NAME\`"
-            echo '- research, promotion policy, scheduler registry and full-project context validated'
+            echo '- V7 research, promotion policy, scheduler registry and full-project context validated'
             if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
               echo '- main push has merged pull-request provenance'
             fi
-            echo '- legacy manual paper-promotion labels are not provisioned or required'
+            echo '- manual paper-promotion labels are not provisioned or required'
             echo '- no pull request was evaluated in this run'
           } > research-policy-report.md
 
