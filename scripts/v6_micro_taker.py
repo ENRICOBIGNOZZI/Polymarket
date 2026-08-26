@@ -5,8 +5,9 @@ from __future__ import annotations
 # Importers receive the frozen legacy module API; direct execution uses the
 # corrected V7 complete-round-trip worker. This adapter retains one explicit
 # atomic JSON writer because the V7 worker currently imports that helper through
-# this compatibility surface. The legacy module itself can be deleted once all
-# remaining helper imports are migrated to V7-native modules.
+# this compatibility surface. The causal target is already V7-native; the
+# remaining legacy helper module can be deleted once discovery/book/feature/ridge
+# helpers are migrated to V7-native modules.
 
 if __name__ == "__main__":
     from v7_micro_taker_worker import main
@@ -30,6 +31,9 @@ _SPEC.loader.exec_module(_MODULE)
 for _name in dir(_MODULE):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_MODULE, _name)
+
+# Override the legacy causal-label helper with the canonical V7 implementation.
+from v7_micro_target import label_matured_samples as label_matured_samples
 
 
 def atomic_json(path: Path, value: Any) -> None:
