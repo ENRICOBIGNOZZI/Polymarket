@@ -192,7 +192,10 @@ def book_snapshot(
     now: int,
     max_age_seconds: int,
 ) -> economics.BookSnapshot | None:
-    freshness_ts = min(yes.freshness_ts(), no.freshness_ts())
+    source_times = (yes.exchange_ts, no.exchange_ts, yes.received_ts, no.received_ts)
+    if any(ts <= 0 or ts > int(now) for ts in source_times):
+        return None
+    freshness_ts = min(source_times)
     snapshot = economics.BookSnapshot(
         yes_bid=yes.bid(), yes_ask=yes.ask(), no_bid=no.bid(), no_ask=no.ask(),
         liquidity=float(liquidity), received_ts=int(freshness_ts),
@@ -200,7 +203,7 @@ def book_snapshot(
     if not economics.valid_book(snapshot):
         return None
     age = int(now) - snapshot.received_ts
-    if snapshot.received_ts <= 0 or age < 0 or age > max(0, int(max_age_seconds)):
+    if age < 0 or age > max(0, int(max_age_seconds)):
         return None
     return snapshot
 
