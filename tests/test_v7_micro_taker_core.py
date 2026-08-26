@@ -193,6 +193,12 @@ class MicroTakerBookFreshnessTest(unittest.TestCase):
         future_receive = data.Book(raw_book("yes", str(NOW * 1000)), received_ts=NOW + 2)
         self.assertIsNone(worker.book_snapshot(future_receive, normal, liquidity=1000.0, now=NOW, max_age_seconds=5))
 
+    def test_filtered_stale_pair_makes_open_position_unmarkable(self) -> None:
+        positions = {"m": {"side": "YES", "shares": 10.0}}
+        equity, unmarkable = worker.conservative_marked_equity(37.5, positions, current={})
+        self.assertEqual(equity, 37.5)
+        self.assertEqual(unmarkable, [{"market_id": "m", "reason": "missing_current_snapshot"}])
+
 
 if __name__ == "__main__":
     unittest.main()
