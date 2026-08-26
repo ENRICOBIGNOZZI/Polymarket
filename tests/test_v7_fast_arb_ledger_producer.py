@@ -75,8 +75,11 @@ def source_row(*, enriched: bool) -> dict[str, str]:
         "legs": "market-1:token-y:YES:20:0.48:0.001:9.62|market-1:token-n:NO:20:0.49:0.001:9.82",
     }
     if enriched:
+        latest_receive = receive + 10
         row["model_sha"] = SHA
         row["book_snapshot_id"] = "bundle-snapshot-1"
+        row["received_ts_ms"] = str(latest_receive)
+        row["feed_latency_ms"] = str(latest_receive - exchange)
         row["leg_context_json"] = json.dumps(
             [
                 {
@@ -88,7 +91,7 @@ def source_row(*, enriched: bool) -> dict[str, str]:
                 {
                     "token_id": "token-n",
                     "exchange_ts_ms": exchange + 10,
-                    "receive_ts_ms": receive + 10,
+                    "receive_ts_ms": latest_receive,
                     "book_snapshot_id": "snapshot-n",
                 },
             ]
@@ -100,7 +103,11 @@ class FastArbLedgerProducerTests(unittest.TestCase):
     def test_current_fast_csv_is_opportunity_only_not_assumed_candidate(self) -> None:
         row = source_row(enriched=False)
         started = int(row["observed_ts_ms"]) - 100
-        status = {"timestamp_ms": int(row["observed_ts_ms"]) + 100, "mode": "shadow", "real_order_submission": False}
+        status = {
+            "timestamp_ms": int(row["observed_ts_ms"]) + 100,
+            "mode": "shadow",
+            "real_order_submission": False,
+        }
         with tempfile.TemporaryDirectory() as tmp:
             ledger = Path(tmp) / "execution.jsonl"
             with CanonicalLedgerWriter(ledger, writer_id="test", model_sha=SHA) as writer:
@@ -113,14 +120,24 @@ class FastArbLedgerProducerTests(unittest.TestCase):
         self.assertEqual([event.event_type for event in events], ["OPPORTUNITY"])
         self.assertEqual(events[0].strategy, STRATEGY)
         self.assertFalse(events[0].metadata["candidate_contract_ready"])
-        self.assertIn("missing_exact_book_snapshot_identity", events[0].metadata["candidate_blockers"])
-        self.assertIn("missing_per_leg_clock_lineage", events[0].metadata["candidate_blockers"])
+        self.assertIn(
+            "missing_exact_book_snapshot_identity",
+            events[0].metadata["candidate_blockers"],
+        )
+        self.assertIn(
+            "missing_per_leg_clock_lineage",
+            events[0].metadata["candidate_blockers"],
+        )
         self.assertFalse(events[0].metadata["promotion_eligible"])
 
     def test_enriched_exact_sha_source_emits_bundle_and_per_leg_candidates(self) -> None:
         row = source_row(enriched=True)
         started = int(row["observed_ts_ms"]) - 100
-        status = {"timestamp_ms": int(row["observed_ts_ms"]) + 100, "mode": "shadow", "real_order_submission": False}
+        status = {
+            "timestamp_ms": int(row["observed_ts_ms"]) + 100,
+            "mode": "shadow",
+            "real_order_submission": False,
+        }
         with tempfile.TemporaryDirectory() as tmp:
             ledger = Path(tmp) / "execution.jsonl"
             with CanonicalLedgerWriter(ledger, writer_id="test", model_sha=SHA) as writer:
@@ -129,21 +146,63 @@ class FastArbLedgerProducerTests(unittest.TestCase):
 
         self.assertEqual(summary["opportunities_appended"], 1)
         self.assertEqual(summary["canonical_candidates_appended"], 3)
-        self.assertEqual([event.event_type for event in events], ["OPPORTUNITY", "CANDIDATE", "CANDIDATE", "CANDIDATE"])
+        self.assertEqual(
+            [event.event_type for event in events],
+            ["OPPORTUNITY", "CANDIDATE", "CANDIDATE", "CANDIDATE"],
+        )
         bundle = events[1]
+        contexts = json.loads(row["leg_context_json"])
+        self.assertEqual(bundle.exchange_ts_ms, min(item["exchange_ts_ms"] for item in contexts))
+        self.assertEqual(bundle.receive_ts_ms, max(item["receive_ts_ms"] for item in contexts))
         self.assertEqual(bundle.book_snapshot_id, "bundle-snapshot-1")
         self.assertEqual(bundle.intended_action, "STRUCTURAL_ARB_PAPER_CANDIDATE")
+        self.assertEqual(
+            bundle.metadata["bundle_clock_semantics"],
+            "oldest_leg_exchange/latest_leg_receive",
+        )
         legs = events[2:]
         self.assertEqual({event.token_id for event in legs}, {"token-y", "token-n"})
-        self.assertEqual({event.book_snapshot_id for event in legs}, {"snapshot-y", "snapshot-n"})
+        self.assertEqual(
+            {event.book_snapshot_id for event in legs},
+            {"snapshot-y", "snapshot-n"},
+        )
         self.assertTrue(all(event.side == "BUY" for event in legs))
-        self.assertFalse(any(event.event_type in {"ORDER_SUBMITTED", "FILL", "FINAL"} for event in events))
+        self.assertFalse(
+            any(event.event_type in {"ORDER_SUBMITTED", "FILL", "FINAL"} for event in events)
+        )
+
+    def test_mixed_time_bundle_is_opportunity_only(self) -> None:
+        row = source_row(enriched=True)
+        row["received_ts_ms"] = str(int(row["received_ts_ms"]) - 10)
+        started = int(row["observed_ts_ms"]) - 100
+        status = {
+            "timestamp_ms": int(row["observed_ts_ms"]) + 100,
+            "mode": "shadow",
+            "real_order_submission": False,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "execution.jsonl"
+            with CanonicalLedgerWriter(ledger, writer_id="test", model_sha=SHA) as writer:
+                summary = ingest_rows([row], session=session(started), status=status, writer=writer)
+            events = load_events(ledger, expected_model_sha=SHA)
+
+        self.assertEqual(summary["canonical_candidates_appended"], 0)
+        self.assertEqual(summary["candidate_rows_blocked"], 1)
+        self.assertEqual([event.event_type for event in events], ["OPPORTUNITY"])
+        self.assertIn(
+            "bundle_receive_not_latest_required_leg",
+            events[0].metadata["candidate_blockers"],
+        )
 
     def test_source_row_mixed_sha_fails_closed(self) -> None:
         row = source_row(enriched=True)
         row["model_sha"] = OTHER_SHA
         started = int(row["observed_ts_ms"]) - 100
-        status = {"timestamp_ms": int(row["observed_ts_ms"]) + 100, "mode": "shadow", "real_order_submission": False}
+        status = {
+            "timestamp_ms": int(row["observed_ts_ms"]) + 100,
+            "mode": "shadow",
+            "real_order_submission": False,
+        }
         with tempfile.TemporaryDirectory() as tmp:
             ledger = Path(tmp) / "execution.jsonl"
             with CanonicalLedgerWriter(ledger, writer_id="test", model_sha=SHA) as writer:
@@ -153,15 +212,29 @@ class FastArbLedgerProducerTests(unittest.TestCase):
     def test_idempotent_source_row_does_not_duplicate(self) -> None:
         row = source_row(enriched=True)
         started = int(row["observed_ts_ms"]) - 100
-        status = {"timestamp_ms": int(row["observed_ts_ms"]) + 100, "mode": "shadow", "real_order_submission": False}
+        status = {
+            "timestamp_ms": int(row["observed_ts_ms"]) + 100,
+            "mode": "shadow",
+            "real_order_submission": False,
+        }
         with tempfile.TemporaryDirectory() as tmp:
             ledger = Path(tmp) / "execution.jsonl"
             with CanonicalLedgerWriter(ledger, writer_id="test-1", model_sha=SHA) as writer:
                 ingest_rows([row], session=session(started), status=status, writer=writer)
             first = load_events(ledger, expected_model_sha=SHA)
-            keys = {str(event.metadata.get("source_row_key")) for event in first if event.metadata.get("source_row_key")}
+            keys = {
+                str(event.metadata.get("source_row_key"))
+                for event in first
+                if event.metadata.get("source_row_key")
+            }
             with CanonicalLedgerWriter(ledger, writer_id="test-2", model_sha=SHA) as writer:
-                summary = ingest_rows([row], session=session(started), status=status, writer=writer, existing_row_keys=keys)
+                summary = ingest_rows(
+                    [row],
+                    session=session(started),
+                    status=status,
+                    writer=writer,
+                    existing_row_keys=keys,
+                )
             second = load_events(ledger, expected_model_sha=SHA)
 
         self.assertEqual(summary["duplicate_rows"], 1)
@@ -170,7 +243,11 @@ class FastArbLedgerProducerTests(unittest.TestCase):
     def test_pre_session_rows_are_not_relabelled_as_current_sha(self) -> None:
         row = source_row(enriched=False)
         started = int(row["observed_ts_ms"]) + 1
-        status = {"timestamp_ms": started + 100, "mode": "shadow", "real_order_submission": False}
+        status = {
+            "timestamp_ms": started + 100,
+            "mode": "shadow",
+            "real_order_submission": False,
+        }
         with tempfile.TemporaryDirectory() as tmp:
             ledger = Path(tmp) / "execution.jsonl"
             with CanonicalLedgerWriter(ledger, writer_id="test", model_sha=SHA) as writer:
@@ -187,14 +264,27 @@ class FastArbLedgerProducerTests(unittest.TestCase):
             self.assertFalse(loaded["authenticated_execution"])
 
             bad_status = root / "fast_arb_status.json"
-            bad_status.write_text(json.dumps({"timestamp_ms": 12346, "mode": "shadow", "real_order_submission": True}), encoding="utf-8")
+            bad_status.write_text(
+                json.dumps(
+                    {
+                        "timestamp_ms": 12346,
+                        "mode": "shadow",
+                        "real_order_submission": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
             with self.assertRaisesRegex(FastArbSourceError, "not_safe_shadow"):
                 load_status(bad_status, session_started_ts_ms=12345)
 
     def test_status_must_cover_every_ingested_observation(self) -> None:
         row = source_row(enriched=False)
         started = int(row["observed_ts_ms"]) - 100
-        status = {"timestamp_ms": int(row["observed_ts_ms"]) - 1, "mode": "shadow", "real_order_submission": False}
+        status = {
+            "timestamp_ms": int(row["observed_ts_ms"]) - 1,
+            "mode": "shadow",
+            "real_order_submission": False,
+        }
         with tempfile.TemporaryDirectory() as tmp:
             ledger = Path(tmp) / "execution.jsonl"
             with CanonicalLedgerWriter(ledger, writer_id="test", model_sha=SHA) as writer:
