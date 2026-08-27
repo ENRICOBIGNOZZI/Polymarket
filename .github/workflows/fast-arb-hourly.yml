@@ -15,6 +15,7 @@ on:
       - "src/fast_arb_main.cpp"
       - "src/fast_runtime/**"
       - "config/fast_arb_*"
+      - "config/operator_directives.json"
       - "scripts/arb_theory_scheduler.py"
       - "scripts/validate_fast_data_health.py"
       - "scripts/paper_latest_loop.sh"
@@ -35,8 +36,21 @@ jobs:
   shadow-evidence:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      VALIDATION_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.VALIDATION_SHA }}
+          fetch-depth: 1
+
+      - name: Verify exact research revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
+          printf 'validation_sha=%s\n' "$VALIDATION_SHA"
 
       - name: Install native dependencies
         run: |
@@ -55,18 +69,19 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p runs/hourly-fast
+          printf '%s\n' "$VALIDATION_SHA" > runs/hourly-fast/validation_sha.txt
           duration=180
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then duration=45; fi
           ./build/polymarket_fast_arb_shadow \
-            --config config/fast_arb_shadow.json \
+            --config config/fast_arb_v7_shadow.json \
             --policy config/fast_arb_policy.json \
             --relations config/fast_arb_relations.csv \
             --external-signals data/external_signals.csv \
             --run-dir runs/hourly-fast \
-            --markets 600 \
-            --min-liquidity 10 \
+            --markets 1000 \
+            --min-liquidity 2 \
             --shard-size 200 \
-            --snapshot-refresh-seconds 20 \
+            --snapshot-refresh-seconds 5 \
             --duration-seconds "$duration" \
             --recycle-seconds 0
 
@@ -75,6 +90,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$(cat runs/hourly-fast/validation_sha.txt)" = "$VALIDATION_SHA"
           python3 scripts/arb_theory_scheduler.py \
             --evidence-root runs/hourly-fast \
             --base-policy config/fast_arb_policy.json \
@@ -88,16 +104,69 @@ jobs:
             --max-feed-stale-ms 45000 \
             --min-rest-resyncs 2
           python3 - <<'PY'
+          import csv
           import json
+          import math
+          import os
           from pathlib import Path
+
+          validation_sha = Path("runs/hourly-fast/validation_sha.txt").read_text(encoding="utf-8").strip()
+          assert validation_sha == os.environ["VALIDATION_SHA"]
           status = json.loads(Path("runs/hourly-fast/fast_arb_status.json").read_text())
           candidate = json.loads(Path("runs/hourly-fast/fast_arb_candidate.json").read_text())
           base_policy = json.loads(Path("config/fast_arb_policy.json").read_text())
+          shadow = json.loads(Path("config/fast_arb_v7_shadow.json").read_text())
+          directives = json.loads(Path("config/operator_directives.json").read_text())
+          auth = directives["paper_v7_authorization"]
+
           assert status["mode"] == "shadow"
           assert status["real_order_submission"] is False
           assert candidate["mode"] == "research_only"
           assert candidate["real_order_submission"] is False
           assert candidate["candidate_policy"]["min_net_edge"] >= base_policy["min_net_edge"]
+
+          assert shadow["paper_only"] is True
+          assert shadow["authenticated_execution"] is False
+          assert shadow["market_limit"] == auth["market_limit"] == 1000
+          assert shadow["min_liquidity"] == auth["min_liquidity"] == 2.0
+          assert shadow["min_net_edge"] == auth["min_net_edge"] == 0.00005
+          assert shadow["uncertainty_penalty"] == auth["uncertainty_penalty"] == 0.0
+          assert shadow["fractional_kelly"] <= auth["fractional_kelly_ceiling"]
+          assert shadow["max_market_fraction"] == auth["max_market_fraction"] == 1.0
+          assert shadow["max_event_fraction"] == auth["max_event_fraction"] == 1.0
+          assert shadow["max_gross_fraction"] == auth["max_gross_fraction"] == 1.0
+          assert shadow["max_drawdown"] == auth["max_drawdown"] == 0.15
+          assert auth["fixed_dollar_trade_cap_enabled"] is False
+          assert base_policy["max_notional_usd"] == auth["max_trade_usd_compatibility_sentinel"]
+          assert base_policy["external_uncertainty_penalty"] == 0.0
+
+          provenance_fields = {
+              "freshness_ready_tokens",
+              "freshness_missing_rejections",
+              "freshness_age_rejections",
+              "freshness_skew_rejections",
+          }
+          if not provenance_fields.issubset(status):
+              assert int(status.get("hard_executable_observations", 0) or 0) == 0, (
+                  "hard-arb observation present without per-token freshness provenance; "
+                  "forward-port #690 before economic interpretation",
+                  status,
+              )
+
+          capital_ceiling = shadow["starting_capital"] * min(
+              1.0,
+              shadow["max_market_fraction"],
+              shadow["max_event_fraction"],
+              shadow["max_gross_fraction"],
+          )
+          latest = Path("runs/hourly-fast/fast_arb_latest.csv")
+          if latest.exists():
+              with latest.open(newline="", encoding="utf-8") as handle:
+                  for row in csv.DictReader(handle):
+                      for field in ("executable_shares", "capital_required", "expected_profit"):
+                          value = float(row.get(field, 0.0) or 0.0)
+                          assert math.isfinite(value), (field, row)
+                      assert float(row.get("capital_required", 0.0) or 0.0) <= capital_ceiling + 1e-9, row
           PY
           cat runs/hourly-fast/fast_arb_theory_report.md >> "$GITHUB_STEP_SUMMARY"
 

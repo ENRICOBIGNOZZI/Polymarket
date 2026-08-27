@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-08-27T05:25:00Z",
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "state": "CURRENT_MAIN_FAST_AUTHORITY_X_FRESHNESS_COMPOSITION_LIVE_EVIDENCE_PENDING",
+  "base_main_sha": "4196f31d5b923a530427bce58432f85206199560",
+  "authority": {
+    "source": "config/operator_directives.json@main plus latest explicit user instruction",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "market_limit": 1000,
+    "min_liquidity": 2.0,
+    "min_net_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "fixed_dollar_trade_cap_enabled": false,
+    "max_trade_fraction": 1.0,
+    "max_market_fraction": 1.0,
+    "max_event_fraction": 1.0,
+    "max_gross_fraction": 1.0,
+    "hard_arb_max_trade_fraction": 1.0,
+    "max_drawdown": 0.15
+  },
+  "observed_current_main_gap": {
+    "registered_fast_workflow_config": "config/fast_arb_shadow.json",
+    "registered_fast_workflow_markets": 600,
+    "registered_fast_workflow_min_liquidity": 10.0,
+    "registered_fast_policy_min_net_edge": 0.0005,
+    "registered_fast_policy_max_notional_usd": 50.0,
+    "registered_fast_policy_external_uncertainty_penalty": 0.01,
+    "strict_per_token_freshness_on_main": false,
+    "interpretation": "Current main still does not exercise the authoritative V7 Fast breadth/economic floor together with strict per-token WS/REST provenance. This experiment composes the already-owned repairs on a fresh current-main research branch without changing canonical refs."
+  },
+  "composition": {
+    "authority_exact_head_and_sentinel_source_pr": 698,
+    "quiet_book_dual_clock_freshness_source_pr": 690,
+    "sequential_legging_owner_pr": 623,
+    "canonical_realized_economic_gate_owner_pr": 655,
+    "scope": "Only compose authority/exact-head/sentinel sizing with per-token WS/REST freshness. Do not duplicate sequential legging, partial/unwind or canonical-ledger ownership."
+  },
+  "research_contract": [
+    "Pull-request evidence is checked out at pull_request.head.sha and persisted with the artifact.",
+    "Fast breadth uses 1000 markets and $2 minimum liquidity under the current 0.5 bp post-cost floor.",
+    "The 1e100 compatibility sentinel is never spendable notional and is bounded by PAPER capital/percentage ceilings.",
+    "Every executable leg has per-token exchange and receive provenance.",
+    "Uninterrupted full-WS lineage remains current for quiet books; reconnect invalidates that lineage.",
+    "REST /books timestamp+hash is point-in-time provenance only and remains strictly age/skew gated.",
+    "A REST snapshot plus later WS delta never upgrades to gap-free WS lineage.",
+    "Hard observations without strict provenance fail closed.",
+    "No real-order or authenticated execution path is enabled."
+  ],
+  "live_evidence": null,
+  "economic_claim": false,
+  "pnl_claim": false,
+  "promotion_ready": false,
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "next_gate": "Run exact-head chronological Fast Shadow on the composed current-main branch. Any surviving hard candidate still requires authoritative fees, full-depth sequential PAPER legging, partial/unwind accounting, canonical-ledger realized fill-conditioned post-cost PnL and 1x/1.5x/2x stress."
+}
