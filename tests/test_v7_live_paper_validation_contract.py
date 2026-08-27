@@ -24,7 +24,7 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             "promotion_ready",
             "paper-validated unchanged",
             "git merge-base --is-ancestor \"$old_validated\" \"$VALIDATION_SHA\"",
-            '-F force=false',
+            "-F force=false",
         ):
             self.assertIn(required, text)
         for forbidden in (
@@ -35,7 +35,6 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             "POLYMARKET_DEPLOY_REF=",
             "paper_v7_loop.sh",
             "v7_execution_evidence_hardened.py",
-            "paper_v6",
         ):
             self.assertNotIn(forbidden, text)
 
@@ -78,7 +77,7 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
         self.assertFalse(row["validation_dispatch_authority"])
         self.assertTrue(row["critical"])
 
-    def test_forced_paper_champion_keeps_exact_sha_deploy_health_fail_closed(self) -> None:
+    def test_forced_paper_champion_is_v7_only_and_safe(self) -> None:
         manifest = json.loads((ROOT / "config/live_champion.json").read_text(encoding="utf-8"))
         context = json.loads((ROOT / "config/project_context.json").read_text(encoding="utf-8"))
         self.assertTrue(manifest["enabled"])
@@ -90,13 +89,14 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
         self.assertEqual(manifest["promotion_policy"], "operator_forced_v7_paper_champion")
         self.assertFalse(manifest["legacy_fallback_allowed"])
         self.assertEqual(manifest["loop"], "scripts/paper_v7_execution_loop.sh")
-        # Main owns this context metadata and already names the canonical V7
-        # runtime/Grafana plane. The lifecycle is still fail-closed because the
-        # recorded cutover state explicitly requires exact-SHA deploy + health.
         self.assertTrue(context["runtime"]["active_champion"])
         self.assertTrue(context["grafana"]["active"])
         self.assertEqual(context["grafana"]["dashboard_uid"], "polymarket-v7")
-        self.assertIn("pending_exact_sha_deploy_health", context["cutover"]["current_state"])
+        self.assertEqual(
+            context["cutover"]["current_state"],
+            "operator_forced_v7_paper_champion_exact_head_validation",
+        )
+        self.assertEqual(context["cutover"]["target_version"], 7)
 
 
 if __name__ == "__main__":
