@@ -6,7 +6,7 @@
   "champion_manifest": "config/live_champion.json",
   "telemetry": {
     "live_smoke": "telemetry/latest-live-smoke.json",
-    "forward_maker": "telemetry/latest-forward-maker.jsonl",
+    "forward_maker": "telemetry/latest-forward-maker.json",
     "forward_maker_history": "telemetry/forward-maker-history.jsonl",
     "max_live_smoke_age_seconds": 10800,
     "max_forward_age_seconds": 10800,
