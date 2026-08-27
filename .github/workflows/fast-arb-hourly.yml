@@ -94,14 +94,21 @@ jobs:
           status = json.loads(Path("runs/hourly-fast/fast_arb_status.json").read_text())
           candidate = json.loads(Path("runs/hourly-fast/fast_arb_candidate.json").read_text())
           base_policy = json.loads(Path("config/fast_arb_policy.json").read_text())
-          directives = json.loads(Path("config/operator_directives.json").read_text())
+          v7 = json.loads(Path("config/fast_arb_v7_shadow.json").read_text())
+          directives = json.loads(Path("config/operator_directives.json").read_text())["paper_v7_authorization"]
           assert status["mode"] == "shadow"
           assert status["real_order_submission"] is False
           assert candidate["mode"] == "research_only"
           assert candidate["real_order_submission"] is False
           assert candidate["candidate_policy"]["min_net_edge"] >= base_policy["min_net_edge"]
-          assert base_policy["min_net_edge"] == directives["hf_research_authority"]["min_net_edge"]
-          assert base_policy["external_uncertainty_penalty"] == directives["hf_research_authority"]["uncertainty_penalty"]
+          assert base_policy["min_net_edge"] == directives["min_net_edge"]
+          assert base_policy["external_uncertainty_penalty"] == directives["uncertainty_penalty"]
+          assert v7["market_limit"] == directives["market_limit"] == 1000
+          assert v7["min_liquidity"] == directives["min_liquidity"] == 2.0
+          assert v7["fractional_kelly"] == directives["fractional_kelly_ceiling"] == 0.25
+          assert v7["max_trade_usd"] == directives["max_trade_usd_compatibility_sentinel"]
+          assert v7["max_drawdown"] == directives["max_drawdown"] == 0.15
+          assert v7["paper_only"] is True and v7["authenticated_execution"] is False
           PY
           cat runs/hourly-fast/fast_arb_theory_report.md >> "$GITHUB_STEP_SUMMARY"
 
