@@ -95,7 +95,7 @@ class JointStateDistribution:
         for state, probability in self.probabilities.items():
             if int(state) < 0 or int(state) > self.full_mask:
                 raise ValueError("invalid state bitmask")
-            if not math.isfinite(float(probability)) or float(probability) < 0.0:
+            if not math.isfinite(float(probability)) or float(probability) < -tol:
                 raise ValueError("invalid state probability")
             total += float(probability)
         if abs(total - 1.0) > tol:
