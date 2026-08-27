@@ -74,7 +74,38 @@ if [[ ! -f "$CONFIG" ]]; then
   exit 78
 fi
 
+EXTERNAL_SIGNALS_FILE="$(
+  python3 - "$CONFIG" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    config = json.load(handle)
+print(str(config.get("external_signals_file") or "data/external_signals.csv"))
+PY
+)"
+case "$EXTERNAL_SIGNALS_FILE" in
+  data/*|runs/*) ;;
+  *) echo "fatal: external_signals_file must stay within data/ or runs/: $EXTERNAL_SIGNALS_FILE" >&2; exit 78 ;;
+esac
+if [[ "$EXTERNAL_SIGNALS_FILE" == *"/../"* || "$EXTERNAL_SIGNALS_FILE" == ../* || "$EXTERNAL_SIGNALS_FILE" == */.. ]]; then
+  echo "fatal: external_signals_file may not contain parent traversal" >&2
+  exit 78
+fi
+if [[ ! -f scripts/v7_external_bridge.py ]]; then
+  echo "fatal: V7 External Intelligence bridge is missing" >&2
+  exit 78
+fi
+
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
+
+# Materialize External Intelligence before the operational loop starts. The
+# bridge always revokes a previous signal before remote I/O and only admits an
+# exact integration-approved direct probability. A stale/unavailable report
+# therefore yields safe header-only abstention rather than stale carry-forward.
+python3 scripts/v7_external_bridge.py \
+  --output "$EXTERNAL_SIGNALS_FILE" \
+  --status "$RUN_ROOT/external_bridge_status.json"
 
 exec bash "$LOOP" "$CONFIG" "$RUN_ROOT"
