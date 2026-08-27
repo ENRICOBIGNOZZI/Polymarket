@@ -4,16 +4,21 @@
 The statistical holdout remains owned by ``v7_cross_sectional_tail_relative``.
 This wrapper changes only the current executable-book surface: every book used
 for the current cross-section must carry exchange timestamp + snapshot hash and
-the whole current set must satisfy the shared V7 age/skew contract.  Missing or
+the whole current set must satisfy the shared V7 age/skew contract. Missing or
 mixed-time books fail closed rather than creating a synthetic synchronous rank.
 """
 from __future__ import annotations
 
 import json
+import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
 import v7_cross_sectional_tail_relative as driver
 import v7_model_book_snapshot as snapshots
