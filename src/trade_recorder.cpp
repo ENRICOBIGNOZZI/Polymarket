@@ -321,11 +321,11 @@ private:
 
 int main(int argc, char** argv) {
     try {
-        std::string config = "config/paper_v3.json";
-        std::string run_dir = "runs/paper_v4";
+        std::string config = "config/v7_market_data_recorder.json";
+        std::string run_dir = "runs/v7-paper";
         std::string data_url = "https://data-api.polymarket.com";
-        std::size_t markets = 600, batch = 20;
-        double min_liquidity = 100.0;
+        std::size_t markets = 1000, batch = 100;
+        double min_liquidity = 2.0;
         std::int64_t lookback_s = 300;
         int interval_s = 10;
         bool loop = false;
