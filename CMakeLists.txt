@@ -33,6 +33,10 @@ add_executable(polymarket_v7_trade_recorder src/v7_trade_recorder.cpp)
 target_link_libraries(polymarket_v7_trade_recorder PRIVATE pm_core)
 target_compile_options(polymarket_v7_trade_recorder PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(polymarket_v7_maker_replay_bench src/v7_maker_replay_bench.cpp)
+target_link_libraries(polymarket_v7_maker_replay_bench PRIVATE pm_v7_hft)
+target_compile_options(polymarket_v7_maker_replay_bench PRIVATE -Wall -Wextra -Wpedantic)
+
 include(CTest)
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
