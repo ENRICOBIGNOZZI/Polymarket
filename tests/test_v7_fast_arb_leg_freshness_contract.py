@@ -33,12 +33,35 @@ class V7FastArbLegFreshnessContractTest(unittest.TestCase):
         self.assertIn("book_exchange_ts_ms_.erase(token);", self.part2)
         self.assertIn("book_received_ts_ms_.erase(token);", self.part2)
 
-    def test_freshness_gate_covers_binary_event_and_relation_evaluations(self) -> None:
+    def test_binary_complete_set_requires_both_executable_outcomes(self) -> None:
         self.assertIn("{market.yes_token, market.no_token}, decision", self.part3)
-        self.assertIn("freshness_window_locked(required_tokens, decision)", self.part3)
-        self.assertIn("left->second.yes_token, left->second.no_token, right->second.yes_token", self.part3)
-        self.assertIn("max_exchange - min_exchange > kMaxBookSkewMs", self.part3)
-        self.assertIn("age > kMaxBookAgeMs", self.part3)
+
+    def test_negrisk_complete_set_requires_only_executable_yes_legs(self) -> None:
+        self.assertIn("complete_set_tokens.push_back(member->yes_token)", self.part3)
+        self.assertNotIn("complete_set_tokens.push_back(member->no_token)", self.part3)
+        self.assertIn("freshness_window_locked(complete_set_tokens, decision)", self.part3)
+
+    def test_negrisk_conversion_uses_source_no_plus_target_yes_legs(self) -> None:
+        self.assertIn("conversion_tokens.push_back(source->no_token)", self.part3)
+        self.assertIn("conversion_tokens.push_back(target->yes_token)", self.part3)
+        self.assertIn("freshness_window_locked(conversion_tokens, decision)", self.part3)
+
+    def test_relation_freshness_matches_the_actual_evaluated_basket(self) -> None:
+        self.assertIn("{left->second.no_token, right->second.yes_token}, decision", self.part3)
+        self.assertIn("{left->second.no_token, right->second.no_token}, decision", self.part3)
+        self.assertIn("{left->second.yes_token, right->second.yes_token}, decision", self.part3)
+        self.assertNotIn(
+            "{left->second.yes_token, left->second.no_token, right->second.yes_token,\n             right->second.no_token}",
+            self.part3,
+        )
+
+    def test_publish_revalidation_uses_only_actual_opportunity_leg_tokens(self) -> None:
+        start = self.part3.index("std::vector<std::string> opportunity_required_tokens_locked")
+        end = self.part3.index("void apply_event_locked", start)
+        helper = self.part3[start:end]
+        self.assertIn("required.push_back(leg.token_id)", helper)
+        self.assertNotIn("market->second.yes_token", helper)
+        self.assertNotIn("market->second.no_token", helper)
 
     def test_current_opportunity_is_expired_even_without_another_market_message(self) -> None:
         self.assertIn("opportunity_required_tokens_locked(current)", self.part2)
