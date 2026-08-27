@@ -175,6 +175,10 @@ void MakerPaperMarketEngine::request_cancel(
         result.invariant_violation = 1;
         return;
     }
+    if (now > std::numeric_limits<std::int64_t>::max() - policy_.cancel_latency_ns) {
+        result.invariant_violation = 1;
+        return;
+    }
     slot.paper.cancel_effective_monotonic_ns = now + policy_.cancel_latency_ns;
     PaperMakerEvent event;
     event.kind = PaperMakerEventKind::CancelRequested;
@@ -225,8 +229,12 @@ void MakerPaperMarketEngine::apply_operational_fill(
 
 void MakerPaperMarketEngine::maybe_merge(
     std::int64_t timestamp_ns, PaperMakerResult& result) noexcept {
-    const std::int64_t merge_microunits = std::min(inventory_.yes_microunits,
-                                                   inventory_.no_microunits);
+    // Do not consume shares reserved by live SELL quotes. Automatic PAPER merge
+    // is accounting convenience only; it must never manufacture uncovered sell
+    // inventory after a merge.
+    const std::int64_t merge_microunits = std::min(
+        available_to_sell(yes_instrument_handle_),
+        available_to_sell(no_instrument_handle_));
     if (merge_microunits <= 0) return;
     const double yes_shares = shares(inventory_.yes_microunits);
     const double no_shares = shares(inventory_.no_microunits);
@@ -289,9 +297,10 @@ PaperMakerResult MakerPaperMarketEngine::apply_intent(
     }
 
     if (intent.type == IntentType::Withdraw || intent.type == IntentType::Kill) {
+        const bool market_wide = intent.type == IntentType::Kill;
         for (auto& slot : slots_) {
-            if (!slot.occupied || slot.oms.record().instrument_handle != intent.instrument_handle
-                || !queue_active(slot.oms.record().state)) {
+            if (!slot.occupied || !queue_active(slot.oms.record().state)
+                || (!market_wide && slot.oms.record().instrument_handle != intent.instrument_handle)) {
                 continue;
             }
             request_cancel(slot, intent.decision_monotonic_ns, result);
@@ -323,6 +332,12 @@ PaperMakerResult MakerPaperMarketEngine::apply_intent(
     const std::uint64_t order_id = ++order_sequence_;
     slot->oms = OmsOrder(intent, order_id);
 
+    if (intent.decision_monotonic_ns
+        > std::numeric_limits<std::int64_t>::max() - policy_.assumed_submission_latency_ns) {
+        slot->occupied = 0;
+        result.invariant_violation = 1;
+        return reject();
+    }
     const std::int64_t arrival_receive = intent.decision_monotonic_ns
         + policy_.assumed_submission_latency_ns;
     if (arrival_receive <= 0) {
@@ -492,11 +507,15 @@ PaperMakerResult MakerPaperMarketEngine::on_public_trade(
             event.order_state = transition.state;
             apply_operational_fill(*slot, event.operational_fill_microunits,
                                    trade.receive_monotonic_ns, event);
-            maybe_merge(trade.receive_monotonic_ns, result);
         } else {
             event.order_state = slot->oms.record().state;
         }
+        // Canonical evidence must observe the causal fill before any accounting
+        // terminal event generated from that fill.
         emit(result, event);
+        if (event.operational_fill_microunits > 0) {
+            maybe_merge(trade.receive_monotonic_ns, result);
+        }
     }
     result.applied = 1;
     return result;
