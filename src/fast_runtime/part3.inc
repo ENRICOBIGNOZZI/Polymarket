@@ -22,6 +22,7 @@ private:
     std::unordered_map<std::string, std::int64_t> book_exchange_ts_ms_;
     std::unordered_map<std::string, std::int64_t> book_received_ts_ms_;
     std::unordered_set<std::string> ws_snapshot_ready_;
+    std::unordered_set<std::string> rest_snapshot_ready_;
     std::deque<double> feed_latency_ms_;
     std::deque<double> decision_latency_us_;
     std::ofstream opportunity_log_;
@@ -40,13 +41,22 @@ private:
     std::uint64_t freshness_skew_rejections_ = 0;
 
     // Fast structural evidence is fail-closed unless every actually required L2 leg has
-    // a recent full-WS-snapshot lineage and the legs are event-time aligned.
+    // a recent timestamped full-book image and the legs are event-time aligned. A full
+    // WS snapshot establishes gap-free delta lineage; a REST /books image establishes
+    // only point-in-time provenance and must never authorize subsequent WS deltas.
     static constexpr std::int64_t kMaxBookAgeMs = 5000;
     static constexpr std::int64_t kMaxBookSkewMs = 1500;
 
     struct FreshnessWindow {
         std::int64_t exchange_ms = 0;
         std::int64_t received_ms = 0;
+    };
+
+    struct RestSnapshot {
+        pm::Book book;
+        std::int64_t exchange_ms = 0;
+        std::int64_t received_ms = 0;
+        std::string hash;
     };
 
     static std::string opportunity_header() {
@@ -182,6 +192,56 @@ private:
         return levels;
     }
 
+    std::unordered_map<std::string, RestSnapshot> fetch_timestamped_rest_books() {
+        std::unordered_map<std::string, RestSnapshot> out;
+        const std::size_t batch = std::max<std::size_t>(1, cfg_.books_batch_size);
+        for (std::size_t pos = 0; pos < tokens_.size(); pos += batch) {
+            json::array body;
+            const auto end = std::min(tokens_.size(), pos + batch);
+            for (std::size_t i = pos; i < end; ++i) {
+                body.emplace_back(json::object{{"token_id", tokens_[i]}});
+            }
+            const auto response =
+                http_.post_json(cfg_.clob_url + "/books", json::serialize(body));
+            const auto received_ms = now_ms();
+            if (response.status < 200 || response.status >= 300) {
+                throw std::runtime_error("CLOB books HTTP " +
+                                         std::to_string(response.status) + ": " +
+                                         response.body.substr(0, 300));
+            }
+            const auto root = json::parse(response.body);
+            if (!root.is_array()) {
+                throw std::runtime_error("Unexpected CLOB books response");
+            }
+            for (const auto& value : root.as_array()) {
+                if (!value.is_object()) continue;
+                const auto& object = value.as_object();
+                RestSnapshot snapshot;
+                snapshot.book.token_id = get_text(object, "asset_id");
+                snapshot.book.tick_size =
+                    get_number(object, "tick_size", snapshot.book.tick_size);
+                snapshot.book.min_order_size =
+                    get_number(object, "min_order_size", snapshot.book.min_order_size);
+                snapshot.book.neg_risk = boolean(
+                    object.find("neg_risk") == object.end() ? json::value(false) :
+                                                               object.at("neg_risk"),
+                    false);
+                snapshot.book.last_trade =
+                    get_number(object, "last_trade_price", snapshot.book.last_trade);
+                snapshot.book.bids = parse_levels(object, "bids");
+                snapshot.book.asks = parse_levels(object, "asks");
+                snapshot.exchange_ms = normalize_timestamp_ms(
+                    get_integer(object, "timestamp", 0));
+                snapshot.received_ms = received_ms;
+                snapshot.hash = get_text(object, "hash");
+                if (!snapshot.book.token_id.empty()) {
+                    out[snapshot.book.token_id] = std::move(snapshot);
+                }
+            }
+        }
+        return out;
+    }
+
     void mark_l2_clock_locked(const std::string& token, std::int64_t exchange_ms,
                               std::int64_t received_ms) {
         book_received_ts_ms_[token] = received_ms;
@@ -217,7 +277,9 @@ private:
 
         for (const auto& token : required_tokens) {
             if (token.empty() || !unique.insert(token).second) continue;
-            if (!ws_snapshot_ready_.count(token)) return reject_missing();
+            if (!ws_snapshot_ready_.count(token) && !rest_snapshot_ready_.count(token)) {
+                return reject_missing();
+            }
             const auto exchange = book_exchange_ts_ms_.find(token);
             const auto received = book_received_ts_ms_.find(token);
             if (exchange == book_exchange_ts_ms_.end() ||
@@ -279,6 +341,11 @@ private:
         if (type == "book") {
             const auto token = get_text(event, "asset_id");
             if (token.empty() || !token_to_market_.count(token)) return;
+            if (const auto previous = book_exchange_ts_ms_.find(token);
+                timestamp > 0 && previous != book_exchange_ts_ms_.end() &&
+                previous->second > timestamp) {
+                return;
+            }
             pm::Book book;
             if (const auto it = books_.find(token); it != books_.end()) book = it->second;
             book.token_id = token;
@@ -288,6 +355,7 @@ private:
             book.min_order_size = get_number(event, "min_order_size", book.min_order_size);
             book.last_trade = get_number(event, "last_trade_price", book.last_trade);
             books_[token] = std::move(book);
+            rest_snapshot_ready_.erase(token);
             ws_snapshot_ready_.insert(token);
             mark_l2_clock_locked(token, timestamp, received_ms);
             affected.insert(token_to_market_.at(token));
@@ -302,17 +370,21 @@ private:
                 const auto& change = value.as_object();
                 const auto token = get_text(change, "asset_id");
                 if (token.empty() || !token_to_market_.count(token)) continue;
+                // A delta is trustworthy only after this subscription has seen a
+                // complete WS book. A fresh REST image is valid point-in-time
+                // evidence, but it is never upgraded into gap-free WS lineage by a delta.
+                if (!ws_snapshot_ready_.count(token) || timestamp <= 0) continue;
+                if (const auto previous = book_exchange_ts_ms_.find(token);
+                    previous != book_exchange_ts_ms_.end() &&
+                    previous->second > timestamp) {
+                    continue;
+                }
                 auto& book = books_[token];
                 book.token_id = token;
                 const auto side = get_text(change, "side");
                 pm::fast::apply_level(book, side == "BUY", get_number(change, "price", -1.0),
                                       get_number(change, "size", 0.0));
-                // A delta is trustworthy only after this subscription has seen a
-                // complete WS book. REST seed + delta is not enough to establish
-                // a gap-free L2 lineage.
-                if (ws_snapshot_ready_.count(token)) {
-                    mark_l2_clock_locked(token, timestamp, received_ms);
-                }
+                mark_l2_clock_locked(token, timestamp, received_ms);
                 affected.insert(token_to_market_.at(token));
             }
             return;
