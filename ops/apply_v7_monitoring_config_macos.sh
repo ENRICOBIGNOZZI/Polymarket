@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="${POLYMARKET_APP_DIR:-$ROOT}"
 STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
+CANONICAL_RUN_ROOT="${POLYMARKET_RUN_ROOT:-runs/paper_v7_live}"
 MANIFEST="$APP_DIR/monitoring/v7_monitoring_manifest.json"
 
 [[ "$(uname -s)" == "Darwin" ]] || { echo "fatal: macOS monitoring installer requires Darwin" >&2; exit 78; }
@@ -71,6 +72,7 @@ Path(sys.argv[2]).write_text(source.replace(marker, sys.argv[3]), encoding='utf-
 PY
 
 printf 'v7_monitoring_configured=true\n'
+printf 'canonical_run_root=%s\n' "$CANONICAL_RUN_ROOT"
 printf 'dashboard_uid=%s\n' "$DASHBOARD_UID"
 printf 'dashboard_file=%s\n' "$APP_DIR/$DASHBOARD_FILE"
 printf 'prometheus_config=%s\n' "$STATE_DIR/prometheus-v7.yml"
