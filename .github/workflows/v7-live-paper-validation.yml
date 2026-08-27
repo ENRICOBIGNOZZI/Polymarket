@@ -5,7 +5,7 @@ on:
     inputs:
       expected_sha:
         description: Exact merged V7 SHA to validate and, on success, advance to paper-validated
-        required: true
+        required: false
         type: string
   repository_dispatch:
     types: [v7-live-paper-validate]
@@ -13,6 +13,8 @@ on:
     workflows: ["ci", "monitoring"]
     types: [completed]
     branches: [main]
+  schedule:
+    - cron: "11,26,41,56 * * * *"
 
 permissions:
   actions: read
@@ -28,7 +30,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.event.client_payload.expected_sha || github.event.workflow_run.head_sha }}
+      VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.event.client_payload.expected_sha || github.event.workflow_run.head_sha || github.sha }}
     steps:
       - name: Validate requested SHA syntax
         shell: bash
@@ -41,7 +43,7 @@ jobs:
           ref: ${{ env.VALIDATION_SHA }}
           fetch-depth: 0
 
-      - name: Coordinate automatic exact-SHA validation
+      - name: Coordinate exact-SHA V7 validation
         id: gate
         shell: bash
         env:
@@ -49,27 +51,33 @@ jobs:
         run: |
           set -euo pipefail
           echo "ready=false" >> "$GITHUB_OUTPUT"
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then
-            test "${{ github.event.workflow_run.conclusion }}" = "success"
-            if ! python3 - <<'PY'
+          git fetch --no-tags origin main paper-validated
+          main_sha="$(git rev-parse origin/main)"
+          if [[ "$main_sha" != "$VALIDATION_SHA" ]]; then
+            echo "validation_state=stale_non_main_sha" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if ! python3 - <<'PY'
           import json
           from pathlib import Path
           m=json.loads(Path('config/live_champion.json').read_text(encoding='utf-8'))
-          raise SystemExit(0 if m.get('enabled') is True and m.get('version') == 7 else 1)
+          raise SystemExit(0 if (
+              m.get('enabled') is True and
+              m.get('version') == 7 and
+              m.get('paper_only') is True and
+              m.get('authenticated_execution') is False
+          ) else 1)
           PY
-            then
-              echo "automatic_validation=awaiting_enabled_v7_champion" >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            git fetch --no-tags origin main
-            if [[ "$(git rev-parse origin/main)" != "$VALIDATION_SHA" ]]; then
-              echo "automatic_validation=stale_sha" >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            for workflow in ci.yml monitoring.yml; do
-              tmp="/tmp/${workflow%.yml}-runs.json"
-              gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&per_page=50" > "$tmp"
-              python3 - "$tmp" "$VALIDATION_SHA" "$workflow" <<'PY'
+          then
+            echo "validation_state=awaiting_enabled_v7_champion" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          for workflow in ci.yml monitoring.yml; do
+            tmp="/tmp/${workflow%.yml}-runs.json"
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&per_page=50" > "$tmp"
+            python3 - "$tmp" "$VALIDATION_SHA" "$workflow" <<'PY'
           import json,sys
           path,sha,workflow=sys.argv[1:]
           rows=json.load(open(path,encoding='utf-8')).get('workflow_runs',[])
@@ -77,20 +85,18 @@ jobs:
           if not any(r.get('conclusion') == 'success' for r in exact):
               raise SystemExit(f'{workflow} has no successful completed run for exact SHA {sha}')
           PY
-            done
-          fi
+          done
           echo "ready=true" >> "$GITHUB_OUTPUT"
 
-      - name: Enforce exact-main and V7 PAPER cutover contract
+      - name: Enforce exact-main V7 PAPER operator contract
         if: steps.gate.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
           git fetch --no-tags origin main paper-validated
-          main_sha="$(git rev-parse origin/main)"
+          test "$(git rev-parse origin/main)" = "$VALIDATION_SHA"
           current_validated="$(git rev-parse origin/paper-validated)"
-          test "$main_sha" = "$VALIDATION_SHA"
           git merge-base --is-ancestor "$current_validated" "$VALIDATION_SHA"
           python3 scripts/v7_cutover_contract.py \
             --repository-root . \
@@ -143,10 +149,10 @@ jobs:
               exit 1
             fi
             if [[ -s "$R/v7_supervisor.json" && -s "$R/execution/v7_execution_supervisor.json" && -s "$R/execution/runtime_status.json" ]]; then
-              if python3 - "$R" <<'PY'
+              if python3 - "$R" "$VALIDATION_SHA" <<'PY'
           import json,sys,time
           from pathlib import Path
-          root=Path(sys.argv[1])
+          root=Path(sys.argv[1]); sha=sys.argv[2]
           sup=json.loads((root/'v7_supervisor.json').read_text())
           exe=json.loads((root/'execution/v7_execution_supervisor.json').read_text())
           status=json.loads((root/'execution/runtime_status.json').read_text())
@@ -155,6 +161,9 @@ jobs:
           assert status.get('version') == 7
           assert status.get('paper_only') is True
           assert status.get('authenticated_execution') is False
+          observed_sha=str(status.get('sha') or status.get('model_sha') or status.get('revision') or '')
+          if observed_sha:
+              assert observed_sha == sha
           assert float(status.get('drawdown', 1.0)) <= 0.15 + 1e-12
           assert int(time.time()) - int(status.get('timestamp', 0)) <= 180
           PY
@@ -174,6 +183,29 @@ jobs:
           cleanup
           trap - EXIT INT TERM
           echo "SMOKE_ROOT=$R" >> "$GITHUB_ENV"
+
+      - name: Enforce PAPER evidence integrity and safety
+        if: steps.gate.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$SMOKE_ROOT" <<'PY'
+          import json,sys
+          from pathlib import Path
+          root=Path(sys.argv[1])
+          report=json.loads((root/'v7_execution_evidence.json').read_text(encoding='utf-8'))
+          status=json.loads((root/'execution/runtime_status.json').read_text(encoding='utf-8'))
+          assert status.get('paper_only') is True
+          assert status.get('authenticated_execution') is False
+          assert float(status.get('drawdown', 1.0)) <= 0.15 + 1e-12
+          assert report.get('summary',{}).get('capital_allocation_mutated') is False
+          for model,row in report.get('models',{}).items():
+              audit=row.get('cost_audit',{})
+              n=int(audit.get('pnl_observations',0))
+              coverage=audit.get('cost_observation_coverage')
+              if n:
+                  assert coverage is not None and float(coverage) >= 1.0 - 1e-12, model
+          PY
 
       - name: Verify merged PR provenance for exact main SHA
         if: steps.gate.outputs.ready == 'true'
@@ -197,7 +229,7 @@ jobs:
           test -n "$merged_pr"
           echo "paper_validation_source_pr=$merged_pr" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Advance paper-validated to the exact validated SHA
+      - name: Advance paper-validated to exact validated SHA
         if: steps.gate.outputs.ready == 'true'
         shell: bash
         env:
@@ -217,7 +249,7 @@ jobs:
           fi
           echo "paper_validated_sha=$VALIDATION_SHA" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload exact-SHA PAPER smoke evidence
+      - name: Upload exact-SHA V7 PAPER evidence
         if: always() && steps.gate.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:

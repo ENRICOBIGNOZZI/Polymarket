@@ -50,4 +50,4 @@ jobs:
           done
           echo "validation_sha=$EXPECTED_SHA" >> "$GITHUB_STEP_SUMMARY"
           echo "dispatched=ci.yml monitoring.yml" >> "$GITHUB_STEP_SUMMARY"
-          echo "v7_live_paper=automatic_after_exact_sha_ci_and_monitoring_are_green_and_v7_champion_is_enabled" >> "$GITHUB_STEP_SUMMARY"
+          echo "live_paper=disabled_until_validated_v7_integration" >> "$GITHUB_STEP_SUMMARY"
