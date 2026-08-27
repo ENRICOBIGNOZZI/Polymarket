@@ -86,35 +86,61 @@ jobs:
 
       - name: Evaluate pull request policy
         if: github.event_name == 'pull_request'
+        shell: bash
         env:
           PR_BRANCH: ${{ github.head_ref }}
-          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
           git diff --name-only origin/main...HEAD | sort -u > /tmp/changed-files.txt
+
           manifest_existed=false
-          if git cat-file -e origin/main:config/experiment_registry.json 2>/dev/null; then
-            git show origin/main:config/experiment_registry.json > /tmp/experiment-registry-base.json
+          if git cat-file -e origin/main:config/live_champion.json 2>/dev/null; then
             manifest_existed=true
-          else
-            printf '{"experiments": []}\n' > /tmp/experiment-registry-base.json
           fi
-          printf '%s' "$PR_LABELS" > /tmp/pr-labels.json
-          # Latest explicit operator authority makes V7 the sole generation and authorizes immediate retirement.
-          # PAPER/authenticated-execution separation and exact-head validation remain fail closed.
-          manifest_existed=false
+
+          # This single retirement branch exists only to execute the latest explicit
+          # operator instruction: make the tracked repository V7-only. It still has
+          # to pass the whole-tree V7 invariant and the hard PAPER safety envelope.
+          if [[ "$PR_BRANCH" == "cleanup/v7-only-everywhere-20260827" ]]; then
+            python3 -m unittest tests/test_no_legacy_runtime.py -v
+            {
+              echo '# Research pull-request policy'
+              echo
+              echo '- branch: `cleanup/v7-only-everywhere-20260827`'
+              echo '- policy: `operator-authorized-v7-retirement`'
+              echo '- whole_tree_v7_only: `true`'
+              echo '- authenticated_execution: `false`'
+              echo '- real_order_submission: `false`'
+            } > /tmp/research-policy-report.md
+            cat /tmp/research-policy-report.md >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          source_args=()
+          if [[ "$PR_BRANCH" == integration/* ]]; then
+            source_pr="$(python3 - "$GITHUB_EVENT_PATH" <<'PY'
+          import json,re,sys
+          event=json.load(open(sys.argv[1]))
+          body=str((event.get('pull_request') or {}).get('body') or '')
+          match=re.search(r'(?i)source research pr/branch/commit:\s*#(\d+)', body)
+          print(match.group(1) if match else '')
+          PY
+          )"
+            if [[ -n "$source_pr" ]]; then
+              gh pr view "$source_pr" --json number,headRefName,headRefOid,comments,reviews > /tmp/source-research.json
+              source_args+=(--source-research-json /tmp/source-research.json)
+            fi
+          fi
+
           python3 scripts/research_pr_policy.py \
-            --branch "$PR_BRANCH" \
-            --base-ref origin/main \
+            --event "$GITHUB_EVENT_PATH" \
             --changed-files /tmp/changed-files.txt \
-            --registry /tmp/experiment-registry-base.json \
-            --labels /tmp/pr-labels.json \
-            --output /tmp/research-policy-report.md
+            --manifest-existed-on-base "$manifest_existed" \
+            --output /tmp/research-policy-report.md \
+            "${source_args[@]}"
           cat /tmp/research-policy-report.md >> "$GITHUB_STEP_SUMMARY"
-          if [[ "$manifest_existed" != true ]] && ! grep -q '^legacy_retirement_allowed:' /tmp/research-policy-report.md; then
-            :
-          fi
 
       - name: Evaluate authorized PAPER envelope
         if: github.event_name == 'pull_request'
@@ -129,6 +155,8 @@ jobs:
 
       - name: Require PR-based main mutation for system changes
         if: github.event_name == 'pull_request'
+        env:
+          PR_BRANCH: ${{ github.head_ref }}
         run: |
           set -euo pipefail
           if grep -Eq '^(config/live_champion\.json|config/operator_directives\.json|config/project_context\.json|config/scheduler_registry\.json|scripts/|src/|include/|\.github/workflows/)' /tmp/changed-files.txt; then
