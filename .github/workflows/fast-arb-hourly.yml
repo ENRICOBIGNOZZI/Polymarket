@@ -58,13 +58,13 @@ jobs:
           duration=180
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then duration=45; fi
           ./build/polymarket_fast_arb_shadow \
-            --config config/paper_v4.json \
+            --config config/fast_arb_shadow.json \
             --policy config/fast_arb_policy.json \
             --relations config/fast_arb_relations.csv \
             --external-signals data/external_signals.csv \
             --run-dir runs/hourly-fast \
             --markets 600 \
-            --min-liquidity 100 \
+            --min-liquidity 10 \
             --shard-size 200 \
             --snapshot-refresh-seconds 20 \
             --duration-seconds "$duration" \
