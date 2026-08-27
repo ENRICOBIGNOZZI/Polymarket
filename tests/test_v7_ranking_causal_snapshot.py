@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import sys
 import time
 import unittest
+from pathlib import Path
 
-from scripts import v7_cross_sectional_rank as rank
-from scripts import v7_cross_sectional_tail_relative_causal as causal
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+import v7_cross_sectional_rank as rank
+import v7_cross_sectional_tail_relative_causal as causal
 
 
 class RankingCausalSnapshotTest(unittest.TestCase):
