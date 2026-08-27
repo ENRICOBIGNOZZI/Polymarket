@@ -22,7 +22,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -43,7 +42,18 @@ namespace ssl = asio::ssl;
 namespace json = boost::json;
 using tcp = asio::ip::tcp;
 
-std::int64_t now_ms() {
+[[nodiscard]] FeedReceiveStamp receive_stamp() noexcept {
+    FeedReceiveStamp stamp;
+    stamp.monotonic_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                             std::chrono::steady_clock::now().time_since_epoch())
+                             .count();
+    stamp.wall_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch())
+                        .count();
+    return stamp;
+}
+
+std::int64_t now_ms() noexcept {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::system_clock::now().time_since_epoch())
         .count();
@@ -58,7 +68,7 @@ struct Endpoint {
 Endpoint parse_wss_url(std::string url) {
     constexpr std::string_view scheme = "wss://";
     if (!url.starts_with(scheme)) {
-        throw std::runtime_error("fast market feed requires a wss:// URL");
+        throw std::runtime_error("V7 public market feed requires a wss:// URL");
     }
     url.erase(0, scheme.size());
     const auto slash = url.find('/');
@@ -126,6 +136,7 @@ struct MarketWebSocketFeed::Impl {
 
     Endpoint endpoint;
     std::vector<std::vector<std::string>> shards;
+    std::vector<std::string> subscriptions;
     MessageHandler on_message;
     ErrorHandler on_error;
 #if PM_USE_STD_JTHREAD
@@ -155,6 +166,8 @@ struct MarketWebSocketFeed::Impl {
             shards.emplace_back(ids.begin() + static_cast<std::ptrdiff_t>(pos),
                                 ids.begin() + static_cast<std::ptrdiff_t>(end));
         }
+        subscriptions.reserve(shards.size());
+        for (const auto& shard : shards) subscriptions.push_back(subscription(shard));
     }
 
     void report(std::size_t shard, std::string_view message) {
@@ -164,8 +177,13 @@ struct MarketWebSocketFeed::Impl {
 
     void run_worker(WorkerStopToken stop, std::size_t shard_index,
                     const std::vector<std::string>& ids) {
+        (void)ids;
         int backoff_seconds = 1;
         bool first_attempt = true;
+        // One reusable receive buffer per shard. It can grow on an exceptional
+        // large frame, but normal frames no longer allocate/copy per message.
+        beast::flat_buffer buffer;
+        buffer.reserve(256 * 1024);
         while (!stop.stop_requested()) {
             if (!first_attempt) reconnects.fetch_add(1, std::memory_order_relaxed);
             first_attempt = false;
@@ -194,10 +212,6 @@ struct MarketWebSocketFeed::Impl {
                 ws.next_layer().handshake(ssl::stream_base::client);
 
                 beast::get_lowest_layer(ws).expires_never();
-                // Quiet books are valid only while their subscription transport is
-                // demonstrably continuous. Keep-alive pings plus a short idle timeout
-                // bound silent socket failure; the error path invalidates that shard's
-                // WS lineage before reconnect.
                 websocket::stream_base::timeout timeouts{
                     std::chrono::seconds(10),
                     std::chrono::seconds(5),
@@ -206,11 +220,11 @@ struct MarketWebSocketFeed::Impl {
                 ws.set_option(timeouts);
                 ws.set_option(websocket::stream_base::decorator([](websocket::request_type& request) {
                     request.set(beast::http::field::user_agent,
-                                "polymarket-fast-arb-shadow/0.9");
+                                "polymarket-v7-common-feed/1.0");
                 }));
                 ws.handshake(endpoint.host, endpoint.target);
                 ws.text(true);
-                ws.write(asio::buffer(subscription(ids)));
+                ws.write(asio::buffer(subscriptions.at(shard_index)));
 
                 connected.fetch_add(1, std::memory_order_relaxed);
                 marked_connected = true;
@@ -227,9 +241,10 @@ struct MarketWebSocketFeed::Impl {
 #endif
 
                 while (!stop.stop_requested()) {
-                    beast::flat_buffer buffer;
+                    buffer.consume(buffer.size());
                     beast::error_code error;
                     ws.read(buffer, error);
+                    const FeedReceiveStamp stamp = receive_stamp();
                     if (error) {
                         if (!stop.stop_requested() && error == websocket::error::closed) {
                             report(shard_index, "websocket closed; reconnecting and invalidating L2 lineage");
@@ -239,17 +254,21 @@ struct MarketWebSocketFeed::Impl {
                         }
                         break;
                     }
-                    const auto received_ms = now_ms();
-                    std::string message = beast::buffers_to_string(buffer.data());
+
+                    const auto front = beast::buffers_front(buffer.data());
+                    const std::string_view message{
+                        static_cast<const char*>(front.data()), front.size()};
                     if (message != "PONG" && !message.empty()) {
                         messages.fetch_add(1, std::memory_order_relaxed);
-                        on_message(message, received_ms, shard_index);
+                        // The callback executes synchronously while `buffer` remains
+                        // valid, so no payload copy is needed on the feed hot path.
+                        on_message(message, stamp, shard_index);
                     }
-                    if (received_ms - last_text_ping >= 10000) {
+                    if (stamp.wall_ms - last_text_ping >= 10000) {
                         ws.text(true);
                         ws.write(asio::buffer(std::string_view{"PING"}), error);
                         if (error) throw beast::system_error(error);
-                        last_text_ping = received_ms;
+                        last_text_ping = stamp.wall_ms;
                     }
                 }
             } catch (const std::exception& error) {
