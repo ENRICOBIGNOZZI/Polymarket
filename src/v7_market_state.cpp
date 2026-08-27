@@ -24,9 +24,9 @@ void set_occupied(Occupancy& bits, std::int32_t index, bool occupied) noexcept {
     std::int32_t index = std::min<std::int32_t>(
         from_exclusive - 1, static_cast<std::int32_t>(kCanonicalPriceSlots - 1));
     std::size_t word = static_cast<std::size_t>(index) >> 6U;
-    unsigned bit = static_cast<unsigned>(index) & 63U;
-    std::uint64_t mask = bit == 63U ? std::numeric_limits<std::uint64_t>::max()
-                                    : ((std::uint64_t{1} << (bit + 1U)) - 1U);
+    const unsigned bit = static_cast<unsigned>(index) & 63U;
+    const std::uint64_t mask = bit == 63U ? std::numeric_limits<std::uint64_t>::max()
+                                          : ((std::uint64_t{1} << (bit + 1U)) - 1U);
     std::uint64_t value = bits[word] & mask;
     while (true) {
         if (value != 0) {
@@ -43,7 +43,7 @@ void set_occupied(Occupancy& bits, std::int32_t index, bool occupied) noexcept {
 [[nodiscard]] std::int32_t find_next(const Occupancy& bits,
                                      std::int32_t from_exclusive) noexcept {
     if (from_exclusive >= static_cast<std::int32_t>(kCanonicalPriceSlots - 1)) return 0;
-    std::int32_t index = std::max<std::int32_t>(1, from_exclusive + 1);
+    const std::int32_t index = std::max<std::int32_t>(1, from_exclusive + 1);
     std::size_t word = static_cast<std::size_t>(index) >> 6U;
     const unsigned bit = static_cast<unsigned>(index) & 63U;
     std::uint64_t value = bits[word] & (~std::uint64_t{0} << bit);
@@ -101,7 +101,7 @@ bool CanonicalL2Book::valid_level(std::int32_t price_e4,
         && price_e4 % tick_size_e4_ == 0 && quantity_microunits >= 0;
 }
 
-void CanonicalL2Book::clear() noexcept {
+void CanonicalL2Book::clear_levels() noexcept {
     bid_qty_.fill(0);
     ask_qty_.fill(0);
     bid_occupied_.fill(0);
@@ -133,17 +133,21 @@ bool CanonicalL2Book::replace_snapshot(std::span<const PriceLevelE4> bids,
         if (!valid_level(level.price_e4, level.quantity_microunits)) return false;
     }
 
-    clear();
+    clear_levels();
     for (const auto& level : bids) set_raw(Side::Buy, level.price_e4, level.quantity_microunits);
     for (const auto& level : asks) set_raw(Side::Sell, level.price_e4, level.quantity_microunits);
     best_bid_e4_ = best_bid();
     best_ask_e4_ = best_ask();
     if (best_bid_e4_ <= 0 || best_ask_e4_ <= 0 || best_bid_e4_ >= best_ask_e4_) {
-        clear();
+        clear_levels();
+        lineage_continuous_ = false;
+        exchange_event_ns_ = 0;
+        receive_monotonic_ns_ = 0;
         return false;
     }
     exchange_event_ns_ = exchange_event_ns;
     receive_monotonic_ns_ = receive_monotonic_ns;
+    lineage_continuous_ = true;
     ++state_version_;
     return true;
 }
@@ -152,7 +156,8 @@ bool CanonicalL2Book::mutate_level(Side side, std::int32_t price_e4,
                                    std::int64_t quantity_microunits,
                                    std::int64_t exchange_event_ns,
                                    std::int64_t receive_monotonic_ns) noexcept {
-    if (side == Side::None || !valid_level(price_e4, quantity_microunits)
+    if (!lineage_continuous_ || side == Side::None
+        || !valid_level(price_e4, quantity_microunits)
         || exchange_event_ns <= 0 || receive_monotonic_ns <= 0
         || (receive_monotonic_ns_ > 0 && receive_monotonic_ns < receive_monotonic_ns_)) {
         return false;
@@ -167,13 +172,20 @@ bool CanonicalL2Book::mutate_level(Side side, std::int32_t price_e4,
         if (quantity_microunits > 0 && price_e4 > best_bid_e4_) best_bid_e4_ = price_e4;
         else if (quantity_microunits == 0 && price_e4 == best_bid_e4_) best_bid_e4_ = best_bid();
     } else {
-        if (quantity_microunits > 0 && (best_ask_e4_ == 0 || price_e4 < best_ask_e4_) best_ask_e4_ = price_e4;
+        if (quantity_microunits > 0 && (best_ask_e4_ == 0 || price_e4 < best_ask_e4_)) best_ask_e4_ = price_e4;
         else if (quantity_microunits == 0 && price_e4 == best_ask_e4_) best_ask_e4_ = best_ask();
     }
     exchange_event_ns_ = exchange_event_ns;
     receive_monotonic_ns_ = receive_monotonic_ns;
     ++state_version_;
     return true;
+}
+
+void CanonicalL2Book::invalidate_lineage() noexcept {
+    lineage_continuous_ = false;
+    exchange_event_ns_ = 0;
+    receive_monotonic_ns_ = 0;
+    ++state_version_;
 }
 
 std::int32_t CanonicalL2Book::best_bid() const noexcept {
@@ -196,16 +208,18 @@ DepthSummary CanonicalL2Book::depth_summary(Side side) const noexcept {
     DepthSummary out;
     std::int64_t cumulative = 0;
     std::int32_t price = side == Side::Buy ? best_bid_e4_ : best_ask_e4_;
+    int populated = 0;
     for (int level = 1; level <= 10 && price > 0; ++level) {
         const auto quantity = quantity_at(side, price);
         cumulative += std::max<std::int64_t>(0, quantity);
+        populated = level;
         if (level == 1) out.l1_microunits = cumulative;
         if (level == 5) out.l5_microunits = cumulative;
         if (level == 10) out.l10_microunits = cumulative;
         price = side == Side::Buy ? next_bid(price) : next_ask(price);
     }
-    if (out.l5_microunits == 0) out.l5_microunits = cumulative;
-    if (out.l10_microunits == 0) out.l10_microunits = cumulative;
+    if (populated > 0 && populated < 5) out.l5_microunits = cumulative;
+    if (populated > 0 && populated < 10) out.l10_microunits = cumulative;
     return out;
 }
 
@@ -221,9 +235,11 @@ BookHotSnapshot CanonicalL2Book::hot_snapshot() const noexcept {
     out.best_ask_microunits = quantity_at(Side::Sell, best_ask_e4_);
     out.bid_depth = depth_summary(Side::Buy);
     out.ask_depth = depth_summary(Side::Sell);
+    out.lineage_continuous = static_cast<std::uint8_t>(lineage_continuous_);
     out.valid = static_cast<std::uint8_t>(
-        state_version_ > 0 && exchange_event_ns_ > 0 && receive_monotonic_ns_ > 0
-        && best_bid_e4_ > 0 && best_ask_e4_ > best_bid_e4_
+        lineage_continuous_ && state_version_ > 0 && exchange_event_ns_ > 0
+        && receive_monotonic_ns_ > 0 && best_bid_e4_ > 0
+        && best_ask_e4_ > best_bid_e4_
         && venue_tick_index(best_bid_e4_) > 0 && venue_tick_index(best_ask_e4_) > 0);
     return out;
 }
