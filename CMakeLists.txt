@@ -39,7 +39,9 @@ target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inclu
 target_link_libraries(pm_v7_common PUBLIC pm_json)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
 
-add_library(pm_v7_hft src/v7_maker_hft.cpp)
+add_library(pm_v7_hft
+  src/v7_maker_hft.cpp
+  src/v7_maker_lane.cpp)
 target_include_directories(pm_v7_hft PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(pm_v7_hft PUBLIC pm_v7_common Threads::Threads)
 target_compile_options(pm_v7_hft PRIVATE -Wall -Wextra -Wpedantic)
@@ -78,6 +80,10 @@ if(BUILD_TESTING)
   add_executable(pm_v7_maker_hft_tests tests/test_v7_maker_hft.cpp)
   target_link_libraries(pm_v7_maker_hft_tests PRIVATE pm_v7_hft)
   add_test(NAME pm_v7_maker_hft_tests COMMAND pm_v7_maker_hft_tests)
+
+  add_executable(pm_v7_maker_lane_tests tests/test_v7_maker_lane.cpp)
+  target_link_libraries(pm_v7_maker_lane_tests PRIVATE pm_v7_hft)
+  add_test(NAME pm_v7_maker_lane_tests COMMAND pm_v7_maker_lane_tests)
 
   add_test(NAME no_legacy_runtime COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_no_legacy_runtime.py)
 
