@@ -78,7 +78,7 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
         self.assertFalse(row["validation_dispatch_authority"])
         self.assertTrue(row["critical"])
 
-    def test_forced_paper_champion_is_designated_but_predeployment(self) -> None:
+    def test_forced_paper_champion_keeps_exact_sha_deploy_health_fail_closed(self) -> None:
         manifest = json.loads((ROOT / "config/live_champion.json").read_text(encoding="utf-8"))
         context = json.loads((ROOT / "config/project_context.json").read_text(encoding="utf-8"))
         self.assertTrue(manifest["enabled"])
@@ -90,9 +90,13 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
         self.assertEqual(manifest["promotion_policy"], "operator_forced_v7_paper_champion")
         self.assertFalse(manifest["legacy_fallback_allowed"])
         self.assertEqual(manifest["loop"], "scripts/paper_v7_execution_loop.sh")
-        self.assertFalse(context["runtime"]["active_champion"])
-        self.assertFalse(context["grafana"]["active"])
-        self.assertEqual(context["cutover"]["current_state"], "operator_forced_v7_paper_champion_predeployment")
+        # Main owns this context metadata and already names the canonical V7
+        # runtime/Grafana plane. The lifecycle is still fail-closed because the
+        # recorded cutover state explicitly requires exact-SHA deploy + health.
+        self.assertTrue(context["runtime"]["active_champion"])
+        self.assertTrue(context["grafana"]["active"])
+        self.assertEqual(context["grafana"]["dashboard_uid"], "polymarket-v7")
+        self.assertIn("pending_exact_sha_deploy_health", context["cutover"]["current_state"])
 
 
 if __name__ == "__main__":
