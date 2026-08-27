@@ -24,7 +24,7 @@ target_include_directories(pm_fast_arb PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/includ
 target_link_libraries(pm_fast_arb PUBLIC pm_core Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 target_compile_options(pm_fast_arb PRIVATE -Wall -Wextra -Wpedantic)
 
-add_library(pm_v7_common src/v7_oms.cpp src/v7_paper_queue.cpp)
+add_library(pm_v7_common src/v7_oms.cpp src/v7_paper_queue.cpp src/v7_market_state.cpp)
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
 
@@ -55,6 +55,10 @@ if(BUILD_TESTING)
   add_executable(pm_v7_paper_queue_tests tests/test_v7_paper_queue.cpp)
   target_link_libraries(pm_v7_paper_queue_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_paper_queue_tests COMMAND pm_v7_paper_queue_tests)
+
+  add_executable(pm_v7_market_state_tests tests/test_v7_market_state.cpp)
+  target_link_libraries(pm_v7_market_state_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_market_state_tests COMMAND pm_v7_market_state_tests)
 
   add_executable(pm_v7_maker_hft_tests tests/test_v7_maker_hft.cpp)
   target_link_libraries(pm_v7_maker_hft_tests PRIVATE pm_v7_hft)
