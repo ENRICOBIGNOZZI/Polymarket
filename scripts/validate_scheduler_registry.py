@@ -11,7 +11,7 @@ REQUIRED_IDS = {
     "administrator-supervisor", "research-policy", "research-queue", "promotion-controller",
     "integration-merge", "control-plane-event-bridge", "post-merge-validation", "code-validation",
     "monitoring-validation", "alpha-factory", "meta-supervisor", "fast-arb-shadow-research",
-    "arb-theory-research", "external-intelligence", "live-api-smoke",
+    "arb-theory-research", "external-intelligence", "live-api-smoke", "v7-live-paper-validation",
     "v7-cross-sectional-ranking-research", "v7-point-in-time-universe-archive",
     "v7-unified-paper-evidence",
 }
@@ -153,6 +153,26 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
                 errors.append(f"{sid} must accept expected_sha")
             if 'test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"' not in text:
                 errors.append(f"{sid} must verify exact checkout")
+
+    live = root / str(by_id.get("v7-live-paper-validation", {}).get("workflow", ""))
+    if live.is_file():
+        text = live.read_text(encoding="utf-8")
+        for required in (
+            "expected_sha:",
+            'workflows: ["ci", "monitoring"]',
+            "scripts/v7_cutover_contract.py",
+            "scripts/v7_execution_evidence_hardened.py",
+            'test "$(git rev-parse origin/main)" = "$VALIDATION_SHA"',
+            '-F force=false',
+        ):
+            if required not in text:
+                errors.append(f"V7 live PAPER validation missing contract: {required}")
+        for forbidden in (
+            "force=true", "git push origin main", "git push origin paper-validated", "gh pr merge",
+            "POLYMARKET_DEPLOY_REF=", "deploy-paper-server", "paper_v6", "v4-live-paper",
+        ):
+            if forbidden in text:
+                errors.append(f"V7 live PAPER validation contains forbidden authority: {forbidden}")
 
     evidence = root / str(by_id.get("v7-unified-paper-evidence", {}).get("workflow", ""))
     if evidence.is_file():
