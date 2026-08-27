@@ -56,10 +56,17 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
 
     def test_fast_path_contract_forbids_rest_on_quote_hot_path(self) -> None:
         policy = json.loads((ROOT / "config" / "v7_professional_market_maker.json").read_text(encoding="utf-8"))
-        self.assertTrue(policy["latency"]["event_driven"])
-        self.assertTrue(policy["latency"]["rest_polling_not_allowed_on_quote_fast_path"])
-        self.assertLessEqual(int(policy["latency"]["target_decision_p99_us"]), 1500)
-        self.assertLessEqual(int(policy["latency"]["target_cancel_decision_p99_us"]), 1000)
+        latency = policy["latency"]
+        self.assertTrue(latency["event_driven"])
+        self.assertTrue(latency["rest_polling_not_allowed_on_quote_fast_path"])
+        acceptance = latency["acceptance_receive_to_intent_us"]
+        stretch = latency["stretch_receive_to_intent_us"]
+        self.assertLessEqual(int(acceptance["p99"]), 1500)
+        self.assertLessEqual(int(latency["acceptance_toxicity_to_cancel_intent_p99_us"]), 1000)
+        self.assertLessEqual(int(stretch["p99"]), 500)
+        self.assertLessEqual(int(latency["stretch_toxicity_to_cancel_intent_p99_us"]), 250)
+        self.assertTrue(latency["representative_replay_required_for_claim"])
+        self.assertTrue(latency["synthetic_empty_market_benchmark_not_sufficient"])
 
     def test_current_operator_authority_is_v7_only_cleanup(self) -> None:
         directives = json.loads((ROOT / "config" / "operator_directives.json").read_text(encoding="utf-8"))
