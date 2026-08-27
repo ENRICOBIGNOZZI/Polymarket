@@ -25,7 +25,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+
+      - name: Verify exact policy revision
+        shell: bash
+        env:
+          POLICY_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$POLICY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$POLICY_SHA"
+          echo "policy_sha=$POLICY_SHA"
 
       - name: Enforce main provenance or explicit operator authority
         if: github.event_name == 'push'
@@ -57,8 +68,9 @@ jobs:
               raise SystemExit(f'unauthorized direct-main operator package: {sorted(changed)}')
           d=json.loads(Path('config/operator_directives.json').read_text())
           assert d['authority']=='latest_explicit_user_instruction'
-          assert d['architecture']['cleanup_sequence']=='delete_legacy_immediately_then_promote_only_validated_v7'
-          assert d['architecture']['operational_champion_may_be_absent'] is True
+          assert d['operator_instruction_id']=='user-v7-master-multi-agent-operating-prompt-20260827'
+          assert d['architecture']['cleanup_sequence']=='v7_implementation_then_tests_then_same_sha_paper_then_main_then_paper_validated_then_deploy_then_server_health_then_legacy_deletion'
+          assert d['paper_v7_authorization']['paper_only'] is True
           assert d['paper_v7_authorization']['authenticated_execution'] is False
           PY
           echo 'direct_operator_authority_update=true'
@@ -70,7 +82,7 @@ jobs:
           python3 scripts/validate_project_context.py --root . --output project-context-validation.md
           python3 scripts/project_context_snapshot.py --root . --manifest config/project_context.json --output-json project-context.json --output-markdown project-context.md
 
-      - name: Test current V7 and retirement policy contracts
+      - name: Test current V7 master policy contracts
         run: |
           set -euo pipefail
           python3 -m unittest \
@@ -87,35 +99,28 @@ jobs:
           set -euo pipefail
           base_sha="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["base"]["sha"])')"
           head_sha="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["sha"])')"
-          head_ref="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["ref"])')"
+          [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "$base_sha^{commit}" 2>/dev/null || git fetch --no-tags origin "$base_sha"
+          git cat-file -e "$head_sha^{commit}" 2>/dev/null || git fetch --no-tags origin "$head_sha"
           git diff --name-only "$base_sha...$head_sha" | sort -u > changed-files.txt
-
-          if [[ "$head_ref" == cleanup/* ]]; then
-            python3 - <<'PY'
-          import json
-          from pathlib import Path
-          d=json.loads(Path('config/operator_directives.json').read_text())
-          assert d['architecture']['cleanup_sequence']=='delete_legacy_immediately_then_promote_only_validated_v7'
-          assert d['architecture']['operational_champion_may_be_absent'] is True
-          assert d['paper_v7_authorization']['authenticated_execution'] is False
-          PY
-            python3 tests/test_no_legacy_runtime.py
-            echo '# Research pull-request policy' > research-policy-report.md
-            echo >> research-policy-report.md
-            echo '- policy: `pass`' >> research-policy-report.md
-            echo '- lifecycle: `operator-authorized immediate legacy retirement`' >> research-policy-report.md
-            exit 0
-          fi
-
           manifest_existed=false
           if git cat-file -e "$base_sha:config/live_champion.json" 2>/dev/null; then manifest_existed=true; fi
-          python3 scripts/hard_safety_policy.py --base-ref "$base_sha" --changed-files changed-files.txt --root . --output hard-safety-policy-report.md
-          python3 scripts/research_pr_policy.py --event "$GITHUB_EVENT_PATH" --changed-files changed-files.txt --manifest-existed-on-base "$manifest_existed" --output research-policy-report.md
+          python3 scripts/hard_safety_policy.py \
+            --base-ref "$base_sha" \
+            --changed-files changed-files.txt \
+            --root . \
+            --output hard-safety-policy-report.md
+          python3 scripts/research_pr_policy.py \
+            --event "$GITHUB_EVENT_PATH" \
+            --changed-files changed-files.txt \
+            --manifest-existed-on-base "$manifest_existed" \
+            --output research-policy-report.md
 
       - name: Write non-PR report
         if: github.event_name != 'pull_request'
         run: |
-          printf '# Research pull-request policy\n\n- event: `%s`\n- current V7/no-legacy policy validated\n' "$GITHUB_EVENT_NAME" > research-policy-report.md
+          printf '# Research pull-request policy\n\n- event: `%s`\n- current V7 master / exact-SHA policy validated\n' "$GITHUB_EVENT_NAME" > research-policy-report.md
 
       - name: Publish policy report
         if: always()
