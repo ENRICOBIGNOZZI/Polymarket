@@ -83,17 +83,27 @@ class FastDataHealthTest(unittest.TestCase):
 
     def test_hourly_shadow_does_not_depend_on_retired_runtime_config(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "fast-arb-hourly.yml").read_text()
-        self.assertIn("--config config/fast_arb_shadow.json", workflow)
-        self.assertNotIn("paper_v4.json", workflow)
-        self.assertIn("--min-liquidity 10", workflow)
+        directives = json.loads((ROOT / "config" / "operator_directives.json").read_text())
+        authority = directives["paper_v7_authorization"]
 
-        config = json.loads((ROOT / "config" / "fast_arb_shadow.json").read_text())
+        self.assertIn("--config config/fast_arb_v7_shadow.json", workflow)
+        for retired in ("paper_v4.json", "paper_v5.json", "paper_v6.json"):
+            self.assertNotIn(retired, workflow)
+        self.assertIn(f"--markets {int(authority['market_limit'])}", workflow)
+        self.assertIn(f"--min-liquidity {authority['min_liquidity']:g}", workflow)
+
+        config = json.loads((ROOT / "config" / "fast_arb_v7_shadow.json").read_text())
         self.assertEqual(config["gamma_url"], "https://gamma-api.polymarket.com")
         self.assertEqual(config["clob_url"], "https://clob.polymarket.com")
         self.assertTrue(config["scan_only"])
+        self.assertTrue(config["paper_only"])
+        self.assertFalse(config["authenticated_execution"])
         self.assertFalse(config["history_bootstrap"])
-        self.assertLessEqual(float(config["min_liquidity"]), 10.0)
-        self.assertEqual(float(config["min_volume24h"]), 0.0)
+        self.assertEqual(int(config["market_limit"]), int(authority["market_limit"]))
+        self.assertEqual(float(config["min_liquidity"]), float(authority["min_liquidity"]))
+        self.assertEqual(float(config["min_net_edge"]), float(authority["min_net_edge"]))
+        self.assertEqual(float(config["uncertainty_penalty"]), float(authority["uncertainty_penalty"]))
+        self.assertEqual(float(config["max_drawdown"]), float(authority["max_drawdown"]))
 
 
 if __name__ == "__main__":
