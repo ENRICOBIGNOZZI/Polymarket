@@ -6,19 +6,23 @@ Research-only: this does not mutate execution, allocation, risk, or operator aut
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts.v7_execution_evidence import row_has_realized_pnl, row_is_fill
 
 
 def run_audit() -> dict[str, Any]:
-    submission = {"action": "POST"}
     entry = {"action": "BUY", "net_pnl": "0", "timestamp": "1"}
     exit_row = {"action": "SELL", "net_pnl": "1.0", "timestamp": "2"}
     partial_entry = {"action": "FILL", "net_pnl": "0", "timestamp": "3"}
 
     counted_fills = sum(row_is_fill(row) for row in (entry, exit_row))
-    fill_rate_from_one_round_trip_and_one_submission = counted_fills / 1
     counted_realized = sum(row_has_realized_pnl(row) for row in (entry, exit_row, partial_entry))
 
     return {
@@ -27,7 +31,7 @@ def run_audit() -> dict[str, Any]:
         "submission_count": 1,
         "round_trip_execution_rows": 2,
         "current_counted_fills": counted_fills,
-        "current_fill_rate": fill_rate_from_one_round_trip_and_one_submission,
+        "current_fill_rate": counted_fills / 1,
         "expected_fill_opportunities_completed": 1,
         "entry_zero_pnl_counted_as_realized": row_has_realized_pnl(entry),
         "partial_zero_pnl_counted_as_realized": row_has_realized_pnl(partial_entry),
