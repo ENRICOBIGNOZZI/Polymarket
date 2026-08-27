@@ -19,8 +19,10 @@ on:
       - "scripts/arb_theory_scheduler.py"
       - "scripts/validate_fast_data_health.py"
       - "scripts/v7_fast_runtime_freshness_gate.py"
+      - "scripts/v7_fast_rest_snapshot_probe.py"
       - "tests/test_fast_*"
       - "tests/test_v7_fast_arb_leg_freshness_contract.py"
+      - "tests/test_v7_fast_rest_snapshot_probe.py"
       - "tests/test_arb_theory_scheduler.py"
       - ".github/workflows/fast-arb-hourly.yml"
       - ".github/workflows/arb-theory-hourly.yml"
@@ -53,7 +55,8 @@ jobs:
           python3 -m unittest \
             tests/test_fast_data_health.py \
             tests/test_fast_v7_current_shadow_contract.py \
-            tests/test_v7_fast_arb_leg_freshness_contract.py -v
+            tests/test_v7_fast_arb_leg_freshness_contract.py \
+            tests/test_v7_fast_rest_snapshot_probe.py -v
 
       - name: Run read-only V7 fast shadow probe
         shell: bash
@@ -74,6 +77,23 @@ jobs:
             --snapshot-refresh-seconds 5 \
             --duration-seconds "$duration" \
             --recycle-seconds 0
+
+      - name: Probe authoritative REST snapshot provenance
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/v7_fast_rest_snapshot_probe.py \
+            --markets 1000 \
+            --min-liquidity 2 \
+            --sample-markets 250 \
+            --batch-size 50 \
+            --rounds 2 \
+            --round-sleep-seconds 1 \
+            --max-age-ms 5000 \
+            --max-skew-ms 1500 \
+            --output runs/hourly-fast/v7_fast_rest_snapshot_probe.json
+          cat runs/hourly-fast/v7_fast_rest_snapshot_probe.json >> "$GITHUB_STEP_SUMMARY"
 
       - name: Produce cost-stressed research evidence
         if: always()
