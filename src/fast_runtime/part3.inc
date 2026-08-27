@@ -19,6 +19,9 @@ private:
     std::unordered_map<std::string, pm::fast::Opportunity> latest_;
     std::unordered_map<std::string, std::string> signatures_;
     std::unordered_map<std::string, std::int64_t> last_log_ms_;
+    std::unordered_map<std::string, std::int64_t> book_exchange_ts_ms_;
+    std::unordered_map<std::string, std::int64_t> book_received_ts_ms_;
+    std::unordered_set<std::string> ws_snapshot_ready_;
     std::deque<double> feed_latency_ms_;
     std::deque<double> decision_latency_us_;
     std::ofstream opportunity_log_;
@@ -32,6 +35,19 @@ private:
     std::uint64_t evaluations_ = 0;
     std::uint64_t executable_observations_ = 0;
     std::uint64_t hard_executable_observations_ = 0;
+    std::uint64_t freshness_missing_rejections_ = 0;
+    std::uint64_t freshness_age_rejections_ = 0;
+    std::uint64_t freshness_skew_rejections_ = 0;
+
+    // Fast structural evidence is fail-closed unless every required L2 leg has
+    // a recent full-WS-snapshot lineage and the legs are event-time aligned.
+    static constexpr std::int64_t kMaxBookAgeMs = 5000;
+    static constexpr std::int64_t kMaxBookSkewMs = 1500;
+
+    struct FreshnessWindow {
+        std::int64_t exchange_ms = 0;
+        std::int64_t received_ms = 0;
+    };
 
     static std::string opportunity_header() {
         return "observed_ts_ms,kind,id,event_id,hard_arbitrage,executable,risk_class,"
@@ -166,9 +182,96 @@ private:
         return levels;
     }
 
+    void mark_l2_clock_locked(const std::string& token, std::int64_t exchange_ms,
+                              std::int64_t received_ms) {
+        book_received_ts_ms_[token] = received_ms;
+        if (exchange_ms > 0) {
+            book_exchange_ts_ms_[token] = exchange_ms;
+        } else {
+            book_exchange_ts_ms_.erase(token);
+        }
+    }
+
+    std::optional<FreshnessWindow> freshness_window_locked(
+        const std::vector<std::string>& required_tokens, std::int64_t decision_ms,
+        bool count_rejection = true) {
+        std::unordered_set<std::string> unique;
+        bool first = true;
+        std::int64_t min_exchange = 0;
+        std::int64_t max_exchange = 0;
+        std::int64_t min_received = 0;
+        std::int64_t max_received = 0;
+
+        auto reject_missing = [&]() -> std::optional<FreshnessWindow> {
+            if (count_rejection) ++freshness_missing_rejections_;
+            return std::nullopt;
+        };
+        auto reject_age = [&]() -> std::optional<FreshnessWindow> {
+            if (count_rejection) ++freshness_age_rejections_;
+            return std::nullopt;
+        };
+        auto reject_skew = [&]() -> std::optional<FreshnessWindow> {
+            if (count_rejection) ++freshness_skew_rejections_;
+            return std::nullopt;
+        };
+
+        for (const auto& token : required_tokens) {
+            if (token.empty() || !unique.insert(token).second) continue;
+            if (!ws_snapshot_ready_.count(token)) return reject_missing();
+            const auto exchange = book_exchange_ts_ms_.find(token);
+            const auto received = book_received_ts_ms_.find(token);
+            if (exchange == book_exchange_ts_ms_.end() ||
+                received == book_received_ts_ms_.end() || exchange->second <= 0 ||
+                received->second <= 0) {
+                return reject_missing();
+            }
+            if (decision_ms + kMaxBookSkewMs < received->second ||
+                exchange->second > received->second + kMaxBookSkewMs) {
+                return reject_skew();
+            }
+            const auto age = decision_ms - exchange->second;
+            if (age > kMaxBookAgeMs || age < -kMaxBookSkewMs) return reject_age();
+
+            if (first) {
+                min_exchange = max_exchange = exchange->second;
+                min_received = max_received = received->second;
+                first = false;
+            } else {
+                min_exchange = std::min(min_exchange, exchange->second);
+                max_exchange = std::max(max_exchange, exchange->second);
+                min_received = std::min(min_received, received->second);
+                max_received = std::max(max_received, received->second);
+            }
+        }
+        if (first) return reject_missing();
+        if (max_exchange - min_exchange > kMaxBookSkewMs ||
+            max_received - min_received > kMaxBookSkewMs) {
+            return reject_skew();
+        }
+        // Conservative opportunity clocks: oldest exchange leg and latest local
+        // receipt. This cannot make a mixed-leg basket look fresher than it was.
+        return FreshnessWindow{min_exchange, max_received};
+    }
+
+    std::vector<std::string> opportunity_required_tokens_locked(
+        const pm::fast::Opportunity& opportunity) const {
+        std::vector<std::string> required;
+        for (const auto& leg : opportunity.legs) {
+            const auto market = markets_.find(leg.market_id);
+            if (market != markets_.end()) {
+                required.push_back(market->second.yes_token);
+                required.push_back(market->second.no_token);
+            } else if (!leg.token_id.empty()) {
+                required.push_back(leg.token_id);
+            }
+        }
+        return required;
+    }
+
     void apply_event_locked(const json::object& event,
                             std::unordered_set<std::string>& affected,
-                            std::int64_t& exchange_ms) {
+                            std::int64_t& exchange_ms,
+                            std::int64_t received_ms) {
         std::string type = get_text(event, "event_type");
         if (type.empty()) type = get_text(event, "type");
         const auto timestamp = normalize_timestamp_ms(get_integer(event, "timestamp", 0));
@@ -186,6 +289,8 @@ private:
             book.min_order_size = get_number(event, "min_order_size", book.min_order_size);
             book.last_trade = get_number(event, "last_trade_price", book.last_trade);
             books_[token] = std::move(book);
+            ws_snapshot_ready_.insert(token);
+            mark_l2_clock_locked(token, timestamp, received_ms);
             affected.insert(token_to_market_.at(token));
             return;
         }
@@ -203,6 +308,12 @@ private:
                 const auto side = get_text(change, "side");
                 pm::fast::apply_level(book, side == "BUY", get_number(change, "price", -1.0),
                                       get_number(change, "size", 0.0));
+                // A delta is trustworthy only after this subscription has seen a
+                // complete WS book. REST seed + delta is not enough to establish
+                // a gap-free L2 lineage.
+                if (ws_snapshot_ready_.count(token)) {
+                    mark_l2_clock_locked(token, timestamp, received_ms);
+                }
                 affected.insert(token_to_market_.at(token));
             }
             return;
@@ -225,31 +336,35 @@ private:
         }
     }
 
-    void evaluate_single_locked(const pm::Market& market, std::int64_t exchange_ms,
-                                std::int64_t received_ms) {
+    void evaluate_single_locked(const pm::Market& market) {
         const auto yes = books_.find(market.yes_token);
         const auto no = books_.find(market.no_token);
         if (yes == books_.end() || no == books_.end()) return;
         const auto fee_it = fees_.find(market.condition_id);
         const auto decision = now_ms();
+        const auto clocks = freshness_window_locked(
+            {market.yes_token, market.no_token}, decision);
+        if (!clocks.has_value()) return;
         if (fee_it != fees_.end()) {
             record_locked(pm::fast::evaluate_binary(
-                market, yes->second, no->second, fee_it->second, policy_, exchange_ms, received_ms, decision));
+                market, yes->second, no->second, fee_it->second, policy_, clocks->exchange_ms,
+                clocks->received_ms, decision));
         }
         record_locked(pm::fast::evaluate_maker_complete_set(
-            market, yes->second, no->second, policy_, exchange_ms, received_ms, decision));
+            market, yes->second, no->second, policy_, clocks->exchange_ms,
+            clocks->received_ms, decision));
         if (const auto external_it = external_.find(market.id);
             external_it != external_.end() && fee_it != fees_.end()) {
             record_locked(pm::fast::evaluate_external_latency(
-                market, yes->second, no->second, fee_it->second, external_it->second, decision, policy_,
-                exchange_ms, received_ms, decision));
+                market, yes->second, no->second, fee_it->second, external_it->second, decision,
+                policy_, clocks->exchange_ms, clocks->received_ms, decision));
         }
     }
 
-    void evaluate_event_locked(const std::string& event_id, std::int64_t exchange_ms,
-                               std::int64_t received_ms) {
+    void evaluate_event_locked(const std::string& event_id) {
         if (!safe_negrisk_events_.count(event_id)) return;
         std::vector<const pm::Market*> members;
+        std::vector<std::string> required_tokens;
         const auto group = event_members_.find(event_id);
         if (group == event_members_.end()) return;
         for (const auto& id : group->second) {
@@ -257,20 +372,24 @@ private:
             if (member != markets_.end()) {
                 if (!fees_.count(member->second.condition_id)) return;
                 members.push_back(&member->second);
+                required_tokens.push_back(member->second.yes_token);
+                required_tokens.push_back(member->second.no_token);
             }
         }
         const auto decision = now_ms();
+        const auto clocks = freshness_window_locked(required_tokens, decision);
+        if (!clocks.has_value()) return;
         record_locked(pm::fast::evaluate_negrisk_complete_set(
-            event_id, members, books_, fees_, policy_, exchange_ms, received_ms, decision));
+            event_id, members, books_, fees_, policy_, clocks->exchange_ms,
+            clocks->received_ms, decision));
         for (const auto* source : members) {
             record_locked(pm::fast::evaluate_negrisk_conversion(
-                event_id, *source, members, books_, fees_, policy_, exchange_ms,
-                received_ms, decision));
+                event_id, *source, members, books_, fees_, policy_, clocks->exchange_ms,
+                clocks->received_ms, decision));
         }
     }
 
-    void evaluate_relation_locked(std::size_t index, std::int64_t exchange_ms,
-                                  std::int64_t received_ms) {
+    void evaluate_relation_locked(std::size_t index) {
         const auto& spec = active_relations_.at(index);
         const auto& relation = spec.relation;
         const auto left = markets_.find(relation.antecedent_market_id);
@@ -278,40 +397,44 @@ private:
         if (left == markets_.end() || right == markets_.end()) return;
         if (!fees_.count(left->second.condition_id) || !fees_.count(right->second.condition_id)) return;
         const auto decision = now_ms();
+        const auto clocks = freshness_window_locked(
+            {left->second.yes_token, left->second.no_token, right->second.yes_token,
+             right->second.no_token},
+            decision);
+        if (!clocks.has_value()) return;
         if (spec.type == RelationType::Implication) {
             record_locked(pm::fast::evaluate_implication(
-                relation, left->second, right->second, books_, fees_, policy_, exchange_ms,
-                received_ms, decision));
+                relation, left->second, right->second, books_, fees_, policy_,
+                clocks->exchange_ms, clocks->received_ms, decision));
         } else if (spec.type == RelationType::MutualExclusion) {
             record_locked(pm::fast::evaluate_mutual_exclusion(
-                relation, left->second, right->second, books_, fees_, policy_, exchange_ms,
-                received_ms, decision));
+                relation, left->second, right->second, books_, fees_, policy_,
+                clocks->exchange_ms, clocks->received_ms, decision));
         } else {
             record_locked(pm::fast::evaluate_exhaustive_pair(
-                relation, left->second, right->second, books_, fees_, policy_, exchange_ms,
-                received_ms, decision));
+                relation, left->second, right->second, books_, fees_, policy_,
+                clocks->exchange_ms, clocks->received_ms, decision));
         }
     }
 
-    void evaluate_all_locked(std::int64_t exchange_ms, std::int64_t received_ms) {
+    void evaluate_all_locked() {
         for (const auto& [market_id, market] : markets_) {
             (void)market_id;
-            evaluate_single_locked(market, exchange_ms, received_ms);
+            evaluate_single_locked(market);
         }
         for (const auto& event_id : safe_negrisk_events_) {
-            evaluate_event_locked(event_id, exchange_ms, received_ms);
+            evaluate_event_locked(event_id);
         }
         for (std::size_t i = 0; i < active_relations_.size(); ++i) {
-            evaluate_relation_locked(i, exchange_ms, received_ms);
+            evaluate_relation_locked(i);
         }
     }
 
-    void evaluate_market_locked(const std::string& market_id, std::int64_t exchange_ms,
-                                std::int64_t received_ms) {
+    void evaluate_market_locked(const std::string& market_id) {
         const auto market_it = markets_.find(market_id);
         if (market_it == markets_.end()) return;
-        evaluate_single_locked(market_it->second, exchange_ms, received_ms);
-        evaluate_event_locked(market_it->second.event_id, exchange_ms, received_ms);
+        evaluate_single_locked(market_it->second);
+        evaluate_event_locked(market_it->second.event_id);
 
         std::unordered_set<std::size_t> relation_indices;
         if (const auto it = relations_by_market_.find(market_id);
@@ -319,7 +442,7 @@ private:
             relation_indices.insert(it->second.begin(), it->second.end());
         }
         for (const auto index : relation_indices) {
-            evaluate_relation_locked(index, exchange_ms, received_ms);
+            evaluate_relation_locked(index);
         }
     }
 
