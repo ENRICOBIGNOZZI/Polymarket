@@ -5,6 +5,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from scripts.integration_base_gate import validate_base
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
@@ -51,6 +53,69 @@ class ModelGovernanceContractTest(unittest.TestCase):
             if "git push origin HEAD:main" in text or "git push origin main" in text:
                 offenders.append(path.name)
         self.assertEqual(offenders, [], f"direct main mutation workflows: {offenders}")
+
+    def test_integration_base_allows_explicit_no_champion_cutover_divergence(self) -> None:
+        champion = {
+            "enabled": False,
+            "version": None,
+            "loop": None,
+            "config": None,
+            "run_root": None,
+            "paper_only": True,
+            "authenticated_execution": False,
+        }
+        directives = {"architecture": {"operational_champion_may_be_absent": True}}
+        mode = validate_base(
+            main_sha="b" * 40,
+            validated_sha="a" * 40,
+            checkout_sha="b" * 40,
+            validated_is_ancestor=True,
+            champion=champion,
+            directives=directives,
+        )
+        self.assertEqual(mode, "v7_no_champion_cutover")
+
+    def test_integration_base_requires_validated_incumbent_when_champion_enabled(self) -> None:
+        champion = {
+            "enabled": True,
+            "version": 7,
+            "loop": "scripts/paper_v7_loop.sh",
+            "config": "config/paper_v7.json",
+            "run_root": "runs/v7",
+            "paper_only": True,
+            "authenticated_execution": False,
+        }
+        directives = {"architecture": {"operational_champion_may_be_absent": True}}
+        with self.assertRaisesRegex(ValueError, "main == paper-validated"):
+            validate_base(
+                main_sha="b" * 40,
+                validated_sha="a" * 40,
+                checkout_sha="b" * 40,
+                validated_is_ancestor=True,
+                champion=champion,
+                directives=directives,
+            )
+
+    def test_integration_base_rejects_nonancestor_paper_validated_ref(self) -> None:
+        champion = {
+            "enabled": False,
+            "version": None,
+            "loop": None,
+            "config": None,
+            "run_root": None,
+            "paper_only": True,
+            "authenticated_execution": False,
+        }
+        directives = {"architecture": {"operational_champion_may_be_absent": True}}
+        with self.assertRaisesRegex(ValueError, "not an ancestor"):
+            validate_base(
+                main_sha="b" * 40,
+                validated_sha="a" * 40,
+                checkout_sha="b" * 40,
+                validated_is_ancestor=False,
+                champion=champion,
+                directives=directives,
+            )
 
 
 if __name__ == "__main__":

@@ -25,16 +25,23 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Require current main to be publicly paper-validated
+      - name: Require safe current V7 integration base
         shell: bash
         run: |
           set -euo pipefail
           git fetch --no-tags origin main paper-validated
           main_sha="$(git rev-parse origin/main)"
           validated_sha="$(git rev-parse origin/paper-validated)"
-          test "$main_sha" = "$validated_sha"
-          test "$(git rev-parse HEAD)" = "$main_sha"
-          echo "validated_base_sha=$main_sha"
+          checkout_sha="$(git rev-parse HEAD)"
+          validated_is_ancestor=false
+          if git merge-base --is-ancestor "$validated_sha" "$main_sha"; then
+            validated_is_ancestor=true
+          fi
+          python3 scripts/integration_base_gate.py \
+            --main-sha "$main_sha" \
+            --validated-sha "$validated_sha" \
+            --checkout-sha "$checkout_sha" \
+            --validated-is-ancestor "$validated_is_ancestor"
 
       - name: Select exactly one controller-authorized integration
         shell: bash
@@ -86,10 +93,6 @@ jobs:
           base_sha="$(python3 -c 'import json; print(json.load(open("integration-merge/candidate.json"))["baseRefOid"])')"
           test "$base_sha" = "$current_main" || { echo "Authorized PR base $base_sha is stale versus main $current_main; wait for fresh checks." >&2; exit 1; }
 
-          # Re-run the trusted research lifecycle gate immediately before merge.
-          # Candidate status checks can become stale when source comments/reviews
-          # change, so the unique merge authority must independently re-fetch
-          # trusted governance evidence and re-bind the cited branch/head.
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${source_number}" \
             > integration-merge/source-pr.json
           gh api --paginate --slurp \
