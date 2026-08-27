@@ -10,16 +10,8 @@
   "economic_stagnation_seconds": 7200,
   "max_alpha_report_age_seconds": 10800,
   "owner_workflows": {
-    "forward-maker-research.yml": {
-      "workflow_name": "forward-maker-alpha-research",
-      "priority_bias": 0
-    },
     "external-intelligence.yml": {
       "workflow_name": "Polymarket External Intelligence",
-      "priority_bias": 0
-    },
-    "v6-research-smoke.yml": {
-      "workflow_name": "V6 live-data research smoke",
       "priority_bias": 0
     },
     "fast-arb-hourly.yml": {
@@ -29,22 +21,30 @@
     "arb-theory-hourly.yml": {
       "workflow_name": "Arbitrage Theory Hourly Research",
       "priority_bias": 1
+    },
+    "v7-cross-sectional-ranking-research.yml": {
+      "workflow_name": "V7 cross-sectional relative tail research",
+      "priority_bias": 1
     }
   },
-  "owner_remap": {
-    "alpha-factory.yml": "v6-research-smoke.yml"
-  },
+  "owner_remap": {},
   "experiment_prefix_owner": {
     "external_": "external-intelligence.yml",
-    "b2_": "v6-research-smoke.yml",
     "fast_arb_": "fast-arb-hourly.yml",
-    "arb_theory_": "arb-theory-hourly.yml"
+    "arb_theory_": "arb-theory-hourly.yml",
+    "cross_sectional_": "v7-cross-sectional-ranking-research.yml",
+    "ranking_": "v7-cross-sectional-ranking-research.yml"
   },
   "forbidden_workflows": [
     "integration-merge.yml",
-    "deploy-paper-server.yml",
-    "server-health.yml",
     "promotion-controller.yml",
-    "post-merge-validation.yml"
+    "control-plane-event-bridge.yml",
+    "post-merge-validation.yml",
+    "v7-live-paper-validation.yml",
+    "v7-deploy-paper-server.yml",
+    "v7-paper-server-health.yml",
+    "v7-unified-paper-evidence.yml",
+    "deploy-paper-server.yml",
+    "server-health.yml"
   ]
 }

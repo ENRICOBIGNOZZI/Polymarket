@@ -43,7 +43,9 @@ jobs:
           python3 -m json.tool config/research_director.json >/dev/null
           python3 - <<'PY'
           import json
+          import re
           from pathlib import Path
+
           cfg=json.loads(Path('config/research_director.json').read_text())
           assert cfg['paper_only'] is True
           assert cfg['allow_authenticated_execution'] is False
@@ -51,8 +53,24 @@ jobs:
           forbidden=set(cfg['forbidden_workflows'])
           owners=set(cfg['owner_workflows'])
           assert not owners & forbidden
-          assert 'deploy-paper-server.yml' not in owners
-          assert 'integration-merge.yml' not in owners
+          retired={
+              'forward-maker-research.yml',
+              'v4-live-smoke.yml',
+              'v6-research-smoke.yml',
+              'deploy-paper-server.yml',
+              'server-health.yml',
+          }
+          assert not owners & retired
+          workflow_dir=Path('.github/workflows')
+          for workflow in sorted(owners):
+              path=workflow_dir / workflow
+              if not path.is_file():
+                  raise SystemExit(f'research-director contract error: missing owner workflow {workflow}')
+              text=path.read_text(encoding='utf-8')
+              if not re.search(r'(?m)^  workflow_dispatch:\s*$', text):
+                  raise SystemExit(
+                      f'research-director contract error: owner workflow lacks workflow_dispatch: {workflow}'
+                  )
           PY
 
       - name: Materialize durable research evidence
@@ -116,18 +134,39 @@ jobs:
           : > research-director/output/dispatch-results.txt
           while IFS= read -r workflow; do
             [[ -n "$workflow" ]] || continue
-            case "$workflow" in
-              forward-maker-research.yml|external-intelligence.yml|v6-research-smoke.yml|fast-arb-hourly.yml|arb-theory-hourly.yml)
-                gh workflow run "$workflow" --ref main
-                printf 'dispatched=%s ref=main\n' "$workflow" | tee -a research-director/output/dispatch-results.txt
-                ;;
-              *)
-                printf 'forbidden_research_dispatch=%s\n' "$workflow" >&2
-                exit 1
-                ;;
-            esac
+            python3 - "$workflow" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          workflow=sys.argv[1]
+          cfg=json.loads(Path('config/research_director.json').read_text(encoding='utf-8'))
+          owners=set(cfg.get('owner_workflows') or {})
+          forbidden=set(cfg.get('forbidden_workflows') or [])
+          if workflow not in owners:
+              raise SystemExit(
+                  f'research-director dispatch contract error: workflow is not an allowed owner: {workflow}'
+              )
+          if workflow in forbidden:
+              raise SystemExit(
+                  f'research-director dispatch contract error: forbidden authority selected: {workflow}'
+              )
+          path=Path('.github/workflows') / workflow
+          if not path.is_file():
+              raise SystemExit(
+                  f'research-director dispatch contract error: owner workflow is missing: {workflow}'
+              )
+          text=path.read_text(encoding='utf-8')
+          if not re.search(r'(?m)^  workflow_dispatch:\s*$', text):
+              raise SystemExit(
+                  f'research-director dispatch contract error: owner workflow lacks workflow_dispatch: {workflow}'
+              )
+          PY
+            gh workflow run "$workflow" --ref main
+            printf 'dispatched=%s ref=main\n' "$workflow" | tee -a research-director/output/dispatch-results.txt
           done < research-director/output/dispatch-plan.txt
-          if grep -Eq 'integration-merge|deploy-paper-server|server-health|promotion-controller|post-merge-validation' research-director/output/dispatch-results.txt; then
+          if grep -Eq 'integration-merge|promotion-controller|control-plane-event-bridge|post-merge-validation|v7-live-paper-validation|v7-deploy-paper-server|v7-paper-server-health|v7-unified-paper-evidence|deploy-paper-server|server-health' research-director/output/dispatch-results.txt; then
             echo 'non-research authority escaped the Research Director allowlist' >&2
             exit 1
           fi
