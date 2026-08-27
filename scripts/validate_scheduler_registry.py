@@ -19,6 +19,12 @@ NON_SCHEDULER_WORKFLOWS = {
     ".github/workflows/private-runtime-single-writer-validation.yml",
     ".github/workflows/operator-authority-gate.yml",
 }
+V7_EVIDENCE_REQUIRED_WORKFLOWS = {
+    "ci",
+    "Polymarket Research Policy",
+    "monitoring",
+    "Private runtime single-writer validation",
+}
 
 
 def job_ids(path: Path) -> list[str]:
@@ -193,12 +199,40 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             if forbidden in text: errors.append(f"V7 server-health workflow contains forbidden authority: {forbidden}")
 
     evidence = root / str(by_id.get("v7-unified-paper-evidence", {}).get("workflow", ""))
+    evidence_cfg_path = root / "config/v7_evidence_runtime.json"
     if evidence.is_file():
         text = evidence.read_text(encoding="utf-8")
-        for required in ("config/v7_evidence_runtime.json", "by-sha", "Private runtime single-writer validation", "contents: read"):
-            if required not in text: errors.append(f"V7 evidence runtime missing contract: {required}")
+        for required in (
+            "config/v7_evidence_runtime.json",
+            "by-sha",
+            "contents: read",
+            "required_successful_workflows",
+            "missing_or_not_green",
+            "head_sha",
+        ):
+            if required not in text:
+                errors.append(f"V7 evidence runtime missing workflow contract: {required}")
         for forbidden in ("contents: write", "git push origin paper-validated", "POLYMARKET_DEPLOY_REF="):
-            if forbidden in text: errors.append(f"V7 evidence runtime contains forbidden authority: {forbidden}")
+            if forbidden in text:
+                errors.append(f"V7 evidence runtime contains forbidden authority: {forbidden}")
+    if not evidence_cfg_path.is_file():
+        errors.append("V7 evidence runtime config is missing")
+    else:
+        evidence_cfg = load(evidence_cfg_path)
+        observed = evidence_cfg.get("required_successful_workflows")
+        observed_names = {str(name) for name in observed} if isinstance(observed, list) else set()
+        missing_names = sorted(V7_EVIDENCE_REQUIRED_WORKFLOWS.difference(observed_names))
+        if missing_names:
+            errors.append("V7 evidence runtime required_successful_workflows missing: " + ", ".join(missing_names))
+        source_selection = evidence_cfg.get("source_selection") if isinstance(evidence_cfg.get("source_selection"), dict) else {}
+        if source_selection.get("mode") != "single_open_canonical_integration_pr":
+            errors.append("V7 evidence runtime must select a single open canonical integration PR")
+        if source_selection.get("base_branch") != "main" or source_selection.get("head_prefix") != "integration/v7-":
+            errors.append("V7 evidence runtime source selection must remain main <- integration/v7-*")
+        if source_selection.get("require_current_main_ancestor") is not True:
+            errors.append("V7 evidence runtime must require current main as candidate ancestor")
+        if evidence_cfg.get("state_partition") != "source_head_sha" or evidence_cfg.get("restart_on_source_head_change") is not True:
+            errors.append("V7 evidence runtime must partition/restart by exact source head SHA")
 
     return errors, items
 
