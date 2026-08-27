@@ -148,24 +148,31 @@ public:
     }
 
     void resync_books() {
-        const auto fresh = api_.fetch_books(tokens_);
+        const auto fresh = fetch_timestamped_rest_books();
         const auto observed_ms = now_ms();
         std::scoped_lock lock(mutex_);
-        for (const auto& [token, book] : fresh) {
-            // REST is useful for seeding/recovery, but its Book contract carries no
-            // exchange timestamp. Never overwrite a currently fresh WS snapshot
-            // with an un-timestamped REST image. A stale/missing token is replaced
-            // but remains ineligible until a full timestamped WS book arrives.
+        for (const auto& [token, snapshot] : fresh) {
+            // A currently fresh full WS book has stronger gap-free lineage, so a REST
+            // poll must not overwrite it. Otherwise /books is accepted only as a
+            // timestamped point-in-time rebase; its timestamp/hash do not authorize
+            // subsequent WS deltas without another full WS book event.
             const auto received = book_received_ts_ms_.find(token);
             const bool fresh_ws = ws_snapshot_ready_.count(token) &&
                                   received != book_received_ts_ms_.end() &&
                                   received->second > 0 && observed_ms >= received->second &&
                                   observed_ms - received->second <= kMaxBookAgeMs;
             if (fresh_ws) continue;
-            books_[token] = book;
+            books_[token] = snapshot.book;
             ws_snapshot_ready_.erase(token);
-            book_exchange_ts_ms_.erase(token);
-            book_received_ts_ms_.erase(token);
+            if (snapshot.exchange_ms > 0 && snapshot.received_ms > 0 &&
+                !snapshot.hash.empty()) {
+                rest_snapshot_ready_.insert(token);
+                mark_l2_clock_locked(token, snapshot.exchange_ms, snapshot.received_ms);
+            } else {
+                rest_snapshot_ready_.erase(token);
+                book_exchange_ts_ms_.erase(token);
+                book_received_ts_ms_.erase(token);
+            }
         }
         ++rest_resyncs_;
     }
@@ -181,9 +188,9 @@ public:
     }
 
     void append_feed_error(std::size_t shard, std::string_view message) {
-        // Any transport failure/reconnect breaks gap-free L2 lineage for the
-        // affected subscription shard. The next delta must not reuse the prior
-        // snapshot; eligibility resumes only after a new full WS book arrives.
+        // Any transport failure/reconnect breaks gap-free WS L2 lineage for the
+        // affected subscription shard. An independent REST point-in-time snapshot
+        // may remain usable until its own exchange-age bound expires.
         {
             std::scoped_lock lock(mutex_);
             const std::size_t begin = shard * options_.shard_size;
@@ -191,8 +198,10 @@ public:
             for (std::size_t i = begin; i < end; ++i) {
                 const auto& token = tokens_[i];
                 ws_snapshot_ready_.erase(token);
-                book_exchange_ts_ms_.erase(token);
-                book_received_ts_ms_.erase(token);
+                if (!rest_snapshot_ready_.count(token)) {
+                    book_exchange_ts_ms_.erase(token);
+                    book_received_ts_ms_.erase(token);
+                }
             }
         }
         append_error("websocket_shard_" + std::to_string(shard), std::string(message));
@@ -212,6 +221,8 @@ public:
         std::uint64_t freshness_skew = 0;
         std::size_t external_count = 0;
         std::size_t ws_snapshot_tokens = 0;
+        std::size_t rest_snapshot_tokens = 0;
+        std::size_t freshness_ready_tokens = 0;
         std::int64_t last_message = 0;
         const auto snapshot_ms = now_ms();
         {
@@ -242,6 +253,8 @@ public:
             freshness_skew = freshness_skew_rejections_;
             external_count = external_.size();
             ws_snapshot_tokens = ws_snapshot_ready_.size();
+            rest_snapshot_tokens = rest_snapshot_ready_.size();
+            freshness_ready_tokens = ws_snapshot_tokens + rest_snapshot_tokens;
             last_message = last_message_ms_;
             opportunity_log_.flush();
             latency_log_.flush();
@@ -297,6 +310,8 @@ public:
             {"book_updates", static_cast<std::int64_t>(updates)},
             {"rest_resyncs", static_cast<std::int64_t>(rest_resyncs)},
             {"ws_snapshot_ready_tokens", static_cast<std::int64_t>(ws_snapshot_tokens)},
+            {"rest_point_in_time_ready_tokens", static_cast<std::int64_t>(rest_snapshot_tokens)},
+            {"freshness_ready_tokens", static_cast<std::int64_t>(freshness_ready_tokens)},
             {"book_freshness_max_age_ms", kMaxBookAgeMs},
             {"book_freshness_max_skew_ms", kMaxBookSkewMs},
             {"freshness_missing_rejections", static_cast<std::int64_t>(freshness_missing)},
