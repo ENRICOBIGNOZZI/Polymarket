@@ -86,22 +86,24 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
         self.assertTrue(result["dispatch_needed"])
 
     def test_expected_deploy_timer_skip_does_not_mask_real_failure(self) -> None:
+        config = json.loads(json.dumps(self.config))
+        config["coordination"]["workflows"]["v7-deploy-paper-server.yml"]["ignore_scheduled_skips"] = True
         runs = [
             run
             for run in self.healthy_runs()
-            if run["workflowName"] != "deploy-paper-server"
+            if run["workflowName"] != "V7 deploy PAPER server"
         ]
         runs.extend(
             [
                 self.workflow_run(
-                    "deploy-paper-server",
+                    "V7 deploy PAPER server",
                     age=120,
                     conclusion="failure",
                     run_id=90,
                     event="workflow_run",
                 ),
                 self.workflow_run(
-                    "deploy-paper-server",
+                    "V7 deploy PAPER server",
                     age=30,
                     conclusion="skipped",
                     run_id=91,
@@ -111,8 +113,8 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
         )
         snapshot = self.healthy_snapshot()
         snapshot["runs"] = runs
-        report = module.build_report(self.config, snapshot, self.now)
-        deploy = report["workflow_status"]["deploy-paper-server.yml"]
+        report = module.build_report(config, snapshot, self.now)
+        deploy = report["workflow_status"]["v7-deploy-paper-server.yml"]
         self.assertEqual(deploy["state"], "failure_cooldown", deploy)
         self.assertEqual(deploy["latest_run"]["database_id"], 90)
         self.assertIn("failure", deploy["reason"])
@@ -120,14 +122,16 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
         self.assertEqual(report["status"], "DEGRADED")
 
     def test_expected_deploy_timer_skip_without_prior_evidence_is_missing(self) -> None:
+        config = json.loads(json.dumps(self.config))
+        config["coordination"]["workflows"]["v7-deploy-paper-server.yml"]["ignore_scheduled_skips"] = True
         runs = [
             run
             for run in self.healthy_runs()
-            if run["workflowName"] != "deploy-paper-server"
+            if run["workflowName"] != "V7 deploy PAPER server"
         ]
         runs.append(
             self.workflow_run(
-                "deploy-paper-server",
+                "V7 deploy PAPER server",
                 age=30,
                 conclusion="skipped",
                 run_id=91,
@@ -136,8 +140,8 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
         )
         snapshot = self.healthy_snapshot()
         snapshot["runs"] = runs
-        report = module.build_report(self.config, snapshot, self.now)
-        deploy = report["workflow_status"]["deploy-paper-server.yml"]
+        report = module.build_report(config, snapshot, self.now)
+        deploy = report["workflow_status"]["v7-deploy-paper-server.yml"]
         self.assertEqual(deploy["state"], "missing", deploy)
         self.assertIsNone(deploy["latest_run"])
         self.assertEqual(report["invariants"]["expected_scheduled_skips_ignored"], 1)
@@ -286,7 +290,7 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
     def test_private_health_failure_cooldown_is_critical_and_degraded(self) -> None:
         runs = self.healthy_runs()
         for run in runs:
-            if run["workflowName"] == "paper-server-health":
+            if run["workflowName"] == "V7 PAPER server health":
                 run["conclusion"] = "failure"
                 run["updatedAt"] = self.now - 60
         snapshot = {
@@ -298,7 +302,7 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
             "products": {"autonomous_research": self.healthy_product()},
         }
         report = module.build_report(self.config, snapshot, self.now)
-        state = report["workflow_status"]["server-health.yml"]
+        state = report["workflow_status"]["v7-paper-server-health.yml"]
         self.assertEqual(state["state"], "failure_cooldown")
         self.assertEqual(report["status"], "DEGRADED")
         self.assertFalse(report["invariants"]["failure_cooldown_is_health_evidence"])
@@ -309,7 +313,7 @@ class AutonomousMetaSupervisorTests(unittest.TestCase):
         self.assertTrue(alerts, report["alerts"])
         self.assertTrue(any(alert.get("severity") == "critical" for alert in alerts))
         self.assertNotIn(
-            "server-health.yml",
+            "v7-paper-server-health.yml",
             [item["workflow_file"] for item in report["dispatch_plan"]],
         )
 
