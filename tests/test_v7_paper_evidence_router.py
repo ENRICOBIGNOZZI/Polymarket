@@ -38,13 +38,16 @@ class EvidenceCandidateContractTest(unittest.TestCase):
             "authenticated_execution": False,
             "candidate_contract": {
                 "require_enabled_v7_champion": True,
-                "champion_loop": "scripts/paper_v7_loop.sh",
+                "champion_loop": "scripts/paper_v7_execution_loop.sh",
                 "champion_config": "config/paper_v7.json",
                 "champion_run_root": "runs/paper_v7_live",
                 "require_operator_directives_match_main": True,
                 "require_authoritative_fee": True,
                 "require_shared_execution_ledger": True,
+                "require_single_canonical_ledger_writer": True,
                 "require_joint_fill_state_for_multileg": True,
+                "require_complete_cost_vector": True,
+                "require_account_drawdown_guard": True,
                 "max_drawdown": 0.15,
             },
         }
@@ -52,25 +55,34 @@ class EvidenceCandidateContractTest(unittest.TestCase):
         directives = '{"authority":"current"}\n'
         (main / "config/operator_directives.json").write_text(directives, encoding="utf-8")
         (candidate / "config/operator_directives.json").write_text(directives, encoding="utf-8")
+        (candidate / "config/v7_evidence_runtime.json").write_text(json.dumps(policy), encoding="utf-8")
         manifest = {
             "enabled": True,
             "version": 7,
-            "loop": "scripts/paper_v7_loop.sh",
+            "loop": "scripts/paper_v7_execution_loop.sh",
             "config": "config/paper_v7.json",
             "run_root": "runs/paper_v7_live",
             "paper_only": True,
             "authenticated_execution": False,
+            "real_order_submission": False,
         }
         paper = {
             "engine_version": 7,
             "paper_only": True,
             "max_drawdown": 0.15,
+            "multi_strategy": {
+                "single_account_allocator": True,
+                "global_max_drawdown": 0.15,
+            },
             "v7": {
                 "paper_only": True,
                 "authenticated_execution": False,
+                "real_order_submission": False,
                 "authoritative_fee_required": True,
                 "shared_execution_ledger_required": True,
+                "single_canonical_ledger_writer": True,
                 "joint_fill_state_required_for_multileg": True,
+                "cost_vector_required": ["fee", "slippage", "unwind_loss", "capital_cost", "latency_cost"],
             },
         }
         (candidate / "config/live_champion.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -78,11 +90,14 @@ class EvidenceCandidateContractTest(unittest.TestCase):
         (candidate / "config/v7_frequency_matrix.json").write_text("{}\n", encoding="utf-8")
         (candidate / "config/v7_execution_evidence.json").write_text("{}\n", encoding="utf-8")
         for rel in (
-            "scripts/paper_v7_loop.sh",
             "scripts/paper_v7_execution_loop.sh",
-            "scripts/runtime_singleton_launcher.py",
-            "scripts/v7_execution_evidence.py",
-            "scripts/v7_execution_evidence_hardened.py",
+            "scripts/v7_execution_ledger.py",
+            "scripts/v7_ledger_spool.py",
+            "scripts/v7_canonical_economics.py",
+            "scripts/v7_joint_execution_policy.py",
+            "scripts/v7_capital_allocator.py",
+            "scripts/v7_portfolio_guard.py",
+            "scripts/v7_learned_execution_model.py",
         ):
             (candidate / rel).write_text("# fixture\n", encoding="utf-8")
         return temporary, main, candidate
@@ -119,7 +134,9 @@ class EvidenceCandidateContractTest(unittest.TestCase):
         mutations = (
             lambda c: c["v7"].__setitem__("authoritative_fee_required", False),
             lambda c: c["v7"].__setitem__("shared_execution_ledger_required", False),
+            lambda c: c["v7"].__setitem__("single_canonical_ledger_writer", False),
             lambda c: c["v7"].__setitem__("joint_fill_state_required_for_multileg", False),
+            lambda c: c["v7"].__setitem__("cost_vector_required", ["fee"]),
             lambda c: c.__setitem__("max_drawdown", 0.151),
         )
         for index, fn in enumerate(mutations):
@@ -137,10 +154,10 @@ class EvidenceCandidateContractTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.validate(main, candidate)
 
-    def test_hardened_evidence_generator_is_required(self):
+    def test_canonical_ledger_primitive_is_required(self):
         temporary, main, candidate = self.make_fixture()
         self.addCleanup(temporary.cleanup)
-        (candidate / "scripts/v7_execution_evidence_hardened.py").unlink()
+        (candidate / "scripts/v7_execution_ledger.py").unlink()
         with self.assertRaises(SystemExit):
             self.validate(main, candidate)
 
@@ -175,18 +192,18 @@ class EvidenceRouterStaticContractTest(unittest.TestCase):
         for required in (
             "integration/v7-",
             "eligible_count",
-            "ambiguous canonical V7 integration ownership",
+            "if len(eligible)==0: raise SystemExit(10)",
+            "if len(eligible)!=1: raise SystemExit(11)",
             "git merge-base --is-ancestor",
             "candidate-contract.json",
         ):
             self.assertIn(required, self.workflow)
 
     def test_zero_candidate_noops_but_ambiguity_fails(self):
-        self.assertIn("set +e", self.workflow)
         self.assertIn('if [[ "$rc" -eq 10 ]]', self.workflow)
         self.assertIn("selection=no_open_integration_v7_candidate", self.workflow)
-        self.assertIn('if [[ "$rc" -eq 11 ]]', self.workflow)
-        self.assertIn("exit 1", self.workflow)
+        self.assertIn('test "$rc" -eq 0', self.workflow)
+        self.assertIn("raise SystemExit(11)", self.workflow)
 
     def test_exact_head_green_checks_gate_private_runtime(self):
         self.assertEqual(
@@ -195,20 +212,23 @@ class EvidenceRouterStaticContractTest(unittest.TestCase):
         )
         for required in (
             "head_sha=${SOURCE_SHA}",
-            "row.get('head_sha') != meta['source_sha']",
-            "row.get('conclusion') != 'success'",
+            "row.get('head_sha')!=sha",
+            "row.get('status')!='completed'",
+            "row.get('conclusion')!='success'",
             "steps.source.outputs.ready == 'true'",
         ):
             self.assertIn(required, self.workflow)
 
     def test_runtime_is_isolated_by_sha_and_never_promotes_or_deploys(self):
         for required in (
-            "by-sha",
-            "runtime_singleton_launcher.py",
-            "runtime_owner.lock",
+            "$BASE/by-sha",
+            "$WORKTREES/$SOURCE_SHA",
+            "$RUNS/$SOURCE_SHA",
+            "git -C \"$worktree\" rev-parse HEAD",
+            "scripts/paper_v7_execution_loop.sh",
+            "active.env",
             "SOURCE_SHA",
-            "v7_execution_evidence_hardened.py",
-            "v7_execution_evidence.json",
+            "canonical_economics.json",
         ):
             self.assertIn(required, self.workflow)
         for forbidden in (
