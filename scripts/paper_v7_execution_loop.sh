@@ -82,7 +82,7 @@ pids+=("$!")
 ) & pids+=("$!")
 
 # Professional maker slow path: public reward-market selection and conservative
-# competition/reward context.  This work is deliberately outside the quote hot path.
+# competition/reward context. This work is deliberately outside the quote hot path.
 (
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_market_maker_rewards.py \
@@ -135,13 +135,15 @@ python3 scripts/v7_market_maker_worker.py \
   >> "$RUN_ROOT/micro_maker/runtime.log" 2>&1 &
 pids+=("$!")
 
-# Full-depth executable mark for account-level risk. Unmarkable maker inventory
-# is a hard fail-closed condition rather than being carried at midpoint/cost.
+# Full-depth executable mark for account-level risk. The marker uses the reward
+# selection only for condition-id provenance, then independently verifies the
+# CLOB fee schedule and marks residual inventory net of taker fee/slippage.
 (
   while [[ ! -e "$KILL" ]]; do
     if ! python3 scripts/v7_market_maker_status.py \
       --state "$RUN_ROOT/micro_maker/state.json" \
       --config "$ALLOC/micro_maker.json" \
+      --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
       --output "$RUN_ROOT/micro_maker/status.json" \
       >> "$RUN_ROOT/micro_maker/status.log" 2>&1; then
       printf '{"schema":"polymarket_v7_maker_risk_failure_v1","paper_only":true,"model_sha":"%s"}\n' "$SHA" > "$KILL"
