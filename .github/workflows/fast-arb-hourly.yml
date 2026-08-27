@@ -122,6 +122,23 @@ jobs:
           assert base_policy["max_notional_usd"] == auth["max_trade_usd_compatibility_sentinel"]
           assert base_policy["external_uncertainty_penalty"] == 0.0
 
+          # Current main does not yet contain #690's per-token WS/REST provenance
+          # contract. Until that is forward-ported, a positive hard-arb row cannot
+          # be interpreted as synchronized executable evidence. Fail closed rather
+          # than allowing this authority/sizing repair to create a false alpha hit.
+          provenance_fields = {
+              "freshness_ready_tokens",
+              "freshness_missing_rejections",
+              "freshness_age_rejections",
+              "freshness_skew_rejections",
+          }
+          if not provenance_fields.issubset(status):
+              assert int(status.get("hard_executable_observations", 0) or 0) == 0, (
+                  "hard-arb observation present without per-token freshness provenance; "
+                  "forward-port #690 before economic interpretation",
+                  status,
+              )
+
           capital_ceiling = shadow["starting_capital"] * min(
               1.0,
               shadow["max_market_fraction"],
