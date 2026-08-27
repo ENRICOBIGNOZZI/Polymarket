@@ -78,15 +78,21 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
         self.assertFalse(row["validation_dispatch_authority"])
         self.assertTrue(row["critical"])
 
-    def test_candidate_champion_is_enabled_only_for_paper_evidence(self) -> None:
+    def test_forced_paper_champion_is_designated_but_predeployment(self) -> None:
         manifest = json.loads((ROOT / "config/live_champion.json").read_text(encoding="utf-8"))
+        context = json.loads((ROOT / "config/project_context.json").read_text(encoding="utf-8"))
         self.assertTrue(manifest["enabled"])
         self.assertEqual(manifest["version"], 7)
         self.assertTrue(manifest["paper_only"])
         self.assertFalse(manifest["authenticated_execution"])
         self.assertFalse(manifest["real_order_submission"])
-        self.assertTrue(manifest["candidate_only_until_promoted"])
+        self.assertFalse(manifest["candidate_only_until_promoted"])
+        self.assertEqual(manifest["promotion_policy"], "operator_forced_v7_paper_champion")
+        self.assertFalse(manifest["legacy_fallback_allowed"])
         self.assertEqual(manifest["loop"], "scripts/paper_v7_execution_loop.sh")
+        self.assertFalse(context["runtime"]["active_champion"])
+        self.assertFalse(context["grafana"]["active"])
+        self.assertEqual(context["cutover"]["current_state"], "operator_forced_v7_paper_champion_predeployment")
 
 
 if __name__ == "__main__":
