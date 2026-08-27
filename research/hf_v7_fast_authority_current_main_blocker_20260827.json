@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "research_only": true,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "base_main_sha": "59890edc6a6018e5f69ca91d2dc7a3a2059dd5f5",
+  "operator_directive_epoch": "2026-08-27T01:36:00+02:00",
+  "latest_explicit_user_instruction": {
+    "market_limit": 1000,
+    "min_liquidity": 2.0,
+    "min_net_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "fixed_dollar_trade_cap_enabled": false,
+    "trade_market_event_gross_fraction_ceiling": 1.0,
+    "max_drawdown": 0.15
+  },
+  "current_main_blocker": {
+    "fast_arb_policy_min_net_edge": 0.0005,
+    "fast_arb_policy_max_notional_usd": 50.0,
+    "fast_arb_policy_external_uncertainty_penalty": 0.01,
+    "workflow_markets": 600,
+    "workflow_min_liquidity": 10.0,
+    "workflow_snapshot_refresh_seconds": 20,
+    "sentinel_guard_present_on_main": false,
+    "interpretation": "The registered Fast shadow does not currently test the authorized V7 breadth/economic floor and the runtime lacks a guard preventing a non-binding fixed-dollar compatibility sentinel from becoming spendable notional if the policy is aligned."
+  },
+  "chronological_prior_experiment": {
+    "source_pr": 693,
+    "post_fix_run_id": 33037813639,
+    "post_fix_head_sha": "4c6d38e081ef13699f803d7c48976ef202cd8045",
+    "markets": 1239,
+    "tokens": 2478,
+    "ws_messages": 21959,
+    "book_updates": 19505,
+    "freshness_ready_tokens": 2478,
+    "hard_executable_observations": 0,
+    "hard_reject_reasons": {
+      "edge_below_policy_after_costs": 1105,
+      "edge_below_costed_conversion_policy": 337,
+      "insufficient_conversion_depth": 54
+    },
+    "max_observed_capital_required": 10000.0,
+    "maker_shadow_executable_observations": 477,
+    "maker_shadow_edge_p50": 0.005,
+    "maker_shadow_edge_p90": 0.006,
+    "maker_shadow_stress_survival_plus_10bp": 0.7882599580712788,
+    "maker_shadow_modeled_profit_is_realized_pnl": false,
+    "opportunity_lifetime_p10_ms": 233.6,
+    "feed_latency_p99_ms": 523.96,
+    "decision_latency_p99_us": 39127.08,
+    "end_to_end_latency_p99_ms": 545.68486,
+    "interpretation": "The sentinel repair bounded size prospectively, but the authorized forward window still produced zero hard-executable observations and exposed a latency-horizon blocker."
+  },
+  "bounded_challenger": {
+    "branch": "research/v7-fast-authority-sentinel-current-main-20260827",
+    "changes": [
+      "align registered Fast shadow breadth/economic policy with current V7 authorization",
+      "use 1e100 only as the compatibility sentinel for a disabled fixed-dollar cap",
+      "clamp runtime shadow notional to starting PAPER capital times binding market/event/gross percentage ceilings",
+      "fail closed in workflow evidence if capital/profit/size are non-finite or observed capital exceeds the derived PAPER ceiling",
+      "keep real_order_submission=false and authenticated_execution=false"
+    ],
+    "non_changes": [
+      "no direct main or paper-validated update",
+      "no operator_directives edit",
+      "no real or authenticated order path",
+      "no claimed PAPER fill or realized PnL"
+    ]
+  },
+  "decision": "BLOCKING_FAST_AUTHORITY_AND_SENTINEL_SIZING_DEFECT_RESEARCH_SUCCESSOR_CREATED_MORE_EVIDENCE_REQUIRED"
+}
