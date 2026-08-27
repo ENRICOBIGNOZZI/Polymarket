@@ -34,7 +34,7 @@
       "ci.yml": {"name":"ci","requires_current_main":true,"max_age_seconds":0,"dispatchable":true,"priority":10,"dependencies":[]},
       "monitoring.yml": {"name":"monitoring","requires_current_main":true,"max_age_seconds":0,"dispatchable":true,"priority":20,"dependencies":[]},
       "live-smoke.yml": {"name":"live-api-smoke","requires_current_main":true,"max_age_seconds":21600,"dispatchable":true,"priority":30,"dependencies":["ci.yml"]},
-      "external-intelligence.yml": {"name":"Polymarket External Intelligence","requires_current_main":true,"max_age_seconds":7200,"dispatchable":true,"priority":40,"dependencies":["live-smoke.yml"]},
+      "external-intelligence.yml": {"name":"Polymarket External Intelligence","requires_current_main":true,"max_age_seconds":7200,"dispatchable":true,"priority":40,"dependencies":[]},
       "alpha-factory.yml": {"name":"Polymarket Alpha Factory","requires_current_main":true,"max_age_seconds":10800,"dispatchable":true,"priority":50,"dependencies":["ci.yml","monitoring.yml","live-smoke.yml"]},
       "research-queue.yml": {"name":"Polymarket Research Director","requires_current_main":true,"max_age_seconds":5400,"dispatchable":true,"priority":55,"dependencies":["alpha-factory.yml"]},
       "research-policy.yml": {"name":"Polymarket Research Policy","requires_current_main":true,"max_age_seconds":7200,"dispatchable":true,"priority":60,"dependencies":["ci.yml"]},
@@ -43,23 +43,7 @@
       "v7-deploy-paper-server.yml": {"name":"V7 deploy PAPER server","requires_current_main":false,"max_age_seconds":3600,"dispatchable":false,"priority":80,"dependencies":["v7-live-paper-validation.yml"]},
       "v7-paper-server-health.yml": {"name":"V7 PAPER server health","requires_current_main":false,"max_age_seconds":3600,"dispatchable":false,"priority":90,"dependencies":["v7-deploy-paper-server.yml"]}
     },
-    "allowlisted_dispatches": [
-      "ci.yml",
-      "monitoring.yml",
-      "live-smoke.yml",
-      "external-intelligence.yml",
-      "alpha-factory.yml",
-      "research-queue.yml",
-      "research-policy.yml",
-      "promotion-controller.yml"
-    ],
-    "forbidden_dispatches": [
-      "control-plane-event-bridge.yml",
-      "integration-merge.yml",
-      "post-merge-validation.yml",
-      "v7-live-paper-validation.yml",
-      "v7-deploy-paper-server.yml",
-      "v7-paper-server-health.yml"
-    ]
+    "allowlisted_dispatches": ["ci.yml","monitoring.yml","live-smoke.yml","external-intelligence.yml","alpha-factory.yml","research-queue.yml","research-policy.yml","promotion-controller.yml"],
+    "forbidden_dispatches": ["control-plane-event-bridge.yml","integration-merge.yml","post-merge-validation.yml","v7-live-paper-validation.yml","v7-deploy-paper-server.yml","v7-paper-server-health.yml"]
   }
 }
