@@ -51,5 +51,6 @@ jobs:
         with:
           name: v7-cleanup-tree-${{ github.run_id }}
           path: cleanup-artifact/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
