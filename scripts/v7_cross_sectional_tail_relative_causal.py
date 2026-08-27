@@ -17,13 +17,15 @@ from pathlib import Path
 from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT = SCRIPT_DIR.parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import v7_cross_sectional_tail_relative as driver
 import v7_model_book_snapshot as snapshots
 
-MARKET_DATA_CONFIG = Path("config/research_v7_market_data.json")
+MARKET_DATA_CONFIG_REL = "config/research_v7_market_data.json"
+MARKET_DATA_CONFIG = ROOT / MARKET_DATA_CONFIG_REL
 _BOOKS_BY_TOKEN: dict[str, snapshots.CausalBook] = {}
 _BOOKS_BY_MARKET: dict[str, tuple[snapshots.CausalBook | None, snapshots.CausalBook | None]] = {}
 _PAIR_PROVENANCE: dict[tuple[str, str, int], dict[str, Any]] = {}
@@ -158,7 +160,7 @@ def _atomic_json(path: Path, value: Any) -> None:
         return _ORIGINAL_ATOMIC_JSON(path, rows)
     if isinstance(value, dict):
         value = dict(value)
-        value["market_data_config"] = str(MARKET_DATA_CONFIG)
+        value["market_data_config"] = MARKET_DATA_CONFIG_REL
         value["current_cross_section_causal_snapshot_required"] = True
         value["per_pair_causal_snapshot_provenance"] = True
         value["current_book_snapshot_contract"] = {
