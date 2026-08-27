@@ -81,19 +81,27 @@ class FastDataHealthTest(unittest.TestCase):
         )
         self.assertGreaterEqual(len(failures), 3)
 
-    def test_hourly_shadow_does_not_depend_on_retired_runtime_config(self) -> None:
+    def test_hourly_shadow_uses_current_v7_authorized_runtime_config(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "fast-arb-hourly.yml").read_text()
-        self.assertIn("--config config/fast_arb_shadow.json", workflow)
-        self.assertNotIn("paper_v4.json", workflow)
-        self.assertIn("--min-liquidity 10", workflow)
+        directives = json.loads((ROOT / "config" / "operator_directives.json").read_text())
+        auth = directives["paper_v7_authorization"]
 
-        config = json.loads((ROOT / "config" / "fast_arb_shadow.json").read_text())
+        self.assertIn("--config config/fast_arb_v7_shadow.json", workflow)
+        self.assertNotIn("paper_v4.json", workflow)
+        self.assertIn("--markets 1000", workflow)
+        self.assertIn("--min-liquidity 2", workflow)
+
+        config = json.loads((ROOT / "config" / "fast_arb_v7_shadow.json").read_text())
         self.assertEqual(config["gamma_url"], "https://gamma-api.polymarket.com")
         self.assertEqual(config["clob_url"], "https://clob.polymarket.com")
         self.assertTrue(config["scan_only"])
         self.assertFalse(config["history_bootstrap"])
-        self.assertLessEqual(float(config["min_liquidity"]), 10.0)
-        self.assertEqual(float(config["min_volume24h"]), 0.0)
+        self.assertTrue(config["paper_only"])
+        self.assertFalse(config["authenticated_execution"])
+        self.assertEqual(int(config["market_limit"]), int(auth["market_limit"]))
+        self.assertEqual(float(config["min_liquidity"]), float(auth["min_liquidity"]))
+        self.assertEqual(float(config["min_net_edge"]), float(auth["min_net_edge"]))
+        self.assertEqual(float(config["uncertainty_penalty"]), float(auth["uncertainty_penalty"]))
 
 
 if __name__ == "__main__":
