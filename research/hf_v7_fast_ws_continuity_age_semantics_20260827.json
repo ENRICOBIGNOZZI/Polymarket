@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "research_state": "WS_CONTINUITY_AGE_SEMANTICS_REPAIRED_MORE_EVIDENCE_REQUIRED",
+  "authority": {
+    "source": "config/operator_directives.json@main",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "market_limit": 1000,
+    "min_liquidity": 2.0,
+    "min_net_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "max_drawdown": 0.15
+  },
+  "pre_fix_evidence": {
+    "source_run_id": 33035245061,
+    "source_head": "c36ff39059f0a0352de46016b41432d1bdde0e20",
+    "github_execution_ref": "pull_request_merge_ref",
+    "markets": 736,
+    "tokens": 1472,
+    "ws_messages": 12680,
+    "book_updates": 10271,
+    "rest_resyncs": 3,
+    "ws_snapshot_ready_tokens": 170,
+    "rest_point_in_time_ready_tokens": 1302,
+    "freshness_missing_rejections": 0,
+    "freshness_age_rejections": 12850,
+    "freshness_skew_rejections": 729,
+    "hard_executable_observations": 0,
+    "feed_stale_ms": 6,
+    "feed_latency_p99_ms": 806.3,
+    "decision_latency_p99_us": 85.0,
+    "note": "The runtime applied the same last-event exchange-age and cross-leg last-update skew gates to uninterrupted WS lineage and REST point-in-time snapshots. REST resync also downgraded a continuous WS lineage whenever that token had no update within 5s."
+  },
+  "protocol_basis": {
+    "market_ws_contract": "A full book is sent on subscription; price_change represents order placement/cancellation and book events update the L2 state. Therefore, after a full snapshot and uninterrupted monotone delta lineage, absence of a token update means unchanged state rather than an automatically stale state.",
+    "rest_contract": "CLOB /books exposes timestamp+hash for a point-in-time order-book snapshot. REST snapshots remain strictly exchange-age and cross-leg-skew gated.",
+    "transport_rule": "Any WS error/reconnect invalidates the affected shard lineage. The research feed idle timeout is shortened from 20s to 5s with keep-alive pings to bound silent socket failure before quiet-book continuity is trusted."
+  },
+  "repair": {
+    "continuous_ws": "Do not reject a gap-free WS book solely because the token's last market-update timestamp is older than 5s or differs from another unchanged WS leg. Keep the last event clocks as audit timestamps.",
+    "rest_point_in_time": "Retain <=5s exchange-age and <=1.5s cross-leg exchange/receive skew.",
+    "mixed_baskets": "REST legs must satisfy REST age/skew. Continuous WS legs are current by lineage; their old last-update timestamps are not compared to REST snapshot timestamps as if they were snapshot times.",
+    "resync": "REST polling no longer overwrites an uninterrupted WS lineage merely because that token is quiet.",
+    "safety": "No real-order path, credential path, sizing authority, drawdown limit, kill switch, or operator directive changed."
+  },
+  "required_next_evidence": [
+    "CI and research-policy success on the repaired branch",
+    "fresh public Fast Shadow run",
+    "compare age/skew rejection counts and hard-executable observations against pre-fix evidence",
+    "any surviving hard candidate still requires authoritative fees, multi-level depth, sequential PAPER legging, partial/unwind accounting, canonical-ledger realized post-cost PnL, and 1x/1.5x/2x stress"
+  ]
+}
