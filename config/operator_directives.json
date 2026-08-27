@@ -42,7 +42,7 @@
     "maker_slow_path_owns_reward_selection_and_model_fit_only": true,
     "cleanup_sequence": "v7_implementation_then_tests_then_same_sha_paper_then_main_then_paper_validated_then_deploy_then_server_health_then_legacy_deletion",
     "recovery_after_premature_cleanup": "Do not restore retired numerical generations wholesale. Port only required cutover/data/monitoring primitives into V7/common/control-plane and prove them with current V7 tests.",
-    "legacy_rule": "Do not add new logic to V3/V4/V5/V6. Any primitive still required by V7 must live in V7/common before final retirement. Git history is the archive."
+    "legacy_rule": "Do not add new logic to any superseded numerical generation. Any primitive still required by V7 must live in V7/common before final retirement. Git history is the archive."
   },
   "economic_objective": {
     "decision_ev": "P(fill_or_joint_completion|X,a) * E[alpha_or_spread_capture-costs-adverse_markout|fill,X,a] - E[partial_or_inventory_unwind_loss|X,a] - capital_cost - latency_cost + conservatively_haircut_maker_rebate + conservatively_haircut_liquidity_reward",
@@ -107,9 +107,9 @@
     "v7-cross-sectional-ranking-research": "Continue horizon-separated ranking evidence with lower priority while maker is the primary engineering focus."
   },
   "forbidden_regressions": [
-    "Do not create V8/V9/V10 or another numerical runtime generation.",
+    "Do not create another numerical runtime generation; V7 is the terminal generation identifier for this architecture.",
     "Do not create a second maker runtime, WebSocket market-data plane, state writer, broker owner, execution ledger or canonical integration; reuse V7/common and the shared C++ fast feed.",
-    "Do not add new strategy/runtime logic to V3/V4/V5/V6 or resurrect them wholesale.",
+    "Do not add new strategy/runtime logic to superseded numerical generations or resurrect them wholesale.",
     "Do not delete or omit V7 cutover primitives required for same-SHA PAPER -> main -> paper-validated -> deploy -> health.",
     "Do not add authenticated or real-money execution during this mission.",
     "Do not treat maker reward pools, projected reward share, quote count, quoted spread, assumed fills, in-sample Sharpe or CI success as profitable alpha.",
