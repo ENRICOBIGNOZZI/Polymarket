@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Canonical PAPER capital partition for V7 strategy workers.
 
-Workers must never each inherit the full account balance.  This module creates
+Workers must never each inherit the full account balance. This module creates
 atomic per-sleeve configs whose starting capital sums to at most the canonical
-PAPER account.  It is a risk-capacity partition, not an alpha selector.
+PAPER account. Once a child receives its sleeve budget, its own sleeve fraction
+is normalized to 100% of that child budget so the allocation is not applied a
+second time.
 """
 from __future__ import annotations
 
@@ -51,13 +53,18 @@ def allocate(config: dict[str, Any]) -> dict[str, float]:
 def materialize(base_config: Path, output_dir: Path) -> dict[str, Any]:
     cfg = json.loads(base_config.read_text(encoding="utf-8"))
     budgets = allocate(cfg)
-    for sleeve in SLEEVES:
+    for sleeve, active_key in SLEEVES.items():
         child = json.loads(json.dumps(cfg))
         child["starting_capital"] = budgets[sleeve]
+        child_v7 = child.setdefault("v7", {})
+        for other_key in SLEEVES.values():
+            child_v7[other_key] = 1.0 if other_key == active_key else 0.0
+        child_v7["reserve_fraction"] = 0.0
         child["capital_scope"] = {
             "canonical_account_starting_capital": float(cfg["starting_capital"]),
             "sleeve": sleeve,
             "sleeve_starting_capital": budgets[sleeve],
+            "sleeve_internal_fraction": 1.0,
             "double_counting_forbidden": True,
         }
         atomic_json(output_dir / f"{sleeve}.json", child)
@@ -69,6 +76,7 @@ def materialize(base_config: Path, output_dir: Path) -> dict[str, Any]:
         "budgets": budgets,
         "allocated_plus_reserve": sum(budgets.values()),
         "double_counting_forbidden": True,
+        "child_configs_are_already_capacity_bounded": True,
     }
     atomic_json(output_dir / "manifest.json", manifest)
     return manifest
