@@ -13,7 +13,7 @@
     "require_full_worktree_inventory": true,
     "require_operator_directives": true,
     "inventory_command": "git ls-files",
-    "rule": "V7 is the sole PAPER champion and final runtime generation by latest explicit operator instruction. Do not restore V3-V6 for compatibility. The canonical server process group is scripts/paper_v7_execution_loop.sh; exact-SHA technical, deploy and server-health evidence remains fail-closed and authenticated/real-order execution remains disabled."
+    "rule": "V7 is the sole PAPER champion and final runtime generation by latest explicit operator instruction. Do not restore superseded runtime generations for compatibility. The canonical server process group is scripts/paper_v7_execution_loop.sh; exact-SHA technical, deploy and server-health evidence remains fail-closed and authenticated/real-order execution remains disabled."
   },
   "cutover": {
     "target_version": 7,
