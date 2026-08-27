@@ -42,4 +42,5 @@ jobs:
     if: ${{ false }}
     runs-on: ubuntu-24.04
     steps:
-      - run: echo "V7 fixed-SHA freeze: automatic promotion decisions disabled."
+      - run: |
+          echo "V7 fixed-SHA freeze: automatic promotion decisions disabled."
