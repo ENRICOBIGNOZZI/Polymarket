@@ -191,6 +191,20 @@ class V7NativeMonitoringTest(unittest.TestCase):
         self.assertNotIn("exporter_latest", installer)
         self.assertNotIn("paper_v6", installer)
 
+    def test_monitoring_workflow_executes_v7_monitoring_contract(self) -> None:
+        workflow = (ROOT / ".github/workflows/monitoring.yml").read_text(encoding="utf-8")
+        for required in (
+            "tests/test_monitoring_v7_native.py",
+            "tests/test_monitoring_v7_ledger.py",
+            "tests/test_monitoring_v7_dashboard_completion.py",
+            "monitoring/exporter_v7.py",
+            "monitoring/v7_ledger_metrics.py",
+            "monitoring/v7_monitoring_manifest.json",
+            "monitoring/grafana/dashboards/polymarket-v7.json",
+            "ops/apply_v7_monitoring_config_macos.sh",
+        ):
+            self.assertIn(required, workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
