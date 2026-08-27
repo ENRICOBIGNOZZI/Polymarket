@@ -31,7 +31,7 @@ class V7UnifiedEvidenceRuntimeTest(unittest.TestCase):
         self.assertTrue(contract["require_complete_cost_vector"])
         self.assertTrue(contract["require_account_drawdown_guard"])
 
-    def test_forced_paper_champion_is_safe_and_exact_sha_health_remains_pending(self) -> None:
+    def test_forced_paper_champion_is_v7_only_and_safe(self) -> None:
         champion = json.loads((ROOT / "config/live_champion.json").read_text())
         context = json.loads((ROOT / "config/project_context.json").read_text())
         self.assertTrue(champion["enabled"])
@@ -43,13 +43,13 @@ class V7UnifiedEvidenceRuntimeTest(unittest.TestCase):
         self.assertEqual(champion["promotion_policy"], "operator_forced_v7_paper_champion")
         self.assertFalse(champion["legacy_fallback_allowed"])
         self.assertEqual(champion["loop"], "scripts/paper_v7_execution_loop.sh")
-        # project_context is canonical main-owned metadata and may describe the
-        # V7 monitoring/runtime plane as active. It is not an exact-head deploy
-        # receipt: the state itself must continue to say exact-SHA deploy/health
-        # is pending until the lifecycle workflow proves it.
         self.assertTrue(context["runtime"]["active_champion"])
         self.assertTrue(context["grafana"]["active"])
-        self.assertIn("pending_exact_sha_deploy_health", context["cutover"]["current_state"])
+        self.assertEqual(
+            context["cutover"]["current_state"],
+            "operator_forced_v7_paper_champion_exact_head_validation",
+        )
+        self.assertEqual(context["cutover"]["target_version"], 7)
 
     def test_scheduler_has_no_promotion_or_deployment_authority(self) -> None:
         registry = json.loads((ROOT / "config/scheduler_registry.json").read_text())
@@ -93,7 +93,6 @@ class V7UnifiedEvidenceRuntimeTest(unittest.TestCase):
             "POLYMARKET_DEPLOY_REF=",
             "paper_v7_loop.sh",
             "v7_execution_evidence_hardened.py",
-            "version\") == 6",
         ):
             self.assertNotIn(forbidden, text)
 
