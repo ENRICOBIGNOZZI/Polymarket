@@ -118,7 +118,7 @@ class ModelIntentRouterTest(unittest.TestCase):
         self.assertFalse(intent.executable)
         self.assertIn("point_in_time_universe_not_validated", intent.blockers)
 
-    def test_candidate_events_do_not_manufacture_orders_or_fills(self) -> None:
+    def test_candidate_events_fail_closed_without_causal_book_provenance(self) -> None:
         intent = router.ModelIntent(
             candidate_id="id", model_sha=SHA, family="pca", horizon_seconds=3600,
             decision_ts_ms=100_000, semantics="single_leg_residual_stat_arb",
@@ -129,11 +129,13 @@ class ModelIntentRouterTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "ledger.jsonl"
             with ledger.CanonicalLedgerWriter(path, writer_id="test", model_sha=SHA) as writer:
-                self.assertEqual(router.write_candidate_events(writer, [intent]), 1)
-            events = list(ledger.iter_events(path, expected_model_sha=SHA))
-        self.assertEqual([event.event_type for event in events], ["CANDIDATE"])
-        self.assertEqual(events[0].intended_action, "RESEARCH_CANDIDATE")
-        self.assertFalse(events[0].metadata["execution_eligible"])
+                with self.assertRaisesRegex(
+                    ledger.LedgerContractError,
+                    "decision:missing_exchange_receive_decision_clock",
+                ):
+                    router.write_candidate_events(writer, [intent])
+            if path.exists():
+                self.assertEqual(path.read_text(encoding="utf-8").strip(), "")
 
 
 if __name__ == "__main__":
