@@ -103,7 +103,7 @@ jobs:
           chmod 600 ~/.ssh/polymarket_validation
           ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
 
-      - name: Prove exact-head singleton primitive on private node
+      - name: Prove exact-head singleton orphan guard on private node
         shell: bash
         env:
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
@@ -148,13 +148,17 @@ jobs:
           test -f "$launcher"
           python3 -m py_compile "$launcher"
 
-          child_code='import os,sys,time; open(sys.argv[1],"w",encoding="utf-8").write(str(os.getpid())); time.sleep(30)'
+          # Ignore TERM so the watchdog grace interval is observable: after the
+          # supervisor is SIGKILLed, the child must still be alive while the
+          # watchdog continues to hold the lock, then be force-drained before a
+          # new owner can acquire it.
+          child_code='import os,signal,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1],"w",encoding="utf-8").write(str(os.getpid())); time.sleep(30)'
           python3 "$launcher" --lock "$lock" -- \
             python3 -c "$child_code" "$child_file" \
             >"$evidence/first-owner.out" 2>"$evidence/first-owner.err" &
           first_pid=$!
 
-          for _ in $(seq 1 100); do
+          for _ in $(seq 1 150); do
             if [[ -s "$lock" && -s "$child_file" ]]; then
               break
             fi
@@ -179,37 +183,54 @@ jobs:
           test "$second_rc" -eq 75
           grep -q 'another paper runtime already owns' "$evidence/second-owner.err"
 
-          # Kill only the isolated supervisor. Its child intentionally remains
-          # alive long enough to prove the singleton descriptor was not inherited.
           kill -9 "$first_pid"
           wait "$first_pid" 2>/dev/null || true
           first_pid=0
           kill -0 "$child_pid"
 
-          python3 "$launcher" --lock "$lock" -- python3 -c 'print("reacquired")' \
-            >"$evidence/third-owner.out" 2>"$evidence/third-owner.err"
-          grep -qx 'reacquired' "$evidence/third-owner.out"
+          set +e
+          python3 "$launcher" --lock "$lock" -- python3 -c 'print("unsafe-reacquire")' \
+            >"$evidence/post-loss-owner.out" 2>"$evidence/post-loss-owner.err"
+          post_loss_rc=$?
+          set -e
+          test "$post_loss_rc" -eq 75
+          grep -q 'another paper runtime already owns' "$evidence/post-loss-owner.err"
 
-          kill -9 "$child_pid" 2>/dev/null || true
+          child_drained=false
+          for _ in $(seq 1 180); do
+            if ! kill -0 "$child_pid" 2>/dev/null; then
+              child_drained=true
+              break
+            fi
+            sleep 0.05
+          done
+          test "$child_drained" = true
           child_pid=0
 
-          python3 - "$evidence/summary.json" "$SOURCE_SHA" "$second_rc" <<'PY'
+          python3 "$launcher" --lock "$lock" -- python3 -c 'print("safe-reacquire")' \
+            >"$evidence/final-owner.out" 2>"$evidence/final-owner.err"
+          grep -qx 'safe-reacquire' "$evidence/final-owner.out"
+
+          python3 - "$evidence/summary.json" "$SOURCE_SHA" "$second_rc" "$post_loss_rc" <<'PY'
           import json
           import sys
           from pathlib import Path
 
-          output, source_sha, second_rc = sys.argv[1:]
+          output, source_sha, second_rc, post_loss_rc = sys.argv[1:]
           payload = {
-              "schema": "polymarket_v7_private_single_writer_probe_v1",
+              "schema": "polymarket_v7_private_single_writer_probe_v2",
               "source_sha": source_sha,
               "paper_only": True,
               "authenticated_execution": False,
               "isolated_probe": True,
               "live_runtime_started": False,
               "second_owner_exit_code": int(second_rc),
+              "post_supervisor_loss_competitor_exit_code": int(post_loss_rc),
               "singleton_exclusion": True,
-              "descriptor_not_inherited": True,
-              "reacquire_after_supervisor_exit": True,
+              "runtime_does_not_inherit_lock_descriptor": True,
+              "watchdog_holds_lock_after_supervisor_loss": True,
+              "orphan_runtime_drained_before_reacquire": True,
+              "safe_reacquire_after_drain": True,
           }
           Path(output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
           print(json.dumps(payload, sort_keys=True))
