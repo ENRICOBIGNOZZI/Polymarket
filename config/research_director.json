@@ -43,8 +43,6 @@
     "v7-live-paper-validation.yml",
     "v7-deploy-paper-server.yml",
     "v7-paper-server-health.yml",
-    "v7-unified-paper-evidence.yml",
-    "deploy-paper-server.yml",
-    "server-health.yml"
+    "v7-unified-paper-evidence.yml"
   ]
 }
