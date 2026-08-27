@@ -142,6 +142,25 @@ class V7PcaStatArbTests(unittest.TestCase):
         self.assertIn("uncertainty_penalty", source)
         self.assertIn('"unestimable_pvalue": 1.0', source)
 
+    def test_cross_market_current_books_do_not_yet_have_snapshot_coherence_provenance(self) -> None:
+        lf_data = (ROOT / "scripts" / "v7_local_factor_data.py").read_text(encoding="utf-8")
+        pca_driver = (ROOT / "scripts" / "v7_pca_stat_arb_research.py").read_text(encoding="utf-8")
+        self.assertNotIn('row.get("timestamp")', lf_data)
+        self.assertNotIn('row.get("hash")', lf_data)
+        self.assertIn("token_books = base.fetch_books", pca_driver)
+        self.assertIn("books_received_ts = int(time.time())", pca_driver)
+        self.assertIn("received_ts=books_received_ts", pca_driver)
+
+        sqrt2 = 2.0 ** 0.5
+        target_current = 2.0 * sqrt2
+        synchronous_factor = (2.0 + 2.0) / sqrt2
+        mixed_time_factor = (-2.0 + 2.0) / sqrt2
+        true_residual = target_current - synchronous_factor
+        mixed_time_residual = target_current - mixed_time_factor
+        self.assertAlmostEqual(true_residual, 0.0)
+        self.assertAlmostEqual(mixed_time_residual, 2.0 * sqrt2)
+        self.assertGreater(abs(mixed_time_residual), 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()
