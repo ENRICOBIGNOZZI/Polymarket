@@ -69,7 +69,7 @@ jobs:
           assert cfg["paper_only"] is True
           assert cfg["allow_authenticated_execution"] is False
           assert cfg["allow_direct_champion_mutation"] is False
-          assert "deploy-paper-server.yml" not in cfg["coordination"]["allowlisted_dispatches"]
+          assert "v7-deploy-paper-server.yml" not in cfg["coordination"]["allowlisted_dispatches"]
           PY
 
       - name: Materialize latest empirical evidence
