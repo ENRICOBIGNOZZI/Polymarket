@@ -106,6 +106,24 @@ class V7PcaStatArbTests(unittest.TestCase):
         assert residual_only is not None and total is not None
         self.assertGreaterEqual(total.sigma_logit, residual_only.sigma_logit)
 
+    def test_single_leg_residual_mean_can_have_wrong_sign_when_common_mode_has_nonzero_mean(self) -> None:
+        core_source = (ROOT / "scripts" / "v7_pca_stat_arb_core.py").read_text(encoding="utf-8")
+        inference_source = (ROOT / "scripts" / "v7_pca_stat_arb_inference.py").read_text(encoding="utf-8")
+        self.assertIn("predicted_logit_move = residual_move * model.target_scale", core_source)
+        self.assertIn('side = "YES" if score.predicted_logit_move > 0.0 else "NO"', core_source)
+        self.assertIn("common_error = common[end] - common[start]", inference_source)
+        self.assertIn("return replace(score, sigma_logit=max(score.sigma_logit, total_sigma))", inference_source)
+
+        residual_down, common_up = -0.05, 0.20
+        self.assertLess(residual_down, 0.0)
+        self.assertGreater(residual_down + common_up, 0.0)
+
+        residual_up, common_down = 0.05, -0.20
+        self.assertGreater(residual_up, 0.0)
+        self.assertLess(residual_up + common_down, 0.0)
+
+        self.assertLess(residual_down + 0.0, 0.0)
+
     def test_executable_candidate_is_single_leg(self) -> None:
         score = pca.PcaScore("m", 0.50, 1.0, 2.0, 0.45, 0.08, 2)
         book = pca.BookEconomics("m", "e", 0.49, 0.51, 0.49, 0.51, 100.0, 0.0, 1.0, True, 100)
