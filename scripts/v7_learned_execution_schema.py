@@ -3,21 +3,61 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-import v7_learned_execution_model_base as b
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+TERMINAL = frozenset({"ABORTED", "CANCELED", "CANCELLED", "CLOSED", "COMPLETE", "DONE", "EXPIRED", "FILLED", "REJECTED", "TIMEOUT"})
+MARKOUTS = ("1s", "10s", "45s", "60s", "300s")
 
-ExecutionModelError = b.ExecutionModelError
-get = b.get
-finite_optional = b.finite_optional
-required_finite = b.required_finite
-optional_value = b.optional_value
-event_ts = b.event_ts
-SHA_RE = b.SHA_RE
-TERMINAL = b.TERMINAL
-MARKOUTS = b.MARKOUTS
+
+class ExecutionModelError(ValueError):
+    pass
+
+
+def get(event: Any, name: str, default: Any = None) -> Any:
+    return event.get(name, default) if isinstance(event, dict) else getattr(event, name, default)
+
+
+def finite_optional(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return out if math.isfinite(out) else None
+
+
+def required_finite(event: Any, name: str, *, nonnegative: bool = False, positive: bool = False) -> float:
+    value = finite_optional(get(event, name))
+    if value is None:
+        raise ExecutionModelError(f"features:missing_or_nonfinite:{name}")
+    if nonnegative and value < 0.0:
+        raise ExecutionModelError(f"features:negative:{name}")
+    if positive and value <= 0.0:
+        raise ExecutionModelError(f"features:nonpositive:{name}")
+    return value
+
+
+def optional_value(event: Any, name: str, *, nonnegative: bool = False) -> tuple[float, float]:
+    raw = get(event, name)
+    if raw is None:
+        return 0.0, 0.0
+    value = finite_optional(raw)
+    if value is None or (nonnegative and value < 0.0):
+        raise ExecutionModelError(f"features:invalid_optional:{name}")
+    return value, 1.0
+
+
+def event_ts(event: Any) -> int:
+    ts = int(get(event, "recorded_ts_ms", 0) or 0)
+    if ts <= 0:
+        raise ExecutionModelError("event:missing_recorded_ts_ms")
+    return ts
+
 HORIZON_MS = {"1s": 1_000, "10s": 10_000, "45s": 45_000, "60s": 60_000, "300s": 300_000}
 FEATURES = (
     "log_queue_plus_one", "log_bid_depth_plus_one", "log_ask_depth_plus_one",
@@ -350,5 +390,4 @@ def build_joint(orders: Sequence[OrderExample]) -> tuple[list[JointExample], dic
     out.sort(key=lambda row: (row.ts_ms, row.group_id))
     stats["joint_examples"] = len(out)
     return out, dict(stats)
-
 

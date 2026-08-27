@@ -6,21 +6,101 @@ import argparse
 import json
 import math
 import statistics
+import os
+import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Sequence
 
-import v7_learned_execution_model_base as b
+from dataclasses import dataclass
 from v7_learned_execution_schema import *
 
-Kernel = b.Kernel
-split = b.split
-predict_mean = b.predict_mean
-predict_distribution = b.predict_distribution
-product_marginal_probability = b.product_marginal_probability
-atomic_json = b.atomic_json
-MARKOUTS = b.MARKOUTS
-EPS = b.EPS
+EPS = 1e-12
+
+
+@dataclass(frozen=True)
+class Kernel:
+    train_x: tuple[tuple[float, ...], ...]
+    mean: tuple[float, ...]
+    scale: tuple[float, ...]
+    bandwidth: float
+
+    @classmethod
+    def fit(cls, rows: Sequence[Sequence[float]], bandwidth: float) -> "Kernel":
+        if not rows or bandwidth <= 0.0 or not math.isfinite(bandwidth):
+            raise ExecutionModelError("kernel:invalid_training_contract")
+        width = len(rows[0])
+        if width == 0 or any(len(row) != width for row in rows):
+            raise ExecutionModelError("kernel:bad_shape")
+        mean = tuple(statistics.fmean(row[j] for row in rows) for j in range(width))
+        scale = []
+        for j, mu in enumerate(mean):
+            sd = math.sqrt(statistics.fmean((row[j] - mu) ** 2 for row in rows))
+            scale.append(sd if sd > 1e-9 else 1.0)
+        norm = tuple(tuple((value - mu) / sd for value, mu, sd in zip(row, mean, scale)) for row in rows)
+        return cls(norm, mean, tuple(scale), bandwidth)
+
+    def weights(self, row: Sequence[float]) -> list[float]:
+        if len(row) != len(self.mean):
+            raise ExecutionModelError("kernel:prediction_shape_mismatch")
+        z = tuple((value - mu) / sd for value, mu, sd in zip(row, self.mean, self.scale))
+        raw = [math.exp(-sum((a - b) ** 2 for a, b in zip(z, train)) / (2.0 * self.bandwidth ** 2)) for train in self.train_x]
+        total = sum(raw)
+        return [1.0 / len(raw)] * len(raw) if total <= EPS else [value / total for value in raw]
+
+
+def split(rows: Sequence[Any], min_train: int, min_test: int, test_fraction: float, embargo_ms: int) -> tuple[list[Any], list[Any]]:
+    if not 0.05 <= test_fraction <= 0.5:
+        raise ExecutionModelError("split:test_fraction_out_of_range")
+    rows = sorted(rows, key=lambda row: (int(row.ts_ms), str(getattr(row, "order_id", getattr(row, "group_id", "")))))
+    if len(rows) < min_train + min_test:
+        raise ExecutionModelError("split:insufficient_examples")
+    cut = min(max(min_train, int(len(rows) * (1.0 - test_fraction))), len(rows) - min_test)
+    test = list(rows[cut:])
+    cutoff = int(test[0].ts_ms) - max(0, embargo_ms)
+    train = [row for row in rows[:cut] if int(getattr(row, "label_ts_ms", row.ts_ms)) <= cutoff]
+    if len(train) < min_train:
+        raise ExecutionModelError("split:embargo_or_label_maturity_removed_training_sample")
+    return train, test
+
+
+def predict_mean(kernel: Kernel, row: Sequence[float], labels: Sequence[float]) -> float:
+    return sum(weight * float(label) for weight, label in zip(kernel.weights(row), labels))
+
+
+def predict_distribution(kernel: Kernel, row: Sequence[float], labels: Sequence[str]) -> dict[str, float]:
+    weights, classes = kernel.weights(row), sorted(set(labels))
+    mass = {label: EPS for label in classes}
+    for weight, label in zip(weights, labels):
+        mass[label] += weight
+    total = sum(mass.values())
+    return {label: value / total for label, value in mass.items()}
+
+
+def product_marginal_probability(train_states: Sequence[str], state: str) -> float:
+    parts, target = [row.split("|") for row in train_states], state.split("|")
+    if not parts or any(len(row) != len(target) for row in parts):
+        return EPS
+    probability = 1.0
+    for j, label in enumerate(target):
+        counts = Counter(row[j] for row in parts)
+        probability *= (counts[label] + 1.0) / (len(parts) + 3.0)
+    return max(EPS, probability)
+
+
+def atomic_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".tmp.", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 def binary_report(train: Sequence[OrderExample], test: Sequence[OrderExample], attr: str, bandwidth: float) -> dict[str, Any]:
     y_train = [int(getattr(row, attr)) for row in train]
