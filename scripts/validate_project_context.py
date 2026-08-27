@@ -11,7 +11,7 @@ EXPECTED_CLEANUP_SEQUENCE = (
     "paper_validated_then_deploy_then_server_health_then_legacy_deletion"
 )
 EXPECTED_V7_PATHS = {
-    "canonical_loop": "scripts/paper_v7_loop.sh",
+    "canonical_loop": "scripts/paper_v7_execution_loop.sh",
     "canonical_config": "config/paper_v7.json",
     "canonical_run_root": "runs/paper_v7_live",
 }
@@ -147,9 +147,6 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
         if champion.get("version") != 7:
             errors.append("isolated evidence candidate must be version 7")
         _validate_v7_manifest_paths(root, champion, errors, expected_loop=EVIDENCE_CANDIDATE_LOOP)
-        # Candidate-only enablement is an evidence selector, not an assertion that
-        # main/paper-validated/deploy/Grafana has become operational.  Those remain
-        # false until the later exact-SHA lifecycle stages succeed.
         if runtime.get("active_champion") is not False:
             errors.append("candidate-only V7 evidence must not set runtime.active_champion=true")
         if grafana.get("active") is not False or grafana.get("dashboard_uid") is not None or grafana.get("dashboard_file") is not None:
