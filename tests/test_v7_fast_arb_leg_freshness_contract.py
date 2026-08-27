@@ -33,7 +33,19 @@ class V7FastArbLegFreshnessContractTest(unittest.TestCase):
         self.assertIn('snapshot.hash = get_text(object, "hash")', self.part3)
         self.assertIn("rest_snapshot_ready_.insert(token);", self.part2)
         self.assertIn("!snapshot.hash.empty()", self.part2)
-        self.assertIn("!ws_snapshot_ready_.count(token) && !rest_snapshot_ready_.count(token)", self.part3)
+        self.assertIn("if (!continuous_ws && !point_in_time_rest)", self.part3)
+
+    def test_continuous_ws_state_is_not_aged_by_last_token_update(self) -> None:
+        self.assertIn("const bool continuous_ws = ws_snapshot_ready_.count(token) > 0;", self.part3)
+        self.assertIn("if (!continuous_ws) {", self.part3)
+        self.assertIn("last-update age/skew are diagnostics", self.part3)
+        self.assertIn("A transport failure/reconnect clears this lineage", self.part3)
+
+    def test_rest_point_in_time_state_keeps_strict_age_and_skew(self) -> None:
+        self.assertIn("const auto age = decision_ms - exchange->second;", self.part3)
+        self.assertIn("age > kMaxBookAgeMs || age < -kMaxBookSkewMs", self.part3)
+        self.assertIn("max_rest_exchange - min_rest_exchange > kMaxBookSkewMs", self.part3)
+        self.assertIn("max_rest_received - min_rest_received > kMaxBookSkewMs", self.part3)
 
     def test_delta_cannot_upgrade_a_rest_snapshot_into_ws_lineage(self) -> None:
         self.assertIn("if (!ws_snapshot_ready_.count(token) || timestamp <= 0) continue;", self.part3)
@@ -81,9 +93,11 @@ class V7FastArbLegFreshnessContractTest(unittest.TestCase):
         self.assertIn('current.reject_reason = "stale_or_unsynchronized_leg_book"', self.part2)
         self.assertIn('"current_stale_opportunities"', self.part2)
 
-    def test_rest_resync_does_not_overwrite_a_fresh_ws_l2_lineage(self) -> None:
+    def test_rest_resync_never_downgrades_uninterrupted_ws_lineage(self) -> None:
+        self.assertIn("const bool fresh_ws = ws_snapshot_ready_.count(token) > 0;", self.part2)
         self.assertIn("if (fresh_ws) continue;", self.part2)
-        self.assertIn("timestamped point-in-time rebase", self.part2)
+        self.assertNotIn("observed_ms - received->second <= kMaxBookAgeMs", self.part2)
+        self.assertIn("still-continuous WS lineage", self.part2)
         self.assertNotIn("evaluate_all_locked(0, now_ms())", self.part2)
 
     def test_reconnect_invalidates_ws_lineage_but_not_independent_rest_snapshot(self) -> None:
@@ -92,6 +106,11 @@ class V7FastArbLegFreshnessContractTest(unittest.TestCase):
         self.assertIn("if (!rest_snapshot_ready_.count(token))", self.part2)
         self.assertIn("websocket closed; reconnecting and invalidating L2 lineage", self.fast_ws)
         self.assertIn("report(shard_index", self.fast_ws)
+
+    def test_silent_ws_failure_is_bounded_before_quiet_lineage_is_trusted(self) -> None:
+        self.assertIn("std::chrono::seconds(5)", self.fast_ws)
+        self.assertIn("Keep-alive pings plus a short idle timeout", self.fast_ws)
+        self.assertIn("error path invalidates that shard's", self.fast_ws)
 
     def test_status_separates_ws_and_rest_provenance_coverage(self) -> None:
         self.assertIn('"ws_snapshot_ready_tokens"', self.part2)
