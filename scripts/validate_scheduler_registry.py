@@ -12,8 +12,8 @@ REQUIRED_IDS = {
     "integration-merge", "control-plane-event-bridge", "post-merge-validation", "code-validation",
     "monitoring-validation", "alpha-factory", "meta-supervisor", "fast-arb-shadow-research",
     "arb-theory-research", "external-intelligence", "live-api-smoke", "v7-live-paper-validation",
-    "v7-cross-sectional-ranking-research", "v7-point-in-time-universe-archive",
-    "v7-unified-paper-evidence",
+    "v7-paper-server-deploy", "v7-paper-server-health", "v7-cross-sectional-ranking-research",
+    "v7-point-in-time-universe-archive", "v7-unified-paper-evidence",
 }
 NON_SCHEDULER_WORKFLOWS = {
     ".github/workflows/private-runtime-single-writer-validation.yml",
@@ -108,8 +108,8 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
     dispatch_ids = [str(i["id"]) for i in items if i["validation_dispatch_authority"] is True]
     if merge_ids != ["integration-merge"]:
         errors.append(f"merge authority must belong only to integration-merge; found {merge_ids}")
-    if deploy_ids:
-        errors.append(f"no deployment authority is allowed while champion is disabled; found {deploy_ids}")
+    if deploy_ids != ["v7-paper-server-deploy"]:
+        errors.append(f"deploy authority must belong only to v7-paper-server-deploy; found {deploy_ids}")
     if dispatch_ids != ["post-merge-validation"]:
         errors.append(f"validation dispatch authority must belong only to post-merge-validation; found {dispatch_ids}")
 
@@ -158,21 +158,39 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
     if live.is_file():
         text = live.read_text(encoding="utf-8")
         for required in (
-            "expected_sha:",
-            'workflows: ["ci", "monitoring"]',
-            "scripts/v7_cutover_contract.py",
-            "scripts/v7_execution_evidence_hardened.py",
-            'test "$(git rev-parse origin/main)" = "$VALIDATION_SHA"',
-            '-F force=false',
+            "expected_sha:", 'workflows: ["ci", "monitoring"]', "scripts/v7_cutover_contract.py",
+            "scripts/v7_execution_evidence_hardened.py", 'test "$(git rev-parse origin/main)" = "$VALIDATION_SHA"', '-F force=false',
         ):
-            if required not in text:
-                errors.append(f"V7 live PAPER validation missing contract: {required}")
-        for forbidden in (
-            "force=true", "git push origin main", "git push origin paper-validated", "gh pr merge",
-            "POLYMARKET_DEPLOY_REF=", "deploy-paper-server", "paper_v6", "v4-live-paper",
+            if required not in text: errors.append(f"V7 live PAPER validation missing contract: {required}")
+        for forbidden in ("force=true", "git push origin main", "git push origin paper-validated", "gh pr merge", "POLYMARKET_DEPLOY_REF=", "deploy-paper-server", "paper_v6", "v4-live-paper"):
+            if forbidden in text: errors.append(f"V7 live PAPER validation contains forbidden authority: {forbidden}")
+
+    deploy = root / str(by_id.get("v7-paper-server-deploy", {}).get("workflow", ""))
+    if deploy.is_file():
+        text = deploy.read_text(encoding="utf-8")
+        for required in (
+            "ref: paper-validated", "scripts/v7_cutover_contract.py", "EXPECTED_VALIDATED_SHA",
+            "POLYMARKET_DEPLOY_REF=paper-validated", "V7 live PAPER validation", "ops/update_server_v7.sh",
+            "monitoring/v7_monitoring_manifest.json", 'test "$main_sha" = "$EXPECTED_VALIDATED_SHA"',
+            'test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"',
         ):
-            if forbidden in text:
-                errors.append(f"V7 live PAPER validation contains forbidden authority: {forbidden}")
+            if required not in text: errors.append(f"V7 deploy workflow missing contract: {required}")
+        for forbidden in ("authenticated_execution: true", "git push", "gh pr merge", "force=true", 'git merge-base --is-ancestor "$validated_sha" "$main_sha"'):
+            if forbidden in text: errors.append(f"V7 deploy workflow contains forbidden authority: {forbidden}")
+
+    health = root / str(by_id.get("v7-paper-server-health", {}).get("workflow", ""))
+    if health.is_file():
+        text = health.read_text(encoding="utf-8")
+        for required in (
+            "scripts/v7_cutover_contract.py", "paper_v7_loop", "paper_v7_execution_loop", "v7_market_proxy_status",
+            "recorder_count", "broker_count", "polymarket_runtime_pnl_usd", "polymarket_runtime_equity_usd",
+            "GRAFANA_DASHBOARD_UID", "monitoring/v7_monitoring_manifest.json", "polymarket_v7_monitoring_manifest_v1",
+            "polymarket_v7_ledger_", 'test "$main_sha" = "$EXPECTED_VALIDATED_SHA"',
+            'test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"',
+        ):
+            if required not in text: errors.append(f"V7 server-health workflow missing contract: {required}")
+        for forbidden in ("POLYMARKET_DEPLOY_REF=", "gh pr merge", "git push", 'git merge-base --is-ancestor "$validated_sha" "$main_sha"', "config/project_context.json"):
+            if forbidden in text: errors.append(f"V7 server-health workflow contains forbidden authority: {forbidden}")
 
     evidence = root / str(by_id.get("v7-unified-paper-evidence", {}).get("workflow", ""))
     if evidence.is_file():
@@ -190,7 +208,7 @@ def render(items: list[dict[str, Any]], errors: list[str]) -> str:
     if errors:
         lines += ["", "## Errors", *[f"- {e}" for e in errors]]
     else:
-        lines += ["", "Registry is valid: V3-V6 schedulers are absent and deployment authority is intentionally disabled until V7 promotion."]
+        lines += ["", "Registry is valid: V7 live validation, deploy and server-health have distinct owners; deploy authority is unique and fail-closed by workflow contract."]
     return "\n".join(lines) + "\n"
 
 
