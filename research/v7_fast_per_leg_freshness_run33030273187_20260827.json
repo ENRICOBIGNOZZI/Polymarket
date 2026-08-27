@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "research_only": true,
+  "real_order_submission": false,
+  "source": {
+    "pr": 684,
+    "branch": "research/v7-fast-per-leg-freshness-port-20260827",
+    "head_sha": "bb741fd711890d4d658d7ff4e8f91e9523c22d93",
+    "workflow_run_id": 33030273187,
+    "artifact_id": 9630010146,
+    "artifact_name": "fast-arb-evidence-33030273187"
+  },
+  "technical_validation": {
+    "ci": "success",
+    "monitoring": "success",
+    "research_policy": "success",
+    "fast_arb_shadow": "success",
+    "ctest_passed": 15,
+    "ctest_failed": 0,
+    "fast_data_health_tests_passed": 6,
+    "fast_data_health_tests_failed": 0
+  },
+  "shadow_status": {
+    "markets": 701,
+    "tokens": 1402,
+    "safe_negrisk_events": 17,
+    "ws_messages": 13823,
+    "book_updates": 13217,
+    "rest_resyncs": 3,
+    "feed_stale_ms": 5,
+    "feed_latency_p50_ms": 77.0,
+    "feed_latency_p95_ms": 373.2,
+    "feed_latency_p99_ms": 834.52,
+    "decision_latency_p99_us": 85.0,
+    "ws_snapshot_ready_tokens": 156,
+    "ws_snapshot_ready_fraction": 0.11126961483594865,
+    "freshness_missing_rejections": 3395,
+    "freshness_age_rejections": 1415,
+    "freshness_skew_rejections": 79,
+    "evaluations": 23236,
+    "executable_observations": 4356,
+    "hard_executable_observations": 0,
+    "current_opportunities": 876,
+    "current_executable": 17,
+    "current_hard_executable": 0,
+    "current_stale_opportunities": 69
+  },
+  "cost_stressed_research_summary": {
+    "runs": 1,
+    "observations": 878,
+    "hard_executable_observations": 0,
+    "nonhard_executable_observations": 86,
+    "maker_complete_set_shadow_executable": 86,
+    "maker_complete_set_shadow_profit_sum_modelled": 21.6736646,
+    "maker_complete_set_shadow_stressed_positive_share": 0.9767441860465116,
+    "binary_complete_set_hard_executable": 0,
+    "negrisk_complete_set_hard_executable": 0,
+    "research_ready": false,
+    "promotion_ready": false
+  },
+  "interpretation": {
+    "state": "STRICT_PER_LEG_FRESHNESS_EXACT_HEAD_GREEN_ZERO_HARD_HITS",
+    "alpha_status": "MORE_EVIDENCE_REQUIRED",
+    "hard_arb_conclusion": "No hard structural-arbitrage observation survives the strict per-leg full-WS-lineage age/skew gate on this exact-head window.",
+    "feed_conclusion": "The zero hard hits are not attributable to a dead public feed: WS traffic, book updates, REST resyncs and feed freshness were healthy.",
+    "primary_blocker": "Only 156/1402 tokens had valid full-WS-snapshot lineage at stop; missing lineage plus age/skew rejections dominate the admissibility funnel.",
+    "nonhard_warning": "The passive maker complete-set observations are shadow/theory state changes, not PAPER fills, completions or audited fill-conditioned PnL and must not be promoted as alpha."
+  },
+  "bounded_next_challenger": {
+    "hypothesis": "Preserving CLOB /books snapshot timestamp and hash can increase point-in-time L2 provenance coverage without weakening per-leg age/skew gates.",
+    "constraints": [
+      "REST full snapshots may be used only as point-in-time rebase evidence.",
+      "REST snapshots never establish gap-free WebSocket continuity.",
+      "A delta after a REST rebase does not become sequence-continuous unless an accepted continuity contract is proven.",
+      "Every required leg must independently pass exchange-time age and cross-leg skew checks.",
+      "No authenticated or real-money execution.",
+      "No main or paper-validated ref mutation from this research lane."
+    ],
+    "success_metrics": [
+      "higher provenance-ready token fraction on the same chronological shadow protocol",
+      "lower missing-lineage rejection rate without higher stale/skew admission",
+      "hard-arb survivors, if any, must retain positive executable depth/fee/latency economics",
+      "no promotion until sequential legging/unwind and PAPER fill-conditioned PnL are evidenced"
+    ]
+  }
+}
