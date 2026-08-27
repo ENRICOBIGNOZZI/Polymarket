@@ -14,9 +14,15 @@ find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
 
-add_library(pm_core src/http.cpp src/api.cpp src/event_api.cpp src/config.cpp src/boost_json.cpp)
+# Boost.JSON is compiled exactly once and shared by all V7 C++ components.
+# This keeps the bounded market-data decoder independent from HTTP/REST code.
+add_library(pm_json src/boost_json.cpp)
+target_include_directories(pm_json PUBLIC ${Boost_INCLUDE_DIRS})
+target_compile_options(pm_json PRIVATE -Wall -Wextra -Wpedantic)
+
+add_library(pm_core src/http.cpp src/api.cpp src/event_api.cpp src/config.cpp)
 target_include_directories(pm_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
-target_link_libraries(pm_core PUBLIC PkgConfig::LIBCURL)
+target_link_libraries(pm_core PUBLIC PkgConfig::LIBCURL pm_json)
 target_compile_options(pm_core PRIVATE -Wall -Wextra -Wpedantic)
 
 add_library(pm_fast_arb src/fast_arb.cpp src/fast_ws.cpp)
@@ -24,8 +30,13 @@ target_include_directories(pm_fast_arb PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/includ
 target_link_libraries(pm_fast_arb PUBLIC pm_core Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 target_compile_options(pm_fast_arb PRIVATE -Wall -Wextra -Wpedantic)
 
-add_library(pm_v7_common src/v7_oms.cpp src/v7_paper_queue.cpp src/v7_market_state.cpp)
-target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_library(pm_v7_common
+  src/v7_oms.cpp
+  src/v7_paper_queue.cpp
+  src/v7_market_state.cpp
+  src/v7_market_ws.cpp)
+target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
+target_link_libraries(pm_v7_common PUBLIC pm_json)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
 
 add_library(pm_v7_hft src/v7_maker_hft.cpp)
@@ -59,6 +70,10 @@ if(BUILD_TESTING)
   add_executable(pm_v7_market_state_tests tests/test_v7_market_state.cpp)
   target_link_libraries(pm_v7_market_state_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_market_state_tests COMMAND pm_v7_market_state_tests)
+
+  add_executable(pm_v7_market_ws_tests tests/test_v7_market_ws.cpp)
+  target_link_libraries(pm_v7_market_ws_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_market_ws_tests COMMAND pm_v7_market_ws_tests)
 
   add_executable(pm_v7_maker_hft_tests tests/test_v7_maker_hft.cpp)
   target_link_libraries(pm_v7_maker_hft_tests PRIVATE pm_v7_hft)
