@@ -155,6 +155,27 @@ class PersistentMakerHandoffTests(unittest.TestCase):
             with self.assertRaisesRegex(module.EvidenceError, "unsafe_operator_directive"):
                 module.load_authorized_min_edge(path)
 
+    def test_frozen_recurrence_evidence_is_prospective_and_not_execution_credit(self) -> None:
+        path = ROOT / "research" / "hf_v7_persistent_maker_recurrence_window2_20260827.json"
+        report = json.loads(path.read_text(encoding="utf-8"))
+        cutoff = int(report["preregistered_source"]["prospective_not_before_ms"])
+        recurrence = report["prospective_recurrence"]["candidate"]
+        first = int(recurrence["first_later_observed_ts_ms"])
+
+        self.assertGreaterEqual(first, cutoff)
+        self.assertEqual(int(recurrence["delay_after_preregistered_cutoff_ms"]), first - cutoff)
+        self.assertEqual(recurrence["opportunity_id"], "maker-binary:1321564")
+        self.assertGreater(float(recurrence["net_edge_per_share"]), 0.0)
+        self.assertGreater(float(recurrence["stressed_net_edge_per_share"]), 0.0)
+        self.assertEqual(int(recurrence["exchange_ts_ms"]), 0)
+        self.assertFalse(report["later_window"]["authority_valid_execution_window"])
+        self.assertFalse(report["paper_fill_claim"])
+        self.assertFalse(report["realized_pnl_claim"])
+        self.assertFalse(recurrence["paper_fill"])
+        self.assertFalse(recurrence["paired_completion"])
+        self.assertIsNone(recurrence["realized_fill_conditioned_pnl_usd"])
+        self.assertFalse(report["promotion_allowed"])
+
 
 if __name__ == "__main__":
     unittest.main()
