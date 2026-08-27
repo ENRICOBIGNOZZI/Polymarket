@@ -196,12 +196,17 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             "EXPECTED_VALIDATED_SHA",
             "POLYMARKET_DEPLOY_REF=paper-validated",
             "V7 live PAPER validation",
-            "ops/update_server_macos.sh",
-            "ops/update_server.sh",
+            "ops/update_server_v7.sh",
+            "monitoring/v7_monitoring_manifest.json",
+            'test "$main_sha" = "$EXPECTED_VALIDATED_SHA"',
+            'test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"',
         ):
             if required not in text:
                 errors.append(f"V7 deploy workflow missing contract: {required}")
-        for forbidden in ("authenticated_execution: true", "git push", "gh pr merge", "force=true"):
+        for forbidden in (
+            "authenticated_execution: true", "git push", "gh pr merge", "force=true",
+            'git merge-base --is-ancestor "$validated_sha" "$main_sha"',
+        ):
             if forbidden in text:
                 errors.append(f"V7 deploy workflow contains forbidden authority: {forbidden}")
 
@@ -218,10 +223,19 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             "polymarket_runtime_pnl_usd",
             "polymarket_runtime_equity_usd",
             "GRAFANA_DASHBOARD_UID",
+            "monitoring/v7_monitoring_manifest.json",
+            "polymarket_v7_monitoring_manifest_v1",
+            "polymarket_v7_ledger_",
+            'test "$main_sha" = "$EXPECTED_VALIDATED_SHA"',
+            'test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"',
         ):
             if required not in text:
                 errors.append(f"V7 server-health workflow missing contract: {required}")
-        for forbidden in ("POLYMARKET_DEPLOY_REF=", "gh pr merge", "git push"):
+        for forbidden in (
+            "POLYMARKET_DEPLOY_REF=", "gh pr merge", "git push",
+            'git merge-base --is-ancestor "$validated_sha" "$main_sha"',
+            "config/project_context.json",
+        ):
             if forbidden in text:
                 errors.append(f"V7 server-health workflow contains forbidden authority: {forbidden}")
 
