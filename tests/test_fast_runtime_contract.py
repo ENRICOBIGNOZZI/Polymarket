@@ -13,6 +13,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _wait_pid_gone(pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            return True
+        time.sleep(0.05)
+    return not _pid_alive(pid)
+
+
 class FastRuntimeContractTest(unittest.TestCase):
     def test_fast_engine_remains_shadow_only(self) -> None:
         policy = json.loads((ROOT / "config" / "fast_arb_policy.json").read_text(encoding="utf-8"))
@@ -34,8 +53,11 @@ class FastRuntimeContractTest(unittest.TestCase):
             "fcntl.LOCK_EX | fcntl.LOCK_NB",
             "close_fds=True",
             "start_new_session=True",
+            "pass_fds=(lock_fd,)",
+            '"--internal-watchdog"',
+            "os.getppid() != parent_pid",
+            "_drain_process_group(child_pgid)",
             "os.set_inheritable(fd, False)",
-            "os.killpg(child.pid, signum)",
             "return 75",
         ):
             with self.subTest(token=token):
@@ -52,7 +74,9 @@ class FastRuntimeContractTest(unittest.TestCase):
             'root="$repo/.private_validation/$PROBE_ID"',
             'scripts/runtime_singleton_launcher.py',
             'second_owner_exit_code',
-            'descriptor_not_inherited',
+            'post_supervisor_loss_competitor_exit_code',
+            'watchdog_holds_lock_after_supervisor_loss',
+            'orphan_runtime_drained_before_reacquire',
             'live_runtime_started": False',
         ):
             with self.subTest(token=token):
@@ -113,7 +137,7 @@ class FastRuntimeContractTest(unittest.TestCase):
             finally:
                 first.terminate()
                 try:
-                    first.wait(timeout=5)
+                    first.wait(timeout=8)
                 except subprocess.TimeoutExpired:
                     first.kill()
                     first.wait(timeout=5)
@@ -140,13 +164,14 @@ class FastRuntimeContractTest(unittest.TestCase):
             self.assertEqual(third.returncode, 0, third)
             self.assertEqual(third.stdout.strip(), "reacquired")
 
-    def test_singleton_descriptor_is_not_inherited_by_child(self) -> None:
+    def test_supervisor_sigkill_keeps_lock_until_orphan_runtime_is_drained(self) -> None:
         launcher = ROOT / "scripts" / "runtime_singleton_launcher.py"
         with tempfile.TemporaryDirectory() as tmpdir:
             lock = Path(tmpdir) / "runtime.lock"
             child_file = Path(tmpdir) / "child.pid"
             child_code = (
-                "import os,sys,time; "
+                "import os,signal,sys,time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
                 "open(sys.argv[1],'w',encoding='utf-8').write(str(os.getpid())); "
                 "time.sleep(30)"
             )
@@ -162,13 +187,12 @@ class FastRuntimeContractTest(unittest.TestCase):
                     child_code,
                     str(child_file),
                 ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             child_pid = 0
             try:
-                for _ in range(100):
+                for _ in range(150):
                     if lock.exists() and child_file.exists():
                         break
                     if first.poll() is not None:
@@ -177,10 +201,36 @@ class FastRuntimeContractTest(unittest.TestCase):
                 else:
                     self.fail("lock/child marker was not materialized")
                 child_pid = int(child_file.read_text(encoding="utf-8"))
+                self.assertTrue(_pid_alive(child_pid))
 
                 first.kill()
                 first.wait(timeout=5)
-                os.kill(child_pid, 0)
+                self.assertTrue(_pid_alive(child_pid), "test must observe the orphan before watchdog drainage completes")
+
+                blocked = subprocess.run(
+                    [
+                        sys.executable,
+                        str(launcher),
+                        "--lock",
+                        str(lock),
+                        "--",
+                        sys.executable,
+                        "-c",
+                        "print('unsafe-reacquire')",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                    check=False,
+                )
+                self.assertEqual(blocked.returncode, 75, blocked)
+                self.assertIn("another paper runtime already owns", blocked.stderr)
+
+                self.assertTrue(
+                    _wait_pid_gone(child_pid, 8.0),
+                    "watchdog did not drain orphan runtime group before releasing ownership",
+                )
+                child_pid = 0
 
                 reacquired = subprocess.run(
                     [
@@ -191,7 +241,7 @@ class FastRuntimeContractTest(unittest.TestCase):
                         "--",
                         sys.executable,
                         "-c",
-                        "print('reacquired-with-orphan-child')",
+                        "print('safe-reacquire')",
                     ],
                     capture_output=True,
                     text=True,
@@ -199,19 +249,16 @@ class FastRuntimeContractTest(unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(reacquired.returncode, 0, reacquired)
-                self.assertEqual(reacquired.stdout.strip(), "reacquired-with-orphan-child")
+                self.assertEqual(reacquired.stdout.strip(), "safe-reacquire")
             finally:
                 if first.poll() is None:
                     first.kill()
                     first.wait(timeout=5)
-                if child_pid:
+                if child_pid and _pid_alive(child_pid):
                     try:
                         os.kill(child_pid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
-                for stream in (first.stdout, first.stderr):
-                    if stream is not None:
-                        stream.close()
 
 
 if __name__ == "__main__":
