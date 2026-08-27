@@ -61,7 +61,7 @@ jobs:
           set -euo pipefail
           mkdir -p runs/hourly-fast
           duration=180
-          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then duration=45; fi
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then duration=120; fi
           ./build/polymarket_fast_arb_shadow \
             --config config/fast_arb_v7_shadow.json \
             --policy config/fast_arb_policy.json \
