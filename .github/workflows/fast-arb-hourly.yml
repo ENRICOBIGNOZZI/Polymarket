@@ -36,8 +36,21 @@ jobs:
   shadow-evidence:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      VALIDATION_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.VALIDATION_SHA }}
+          fetch-depth: 1
+
+      - name: Verify exact research revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
+          printf 'validation_sha=%s\n' "$VALIDATION_SHA"
 
       - name: Install native dependencies
         run: |
@@ -56,6 +69,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p runs/hourly-fast
+          printf '%s\n' "$VALIDATION_SHA" > runs/hourly-fast/validation_sha.txt
           duration=180
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then duration=45; fi
           ./build/polymarket_fast_arb_shadow \
@@ -76,6 +90,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$(cat runs/hourly-fast/validation_sha.txt)" = "$VALIDATION_SHA"
           python3 scripts/arb_theory_scheduler.py \
             --evidence-root runs/hourly-fast \
             --base-policy config/fast_arb_policy.json \
@@ -92,8 +107,11 @@ jobs:
           import csv
           import json
           import math
+          import os
           from pathlib import Path
 
+          validation_sha = Path("runs/hourly-fast/validation_sha.txt").read_text(encoding="utf-8").strip()
+          assert validation_sha == os.environ["VALIDATION_SHA"]
           status = json.loads(Path("runs/hourly-fast/fast_arb_status.json").read_text())
           candidate = json.loads(Path("runs/hourly-fast/fast_arb_candidate.json").read_text())
           base_policy = json.loads(Path("config/fast_arb_policy.json").read_text())
@@ -122,10 +140,6 @@ jobs:
           assert base_policy["max_notional_usd"] == auth["max_trade_usd_compatibility_sentinel"]
           assert base_policy["external_uncertainty_penalty"] == 0.0
 
-          # Current main does not yet contain #690's per-token WS/REST provenance
-          # contract. Until that is forward-ported, a positive hard-arb row cannot
-          # be interpreted as synchronized executable evidence. Fail closed rather
-          # than allowing this authority/sizing repair to create a false alpha hit.
           provenance_fields = {
               "freshness_ready_tokens",
               "freshness_missing_rejections",
