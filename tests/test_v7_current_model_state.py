@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import math
+import sys
 import time
 import unittest
 from dataclasses import replace
+from pathlib import Path
 
-import scripts.v7_local_factor_core as lf
-import scripts.v7_model_book_snapshot as books
-import scripts.v7_pca_stat_arb_core as pca
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = ROOT / "scripts"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import v7_local_factor_core as lf
+import v7_model_book_snapshot as books
+import v7_pca_stat_arb_core as pca
 
 
 class CausalBookSnapshotTests(unittest.TestCase):
@@ -36,6 +43,9 @@ class CausalBookSnapshotTests(unittest.TestCase):
         now_ms = int(time.time() * 1000)
         a = books.parse_causal_book(self._row(now_ms - 100, token="a", snapshot_hash="ha"), received_ts_ms=now_ms - 50)
         b = books.parse_causal_book(self._row(now_ms - 200, token="b", snapshot_hash="hb"), received_ts_ms=now_ms - 40)
+        self.assertIsNotNone(a)
+        self.assertIsNotNone(b)
+        assert a is not None and b is not None
         self.assertTrue(books.validate_coherent_books({"a": a, "b": b}, ["a", "b"], now_ms=now_ms).ok)
         stale = replace(a, exchange_ts_ms=now_ms - 6000)
         self.assertEqual(books.validate_coherent_books({"a": stale}, ["a"], now_ms=now_ms).reason, "stale_exchange_book")
@@ -52,8 +62,10 @@ class LocalFactorCurrentStateTests(unittest.TestCase):
         b = [-0.6 * c[i] + 0.15 * d[i] - 0.10 * ((-0.40) ** i) for i in times]
         panel = lf.standardize_levels({"a": a, "b": b, "c": c, "d": d}, times)
         self.assertIsNotNone(panel)
+        assert panel is not None
         fit = lf.fit_pair(panel, "a", "b", min_controls=2)
         self.assertIsInstance(fit, lf.CurrentPairFit)
+        assert fit is not None
         at_means = {mid: lf.logistic(panel.means[mid]) for mid in ("a", "b", "c", "d")}
         state = lf.current_residual_state(fit, at_means)
         self.assertIsNotNone(state)
@@ -64,6 +76,7 @@ class LocalFactorCurrentStateTests(unittest.TestCase):
         shifted["a"] = lf.logistic(panel.means["a"] + 2.0 * panel.scales["a"])
         shifted_state = lf.current_residual_state(fit, shifted)
         self.assertIsNotNone(shifted_state)
+        assert state is not None and shifted_state is not None
         self.assertGreater(abs(shifted_state.residual_z_a), abs(state.residual_z_a) + 0.5)
 
 
@@ -81,9 +94,11 @@ class PcaCurrentForecastTests(unittest.TestCase):
         panel = pca.RawPanel(tuple(range(n)), {"target": tuple(target), "c": tuple(c), "d": tuple(d)})
         model = pca.fit_target(panel, "target", max_components=2, explained_variance_threshold=0.99)
         self.assertIsInstance(model, pca.CurrentPcaTargetModel)
+        assert model is not None
         current = {"target": target[-1] + 0.08, "c": c[-1] + 0.20, "d": d[-1] - 0.10}
         score = pca.score_current(model, current, 2)
         self.assertIsNotNone(score)
+        assert score is not None
         self.assertTrue(score.common_factor_forecast_identified)
         self.assertAlmostEqual(
             score.predicted_logit_move,
