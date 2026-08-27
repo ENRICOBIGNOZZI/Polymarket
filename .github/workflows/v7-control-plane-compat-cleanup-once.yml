@@ -1,0 +1,68 @@
+name: V7 one-shot control-plane compatibility cleanup
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/v7-control-plane-compat-cleanup-once.yml"
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: v7-control-plane-compat-cleanup
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: github.event.pull_request.head.ref == 'cleanup/v7-only-everywhere-20260827'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Replace retired compatibility authorities with V7 authorities
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          targets = [
+              Path('scripts/alpha_factory.py'),
+              Path('scripts/meta_supervisor.py'),
+              Path('scripts/research_director.py'),
+              Path('tests/test_meta_supervisor.py'),
+              Path('tests/test_meta_supervisor_workflow_contract.py'),
+          ]
+          retired_maker = 'forward-' + 'maker-research.yml'
+          retired_deploy = re.compile(r'(?<!v7-)deploy-' + r'paper-server\.yml')
+          retired_health = re.compile(r'(?<!paper-)server-' + r'health\.yml')
+          for path in targets:
+              text = path.read_text(encoding='utf-8')
+              text = text.replace(retired_maker, 'v7-unified-paper-evidence.yml')
+              text = retired_deploy.sub('v7-deploy-paper-server.yml', text)
+              text = retired_health.sub('v7-paper-server-health.yml', text)
+              path.write_text(text, encoding='utf-8')
+          PY
+          python3 -m unittest tests/test_no_legacy_runtime.py -v
+          git diff -- scripts tests
+
+      - name: Commit non-workflow migration
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts tests
+          git diff --cached --quiet && exit 0
+          git commit -m 'V7 cleanup: retire control-plane compatibility authorities'
+          git push origin "HEAD:${HEAD_REF}"
