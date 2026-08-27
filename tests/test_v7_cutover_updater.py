@@ -49,10 +49,28 @@ class V7CutoverUpdaterContractTest(unittest.TestCase):
             "tests/test_runtime_contract_health.py",
             "tests/test_grafana_multi_strategy_contract.py",
             "monitoring/exporter.py monitoring/exporter_latest.py",
-            "scripts/paper_latest_loop.sh",
             "v5_runtime_readiness.py",
         ):
             self.assertNotIn(forbidden, text)
+
+        guard_start = text.index("assert_no_legacy_writer(){")
+        guard_end = text.index("\n}\n\nstop_v7_runtime", guard_start) + 2
+        guard = text[guard_start:guard_end]
+        outside_guard = text[:guard_start] + text[guard_end:]
+        self.assertIn('pgrep -af "$pattern"', guard)
+        for legacy_writer in (
+            "scripts/paper_v3_loop.sh",
+            "scripts/paper_v4_loop.sh",
+            "scripts/paper_v5_loop.sh",
+            "scripts/paper_v6_loop.sh",
+            "scripts/paper_latest_loop.sh",
+        ):
+            self.assertIn(legacy_writer, guard)
+            self.assertNotIn(
+                legacy_writer,
+                outside_guard,
+                f"{legacy_writer} may appear only in the fail-closed legacy-writer detector",
+            )
 
     def test_candidate_validation_happens_before_active_checkout_mutation(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
