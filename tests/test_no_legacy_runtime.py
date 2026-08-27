@@ -48,6 +48,7 @@ FORBIDDEN_PATHS = {
     "scripts/validate_scheduler_registry.py",
     "scripts/v7_canonical_convergence_policy.py",
     "scripts/v7_evidence_candidate_contract.py",
+    "scripts/v7_market_maker_worker.py",
     "src/fast_arb_main.cpp",
     "tests/test_fast_runtime_contract.py",
     "tests/test_v7_canonical_convergence_policy.py",
