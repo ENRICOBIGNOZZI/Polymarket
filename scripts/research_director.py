@@ -95,8 +95,8 @@ def validate_config(config: dict[str, Any]) -> None:
         errors.append("owner workflow allowlist overlaps forbidden workflows: " + ", ".join(overlap))
     hard_forbidden = {
         "integration-merge.yml",
-        "deploy-paper-server.yml",
-        "server-health.yml",
+        "v7-deploy-paper-server.yml",
+        "v7-paper-server-health.yml",
         "promotion-controller.yml",
     }
     bad = sorted(set(owners).intersection(hard_forbidden))

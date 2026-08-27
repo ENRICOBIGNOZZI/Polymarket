@@ -114,7 +114,7 @@ def validate_config(config: dict[str, Any]) -> None:
     overlap = sorted(allowlist.intersection(forbidden))
     if overlap:
         errors.append("dispatch allowlist overlaps forbidden set: " + ", ".join(overlap))
-    if "deploy-paper-server.yml" in allowlist:
+    if "v7-deploy-paper-server.yml" in allowlist:
         errors.append("the Alpha Factory may never dispatch deployment directly")
 
     multipliers = {finite(x) for x in (config.get("gates") or {}).get("cost_stress_multipliers", [])}
@@ -459,7 +459,7 @@ def next_experiments(diagnostics: dict[str, Any], forward_candidates_: list[dict
             "The current bottleneck is observed paired execution rather than a lower signal threshold.",
             "zero finalized OOS bundles",
             "future paired fills, net PnL ex rewards, and 60s/300s executable markouts",
-            "forward-maker-research.yml",
+            "v7-unified-paper-evidence.yml",
         )
 
     b1 = diagnostics.get("b1") or {}
@@ -470,7 +470,7 @@ def next_experiments(diagnostics: dict[str, Any], forward_candidates_: list[dict
             "Quote placement and horizon selection may recover a subset of B1 raw edge without lowering the production gate.",
             f"B1 raw-positive={b1.get('raw_positive')} maker-positive=0",
             "forward net edge and paired fill probability by quote policy and holding horizon",
-            "forward-maker-research.yml",
+            "v7-unified-paper-evidence.yml",
         )
 
     b2 = diagnostics.get("b2") or {}
@@ -496,7 +496,7 @@ def next_experiments(diagnostics: dict[str, Any], forward_candidates_: list[dict
                 "Coordinated quote admission/cancellation can reduce naked one-sided inventory.",
                 f"observed one-sided fill rate up to {worst_one_sided:.4f}",
                 "lower one-sided-only rate with nonnegative 2x-cost-stressed matched PnL",
-                "forward-maker-research.yml",
+                "v7-unified-paper-evidence.yml",
             )
         if max(integer(candidate.get("observations")) for candidate in forward_candidates_) < 24:
             add(
@@ -505,7 +505,7 @@ def next_experiments(diagnostics: dict[str, Any], forward_candidates_: list[dict
                 "More independent forward windows are needed before inference or promotion.",
                 "fewer than 24 forward runs per policy",
                 "at least 24 runs and 20 paired fills per policy",
-                "forward-maker-research.yml",
+                "v7-unified-paper-evidence.yml",
             )
 
     b3 = diagnostics.get("b3_rewards") or {}
@@ -516,7 +516,7 @@ def next_experiments(diagnostics: dict[str, Any], forward_candidates_: list[dict
             "Observed reward share and payout-floor frequency, not advertised pool size, determine B3 economics.",
             "no standalone payout-aware B3 opportunity",
             "realized payout share net of capital, adverse selection, and one-sided inventory",
-            "forward-maker-research.yml",
+            "v7-unified-paper-evidence.yml",
         )
 
     external = diagnostics.get("external") or {}
@@ -762,8 +762,8 @@ def build_report(
                 "monitoring.yml",
                 "v7-live-paper-validation.yml",
                 "paper-validated",
-                "deploy-paper-server.yml",
-                "server-health.yml",
+                "v7-deploy-paper-server.yml",
+                "v7-paper-server-health.yml",
             ],
             "real_money_automation": False,
         },

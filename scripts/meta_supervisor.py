@@ -88,7 +88,7 @@ def validate_config(config: dict[str, Any]) -> None:
     overlap = sorted(allowlist.intersection(forbidden))
     if overlap:
         errors.append("dispatch allowlist overlaps forbidden workflows: " + ", ".join(overlap))
-    if "deploy-paper-server.yml" in allowlist or "server-health.yml" in allowlist:
+    if "v7-deploy-paper-server.yml" in allowlist or "v7-paper-server-health.yml" in allowlist:
         errors.append("deployment and private health workflows may not be auto-dispatched")
     if errors:
         raise ValueError("; ".join(errors))
