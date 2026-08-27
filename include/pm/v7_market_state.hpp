@@ -15,6 +15,7 @@ namespace pm::v7 {
 inline constexpr std::int32_t kCanonicalPriceScale = 10'000;
 inline constexpr std::size_t kCanonicalPriceSlots = 10'001;
 inline constexpr std::size_t kOccupancyWords = (kCanonicalPriceSlots + 63) / 64;
+inline constexpr std::size_t kHotDepthLevels = 10;
 
 struct PriceLevelE4 {
     std::int32_t price_e4 = 0;
@@ -38,6 +39,13 @@ struct BookHotSnapshot {
     std::int64_t best_ask_microunits = 0;
     DepthSummary bid_depth{};
     DepthSummary ask_depth{};
+    // Fixed L10 executable ladders are part of the compact canonical snapshot.
+    // They let PAPER markout/risk code compute size-aware future VWAP without
+    // copying the full book or performing REST lookups on the hot path.
+    std::array<PriceLevelE4, kHotDepthLevels> bid_levels{};
+    std::array<PriceLevelE4, kHotDepthLevels> ask_levels{};
+    std::uint8_t bid_level_count = 0;
+    std::uint8_t ask_level_count = 0;
     std::uint8_t lineage_continuous = 0;
     std::uint8_t valid = 0;
 };
@@ -80,7 +88,9 @@ private:
     [[nodiscard]] std::int32_t best_ask() const noexcept;
     [[nodiscard]] std::int32_t next_bid(std::int32_t from_exclusive) const noexcept;
     [[nodiscard]] std::int32_t next_ask(std::int32_t from_exclusive) const noexcept;
-    [[nodiscard]] DepthSummary depth_summary(Side side) const noexcept;
+    [[nodiscard]] std::uint8_t fill_ladder(
+        Side side,
+        std::array<PriceLevelE4, kHotDepthLevels>& output) const noexcept;
 
     std::array<std::int64_t, kCanonicalPriceSlots> bid_qty_{};
     std::array<std::int64_t, kCanonicalPriceSlots> ask_qty_{};
