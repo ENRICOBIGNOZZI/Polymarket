@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-08-27T06:42:00Z",
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "research_only": true,
+  "promotion_allowed": false,
+  "paper_fill_claim": false,
+  "realized_pnl_claim": false,
+  "authority": {
+    "source": "config/operator_directives.json@main plus latest explicit user instruction",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "market_limit": 1000,
+    "min_liquidity": 2.0,
+    "min_net_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "fixed_dollar_trade_cap_enabled": false,
+    "max_trade_fraction": 1.0,
+    "max_market_fraction": 1.0,
+    "max_event_fraction": 1.0,
+    "max_gross_fraction": 1.0,
+    "hard_arb_max_trade_fraction": 1.0,
+    "max_drawdown": 0.15
+  },
+  "preregistered_source": {
+    "pr": 708,
+    "source_fast_pr": 704,
+    "source_fast_head_sha": "e2285d800fdeaaf82e8ff93882b90b306ce5347d",
+    "source_fast_run_id": 33042585786,
+    "source_fast_artifact_id": 9634503913,
+    "prospective_not_before_ms": 1787808775004,
+    "candidate_ids": [
+      "maker-binary:3746416",
+      "maker-binary:701544",
+      "maker-binary:1321564"
+    ],
+    "same_window_execution_credit_allowed": false
+  },
+  "prior_prospective_recurrence": {
+    "evidence_file": "research/hf_v7_persistent_maker_recurrence_window2_20260827.json",
+    "candidate_id": "maker-binary:1321564",
+    "final_observed_ts_ms": 1787812153708
+  },
+  "later_window": {
+    "workflow_run_id": 33046615403,
+    "artifact_id": 9635954232,
+    "artifact_sha256": "e76605aa3a3afa2fa184a697e6d054faa9df764c22adae792cf8f142f563e9df",
+    "workflow_head_sha": "570ca7dfbcf897d7a07ea0dda048ddd081d89574",
+    "chronologically_after_preregistration": true,
+    "chronologically_after_prior_recurrence": true,
+    "authority_valid_execution_window": false,
+    "authority_invalid_reasons": [
+      "the registered current-main Fast workflow used the legacy config/fast_arb_shadow.json research surface rather than the current V7 Fast authority surface",
+      "the registered workflow remained narrower than current authority at 600 markets and $10 minimum liquidity rather than approximately 1000 markets and $2",
+      "the candidate policy remained on the older 0.001 min-net-edge / $50 notional / 0.01 external-uncertainty settings",
+      "exact current-authority PAPER execution of the two maker legs was not performed",
+      "the first and final persisted recurrence rows had aggregate exchange_ts_ms=0, so strict exchange-time freshness is not established for the complete recurrence window"
+    ],
+    "observed_data_health": {
+      "markets": 756,
+      "tokens": 1512,
+      "safe_negrisk_events": 24,
+      "ws_messages": 11411,
+      "book_updates": 11277,
+      "rest_resyncs": 3,
+      "ws_errors": 0,
+      "feed_stale_ms": 12,
+      "feed_latency_p50_ms": 60.0,
+      "feed_latency_p95_ms": 102.0,
+      "feed_latency_p99_ms": 546.0,
+      "decision_latency_p99_us": 384.24,
+      "hard_executable_observations": 0,
+      "real_order_submission": false
+    }
+  },
+  "prospective_recurrence": {
+    "candidate_id": "maker-binary:1321564",
+    "market_id": "1321564",
+    "event_id": "196914",
+    "second_independent_post_registration_recurrence": true,
+    "first_later_observed_ts_ms": 1787812866437,
+    "final_later_observed_ts_ms": 1787812914802,
+    "delay_after_preregistered_cutoff_ms": 4091433,
+    "gap_after_prior_recurrence_ms": 712729,
+    "observed_later_span_ms": 48365,
+    "state_change_observations": 4,
+    "net_edge_per_share_min": 0.001,
+    "net_edge_per_share_median": 0.0045,
+    "net_edge_per_share_max": 0.006,
+    "raw_edge_per_share_min": 0.006,
+    "raw_edge_per_share_max": 0.011,
+    "price_sum_min": 0.989,
+    "price_sum_max": 0.994,
+    "all_rows_above_authorized_0_5bp_floor": true,
+    "additional_frozen_stress_bps": 10.0,
+    "minimum_edge_after_extra_10bp_stress": 0.0,
+    "passes_original_all_rows_extra_10bp_frontier": false,
+    "intermediate_rows_with_nonzero_aggregate_exchange_timestamp": 3,
+    "first_row_exchange_ts_ms": 0,
+    "final_row_exchange_ts_ms": 0,
+    "final_static_net_edge_per_share": 0.004,
+    "paper_fill": false,
+    "paired_completion": false,
+    "realized_fill_conditioned_pnl_usd": null
+  },
+  "interpretation": {
+    "material_finding": "maker-binary:1321564 recurred for a second independent post-registration window and remained statically above the authorized 0.5bp net-edge floor, strengthening identity-level persistence",
+    "qualification": "the newest recurrence does not satisfy the original stronger all-rows +10bp stress frontier because its first observed row had only 10bp net edge, and it still lacks complete strict exchange-time provenance and PAPER execution",
+    "strongest_target": "maker-binary:1321564 remains the strongest frozen target for an exact-current-authority candidate-specific PAPER execution test",
+    "not_claimed": [
+      "PAPER fill",
+      "paired completion",
+      "strict complete-window exchange-time freshness",
+      "audited realized PnL",
+      "fill-conditioned PnL",
+      "promotion readiness"
+    ]
+  },
+  "next_test": {
+    "candidate_id": "maker-binary:1321564",
+    "window": "new independent chronological PAPER window strictly after this evidence",
+    "actions": [
+      "at_touch_two_sided",
+      "selective_inside_spread_only_if_incremental_fill_conditioned_ev_is_positive"
+    ],
+    "required_execution_contract": [
+      "exact research head",
+      "current operator-authorized V7 breadth and economic floor",
+      "per-token receive and exchange freshness",
+      "explicit OPEN to CANCEL_PENDING to CANCELLED latency",
+      "delayed pre-cancel tape replay",
+      "FIFO queue accounting",
+      "authoritative fees and executable multi-level depth",
+      "45s 60s 300s depth-aware markout",
+      "audited non-overlapping cost provenance including fee slippage unwind capital and latency costs",
+      "frozen-trade cost stress at 1x 1.5x and 2x"
+    ],
+    "success_gate": "positive realized post-cost fill-conditioned PAPER PnL with no same-window selection credit"
+  },
+  "decision": "SECOND_PROSPECTIVE_STATIC_RECURRENCE_STRONG_TARGET_EXECUTION_NOT_YET_VALID_MORE_EVIDENCE_REQUIRED"
+}
