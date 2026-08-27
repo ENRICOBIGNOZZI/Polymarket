@@ -2,8 +2,8 @@
 """Fail-closed single-owner supervisor for the PAPER runtime.
 
 The launcher owns the canonical advisory lock and supervises one isolated
-runtime process group.  A dedicated watchdog inherits the lock descriptor but
-the runtime itself does not.  If the launcher is killed abruptly, the watchdog
+runtime process group. A dedicated watchdog inherits the lock descriptor but
+the runtime itself does not. If the launcher is killed abruptly, the watchdog
 keeps ownership fail-closed until the orphan runtime group has been drained.
 """
 from __future__ import annotations
@@ -16,6 +16,9 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+LOCK_REACQUIRE_GRACE_SECONDS = 0.75
+LOCK_RETRY_INTERVAL_SECONDS = 0.025
 
 
 def _current_owner(fd: int) -> str:
@@ -31,6 +34,26 @@ def _write_owner(fd: int, pid: int) -> None:
     os.ftruncate(fd, 0)
     os.write(fd, f"{pid}\n".encode("utf-8"))
     os.fsync(fd)
+
+
+def _acquire_lock(fd: int, wait_seconds: float = LOCK_REACQUIRE_GRACE_SECONDS) -> bool:
+    """Acquire exclusively, tolerating only a bounded watchdog-release race.
+
+    A live runtime or an orphan-draining watchdog keeps the lock for longer than
+    this small grace period, so competing PAPER owners still fail closed. The
+    grace only bridges the scheduler race where the orphan process has already
+    disappeared but the watchdog has not yet closed its inherited descriptor.
+    """
+
+    deadline = time.monotonic() + max(0.0, wait_seconds)
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(LOCK_RETRY_INTERVAL_SECONDS)
 
 
 def _process_group_alive(pgid: int) -> bool:
@@ -61,7 +84,7 @@ def _drain_process_group(pgid: int, grace_seconds: float = 5.0) -> None:
         time.sleep(0.05)
     if _process_group_alive(pgid):
         _signal_process_group(pgid, signal.SIGKILL)
-    # Fail closed.  If the kernel still reports the group alive, keep the
+    # Fail closed. If the kernel still reports the group alive, keep the
     # watchdog/launcher lock rather than admitting a second PAPER writer.
     while _process_group_alive(pgid):
         time.sleep(0.05)
@@ -95,7 +118,16 @@ def _watchdog_main(argv: list[str]) -> int:
     parser.add_argument("--child-pgid", type=int, required=True)
     parser.add_argument("--lock-fd", type=int, required=True)
     args = parser.parse_args(argv)
-    return _watchdog(args.parent_pid, args.child_pgid, args.lock_fd)
+    try:
+        return _watchdog(args.parent_pid, args.child_pgid, args.lock_fd)
+    finally:
+        # Release synchronously after drainage instead of relying on interpreter
+        # teardown. The launcher still owns its own descriptor during normal
+        # shutdown; after launcher SIGKILL this is the final lock holder.
+        try:
+            os.close(args.lock_fd)
+        except OSError:
+            pass
 
 
 def _forward_to_child_group(child: subprocess.Popen[object], signum: int) -> None:
@@ -154,7 +186,7 @@ def _supervise(command: list[str], lock_fd: int) -> int:
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
-        # A direct child can exit while descendants remain.  Drain the complete
+        # A direct child can exit while descendants remain. Drain the complete
         # owned group before this launcher can release its copy of the lock.
         _drain_process_group(child.pid)
         if child.poll() is None:
@@ -166,7 +198,7 @@ def _supervise(command: list[str], lock_fd: int) -> int:
             watchdog.wait(timeout=2)
         except subprocess.TimeoutExpired:
             # Group drainage above is complete; a stuck watchdog is no longer
-            # protecting live writers.  Terminate only that internal helper.
+            # protecting live writers. Terminate only that internal helper.
             watchdog.terminate()
             try:
                 watchdog.wait(timeout=1)
@@ -189,9 +221,7 @@ def main() -> int:
 
     args.lock.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(args.lock, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+    if not _acquire_lock(fd):
         owner = _current_owner(fd)
         suffix = f" (owner pid {owner})" if owner else ""
         print(f"fatal: another paper runtime already owns {args.lock}{suffix}", file=sys.stderr, flush=True)
@@ -199,7 +229,7 @@ def main() -> int:
         return 75
 
     _write_owner(fd, os.getpid())
-    # The runtime command itself never gets this fd.  `_spawn_watchdog` passes a
+    # The runtime command itself never gets this fd. `_spawn_watchdog` passes a
     # duplicate only to the internal watchdog so ownership survives SIGKILL of
     # the launcher until its runtime process group is gone.
     os.set_inheritable(fd, False)
