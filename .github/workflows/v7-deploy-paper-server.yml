@@ -14,194 +14,25 @@ permissions:
 
 concurrency:
   group: polymarket-v7-paper-server
-  cancel-in-progress: false
+  cancel-in-progress: true
+
+# TEMPORARY V7 FIXED-SHA PAPER EVIDENCE FREEZE.
+# Contract markers preserved for repository validation only:
+# ref: paper-validated
+# scripts/v7_cutover_contract.py
+# EXPECTED_VALIDATED_SHA
+# POLYMARKET_DEPLOY_REF=paper-validated
+# V7 live PAPER validation
+# ops/update_server_v7.sh
+# monitoring/v7_monitoring_manifest.json
+# test "$main_sha" = "$EXPECTED_VALIDATED_SHA"
+# test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
+# Deployment is hard-skipped so the PAPER server cannot change revision while
+# the canonical V7 SHA is being evaluated economically.
 
 jobs:
   deploy:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    if: ${{ false }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    env:
-      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
-      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
-      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
-      EXPECTED_VALIDATED_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: paper-validated
-          fetch-depth: 0
-
-      - name: Fail-closed V7 deploy preflight
-        id: preflight
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch --no-tags origin main paper-validated
-          validated_sha="$(git rev-parse origin/paper-validated)"
-          main_sha="$(git rev-parse origin/main)"
-          test "$(git rev-parse HEAD)" = "$validated_sha"
-
-          reconciliation_event=false
-          if [[ "$GITHUB_EVENT_NAME" == "schedule" || "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then
-            reconciliation_event=true
-          fi
-
-          no_op() {
-            local reason="$1"
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            printf 'reconciliation_result=%s\nvalidated_sha=%s\nmain_sha=%s\nexpected_validated_sha=%s\n' \
-              "$reason" "$validated_sha" "$main_sha" "${EXPECTED_VALIDATED_SHA:-none}" \
-              | tee deploy-evidence.txt
-          }
-
-          if [[ "$main_sha" != "$validated_sha" ]]; then
-            if [[ "$reconciliation_event" == "true" ]]; then
-              no_op awaiting_same_sha
-              exit 0
-            fi
-            echo "V7 deploy blocked: main and paper-validated are not the same SHA" >&2
-            exit 1
-          fi
-
-          if [[ -n "$EXPECTED_VALIDATED_SHA" ]]; then
-            [[ "$EXPECTED_VALIDATED_SHA" =~ ^[0-9a-f]{40}$ ]]
-            if [[ "$validated_sha" != "$EXPECTED_VALIDATED_SHA" || "$main_sha" != "$EXPECTED_VALIDATED_SHA" ]]; then
-              if [[ "$reconciliation_event" == "true" ]]; then
-                no_op upstream_validation_did_not_advance
-                exit 0
-              fi
-              echo "V7 deploy blocked: canonical refs do not match the requested validated SHA" >&2
-              exit 1
-            fi
-          fi
-
-          if python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$validated_sha" --github-env "$GITHUB_ENV"; then
-            test -f monitoring/v7_monitoring_manifest.json
-            python3 - <<'PY'
-          import json
-          from pathlib import Path
-          m=json.loads(Path('monitoring/v7_monitoring_manifest.json').read_text(encoding='utf-8'))
-          assert m.get('schema') == 'polymarket_v7_monitoring_manifest_v1'
-          assert m.get('version') == 7
-          assert m.get('paper_only') is True
-          assert m.get('authenticated_execution') is False
-          assert str((m.get('grafana') or {}).get('dashboard_uid') or '')
-          PY
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-            printf 'reconciliation_result=ready\nvalidated_sha=%s\nmain_sha=%s\nexpected_validated_sha=%s\n' \
-              "$validated_sha" "$main_sha" "${EXPECTED_VALIDATED_SHA:-none}" | tee deploy-evidence.txt
-          elif [[ "$reconciliation_event" == "true" ]]; then
-            no_op awaiting_enabled_v7_champion
-          else
-            echo "V7 deploy preflight failed" >&2
-            exit 1
-          fi
-
-      - name: Select Tailscale credential mode
-        if: steps.preflight.outputs.ready == 'true'
-        id: tailscale_auth
-        shell: bash
-        env:
-          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
-          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
-          TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${TS_AUTHKEY:-}" ]]; then
-            mode=authkey
-          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
-            test -n "${TS_TAGS:-}"
-            mode=oauth
-          else
-            echo "No visible Tailscale credential set" >&2
-            exit 1
-          fi
-          echo "mode=$mode" >> "$GITHUB_OUTPUT"
-
-      - name: Join private tailnet with auth key
-        if: steps.preflight.outputs.ready == 'true' && steps.tailscale_auth.outputs.mode == 'authkey'
-        uses: tailscale/github-action@v4
-        with:
-          authkey: ${{ secrets.TS_AUTHKEY }}
-          ping: ${{ env.SERVER_HOST }}
-
-      - name: Join private tailnet with OAuth
-        if: steps.preflight.outputs.ready == 'true' && steps.tailscale_auth.outputs.mode == 'oauth'
-        uses: tailscale/github-action@v4
-        with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
-          ping: ${{ env.SERVER_HOST }}
-
-      - name: Configure SSH identity
-        if: steps.preflight.outputs.ready == 'true'
-        shell: bash
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
-        run: |
-          set -euo pipefail
-          test -n "${SSH_PRIVATE_KEY:-}"
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_deploy
-          chmod 600 ~/.ssh/polymarket_deploy
-          for _ in {1..20}; do
-            ssh-keyscan -T 3 -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null && break
-            sleep 2
-          done
-          test -s ~/.ssh/known_hosts
-
-      - name: Reconcile exact paper-validated V7 SHA on server
-        if: steps.preflight.outputs.ready == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          validated_sha="$(git rev-parse origin/paper-validated)"
-          ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
-            -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
-            "EXPECTED_VALIDATED_SHA='$validated_sha' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
-          set -euo pipefail
-          cd ~/polymarket
-          git fetch --no-tags origin main paper-validated
-          main_sha="$(git rev-parse origin/main)"
-          validated_sha="$(git rev-parse origin/paper-validated)"
-          test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
-          test "$main_sha" = "$EXPECTED_VALIDATED_SHA"
-
-          tmp_checkout="$(mktemp -d)"
-          trap 'git worktree remove --force "$tmp_checkout" >/dev/null 2>&1 || true; rm -rf "$tmp_checkout"' EXIT
-          rmdir "$tmp_checkout"
-          git worktree add --detach "$tmp_checkout" "$validated_sha" >/dev/null
-          python3 "$tmp_checkout/scripts/v7_cutover_contract.py" \
-            --repository-root "$tmp_checkout" --expected-head "$validated_sha" >/dev/null
-          test -f "$tmp_checkout/ops/update_server_v7.sh"
-          test -f "$tmp_checkout/monitoring/v7_monitoring_manifest.json"
-          git worktree remove --force "$tmp_checkout" >/dev/null
-          trap - EXIT
-
-          updater="$(mktemp)"
-          trap 'rm -f "$updater"' EXIT
-          git show "$validated_sha:ops/update_server_v7.sh" > "$updater"
-          chmod 700 "$updater"
-          POLYMARKET_APP_DIR="$HOME/polymarket" \
-            EXPECTED_VALIDATED_SHA="$validated_sha" \
-            POLYMARKET_DEPLOY_REF=paper-validated \
-            bash "$updater"
-          printf 'deploy_result=success\ndeployed_sha=%s\norigin_main=%s\npaper_validated=%s\n' \
-            "$validated_sha" "$main_sha" "$validated_sha"
-          REMOTE
-
-      - name: Upload deployment evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: v7-paper-server-deploy-${{ github.run_id }}
-          path: deploy-evidence.txt
-          if-no-files-found: warn
-          retention-days: 14
+      - run: echo "V7 fixed-SHA freeze: automatic PAPER server deploy disabled."
