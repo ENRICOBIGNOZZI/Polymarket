@@ -15,6 +15,7 @@ on:
       - "src/fast_arb_main.cpp"
       - "src/fast_runtime/**"
       - "config/fast_arb_*"
+      - "config/operator_directives.json"
       - "scripts/arb_theory_scheduler.py"
       - "scripts/validate_fast_data_health.py"
       - "scripts/paper_latest_loop.sh"
@@ -50,7 +51,7 @@ jobs:
           ctest --test-dir build --output-on-failure
           python3 -m unittest tests/test_fast_data_health.py -v
 
-      - name: Run read-only fast shadow probe
+      - name: Run read-only V7-authority fast shadow probe
         shell: bash
         run: |
           set -euo pipefail
@@ -58,15 +59,15 @@ jobs:
           duration=180
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then duration=45; fi
           ./build/polymarket_fast_arb_shadow \
-            --config config/fast_arb_shadow.json \
+            --config config/fast_arb_v7_shadow.json \
             --policy config/fast_arb_policy.json \
             --relations config/fast_arb_relations.csv \
             --external-signals data/external_signals.csv \
             --run-dir runs/hourly-fast \
-            --markets 600 \
-            --min-liquidity 10 \
+            --markets 1000 \
+            --min-liquidity 2 \
             --shard-size 200 \
-            --snapshot-refresh-seconds 20 \
+            --snapshot-refresh-seconds 5 \
             --duration-seconds "$duration" \
             --recycle-seconds 0
 
@@ -93,11 +94,14 @@ jobs:
           status = json.loads(Path("runs/hourly-fast/fast_arb_status.json").read_text())
           candidate = json.loads(Path("runs/hourly-fast/fast_arb_candidate.json").read_text())
           base_policy = json.loads(Path("config/fast_arb_policy.json").read_text())
+          directives = json.loads(Path("config/operator_directives.json").read_text())
           assert status["mode"] == "shadow"
           assert status["real_order_submission"] is False
           assert candidate["mode"] == "research_only"
           assert candidate["real_order_submission"] is False
           assert candidate["candidate_policy"]["min_net_edge"] >= base_policy["min_net_edge"]
+          assert base_policy["min_net_edge"] == directives["hf_research_authority"]["min_net_edge"]
+          assert base_policy["external_uncertainty_penalty"] == directives["hf_research_authority"]["uncertainty_penalty"]
           PY
           cat runs/hourly-fast/fast_arb_theory_report.md >> "$GITHUB_STEP_SUMMARY"
 
