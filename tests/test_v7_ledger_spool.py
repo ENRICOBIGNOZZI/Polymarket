@@ -34,12 +34,38 @@ class LedgerSpoolTests(unittest.TestCase):
             rows = [json.loads(line) for line in canonical_ledger_path(root).read_text().splitlines() if line.strip()]
             self.assertEqual([row["record_id"] for row in rows], [event.record_id])
 
-            # Re-create an already-appended transport record; drain must not duplicate evidence.
             spool_event(root, event)
             result = drain_spool(root, model_sha=SHA)
             self.assertEqual(result["duplicates"], 1)
             rows2 = [json.loads(line) for line in canonical_ledger_path(root).read_text().splitlines() if line.strip()]
             self.assertEqual(len(rows2), 1)
+
+    def test_graph_outcome_side_is_preserved_but_execution_side_is_buy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            event = LedgerEvent(
+                event_type="FILL",
+                strategy="GRAPH_RV",
+                model_sha=SHA,
+                bundle_id="b",
+                order_id="o",
+                fill_id="f",
+                leg_id="l",
+                token_id="t",
+                side="YES",
+                exchange_ts_ms=1000,
+                receive_ts_ms=1100,
+                fill_price=0.5,
+                filled_size=1.0,
+                fee=0.0,
+                fee_source="test:authoritative",
+            )
+            path = spool_event(root, event)
+            raw = json.loads(path.read_text())
+            self.assertEqual(raw["side"], "BUY")
+            self.assertEqual(raw["metadata"]["outcome_side"], "YES")
+            self.assertEqual(raw["metadata"]["execution_side"], "BUY")
+            self.assertEqual(drain_spool(root, model_sha=SHA)["appended"], 1)
 
     def test_mixed_sha_spool_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
