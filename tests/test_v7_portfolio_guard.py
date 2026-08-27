@@ -37,6 +37,42 @@ class PortfolioGuardTests(unittest.TestCase):
             self.assertFalse(report["killed"])
             self.assertEqual(report["equity"], 100.0)
 
+    def test_professional_maker_equity_is_not_treated_as_reserved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            alloc = root / "manifest.json"
+            alloc.write_text(json.dumps({"account_starting_capital": 100.0, "budgets": {"micro_maker": 60.0, "reserve": 40.0}}))
+            status = root / "micro_maker" / "status.json"
+            status.parent.mkdir(parents=True)
+            status.write_text(json.dumps({
+                "paper_only": True,
+                "authenticated_execution": False,
+                "equity": 55.0,
+                "killed": False,
+            }))
+            report = assess(root, alloc, max_drawdown=.15)
+            self.assertFalse(report["killed"])
+            self.assertEqual(report["sleeves"]["micro_maker"]["source"], "reported")
+            self.assertAlmostEqual(report["equity"], 95.0)
+
+    def test_unsafe_or_unmarkable_maker_kills_account(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            alloc = root / "manifest.json"
+            alloc.write_text(json.dumps({"account_starting_capital": 100.0, "budgets": {"micro_maker": 60.0, "reserve": 40.0}}))
+            status = root / "micro_maker" / "status.json"
+            status.parent.mkdir(parents=True)
+            status.write_text(json.dumps({
+                "paper_only": True,
+                "authenticated_execution": False,
+                "equity": 0.0,
+                "killed": True,
+                "source": "fail_closed_unmarkable",
+            }))
+            report = assess(root, alloc, max_drawdown=.15)
+            self.assertTrue(report["killed"])
+            self.assertTrue((root / "control" / "KILL").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
