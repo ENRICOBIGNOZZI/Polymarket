@@ -58,7 +58,7 @@ class NoLegacyRuntimeContractTest(unittest.TestCase):
         offenders = [path for path in retired if (ROOT / path).exists()]
         self.assertEqual(offenders, [], "known compatibility entrypoints remain")
 
-    def test_champion_manifest_is_disabled_or_safe_candidate_only_v7(self) -> None:
+    def test_champion_manifest_is_disabled_candidate_or_operator_forced_v7(self) -> None:
         manifest = json.loads((ROOT / "config/live_champion.json").read_text(encoding="utf-8"))
         self.assertTrue(manifest["paper_only"])
         self.assertFalse(manifest["authenticated_execution"])
@@ -67,12 +67,8 @@ class NoLegacyRuntimeContractTest(unittest.TestCase):
                 self.assertIsNone(manifest[key])
             return
 
-        # An integration/v7-* candidate may be enabled only so the isolated
-        # same-SHA PAPER evidence runtime can resolve its exact entrypoint.  It
-        # is not the canonical/deployed champion until the later lifecycle gates.
         self.assertTrue(manifest["enabled"])
         self.assertEqual(manifest["version"], 7)
-        self.assertTrue(manifest.get("candidate_only_until_promoted"))
         self.assertFalse(manifest.get("real_order_submission"))
         self.assertEqual(manifest["loop"], "scripts/paper_v7_execution_loop.sh")
         self.assertEqual(manifest["config"], "config/paper_v7.json")
@@ -80,6 +76,13 @@ class NoLegacyRuntimeContractTest(unittest.TestCase):
         self.assertEqual(manifest["deployment_ref"], "paper-validated")
         self.assertTrue((ROOT / manifest["loop"]).is_file())
         self.assertTrue((ROOT / manifest["config"]).is_file())
+
+        if manifest.get("promotion_policy") == "operator_forced_v7_paper_champion":
+            self.assertFalse(manifest.get("candidate_only_until_promoted"))
+            self.assertFalse(manifest.get("legacy_fallback_allowed"))
+        else:
+            # Normal pre-promotion integration candidates remain candidate-only.
+            self.assertTrue(manifest.get("candidate_only_until_promoted"))
 
 
 if __name__ == "__main__":
