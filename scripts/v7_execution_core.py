@@ -95,9 +95,15 @@ class JointStateDistribution:
         for state, probability in self.probabilities.items():
             if int(state) < 0 or int(state) > self.full_mask:
                 raise ValueError("invalid state bitmask")
-            if not math.isfinite(float(probability)) or float(probability) < 0.0:
+            value = float(probability)
+            # Fréchet-bound constructions can produce tiny signed round-off at
+            # exact boundaries (for example -1e-16 for a mathematically zero
+            # state).  Accept only numerical noise within the same tolerance
+            # already used for the unit-sum check; materially negative or >1
+            # probabilities still fail closed.
+            if not math.isfinite(value) or value < -tol or value > 1.0 + tol:
                 raise ValueError("invalid state probability")
-            total += float(probability)
+            total += value
         if abs(total - 1.0) > tol:
             raise ValueError(f"joint state probabilities sum to {total}, not one")
 
