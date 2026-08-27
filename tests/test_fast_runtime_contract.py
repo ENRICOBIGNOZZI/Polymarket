@@ -58,6 +58,7 @@ class FastRuntimeContractTest(unittest.TestCase):
             "os.getppid() != parent_pid",
             "_drain_process_group(child_pgid)",
             "os.set_inheritable(fd, False)",
+            "LOCK_REACQUIRE_GRACE_SECONDS",
             "return 75",
         ):
             with self.subTest(token=token):
@@ -163,6 +164,58 @@ class FastRuntimeContractTest(unittest.TestCase):
             )
             self.assertEqual(third.returncode, 0, third)
             self.assertEqual(third.stdout.strip(), "reacquired")
+
+    def test_runtime_singleton_bridges_brief_lock_release_without_stealing(self) -> None:
+        launcher = ROOT / "scripts" / "runtime_singleton_launcher.py"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock = Path(tmpdir) / "runtime.lock"
+            marker = Path(tmpdir) / "holder.ready"
+            holder_code = (
+                "import fcntl,os,sys,time; "
+                "fd=os.open(sys.argv[1], os.O_CREAT|os.O_RDWR, 0o600); "
+                "fcntl.flock(fd, fcntl.LOCK_EX); "
+                "open(sys.argv[2],'w',encoding='utf-8').write('ready'); "
+                "time.sleep(0.25); os.close(fd)"
+            )
+            holder = subprocess.Popen(
+                [sys.executable, "-c", holder_code, str(lock), str(marker)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                for _ in range(100):
+                    if marker.exists():
+                        break
+                    if holder.poll() is not None:
+                        self.fail(f"brief lock holder exited early rc={holder.returncode}")
+                    time.sleep(0.01)
+                else:
+                    self.fail("brief lock holder did not acquire the lock")
+
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(launcher),
+                        "--lock",
+                        str(lock),
+                        "--",
+                        sys.executable,
+                        "-c",
+                        "print('bounded-handoff')",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result)
+                self.assertEqual(result.stdout.strip(), "bounded-handoff")
+            finally:
+                try:
+                    holder.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    holder.kill()
+                    holder.wait(timeout=2)
 
     def test_supervisor_sigkill_keeps_lock_until_orphan_runtime_is_drained(self) -> None:
         launcher = ROOT / "scripts" / "runtime_singleton_launcher.py"
