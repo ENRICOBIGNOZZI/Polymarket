@@ -1,7 +1,9 @@
 {
   "schema_version": 1,
-  "timestamp_utc": "2026-08-27T01:17:21Z",
-  "base_main_sha": "3640fae32ecbcc6d699b934455ed398538c8ae86",
+  "timestamp_utc": "2026-08-27T01:21:30Z",
+  "audited_main_sha": "3640fae32ecbcc6d699b934455ed398538c8ae86",
+  "rebased_main_sha": "5db9efa6c9707af090dd1a89043fc58dff45fba8",
+  "main_advance_since_audit": "deploy-transition workflow only; Fast Arb runtime blobs unchanged",
   "state": "RAW_HARD_HITS_FRESHNESS_BLOCKED / MORE_EVIDENCE_REQUIRED",
   "current_main_audit": {
     "fast_runtime_uses_payload_level_clocks_for_multi_leg_evaluation": true,
