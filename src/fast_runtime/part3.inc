@@ -40,10 +40,12 @@ private:
     std::uint64_t freshness_age_rejections_ = 0;
     std::uint64_t freshness_skew_rejections_ = 0;
 
-    // Fast structural evidence is fail-closed unless every actually required L2 leg has
-    // a recent timestamped full-book image and the legs are event-time aligned. A full
-    // WS snapshot establishes gap-free delta lineage; a REST /books image establishes
-    // only point-in-time provenance and must never authorize subsequent WS deltas.
+    // A REST /books image is only a point-in-time snapshot, so its exchange age and
+    // cross-leg skew are bounded strictly. A full WS book followed by uninterrupted,
+    // monotone price_change lineage is different: the state remains current when a
+    // quiet token has no updates. Its last event timestamp is therefore an audit clock,
+    // not the age of the current state. Reconnect/error explicitly invalidates that
+    // continuity before any later delta can be trusted.
     static constexpr std::int64_t kMaxBookAgeMs = 5000;
     static constexpr std::int64_t kMaxBookSkewMs = 1500;
 
@@ -257,10 +259,13 @@ private:
         bool count_rejection = true) {
         std::unordered_set<std::string> unique;
         bool first = true;
+        bool first_rest = true;
         std::int64_t min_exchange = 0;
-        std::int64_t max_exchange = 0;
-        std::int64_t min_received = 0;
         std::int64_t max_received = 0;
+        std::int64_t min_rest_exchange = 0;
+        std::int64_t max_rest_exchange = 0;
+        std::int64_t min_rest_received = 0;
+        std::int64_t max_rest_received = 0;
 
         auto reject_missing = [&]() -> std::optional<FreshnessWindow> {
             if (count_rejection) ++freshness_missing_rejections_;
@@ -277,9 +282,10 @@ private:
 
         for (const auto& token : required_tokens) {
             if (token.empty() || !unique.insert(token).second) continue;
-            if (!ws_snapshot_ready_.count(token) && !rest_snapshot_ready_.count(token)) {
-                return reject_missing();
-            }
+            const bool continuous_ws = ws_snapshot_ready_.count(token) > 0;
+            const bool point_in_time_rest = rest_snapshot_ready_.count(token) > 0;
+            if (!continuous_ws && !point_in_time_rest) return reject_missing();
+
             const auto exchange = book_exchange_ts_ms_.find(token);
             const auto received = book_received_ts_ms_.find(token);
             if (exchange == book_exchange_ts_ms_.end() ||
@@ -287,31 +293,52 @@ private:
                 received->second <= 0) {
                 return reject_missing();
             }
+
+            // Both provenance modes must be causal: no leg may have been received
+            // materially after the decision, nor may its exchange clock lead the
+            // local receive clock beyond the configured clock-skew tolerance.
             if (decision_ms + kMaxBookSkewMs < received->second ||
                 exchange->second > received->second + kMaxBookSkewMs) {
                 return reject_skew();
             }
-            const auto age = decision_ms - exchange->second;
-            if (age > kMaxBookAgeMs || age < -kMaxBookSkewMs) return reject_age();
 
+            if (!continuous_ws) {
+                // REST is a point-in-time image. It must itself be recent and REST
+                // legs in the same basket must describe nearly simultaneous images.
+                const auto age = decision_ms - exchange->second;
+                if (age > kMaxBookAgeMs || age < -kMaxBookSkewMs) return reject_age();
+                if (first_rest) {
+                    min_rest_exchange = max_rest_exchange = exchange->second;
+                    min_rest_received = max_rest_received = received->second;
+                    first_rest = false;
+                } else {
+                    min_rest_exchange = std::min(min_rest_exchange, exchange->second);
+                    max_rest_exchange = std::max(max_rest_exchange, exchange->second);
+                    min_rest_received = std::min(min_rest_received, received->second);
+                    max_rest_received = std::max(max_rest_received, received->second);
+                }
+            }
+
+            // For uninterrupted WS lineage, last-update age/skew are diagnostics,
+            // not freshness gates. If no order-book event occurred, the current book
+            // state is unchanged. A transport failure/reconnect clears this lineage.
             if (first) {
-                min_exchange = max_exchange = exchange->second;
-                min_received = max_received = received->second;
+                min_exchange = exchange->second;
+                max_received = received->second;
                 first = false;
             } else {
                 min_exchange = std::min(min_exchange, exchange->second);
-                max_exchange = std::max(max_exchange, exchange->second);
-                min_received = std::min(min_received, received->second);
                 max_received = std::max(max_received, received->second);
             }
         }
         if (first) return reject_missing();
-        if (max_exchange - min_exchange > kMaxBookSkewMs ||
-            max_received - min_received > kMaxBookSkewMs) {
+        if (!first_rest &&
+            (max_rest_exchange - min_rest_exchange > kMaxBookSkewMs ||
+             max_rest_received - min_rest_received > kMaxBookSkewMs)) {
             return reject_skew();
         }
-        // Conservative opportunity clocks: oldest exchange leg and latest local
-        // receipt. This cannot make a mixed-leg basket look fresher than it was.
+        // Conservative audit clocks: oldest last exchange update and latest local
+        // receipt. These clocks are not reinterpreted as WS state age downstream.
         return FreshnessWindow{min_exchange, max_received};
     }
 
