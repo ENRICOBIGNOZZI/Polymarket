@@ -25,9 +25,13 @@ class M:
 
 def fixture(points: int = 120) -> core.RawPanel:
     times = tuple(index * 1800 for index in range(points))
-    c1 = [math.sin(index * 0.17) for index in range(points)]
-    c2 = [math.cos(index * 0.11) for index in range(points)]
-    c3 = [0.6 * math.sin(index * 0.07) + 0.2 * math.cos(index * 0.23) for index in range(points)]
+    # Deliberately stationary nuisance factors with comfortably identified AR(1)
+    # dynamics.  The previous very-slow oscillations generated a PCA component
+    # with phi ~= 0.9996, correctly triggering the V7 near-unit-root fail-closed
+    # common-factor forecast guard and making the downstream sigma test invalid.
+    c1 = [math.sin(index * 0.31) for index in range(points)]
+    c2 = [math.cos(index * 0.23) for index in range(points)]
+    c3 = [0.6 * math.sin(index * 0.17) + 0.2 * math.cos(index * 0.43) for index in range(points)]
     residual = [0.25]
     for index in range(1, points):
         shock = 0.05 * math.sin(index * 0.41) + 0.025 * math.cos(index * 0.19)
@@ -92,6 +96,20 @@ def test_total_single_leg_sigma_includes_common_factor_forecast_error():
     assert total.sigma_logit >= residual_only.sigma_logit
     assert total.sigma_logit > 0.0
     assert residual_only.common_factor_forecast_identified is True
+
+
+def test_near_unit_root_common_factor_fails_closed():
+    panel = fixture()
+    model = core.fit_target(panel, "target", max_components=3, explained_variance_threshold=0.8)
+    assert model is not None
+    unstable = core.CurrentPcaTargetModel(
+        **{
+            **model.__dict__,
+            "factor_phis": tuple(0.9995 if index == 0 else value for index, value in enumerate(model.factor_phis)),
+        }
+    )
+    current = {market_id: values[-1] for market_id, values in panel.values.items()}
+    assert core.score_current(unstable, current, 4) is None
 
 
 def test_research_driver_preserves_successor_base_and_adds_current_contracts():
