@@ -1,0 +1,120 @@
+{
+  "candidate_count": 3,
+  "candidates": [
+    {
+      "event_id": "881209",
+      "feed_latency_ms_max": 4282.0,
+      "feed_latency_ms_median": 59.0,
+      "first_observed_ts_ms": 1787808724966,
+      "last_observed_ts_ms": 1787808773747,
+      "market_id": "3746416",
+      "net_edge_max": 0.017,
+      "net_edge_median": 0.014,
+      "net_edge_min": 0.011,
+      "observations": 13,
+      "opportunity_id": "maker-binary:3746416",
+      "price_sum_max": 0.984,
+      "price_sum_min": 0.978,
+      "raw_edge_min": 0.016,
+      "span_ms": 48781,
+      "stressed_net_edge_min": 0.009999999999999998
+    },
+    {
+      "event_id": "89519",
+      "feed_latency_ms_max": 232.0,
+      "feed_latency_ms_median": 57.0,
+      "first_observed_ts_ms": 1787808743443,
+      "last_observed_ts_ms": 1787808770368,
+      "market_id": "701544",
+      "net_edge_max": 0.013,
+      "net_edge_median": 0.008,
+      "net_edge_min": 0.005,
+      "observations": 61,
+      "opportunity_id": "maker-binary:701544",
+      "price_sum_max": 0.99,
+      "price_sum_min": 0.982,
+      "raw_edge_min": 0.01,
+      "span_ms": 26925,
+      "stressed_net_edge_min": 0.004
+    },
+    {
+      "event_id": "196914",
+      "feed_latency_ms_max": 1225.0,
+      "feed_latency_ms_median": 56.5,
+      "first_observed_ts_ms": 1787808722336,
+      "last_observed_ts_ms": 1787808769111,
+      "market_id": "1321564",
+      "net_edge_max": 0.011,
+      "net_edge_median": 0.006500000000000001,
+      "net_edge_min": 0.004,
+      "observations": 18,
+      "opportunity_id": "maker-binary:1321564",
+      "price_sum_max": 0.991,
+      "price_sum_min": 0.984,
+      "raw_edge_min": 0.009,
+      "span_ms": 46775,
+      "stressed_net_edge_min": 0.003
+    }
+  ],
+  "evidence_provenance": {
+    "analysis_base_main": "e52baa4971d612b121655e4be9f0262b24580776",
+    "main_evidence_accounting_repair_pr": 705,
+    "source_artifact_id": 9634503913,
+    "source_artifact_sha256": "f638db6fb7cf041ed45b170cf784e1f5f4355f7ae32f88c30a82b77dbe2ba1fb",
+    "source_exact_head": "e2285d800fdeaaf82e8ff93882b90b306ce5347d",
+    "source_pr": 704,
+    "source_workflow_run": 33042585786
+  },
+  "frontier": {
+    "additional_cost_stress_bps": 10.0,
+    "authorized_min_net_edge": 5e-05,
+    "min_observations": 10,
+    "min_span_ms": 20000,
+    "rule": "every observed executable row must remain above the authorized edge floor after frozen extra cost stress"
+  },
+  "interpretation": {
+    "future_evidence_contract": "future execution evidence must use current-main unique mature fill/submission/terminal-PnL accounting from PR #705 or a stricter successor on the exact tested SHA",
+    "hard_arb_result": "zero hard-executable observations in the strict authority x freshness window",
+    "maker_result": "three persistent passive binary complete-set discovery leads survive an additional frozen +10bp cost stress throughout their observed windows",
+    "not_claimed": [
+      "PAPER fill",
+      "paired completion",
+      "realized PnL",
+      "fill-conditioned PnL",
+      "promotion readiness"
+    ],
+    "selection_bias_guard": "candidate identities are frozen only for an independent future chronological PAPER execution window; no same-window execution credit is allowed"
+  },
+  "next_test": {
+    "actions": [
+      "at_touch_two_sided",
+      "selective_improve_only_if_incremental_fill_conditioned_ev_positive"
+    ],
+    "decision": "no alpha claim unless realized audited PAPER economics are positive",
+    "required_metrics": [
+      "unique_fifo_entry_fills",
+      "paired_completion",
+      "one_sided_partial_states",
+      "cancel_latency_ms",
+      "capital_hours",
+      "45s_markout",
+      "60s_markout",
+      "300s_markout",
+      "realized_post_cost_fill_conditioned_pnl",
+      "frozen_trade_cost_stress_1x_1p5x_2x"
+    ],
+    "window": "independent chronological PAPER window only"
+  },
+  "promotion_allowed": false,
+  "prospective_not_before_ms": 1787808775004,
+  "research_only": true,
+  "same_window_fill_or_pnl_credit": false,
+  "schema_version": 1,
+  "source": {
+    "artifact_id": "9634503913",
+    "head_sha": "e2285d800fdeaaf82e8ff93882b90b306ce5347d",
+    "run_id": "33042585786",
+    "window_end_ms": 1787808775003
+  },
+  "state": "PERSISTENT_MAKER_COMPLETE_SET_LEADS_PRE_REGISTERED_MORE_EVIDENCE_REQUIRED"
+}
