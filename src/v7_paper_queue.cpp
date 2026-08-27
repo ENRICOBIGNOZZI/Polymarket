@@ -134,24 +134,32 @@ PaperPrintAllocation allocate_public_print(
                      order.remaining_optimistic_microunits,
                      fill.optimistic_fill_microunits);
 
+        result.pessimistic_own_fill_microunits += fill.pessimistic_fill_microunits;
+        result.expected_own_fill_microunits += fill.expected_fill_microunits;
+        result.optimistic_own_fill_microunits += fill.optimistic_fill_microunits;
+
         if (fill.pessimistic_fill_microunits > 0 || fill.expected_fill_microunits > 0
             || fill.optimistic_fill_microunits > 0) {
             output[result.output_count++] = fill;
         }
     }
 
-    result.pessimistic_filled_microunits = trade.quantity_microunits - pessimistic_available;
-    result.expected_filled_microunits = trade.quantity_microunits - expected_available;
-    result.optimistic_filled_microunits = trade.quantity_microunits - optimistic_available;
+    result.pessimistic_consumed_microunits = trade.quantity_microunits - pessimistic_available;
+    result.expected_consumed_microunits = trade.quantity_microunits - expected_available;
+    result.optimistic_consumed_microunits = trade.quantity_microunits - optimistic_available;
 
-    // These totals include public volume consumed by queue-ahead as well as own
-    // fills. They can never exceed the single public print in any scenario.
-    if (result.pessimistic_filled_microunits < 0
-        || result.expected_filled_microunits < 0
-        || result.optimistic_filled_microunits < 0
-        || result.pessimistic_filled_microunits > trade.quantity_microunits
-        || result.expected_filled_microunits > trade.quantity_microunits
-        || result.optimistic_filled_microunits > trade.quantity_microunits) {
+    // Queue depletion plus own fills and own fills alone are both bounded by the
+    // one observed public print in every scenario. This is the conservation
+    // invariant that prevents one print filling multiple PAPER orders twice.
+    if (result.pessimistic_consumed_microunits < 0
+        || result.expected_consumed_microunits < 0
+        || result.optimistic_consumed_microunits < 0
+        || result.pessimistic_consumed_microunits > trade.quantity_microunits
+        || result.expected_consumed_microunits > trade.quantity_microunits
+        || result.optimistic_consumed_microunits > trade.quantity_microunits
+        || result.pessimistic_own_fill_microunits > trade.quantity_microunits
+        || result.expected_own_fill_microunits > trade.quantity_microunits
+        || result.optimistic_own_fill_microunits > trade.quantity_microunits) {
         result.invalid_input = 1;
     }
     return result;
