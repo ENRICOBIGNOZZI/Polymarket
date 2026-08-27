@@ -84,7 +84,9 @@ class V7LedgerMonitoringTest(unittest.TestCase):
         snapshot = {
             "sha": "a" * 40,
             "run_root": "paper_v7_live",
-            "runtime": {"version": 7},
+            "runtime": {"version": 7, "paper_only": True, "authenticated_execution": False},
+            "execution_supervisor": {"paper_only": True, "authenticated_execution": False},
+            "authority": {"valid": True, "max_drawdown": 0.15},
             "proxy": {},
             "evidence": {"summary": {}},
             "ledger": {
