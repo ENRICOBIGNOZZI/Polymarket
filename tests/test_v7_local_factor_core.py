@@ -102,7 +102,7 @@ class V7LocalFactorCoreTests(unittest.TestCase):
         self.assertLess(fit.pair_stat, -2.0)
         self.assertLess(pvalue, 0.35)
 
-    def test_pair_signal_uses_price_exposure_and_ttr(self) -> None:
+    def test_pair_signal_uses_current_controls_price_exposure_and_ttr(self) -> None:
         rng = random.Random(7)
         n = 80
         c1 = [0.0]
@@ -125,11 +125,17 @@ class V7LocalFactorCoreTests(unittest.TestCase):
         )
         assert panel is not None
         fit = lf.fit_pair(panel, "a", "b")
-        assert fit is not None
+        assert isinstance(fit, lf.CurrentPairFit)
+        current_probabilities = {
+            "a": lf.logistic(a[-1]),
+            "b": lf.logistic(b[-1]),
+            "c1": lf.logistic(c1[-1]),
+            "c2": lf.logistic(c2[-1]),
+        }
         signal = lf.build_pair_signal(
             fit,
             0.02,
-            {"a": 0.50, "b": 0.70},
+            current_probabilities,
             {"a": 0.10, "b": 0.20},
             1800,
             1000,
@@ -141,6 +147,8 @@ class V7LocalFactorCoreTests(unittest.TestCase):
         assert signal is not None
         self.assertLessEqual(signal.hold_seconds, 24 * 3600)
         self.assertLess(signal.factor_exposure_a * signal.factor_exposure_b, 0.0)
+        self.assertGreater(abs(signal.current_residual_z_a), 0.20)
+        self.assertGreater(abs(signal.current_residual_z_b), 0.20)
 
     def test_joint_distribution_records_full_partial_and_none_states(self) -> None:
         distribution = lf.estimate_joint_distribution(
