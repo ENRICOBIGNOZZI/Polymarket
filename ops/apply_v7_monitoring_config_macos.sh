@@ -14,7 +14,7 @@ read -r DASHBOARD_FILE DATASOURCE_FILE PROVIDER_FILE PROMETHEUS_FILE ALERT_RULES
 import json,sys
 from pathlib import Path, PurePosixPath
 manifest=json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
-assert manifest.get('schema') == 'polymarket_v7_monitoring_manifest_v1'
+assert manifest.get('schema') == 'polymarket_v7_monitoring_manifest_v2'
 assert manifest.get('version') == 7
 assert manifest.get('paper_only') is True
 assert manifest.get('authenticated_execution') is False
@@ -50,19 +50,13 @@ assert dashboard.get('uid') == expected
 assert 'V7' in str(dashboard.get('title',''))
 PY
 
-mkdir -p \
-  "$STATE_DIR/grafana/provisioning/datasources" \
-  "$STATE_DIR/grafana/provisioning/dashboards"
-
-install -m 0644 "$APP_DIR/$DATASOURCE_FILE" \
-  "$STATE_DIR/grafana/provisioning/datasources/prometheus-v7.yml"
+mkdir -p "$STATE_DIR/grafana/provisioning/datasources" "$STATE_DIR/grafana/provisioning/dashboards"
+install -m 0644 "$APP_DIR/$DATASOURCE_FILE" "$STATE_DIR/grafana/provisioning/datasources/prometheus-v7.yml"
 
 python3 - "$APP_DIR/$PROVIDER_FILE" "$STATE_DIR/grafana/provisioning/dashboards/v7.yml" "$APP_DIR/monitoring/grafana/dashboards" <<'PY'
 import sys
 from pathlib import Path
-source=Path(sys.argv[1]).read_text(encoding='utf-8')
-replacement=sys.argv[3]
-marker='__POLYMARKET_V7_DASHBOARD_DIR__'
+source=Path(sys.argv[1]).read_text(encoding='utf-8'); replacement=sys.argv[3]; marker='__POLYMARKET_V7_DASHBOARD_DIR__'
 assert source.count(marker) == 1
 Path(sys.argv[2]).write_text(source.replace(marker, replacement), encoding='utf-8')
 PY
@@ -71,8 +65,7 @@ install -m 0644 "$APP_DIR/$ALERT_RULES_FILE" "$STATE_DIR/prometheus-v7-alerts.ym
 python3 - "$APP_DIR/$PROMETHEUS_FILE" "$STATE_DIR/prometheus-v7.yml" "$STATE_DIR/prometheus-v7-alerts.yml" <<'PY'
 import sys
 from pathlib import Path
-source=Path(sys.argv[1]).read_text(encoding='utf-8')
-marker='__POLYMARKET_V7_ALERT_RULES__'
+source=Path(sys.argv[1]).read_text(encoding='utf-8'); marker='__POLYMARKET_V7_ALERT_RULES__'
 assert source.count(marker) == 1
 Path(sys.argv[2]).write_text(source.replace(marker, sys.argv[3]), encoding='utf-8')
 PY
