@@ -473,8 +473,6 @@ def choose_quote(
                 touch_ev = bundle.expected_value
             if bundle.expected_value <= 0.0:
                 continue
-            # Inside-spread improvement must be incremental versus the fully
-            # admissible at-touch baseline, never merely "less bad".
             if (y_mode == "inside" or n_mode == "inside") and touch_ev is not None and bundle.expected_value <= touch_ev + 1e-12:
                 continue
             row = {
@@ -503,27 +501,69 @@ def _trade_id(row: dict[str, str]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _parse_tape_row(row: dict[str, str]) -> TapeTrade | None:
+    received = int(_finite(row.get("received_ms"), 0.0))
+    event_ms = int(_finite(row.get("timestamp"), 0.0) * 1000)
+    token = str(row.get("asset_id") or "")
+    side = str(row.get("side") or "").upper()
+    price, size = _finite(row.get("price")), _finite(row.get("size"), 0.0)
+    tid = _trade_id(row)
+    if received <= 0 or event_ms <= 0 or not token or side not in {"BUY", "SELL"} or not math.isfinite(price) or not 0.0 < price < 1.0 or size <= 0.0:
+        return None
+    return TapeTrade(tid, token, side, price, size, event_ms, received)
+
+
 def read_new_tape(path: Path, state: dict[str, Any]) -> list[TapeTrade]:
+    """Read only rows not yet consumed by forward fill replay."""
     watermark = int(state.get("tape_watermark_received_ms") or 0)
     seen_at_watermark = set(str(x) for x in state.get("tape_watermark_trade_ids", []))
     rows: list[TapeTrade] = []
     try:
         with path.open(newline="", encoding="utf-8") as handle:
-            for row in csv.DictReader(handle):
-                received = int(_finite(row.get("received_ms"), 0.0))
-                event_ms = int(_finite(row.get("timestamp"), 0.0) * 1000)
-                token = str(row.get("asset_id") or "")
-                side = str(row.get("side") or "").upper()
-                price, size = _finite(row.get("price")), _finite(row.get("size"), 0.0)
-                tid = _trade_id(row)
-                if received < watermark or (received == watermark and tid in seen_at_watermark):
+            for raw in csv.DictReader(handle):
+                trade = _parse_tape_row(raw)
+                if trade is None:
                     continue
-                if received <= 0 or event_ms <= 0 or not token or side not in {"BUY", "SELL"} or not math.isfinite(price) or not 0.0 < price < 1.0 or size <= 0.0:
+                if trade.received_ms < watermark or (trade.received_ms == watermark and trade.trade_id in seen_at_watermark):
                     continue
-                rows.append(TapeTrade(tid, token, side, price, size, event_ms, received))
+                rows.append(trade)
     except OSError:
         return []
     rows.sort(key=lambda t: (t.received_ms, t.event_ts_ms, t.trade_id))
+    return rows
+
+
+def read_decision_tape_window(
+    path: Path,
+    *,
+    decision_ms: int,
+    lookback_seconds: int,
+) -> list[TapeTrade]:
+    """Reconstruct causal market-flow memory independently of the fill watermark.
+
+    `received_ms` governs availability: a print cannot influence a decision before
+    it was locally observed.  Exchange/event time preserves market-flow spacing
+    and defines the lookback window.  The result is never used for fill replay;
+    `read_new_tape()` remains the sole one-shot fill source.
+    """
+    decision = int(decision_ms)
+    lookback_ms = max(1, int(lookback_seconds)) * 1000
+    cutoff_event_ms = decision - lookback_ms
+    rows: list[TapeTrade] = []
+    try:
+        with path.open(newline="", encoding="utf-8") as handle:
+            for raw in csv.DictReader(handle):
+                trade = _parse_tape_row(raw)
+                if trade is None:
+                    continue
+                if trade.received_ms > decision or trade.event_ts_ms > decision:
+                    continue
+                if trade.event_ts_ms < cutoff_event_ms:
+                    continue
+                rows.append(trade)
+    except OSError:
+        return []
+    rows.sort(key=lambda t: (t.event_ts_ms, t.received_ms, t.trade_id))
     return rows
 
 
@@ -949,7 +989,11 @@ def run_cycle(
     update_markouts(writer, state, books, model_sha=model_sha, now_ms=now, cfg=cfg)
 
     open_markets = {str(bundle["market_id"]) for bundle in state["bundles"].values() if not bundle.get("final_recorded")}
-    recent_for_decision = [t for t in new_trades if t.received_ms <= now and t.event_ts_ms <= now]
+    recent_for_decision = read_decision_tape_window(
+        trade_tape,
+        decision_ms=now,
+        lookback_seconds=max(60, int(cfg["flow_lookback_seconds"])),
+    )
     submitted = 0
     for market_id, candidate in cohort.items():
         if market_id in open_markets or now < candidate.prospective_not_before_ms:
@@ -982,7 +1026,8 @@ def run_cycle(
         "schema": "polymarket_v7_complete_set_maker_cycle_v1", "model_sha": model_sha,
         "paper_only": True, "authenticated_execution": False,
         "frozen_candidates": len(cohort), "markets_resolved": len(markets),
-        "new_tape_trades": len(new_trades), "fills_written": fills, "bundles_submitted": submitted,
+        "new_tape_trades": len(new_trades), "decision_tape_trades": len(recent_for_decision),
+        "fills_written": fills, "bundles_submitted": submitted,
         "open_bundles": sum(1 for b in state["bundles"].values() if not b.get("final_recorded")),
         "final_bundles": sum(1 for b in state["bundles"].values() if b.get("final_recorded")),
     }
