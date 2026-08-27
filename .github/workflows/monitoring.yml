@@ -46,6 +46,7 @@ jobs:
             tests/test_external_intelligence_workflow_contract.py \
             tests/test_monitoring_v7_native.py \
             tests/test_monitoring_v7_ledger.py \
+            tests/test_monitoring_v7_fill_rate_integrity.py \
             tests/test_monitoring_v7_dashboard_completion.py -v
           python3 -m py_compile monitoring/exporter_v7.py monitoring/v7_ledger_metrics.py
           python3 -m json.tool config/live_champion.json >/dev/null
