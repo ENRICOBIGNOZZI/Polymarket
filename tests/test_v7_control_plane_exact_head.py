@@ -25,6 +25,27 @@ class V7ControlPlaneExactHeadTest(unittest.TestCase):
         self.assertNotIn("delete_legacy_immediately_then_promote_only_validated_v7", text)
         self.assertNotIn("operator-authorized immediate legacy retirement", text)
 
+    def test_cleanup_branches_fail_closed_until_cutover_receipt_exists(self) -> None:
+        text = (ROOT / ".github/workflows/research-policy.yml").read_text(encoding="utf-8")
+        cleanup_guard = 'if [[ "$head_ref" == cleanup/* ]]'
+        self.assertEqual(text.count(cleanup_guard), 1)
+        guard_pos = text.index(cleanup_guard)
+        hard_safety_pos = text.index("python3 scripts/hard_safety_policy.py")
+        research_policy_pos = text.index("python3 scripts/research_pr_policy.py")
+        self.assertLess(guard_pos, hard_safety_pos)
+        self.assertLess(guard_pos, research_policy_pos)
+        for required in (
+            "cleanup locked during V7 cutover repair",
+            "same-SHA PAPER",
+            "paper-validated",
+            "deploy",
+            "server health",
+            "durable machine-verifiable lifecycle receipt",
+            "exit 1",
+        ):
+            self.assertIn(required, text)
+        self.assertIn("tests/test_v7_control_plane_exact_head.py", text)
+
     def test_operator_directive_preserves_master_cutover_sequence(self) -> None:
         directives = json.loads((ROOT / "config/operator_directives.json").read_text(encoding="utf-8"))
         self.assertEqual(directives["operator_instruction_id"], "user-v7-master-multi-agent-operating-prompt-20260827")

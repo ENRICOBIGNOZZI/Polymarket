@@ -88,6 +88,7 @@ jobs:
           python3 -m unittest \
             tests/test_no_legacy_runtime.py \
             tests/test_v7_authorized_paper_envelope.py \
+            tests/test_v7_control_plane_exact_head.py \
             tests/test_promotion_gate.py -v
 
       - name: Enforce pull-request lifecycle
@@ -99,11 +100,41 @@ jobs:
           set -euo pipefail
           base_sha="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["base"]["sha"])')"
           head_sha="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["sha"])')"
+          head_ref="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["ref"])')"
           [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
           [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
           git cat-file -e "$base_sha^{commit}" 2>/dev/null || git fetch --no-tags origin "$base_sha"
           git cat-file -e "$head_sha^{commit}" 2>/dev/null || git fetch --no-tags origin "$head_sha"
           git diff --name-only "$base_sha...$head_sha" | sort -u > changed-files.txt
+
+          # Fail closed after the premature-cleanup incident. There is not yet a
+          # durable machine-verifiable receipt proving one exact V7 SHA completed
+          # tests -> same-SHA PAPER -> main -> paper-validated -> deploy -> server
+          # health. Until that receipt exists and is explicitly validated here,
+          # no cleanup/* PR is eligible for integration.
+          if [[ "$head_ref" == cleanup/* ]]; then
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          d=json.loads(Path('config/operator_directives.json').read_text(encoding='utf-8'))
+          assert d['operator_instruction_id']=='user-v7-master-multi-agent-operating-prompt-20260827'
+          assert d['architecture']['cleanup_sequence']=='v7_implementation_then_tests_then_same_sha_paper_then_main_then_paper_validated_then_deploy_then_server_health_then_legacy_deletion'
+          assert d['paper_v7_authorization']['paper_only'] is True
+          assert d['paper_v7_authorization']['authenticated_execution'] is False
+          PY
+            cat > research-policy-report.md <<'EOF'
+          # Research pull-request policy
+
+          - policy: `fail`
+          - lifecycle: `cleanup locked during V7 cutover repair`
+          - requirement: one exact V7 SHA must complete tests, same-SHA PAPER, main, paper-validated, deploy and server health before remaining legacy deletion can be authorized.
+          - unlock: requires a durable machine-verifiable lifecycle receipt and an explicit receipt-validation contract; neither is present yet.
+          EOF
+            cat research-policy-report.md >&2
+            exit 1
+          fi
+
           manifest_existed=false
           if git cat-file -e "$base_sha:config/live_champion.json" 2>/dev/null; then manifest_existed=true; fi
           python3 scripts/hard_safety_policy.py \
