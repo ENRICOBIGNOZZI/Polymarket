@@ -43,6 +43,7 @@ struct PaperMakerEvent {
     OrderState order_state = OrderState::Intent;
     std::int64_t timestamp_ns = 0;
     std::int64_t price_tick = 0;
+    std::int32_t tick_size_e4 = 0;
     std::int64_t original_microunits = 0;
     std::int64_t operational_fill_microunits = 0;
     std::int64_t pessimistic_fill_microunits = 0;
@@ -82,7 +83,8 @@ public:
 
     [[nodiscard]] PaperMakerResult apply_intent(
         const StrategyIntent& intent,
-        std::int64_t visible_queue_ahead_microunits) noexcept;
+        std::int64_t visible_queue_ahead_microunits,
+        std::int32_t tick_size_e4) noexcept;
 
     [[nodiscard]] PaperMakerResult on_public_trade(
         const PublicTradePrint& trade) noexcept;
@@ -102,7 +104,7 @@ private:
         OmsOrder oms{};
         PaperRestingOrder paper{};
         std::uint64_t intent_id = 0;
-        std::int64_t limit_price_e4 = 0;
+        std::int32_t tick_size_e4 = 0;
         std::uint8_t occupied = 0;
     };
 
@@ -118,8 +120,7 @@ private:
     void emit(PaperMakerResult& result, PaperMakerEvent event) const noexcept;
     void request_cancel(Slot& slot, std::int64_t now, PaperMakerResult& result) noexcept;
     void apply_operational_fill(Slot& slot, std::int64_t fill_microunits,
-                                std::int64_t price_tick, std::int64_t timestamp_ns,
-                                PaperMakerEvent& event) noexcept;
+                                std::int64_t timestamp_ns, PaperMakerEvent& event) noexcept;
     void maybe_merge(std::int64_t timestamp_ns, PaperMakerResult& result) noexcept;
     [[nodiscard]] OmsEvent oms_event(OmsEventType type, std::int64_t timestamp_ns) noexcept;
 
