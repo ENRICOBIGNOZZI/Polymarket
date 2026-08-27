@@ -3,24 +3,13 @@ name: V7 cross-sectional relative tail research
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 */2 * * *"
+    - cron: "7,22,37,52 * * * *"
   pull_request:
     branches: [main]
     paths:
-      - "scripts/v7_cross_sectional_rank.py"
-      - "scripts/v7_cross_sectional_rank_core.py"
-      - "scripts/v7_cross_sectional_rank_fast.py"
-      - "scripts/v7_cross_sectional_rank_inference.py"
-      - "scripts/v7_cross_sectional_history.py"
-      - "scripts/v7_cross_sectional_relative.py"
-      - "scripts/v7_cross_sectional_tail_relative.py"
-      - "config/research_v7_cross_sectional_rank.json"
-      - "config/research_v7_cross_sectional_rank_frozen.json"
-      - "tests/test_v7_cross_sectional_rank.py"
-      - "tests/test_v7_cross_sectional_rank_fast.py"
-      - "tests/test_v7_cross_sectional_rank_inference.py"
-      - "tests/test_v7_cross_sectional_history.py"
-      - "tests/test_v7_cross_sectional_relative.py"
+      - "scripts/v7_cross_sectional_*.py"
+      - "config/research_v7_cross_sectional_rank*.json"
+      - "tests/test_v7_cross_sectional_*.py"
       - "docs/V7_CROSS_SECTIONAL_RANKING.md"
       - ".github/workflows/v7-cross-sectional-ranking-research.yml"
 
@@ -31,16 +20,24 @@ concurrency:
   group: v7-cross-sectional-relative-tail-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  VALIDATION_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
 jobs:
   research:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.VALIDATION_SHA }}
+      - name: Bind evidence to exact head
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
+          printf '%s\n' "$VALIDATION_SHA" > validation_sha.txt
 
-      - name: Detect V7 ranking implementation
-        id: preflight
-        shell: bash
+      - name: Deterministic frozen-ranking contracts
         run: |
           set -euo pipefail
           required=(
@@ -48,6 +45,7 @@ jobs:
             scripts/v7_cross_sectional_rank_core.py
             scripts/v7_cross_sectional_rank_fast.py
             scripts/v7_cross_sectional_rank_inference.py
+            scripts/v7_cross_sectional_rank_frozen.py
             scripts/v7_cross_sectional_history.py
             scripts/v7_cross_sectional_relative.py
             scripts/v7_cross_sectional_tail_relative.py
@@ -57,40 +55,37 @@ jobs:
             tests/test_v7_cross_sectional_rank_inference.py
             tests/test_v7_cross_sectional_history.py
             tests/test_v7_cross_sectional_relative.py
+            tests/test_v7_cross_sectional_rank_15m.py
           )
-          missing=()
-          for path in "${required[@]}"; do
-            [[ -f "$path" ]] || missing+=("$path")
-          done
-          if (( ${#missing[@]} )); then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "V7 ranking lane is registered but deferred until the implementation lands: ${missing[*]}" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Deterministic relative-ranking contracts
-        if: steps.preflight.outputs.ready == 'true'
-        run: |
-          set -euo pipefail
+          for path in "${required[@]}"; do test -f "$path"; done
           python3 -m unittest \
             tests/test_v7_cross_sectional_rank.py \
             tests/test_v7_cross_sectional_rank_fast.py \
             tests/test_v7_cross_sectional_rank_inference.py \
             tests/test_v7_cross_sectional_history.py \
-            tests/test_v7_cross_sectional_relative.py -v
+            tests/test_v7_cross_sectional_relative.py \
+            tests/test_v7_cross_sectional_rank_15m.py -v
           python3 -m py_compile \
             scripts/v7_cross_sectional_rank_core.py \
             scripts/v7_cross_sectional_rank_fast.py \
             scripts/v7_cross_sectional_rank_inference.py \
+            scripts/v7_cross_sectional_rank_frozen.py \
             scripts/v7_cross_sectional_rank.py \
             scripts/v7_cross_sectional_history.py \
             scripts/v7_cross_sectional_relative.py \
             scripts/v7_cross_sectional_tail_relative.py
-          python3 -m json.tool config/research_v7_cross_sectional_rank_frozen.json >/dev/null
+          python3 - <<'PY'
+          import json
+          c=json.load(open('config/research_v7_cross_sectional_rank_frozen.json'))
+          assert c['horizons_minutes']==[15,30,60,120,360]
+          assert c['frequency_registration']['pool_evidence_across_horizons'] is False
+          assert c['frequency_registration']['frozen_holdout_only'] is True
+          assert c['history']['fit_once_before_holdout_minus_embargo'] is True
+          assert c['history']['refit_during_frozen_holdout'] is False
+          assert c['integration_contract']['requires_canonical_v7_execution_ledger'] is True
+          PY
 
-      - name: Live public-data frozen 2h/6h relative holdout
-        if: steps.preflight.outputs.ready == 'true'
+      - name: Live public-data frozen 15m/30m/1h/2h/6h observer
         shell: bash
         run: |
           set -euo pipefail
@@ -104,61 +99,55 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          report = json.loads(Path("ranking_evidence/report.json").read_text())
-          assert report["schema_version"] == 2
-          assert report["paper_only"] is True
-          assert report["research_only"] is True
-          assert report["live_intents_enabled"] is False
-          assert report["submitted_orders"] == 0
-          assert report["promotion_ready"] is False
-          assert report["economic_pnl_validated"] is False
-          assert report["survivorship_safe"] is False
-          assert report["absolute_single_leg_mapping_disabled"] is True
-          assert report["relative_pair_only"] is True
-          assert report["common_logit_mode_neutralized_first_order"] is True
-          assert report["joint_fill_state_evidence_validated"] is False
-          assert report["partial_fill_unwind_economics_validated"] is False
-          assert report["fill_conditioned_cost_stressed_pnl_validated"] is False
-          assert report["history_data_healthy"] is True
-          assert report["forward_holdout_start_ts"] > report["discovery_cutoff_ts"]
-          assert report["frozen_horizons_minutes"] == [120, 360]
-          assert len(report["horizons"]) == 2
+          r=json.loads(Path('ranking_evidence/report.json').read_text())
+          assert r['schema_version']==2
+          assert r['paper_only'] is True and r['research_only'] is True
+          assert r['live_intents_enabled'] is False and r['submitted_orders']==0
+          assert r['frozen_horizons_minutes']==[15,30,60,120,360]
+          assert len(r['horizons'])==5
+          assert r['pool_evidence_across_horizons'] is False
+          assert r['absolute_single_leg_mapping_disabled'] is True
+          assert r['relative_pair_only'] is True
+          assert r['promotion_ready'] is False
+          # Point-in-time universe provenance remains a hard gate. A current-active
+          # survivor sample may be observed but never credited as promotion evidence.
+          if not r['survivorship_safe'] or not r['point_in_time_universe_validated']:
+              assert r['economic_pnl_validated'] is False
+              assert r['promotion_ready'] is False
+          for h in r['horizons']:
+              assert h['fit_mode']=='frozen_at_holdout_start'
+              assert h['frozen_fit_asof_ts']==r['forward_holdout_start_ts']
+              if h['fit'] is not None:
+                  assert h['fit']['train_end_ts'] <= r['frozen_training_label_cutoff_ts']
           PY
 
-      - name: Publish relative-tail summary
+      - name: Publish summary
         if: always()
         shell: bash
         run: |
           echo '## V7 cross-sectional relative tail research' >> "$GITHUB_STEP_SUMMARY"
-          if [[ "${{ steps.preflight.outputs.ready }}" != "true" ]]; then
-            echo '- status: deferred until V7 ranking implementation is present on this revision' >> "$GITHUB_STEP_SUMMARY"
-          elif test -s ranking_evidence/report.json; then
+          echo "- exact SHA: $VALIDATION_SHA" >> "$GITHUB_STEP_SUMMARY"
+          if test -s ranking_evidence/report.json; then
             python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
-          from pathlib import Path
-          r=json.loads(Path('ranking_evidence/report.json').read_text())
-          print(f"- markets: {r['market_count']}")
-          print(f"- history markets: {r['history_market_count']}")
-          print(f"- history data healthy: {r['history_data_healthy']}")
-          print(f"- authoritative fee books: {r['authoritative_fee_book_count']}")
-          print(f"- frozen horizons: {r['frozen_horizons_minutes']}")
-          print(f"- tail fraction: {r['tail_fraction']}")
-          print(f"- forward days observed: {r['forward_days_observed']}")
-          print(f"- current relative pair candidates: {r['current_relative_pair_candidates']}")
-          print(f"- absolute single-leg mapping disabled: {r['absolute_single_leg_mapping_disabled']}")
+          r=json.load(open('ranking_evidence/report.json'))
+          print(f"- horizons: {r['frozen_horizons_minutes']}")
+          print(f"- point-in-time universe valid: {r['point_in_time_universe_validated']}")
+          print(f"- survivorship safe: {r['survivorship_safe']}")
+          print(f"- current relative pairs: {r['current_relative_pair_candidates']}")
           for h in r['horizons']:
               b=h['forward_blocked_inference']
-              print(f"- {h['horizon_minutes']}m: forward_gate={h['forward_gate']}, reasons={h['forward_gate_reasons']}, days={b['days']}, daily_IC={b['mean_daily_rank_ic']:.4f}, daily_tail={b['mean_daily_top_bottom_logit_spread']:.6f}, pIC={b['rank_ic_bootstrap_p_mean_nonpositive']}, pTail={b['top_bottom_bootstrap_p_mean_nonpositive']}, pairs={h['relative_pair_candidates']}")
+              print(f"- {h['horizon_minutes']}m: gate={h['forward_gate']}, reasons={h['forward_gate_reasons']}, days={b['days']}, IC={b['mean_daily_rank_ic']:.4f}, tail={b['mean_daily_top_bottom_logit_spread']:.6f}, pairs={h['relative_pair_candidates']}")
           PY
-          else
-            echo '- report missing' >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Upload relative-ranking evidence
-        if: always() && steps.preflight.outputs.ready == 'true'
+      - name: Upload exact-head ranking evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: v7-cross-sectional-relative-tail-${{ github.run_id }}
-          path: ranking_evidence/
+          path: |
+            validation_sha.txt
+            ranking_evidence/
           if-no-files-found: warn
           retention-days: 30
