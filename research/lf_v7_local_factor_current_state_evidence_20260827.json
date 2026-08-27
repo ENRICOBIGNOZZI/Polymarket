@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-08-27T00:24:00Z",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "finding": "CURRENT_BOOK_RESIDUAL_STATE_NOT_RECONSTRUCTED",
+  "material_structural_blocker": true,
+  "authority": {
+    "source": "config/operator_directives.json on current main plus latest explicit user instruction",
+    "main_observed_sha": "10d5dfbbd910753354b7af1b877f36d7e2acc2f3",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "market_limit": 1000,
+    "minimum_liquidity_usd": 2.0,
+    "minimum_post_cost_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "max_drawdown": 0.15
+  },
+  "audited_v7_model_source": {
+    "branch": "research/v7-unified-final-evidence-20260826",
+    "sha": "ffe3a4ef6d71959afbf4f118721026a48aab19d7",
+    "status": "superseded research source retained for V7 model reconstruction; no direct canonical-ref mutation"
+  },
+  "source_observations": [
+    "v7_local_factor_core.fit_pair builds one pair-excluded orientation-invariant temporal PC1 from predeclared controls and stores target loadings plus historical residual paths.",
+    "v7_local_factor_core_base.build_pair_signal applies the residual-z floor to fit.residual_z_a/b and starts the n-step forecast from fit.residual_a[-1] / fit.residual_b[-1].",
+    "v7_local_factor_research fetches current books but passes only the two current target mids to build_pair_signal; current control mids are not supplied for current factor reconstruction.",
+    "v7_local_factor_orientation.orientation_invariant_pc1 returns the historical temporal factor scores only; the fitted object does not persist a frozen current-observation projection map for the controls."
+  ],
+  "deterministic_counterexamples": {
+    "parameters": {
+      "phi": 0.8,
+      "horizon_steps": 6,
+      "residual_z_floor": 1.0
+    },
+    "reverted_between_completed_bucket_and_book": {
+      "historical_residual_z": [2.0, -2.0],
+      "current_book_residual_z": [0.1, -0.1],
+      "incumbent_historical_gate_passes": true,
+      "current_state_gate_passes": false,
+      "historical_endpoint_forecast_change_a": -1.475712,
+      "current_state_forecast_change_a": -0.0737856,
+      "absolute_forecast_overstatement": 20.0
+    },
+    "new_dislocation_after_completed_bucket": {
+      "historical_residual_z": [0.2, -0.2],
+      "current_book_residual_z": [2.0, -2.0],
+      "incumbent_historical_gate_passes": false,
+      "current_state_gate_passes": true
+    },
+    "sign_flip_after_completed_bucket": {
+      "historical_residual_z": [2.0, -2.0],
+      "current_book_residual_z": [-2.0, 2.0],
+      "incumbent_sides": ["NO", "YES"],
+      "current_state_sides": ["YES", "NO"]
+    }
+  },
+  "interpretation": "The freshness repair prevents very old fitted states, but freshness alone does not make the last completed-bucket residual equal to the current executable-book residual. The current V7 LF signal path can therefore admit already-reverted states, miss newly-created dislocations, or choose the opposite direction even when the statistical fit and multiplicity layer are otherwise valid.",
+  "required_successor_contract": [
+    "Freeze the pair-excluded orientation-invariant PC1 basis using training data only; never refit it using the current observation.",
+    "Persist sufficient training-only control means/scales and a sign-stable PC1 projection representation so a new control vector can be scored out of sample.",
+    "Require fresh causally coherent current books for both targets and every predeclared control; missing or stale required state fails closed.",
+    "Standardize current target/control logits with training-only moments, project the current controls onto the frozen factor basis and reconstruct current residuals for both pair legs.",
+    "Apply post-multiplicity |z| admission to these current residuals; keep historical endpoint z only as diagnostic telemetry.",
+    "Use these reconstructed current residuals in the actual-horizon n-step forecast and retain fidelity plus TTR-minus-buffer guards.",
+    "Only after current-state validity attach executable depth, authoritative fees, slippage, empirical both/A-only/B-only/none joint states, partial abort/unwind loss and audited fill-conditioned PnL with cost stress."
+  ],
+  "non_claims": [
+    "This is not evidence of profitable LF alpha.",
+    "This does not justify relaxing warmup, z, FDR or economic gates.",
+    "No claim is made that any historical V7 LF candidate would have filled or made money after this repair."
+  ],
+  "safety": {
+    "main_mutated": false,
+    "paper_validated_mutated": false,
+    "operator_authority_redefined": false,
+    "authenticated_or_real_execution_added": false,
+    "hard_risk_changed": false
+  }
+}
