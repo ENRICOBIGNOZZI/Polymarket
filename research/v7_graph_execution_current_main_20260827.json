@@ -1,0 +1,66 @@
+{
+  "schema": "polymarket_v7_graph_execution_research_v1",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "repository_main_at_start": "6ff5083ee87415a247d0591834a7c16dd2a742bb",
+  "stacked_profit_stack_base_at_branch_creation": "1f741308e1896266bed53afe9fc4eb4c7a1cf4b1",
+  "coordination": {
+    "active_profit_stack_pr": 728,
+    "queue_decoupled_audit_pr": 600,
+    "receive_time_causality_predecessor_pr": 609,
+    "canonical_ledger_successor_pr": 720,
+    "collision_policy": "do not edit the active #728 branch; keep Graph execution isolated and stack/rebase after its current head stabilizes"
+  },
+  "finding": {
+    "defect": "legacy V7 Graph broker capacity increased mechanically with queue ahead",
+    "forbidden_semantics": "queue_ahead_grants_capital",
+    "required_semantics": "queue_ahead_affects_empirical_joint_fillability_only",
+    "economic_unit": "bundle",
+    "joint_completion": "direct empirical state distribution; no product or minimum of marginals"
+  },
+  "implementation": {
+    "module": "scripts/v7_graph_execution.py",
+    "config": "config/v7_graph_execution.json",
+    "test": "tests/test_v7_graph_execution.py",
+    "capacity_inputs": [
+      "risk_capital",
+      "action_specific_entry_depth",
+      "full_depth_unwind_capacity",
+      "empirical_joint_completion"
+    ],
+    "entry_frontier": [
+      "maker_maker_join",
+      "maker_maker_improve",
+      "maker_taker",
+      "taker_maker",
+      "taker_taker",
+      "sequential_maker_taker",
+      "sequential_taker_maker"
+    ],
+    "partial_states": "explicit full-depth unwind plus fee, depth-slippage, adverse-markout and optional unwind penalty",
+    "cost_stress": [1.0, 1.5, 2.0],
+    "ledger": "canonical V7 LedgerEvent candidate handoff only; this module cannot acquire a second writer",
+    "legacy_imports": false,
+    "paper_only": true,
+    "authenticated_execution": false
+  },
+  "deterministic_acceptance": [
+    "capacity is invariant to queue ahead when risk, depth and joint distribution are fixed",
+    "capacity rises with independently executable unwind depth",
+    "equal marginal fill probabilities with different joint completion produce different capacity",
+    "insufficient empirical joint observations fail closed",
+    "stale or cross-leg mixed-time books fail closed",
+    "partial unwind loss is explicit in total EV",
+    "same action, size and joint states are stressed at 1x, 1.5x and 2x",
+    "Graph candidate metadata is canonical-ledger compatible and queue_used_for_capacity=false",
+    "no V6 import and no second canonical writer"
+  ],
+  "economic_evidence": {
+    "opportunities": null,
+    "fills": null,
+    "complete_bundles": null,
+    "realized_paper_pnl": null,
+    "markout": null,
+    "reason": "implementation/regression stage only; no forward same-SHA PAPER run has been credited"
+  },
+  "next_gate": "rebase/compose on the stable current #728 profit-stack head, obtain exact-head CI, then run identical prospective Graph candidates through canonical PAPER bundle states and realized cost-stressed PnL"
+}
