@@ -11,7 +11,7 @@ CONTROL="$RUN_ROOT/control"
 ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
 LOCK="$CONTROL/runtime.lock"
-mkdir -p "$CONTROL" "$RUN_ROOT/market_data" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/external" "$RUN_ROOT/learned_execution"
+mkdir -p "$CONTROL" "$RUN_ROOT/market_data" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/learned_execution"
 
 python3 - "$CONFIG" <<'PY'
 import json,sys
@@ -152,12 +152,11 @@ pids+=("$!")
 ) & pids+=("$!")
 
 # Generic maker is intentionally not started: current forward evidence rejects
-# unconditional improvement.  The capital sleeve stays reserved until the direct
+# unconditional improvement. The capital sleeve stays reserved until the direct
 # joint execution model supports a selective positive-EV maker action.
 cat > "$RUN_ROOT/micro_maker/status.json.tmp" <<JSON
 {"schema":"polymarket_v7_selective_maker_status_v1","paper_only":true,"authenticated_execution":false,"enabled":false,"reason":"direct_joint_fill_conditioned_ev_not_yet_mature_generic_maker_rejected"}
 JSON
-mkdir -p "$RUN_ROOT/micro_maker"
 mv "$RUN_ROOT/micro_maker/status.json.tmp" "$RUN_ROOT/micro_maker/status.json"
 
 # Account-level kill switch. Any unsafe/unmarkable sleeve or >=15% account DD
