@@ -45,11 +45,58 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          merged_pr="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" --jq '[.[] | select(.base.ref == "main" and .merged_at != null)] | first | .number // empty' 2>/dev/null || true)"
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" > /tmp/main-commit-pulls.json 2>/dev/null || printf '[]\n' > /tmp/main-commit-pulls.json
+          merged_pr="$(python3 - <<'PY'
+          import json
+          rows=json.load(open('/tmp/main-commit-pulls.json'))
+          eligible=[p for p in rows if (p.get('base') or {}).get('ref')=='main' and p.get('merged_at')]
+          print(eligible[0]['number'] if eligible else '')
+          PY
+          )"
           if [[ -n "$merged_pr" ]]; then
             echo "main_push_pr=$merged_pr"
             exit 0
           fi
+
+          python3 - "$GITHUB_SHA" "$GITHUB_REPOSITORY" <<'PY' > /tmp/exact-fast-forward.json
+          import json,re,sys
+          sha,repo=sys.argv[1:]
+          rows=json.load(open('/tmp/main-commit-pulls.json'))
+          eligible=[]
+          for p in rows:
+              head=p.get('head') or {}; base=p.get('base') or {}; head_repo=head.get('repo') or {}
+              labels={str(x.get('name') or '') for x in (p.get('labels') or []) if isinstance(x,dict)}
+              body=str(p.get('body') or '')
+              if base.get('ref')!='main': continue
+              if head.get('sha')!=sha: continue
+              if str(head.get('ref') or '').startswith('integration/v7-') is False: continue
+              if str(head_repo.get('full_name') or '')!=repo: continue
+              if p.get('draft') is True: continue
+              if 'autonomous-promotion-approved' not in labels: continue
+              if not re.search(r'source research pr/branch/commit:\s*#\d+\b',body,re.I): continue
+              if not re.search(r'promotion evidence file:\s*[^\s`]+\.json\b',body,re.I): continue
+              base_sha=str(base.get('sha') or '')
+              if not re.fullmatch(r'[0-9a-f]{40}',base_sha): continue
+              eligible.append({'number':int(p['number']),'base_sha':base_sha,'head_sha':sha,'head_ref':head['ref']})
+          if len(eligible)>1:
+              raise SystemExit('ambiguous exact-head integration provenance')
+          print(json.dumps(eligible[0] if eligible else {},sort_keys=True))
+          PY
+          fast_forward_pr="$(python3 -c 'import json; d=json.load(open("/tmp/exact-fast-forward.json")); print(d.get("number") or "")')"
+          if [[ -n "$fast_forward_pr" ]]; then
+            base_sha="$(python3 -c 'import json; print(json.load(open("/tmp/exact-fast-forward.json"))["base_sha"])')"
+            [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
+            git cat-file -e "$base_sha^{commit}" 2>/dev/null || git fetch --no-tags origin "$base_sha"
+            git fetch --no-tags origin paper-validated
+            validated_sha="$(git rev-parse origin/paper-validated)"
+            git merge-base --is-ancestor "$validated_sha" "$base_sha"
+            git merge-base --is-ancestor "$base_sha" "$GITHUB_SHA"
+            test "$base_sha" != "$GITHUB_SHA"
+            echo "main_exact_fast_forward_pr=$fast_forward_pr"
+            echo "main_exact_fast_forward_base=$base_sha"
+            exit 0
+          fi
+
           parent="$(git rev-parse HEAD^)"
           git diff --name-only "$parent" HEAD | sort -u > /tmp/direct-main-files.txt
           git log -1 --pretty=%s | grep -q '^Operator:'
