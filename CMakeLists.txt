@@ -24,6 +24,11 @@ target_include_directories(pm_fast_arb PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/includ
 target_link_libraries(pm_fast_arb PUBLIC pm_core Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 target_compile_options(pm_fast_arb PRIVATE -Wall -Wextra -Wpedantic)
 
+add_library(pm_v7_hft src/v7_maker_hft.cpp)
+target_include_directories(pm_v7_hft PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(pm_v7_hft PUBLIC Threads::Threads)
+target_compile_options(pm_v7_hft PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_trade_recorder src/v7_trade_recorder.cpp)
 target_link_libraries(polymarket_v7_trade_recorder PRIVATE pm_core)
 target_compile_options(polymarket_v7_trade_recorder PRIVATE -Wall -Wextra -Wpedantic)
@@ -34,6 +39,11 @@ if(BUILD_TESTING)
   add_executable(pm_fast_arb_tests tests/test_fast_arb.cpp)
   target_link_libraries(pm_fast_arb_tests PRIVATE pm_fast_arb)
   add_test(NAME pm_fast_arb_tests COMMAND pm_fast_arb_tests)
+
+  add_executable(pm_v7_maker_hft_tests tests/test_v7_maker_hft.cpp)
+  target_link_libraries(pm_v7_maker_hft_tests PRIVATE pm_v7_hft)
+  add_test(NAME pm_v7_maker_hft_tests COMMAND pm_v7_maker_hft_tests)
+
   add_test(NAME no_legacy_runtime COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_no_legacy_runtime.py)
 
   file(GLOB V7_PY_TESTS CONFIGURE_DEPENDS
