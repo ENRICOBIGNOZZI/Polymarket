@@ -27,7 +27,10 @@ pm::v7::MarketWsShard make_shard() {
 }
 
 pm::fast::FeedReceiveStamp stamp(std::int64_t monotonic_ns, std::int64_t wall_ms) {
-    return pm::fast::FeedReceiveStamp{monotonic_ns, wall_ms};
+    pm::fast::FeedReceiveStamp out;
+    out.wall_ms = wall_ms;
+    out.monotonic_ns = monotonic_ns;
+    return out;
 }
 
 void test_snapshot_delta_trade_and_reconnect_lineage() {
@@ -47,6 +50,8 @@ void test_snapshot_delta_trade_and_reconnect_lineage() {
     assert(result.applied_state_events == 1);
     assert(output[0].kind == pm::v7::MarketWsEventKind::BookChanged);
     assert(output[0].instrument_handle == 301);
+    assert(output[0].receive_monotonic_ns == 2'000'000'000LL);
+    assert(output[0].book.receive_monotonic_ns == 2'000'000'000LL);
     assert(output[0].book.valid);
     assert(output[0].book.best_bid_e4 == 4800);
     assert(output[0].book.best_ask_e4 == 5200);
