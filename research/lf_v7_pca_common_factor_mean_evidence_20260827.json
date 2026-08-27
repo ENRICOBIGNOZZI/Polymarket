@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "generated_utc": "2026-08-27T01:22:00Z",
+  "authority_main_sha": "5db9efa6c9707af090dd1a89043fc58dff45fba8",
+  "operator_directive_epoch": "2026-08-27T01:36:00+02:00",
+  "audited_source_sha": "ffe3a4ef6d71959afbf4f118721026a48aab19d7",
+  "source_branch": "research/v7-unified-final-evidence-20260826",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "state": "MORE_EVIDENCE_REQUIRED",
+  "alpha_claim": false,
+  "structural_defect": "single_leg_pca_uses_residual_mean_reversion_as_total_expected_markout_while_common_factor_is_unhedged_and_only_enters_forecast_risk",
+  "current_authority": {
+    "market_limit": 1000,
+    "minimum_liquidity_usd": 2.0,
+    "minimum_post_cost_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "maximum_drawdown": 0.15,
+    "paper_only": true,
+    "authenticated_execution": false
+  },
+  "counterexamples": {
+    "common_up_reverses_residual_no": {
+      "residual_expected_logit_move": -0.05,
+      "common_expected_logit_move": 0.2,
+      "total_expected_logit_move": 0.15,
+      "incumbent_single_leg_side": "NO",
+      "total_mean_single_leg_side": "YES"
+    },
+    "common_down_reverses_residual_yes": {
+      "residual_expected_logit_move": 0.05,
+      "common_expected_logit_move": -0.2,
+      "total_expected_logit_move": -0.15,
+      "incumbent_single_leg_side": "YES",
+      "total_mean_single_leg_side": "NO"
+    },
+    "zero_common_mean_control": {
+      "residual_expected_logit_move": -0.05,
+      "common_expected_logit_move": 0.0,
+      "total_expected_logit_move": -0.05,
+      "incumbent_single_leg_side": "NO",
+      "total_mean_single_leg_side": "NO"
+    }
+  },
+  "required_successor": [
+    "apply the current-book residual-z repair before economic admission",
+    "preserve target-excluded PCA and conditional target-residual unit-root inference",
+    "estimate or prospectively validate the conditional common-component mean separately for 30m, 1h, 2h and 6h using only pre-decision information",
+    "use expected common move plus expected residual move as the single-leg expected logit markout",
+    "retain common-component uncertainty around that total conditional mean",
+    "abstain when the common-mode mean is not identified rather than silently assuming zero",
+    "require common-sample forward executable fills and positive audited fill-conditioned post-cost PnL before promotion"
+  ]
+}
