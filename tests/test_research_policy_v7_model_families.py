@@ -21,6 +21,7 @@ class V7ModelFamilyPolicyTest(unittest.TestCase):
         "scripts/v7_local_factor_inference.py",
         "scripts/v7_local_factor_multiplicity.py",
         "scripts/v7_local_factor_pairs.py",
+        "scripts/v7_execution_evidence.py",
     ]
 
     def run_policy(self, branch: str, *, draft: bool, labels: list[str] | None = None):
