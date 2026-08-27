@@ -9,6 +9,7 @@ class V7FastArbLegFreshnessContractTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.part2 = (ROOT / "src" / "fast_runtime" / "part2.inc").read_text(encoding="utf-8")
         cls.part3 = (ROOT / "src" / "fast_runtime" / "part3.inc").read_text(encoding="utf-8")
+        cls.part4 = (ROOT / "src" / "fast_runtime" / "part4.inc").read_text(encoding="utf-8")
         cls.fast_ws = (ROOT / "src" / "fast_ws.cpp").read_text(encoding="utf-8")
 
     def test_each_l2_leg_has_its_own_exchange_and_receive_clock(self) -> None:
@@ -117,9 +118,19 @@ class V7FastArbLegFreshnessContractTest(unittest.TestCase):
         self.assertIn('"rest_point_in_time_ready_tokens"', self.part2)
         self.assertIn('"freshness_ready_tokens"', self.part2)
 
+    def test_nonbinding_dollar_sentinel_is_never_used_as_economic_notional(self) -> None:
+        self.assertIn("fixed-dollar cap is disabled", self.part4)
+        self.assertIn("const double capital_fraction_ceiling", self.part4)
+        self.assertIn("config.starting_capital * capital_fraction_ceiling", self.part4)
+        self.assertIn("policy.max_notional_usd > capital_ceiling", self.part4)
+        self.assertIn("policy.max_notional_usd = capital_ceiling", self.part4)
+        self.assertIn("config.max_market_fraction", self.part4)
+        self.assertIn("config.max_event_fraction", self.part4)
+        self.assertIn("config.max_gross_fraction", self.part4)
+
     def test_shadow_safety_boundary_is_unchanged(self) -> None:
         self.assertIn('{"real_order_submission", false}', self.part2)
-        combined = self.part2 + "\n" + self.part3 + "\n" + self.fast_ws
+        combined = self.part2 + "\n" + self.part3 + "\n" + self.part4 + "\n" + self.fast_ws
         self.assertNotIn("PRIVATE_KEY", combined)
         self.assertNotIn("--execute", combined)
 
