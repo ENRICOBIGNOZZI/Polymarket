@@ -227,6 +227,9 @@ struct MarketWebSocketFeed::Impl {
                     beast::error_code error;
                     ws.read(buffer, error);
                     if (error) {
+                        if (!stop.stop_requested() && error == websocket::error::closed) {
+                            report(shard_index, "websocket closed; reconnecting and invalidating L2 lineage");
+                        }
                         if (!stop.stop_requested() && error != websocket::error::closed) {
                             throw beast::system_error(error);
                         }
