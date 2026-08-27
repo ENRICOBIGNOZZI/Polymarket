@@ -111,11 +111,21 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     for name, row in evidence_models.items():
         if not isinstance(row, dict):
             continue
-        strategies.setdefault(str(name), {}).update(
+        strategy_name = str(name)
+        target = str(row.get("target") or "")
+        raw_fill_rate = None if row.get("fill_rate") is None else _number(row.get("fill_rate"))
+        fill_rate_valid = (
+            raw_fill_rate is not None
+            and 0.0 <= raw_fill_rate <= 1.0
+            and strategy_name != "relative_value"
+            and target != "hedged_convergence"
+        )
+        strategies.setdefault(strategy_name, {}).update(
             {
                 "orders_submitted": None if row.get("orders_submitted") is None else _integer(row.get("orders_submitted")),
                 "evidence_fills": _integer(row.get("fills")),
-                "fill_rate": None if row.get("fill_rate") is None else _number(row.get("fill_rate")),
+                "fill_rate": raw_fill_rate if fill_rate_valid else None,
+                "fill_rate_valid": fill_rate_valid,
                 "net_pnl": _number(row.get("net_pnl")),
                 "stressed_net_pnl": None if row.get("stressed_net_pnl") is None else _number(row.get("stressed_net_pnl")),
                 "markout_observations": _integer(row.get("forward_markout_observations")),
@@ -327,6 +337,8 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         for key, metric_name in mapping:
             if key in row and row[key] is not None:
                 lines.append(_metric(metric_name, row[key], strategy_label))
+        if "fill_rate_valid" in row:
+            lines.append(_metric("polymarket_strategy_fill_rate_valid", 1 if row["fill_rate_valid"] else 0, strategy_label))
         if "killed" in row:
             lines.append(_metric("polymarket_strategy_killed", 1 if row["killed"] else 0, strategy_label))
         if "paper_eligible" in row:
