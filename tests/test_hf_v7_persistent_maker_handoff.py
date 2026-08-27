@@ -176,6 +176,35 @@ class PersistentMakerHandoffTests(unittest.TestCase):
         self.assertIsNone(recurrence["realized_fill_conditioned_pnl_usd"])
         self.assertFalse(report["promotion_allowed"])
 
+    def test_second_recurrence_strengthens_identity_but_not_execution_or_stress_credit(self) -> None:
+        path = ROOT / "research" / "hf_v7_persistent_maker_recurrence_window3_20260827.json"
+        report = json.loads(path.read_text(encoding="utf-8"))
+        cutoff = int(report["preregistered_source"]["prospective_not_before_ms"])
+        prior_final = int(report["prior_prospective_recurrence"]["final_observed_ts_ms"])
+        recurrence = report["prospective_recurrence"]
+        first = int(recurrence["first_later_observed_ts_ms"])
+        final = int(recurrence["final_later_observed_ts_ms"])
+
+        self.assertGreater(first, cutoff)
+        self.assertGreater(first, prior_final)
+        self.assertGreater(final, first)
+        self.assertEqual(int(recurrence["delay_after_preregistered_cutoff_ms"]), first - cutoff)
+        self.assertEqual(int(recurrence["gap_after_prior_recurrence_ms"]), first - prior_final)
+        self.assertEqual(recurrence["candidate_id"], "maker-binary:1321564")
+        self.assertTrue(recurrence["second_independent_post_registration_recurrence"])
+        self.assertTrue(recurrence["all_rows_above_authorized_0_5bp_floor"])
+        self.assertFalse(recurrence["passes_original_all_rows_extra_10bp_frontier"])
+        self.assertAlmostEqual(float(recurrence["minimum_edge_after_extra_10bp_stress"]), 0.0)
+        self.assertEqual(int(recurrence["first_row_exchange_ts_ms"]), 0)
+        self.assertEqual(int(recurrence["final_row_exchange_ts_ms"]), 0)
+        self.assertFalse(report["later_window"]["authority_valid_execution_window"])
+        self.assertFalse(report["paper_fill_claim"])
+        self.assertFalse(report["realized_pnl_claim"])
+        self.assertFalse(recurrence["paper_fill"])
+        self.assertFalse(recurrence["paired_completion"])
+        self.assertIsNone(recurrence["realized_fill_conditioned_pnl_usd"])
+        self.assertFalse(report["promotion_allowed"])
+
 
 if __name__ == "__main__":
     unittest.main()
