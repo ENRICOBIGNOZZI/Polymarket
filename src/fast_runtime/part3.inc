@@ -39,7 +39,7 @@ private:
     std::uint64_t freshness_age_rejections_ = 0;
     std::uint64_t freshness_skew_rejections_ = 0;
 
-    // Fast structural evidence is fail-closed unless every required L2 leg has
+    // Fast structural evidence is fail-closed unless every actually required L2 leg has
     // a recent full-WS-snapshot lineage and the legs are event-time aligned.
     static constexpr std::int64_t kMaxBookAgeMs = 5000;
     static constexpr std::int64_t kMaxBookSkewMs = 1500;
@@ -256,14 +256,13 @@ private:
     std::vector<std::string> opportunity_required_tokens_locked(
         const pm::fast::Opportunity& opportunity) const {
         std::vector<std::string> required;
+        required.reserve(opportunity.legs.size());
         for (const auto& leg : opportunity.legs) {
-            const auto market = markets_.find(leg.market_id);
-            if (market != markets_.end()) {
-                required.push_back(market->second.yes_token);
-                required.push_back(market->second.no_token);
-            } else if (!leg.token_id.empty()) {
-                required.push_back(leg.token_id);
-            }
+            // Revalidation must match the books that were actually priced/executed.
+            // Requiring the complementary outcome of every market can falsely reject
+            // a valid YES-only NegRisk basket (or a two-leg logical relation) even
+            // though that complementary token never enters the executable basket.
+            if (!leg.token_id.empty()) required.push_back(leg.token_id);
         }
         return required;
     }
@@ -364,7 +363,6 @@ private:
     void evaluate_event_locked(const std::string& event_id) {
         if (!safe_negrisk_events_.count(event_id)) return;
         std::vector<const pm::Market*> members;
-        std::vector<std::string> required_tokens;
         const auto group = event_members_.find(event_id);
         if (group == event_members_.end()) return;
         for (const auto& id : group->second) {
@@ -372,17 +370,37 @@ private:
             if (member != markets_.end()) {
                 if (!fees_.count(member->second.condition_id)) return;
                 members.push_back(&member->second);
-                required_tokens.push_back(member->second.yes_token);
-                required_tokens.push_back(member->second.no_token);
             }
         }
-        const auto decision = now_ms();
-        const auto clocks = freshness_window_locked(required_tokens, decision);
-        if (!clocks.has_value()) return;
-        record_locked(pm::fast::evaluate_negrisk_complete_set(
-            event_id, members, books_, fees_, policy_, clocks->exchange_ms,
-            clocks->received_ms, decision));
+        if (members.size() < 2) return;
+
+        // A NegRisk complete-set buys only YES tokens. Freshness is therefore
+        // required on those exact executable legs, not on every complementary NO.
+        std::vector<std::string> complete_set_tokens;
+        complete_set_tokens.reserve(members.size());
+        for (const auto* member : members) complete_set_tokens.push_back(member->yes_token);
+        {
+            const auto decision = now_ms();
+            if (const auto clocks = freshness_window_locked(complete_set_tokens, decision);
+                clocks.has_value()) {
+                record_locked(pm::fast::evaluate_negrisk_complete_set(
+                    event_id, members, books_, fees_, policy_, clocks->exchange_ms,
+                    clocks->received_ms, decision));
+            }
+        }
+
+        // Each conversion has a different executable basket: source NO plus the
+        // YES token of every other event member. Gate each source independently.
         for (const auto* source : members) {
+            std::vector<std::string> conversion_tokens;
+            conversion_tokens.reserve(members.size());
+            conversion_tokens.push_back(source->no_token);
+            for (const auto* target : members) {
+                if (target->id != source->id) conversion_tokens.push_back(target->yes_token);
+            }
+            const auto decision = now_ms();
+            const auto clocks = freshness_window_locked(conversion_tokens, decision);
+            if (!clocks.has_value()) continue;
             record_locked(pm::fast::evaluate_negrisk_conversion(
                 event_id, *source, members, books_, fees_, policy_, clocks->exchange_ms,
                 clocks->received_ms, decision));
@@ -397,20 +415,25 @@ private:
         if (left == markets_.end() || right == markets_.end()) return;
         if (!fees_.count(left->second.condition_id) || !fees_.count(right->second.condition_id)) return;
         const auto decision = now_ms();
-        const auto clocks = freshness_window_locked(
-            {left->second.yes_token, left->second.no_token, right->second.yes_token,
-             right->second.no_token},
-            decision);
-        if (!clocks.has_value()) return;
+
         if (spec.type == RelationType::Implication) {
+            const auto clocks = freshness_window_locked(
+                {left->second.no_token, right->second.yes_token}, decision);
+            if (!clocks.has_value()) return;
             record_locked(pm::fast::evaluate_implication(
                 relation, left->second, right->second, books_, fees_, policy_,
                 clocks->exchange_ms, clocks->received_ms, decision));
         } else if (spec.type == RelationType::MutualExclusion) {
+            const auto clocks = freshness_window_locked(
+                {left->second.no_token, right->second.no_token}, decision);
+            if (!clocks.has_value()) return;
             record_locked(pm::fast::evaluate_mutual_exclusion(
                 relation, left->second, right->second, books_, fees_, policy_,
                 clocks->exchange_ms, clocks->received_ms, decision));
         } else {
+            const auto clocks = freshness_window_locked(
+                {left->second.yes_token, right->second.yes_token}, decision);
+            if (!clocks.has_value()) return;
             record_locked(pm::fast::evaluate_exhaustive_pair(
                 relation, left->second, right->second, books_, fees_, policy_,
                 clocks->exchange_ms, clocks->received_ms, decision));
