@@ -125,8 +125,6 @@ def local_factor_intents(report: dict[str, Any], model_sha: str) -> list[ModelIn
         blockers0.append("causal_book_snapshot_contract_missing")
     elif int(book_contract.get("guard_rejections") or 0) > 0:
         blockers0.append("causal_book_snapshot_rejections_present")
-    # Current LF research is not yet point-in-time survivorship safe.  A current
-    # signal can be recorded as a candidate, but not routed to execution.
     if report.get("survivorship_safe") is not True:
         blockers0.append("point_in_time_universe_not_validated")
 
@@ -157,6 +155,9 @@ def local_factor_intents(report: dict[str, Any], model_sha: str) -> list[ModelIn
                 "current_residual_z_a": row.get("current_residual_z_a"),
                 "current_residual_z_b": row.get("current_residual_z_b"),
                 "latest_completed_bucket_end_ts": row.get("latest_completed_bucket_end_ts"),
+                "exchange_ts_ms": row.get("exchange_ts_ms"),
+                "receive_ts_ms": row.get("receive_ts_ms"),
+                "book_snapshot_id": row.get("book_snapshot_id"),
             },
         )
         intent.validate(); out.append(intent)
@@ -199,6 +200,9 @@ def pca_intents(report: dict[str, Any], model_sha: str) -> list[ModelIntent]:
                     "predicted_yes_probability": row.get("predicted_yes_probability"),
                     "uncertainty_penalty": row.get("uncertainty_penalty"),
                     "gross_markout": row.get("gross_markout"),
+                    "exchange_ts_ms": row.get("exchange_ts_ms"),
+                    "receive_ts_ms": row.get("receive_ts_ms"),
+                    "book_snapshot_id": row.get("book_snapshot_id"),
                 },
             )
             intent.validate(); out.append(intent)
@@ -244,13 +248,37 @@ def ranking_intents(report: dict[str, Any], pairs: list[Any], model_sha: str) ->
                 "predicted_relative_logit_spread": row.get("predicted_relative_logit_spread"),
                 "common_logit_delta_per_pair_dollar": row.get("common_logit_delta_per_pair_dollar"),
                 "max_pair_notional": row.get("max_pair_notional"),
+                "exchange_ts_ms": row.get("exchange_ts_ms"),
+                "receive_ts_ms": row.get("receive_ts_ms"),
+                "book_snapshot_id": row.get("book_snapshot_id"),
             },
         )
         intent.validate(); out.append(intent)
     return out
 
 
+def _causal_candidate_clock(intent: ModelIntent) -> tuple[int, int, str] | None:
+    try:
+        exchange_ts_ms = int(intent.provenance.get("exchange_ts_ms") or 0)
+        receive_ts_ms = int(intent.provenance.get("receive_ts_ms") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    snapshot_id = _text(intent.provenance.get("book_snapshot_id"))
+    if exchange_ts_ms <= 0 or receive_ts_ms <= 0 or not snapshot_id:
+        return None
+    if exchange_ts_ms > receive_ts_ms or receive_ts_ms > intent.decision_ts_ms:
+        return None
+    return exchange_ts_ms, receive_ts_ms, snapshot_id
+
+
 def write_candidate_events(writer: ledger.CanonicalLedgerWriter, intents: list[ModelIntent]) -> int:
+    """Persist research opportunities; emit CANDIDATE only with causal book identity.
+
+    The canonical ledger deliberately requires exchange/receive/decision clocks and
+    a snapshot id for CANDIDATE.  A research intent that is blocked, or an otherwise
+    eligible intent whose causal snapshot did not survive into the router, remains
+    an OPPORTUNITY.  The router never fabricates timestamps to cross this boundary.
+    """
     written = 0
     for intent in intents:
         intent.validate()
@@ -260,23 +288,37 @@ def write_candidate_events(writer: ledger.CanonicalLedgerWriter, intents: list[M
             {"leg_id": str(index), "market_id": str(leg["market_id"]), "side": str(leg["side"]), "target_weight": float(leg["weight"])}
             for index, leg in enumerate(intent.legs)
         ]
+        clock = _causal_candidate_clock(intent) if intent.executable else None
+        candidate_ready = intent.executable and clock is not None
+        router_blockers = list(intent.blockers)
+        if intent.executable and clock is None:
+            router_blockers.append("causal_book_clock_missing_at_router")
+        exchange_ts_ms, receive_ts_ms, snapshot_id = clock if clock is not None else (None, None, None)
         writer.append(ledger.LedgerEvent(
-            event_type="CANDIDATE", strategy=intent.family, model_sha=intent.model_sha,
-            candidate_id=intent.candidate_id, bundle_id=intent.candidate_id if len(intent.legs) > 1 else None,
+            event_type="CANDIDATE" if candidate_ready else "OPPORTUNITY",
+            strategy=intent.family,
+            model_sha=intent.model_sha,
+            opportunity_id=None if candidate_ready else intent.candidate_id,
+            candidate_id=intent.candidate_id if candidate_ready else None,
+            bundle_id=intent.candidate_id if candidate_ready and len(intent.legs) > 1 else None,
             market_id=market_ids[0] if len(market_ids) == 1 else "|".join(market_ids),
             event_id=event_ids[0] if len(set(event_ids)) == 1 else "|".join(event_ids),
             decision_ts_ms=intent.decision_ts_ms,
+            exchange_ts_ms=exchange_ts_ms,
+            receive_ts_ms=receive_ts_ms,
+            book_snapshot_id=snapshot_id,
             predicted_alpha=intent.predicted_edge,
             expected_ev=intent.economic_score,
-            intended_action="RESEARCH_CANDIDATE" if not intent.executable else "PAPER_EXECUTION_ELIGIBLE",
+            intended_action="PAPER_EXECUTION_ELIGIBLE" if candidate_ready else "RESEARCH_OPPORTUNITY",
             metadata={
                 "model_family": intent.family,
                 "horizon_seconds": intent.horizon_seconds,
                 "intent_semantics": intent.semantics,
                 "joint_target_legs": required if len(required) > 1 else None,
                 "legs": list(intent.legs),
-                "execution_eligible": intent.executable,
-                "blockers": list(intent.blockers),
+                "model_execution_eligible": intent.executable,
+                "execution_eligible": candidate_ready,
+                "blockers": sorted(set(router_blockers)),
                 "provenance": intent.provenance,
             },
         ))
@@ -322,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
     _atomic_json(args.output, payload)
     if args.ledger:
         with ledger.CanonicalLedgerWriter(args.ledger, writer_id="v7-model-intent-router", model_sha=args.model_sha) as writer:
-            payload["ledger_candidates_written"] = write_candidate_events(writer, intents)
+            payload["ledger_events_written"] = write_candidate_events(writer, intents)
         _atomic_json(args.output, payload)
     print(json.dumps(payload, sort_keys=True))
     return 0
