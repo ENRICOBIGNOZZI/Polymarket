@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "generated_utc": "2026-08-27T03:22:57Z",
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "authority_source": "config/operator_directives.json on current main plus latest explicit user instruction",
+  "current_main_sha": "877d90b4ecbae3b620ecaa55a68e65cc5ed88ac9",
+  "state": "CANONICAL_V7_MODEL_SOURCE_ANCHOR_BLOCKER",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "material_finding": "Canonical V7 main currently lacks the Local Factor, PCA and cross-sectional ranking research implementation primitives required to produce exact-main model evidence. The registered ranking workflow is present but explicitly defers when those implementation files are absent. Active LF/PCA/ranking research PRs remain anchored to the closed superseded V7 research source rather than current main.",
+  "current_main_model_surface": {
+    "local_factor_implementation_present": false,
+    "pca_implementation_present": false,
+    "ranking_implementation_present": false,
+    "ranking_workflow_present": true,
+    "ranking_workflow_deferred_until_implementation_lands": true
+  },
+  "superseded_research_source": {
+    "pr": 546,
+    "state": "closed",
+    "title": "[SUPERSEDED BY CANONICAL V7 MAIN] Research: final unified V7 PAPER evidence candidate",
+    "head_ref": "research/v7-unified-final-evidence-20260826",
+    "head_sha": "ffe3a4ef6d71959afbf4f118721026a48aab19d7",
+    "contained_v7_lf_pca_ranking_primitives": true
+  },
+  "active_stale_base_examples": [
+    {
+      "pr": 677,
+      "family": "local_factor",
+      "base_ref": "research/v7-unified-final-evidence-20260826",
+      "base_sha": "ffe3a4ef6d71959afbf4f118721026a48aab19d7",
+      "head_ref": "research/v7-local-factor-current-state-residual-20260827",
+      "head_sha": "caa61f7b5548f91f821eca6daa74caf88786eaa2"
+    },
+    {
+      "pr": 627,
+      "family": "pca",
+      "note": "audits the same superseded V7 research source rather than canonical current main"
+    },
+    {
+      "pr": 689,
+      "family": "local_factor_and_pca",
+      "note": "observes current main but audits the superseded V7 research source"
+    },
+    {
+      "pr": 601,
+      "family": "cross_sectional_ranking",
+      "note": "frozen-holdout audit from the superseded research implementation"
+    },
+    {
+      "pr": 626,
+      "family": "cross_sectional_ranking",
+      "note": "fixed frozen-holdout implementation based on the superseded research source"
+    }
+  ],
+  "economic_interpretation": "No new LF/PCA/ranking alpha or fill-conditioned PnL conclusion is valid from this audit. The blocker is exact-SHA evidence identity: a model absent from canonical main cannot generate canonical-main model evidence, while stale-base research cannot be silently treated as current-main evidence.",
+  "required_successor": [
+    "Create one current-main-based V7 research source for LF/PCA/ranking rather than continuing to stack model research on the closed superseded branch.",
+    "Recover only the V7 model primitives required by the current operator contracts; do not resurrect V3-V6 or other retired runtime generations wholesale.",
+    "Preserve Local Factor pair-specific panels, pair-excluded orientation-invariant temporal PC1, same-basis null-preserving inference, dependence-robust multiplicity, horizon-matched forecasts and TTR guard.",
+    "Preserve PCA as horizon-separated single-leg residual statistical arbitrage with no hedge-basket or terminal-probability semantics.",
+    "Preserve ranking as relative-pair-only and fit each frozen holdout model once before holdout_start minus embargo, with adaptive walk-forward evidence kept separate.",
+    "Carry forward the open current-state and point-in-time snapshot-coherence blockers before interpreting any executable edge.",
+    "Run deterministic tests and exact-head policy/CI on the current-main-based research source, then collect same-SHA PAPER evidence with authoritative fees, executable depth, joint completion/partial unwind economics and fill-conditioned post-cost PnL."
+  ],
+  "hard_safety": {
+    "market_limit": 1000,
+    "minimum_liquidity_usd": 2.0,
+    "minimum_post_cost_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "fixed_dollar_trade_cap_enabled": false,
+    "max_trade_fraction": 1.0,
+    "max_market_fraction": 1.0,
+    "max_event_fraction": 1.0,
+    "max_gross_fraction": 1.0,
+    "max_drawdown": 0.15,
+    "kill_switch_required": true,
+    "state_integrity_required": true,
+    "paper_only": true,
+    "authenticated_execution": false
+  }
+}
