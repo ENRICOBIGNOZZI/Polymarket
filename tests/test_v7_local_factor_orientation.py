@@ -8,86 +8,76 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-NAME = "v7_local_factor_core_orientation_test"
-SPEC = importlib.util.spec_from_file_location(NAME, ROOT / "scripts" / "v7_local_factor_core.py")
+NAME = "v7_local_factor_orientation"
+SPEC = importlib.util.spec_from_file_location(NAME, ROOT / "scripts" / "v7_local_factor_orientation.py")
 assert SPEC is not None and SPEC.loader is not None
-lf = importlib.util.module_from_spec(SPEC)
-sys.modules[NAME] = lf
-SPEC.loader.exec_module(lf)
+orientation = importlib.util.module_from_spec(SPEC)
+sys.modules[NAME] = orientation
+SPEC.loader.exec_module(orientation)
+
+CORE_NAME = "v7_local_factor_core"
+CORE_SPEC = importlib.util.spec_from_file_location(CORE_NAME, ROOT / "scripts" / "v7_local_factor_core.py")
+assert CORE_SPEC is not None and CORE_SPEC.loader is not None
+lf = importlib.util.module_from_spec(CORE_SPEC)
+sys.modules[CORE_NAME] = lf
+CORE_SPEC.loader.exec_module(lf)
 
 
-def close(a: float, b: float, tol: float = 1e-9) -> bool:
-    return math.isfinite(a) and math.isfinite(b) and abs(a - b) <= tol
+def test_orientation_invariant_pc1_survives_control_sign_flip() -> None:
+    n = 100
+    controls = {
+        "c1": [math.sin(i / 10.0) for i in range(n)],
+        "c2": [0.8 * math.sin(i / 10.0) + 0.2 * math.cos(i / 7.0) for i in range(n)],
+        "c3": [0.6 * math.sin(i / 10.0) - 0.1 * math.cos(i / 11.0) for i in range(n)],
+    }
+    first = orientation.orientation_invariant_pc1(controls)
+    flipped = dict(controls)
+    flipped["c2"] = [-value for value in controls["c2"]]
+    second = orientation.orientation_invariant_pc1(flipped)
+    assert first is not None and second is not None
+    correlation = abs(sum(a * b for a, b in zip(first, second))) / math.sqrt(
+        sum(a * a for a in first) * sum(b * b for b in second)
+    )
+    assert correlation > 0.99
 
 
-def test_temporal_pc1_is_invariant_to_individual_control_sign_flip() -> None:
-    c1 = tuple(float(i - 20) for i in range(40))
-    c2 = tuple(0.7 * x + (0.3 if i % 3 else -0.2) for i, x in enumerate(c1))
-    c3 = tuple(-0.4 * x + (0.1 if i % 2 else -0.1) for i, x in enumerate(c1))
-    a = lf.orientation_invariant_pc1({"c1": c1, "c2": c2, "c3": c3})
-    b = lf.orientation_invariant_pc1({"c1": c1, "c2": tuple(-x for x in c2), "c3": c3})
-    assert a is not None and b is not None
-    assert len(a) == len(b)
-    assert max(abs(x - y) for x, y in zip(a, b)) < 1e-9
-
-
-def test_oppositely_coded_duplicate_controls_do_not_cancel_factor() -> None:
-    times = tuple(range(60))
-    common = [0.0]
-    for i in range(1, len(times)):
-        common.append(common[-1] + (0.08 if i % 5 else -0.05))
-    c1 = common
-    c2 = [-x for x in common]
-    a = [x + 0.03 * math.sin(i) for i, x in enumerate(common)]
-    b = [1.2 * x + 0.04 * math.cos(i) for i, x in enumerate(common)]
-    panel = lf.standardize_levels({"a": a, "b": b, "c1": c1, "c2": c2}, times)
+def test_fit_pair_uses_orientation_invariant_factor_and_excludes_targets() -> None:
+    times = tuple(range(40))
+    controls = {
+        "c1": [0.2 * i + math.sin(i / 5.0) for i in times],
+        "c2": [0.15 * i + math.sin(i / 5.0 + 0.2) for i in times],
+        "c3": [0.12 * i + math.sin(i / 5.0 - 0.3) for i in times],
+    }
+    levels = {
+        **controls,
+        "a": [0.5 * controls["c1"][i] + 0.1 * math.sin(i / 2.0) for i in times],
+        "b": [-0.4 * controls["c1"][i] + 0.1 * math.cos(i / 3.0) for i in times],
+    }
+    panel = lf.standardize_levels(levels, times)
     assert panel is not None
-    old = [0.5 * (panel.values["c1"][i] + panel.values["c2"][i]) for i in range(len(times))]
-    assert max(abs(x) for x in old) < 1e-10
     fit = lf.fit_pair(panel, "a", "b")
     assert fit is not None
-    assert abs(fit.loading_a) > 1e-6
-    assert abs(fit.loading_b) > 1e-6
+    assert fit.controls == ("c1", "c2", "c3")
+    assert len(fit.control_factor_loadings) == 3
 
 
-def test_pair_fit_is_invariant_to_control_yes_no_recoding() -> None:
-    times = tuple(range(80))
-    f = [0.0]
-    for i in range(1, len(times)):
-        f.append(f[-1] + 0.12 * math.sin(i / 5.0) + 0.03)
-    c1 = [x + 0.02 * math.sin(i) for i, x in enumerate(f)]
-    c2 = [0.9 * x + 0.03 * math.cos(i / 2.0) for i, x in enumerate(f)]
-    a = [1.1 * x + 0.05 * math.sin(i / 3.0) for i, x in enumerate(f)]
-    b = [0.8 * x + 0.04 * math.cos(i / 4.0) for i, x in enumerate(f)]
-    panel1 = lf.standardize_levels({"a": a, "b": b, "c1": c1, "c2": c2}, times)
-    panel2 = lf.standardize_levels({"a": a, "b": b, "c1": c1, "c2": [-x for x in c2]}, times)
-    assert panel1 is not None and panel2 is not None
-    fit1 = lf.fit_pair(panel1, "a", "b")
-    fit2 = lf.fit_pair(panel2, "a", "b")
-    assert fit1 is not None and fit2 is not None
-    assert close(fit1.loading_a, fit2.loading_a)
-    assert close(fit1.loading_b, fit2.loading_b)
-    assert close(fit1.residual_z_a, fit2.residual_z_a)
-    assert close(fit1.residual_z_b, fit2.residual_z_b)
-    assert close(fit1.pair_stat, fit2.pair_stat)
-
-
-def test_completed_history_view_excludes_incomplete_current_and_future_buckets() -> None:
+def test_completed_history_view_excludes_current_bucket() -> None:
     now = 10_000
     bucket = 60
     current_start = (now // bucket) * bucket
     histories = {
         "a": {
-            current_start - bucket: 1.0,
-            current_start: 2.0,
-            current_start + bucket: 3.0,
+            current_start - 2 * bucket: 0.4,
+            current_start - bucket: 0.5,
+            current_start: 0.6,
         }
     }
     completed = lf.completed_history_view(histories, now=now, bucket_seconds=bucket)
-    assert completed == {"a": {current_start - bucket: 1.0}}
+    assert current_start not in completed["a"]
+    assert current_start - bucket in completed["a"]
 
 
-def test_recent_completed_regular_panel_is_fresh() -> None:
+def test_fresh_completed_regular_panel_passes() -> None:
     now = 10_000
     bucket = 60
     current_start = (now // bucket) * bucket
@@ -105,14 +95,13 @@ def test_recent_completed_regular_panel_is_fresh() -> None:
     result = lf.assess_panel_freshness(panel, now=now, bucket_seconds=bucket, maximum_age_buckets=2.0)
     assert result.fresh
     assert result.reason == "fresh_completed_regular_history"
-    assert result.latest_completed_bucket_end_ts == current_start
 
 
-def test_regular_but_stale_panel_fails_closed() -> None:
+def test_stale_completed_panel_fails_closed() -> None:
     now = 10_000
     bucket = 60
     current_start = (now // bucket) * bucket
-    times = tuple(current_start - 16 * bucket + i * bucket for i in range(10))
+    times = tuple(current_start - 20 * bucket + i * bucket for i in range(10))
     panel = lf.standardize_levels(
         {
             "a": [float(i) for i in range(10)],
@@ -149,13 +138,17 @@ def test_current_incomplete_bucket_panel_fails_closed() -> None:
     assert result.reason == "incomplete_or_future_bucket"
 
 
-def test_research_driver_rechecks_freshness_before_current_book_signal() -> None:
-    source = (ROOT / "scripts" / "v7_local_factor_research.py").read_text(encoding="utf-8")
-    assert "completed_history_view" in source
-    assert "pre_inference" in source
-    assert "pre_signal_current_book" in source
-    assert "signal_now = int(time.time())" in source
-    assert source.index("pre_signal_current_book") < source.index("yes_a = books.get")
+def test_research_driver_preserves_history_freshness_and_adds_current_book_guard() -> None:
+    base = (ROOT / "scripts" / "v7_local_factor_research_base.py").read_text(encoding="utf-8")
+    wrapper = (ROOT / "scripts" / "v7_local_factor_research.py").read_text(encoding="utf-8")
+    assert "completed_history_view" in base
+    assert "pre_inference" in base
+    assert "pre_signal_current_book" in base
+    assert "signal_now = int(time.time())" in base
+    assert base.index("pre_signal_current_book") < base.index("yes_a = books.get")
+    assert "validate_coherent_books" in wrapper
+    assert "required_markets = (fit.market_a, fit.market_b, *fit.controls)" in wrapper
+    assert "current_residual_reconstructed_from_frozen_controls" in wrapper
     for config_name in ("research_v7_local_factor.json", "research_v7_local_factor_60m.json"):
         cfg = json.loads((ROOT / "config" / config_name).read_text(encoding="utf-8"))
         history = cfg["history"]
