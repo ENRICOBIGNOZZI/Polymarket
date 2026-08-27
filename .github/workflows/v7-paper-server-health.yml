@@ -1,0 +1,252 @@
+name: V7 PAPER server health
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["V7 deploy PAPER server"]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: "23,53 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: polymarket-v7-paper-server-health
+  cancel-in-progress: true
+
+jobs:
+  health:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+      GRAFANA_HOSTNAME: mamma-portfolio
+      GRAFANA_FQDN: mamma-portfolio.tail1bae85.ts.net
+      GRAFANA_URL: http://mamma-portfolio.tail1bae85.ts.net
+      EXPECTED_VALIDATED_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: paper-validated
+          fetch-depth: 0
+
+      - name: Fail-closed V7 health preflight
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main paper-validated
+          validated_sha="$(git rev-parse origin/paper-validated)"
+          main_sha="$(git rev-parse origin/main)"
+          test "$(git rev-parse HEAD)" = "$validated_sha"
+          if [[ "$main_sha" != "$validated_sha" ]]; then
+            if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
+              echo "ready=false" >> "$GITHUB_OUTPUT"
+              printf 'health_result=awaiting_same_sha\nvalidated_sha=%s\nmain_sha=%s\n' "$validated_sha" "$main_sha" | tee server-health.txt
+              exit 0
+            fi
+            echo "V7 health blocked: main and paper-validated are not the same SHA" >&2
+            exit 1
+          fi
+          if [[ -n "$EXPECTED_VALIDATED_SHA" ]]; then
+            [[ "$EXPECTED_VALIDATED_SHA" =~ ^[0-9a-f]{40}$ ]]
+            test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
+            test "$main_sha" = "$EXPECTED_VALIDATED_SHA"
+          fi
+          if python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$validated_sha" --github-env "$GITHUB_ENV"; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            uid="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path('monitoring/v7_monitoring_manifest.json').read_text(encoding='utf-8'))
+          assert m.get('schema') == 'polymarket_v7_monitoring_manifest_v1'
+          assert m.get('version') == 7
+          assert m.get('paper_only') is True
+          assert m.get('authenticated_execution') is False
+          print(str((m.get('grafana') or {}).get('dashboard_uid') or ''))
+          PY
+          )"
+            test -n "$uid"
+            echo "GRAFANA_DASHBOARD_UID=$uid" >> "$GITHUB_ENV"
+            printf 'health_preflight=same_sha\nvalidated_sha=%s\nmain_sha=%s\ndashboard_uid=%s\n' \
+              "$validated_sha" "$main_sha" "$uid" | tee server-health.txt
+          elif [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            printf 'health_result=awaiting_v7_champion\nvalidated_sha=%s\nmain_sha=%s\n' "$validated_sha" "$main_sha" | tee server-health.txt
+          else
+            echo "V7 health preflight failed" >&2
+            exit 1
+          fi
+
+      - name: Select Tailscale credential mode
+        if: steps.preflight.outputs.ready == 'true'
+        id: tailscale_auth
+        shell: bash
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${TS_AUTHKEY:-}" ]]; then
+            mode=authkey
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
+            mode=oauth
+          else
+            echo "No visible Tailscale credential set" >&2
+            exit 1
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Join private tailnet with auth key
+        if: steps.preflight.outputs.ready == 'true' && steps.tailscale_auth.outputs.mode == 'authkey'
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Join private tailnet with OAuth
+        if: steps.preflight.outputs.ready == 'true' && steps.tailscale_auth.outputs.mode == 'oauth'
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Configure SSH identity
+        if: steps.preflight.outputs.ready == 'true'
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_health
+          chmod 600 ~/.ssh/polymarket_health
+          for _ in {1..20}; do
+            ssh-keyscan -T 3 -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null && break
+            sleep 2
+          done
+          test -s ~/.ssh/known_hosts
+
+      - name: Verify exact deployed V7 SHA, single writer, data plane and economics telemetry
+        if: steps.preflight.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          validated_sha="$(git rev-parse origin/paper-validated)"
+          ssh -i ~/.ssh/polymarket_health -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            "EXPECTED_VALIDATED_SHA='$validated_sha' GRAFANA_DASHBOARD_UID='$GRAFANA_DASHBOARD_UID' bash -s" <<'REMOTE' | tee -a server-health.txt
+          set -euo pipefail
+          cd ~/polymarket
+          git fetch -q --no-tags origin main paper-validated
+          head_sha="$(git rev-parse HEAD)"
+          main_sha="$(git rev-parse origin/main)"
+          validated_sha="$(git rev-parse origin/paper-validated)"
+          test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
+          test "$main_sha" = "$EXPECTED_VALIDATED_SHA"
+          test "$head_sha" = "$EXPECTED_VALIDATED_SHA"
+          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$EXPECTED_VALIDATED_SHA" >/dev/null
+          python3 - "$GRAFANA_DASHBOARD_UID" <<'PY'
+          import json,sys
+          from pathlib import Path
+          uid=sys.argv[1]
+          m=json.loads(Path('monitoring/v7_monitoring_manifest.json').read_text(encoding='utf-8'))
+          assert m.get('schema') == 'polymarket_v7_monitoring_manifest_v1'
+          assert m.get('version') == 7
+          assert m.get('paper_only') is True
+          assert m.get('authenticated_execution') is False
+          assert str((m.get('grafana') or {}).get('dashboard_uid') or '') == uid
+          PY
+
+          legacy_processes="$(ps -axo command= | grep -E '[p]aper_v(3|4|5|6)_loop\.sh|[p]aper_latest_loop\.sh' || true)"
+          test -z "$legacy_processes"
+          v7_owner_count="$(ps -axo command= | grep -c '[s]cripts/paper_v7_loop\.sh' || true)"
+          execution_owner_count="$(ps -axo command= | grep -c '[s]cripts/paper_v7_execution_loop\.sh' || true)"
+          recorder_count="$(ps -axo command= | grep -c '[p]olymarket_trade_recorder.*--loop' || true)"
+          broker_count="$(ps -axo command= | grep -c '[v]7_multileg_broker_runner\.py.*--loop' || true)"
+          test "$v7_owner_count" -eq 1
+          test "$execution_owner_count" -eq 1
+          test "$recorder_count" -eq 1
+          test "$broker_count" -eq 1
+
+          python3 - <<'PY'
+          import json,time
+          from pathlib import Path
+          root=Path('runs/paper_v7_live')
+          sup=json.loads((root/'v7_supervisor.json').read_text())
+          exe=json.loads((root/'execution/v7_execution_supervisor.json').read_text())
+          status=json.loads((root/'execution/runtime_status.json').read_text())
+          proxy=json.loads((root/'execution/market_proxy_status.json').read_text())
+          now=int(time.time())
+          assert sup.get('execution_alive') is True and sup.get('shadow_alive') is True
+          assert now-int(sup.get('timestamp',0)) <= 30
+          assert exe.get('paper_only') is True and now-int(exe.get('timestamp',0)) <= 180
+          assert status.get('version') == 7
+          assert status.get('paper_only') is True
+          assert status.get('authenticated_execution') is False
+          assert now-int(status.get('timestamp',0)) <= 180
+          assert float(status.get('drawdown',1.0)) <= 0.15 + 1e-12
+          assert proxy.get('schema') == 'polymarket_v7_market_proxy_status_v1'
+          assert proxy.get('paper_only') is True
+          assert int(proxy.get('markets',0)) > 0
+          assert now-int(proxy.get('timestamp',0)) <= 180
+          PY
+
+          curl -fsS http://127.0.0.1:9108/healthz >/dev/null
+          curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
+          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+          curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$GRAFANA_DASHBOARD_UID" >/dev/null
+          metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
+          grep -q '^polymarket_v7_runtime_info 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_execution_alive 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_shadow_alive 1$' <<<"$metrics"
+          grep -Eq '^polymarket_runtime_info\{adapter="[^"]+",run_root="paper_v7_live",version="v7"\} 1$' <<<"$metrics"
+          grep -q '^polymarket_runtime_pnl_usd ' <<<"$metrics"
+          grep -q '^polymarket_runtime_equity_usd ' <<<"$metrics"
+          grep -q '^polymarket_runtime_drawdown_ratio ' <<<"$metrics"
+          grep -q '^polymarket_v7_ledger_' <<<"$metrics"
+          printf 'health_result=success\nhead=%s\npaper_validated=%s\norigin_main=%s\nv7_owner_count=%s\nexecution_owner_count=%s\nrecorder_count=%s\nbroker_count=%s\n' \
+            "$head_sha" "$validated_sha" "$main_sha" "$v7_owner_count" "$execution_owner_count" "$recorder_count" "$broker_count"
+          REMOTE
+
+      - name: Verify operator Grafana route resolves the exact dashboard
+        if: steps.preflight.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tailscale ping --until-direct=false --c 1 --timeout=10s "$GRAFANA_HOSTNAME"
+          getent hosts "$GRAFANA_FQDN"
+          curl --fail --silent --show-error --retry 8 --retry-delay 2 --retry-all-errors \
+            "$GRAFANA_URL/api/health" >/dev/null
+          curl --fail --silent --show-error --retry 5 --retry-delay 2 --retry-all-errors \
+            "$GRAFANA_URL/api/dashboards/uid/$GRAFANA_DASHBOARD_UID" > grafana-dashboard.json
+          python3 - "$GRAFANA_DASHBOARD_UID" grafana-dashboard.json <<'PY'
+          import json,sys
+          uid,path=sys.argv[1:]
+          dashboard=(json.load(open(path,encoding='utf-8')).get('dashboard') or {})
+          assert dashboard.get('uid') == uid, dashboard.get('uid')
+          PY
+
+      - name: Upload server-health evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v7-paper-server-health-${{ github.run_id }}
+          path: |
+            server-health.txt
+            grafana-dashboard.json
+          if-no-files-found: warn
+          retention-days: 14
