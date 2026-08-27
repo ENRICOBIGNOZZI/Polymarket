@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-08-27T04:30:00Z",
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "pr": 698,
+  "state": "BLOCKING_EXACT_HEAD_EVIDENCE_DEFECT_REPAIRED_MORE_EVIDENCE_REQUIRED",
+  "authority": {
+    "source": "config/operator_directives.json@main plus latest explicit user instruction",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "market_limit": 1000,
+    "min_liquidity": 2.0,
+    "min_net_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "max_drawdown": 0.15
+  },
+  "observed_defect": {
+    "workflow_run_id": 33039215488,
+    "pr_head_before_repair": "2d97b2d29ec5bdcf164bba0afee7430a92bb84cb",
+    "checked_out_revision": "1ea0d547f58082930a50be5dbd55f3c607f467e9",
+    "checked_out_ref": "refs/pull/698/merge",
+    "problem": "pull-request Fast Shadow evidence was produced from GitHub's synthetic merge ref rather than the exact research head; the run was then cancelled before the live probe and produced no fast_arb_status.json",
+    "economic_interpretation": "no hard-arb, fill, completion, latency or PnL conclusion may be drawn from this run"
+  },
+  "repair": {
+    "workflow_validation_sha": "pull_request.head.sha on pull_request events; github.sha otherwise",
+    "checkout_exact_validation_sha": true,
+    "verify_git_head_matches_validation_sha": true,
+    "persist_validation_sha_with_evidence": true,
+    "assert_artifact_validation_sha_matches_job": true
+  },
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "next_gate": "complete exact-head Fast Shadow chronological probe, then interpret only freshness-valid, depth/fee-valid, sequentially executable PAPER economics"
+}
