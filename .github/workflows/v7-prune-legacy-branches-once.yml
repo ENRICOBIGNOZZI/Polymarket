@@ -1,0 +1,123 @@
+name: V7 prune legacy-version branch refs
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/v7-prune-legacy-branches-once.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: v7-prune-legacy-version-branches
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'cleanup/v7-only-everywhere-20260827'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Select legacy-version branch refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-remote --heads origin > /tmp/heads.txt
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          protected = {
+              'main',
+              'paper-validated',
+              'telemetry',
+              'cleanup/v7-only-everywhere-20260827',
+          }
+          pattern = re.compile(r'(^|[._/-])v0*[0-6](?=$|[._/-])', re.I)
+          selected=[]
+          for line in Path('/tmp/heads.txt').read_text(encoding='utf-8').splitlines():
+              if not line.strip():
+                  continue
+              _, ref = line.split('\t', 1)
+              prefix='refs/heads/'
+              if not ref.startswith(prefix):
+                  continue
+              branch=ref[len(prefix):]
+              if branch in protected:
+                  continue
+              if pattern.search(branch):
+                  selected.append(branch)
+          selected=sorted(set(selected))
+          Path('/tmp/delete-branches.txt').write_text('\n'.join(selected) + ('\n' if selected else ''), encoding='utf-8')
+          print(f'legacy_version_branches={len(selected)}')
+          print('\n'.join(selected))
+          PY
+
+      - name: Delete selected remote refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          deleted=0
+          failed=0
+          : > /tmp/delete-failures.txt
+          while IFS= read -r branch; do
+            [[ -n "$branch" ]] || continue
+            if git push origin --delete -- "$branch"; then
+              deleted=$((deleted + 1))
+            else
+              printf '%s\n' "$branch" >> /tmp/delete-failures.txt
+              failed=$((failed + 1))
+            fi
+          done < /tmp/delete-branches.txt
+          printf 'deleted=%s\nfailed=%s\n' "$deleted" "$failed" | tee /tmp/prune-summary.txt
+          if [[ "$failed" -ne 0 ]]; then
+            echo 'Failed refs:' >&2
+            cat /tmp/delete-failures.txt >&2
+            exit 1
+          fi
+
+      - name: Verify no legacy-version refs remain
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-remote --heads origin > /tmp/heads-after.txt
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          pattern = re.compile(r'(^|[._/-])v0*[0-6](?=$|[._/-])', re.I)
+          leftovers=[]
+          for line in Path('/tmp/heads-after.txt').read_text(encoding='utf-8').splitlines():
+              if not line.strip():
+                  continue
+              _, ref=line.split('\t',1)
+              branch=ref.removeprefix('refs/heads/')
+              if pattern.search(branch):
+                  leftovers.append(branch)
+          if leftovers:
+              print('\n'.join(sorted(leftovers)))
+              raise SystemExit(f'legacy-version branch refs remain: {len(leftovers)}')
+          print('legacy_version_branch_refs_remaining=0')
+          PY
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## V7 branch-ref retirement'
+            echo
+            if [[ -f /tmp/prune-summary.txt ]]; then
+              echo '```text'
+              cat /tmp/prune-summary.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
