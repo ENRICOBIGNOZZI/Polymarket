@@ -52,14 +52,13 @@ int main(int argc, char** argv) {
         std::signal(SIGINT, handle_signal);
         std::signal(SIGTERM, handle_signal);
         auto options = parse_options(argc, argv);
-        auto config = pm::Engine::load_config(options.config);
+        auto config = pm::load_config(options.config);
         if (options.external_signals.empty()) options.external_signals = config.external_signals_file;
         auto policy = load_policy(options.policy);
 
-        // The current V7 operator directive disables a binding fixed-dollar cap by
-        // using a huge compatibility sentinel. That sentinel is metadata, not
-        // spendable notional. Bound shadow sizing by current PAPER capital and the
-        // binding market/event/gross percentage ceilings instead.
+        // V7 interprets the disabled fixed-dollar cap as metadata, not spendable
+        // notional. Shadow sizing remains bounded by PAPER capital and the
+        // binding market/event/gross percentage ceilings.
         const double capital_fraction_ceiling = std::clamp(
             std::min({config.max_market_fraction, config.max_event_fraction,
                       config.max_gross_fraction}),
