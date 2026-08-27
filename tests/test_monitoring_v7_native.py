@@ -29,7 +29,7 @@ class V7NativeMonitoringTest(unittest.TestCase):
         )
         self._write(
             root / "execution" / "v7_execution_supervisor.json",
-            {"timestamp": now - 10, "paper_only": True},
+            {"timestamp": now - 10, "paper_only": True, "authenticated_execution": False},
         )
         self._write(
             root / "execution" / "runtime_status.json",
@@ -115,6 +115,10 @@ class V7NativeMonitoringTest(unittest.TestCase):
             metrics = exporter.render_prometheus(snapshot)
             self.assertIn("polymarket_v7_runtime_info 1", metrics)
             self.assertIn('polymarket_runtime_info{adapter="v7_native",run_root="paper_v7_live",version="v7"} 1', metrics)
+            self.assertIn("polymarket_v7_operator_authority_valid 1", metrics)
+            self.assertIn("polymarket_v7_authority_max_drawdown_ratio 0.15", metrics)
+            self.assertIn("polymarket_v7_paper_only_contract_ok 1", metrics)
+            self.assertIn("polymarket_v7_authenticated_execution_disabled 1", metrics)
             self.assertIn("polymarket_runtime_pnl_usd 100", metrics)
             self.assertIn("polymarket_runtime_realized_pnl_usd 70", metrics)
             self.assertIn("polymarket_runtime_unrealized_executable_pnl_usd 30", metrics)
@@ -144,13 +148,38 @@ class V7NativeMonitoringTest(unittest.TestCase):
             snapshot = exporter.collect_snapshot(run_root, ROOT, now=1_000)
             self.assertIn("authenticated_execution_not_disabled", exporter.health_reasons(snapshot))
 
-    def test_drawdown_above_master_limit_fails_health_closed(self) -> None:
+    def test_authenticated_execution_supervisor_fails_health_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_root = Path(directory) / "paper_v7_live"
+            self._fixture(run_root)
+            path = run_root / "execution" / "v7_execution_supervisor.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value["authenticated_execution"] = True
+            self._write(path, value)
+            snapshot = exporter.collect_snapshot(run_root, ROOT, now=1_000)
+            self.assertIn(
+                "execution_supervisor_authenticated_execution_not_disabled",
+                exporter.health_reasons(snapshot),
+            )
+
+    def test_killed_runtime_fails_health_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_root = Path(directory) / "paper_v7_live"
             self._fixture(run_root)
             path = run_root / "execution" / "runtime_status.json"
             value = json.loads(path.read_text(encoding="utf-8"))
-            value["drawdown"] = 0.151
+            value["killed"] = True
+            self._write(path, value)
+            snapshot = exporter.collect_snapshot(run_root, ROOT, now=1_000)
+            self.assertIn("runtime_killed", exporter.health_reasons(snapshot))
+
+    def test_drawdown_at_master_limit_fails_health_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_root = Path(directory) / "paper_v7_live"
+            self._fixture(run_root)
+            path = run_root / "execution" / "runtime_status.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value["drawdown"] = 0.15
             self._write(path, value)
             snapshot = exporter.collect_snapshot(run_root, ROOT, now=1_000)
             self.assertIn("drawdown_limit_breached", exporter.health_reasons(snapshot))
@@ -164,6 +193,7 @@ class V7NativeMonitoringTest(unittest.TestCase):
         self.assertTrue(manifest["paper_only"])
         self.assertFalse(manifest["authenticated_execution"])
         self.assertEqual(manifest["run_root"], "runs/paper_v7_live")
+        self.assertEqual(manifest["prometheus"]["alert_rules"], "monitoring/v7_alerts.yml")
         self.assertEqual(dashboard["uid"], manifest["grafana"]["dashboard_uid"])
         self.assertEqual(dashboard["uid"], "polymarket-v7")
         self.assertIn("Polymarket V7", dashboard["title"])
@@ -179,6 +209,26 @@ class V7NativeMonitoringTest(unittest.TestCase):
         ):
             self.assertIn(metric, serialized)
 
+    def test_prometheus_alerts_cover_v7_hard_safety_visibility(self) -> None:
+        config = (ROOT / "monitoring/prometheus_v7.yml").read_text(encoding="utf-8")
+        alerts = (ROOT / "monitoring/v7_alerts.yml").read_text(encoding="utf-8")
+        self.assertIn("__POLYMARKET_V7_ALERT_RULES__", config)
+        for required in (
+            "PolymarketV7ExporterDown",
+            "PolymarketV7RuntimeContractInvalid",
+            "PolymarketV7PaperContractInvalid",
+            "PolymarketV7AuthenticatedExecutionEnabled",
+            "PolymarketV7KillSwitchEngaged",
+            "PolymarketV7HardDrawdownLimitBreach",
+            "PolymarketV7ExecutionOwnerDown",
+            "PolymarketV7StateMissing",
+            "PolymarketV7RuntimeStateStale",
+            "PolymarketV7MarketProxyEmpty",
+            "PolymarketV7CanonicalLedgerInvalid",
+            "polymarket_v7_authority_max_drawdown_ratio",
+        ):
+            self.assertIn(required, alerts)
+
     def test_monitoring_sources_have_no_retired_exporter_dependency(self) -> None:
         exporter_source = EXPORTER_PATH.read_text(encoding="utf-8").lower()
         self.assertNotIn("exporter_v6", exporter_source)
@@ -188,6 +238,7 @@ class V7NativeMonitoringTest(unittest.TestCase):
         self.assertIn("__POLYMARKET_V7_DASHBOARD_DIR__", provider)
         installer = (ROOT / "ops/apply_v7_monitoring_config_macos.sh").read_text(encoding="utf-8")
         self.assertIn("v7_monitoring_manifest.json", installer)
+        self.assertIn("prometheus-v7-alerts.yml", installer)
         self.assertNotIn("exporter_latest", installer)
         self.assertNotIn("paper_v6", installer)
 
@@ -200,6 +251,7 @@ class V7NativeMonitoringTest(unittest.TestCase):
             "monitoring/exporter_v7.py",
             "monitoring/v7_ledger_metrics.py",
             "monitoring/v7_monitoring_manifest.json",
+            "monitoring/v7_alerts.yml",
             "monitoring/grafana/dashboards/polymarket-v7.json",
             "ops/apply_v7_monitoring_config_macos.sh",
         ):
