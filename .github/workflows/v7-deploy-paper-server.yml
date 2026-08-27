@@ -44,20 +44,41 @@ jobs:
           validated_sha="$(git rev-parse origin/paper-validated)"
           main_sha="$(git rev-parse origin/main)"
           test "$(git rev-parse HEAD)" = "$validated_sha"
+
+          reconciliation_event=false
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" || "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then
+            reconciliation_event=true
+          fi
+
+          no_op() {
+            local reason="$1"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            printf 'reconciliation_result=%s\nvalidated_sha=%s\nmain_sha=%s\nexpected_validated_sha=%s\n' \
+              "$reason" "$validated_sha" "$main_sha" "${EXPECTED_VALIDATED_SHA:-none}" \
+              | tee deploy-evidence.txt
+          }
+
           if [[ "$main_sha" != "$validated_sha" ]]; then
-            if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
-              echo "ready=false" >> "$GITHUB_OUTPUT"
-              printf 'reconciliation_result=awaiting_same_sha\nvalidated_sha=%s\nmain_sha=%s\n' "$validated_sha" "$main_sha" | tee deploy-evidence.txt
+            if [[ "$reconciliation_event" == "true" ]]; then
+              no_op awaiting_same_sha
               exit 0
             fi
             echo "V7 deploy blocked: main and paper-validated are not the same SHA" >&2
             exit 1
           fi
+
           if [[ -n "$EXPECTED_VALIDATED_SHA" ]]; then
             [[ "$EXPECTED_VALIDATED_SHA" =~ ^[0-9a-f]{40}$ ]]
-            test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
-            test "$main_sha" = "$EXPECTED_VALIDATED_SHA"
+            if [[ "$validated_sha" != "$EXPECTED_VALIDATED_SHA" || "$main_sha" != "$EXPECTED_VALIDATED_SHA" ]]; then
+              if [[ "$reconciliation_event" == "true" ]]; then
+                no_op upstream_validation_did_not_advance
+                exit 0
+              fi
+              echo "V7 deploy blocked: canonical refs do not match the requested validated SHA" >&2
+              exit 1
+            fi
           fi
+
           if python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$validated_sha" --github-env "$GITHUB_ENV"; then
             test -f monitoring/v7_monitoring_manifest.json
             python3 - <<'PY'
@@ -71,10 +92,10 @@ jobs:
           assert str((m.get('grafana') or {}).get('dashboard_uid') or '')
           PY
             echo "ready=true" >> "$GITHUB_OUTPUT"
-            printf 'validated_sha=%s\nmain_sha=%s\n' "$validated_sha" "$main_sha" | tee deploy-evidence.txt
-          elif [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            printf 'reconciliation_result=awaiting_v7_champion\nvalidated_sha=%s\nmain_sha=%s\n' "$validated_sha" "$main_sha" | tee deploy-evidence.txt
+            printf 'reconciliation_result=ready\nvalidated_sha=%s\nmain_sha=%s\nexpected_validated_sha=%s\n' \
+              "$validated_sha" "$main_sha" "${EXPECTED_VALIDATED_SHA:-none}" | tee deploy-evidence.txt
+          elif [[ "$reconciliation_event" == "true" ]]; then
+            no_op awaiting_enabled_v7_champion
           else
             echo "V7 deploy preflight failed" >&2
             exit 1
