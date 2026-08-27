@@ -1,0 +1,60 @@
+{
+  "schema": "lf_v7_event_cluster_pnl_evidence_v1",
+  "base_main_sha": "6ff5083ee87415a247d0591834a7c16dd2a742bb",
+  "authority": {
+    "source": "config/operator_directives.json@main plus latest explicit user instruction",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "market_limit": 1000,
+    "min_liquidity": 2.0,
+    "min_net_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "max_drawdown": 0.15
+  },
+  "finding": "DAY_BLOCK_INFERENCE_IGNORES_EVENT_CLUSTER_DEPENDENCE",
+  "canonical_sidecar": {
+    "path": "scripts/v7_execution_evidence.py",
+    "event_key_helper_present": true,
+    "event_key_used_by_block_bootstrap": false,
+    "bootstrap_input_unit": "(timestamp, pnl)",
+    "fold_input_unit": "(timestamp, pnl)",
+    "resampling_block": "UTC day"
+  },
+  "deterministic_counterexample": {
+    "terminal_pnl_observations": 20,
+    "days": 20,
+    "pnl_each": 1.0,
+    "net_pnl": 20.0,
+    "case_a": {
+      "distinct_events": 1,
+      "bootstrap_one_sided_pvalue": 0.0,
+      "fold_count": 2,
+      "positive_fold_fraction": 1.0,
+      "event_cluster_uncertainty_estimable": false
+    },
+    "case_b": {
+      "distinct_events": 20,
+      "bootstrap_one_sided_pvalue": 0.0,
+      "fold_count": 2,
+      "positive_fold_fraction": 1.0,
+      "event_cluster_uncertainty_estimable": true
+    },
+    "interpretation": "The canonical day-block statistics are identical even though case A contains one economic event repeated across days and case B contains twenty distinct events. Repeated sessions or terminal observations from one event can therefore look statistically stable without cross-event evidence."
+  },
+  "economic_relevance": [
+    "Graph/RV, Local Factor pairs and ranking relative pairs can revisit the same economic event over multiple sessions or days.",
+    "Multiple positions tied to one eventual resolution path are not independent cross-event evidence merely because they mature on different UTC days.",
+    "The current operator objective requires audited forward fill-conditioned post-cost PnL; event pseudo-replication can overstate confidence in that PnL."
+  ],
+  "required_successor": [
+    "Bind every mature PnL observation to canonical event_id plus model and horizon identity.",
+    "Fail closed when economic event identity is missing or ambiguous.",
+    "Use dependence-aware inference that preserves both event clustering and chronology, such as hierarchical event-by-time or event-cluster resampling with a predeclared rule.",
+    "Require enough distinct event clusters before interpreting bootstrap or fold stability as promotion evidence.",
+    "Keep completion states and the exact same frozen trades under 1x, 1.5x and 2x cost stress."
+  ],
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "alpha_claim": false,
+  "pnl_claim": false
+}
