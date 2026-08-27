@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import asdict
 from typing import Any
@@ -16,6 +17,11 @@ _GUARD_REJECTIONS = 0
 _LAST_VALIDATION: snapshots.SnapshotValidation | None = None
 _ORIGINAL_BUILD_PAIR_SIGNAL = core.build_pair_signal
 _ORIGINAL_ATOMIC_JSON = driver.atomic_json
+
+
+def _ensure_market_data_config() -> None:
+    if not any(value == "--paper-config" or value.startswith("--paper-config=") for value in sys.argv[1:]):
+        sys.argv.extend(["--paper-config", "config/research_v7_market_data.json"])
 
 
 def _fetch_books(clob: str, markets: list[Any]) -> dict[str, snapshots.CausalBook]:
@@ -61,6 +67,8 @@ def _atomic_json(path, value):
     if isinstance(value, dict):
         value = dict(value)
         value["current_residual_reconstructed_from_frozen_controls"] = True
+        value["market_data_config"] = "config/research_v7_market_data.json"
+        value["operational_paper_config_introduced"] = False
         value["current_book_snapshot_contract"] = {
             "required": True,
             "max_age_ms": 5000,
@@ -79,6 +87,7 @@ driver.atomic_json = _atomic_json
 
 
 def main() -> int:
+    _ensure_market_data_config()
     return driver.main()
 
 

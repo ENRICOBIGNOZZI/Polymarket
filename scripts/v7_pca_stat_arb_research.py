@@ -27,6 +27,11 @@ _ORIGINAL_SCORE = driver.inference.score_with_total_single_leg_risk
 _ORIGINAL_ATOMIC_JSON = driver.atomic_json
 
 
+def _ensure_market_data_config() -> None:
+    if not any(value == "--paper-config" or value.startswith("--paper-config=") for value in sys.argv[1:]):
+        sys.argv.extend(["--paper-config", "config/research_v7_market_data.json"])
+
+
 def _config_path() -> Path:
     for index, value in enumerate(sys.argv):
         if value == "--config" and index + 1 < len(sys.argv):
@@ -112,6 +117,8 @@ def _atomic_json(path, value):
         value["historical_residual_z_used_for_admission"] = False
         value["current_residual_z_gate"] = _current_z_floor()
         value["common_factor_conditional_mean_forecast_required"] = True
+        value["market_data_config"] = "config/research_v7_market_data.json"
+        value["operational_paper_config_introduced"] = False
         value["current_book_snapshot_contract"] = {
             "required": True,
             "max_age_ms": 5000,
@@ -130,6 +137,7 @@ driver.atomic_json = _atomic_json
 
 
 def main() -> int:
+    _ensure_market_data_config()
     _current_z_floor()
     return driver.main()
 
