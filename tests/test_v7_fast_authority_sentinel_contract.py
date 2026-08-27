@@ -53,6 +53,20 @@ class V7FastAuthoritySentinelContractTest(unittest.TestCase):
         self.assertIn("max_trade_usd_compatibility_sentinel", workflow)
         self.assertIn("capital_required", workflow)
 
+    def test_pull_request_shadow_evidence_is_bound_to_exact_head(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "fast-arb-hourly.yml").read_text(encoding="utf-8")
+        for token in (
+            "github.event.pull_request.head.sha",
+            "VALIDATION_SHA",
+            "ref: ${{ env.VALIDATION_SHA }}",
+            'test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"',
+            "runs/hourly-fast/validation_sha.txt",
+            'test "$(cat runs/hourly-fast/validation_sha.txt)" = "$VALIDATION_SHA"',
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, workflow)
+        self.assertNotIn("ref: ${{ github.sha }}", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
