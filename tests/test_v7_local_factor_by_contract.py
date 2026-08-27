@@ -7,6 +7,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def source(name: str) -> str:
+    return (ROOT / "scripts" / name).read_text(encoding="utf-8")
+
+
 class LocalFactorBYContractTest(unittest.TestCase):
     def test_config_freezes_dependence_robust_full_family_contract(self) -> None:
         cfg = json.loads((ROOT / "config/research_v7_local_factor.json").read_text())
@@ -27,32 +31,42 @@ class LocalFactorBYContractTest(unittest.TestCase):
         self.assertTrue(evidence["require_joint_fill_state_bitmasks"])
         self.assertTrue(evidence["require_partial_state_abort_unwind_pnl"])
 
-    def test_runner_keeps_unestimable_declared_pairs_at_p_one_and_uses_by(self) -> None:
-        source = (ROOT / "scripts/v7_local_factor_research.py").read_text()
-        self.assertIn("{key: 1.0 for key in predeclared_keys}", source)
-        self.assertIn("multiplicity.by_selected(pvalues, fdr_q)", source)
-        self.assertIn("multiplicity.by_resolution_diagnostics(predeclared_pair_count, reps, fdr_q)", source)
-        self.assertNotIn("core.bh_selected(pvalues", source)
-        self.assertIn('"multiplicity_method": "benjamini_yekutieli_arbitrary_dependence"', source)
-        self.assertIn('"survivorship_safe": False', source)
-        self.assertIn('"execution_joint_state_validated": False', source)
-        self.assertIn('"fill_conditioned_pnl_validated": False', source)
+    def test_base_keeps_unestimable_declared_pairs_at_p_one_and_uses_by(self) -> None:
+        base = source("v7_local_factor_research_base.py")
+        self.assertIn("{key: 1.0 for key in predeclared_keys}", base)
+        self.assertIn("multiplicity.by_selected(pvalues, fdr_q)", base)
+        self.assertIn("multiplicity.by_resolution_diagnostics(predeclared_pair_count, reps, fdr_q)", base)
+        self.assertNotIn("core.bh_selected(pvalues", base)
+        self.assertIn('"multiplicity_method": "benjamini_yekutieli_arbitrary_dependence"', base)
+        self.assertIn('"survivorship_safe": False', base)
+        self.assertIn('"execution_joint_state_validated": False', base)
+        self.assertIn('"fill_conditioned_pnl_validated": False', base)
 
     def test_pair_graph_and_controls_are_frozen_before_price_history_fetch(self) -> None:
-        source = (ROOT / "scripts/v7_local_factor_research.py").read_text()
-        graph_pos = source.index("pair_graphs: dict")
-        controls_pos = source.index("pair_control_plans: dict")
-        history_pos = source.index("histories, history_failures = fetch_histories_chunked")
+        base = source("v7_local_factor_research_base.py")
+        graph_pos = base.index("pair_graphs: dict")
+        controls_pos = base.index("pair_control_plans: dict")
+        history_pos = base.index("histories, history_failures = fetch_histories_chunked")
         self.assertLess(graph_pos, controls_pos)
         self.assertLess(controls_pos, history_pos)
 
-    def test_runner_builds_pair_specific_panel_not_cluster_wide_complete_case(self) -> None:
-        source = (ROOT / "scripts/v7_local_factor_research.py").read_text()
-        self.assertIn("pair_market_ids = [market_a, market_b, *controls]", source)
-        self.assertIn("core.build_regular_panel(completed_histories, pair_market_ids", source)
-        self.assertIn("pair_controls_frozen_before_price_history", source)
-        self.assertNotIn("market_ids = [market.market_id for market in group]", source)
-        self.assertNotIn("histories,\n            market_ids,", source)
+    def test_base_builds_pair_specific_panel_not_cluster_wide_complete_case(self) -> None:
+        base = source("v7_local_factor_research_base.py")
+        self.assertIn("pair_market_ids = [market_a, market_b, *controls]", base)
+        self.assertIn("core.build_regular_panel(completed_histories, pair_market_ids", base)
+        self.assertIn("pair_controls_frozen_before_price_history", base)
+        self.assertNotIn("market_ids = [market.market_id for market in group]", base)
+        self.assertNotIn("histories,\n            market_ids,", base)
+
+    def test_current_wrapper_adds_causal_books_and_current_residual_state(self) -> None:
+        wrapper = source("v7_local_factor_research.py")
+        self.assertIn("v7_model_book_snapshot", wrapper)
+        self.assertIn("validate_coherent_books", wrapper)
+        self.assertIn("required_markets = (fit.market_a, fit.market_b, *fit.controls)", wrapper)
+        self.assertIn("current_residual_reconstructed_from_frozen_controls", wrapper)
+        self.assertIn("config/research_v7_market_data.json", wrapper)
+        self.assertIn("operational_paper_config_introduced", wrapper)
+        self.assertNotIn("config/paper_v7.json", wrapper)
 
 
 if __name__ == "__main__":
