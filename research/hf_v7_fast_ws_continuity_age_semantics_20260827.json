@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "research_state": "WS_CONTINUITY_AGE_SEMANTICS_REPAIRED_MORE_EVIDENCE_REQUIRED",
+  "research_state": "WS_CONTINUITY_FRESHNESS_REPAIRED_CURRENT_SHADOW_HARD_ZERO_MORE_EVIDENCE_REQUIRED",
   "authority": {
     "source": "config/operator_directives.json@main",
     "paper_only": true,
@@ -38,16 +38,69 @@
     "transport_rule": "Any WS error/reconnect invalidates the affected shard lineage. The research feed idle timeout is shortened from 20s to 5s with keep-alive pings to bound silent socket failure before quiet-book continuity is trusted."
   },
   "repair": {
-    "continuous_ws": "Do not reject a gap-free WS book solely because the token's last market-update timestamp is older than 5s or differs from another unchanged WS leg. Keep the last event clocks as audit timestamps.",
+    "continuous_ws": "Do not reject a gap-free WS book solely because the token's last-market-update timestamp is older than 5s or differs from another unchanged WS leg. Keep last-event clocks as audit timestamps.",
     "rest_point_in_time": "Retain <=5s exchange-age and <=1.5s cross-leg exchange/receive skew.",
-    "mixed_baskets": "REST legs must satisfy REST age/skew. Continuous WS legs are current by lineage; their old last-update timestamps are not compared to REST snapshot timestamps as if they were snapshot times.",
+    "mixed_baskets": "REST legs satisfy REST age/skew. Continuous WS legs are current by lineage; their old last-update timestamps are not compared to REST snapshot timestamps as if they were snapshot times.",
     "resync": "REST polling no longer overwrites an uninterrupted WS lineage merely because that token is quiet.",
+    "transport_liveness": "The market WebSocket uses keep-alive pings with a 5s idle timeout; reconnect/error invalidates the affected shard lineage before later deltas are trusted.",
     "safety": "No real-order path, credential path, sizing authority, drawdown limit, kill switch, or operator directive changed."
   },
+  "post_fix_evidence": {
+    "source_run_id": 33036588650,
+    "source_branch_head": "692e1cff3b23ac6593c356d108a8439a8d16bef3",
+    "github_execution_ref": "pull_request_merge_ref",
+    "checked_out_merge_sha": "0d4af3849c33fb851e05ad90fc847267de408b8b",
+    "exact_head_evidence": false,
+    "markets": 648,
+    "tokens": 1296,
+    "ws_messages": 11323,
+    "book_updates": 10877,
+    "rest_resyncs": 3,
+    "ws_snapshot_ready_tokens": 1296,
+    "rest_point_in_time_ready_tokens": 0,
+    "freshness_ready_tokens": 1296,
+    "freshness_missing_rejections": 0,
+    "freshness_age_rejections": 2950,
+    "freshness_skew_rejections": 0,
+    "hard_executable_observations": 0,
+    "current_hard_executable": 0,
+    "current_stale_opportunities": 0,
+    "feed_stale_ms": 18,
+    "feed_latency_p99_ms": 219.0,
+    "decision_latency_p99_us": 229.2,
+    "hard_latest_reject_reasons": {
+      "edge_below_policy_after_costs": 540,
+      "edge_below_costed_conversion_policy": 97,
+      "insufficient_conversion_depth": 13
+    },
+    "nonhard_maker_shadow_observations": 120,
+    "nonhard_modeled_profit_usd": 30.633687,
+    "nonhard_stress_positive_share_plus_10bp": 0.9583333333333334,
+    "note": "At steady state all 1,296 tokens had uninterrupted WS full-snapshot lineage; REST point-in-time provenance was no longer needed for current state, cross-leg last-update-skew rejections fell to zero, and every latest hard row was rejected for economics/depth rather than freshness. The residual age counter was accumulated during startup/REST-only phases. Nonhard modeled profit is shadow theory, not PAPER fill-conditioned PnL."
+  },
+  "validation": {
+    "research_policy": "success",
+    "monitoring": "success",
+    "ci_debug": "success",
+    "ci_release": "success",
+    "fast_shadow": "success",
+    "ctest": "18/18 passed",
+    "fast_data_health": "6/6 passed"
+  },
+  "authority_caveat": {
+    "runtime_workflow_market_limit": 600,
+    "runtime_workflow_min_liquidity": 10.0,
+    "runtime_policy_min_net_edge": 0.0005,
+    "runtime_policy_max_notional_usd": 50.0,
+    "reason": "The current Fast Shadow workflow/policy on this branch is a legacy research surface and is not the authoritative V7 envelope. PR #633 owns that workflow/authority-alignment surface. Therefore hard_executable=0 in this run is not a valid rejection under the authorized 1000-market/$2/0.5bp/non-binding-dollar envelope."
+  },
+  "decision": "The false freshness blocker from last-update age/skew on quiet continuous WS books is repaired prospectively. No hard opportunity survived the narrower legacy-policy sample. A same-SHA run combining this clock repair with the authoritative V7 breadth/policy is required before judging hard-arb availability; any surviving candidate still requires verified fees, multi-level depth, sequential PAPER legging, partial/unwind accounting, canonical-ledger realized post-cost PnL, and 1x/1.5x/2x stress.",
   "required_next_evidence": [
-    "CI and research-policy success on the repaired branch",
-    "fresh public Fast Shadow run",
-    "compare age/skew rejection counts and hard-executable observations against pre-fix evidence",
-    "any surviving hard candidate still requires authoritative fees, multi-level depth, sequential PAPER legging, partial/unwind accounting, canonical-ledger realized post-cost PnL, and 1x/1.5x/2x stress"
+    "same-SHA Fast Shadow using authoritative V7 1000-market/$2/0.5bp research authority without duplicating PR #633 ownership",
+    "candidate-level per-token provenance retained through sequential PAPER legging",
+    "authoritative fees and multi-level depth",
+    "partial-fill and unwind accounting",
+    "canonical-ledger realized post-cost PAPER PnL",
+    "1x/1.5x/2x cost and latency stress"
   ]
 }
