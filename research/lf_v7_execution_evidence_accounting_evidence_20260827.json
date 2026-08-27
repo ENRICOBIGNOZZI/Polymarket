@@ -1,0 +1,40 @@
+{
+  "schema": "lf_v7_execution_evidence_accounting_evidence_v1",
+  "source_main_sha": "4196f31d5b923a530427bce58432f85206199560",
+  "authority": {
+    "operator_directive_epoch": "2026-08-27T01:36:00+02:00",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "market_limit": 1000,
+    "min_liquidity": 2.0,
+    "min_net_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "max_drawdown": 0.15
+  },
+  "finding": {
+    "decision": "STRUCTURAL_EVIDENCE_ACCOUNTING_BLOCKER",
+    "source_file": "scripts/v7_execution_evidence.py",
+    "row_is_fill_behavior": "BUY, SELL, FILL, EXIT and SETTLE-like actions are all classified as fills",
+    "row_has_realized_pnl_behavior": "any non-empty net_pnl field is classified as realized even on entry/partial rows",
+    "deterministic_counterexample": {
+      "submissions": 1,
+      "execution_rows": ["BUY", "SELL"],
+      "current_counted_fills": 2,
+      "current_fill_rate": 2.0,
+      "economic_round_trips": 1,
+      "rows_with_net_pnl": ["BUY net_pnl=0", "SELL net_pnl=1", "FILL net_pnl=0"],
+      "current_realized_pnl_observations": 3,
+      "terminal_realized_pnl_observations": 1
+    }
+  },
+  "economic_implication": "Minimum-fill and minimum-realized-PnL observation gates can be satisfied by duplicated lifecycle rows rather than unique mature executions, so PAPER_ELIGIBLE evidence can be overstated before fill-conditioned PnL is actually established.",
+  "required_successor": [
+    "Use canonical unique order/fill identifiers for fill observations and do not count exits/settles as additional entry fills.",
+    "Count realized PnL only on explicit terminal close/unwind/settle/bundle-terminal records; entry and partial rows remain censored.",
+    "Use compatible unique denominators for fill-rate estimation.",
+    "For multi-leg evidence, key by bundle_id/leg_id/fill_id and preserve joint partial/completion state rather than row counts.",
+    "Re-run the same-SHA PAPER evidence gates after the accounting repair before interpreting fills or fill-conditioned PnL."
+  ],
+  "decision": "MORE_EVIDENCE_REQUIRED"
+}
