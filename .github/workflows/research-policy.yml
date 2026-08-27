@@ -89,6 +89,7 @@ jobs:
             tests/test_no_legacy_runtime.py \
             tests/test_v7_authorized_paper_envelope.py \
             tests/test_v7_control_plane_exact_head.py \
+            tests/test_v7_canonical_convergence_policy.py \
             tests/test_promotion_gate.py -v
 
       - name: Enforce pull-request lifecycle
@@ -142,11 +143,20 @@ jobs:
             --changed-files changed-files.txt \
             --root . \
             --output hard-safety-policy-report.md
-          python3 scripts/research_pr_policy.py \
-            --event "$GITHUB_EVENT_PATH" \
-            --changed-files changed-files.txt \
-            --manifest-existed-on-base "$manifest_existed" \
-            --output research-policy-report.md
+
+          if [[ "$head_ref" == "integration/v7-complete-20260827" ]]; then
+            python3 scripts/v7_canonical_convergence_policy.py \
+              --event "$GITHUB_EVENT_PATH" \
+              --changed-files changed-files.txt \
+              --root . \
+              --output research-policy-report.md
+          else
+            python3 scripts/research_pr_policy.py \
+              --event "$GITHUB_EVENT_PATH" \
+              --changed-files changed-files.txt \
+              --manifest-existed-on-base "$manifest_existed" \
+              --output research-policy-report.md
+          fi
 
       - name: Write non-PR report
         if: github.event_name != 'pull_request'
