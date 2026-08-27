@@ -11,7 +11,8 @@ CONTROL="$RUN_ROOT/control"
 ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
 LOCK="$CONTROL/runtime.lock"
-mkdir -p "$CONTROL" "$RUN_ROOT/market_data" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/learned_execution"
+mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/learned_execution"
+touch "$RUN_ROOT/ledger/execution.jsonl"
 
 python3 - "$CONFIG" <<'PY'
 import json,sys
@@ -39,10 +40,17 @@ rm -f "$KILL"
 
 python3 scripts/v7_capital_allocator.py --config "$CONFIG" --output-dir "$ALLOC" >/dev/null
 
-cat > "$CONTROL/runtime_status.json.tmp" <<JSON
-{"schema":"polymarket_v7_runtime_status_v1","paper_only":true,"authenticated_execution":false,"model_sha":"$SHA","pid":$$,"starting":true}
-JSON
-mv "$CONTROL/runtime_status.json.tmp" "$CONTROL/runtime_status.json"
+write_runtime_status() {
+  local state="$1"
+  local killed="${2:-false}"
+  local now
+  now="$(date +%s)"
+  local tmp="$CONTROL/runtime_status.json.tmp.$$"
+  printf '{"schema":"polymarket_v7_runtime_status_v2","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"model_sha":"%s","pid":%s,"state":"%s","killed":%s}\n' \
+    "$now" "$SHA" "$$" "$state" "$killed" > "$tmp"
+  mv "$tmp" "$CONTROL/runtime_status.json"
+}
+write_runtime_status starting false
 
 pids=()
 cleanup() {
@@ -102,16 +110,16 @@ pids+=("$!")
 
 (
   while [[ ! -e "$KILL" ]]; do
-    if [[ -s "$RUN_ROOT/ledger/execution.jsonl" ]]; then
-      python3 scripts/v7_graph_cost_vector.py --run-root "$RUN_ROOT" --model-sha "$SHA" --slippage-bps 5 \
-        >> "$RUN_ROOT/graph_rv/cost_vector.log" 2>&1 || true
-      python3 scripts/v7_joint_execution_policy.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --model-sha "$SHA" \
-        --output "$RUN_ROOT/learned_execution/joint_policy.json" --strategy GRAPH_RV --min-bundles 20 \
-        >> "$RUN_ROOT/learned_execution/joint_policy.log" 2>&1 || true
-      python3 scripts/v7_learned_execution_model.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --model-sha "$SHA" \
-        --output "$RUN_ROOT/learned_execution/oos_report.json" \
-        >> "$RUN_ROOT/learned_execution/model.log" 2>&1 || true
-    fi
+    python3 scripts/v7_graph_cost_vector.py --run-root "$RUN_ROOT" --model-sha "$SHA" --slippage-bps 5 \
+      >> "$RUN_ROOT/graph_rv/cost_vector.log" 2>&1 || true
+    python3 scripts/v7_joint_execution_policy.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --model-sha "$SHA" \
+      --output "$RUN_ROOT/learned_execution/joint_policy.json" --strategy GRAPH_RV --min-bundles 20 \
+      >> "$RUN_ROOT/learned_execution/joint_policy.log" 2>&1 || true
+    python3 scripts/v7_learned_execution_model.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --model-sha "$SHA" \
+      --output "$RUN_ROOT/learned_execution/oos_report.json" \
+      >> "$RUN_ROOT/learned_execution/model.log" 2>&1 || true
+    python3 scripts/v7_canonical_economics.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --expected-model-sha "$SHA" \
+      --output "$RUN_ROOT/canonical_economics.json" >> "$RUN_ROOT/canonical_economics.log" 2>&1 || true
     sleep 60
   done
 ) & pids+=("$!")
@@ -155,9 +163,11 @@ pids+=("$!")
 # unconditional improvement. The capital sleeve stays reserved until the direct
 # joint execution model supports a selective positive-EV maker action.
 cat > "$RUN_ROOT/micro_maker/status.json.tmp" <<JSON
-{"schema":"polymarket_v7_selective_maker_status_v1","paper_only":true,"authenticated_execution":false,"enabled":false,"reason":"direct_joint_fill_conditioned_ev_not_yet_mature_generic_maker_rejected"}
+{"schema":"polymarket_v7_selective_maker_status_v1","timestamp":$(date +%s),"paper_only":true,"authenticated_execution":false,"enabled":false,"reason":"direct_joint_fill_conditioned_ev_not_yet_mature_generic_maker_rejected"}
 JSON
 mv "$RUN_ROOT/micro_maker/status.json.tmp" "$RUN_ROOT/micro_maker/status.json"
+
+write_runtime_status running false
 
 # Account-level kill switch. Any unsafe/unmarkable sleeve or >=15% account DD
 # writes control/KILL; the parent then terminates the entire process group.
@@ -167,14 +177,15 @@ while [[ ! -e "$KILL" ]]; do
       > "$RUN_ROOT/portfolio_guard.log" 2>&1; then
     break
   fi
+  write_runtime_status running false
   for pid in "${pids[@]}"; do
     if ! kill -0 "$pid" 2>/dev/null; then
-      printf '{"schema":"polymarket_v7_runtime_failure_v1","paper_only":true,"model_sha":"%s","dead_pid":%s}\n' "$SHA" "$pid" > "$KILL"
+      printf '{"schema":"polymarket_v7_runtime_failure_v1","timestamp":%s,"paper_only":true,"authenticated_execution":false,"model_sha":"%s","dead_pid":%s}\n' "$(date +%s)" "$SHA" "$pid" > "$KILL"
       break
     fi
   done
   sleep 1
 done
 
-printf '{"schema":"polymarket_v7_runtime_status_v1","paper_only":true,"authenticated_execution":false,"model_sha":"%s","pid":%s,"killed":true}\n' "$SHA" "$$" > "$CONTROL/runtime_status.json"
+write_runtime_status killed true
 exit 2
