@@ -1,0 +1,44 @@
+{
+  "schema": "polymarket_v7_graph_execution_v1",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "strategy": "GRAPH_RV",
+  "min_joint_observations": 20,
+  "max_receive_age_ms": 1000,
+  "max_exchange_skew_ms": 1000,
+  "max_receive_skew_ms": 1000,
+  "unwind_depth_fraction": 0.25,
+  "min_joint_completion_for_full_size": 0.5,
+  "cost_stress": [1.0, 1.5, 2.0],
+  "queue_role": "empirical_joint_fillability_only",
+  "capacity_inputs": [
+    "risk_capital",
+    "entry_executable_depth",
+    "unwind_executable_depth",
+    "empirical_joint_completion"
+  ],
+  "entry_frontier": [
+    "maker_maker_join",
+    "maker_maker_improve",
+    "maker_taker",
+    "taker_maker",
+    "taker_taker",
+    "sequential_maker_taker",
+    "sequential_taker_maker"
+  ],
+  "promotion_contract": {
+    "quoted_edge_is_not_pnl": true,
+    "joint_distribution_required": true,
+    "products_of_marginals_forbidden": true,
+    "partial_unwind_economics_required": true,
+    "authoritative_fee_source_required": true,
+    "full_depth_required": true,
+    "positive_ev_all_stresses_required": true,
+    "canonical_ledger_only": true
+  },
+  "ledger": {
+    "writer_owner": "canonical_v7_runtime_only",
+    "graph_module_may_acquire_writer": false,
+    "candidate_handoff_only": true
+  }
+}
