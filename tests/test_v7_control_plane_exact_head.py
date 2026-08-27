@@ -75,8 +75,9 @@ class V7ControlPlaneExactHeadTest(unittest.TestCase):
     def test_cleanup_retirement_is_authorized_without_restoring_old_runtime(self) -> None:
         text = (ROOT / ".github/workflows/research-policy.yml").read_text(encoding="utf-8")
         self.assertNotIn('if [[ "$head_ref" == cleanup/* ]]', text)
-        self.assertIn("V7 the sole generation and authorizes immediate retirement", text)
-        self.assertIn("PAPER/authenticated-execution separation", text)
+        self.assertIn("operator-authorized-v7-retirement", text)
+        self.assertIn("whole-tree V7 invariant", text)
+        self.assertIn("hard PAPER safety envelope", text)
         self.assertIn("python3 scripts/hard_safety_policy.py", text)
         self.assertIn("python3 scripts/research_pr_policy.py", text)
         self.assertIn("Verify exact policy revision", text)
