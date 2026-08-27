@@ -92,6 +92,21 @@ class V7CutoverUpdaterContractTest(unittest.TestCase):
         self.assertNotIn("update_server_macos.sh", deploy)
         self.assertNotIn("updater_path=ops/update_server.sh", deploy)
 
+    def test_automatic_deploy_transition_mismatches_are_noops_not_false_failures(self) -> None:
+        deploy = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            'if [[ "$GITHUB_EVENT_NAME" == "schedule" || "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then',
+            deploy,
+        )
+        self.assertIn("reconciliation_event=true", deploy)
+        self.assertIn("no_op awaiting_same_sha", deploy)
+        self.assertIn("no_op upstream_validation_did_not_advance", deploy)
+        self.assertIn("no_op awaiting_enabled_v7_champion", deploy)
+        self.assertIn('if [[ "$reconciliation_event" == "true" ]]; then', deploy)
+        self.assertIn('echo "V7 deploy blocked: main and paper-validated are not the same SHA" >&2', deploy)
+        self.assertIn('echo "V7 deploy blocked: canonical refs do not match the requested validated SHA" >&2', deploy)
+        self.assertNotIn('reconciliation_event=true # workflow_dispatch', deploy)
+
     def test_health_uses_v7_monitoring_manifest_not_legacy_project_context(self) -> None:
         health = (ROOT / ".github/workflows/v7-paper-server-health.yml").read_text(encoding="utf-8")
         self.assertIn("monitoring/v7_monitoring_manifest.json", health)
