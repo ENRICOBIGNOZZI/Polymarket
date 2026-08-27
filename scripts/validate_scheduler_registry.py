@@ -83,7 +83,8 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             errors.append(f"duplicate scheduler id: {sid}")
         if rel in workflows:
             errors.append(f"duplicate workflow registration: {rel}")
-        ids.add(sid); workflows.add(rel)
+        ids.add(sid)
+        workflows.add(rel)
         path = root / rel
         if not path.is_file():
             errors.append(f"registered workflow does not exist: {rel}")
@@ -98,8 +99,10 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
     if ids != REQUIRED_IDS:
         missing = sorted(REQUIRED_IDS.difference(ids))
         extra = sorted(ids.difference(REQUIRED_IDS))
-        if missing: errors.append("missing scheduler ids: " + ", ".join(missing))
-        if extra: errors.append("unrecognized scheduler ids: " + ", ".join(extra))
+        if missing:
+            errors.append("missing scheduler ids: " + ", ".join(missing))
+        if extra:
+            errors.append("unrecognized scheduler ids: " + ", ".join(extra))
 
     workflow_dir = root / ".github" / "workflows"
     actual = {str(p.relative_to(root)) for p in workflow_dir.iterdir() if p.is_file() and p.suffix in {".yml", ".yaml"}}
@@ -124,24 +127,31 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
     if controller.is_file():
         text = controller.read_text(encoding="utf-8")
         for required in ("scripts/promotion_gate.py", "autonomous-promotion-approved", "source-match-files.txt"):
-            if required not in text: errors.append(f"promotion-controller missing contract: {required}")
-        if "gh pr merge" in text: errors.append("promotion-controller must not merge")
+            if required not in text:
+                errors.append(f"promotion-controller missing contract: {required}")
+        if "gh pr merge" in text:
+            errors.append("promotion-controller must not merge")
 
     integration = root / str(by_id.get("integration-merge", {}).get("workflow", ""))
     if integration.is_file():
         text = integration.read_text(encoding="utf-8")
         if 'gh pr merge "$PR_NUMBER" --squash --delete-branch' not in text:
             errors.append("integration-merge must use bounded squash merge")
-        if "--admin" in text: errors.append("integration-merge must never use --admin")
+        if "--admin" in text:
+            errors.append("integration-merge must never use --admin")
 
     bridge = root / str(by_id.get("control-plane-event-bridge", {}).get("workflow", ""))
     if bridge.is_file():
         text = bridge.read_text(encoding="utf-8")
-        for required in ('"ci"', '"monitoring"', '"Private runtime single-writer validation"', '"Polymarket Promotion Controller"',
-                         "gh workflow run promotion-controller.yml --ref main", "gh workflow run integration-merge.yml --ref main"):
-            if required not in text: errors.append(f"control-plane-event-bridge missing contract: {required}")
+        for required in (
+            '"ci"', '"monitoring"', '"Private runtime single-writer validation"', '"Polymarket Promotion Controller"',
+            "gh workflow run promotion-controller.yml --ref main", "gh workflow run integration-merge.yml --ref main",
+        ):
+            if required not in text:
+                errors.append(f"control-plane-event-bridge missing contract: {required}")
         for forbidden in ('"v4-live-paper-smoke"', "gh pr merge", "git push origin paper-validated"):
-            if forbidden in text: errors.append(f"control-plane-event-bridge contains retired/forbidden authority: {forbidden}")
+            if forbidden in text:
+                errors.append(f"control-plane-event-bridge contains retired/forbidden authority: {forbidden}")
 
     post = root / str(by_id.get("post-merge-validation", {}).get("workflow", ""))
     if post.is_file():
@@ -174,9 +184,14 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             "economic_ready",
             '-F force=false',
         ):
-            if required not in text: errors.append(f"V7 live PAPER validation missing contract: {required}")
-        for forbidden in ("force=true", "git push origin main", "git push origin paper-validated", "gh pr merge", "POLYMARKET_DEPLOY_REF=", "deploy-paper-server", "paper_v6", "v4-live-paper"):
-            if forbidden in text: errors.append(f"V7 live PAPER validation contains forbidden authority: {forbidden}")
+            if required not in text:
+                errors.append(f"V7 live PAPER validation missing contract: {required}")
+        for forbidden in (
+            "force=true", "git push origin main", "git push origin paper-validated", "gh pr merge", "POLYMARKET_DEPLOY_REF=",
+            "deploy-paper-server", "paper_v6", "v4-live-paper",
+        ):
+            if forbidden in text:
+                errors.append(f"V7 live PAPER validation contains forbidden authority: {forbidden}")
 
     deploy = root / str(by_id.get("v7-paper-server-deploy", {}).get("workflow", ""))
     if deploy.is_file():
@@ -187,23 +202,47 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
             "monitoring/v7_monitoring_manifest.json", 'test "$main_sha" = "$EXPECTED_VALIDATED_SHA"',
             'test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"',
         ):
-            if required not in text: errors.append(f"V7 deploy workflow missing contract: {required}")
-        for forbidden in ("authenticated_execution: true", "git push", "gh pr merge", "force=true", 'git merge-base --is-ancestor "$validated_sha" "$main_sha"'):
-            if forbidden in text: errors.append(f"V7 deploy workflow contains forbidden authority: {forbidden}")
+            if required not in text:
+                errors.append(f"V7 deploy workflow missing contract: {required}")
+        for forbidden in (
+            "authenticated_execution: true", "git push", "gh pr merge", "force=true",
+            'git merge-base --is-ancestor "$validated_sha" "$main_sha"',
+        ):
+            if forbidden in text:
+                errors.append(f"V7 deploy workflow contains forbidden authority: {forbidden}")
 
     health = root / str(by_id.get("v7-paper-server-health", {}).get("workflow", ""))
     if health.is_file():
         text = health.read_text(encoding="utf-8")
         for required in (
-            "scripts/v7_cutover_contract.py", "paper_v7_loop", "paper_v7_execution_loop", "v7_market_proxy_status",
-            "recorder_count", "broker_count", "polymarket_runtime_pnl_usd", "polymarket_runtime_equity_usd",
-            "GRAFANA_DASHBOARD_UID", "monitoring/v7_monitoring_manifest.json", "polymarket_v7_monitoring_manifest_v1",
-            "polymarket_v7_ledger_", 'test "$main_sha" = "$EXPECTED_VALIDATED_SHA"',
-            'test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"',
+            "scripts/v7_cutover_contract.py",
+            "control/runtime_status.json",
+            "control/portfolio_state.json",
+            "graph_rv/status.json",
+            "canonical_economics.json",
+            "ledger/execution.jsonl",
+            "trade_tape.csv",
+            "no exact-SHA successful V7 deploy",
+            'test "$head_sha" = "$EXPECTED_SHA"',
+            'test "$validated_sha" = "$EXPECTED_SHA"',
+            'test "$main_sha" = "$EXPECTED_SHA"',
+            "polymarket_v7_runtime_info",
+            "polymarket_v7_execution_alive",
+            "polymarket_v7_paper_only_contract_ok",
+            "polymarket_v7_authenticated_execution_disabled",
+            "polymarket_v7_ledger_valid",
+            "http://127.0.0.1:9108/healthz",
+            "http://127.0.0.1:9090/-/ready",
+            "/api/dashboards/uid/polymarket-v7",
         ):
-            if required not in text: errors.append(f"V7 server-health workflow missing contract: {required}")
-        for forbidden in ("POLYMARKET_DEPLOY_REF=", "gh pr merge", "git push", 'git merge-base --is-ancestor "$validated_sha" "$main_sha"', "config/project_context.json"):
-            if forbidden in text: errors.append(f"V7 server-health workflow contains forbidden authority: {forbidden}")
+            if required not in text:
+                errors.append(f"V7 server-health workflow missing canonical contract: {required}")
+        for forbidden in (
+            "POLYMARKET_DEPLOY_REF=", "gh pr merge", "git push", "config/project_context.json",
+            "v7_market_proxy_status", "paper_v6", "v4-live-paper",
+        ):
+            if forbidden in text:
+                errors.append(f"V7 server-health workflow contains retired/forbidden authority: {forbidden}")
 
     evidence = root / str(by_id.get("v7-unified-paper-evidence", {}).get("workflow", ""))
     evidence_cfg_path = root / "config/v7_evidence_runtime.json"
@@ -255,12 +294,19 @@ def render(items: list[dict[str, Any]], errors: list[str]) -> str:
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--root", default="."); p.add_argument("--registry", default="config/scheduler_registry.json"); p.add_argument("--output")
-    a = p.parse_args(); root = Path(a.root).resolve(); registry = root / a.registry
-    try: errors, items = validate(root, registry)
-    except Exception as exc: errors, items = [str(exc)], []
+    p.add_argument("--root", default=".")
+    p.add_argument("--registry", default="config/scheduler_registry.json")
+    p.add_argument("--output")
+    a = p.parse_args()
+    root = Path(a.root).resolve()
+    registry = root / a.registry
+    try:
+        errors, items = validate(root, registry)
+    except Exception as exc:
+        errors, items = [str(exc)], []
     report = render(items, errors)
-    if a.output: Path(a.output).write_text(report, encoding="utf-8")
+    if a.output:
+        Path(a.output).write_text(report, encoding="utf-8")
     print(report, end="")
     return 1 if errors else 0
 
