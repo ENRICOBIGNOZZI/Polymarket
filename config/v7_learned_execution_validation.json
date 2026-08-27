@@ -1,0 +1,35 @@
+{
+  "schema": "polymarket_v7_learned_execution_validation_policy_v1",
+  "paper_only": true,
+  "promotion_allowed": false,
+  "minimums": {
+    "scored_folds": 3,
+    "bootstrap_days": 7,
+    "positive_fold_fraction": 0.75,
+    "worst_improvement": 0.0,
+    "bootstrap_ci_lower": 0.0,
+    "max_p_nonpositive": 0.10
+  },
+  "metrics": {
+    "fill": {
+      "positive_fraction_field": "positive_brier_fold_fraction",
+      "worst_field": "worst_brier_improvement",
+      "bootstrap_field": "brier_day_block_bootstrap"
+    },
+    "completion": {
+      "positive_fraction_field": "positive_brier_fold_fraction",
+      "worst_field": "worst_brier_improvement",
+      "bootstrap_field": "brier_day_block_bootstrap"
+    },
+    "markout": {
+      "positive_fraction_field": "positive_mse_fold_fraction",
+      "worst_field": "worst_mse_improvement",
+      "bootstrap_field": "mse_day_block_bootstrap"
+    },
+    "joint": {
+      "positive_fraction_field": "positive_vs_marginal_fold_fraction",
+      "worst_field": "worst_vs_marginal_improvement",
+      "bootstrap_field": "vs_product_marginals_day_block_bootstrap"
+    }
+  }
+}
