@@ -56,8 +56,6 @@ def base_config():
             "v7-deploy-paper-server.yml",
             "v7-paper-server-health.yml",
             "v7-unified-paper-evidence.yml",
-            "deploy-paper-server.yml",
-            "server-health.yml",
         ],
     }
 
@@ -79,7 +77,7 @@ def alpha_report(ts=1000):
                 "hypothesis": "Fillability is the bottleneck.",
                 "triggering_evidence": "zero OOS fills",
                 "success_metric": "paired fills and markout",
-                "owner_workflow": "forward-maker-research.yml",
+                "owner_workflow": "retired-research-owner.yml",
             },
             {
                 "experiment_id": "fast_arb_exact_leg_freshness",
@@ -192,11 +190,11 @@ class ResearchDirectorTests(unittest.TestCase):
         registry = json.loads((ROOT / "config" / "scheduler_registry.json").read_text(encoding="utf-8"))
         registered = {Path(row["workflow"]).name for row in registry["schedulers"]}
         owners = set(cfg["owner_workflows"])
+        forbidden = set(cfg["forbidden_workflows"])
         self.assertTrue(owners)
         self.assertTrue(owners <= registered)
+        self.assertFalse(owners & forbidden)
         for workflow in sorted(owners):
-            self.assertNotIn("forward-maker", workflow)
-            self.assertNotIn("v7-", workflow)
             path = ROOT / ".github" / "workflows" / workflow
             self.assertTrue(path.is_file(), workflow)
             text = path.read_text(encoding="utf-8")
@@ -226,10 +224,6 @@ class ResearchDirectorTests(unittest.TestCase):
         self.assertIn("research-director dispatch contract error", text)
         self.assertIn("owner_workflows", text)
         self.assertIn("workflow_dispatch", text)
-        self.assertNotIn(
-            "forward-maker-research.yml|external-intelligence.yml",
-            text,
-        )
         self.assertIn('gh workflow run "$workflow" --ref main', text)
 
 
