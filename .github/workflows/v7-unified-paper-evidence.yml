@@ -31,6 +31,7 @@ concurrency:
 
 jobs:
   reconcile:
+    if: github.event_name != 'pull_request' || startsWith(github.event.pull_request.head.ref, 'integration/v7-')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
