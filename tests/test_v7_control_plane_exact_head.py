@@ -25,6 +25,53 @@ class V7ControlPlaneExactHeadTest(unittest.TestCase):
         self.assertNotIn("delete_legacy_immediately_then_promote_only_validated_v7", text)
         self.assertNotIn("operator-authorized immediate legacy retirement", text)
 
+    def test_critical_v7_lifecycle_workflows_are_active(self) -> None:
+        contracts = {
+            ".github/workflows/control-plane-event-bridge.yml": (
+                "actions: write",
+                "Verify current project context",
+                "gh workflow run promotion-controller.yml --ref main",
+                "gh workflow run integration-merge.yml --ref main",
+            ),
+            ".github/workflows/promotion-controller.yml": (
+                "issues: write",
+                "pull-requests: write",
+                "Evaluate integration queue and authorize one promotion",
+                "python3 scripts/promotion_gate.py",
+                "--add-label autonomous-promotion-approved",
+            ),
+            ".github/workflows/integration-merge.yml": (
+                "contents: write",
+                "pull-requests: write",
+                "Select exactly one controller-authorized integration",
+                "gh pr merge \"$PR_NUMBER\" --squash --delete-branch --match-head-commit \"$expected_head\"",
+                "champion-integration-merged",
+            ),
+            ".github/workflows/v7-live-paper-validation.yml": (
+                "contents: write",
+                "Coordinate exact-SHA V7 validation",
+                "Bounded public-data V7 PAPER runtime smoke",
+                "Advance paper-validated to exact validated SHA",
+                "-F force=false",
+            ),
+            ".github/workflows/v7-deploy-paper-server.yml": (
+                "Fail-closed V7 deploy preflight",
+                "Select Tailscale credential mode",
+                "Reconcile exact paper-validated V7 SHA on server",
+                "POLYMARKET_DEPLOY_REF=paper-validated",
+            ),
+        }
+        for rel, required in contracts.items():
+            text = (ROOT / rel).read_text(encoding="utf-8")
+            self.assertNotIn("if: ${{ false }}", text, rel)
+            self.assertNotIn("FIXED-SHA PAPER EVIDENCE FREEZE", text.upper(), rel)
+            self.assertNotIn("automatic promotion decisions disabled", text, rel)
+            self.assertNotIn("automatic integration merge disabled", text, rel)
+            self.assertNotIn("automatic paper-validated advancement disabled", text, rel)
+            self.assertNotIn("automatic PAPER server deploy disabled", text, rel)
+            for marker in required:
+                self.assertIn(marker, text, f"{rel}: missing active lifecycle marker {marker!r}")
+
     def test_cleanup_branches_fail_closed_until_cutover_receipt_exists(self) -> None:
         text = (ROOT / ".github/workflows/research-policy.yml").read_text(encoding="utf-8")
         cleanup_guard = 'if [[ "$head_ref" == cleanup/* ]]'
