@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import unittest
 from pathlib import Path
 
@@ -79,6 +80,20 @@ class FastDataHealthTest(unittest.TestCase):
             min_rest_resyncs=2,
         )
         self.assertGreaterEqual(len(failures), 3)
+
+    def test_hourly_shadow_does_not_depend_on_retired_runtime_config(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "fast-arb-hourly.yml").read_text()
+        self.assertIn("--config config/fast_arb_shadow.json", workflow)
+        self.assertNotIn("paper_v4.json", workflow)
+        self.assertIn("--min-liquidity 10", workflow)
+
+        config = json.loads((ROOT / "config" / "fast_arb_shadow.json").read_text())
+        self.assertEqual(config["gamma_url"], "https://gamma-api.polymarket.com")
+        self.assertEqual(config["clob_url"], "https://clob.polymarket.com")
+        self.assertTrue(config["scan_only"])
+        self.assertFalse(config["history_bootstrap"])
+        self.assertLessEqual(float(config["min_liquidity"]), 10.0)
+        self.assertEqual(float(config["min_volume24h"]), 0.0)
 
 
 if __name__ == "__main__":
