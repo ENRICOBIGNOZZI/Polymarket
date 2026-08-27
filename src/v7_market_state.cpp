@@ -81,6 +81,20 @@ bool CanonicalL2Book::set_tick_size(std::int32_t tick_size_e4) noexcept {
     return true;
 }
 
+bool CanonicalL2Book::change_tick_size(std::int32_t tick_size_e4,
+                                       std::int64_t exchange_event_ns,
+                                       std::int64_t receive_monotonic_ns) noexcept {
+    if (exchange_event_ns <= 0 || receive_monotonic_ns <= 0
+        || (receive_monotonic_ns_ > 0 && receive_monotonic_ns < receive_monotonic_ns_)) {
+        return false;
+    }
+    if (!set_tick_size(tick_size_e4)) return false;
+    exchange_event_ns_ = exchange_event_ns;
+    receive_monotonic_ns_ = receive_monotonic_ns;
+    ++state_version_;
+    return true;
+}
+
 bool CanonicalL2Book::valid_level(std::int32_t price_e4,
                                   std::int64_t quantity_microunits) const noexcept {
     return price_e4 > 0 && price_e4 < kCanonicalPriceScale
@@ -153,7 +167,7 @@ bool CanonicalL2Book::mutate_level(Side side, std::int32_t price_e4,
         if (quantity_microunits > 0 && price_e4 > best_bid_e4_) best_bid_e4_ = price_e4;
         else if (quantity_microunits == 0 && price_e4 == best_bid_e4_) best_bid_e4_ = best_bid();
     } else {
-        if (quantity_microunits > 0 && (best_ask_e4_ == 0 || price_e4 < best_ask_e4_)) best_ask_e4_ = price_e4;
+        if (quantity_microunits > 0 && (best_ask_e4_ == 0 || price_e4 < best_ask_e4_) best_ask_e4_ = price_e4;
         else if (quantity_microunits == 0 && price_e4 == best_ask_e4_) best_ask_e4_ = best_ask();
     }
     exchange_event_ns_ = exchange_event_ns;
