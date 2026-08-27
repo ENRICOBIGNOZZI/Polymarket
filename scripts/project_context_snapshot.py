@@ -31,9 +31,12 @@ def build_snapshot(root: Path, manifest_path: Path) -> dict[str, Any]:
     registry = load(root / str(manifest["scheduler_registry"]))
     directives_rel = str(manifest["operator_directives"])
     directives = load(root / directives_rel)
+    receipt_rel = str(manifest.get("cutover_receipt") or "")
+    receipt_path = root / receipt_rel if receipt_rel else None
+    receipt = load(receipt_path) if receipt_path is not None and receipt_path.is_file() else None
     workflows = sorted(x for x in tracked if x.startswith(".github/workflows/") and x.endswith((".yml", ".yaml")))
     return {
-        "schema_version": 5,
+        "schema_version": 6,
         "repository": manifest.get("repository"),
         "head": run_git(root, "rev-parse", "HEAD"),
         "branch": run_git(root, "branch", "--show-current"),
@@ -50,6 +53,9 @@ def build_snapshot(root: Path, manifest_path: Path) -> dict[str, Any]:
         "runtime": manifest.get("runtime", {}),
         "grafana": manifest.get("grafana", {}),
         "cutover": manifest.get("cutover", {}),
+        "cutover_receipt_path": receipt_rel or None,
+        "cutover_receipt_present": receipt is not None,
+        "cutover_receipt": receipt,
         "context_policy": manifest.get("context_policy", {}),
         "security": manifest.get("security", {}),
         "operator_directives_path": directives_rel,
@@ -74,6 +80,7 @@ def render(snapshot: dict[str, Any]) -> str:
         f"- target champion: **V{cutover.get('target_version', '?')}**",
         f"- control-plane state: `{cutover.get('current_state')}`",
         f"- required cutover sequence: `{cutover.get('required_sequence')}`",
+        f"- cutover receipt: `{snapshot.get('cutover_receipt_path')}` present={snapshot.get('cutover_receipt_present')}",
         f"- operator directive epoch: `{directives.get('directive_epoch')}`",
         "", "## Current priority order", "",
     ]
@@ -89,7 +96,7 @@ def main() -> int:
     snapshot = build_snapshot(root, manifest)
     Path(a.output_json).write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     Path(a.output_markdown).write_text(render(snapshot), encoding="utf-8")
-    print(json.dumps({"head": snapshot["head"], "tracked_file_count": snapshot["tracked_file_count"], "workflow_count": snapshot["workflow_count"], "scheduler_count": snapshot["scheduler_count"], "champion_enabled": snapshot["live_champion"].get("enabled"), "cutover_state": snapshot.get("cutover", {}).get("current_state"), "operator_directive_epoch": snapshot["operator_directives"].get("directive_epoch")}, sort_keys=True))
+    print(json.dumps({"head": snapshot["head"], "tracked_file_count": snapshot["tracked_file_count"], "workflow_count": snapshot["workflow_count"], "scheduler_count": snapshot["scheduler_count"], "champion_enabled": snapshot["live_champion"].get("enabled"), "cutover_state": snapshot.get("cutover", {}).get("current_state"), "cutover_receipt_present": snapshot.get("cutover_receipt_present"), "operator_directive_epoch": snapshot["operator_directives"].get("directive_epoch")}, sort_keys=True))
     return 0
 
 
