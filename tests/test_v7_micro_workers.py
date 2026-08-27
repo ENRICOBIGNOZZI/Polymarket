@@ -6,15 +6,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_maker_uses_canonical_professional_worker_and_fill_conditioned_core():
-    worker_path = ROOT / "scripts/v7_market_maker_worker.py"
+def test_maker_uses_canonical_cpp_runtime_and_fill_conditioned_research_core():
+    runtime_path = ROOT / "src/v7_market_maker_runtime.cpp"
+    lane_path = ROOT / "src/v7_maker_lane.cpp"
+    paper_path = ROOT / "src/v7_maker_paper.cpp"
     core_path = ROOT / "scripts/v7_market_maker_core.py"
-    assert worker_path.is_file()
+    assert runtime_path.is_file()
+    assert lane_path.is_file()
+    assert paper_path.is_file()
     assert core_path.is_file()
     assert not (ROOT / "scripts/v7_micro_maker_worker.py").exists()
     assert not (ROOT / "scripts/v7_micro_maker_worker_eventtime_core.py").exists()
 
-    worker = worker_path.read_text(encoding="utf-8")
+    runtime = runtime_path.read_text(encoding="utf-8")
+    lane = lane_path.read_text(encoding="utf-8")
+    paper = paper_path.read_text(encoding="utf-8")
     core = core_path.read_text(encoding="utf-8")
     assert "fill-conditioned trading economics" in core
     assert "toxicity_score" in core
@@ -23,13 +29,18 @@ def test_maker_uses_canonical_professional_worker_and_fill_conditioned_core():
     assert "complete_sets" in core
     assert "expected_total_pnl" in core
     assert "subsidy_dependent" in core
-    assert "MARKOUT_HORIZONS = (1, 10, 45, 60, 300)" in worker
-    assert "simulates FIFO queue depletion conservatively" in worker
-    assert "cancel-pending orders fillable" in worker
-    assert "complete-set merges" in worker
-    assert "single V7 ledger spool" in worker
-    assert "def walk(" in worker
-    assert "v7_ledger_spool" in worker
+    assert "MarketWebSocketFeed" in runtime
+    assert "MarketWsShard" in runtime
+    assert "MakerInstrumentLane" in runtime
+    assert "MakerPaperMarketEngine" in runtime
+    assert "v7_ledger_spool" in runtime
+    assert "operational_fill_scenario" in runtime
+    assert "pessimistic" in runtime
+    assert "LineageInvalidated" in runtime
+    assert "instrument_inventory_sign" in lane
+    assert "allocate_public_print" in paper
+    assert "CancelPending" in paper
+    assert "FinalMerge" in paper
 
 
 def test_taker_uses_complete_round_trip_contract():
@@ -56,7 +67,7 @@ def test_taker_freezes_new_risk_when_open_positions_are_unmarkable():
 
 
 if __name__ == "__main__":
-    test_maker_uses_canonical_professional_worker_and_fill_conditioned_core()
+    test_maker_uses_canonical_cpp_runtime_and_fill_conditioned_research_core()
     test_taker_uses_complete_round_trip_contract()
     test_taker_freezes_new_risk_when_open_positions_are_unmarkable()
     print("ok 3 v7 micro worker tests")
