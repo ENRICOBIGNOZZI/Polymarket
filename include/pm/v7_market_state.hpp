@@ -38,6 +38,7 @@ struct BookHotSnapshot {
     std::int64_t best_ask_microunits = 0;
     DepthSummary bid_depth{};
     DepthSummary ask_depth{};
+    std::uint8_t lineage_continuous = 0;
     std::uint8_t valid = 0;
 };
 
@@ -60,17 +61,19 @@ public:
                                     std::int64_t quantity_microunits,
                                     std::int64_t exchange_event_ns,
                                     std::int64_t receive_monotonic_ns) noexcept;
+    void invalidate_lineage() noexcept;
 
     [[nodiscard]] BookHotSnapshot hot_snapshot() const noexcept;
     [[nodiscard]] std::int64_t quantity_at(Side side, std::int32_t price_e4) const noexcept;
     [[nodiscard]] std::int32_t venue_tick_index(std::int32_t price_e4) const noexcept;
     [[nodiscard]] std::int32_t tick_size_e4() const noexcept { return tick_size_e4_; }
     [[nodiscard]] std::uint64_t state_version() const noexcept { return state_version_; }
+    [[nodiscard]] bool lineage_continuous() const noexcept { return lineage_continuous_; }
 
 private:
     [[nodiscard]] bool valid_level(std::int32_t price_e4,
                                    std::int64_t quantity_microunits) const noexcept;
-    void clear() noexcept;
+    void clear_levels() noexcept;
     void set_raw(Side side, std::int32_t price_e4,
                  std::int64_t quantity_microunits) noexcept;
     [[nodiscard]] std::int32_t best_bid() const noexcept;
@@ -89,6 +92,7 @@ private:
     std::int32_t tick_size_e4_ = 100;
     std::int32_t best_bid_e4_ = 0;
     std::int32_t best_ask_e4_ = 0;
+    bool lineage_continuous_ = false;
 };
 
 static_assert(std::is_trivially_copyable_v<PriceLevelE4>);
