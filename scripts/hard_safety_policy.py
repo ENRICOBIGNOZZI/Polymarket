@@ -22,16 +22,8 @@ TOP_LEVEL_LIMITS = (
     "max_event_fraction",
     "max_gross_fraction",
 )
-MULTI_STRATEGY_LIMITS = (
-    "global_max_drawdown",
-    "global_max_gross_fraction",
-)
-CHILD_LIMITS = (
-    "max_drawdown",
-    "max_market_fraction",
-    "max_event_fraction",
-    "max_gross_fraction",
-)
+MULTI_STRATEGY_LIMITS = ("global_max_drawdown", "global_max_gross_fraction")
+CHILD_LIMITS = ("max_drawdown", "max_market_fraction", "max_event_fraction", "max_gross_fraction")
 RUNTIME_PROTECTED_KEYS = (
     "max_drawdown",
     "max_trade_fraction",
@@ -54,8 +46,6 @@ RUNTIME_HARD_SAFETY_WRITE_RE = re.compile(
     rf")"
 )
 
-# V6 is a transitional compatibility runtime. Its envelope remains bounded and
-# independent from V7 authorization.
 V6_AUTHORIZED_MARKET_LIMIT = 1000.0
 V6_AUTHORIZED_CEILINGS = {
     "max_drawdown": 0.15,
@@ -85,10 +75,6 @@ V6_AUTHORIZED_CAPITAL_CEILINGS = {
 }
 V6_CAPITAL_FRACTIONS = tuple(V6_AUTHORIZED_CAPITAL_CEILINGS)
 
-# V7 follows config/operator_directives.json. The explicit current PAPER
-# authorization has no binding fixed-dollar trade cap and uses 100% hard
-# percentage ceilings. These values are ceilings/permissions, not trade targets:
-# Kelly, executable depth/costs, state integrity and the drawdown kill remain.
 V7_AUTHORIZED_MARKET_LIMIT = 1000.0
 V7_AUTHORIZED_CEILINGS = {
     "max_drawdown": 0.15,
@@ -109,6 +95,8 @@ V7_AUTHORIZED_FLOORS = {
     "hard_arb_min_net_edge": 0.00005,
 }
 V7_NONBINDING_DOLLAR_SENTINEL_MIN = 1e50
+V7_DIRECTIVE_ID = "user-v7-master-multi-agent-operating-prompt-20260827"
+V7_CLEANUP_SEQUENCE = "v7_implementation_then_tests_then_same_sha_paper_then_main_then_paper_validated_then_deploy_then_server_health_then_legacy_deletion"
 
 
 def _number(value: Any) -> float | None:
@@ -119,14 +107,7 @@ def _number(value: Any) -> float | None:
     return None
 
 
-def _compare_limit(
-    errors: list[str],
-    label: str,
-    base_value: Any,
-    current_value: Any,
-    *,
-    ceiling: float | None = None,
-) -> None:
+def _compare_limit(errors: list[str], label: str, base_value: Any, current_value: Any, *, ceiling: float | None = None) -> None:
     base_number = _number(base_value)
     if base_number is None and ceiling is None:
         return
@@ -136,9 +117,7 @@ def _compare_limit(
         return
     allowed = float(ceiling) if ceiling is not None else float(base_number)
     if current_number > allowed + 1e-12:
-        errors.append(
-            f"protected hard-safety limit weakened: {label} allowed<={allowed:g}, got {current_number:g}"
-        )
+        errors.append(f"protected hard-safety limit weakened: {label} allowed<={allowed:g}, got {current_number:g}")
 
 
 def _compare_floor(errors: list[str], label: str, current_value: Any, floor: float) -> None:
@@ -160,21 +139,23 @@ def _strategies(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     multi = config.get("multi_strategy")
     if not isinstance(multi, dict):
         return {}
-    result: dict[str, dict[str, Any]] = {}
-    for item in multi.get("strategies") or []:
-        if isinstance(item, dict) and item.get("name"):
-            result[str(item["name"])] = item
-    return result
+    return {
+        str(item["name"]): item
+        for item in (multi.get("strategies") or [])
+        if isinstance(item, dict) and item.get("name")
+    }
 
 
 def _fallback_limits(config: dict[str, Any]) -> dict[str, float | None]:
     multi = config.get("multi_strategy") if isinstance(config.get("multi_strategy"), dict) else {}
+    gross = _number(multi.get("global_max_gross_fraction"))
+    if gross is None:
+        gross = _number(config.get("max_gross_fraction"))
     return {
         "max_drawdown": _number(config.get("max_drawdown")),
         "max_market_fraction": _number(config.get("max_market_fraction")),
         "max_event_fraction": _number(config.get("max_event_fraction")),
-        "max_gross_fraction": _number(multi.get("global_max_gross_fraction"))
-        or _number(config.get("max_gross_fraction")),
+        "max_gross_fraction": gross,
     }
 
 
@@ -196,108 +177,48 @@ def _ceiling(path: str, key: str) -> float | None:
 
 def compare_paper_config(base: dict[str, Any], current: dict[str, Any], path: str) -> list[str]:
     errors: list[str] = []
-
     for key in TOP_LEVEL_LIMITS:
-        _compare_limit(
-            errors,
-            f"{path}:{key}",
-            base.get(key),
-            current.get(key),
-            ceiling=_ceiling(path, key),
-        )
+        _compare_limit(errors, f"{path}:{key}", base.get(key), current.get(key), ceiling=_ceiling(path, key))
 
     base_multi = base.get("multi_strategy") if isinstance(base.get("multi_strategy"), dict) else {}
     current_multi = current.get("multi_strategy") if isinstance(current.get("multi_strategy"), dict) else {}
-
     if (_is_v6(path) or _is_v7(path) or base_multi.get("paper_only") is True) and current_multi.get("paper_only") is not True:
         errors.append(f"paper-only separation weakened: {path}:multi_strategy.paper_only must remain true")
-
     for key in MULTI_STRATEGY_LIMITS:
-        _compare_limit(
-            errors,
-            f"{path}:multi_strategy.{key}",
-            base_multi.get(key),
-            current_multi.get(key),
-            ceiling=_ceiling(path, key),
-        )
+        _compare_limit(errors, f"{path}:multi_strategy.{key}", base_multi.get(key), current_multi.get(key), ceiling=_ceiling(path, key))
 
     base_strategies = _strategies(base)
     current_strategies = _strategies(current)
     base_fallback = _fallback_limits(base)
     current_fallback = _fallback_limits(current)
-
     for name, current_strategy in sorted(current_strategies.items()):
-        current_overrides = (
-            current_strategy.get("overrides")
-            if isinstance(current_strategy.get("overrides"), dict)
-            else {}
-        )
+        current_overrides = current_strategy.get("overrides") if isinstance(current_strategy.get("overrides"), dict) else {}
         base_strategy = base_strategies.get(name, {})
-        base_overrides = (
-            base_strategy.get("overrides")
-            if isinstance(base_strategy.get("overrides"), dict)
-            else {}
-        )
+        base_overrides = base_strategy.get("overrides") if isinstance(base_strategy.get("overrides"), dict) else {}
         for key in CHILD_LIMITS:
             base_value = base_overrides.get(key, base_fallback.get(key))
             current_value = current_overrides.get(key, current_fallback.get(key))
             if base_value is not None or _ceiling(path, key) is not None:
-                _compare_limit(
-                    errors,
-                    f"{path}:strategy[{name}].{key}",
-                    base_value,
-                    current_value,
-                    ceiling=_ceiling(path, key),
-                )
+                _compare_limit(errors, f"{path}:strategy[{name}].{key}", base_value, current_value, ceiling=_ceiling(path, key))
         if _is_v6(path):
             if "min_net_edge" in current_overrides:
-                _compare_floor(
-                    errors,
-                    f"{path}:strategy[{name}].min_net_edge",
-                    current_overrides.get("min_net_edge"),
-                    V6_AUTHORIZED_FLOORS["min_net_edge"],
-                )
+                _compare_floor(errors, f"{path}:strategy[{name}].min_net_edge", current_overrides.get("min_net_edge"), V6_AUTHORIZED_FLOORS["min_net_edge"])
             for key in ("fractional_kelly", "max_trade_usd"):
                 if key in current_overrides:
-                    _compare_limit(
-                        errors,
-                        f"{path}:strategy[{name}].{key}",
-                        None,
-                        current_overrides.get(key),
-                        ceiling=V6_AUTHORIZED_CEILINGS[key],
-                    )
+                    _compare_limit(errors, f"{path}:strategy[{name}].{key}", None, current_overrides.get(key), ceiling=V6_AUTHORIZED_CEILINGS[key])
 
     if _is_v6(path):
-        _compare_limit(
-            errors,
-            f"{path}:market_limit",
-            None,
-            current.get("market_limit"),
-            ceiling=V6_AUTHORIZED_MARKET_LIMIT,
-        )
+        _compare_limit(errors, f"{path}:market_limit", None, current.get("market_limit"), ceiling=V6_AUTHORIZED_MARKET_LIMIT)
         for key in ("min_liquidity", "min_net_edge", "uncertainty_penalty"):
             _compare_floor(errors, f"{path}:{key}", current.get(key), V6_AUTHORIZED_FLOORS[key])
         for key in ("fractional_kelly", "max_trade_usd"):
-            _compare_limit(
-                errors,
-                f"{path}:{key}",
-                None,
-                current.get(key),
-                ceiling=V6_AUTHORIZED_CEILINGS[key],
-            )
-
+            _compare_limit(errors, f"{path}:{key}", None, current.get(key), ceiling=V6_AUTHORIZED_CEILINGS[key])
         v6 = current.get("v6") if isinstance(current.get("v6"), dict) else {}
         if v6.get("paper_only") is not True:
             errors.append(f"paper-only separation weakened: {path}:v6.paper_only must remain true")
         for key in ("intent_min_edge", "hard_arb_min_net_edge"):
             _compare_floor(errors, f"{path}:v6.{key}", v6.get(key), V6_AUTHORIZED_FLOORS[key])
-        _compare_limit(
-            errors,
-            f"{path}:v6.hard_arb_max_trade_usd",
-            None,
-            v6.get("hard_arb_max_trade_usd"),
-            ceiling=V6_AUTHORIZED_CEILINGS["hard_arb_max_trade_usd"],
-        )
+        _compare_limit(errors, f"{path}:v6.hard_arb_max_trade_usd", None, v6.get("hard_arb_max_trade_usd"), ceiling=V6_AUTHORIZED_CEILINGS["hard_arb_max_trade_usd"])
         fractions: list[float] = []
         for key in V6_CAPITAL_FRACTIONS:
             value = _number(v6.get(key))
@@ -305,48 +226,21 @@ def compare_paper_config(base: dict[str, Any], current: dict[str, Any], path: st
                 errors.append(f"invalid V6 capital allocation: {path}:v6.{key}")
             else:
                 fractions.append(value)
-                _compare_limit(
-                    errors,
-                    f"{path}:v6.{key}",
-                    None,
-                    value,
-                    ceiling=V6_AUTHORIZED_CAPITAL_CEILINGS[key],
-                )
+                _compare_limit(errors, f"{path}:v6.{key}", None, value, ceiling=V6_AUTHORIZED_CAPITAL_CEILINGS[key])
         if len(fractions) == len(V6_CAPITAL_FRACTIONS) and sum(fractions) > 1.0 + 1e-12:
             errors.append(f"V6 paper capital allocations exceed 100%: {path}:v6 total={sum(fractions):g}")
 
     if _is_v7(path):
-        _compare_limit(
-            errors,
-            f"{path}:market_limit",
-            None,
-            current.get("market_limit"),
-            ceiling=V7_AUTHORIZED_MARKET_LIMIT,
-        )
+        if current.get("paper_only") is not True:
+            errors.append(f"paper-only separation weakened: {path}:paper_only must remain true")
+        _compare_limit(errors, f"{path}:market_limit", None, current.get("market_limit"), ceiling=V7_AUTHORIZED_MARKET_LIMIT)
         for key in ("min_liquidity", "min_net_edge", "uncertainty_penalty"):
             _compare_floor(errors, f"{path}:{key}", current.get(key), V7_AUTHORIZED_FLOORS[key])
-        _compare_limit(
-            errors,
-            f"{path}:fractional_kelly",
-            None,
-            current.get("fractional_kelly"),
-            ceiling=V7_AUTHORIZED_CEILINGS["fractional_kelly"],
-        )
-        _compare_limit(
-            errors,
-            f"{path}:max_drawdown",
-            None,
-            current.get("max_drawdown"),
-            ceiling=V7_AUTHORIZED_CEILINGS["max_drawdown"],
-        )
+        _compare_limit(errors, f"{path}:fractional_kelly", None, current.get("fractional_kelly"), ceiling=V7_AUTHORIZED_CEILINGS["fractional_kelly"])
+        _compare_limit(errors, f"{path}:max_drawdown", None, current.get("max_drawdown"), ceiling=V7_AUTHORIZED_CEILINGS["max_drawdown"])
         for key in ("max_trade_fraction", "max_market_fraction", "max_event_fraction", "max_gross_fraction"):
             _require_exact(errors, f"{path}:{key}", current.get(key), 1.0)
-        _require_exact(
-            errors,
-            f"{path}:multi_strategy.global_max_gross_fraction",
-            current_multi.get("global_max_gross_fraction"),
-            1.0,
-        )
+        _require_exact(errors, f"{path}:multi_strategy.global_max_gross_fraction", current_multi.get("global_max_gross_fraction"), 1.0)
         if current.get("fixed_dollar_trade_cap_enabled") is not False:
             errors.append(f"operator V7 directive violated: {path}:fixed_dollar_trade_cap_enabled must be false")
         max_trade_usd = _number(current.get("max_trade_usd"))
@@ -365,12 +259,7 @@ def compare_paper_config(base: dict[str, Any], current: dict[str, Any], path: st
             _compare_floor(errors, f"{path}:v7.{key}", v7.get(key), V7_AUTHORIZED_FLOORS[key])
         if v7.get("hard_arb_fixed_dollar_trade_cap_enabled") is not False:
             errors.append(f"operator V7 directive violated: {path}:v7.hard_arb_fixed_dollar_trade_cap_enabled must be false")
-        _require_exact(
-            errors,
-            f"{path}:v7.hard_arb_max_trade_fraction",
-            v7.get("hard_arb_max_trade_fraction"),
-            1.0,
-        )
+        _require_exact(errors, f"{path}:v7.hard_arb_max_trade_fraction", v7.get("hard_arb_max_trade_fraction"), 1.0)
         hard_max_usd = _number(v7.get("hard_arb_max_trade_usd"))
         if hard_max_usd is None or hard_max_usd < V7_NONBINDING_DOLLAR_SENTINEL_MIN:
             errors.append(f"operator V7 directive violated: {path}:v7.hard_arb_max_trade_usd must be a nonbinding compatibility sentinel")
@@ -390,7 +279,6 @@ def compare_paper_config(base: dict[str, Any], current: dict[str, Any], path: st
                 fractions.append(value)
         if len(fractions) == 6 and abs(sum(fractions) - 1.0) > 1e-9:
             errors.append(f"V7 paper capital allocations must sum to 100%: {path}:v7 total={sum(fractions):g}")
-
     return errors
 
 
@@ -399,14 +287,6 @@ def is_runtime_hard_safety_surface(path: str) -> bool:
 
 
 def compare_runtime_hard_safety(base_text: str, current_text: str, path: str) -> list[str]:
-    """Reject newly introduced runtime writes to declarative hard-safety controls.
-
-    Paper-only alpha/admission aggression may change model thresholds, universe,
-    warm-up, cadence, sizing parameters and execution logic inside the approved
-    versioned envelope. Drawdown, concentration/gross ceilings and paper-only
-    separation must remain explicit in configuration rather than being silently
-    rewritten by runtime/materialization code.
-    """
     errors: list[str] = []
     for diff_line in difflib.ndiff(base_text.splitlines(), current_text.splitlines()):
         if not diff_line.startswith("+ "):
@@ -420,12 +300,7 @@ def compare_runtime_hard_safety(base_text: str, current_text: str, path: str) ->
 
 
 def _git_show_text(base_ref: str, path: str) -> str | None:
-    proc = subprocess.run(
-        ["git", "show", f"{base_ref}:{path}"],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    proc = subprocess.run(["git", "show", f"{base_ref}:{path}"], text=True, capture_output=True, check=False)
     return proc.stdout if proc.returncode == 0 else None
 
 
@@ -450,9 +325,66 @@ def _baseline_config(base_ref: str, changed_path: str) -> tuple[str, dict[str, A
     if not incumbent_path:
         return None
     incumbent = _git_show_json(base_ref, incumbent_path)
-    if incumbent is None:
-        return None
-    return incumbent_path, incumbent
+    return (incumbent_path, incumbent) if incumbent is not None else None
+
+
+def _validate_v7_authority_object(value: dict[str, Any], label: str) -> list[str]:
+    errors: list[str] = []
+    if value.get("operator_instruction_id") != V7_DIRECTIVE_ID:
+        errors.append(f"{label}: wrong V7 operator_instruction_id")
+    if value.get("authority") != "latest_explicit_user_instruction":
+        errors.append(f"{label}: V7 authority is not latest_explicit_user_instruction")
+    architecture = value.get("architecture") if isinstance(value.get("architecture"), dict) else {}
+    if architecture.get("cleanup_sequence") != V7_CLEANUP_SEQUENCE:
+        errors.append(f"{label}: V7 exact-SHA cleanup sequence mismatch")
+    auth = value.get("paper_v7_authorization") if isinstance(value.get("paper_v7_authorization"), dict) else {}
+    exact = {
+        "paper_only": True,
+        "authenticated_execution": False,
+        "market_limit": 1000,
+        "min_liquidity": 2.0,
+        "min_net_edge": 0.00005,
+        "uncertainty_penalty": 0.0,
+        "fractional_kelly_ceiling": 0.25,
+        "fixed_dollar_trade_cap_enabled": False,
+        "max_trade_fraction": 1.0,
+        "max_market_fraction": 1.0,
+        "max_event_fraction": 1.0,
+        "max_gross_fraction": 1.0,
+        "max_drawdown": 0.15,
+        "hard_arb_fixed_dollar_trade_cap_enabled": False,
+        "hard_arb_max_trade_fraction": 1.0,
+    }
+    for key, expected in exact.items():
+        current = auth.get(key)
+        if isinstance(expected, float):
+            number = _number(current)
+            if number is None or abs(number - expected) > 1e-12:
+                errors.append(f"{label}: paper_v7_authorization.{key} mismatch")
+        elif current != expected:
+            errors.append(f"{label}: paper_v7_authorization.{key} mismatch")
+    for key in ("max_trade_usd_compatibility_sentinel", "hard_arb_max_trade_usd_compatibility_sentinel"):
+        number = _number(auth.get(key))
+        if number is None or number < V7_NONBINDING_DOLLAR_SENTINEL_MIN:
+            errors.append(f"{label}: paper_v7_authorization.{key} is not nonbinding")
+    return errors
+
+
+def _v7_bootstrap_authority_errors(base_ref: str, root: Path) -> list[str]:
+    base = _git_show_json(base_ref, "config/operator_directives.json")
+    current_path = root / "config/operator_directives.json"
+    if base is None:
+        return ["cannot bootstrap V7 hard safety: operator directives missing on base"]
+    if not current_path.is_file():
+        return ["cannot bootstrap V7 hard safety: operator directives missing on candidate"]
+    current = json.loads(current_path.read_text(encoding="utf-8"))
+    if not isinstance(current, dict):
+        return ["cannot bootstrap V7 hard safety: candidate operator directives are not an object"]
+    errors = _validate_v7_authority_object(base, "base operator directives")
+    errors.extend(_validate_v7_authority_object(current, "candidate operator directives"))
+    if not errors and base.get("paper_v7_authorization") != current.get("paper_v7_authorization"):
+        errors.append("cannot bootstrap V7 hard safety: base/candidate V7 authorization differs")
+    return errors
 
 
 def evaluate(base_ref: str, changed_files: set[str], root: Path) -> tuple[list[str], list[str]]:
@@ -469,6 +401,14 @@ def evaluate(base_ref: str, changed_files: set[str], root: Path) -> tuple[list[s
                 errors.append(f"{path} must contain a JSON object")
                 continue
             baseline = _baseline_config(base_ref, path)
+            if baseline is None and _is_v7(path):
+                authority_errors = _v7_bootstrap_authority_errors(base_ref, root)
+                if authority_errors:
+                    errors.extend(authority_errors)
+                    continue
+                checked.append(f"{path} against exact base/candidate operator V7 authorization bootstrap")
+                errors.extend(compare_paper_config({}, current, path))
+                continue
             if baseline is None:
                 errors.append(f"cannot resolve incumbent hard-safety baseline for {path}")
                 continue
@@ -485,7 +425,6 @@ def evaluate(base_ref: str, changed_files: set[str], root: Path) -> tuple[list[s
             base_text = _git_show_text(base_ref, path) or ""
             checked.append(f"{path} runtime-generated hard-safety controls")
             errors.extend(compare_runtime_hard_safety(base_text, current_text, path))
-
     return errors, checked
 
 
@@ -498,11 +437,10 @@ def render(errors: list[str], checked: list[str]) -> str:
         "- V6 compatibility envelope: universe <=1000, drawdown <=15%, market <=5%, event <=15%, gross <=70%, Kelly <=25%, max trade <=$125",
         "- V7 current operator authorization: PAPER-only, authenticated execution disabled, no binding fixed-dollar cap, trade/market/event/gross hard percentage ceilings =100%, Kelly <=25%, drawdown <=15%",
         "- V7 executable admission floors: min liquidity >=$2, post-cost min edge >=0.5 bp, uncertainty penalty >=0; authoritative fees, shared execution ledger and joint multi-leg fill-state evidence remain mandatory",
-        "- V7 100% values are ceilings, not trade targets; executable depth/costs, available capital, state integrity and the drawdown kill remain binding",
+        "- first-V7-config rule: if no incumbent V7 config exists, both base and candidate operator directives must match exactly before the V7 envelope is validated directly",
         "- runtime rule: protected controls must be inherited from versioned config, not newly hidden in runtime/materialization overrides",
     ]
-    for item in checked:
-        lines.append(f"- checked: `{item}`")
+    lines.extend(f"- checked: `{item}`" for item in checked)
     if errors:
         lines.extend(["", "## Violations"])
         lines.extend(f"- {error}" for error in errors)
@@ -516,13 +454,8 @@ def main() -> int:
     parser.add_argument("--root", default=".")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
-
     root = Path(args.root).resolve()
-    changed = {
-        line.strip()
-        for line in Path(args.changed_files).read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    }
+    changed = {line.strip() for line in Path(args.changed_files).read_text(encoding="utf-8").splitlines() if line.strip()}
     try:
         errors, checked = evaluate(args.base_ref, changed, root)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
