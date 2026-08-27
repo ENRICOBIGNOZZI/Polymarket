@@ -32,6 +32,7 @@ _PAIR_PROVENANCE: dict[tuple[str, str, int], dict[str, Any]] = {}
 _CURRENT_VALIDATION: snapshots.SnapshotValidation | None = None
 _GUARD_ATTEMPTS = 0
 _GUARD_REJECTIONS = 0
+_ORIGINAL_FETCH_BOOKS = driver.base.fetch_books
 _ORIGINAL_SELECT = driver.relative.select_relative_pairs
 _ORIGINAL_ATOMIC_JSON = driver.atomic_json
 
@@ -173,14 +174,25 @@ def _atomic_json(path: Path, value: Any) -> None:
     return _ORIGINAL_ATOMIC_JSON(path, value)
 
 
-driver.base.fetch_books = _fetch_books
-driver.relative.select_relative_pairs = _select_relative_pairs
-driver.atomic_json = _atomic_json
+def _install() -> None:
+    driver.base.fetch_books = _fetch_books
+    driver.relative.select_relative_pairs = _select_relative_pairs
+    driver.atomic_json = _atomic_json
+
+
+def _restore() -> None:
+    driver.base.fetch_books = _ORIGINAL_FETCH_BOOKS
+    driver.relative.select_relative_pairs = _ORIGINAL_SELECT
+    driver.atomic_json = _ORIGINAL_ATOMIC_JSON
 
 
 def main() -> int:
     _contract()
-    return driver.main()
+    _install()
+    try:
+        return driver.main()
+    finally:
+        _restore()
 
 
 if __name__ == "__main__":
