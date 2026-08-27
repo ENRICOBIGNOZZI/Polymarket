@@ -27,6 +27,13 @@
   "max_event_fraction": 1.0,
   "max_gross_fraction": 1.0,
   "max_drawdown": 0.15,
+  "multi_strategy": {
+    "paper_only": true,
+    "global_max_drawdown": 0.15,
+    "global_max_gross_fraction": 1.0,
+    "single_account_allocator": true,
+    "single_canonical_ledger_writer": true
+  },
   "v7": {
     "paper_only": true,
     "authenticated_execution": false,
