@@ -40,6 +40,13 @@ pm::v7::StrategyIntent cancel(std::uint64_t id, std::uint64_t instrument,
     return intent;
 }
 
+pm::v7::StrategyIntent kill(std::uint64_t id, std::uint64_t instrument,
+                            std::int64_t decision_ns, std::int64_t exchange_ns) {
+    auto intent = cancel(id, instrument, pm::v7::Side::None, decision_ns, exchange_ns);
+    intent.type = pm::v7::IntentType::Kill;
+    return intent;
+}
+
 pm::v7::PublicTradePrint trade(std::uint64_t id, std::uint64_t instrument,
                                pm::v7::Side aggressor, std::int64_t price_tick,
                                std::int64_t quantity, std::int64_t exchange_ns,
@@ -62,6 +69,14 @@ const pm::v7::maker::PaperMakerEvent* find_event(
         if (result.events[i].kind == kind) return &result.events[i];
     }
     return nullptr;
+}
+
+std::size_t first_event_index(const pm::v7::maker::PaperMakerResult& result,
+                              pm::v7::maker::PaperMakerEventKind kind) {
+    for (std::size_t i = 0; i < result.event_count; ++i) {
+        if (result.events[i].kind == kind) return i;
+    }
+    return result.event_count;
 }
 
 void test_queue_envelope_and_pessimistic_operational_fill() {
@@ -160,9 +175,63 @@ void test_yes_no_buys_merge_complete_set_and_realize_trading_pnl() {
     assert(merged != nullptr);
     assert(merged->operational_fill_microunits == 1'000'000);
     assert(std::abs(merged->realized_pnl - 0.03) < 1e-12);
+    assert(first_event_index(result, pm::v7::maker::PaperMakerEventKind::Fill)
+           < first_event_index(result, pm::v7::maker::PaperMakerEventKind::FinalMerge));
     assert(engine.inventory().yes_microunits == 0);
     assert(engine.inventory().no_microunits == 0);
     assert(std::abs(engine.inventory().realized_trading_pnl - 0.03) < 1e-12);
+}
+
+void test_merge_does_not_consume_inventory_reserved_by_live_sell() {
+    pm::v7::maker::MakerPaperMarketEngine engine(kMarket, kYes, kNo);
+    assert(engine.apply_intent(
+        quote(1, kYes, pm::v7::Side::Buy, 48, 2'000'000,
+              1'000'000'000LL, 10'000'000'000LL), 0, 100).applied);
+    assert(engine.on_public_trade(trade(
+        201, kYes, pm::v7::Side::Sell, 48, 2'000'000,
+        10'100'000'000LL, 1'100'000'000LL)).applied);
+    assert(engine.inventory().yes_microunits == 2'000'000);
+
+    // Reserve one YES share for a live maker ask before the NO inventory arrives.
+    assert(engine.apply_intent(
+        quote(2, kYes, pm::v7::Side::Sell, 52, 1'000'000,
+              1'200'000'000LL, 10'200'000'000LL), 0, 100).applied);
+    assert(engine.apply_intent(
+        quote(3, kNo, pm::v7::Side::Buy, 49, 2'000'000,
+              1'300'000'000LL, 10'300'000'000LL), 0, 100).applied);
+    const auto result = engine.on_public_trade(trade(
+        202, kNo, pm::v7::Side::Sell, 49, 2'000'000,
+        10'400'000'000LL, 1'400'000'000LL));
+    const auto* merged = find_event(result, pm::v7::maker::PaperMakerEventKind::FinalMerge);
+    assert(merged != nullptr);
+    assert(merged->operational_fill_microunits == 1'000'000);
+    assert(engine.inventory().yes_microunits == 1'000'000);
+    assert(engine.inventory().no_microunits == 1'000'000);
+    assert(engine.active_order_count() == 1);
+}
+
+void test_market_kill_cancels_both_yes_and_no_quotes() {
+    pm::v7::maker::MakerPaperPolicy policy;
+    policy.cancel_latency_ns = 10;
+    pm::v7::maker::MakerPaperMarketEngine engine(kMarket, kYes, kNo, policy);
+    assert(engine.apply_intent(
+        quote(1, kYes, pm::v7::Side::Buy, 48, 1'000'000,
+              1'000'000'000LL, 10'000'000'000LL), 0, 100).applied);
+    assert(engine.apply_intent(
+        quote(2, kNo, pm::v7::Side::Buy, 48, 1'000'000,
+              1'100'000'000LL, 10'100'000'000LL), 0, 100).applied);
+    assert(engine.active_order_count() == 2);
+    const auto killed = engine.apply_intent(
+        kill(3, kYes, 1'200'000'000LL, 10'200'000'000LL), 0, 0);
+    assert(killed.applied);
+    assert(killed.event_count == 2);
+    const auto advanced = engine.advance_time(1'200'000'020LL);
+    std::size_t cancelled = 0;
+    for (std::size_t i = 0; i < advanced.event_count; ++i) {
+        if (advanced.events[i].kind == pm::v7::maker::PaperMakerEventKind::Cancelled) ++cancelled;
+    }
+    assert(cancelled == 2);
+    assert(engine.active_order_count() == 0);
 }
 
 void test_uncovered_sell_is_rejected() {
@@ -190,6 +259,8 @@ int main() {
     test_public_print_is_idempotent();
     test_cancel_pending_can_fill_until_effective_but_not_after();
     test_yes_no_buys_merge_complete_set_and_realize_trading_pnl();
+    test_merge_does_not_consume_inventory_reserved_by_live_sell();
+    test_market_kill_cancels_both_yes_and_no_quotes();
     test_uncovered_sell_is_rejected();
     test_inventory_snapshot_reservations_have_global_yes_minus_no_sign();
     return 0;
