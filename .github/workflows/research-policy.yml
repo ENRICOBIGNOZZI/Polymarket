@@ -10,6 +10,7 @@ on:
     types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft, labeled, unlabeled]
 
 permissions:
+  actions: read
   contents: read
   issues: write
   pull-requests: write
@@ -108,32 +109,65 @@ jobs:
           git cat-file -e "$head_sha^{commit}" 2>/dev/null || git fetch --no-tags origin "$head_sha"
           git diff --name-only "$base_sha...$head_sha" | sort -u > changed-files.txt
 
-          # Fail closed after the premature-cleanup incident. There is not yet a
-          # durable machine-verifiable receipt proving one exact V7 SHA completed
-          # tests -> same-SHA PAPER -> main -> paper-validated -> deploy -> server
-          # health. Until that receipt exists and is explicitly validated here,
-          # no cleanup/* PR is eligible for integration.
+          # cleanup/* remains fail closed until a durable machine-verifiable lifecycle receipt
+          # proves tests -> same-SHA PAPER -> main -> paper-validated -> deploy -> server health.
           if [[ "$head_ref" == cleanup/* ]]; then
-            python3 - <<'PY'
-          import json
-          from pathlib import Path
+            receipt="evidence/v7_cutover_receipt.json"
+            if [[ ! -s "$receipt" ]]; then
+              cat > research-policy-report.md <<'EOF'
+          # Research pull-request policy
 
+          - policy: `fail`
+          - lifecycle: `cleanup locked during V7 cutover repair`
+          - requirement: one exact V7 SHA must complete tests, same-SHA PAPER, main, paper-validated, deploy and server health before remaining legacy deletion can be authorized.
+          - unlock: requires a durable machine-verifiable lifecycle receipt at `evidence/v7_cutover_receipt.json`.
+          EOF
+              cat research-policy-report.md >&2
+              exit 1
+            fi
+            BASE_SHA="$base_sha" python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          r=json.loads(Path('evidence/v7_cutover_receipt.json').read_text(encoding='utf-8'))
+          assert r.get('schema') == 'polymarket_v7_cutover_receipt_v1'
+          base=os.environ['BASE_SHA']
+          assert re.fullmatch(r'[0-9a-f]{40}', base)
+          sha_fields=('tested_sha','paper_evidence_sha','main_sha','paper_validated_sha','deployed_sha','server_sha')
+          assert all(r.get(k) == base for k in sha_fields), {k:r.get(k) for k in sha_fields}
+          assert r.get('paper_only') is True
+          assert r.get('authenticated_execution') is False
+          assert r.get('real_order_submission') is False
+          assert r.get('single_writer') is True
+          assert r.get('server_health') == 'green'
+          assert r.get('monitoring') == 'green'
+          runs=r.get('runs')
+          assert isinstance(runs, dict)
+          required=('ci','monitoring','research_policy','single_writer','paper_validation','deploy','server_health')
+          for key in required:
+              assert isinstance(runs.get(key), int) and runs[key] > 0, (key, runs.get(key))
           d=json.loads(Path('config/operator_directives.json').read_text(encoding='utf-8'))
           assert d['operator_instruction_id']=='user-v7-master-multi-agent-operating-prompt-20260827'
           assert d['architecture']['cleanup_sequence']=='v7_implementation_then_tests_then_same_sha_paper_then_main_then_paper_validated_then_deploy_then_server_health_then_legacy_deletion'
           assert d['paper_v7_authorization']['paper_only'] is True
           assert d['paper_v7_authorization']['authenticated_execution'] is False
           PY
-            cat > research-policy-report.md <<'EOF'
-          # Research pull-request policy
-
-          - policy: `fail`
-          - lifecycle: `cleanup locked during V7 cutover repair`
-          - requirement: one exact V7 SHA must complete tests, same-SHA PAPER, main, paper-validated, deploy and server health before remaining legacy deletion can be authorized.
-          - unlock: requires a durable machine-verifiable lifecycle receipt and an explicit receipt-validation contract; neither is present yet.
-          EOF
-            cat research-policy-report.md >&2
-            exit 1
+            receipt_sha="$(python3 -c 'import json; print(json.load(open("evidence/v7_cutover_receipt.json"))["main_sha"])')"
+            main_now="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+            validated_now="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/paper-validated" --jq .object.sha)"
+            test "$main_now" = "$base_sha"
+            test "$validated_now" = "$base_sha"
+            test "$receipt_sha" = "$base_sha"
+            for key in ci monitoring research_policy single_writer paper_validation deploy server_health; do
+              run_id="$(KEY="$key" python3 -c 'import json,os; print(json.load(open("evidence/v7_cutover_receipt.json"))["runs"][os.environ["KEY"]])')"
+              run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+              RUN_JSON="$run_json" RECEIPT_SHA="$receipt_sha" python3 - <<'PY'
+          import json, os
+          run=json.loads(os.environ['RUN_JSON'])
+          assert run.get('conclusion') == 'success', (run.get('name'), run.get('conclusion'))
+          assert run.get('head_sha') == os.environ['RECEIPT_SHA'], (run.get('name'), run.get('head_sha'))
+          PY
+            done
+            echo "cleanup_receipt_verified_sha=$receipt_sha"
           fi
 
           manifest_existed=false
