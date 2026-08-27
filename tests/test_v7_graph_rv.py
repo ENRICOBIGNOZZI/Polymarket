@@ -36,12 +36,13 @@ class GraphRVContractTests(unittest.TestCase):
         self.assertEqual(graph.direct_joint_state({}, 2, ("TAKER", "TAKER")), (1.0, 0.0))
 
     def test_book_fails_closed_without_causal_exchange_clock(self) -> None:
+        receive_ms = 1_800_000_000_000
         raw = {"asset_id":"t", "bids":[{"price":"0.49","size":"10"}], "asks":[{"price":"0.51","size":"10"}], "hash":"h"}
-        self.assertIsNone(graph.parse_book(raw, 1000))
-        raw["timestamp"] = 900
-        self.assertIsNotNone(graph.parse_book(raw, 1000))
-        raw["timestamp"] = 1100
-        self.assertIsNone(graph.parse_book(raw, 1000))
+        self.assertIsNone(graph.parse_book(raw, receive_ms))
+        raw["timestamp"] = receive_ms - 1000
+        self.assertIsNotNone(graph.parse_book(raw, receive_ms))
+        raw["timestamp"] = receive_ms + 1000
+        self.assertIsNone(graph.parse_book(raw, receive_ms))
 
 
 if __name__ == "__main__":
