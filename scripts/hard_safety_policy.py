@@ -109,6 +109,8 @@ V7_AUTHORIZED_FLOORS = {
     "hard_arb_min_net_edge": 0.00005,
 }
 V7_NONBINDING_DOLLAR_SENTINEL_MIN = 1e50
+V7_OPERATOR_DIRECTIVES_PATH = "config/operator_directives.json"
+V7_OPERATOR_BASELINE_LABEL = f"{V7_OPERATOR_DIRECTIVES_PATH}::paper_v7_authorization"
 
 
 def _number(value: Any) -> float | None:
@@ -439,10 +441,92 @@ def _git_show_json(base_ref: str, path: str) -> dict[str, Any] | None:
     return data
 
 
+def _v7_operator_baseline(base_ref: str) -> tuple[str, dict[str, Any]] | None:
+    """Build the first V7 config baseline from operator authority on the base SHA.
+
+    `paper_v7.json` is intentionally absent before the V7 cutover. Falling back
+    to a retired champion would either make the first V7 config unverifiable or
+    incorrectly treat legacy risk limits as V7 authority. The base revision's
+    operator directive is the only permitted bootstrap source, and malformed or
+    incomplete authority fails closed.
+    """
+    directives = _git_show_json(base_ref, V7_OPERATOR_DIRECTIVES_PATH)
+    if not isinstance(directives, dict):
+        return None
+    auth = directives.get("paper_v7_authorization")
+    if not isinstance(auth, dict):
+        return None
+    if auth.get("paper_only") is not True or auth.get("authenticated_execution") is not False:
+        return None
+    if auth.get("fixed_dollar_trade_cap_enabled") is not False:
+        return None
+    if auth.get("hard_arb_fixed_dollar_trade_cap_enabled") is not False:
+        return None
+
+    required_numeric = (
+        "market_limit",
+        "min_liquidity",
+        "min_net_edge",
+        "uncertainty_penalty",
+        "fractional_kelly_ceiling",
+        "max_trade_fraction",
+        "max_market_fraction",
+        "max_event_fraction",
+        "max_gross_fraction",
+        "max_drawdown",
+        "hard_arb_max_trade_fraction",
+        "max_trade_usd_compatibility_sentinel",
+        "hard_arb_max_trade_usd_compatibility_sentinel",
+    )
+    numbers = {key: _number(auth.get(key)) for key in required_numeric}
+    if any(value is None for value in numbers.values()):
+        return None
+
+    baseline: dict[str, Any] = {
+        "paper_only": True,
+        "market_limit": numbers["market_limit"],
+        "min_liquidity": numbers["min_liquidity"],
+        "min_net_edge": numbers["min_net_edge"],
+        "uncertainty_penalty": numbers["uncertainty_penalty"],
+        "fractional_kelly": numbers["fractional_kelly_ceiling"],
+        "fixed_dollar_trade_cap_enabled": False,
+        "max_trade_usd": numbers["max_trade_usd_compatibility_sentinel"],
+        "max_trade_fraction": numbers["max_trade_fraction"],
+        "max_market_fraction": numbers["max_market_fraction"],
+        "max_event_fraction": numbers["max_event_fraction"],
+        "max_gross_fraction": numbers["max_gross_fraction"],
+        "max_drawdown": numbers["max_drawdown"],
+        "multi_strategy": {
+            "paper_only": True,
+            "global_max_drawdown": numbers["max_drawdown"],
+            "global_max_gross_fraction": numbers["max_gross_fraction"],
+            "strategies": [],
+        },
+        "v7": {
+            "paper_only": True,
+            "authenticated_execution": False,
+            "intent_min_edge": numbers["min_net_edge"],
+            "hard_arb_min_net_edge": numbers["min_net_edge"],
+            "hard_arb_fixed_dollar_trade_cap_enabled": False,
+            "hard_arb_max_trade_usd": numbers["hard_arb_max_trade_usd_compatibility_sentinel"],
+            "hard_arb_max_trade_fraction": numbers["hard_arb_max_trade_fraction"],
+            "authoritative_fee_required": True,
+            "shared_execution_ledger_required": True,
+            "joint_fill_state_required_for_multileg": True,
+        },
+    }
+    return V7_OPERATOR_BASELINE_LABEL, baseline
+
+
 def _baseline_config(base_ref: str, changed_path: str) -> tuple[str, dict[str, Any]] | None:
     same_path = _git_show_json(base_ref, changed_path)
     if same_path is not None:
         return changed_path, same_path
+    if _is_v7(changed_path):
+        # First V7 cutover: bind to explicit base-SHA operator authority. If the
+        # directive is absent or malformed, fail closed instead of inheriting a
+        # retired numerical-generation champion.
+        return _v7_operator_baseline(base_ref)
     manifest = _git_show_json(base_ref, "config/live_champion.json")
     if not manifest:
         return None
