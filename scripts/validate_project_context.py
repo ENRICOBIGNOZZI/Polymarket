@@ -16,6 +16,7 @@ EXPECTED_V7_PATHS = {
     "canonical_run_root": "runs/paper_v7_live",
 }
 EVIDENCE_CANDIDATE_LOOP = "scripts/paper_v7_execution_loop.sh"
+EXPECTED_CUTOVER_RECEIPT_PATH = "evidence/v7_cutover_receipt.json"
 
 
 def load(path: Path) -> dict[str, Any]:
@@ -92,6 +93,8 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
         errors.append("canonical branch must be main")
     if context.get("deployment_ref") != "paper-validated":
         errors.append("deployment ref must be paper-validated")
+    if context.get("cutover_receipt") != EXPECTED_CUTOVER_RECEIPT_PATH:
+        errors.append(f"project context cutover_receipt must equal {EXPECTED_CUTOVER_RECEIPT_PATH}")
     policy = context.get("context_policy") if isinstance(context.get("context_policy"), dict) else {}
     if policy.get("scope") != "entire_repository":
         errors.append("context scope must be entire_repository")
