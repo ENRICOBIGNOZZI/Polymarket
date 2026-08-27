@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-08-27T02:20:00Z",
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "authority": {
+    "operator_directives_ref": "main",
+    "operator_directives_sha": "07e65a90c272a7442b40903eeb334bfbe05d0fcf",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "min_net_edge": 0.00005,
+    "max_drawdown": 0.15
+  },
+  "baseline_exact_head": {
+    "sha": "bb741fd711890d4d658d7ff4e8f91e9523c22d93",
+    "workflow_run_id": 33030273187,
+    "workflow": "Fast Arbitrage Hourly Shadow",
+    "conclusion": "success",
+    "markets": 701,
+    "tokens": 1402,
+    "safe_negrisk_events": 17,
+    "ws_messages": 13823,
+    "book_updates": 13217,
+    "rest_resyncs": 3,
+    "ws_snapshot_ready_tokens": 156,
+    "ws_snapshot_ready_share": 0.1112696148,
+    "freshness_missing_rejections": 3395,
+    "freshness_age_rejections": 1415,
+    "freshness_skew_rejections": 79,
+    "hard_executable_observations": 0,
+    "current_hard_executable": 0,
+    "feed_stale_ms": 5,
+    "feed_latency_p99_ms": 834.52,
+    "decision_latency_p99_us": 85.0,
+    "nonhard_maker_complete_set_executable_observations": 86,
+    "nonhard_modeled_opportunity_profit": 21.6736646,
+    "nonhard_stress_positive_share_plus_10bps": 0.9767441860,
+    "economic_interpretation": "Non-hard shadow/theory output only; no PAPER fill-conditioned PnL claim."
+  },
+  "defect": {
+    "name": "freshness_gate_required_non_executable_complement_tokens",
+    "severity": "blocking_hard_arb_recall_and_evidence",
+    "description": "The freshness layer required both YES and NO tokens for every market appearing in a multi-leg opportunity, even when the executable basket used only one of those outcomes. In particular, NegRisk complete-set pricing buys only each member YES token, but evaluate_event_locked required every member YES and NO token to have current full-WS lineage. NegRisk conversions and logical relations were similarly gated on broader token sets than their priced/executable legs. Publish-time revalidation repeated the same over-requirement by expanding every opportunity leg back to both market outcomes.",
+    "why_it_matters": "With only 11.13% of tokens carrying valid full-WS lineage at the end of the baseline exact-head run, requiring irrelevant complementary tokens can reject otherwise synchronized executable baskets. This is a structural zero-hard-hit mechanism, not evidence that quoted hard-arbitrage edge is absent.",
+    "safety": "The repair does not relax the 5s per-leg age bound or 1.5s cross-leg exchange/receive skew. It narrows the freshness set to exactly the books that enter the executable basket."
+  },
+  "repair": {
+    "branch": "research/v7-fast-per-leg-freshness-port-20260827",
+    "first_code_commit": "bf6d4e53bde2e13965388ea308efe3f7d179b4f6",
+    "test_commit": "2e2a818d025e87317cdc80000a7ddc50ce106b11",
+    "ctest_registration_commit": "852d0f6d915dc751ee27bb5294adb56371ee2ee4",
+    "contracts": [
+      "Binary complete-set still requires YES+NO freshness.",
+      "NegRisk complete-set requires only the YES tokens actually bought.",
+      "Each NegRisk conversion requires source NO plus target YES tokens actually used.",
+      "Implication requires antecedent NO plus consequent YES only.",
+      "Mutual exclusion requires the two NO legs only.",
+      "Exhaustive pair requires the two YES legs only.",
+      "Publish-time revalidation uses opportunity.legs token ids exactly.",
+      "All existing per-leg age/skew and reconnect/full-WS lineage guards remain unchanged."
+    ]
+  },
+  "status": "EXACT_EXECUTABLE_LEG_FRESHNESS_DEFECT_REPAIRED_LIVE_EVIDENCE_PENDING",
+  "promotion_ready": false,
+  "alpha_claim": false,
+  "required_next_evidence": [
+    "Exact-head deterministic CI and Research Policy green.",
+    "Exact-head Fast Shadow on public data.",
+    "Compare missing/age/skew rejection counts and hard-hit recall against the baseline above.",
+    "Any hard hit must still pass authoritative fee, multi-level depth, exact per-leg clocks, sequential PAPER legging/partial/unwind and canonical-ledger realized PnL gates before any alpha claim."
+  ]
+}
