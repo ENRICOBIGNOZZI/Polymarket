@@ -75,7 +75,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p control_plane
+          mkdir -p control_plane/run-slices
           git fetch --no-tags origin main paper-validated
           git fetch --no-tags origin telemetry:refs/remotes/origin/telemetry || true
           MAIN_SHA="$(git rev-parse origin/main)"
@@ -83,7 +83,40 @@ jobs:
           VALIDATED_ANCESTOR=false
           if git merge-base --is-ancestor "$VALIDATED_SHA" "$MAIN_SHA"; then VALIDATED_ANCESTOR=true; fi
           MAIN_PROTECTED="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected // false')"
-          gh run list --limit 100 --json databaseId,workflowName,status,conclusion,headSha,headBranch,event,createdAt,updatedAt,url > control_plane/runs.json
+
+          python3 - <<'PY' > control_plane/workflows.txt
+          import json
+          from pathlib import Path
+          cfg=json.loads(Path('config/alpha_factory.json').read_text(encoding='utf-8'))
+          for workflow in cfg['coordination']['workflows']:
+              print(workflow)
+          PY
+
+          while IFS= read -r workflow; do
+            [[ -n "$workflow" ]] || continue
+            safe="${workflow//[^A-Za-z0-9_.-]/_}"
+            gh run list --workflow "$workflow" --limit 30 \
+              --json databaseId,workflowName,status,conclusion,headSha,headBranch,event,createdAt,updatedAt,url \
+              > "control_plane/run-slices/${safe}.json"
+          done < control_plane/workflows.txt
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          runs_by_id={}
+          for path in sorted(Path('control_plane/run-slices').glob('*.json')):
+              rows=json.loads(path.read_text(encoding='utf-8'))
+              if not isinstance(rows, list):
+                  raise SystemExit(f'workflow run slice is not a list: {path}')
+              for row in rows:
+                  run_id=row.get('databaseId')
+                  if run_id is None:
+                      raise SystemExit(f'workflow run missing databaseId: {path}')
+                  runs_by_id[int(run_id)]=row
+          runs=sorted(runs_by_id.values(), key=lambda row: int(row.get('databaseId') or 0), reverse=True)
+          Path('control_plane/runs.json').write_text(json.dumps(runs, indent=2) + '\n', encoding='utf-8')
+          PY
+
           if git show origin/telemetry:telemetry/latest-research-director.json > control_plane/research-director.json 2>/dev/null; then
             test -s control_plane/research-director.json || printf '{}\n' > control_plane/research-director.json
           else
@@ -127,19 +160,35 @@ jobs:
           : > control_plane/dispatch-results.txt
           while IFS= read -r workflow; do
             [[ -n "$workflow" ]] || continue
-            case "$workflow" in
-              ci.yml|monitoring.yml|v4-live-smoke.yml|forward-maker-research.yml|alpha-factory.yml|research-queue.yml|research-policy.yml|promotion-controller.yml)
-                gh workflow run "$workflow" --ref main
-                printf 'dispatched=%s ref=main\n' "$workflow" | tee -a control_plane/dispatch-results.txt
-                ;;
-              *)
-                printf 'forbidden_dispatch=%s\n' "$workflow" >&2
-                exit 1
-                ;;
-            esac
+            python3 - "$workflow" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          workflow=sys.argv[1]
+          cfg=json.loads(Path('config/alpha_factory.json').read_text(encoding='utf-8'))
+          coordination=cfg.get('coordination') or {}
+          allowlisted=set(coordination.get('allowlisted_dispatches') or [])
+          forbidden=set(coordination.get('forbidden_dispatches') or [])
+          if workflow not in allowlisted:
+              raise SystemExit(f'meta-supervisor dispatch contract error: workflow not allowlisted: {workflow}')
+          if workflow in forbidden:
+              raise SystemExit(f'meta-supervisor dispatch contract error: forbidden authority selected: {workflow}')
+          path=Path('.github/workflows') / workflow
+          if not path.is_file():
+              raise SystemExit(f'meta-supervisor dispatch contract error: workflow missing: {workflow}')
+          text=path.read_text(encoding='utf-8')
+          if not re.search(r'(?m)^  workflow_dispatch:\s*$', text):
+              raise SystemExit(
+                  f'meta-supervisor dispatch contract error: workflow lacks workflow_dispatch: {workflow}'
+              )
+          PY
+            gh workflow run "$workflow" --ref main
+            printf 'dispatched=%s ref=main\n' "$workflow" | tee -a control_plane/dispatch-results.txt
           done < control_plane/dispatch-plan.txt
-          if grep -Eq 'integration-merge|deploy-paper-server|server-health' control_plane/dispatch-results.txt; then
-            echo 'merge, deployment, or private health dispatch escaped the decision-layer allowlist' >&2
+          if grep -Eq 'control-plane-event-bridge|integration-merge|post-merge-validation|v7-live-paper-validation|v7-deploy-paper-server|v7-paper-server-health' control_plane/dispatch-results.txt; then
+            echo 'integration, validation, deployment, or private-health authority escaped the decision-layer allowlist' >&2
             exit 1
           fi
 
