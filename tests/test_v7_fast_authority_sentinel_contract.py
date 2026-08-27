@@ -53,7 +53,7 @@ class V7FastAuthoritySentinelContractTest(unittest.TestCase):
             'test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"',
             "Require exact-main V7 technical gates",
             "Enforce V7 PAPER safety contract",
-            "bounded same-SHA public-data PAPER runtime",
+            "Bounded same-SHA public-data PAPER runtime",
             "paper-validated",
         ):
             with self.subTest(token=token):
