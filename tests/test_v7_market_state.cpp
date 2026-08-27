@@ -18,6 +18,7 @@ void test_snapshot_best_levels_and_cumulative_depth() {
     assert(book.replace_snapshot(bids, asks, 100, 1000));
     const auto hot = book.hot_snapshot();
     assert(hot.valid);
+    assert(hot.lineage_continuous);
     assert(hot.best_bid_e4 == 4800);
     assert(hot.best_ask_e4 == 5200);
     assert(book.venue_tick_index(hot.best_bid_e4) == 48);
@@ -58,8 +59,9 @@ void test_tick_change_requires_existing_levels_to_remain_valid() {
     assert(book.replace_snapshot(bids, asks, 100, 1000));
     assert(!book.set_tick_size(100));
     assert(book.tick_size_e4() == 10);
-    assert(book.set_tick_size(50));
+    assert(book.change_tick_size(50, 101, 1001));
     assert(book.tick_size_e4() == 50);
+    assert(book.state_version() == 2);
 }
 
 void test_receive_clock_cannot_go_backwards() {
@@ -71,6 +73,34 @@ void test_receive_clock_cannot_go_backwards() {
     assert(book.quantity_at(pm::v7::Side::Buy, 4700) == 0);
 }
 
+void test_reconnect_invalidates_delta_lineage_until_fresh_snapshot() {
+    pm::v7::CanonicalL2Book book(100);
+    const std::array<pm::v7::PriceLevelE4, 1> bids{{{4800, 1'000'000}}};
+    const std::array<pm::v7::PriceLevelE4, 1> asks{{{5200, 1'000'000}}};
+    assert(book.replace_snapshot(bids, asks, 100, 1000));
+    const auto before_invalidate = book.state_version();
+
+    book.invalidate_lineage();
+    auto hot = book.hot_snapshot();
+    assert(book.state_version() == before_invalidate + 1);
+    assert(!book.lineage_continuous());
+    assert(!hot.valid);
+    assert(!hot.lineage_continuous);
+
+    const auto version = book.state_version();
+    assert(!book.mutate_level(pm::v7::Side::Buy, 4700, 2'000'000, 101, 1001));
+    assert(book.state_version() == version);
+    assert(book.quantity_at(pm::v7::Side::Buy, 4700) == 0);
+
+    const std::array<pm::v7::PriceLevelE4, 2> fresh_bids{{{4800, 1'500'000}, {4700, 2'000'000}}};
+    assert(book.replace_snapshot(fresh_bids, asks, 102, 1002));
+    hot = book.hot_snapshot();
+    assert(hot.valid);
+    assert(hot.lineage_continuous);
+    assert(book.mutate_level(pm::v7::Side::Buy, 4700, 3'000'000, 103, 1003));
+    assert(book.quantity_at(pm::v7::Side::Buy, 4700) == 3'000'000);
+}
+
 } // namespace
 
 int main() {
@@ -79,5 +109,6 @@ int main() {
     test_crossed_or_off_tick_updates_fail_closed();
     test_tick_change_requires_existing_levels_to_remain_valid();
     test_receive_clock_cannot_go_backwards();
+    test_reconnect_invalidates_delta_lineage_until_fresh_snapshot();
     return 0;
 }
