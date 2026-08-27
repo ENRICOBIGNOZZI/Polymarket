@@ -23,6 +23,7 @@ _BOOKS_BY_MARKET: dict[str, tuple[snapshots.CausalBook | None, snapshots.CausalB
 _GUARD_ATTEMPTS = 0
 _GUARD_REJECTIONS = 0
 _LAST_VALIDATION: snapshots.SnapshotValidation | None = None
+_SCORE_PROVENANCE: dict[tuple[str, int], dict[str, Any]] = {}
 _ORIGINAL_SCORE = driver.inference.score_with_total_single_leg_risk
 _ORIGINAL_ATOMIC_JSON = driver.atomic_json
 
@@ -54,6 +55,14 @@ def _current_z_floor() -> float:
     return value
 
 
+def _fidelity_minutes() -> int:
+    cfg = json.loads(_config_path().read_text(encoding="utf-8"))
+    value = int(cfg["history"]["fidelity_minutes"])
+    if value <= 0:
+        raise SystemExit("positive PCA fidelity_minutes required")
+    return value
+
+
 def _fetch_books(clob: str, markets: list[Any]) -> dict[str, snapshots.CausalBook]:
     global _BOOKS_BY_TOKEN, _BOOKS_BY_MARKET
     tokens = [token for market in markets for token in (market.yes, market.no)]
@@ -64,6 +73,19 @@ def _fetch_books(clob: str, markets: list[Any]) -> dict[str, snapshots.CausalBoo
         for market in markets
     }
     return books
+
+
+def _snapshot_provenance(required_tokens: list[str], validation: snapshots.SnapshotValidation) -> dict[str, Any]:
+    selected = [_BOOKS_BY_TOKEN[token] for token in required_tokens]
+    return {
+        "exchange_ts_ms": min(book.exchange_ts_ms for book in selected),
+        "receive_ts_ms": max(book.received_ts_ms for book in selected),
+        "decision_ts_ms": time.time_ns() // 1_000_000,
+        "book_snapshot_id": validation.snapshot_set_id,
+        "snapshot_token_count": validation.token_count,
+        "exchange_skew_ms": validation.exchange_skew_ms,
+        "receive_skew_ms": validation.receive_skew_ms,
+    }
 
 
 def _score_with_current_state(panel, model, current_logits, horizon_steps):
@@ -107,18 +129,38 @@ def _score_with_current_state(panel, model, current_logits, horizon_steps):
         return None
     if getattr(score, "common_factor_forecast_identified", False) is not True:
         return None
+    _SCORE_PROVENANCE[(str(model.target), int(horizon_steps))] = _snapshot_provenance(required_tokens, validation)
     return score
 
 
 def _atomic_json(path, value):
     if isinstance(value, dict):
         value = dict(value)
+        fidelity = _fidelity_minutes()
+        horizons = []
+        for raw_horizon in value.get("horizons") or []:
+            horizon = dict(raw_horizon) if isinstance(raw_horizon, dict) else raw_horizon
+            if isinstance(horizon, dict):
+                horizon_minutes = int(horizon.get("horizon_minutes") or 0)
+                steps = horizon_minutes // fidelity if horizon_minutes > 0 and horizon_minutes % fidelity == 0 else 0
+                rows = []
+                for raw in horizon.get("shadow_candidates") or []:
+                    row = dict(raw) if isinstance(raw, dict) else raw
+                    if isinstance(row, dict):
+                        provenance = _SCORE_PROVENANCE.get((str(row.get("market_id") or ""), steps))
+                        if provenance is not None:
+                            row.update(provenance)
+                    rows.append(row)
+                horizon["shadow_candidates"] = rows
+            horizons.append(horizon)
+        value["horizons"] = horizons
         value["legacy_runtime_dependency"] = False
         value["historical_residual_z_used_for_admission"] = False
         value["current_residual_z_gate"] = _current_z_floor()
         value["common_factor_conditional_mean_forecast_required"] = True
         value["market_data_config"] = "config/research_v7_market_data.json"
         value["operational_paper_config_introduced"] = False
+        value["per_candidate_causal_snapshot_provenance"] = True
         value["current_book_snapshot_contract"] = {
             "required": True,
             "max_age_ms": 5000,
