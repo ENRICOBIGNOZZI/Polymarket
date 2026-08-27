@@ -1,0 +1,66 @@
+{
+  "schema": "polymarket_lf_v7_model_evidence_horizon_audit_v1",
+  "generated_date": "2026-08-27",
+  "canonical_main_sha": "b81f37ad858460cc8d4546682d684cb5bca79bbb",
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "state": "MODEL_HORIZON_EXECUTION_EVIDENCE_BLOCKER",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "configured_model_names": [
+    "external",
+    "graph_hard",
+    "micro_maker",
+    "micro_taker",
+    "relative_value"
+  ],
+  "required_model_surfaces": [
+    "local_factor",
+    "pca_30m",
+    "pca_1h",
+    "pca_2h",
+    "pca_6h",
+    "ranking_2h",
+    "ranking_6h"
+  ],
+  "missing_from_config": [
+    "local_factor",
+    "pca_30m",
+    "pca_1h",
+    "pca_2h",
+    "pca_6h",
+    "ranking_2h",
+    "ranking_6h"
+  ],
+  "dropped_after_normalization": [
+    "local_factor",
+    "pca_30m",
+    "pca_1h",
+    "pca_2h",
+    "pca_6h",
+    "ranking_2h",
+    "ranking_6h"
+  ],
+  "unmapped_strategy_paths": [
+    "local_factor",
+    "pca_30m",
+    "pca_1h",
+    "pca_2h",
+    "pca_6h",
+    "ranking_2h",
+    "ranking_6h"
+  ],
+  "finding": "The canonical V7 execution-evidence sidecar has only five built-in model identities. Its policy normalizer reconstructs the model dictionary by iterating those built-in identities, so newly configured Local Factor, PCA-horizon or ranking-horizon contracts are silently discarded. strategy_paths also has no source mapping for those required lanes.",
+  "impact": "Even after the V7 model source is re-anchored, canonical evidence cannot currently measure or promote horizon-separated executable fills/completions and audited PnL for Local Factor, PCA or cross-sectional ranking. A policy-only addition would silently disappear instead of failing closed.",
+  "distinct_from_existing_work": {
+    "pr_691": "PR #691 audits missing canonical V7 LF/PCA/ranking model source provenance. This finding concerns the downstream canonical execution-evidence registry/normalizer even after model code exists.",
+    "pr_709": "PR #709 audits incomplete cost-vector stress. This finding concerns model-family/horizon identity and evidence routing, not cost decomposition."
+  },
+  "required_successor_contract": [
+    "Represent Local Factor, PCA and cross-sectional ranking as first-class V7 evidence families without restoring V3-V6 runtime surfaces.",
+    "Keep PCA 30m/1h/2h/6h and frozen ranking 2h/6h evidence separated by horizon.",
+    "Preserve the actual Local Factor candidate hold horizon/TTR provenance on each executable observation.",
+    "Unknown configured evidence families must fail closed explicitly rather than being silently removed by normalization.",
+    "Bind submissions, unique fills, joint completion/partial states, terminal PnL, exact source SHA and cost-stress observations to model family and horizon.",
+    "Stress the same frozen observations at 1x/1.5x/2x and retain PAPER-only/authenticated-disabled safety."
+  ]
+}
