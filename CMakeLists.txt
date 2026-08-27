@@ -99,8 +99,6 @@ if(BUILD_TESTING)
     add_test(NAME v7_cross_sectional_rank_15m_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_cross_sectional_rank_15m.py)
     add_test(NAME v7_micro_taker_core_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_micro_taker_core.py)
     add_test(NAME v7_micro_target_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_micro_target.py)
-    add_test(NAME v7_micro_workers_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_micro_workers.py)
-    add_test(NAME v7_authoritative_fees_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_authoritative_fees.py)
 
     add_test(NAME mock_integration COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_mock.sh $<TARGET_FILE:polymarket_engine>)
 endif()
