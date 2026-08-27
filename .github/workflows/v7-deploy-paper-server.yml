@@ -35,4 +35,5 @@ jobs:
     if: ${{ false }}
     runs-on: ubuntu-24.04
     steps:
-      - run: echo "V7 fixed-SHA freeze: automatic PAPER server deploy disabled."
+      - run: |
+          echo "V7 fixed-SHA freeze: automatic PAPER server deploy disabled."

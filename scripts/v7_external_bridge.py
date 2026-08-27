@@ -122,6 +122,8 @@ def materialize(
                 continue
             if str(row.get("feature_name") or "") != "external_probability":
                 continue
+            # Authorization is candidate-level, not source-level. A probability
+            # must carry the same immutable model identity as the approved report.
             if str(row.get("candidate_id") or "").strip() != approved_id:
                 continue
             if approved_horizon > 0 and integer(row.get("horizon_seconds"), 0) != approved_horizon:
@@ -174,6 +176,8 @@ def main() -> int:
     args = parser.parse_args()
     now = int(time.time())
 
+    # Revoke any prior probability before any remote I/O. Network failure,
+    # malformed/stale telemetry or authorization failure must leave abstention.
     atomic_write(args.output, EMPTY_FEED)
     initializing = {
         "schema": SCHEMA,
