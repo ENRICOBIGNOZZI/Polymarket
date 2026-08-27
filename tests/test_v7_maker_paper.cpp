@@ -192,7 +192,6 @@ void test_merge_does_not_consume_inventory_reserved_by_live_sell() {
         10'100'000'000LL, 1'100'000'000LL)).applied);
     assert(engine.inventory().yes_microunits == 2'000'000);
 
-    // Reserve one YES share for a live maker ask before the NO inventory arrives.
     assert(engine.apply_intent(
         quote(2, kYes, pm::v7::Side::Sell, 52, 1'000'000,
               1'200'000'000LL, 10'200'000'000LL), 0, 100).applied);
@@ -211,7 +210,7 @@ void test_merge_does_not_consume_inventory_reserved_by_live_sell() {
 }
 
 void test_market_kill_cancels_both_yes_and_no_quotes() {
-    pm::v7::maker::MakerPaperPolicy policy;
+    pm::v7::maker::PaperMakerPolicy policy;
     policy.cancel_latency_ns = 10;
     pm::v7::maker::MakerPaperMarketEngine engine(kMarket, kYes, kNo, policy);
     assert(engine.apply_intent(
