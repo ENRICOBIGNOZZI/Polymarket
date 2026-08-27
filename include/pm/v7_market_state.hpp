@@ -49,6 +49,9 @@ public:
     explicit CanonicalL2Book(std::int32_t tick_size_e4 = 100) noexcept;
 
     [[nodiscard]] bool set_tick_size(std::int32_t tick_size_e4) noexcept;
+    [[nodiscard]] bool change_tick_size(std::int32_t tick_size_e4,
+                                        std::int64_t exchange_event_ns,
+                                        std::int64_t receive_monotonic_ns) noexcept;
     [[nodiscard]] bool replace_snapshot(std::span<const PriceLevelE4> bids,
                                         std::span<const PriceLevelE4> asks,
                                         std::int64_t exchange_event_ns,
