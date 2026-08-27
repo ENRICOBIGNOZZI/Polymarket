@@ -60,9 +60,10 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertLessEqual(int(policy["latency"]["target_decision_p99_us"]), 1500)
         self.assertLessEqual(int(policy["latency"]["target_cancel_decision_p99_us"]), 1000)
 
-    def test_operator_priority_supersedes_generic_maker_rejection_only_not_safety(self) -> None:
+    def test_operator_priority_is_child_of_master_v7_authority_and_keeps_safety(self) -> None:
         directives = json.loads((ROOT / "config" / "operator_directives.json").read_text(encoding="utf-8"))
-        self.assertEqual(directives["operator_instruction_id"], "user-v7-professional-market-making-priority-20260827")
+        self.assertEqual(directives["operator_instruction_id"], "user-v7-master-multi-agent-operating-prompt-20260827")
+        self.assertEqual(directives["priority_instruction_id"], "user-v7-professional-market-making-priority-20260827")
         self.assertIn("Professional Market Making", directives["current_priority_order"][0])
         forbidden = "\n".join(directives["forbidden_regressions"])
         self.assertIn("Do not add authenticated or real-money execution", forbidden)
