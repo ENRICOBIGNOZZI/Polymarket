@@ -6,12 +6,24 @@ import unittest
 from pathlib import Path
 
 from scripts.integration_base_gate import validate_base
+from scripts.research_pr_policy import evaluate, is_sensitive_model_surface, shadow_forbidden_files
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 
 class ModelGovernanceContractTest(unittest.TestCase):
+    @staticmethod
+    def _policy_event(head: str, *, draft: bool, labels: list[str] | None = None, body: str = "") -> dict:
+        return {
+            "pull_request": {
+                "head": {"ref": head},
+                "body": body,
+                "draft": draft,
+                "labels": [{"name": name} for name in (labels or [])],
+            }
+        }
+
     def test_no_operational_champion_is_explicit_and_valid(self) -> None:
         manifest = json.loads((ROOT / "config" / "live_champion.json").read_text(encoding="utf-8"))
         self.assertFalse(manifest["enabled"])
@@ -116,6 +128,90 @@ class ModelGovernanceContractTest(unittest.TestCase):
                 champion=champion,
                 directives=directives,
             )
+
+    def test_canonical_v7_runtime_ownership_surfaces_are_sensitive(self) -> None:
+        paths = {
+            "scripts/runtime_singleton_launcher.py",
+            "scripts/runtime_plane_supervisor.py",
+            "scripts/run_paper.sh",
+            "scripts/v7_multileg_broker.py",
+            "scripts/v7_execution_ledger.py",
+            "scripts/v7_micro_taker_core.py",
+            "scripts/v7_micro_taker_data.py",
+            "scripts/v7_micro_target.py",
+            "scripts/v7_micro_taker_worker.py",
+        }
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertTrue(is_sensitive_model_surface(path))
+
+    def test_normal_fix_cannot_change_v7_runtime_ownership_surface(self) -> None:
+        path = "scripts/runtime_singleton_launcher.py"
+        errors, summary = evaluate(
+            self._policy_event("fix/runtime-singleton", draft=False),
+            {path},
+            manifest_existed_on_base=True,
+        )
+        self.assertEqual(summary["policy"], "fail")
+        self.assertTrue(any("unapproved model/runtime work" in error for error in errors))
+
+    def test_draft_research_can_change_v7_runtime_ownership_surface(self) -> None:
+        errors, summary = evaluate(
+            self._policy_event("research/runtime-singleton", draft=True),
+            {"scripts/runtime_singleton_launcher.py"},
+            manifest_existed_on_base=True,
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(summary["policy"], "pass")
+
+    def test_shadow_isolated_cannot_change_v7_runtime_ownership_surface(self) -> None:
+        path = "scripts/v7_multileg_broker.py"
+        self.assertIn(path, shadow_forbidden_files({path}))
+        errors, summary = evaluate(
+            self._policy_event("research/multileg-shadow", draft=True, labels=["shadow-isolated"]),
+            {path},
+            manifest_existed_on_base=True,
+        )
+        self.assertEqual(summary["policy"], "fail")
+        self.assertTrue(any("shadow-isolated code cannot modify" in error for error in errors))
+
+    def test_v7_runtime_integration_requires_trusted_exact_head_provenance(self) -> None:
+        source_sha = "a" * 40
+        source = {
+            "number": 42,
+            "headRefName": "research/runtime-owner",
+            "headRefOid": source_sha,
+            "comments": [
+                {
+                    "authorAssociation": "OWNER",
+                    "createdAt": "2026-08-27T00:00:00Z",
+                    "body": (
+                        "Research Governance — APPROVED_FOR_INTEGRATION\n\n"
+                        f"Exact validated head: {source_sha}"
+                    ),
+                }
+            ],
+            "reviews": [],
+        }
+        body = f"Source research PR/branch/commit: #42 / research/runtime-owner / {source_sha}"
+        errors, summary = evaluate(
+            self._policy_event("integration/runtime-owner", draft=False, body=body),
+            {"scripts/runtime_singleton_launcher.py"},
+            manifest_existed_on_base=True,
+            source_research=source,
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(summary["source_research_approved_sha"], source_sha)
+
+        stale = dict(source)
+        stale["headRefOid"] = "b" * 40
+        errors, _ = evaluate(
+            self._policy_event("integration/runtime-owner", draft=False, body=body),
+            {"scripts/runtime_singleton_launcher.py"},
+            manifest_existed_on_base=True,
+            source_research=stale,
+        )
+        self.assertTrue(any("source research changed after approval" in error for error in errors))
 
 
 if __name__ == "__main__":
