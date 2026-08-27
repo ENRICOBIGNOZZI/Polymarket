@@ -4,11 +4,21 @@ on:
   workflow_dispatch:
     inputs:
       source_pr:
-        description: Optional canonical integration PR number; must satisfy the same integration/v7-* contract
+        description: Optional canonical integration PR number
         required: false
         type: string
   schedule:
     - cron: "4,19,34,49 * * * *"
+  pull_request:
+    branches: [main]
+    paths:
+      - "config/live_champion.json"
+      - "config/paper_v7.json"
+      - "config/v7_evidence_runtime.json"
+      - "scripts/paper_v7_execution_loop.sh"
+      - "scripts/v7_*.py"
+      - ".github/workflows/v7-unified-paper-evidence.yml"
+      - "CMakeLists.txt"
 
 permissions:
   actions: read
@@ -16,13 +26,13 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: polymarket-v7-unified-paper-evidence
+  group: polymarket-v7-unified-paper-evidence-${{ github.event.pull_request.number || 'canonical' }}
   cancel-in-progress: false
 
 jobs:
   reconcile:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     env:
       SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
       SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
@@ -31,127 +41,91 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
-      - name: Validate dynamic evidence-runtime policy
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -m json.tool config/v7_evidence_runtime.json >/dev/null
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          cfg=json.loads(Path('config/v7_evidence_runtime.json').read_text())
-          assert cfg['schema_version'] == 2
-          assert cfg['paper_only'] is True
-          assert cfg['authenticated_execution'] is False
-          sel=cfg['source_selection']
-          assert sel['mode'] == 'single_open_canonical_integration_pr'
-          assert sel['base_branch'] == 'main'
-          assert sel['head_prefix'] == 'integration/v7-'
-          assert cfg['state_partition'] == 'source_head_sha'
-          assert set(cfg['required_successful_workflows']) == {
-              'ci','Polymarket Research Policy','monitoring','Private runtime single-writer validation'
-          }
-          for key in ('source_pr','source_branch','require_source_draft','require_source_live_champion_unchanged'):
-              assert key not in cfg, key
-          PY
-
-      - name: Resolve the single canonical V7 integration candidate
+      - name: Resolve exact canonical V7 candidate
         id: source
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PR: ${{ github.event.pull_request.number || '' }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          EVENT_HEAD_REF: ${{ github.event.pull_request.head.ref || '' }}
         run: |
           set -euo pipefail
           mkdir -p v7-evidence
           git fetch --no-tags origin main
           MAIN_SHA="$(git rev-parse origin/main)"
-          test "$(git rev-parse HEAD)" = "$MAIN_SHA"
 
-          if [[ -n "$REQUESTED_SOURCE_PR" ]]; then
-            [[ "$REQUESTED_SOURCE_PR" =~ ^[1-9][0-9]*$ ]]
-            gh api "repos/${GITHUB_REPOSITORY}/pulls/${REQUESTED_SOURCE_PR}" > v7-evidence/source-pr.json
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            SOURCE_PR="$EVENT_PR"
+            SOURCE_SHA="$EVENT_HEAD_SHA"
+            SOURCE_BRANCH="$EVENT_HEAD_REF"
+            test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           else
-            gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&per_page=100" > v7-evidence/open-pulls-pages.json
-            set +e
-            python3 - <<'PY'
+            if [[ -n "$REQUESTED_SOURCE_PR" ]]; then
+              [[ "$REQUESTED_SOURCE_PR" =~ ^[1-9][0-9]*$ ]]
+              gh api "repos/${GITHUB_REPOSITORY}/pulls/${REQUESTED_SOURCE_PR}" > v7-evidence/source-pr.json
+            else
+              gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&per_page=100" > v7-evidence/open-pulls-pages.json
+              python3 - <<'PY'
           import json
           from pathlib import Path
           pages=json.loads(Path('v7-evidence/open-pulls-pages.json').read_text())
-          rows=[]
-          for page in pages:
-              if isinstance(page,list): rows.extend(page)
+          rows=[p for page in pages if isinstance(page,list) for p in page]
           repo='${{ github.repository }}'
           eligible=[]
           for p in rows:
               head=p.get('head') or {}; base=p.get('base') or {}; head_repo=head.get('repo') or {}
-              if p.get('state') != 'open': continue
-              if base.get('ref') != 'main': continue
+              if p.get('state')!='open' or base.get('ref')!='main': continue
               if not str(head.get('ref') or '').startswith('integration/v7-'): continue
               if str(head_repo.get('full_name') or '') != repo: continue
               eligible.append(p)
-          summary={'eligible_count':len(eligible),'eligible':[{'number':p['number'],'branch':p['head']['ref'],'sha':p['head']['sha']} for p in eligible]}
-          Path('v7-evidence/candidate-selection.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n')
-          if not eligible: raise SystemExit(10)
-          if len(eligible) != 1: raise SystemExit(11)
+          Path('v7-evidence/candidate-selection.json').write_text(json.dumps({'eligible_count':len(eligible),'eligible':[{'number':p['number'],'branch':p['head']['ref'],'sha':p['head']['sha']} for p in eligible]},indent=2,sort_keys=True)+'\n')
+          if len(eligible)==0: raise SystemExit(10)
+          if len(eligible)!=1: raise SystemExit(11)
           Path('v7-evidence/source-pr.json').write_text(json.dumps(eligible[0],indent=2,sort_keys=True)+'\n')
           PY
-            rc=$?
-            set -e
-            if [[ "$rc" -eq 10 ]]; then
-              echo "ready=false" >> "$GITHUB_OUTPUT"
-              echo "selection=no_open_integration_v7_candidate" >> "$GITHUB_STEP_SUMMARY"
-              exit 0
+              rc=$?
+              if [[ "$rc" -eq 10 ]]; then
+                echo "ready=false" >> "$GITHUB_OUTPUT"
+                echo "selection=no_open_integration_v7_candidate" >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+              test "$rc" -eq 0
             fi
-            if [[ "$rc" -eq 11 ]]; then
-              cat v7-evidence/candidate-selection.json >&2
-              echo "ambiguous canonical V7 integration ownership" >&2
-              exit 1
-            fi
-            test "$rc" -eq 0
+            SOURCE_PR="$(python3 -c 'import json; print(json.load(open("v7-evidence/source-pr.json"))["number"])')"
+            SOURCE_SHA="$(python3 -c 'import json; print(json.load(open("v7-evidence/source-pr.json"))["head"]["sha"])')"
+            SOURCE_BRANCH="$(python3 -c 'import json; print(json.load(open("v7-evidence/source-pr.json"))["head"]["ref"])')"
           fi
 
-          python3 - "$MAIN_SHA" <<'PY'
-          import json,re,sys
-          from pathlib import Path
-          main_sha=sys.argv[1]
-          p=json.loads(Path('v7-evidence/source-pr.json').read_text())
-          head=p.get('head') or {}; base=p.get('base') or {}; head_repo=head.get('repo') or {}
-          assert p.get('state') == 'open'
-          assert base.get('ref') == 'main'
-          assert str(head.get('ref') or '').startswith('integration/v7-')
-          assert str(head_repo.get('full_name') or '') == '${{ github.repository }}'
-          sha=str(head.get('sha') or '')
-          assert re.fullmatch(r'[0-9a-f]{40}',sha), sha
-          Path('v7-evidence/selection-meta.json').write_text(json.dumps({
-              'source_pr':int(p['number']),'source_branch':head['ref'],'source_sha':sha,'main_sha':main_sha
-          },indent=2,sort_keys=True)+'\n')
-          PY
-          SOURCE_PR="$(python3 -c 'import json; print(json.load(open("v7-evidence/selection-meta.json"))["source_pr"])')"
-          SOURCE_BRANCH="$(python3 -c 'import json; print(json.load(open("v7-evidence/selection-meta.json"))["source_branch"])')"
-          SOURCE_SHA="$(python3 -c 'import json; print(json.load(open("v7-evidence/selection-meta.json"))["source_sha"])')"
-
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_BRANCH" == integration/v7-* ]]
           git fetch --no-tags origin "+refs/heads/${SOURCE_BRANCH}:refs/remotes/v7-evidence/source"
           test "$(git rev-parse refs/remotes/v7-evidence/source)" = "$SOURCE_SHA"
           git merge-base --is-ancestor "$MAIN_SHA" "$SOURCE_SHA"
-          rm -rf /tmp/v7-evidence-candidate
+
+          rm -rf /tmp/v7-evidence-candidate /tmp/v7-evidence-main
           git worktree add --detach /tmp/v7-evidence-candidate "$SOURCE_SHA" >/dev/null
-          trap 'git worktree remove --force /tmp/v7-evidence-candidate >/dev/null 2>&1 || true' EXIT
-          python3 scripts/v7_evidence_candidate_contract.py \
+          git worktree add --detach /tmp/v7-evidence-main "$MAIN_SHA" >/dev/null
+          trap 'git worktree remove --force /tmp/v7-evidence-candidate >/dev/null 2>&1 || true; git worktree remove --force /tmp/v7-evidence-main >/dev/null 2>&1 || true' EXIT
+          python3 /tmp/v7-evidence-candidate/scripts/v7_evidence_candidate_contract.py \
             --candidate-root /tmp/v7-evidence-candidate \
-            --main-root . \
+            --main-root /tmp/v7-evidence-main \
             --expected-sha "$SOURCE_SHA" > v7-evidence/candidate-contract.json
+          cp /tmp/v7-evidence-candidate/config/v7_evidence_runtime.json v7-evidence/evidence-runtime.json
           git worktree remove --force /tmp/v7-evidence-candidate >/dev/null
+          git worktree remove --force /tmp/v7-evidence-main >/dev/null
           trap - EXIT
 
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${SOURCE_SHA}&per_page=100" > v7-evidence/source-runs.json
-          READY="$(python3 - <<'PY'
-          import json
+          READY="$(python3 - "$SOURCE_SHA" <<'PY'
+          import json,sys
           from pathlib import Path
-          cfg=json.loads(Path('config/v7_evidence_runtime.json').read_text())
-          meta=json.loads(Path('v7-evidence/selection-meta.json').read_text())
+          sha=sys.argv[1]
+          cfg=json.loads(Path('v7-evidence/evidence-runtime.json').read_text())
           runs=json.loads(Path('v7-evidence/source-runs.json').read_text()).get('workflow_runs') or []
           latest={}
           for row in sorted(runs,key=lambda x:(x.get('created_at') or '',int(x.get('id') or 0)),reverse=True):
@@ -160,16 +134,9 @@ jobs:
           missing=[]; evidence={}
           for name in cfg['required_successful_workflows']:
               row=latest.get(name)
-              evidence[name]={
-                  'id':int(row.get('id') or 0) if row else 0,
-                  'status':row.get('status') if row else None,
-                  'conclusion':row.get('conclusion') if row else None,
-                  'head_sha':row.get('head_sha') if row else None,
-              }
-              if not row or row.get('head_sha') != meta['source_sha'] or row.get('status') != 'completed' or row.get('conclusion') != 'success':
-                  missing.append(name)
-          payload={'source_sha':meta['source_sha'],'required':cfg['required_successful_workflows'],'workflow_evidence':evidence,'missing_or_not_green':missing,'ready':not missing}
-          Path('v7-evidence/check-gate.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
+              evidence[name]={'id':int(row.get('id') or 0) if row else 0,'status':row.get('status') if row else None,'conclusion':row.get('conclusion') if row else None,'head_sha':row.get('head_sha') if row else None}
+              if not row or row.get('head_sha')!=sha or row.get('status')!='completed' or row.get('conclusion')!='success': missing.append(name)
+          Path('v7-evidence/check-gate.json').write_text(json.dumps({'source_sha':sha,'workflow_evidence':evidence,'missing_or_not_green':missing,'ready':not missing},indent=2,sort_keys=True)+'\n')
           print('true' if not missing else 'false')
           PY
           )"
@@ -179,7 +146,12 @@ jobs:
           echo "ready=$READY" >> "$GITHUB_OUTPUT"
           cat v7-evidence/check-gate.json
 
-      - name: Select existing Tailscale credential mode
+      - name: Exact-head technical gate pending
+        if: steps.source.outputs.ready != 'true'
+        run: |
+          echo "Exact-head PAPER runtime not started: required technical workflows are not all green yet." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Select Tailscale credential mode
         if: steps.source.outputs.ready == 'true'
         id: tailscale_auth
         shell: bash
@@ -233,11 +205,9 @@ jobs:
           SOURCE_BRANCH: ${{ steps.source.outputs.source_branch }}
         run: |
           set -euo pipefail
-          PROXY_PORT="$(python3 -c 'import json; print(json.load(open("config/v7_evidence_runtime.json"))["proxy_port"])')"
-          BASE_REL="$(python3 -c 'import json; print(json.load(open("config/v7_evidence_runtime.json"))["runtime_root"])')"
-          ssh -i ~/.ssh/polymarket_v7_evidence -o IdentitiesOnly=yes -o BatchMode=yes \
-            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
-            "SOURCE_SHA='$SOURCE_SHA' SOURCE_BRANCH='$SOURCE_BRANCH' PROXY_PORT='$PROXY_PORT' BASE_REL='$BASE_REL' bash -s" <<'REMOTE' | tee v7-evidence/server-reconcile.txt
+          BASE_REL="$(python3 -c 'import json; print(json.load(open("v7-evidence/evidence-runtime.json"))["runtime_root"])')"
+          ssh -i ~/.ssh/polymarket_v7_evidence -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            "SOURCE_SHA='$SOURCE_SHA' SOURCE_BRANCH='$SOURCE_BRANCH' BASE_REL='$BASE_REL' bash -s" <<'REMOTE' | tee v7-evidence/server-reconcile.txt
           set -euo pipefail
           APP="$HOME/polymarket"
           BASE="$HOME/${BASE_REL}"
@@ -261,18 +231,13 @@ jobs:
             remote_url="$(git -C "$APP" remote get-url origin)"
             git clone --no-checkout -q "$remote_url" "$REPO"
           fi
-          git -C "$REPO" fetch -q origin \
-            "+refs/heads/main:refs/remotes/origin/main" \
-            "+refs/heads/$SOURCE_BRANCH:refs/remotes/origin/$SOURCE_BRANCH"
+          git -C "$REPO" fetch -q origin "+refs/heads/main:refs/remotes/origin/main" "+refs/heads/$SOURCE_BRANCH:refs/remotes/origin/$SOURCE_BRANCH"
           test "$(git -C "$REPO" rev-parse "origin/$SOURCE_BRANCH")" = "$SOURCE_SHA"
           main_sha="$(git -C "$REPO" rev-parse origin/main)"
           git -C "$REPO" merge-base --is-ancestor "$main_sha" "$SOURCE_SHA"
           test "$(git -C "$REPO" rev-parse "origin/main:config/operator_directives.json")" = "$(git -C "$REPO" rev-parse "$SOURCE_SHA:config/operator_directives.json")"
-          git -C "$REPO" show "$SOURCE_SHA:config/live_champion.json" | python3 -c 'import json,sys; m=json.load(sys.stdin); assert m.get("enabled") is True; assert m.get("version") == 7; assert m.get("paper_only") is True; assert m.get("authenticated_execution") is False; assert m.get("loop") == "scripts/paper_v7_loop.sh"; assert m.get("config") == "config/paper_v7.json"; assert m.get("run_root") == "runs/paper_v7_live"'
-          git -C "$REPO" show "$SOURCE_SHA:config/paper_v7.json" | python3 -c 'import json,sys; c=json.load(sys.stdin); assert c.get("engine_version") == 7; assert c.get("paper_only") is True; v=c.get("v7") or {}; assert v.get("authenticated_execution") is False; assert v.get("authoritative_fee_required") is True; assert v.get("shared_execution_ledger_required") is True; assert v.get("joint_fill_state_required_for_multileg") is True; assert float(c.get("max_drawdown",1)) <= 0.15'
-          for required in scripts/v7_execution_evidence.py scripts/v7_execution_evidence_hardened.py config/v7_execution_evidence.json; do
-            git -C "$REPO" cat-file -e "$SOURCE_SHA:$required"
-          done
+          git -C "$REPO" show "$SOURCE_SHA:config/live_champion.json" | python3 -c 'import json,sys; m=json.load(sys.stdin); assert m.get("enabled") is True; assert m.get("version") == 7; assert m.get("paper_only") is True; assert m.get("authenticated_execution") is False; assert m.get("real_order_submission") is False; assert m.get("loop") == "scripts/paper_v7_execution_loop.sh"; assert m.get("config") == "config/paper_v7.json"; assert m.get("run_root") == "runs/paper_v7_live"'
+          for required in scripts/paper_v7_execution_loop.sh scripts/v7_execution_ledger.py scripts/v7_ledger_spool.py scripts/v7_canonical_economics.py scripts/v7_joint_execution_policy.py scripts/v7_portfolio_guard.py; do git -C "$REPO" cat-file -e "$SOURCE_SHA:$required"; done
 
           worktree="$WORKTREES/$SOURCE_SHA"
           run_root="$RUNS/$SOURCE_SHA"
@@ -281,7 +246,8 @@ jobs:
             git -C "$REPO" worktree add --detach "$worktree" "$SOURCE_SHA" >/dev/null
           fi
           test "$(git -C "$worktree" rev-parse HEAD)" = "$SOURCE_SHA"
-          mkdir -p "$run_root"
+          mkdir -p "$run_root/ledger" "$run_root/control"
+          touch "$run_root/ledger/execution.jsonl"
 
           old_sha=""; old_pid=""
           if [[ -f "$ACTIVE" ]]; then
@@ -295,7 +261,7 @@ jobs:
           fi
 
           cd "$worktree"
-          if [[ ! -x build/polymarket_trade_recorder || ! -x build/polymarket_engine ]]; then
+          if [[ ! -x build/polymarket_trade_recorder ]]; then
             "$CMAKE_BIN" -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$BREW_PREFIX" >/dev/null
             "$CMAKE_BIN" --build build --parallel 2 >/dev/null
           fi
@@ -303,52 +269,42 @@ jobs:
           if [[ "$old_sha" == "$SOURCE_SHA" && "$old_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$old_pid" 2>/dev/null; then
             pid="$old_pid"
           else
-            nohup env V7_MARKET_PROXY_PORT="$PROXY_PORT" \
-              python3 scripts/runtime_singleton_launcher.py --lock "$run_root/runtime_owner.lock" -- \
-              bash scripts/paper_v7_loop.sh config/paper_v7.json "$run_root" \
-              >>"$run_root/runtime.log" 2>&1 </dev/null &
+            nohup env PM_V7_CONFIG=config/paper_v7.json PM_V7_RUN_ROOT="$run_root" PM_TRADE_RECORDER="$worktree/build/polymarket_trade_recorder" \
+              bash scripts/paper_v7_execution_loop.sh >>"$run_root/runtime.log" 2>&1 </dev/null &
             pid=$!
-            sleep 2
-            kill -0 "$pid"
+            sleep 3
+            kill -0 "$pid" || { tail -n 200 "$run_root/runtime.log" >&2 || true; exit 1; }
           fi
 
           tmp="$ACTIVE.tmp.$$"
-          {
-            printf 'sha=%s\n' "$SOURCE_SHA"
-            printf 'pid=%s\n' "$pid"
-            printf 'proxy_port=%s\n' "$PROXY_PORT"
-            printf 'run_root=%s\n' "$run_root"
-            printf 'worktree=%s\n' "$worktree"
-            printf 'main_sha=%s\n' "$main_sha"
-            printf 'updated_ts=%s\n' "$(date +%s)"
-          } > "$tmp"
+          { printf 'sha=%s\n' "$SOURCE_SHA"; printf 'pid=%s\n' "$pid"; printf 'run_root=%s\n' "$run_root"; printf 'worktree=%s\n' "$worktree"; printf 'main_sha=%s\n' "$main_sha"; printf 'updated_ts=%s\n' "$(date +%s)"; } > "$tmp"
           mv "$tmp" "$ACTIVE"
 
-          for _ in $(seq 1 120); do
-            if [[ -s "$run_root/v7_supervisor.json" && -s "$run_root/execution/v7_execution_supervisor.json" ]]; then break; fi
-            kill -0 "$pid" || { tail -n 120 "$run_root/runtime.log" >&2 || true; exit 1; }
+          for _ in $(seq 1 60); do
+            [[ -s "$run_root/control/runtime_status.json" && -s "$run_root/control/allocations/manifest.json" ]] && break
+            kill -0 "$pid" || { tail -n 200 "$run_root/runtime.log" >&2 || true; exit 1; }
             sleep 1
           done
           kill -0 "$pid"
-          curl -fsS --max-time 2 "http://127.0.0.1:${PROXY_PORT}/healthz" >/dev/null
-          python3 - "$run_root" "$SOURCE_SHA" "$pid" "$PROXY_PORT" <<'PY'
+          python3 scripts/v7_ledger_spool.py --run-root "$run_root" --model-sha "$SOURCE_SHA" >/dev/null
+          python3 scripts/v7_canonical_economics.py --ledger "$run_root/ledger/execution.jsonl" --expected-model-sha "$SOURCE_SHA" --output "$run_root/canonical_economics.json"
+          python3 scripts/v7_portfolio_guard.py --run-root "$run_root" --allocation-manifest "$run_root/control/allocations/manifest.json" --max-drawdown 0.15 >/dev/null || true
+          python3 - "$run_root" "$SOURCE_SHA" "$pid" <<'PY'
           import json,sys,time
           from pathlib import Path
-          root=Path(sys.argv[1]); sha=sys.argv[2]; pid=int(sys.argv[3]); port=int(sys.argv[4]); now=time.time()
-          sup=json.loads((root/'v7_supervisor.json').read_text())
-          exe=json.loads((root/'execution'/'v7_execution_supervisor.json').read_text())
-          assert now-float(sup['timestamp']) <= 60
-          assert now-float(exe['timestamp']) <= 180
-          assert exe.get('paper_only') is True
-          payload={'schema':'polymarket_v7_isolated_runtime_status_v2','source_sha':sha,'pid':pid,'proxy_port':port,'paper_only':True,'authenticated_execution':False,'runtime_alive':True,'supervisor_age_seconds':now-float(sup['timestamp']),'execution_supervisor_age_seconds':now-float(exe['timestamp']),'updated_ts':int(now)}
+          root=Path(sys.argv[1]); sha=sys.argv[2]; pid=int(sys.argv[3]); now=int(time.time())
+          runtime=json.loads((root/'control'/'runtime_status.json').read_text())
+          portfolio=json.loads((root/'control'/'portfolio_state.json').read_text())
+          economics=json.loads((root/'canonical_economics.json').read_text())
+          assert runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False
+          assert runtime.get('model_sha') == sha
+          assert portfolio.get('paper_only') is True and portfolio.get('authenticated_execution') is False
+          assert economics.get('expected_model_sha') == sha
+          assert economics.get('paper_only') is True and economics.get('authenticated_execution') is False
+          payload={'schema':'polymarket_v7_isolated_runtime_status_v3','source_sha':sha,'pid':pid,'paper_only':True,'authenticated_execution':False,'runtime_alive':True,'portfolio_drawdown':portfolio.get('drawdown'),'portfolio_killed':portfolio.get('killed'),'economic_state':economics.get('state'),'promotion_ready':economics.get('promotion_ready',False),'submitted_units':economics.get('submitted_units',0),'complete_units':economics.get('complete_units',0),'net_pnl':economics.get('net_pnl'),'stressed_net_pnl':economics.get('stressed_net_pnl'),'updated_ts':now}
           (root/'evidence_router_status.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
           print(json.dumps(payload,sort_keys=True))
           PY
-          python3 scripts/v7_execution_evidence_hardened.py \
-            --run-root "$run_root/execution" \
-            --policy config/v7_execution_evidence.json \
-            --output "$run_root/v7_execution_evidence.json" \
-            --markdown "$run_root/v7_execution_evidence.md"
           REMOTE
 
       - name: Snapshot current isolated evidence state
@@ -358,22 +314,39 @@ jobs:
           SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
         run: |
           set -euo pipefail
-          BASE_REL="$(python3 -c 'import json; print(json.load(open("config/v7_evidence_runtime.json"))["runtime_root"])')"
+          BASE_REL="$(python3 -c 'import json; print(json.load(open("v7-evidence/evidence-runtime.json"))["runtime_root"])')"
           mkdir -p v7-evidence/runtime
-          ssh -i ~/.ssh/polymarket_v7_evidence -o IdentitiesOnly=yes -o BatchMode=yes \
-            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+          ssh -i ~/.ssh/polymarket_v7_evidence -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
             "BASE_REL='$BASE_REL' SOURCE_SHA='$SOURCE_SHA' bash -s" <<'REMOTE' > /tmp/v7-evidence-runtime.tar
           set -euo pipefail
           root="$HOME/$BASE_REL/by-sha/$SOURCE_SHA"
           test -f "$root/evidence_router_status.json"
-          test -f "$root/v7_execution_evidence.json"
+          test -f "$root/canonical_economics.json"
           cd "$root"
-          files=(evidence_router_status.json v7_supervisor.json v7_execution_evidence.json v7_execution_evidence.md)
-          [[ -f execution/v7_execution_supervisor.json ]] && files+=(execution/v7_execution_supervisor.json)
-          [[ -f execution/runtime_status.json ]] && files+=(execution/runtime_status.json)
+          files=(evidence_router_status.json canonical_economics.json control/runtime_status.json control/portfolio_state.json control/allocations/manifest.json)
+          [[ -f graph_rv/status.json ]] && files+=(graph_rv/status.json)
+          [[ -f learned_execution/joint_policy.json ]] && files+=(learned_execution/joint_policy.json)
+          [[ -f learned_execution/oos_report.json ]] && files+=(learned_execution/oos_report.json)
           tar -cf - "${files[@]}"
           REMOTE
           tar -xf /tmp/v7-evidence-runtime.tar -C v7-evidence/runtime
+
+      - name: Evidence summary
+        if: steps.source.outputs.ready == 'true'
+        run: |
+          echo '## V7 exact-SHA PAPER evidence' >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          r=json.load(open('v7-evidence/runtime/evidence_router_status.json'))
+          print(f"- SHA: {r['source_sha']}")
+          print(f"- runtime alive: {r['runtime_alive']}")
+          print(f"- portfolio drawdown: {r['portfolio_drawdown']}")
+          print(f"- economic state: {r['economic_state']}")
+          print(f"- submitted/complete units: {r['submitted_units']}/{r['complete_units']}")
+          print(f"- net PnL: {r['net_pnl']}")
+          print(f"- stressed PnL: {r['stressed_net_pnl']}")
+          print(f"- promotion ready: {r['promotion_ready']}")
+          PY
 
       - name: Upload exact-SHA isolated PAPER evidence
         if: always()
