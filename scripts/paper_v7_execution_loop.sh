@@ -5,8 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 CONFIG="${PM_V7_CONFIG:-config/paper_v7.json}"
 RUN_ROOT="${PM_V7_RUN_ROOT:-runs/paper_v7_live}"
-RECORDER="${PM_TRADE_RECORDER:-build/polymarket_trade_recorder}"
-REWARDS_SCAN="${PM_REWARDS_SCAN:-build/polymarket_rewards_scan}"
+RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
 MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
 SHA="$(git rev-parse HEAD)"
 CONTROL="$RUN_ROOT/control"
@@ -71,7 +70,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if [[ ! -x "$RECORDER" ]]; then
-  echo "missing same-checkout trade recorder executable: $RECORDER" >&2
+  echo "missing canonical V7 trade recorder executable: $RECORDER" >&2
   exit 74
 fi
 
@@ -91,25 +90,14 @@ pids+=("$!")
   done
 ) & pids+=("$!")
 
-# Professional maker slow path: reward-market selection and competition context
-# stay outside the quote/cancel hot path.
+# One professional-maker reward selector. The retired C++ rewards scanner is not
+# kept as a second reward/economic implementation.
 (
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_market_maker_rewards.py \
       --config "$MAKER_POLICY" \
       --output "$RUN_ROOT/micro_maker/reward_selection.json" \
       >> "$RUN_ROOT/micro_maker/reward_selection.log" 2>&1 || true
-    if [[ -x "$REWARDS_SCAN" ]]; then
-      "$REWARDS_SCAN" \
-        --config "$ALLOC/micro_maker.json" \
-        --markets 1000 --top 40 \
-        --csv "$RUN_ROOT/micro_maker/reward_scan.csv" \
-        --quote-shares 10 --max-notional 100 \
-        --competition-multiplier 2 --reward-haircut 0.50 \
-        --annual-capital-rate 0.05 --adverse-bps 50 \
-        --one-sided-fills-per-day 1 --improve-ticks 0 \
-        >> "$RUN_ROOT/micro_maker/reward_scan.log" 2>&1 || true
-    fi
     sleep 60
   done
 ) & pids+=("$!")
@@ -129,8 +117,6 @@ pids+=("$!")
   done
 ) & pids+=("$!")
 
-# PAPER/bootstrap professional maker. No authenticated order path exists; all
-# economic events are emitted through the shared V7 ledger spool.
 python3 scripts/v7_market_maker_worker.py \
   --config "$ALLOC/micro_maker.json" \
   --maker-policy "$MAKER_POLICY" \
@@ -143,7 +129,6 @@ python3 scripts/v7_market_maker_worker.py \
   >> "$RUN_ROOT/micro_maker/runtime.log" 2>&1 &
 pids+=("$!")
 
-# Full-depth executable maker equity is part of account-level risk.
 (
   while [[ ! -e "$KILL" ]]; do
     if ! python3 scripts/v7_market_maker_status.py \
@@ -201,9 +186,6 @@ pids+=("$!")
   done
 ) & pids+=("$!")
 
-# Hard Arb and Micro Taker remain secondary isolated PAPER sleeves. Their
-# non-canonical research state is not credited until full causal identity reaches
-# the canonical ledger.
 (
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_hard_arb_guard.py \
@@ -238,8 +220,6 @@ pids+=("$!")
 
 write_runtime_status running false
 
-# Account-level kill switch. Any unsafe/unmarkable sleeve or >=15% account DD
-# writes control/KILL; the parent then terminates the entire process group.
 while [[ ! -e "$KILL" ]]; do
   if ! python3 scripts/v7_portfolio_guard.py --run-root "$RUN_ROOT" \
       --allocation-manifest "$ALLOC/manifest.json" --max-drawdown 0.15 \
