@@ -50,8 +50,8 @@ class V7ControlPlaneExactHeadTest(unittest.TestCase):
             ".github/workflows/v7-live-paper-validation.yml": (
                 "contents: write",
                 "Coordinate exact-SHA V7 validation",
-                "Bounded public-data V7 PAPER runtime smoke",
-                "Advance paper-validated to exact validated SHA",
+                "Bounded same-SHA public-data PAPER runtime",
+                "Advance paper-validated to exact economically validated SHA",
                 "-F force=false",
             ),
             ".github/workflows/v7-deploy-paper-server.yml": (
