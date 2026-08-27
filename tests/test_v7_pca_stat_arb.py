@@ -95,6 +95,7 @@ class V7PcaStatArbTests(unittest.TestCase):
         assert short is not None and long is not None
         self.assertNotAlmostEqual(short.predicted_logit_move, long.predicted_logit_move)
         self.assertGreaterEqual(long.sigma_logit, short.sigma_logit)
+        self.assertTrue(short.common_factor_forecast_identified)
 
     def test_total_single_leg_risk_never_falls_below_residual_only_risk(self) -> None:
         panel = self._panel()
@@ -132,15 +133,21 @@ class V7PcaStatArbTests(unittest.TestCase):
         assert panel is not None
         self.assertEqual(panel.times, (480, 540, 600))
 
-    def test_driver_uses_predeclared_controls_by_and_uncertainty_deduction(self) -> None:
-        source = (ROOT / "scripts" / "v7_pca_stat_arb_research.py").read_text(encoding="utf-8")
-        self.assertIn("predeclare_target_controls", source)
-        self.assertIn("conditional_target_bootstrap_pvalue", source)
-        self.assertIn("benjamini_yekutieli_selected", source)
-        self.assertIn("score_with_total_single_leg_risk", source)
-        self.assertIn("resolve_fee_details", source)
-        self.assertIn("uncertainty_penalty", source)
-        self.assertIn('"unestimable_pvalue": 1.0', source)
+    def test_driver_preserves_successor_base_and_adds_current_state_guard(self) -> None:
+        base = (ROOT / "scripts" / "v7_pca_stat_arb_research_base.py").read_text(encoding="utf-8")
+        wrapper = (ROOT / "scripts" / "v7_pca_stat_arb_research.py").read_text(encoding="utf-8")
+        self.assertIn("predeclare_target_controls", base)
+        self.assertIn("conditional_target_bootstrap_pvalue", base)
+        self.assertIn("benjamini_yekutieli_selected", base)
+        self.assertIn("score_with_total_single_leg_risk", base)
+        self.assertIn("resolve_fee_details", base)
+        self.assertIn("uncertainty_penalty", base)
+        self.assertIn('"unestimable_pvalue": 1.0', base)
+        self.assertIn("validate_coherent_books", wrapper)
+        self.assertIn("abs(score.residual_z) < _current_z_floor()", wrapper)
+        self.assertIn("common_factor_forecast_identified", wrapper)
+        self.assertIn("config/research_v7_market_data.json", wrapper)
+        self.assertNotIn("config/paper_v7.json", wrapper)
 
 
 if __name__ == "__main__":
