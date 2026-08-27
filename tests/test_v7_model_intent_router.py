@@ -118,7 +118,7 @@ class ModelIntentRouterTest(unittest.TestCase):
         self.assertFalse(intent.executable)
         self.assertIn("point_in_time_universe_not_validated", intent.blockers)
 
-    def test_candidate_events_do_not_manufacture_orders_or_fills(self) -> None:
+    def test_blocked_research_intent_is_opportunity_not_candidate(self) -> None:
         intent = router.ModelIntent(
             candidate_id="id", model_sha=SHA, family="pca", horizon_seconds=3600,
             decision_ts_ms=100_000, semantics="single_leg_residual_stat_arb",
@@ -131,9 +131,44 @@ class ModelIntentRouterTest(unittest.TestCase):
             with ledger.CanonicalLedgerWriter(path, writer_id="test", model_sha=SHA) as writer:
                 self.assertEqual(router.write_candidate_events(writer, [intent]), 1)
             events = list(ledger.iter_events(path, expected_model_sha=SHA))
-        self.assertEqual([event.event_type for event in events], ["CANDIDATE"])
-        self.assertEqual(events[0].intended_action, "RESEARCH_CANDIDATE")
+        self.assertEqual([event.event_type for event in events], ["OPPORTUNITY"])
+        self.assertEqual(events[0].intended_action, "RESEARCH_OPPORTUNITY")
         self.assertFalse(events[0].metadata["execution_eligible"])
+
+    def test_causal_execution_eligible_intent_can_be_candidate(self) -> None:
+        intent = router.ModelIntent(
+            candidate_id="causal", model_sha=SHA, family="pca", horizon_seconds=3600,
+            decision_ts_ms=100_000, semantics="single_leg_residual_stat_arb",
+            legs=({"role": "single", "market_id": "m", "event_id": "e", "side": "YES", "weight": 1.0},),
+            predicted_edge=0.01, economic_score=1.0, executable=True, blockers=(),
+            provenance={"exchange_ts_ms": 98_000, "receive_ts_ms": 99_000, "book_snapshot_id": "book-hash"},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ledger.jsonl"
+            with ledger.CanonicalLedgerWriter(path, writer_id="test", model_sha=SHA) as writer:
+                self.assertEqual(router.write_candidate_events(writer, [intent]), 1)
+            events = list(ledger.iter_events(path, expected_model_sha=SHA))
+        self.assertEqual(events[0].event_type, "CANDIDATE")
+        self.assertEqual(events[0].exchange_ts_ms, 98_000)
+        self.assertEqual(events[0].receive_ts_ms, 99_000)
+        self.assertEqual(events[0].book_snapshot_id, "book-hash")
+        self.assertTrue(events[0].metadata["execution_eligible"])
+
+    def test_execution_eligible_without_causal_clock_falls_back_to_opportunity(self) -> None:
+        intent = router.ModelIntent(
+            candidate_id="missing-clock", model_sha=SHA, family="pca", horizon_seconds=3600,
+            decision_ts_ms=100_000, semantics="single_leg_residual_stat_arb",
+            legs=({"role": "single", "market_id": "m", "event_id": "e", "side": "YES", "weight": 1.0},),
+            predicted_edge=0.01, economic_score=1.0, executable=True, blockers=(), provenance={},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ledger.jsonl"
+            with ledger.CanonicalLedgerWriter(path, writer_id="test", model_sha=SHA) as writer:
+                router.write_candidate_events(writer, [intent])
+            event = list(ledger.iter_events(path, expected_model_sha=SHA))[0]
+        self.assertEqual(event.event_type, "OPPORTUNITY")
+        self.assertFalse(event.metadata["execution_eligible"])
+        self.assertIn("causal_book_clock_missing_at_router", event.metadata["blockers"])
 
 
 if __name__ == "__main__":
