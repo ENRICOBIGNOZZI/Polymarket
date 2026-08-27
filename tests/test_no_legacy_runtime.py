@@ -40,7 +40,11 @@ class NoLegacyRuntimeContractTest(unittest.TestCase):
                 if any(pattern.search(line) for pattern in FORBIDDEN_GENERATION_PATTERNS):
                     offenders.append(f"{relative}:{line_no}: {line.strip()}")
 
-        self.assertEqual(sorted(set(offenders)), [], "non-V7 project generation references remain")
+        unique_offenders = sorted(set(offenders))
+        if unique_offenders:
+            print("\nV7-only repository offenders:")
+            print("\n".join(unique_offenders))
+        self.assertEqual(unique_offenders, [], "non-V7 project generation references remain")
 
     def test_known_compatibility_entrypoints_are_absent(self) -> None:
         retired = (
