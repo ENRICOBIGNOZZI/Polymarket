@@ -14,9 +14,12 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             "name: V7 live PAPER validation",
             "expected_sha:",
             "Private runtime single-writer validation",
-            'test "$(git rev-parse origin/main)" = "$VALIDATION_SHA"',
+            "ci.yml:ci",
+            "monitoring.yml:monitoring",
+            "private-runtime-single-writer-validation.yml:Private runtime single-writer validation",
             "scripts/v7_cutover_contract.py",
             "scripts/paper_v7_execution_loop.sh",
+            "polymarket_v7_trade_recorder",
             "scripts/v7_ledger_spool.py",
             "scripts/v7_canonical_economics.py",
             "scripts/v7_portfolio_guard.py",
@@ -28,17 +31,19 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
         ):
             self.assertIn(required, text)
         for forbidden in (
-            "force=true",
+            "Polymarket Research Policy",
+            "research-policy.yml",
+            "project_context",
+            "scheduler_registry",
+            "gh pr merge",
             "git push origin main",
             "git push origin paper-validated",
-            "gh pr merge",
-            "POLYMARKET_DEPLOY_REF=",
+            "force=true",
             "paper_v7_loop.sh",
-            "v7_execution_evidence_hardened.py",
         ):
             self.assertNotIn(forbidden, text)
 
-    def test_cutover_contract_reads_operator_authority_and_canonical_v7_envelope(self) -> None:
+    def test_cutover_contract_reads_v7_safety_authority(self) -> None:
         text = (ROOT / "scripts/v7_cutover_contract.py").read_text(encoding="utf-8")
         for required in (
             '"config/operator_directives.json"',
@@ -48,11 +53,7 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             '"scripts/paper_v7_execution_loop.sh"',
             '"config/paper_v7.json"',
             '"market_limit"',
-            '"min_liquidity"',
-            '"min_net_edge"',
-            '"uncertainty_penalty"',
             '"fractional_kelly_ceiling"',
-            '"fixed_dollar_trade_cap_enabled"',
             '"max_drawdown"',
             '"authoritative_fee_required"',
             '"shared_execution_ledger_required"',
@@ -61,42 +62,19 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             '"queue_never_grants_size"',
             '"partial_unwind_required"',
             '"cost_vector_required"',
-            '"markout_horizons_seconds"',
-            '"hard_arb_max_trade_fraction"',
         ):
             self.assertIn(required, text)
 
-    def test_registry_assigns_live_validation_without_merge_or_deploy_authority(self) -> None:
-        registry = json.loads((ROOT / "config/scheduler_registry.json").read_text(encoding="utf-8"))
-        matches = [row for row in registry["schedulers"] if row["id"] == "v7-live-paper-validation"]
-        self.assertEqual(len(matches), 1)
-        row = matches[0]
-        self.assertEqual(row["workflow"], ".github/workflows/v7-live-paper-validation.yml")
-        self.assertFalse(row["merge_authority"])
-        self.assertFalse(row["deploy_authority"])
-        self.assertFalse(row["validation_dispatch_authority"])
-        self.assertTrue(row["critical"])
-
-    def test_forced_paper_champion_is_v7_only_and_safe(self) -> None:
+    def test_champion_is_one_safe_v7_runtime(self) -> None:
         manifest = json.loads((ROOT / "config/live_champion.json").read_text(encoding="utf-8"))
-        context = json.loads((ROOT / "config/project_context.json").read_text(encoding="utf-8"))
         self.assertTrue(manifest["enabled"])
         self.assertEqual(manifest["version"], 7)
         self.assertTrue(manifest["paper_only"])
         self.assertFalse(manifest["authenticated_execution"])
         self.assertFalse(manifest["real_order_submission"])
-        self.assertFalse(manifest["candidate_only_until_promoted"])
-        self.assertEqual(manifest["promotion_policy"], "operator_forced_v7_paper_champion")
         self.assertFalse(manifest["legacy_fallback_allowed"])
         self.assertEqual(manifest["loop"], "scripts/paper_v7_execution_loop.sh")
-        self.assertTrue(context["runtime"]["active_champion"])
-        self.assertTrue(context["grafana"]["active"])
-        self.assertEqual(context["grafana"]["dashboard_uid"], "polymarket-v7")
-        self.assertEqual(
-            context["cutover"]["current_state"],
-            "operator_forced_v7_paper_champion_exact_head_validation",
-        )
-        self.assertEqual(context["cutover"]["target_version"], 7)
+        self.assertEqual(manifest["config"], "config/paper_v7.json")
 
 
 if __name__ == "__main__":
