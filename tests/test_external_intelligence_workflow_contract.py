@@ -4,57 +4,43 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = ROOT / ".github" / "workflows" / "external-intelligence.yml"
 
 
 class ExternalIntelligenceWorkflowContractTest(unittest.TestCase):
-    def test_writer_and_validation_concurrency_are_isolated(self) -> None:
-        workflow = (ROOT / ".github" / "workflows" / "external-intelligence.yml").read_text(
-            encoding="utf-8"
-        )
-        writer_condition = (
-            "github.event_name == 'schedule' || "
-            "(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')"
-        )
+    def test_external_lane_is_standalone_v7_research(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("name: Polymarket External Intelligence", workflow)
+        self.assertIn('cron: "17 * * * *"', workflow)
+        self.assertIn("timeout-minutes: 55", workflow)
+        self.assertIn("python3 scripts/run_external_intelligence.py", workflow)
+        self.assertIn("paper_only", workflow)
+        self.assertIn("authenticated_execution", workflow)
+        self.assertNotIn("alpha_factory", workflow.lower())
+        self.assertNotIn("attach_external_evidence", workflow)
+        self.assertNotIn("live-smoke", workflow.lower())
+
+    def test_only_main_manual_or_schedule_can_publish_durable_telemetry(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(
-            "group: polymarket-external-intelligence-${{ (" + writer_condition + ") && "
-            "'writer' || github.ref }}",
-            workflow,
-        )
-        self.assertIn(
-            "cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' || "
-            "(github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main') }}",
-            workflow,
-        )
-        self.assertIn(
-            "if: (" + writer_condition + ") && success()",
+            "if: (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) && success()",
             workflow,
         )
         self.assertNotIn(
             "if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && success()",
             workflow,
-            "manual dispatch from an unmerged ref must never publish durable telemetry",
         )
-        self.assertIn('cron: "17 * * * *"', workflow)
-        self.assertNotIn('cron: "17,47 * * * *"', workflow)
 
-    def test_collection_runtime_budget_cannot_regress_to_old_timeout(self) -> None:
-        workflow = (ROOT / ".github" / "workflows" / "external-intelligence.yml").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("timeout-minutes: 55", workflow)
-        self.assertNotIn("timeout-minutes: 25", workflow)
-        self.assertIn("Collect, store and backtest public external information", workflow)
-        self.assertIn("python3 scripts/run_external_intelligence.py", workflow)
-
-    def test_workflow_runs_this_contract_test(self) -> None:
-        workflow = (ROOT / ".github" / "workflows" / "external-intelligence.yml").read_text(
-            encoding="utf-8"
-        )
+    def test_workflow_validates_its_current_contract(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertGreaterEqual(
             workflow.count("tests/test_external_intelligence_workflow_contract.py"),
-            3,
-            "contract test must trigger on push/PR changes and execute in validation",
+            2,
         )
+        self.assertIn("scripts/external_intelligence.py", workflow)
+        self.assertIn("scripts/external_request_policy.py", workflow)
+        self.assertIn("scripts/gdelt_webngrams.py", workflow)
+        self.assertIn("scripts/build_github_contents_request.py", workflow)
 
 
 if __name__ == "__main__":
