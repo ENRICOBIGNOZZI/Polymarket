@@ -14,36 +14,24 @@ find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
 
-add_library(pm_core
-    src/http.cpp
-    src/api.cpp
-    src/event_api.cpp
-    src/engine.cpp
-    src/boost_json.cpp
-)
+add_library(pm_core src/http.cpp src/api.cpp src/event_api.cpp src/engine.cpp src/boost_json.cpp)
 target_include_directories(pm_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_core PUBLIC PkgConfig::LIBCURL)
 target_compile_options(pm_core PRIVATE -Wall -Wextra -Wpedantic)
 
-add_library(pm_fast_arb
-    src/fast_arb.cpp
-    src/fast_ws.cpp
-)
+add_library(pm_fast_arb src/fast_arb.cpp src/fast_ws.cpp)
 target_include_directories(pm_fast_arb PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(pm_fast_arb PUBLIC pm_core Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 target_compile_options(pm_fast_arb PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(polymarket_engine src/main.cpp)
 target_link_libraries(polymarket_engine PRIVATE pm_core)
-
 add_executable(polymarket_trade_recorder src/trade_recorder.cpp)
 target_link_libraries(polymarket_trade_recorder PRIVATE pm_core)
 target_compile_options(polymarket_trade_recorder PRIVATE -Wall -Wextra -Wpedantic)
-
 add_executable(polymarket_rewards_scan src/rewards_scan.cpp)
 target_link_libraries(polymarket_rewards_scan PRIVATE pm_core)
 target_compile_options(polymarket_rewards_scan PRIVATE -Wall -Wextra -Wpedantic)
-
 add_executable(polymarket_fast_arb_shadow src/fast_arb_main.cpp)
 target_link_libraries(polymarket_fast_arb_shadow PRIVATE pm_fast_arb)
 target_compile_options(polymarket_fast_arb_shadow PRIVATE -Wall -Wextra -Wpedantic)
@@ -51,7 +39,6 @@ target_compile_options(polymarket_fast_arb_shadow PRIVATE -Wall -Wextra -Wpedant
 include(CTest)
 if(BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
-
     add_executable(pm_tests tests/test_core.cpp)
     target_link_libraries(pm_tests PRIVATE pm_core)
     add_executable(pm_execution_tests tests/test_execution.cpp)
@@ -72,8 +59,15 @@ if(BUILD_TESTING)
     add_test(NAME v7_authorized_paper_envelope_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_authorized_paper_envelope.py)
     add_test(NAME v7_execution_evidence_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_execution_evidence.py)
     add_test(NAME v7_execution_ledger_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_execution_ledger.py)
+    add_test(NAME v7_ledger_spool_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_ledger_spool.py)
     add_test(NAME v7_learned_execution_model_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_learned_execution_model.py)
     add_test(NAME v7_canonical_economics_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_canonical_economics.py)
+    add_test(NAME v7_joint_execution_policy_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_joint_execution_policy.py)
+    add_test(NAME v7_graph_rv_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_graph_rv.py)
+    add_test(NAME v7_graph_cost_vector_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_graph_cost_vector.py)
+    add_test(NAME v7_capital_allocator_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_capital_allocator.py)
+    add_test(NAME v7_portfolio_guard_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_portfolio_guard.py)
+    add_test(NAME v7_hard_arb_executable_mark_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_hard_arb_executable_mark.py)
     add_test(NAME v7_native_monitoring_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitoring_v7_native.py)
     add_test(NAME v7_ledger_monitoring_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitoring_v7_ledger.py)
     add_test(NAME v7_dashboard_completion_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitoring_v7_dashboard_completion.py)
@@ -86,7 +80,6 @@ if(BUILD_TESTING)
     add_test(NAME v7_fast_runtime_contract_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fast_runtime_contract.py)
     add_test(NAME v7_fast_authority_sentinel_contract_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_fast_authority_sentinel_contract.py)
     add_test(NAME v7_fast_arb_leg_freshness_contract_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_fast_arb_leg_freshness_contract.py)
-
     add_test(NAME v7_current_model_state_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_current_model_state.py)
     add_test(NAME v7_local_factor_by_contract_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_local_factor_by_contract.py)
     add_test(NAME v7_local_factor_core_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_local_factor_core.py)
@@ -105,6 +98,5 @@ if(BUILD_TESTING)
     add_test(NAME v7_cross_sectional_rank_15m_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_cross_sectional_rank_15m.py)
     add_test(NAME v7_micro_taker_core_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_micro_taker_core.py)
     add_test(NAME v7_micro_target_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_micro_target.py)
-
     add_test(NAME mock_integration COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_mock.sh $<TARGET_FILE:polymarket_engine>)
 endif()
