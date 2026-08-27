@@ -12,7 +12,7 @@
   },
   "candidate_contract": {
     "require_enabled_v7_champion": true,
-    "champion_loop": "scripts/paper_v7_loop.sh",
+    "champion_loop": "scripts/paper_v7_execution_loop.sh",
     "champion_config": "config/paper_v7.json",
     "champion_run_root": "runs/paper_v7_live",
     "require_operator_directives_match_main": true,
@@ -20,7 +20,10 @@
     "require_authenticated_execution_false": true,
     "require_authoritative_fee": true,
     "require_shared_execution_ledger": true,
+    "require_single_canonical_ledger_writer": true,
     "require_joint_fill_state_for_multileg": true,
+    "require_complete_cost_vector": true,
+    "require_account_drawdown_guard": true,
     "max_drawdown": 0.15
   },
   "runtime_root": "runs/v7_candidate_evidence",
@@ -36,5 +39,5 @@
   "publish_telemetry": true,
   "telemetry_latest_path": "telemetry/latest-v7-unified-evidence.json",
   "telemetry_runtime_path": "telemetry/latest-v7-unified-runtime.json",
-  "rule": "Run only the single open canonical integration/v7-* PR whose exact head is descended from current main, has all required exact-head workflows green, and already contains the final enabled V7 PAPER champion contract. Evidence runs on an isolated per-SHA state root and never mutates main, paper-validated, deploy state, authenticated execution, or another runtime. If zero or multiple canonical candidates exist, do not choose one arbitrarily."
+  "rule": "Run only the single open canonical integration/v7-* PR whose exact head descends from current main, has all required exact-head workflows green, and contains the enabled PAPER-only V7 candidate champion. The isolated per-SHA runtime uses the canonical single-writer ledger and bundle-level economics; it never mutates main, paper-validated, deploy state, authenticated execution, or another runtime."
 }
