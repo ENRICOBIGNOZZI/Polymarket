@@ -37,6 +37,7 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertTrue(architecture["single_account_allocator"])
         self.assertTrue(architecture["single_canonical_ledger_writer"])
         self.assertEqual(architecture["fast_path"], "cpp_websocket_event_driven")
+        self.assertEqual(architecture["slow_path"], "python_reward_selection_and_model_fit")
         self.assertTrue(policy["exploration"]["enabled"])
         self.assertFalse(policy["exploration"]["promotion_credit"])
         self.assertLessEqual(float(policy["exploration"]["max_capital_fraction"]), 0.02)
@@ -45,11 +46,14 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
 
     def test_canonical_runtime_starts_only_professional_maker_stack(self) -> None:
         source = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
-        self.assertIn("v7_market_maker_worker.py", source)
+        self.assertIn("polymarket_v7_market_maker_runtime", source)
+        self.assertIn("PM_V7_MARKET_MAKER_RUNTIME", source)
         self.assertIn("v7_market_maker_rewards.py", source)
         self.assertIn("v7_market_maker_model.py", source)
         self.assertIn("v7_market_maker_status.py", source)
         self.assertIn("v7_ledger_spool.py", source)
+        self.assertNotIn("v7_market_maker_worker.py", source)
+        self.assertNotIn("--interval-ms 500", source)
         self.assertNotIn("v7_complete_set_maker", source)
         self.assertNotIn("polymarket_rewards_scan", source)
         self.assertNotIn("Generic maker is intentionally not started", source)
