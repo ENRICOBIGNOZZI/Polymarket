@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.v7_execution_evidence import row_has_realized_pnl, row_is_fill
+from scripts.v7_execution_evidence import default_policy, row_has_realized_pnl, row_is_fill
 
 
 def run_audit() -> dict[str, Any]:
@@ -24,6 +24,7 @@ def run_audit() -> dict[str, Any]:
 
     counted_fills = sum(row_is_fill(row) for row in (entry, exit_row))
     counted_realized = sum(row_has_realized_pnl(row) for row in (entry, exit_row, partial_entry))
+    default_min_fills = int(default_policy()["models"]["micro_maker"]["min_fills"])
 
     return {
         "schema": "lf_v7_execution_evidence_accounting_audit_v1",
@@ -33,6 +34,8 @@ def run_audit() -> dict[str, Any]:
         "current_counted_fills": counted_fills,
         "current_fill_rate": counted_fills / 1,
         "expected_fill_opportunities_completed": 1,
+        "default_min_fills": default_min_fills,
+        "unique_round_trips_needed_to_hit_current_fill_gate": (default_min_fills + counted_fills - 1) // counted_fills,
         "entry_zero_pnl_counted_as_realized": row_has_realized_pnl(entry),
         "partial_zero_pnl_counted_as_realized": row_has_realized_pnl(partial_entry),
         "current_counted_realized_pnl_rows": counted_realized,
