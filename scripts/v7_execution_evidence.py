@@ -19,7 +19,7 @@ import threading
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 
 SCHEMA = "polymarket_execution_evidence_v1"
@@ -29,6 +29,9 @@ ALLOWED_TARGETS = {
     "structural_payout",
     "terminal_probability",
 }
+TERMINAL_ACTION_TOKENS = ("SELL", "EXIT", "UNWIND", "SETTLE", "CLOSE")
+PARTIAL_STATE_TOKENS = ("PARTIAL", "PENDING")
+ENTRY_FILL_TOKENS = ("BUY", "FILL", "EXECUTE")
 
 
 def number(value: Any, default: float = math.nan) -> float:
@@ -94,6 +97,14 @@ def canonical_action(row: dict[str, str]) -> str:
     return first_text(row, ("action", "event", "status")).upper()
 
 
+def lifecycle_text(row: dict[str, str]) -> str:
+    return " ".join(
+        str(row.get(column) or "").strip().upper()
+        for column in ("action", "event", "status", "state", "fill_state", "order_state", "phase", "position_effect")
+        if str(row.get(column) or "").strip()
+    )
+
+
 def timestamp(row: dict[str, str]) -> int:
     return integer(first_number(row, ("closed_ts", "timestamp", "exit_ts", "created_ts")), 0)
 
@@ -130,10 +141,21 @@ def strategy_paths(run_root: Path, model: str) -> tuple[list[Path], list[Path]]:
 
 
 def row_is_fill(row: dict[str, str]) -> bool:
+    """Return true only for mature entry-fill records.
+
+    Exit/settlement rows are terminal outcome observations, not additional
+    entries.  Explicit partial/pending rows stay censored until their order has
+    a mature entry-fill record.
+    """
     action = canonical_action(row)
     if not action:
         return False
-    return any(token in action for token in ("BUY", "SELL", "FILL", "EXIT", "SETTLE"))
+    lifecycle = lifecycle_text(row)
+    if any(token in lifecycle for token in PARTIAL_STATE_TOKENS):
+        return False
+    if any(token in action for token in TERMINAL_ACTION_TOKENS):
+        return False
+    return any(token in action for token in ENTRY_FILL_TOKENS)
 
 
 def row_is_submission(row: dict[str, str]) -> bool:
@@ -141,21 +163,92 @@ def row_is_submission(row: dict[str, str]) -> bool:
     return action in {"POST", "SUBMIT", "RESTING", "OPEN"} or bool(first_text(row, ("expected_edge", "maker_entry_net_edge")))
 
 
+def fill_identity(row: dict[str, str]) -> str:
+    fill_id = first_text(row, ("fill_id", "trade_id", "execution_id"))
+    if fill_id:
+        return f"fill:{fill_id}"
+    order_id = first_text(row, ("order_id", "client_order_id", "submission_id"))
+    leg_id = first_text(row, ("leg_id", "token_id", "asset_id", "outcome_id"))
+    if order_id:
+        return f"order:{order_id}:leg:{leg_id or '-'}"
+    bundle_id = first_text(row, ("bundle_id", "intent_id"))
+    if bundle_id and leg_id:
+        return f"bundle:{bundle_id}:leg:{leg_id}"
+    return ""
+
+
+def submission_identity(row: dict[str, str]) -> str:
+    value = first_text(
+        row,
+        (
+            "order_id",
+            "client_order_id",
+            "submission_id",
+            "intent_id",
+            "opportunity_id",
+            "candidate_id",
+            "bundle_id",
+        ),
+    )
+    return f"submission:{value}" if value else ""
+
+
 def realized_pnl(row: dict[str, str]) -> float:
     return first_number(row, ("net_pnl", "pnl", "realized_pnl"))
 
 
 def row_has_realized_pnl(row: dict[str, str]) -> bool:
-    """Exclude entry/partial-fill zeroes from a realized-PnL sample.
+    """Count PnL only on explicit terminal execution records.
 
-    Bundle ledgers are already terminal rows and normally use ``net_pnl`` with
-    no action.  Execution logs need an explicit close, unwind, or settlement
-    action before their PnL belongs in the statistical sample.
+    Actionless bundle ledgers may already be terminal records.  Execution logs
+    with BUY/FILL/partial states remain censored even when they carry a literal
+    ``net_pnl=0`` placeholder.
     """
-    if str(row.get("net_pnl") or "").strip():
-        return True
+    if not any(str(row.get(column) or "").strip() for column in ("net_pnl", "pnl", "realized_pnl")):
+        return False
     action = canonical_action(row)
-    return any(token in action for token in ("SELL", "EXIT", "UNWIND", "SETTLE", "CLOSE"))
+    if not action:
+        return True
+    lifecycle = lifecycle_text(row)
+    if any(token in lifecycle for token in PARTIAL_STATE_TOKENS):
+        return False
+    return any(token in action for token in TERMINAL_ACTION_TOKENS)
+
+
+def terminal_pnl_identity(row: dict[str, str]) -> str:
+    terminal_id = first_text(row, ("close_id", "settlement_id", "realization_id", "terminal_id"))
+    if terminal_id:
+        return f"terminal:{terminal_id}"
+    anchor = first_text(row, ("bundle_id", "position_id", "order_id", "client_order_id", "fill_id", "trade_id"))
+    if not anchor:
+        return ""
+    return f"terminal:{anchor}:{timestamp(row)}:{canonical_action(row) or 'BUNDLE'}"
+
+
+def unique_evidence_rows(
+    rows: Iterable[dict[str, str]],
+    predicate: Callable[[dict[str, str]], bool],
+    identity: Callable[[dict[str, str]], str],
+) -> tuple[list[dict[str, str]], int, int]:
+    """Return unique identified evidence plus raw and unidentified counts.
+
+    Evidence without an immutable identity is not promoted into a maturity
+    count.  Any such rows are surfaced separately so the caller can fail closed
+    rather than silently treating log-line multiplicity as independent samples.
+    """
+    unique: dict[str, dict[str, str]] = {}
+    raw_count = 0
+    unidentified = 0
+    for row in rows:
+        if not predicate(row):
+            continue
+        raw_count += 1
+        key = identity(row)
+        if not key:
+            unidentified += 1
+            continue
+        unique.setdefault(key, row)
+    return list(unique.values()), raw_count, unidentified
 
 
 def observed_markout(row: dict[str, str]) -> float:
@@ -280,9 +373,14 @@ def assess_model(
     execution_paths, submission_paths = strategy_paths(run_root, model)
     execution_rows = [row for path in execution_paths for row in read_rows(path)]
     submission_rows = [row for path in submission_paths for row in read_rows(path)]
-    fills = [row for row in execution_rows if row_is_fill(row)]
-    submissions = [row for row in submission_rows if row_is_submission(row)]
-    pnl_values = [(timestamp(row), realized_pnl(row)) for row in execution_rows if row_has_realized_pnl(row)]
+    fills, raw_fill_rows, unidentified_fill_rows = unique_evidence_rows(execution_rows, row_is_fill, fill_identity)
+    submissions, raw_submission_rows, unidentified_submission_rows = unique_evidence_rows(
+        submission_rows, row_is_submission, submission_identity
+    )
+    pnl_rows, raw_pnl_rows, unidentified_pnl_rows = unique_evidence_rows(
+        execution_rows, row_has_realized_pnl, terminal_pnl_identity
+    )
+    pnl_values = [(timestamp(row), realized_pnl(row)) for row in pnl_rows]
     pnl_values = [(ts, value) for ts, value in pnl_values if math.isfinite(value)]
     markouts = [observed_markout(row) for row in execution_rows]
     markouts = [value for value in markouts if math.isfinite(value)]
@@ -303,18 +401,26 @@ def assess_model(
     terminal_observations, brier_improvement = terminal_calibration(terminal_rows)
 
     reasons: list[str] = []
+    required_fills = integer(contract.get("min_fills"), 20)
+    required_pnl = integer(contract.get("min_pnl_observations"), 12)
+    required_fill_rate = number(contract.get("min_fill_rate"), 0.0)
     if target not in ALLOWED_TARGETS:
         reasons.append("invalid_target_contract")
     if bool(contract.get("allow_terminal_mixture", False)):
         reasons.append("terminal_mixture_forbidden")
-    if len(fills) < integer(contract.get("min_fills"), 20):
+    if raw_fill_rows and unidentified_fill_rows and required_fills > 0:
+        reasons.append("fill_identity_unverifiable")
+    if raw_submission_rows and unidentified_submission_rows and math.isfinite(required_fill_rate) and required_fill_rate > 0.0:
+        reasons.append("submission_identity_unverifiable")
+    if raw_pnl_rows and unidentified_pnl_rows and required_pnl > 0:
+        reasons.append("terminal_pnl_identity_unverifiable")
+    if len(fills) < required_fills:
         reasons.append("insufficient_fills")
-    if len(pnl_values) < integer(contract.get("min_pnl_observations"), 12):
+    if len(pnl_values) < required_pnl:
         reasons.append("insufficient_realized_pnl_observations")
     min_markouts = integer(contract.get("min_markout_observations"), 0)
     if len(markouts) < min_markouts:
         reasons.append("insufficient_forward_markout_observations")
-    required_fill_rate = number(contract.get("min_fill_rate"), 0.0)
     if math.isfinite(required_fill_rate) and required_fill_rate > 0.0:
         if fill_rate is None:
             reasons.append("submission_denominator_missing")
@@ -374,6 +480,12 @@ def assess_model(
         "bootstrap_one_sided_pvalue": bootstrap,
         "active_folds": active_folds,
         "positive_fold_fraction": positive_fold_fraction,
+        "raw_fill_rows": raw_fill_rows,
+        "unidentified_fill_rows": unidentified_fill_rows,
+        "raw_submission_rows": raw_submission_rows,
+        "unidentified_submission_rows": unidentified_submission_rows,
+        "raw_terminal_pnl_rows": raw_pnl_rows,
+        "unidentified_terminal_pnl_rows": unidentified_pnl_rows,
         "reason_codes": sorted(set(reasons)),
         "sources": source_stats,
         "as_of_timestamp": now,
