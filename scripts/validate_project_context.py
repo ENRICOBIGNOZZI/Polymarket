@@ -11,11 +11,13 @@ EXPECTED_CLEANUP_SEQUENCE = (
     "paper_validated_then_deploy_then_server_health_then_legacy_deletion"
 )
 EXPECTED_V7_PATHS = {
-    "canonical_loop": "scripts/paper_v7_loop.sh",
+    "canonical_loop": "scripts/paper_v7_execution_loop.sh",
     "canonical_config": "config/paper_v7.json",
     "canonical_run_root": "runs/paper_v7_live",
 }
-EVIDENCE_CANDIDATE_LOOP = "scripts/paper_v7_execution_loop.sh"
+EVIDENCE_CANDIDATE_LOOP = EXPECTED_V7_PATHS["canonical_loop"]
+FORCED_PAPER_CHAMPION_POLICY = "operator_forced_v7_paper_champion"
+FORCED_PAPER_CHAMPION_PREDEPLOY_STATE = "operator_forced_v7_paper_champion_predeployment"
 
 
 def load(path: Path) -> dict[str, Any]:
@@ -142,19 +144,38 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     grafana = context.get("grafana") if isinstance(context.get("grafana"), dict) else {}
     champion_enabled = champion.get("enabled") is True
     candidate_only = champion_enabled and champion.get("candidate_only_until_promoted") is True
+    forced_predeploy = (
+        champion_enabled
+        and champion.get("version") == 7
+        and champion.get("promotion_policy") == FORCED_PAPER_CHAMPION_POLICY
+        and champion.get("candidate_only_until_promoted") is False
+        and runtime.get("active_champion") is False
+    )
 
     if candidate_only:
         if champion.get("version") != 7:
             errors.append("isolated evidence candidate must be version 7")
         _validate_v7_manifest_paths(root, champion, errors, expected_loop=EVIDENCE_CANDIDATE_LOOP)
-        # Candidate-only enablement is an evidence selector, not an assertion that
-        # main/paper-validated/deploy/Grafana has become operational.  Those remain
-        # false until the later exact-SHA lifecycle stages succeed.
         if runtime.get("active_champion") is not False:
             errors.append("candidate-only V7 evidence must not set runtime.active_champion=true")
         if grafana.get("active") is not False or grafana.get("dashboard_uid") is not None or grafana.get("dashboard_file") is not None:
             errors.append("candidate-only V7 evidence must not activate canonical Grafana before promotion/deploy")
         notes.append("operational champion: inactive; isolated V7 evidence candidate enabled")
+    elif forced_predeploy:
+        _validate_v7_manifest_paths(root, champion, errors, expected_loop=EXPECTED_V7_PATHS["canonical_loop"])
+        if champion.get("legacy_fallback_allowed") is not False:
+            errors.append("operator-forced V7 PAPER champion must forbid legacy fallback")
+        if cutover.get("current_state") != FORCED_PAPER_CHAMPION_PREDEPLOY_STATE:
+            errors.append(f"operator-forced predeploy champion requires cutover.current_state={FORCED_PAPER_CHAMPION_PREDEPLOY_STATE}")
+        # The operator may designate V7 as the sole PAPER champion before the
+        # exact-SHA lifecycle reaches deployment. That designation must never be
+        # misrepresented as a deployed runtime: main/paper-validated/deploy/health
+        # still have to converge in order, and Grafana stays non-canonical here.
+        if runtime.get("active_champion") is not False:
+            errors.append("predeploy V7 PAPER champion designation must keep runtime.active_champion=false")
+        if grafana.get("active") is not False or grafana.get("dashboard_uid") is not None or grafana.get("dashboard_file") is not None:
+            errors.append("predeploy V7 PAPER champion designation must not claim canonical Grafana")
+        notes.append("operational champion: V7 PAPER champion designated; exact-SHA deployment pending")
     elif champion_enabled:
         if champion.get("version") != 7:
             errors.append("enabled operational champion must be version 7")
@@ -167,7 +188,7 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
             errors.append("operational V7 champion requires active canonical Grafana with dashboard_uid")
         if dashboard_file is None or not (root / dashboard_file).is_file():
             errors.append("operational V7 champion requires an existing canonical dashboard_file")
-        notes.append("operational champion: V7 enabled")
+        notes.append("operational champion: V7 enabled and deployed")
     else:
         if champion.get("enabled") is not False:
             errors.append("live champion must be explicitly enabled or disabled")
