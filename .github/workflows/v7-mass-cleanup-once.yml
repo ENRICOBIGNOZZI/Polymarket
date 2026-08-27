@@ -1,0 +1,46 @@
+name: V7 one-shot repository cleanup
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: v7-one-shot-cleanup-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    if: github.event.pull_request.head.ref == 'cleanup/v7-only-everywhere-20260827'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Apply deterministic V7-only cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/v7_mass_cleanup_once.py
+          git status --short
+      - name: Commit cleanup result
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'no cleanup changes'
+            exit 0
+          fi
+          git commit -m 'V7 cleanup: purge superseded repository surfaces'
+          git push origin "HEAD:${HEAD_REF}"
