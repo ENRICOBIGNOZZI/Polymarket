@@ -1,0 +1,38 @@
+{
+  "schema": "polymarket_hf_v7_maker_flow_window_evidence_v1",
+  "decision": "BLOCKING_ROLLING_FLOW_WINDOW_TRUNCATED",
+  "audited_parent_sha": "0ac26368d1c636044a9952d7f0a1ef269310719d",
+  "source": "scripts/v7_complete_set_maker.py",
+  "config": "config/v7_complete_set_maker.json",
+  "configured_flow_lookback_seconds": 300,
+  "default_worker_interval_seconds": 2.0,
+  "nominal_interval_to_lookback_fraction": 0.006666666666666667,
+  "observed_contract": {
+    "fill_replay_rows": "new_trades = read_new_tape(trade_tape, state)",
+    "watermark": "advanced after one-time fill replay",
+    "decision_flow_rows": "recent_for_decision is filtered only from new_trades",
+    "problem": "previously known prints inside the configured 300s event-time window disappear from the next admission/fill-hazard decision"
+  },
+  "economic_consequence": [
+    "compatible contra-flow can be materially understated",
+    "target size can fail flow-cap admission despite genuine recent activity",
+    "fill probability and joint completion probability can be understated",
+    "zero-candidate and zero-fill PAPER evidence can be artificially inflated"
+  ],
+  "required_fix": {
+    "fill_replay": "retain watermark/incremental semantics so each public print is consumed at most once",
+    "decision_flow": "independently reconstruct all causally known prints in the configured rolling event-time window",
+    "causal_receive_gate": "received_ms <= decision_ms",
+    "causal_event_gate": "event_ts_ms <= decision_ms",
+    "event_age_gate": "event_ts_ms >= decision_ms - flow_lookback_seconds*1000",
+    "no_double_fill_replay": true
+  },
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "operator_authority_modified": false,
+    "main_modified": false,
+    "paper_validated_modified": false
+  },
+  "pnl_credit": "NONE_UNTIL_FORWARD_RERUN_AFTER_FIX"
+}
