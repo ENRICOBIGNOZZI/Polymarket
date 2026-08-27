@@ -3,11 +3,11 @@
   "research_only": true,
   "paper_only": true,
   "authenticated_execution": false,
-  "observed_run_id": 33037250785,
-  "observed_head_sha": "7e626d0c496636ccca4cec254474b02206118bbf",
   "operator_directive_epoch": "2026-08-27T01:36:00+02:00",
   "defect": "The non-binding fixed-dollar compatibility sentinel 1e100 was used directly as economic notional by Fast Shadow, especially MAKER_COMPLETE_SET_SHADOW, producing impossible executable_shares/capital/profit and contaminating aggregate opportunity-profit/bootstrap evidence.",
-  "pre_fix_observations": {
+  "pre_fix": {
+    "run_id": 33037250785,
+    "head_sha": "7e626d0c496636ccca4cec254474b02206118bbf",
     "markets": 1263,
     "tokens": 2526,
     "ws_messages": 30762,
@@ -24,12 +24,8 @@
     "maker_shadow_stress_survival_plus_10bp": 0.9298245614035088,
     "reported_maker_shadow_profit_sum": 4.00952218e100,
     "reported_best_expected_profit": 3.5379812695109304e98,
-    "reported_bootstrap_lower_profit_95": 4.0095221799999906e100
-  },
-  "interpretation": {
-    "hard_arb": "No valid hard-arbitrage hit was observed in this window.",
-    "maker_shadow": "Edge observations may remain useful as price diagnostics, but all size-dependent profit/capital/bootstrap quantities from the pre-fix run are invalid economic evidence.",
-    "promotion": "Not eligible. A fresh chronological rerun is required after the sentinel sizing fix."
+    "reported_bootstrap_lower_profit_95": 4.0095221799999906e100,
+    "economic_evidence_valid": false
   },
   "repair_contract": {
     "rule": "When max_notional_usd is non-finite or above current PAPER capital ceilings, clamp it to starting_capital times the minimum of market/event/gross percentage ceilings and 100%.",
@@ -40,5 +36,45 @@
     "derived_shadow_capital_ceiling": 10000.0,
     "workflow_gate": "Fail if any shadow opportunity capital_required exceeds the derived PAPER capital ceiling or any capital/profit/share quantity is non-finite."
   },
-  "decision": "BLOCKING_SENTINEL_NOTIONAL_EVIDENCE_DEFECT_REPAIRED_MORE_EVIDENCE_REQUIRED"
+  "post_fix": {
+    "run_id": 33037813639,
+    "head_sha": "4c6d38e081ef13699f803d7c48976ef202cd8045",
+    "workflow_conclusion": "success",
+    "markets": 1239,
+    "tokens": 2478,
+    "ws_messages": 21959,
+    "book_updates": 19505,
+    "feed_stale_ms": 7,
+    "feed_latency_p99_ms": 523.96,
+    "decision_latency_p99_us": 39127.08,
+    "freshness_ready_tokens": 2478,
+    "freshness_missing_rejections": 0,
+    "freshness_skew_rejections": 0,
+    "freshness_age_rejections": 11580,
+    "hard_executable_observations": 0,
+    "hard_reject_reasons": {
+      "edge_below_policy_after_costs": 1105,
+      "edge_below_costed_conversion_policy": 337,
+      "insufficient_conversion_depth": 54
+    },
+    "maker_shadow_executable_observations": 477,
+    "maker_shadow_edge_p50": 0.005,
+    "maker_shadow_edge_p90": 0.006,
+    "maker_shadow_stress_survival_plus_10bp": 0.7882599580712788,
+    "maker_shadow_profit_sum": 23354.4651,
+    "max_observed_capital_required": 10000.0,
+    "best_expected_profit": 257.73195876288685,
+    "completed_opportunity_lifetimes": 47,
+    "opportunity_lifetime_p10_ms": 233.6,
+    "end_to_end_latency_p99_ms": 545.68486,
+    "economic_sizing_contract_valid": true,
+    "hard_arb_result": "ZERO_HARD_EXECUTABLE_IN_THIS_AUTHORIZED_WINDOW"
+  },
+  "interpretation": {
+    "sentinel_defect": "Repaired and prospectively validated: no opportunity exceeded the derived PAPER capital ceiling.",
+    "hard_arb": "The authorized 1000-market / $2 / 0.5bp envelope produced zero freshness-qualified hard-arbitrage observations in the post-fix window. Reject reasons were economic/depth, not missing/skew provenance.",
+    "maker_shadow": "Finite price/size diagnostics are now auditable, but modeled opportunity profit is still not PAPER fill-conditioned realized PnL and cannot support promotion.",
+    "latency": "The p10 completed opportunity lifetime was shorter than p99 end-to-end latency, so the current Fast path is not promotion-ready even apart from zero hard hits."
+  },
+  "decision": "SENTINEL_SIZING_REPAIRED_HARD_ARB_ZERO_LATENCY_HORIZON_BLOCKER_MORE_EVIDENCE_REQUIRED"
 }
