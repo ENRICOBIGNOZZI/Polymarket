@@ -154,15 +154,18 @@ class EvidenceRouterStaticContractTest(unittest.TestCase):
         for forbidden in (
             "source_pr: 546",
             "research/v7-unified-final-evidence-20260826",
-            "require_source_draft",
-            "require_source_live_champion_unchanged",
             "version') == 6",
             'version"] == 6',
             "paper_v6_loop",
         ):
             self.assertNotIn(forbidden, self.workflow)
-        self.assertNotIn("source_pr", self.config)
-        self.assertNotIn("source_branch", self.config)
+        for deprecated_key in (
+            "source_pr",
+            "source_branch",
+            "require_source_draft",
+            "require_source_live_champion_unchanged",
+        ):
+            self.assertNotIn(deprecated_key, self.config)
 
     def test_router_requires_unique_canonical_integration_candidate(self):
         selection = self.config["source_selection"]
