@@ -19,6 +19,8 @@ class V7ExecutionEvidenceAccountingAuditTest(unittest.TestCase):
         self.assertEqual(report["current_counted_fills"], 2)
         self.assertEqual(report["current_fill_rate"], 2.0)
         self.assertEqual(report["expected_fill_opportunities_completed"], 1)
+        self.assertEqual(report["default_min_fills"], 20)
+        self.assertEqual(report["unique_round_trips_needed_to_hit_current_fill_gate"], 10)
 
     def test_entry_and_partial_zero_pnl_rows_are_currently_counted_as_realized(self) -> None:
         report = run_audit()
