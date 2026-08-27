@@ -31,15 +31,25 @@ class V7UnifiedEvidenceRuntimeTest(unittest.TestCase):
         self.assertTrue(contract["require_complete_cost_vector"])
         self.assertTrue(contract["require_account_drawdown_guard"])
 
-    def test_candidate_champion_is_paper_only_and_not_deployed_by_this_workflow(self) -> None:
+    def test_forced_paper_champion_is_safe_and_exact_sha_health_remains_pending(self) -> None:
         champion = json.loads((ROOT / "config/live_champion.json").read_text())
+        context = json.loads((ROOT / "config/project_context.json").read_text())
         self.assertTrue(champion["enabled"])
         self.assertEqual(champion["version"], 7)
         self.assertTrue(champion["paper_only"])
         self.assertFalse(champion["authenticated_execution"])
         self.assertFalse(champion["real_order_submission"])
-        self.assertTrue(champion["candidate_only_until_promoted"])
+        self.assertFalse(champion["candidate_only_until_promoted"])
+        self.assertEqual(champion["promotion_policy"], "operator_forced_v7_paper_champion")
+        self.assertFalse(champion["legacy_fallback_allowed"])
         self.assertEqual(champion["loop"], "scripts/paper_v7_execution_loop.sh")
+        # project_context is canonical main-owned metadata and may describe the
+        # V7 monitoring/runtime plane as active. It is not an exact-head deploy
+        # receipt: the state itself must continue to say exact-SHA deploy/health
+        # is pending until the lifecycle workflow proves it.
+        self.assertTrue(context["runtime"]["active_champion"])
+        self.assertTrue(context["grafana"]["active"])
+        self.assertIn("pending_exact_sha_deploy_health", context["cutover"]["current_state"])
 
     def test_scheduler_has_no_promotion_or_deployment_authority(self) -> None:
         registry = json.loads((ROOT / "config/scheduler_registry.json").read_text())
@@ -63,7 +73,7 @@ class V7UnifiedEvidenceRuntimeTest(unittest.TestCase):
             "SOURCE_SHA",
             "git merge-base --is-ancestor \"$MAIN_SHA\" \"$SOURCE_SHA\"",
             "head_sha=${SOURCE_SHA}",
-            "Private runtime single-writer validation",
+            "cfg['required_successful_workflows']",
             "scripts/paper_v7_execution_loop.sh",
             "scripts/v7_ledger_spool.py",
             "scripts/v7_canonical_economics.py",

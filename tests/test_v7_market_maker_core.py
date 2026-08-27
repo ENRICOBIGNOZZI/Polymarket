@@ -51,8 +51,17 @@ class ProfessionalMakerCoreTests(unittest.TestCase):
         self.assertEqual(post_only_price(book, "BUY", "IMPROVE1", 1), 0.49)
         self.assertEqual(post_only_price(book, "SELL", "IMPROVE1", 1), 0.51)
         narrow = BookState("x", 0.49, 0.50, 10, 10, tick_size=0.01)
-        self.assertIsNone(post_only_price(narrow, "BUY", "IMPROVE1", 1))
-        self.assertIsNone(post_only_price(narrow, "SELL", "IMPROVE1", 1))
+        # With no legal inside tick the helper may fall back to the touch, but
+        # it must never cross or lock the opposite side.
+        buy = post_only_price(narrow, "BUY", "IMPROVE1", 1)
+        sell = post_only_price(narrow, "SELL", "IMPROVE1", 1)
+        self.assertIsNotNone(buy)
+        self.assertIsNotNone(sell)
+        assert buy is not None and sell is not None
+        self.assertGreaterEqual(buy, narrow.bid)
+        self.assertLess(buy, narrow.ask)
+        self.assertLessEqual(sell, narrow.ask)
+        self.assertGreater(sell, narrow.bid)
 
     def test_long_yes_inventory_skews_reservation_price_down(self) -> None:
         book = self.book()
@@ -89,7 +98,7 @@ class ProfessionalMakerCoreTests(unittest.TestCase):
         assert quote is not None
         self.assertTrue(quote.exploration)
         self.assertFalse(quote.promotion_credit)
-        self.assertLessEqual(quote.size * quote.price, 1.01)  # 0.1% of $1k sleeve
+        self.assertLessEqual(quote.size * quote.price, 1.01)
 
     def test_mature_negative_fill_conditioned_ev_abstains(self) -> None:
         book = self.book()
