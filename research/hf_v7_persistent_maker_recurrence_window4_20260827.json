@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-08-27T07:22:00Z",
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "research_only": true,
+  "promotion_allowed": false,
+  "paper_fill_claim": false,
+  "realized_pnl_claim": false,
+  "authority": {
+    "source": "config/operator_directives.json@main plus latest explicit user instruction",
+    "main_sha_observed": "b81f37ad858460cc8d4546682d684cb5bca79bbb",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "market_limit": 1000,
+    "min_liquidity": 2.0,
+    "min_net_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "fixed_dollar_trade_cap_enabled": false,
+    "max_trade_fraction": 1.0,
+    "max_market_fraction": 1.0,
+    "max_event_fraction": 1.0,
+    "max_gross_fraction": 1.0,
+    "hard_arb_max_trade_fraction": 1.0,
+    "max_drawdown": 0.15
+  },
+  "preregistered_source": {
+    "pr": 708,
+    "source_fast_pr": 704,
+    "source_fast_head_sha": "e2285d800fdeaaf82e8ff93882b90b306ce5347d",
+    "source_fast_run_id": 33042585786,
+    "source_fast_artifact_id": 9634503913,
+    "prospective_not_before_ms": 1787808775004,
+    "candidate_ids": ["maker-binary:3746416", "maker-binary:701544", "maker-binary:1321564"],
+    "same_window_execution_credit_allowed": false,
+    "original_persistence_min_observations": 10,
+    "original_persistence_min_span_ms": 20000,
+    "additional_frozen_stress_bps": 10.0
+  },
+  "prior_prospective_recurrence": {
+    "evidence_file": "research/hf_v7_persistent_maker_recurrence_window3_20260827.json",
+    "candidate_id": "maker-binary:1321564",
+    "final_observed_ts_ms": 1787812914802
+  },
+  "later_window": {
+    "workflow_run_id": 33047208690,
+    "artifact_id": 9636219121,
+    "artifact_sha256": "8d2db48fdfd11a3782dc5859a5736207d1569e69af2735288c2e02a9166d8767",
+    "pr": 708,
+    "research_head_sha": "ad25ec36046fec8e490e8fa8aacca45b4d9766be",
+    "checked_out_revision": "da9c1a862b101c79bd7239b8c7c5f8c207ddbd48",
+    "checked_out_ref": "refs/pull/708/merge",
+    "chronologically_after_preregistration": true,
+    "chronologically_after_prior_recurrence": true,
+    "authority_valid_execution_window": false,
+    "authority_invalid_reasons": [
+      "GitHub Actions checked out the synthetic pull-request merge ref instead of the exact research head",
+      "the Fast workflow invoked config/fast_arb_shadow.json rather than a current-authority V7 Fast surface",
+      "the Fast workflow invoked --markets 600 rather than the authorized approximately 1000-market breadth",
+      "the Fast workflow invoked --min-liquidity 10 rather than the authorized $2 floor",
+      "the candidate policy used min_net_edge 0.0006 rather than the authoritative 0.00005 floor",
+      "the candidate policy used max_notional_usd 50 despite current authority having no binding fixed-dollar cap",
+      "the candidate policy used external_uncertainty_penalty 0.01 rather than the authoritative 0",
+      "the first recurrence row had exchange_ts_ms=0 and therefore complete strict exchange-time provenance is not established",
+      "candidate-specific PAPER execution was not performed"
+    ],
+    "observed_data_health": {
+      "markets": 757,
+      "tokens": 1514,
+      "safe_negrisk_events": 24,
+      "ws_messages": 13121,
+      "book_updates": 12969,
+      "rest_resyncs": 3,
+      "ws_errors": 0,
+      "feed_stale_ms": 11,
+      "feed_latency_p50_ms": 76.0,
+      "feed_latency_p95_ms": 130.0,
+      "feed_latency_p99_ms": 290.0,
+      "decision_latency_p99_us": 376.0,
+      "hard_executable_observations": 0,
+      "current_hard_executable": 0,
+      "real_order_submission": false
+    },
+    "observed_legacy_candidate_policy": {
+      "min_net_edge": 0.0006,
+      "max_notional_usd": 50.0,
+      "external_uncertainty_penalty": 0.01,
+      "research_ready": false,
+      "promotion_ready": false
+    }
+  },
+  "prospective_recurrence": {
+    "candidate_id": "maker-binary:1321564",
+    "market_id": "1321564",
+    "event_id": "196914",
+    "third_independent_post_registration_recurrence": true,
+    "first_later_observed_ts_ms": 1787813542094,
+    "final_later_observed_ts_ms": 1787813556493,
+    "delay_after_preregistered_cutoff_ms": 4767090,
+    "gap_after_prior_recurrence_ms": 627292,
+    "observed_later_span_ms": 14399,
+    "state_change_observations": 3,
+    "net_edge_per_share_min": 0.002,
+    "net_edge_per_share_median": 0.003,
+    "net_edge_per_share_max": 0.004,
+    "raw_edge_per_share_min": 0.007,
+    "raw_edge_per_share_max": 0.009,
+    "all_rows_above_authorized_0_5bp_floor": true,
+    "additional_frozen_stress_bps": 10.0,
+    "minimum_edge_after_extra_10bp_stress": 0.001,
+    "passes_original_all_rows_extra_10bp_edge_frontier": true,
+    "passes_original_persistence_window": false,
+    "persistence_failure_reasons": [
+      "3 state-change observations is below the pre-registered minimum of 10",
+      "14399 ms observed span is below the pre-registered minimum of 20000 ms"
+    ],
+    "first_row_exchange_ts_ms": 0,
+    "later_rows_exchange_ts_ms": [1787813555876, 1787813556424],
+    "paper_fill": false,
+    "paired_completion": false,
+    "realized_fill_conditioned_pnl_usd": null
+  },
+  "other_preregistered_candidates": {
+    "maker-binary:3746416": "not observed in this narrower legacy workflow universe; not counted as a failure",
+    "maker-binary:701544": "not observed in this narrower legacy workflow universe; not counted as a failure"
+  },
+  "blocking_pipeline_finding": {
+    "material": true,
+    "finding": "the currently registered Fast PR workflow can be green while evaluating a non-authoritative legacy 600-market/$10/policy surface on a synthetic merge ref",
+    "current_main_workflow_still_observed_stale": true,
+    "owner_coordination": "PR #633 owns restoration of the Fast shadow authority/current-main workflow surface; this PR does not duplicate that implementation",
+    "consequence": "static identity recurrence may be recorded for frozen-candidate research, but no PAPER execution, fill, freshness, cost-stress or promotion credit can be assigned to this window"
+  },
+  "interpretation": {
+    "material_finding": "maker-binary:1321564 appeared in a third independent post-registration chronological window; all three sampled rows remained above the authorized edge floor and also above it after an additional frozen +10bp cost stress",
+    "qualification": "this newest appearance is too short and too sparsely sampled to satisfy the pre-registered persistence-window criterion and was generated by a legacy non-authority Fast workflow on a synthetic merge ref",
+    "strongest_target": "maker-binary:1321564 remains the strongest frozen maker complete-set identity for an exact-current-authority candidate-specific PAPER execution experiment",
+    "not_claimed": ["PAPER fill", "paired completion", "strict complete-window exchange-time freshness", "audited realized PnL", "fill-conditioned PnL", "promotion readiness"]
+  },
+  "next_test": {
+    "candidate_id": "maker-binary:1321564",
+    "window": "new independent chronological PAPER window on exact research head and current V7 authority",
+    "actions": ["at_touch_two_sided", "selective_inside_spread_only_if_incremental_fill_conditioned_ev_is_positive"],
+    "required_execution_contract": [
+      "exact research head",
+      "current operator-authorized V7 breadth and economic floor",
+      "per-token receive and exchange freshness",
+      "explicit OPEN to CANCEL_PENDING to CANCELLED latency",
+      "delayed pre-cancel tape replay",
+      "FIFO queue accounting",
+      "authoritative fees and executable multi-level depth",
+      "45s 60s 300s depth-aware markout",
+      "audited non-overlapping fee slippage unwind capital and latency cost provenance",
+      "frozen-trade cost stress at 1x 1.5x and 2x"
+    ],
+    "success_gate": "positive realized post-cost fill-conditioned PAPER PnL with no same-window selection credit"
+  },
+  "decision": "THIRD_STATIC_RECURRENCE_BUT_PERSISTENCE_WINDOW_NOT_MET_AND_FAST_PIPELINE_NOT_AUTHORITY_VALID_MORE_EVIDENCE_REQUIRED"
+}
