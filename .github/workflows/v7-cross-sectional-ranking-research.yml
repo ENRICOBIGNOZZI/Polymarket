@@ -14,13 +14,17 @@ on:
       - "scripts/v7_cross_sectional_history.py"
       - "scripts/v7_cross_sectional_relative.py"
       - "scripts/v7_cross_sectional_tail_relative.py"
+      - "scripts/v7_cross_sectional_tail_relative_causal.py"
+      - "scripts/v7_model_book_snapshot.py"
       - "config/research_v7_cross_sectional_rank.json"
       - "config/research_v7_cross_sectional_rank_frozen.json"
+      - "config/research_v7_market_data.json"
       - "tests/test_v7_cross_sectional_rank.py"
       - "tests/test_v7_cross_sectional_rank_fast.py"
       - "tests/test_v7_cross_sectional_rank_inference.py"
       - "tests/test_v7_cross_sectional_history.py"
       - "tests/test_v7_cross_sectional_relative.py"
+      - "tests/test_v7_ranking_causal_snapshot.py"
       - "docs/V7_CROSS_SECTIONAL_RANKING.md"
       - ".github/workflows/v7-cross-sectional-ranking-research.yml"
 
@@ -51,12 +55,16 @@ jobs:
             scripts/v7_cross_sectional_history.py
             scripts/v7_cross_sectional_relative.py
             scripts/v7_cross_sectional_tail_relative.py
+            scripts/v7_cross_sectional_tail_relative_causal.py
+            scripts/v7_model_book_snapshot.py
             config/research_v7_cross_sectional_rank_frozen.json
+            config/research_v7_market_data.json
             tests/test_v7_cross_sectional_rank.py
             tests/test_v7_cross_sectional_rank_fast.py
             tests/test_v7_cross_sectional_rank_inference.py
             tests/test_v7_cross_sectional_history.py
             tests/test_v7_cross_sectional_relative.py
+            tests/test_v7_ranking_causal_snapshot.py
           )
           missing=()
           for path in "${required[@]}"; do
@@ -78,7 +86,8 @@ jobs:
             tests/test_v7_cross_sectional_rank_fast.py \
             tests/test_v7_cross_sectional_rank_inference.py \
             tests/test_v7_cross_sectional_history.py \
-            tests/test_v7_cross_sectional_relative.py -v
+            tests/test_v7_cross_sectional_relative.py \
+            tests/test_v7_ranking_causal_snapshot.py -v
           python3 -m py_compile \
             scripts/v7_cross_sectional_rank_core.py \
             scripts/v7_cross_sectional_rank_fast.py \
@@ -86,8 +95,11 @@ jobs:
             scripts/v7_cross_sectional_rank.py \
             scripts/v7_cross_sectional_history.py \
             scripts/v7_cross_sectional_relative.py \
-            scripts/v7_cross_sectional_tail_relative.py
+            scripts/v7_cross_sectional_tail_relative.py \
+            scripts/v7_cross_sectional_tail_relative_causal.py \
+            scripts/v7_model_book_snapshot.py
           python3 -m json.tool config/research_v7_cross_sectional_rank_frozen.json >/dev/null
+          python3 -m json.tool config/research_v7_market_data.json >/dev/null
 
       - name: Live public-data frozen 2h/6h relative holdout
         if: steps.preflight.outputs.ready == 'true'
@@ -95,7 +107,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ranking_evidence
-          python3 scripts/v7_cross_sectional_tail_relative.py \
+          python3 scripts/v7_cross_sectional_tail_relative_causal.py \
             --config config/research_v7_cross_sectional_rank_frozen.json \
             --market-limit 150 \
             --output-json ranking_evidence/report.json \
@@ -123,6 +135,9 @@ jobs:
           assert report["forward_holdout_start_ts"] > report["discovery_cutoff_ts"]
           assert report["frozen_horizons_minutes"] == [120, 360]
           assert len(report["horizons"]) == 2
+          assert report["current_cross_section_causal_snapshot_required"] is True
+          assert report["per_pair_causal_snapshot_provenance"] is True
+          assert report["current_book_snapshot_contract"]["required"] is True
           PY
 
       - name: Publish relative-tail summary
@@ -145,6 +160,7 @@ jobs:
           print(f"- tail fraction: {r['tail_fraction']}")
           print(f"- forward days observed: {r['forward_days_observed']}")
           print(f"- current relative pair candidates: {r['current_relative_pair_candidates']}")
+          print(f"- causal current book guard: {r['current_book_snapshot_contract']}")
           print(f"- absolute single-leg mapping disabled: {r['absolute_single_leg_mapping_disabled']}")
           for h in r['horizons']:
               b=h['forward_blocked_inference']
