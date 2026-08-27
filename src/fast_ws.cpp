@@ -194,9 +194,13 @@ struct MarketWebSocketFeed::Impl {
                 ws.next_layer().handshake(ssl::stream_base::client);
 
                 beast::get_lowest_layer(ws).expires_never();
+                // Quiet books are valid only while their subscription transport is
+                // demonstrably continuous. Keep-alive pings plus a short idle timeout
+                // bound silent socket failure; the error path invalidates that shard's
+                // WS lineage before reconnect.
                 websocket::stream_base::timeout timeouts{
                     std::chrono::seconds(10),
-                    std::chrono::seconds(20),
+                    std::chrono::seconds(5),
                     true,
                 };
                 ws.set_option(timeouts);
