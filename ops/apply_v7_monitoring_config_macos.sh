@@ -9,7 +9,7 @@ MANIFEST="$APP_DIR/monitoring/v7_monitoring_manifest.json"
 [[ "$(uname -s)" == "Darwin" ]] || { echo "fatal: macOS monitoring installer requires Darwin" >&2; exit 78; }
 [[ -f "$MANIFEST" ]] || { echo "fatal: missing V7 monitoring manifest" >&2; exit 78; }
 
-read -r DASHBOARD_FILE DATASOURCE_FILE PROVIDER_FILE PROMETHEUS_FILE DASHBOARD_UID < <(
+read -r DASHBOARD_FILE DATASOURCE_FILE PROVIDER_FILE PROMETHEUS_FILE ALERT_RULES_FILE DASHBOARD_UID < <(
   python3 - "$MANIFEST" <<'PY'
 import json,sys
 from pathlib import Path, PurePosixPath
@@ -31,12 +31,13 @@ print(
     safe(graf['datasource_file']),
     safe(graf['provider_file']),
     safe(prom['config']),
+    safe(prom['alert_rules']),
     str(graf['dashboard_uid']),
 )
 PY
 )
 
-for rel in "$DASHBOARD_FILE" "$DATASOURCE_FILE" "$PROVIDER_FILE" "$PROMETHEUS_FILE"; do
+for rel in "$DASHBOARD_FILE" "$DATASOURCE_FILE" "$PROVIDER_FILE" "$PROMETHEUS_FILE" "$ALERT_RULES_FILE"; do
   [[ -f "$APP_DIR/$rel" ]] || { echo "fatal: missing V7 monitoring asset: $rel" >&2; exit 78; }
 done
 
@@ -66,9 +67,18 @@ assert source.count(marker) == 1
 Path(sys.argv[2]).write_text(source.replace(marker, replacement), encoding='utf-8')
 PY
 
-install -m 0644 "$APP_DIR/$PROMETHEUS_FILE" "$STATE_DIR/prometheus-v7.yml"
+install -m 0644 "$APP_DIR/$ALERT_RULES_FILE" "$STATE_DIR/prometheus-v7-alerts.yml"
+python3 - "$APP_DIR/$PROMETHEUS_FILE" "$STATE_DIR/prometheus-v7.yml" "$STATE_DIR/prometheus-v7-alerts.yml" <<'PY'
+import sys
+from pathlib import Path
+source=Path(sys.argv[1]).read_text(encoding='utf-8')
+marker='__POLYMARKET_V7_ALERT_RULES__'
+assert source.count(marker) == 1
+Path(sys.argv[2]).write_text(source.replace(marker, sys.argv[3]), encoding='utf-8')
+PY
 
 printf 'v7_monitoring_configured=true\n'
 printf 'dashboard_uid=%s\n' "$DASHBOARD_UID"
 printf 'dashboard_file=%s\n' "$APP_DIR/$DASHBOARD_FILE"
 printf 'prometheus_config=%s\n' "$STATE_DIR/prometheus-v7.yml"
+printf 'prometheus_alert_rules=%s\n' "$STATE_DIR/prometheus-v7-alerts.yml"
