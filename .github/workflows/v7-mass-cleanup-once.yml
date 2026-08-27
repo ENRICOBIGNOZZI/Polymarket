@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: read
 
 concurrency:
@@ -22,25 +22,34 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
       - name: Apply deterministic V7-only cleanup
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/v7_mass_cleanup_once.py
           git status --short
-      - name: Commit cleanup result
+      - name: Package cleaned changed files
         shell: bash
-        env:
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          if git diff --cached --quiet; then
-            echo 'no cleanup changes'
-            exit 0
-          fi
-          git commit -m 'V7 cleanup: purge superseded repository surfaces'
-          git push origin "HEAD:${HEAD_REF}"
+          rm -rf cleanup-artifact
+          mkdir -p cleanup-artifact/tree
+          git diff --name-status > cleanup-artifact/name-status.txt
+          git diff --binary > cleanup-artifact/cleanup.patch
+          git ls-files -s > cleanup-artifact/index.txt
+          git diff --name-only --diff-filter=D > cleanup-artifact/deleted.txt
+          while IFS= read -r file; do
+            [[ -n "$file" ]] || continue
+            [[ -f "$file" ]] || continue
+            mkdir -p "cleanup-artifact/tree/$(dirname "$file")"
+            cp "$file" "cleanup-artifact/tree/$file"
+          done < <(git diff --name-only --diff-filter=ACMRTUXB)
+          printf '%s\n' "$(git rev-parse HEAD)" > cleanup-artifact/base-sha.txt
+      - name: Upload cleaned tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: v7-cleanup-tree-${{ github.run_id }}
+          path: cleanup-artifact/
+          if-no-files-found: error
+          retention-days: 7
