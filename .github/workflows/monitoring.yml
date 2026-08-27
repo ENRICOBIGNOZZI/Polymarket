@@ -36,17 +36,27 @@ jobs:
           [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
           echo "validation_sha=$VALIDATION_SHA"
-      - name: Validate V7 transition/control plane
+      - name: Validate V7 transition/control plane and monitoring
         run: |
           set -euo pipefail
           python3 -m unittest \
             tests/test_no_legacy_runtime.py \
             tests/test_v7_authorized_paper_envelope.py \
             tests/test_v7_control_plane_exact_head.py \
-            tests/test_external_intelligence_workflow_contract.py -v
+            tests/test_external_intelligence_workflow_contract.py \
+            tests/test_monitoring_v7_native.py \
+            tests/test_monitoring_v7_ledger.py \
+            tests/test_monitoring_v7_dashboard_completion.py -v
+          python3 -m py_compile monitoring/exporter_v7.py monitoring/v7_ledger_metrics.py
           python3 -m json.tool config/live_champion.json >/dev/null
           python3 -m json.tool config/project_context.json >/dev/null
           python3 -m json.tool config/operator_directives.json >/dev/null
+          python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
+          python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7.json >/dev/null
+          bash -n ops/apply_v7_monitoring_config_macos.sh
+          test -s monitoring/prometheus_v7.yml
+          test -s monitoring/grafana/provisioning/dashboards/v7.yml
+          test -s monitoring/grafana/provisioning/datasources/prometheus-v7.yml
           python3 scripts/validate_scheduler_registry.py --root . --registry config/scheduler_registry.json
           python3 scripts/validate_project_context.py --root . --output /tmp/project-context-validation.md
           test -s /tmp/project-context-validation.md
