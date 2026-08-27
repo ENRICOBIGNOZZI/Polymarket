@@ -89,8 +89,11 @@ jobs:
             --max-feed-stale-ms 45000 \
             --min-rest-resyncs 2
           python3 - <<'PY'
+          import csv
           import json
+          import math
           from pathlib import Path
+
           status = json.loads(Path("runs/hourly-fast/fast_arb_status.json").read_text())
           candidate = json.loads(Path("runs/hourly-fast/fast_arb_candidate.json").read_text())
           base_policy = json.loads(Path("config/fast_arb_policy.json").read_text())
@@ -109,6 +112,31 @@ jobs:
           assert v7["max_trade_usd"] == directives["max_trade_usd_compatibility_sentinel"]
           assert v7["max_drawdown"] == directives["max_drawdown"] == 0.15
           assert v7["paper_only"] is True and v7["authenticated_execution"] is False
+
+          # The huge dollar value in operator_directives is a compatibility sentinel,
+          # not spendable capital. Every shadow opportunity must remain bounded by the
+          # loaded PAPER account and percentage ceilings, otherwise modeled profit is
+          # economically meaningless even though no real orders are sent.
+          fraction_ceiling = max(0.0, min(
+              1.0,
+              float(v7["max_market_fraction"]),
+              float(v7["max_event_fraction"]),
+              float(v7["max_gross_fraction"]),
+          ))
+          capital_ceiling = float(v7["starting_capital"]) * fraction_ceiling
+          assert math.isfinite(capital_ceiling) and capital_ceiling > 0.0
+          max_seen_capital = 0.0
+          with Path("runs/hourly-fast/fast_arb_opportunities.csv").open(newline="") as handle:
+              for row in csv.DictReader(handle):
+                  capital = float(row["capital_required"])
+                  profit = float(row["expected_profit"])
+                  shares = float(row["executable_shares"])
+                  assert math.isfinite(capital)
+                  assert math.isfinite(profit)
+                  assert math.isfinite(shares)
+                  assert capital <= capital_ceiling + 1e-6, (capital, capital_ceiling, row["id"])
+                  max_seen_capital = max(max_seen_capital, capital)
+          assert max_seen_capital <= capital_ceiling + 1e-6
           PY
           cat runs/hourly-fast/fast_arb_theory_report.md >> "$GITHUB_STEP_SUMMARY"
 
