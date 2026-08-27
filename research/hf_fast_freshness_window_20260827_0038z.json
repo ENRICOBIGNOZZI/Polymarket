@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "research_only": true,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "source_head_sha": "2e33092113437fdaac843b898a94d70958e8f265",
+  "observed_at_utc": "2026-08-27T00:38:20Z",
+  "window_kind": "pull_request_shadow_probe",
+  "requested_duration_seconds": 45,
+  "operator_authority": {
+    "market_limit": 1000,
+    "min_liquidity": 2.0,
+    "min_net_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "max_trade_fraction": 1.0,
+    "max_market_fraction": 1.0,
+    "max_event_fraction": 1.0,
+    "max_gross_fraction": 1.0,
+    "max_drawdown": 0.15
+  },
+  "runtime": {
+    "markets": 1334,
+    "tokens": 2668,
+    "safe_negrisk_events": 49,
+    "ws_workers": 14,
+    "ws_messages": 22907,
+    "book_updates": 20999,
+    "rest_resyncs": 5,
+    "feed_stale_ms_at_stop": 8,
+    "feed_latency_p50_ms": 99.0,
+    "feed_latency_p95_ms": 1210.0,
+    "feed_latency_p99_ms": 2385.02,
+    "decision_latency_p50_us": 36.0,
+    "decision_latency_p95_us": 893.0,
+    "decision_latency_p99_us": 1600.0,
+    "ws_snapshot_ready_tokens": 56,
+    "freshness_missing_rejections": 15451,
+    "freshness_age_rejections": 3263,
+    "freshness_skew_rejections": 151,
+    "evaluations": 23936,
+    "hard_executable_observations": 0,
+    "current_hard_executable": 0
+  },
+  "freshness_contract": {
+    "max_token_age_ms": 5000,
+    "max_cross_leg_skew_ms": 1500,
+    "internal_per_leg_gate_valid": true,
+    "canonical_per_leg_provenance_serialized": false,
+    "promotion_allowed": false,
+    "state": "NO_FRESH_HARD_EXECUTABLE_OBSERVATIONS"
+  },
+  "hard_structural_evidence": {
+    "binary_observations_after_freshness_gate": 494,
+    "binary_positive_executable": 0,
+    "negrisk_complete_set_observations_after_freshness_gate": 6,
+    "negrisk_complete_set_positive_executable": 0,
+    "negrisk_conversion_observations_after_freshness_gate": 20,
+    "negrisk_conversion_positive_executable": 0
+  },
+  "nonhard_diagnostic": {
+    "maker_complete_set_positive_observations": 186,
+    "edge_p50": 0.005,
+    "edge_p90": 0.031,
+    "survival_after_additional_10bps_cost": 0.956989247311828,
+    "absolute_profit_metric_usable": false,
+    "reason": "The mixed-sleeve legacy research policy uses the non-binding fixed-dollar compatibility sentinel as maker-shadow notional, so its absolute maker opportunity profit is not an economic PAPER PnL estimate. It is excluded from this hard-arbitrage conclusion."
+  },
+  "latency_horizon": {
+    "completed_opportunity_lifetime_samples": 8,
+    "opportunity_lifetime_p10_ms": 270.1,
+    "end_to_end_latency_p99_ms": 2378.13136
+  },
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "interpretation": "Broad V7 public-data coverage is healthy, but no structural hard-arbitrage observation survives the exact internal per-token L2 freshness gate in this window. Missing/full-snapshot lineage is the dominant freshness rejection. No fill or realized PnL is attributed to shadow opportunities. A longer window is required to distinguish warm-up from a persistent snapshot-lineage coverage bottleneck."
+}
