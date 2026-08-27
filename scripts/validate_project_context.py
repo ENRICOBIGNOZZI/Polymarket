@@ -15,6 +15,7 @@ EXPECTED_V7_PATHS = {
     "canonical_config": "config/paper_v7.json",
     "canonical_run_root": "runs/paper_v7_live",
 }
+EVIDENCE_CANDIDATE_LOOP = "scripts/paper_v7_execution_loop.sh"
 
 
 def load(path: Path) -> dict[str, Any]:
@@ -37,6 +38,27 @@ def safe_relative(value: Any) -> str | None:
     if path.is_absolute() or ".." in path.parts:
         return None
     return value
+
+
+def _validate_v7_manifest_paths(root: Path, champion: dict[str, Any], errors: list[str], *, expected_loop: str) -> None:
+    expected_paths = {
+        "loop": expected_loop,
+        "config": EXPECTED_V7_PATHS["canonical_config"],
+        "run_root": EXPECTED_V7_PATHS["canonical_run_root"],
+    }
+    for key, expected in expected_paths.items():
+        if champion.get(key) != expected:
+            errors.append(f"enabled V7 candidate/champion requires {key}={expected}")
+    if champion.get("deployment_ref") != "paper-validated":
+        errors.append("enabled V7 candidate/champion must retain deployment_ref=paper-validated")
+    if champion.get("paper_only") is not True or champion.get("authenticated_execution") is not False:
+        errors.append("enabled V7 candidate/champion must preserve PAPER-only/authenticated-disabled boundary")
+    if champion.get("real_order_submission") is not False:
+        errors.append("enabled V7 candidate/champion must keep real_order_submission=false")
+    for key in ("loop", "config"):
+        rel = safe_relative(champion.get(key))
+        if rel is None or not (root / rel).is_file():
+            errors.append(f"enabled V7 candidate/champion references missing/unsafe {key}: {champion.get(key)!r}")
 
 
 def validate(root: Path) -> tuple[list[str], list[str]]:
@@ -119,33 +141,32 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     runtime = context.get("runtime") if isinstance(context.get("runtime"), dict) else {}
     grafana = context.get("grafana") if isinstance(context.get("grafana"), dict) else {}
     champion_enabled = champion.get("enabled") is True
-    if champion_enabled:
+    candidate_only = champion_enabled and champion.get("candidate_only_until_promoted") is True
+
+    if candidate_only:
+        if champion.get("version") != 7:
+            errors.append("isolated evidence candidate must be version 7")
+        _validate_v7_manifest_paths(root, champion, errors, expected_loop=EVIDENCE_CANDIDATE_LOOP)
+        # Candidate-only enablement is an evidence selector, not an assertion that
+        # main/paper-validated/deploy/Grafana has become operational.  Those remain
+        # false until the later exact-SHA lifecycle stages succeed.
+        if runtime.get("active_champion") is not False:
+            errors.append("candidate-only V7 evidence must not set runtime.active_champion=true")
+        if grafana.get("active") is not False or grafana.get("dashboard_uid") is not None or grafana.get("dashboard_file") is not None:
+            errors.append("candidate-only V7 evidence must not activate canonical Grafana before promotion/deploy")
+        notes.append("operational champion: inactive; isolated V7 evidence candidate enabled")
+    elif champion_enabled:
         if champion.get("version") != 7:
             errors.append("enabled operational champion must be version 7")
-        expected_paths = {
-            "loop": EXPECTED_V7_PATHS["canonical_loop"],
-            "config": EXPECTED_V7_PATHS["canonical_config"],
-            "run_root": EXPECTED_V7_PATHS["canonical_run_root"],
-        }
-        for key, expected in expected_paths.items():
-            if champion.get(key) != expected:
-                errors.append(f"enabled V7 champion requires {key}={expected}")
-        if champion.get("deployment_ref") != "paper-validated":
-            errors.append("enabled V7 champion must deploy from paper-validated")
-        if champion.get("paper_only") is not True or champion.get("authenticated_execution") is not False:
-            errors.append("enabled V7 champion must preserve PAPER-only/authenticated-disabled boundary")
-        for key in ("loop", "config"):
-            rel = safe_relative(champion.get(key))
-            if rel is None or not (root / rel).is_file():
-                errors.append(f"enabled V7 champion references missing/unsafe {key}: {champion.get(key)!r}")
+        _validate_v7_manifest_paths(root, champion, errors, expected_loop=EXPECTED_V7_PATHS["canonical_loop"])
         if runtime.get("active_champion") is not True:
-            errors.append("project context runtime.active_champion must be true for enabled V7 champion")
+            errors.append("project context runtime.active_champion must be true for operational V7 champion")
         dashboard_uid = grafana.get("dashboard_uid")
         dashboard_file = safe_relative(grafana.get("dashboard_file"))
         if grafana.get("active") is not True or not isinstance(dashboard_uid, str) or not dashboard_uid:
-            errors.append("enabled V7 champion requires active canonical Grafana with dashboard_uid")
+            errors.append("operational V7 champion requires active canonical Grafana with dashboard_uid")
         if dashboard_file is None or not (root / dashboard_file).is_file():
-            errors.append("enabled V7 champion requires an existing canonical dashboard_file")
+            errors.append("operational V7 champion requires an existing canonical dashboard_file")
         notes.append("operational champion: V7 enabled")
     else:
         if champion.get("enabled") is not False:
