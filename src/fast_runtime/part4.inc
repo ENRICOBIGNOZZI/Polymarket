@@ -55,6 +55,24 @@ int main(int argc, char** argv) {
         auto config = pm::Engine::load_config(options.config);
         if (options.external_signals.empty()) options.external_signals = config.external_signals_file;
         auto policy = load_policy(options.policy);
+
+        // A huge max_notional_usd value is a compatibility sentinel meaning the
+        // fixed-dollar cap is disabled. It must never become an economic position
+        // size. Shadow sizing remains bounded by current PAPER capital and the
+        // market/event/gross percentage ceilings from the loaded V7 config.
+        const double capital_fraction_ceiling = std::clamp(
+            std::min({config.max_market_fraction, config.max_event_fraction,
+                      config.max_gross_fraction}),
+            0.0, 1.0);
+        const double capital_ceiling = config.starting_capital * capital_fraction_ceiling;
+        if (!std::isfinite(capital_ceiling) || capital_ceiling <= 0.0) {
+            throw std::runtime_error("invalid PAPER capital ceiling for fast shadow");
+        }
+        if (!std::isfinite(policy.max_notional_usd) ||
+            policy.max_notional_usd > capital_ceiling) {
+            policy.max_notional_usd = capital_ceiling;
+        }
+
         FastRuntime runtime(std::move(config), policy, options);
         runtime.initialize();
 
