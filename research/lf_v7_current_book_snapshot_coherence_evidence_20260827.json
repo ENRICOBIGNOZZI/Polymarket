@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "research_only": true,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "authority_read_first": "config/operator_directives.json on main",
+  "authority_main_sha_observed": "877d90b4ecbae3b620ecaa55a68e65cc5ed88ac9",
+  "audited_v7_research_source_sha": "ffe3a4ef6d71959afbf4f118721026a48aab19d7",
+  "finding": "cross_market_current_book_snapshot_coherence_not_identified",
+  "materiality": "structural_blocker_before_current_state_LF_or_PCA_evidence",
+  "source_evidence": {
+    "local_factor_book_adapter": "scripts/v7_local_factor_data.py",
+    "local_factor_book_fields": [
+      "bid",
+      "ask",
+      "bid_size",
+      "ask_size",
+      "min_order"
+    ],
+    "local_factor_fetch_books_preserves_clob_timestamp": false,
+    "local_factor_fetch_books_preserves_clob_hash": false,
+    "pca_driver": "scripts/v7_pca_stat_arb_research.py",
+    "pca_assigns_one_receive_timestamp_after_bulk_fetch": true,
+    "pca_uses_that_receive_timestamp_for_every_market": true,
+    "consequence": "target and nuisance-control mids fetched in different sequential REST batches can be treated as one synchronous current cross-section"
+  },
+  "deterministic_counterexample": {
+    "training_factor": "PC1=(c1+c2)/sqrt(2)",
+    "target_beta": 1.0,
+    "true_current_controls": [2.0, 2.0],
+    "true_current_target_standardized": 2.8284271247461903,
+    "true_current_factor": 2.8284271247461903,
+    "true_current_residual": 0.0,
+    "mixed_time_controls": [-2.0, 2.0],
+    "mixed_time_factor": 0.0,
+    "mixed_time_apparent_residual": 2.8284271247461903,
+    "interpretation": "A stale first control creates a large false positive residual although the synchronous current residual is exactly zero. Opposite stale states can also erase or reverse a true dislocation. This is an identification counterexample, not a Polymarket PnL estimate."
+  },
+  "coordination": {
+    "pca_current_residual_gate": 627,
+    "pca_common_factor_mean": 686,
+    "local_factor_current_residual_reconstruction": 677,
+    "relationship": "These repairs remain necessary but are insufficient unless the target/control book vector itself has causal per-book time and snapshot provenance."
+  },
+  "required_successor": [
+    "preserve CLOB per-book exchange timestamp and snapshot/hash identity in V7/common book objects",
+    "record local receive time per REST response/book item rather than one timestamp after all batches",
+    "require bounded age and cross-sectional exchange/receive skew for target and every predeclared nuisance control",
+    "fail closed if any required book lacks clock/snapshot provenance",
+    "only then project the frozen target-excluded PCA or pair-excluded orientation-invariant LF factor basis onto the current cross-section",
+    "keep null-preserving inference, dependence-robust multiplicity, horizon/TTR, depth, authoritative fees, slippage and PAPER-only safety unchanged",
+    "compare coherent-snapshot versus incumbent scoring on identical chronological data before threshold aggression"
+  ],
+  "current_operator_envelope_unchanged": {
+    "markets": 1000,
+    "minimum_liquidity_usd": 2.0,
+    "minimum_post_cost_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "fixed_dollar_cap_enabled": false,
+    "trade_market_event_gross_hard_fraction_ceilings": [1.0, 1.0, 1.0, 1.0],
+    "max_drawdown": 0.15,
+    "paper_only": true,
+    "authenticated_execution": false
+  },
+  "decision": "MORE_EVIDENCE_REQUIRED"
+}
