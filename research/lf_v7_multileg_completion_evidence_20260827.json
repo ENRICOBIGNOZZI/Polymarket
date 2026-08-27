@@ -1,0 +1,59 @@
+{
+  "base_main_sha": "b9e19f5702d9452fb6921ada012404a60d3b47b0",
+  "counterexamples": {
+    "four_five_leg_bundles_all_legs_filled": {
+      "economic_joint_completion_rate": 1.0,
+      "economic_joint_completions": 4,
+      "incumbent_fill_rate": 5.0,
+      "raw_fill_rows": 20,
+      "raw_submission_rows": 4,
+      "unidentified_fill_rows": 0,
+      "unidentified_submission_rows": 0,
+      "unique_bundle_submissions": 4,
+      "unique_leg_entry_fills": 20
+    },
+    "twenty_two_leg_bundles_one_leg_filled_each": {
+      "default_min_fills_satisfied": true,
+      "economic_joint_completion_rate": 0.0,
+      "economic_joint_completions": 0,
+      "incumbent_fill_rate": 1.0,
+      "joint_completion_gate_should_fail": true,
+      "one_percent_fill_gate_satisfied": true,
+      "raw_fill_rows": 20,
+      "raw_submission_rows": 20,
+      "unidentified_fill_rows": 0,
+      "unidentified_submission_rows": 0,
+      "unique_bundle_submissions": 20,
+      "unique_leg_entry_fills": 20
+    }
+  },
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "material_finding": "For multi-leg relative-value evidence, leg-level entry fills and bundle-level submissions are different economic units. The current ratio can equal 1.0 with zero joint completions and can exceed 1.0. Therefore min_fills/min_fill_rate do not establish executable multi-leg completion evidence.",
+  "required_successor_contract": [
+    "Preserve unique leg fills as execution events, but aggregate promotion evidence at one economic bundle/opportunity unit.",
+    "Persist the required leg set, target quantities and candidate/bundle identity before entry.",
+    "Build causal bundle states including none, each partial-leg subset, joint completion and terminal unwind/settlement.",
+    "Define completion_rate as economically completed bundles divided by submitted bundles so it is bounded in [0,1].",
+    "Fail closed when required-leg or target-size provenance is absent; do not infer completion from a count of leg fill rows.",
+    "Link terminal PnL to the same bundle state and include partial abort/unwind, authoritative fees, slippage, adverse markout, capital and latency costs.",
+    "Stress the same frozen completed/partial bundle observations at 1x/1.5x/2x without reselecting states."
+  ],
+  "schema": "lf_v7_multileg_completion_evidence_audit_v1",
+  "source": "scripts/v7_execution_evidence.py",
+  "source_contract": {
+    "current_metric": "unique leg entry fills / unique submissions",
+    "relative_value_execution_paths": [
+      "RUN/bundle_ledger.csv",
+      "RUN/multileg_events.csv"
+    ],
+    "relative_value_submission_paths": [
+      "RUN/intents.csv"
+    ],
+    "required_economic_metric": "jointly completed bundles / submitted bundles"
+  },
+  "safety": {
+    "authenticated_execution": false,
+    "paper_only": true,
+    "production_mutated": false
+  }
+}
