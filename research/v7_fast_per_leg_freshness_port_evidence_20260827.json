@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-08-27T01:17:21Z",
+  "base_main_sha": "3640fae32ecbcc6d699b934455ed398538c8ae86",
+  "state": "RAW_HARD_HITS_FRESHNESS_BLOCKED / MORE_EVIDENCE_REQUIRED",
+  "current_main_audit": {
+    "fast_runtime_uses_payload_level_clocks_for_multi_leg_evaluation": true,
+    "per_token_exchange_receive_clocks_present_before_port": false,
+    "ws_reconnect_invalidates_per_token_l2_lineage_before_port": false
+  },
+  "prospective_diagnostic_source": {
+    "pr": 633,
+    "raw_hard_executable_observations": 7,
+    "additional_cost_stress_bps": 10.0,
+    "all_raw_hits_positive_under_additional_stress": true,
+    "negrisk": {
+      "event_id": "133792",
+      "net_edge_per_share": 0.0281407,
+      "shares": 29.6,
+      "capital_required_usd": 28.7641,
+      "modeled_profit_usd": 0.832965
+    },
+    "binary": {
+      "market_id": "3897838",
+      "raw_observations": 6,
+      "net_edge_per_share": 0.00193379,
+      "modeled_profit_usd_min": 0.0967,
+      "modeled_profit_usd_max": 10.3806
+    },
+    "invalidating_evidence": {
+      "candidate_level_per_token_freshness_serialized": false,
+      "negrisk_aggregate_exchange_ts_ms": 0,
+      "binary_aggregate_feed_latency_seconds_min": 9.7,
+      "binary_aggregate_feed_latency_seconds_max": 15.5,
+      "feed_latency_p99_seconds": 18.96,
+      "decision_latency_p99_ms": 259.0,
+      "completed_opportunity_lifetime_p10_ms": 435.0
+    }
+  },
+  "challenger_contract": {
+    "max_book_age_ms": 5000,
+    "max_cross_leg_exchange_receive_skew_ms": 1500,
+    "full_ws_snapshot_required_before_delta_eligibility": true,
+    "rest_seed_is_not_event_time_evidence": true,
+    "reconnect_invalidates_shard_lineage": true,
+    "stale_current_opportunities_fail_closed": true,
+    "promotion_allowed": false
+  },
+  "required_forward_evidence": [
+    "same-SHA public PAPER run with candidate-level per-token clocks",
+    "all required legs within freshness and cross-leg skew bounds",
+    "authoritative fees and executable depth",
+    "sequential legging/partial/unwind accounting",
+    "realized fill-conditioned post-cost PAPER PnL",
+    "frozen trade-set cost stress at 1x/1.5x/2x"
+  ],
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "max_drawdown": 0.15,
+    "operator_authority_modified": false,
+    "main_or_paper_validated_mutated": false
+  }
+}
