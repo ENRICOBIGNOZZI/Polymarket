@@ -63,10 +63,13 @@ struct MarketUpdate {
     std::int64_t exchange_event_ns = 0;
     std::int64_t socket_receive_monotonic_ns = 0;
     std::int64_t related_snapshot_age_ns = 0;
+    // +1 for the YES/outcome-1 token, -1 for its complementary NO/outcome-0
+    // token. Inventory is measured globally as YES-NO, but the hot path must
+    // view it in the orientation of the instrument it is quoting.
+    std::int8_t instrument_inventory_sign = 1;
     std::uint8_t feed_healthy = 1;
     std::uint8_t related_state_valid = 0;
     std::uint8_t reserved0 = 0;
-    std::uint8_t reserved1 = 0;
 };
 
 struct InventorySnapshot {
