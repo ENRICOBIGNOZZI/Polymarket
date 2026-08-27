@@ -58,9 +58,12 @@ struct PaperFillEnvelope {
 
 struct PaperPrintAllocation {
     std::int64_t print_microunits = 0;
-    std::int64_t pessimistic_filled_microunits = 0;
-    std::int64_t expected_filled_microunits = 0;
-    std::int64_t optimistic_filled_microunits = 0;
+    std::int64_t pessimistic_consumed_microunits = 0;
+    std::int64_t expected_consumed_microunits = 0;
+    std::int64_t optimistic_consumed_microunits = 0;
+    std::int64_t pessimistic_own_fill_microunits = 0;
+    std::int64_t expected_own_fill_microunits = 0;
+    std::int64_t optimistic_own_fill_microunits = 0;
     std::size_t output_count = 0;
     std::uint8_t causal_rejection = 0;
     std::uint8_t invalid_input = 0;
@@ -68,7 +71,8 @@ struct PaperPrintAllocation {
 
 // Applies one public print once per queue scenario. The order span must be in
 // deterministic FIFO arrival order for the same instrument. No output vector is
-// allocated: the caller supplies a fixed/preallocated result span.
+// allocated: the caller supplies a fixed/preallocated result span. Queue-ahead
+// depletion and own fills share the same public volume within each scenario.
 [[nodiscard]] PaperPrintAllocation allocate_public_print(
     const PublicTradePrint& trade,
     std::span<PaperRestingOrder> fifo_orders,
