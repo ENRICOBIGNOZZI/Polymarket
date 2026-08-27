@@ -43,14 +43,15 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertTrue(policy["execution_model"]["product_of_marginals_forbidden"])
         self.assertTrue(policy["capital"]["queue_never_grants_size"])
 
-    def test_canonical_runtime_starts_maker_instead_of_old_disabled_status(self) -> None:
+    def test_canonical_runtime_starts_only_professional_maker_stack(self) -> None:
         source = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
         self.assertIn("v7_market_maker_worker.py", source)
         self.assertIn("v7_market_maker_rewards.py", source)
         self.assertIn("v7_market_maker_model.py", source)
         self.assertIn("v7_market_maker_status.py", source)
         self.assertIn("v7_ledger_spool.py", source)
-        self.assertNotIn("direct_joint_fill_conditioned_ev_not_yet_mature_generic_maker_rejected", source)
+        self.assertNotIn("v7_complete_set_maker", source)
+        self.assertNotIn("polymarket_rewards_scan", source)
         self.assertNotIn("Generic maker is intentionally not started", source)
 
     def test_fast_path_contract_forbids_rest_on_quote_hot_path(self) -> None:
@@ -60,19 +61,27 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertLessEqual(int(policy["latency"]["target_decision_p99_us"]), 1500)
         self.assertLessEqual(int(policy["latency"]["target_cancel_decision_p99_us"]), 1000)
 
-    def test_master_v7_authority_preserves_one_professional_maker(self) -> None:
+    def test_current_operator_authority_is_v7_only_cleanup(self) -> None:
         directives = json.loads((ROOT / "config" / "operator_directives.json").read_text(encoding="utf-8"))
-        self.assertEqual(directives["operator_instruction_id"], "user-v7-master-multi-agent-operating-prompt-20260827")
-        self.assertEqual(directives["priority_instruction_id"], "user-v7-professional-market-making-priority-20260827")
+        self.assertEqual(
+            directives["operator_instruction_id"],
+            "user-v7-master-multi-agent-operating-prompt-20260827",
+        )
+        self.assertEqual(
+            directives["priority_instruction_id"],
+            "user-v7-only-heavy-cleanup-20260827",
+        )
+        self.assertTrue(directives["paper_v7_authorization"]["paper_only"])
         self.assertFalse(directives["paper_v7_authorization"]["authenticated_execution"])
         architecture = directives["architecture"]
         self.assertTrue(architecture["single_runtime_owner"])
         self.assertTrue(architecture["single_execution_ledger"])
         self.assertTrue(architecture["professional_market_maker_is_v7_sleeve_not_new_runtime"])
-        self.assertIn("professional_market_maker", directives["model_contracts"]["micro_maker"])
+        self.assertEqual(architecture["cleanup_sequence"], "delete_all_legacy_now_then_validate_v7_only")
+        self.assertIn("Git history is the archive", architecture["legacy_rule"])
         forbidden = "\n".join(directives["forbidden_regressions"])
         self.assertIn("Do not add authenticated or real-money execution", forbidden)
-        self.assertIn("Do not create a second maker runtime", forbidden)
+        self.assertIn("Do not add or restore V3/V4/V5/V6", forbidden)
 
 
 if __name__ == "__main__":
