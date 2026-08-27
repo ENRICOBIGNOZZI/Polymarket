@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-08-27T02:20:00Z",
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "base_main_sha": "877d90b4ecbae3b620ecaa55a68e65cc5ed88ac9",
+  "authority": {
+    "operator_directives_ref": "main",
+    "operator_directives_sha": "07e65a90c272a7442b40903eeb334bfbe05d0fcf",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "min_net_edge": 0.00005,
+    "max_drawdown": 0.15
+  },
+  "pre_repair_exact_head": {
+    "sha": "bb741fd711890d4d658d7ff4e8f91e9523c22d93",
+    "workflow_run_id": 33030273187,
+    "markets": 701,
+    "tokens": 1402,
+    "safe_negrisk_events": 17,
+    "ws_messages": 13823,
+    "book_updates": 13217,
+    "rest_resyncs": 3,
+    "ws_snapshot_ready_tokens": 156,
+    "ws_snapshot_ready_share": 0.1112696148,
+    "freshness_missing_rejections": 3395,
+    "freshness_age_rejections": 1415,
+    "freshness_skew_rejections": 79,
+    "hard_executable_observations": 0,
+    "feed_stale_ms": 5,
+    "feed_latency_p99_ms": 834.52,
+    "decision_latency_p99_us": 85.0,
+    "nonhard_maker_complete_set_executable_observations": 86,
+    "nonhard_modeled_opportunity_profit": 21.6736646,
+    "nonhard_stress_positive_share_plus_10bps": 0.9767441860,
+    "alpha_claim": false
+  },
+  "defect": {
+    "name": "freshness_gate_required_non_executable_complement_tokens",
+    "description": "NegRisk complete sets, conversions, logical relations and publish-time revalidation required complementary market tokens that did not enter the priced/executable basket. Under sparse full-WS lineage this can suppress otherwise valid hard-arbitrage evaluation.",
+    "safety_interpretation": "Freshness remains fail-closed on every token that is actually priced or executed. The repair removes only irrelevant complementary-outcome requirements; it does not weaken age, skew, full-WS or reconnect guards."
+  },
+  "repair_contract": [
+    "Binary complete-set requires YES and NO.",
+    "NegRisk complete-set requires only member YES legs.",
+    "Each NegRisk conversion requires source NO plus target YES legs.",
+    "Implication requires antecedent NO plus consequent YES.",
+    "Mutual exclusion requires two NO legs.",
+    "Exhaustive pair requires two YES legs.",
+    "Publish-time revalidation uses actual opportunity leg token IDs.",
+    "Per-leg maximum exchange age remains 5000 ms.",
+    "Cross-leg exchange/receive skew remains bounded at 1500 ms.",
+    "Only a full WS snapshot can establish gap-free L2 lineage; reconnect invalidates it."
+  ],
+  "status": "CURRENT_MAIN_PORT_EXACT_EXECUTABLE_LEG_FRESHNESS_REPAIR_LIVE_EVIDENCE_PENDING",
+  "promotion_ready": false,
+  "required_next_evidence": [
+    "Exact-head CI and Research Policy green on this current-main port.",
+    "Exact-head Fast Shadow on public data.",
+    "Compare hard-hit recall and freshness reject counters to run 33030273187.",
+    "Any recovered hard hit still requires authoritative fee/depth economics, sequential PAPER legging/partial/unwind, canonical-ledger realized PnL and 1x/1.5x/2x stress before an alpha claim."
+  ]
+}
