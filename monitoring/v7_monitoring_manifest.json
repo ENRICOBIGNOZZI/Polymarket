@@ -1,5 +1,5 @@
 {
-  "schema": "polymarket_v7_monitoring_manifest_v1",
+  "schema": "polymarket_v7_monitoring_manifest_v2",
   "version": 7,
   "paper_only": true,
   "authenticated_execution": false,
@@ -26,11 +26,26 @@
     "host": "127.0.0.1",
     "port": 3000
   },
+  "required_surfaces": [
+    "control/runtime_status.json",
+    "control/portfolio_state.json",
+    "control/allocations/manifest.json",
+    "graph_rv/status.json",
+    "canonical_economics.json",
+    "ledger/execution.jsonl",
+    "trade_tape.csv"
+  ],
   "freshness_seconds": {
-    "supervisor": 30,
+    "portfolio": 30,
     "runtime": 180,
-    "execution_supervisor": 180,
-    "market_proxy": 180,
-    "execution_evidence": 180
-  }
+    "graph": 180,
+    "economics": 180,
+    "trade_tape": 180
+  },
+  "retired_surfaces": [
+    "v7_supervisor.json",
+    "execution/v7_execution_supervisor.json",
+    "execution/market_proxy_status.json",
+    "execution/v7_execution_evidence.json"
+  ]
 }
