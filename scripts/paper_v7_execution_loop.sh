@@ -6,6 +6,7 @@ cd "$ROOT"
 CONFIG="${PM_V7_CONFIG:-config/paper_v7.json}"
 RUN_ROOT="${PM_V7_RUN_ROOT:-runs/paper_v7_live}"
 RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
+MAKER_RUNTIME="${PM_V7_MARKET_MAKER_RUNTIME:-build/polymarket_v7_market_maker_runtime}"
 MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
 SHA="$(git rev-parse HEAD)"
 CONTROL="$RUN_ROOT/control"
@@ -32,6 +33,8 @@ assert maker.get("real_order_submission") is False
 assert maker.get("architecture",{}).get("single_runtime_owner") is True
 assert maker.get("architecture",{}).get("single_account_allocator") is True
 assert maker.get("architecture",{}).get("single_canonical_ledger_writer") is True
+assert maker.get("architecture",{}).get("fast_path") == "cpp_websocket_event_driven"
+assert maker.get("architecture",{}).get("slow_path") == "python_reward_selection_and_model_fit"
 PY
 
 if [[ -d "$LOCK" ]]; then
@@ -73,6 +76,10 @@ if [[ ! -x "$RECORDER" ]]; then
   echo "missing canonical V7 trade recorder executable: $RECORDER" >&2
   exit 74
 fi
+if [[ ! -x "$MAKER_RUNTIME" ]]; then
+  echo "missing canonical V7 market-maker runtime executable: $MAKER_RUNTIME" >&2
+  exit 75
+fi
 
 "$RECORDER" \
   --config "$CONFIG" \
@@ -90,8 +97,8 @@ pids+=("$!")
   done
 ) & pids+=("$!")
 
-# One professional-maker reward selector. The retired C++ rewards scanner is not
-# kept as a second reward/economic implementation.
+# Slow-plane reward selection only. It may perform REST discovery, but it never
+# decides/cancels quotes and is not a second maker runtime.
 (
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_market_maker_rewards.py \
@@ -102,8 +109,8 @@ pids+=("$!")
   done
 ) & pids+=("$!")
 
-# Action-specific exact-SHA fill/markout model. Exploration rows remain
-# promotion_credit=false and cannot promote themselves.
+# Slow-plane exact-SHA fill/markout fit. Refits publish immutable snapshots to
+# the C++ runtime; refit is not promotion.
 (
   while [[ ! -e "$KILL" ]]; do
     if [[ -s "$RUN_ROOT/ledger/execution.jsonl" ]]; then
@@ -117,15 +124,15 @@ pids+=("$!")
   done
 ) & pids+=("$!")
 
-python3 scripts/v7_market_maker_worker.py \
+# Canonical Maker owner: public WS -> bounded V7 L2 -> C++ features/decision ->
+# common V7 OMS/queue PAPER engine -> spool. No Python/REST polling quote loop.
+"$MAKER_RUNTIME" \
   --config "$ALLOC/micro_maker.json" \
   --maker-policy "$MAKER_POLICY" \
   --run-root "$RUN_ROOT" \
   --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
-  --reward-scan "$RUN_ROOT/micro_maker/reward_scan.csv" \
   --model "$RUN_ROOT/micro_maker/execution_model.json" \
-  --trade-tape "$RUN_ROOT/trade_tape.csv" \
-  --loop --interval-ms 500 \
+  --model-sha "$SHA" \
   >> "$RUN_ROOT/micro_maker/runtime.log" 2>&1 &
 pids+=("$!")
 
