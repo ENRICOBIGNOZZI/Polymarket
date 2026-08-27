@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "base_main_sha": "b9030548752d6f0bf9e2f8e953bcbed87a2c21fa",
+  "workflow_path": ".github/workflows/v7-cross-sectional-ranking-research.yml",
+  "workflow_blob_sha": "14536e592d6872504d38614d66715c529916da8e",
+  "authority_read_first": "config/operator_directives.json@main",
+  "finding": "The registered V7 ranking workflow explicitly requires report.survivorship_safe to be false, yet still accepts and publishes frozen-holdout ranking metrics when the implementation is present. A known survivorship-unsafe sample therefore satisfies the workflow contract instead of failing closed.",
+  "current_source_contract": {
+    "unsafe_assertion": "assert report[\"survivorship_safe\"] is False",
+    "publishes_mean_daily_rank_ic": true,
+    "publishes_mean_daily_top_bottom_logit_spread": true,
+    "workflow_currently_deferred_because_ranking_implementation_missing_on_main": true
+  },
+  "why_material": [
+    "Frozen chronological timing alone does not remove survivorship bias from market-universe selection.",
+    "If resolved/disappeared markets are absent from the evaluation universe, rank IC and top-bottom spreads can be biased even without look-ahead inside the fitted model.",
+    "The workflow can therefore turn a known causal-data defect into apparently valid forward evidence once the ranking implementation is re-anchored to main."
+  ],
+  "required_successor_contract": [
+    "Build or consume a point-in-time universe snapshot whose membership was knowable at each decision timestamp.",
+    "Set survivorship_safe=true only after that provenance is actually verified; missing provenance fails closed.",
+    "Require survivorship_safe=true in the registered frozen-holdout workflow before publishing or crediting ranking metrics.",
+    "Keep frozen 2h and 6h fits immutable after holdout_start minus embargo and keep relative-pair-only semantics.",
+    "Do not mix adaptive walk-forward evidence with frozen-holdout inference."
+  ],
+  "economic_evidence": {
+    "new_alpha_claim": false,
+    "new_fill_claim": false,
+    "new_pnl_claim": false
+  },
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "operator_authority_modified": false,
+    "main_or_paper_validated_modified": false,
+    "risk_limits_modified": false
+  },
+  "decision": "MORE_EVIDENCE_REQUIRED"
+}
