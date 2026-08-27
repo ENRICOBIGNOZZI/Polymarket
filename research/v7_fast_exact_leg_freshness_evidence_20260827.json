@@ -1,14 +1,17 @@
 {
-  "schema_version": 1,
-  "timestamp_utc": "2026-08-27T02:20:00Z",
+  "schema_version": 2,
+  "timestamp_utc": "2026-08-27T03:01:10Z",
   "repository": "ENRICOBIGNOZZI/Polymarket",
   "base_main_sha": "877d90b4ecbae3b620ecaa55a68e65cc5ed88ac9",
   "authority": {
     "operator_directives_ref": "main",
-    "operator_directives_sha": "07e65a90c272a7442b40903eeb334bfbe05d0fcf",
     "paper_only": true,
     "authenticated_execution": false,
+    "target_markets": 1000,
+    "min_liquidity_usd": 2.0,
     "min_net_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "kelly_ceiling": 0.25,
     "max_drawdown": 0.15
   },
   "pre_repair_exact_head": {
@@ -34,29 +37,107 @@
     "nonhard_stress_positive_share_plus_10bps": 0.9767441860,
     "alpha_claim": false
   },
-  "defect": {
-    "name": "freshness_gate_required_non_executable_complement_tokens",
-    "description": "NegRisk complete sets, conversions, logical relations and publish-time revalidation required complementary market tokens that did not enter the priced/executable basket. Under sparse full-WS lineage this can suppress otherwise valid hard-arbitrage evaluation.",
-    "safety_interpretation": "Freshness remains fail-closed on every token that is actually priced or executed. The repair removes only irrelevant complementary-outcome requirements; it does not weaken age, skew, full-WS or reconnect guards."
+  "intermediate_ws_only_exact_leg_run": {
+    "workflow_run_id": 33033942738,
+    "markets": 673,
+    "tokens": 1346,
+    "ws_snapshot_ready_tokens": 186,
+    "ws_snapshot_ready_share": 0.1381872214,
+    "freshness_missing_rejections": 9987,
+    "freshness_age_rejections": 15911,
+    "freshness_skew_rejections": 125,
+    "hard_executable_observations": 0,
+    "interpretation": "Exact executable-leg narrowing removed irrelevant complementary-token requirements, but sparse full-WS lineage still dominated the rejection path."
   },
-  "repair_contract": [
-    "Binary complete-set requires YES and NO.",
+  "rest_point_in_time_repair": {
+    "code_head_sha": "7e0859d94844ce02b358afcd5873ceca78e4ac3a",
+    "workflow_run_id": 33034904643,
+    "workflow_checkout_sha": "ebb968460cb98458cb8e1fc3aafe7a8ceeb313ea",
+    "workflow_checkout_kind": "pull_request_merge_ref",
+    "exact_head_live_evidence": false,
+    "base_main_sha": "877d90b4ecbae3b620ecaa55a68e65cc5ed88ac9",
+    "markets": 762,
+    "tokens": 1524,
+    "safe_negrisk_events": 20,
+    "ws_messages": 18390,
+    "book_updates": 11843,
+    "rest_resyncs": 3,
+    "ws_snapshot_ready_tokens": 188,
+    "rest_point_in_time_ready_tokens": 1336,
+    "freshness_ready_tokens": 1524,
+    "freshness_ready_share": 1.0,
+    "freshness_missing_rejections": 0,
+    "freshness_age_rejections": 16448,
+    "freshness_skew_rejections": 1141,
+    "hard_executable_observations": 0,
+    "current_hard_executable": 0,
+    "feed_stale_ms": 6,
+    "feed_latency_p50_ms": 61.0,
+    "feed_latency_p95_ms": 125.0,
+    "feed_latency_p99_ms": 308.48,
+    "decision_latency_p50_us": 26.0,
+    "decision_latency_p95_us": 88.0,
+    "decision_latency_p99_us": 158.0,
+    "nonhard_maker_complete_set_executable_observations": 120,
+    "nonhard_modeled_opportunity_profit": 28.7521196,
+    "nonhard_stress_positive_share_plus_10bps": 0.9416666667,
+    "research_ready": false,
+    "promotion_ready": false,
+    "alpha_claim": false,
+    "pnl_claim": false
+  },
+  "defects_and_repairs": [
+    {
+      "name": "freshness_gate_required_non_executable_complement_tokens",
+      "repair": "Freshness sets are now restricted to the exact token legs used by each executable basket."
+    },
+    {
+      "name": "rest_full_snapshot_provenance_discarded",
+      "repair": "Fast Arb now preserves CLOB /books timestamp and hash inside its research runtime and can use a fresh REST full book only as bounded point-in-time provenance under the same age/skew gates."
+    },
+    {
+      "name": "rest_seed_plus_ws_delta_could_mutate_unproven_lineage",
+      "repair": "WS price deltas are ignored until a full WS book establishes gap-free lineage; a REST snapshot never becomes WS lineage through deltas. Out-of-order WS events cannot regress a newer book timestamp."
+    }
+  ],
+  "validated_contract": [
+    "Binary complete-set requires YES and NO freshness.",
     "NegRisk complete-set requires only member YES legs.",
     "Each NegRisk conversion requires source NO plus target YES legs.",
     "Implication requires antecedent NO plus consequent YES.",
     "Mutual exclusion requires two NO legs.",
     "Exhaustive pair requires two YES legs.",
     "Publish-time revalidation uses actual opportunity leg token IDs.",
+    "A full WS book establishes gap-free delta lineage.",
+    "A REST /books snapshot with timestamp and hash is point-in-time evidence only.",
+    "REST plus WS delta never establishes WS lineage.",
     "Per-leg maximum exchange age remains 5000 ms.",
-    "Cross-leg exchange/receive skew remains bounded at 1500 ms.",
-    "Only a full WS snapshot can establish gap-free L2 lineage; reconnect invalidates it."
+    "Cross-leg exchange and receive skew remains bounded at 1500 ms.",
+    "Reconnect invalidates WS lineage but cannot manufacture or refresh REST provenance.",
+    "Real order submission remains disabled."
   ],
-  "status": "CURRENT_MAIN_PORT_EXACT_EXECUTABLE_LEG_FRESHNESS_REPAIR_LIVE_EVIDENCE_PENDING",
+  "validation": {
+    "research_policy": "success",
+    "monitoring": "success",
+    "ci_debug": "success",
+    "ci_release": "success",
+    "fast_shadow": "success",
+    "ctest": "18/18 passed",
+    "fast_data_health_tests": "6/6 passed"
+  },
+  "economic_interpretation": {
+    "primary_result": "Missing provenance was a real blocker and is repaired in the research runtime: point-in-time freshness coverage reached 1524/1524 tokens and missing-freshness rejects fell to zero.",
+    "remaining_blocker": "No hard-arbitrage observation survived. Exchange-age rejects (16448) and cross-leg skew rejects (1141) now dominate, so the next bottleneck is genuinely synchronized fresh multi-leg state rather than the edge threshold or missing lineage.",
+    "threshold_decision": "Do not lower the authorized 0.5 bp post-cost edge floor to manufacture hard hits.",
+    "nonhard_warning": "The 28.7521196 modeled profit from non-hard maker-complete-set shadow observations is theoretical opportunity output, not PAPER fill-conditioned PnL and not promotion evidence."
+  },
+  "status": "REST_POINT_IN_TIME_PROVENANCE_VALIDATED_AGE_SKEW_BLOCKER_MORE_EVIDENCE_REQUIRED",
   "promotion_ready": false,
   "required_next_evidence": [
-    "Exact-head CI and Research Policy green on this current-main port.",
-    "Exact-head Fast Shadow on public data.",
-    "Compare hard-hit recall and freshness reject counters to run 33030273187.",
-    "Any recovered hard hit still requires authoritative fee/depth economics, sequential PAPER legging/partial/unwind, canonical-ledger realized PnL and 1x/1.5x/2x stress before an alpha claim."
+    "Run the broader V7 Fast Shadow authority surface owned by the workflow diagnostics lane; this PR does not duplicate that ownership.",
+    "Measure hard-candidate survival only when every executable leg satisfies exchange-age and cross-leg exchange/receive skew simultaneously.",
+    "For any surviving hard candidate, require authoritative fees and multi-level executable depth.",
+    "Require sequential PAPER legging with partial-fill and unwind accounting before treating a hard candidate as execution evidence.",
+    "Require canonical-ledger realized post-cost fill-conditioned PnL and frozen-trade-set 1x/1.5x/2x stress before any alpha or promotion claim."
   ]
 }
