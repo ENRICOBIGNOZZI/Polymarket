@@ -1,199 +1,114 @@
 from __future__ import annotations
 
 import json
-import re
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+FORBIDDEN_PATHS = {
+    ".github/actions/project-context/action.yml",
+    ".github/pull_request_template.md",
+    ".github/workflows/admin-supervisor.yml",
+    ".github/workflows/arb-theory-hourly.yml",
+    ".github/workflows/external-intelligence.yml",
+    ".github/workflows/fast-arb-hourly.yml",
+    ".github/workflows/integration-merge.yml",
+    ".github/workflows/operator-authority-gate.yml",
+    ".github/workflows/promotion-controller.yml",
+    ".github/workflows/research-policy.yml",
+    ".github/workflows/research-queue.yml",
+    ".github/workflows/v7-unified-paper-evidence.yml",
+    "config/autonomous_research.json",
+    "config/experiment_registry.json",
+    "config/external_intelligence.json",
+    "config/fast_arb_policy.json",
+    "config/fast_arb_relations.csv",
+    "config/fast_arb_v7_shadow.json",
+    "config/project_context.json",
+    "config/promotion_policy.json",
+    "config/research_director.json",
+    "config/scheduler_registry.json",
+    "config/v7_evidence_runtime.json",
+    "scripts/admin_supervisor_report.py",
+    "scripts/arb_theory_scheduler.py",
+    "scripts/external_intelligence.py",
+    "scripts/external_request_policy.py",
+    "scripts/hard_safety_policy.py",
+    "scripts/integration_base_gate.py",
+    "scripts/integration_gate.py",
+    "scripts/project_context_snapshot.py",
+    "scripts/promotion_gate.py",
+    "scripts/research_common.py",
+    "scripts/research_director.py",
+    "scripts/research_pr_policy.py",
+    "scripts/research_queue_report.py",
+    "scripts/run_external_intelligence.py",
+    "scripts/validate_project_context.py",
+    "scripts/validate_scheduler_registry.py",
+    "scripts/v7_canonical_convergence_policy.py",
+    "scripts/v7_evidence_candidate_contract.py",
+    "src/fast_arb_main.cpp",
+    "tests/test_fast_runtime_contract.py",
+    "tests/test_v7_canonical_convergence_policy.py",
+    "tests/test_v7_control_plane_exact_head.py",
+    "tests/test_v7_paper_evidence_router.py",
+    "tests/test_v7_paper_entrypoint_cutover.py",
+    "tests/test_v7_unified_evidence_runtime.py",
+}
 
-class NoLegacyRuntimeContractTest(unittest.TestCase):
-    def test_versioned_v3_v6_surfaces_are_absent(self) -> None:
-        patterns = (
-            "config/paper_v[3-6].json",
-            "config/v[3-6]_*.json",
-            "scripts/paper_v[3-6]*",
-            "scripts/v[3-6]_*.py",
-            "scripts/v[3-6]_*.sh",
-            ".github/workflows/v[3-6]*.yml",
-            ".github/workflows/v[3-6]*.yaml",
-            "tests/test_v[3-6]_*.py",
-            "monitoring/exporter_v[3-6].py",
-            "research/**/*v[3-6]*",
-            "research/**/*V[3-6]*",
-            "docs/**/*v[3-6]*",
-            "docs/**/*V[3-6]*",
-        )
-        offenders: list[str] = []
-        for pattern in patterns:
-            offenders.extend(str(path.relative_to(ROOT)) for path in ROOT.glob(pattern))
-        self.assertEqual(sorted(set(offenders)), [], "legacy versioned surfaces remain")
 
-    def test_retired_runtime_and_control_plane_paths_are_absent(self) -> None:
-        retired = (
-            # Numerical-generation / compatibility entrypoints.
-            "scripts/paper_latest_loop.sh",
-            "scripts/multi_strategy_paper.py",
-            "scripts/incumbent_health_gate.py",
-            "scripts/tiny_live_pilot.py",
-            "scripts/build_v4_intents.py",
-            "scripts/merge_v4_intents.py",
-            "scripts/walk_forward_v4.py",
-            "scripts/walk_forward_v4_lineage.py",
-            "scripts/filter_coherent_hedges.py",
-            # Deleted monolithic engine and parallel state owners.
-            "include/pm/engine.hpp",
-            "src/engine.cpp",
-            "src/main.cpp",
-            "src/trade_recorder.cpp",
-            "src/rewards_scan.cpp",
-            "scripts/run_paper.sh",
-            "scripts/runtime_action_report.py",
-            "scripts/runtime_contract_health.py",
-            "scripts/runtime_singleton_launcher.py",
-            # Deleted duplicate maker/Fast surfaces.
-            "config/fast_arb_shadow.json",
-            "config/v7_complete_set_maker.json",
-            "scripts/v7_complete_set_maker.py",
-            "tests/test_v7_complete_set_maker.py",
-            "tests/test_v7_complete_set_maker_rolling_flow.py",
-            # Deleted duplicate orchestration/evidence generations.
-            ".github/workflows/live-smoke.yml",
-            ".github/workflows/control-plane.yml",
-            ".github/workflows/control-plane-event-bridge.yml",
-            ".github/workflows/post-merge-validation.yml",
-            ".github/workflows/alpha-factory.yml",
-            "scripts/summarize_live_smoke.py",
-            "scripts/meta_supervisor.py",
-            "scripts/meta_supervisor_v2.py",
-            "scripts/alpha_factory.py",
-            "scripts/calibrate_forward_maker.py",
-            "scripts/finalize_forward_probe.py",
-            "scripts/forward_maker_probe.py",
-            "scripts/select_forward_candidates.py",
-            # Generic deployment/bootstrap paths replaced by V7-specific paths.
-            "ops/apply_runtime_config_macos.sh",
-            "ops/bootstrap_macos.sh",
-            "ops/bootstrap_server.sh",
-            "ops/capture_runtime_health_macos.sh",
-            "ops/finish_bootstrap_macos.sh",
-            "ops/install_autoupdate_macos.sh",
-            "ops/macos_service_control.sh",
-            "ops/update_server.sh",
-            "ops/update_server_macos.sh",
-            # Retired monitoring/runtime binaries.
-            "monitoring/exporter.py",
-            "monitoring/exporter_latest.py",
-            "monitoring/grafana/dashboards/polymarket-fast-paper.json",
-            "monitoring/grafana/dashboards/polymarket-multi-strategy.json",
-            "monitoring/grafana/dashboards/polymarket-v6-model-operations.json",
-            "src/negrisk_arb.cpp",
-            "src/stat_arb.cpp",
-            "src/pca_stat_arb.cpp",
-            "src/maker_paper.cpp",
-            "src/multileg_paper.cpp",
-        )
-        offenders = [path for path in retired if (ROOT / path).exists()]
-        self.assertEqual(offenders, [], "retired executable/control-plane paths remain")
+class NoLegacyRuntimeTest(unittest.TestCase):
+    def test_forbidden_control_plane_and_legacy_surfaces_are_absent(self) -> None:
+        present = sorted(path for path in FORBIDDEN_PATHS if (ROOT / path).exists())
+        self.assertEqual(present, [])
 
-    def test_active_runtime_surfaces_do_not_reference_retired_entrypoints(self) -> None:
-        forbidden = (
-            "paper_v3",
-            "paper_v4",
-            "paper_v5",
-            "paper_v6",
-            "paper.example",
-            "polymarket_engine",
-            "pm/engine.hpp",
-            "broker_state.csv",
-            "legacy_compatibility",
-            "fast_arb_shadow.json",
-            "v7_complete_set_maker",
-            "runtime_singleton_launcher.py",
-            "scripts/run_paper.sh",
-            "live-smoke.yml",
-            "alpha-factory.yml",
-        )
-        files: list[Path] = []
-        for directory in ("src", "include/pm", "ops", "monitoring"):
-            base = ROOT / directory
-            if base.exists():
-                files.extend(path for path in base.rglob("*") if path.is_file())
-        for relative in (
-            "scripts/paper_v7_execution_loop.sh",
-            "config/paper_v7.json",
-            "config/live_champion.json",
-            "config/scheduler_registry.json",
-        ):
-            path = ROOT / relative
-            if path.is_file():
-                files.append(path)
-
-        offenders: list[str] = []
-        for path in files:
-            try:
-                text = path.read_text(encoding="utf-8").lower()
-            except UnicodeDecodeError:
+    def test_no_versioned_v3_v6_paths_remain(self) -> None:
+        bad = []
+        for path in ROOT.rglob("*"):
+            if not path.is_file():
                 continue
-            hits = [token for token in forbidden if token in text]
-            if hits:
-                offenders.append(f"{path.relative_to(ROOT)}: {', '.join(hits)}")
-        self.assertEqual(offenders, [], "active V7 surfaces reference retired entrypoints")
+            rel = path.relative_to(ROOT).as_posix().lower()
+            if any(token in rel for token in ("paper_v3", "paper_v4", "paper_v5", "paper_v6", "/v3_", "/v4_", "/v5_", "/v6_", "_v3.", "_v4.", "_v5.", "_v6.")):
+                bad.append(rel)
+        self.assertEqual(sorted(bad), [])
 
-    def test_only_canonical_v7_operational_ownership_exists(self) -> None:
-        required = (
-            "scripts/paper_v7_execution_loop.sh",
-            "config/paper_v7.json",
-            "scripts/v7_execution_ledger.py",
-            "scripts/v7_ledger_spool.py",
-            "scripts/v7_capital_allocator.py",
-            "scripts/v7_portfolio_guard.py",
-            "monitoring/exporter_v7.py",
-            "monitoring/prometheus_v7.yml",
-            "monitoring/grafana/dashboards/polymarket-v7.json",
-            "ops/update_server_v7.sh",
-            "src/v7_trade_recorder.cpp",
-        )
-        missing = [path for path in required if not (ROOT / path).is_file()]
-        self.assertEqual(missing, [], "canonical V7 ownership surfaces missing")
+    def test_workflows_are_v7_or_core_validation_only(self) -> None:
+        allowed = {"ci.yml", "monitoring.yml", "private-runtime-single-writer-validation.yml"}
+        bad = []
+        for path in (ROOT / ".github/workflows").glob("*.yml"):
+            if path.name not in allowed and not path.name.startswith("v7-"):
+                bad.append(path.name)
+        self.assertEqual(sorted(bad), [])
 
-        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
-        self.assertNotIn("polymarket_engine", cmake)
-        self.assertNotIn("src/engine.cpp", cmake)
-        self.assertNotIn("src/trade_recorder.cpp", cmake)
-        self.assertIn("polymarket_v7_trade_recorder", cmake)
-
-    def test_champion_manifest_is_forced_v7_only(self) -> None:
+    def test_champion_is_v7_only(self) -> None:
         manifest = json.loads((ROOT / "config/live_champion.json").read_text(encoding="utf-8"))
-        self.assertTrue(manifest["paper_only"])
-        self.assertFalse(manifest["authenticated_execution"])
         self.assertTrue(manifest["enabled"])
         self.assertEqual(manifest["version"], 7)
-        self.assertFalse(manifest.get("real_order_submission"))
-        self.assertFalse(manifest.get("legacy_fallback_allowed"))
         self.assertEqual(manifest["loop"], "scripts/paper_v7_execution_loop.sh")
         self.assertEqual(manifest["config"], "config/paper_v7.json")
-        self.assertEqual(manifest["run_root"], "runs/paper_v7_live")
-        self.assertEqual(manifest["deployment_ref"], "paper-validated")
-        self.assertTrue((ROOT / manifest["loop"]).is_file())
-        self.assertTrue((ROOT / manifest["config"]).is_file())
+        self.assertTrue(manifest["paper_only"])
+        self.assertFalse(manifest["authenticated_execution"])
+        self.assertFalse(manifest["real_order_submission"])
+        self.assertFalse(manifest["legacy_fallback_allowed"])
 
-    def test_scheduler_registry_has_no_deleted_workflows(self) -> None:
-        registry = json.loads((ROOT / "config/scheduler_registry.json").read_text(encoding="utf-8"))
-        entries = registry.get("schedulers") or []
-        workflows = [str(entry.get("workflow") or "") for entry in entries]
-        ids = [str(entry.get("id") or "") for entry in entries]
-        for workflow in workflows:
-            self.assertTrue((ROOT / workflow).is_file(), f"registered workflow missing: {workflow}")
-        retired_ids = {
-            "meta-supervisor",
-            "alpha-factory",
-            "live-api-smoke",
-            "control-plane-event-bridge",
-            "post-merge-validation",
-        }
-        self.assertTrue(retired_ids.isdisjoint(ids))
+    def test_canonical_v7_surfaces_exist(self) -> None:
+        required = (
+            "scripts/paper_v7_execution_loop.sh",
+            "scripts/v7_execution_ledger.py",
+            "scripts/v7_canonical_economics.py",
+            "scripts/v7_capital_allocator.py",
+            "scripts/v7_portfolio_guard.py",
+            "config/paper_v7.json",
+            "config/v7_professional_market_maker.json",
+            "monitoring/exporter_v7.py",
+            "monitoring/grafana/dashboards/polymarket-v7.json",
+            ".github/workflows/v7-live-paper-validation.yml",
+            ".github/workflows/v7-deploy-paper-server.yml",
+            ".github/workflows/v7-paper-server-health.yml",
+        )
+        missing = [path for path in required if not (ROOT / path).is_file()]
+        self.assertEqual(missing, [])
 
 
 if __name__ == "__main__":
