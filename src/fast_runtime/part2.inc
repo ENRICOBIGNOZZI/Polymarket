@@ -149,18 +149,15 @@ public:
 
     void resync_books() {
         const auto fresh = fetch_timestamped_rest_books();
-        const auto observed_ms = now_ms();
         std::scoped_lock lock(mutex_);
         for (const auto& [token, snapshot] : fresh) {
-            // A currently fresh full WS book has stronger gap-free lineage, so a REST
-            // poll must not overwrite it. Otherwise /books is accepted only as a
-            // timestamped point-in-time rebase; its timestamp/hash do not authorize
-            // subsequent WS deltas without another full WS book event.
-            const auto received = book_received_ts_ms_.find(token);
-            const bool fresh_ws = ws_snapshot_ready_.count(token) &&
-                                  received != book_received_ts_ms_.end() &&
-                                  received->second > 0 && observed_ms >= received->second &&
-                                  observed_ms - received->second <= kMaxBookAgeMs;
+            // A full WS snapshot followed by an uninterrupted delta stream is a
+            // continuous state lineage. The age of the token's *last market update*
+            // is not the age of that state: a quiet book can remain unchanged for
+            // longer than the REST freshness window. Transport errors/reconnects
+            // explicitly clear ws_snapshot_ready_, so REST must not downgrade a
+            // still-continuous WS lineage merely because that token has been quiet.
+            const bool fresh_ws = ws_snapshot_ready_.count(token) > 0;
             if (fresh_ws) continue;
             books_[token] = snapshot.book;
             ws_snapshot_ready_.erase(token);
