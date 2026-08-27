@@ -1,0 +1,79 @@
+{
+  "schema": "lf_v7_execution_cost_stress_evidence_v1",
+  "as_of_date": "2026-08-27",
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "base_ref": "main",
+  "base_sha": "54019694752cc6cd519fb98dc0797e3b56c6f696",
+  "authority": {
+    "source": "config/operator_directives.json@main",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "market_limit": 1000,
+    "min_liquidity": 2.0,
+    "min_net_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "max_drawdown": 0.15
+  },
+  "material_finding": {
+    "type": "execution_evidence_cost_stress_not_full_vector_audited",
+    "sensitive_surface": "scripts/v7_execution_evidence.py",
+    "current_semantics": "explicit_cost selects the first finite value among fee/fees/slippage_cost/execution_cost/cost and the stress gate subtracts only that selected amount from terminal net PnL at the configured multiplier",
+    "missing_or_ambiguous_components": [
+      "simultaneous fee plus slippage components",
+      "partial-fill unwind cost/loss",
+      "capital cost",
+      "latency cost",
+      "overlap semantics when execution_cost or cost is an aggregate rather than a disjoint component"
+    ],
+    "economic_risk": "a terminal observation can remain positive under reported cost stress even when the same frozen observation is non-positive after all disjoint explicit execution costs are stressed"
+  },
+  "deterministic_counterexample": {
+    "interpretation": "net_pnl is already net of the 1x baseline costs; the stress multiplier therefore charges only the incremental (multiplier-1) times baseline cost",
+    "net_pnl_1x": 0.020,
+    "disjoint_costs": {
+      "fee": 0.006,
+      "slippage_cost": 0.004,
+      "unwind_cost": 0.006,
+      "capital_cost": 0.004,
+      "latency_cost": 0.004,
+      "total": 0.024
+    },
+    "incumbent_recognized_cost": 0.006,
+    "incumbent_recognized_fraction": 0.25,
+    "stress_1_5x": {
+      "incumbent": 0.017,
+      "full_vector": 0.008
+    },
+    "stress_2x": {
+      "incumbent": 0.014,
+      "full_vector": -0.004,
+      "sign_disagreement": true
+    },
+    "note": "This is a deterministic identification counterexample, not a claim about observed Polymarket PnL or about the exact cost fields emitted by every current producer. It shows the generic sidecar cannot prove full-cost robustness from its present schema."
+  },
+  "ci_coverage_finding_on_base_main": {
+    "focused_test_exists": "tests/test_v7_execution_evidence.py",
+    "registered_in_cmake": false,
+    "called_explicitly_by_ci": false,
+    "materiality": "PR #707 classifies this sidecar as a sensitive V7 evidence surface, but the focused regression suite for the #705 maturity-accounting fix is not part of the base-main CTest/explicit unittest path."
+  },
+  "research_branch_change": {
+    "runtime_sidecar_modified": false,
+    "operator_authority_modified": false,
+    "canonical_refs_modified": false,
+    "adds_audit": true,
+    "registers_existing_execution_evidence_tests_in_ctest": true,
+    "registers_new_cost_stress_audit_in_ctest": true
+  },
+  "required_successor_contract": [
+    "Define disjoint authoritative fee/slippage/unwind/capital/latency cost provenance, or one verified non-overlapping total-cost field with an explicit schema.",
+    "Reconstruct 1x realized PnL from audited cashflows and costs instead of trusting whichever generic cost field appears first.",
+    "Stress the same frozen realized observations at 1x, 1.5x and 2x without reselecting trades or completion states.",
+    "Fail closed when cost decomposition is missing, overlapping, ambiguous or unverifiable.",
+    "Keep the focused execution-evidence regression in required exact-head CI before any fill/PnL maturity gate is used for promotion."
+  ],
+  "decision": "MORE_EVIDENCE_REQUIRED",
+  "alpha_claim": false,
+  "pnl_claim": false
+}
