@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "research_only": true,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "observed_at_utc": "2026-08-27T00:49:37Z",
+  "audited_runtime_sha": "2b1e995cf228e3d98055506dc93228a447b8a06f",
+  "workflow_run_id": 33027743499,
+  "operator_authority": {
+    "market_limit": 1000,
+    "min_liquidity": 2.0,
+    "min_net_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "max_trade_fraction": 1.0,
+    "max_market_fraction": 1.0,
+    "max_event_fraction": 1.0,
+    "max_gross_fraction": 1.0,
+    "max_drawdown": 0.15
+  },
+  "chronological_public_shadow": {
+    "markets": 1364,
+    "tokens": 2728,
+    "safe_negrisk_events": 53,
+    "ws_messages": 67701,
+    "book_updates": 66377,
+    "rest_resyncs": 10,
+    "ws_snapshot_ready_tokens_at_stop": 64,
+    "ws_full_snapshot_coverage_fraction_at_stop": 0.02346041055718475,
+    "freshness_missing_rejections": 49649,
+    "freshness_age_rejections": 5095,
+    "freshness_skew_rejections": 710,
+    "freshness_total_rejections": 55454,
+    "freshness_missing_fraction": 0.8953186424784506,
+    "evaluations": 70604,
+    "hard_executable_observations": 0,
+    "current_hard_executable": 0,
+    "feed_stale_ms_at_stop": 18,
+    "feed_latency_p50_ms": 72.0,
+    "feed_latency_p95_ms": 97.0,
+    "feed_latency_p99_ms": 182.0,
+    "decision_latency_p99_us": 1690.0
+  },
+  "documented_clob_rest_contract": {
+    "endpoint": "POST https://clob.polymarket.com/books",
+    "documentation": "https://docs.polymarket.com/api-reference/market-data/get-order-books-request-body",
+    "timestamp_required": true,
+    "hash_required": true,
+    "bids_required": true,
+    "asks_required": true
+  },
+  "repository_contract_at_audited_sha": {
+    "pm_book_preserves_rest_timestamp": false,
+    "pm_book_preserves_rest_hash": false,
+    "fetch_books_parses_rest_timestamp": false,
+    "fetch_books_parses_rest_hash": false,
+    "fast_resync_assumes_rest_has_no_exchange_timestamp": true,
+    "fast_resync_clears_stale_ws_lineage_after_rest_replace": true
+  },
+  "interpretation": "The exact-head broad V7 run is data-active but hard-executable evidence is dominated by missing full-snapshot lineage. The current API type/parser discards documented REST snapshot timestamp/hash fields, so the Fast runtime treats each non-fresh REST replacement as un-timestamped and execution-ineligible. This can create an avoidable coverage bottleneck. It is not alpha or fill/PnL evidence.",
+  "required_successor": [
+    "Preserve each REST book's exchange timestamp and snapshot hash through the API/type boundary.",
+    "Use a fresh REST response only as a timestamped full point-in-time snapshot, never as proof of continuous WebSocket lineage.",
+    "Apply the same per-leg exchange-age and cross-leg-skew checks to synchronized REST full-snapshot evaluations.",
+    "Require monotone event clocks before applying later WS deltas so an out-of-order delta cannot regress snapshot state.",
+    "Serialize exact per-token provenance and then pass sequential PAPER legging/unwind plus canonical realized PnL before any promotion claim."
+  ],
+  "decision": "BLOCKING_REST_SNAPSHOT_PROVENANCE_DROPPED_MORE_EVIDENCE_REQUIRED",
+  "promotion_allowed": false
+}
