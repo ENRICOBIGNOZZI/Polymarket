@@ -47,7 +47,6 @@ class V7CutoverUpdaterTest(unittest.TestCase):
             "v7_execution_supervisor.json",
             "market_proxy_status.json",
             "v7_execution_evidence.json",
-            "paper_v6",
         ):
             self.assertNotIn(retired, text)
 
@@ -60,6 +59,13 @@ class V7CutoverUpdaterTest(unittest.TestCase):
     def test_updater_never_restores_legacy_writer(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         self.assertIn("assert_no_legacy_writer", text)
+        # Retired generation names are allowed only as kill/fail-closed
+        # detection patterns. They must never become start/deploy commands.
+        for generation in ("v3", "v4", "v5", "v6"):
+            pattern = f"scripts/paper_{generation}_loop.sh"
+            self.assertIn(pattern, text)
+            self.assertNotIn(f"bash {pattern}", text)
+            self.assertNotIn(f"nohup {pattern}", text)
         self.assertNotIn("start_legacy", text)
         self.assertNotIn("rollback_v6", text)
         self.assertNotIn("git checkout paper-validated~", text)
