@@ -10,7 +10,7 @@
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
-  "candidate_only_until_promoted": true,
+  "candidate_only_until_promoted": false,
   "legacy_fallback_allowed": false,
-  "reason": "V7 is the sole destination and professional market making is the primary PAPER lane, but this integration head remains candidate-only until exact-SHA technical gates and same-SHA canonical economic evidence pass the required lifecycle. Authenticated and real-order execution remain disabled."
+  "reason": "Latest explicit operator instruction: V7 is the sole PAPER champion now; V6 fallback is forbidden. Technical/economic gates remain evidence and real-money promotion gates, not permission to reactivate legacy. Authenticated and real-order execution remain disabled."
 }
