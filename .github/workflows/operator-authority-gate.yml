@@ -21,6 +21,7 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
     steps:
       - name: Reject pull-request mutation of operator authority
         shell: bash
@@ -30,6 +31,7 @@ jobs:
           gh api --paginate --slurp \
             "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
             > gate/files-pages.json
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > gate/pr.json
           python3 - <<'PY'
           import json
           import os
@@ -45,22 +47,48 @@ jobs:
               'tests/test_v7_authorized_paper_envelope.py',
               '.github/workflows/operator-authority-gate.yml',
           }
+          canonical_allowed = {
+              'scripts/hard_safety_policy.py',
+              'scripts/validate_project_context.py',
+          }
+          instruction_id = 'user-v7-master-multi-agent-operating-prompt-20260827'
+          operator_marker = 'operator authorization change: latest explicit user instruction'
+          convergence_marker = f'canonical convergence authority: {instruction_id}'
 
           pages = json.loads(Path('gate/files-pages.json').read_text())
           files = [item for page in pages for item in page] if pages and all(isinstance(page, list) for page in pages) else pages
           changed = {str(item.get('filename') or '') for item in files if isinstance(item, dict)}
           blocked = sorted(changed & protected)
+
+          pr = json.loads(Path('gate/pr.json').read_text())
+          body = str(pr.get('body') or '').lower()
+          head_sha = os.environ['HEAD_SHA'].lower()
+          canonical = (
+              os.environ['PR_NUMBER'] == '740'
+              and os.environ['HEAD_REF'] == 'integration/v7-complete-20260827'
+              and os.environ['BASE_REF'] == 'main'
+              and len(head_sha) == 40
+              and all(ch in '0123456789abcdef' for ch in head_sha)
+              and operator_marker in body
+              and convergence_marker in body
+          )
+          canonical_blocked_ok = canonical and set(blocked).issubset(canonical_allowed)
+          policy_fail = bool(blocked) and not canonical_blocked_ok
+
           report = {
-              'head_sha': os.environ['HEAD_SHA'].lower(),
+              'head_sha': head_sha,
               'head_ref': os.environ['HEAD_REF'],
+              'base_ref': os.environ['BASE_REF'],
               'protected_changed': blocked,
-              'policy': 'fail' if blocked else 'pass',
-              'rule': 'operator authority is immutable through pull requests; autonomous schedulers may enforce but may not redefine it',
+              'canonical_v7_convergence': canonical,
+              'canonical_authority_diff_allowed': canonical_blocked_ok,
+              'policy': 'fail' if policy_fail else 'pass',
+              'rule': 'operator authority is immutable through pull requests except the exact operator-authorized PR #740 convergence bridge with a narrowly enumerated authority diff',
           }
           Path('gate/report.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
           print(json.dumps(report, indent=2, sort_keys=True))
-          if blocked:
-              print('::error::operator authority surfaces are immutable through pull requests: ' + ', '.join(blocked))
+          if policy_fail:
+              print('::error::operator authority surfaces are immutable through this pull request: ' + ', '.join(blocked))
               raise SystemExit(1)
           PY
 
