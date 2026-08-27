@@ -57,8 +57,10 @@
     }
   ],
   "evidence_provenance": {
-    "analysis_base_main": "e52baa4971d612b121655e4be9f0262b24580776",
+    "analysis_branch_base_main": "e52baa4971d612b121655e4be9f0262b24580776",
+    "current_main_observed_after_branch_creation": "54019694752cc6cd519fb98dc0797e3b56c6f696",
     "main_evidence_accounting_repair_pr": 705,
+    "main_evidence_provenance_guard_pr": 707,
     "source_artifact_id": 9634503913,
     "source_artifact_sha256": "f638db6fb7cf041ed45b170cf784e1f5f4355f7ae32f88c30a82b77dbe2ba1fb",
     "source_exact_head": "e2285d800fdeaaf82e8ff93882b90b306ce5347d",
@@ -73,7 +75,8 @@
     "rule": "every observed executable row must remain above the authorized edge floor after frozen extra cost stress"
   },
   "interpretation": {
-    "future_evidence_contract": "future execution evidence must use current-main unique mature fill/submission/terminal-PnL accounting from PR #705 or a stricter successor on the exact tested SHA",
+    "branch_base_caveat": "main advanced by the execution-evidence provenance guard after this research branch was created; rebase/revalidate on current main before any integration credit",
+    "future_evidence_contract": "future execution evidence must use current-main unique mature fill/submission/terminal-PnL accounting from PR #705 plus the provenance guard from PR #707, or a stricter successor, on the exact tested SHA",
     "hard_arb_result": "zero hard-executable observations in the strict authority x freshness window",
     "maker_result": "three persistent passive binary complete-set discovery leads survive an additional frozen +10bp cost stress throughout their observed windows",
     "not_claimed": [
