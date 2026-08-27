@@ -129,9 +129,11 @@ class MetaSupervisorTests(unittest.TestCase):
     def test_coordination_graph_contains_only_registered_current_workflows(self) -> None:
         registered = {Path(item["workflow"]).name for item in self.registry["schedulers"] if isinstance(item, dict) and item.get("workflow")}
         configured = set(self.config["coordination"]["workflows"])
+        allowlisted = set(self.config["coordination"]["allowlisted_dispatches"])
         self.assertTrue(configured.issubset(registered))
-        retired = {"v7-unified-paper-evidence.yml", "v7-deploy-paper-server.yml", "v7-paper-server-health.yml"}
-        self.assertTrue(configured.isdisjoint(retired)); self.assertTrue(set(self.config["coordination"]["allowlisted_dispatches"]).isdisjoint(retired))
+        protected = {"v7-live-paper-validation.yml", "v7-deploy-paper-server.yml", "v7-paper-server-health.yml"}
+        self.assertTrue(protected.issubset(configured))
+        self.assertTrue(allowlisted.isdisjoint(protected))
 
     def test_single_writer_v7_lifecycle_workflows_are_forbidden_from_meta_dispatch(self) -> None:
         allowlist = set(self.config["coordination"]["allowlisted_dispatches"]); forbidden = set(self.config["coordination"]["forbidden_dispatches"])
