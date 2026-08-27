@@ -34,7 +34,7 @@ probe_http grafana_health http://127.0.0.1:3000/api/health
 
 metrics="$(curl --silent --show-error --max-time 4 http://127.0.0.1:9108/metrics 2>&1 || true)"
 printf '[mac-deploy] candidate_key_metrics_begin\n'
-printf '%s\n' "$metrics" | grep -E '^(polymarket_runtime_info|polymarket_runtime_pnl_usd|polymarket_allocator_state_present|polymarket_allocator_models_expected|polymarket_v6_exporter_info|polymarket_v6_local_factor_clusters|polymarket_v6_model_(alive|staleness_seconds|fills_total|gross_exposure_usd|drawdown))' | head -n 120 || true
+printf '%s\n' "$metrics" | grep -E '^(polymarket_runtime_info|polymarket_runtime_pnl_usd|polymarket_allocator_state_present|polymarket_allocator_models_expected|polymarket_v7_runtime_info|polymarket_v7_local_factor_clusters|polymarket_v7_model_(alive|staleness_seconds|fills_total|gross_exposure_usd|drawdown))' | head -n 120 || true
 printf '[mac-deploy] candidate_key_metrics_end\n'
 
 if [[ -x "$APP_DIR/ops/macos_service_control.sh" || -f "$APP_DIR/ops/macos_service_control.sh" ]]; then

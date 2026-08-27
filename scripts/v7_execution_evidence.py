@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed execution evidence for V6/V7 paper sleeves.
+"""Fail-closed execution evidence for V7 PAPER sleeves.
 
 This sidecar deliberately measures each model against the economic target it
 claims to trade.  It is not an allocator and cannot mutate configs, intents,

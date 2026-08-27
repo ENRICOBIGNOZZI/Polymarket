@@ -559,7 +559,7 @@ def render_markdown(report: dict[str, Any]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--run-root", type=Path, default=Path("runs/paper_v4_live")
+        "--run-root", type=Path, default=Path("runs/paper_v7_live")
     )
     parser.add_argument(
         "--external-signals", type=Path, default=Path("data/external_signals.csv")

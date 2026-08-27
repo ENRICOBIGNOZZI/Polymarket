@@ -9,7 +9,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-import v6_market_common as common
+import v7_market_common as common
 
 
 def test_explicit_gamma_fee_disabled_is_authoritative_zero():
@@ -60,7 +60,7 @@ def test_unknown_schedule_fails_closed_without_007():
     assert details.rate == 0.0
     assert details.source == "unverified_fee_schedule"
     assert all("/fee-rate" not in url for url in calls)
-    source = (ROOT / "scripts" / "v6_market_common.py").read_text(encoding="utf-8")
+    source = (ROOT / "scripts" / "v7_market_common.py").read_text(encoding="utf-8")
     assert "legacy_unverified_fallback" not in source
     assert "FeeDetails(0.07" not in source
 

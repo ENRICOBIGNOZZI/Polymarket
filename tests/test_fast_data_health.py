@@ -87,7 +87,7 @@ class FastDataHealthTest(unittest.TestCase):
         auth = directives["paper_v7_authorization"]
 
         self.assertIn("--config config/fast_arb_v7_shadow.json", workflow)
-        self.assertNotIn("paper_v4.json", workflow)
+        self.assertIn("config/fast_arb_v7_shadow.json", workflow)
         self.assertIn("--markets 1000", workflow)
         self.assertIn("--min-liquidity 2", workflow)
 

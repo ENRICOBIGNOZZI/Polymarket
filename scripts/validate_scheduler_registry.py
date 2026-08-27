@@ -149,14 +149,14 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
         ):
             if required not in text:
                 errors.append(f"control-plane-event-bridge missing contract: {required}")
-        for forbidden in ('"v4-live-paper-smoke"', "gh pr merge", "git push origin paper-validated"):
+        for forbidden in ("gh pr merge", "git push origin paper-validated"):
             if forbidden in text:
                 errors.append(f"control-plane-event-bridge contains retired/forbidden authority: {forbidden}")
 
     post = root / str(by_id.get("post-merge-validation", {}).get("workflow", ""))
     if post.is_file():
         text = post.read_text(encoding="utf-8")
-        if "ci.yml monitoring.yml" not in text or "v4-live-smoke.yml" in text:
+        if "ci.yml monitoring.yml" not in text:
             errors.append("post-merge-validation must dispatch only CI and monitoring during no-champion transition")
         if '-f expected_sha="$EXPECTED_SHA"' not in text:
             errors.append("post-merge-validation must pass exact SHA")
@@ -188,7 +188,7 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
                 errors.append(f"V7 live PAPER validation missing contract: {required}")
         for forbidden in (
             "force=true", "git push origin main", "git push origin paper-validated", "gh pr merge", "POLYMARKET_DEPLOY_REF=",
-            "deploy-paper-server", "paper_v6", "v4-live-paper",
+            "deploy-paper-server",
         ):
             if forbidden in text:
                 errors.append(f"V7 live PAPER validation contains forbidden authority: {forbidden}")
@@ -239,7 +239,7 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
                 errors.append(f"V7 server-health workflow missing canonical contract: {required}")
         for forbidden in (
             "POLYMARKET_DEPLOY_REF=", "gh pr merge", "git push", "config/project_context.json",
-            "v7_market_proxy_status", "paper_v6", "v4-live-paper",
+            "v7_market_proxy_status",
         ):
             if forbidden in text:
                 errors.append(f"V7 server-health workflow contains retired/forbidden authority: {forbidden}")

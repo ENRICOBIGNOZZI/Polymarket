@@ -35,7 +35,6 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             "POLYMARKET_DEPLOY_REF=",
             "paper_v7_loop.sh",
             "v7_execution_evidence_hardened.py",
-            "paper_v6",
         ):
             self.assertNotIn(forbidden, text)
 

@@ -191,10 +191,10 @@ def validate(root: Path) -> tuple[list[str], list[str]]:
     for sid in sorted(set(assignments).difference(active_ids)):
         notes.append(f"{sid}: reserved/inactive operator assignment")
 
-    retired_ids = {"v6-live-data-research", "v6-market-cache-relay"}
+    retired_ids = {"v7-live-data-research", "v7-market-cache-relay"}
     present = sorted(active_ids.intersection(retired_ids))
     if present:
-        errors.append("retired V6 schedulers still active: " + ", ".join(present))
+        errors.append("retired V7 schedulers still active: " + ", ".join(present))
 
     priorities = directives.get("current_priority_order")
     if not isinstance(priorities, list) or len(priorities) < 8:

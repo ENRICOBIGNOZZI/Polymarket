@@ -2,7 +2,7 @@
 """Archive the native V7 point-in-time investable universe.
 
 The archive is fetched directly from Gamma at archive time.  It does not consume
-or translate any V3-V6 market proxy/cache.  Each gzip snapshot is immutable,
+or translate any superseded numerical market proxy/cache.  Each gzip snapshot is immutable,
 bound to the exact paper-validated model SHA, and records the market membership
 that was observable at the capture timestamp.
 """

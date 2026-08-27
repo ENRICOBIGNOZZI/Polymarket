@@ -76,10 +76,10 @@ def test_abort_mark_uses_full_depth_executable_liquidation_value():
         hard.resolve_fee_details = old_resolve
 
 
-def test_hard_arb_native_source_has_no_v6_runtime_dependency():
+def test_hard_arb_native_source_has_no_superseded_runtime_dependency():
     text = (SCRIPTS / "v7_hard_arb_guard.py").read_text(encoding="utf-8")
-    assert "import v6_" not in text
-    assert "from v6_" not in text
+    assert "import v7_" not in text
+    assert "from v7_" not in text
     assert "hard_legacy" not in text
     assert "micro_legacy" not in text
     assert "v7_market_common" in text

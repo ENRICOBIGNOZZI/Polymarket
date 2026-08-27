@@ -68,11 +68,9 @@ stop_production_runtime(){
 }
 
 assert_no_legacy_writer(){
-  local pattern hits
-  for pattern in 'scripts/paper_v3_loop.sh' 'scripts/paper_v4_loop.sh' 'scripts/paper_v5_loop.sh' 'scripts/paper_v6_loop.sh' 'scripts/paper_latest_loop.sh'; do
-    hits="$(pgrep -af "$pattern" 2>/dev/null || true)"
-    [[ -z "$hits" ]] || fail "legacy PAPER writer is still alive for $pattern: $hits"
-  done
+  local hits
+  hits="$(pgrep -af 'scripts/paper_.*_loop\.sh|scripts/paper_latest_loop\.sh' 2>/dev/null | grep -v 'scripts/paper_v7_execution_loop.sh' || true)"
+  [[ -z "$hits" ]] || fail "superseded PAPER writer is still alive: $hits"
 }
 
 monitoring_contract(){

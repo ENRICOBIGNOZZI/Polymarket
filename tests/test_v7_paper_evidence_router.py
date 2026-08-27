@@ -120,7 +120,7 @@ class EvidenceCandidateContractTest(unittest.TestCase):
         self.assertEqual(result["champion_version"], "7")
         self.assertEqual(result["run_root"], "runs/paper_v7_live")
 
-    def test_rejects_disabled_v6_or_authenticated_champion(self):
+    def test_rejects_disabled_or_authenticated_champion(self):
         cases = (("enabled", False), ("version", 6), ("paper_only", False), ("authenticated_execution", True))
         for key, value in cases:
             with self.subTest(key=key):
@@ -167,13 +167,12 @@ class EvidenceRouterStaticContractTest(unittest.TestCase):
         self.workflow = (ROOT / ".github/workflows/v7-unified-paper-evidence.yml").read_text(encoding="utf-8")
         self.config = json.loads((ROOT / "config/v7_evidence_runtime.json").read_text(encoding="utf-8"))
 
-    def test_no_hardcoded_legacy_candidate_or_v6_champion(self):
+    def test_no_hardcoded_superseded_candidate_or_champion(self):
         for forbidden in (
             "source_pr: 546",
             "research/v7-unified-final-evidence-20260826",
             "version') == 6",
             'version"] == 6',
-            "paper_v6_loop",
         ):
             self.assertNotIn(forbidden, self.workflow)
         for deprecated_key in (

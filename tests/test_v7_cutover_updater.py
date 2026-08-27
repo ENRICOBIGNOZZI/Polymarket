@@ -70,7 +70,7 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertNotIn("rollback_v6", text)
         self.assertNotIn("git checkout paper-validated~", text)
 
-    def test_monitoring_manifest_is_v2_and_canonical(self) -> None:
+    def test_monitoring_manifest_schema_is_current_and_canonical(self) -> None:
         manifest = json.loads((ROOT / "monitoring/v7_monitoring_manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["schema"], "polymarket_v7_monitoring_manifest_v2")
         self.assertEqual(manifest["version"], 7)

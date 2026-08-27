@@ -461,7 +461,7 @@ void write_candidate(std::ostream& out, const Candidate& c) {
 
 int main(int argc, char** argv) {
     try {
-        std::string config_path = "config/paper_v4.json";
+        std::string config_path = "config/paper_v7.json";
         std::string csv_path;
         std::size_t market_limit = 2000;
         std::size_t top = 50;

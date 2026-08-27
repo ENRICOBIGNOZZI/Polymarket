@@ -448,7 +448,7 @@ def next_experiments(diagnostics: dict[str, Any], forward_candidates_: list[dict
             "Fresh deterministic telemetry is a prerequisite for every alpha decision.",
             "live-smoke evidence is missing or stale",
             "fresh live-smoke snapshot with reconciled ledger and no runtime degradation",
-            "v4-live-smoke.yml",
+            "v7-live-paper-validation.yml",
         )
 
     oos = diagnostics.get("oos") or {}
@@ -760,7 +760,7 @@ def build_report(
             "required_post_merge_chain": [
                 "ci.yml",
                 "monitoring.yml",
-                "v4-live-smoke.yml",
+                "v7-live-paper-validation.yml",
                 "paper-validated",
                 "deploy-paper-server.yml",
                 "server-health.yml",

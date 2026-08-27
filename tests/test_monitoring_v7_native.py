@@ -274,7 +274,7 @@ class V7NativeMonitoringTest(unittest.TestCase):
         self.assertIn("v7_monitoring_manifest.json", installer)
         self.assertIn("prometheus-v7-alerts.yml", installer)
         self.assertNotIn("exporter_latest", installer)
-        self.assertNotIn("paper_v6", installer)
+        self.assertIn("paper_v7", installer)
 
     def test_monitoring_workflow_executes_v7_monitoring_contract(self) -> None:
         workflow = (ROOT / ".github/workflows/monitoring.yml").read_text(encoding="utf-8")

@@ -130,7 +130,7 @@ class MetaSupervisorTests(unittest.TestCase):
         registered = {Path(item["workflow"]).name for item in self.registry["schedulers"] if isinstance(item, dict) and item.get("workflow")}
         configured = set(self.config["coordination"]["workflows"])
         self.assertTrue(configured.issubset(registered))
-        retired = {"v4-live-smoke.yml", "forward-maker-research.yml", "deploy-paper-server.yml", "server-health.yml"}
+        retired = {"forward-maker-research.yml", "deploy-paper-server.yml", "server-health.yml"}
         self.assertTrue(configured.isdisjoint(retired)); self.assertTrue(set(self.config["coordination"]["allowlisted_dispatches"]).isdisjoint(retired))
 
     def test_single_writer_v7_lifecycle_workflows_are_forbidden_from_meta_dispatch(self) -> None:

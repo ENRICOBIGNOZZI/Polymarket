@@ -184,11 +184,11 @@ void atomic_write(const fs::path& path, const std::string& content) {
 }
 
 struct Options {
-    std::string config = "config/paper_v4.json";
+    std::string config = "config/paper_v7.json";
     std::string policy = "config/fast_arb_policy.json";
     std::string relations = "config/fast_arb_relations.csv";
     std::string external_signals;
-    std::string run_dir = "runs/paper_v4_live/fast";
+    std::string run_dir = "runs/paper_v7_live/fast";
     std::string ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
     std::size_t markets = 1000;
     std::size_t shard_size = 200;

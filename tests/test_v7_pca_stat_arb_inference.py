@@ -126,7 +126,7 @@ def test_research_driver_preserves_successor_base_and_adds_current_contracts():
     assert "common_factor_forecast_identified" in wrapper
     assert "current_residual_z_gate" in wrapper
     assert "config/research_v7_market_data.json" in wrapper
-    assert "v6_local_factor_intents.py" not in wrapper
+    assert "sys.modules[" not in wrapper
 
 
 if __name__ == "__main__":

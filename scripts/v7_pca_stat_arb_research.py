@@ -11,10 +11,6 @@ from typing import Any
 import v7_local_factor_data as v7_data
 import v7_model_book_snapshot as snapshots
 
-# The historical research driver imported a V6-named data helper. Current V7
-# supplies the same read-only discovery/history interface directly and never
-# restores the retired numerical runtime.
-sys.modules["v6_local_factor_intents"] = v7_data
 
 import v7_pca_stat_arb_research_base as driver
 

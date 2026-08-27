@@ -4,10 +4,21 @@
   "research_only": true,
   "live_intents_enabled": false,
   "target": "cross_sectional_tail_relative_logit_spread",
-  "horizons_minutes": [30, 60, 120, 360],
+  "horizons_minutes": [
+    30,
+    60,
+    120,
+    360
+  ],
   "frequency_registration": {
-    "legacy_discovery_selected_horizons_minutes": [120, 360],
-    "new_prospective_challenger_horizons_minutes": [30, 60],
+    "legacy_discovery_selected_horizons_minutes": [
+      120,
+      360
+    ],
+    "new_prospective_challenger_horizons_minutes": [
+      30,
+      60
+    ],
     "registration_date": "2026-08-26",
     "pool_evidence_across_horizons": false,
     "select_new_horizon_on_pre_registration_history": false
@@ -18,8 +29,11 @@
     "source_artifact_run_id": 32959618977,
     "discovery_cutoff_ts": 1787740967,
     "forward_holdout_start_ts": 1787742000,
-    "selected_horizons_before_holdout": [120, 360],
-    "selected_tail_fraction_before_holdout": 0.20,
+    "selected_horizons_before_holdout": [
+      120,
+      360
+    ],
+    "selected_tail_fraction_before_holdout": 0.2,
     "selection_reason": "2h_6h_positive_rank_ic_and_tail_spread_on_discovery_but_not_promotion_robust"
   },
   "history": {
@@ -43,7 +57,7 @@
   "model": {
     "type": "cross_sectionally_normalized_ridge_tail_spread",
     "ridge_penalty": 0.05,
-    "tail_fraction": 0.20,
+    "tail_fraction": 0.2,
     "features": [
       "mom_1",
       "mom_2",
@@ -77,7 +91,7 @@
   },
   "execution_shadow": {
     "mode": "RELATIVE_PAIR_TAKER_SHADOW",
-    "minimum_completed_pair_net_edge": 0.00005,
+    "minimum_completed_pair_net_edge": 5e-05,
     "minimum_liquidity_usd": 2.0,
     "maximum_spread": 0.25,
     "slippage_bps_round_trip_leg": 5.0,
@@ -109,7 +123,7 @@
     "relative_pair_only": true,
     "requires_authoritative_market_fee": true,
     "requires_fresh_executable_books_for_both_legs": true,
-    "requires_shared_v6_v7_broker_ledger": true,
+    "requires_shared_v7_v7_broker_ledger": true,
     "requires_empirical_joint_fill_states": true,
     "requires_partial_abort_unwind_pnl": true,
     "direct_authenticated_execution": false

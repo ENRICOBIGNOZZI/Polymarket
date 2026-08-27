@@ -10,7 +10,7 @@ class MacOSDeployMutexContractTest(unittest.TestCase):
     def test_updater_serializes_checkout_mutation_and_migrates_legacy_launchd(self):
         updater = (ROOT / "ops" / "update_server_macos.sh").read_text(encoding="utf-8")
 
-        self.assertIn("POLYMARKET_DEPLOY_LOCK_V1=1", updater)
+        self.assertIn("POLYMARKET_DEPLOY_LOCK_V7=1", updater)
         self.assertIn('DEPLOY_LOCK_DIR="${POLYMARKET_DEPLOY_LOCK_DIR:-$CACHE_DIR/update.lock}"', updater)
         self.assertIn('DEPLOY_LOCK_WAIT_SECONDS="${POLYMARKET_DEPLOY_LOCK_WAIT_SECONDS:-900}"', updater)
         self.assertIn('DEPLOY_LOCK_STALE_SECONDS="${POLYMARKET_DEPLOY_LOCK_STALE_SECONDS:-3600}"', updater)

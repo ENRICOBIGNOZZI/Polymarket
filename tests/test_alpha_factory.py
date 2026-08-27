@@ -21,9 +21,9 @@ class AlphaFactoryTests(unittest.TestCase):
         self.champion = {
             "schema_version": 1,
             "version": 4,
-            "loop": "scripts/paper_v4_loop.sh",
-            "config": "config/paper_v4.json",
-            "run_root": "runs/paper_v4_live",
+            "loop": "scripts/paper_v7_execution_loop.sh",
+            "config": "config/paper_v7.json",
+            "run_root": "runs/paper_v7_live",
             "deployment_ref": "paper-validated",
             "promotion_policy": "approved integration PR only",
         }

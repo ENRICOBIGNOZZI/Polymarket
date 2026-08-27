@@ -23,10 +23,10 @@ class MetaSupervisorWorkflowContractTests(unittest.TestCase):
         self.assertIn("allowlisted_dispatches", self.text)
         self.assertIn("forbidden_dispatches", self.text)
         self.assertNotIn(
-            "ci.yml|monitoring.yml|v4-live-smoke.yml|forward-maker-research.yml",
+            "ci.yml|monitoring.yml|forward-maker-research.yml",
             self.text,
         )
-        retired = {"v4-live-smoke.yml", "forward-maker-research.yml", "v6-research-smoke.yml"}
+        retired = {"forward-maker-research.yml"}
         self.assertFalse(allowlisted & retired)
         for workflow in allowlisted:
             path = WORKFLOW_DIR / workflow

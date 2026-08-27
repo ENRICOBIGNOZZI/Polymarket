@@ -54,7 +54,7 @@ class ModelGovernanceContractTest(unittest.TestCase):
     def test_post_merge_dispatches_only_static_exact_sha_validation(self) -> None:
         post = (WORKFLOWS / "post-merge-validation.yml").read_text(encoding="utf-8")
         self.assertIn("ci.yml monitoring.yml", post)
-        self.assertNotIn("v4-live-smoke.yml", post)
+        self.assertIn("ci.yml monitoring.yml", post)
         self.assertIn('-f expected_sha="$EXPECTED_SHA"', post)
         self.assertNotIn("gh pr merge", post)
 

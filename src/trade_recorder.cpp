@@ -321,8 +321,8 @@ private:
 
 int main(int argc, char** argv) {
     try {
-        std::string config = "config/paper_v3.json";
-        std::string run_dir = "runs/paper_v4";
+        std::string config = "config/paper_v7.json";
+        std::string run_dir = "runs/paper_v7_live";
         std::string data_url = "https://data-api.polymarket.com";
         std::size_t markets = 600, batch = 20;
         double min_liquidity = 100.0;

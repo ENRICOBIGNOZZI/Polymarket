@@ -61,7 +61,7 @@ class Ranking15mRegistrationTest(unittest.TestCase):
 
     def test_execution_contract_is_v7_only_and_relative(self) -> None:
         serialized = json.dumps(self.cfg, sort_keys=True).lower()
-        self.assertNotIn("shared_v6_v7", serialized)
+        self.assertIn("requires_shared_v7_broker_ledger", serialized)
         pair = self.cfg["relative_pair_contract"]
         self.assertTrue(pair["relative_forecast_only"])
         self.assertFalse(pair["absolute_single_leg_direction_allowed"])

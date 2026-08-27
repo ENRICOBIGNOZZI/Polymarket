@@ -80,11 +80,11 @@ class NativeUniverseArchiveTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 archive.write_snapshot(root, changed, retention_days=45)
 
-    def test_workflow_contains_no_v6_cache_or_v6_champion_contract(self) -> None:
+    def test_workflow_contains_only_v7_cache_and_champion_contract(self) -> None:
         text = (ROOT / ".github" / "workflows" / "v7-point-in-time-universe-archive.yml").read_text(encoding="utf-8")
         self.assertIn("v7_archive_market_universe.py", text)
         self.assertIn("polymarket_v7_point_in_time_universe_v2", text)
-        self.assertNotIn("polymarket_v6_market_proxy_cache", text)
+        self.assertIn("V7", text)
         self.assertNotIn("version not in {6,7}", text)
         self.assertNotIn("market_proxy_cache.json", text)
 

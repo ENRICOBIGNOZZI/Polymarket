@@ -196,7 +196,7 @@ class ResearchDirectorTests(unittest.TestCase):
         self.assertTrue(owners <= registered)
         for workflow in sorted(owners):
             self.assertNotIn("forward-maker", workflow)
-            self.assertNotIn("v6-", workflow)
+            self.assertNotIn("v7-", workflow)
             path = ROOT / ".github" / "workflows" / workflow
             self.assertTrue(path.is_file(), workflow)
             text = path.read_text(encoding="utf-8")
@@ -227,7 +227,7 @@ class ResearchDirectorTests(unittest.TestCase):
         self.assertIn("owner_workflows", text)
         self.assertIn("workflow_dispatch", text)
         self.assertNotIn(
-            "forward-maker-research.yml|external-intelligence.yml|v6-research-smoke.yml",
+            "forward-maker-research.yml|external-intelligence.yml",
             text,
         )
         self.assertIn('gh workflow run "$workflow" --ref main', text)

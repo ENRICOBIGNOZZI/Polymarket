@@ -320,7 +320,7 @@ def build_report(config: dict[str, Any], snapshot: dict[str, Any], now: int) -> 
     if not main_sha or (validated_sha and not validated_ancestor):
         dispatch_plan = [
             action for action in dispatch_plan
-            if action["workflow_file"] in {"ci.yml", "monitoring.yml", "v4-live-smoke.yml"}
+            if action["workflow_file"] in {"ci.yml", "monitoring.yml", "v7-live-paper-validation.yml"}
         ]
 
     if any(alert["severity"] == "critical" for alert in alerts):

@@ -27,7 +27,7 @@ VERDICT_PATTERN = re.compile(
 )
 NEGATIVE_VERDICTS = {"MORE_EVIDENCE_REQUIRED", "REJECTED"}
 POSITIVE_VERDICTS = {"INTEGRATION_READY", "APPROVED_FOR_INTEGRATION"}
-OPERATIONAL_RECOVERY_PATH = re.compile(r"^scripts/paper_v\d+_loop\.sh$", re.I)
+OPERATIONAL_RECOVERY_PATH = re.compile(r"^scripts/paper_v7_execution_loop\.sh$", re.I)
 REQUIRED_CANDIDATE_CHECKS = (
     "build-test (Release)",
     "build-test (Debug)",

@@ -35,7 +35,7 @@ stability, and a deterministic day-block bootstrap p-value. Models are labelled
 `PAPER_ELIGIBLE` only after all configured gates pass; otherwise they remain
 `INSUFFICIENT_EVIDENCE` with explicit reason codes.
 
-The current policy is intentionally fail-closed. It observes the V6 sleeves and
+The current policy is intentionally fail-closed. It observes the V7 sleeves and
 publishes Grafana metrics, but does not reallocate capital automatically. A
 future allocator may consume only this typed evidence and must be promoted as a
 separate economic change.

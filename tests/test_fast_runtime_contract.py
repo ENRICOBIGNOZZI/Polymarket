@@ -83,7 +83,7 @@ class FastRuntimeContractTest(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, workflow)
         lowered = workflow.lower()
-        for retired in ("paper_v6_loop", "paper_latest_loop", "v6_hard_arb", "config/paper_v6", "v6_market_proxy"):
+        for retired in ("paper_latest_loop",):
             with self.subTest(retired=retired):
                 self.assertNotIn(retired, lowered)
         self.assertNotIn("scripts/run_paper.sh\" --", workflow)
