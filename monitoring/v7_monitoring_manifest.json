@@ -13,6 +13,7 @@
   },
   "prometheus": {
     "config": "monitoring/prometheus_v7.yml",
+    "alert_rules": "monitoring/v7_alerts.yml",
     "host": "127.0.0.1",
     "port": 9090
   },
