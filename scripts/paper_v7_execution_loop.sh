@@ -6,6 +6,8 @@ cd "$ROOT"
 CONFIG="${PM_V7_CONFIG:-config/paper_v7.json}"
 RUN_ROOT="${PM_V7_RUN_ROOT:-runs/paper_v7_live}"
 RECORDER="${PM_TRADE_RECORDER:-build/polymarket_trade_recorder}"
+REWARDS_SCAN="${PM_REWARDS_SCAN:-build/polymarket_rewards_scan}"
+MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
 SHA="$(git rev-parse HEAD)"
 CONTROL="$RUN_ROOT/control"
 ALLOC="$CONTROL/allocations"
@@ -13,16 +15,21 @@ KILL="$CONTROL/KILL"
 LOCK="$CONTROL/runtime.lock"
 mkdir -p "$CONTROL" "$RUN_ROOT/market_data" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/learned_execution"
 
-python3 - "$CONFIG" <<'PY'
+python3 - "$CONFIG" "$MAKER_POLICY" <<'PY'
 import json,sys
 cfg=json.load(open(sys.argv[1]))
 v7=cfg.get("v7") or {}
+maker=json.load(open(sys.argv[2]))
 assert cfg.get("engine_version")==7
 assert cfg.get("paper_only") is True
 assert v7.get("paper_only") is True
 assert v7.get("authenticated_execution") is False
 assert v7.get("real_order_submission") is False
 assert float(cfg.get("max_drawdown",0)) <= .15 + 1e-12
+assert maker.get("paper_only") is True
+assert maker.get("authenticated_execution") is False
+assert maker.get("real_order_submission") is False
+assert maker.get("architecture",{}).get("single_canonical_ledger_writer") is True
 PY
 
 if [[ -d "$LOCK" ]]; then
@@ -40,7 +47,7 @@ rm -f "$KILL"
 python3 scripts/v7_capital_allocator.py --config "$CONFIG" --output-dir "$ALLOC" >/dev/null
 
 cat > "$CONTROL/runtime_status.json.tmp" <<JSON
-{"schema":"polymarket_v7_runtime_status_v1","paper_only":true,"authenticated_execution":false,"model_sha":"$SHA","pid":$$,"starting":true}
+{"schema":"polymarket_v7_runtime_status_v1","paper_only":true,"authenticated_execution":false,"model_sha":"$SHA","pid":$$,"starting":true,"primary_economic_sleeve":"MICRO_MAKER_PRO"}
 JSON
 mv "$CONTROL/runtime_status.json.tmp" "$CONTROL/runtime_status.json"
 
@@ -70,6 +77,76 @@ pids+=("$!")
 (
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_ledger_spool.py --run-root "$RUN_ROOT" --model-sha "$SHA" >> "$RUN_ROOT/ledger_router.log" 2>&1 || true
+    sleep 1
+  done
+) & pids+=("$!")
+
+# Professional maker slow path: public reward-market selection and conservative
+# competition/reward context.  This work is deliberately outside the quote hot path.
+(
+  while [[ ! -e "$KILL" ]]; do
+    python3 scripts/v7_market_maker_rewards.py \
+      --config "$MAKER_POLICY" \
+      --output "$RUN_ROOT/micro_maker/reward_selection.json" \
+      >> "$RUN_ROOT/micro_maker/reward_selection.log" 2>&1 || true
+    if [[ -x "$REWARDS_SCAN" ]]; then
+      "$REWARDS_SCAN" \
+        --config "$ALLOC/micro_maker.json" \
+        --markets 1000 --top 40 \
+        --csv "$RUN_ROOT/micro_maker/reward_scan.csv" \
+        --quote-shares 10 --max-notional 100 \
+        --competition-multiplier 2 --reward-haircut 0.50 \
+        --annual-capital-rate 0.05 --adverse-bps 50 \
+        --one-sided-fills-per-day 1 --improve-ticks 0 \
+        >> "$RUN_ROOT/micro_maker/reward_scan.log" 2>&1 || true
+    fi
+    sleep 60
+  done
+) & pids+=("$!")
+
+# Action-specific causal fill/markout model. Exploration records are allowed as
+# training data but retain promotion_credit=false in the canonical ledger.
+(
+  while [[ ! -e "$KILL" ]]; do
+    if [[ -s "$RUN_ROOT/ledger/execution.jsonl" ]]; then
+      python3 scripts/v7_market_maker_model.py \
+        --ledger "$RUN_ROOT/ledger/execution.jsonl" \
+        --model-sha "$SHA" \
+        --output "$RUN_ROOT/micro_maker/execution_model.json" \
+        >> "$RUN_ROOT/micro_maker/model.log" 2>&1 || true
+    fi
+    sleep 60
+  done
+) & pids+=("$!")
+
+# Immediate PAPER/bootstrap maker. It uses public point-in-time books plus the
+# canonical recorder tape, models FIFO queue/cancel latency, manages YES/NO
+# inventory and emits only through the V7 ledger spool. The production latency
+# target remains migration of this decision contract onto the shared C++ WS state.
+python3 scripts/v7_market_maker_worker.py \
+  --config "$ALLOC/micro_maker.json" \
+  --maker-policy "$MAKER_POLICY" \
+  --run-root "$RUN_ROOT" \
+  --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
+  --reward-scan "$RUN_ROOT/micro_maker/reward_scan.csv" \
+  --model "$RUN_ROOT/micro_maker/execution_model.json" \
+  --trade-tape "$RUN_ROOT/trade_tape.csv" \
+  --loop --interval-ms 500 \
+  >> "$RUN_ROOT/micro_maker/runtime.log" 2>&1 &
+pids+=("$!")
+
+# Full-depth executable mark for account-level risk. Unmarkable maker inventory
+# is a hard fail-closed condition rather than being carried at midpoint/cost.
+(
+  while [[ ! -e "$KILL" ]]; do
+    if ! python3 scripts/v7_market_maker_status.py \
+      --state "$RUN_ROOT/micro_maker/state.json" \
+      --config "$ALLOC/micro_maker.json" \
+      --output "$RUN_ROOT/micro_maker/status.json" \
+      >> "$RUN_ROOT/micro_maker/status.log" 2>&1; then
+      printf '{"schema":"polymarket_v7_maker_risk_failure_v1","paper_only":true,"model_sha":"%s"}\n' "$SHA" > "$KILL"
+      break
+    fi
     sleep 1
   done
 ) & pids+=("$!")
@@ -116,9 +193,9 @@ pids+=("$!")
   done
 ) & pids+=("$!")
 
-# Native Hard Arb and Micro Taker run in isolated capital sleeves. Their CSV/state
-# output remains research-only until a strict canonical-ledger producer preserves
-# their full causal execution identity; it is not credited by canonical economics.
+# Native Hard Arb and Micro Taker remain isolated secondary capital sleeves. Their
+# CSV/state output stays research-only until strict canonical-ledger producers
+# preserve their full causal execution identity.
 (
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_hard_arb_guard.py \
@@ -151,14 +228,6 @@ pids+=("$!")
   done
 ) & pids+=("$!")
 
-# Generic maker is intentionally not started: current forward evidence rejects
-# unconditional improvement. The capital sleeve stays reserved until the direct
-# joint execution model supports a selective positive-EV maker action.
-cat > "$RUN_ROOT/micro_maker/status.json.tmp" <<JSON
-{"schema":"polymarket_v7_selective_maker_status_v1","paper_only":true,"authenticated_execution":false,"enabled":false,"reason":"direct_joint_fill_conditioned_ev_not_yet_mature_generic_maker_rejected"}
-JSON
-mv "$RUN_ROOT/micro_maker/status.json.tmp" "$RUN_ROOT/micro_maker/status.json"
-
 # Account-level kill switch. Any unsafe/unmarkable sleeve or >=15% account DD
 # writes control/KILL; the parent then terminates the entire process group.
 while [[ ! -e "$KILL" ]]; do
@@ -176,5 +245,5 @@ while [[ ! -e "$KILL" ]]; do
   sleep 1
 done
 
-printf '{"schema":"polymarket_v7_runtime_status_v1","paper_only":true,"authenticated_execution":false,"model_sha":"%s","pid":%s,"killed":true}\n' "$SHA" "$$" > "$CONTROL/runtime_status.json"
+printf '{"schema":"polymarket_v7_runtime_status_v1","paper_only":true,"authenticated_execution":false,"model_sha":"%s","pid":%s,"killed":true,"primary_economic_sleeve":"MICRO_MAKER_PRO"}\n' "$SHA" "$$" > "$CONTROL/runtime_status.json"
 exit 2
