@@ -2,6 +2,9 @@ global:
   scrape_interval: 5s
   evaluation_interval: 5s
 
+rule_files:
+  - "__POLYMARKET_V7_ALERT_RULES__"
+
 scrape_configs:
   - job_name: polymarket-v7
     metrics_path: /metrics

@@ -84,6 +84,15 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     shadow = _json(run_root / "shadow" / "scheduler_status.json")
     allocator = _json(run_root / "execution" / "allocator_status.json") or _json(run_root / "allocator_status.json")
     ledger = summarize_ledger(run_root / "ledger" / "execution.jsonl")
+    directives = _json(repository_root / "config" / "operator_directives.json")
+    authorization = directives.get("paper_v7_authorization") if isinstance(directives.get("paper_v7_authorization"), dict) else {}
+    authority_max_drawdown = _number(authorization.get("max_drawdown"), 0.0)
+    authority_valid = (
+        directives.get("authority") == "latest_explicit_user_instruction"
+        and authorization.get("paper_only") is True
+        and authorization.get("authenticated_execution") is False
+        and 0.0 < authority_max_drawdown <= 1.0
+    )
 
     evidence_models = evidence.get("models") if isinstance(evidence.get("models"), dict) else {}
     runtime_strategies = runtime.get("strategies") if isinstance(runtime.get("strategies"), dict) else {}
@@ -148,6 +157,10 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "shadow": shadow,
         "allocator": allocator,
         "ledger": ledger,
+        "authority": {
+            "valid": authority_valid,
+            "max_drawdown": authority_max_drawdown,
+        },
         "strategies": strategies,
         "shadow_freshness": {str(name): _age(now, started) for name, started in shadow_jobs.items()},
         "ages": {
@@ -183,6 +196,9 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     evidence = snapshot["evidence"]
     ages = snapshot["ages"]
     ledger = snapshot["ledger"]
+    authority = snapshot["authority"]
+    if authority.get("valid") is not True:
+        reasons.append("operator_authority_missing_or_invalid")
     if runtime.get("version") != 7:
         reasons.append("runtime_version_not_v7")
     if runtime.get("paper_only") is not True:
@@ -195,6 +211,8 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
         reasons.append("shadow_not_alive")
     if execution.get("paper_only") is not True:
         reasons.append("execution_supervisor_not_paper_only")
+    if execution.get("authenticated_execution") is not False:
+        reasons.append("execution_supervisor_authenticated_execution_not_disabled")
     if proxy.get("schema") != "polymarket_v7_market_proxy_status_v1":
         reasons.append("market_proxy_schema_not_v7")
     if proxy.get("paper_only") is not True:
@@ -210,27 +228,38 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
             reasons.append(f"{key}_stale")
     if not math.isfinite(float(ages["supervisor"])) or float(ages["supervisor"]) > max_supervisor_age:
         reasons.append("supervisor_stale")
-    if snapshot["economics"]["drawdown"] > 0.15 + 1e-12:
+    if snapshot["economics"]["killed"]:
+        reasons.append("runtime_killed")
+    max_drawdown = _number(authority.get("max_drawdown"), 0.0)
+    if max_drawdown > 0.0 and snapshot["economics"]["drawdown"] >= max_drawdown - 1e-12:
         reasons.append("drawdown_limit_breached")
     return sorted(set(reasons))
 
 
 def render_prometheus(snapshot: dict[str, Any]) -> str:
     runtime = snapshot["runtime"]
+    execution = snapshot["execution_supervisor"]
     proxy = snapshot["proxy"]
     evidence = snapshot["evidence"]
     ledger = snapshot["ledger"]
+    authority = snapshot["authority"]
     ledger_total = ledger.get("total") if isinstance(ledger.get("total"), dict) else {}
     economics = snapshot["economics"]
     ages = snapshot["ages"]
     supervisor = snapshot["supervisor"]
     evidence_summary = evidence.get("summary") if isinstance(evidence.get("summary"), dict) else {}
     labels = {"adapter": "v7_native", "run_root": snapshot["run_root"], "version": "v7"}
+    paper_contract_ok = runtime.get("paper_only") is True and execution.get("paper_only") is True
+    auth_disabled = runtime.get("authenticated_execution") is False and execution.get("authenticated_execution") is False
     lines = [
         "# TYPE polymarket_v7_runtime_info gauge",
         _metric("polymarket_v7_runtime_info", 1 if runtime.get("version") == 7 else 0),
         _metric("polymarket_runtime_info", 1, labels),
         _metric("polymarket_v7_deployed_sha_info", 1, {"sha": snapshot["sha"]}),
+        _metric("polymarket_v7_operator_authority_valid", 1 if authority.get("valid") is True else 0),
+        _metric("polymarket_v7_authority_max_drawdown_ratio", authority.get("max_drawdown")),
+        _metric("polymarket_v7_paper_only_contract_ok", 1 if paper_contract_ok else 0),
+        _metric("polymarket_v7_authenticated_execution_disabled", 1 if auth_disabled else 0),
         _metric("polymarket_v7_execution_alive", 1 if supervisor.get("execution_alive") is True else 0),
         _metric("polymarket_v7_shadow_alive", 1 if supervisor.get("shadow_alive") is True else 0),
         _metric("polymarket_runtime_equity_usd", economics["equity"]),

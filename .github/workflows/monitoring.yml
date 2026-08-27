@@ -55,6 +55,7 @@ jobs:
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7.json >/dev/null
           bash -n ops/apply_v7_monitoring_config_macos.sh
           test -s monitoring/prometheus_v7.yml
+          test -s monitoring/v7_alerts.yml
           test -s monitoring/grafana/provisioning/dashboards/v7.yml
           test -s monitoring/grafana/provisioning/datasources/prometheus-v7.yml
           python3 scripts/validate_scheduler_registry.py --root . --registry config/scheduler_registry.json
