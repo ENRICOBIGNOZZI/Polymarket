@@ -118,7 +118,7 @@ class ModelIntentRouterTest(unittest.TestCase):
         self.assertFalse(intent.executable)
         self.assertIn("point_in_time_universe_not_validated", intent.blockers)
 
-    def test_candidate_events_do_not_manufacture_orders_or_fills(self) -> None:
+    def test_blocked_noncausal_intent_remains_opportunity(self) -> None:
         intent = router.ModelIntent(
             candidate_id="id", model_sha=SHA, family="pca", horizon_seconds=3600,
             decision_ts_ms=100_000, semantics="single_leg_residual_stat_arb",
@@ -131,9 +131,12 @@ class ModelIntentRouterTest(unittest.TestCase):
             with ledger.CanonicalLedgerWriter(path, writer_id="test", model_sha=SHA) as writer:
                 self.assertEqual(router.write_candidate_events(writer, [intent]), 1)
             events = list(ledger.iter_events(path, expected_model_sha=SHA))
-        self.assertEqual([event.event_type for event in events], ["CANDIDATE"])
-        self.assertEqual(events[0].intended_action, "RESEARCH_CANDIDATE")
+        self.assertEqual([event.event_type for event in events], ["OPPORTUNITY"])
+        self.assertEqual(events[0].intended_action, "RESEARCH_OPPORTUNITY")
+        self.assertIsNone(events[0].candidate_id)
+        self.assertEqual(events[0].opportunity_id, "id")
         self.assertFalse(events[0].metadata["execution_eligible"])
+        self.assertFalse(events[0].metadata["model_execution_eligible"])
 
 
 if __name__ == "__main__":
