@@ -15,6 +15,7 @@ _YES_BOOK_BY_MARKET: dict[str, snapshots.CausalBook] = {}
 _GUARD_ATTEMPTS = 0
 _GUARD_REJECTIONS = 0
 _LAST_VALIDATION: snapshots.SnapshotValidation | None = None
+_SIGNAL_PROVENANCE: dict[tuple[str, str], dict[str, Any]] = {}
 _ORIGINAL_BUILD_PAIR_SIGNAL = core.build_pair_signal
 _ORIGINAL_ATOMIC_JSON = driver.atomic_json
 
@@ -35,6 +36,19 @@ def _fetch_books(clob: str, markets: list[Any]) -> dict[str, snapshots.CausalBoo
         if market.yes in books
     }
     return books
+
+
+def _snapshot_provenance(required_tokens: list[str], validation: snapshots.SnapshotValidation) -> dict[str, Any]:
+    selected = [_BOOKS_BY_TOKEN[token] for token in required_tokens]
+    return {
+        "exchange_ts_ms": min(book.exchange_ts_ms for book in selected),
+        "receive_ts_ms": max(book.received_ts_ms for book in selected),
+        "decision_ts_ms": time.time_ns() // 1_000_000,
+        "book_snapshot_id": validation.snapshot_set_id,
+        "snapshot_token_count": validation.token_count,
+        "exchange_skew_ms": validation.exchange_skew_ms,
+        "receive_skew_ms": validation.receive_skew_ms,
+    }
 
 
 def _build_pair_signal(fit, pvalue, _target_only_probabilities, yes_scales, *args, **kwargs):
@@ -60,15 +74,29 @@ def _build_pair_signal(fit, pvalue, _target_only_probabilities, yes_scales, *arg
         _GUARD_REJECTIONS += 1
         return None
     probabilities = {market_id: _YES_BOOK_BY_MARKET[market_id].mid for market_id in required_markets}
-    return _ORIGINAL_BUILD_PAIR_SIGNAL(fit, pvalue, probabilities, yes_scales, *args, **kwargs)
+    signal = _ORIGINAL_BUILD_PAIR_SIGNAL(fit, pvalue, probabilities, yes_scales, *args, **kwargs)
+    if signal is not None:
+        _SIGNAL_PROVENANCE[(str(fit.market_a), str(fit.market_b))] = _snapshot_provenance(required_tokens, validation)
+    return signal
 
 
 def _atomic_json(path, value):
     if isinstance(value, dict):
         value = dict(value)
+        signals = []
+        for raw in value.get("signals") or []:
+            row = dict(raw) if isinstance(raw, dict) else raw
+            if isinstance(row, dict):
+                key = (str(row.get("market_a") or ""), str(row.get("market_b") or ""))
+                provenance = _SIGNAL_PROVENANCE.get(key)
+                if provenance is not None:
+                    row.update(provenance)
+            signals.append(row)
+        value["signals"] = signals
         value["current_residual_reconstructed_from_frozen_controls"] = True
         value["market_data_config"] = "config/research_v7_market_data.json"
         value["operational_paper_config_introduced"] = False
+        value["per_signal_causal_snapshot_provenance"] = True
         value["current_book_snapshot_contract"] = {
             "required": True,
             "max_age_ms": 5000,
