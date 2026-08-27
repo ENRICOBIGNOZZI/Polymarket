@@ -61,9 +61,10 @@ def write_tape(path: Path) -> None:
         # event-time window, but far below the fill-replay watermark.
         {"timestamp": (NOW - 45_000) / 1000, "received_ms": NOW - 44_000, "asset_id": "YES", "side": "SELL", "price": 0.47, "size": 100.0, "transaction_hash": "valid-y"},
         {"timestamp": (NOW - 46_000) / 1000, "received_ms": NOW - 44_500, "asset_id": "NO", "side": "SELL", "price": 0.47, "size": 100.0, "transaction_hash": "valid-n"},
-        # Causally unavailable at decision time.
+        # Causally unavailable at decision time. These rows are deliberately above
+        # the replay watermark to prove that watermarking and decision causality
+        # are different contracts.
         {"timestamp": (NOW - 10_000) / 1000, "received_ms": NOW + 1, "asset_id": "YES", "side": "SELL", "price": 0.47, "size": 500.0, "transaction_hash": "future-receive"},
-        # Future event even though local receive clock is not future.
         {"timestamp": (NOW + 1_000) / 1000, "received_ms": NOW - 1, "asset_id": "NO", "side": "SELL", "price": 0.47, "size": 500.0, "transaction_hash": "future-event"},
         # Known but outside the configured event-time lookback.
         {"timestamp": (NOW - 301_000) / 1000, "received_ms": NOW - 300_000, "asset_id": "YES", "side": "SELL", "price": 0.47, "size": 500.0, "transaction_hash": "too-old"},
@@ -90,7 +91,16 @@ class RollingDecisionFlowTest(unittest.TestCase):
                 lookback_seconds=300,
             )
 
-        self.assertEqual(incremental, [])
+        # Fill replay is a receive-watermark contract. It may still read rows that
+        # a later order-causality check will reject, but it must not replay the
+        # already-consumed 45s/46s rows.
+        self.assertEqual({row.event_ts_ms for row in incremental}, {NOW - 10_000, NOW + 1_000})
+        self.assertNotIn(NOW - 45_000, {row.event_ts_ms for row in incremental})
+        self.assertNotIn(NOW - 46_000, {row.event_ts_ms for row in incremental})
+
+        # Decision memory is a separate causal window: only information locally
+        # known by NOW and whose market event is inside the 300s lookback survives.
+        self.assertEqual({row.event_ts_ms for row in rolling}, {NOW - 45_000, NOW - 46_000})
         self.assertEqual({row.token_id for row in rolling}, {"YES", "NO"})
         self.assertEqual(len(rolling), 2)
         self.assertTrue(all(row.received_ms <= NOW for row in rolling))
@@ -109,7 +119,15 @@ class RollingDecisionFlowTest(unittest.TestCase):
             incremental = maker.read_new_tape(tape, state)
             rolling = maker.read_decision_tape_window(tape, decision_ms=NOW, lookback_seconds=300)
 
-        self.assertIsNone(maker.choose_quote(market, yes, no, yes_fee=fee(), no_fee=fee(), recent_trades=incremental, cfg=cfg()))
+        # The two causal 45s/46s observations have already crossed the fill replay
+        # watermark and therefore cannot create a second fill.
+        self.assertNotIn(NOW - 45_000, {row.event_ts_ms for row in incremental})
+        self.assertNotIn(NOW - 46_000, {row.event_ts_ms for row in incremental})
+
+        # With no causal flow memory, flow-capped sizing abstains. Restoring the
+        # same below-watermark observations to the decision-only window admits a
+        # positive-EV PAPER candidate without replaying either print as a fill.
+        self.assertIsNone(maker.choose_quote(market, yes, no, yes_fee=fee(), no_fee=fee(), recent_trades=[], cfg=cfg()))
         quote = maker.choose_quote(market, yes, no, yes_fee=fee(), no_fee=fee(), recent_trades=rolling, cfg=cfg())
         self.assertIsNotNone(quote)
         assert quote is not None
