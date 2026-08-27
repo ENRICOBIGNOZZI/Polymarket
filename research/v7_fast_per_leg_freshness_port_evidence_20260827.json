@@ -1,10 +1,10 @@
 {
-  "schema_version": 1,
-  "timestamp_utc": "2026-08-27T01:21:30Z",
+  "schema_version": 2,
+  "timestamp_utc": "2026-08-27T01:30:00Z",
   "audited_main_sha": "3640fae32ecbcc6d699b934455ed398538c8ae86",
   "rebased_main_sha": "5db9efa6c9707af090dd1a89043fc58dff45fba8",
   "main_advance_since_audit": "deploy-transition workflow only; Fast Arb runtime blobs unchanged",
-  "state": "RAW_HARD_HITS_FRESHNESS_BLOCKED / MORE_EVIDENCE_REQUIRED",
+  "state": "STRICT_PER_LEG_FRESHNESS_ZERO_HARD_HITS / MORE_EVIDENCE_REQUIRED",
   "current_main_audit": {
     "fast_runtime_uses_payload_level_clocks_for_multi_leg_evaluation": true,
     "per_token_exchange_receive_clocks_present_before_port": false,
@@ -39,6 +39,33 @@
       "completed_opportunity_lifetime_p10_ms": 435.0
     }
   },
+  "prospective_exact_head_run": {
+    "workflow_run_id": 33029857508,
+    "head_sha": "f156fc151b38f1fd193323fbadd564e75ba6b50b",
+    "workflow_conclusion": "success",
+    "markets": 670,
+    "tokens": 1340,
+    "safe_negrisk_events": 16,
+    "ws_messages": 15376,
+    "book_updates": 15254,
+    "rest_resyncs": 3,
+    "feed_stale_ms_at_stop": 13,
+    "feed_latency_p50_ms": 45.0,
+    "feed_latency_p95_ms": 55.0,
+    "feed_latency_p99_ms": 146.47,
+    "decision_latency_p99_us": 110.0,
+    "ws_snapshot_ready_tokens": 290,
+    "ws_snapshot_ready_fraction": 0.21641791044776118,
+    "freshness_missing_rejections": 3074,
+    "freshness_age_rejections": 1386,
+    "freshness_skew_rejections": 57,
+    "hard_executable_observations": 0,
+    "current_hard_executable": 0,
+    "nonhard_maker_executable_state_changes": 98,
+    "nonhard_maker_modeled_opportunity_profit_usd": 24.9132074,
+    "nonhard_maker_is_audited_paper_pnl": false,
+    "interpretation": "The exact-head strict per-leg freshness port produced no hard-arbitrage observation. The dominant execution-evidence bottleneck is incomplete full-WS-snapshot lineage coverage, not the 0.5 bp edge floor. Non-hard passive maker opportunity profit is theory/shadow output only and must not be treated as fill-conditioned PAPER PnL."
+  },
   "challenger_contract": {
     "max_book_age_ms": 5000,
     "max_cross_leg_exchange_receive_skew_ms": 1500,
@@ -47,6 +74,19 @@
     "reconnect_invalidates_shard_lineage": true,
     "stale_current_opportunities_fail_closed": true,
     "promotion_allowed": false
+  },
+  "next_research": {
+    "do_not_lower_edge_floor": true,
+    "reason": "strict hard-arb evidence is freshness/lineage limited rather than edge limited",
+    "rest_snapshot_provenance_gap": "CLOB /books returns timestamp and hash, but current pm::Book/fetch_books do not preserve them. A bounded follow-up should test timestamped REST full snapshots as point-in-time rebase evidence under the same age/skew gates, without treating them as gap-free WebSocket continuity.",
+    "required_before_pnl_claim": [
+      "candidate-level per-token provenance serialized",
+      "all required legs within freshness/skew bounds",
+      "authoritative fees and executable multi-level depth",
+      "sequential PAPER legging with partial-fill/unwind accounting",
+      "realized fill-conditioned post-cost PAPER PnL",
+      "frozen trade-set 1x/1.5x/2x cost stress"
+    ]
   },
   "required_forward_evidence": [
     "same-SHA public PAPER run with candidate-level per-token clocks",
