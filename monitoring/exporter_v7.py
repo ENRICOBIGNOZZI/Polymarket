@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Native Prometheus exporter for the canonical V7 PAPER runtime.
+"""Prometheus exporter for the canonical V7 PAPER runtime.
 
-Reads only V7 run-root contracts. Missing/stale causal state fails `/healthz`
-closed; `/metrics` stays readable for diagnosis. The canonical execution ledger
-is consumed read-only when present and never replaced by side-file assumptions.
+Health is derived only from live V7 control-plane surfaces: the single runtime
+PID/SHA, account portfolio guard, Graph/RV executor, public trade tape,
+canonical execution ledger and canonical economics. Missing or stale causal
+state fails `/healthz` closed; `/metrics` remains readable for diagnosis.
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
+import os
 import subprocess
 import sys
 import time
@@ -48,16 +51,29 @@ def _age(now: int, value: Any) -> float:
     return math.inf if ts <= 0.0 else max(0.0, float(now) - ts)
 
 
+def _file_age(path: Path, now: int) -> float:
+    try:
+        return max(0.0, float(now) - path.stat().st_mtime)
+    except OSError:
+        return math.inf
+
+
 def _git_head(repository_root: Path) -> str:
     try:
-        return subprocess.check_output(
-            ["git", "-C", str(repository_root), "rev-parse", "HEAD"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-            timeout=2,
-        ).strip()
+        return subprocess.check_output(["git", "-C", str(repository_root), "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL, timeout=2).strip()
     except (OSError, subprocess.SubprocessError):
         return "unknown"
+
+
+def _pid_alive(value: Any) -> bool:
+    pid = _integer(value, 0)
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except (OSError, ProcessLookupError, PermissionError):
+        return False
+    return True
 
 
 def _safe_label(value: Any) -> str:
@@ -72,127 +88,148 @@ def _metric(name: str, value: Any, labels: dict[str, Any] | None = None) -> str:
     return f"{name} {numeric:.12g}"
 
 
+def _trade_tape(path: Path, now: int) -> dict[str, Any]:
+    rows = 0
+    newest_receive_ms = 0
+    assets: set[str] = set()
+    try:
+        with path.open(newline="", encoding="utf-8", errors="replace") as handle:
+            for row in csv.DictReader(handle):
+                rows += 1
+                asset = str(row.get("asset_id") or "")
+                if asset:
+                    assets.add(asset)
+                newest_receive_ms = max(newest_receive_ms, _integer(row.get("received_ms"), 0))
+    except (OSError, csv.Error):
+        pass
+    newest_ts = newest_receive_ms / 1000.0 if newest_receive_ms > 0 else 0.0
+    return {"rows": rows, "assets": len(assets), "age": _age(now, newest_ts)}
+
+
+def _graph_open_cost(path: Path) -> float | None:
+    state = _json(path)
+    bundles = state.get("bundles") if isinstance(state.get("bundles"), dict) else None
+    if bundles is None:
+        return None
+    total = 0.0
+    for bundle in bundles.values():
+        if not isinstance(bundle, dict) or bundle.get("final") is True:
+            continue
+        legs = bundle.get("legs") if isinstance(bundle.get("legs"), dict) else {}
+        for leg in legs.values():
+            if not isinstance(leg, dict):
+                continue
+            for fill in leg.get("fills") if isinstance(leg.get("fills"), list) else []:
+                if isinstance(fill, dict):
+                    total += max(0.0, _number(fill.get("shares"))) * max(0.0, _number(fill.get("price")))
+                    total += max(0.0, _number(fill.get("fee")))
+    return total
+
+
 def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now: int | None = None) -> dict[str, Any]:
     now = int(time.time()) if now is None else int(now)
     run_root = run_root.resolve()
     repository_root = (repository_root or Path(".")).resolve()
-    supervisor = _json(run_root / "v7_supervisor.json")
-    execution_supervisor = _json(run_root / "execution" / "v7_execution_supervisor.json")
-    runtime = _json(run_root / "execution" / "runtime_status.json") or _json(run_root / "runtime_status.json")
-    proxy = _json(run_root / "execution" / "market_proxy_status.json")
-    evidence = _json(run_root / "execution" / "v7_execution_evidence.json")
-    shadow = _json(run_root / "shadow" / "scheduler_status.json")
-    allocator = _json(run_root / "execution" / "allocator_status.json") or _json(run_root / "allocator_status.json")
+    runtime = _json(run_root / "control" / "runtime_status.json")
+    portfolio = _json(run_root / "control" / "portfolio_state.json")
+    allocations = _json(run_root / "control" / "allocations" / "manifest.json")
+    graph = _json(run_root / "graph_rv" / "status.json")
+    graph_scan = _json(run_root / "graph_rv" / "scan_status.json")
+    hard = _json(run_root / "hard_arb" / "status.json")
+    micro = _json(run_root / "micro_taker" / "status.json")
+    maker = _json(run_root / "micro_maker" / "status.json")
+    external = _json(run_root / "external" / "status.json")
+    economics_path = run_root / "canonical_economics.json"
+    canonical = _json(economics_path)
+    joint = _json(run_root / "learned_execution" / "joint_policy.json")
     ledger = summarize_ledger(run_root / "ledger" / "execution.jsonl")
+    tape = _trade_tape(run_root / "trade_tape.csv", now)
     directives = _json(repository_root / "config" / "operator_directives.json")
     authorization = directives.get("paper_v7_authorization") if isinstance(directives.get("paper_v7_authorization"), dict) else {}
     authority_max_drawdown = _number(authorization.get("max_drawdown"), 0.0)
-    authority_valid = (
-        directives.get("authority") == "latest_explicit_user_instruction"
-        and authorization.get("paper_only") is True
-        and authorization.get("authenticated_execution") is False
-        and 0.0 < authority_max_drawdown <= 1.0
-    )
+    authority_valid = directives.get("authority") == "latest_explicit_user_instruction" and authorization.get("paper_only") is True and authorization.get("authenticated_execution") is False and 0.0 < authority_max_drawdown <= 1.0
+    sha = _git_head(repository_root)
+    runtime_alive = _pid_alive(runtime.get("pid")) and not (run_root / "control" / "KILL").exists()
 
-    evidence_models = evidence.get("models") if isinstance(evidence.get("models"), dict) else {}
-    runtime_strategies = runtime.get("strategies") if isinstance(runtime.get("strategies"), dict) else {}
+    budgets = allocations.get("budgets") if isinstance(allocations.get("budgets"), dict) else {}
+    sleeves = portfolio.get("sleeves") if isinstance(portfolio.get("sleeves"), dict) else {}
     strategies: dict[str, dict[str, Any]] = {}
-    for name, row in runtime_strategies.items():
-        if isinstance(row, dict):
-            strategies[str(name)] = {
-                "equity": _number(row.get("equity")),
-                "pnl": _number(row.get("pnl")),
-                "fills": _integer(row.get("fills")),
-                "live_units": _integer(row.get("live_units")),
-                "killed": bool(row.get("killed", False)),
-                "signals": _integer(row.get("signals")),
-                "best_edge": _number(row.get("best_edge")),
-            }
-    for name, row in evidence_models.items():
-        if not isinstance(row, dict):
+    for name, row in sleeves.items():
+        if not isinstance(row, dict) or name == "reserve":
             continue
-        strategy_name = str(name)
-        target = str(row.get("target") or "")
-        raw_fill_rate = None if row.get("fill_rate") is None else _number(row.get("fill_rate"))
-        fill_rate_valid = (
-            raw_fill_rate is not None
-            and 0.0 <= raw_fill_rate <= 1.0
-            and strategy_name != "relative_value"
-            and target != "hedged_convergence"
-        )
-        strategies.setdefault(strategy_name, {}).update(
-            {
-                "orders_submitted": None if row.get("orders_submitted") is None else _integer(row.get("orders_submitted")),
-                "evidence_fills": _integer(row.get("fills")),
-                "fill_rate": raw_fill_rate if fill_rate_valid else None,
-                "fill_rate_valid": fill_rate_valid,
-                "net_pnl": _number(row.get("net_pnl")),
-                "stressed_net_pnl": None if row.get("stressed_net_pnl") is None else _number(row.get("stressed_net_pnl")),
-                "markout_observations": _integer(row.get("forward_markout_observations")),
-                "mean_markout": None if row.get("mean_forward_markout") is None else _number(row.get("mean_forward_markout")),
-                "paper_eligible": bool(row.get("paper_eligible", False)),
-            }
-        )
+        budget = _number(row.get("budget"))
+        equity = _number(row.get("equity"), budget)
+        strategies[str(name)] = {"equity": equity, "pnl": equity - budget, "killed": bool(row.get("killed", False))}
+    if graph:
+        strategies.setdefault("graph_rv", {}).update({"equity": _number(graph.get("equity")), "pnl": _number(graph.get("equity")) - _number(budgets.get("graph_rv")), "killed": bool(graph.get("killed", False)), "signals": _integer(graph_scan.get("bundles"))})
+    if hard:
+        strategies.setdefault("hard_arb", {}).update({"equity": _number(hard.get("equity_cost_basis"), _number(hard.get("cash"))), "pnl": _number(hard.get("realized_pnl_total")), "killed": bool(hard.get("killed", False)), "signals": _integer(hard.get("candidates"))})
+    if micro:
+        strategies.setdefault("micro_taker", {}).update({"equity": _number(micro.get("equity")), "pnl": _number(micro.get("equity")) - _number(budgets.get("micro_taker")), "killed": bool(micro.get("killed", False)), "signals": _integer(micro.get("signals")), "best_edge": _number(micro.get("best_edge")), "live_units": _integer(micro.get("open_positions")), "net_pnl": _number(micro.get("realized_pnl_total")), "paper_eligible": False})
+    if maker:
+        strategies.setdefault("micro_maker", {}).update({"killed": False, "paper_eligible": False})
+    if external:
+        strategies.setdefault("external", {}).update({"paper_eligible": False})
     for name, row in ledger.get("strategies", {}).items():
         if not isinstance(row, dict):
             continue
-        strategies.setdefault(str(name), {}).update(
-            {
-                "ledger_opportunities": _integer(row.get("opportunities")),
-                "ledger_orders": _integer(row.get("orders_submitted")),
-                "ledger_fills": _integer(row.get("fills")),
-                "ledger_complete_fills": _integer(row.get("complete_fills")),
-                "ledger_partial_fills": _integer(row.get("partial_fills")),
-                "ledger_unwinds": _integer(row.get("unwinds")),
-                "ledger_final_pnl": _number(row.get("final_pnl")),
-                "ledger_capital_hours": _number(row.get("capital_duration_ms")) / 3_600_000.0,
-            }
-        )
+        strategies.setdefault(str(name).lower(), {}).update({
+            "ledger_opportunities": _integer(row.get("opportunities")),
+            "ledger_orders": _integer(row.get("orders_submitted")),
+            "ledger_fills": _integer(row.get("fills")),
+            "ledger_complete_fills": _integer(row.get("complete_fills")),
+            "ledger_partial_fills": _integer(row.get("partial_fills")),
+            "ledger_unwinds": _integer(row.get("unwinds")),
+            "ledger_final_pnl": _number(row.get("final_pnl")),
+            "ledger_capital_hours": _number(row.get("capital_duration_ms")) / 3_600_000.0,
+        })
 
-    shadow_jobs = shadow.get("last_started") if isinstance(shadow.get("last_started"), dict) else {}
-    starting = _number(runtime.get("starting_capital"), 0.0)
-    equity = _number(runtime.get("equity"), starting)
-    realized = _number(runtime.get("realized_pnl"), 0.0)
-    pnl = _number(runtime.get("pnl"), equity - starting)
-    gross = _number(runtime.get("gross_exposure"), 0.0)
+    starting = _number(portfolio.get("account_starting_capital"), _number(allocations.get("account_starting_capital")))
+    equity = _number(portfolio.get("equity"), starting)
+    realized = _number(canonical.get("net_pnl"), 0.0)
+    gross_components = [_graph_open_cost(run_root / "graph_rv" / "state.json")]
+    gross_known = all(value is not None for value in gross_components)
+    gross = sum(float(value) for value in gross_components if value is not None) if gross_known else None
+    ages = {
+        "runtime": _age(now, runtime.get("timestamp")),
+        "portfolio": _age(now, portfolio.get("timestamp")),
+        "graph": _age(now, graph.get("timestamp")),
+        "economics": _file_age(economics_path, now),
+        "trade_tape": tape["age"],
+    }
     return {
         "timestamp": now,
-        "sha": _git_head(repository_root),
+        "sha": sha,
         "run_root": run_root.name,
-        "supervisor": supervisor,
-        "execution_supervisor": execution_supervisor,
         "runtime": runtime,
-        "proxy": proxy,
-        "evidence": evidence,
-        "shadow": shadow,
-        "allocator": allocator,
+        "runtime_alive": runtime_alive,
+        "portfolio": portfolio,
+        "allocations": allocations,
+        "graph": graph,
+        "graph_scan": graph_scan,
+        "hard": hard,
+        "micro": micro,
+        "maker": maker,
+        "external": external,
+        "canonical_economics": canonical,
+        "joint_policy": joint,
         "ledger": ledger,
-        "authority": {
-            "valid": authority_valid,
-            "max_drawdown": authority_max_drawdown,
-        },
+        "trade_tape": tape,
+        "authority": {"valid": authority_valid, "max_drawdown": authority_max_drawdown},
         "strategies": strategies,
-        "shadow_freshness": {str(name): _age(now, started) for name, started in shadow_jobs.items()},
-        "ages": {
-            "supervisor": _age(now, supervisor.get("timestamp")),
-            "execution_supervisor": _age(now, execution_supervisor.get("timestamp")),
-            "runtime": _age(now, runtime.get("timestamp")),
-            "proxy": _age(now, proxy.get("timestamp")),
-            "evidence": _age(now, evidence.get("timestamp")),
-            "shadow": _age(now, shadow.get("timestamp")),
-        },
+        "ages": ages,
         "economics": {
             "starting_capital": starting,
-            "cash": _number(runtime.get("cash"), 0.0),
+            "cash": sum(_number(row.get("equity")) for name, row in sleeves.items() if isinstance(row, dict) and name == "reserve"),
             "equity": equity,
-            "pnl": pnl,
+            "pnl": equity - starting,
             "realized_pnl": realized,
-            "unrealized_executable_pnl": pnl - realized,
-            "drawdown": _number(runtime.get("drawdown"), 0.0),
+            "unrealized_executable_pnl": equity - starting - realized,
+            "drawdown": _number(portfolio.get("drawdown")),
             "gross_exposure": gross,
-            "capital_utilization": gross / starting if starting > 0.0 else 0.0,
-            "live_units": _integer(runtime.get("live_units")),
-            "killed": bool(runtime.get("killed", False)),
+            "capital_utilization": (gross / starting) if gross is not None and starting > 0 else None,
+            "live_units": sum(_integer(row.get("open_positions")) for row in (micro,) if isinstance(row, dict)),
+            "killed": bool(portfolio.get("killed", False)),
         },
     }
 
@@ -200,92 +237,64 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
 def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_supervisor_age: int = 30) -> list[str]:
     reasons: list[str] = []
     runtime = snapshot["runtime"]
-    supervisor = snapshot["supervisor"]
-    execution = snapshot["execution_supervisor"]
-    proxy = snapshot["proxy"]
-    evidence = snapshot["evidence"]
-    ages = snapshot["ages"]
+    portfolio = snapshot["portfolio"]
+    graph = snapshot["graph"]
+    canonical = snapshot["canonical_economics"]
     ledger = snapshot["ledger"]
+    ages = snapshot["ages"]
     authority = snapshot["authority"]
-    if authority.get("valid") is not True:
-        reasons.append("operator_authority_missing_or_invalid")
-    if runtime.get("version") != 7:
-        reasons.append("runtime_version_not_v7")
-    if runtime.get("paper_only") is not True:
-        reasons.append("runtime_not_paper_only")
-    if runtime.get("authenticated_execution") is not False:
-        reasons.append("authenticated_execution_not_disabled")
-    if supervisor.get("execution_alive") is not True:
-        reasons.append("execution_not_alive")
-    if supervisor.get("shadow_alive") is not True:
-        reasons.append("shadow_not_alive")
-    if execution.get("paper_only") is not True:
-        reasons.append("execution_supervisor_not_paper_only")
-    if execution.get("authenticated_execution") is not False:
-        reasons.append("execution_supervisor_authenticated_execution_not_disabled")
-    if proxy.get("schema") != "polymarket_v7_market_proxy_status_v1":
-        reasons.append("market_proxy_schema_not_v7")
-    if proxy.get("paper_only") is not True:
-        reasons.append("market_proxy_not_paper_only")
-    if _integer(proxy.get("markets")) <= 0:
-        reasons.append("market_proxy_empty")
-    if evidence.get("paper_only") is not True:
-        reasons.append("execution_evidence_missing_or_not_paper_only")
-    if ledger.get("present") and not ledger.get("valid"):
-        reasons.append("canonical_ledger_invalid_or_mixed_sha")
-    for key in ("runtime", "execution_supervisor", "proxy", "evidence"):
-        if not math.isfinite(float(ages[key])) or float(ages[key]) > max_runtime_age:
-            reasons.append(f"{key}_stale")
-    if not math.isfinite(float(ages["supervisor"])) or float(ages["supervisor"]) > max_supervisor_age:
-        reasons.append("supervisor_stale")
-    if snapshot["economics"]["killed"]:
-        reasons.append("runtime_killed")
+    if authority.get("valid") is not True: reasons.append("operator_authority_missing_or_invalid")
+    if runtime.get("version") != 7: reasons.append("runtime_version_not_v7")
+    if runtime.get("paper_only") is not True: reasons.append("runtime_not_paper_only")
+    if runtime.get("authenticated_execution") is not False or runtime.get("real_order_submission") is not False: reasons.append("authenticated_execution_not_disabled")
+    if runtime.get("model_sha") != snapshot.get("sha"): reasons.append("runtime_sha_mismatch")
+    if snapshot.get("runtime_alive") is not True: reasons.append("execution_not_alive")
+    if portfolio.get("paper_only") is not True or portfolio.get("authenticated_execution") is not False: reasons.append("portfolio_guard_contract_invalid")
+    if graph.get("paper_only") is not True or graph.get("authenticated_execution") is not False: reasons.append("graph_runtime_missing_or_unsafe")
+    if canonical.get("paper_only") is not True or canonical.get("authenticated_execution") is not False: reasons.append("canonical_economics_missing_or_unsafe")
+    if canonical.get("expected_model_sha") != snapshot.get("sha"): reasons.append("canonical_economics_sha_mismatch")
+    if not ledger.get("present"): reasons.append("canonical_ledger_missing")
+    elif not ledger.get("valid"): reasons.append("canonical_ledger_invalid_or_mixed_sha")
+    if _integer(snapshot["trade_tape"].get("rows")) <= 0: reasons.append("trade_tape_empty")
+    for key in ("runtime", "graph", "economics", "trade_tape"):
+        if not math.isfinite(float(ages[key])) or float(ages[key]) > max_runtime_age: reasons.append(f"{key}_stale")
+    if not math.isfinite(float(ages["portfolio"])) or float(ages["portfolio"]) > max_supervisor_age: reasons.append("portfolio_guard_stale")
+    if snapshot["economics"]["killed"]: reasons.append("runtime_killed")
     max_drawdown = _number(authority.get("max_drawdown"), 0.0)
-    if max_drawdown > 0.0 and snapshot["economics"]["drawdown"] >= max_drawdown - 1e-12:
-        reasons.append("drawdown_limit_breached")
+    if max_drawdown > 0.0 and snapshot["economics"]["drawdown"] >= max_drawdown - 1e-12: reasons.append("drawdown_limit_breached")
     return sorted(set(reasons))
 
 
 def render_prometheus(snapshot: dict[str, Any]) -> str:
     runtime = snapshot["runtime"]
-    execution = snapshot["execution_supervisor"]
-    proxy = snapshot["proxy"]
-    evidence = snapshot["evidence"]
     ledger = snapshot["ledger"]
-    authority = snapshot["authority"]
     ledger_total = ledger.get("total") if isinstance(ledger.get("total"), dict) else {}
     economics = snapshot["economics"]
-    ages = snapshot["ages"]
-    supervisor = snapshot["supervisor"]
-    evidence_summary = evidence.get("summary") if isinstance(evidence.get("summary"), dict) else {}
-    labels = {"adapter": "v7_native", "run_root": snapshot["run_root"], "version": "v7"}
-    paper_contract_ok = runtime.get("paper_only") is True and execution.get("paper_only") is True
-    auth_disabled = runtime.get("authenticated_execution") is False and execution.get("authenticated_execution") is False
+    authority = snapshot["authority"]
+    canonical = snapshot["canonical_economics"]
+    labels = {"adapter":"v7_native","run_root":snapshot["run_root"],"version":"v7"}
     lines = [
         "# TYPE polymarket_v7_runtime_info gauge",
         _metric("polymarket_v7_runtime_info", 1 if runtime.get("version") == 7 else 0),
         _metric("polymarket_runtime_info", 1, labels),
         _metric("polymarket_v7_deployed_sha_info", 1, {"sha": snapshot["sha"]}),
-        _metric("polymarket_v7_operator_authority_valid", 1 if authority.get("valid") is True else 0),
+        _metric("polymarket_v7_operator_authority_valid", 1 if authority.get("valid") else 0),
         _metric("polymarket_v7_authority_max_drawdown_ratio", authority.get("max_drawdown")),
-        _metric("polymarket_v7_paper_only_contract_ok", 1 if paper_contract_ok else 0),
-        _metric("polymarket_v7_authenticated_execution_disabled", 1 if auth_disabled else 0),
-        _metric("polymarket_v7_execution_alive", 1 if supervisor.get("execution_alive") is True else 0),
-        _metric("polymarket_v7_shadow_alive", 1 if supervisor.get("shadow_alive") is True else 0),
+        _metric("polymarket_v7_paper_only_contract_ok", 1 if runtime.get("paper_only") is True and snapshot["portfolio"].get("paper_only") is True else 0),
+        _metric("polymarket_v7_authenticated_execution_disabled", 1 if runtime.get("authenticated_execution") is False and runtime.get("real_order_submission") is False and snapshot["portfolio"].get("authenticated_execution") is False else 0),
+        _metric("polymarket_v7_execution_alive", 1 if snapshot["runtime_alive"] else 0),
         _metric("polymarket_runtime_equity_usd", economics["equity"]),
         _metric("polymarket_runtime_pnl_usd", economics["pnl"]),
         _metric("polymarket_runtime_realized_pnl_usd", economics["realized_pnl"]),
         _metric("polymarket_runtime_unrealized_executable_pnl_usd", economics["unrealized_executable_pnl"]),
         _metric("polymarket_runtime_drawdown_ratio", economics["drawdown"]),
-        _metric("polymarket_runtime_gross_exposure_usd", economics["gross_exposure"]),
-        _metric("polymarket_runtime_capital_utilization_ratio", economics["capital_utilization"]),
         _metric("polymarket_runtime_live_units", economics["live_units"]),
         _metric("polymarket_runtime_killed", 1 if economics["killed"] else 0),
-        _metric("polymarket_v7_market_proxy_markets", _integer(proxy.get("markets"))),
-        _metric("polymarket_v7_market_proxy_upstream_ok", 1 if proxy.get("upstream_gamma_ok") is True else 0),
-        _metric("polymarket_v7_market_proxy_failures", _integer(proxy.get("failures"))),
-        _metric("polymarket_v7_paper_eligible_models", _integer(evidence_summary.get("paper_eligible_models"))),
-        _metric("polymarket_v7_insufficient_evidence_models", _integer(evidence_summary.get("insufficient_evidence_models"))),
+        _metric("polymarket_v7_trade_tape_rows", snapshot["trade_tape"]["rows"]),
+        _metric("polymarket_v7_trade_tape_assets", snapshot["trade_tape"]["assets"]),
+        _metric("polymarket_v7_canonical_economics_promotion_ready", 1 if canonical.get("promotion_ready") else 0),
+        _metric("polymarket_v7_canonical_submitted_units", canonical.get("submitted_units")),
+        _metric("polymarket_v7_canonical_complete_units", canonical.get("complete_units")),
         _metric("polymarket_v7_ledger_present", 1 if ledger.get("present") else 0),
         _metric("polymarket_v7_ledger_valid", 1 if ledger.get("valid") else 0),
         _metric("polymarket_v7_ledger_rows", _integer(ledger.get("rows"))),
@@ -300,105 +309,46 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_execution_final_pnl_usd", _number(ledger_total.get("final_pnl"))),
         _metric("polymarket_execution_capital_hours", _number(ledger_total.get("capital_duration_ms")) / 3_600_000.0),
     ]
-    for name, age in ages.items():
-        lines.append(_metric("polymarket_v7_state_age_seconds", 0 if not math.isfinite(float(age)) else age, {"surface": name}))
-        lines.append(_metric("polymarket_v7_state_present", 1 if math.isfinite(float(age)) else 0, {"surface": name}))
+    if economics["gross_exposure"] is not None:
+        lines.append(_metric("polymarket_runtime_gross_exposure_usd", economics["gross_exposure"]))
+    if economics["capital_utilization"] is not None:
+        lines.append(_metric("polymarket_runtime_capital_utilization_ratio", economics["capital_utilization"]))
+    for name, age in snapshot["ages"].items():
+        lines.append(_metric("polymarket_v7_state_age_seconds", 0 if not math.isfinite(float(age)) else age, {"surface":name}))
+        lines.append(_metric("polymarket_v7_state_present", 1 if math.isfinite(float(age)) else 0, {"surface":name}))
     for horizon, total in (ledger_total.get("markout_sum") or {}).items():
         count = _integer((ledger_total.get("markout_count") or {}).get(horizon))
         if count:
-            lines.append(_metric("polymarket_execution_mean_markout", _number(total) / count, {"horizon": horizon}))
-            lines.append(_metric("polymarket_execution_markout_observations", count, {"horizon": horizon}))
-
+            lines.append(_metric("polymarket_execution_mean_markout", _number(total)/count, {"horizon":horizon}))
+            lines.append(_metric("polymarket_execution_markout_observations", count, {"horizon":horizon}))
     for strategy, row in sorted(snapshot["strategies"].items()):
-        strategy_label = {"strategy": strategy}
-        mapping = (
-            ("equity", "polymarket_strategy_equity_usd"),
-            ("pnl", "polymarket_strategy_pnl_usd"),
-            ("fills", "polymarket_strategy_fills"),
-            ("live_units", "polymarket_strategy_live_units"),
-            ("signals", "polymarket_strategy_opportunities"),
-            ("best_edge", "polymarket_strategy_best_edge"),
-            ("orders_submitted", "polymarket_strategy_orders_submitted"),
-            ("evidence_fills", "polymarket_strategy_evidence_fills"),
-            ("fill_rate", "polymarket_strategy_fill_rate"),
-            ("net_pnl", "polymarket_strategy_evidence_net_pnl_usd"),
-            ("stressed_net_pnl", "polymarket_strategy_stressed_net_pnl_usd"),
-            ("markout_observations", "polymarket_strategy_markout_observations"),
-            ("mean_markout", "polymarket_strategy_mean_markout"),
-            ("ledger_opportunities", "polymarket_strategy_ledger_opportunities"),
-            ("ledger_orders", "polymarket_strategy_ledger_orders_submitted"),
-            ("ledger_fills", "polymarket_strategy_ledger_fills"),
-            ("ledger_complete_fills", "polymarket_strategy_complete_fills"),
-            ("ledger_partial_fills", "polymarket_strategy_partial_fills"),
-            ("ledger_unwinds", "polymarket_strategy_unwinds"),
-            ("ledger_final_pnl", "polymarket_strategy_final_pnl_usd"),
-            ("ledger_capital_hours", "polymarket_strategy_capital_hours"),
-        )
-        for key, metric_name in mapping:
-            if key in row and row[key] is not None:
-                lines.append(_metric(metric_name, row[key], strategy_label))
-        if "fill_rate_valid" in row:
-            lines.append(_metric("polymarket_strategy_fill_rate_valid", 1 if row["fill_rate_valid"] else 0, strategy_label))
-        if "killed" in row:
-            lines.append(_metric("polymarket_strategy_killed", 1 if row["killed"] else 0, strategy_label))
-        if "paper_eligible" in row:
-            lines.append(_metric("polymarket_strategy_paper_eligible", 1 if row["paper_eligible"] else 0, strategy_label))
-    for job, age in sorted(snapshot["shadow_freshness"].items()):
-        lines.append(_metric("polymarket_v7_shadow_job_age_seconds", age, {"job": job}))
-    return "\n".join(lines) + "\n"
+        labels_s={"strategy":strategy}
+        for key, metric_name in (("equity","polymarket_strategy_equity_usd"),("pnl","polymarket_strategy_pnl_usd"),("signals","polymarket_strategy_opportunities"),("best_edge","polymarket_strategy_best_edge"),("live_units","polymarket_strategy_live_units"),("net_pnl","polymarket_strategy_evidence_net_pnl_usd"),("ledger_opportunities","polymarket_strategy_ledger_opportunities"),("ledger_orders","polymarket_strategy_ledger_orders_submitted"),("ledger_fills","polymarket_strategy_ledger_fills"),("ledger_complete_fills","polymarket_strategy_complete_fills"),("ledger_partial_fills","polymarket_strategy_partial_fills"),("ledger_unwinds","polymarket_strategy_unwinds"),("ledger_final_pnl","polymarket_strategy_final_pnl_usd"),("ledger_capital_hours","polymarket_strategy_capital_hours")):
+            if key in row and row[key] is not None: lines.append(_metric(metric_name,row[key],labels_s))
+        if "killed" in row: lines.append(_metric("polymarket_strategy_killed",1 if row["killed"] else 0,labels_s))
+        if "paper_eligible" in row: lines.append(_metric("polymarket_strategy_paper_eligible",1 if row["paper_eligible"] else 0,labels_s))
+    return "\n".join(lines)+"\n"
 
 
 class ExporterHandler(BaseHTTPRequestHandler):
-    run_root = Path("runs/paper_v7_live")
-    repository_root = Path(".")
-    max_runtime_age = 180
-    max_supervisor_age = 30
-
-    def log_message(self, _format: str, *_args: object) -> None:
-        return
-
-    def do_GET(self) -> None:  # noqa: N802
-        snapshot = collect_snapshot(self.run_root, self.repository_root)
-        if self.path == "/metrics":
-            payload = render_prometheus(snapshot).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-        elif self.path == "/healthz":
-            reasons = health_reasons(snapshot, max_runtime_age=self.max_runtime_age, max_supervisor_age=self.max_supervisor_age)
-            payload = (json.dumps({"ok": not reasons, "reasons": reasons}, sort_keys=True) + "\n").encode()
-            self.send_response(200 if not reasons else 503)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-        else:
-            payload = b"not found\n"
-            self.send_response(404)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
-        self.wfile.write(payload)
+    run_root=Path("runs/paper_v7_live"); repository_root=Path("."); max_runtime_age=180; max_supervisor_age=30
+    def log_message(self,_format:str,*_args:object)->None: return
+    def do_GET(self)->None:  # noqa: N802
+        snapshot=collect_snapshot(self.run_root,self.repository_root)
+        if self.path=="/metrics": payload=render_prometheus(snapshot).encode(); self.send_response(200); self.send_header("Content-Type","text/plain; version=0.0.4; charset=utf-8")
+        elif self.path=="/healthz":
+            reasons=health_reasons(snapshot,max_runtime_age=self.max_runtime_age,max_supervisor_age=self.max_supervisor_age); payload=(json.dumps({"ok":not reasons,"reasons":reasons},sort_keys=True)+"\n").encode(); self.send_response(200 if not reasons else 503); self.send_header("Content-Type","application/json; charset=utf-8")
+        else: payload=b"not found\n"; self.send_response(404); self.send_header("Content-Type","text/plain; charset=utf-8")
+        self.send_header("Content-Length",str(len(payload))); self.end_headers(); self.wfile.write(payload)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-root", type=Path, default=Path("runs/paper_v7_live"))
-    parser.add_argument("--repository-root", type=Path, default=Path("."))
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=9108)
-    parser.add_argument("--max-runtime-age", type=int, default=180)
-    parser.add_argument("--max-supervisor-age", type=int, default=30)
-    args = parser.parse_args()
-    ExporterHandler.run_root = args.run_root
-    ExporterHandler.repository_root = args.repository_root
-    ExporterHandler.max_runtime_age = max(1, args.max_runtime_age)
-    ExporterHandler.max_supervisor_age = max(1, args.max_supervisor_age)
-    server = ThreadingHTTPServer((args.host, args.port), ExporterHandler)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+def main()->int:
+    parser=argparse.ArgumentParser(description=__doc__); parser.add_argument("--run-root",type=Path,default=Path("runs/paper_v7_live")); parser.add_argument("--repository-root",type=Path,default=Path(".")); parser.add_argument("--host",default="127.0.0.1"); parser.add_argument("--port",type=int,default=9108); parser.add_argument("--max-runtime-age",type=int,default=180); parser.add_argument("--max-supervisor-age",type=int,default=30); args=parser.parse_args()
+    ExporterHandler.run_root=args.run_root; ExporterHandler.repository_root=args.repository_root; ExporterHandler.max_runtime_age=max(1,args.max_runtime_age); ExporterHandler.max_supervisor_age=max(1,args.max_supervisor_age)
+    server=ThreadingHTTPServer((args.host,args.port),ExporterHandler)
+    try: server.serve_forever()
+    except KeyboardInterrupt: pass
+    finally: server.server_close()
     return 0
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+if __name__=="__main__": raise SystemExit(main())
