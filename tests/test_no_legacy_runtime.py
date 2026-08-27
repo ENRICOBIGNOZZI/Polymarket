@@ -8,13 +8,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# The repository is intentionally single-generation. Keep these patterns
-# generic so the guard itself does not preserve retired generation names.
+# V7 is the sole project-generation identifier. Keep these expressions generic
+# so the guard itself does not preserve any alternate generation name.
 FORBIDDEN_GENERATION_PATTERNS = (
-    re.compile(r"\bV[0-6]\b"),
-    re.compile(r"\bpaper_v[0-6](?:\b|_)"),
-    re.compile(r"(?<![A-Za-z0-9])v[0-6]_[A-Za-z0-9]"),
-    re.compile(r"(?<![A-Za-z0-9])v[0-6]-[A-Za-z0-9]"),
+    re.compile(r"\bV(?!7\b)\d+\b"),
+    re.compile(r"\bpaper_v(?!7(?:\b|_))\d+(?:\b|_)"),
+    re.compile(r"(?<![A-Za-z0-9])v(?!7(?:_|-))\d+[_-][A-Za-z0-9]"),
 )
 
 
@@ -24,7 +23,7 @@ def tracked_files() -> list[Path]:
 
 
 class NoLegacyRuntimeContractTest(unittest.TestCase):
-    def test_only_current_generation_names_exist_in_tracked_tree(self) -> None:
+    def test_v7_is_the_only_project_generation_in_tracked_tree(self) -> None:
         offenders: list[str] = []
         for path in tracked_files():
             relative = path.relative_to(ROOT).as_posix()
@@ -41,7 +40,7 @@ class NoLegacyRuntimeContractTest(unittest.TestCase):
                 if any(pattern.search(line) for pattern in FORBIDDEN_GENERATION_PATTERNS):
                     offenders.append(f"{relative}:{line_no}: {line.strip()}")
 
-        self.assertEqual(sorted(set(offenders)), [], "superseded generation references remain")
+        self.assertEqual(sorted(set(offenders)), [], "non-V7 project generation references remain")
 
     def test_known_compatibility_entrypoints_are_absent(self) -> None:
         retired = (
@@ -67,7 +66,7 @@ class NoLegacyRuntimeContractTest(unittest.TestCase):
         offenders = [path for path in retired if (ROOT / path).exists()]
         self.assertEqual(offenders, [], "known compatibility entrypoints remain")
 
-    def test_champion_manifest_is_current_generation_paper_only(self) -> None:
+    def test_champion_manifest_is_v7_paper_only(self) -> None:
         manifest = json.loads((ROOT / "config/live_champion.json").read_text(encoding="utf-8"))
         self.assertTrue(manifest["enabled"])
         self.assertEqual(manifest["version"], 7)
