@@ -15,6 +15,7 @@ class V7FastArbLegFreshnessContractTest(unittest.TestCase):
         self.assertIn("book_exchange_ts_ms_", self.part3)
         self.assertIn("book_received_ts_ms_", self.part3)
         self.assertIn("ws_snapshot_ready_", self.part3)
+        self.assertIn("rest_snapshot_ready_", self.part3)
         self.assertIn("mark_l2_clock_locked(token, timestamp, received_ms)", self.part3)
         self.assertIn("kMaxBookAgeMs = 5000", self.part3)
         self.assertIn("kMaxBookSkewMs = 1500", self.part3)
@@ -26,12 +27,23 @@ class V7FastArbLegFreshnessContractTest(unittest.TestCase):
         self.assertIn("freshness_window_locked", self.part3)
         self.assertIn("FreshnessWindow{min_exchange, max_received}", self.part3)
 
-    def test_delta_cannot_validate_a_rest_seed_without_full_ws_snapshot(self) -> None:
-        self.assertIn("if (ws_snapshot_ready_.count(token))", self.part3)
+    def test_timestamped_rest_book_is_point_in_time_provenance_only(self) -> None:
+        self.assertIn('cfg_.clob_url + "/books"', self.part3)
+        self.assertIn('get_integer(object, "timestamp", 0)', self.part3)
+        self.assertIn('snapshot.hash = get_text(object, "hash")', self.part3)
+        self.assertIn("rest_snapshot_ready_.insert(token);", self.part2)
+        self.assertIn("!snapshot.hash.empty()", self.part2)
+        self.assertIn("!ws_snapshot_ready_.count(token) && !rest_snapshot_ready_.count(token)", self.part3)
+
+    def test_delta_cannot_upgrade_a_rest_snapshot_into_ws_lineage(self) -> None:
+        self.assertIn("if (!ws_snapshot_ready_.count(token) || timestamp <= 0) continue;", self.part3)
+        self.assertIn("rest_snapshot_ready_.erase(token);", self.part3)
         self.assertIn("ws_snapshot_ready_.insert(token);", self.part3)
-        self.assertIn("ws_snapshot_ready_.erase(token);", self.part2)
-        self.assertIn("book_exchange_ts_ms_.erase(token);", self.part2)
-        self.assertIn("book_received_ts_ms_.erase(token);", self.part2)
+        self.assertIn("REST image is valid point-in-time", self.part3)
+
+    def test_out_of_order_ws_update_cannot_regress_a_newer_snapshot(self) -> None:
+        self.assertGreaterEqual(self.part3.count("previous->second > timestamp"), 2)
+        self.assertIn("timestamp > 0 && previous != book_exchange_ts_ms_.end()", self.part3)
 
     def test_binary_complete_set_requires_both_executable_outcomes(self) -> None:
         self.assertIn("{market.yes_token, market.no_token}, decision", self.part3)
@@ -71,16 +83,20 @@ class V7FastArbLegFreshnessContractTest(unittest.TestCase):
 
     def test_rest_resync_does_not_overwrite_a_fresh_ws_l2_lineage(self) -> None:
         self.assertIn("if (fresh_ws) continue;", self.part2)
-        self.assertIn("REST is useful for seeding/recovery", self.part2)
+        self.assertIn("timestamped point-in-time rebase", self.part2)
         self.assertNotIn("evaluate_all_locked(0, now_ms())", self.part2)
 
-    def test_reconnect_invalidates_the_entire_subscription_shard(self) -> None:
+    def test_reconnect_invalidates_ws_lineage_but_not_independent_rest_snapshot(self) -> None:
         self.assertIn("shard * options_.shard_size", self.part2)
         self.assertIn("ws_snapshot_ready_.erase(token);", self.part2)
-        self.assertIn("book_exchange_ts_ms_.erase(token);", self.part2)
-        self.assertIn("book_received_ts_ms_.erase(token);", self.part2)
+        self.assertIn("if (!rest_snapshot_ready_.count(token))", self.part2)
         self.assertIn("websocket closed; reconnecting and invalidating L2 lineage", self.fast_ws)
         self.assertIn("report(shard_index", self.fast_ws)
+
+    def test_status_separates_ws_and_rest_provenance_coverage(self) -> None:
+        self.assertIn('"ws_snapshot_ready_tokens"', self.part2)
+        self.assertIn('"rest_point_in_time_ready_tokens"', self.part2)
+        self.assertIn('"freshness_ready_tokens"', self.part2)
 
     def test_shadow_safety_boundary_is_unchanged(self) -> None:
         self.assertIn('{"real_order_submission", false}', self.part2)
