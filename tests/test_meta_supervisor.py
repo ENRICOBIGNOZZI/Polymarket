@@ -95,6 +95,20 @@ class MetaSupervisorTests(unittest.TestCase):
         blocked = {item["workflow_file"] for item in report["blocked_actions"]}
         self.assertIn("alpha-factory.yml", blocked)
 
+    def test_external_recovery_does_not_wait_for_live_api_smoke(self) -> None:
+        runs = self.healthy_runs()
+        for run in runs:
+            if run["workflowName"] == "live-api-smoke":
+                run["status"] = "in_progress"
+                run["conclusion"] = ""
+                run["updatedAt"] = self.now - 10
+            if run["workflowName"] == "Polymarket External Intelligence":
+                run["updatedAt"] = self.now - 8000
+        report = meta_supervisor.build_report(self.config, self.snapshot(runs), self.now)
+        plan = [item["workflow_file"] for item in report["dispatch_plan"]]
+        self.assertIn("external-intelligence.yml", plan)
+        self.assertNotIn("live-smoke.yml", plan)
+
     def test_running_workflow_is_not_duplicated(self) -> None:
         runs = self.healthy_runs()
         for run in runs:
