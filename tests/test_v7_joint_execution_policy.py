@@ -24,16 +24,17 @@ class JointExecutionPolicyTests(unittest.TestCase):
                 for i in range(2):
                     writer.append(LedgerEvent(
                         event_type="ORDER_SUBMITTED", strategy="GRAPH_RV", model_sha=SHA,
-                        bundle_id="b", order_id=f"o{i}", leg_id=f"l{i}", token_id=f"t{i}", side="YES",
+                        bundle_id="b", order_id=f"o{i}", leg_id=f"l{i}", token_id=f"t{i}", side="BUY",
                         decision_ts_ms=1000, exchange_ts_ms=900, receive_ts_ms=950, book_snapshot_id=f"s{i}",
                         intended_action="MAKER" if i == 0 else "TAKER", intended_size=5.0,
-                        metadata={"target_quantities": targets, "entry_style": "MAKER/TAKER"},
+                        metadata={"target_quantities": targets, "entry_style": "MAKER/TAKER", "outcome_side": "YES"},
                     ))
                     writer.append(LedgerEvent(
                         event_type="FILL", strategy="GRAPH_RV", model_sha=SHA,
-                        bundle_id="b", order_id=f"o{i}", fill_id=f"f{i}", leg_id=f"l{i}", token_id=f"t{i}", side="YES",
+                        bundle_id="b", order_id=f"o{i}", fill_id=f"f{i}", leg_id=f"l{i}", token_id=f"t{i}", side="BUY",
                         exchange_ts_ms=1100, receive_ts_ms=1150, fill_price=.5, filled_size=5.0,
                         fee=0.0, fee_source="test:authoritative", complete=True,
+                        metadata={"outcome_side": "YES"},
                     ))
             report = build(ledger, model_sha=SHA, min_bundles=1)
             row = report["signatures"]["2"]["MAKER/TAKER"]
