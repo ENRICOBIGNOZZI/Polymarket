@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "captured_at_utc": "2026-08-27T04:30:00Z",
+  "captured_at_utc": "2026-08-27T04:34:00Z",
   "repository": "ENRICOBIGNOZZI/Polymarket",
   "pr": 698,
-  "state": "BLOCKING_EXACT_HEAD_EVIDENCE_DEFECT_REPAIRED_MORE_EVIDENCE_REQUIRED",
+  "state": "EXACT_HEAD_EVIDENCE_PIPELINE_REPAIRED_FAST_HARD_ZERO_MORE_EVIDENCE_REQUIRED",
   "authority": {
     "source": "config/operator_directives.json@main plus latest explicit user instruction",
     "paper_only": true,
@@ -13,23 +13,78 @@
     "min_net_edge": 0.00005,
     "uncertainty_penalty": 0.0,
     "fractional_kelly_ceiling": 0.25,
+    "fixed_dollar_trade_cap_enabled": false,
+    "max_market_fraction": 1.0,
+    "max_event_fraction": 1.0,
+    "max_gross_fraction": 1.0,
     "max_drawdown": 0.15
   },
-  "observed_defect": {
-    "workflow_run_id": 33039215488,
-    "pr_head_before_repair": "2d97b2d29ec5bdcf164bba0afee7430a92bb84cb",
-    "checked_out_revision": "1ea0d547f58082930a50be5dbd55f3c607f467e9",
-    "checked_out_ref": "refs/pull/698/merge",
-    "problem": "pull-request Fast Shadow evidence was produced from GitHub's synthetic merge ref rather than the exact research head; the run was then cancelled before the live probe and produced no fast_arb_status.json",
-    "economic_interpretation": "no hard-arb, fill, completion, latency or PnL conclusion may be drawn from this run"
-  },
+  "observed_defects": [
+    {
+      "workflow_run_id": 33039215488,
+      "pr_head_before_repair": "2d97b2d29ec5bdcf164bba0afee7430a92bb84cb",
+      "checked_out_revision": "1ea0d547f58082930a50be5dbd55f3c607f467e9",
+      "checked_out_ref": "refs/pull/698/merge",
+      "problem": "pull-request Fast Shadow evidence was produced from GitHub's synthetic merge ref rather than the exact research head; the run was then cancelled before the live probe and produced no fast_arb_status.json",
+      "economic_interpretation": "no hard-arb, fill, completion, latency or PnL conclusion may be drawn from that run"
+    },
+    {
+      "workflow_run_id": 33039391911,
+      "exact_head": "64b1a0f57e76ed236946f5f6ac595f090eea71b1",
+      "problem": "an obsolete Fast data-health regression still required the retired fast_arb_shadow.json / $10-liquidity workflow contract, contradicting the current operator-authorized V7 $2 / fast_arb_v7_shadow.json contract and stopping the live probe before economic evidence",
+      "repair": "make the regression read current operator_directives.json and assert the V7 authorized runtime contract instead of treating older test text as authority"
+    }
+  ],
   "repair": {
     "workflow_validation_sha": "pull_request.head.sha on pull_request events; github.sha otherwise",
     "checkout_exact_validation_sha": true,
     "verify_git_head_matches_validation_sha": true,
     "persist_validation_sha_with_evidence": true,
-    "assert_artifact_validation_sha_matches_job": true
+    "assert_artifact_validation_sha_matches_job": true,
+    "data_health_regression_uses_current_v7_authority": true
+  },
+  "validated_exact_head": {
+    "sha": "36c8e266d1c1348203545d76e8d2c6b8deb19b4c",
+    "fast_shadow_run_id": 33039509407,
+    "ci_run_id": 33039509389,
+    "research_policy_run_id": 33039509390,
+    "monitoring_run_id": 33039509392,
+    "research_policy": "success",
+    "monitoring": "success",
+    "ci_release": "success",
+    "ci_debug": "success",
+    "ctest_passed": 18,
+    "ctest_failed": 0,
+    "fast_data_health_tests_passed": 6,
+    "fast_shadow": "success",
+    "validation_sha_artifact_bound": true,
+    "markets": 1289,
+    "tokens": 2578,
+    "safe_negrisk_events": 49,
+    "ws_messages": 29495,
+    "book_updates": 27067,
+    "rest_resyncs": 5,
+    "feed_stale_ms": 38,
+    "feed_latency_p99_ms": 2005.0,
+    "decision_latency_p99_us": 65137.18,
+    "hard_executable_observations": 0,
+    "current_hard_executable": 0,
+    "nonhard_executable_observations": 412,
+    "maker_shadow_stress_positive_share_plus_10bps": 0.9174757281553398,
+    "max_observed_capital_required_usd": 10000.0,
+    "completed_opportunity_lifetime_samples": 6,
+    "opportunity_lifetime_p10_ms": 3853.5,
+    "research_ready": false,
+    "promotion_ready": false,
+    "real_order_submission": false
+  },
+  "economic_interpretation": {
+    "new_paper_fills": 0,
+    "new_realized_fill_conditioned_pnl_usd": 0.0,
+    "hard_fast_arb_result": "zero freshness-unproven hard executable observations on this current-authority branch; no hard-arb alpha claim",
+    "nonhard_maker_shadow_result": "static passive opportunities exist and survive +10 bps stress in shadow, but are not PAPER fills or audited realized PnL and must not be promoted",
+    "threshold_decision": "no evidence supports lowering the authorized 0.5 bp floor; the next evidence bottleneck is strict per-token provenance plus sequential PAPER execution and audited ledger economics"
   },
   "decision": "MORE_EVIDENCE_REQUIRED",
-  "next_gate": "complete exact-head Fast Shadow chronological probe, then interpret only freshness-valid, depth/fee-valid, sequentially executable PAPER economics"
+  "next_gate": "compose current V7 authority/sentinel sizing with strict per-token WS/REST freshness provenance, sequential full-depth legging/unwind and canonical-ledger realized PAPER PnL on the same exact SHA; then stress 1x/1.5x/2x"
 }
