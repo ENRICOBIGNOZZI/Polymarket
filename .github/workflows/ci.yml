@@ -42,6 +42,8 @@ jobs:
           [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
           echo "validation_sha=$VALIDATION_SHA"
+      - name: Enforce V7-only project generation
+        run: python3 -m unittest tests/test_no_legacy_runtime.py -v
       - name: Install dependencies
         run: |
           sudo apt-get update
