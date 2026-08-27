@@ -14,6 +14,7 @@ on:
       - "scripts/meta_supervisor_v2.py"
       - "scripts/research_director.py"
       - "tests/test_meta_supervisor.py"
+      - "tests/test_meta_supervisor_workflow_contract.py"
       - "tests/test_autonomous_meta_supervisor.py"
       - "tests/test_research_director.py"
       - ".github/workflows/control-plane.yml"
@@ -32,6 +33,7 @@ on:
       - "scripts/meta_supervisor_v2.py"
       - "scripts/research_director.py"
       - "tests/test_meta_supervisor.py"
+      - "tests/test_meta_supervisor_workflow_contract.py"
       - "tests/test_autonomous_meta_supervisor.py"
       - "tests/test_research_director.py"
       - ".github/workflows/control-plane.yml"
@@ -63,7 +65,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m unittest tests/test_meta_supervisor.py tests/test_autonomous_meta_supervisor.py tests/test_research_director.py -v
+          python3 -m unittest tests/test_meta_supervisor.py tests/test_meta_supervisor_workflow_contract.py tests/test_autonomous_meta_supervisor.py tests/test_research_director.py -v
           python3 -m py_compile scripts/meta_supervisor.py scripts/meta_supervisor_v2.py scripts/research_director.py
           python3 -m json.tool config/alpha_factory.json >/dev/null
           python3 -m json.tool config/research_director.json >/dev/null
