@@ -122,6 +122,13 @@
     "queue_uncertainty_envelope": true,
     "fields": ["queue_ahead_lower", "queue_ahead_expected", "queue_ahead_upper", "queue_confidence"],
     "operational_fill_scenario": "pessimistic",
+    "assumed_submission_latency_ms": 1,
+    "queue_ahead_multipliers": {
+      "lower": 1.0,
+      "expected": 1.25,
+      "upper": 1.5
+    },
+    "cold_start_queue_confidence": 0.5,
     "dual_clock_post_arrival_required": true,
     "public_print_conservation_required": true,
     "cancel_pending_remains_fillable_until_effective": true,
