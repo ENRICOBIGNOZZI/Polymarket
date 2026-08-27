@@ -1,12 +1,13 @@
 {
   "schema_version": 1,
   "directive_epoch": "2026-08-27T12:05:00+02:00",
-  "operator_instruction_id": "user-v7-professional-market-making-priority-20260827",
+  "operator_instruction_id": "user-v7-master-multi-agent-operating-prompt-20260827",
+  "priority_instruction_id": "user-v7-professional-market-making-priority-20260827",
   "authority": "latest_explicit_user_instruction",
   "supersedes_prs": [513, 516, 519, 537, 547, 595, 596, 605, 617],
   "repository": "ENRICOBIGNOZZI/Polymarket",
   "scope": "all_registered_schedulers_and_paper_research",
-  "rule": "V7 is the single final destination. Professional market making is now the primary economic research and engineering priority. Preserve PAPER-only safety and the single V7 architecture. The previous rejection of unconditional generic improve1 is evidence against that quoting policy, not against the market-making strategy class. Build a reward-aware, inventory-aware, event-driven professional maker inside V7/common using the canonical allocator, ledger, monitoring, deployment and exact-SHA lifecycle. The required lifecycle remains implementation -> tests -> same-SHA PAPER -> main -> paper-validated -> deploy -> server health -> legacy deletion.",
+  "rule": "V7 is the single final destination. Professional market making is now the primary economic research and engineering priority inside that master V7 directive. Preserve PAPER-only safety and the single V7 architecture. The previous rejection of unconditional generic improve1 is evidence against that quoting policy, not against the market-making strategy class. Build a reward-aware, inventory-aware, event-driven professional maker inside V7/common using the canonical allocator, ledger, monitoring, deployment and exact-SHA lifecycle. The required lifecycle remains implementation -> tests -> same-SHA PAPER -> main -> paper-validated -> deploy -> server health -> legacy deletion.",
   "paper_v7_authorization": {
     "paper_only": true,
     "authenticated_execution": false,
@@ -79,7 +80,7 @@
     "After one exact V7 SHA is on main, paper-validated, deployed and server-health green, aggressively delete every remaining superseded adapter/workflow/config/test/dashboard/transitional bridge no longer imported by V7/common."
   ],
   "scheduler_assignments": {
-    "administrator-supervisor": "Treat this professional-market-making V7 directive as current authority; report collisions, mixed-SHA evidence, duplicate writers and any resurrection of the old generic-maker-disabled interpretation.",
+    "administrator-supervisor": "Treat the V7 master directive plus its professional-market-making priority as current authority; report collisions, mixed-SHA evidence, duplicate writers and any resurrection of the old generic-maker-disabled interpretation.",
     "research-policy": "Enforce V7-only development, PAPER/authenticated separation, branch provenance, no duplicate ownership, same-SHA evidence, and the distinction between bounded maker exploration and promotion-grade exploitation.",
     "research-queue": "Allocate most new research/engineering capacity to professional maker execution, latency, reward economics and learned fill/markout; avoid duplicate implementations.",
     "promotion-controller": "Promote only exact-provenance V7 integrations with required technical and economic evidence; maker exploration, CI success, quoted spread or estimated rewards alone are not alpha.",
