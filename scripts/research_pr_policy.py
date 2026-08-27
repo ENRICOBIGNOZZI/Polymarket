@@ -59,6 +59,7 @@ LIVE_MODEL_SURFACE_PATTERNS = (
     re.compile(r"^scripts/v\d+_(?:cross_sectional(?:_[a-z0-9]+)*|local_factor(?:_[a-z0-9]+)*|pca_stat_arb(?:_[a-z0-9]+)*)\.py$"),
     re.compile(r"^scripts/v\d+_(?:dynamic_factor_intents|execution_model|external_bridge|global_risk|hard_arb_guard|hard_arb_paper|intent_guard|intent_queue_filter|local_factor_intents|local_factor|market_common|materialize_configs|multileg_launcher|micro_maker|micro_taker|micro_taker_institutional|queue_filter|relation_intents|runtime_status|typed_structural)(?:_v\d+)?\.py$"),
     re.compile(r"^scripts/v\d+_(?:execution_ledger|multileg_broker)\.py$"),
+    re.compile(r"^scripts/v\d+_execution_evidence\.py$"),
     re.compile(r"^scripts/v\d+_micro_taker_(?:core|data|target|worker)\.py$"),
 )
 MODEL_CODE_SURFACE_PATTERNS = (
