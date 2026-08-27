@@ -22,8 +22,10 @@ InventorySnapshot MakerInstrumentLane::oriented_inventory(
     if (inventory_sign_ >= 0) return inventory;
     InventorySnapshot out = inventory;
     std::swap(out.yes_shares, out.no_shares);
-    // reserved_buy/sell are local pending exposure for this instrument, so they
-    // retain their local BUY-positive / SELL-negative interpretation.
+    // The common market inventory is expressed in YES-NO orientation. Swapping
+    // pending BUY/SELL buckets negates their net reservation too, so the NO lane
+    // sees positive exposure as overweight NO rather than overweight YES.
+    std::swap(out.reserved_buy_shares, out.reserved_sell_shares);
     return out;
 }
 
