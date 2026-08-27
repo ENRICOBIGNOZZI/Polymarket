@@ -50,8 +50,7 @@ def _atomic_json(path: Path, value: Any) -> None:
 
 
 def _load_json(path: Path) -> Any:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    return value
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _candidate_id(model_sha: str, family: str, horizon_seconds: int, legs: Iterable[dict[str, Any]]) -> str:
@@ -61,6 +60,14 @@ def _candidate_id(model_sha: str, family: str, horizon_seconds: int, legs: Itera
     ]
     raw = "|".join([model_sha, family, str(horizon_seconds), *identity])
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _row_decision_ts_ms(row: dict[str, Any], fallback_ms: int) -> int:
+    try:
+        value = int(row.get("decision_ts_ms") or fallback_ms)
+    except (TypeError, ValueError, OverflowError):
+        value = fallback_ms
+    return value if value > 0 else fallback_ms
 
 
 @dataclass(frozen=True)
@@ -128,7 +135,7 @@ def local_factor_intents(report: dict[str, Any], model_sha: str) -> list[ModelIn
     if report.get("survivorship_safe") is not True:
         blockers0.append("point_in_time_universe_not_validated")
 
-    decision_ts_ms = int(report.get("timestamp") or 0) * 1000
+    report_decision_ms = int(report.get("timestamp") or 0) * 1000
     out: list[ModelIntent] = []
     for row in report.get("signals") or []:
         if not isinstance(row, dict):
@@ -146,7 +153,7 @@ def local_factor_intents(report: dict[str, Any], model_sha: str) -> list[ModelIn
         cid = _candidate_id(model_sha, "local_factor", horizon, legs)
         intent = ModelIntent(
             candidate_id=cid, model_sha=model_sha, family="local_factor",
-            horizon_seconds=horizon, decision_ts_ms=decision_ts_ms,
+            horizon_seconds=horizon, decision_ts_ms=_row_decision_ts_ms(row, report_decision_ms),
             semantics="pair_residual_convergence", legs=legs,
             predicted_edge=None, economic_score=None,
             executable=not blockers0, blockers=tuple(sorted(set(blockers0))),
@@ -172,7 +179,7 @@ def pca_intents(report: dict[str, Any], model_sha: str) -> list[ModelIntent]:
         blockers0.append("pca_total_single_leg_risk_missing")
     if report.get("survivorship_safe") is not True:
         blockers0.append("point_in_time_universe_not_validated")
-    decision_ts_ms = int(report.get("timestamp") or 0) * 1000
+    report_decision_ms = int(report.get("timestamp") or 0) * 1000
     out: list[ModelIntent] = []
     for horizon_row in report.get("horizons") or []:
         if not isinstance(horizon_row, dict):
@@ -191,7 +198,7 @@ def pca_intents(report: dict[str, Any], model_sha: str) -> list[ModelIntent]:
             cid = _candidate_id(model_sha, "pca", horizon, legs)
             intent = ModelIntent(
                 candidate_id=cid, model_sha=model_sha, family="pca",
-                horizon_seconds=horizon, decision_ts_ms=decision_ts_ms,
+                horizon_seconds=horizon, decision_ts_ms=_row_decision_ts_ms(row, report_decision_ms),
                 semantics="single_leg_residual_stat_arb", legs=legs,
                 predicted_edge=edge, economic_score=score,
                 executable=not blockers0, blockers=tuple(sorted(set(blockers0))),
@@ -219,7 +226,7 @@ def ranking_intents(report: dict[str, Any], pairs: list[Any], model_sha: str) ->
         blockers0.append("frozen_holdout_fit_not_validated")
     if report.get("point_in_time_universe_validated") is not True or report.get("survivorship_safe") is not True:
         blockers0.append("point_in_time_universe_not_validated")
-    decision_ts_ms = int(report.get("timestamp") or 0) * 1000
+    report_decision_ms = int(report.get("timestamp") or 0) * 1000
     out: list[ModelIntent] = []
     for row in pairs:
         if not isinstance(row, dict):
@@ -240,7 +247,7 @@ def ranking_intents(report: dict[str, Any], pairs: list[Any], model_sha: str) ->
         cid = _candidate_id(model_sha, "ranking", horizon, legs)
         intent = ModelIntent(
             candidate_id=cid, model_sha=model_sha, family="ranking",
-            horizon_seconds=horizon, decision_ts_ms=decision_ts_ms,
+            horizon_seconds=horizon, decision_ts_ms=_row_decision_ts_ms(row, report_decision_ms),
             semantics="relative_top_bottom_pair", legs=legs,
             predicted_edge=edge, economic_score=score,
             executable=not blockers0, blockers=tuple(sorted(set(blockers0))),
@@ -272,13 +279,7 @@ def _causal_candidate_clock(intent: ModelIntent) -> tuple[int, int, str] | None:
 
 
 def write_candidate_events(writer: ledger.CanonicalLedgerWriter, intents: list[ModelIntent]) -> int:
-    """Persist research opportunities; emit CANDIDATE only with causal book identity.
-
-    The canonical ledger deliberately requires exchange/receive/decision clocks and
-    a snapshot id for CANDIDATE.  A research intent that is blocked, or an otherwise
-    eligible intent whose causal snapshot did not survive into the router, remains
-    an OPPORTUNITY.  The router never fabricates timestamps to cross this boundary.
-    """
+    """Persist research opportunities; emit CANDIDATE only with causal book identity."""
     written = 0
     for intent in intents:
         intent.validate()
