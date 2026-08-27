@@ -164,8 +164,15 @@ def validate(root: Path, registry_path: Path) -> tuple[list[str], list[dict[str,
     if live.is_file():
         text = live.read_text(encoding="utf-8")
         for required in (
-            "expected_sha:", 'workflows: ["ci", "monitoring"]', "scripts/v7_cutover_contract.py",
-            "scripts/v7_execution_evidence_hardened.py", 'test "$(git rev-parse origin/main)" = "$VALIDATION_SHA"', '-F force=false',
+            "expected_sha:",
+            'workflows: ["ci", "monitoring", "Polymarket Research Policy", "Private runtime single-writer validation"]',
+            "scripts/v7_cutover_contract.py",
+            "scripts/v7_ledger_spool.py",
+            "scripts/v7_canonical_economics.py",
+            "scripts/v7_portfolio_guard.py",
+            "promotion_ready",
+            'test "$(git rev-parse origin/main)" = "$VALIDATION_SHA"',
+            '-F force=false',
         ):
             if required not in text: errors.append(f"V7 live PAPER validation missing contract: {required}")
         for forbidden in ("force=true", "git push origin main", "git push origin paper-validated", "gh pr merge", "POLYMARKET_DEPLOY_REF=", "deploy-paper-server", "paper_v6", "v4-live-paper"):
