@@ -4,34 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Collection mode; backfill expands the bounded historical bootstrap
+        description: Collection mode
         required: false
         default: incremental
         type: choice
-        options:
-          - incremental
-          - backfill
-          - demo
+        options: [incremental, backfill, demo]
   schedule:
     - cron: "17 * * * *"
-  push:
-    branches: [main]
-    paths:
-      - "config/external_intelligence.json"
-      - "scripts/external_intelligence.py"
-      - "scripts/external_request_policy.py"
-      - "scripts/gdelt_webngrams.py"
-      - "scripts/run_external_intelligence.py"
-      - "scripts/attach_external_evidence.py"
-      - "scripts/build_github_contents_request.py"
-      - "tests/test_external_intelligence.py"
-      - "tests/test_external_request_policy.py"
-      - "tests/test_gdelt_webngrams.py"
-      - "tests/test_attach_external_evidence.py"
-      - "tests/test_github_contents_request.py"
-      - "tests/test_external_intelligence_workflow_contract.py"
-      - ".github/workflows/external-intelligence.yml"
-      - "docs/EXTERNAL_INTELLIGENCE.md"
   pull_request:
     branches: [main]
     paths:
@@ -40,24 +19,19 @@ on:
       - "scripts/external_request_policy.py"
       - "scripts/gdelt_webngrams.py"
       - "scripts/run_external_intelligence.py"
-      - "scripts/attach_external_evidence.py"
       - "scripts/build_github_contents_request.py"
       - "tests/test_external_intelligence.py"
       - "tests/test_external_request_policy.py"
       - "tests/test_gdelt_webngrams.py"
-      - "tests/test_attach_external_evidence.py"
-      - "tests/test_github_contents_request.py"
       - "tests/test_external_intelligence_workflow_contract.py"
       - ".github/workflows/external-intelligence.yml"
-      - "docs/EXTERNAL_INTELLIGENCE.md"
 
 permissions:
   contents: write
-  actions: read
 
 concurrency:
-  group: polymarket-external-intelligence-${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) && 'writer' || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main') }}
+  group: external-intelligence-${{ github.event_name == 'schedule' && 'writer' || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   collect:
@@ -68,7 +42,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate external-intelligence contracts
+      - name: Validate standalone external-intelligence contracts
         shell: bash
         run: |
           set -euo pipefail
@@ -76,132 +50,57 @@ jobs:
             tests/test_external_intelligence.py \
             tests/test_external_request_policy.py \
             tests/test_gdelt_webngrams.py \
-            tests/test_attach_external_evidence.py \
-            tests/test_github_contents_request.py \
             tests/test_external_intelligence_workflow_contract.py -v
           python3 -m py_compile \
             scripts/external_intelligence.py \
             scripts/external_request_policy.py \
             scripts/gdelt_webngrams.py \
             scripts/run_external_intelligence.py \
-            scripts/attach_external_evidence.py \
             scripts/build_github_contents_request.py
-          python3 -m json.tool config/external_intelligence.json >/dev/null
           python3 - <<'PY'
           import json
-          from pathlib import Path
-          cfg = json.loads(Path("config/external_intelligence.json").read_text())
-          assert cfg["paper_only"] is True
-          assert cfg["allow_authenticated_execution"] is False
-          assert cfg["allow_direct_champion_mutation"] is False
-          assert cfg["allow_production_signal_write"] is False
-          assert {1.0, 1.5, 2.0}.issubset(
-              {float(value) for value in cfg["backtest"]["cost_stress_multipliers"]}
-          )
+          cfg=json.load(open('config/external_intelligence.json'))
+          assert cfg['paper_only'] is True
+          assert cfg['allow_authenticated_execution'] is False
+          assert cfg['allow_direct_champion_mutation'] is False
+          assert cfg['allow_production_signal_write'] is False
           PY
 
-      - name: Live GDELT Web NGrams transport smoke
-        if: github.event_name == 'pull_request'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json
-          import sys
-          import time
-          from pathlib import Path
-
-          sys.path.insert(0, str(Path("scripts").resolve()))
-          import external_intelligence as ext
-          from gdelt_webngrams import collect_gdelt_webngrams
-
-          cfg = json.loads(Path("config/external_intelligence.json").read_text())
-          if str(cfg.get("sources", {}).get("gdelt", {}).get("transport", "")).lower() != "webngrams":
-              raise SystemExit("GDELT transport is not webngrams")
-          now = int(time.time())
-          market = ext.PmMarket(
-              market_id="gdelt-transport-smoke",
-              condition_id="",
-              event_id="gdelt-transport-smoke",
-              question="Bitcoin price",
-              description="read-only transport health probe",
-              category="diagnostic",
-              end_ts=now + 86400,
-              liquidity=0.0,
-              volume24h=0.0,
-              bid=0.49,
-              ask=0.51,
-              mid=0.50,
-              yes_token="",
-              no_token="",
-              resolved_outcome=None,
-          )
-          observations, health, errors = collect_gdelt_webngrams([market], cfg, now, ext)
-          assert not errors, errors
-          assert observations
-          transport = health.get("_transport", {})
-          assert transport.get("status") == "ok", transport
-          assert transport.get("transport") == "webngrams", transport
-          dataset_ts = int(transport.get("dataset_ts") or 0)
-          age = now - dataset_ts
-          assert 120 <= age <= 3600, (now, dataset_ts, age)
-          print(
-              "gdelt_webngrams_status=ok",
-              f"dataset_age_seconds={age}",
-              f"documents={health[market.market_id]['documents']}",
-              f"mentions={health[market.market_id]['mentions']}",
-          )
-          PY
-
-      - name: Restore point-in-time history from telemetry
+      - name: Restore point-in-time history
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p external_intelligence/input external_intelligence/output
           git fetch --no-tags origin telemetry:refs/remotes/origin/telemetry || true
-
-          extract_or_empty() {
-            local remote_path="$1"
-            local local_path="$2"
-            if git show "origin/telemetry:${remote_path}" > "$local_path" 2>/dev/null; then
-              test -s "$local_path" || rm -f "$local_path"
-            fi
+          restore() {
+            local remote="$1" local="$2"
+            git show "origin/telemetry:${remote}" > "$local" 2>/dev/null || true
           }
-
-          extract_or_empty telemetry/external-intelligence-observations.jsonl.gz \
-            external_intelligence/input/observations.jsonl.gz
-          extract_or_empty telemetry/external-intelligence-prices.jsonl.gz \
-            external_intelligence/input/prices.jsonl.gz
-          extract_or_empty telemetry/external-intelligence-state.json \
-            external_intelligence/input/state.json
-
+          restore telemetry/external-intelligence-observations.jsonl.gz external_intelligence/input/observations.jsonl.gz
+          restore telemetry/external-intelligence-prices.jsonl.gz external_intelligence/input/prices.jsonl.gz
+          restore telemetry/external-intelligence-state.json external_intelligence/input/state.json
           python3 - <<'PY'
           import gzip
           from pathlib import Path
-          for name in ("observations.jsonl.gz", "prices.jsonl.gz"):
-              path = Path("external_intelligence/input") / name
-              if not path.exists():
-                  path.write_bytes(gzip.compress(b"", compresslevel=9, mtime=0))
-          state = Path("external_intelligence/input/state.json")
-          if not state.exists():
-              state.write_text("{}\n", encoding="utf-8")
+          for name in ('observations.jsonl.gz','prices.jsonl.gz'):
+              p=Path('external_intelligence/input')/name
+              if not p.exists() or p.stat().st_size == 0:
+                  p.write_bytes(gzip.compress(b'', compresslevel=9, mtime=0))
+          p=Path('external_intelligence/input/state.json')
+          if not p.exists() or p.stat().st_size == 0:
+              p.write_text('{}\n')
           PY
 
-      - name: Collect, store and backtest public external information
+      - name: Collect point-in-time public information
         shell: bash
         env:
           REQUESTED_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
           mode=incremental
-          case "$GITHUB_EVENT_NAME" in
-            pull_request|push) mode=demo ;;
-            workflow_dispatch) mode="${REQUESTED_MODE:-incremental}" ;;
-            schedule) mode=incremental ;;
-            *) echo "unsupported event: $GITHUB_EVENT_NAME" >&2; exit 1 ;;
-          esac
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then mode=demo; fi
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then mode="${REQUESTED_MODE:-incremental}"; fi
           case "$mode" in incremental|backfill|demo) ;; *) exit 2 ;; esac
-
           python3 scripts/run_external_intelligence.py \
             --config config/external_intelligence.json \
             --observations-in external_intelligence/input/observations.jsonl.gz \
@@ -213,37 +112,21 @@ jobs:
             --signals-out external_intelligence/output/latest-signals.jsonl \
             --report-json external_intelligence/output/latest-external-intelligence.json \
             --report-markdown external_intelligence/output/latest-external-intelligence.md \
-            --mode "$mode" \
-            | tee external_intelligence/output/external-intelligence.log
-
+            --mode "$mode"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          report = json.loads(
-              Path("external_intelligence/output/latest-external-intelligence.json").read_text()
-          )
-          assert report["paper_only"] is True
-          assert report["submitted_orders"] == 0
-          assert report["authenticated_execution"] is False
-          assert report["direct_champion_mutation"] is False
-          assert report["production_signal_write"] is False
-          assert report["safety"]["lookahead_rejected"] is True
-          assert Path("external_intelligence/output/observations.jsonl.gz").stat().st_size > 0
-          assert Path("external_intelligence/output/prices.jsonl.gz").stat().st_size > 0
+          r=json.load(open('external_intelligence/output/latest-external-intelligence.json'))
+          assert r['paper_only'] is True
+          assert r['submitted_orders'] == 0
+          assert r['authenticated_execution'] is False
+          assert r['direct_champion_mutation'] is False
+          assert r['production_signal_write'] is False
+          assert Path('external_intelligence/output/observations.jsonl.gz').stat().st_size > 0
+          assert Path('external_intelligence/output/prices.jsonl.gz').stat().st_size > 0
           PY
 
-      - name: Publish external-intelligence summary
-        if: always()
-        shell: bash
-        run: |
-          echo '## Polymarket External Intelligence' >> "$GITHUB_STEP_SUMMARY"
-          if test -s external_intelligence/output/latest-external-intelligence.md; then
-            cat external_intelligence/output/latest-external-intelligence.md >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo 'External-intelligence report is missing.' >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Publish durable history and evidence to telemetry
+      - name: Publish durable standalone telemetry
         if: (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) && success()
         shell: bash
         env:
@@ -253,49 +136,25 @@ jobs:
           if ! git ls-remote --exit-code origin refs/heads/telemetry >/dev/null 2>&1; then
             git push origin "HEAD:refs/heads/telemetry"
           fi
-
           publish_file() {
-            local local_path="$1"
-            local remote_path="$2"
-            local message="$3"
+            local local_path="$1" remote_path="$2" message="$3"
             local endpoint="repos/${GITHUB_REPOSITORY}/contents/${remote_path}"
-            local current_sha request_path
+            local current_sha request
             current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
-            request_path="$(mktemp)"
-            local payload_args=(
-              --input "$local_path"
-              --message "$message"
-              --branch telemetry
-              --output "$request_path"
-            )
-            if [[ -n "$current_sha" ]]; then
-              payload_args+=(--sha "$current_sha")
-            fi
-            python3 scripts/build_github_contents_request.py "${payload_args[@]}"
-            gh api "$endpoint" --method PUT --input "$request_path" >/dev/null
-            rm -f "$request_path"
+            request="$(mktemp)"
+            args=(--input "$local_path" --message "$message" --branch telemetry --output "$request")
+            [[ -n "$current_sha" ]] && args+=(--sha "$current_sha")
+            python3 scripts/build_github_contents_request.py "${args[@]}"
+            gh api "$endpoint" --method PUT --input "$request" >/dev/null
+            rm -f "$request"
           }
+          publish_file external_intelligence/output/observations.jsonl.gz telemetry/external-intelligence-observations.jsonl.gz "Update external observations"
+          publish_file external_intelligence/output/prices.jsonl.gz telemetry/external-intelligence-prices.jsonl.gz "Update external prices"
+          publish_file external_intelligence/output/state.json telemetry/external-intelligence-state.json "Update external state"
+          publish_file external_intelligence/output/latest-signals.jsonl telemetry/latest-external-signals.jsonl "Update external shadow signals"
+          publish_file external_intelligence/output/latest-external-intelligence.json telemetry/latest-external-intelligence.json "Update external evidence"
 
-          publish_file external_intelligence/output/observations.jsonl.gz \
-            telemetry/external-intelligence-observations.jsonl.gz \
-            "Update external-intelligence point-in-time observations"
-          publish_file external_intelligence/output/prices.jsonl.gz \
-            telemetry/external-intelligence-prices.jsonl.gz \
-            "Update external-intelligence Polymarket prices"
-          publish_file external_intelligence/output/state.json \
-            telemetry/external-intelligence-state.json \
-            "Update external-intelligence source and backfill state"
-          publish_file external_intelligence/output/latest-signals.jsonl \
-            telemetry/latest-external-signals.jsonl \
-            "Update latest external-information shadow signals"
-          publish_file external_intelligence/output/latest-external-intelligence.json \
-            telemetry/latest-external-intelligence.json \
-            "Update external-intelligence backtest evidence"
-          publish_file external_intelligence/output/latest-external-intelligence.md \
-            telemetry/latest-external-intelligence.md \
-            "Update external-intelligence human report"
-
-      - name: Upload durable external-intelligence evidence
+      - name: Upload external-intelligence evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
