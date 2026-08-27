@@ -1,87 +1,227 @@
 name: Polymarket Research Director
 
 on:
-  schedule:
-    - cron: "0 * * * *"
   workflow_dispatch:
+  schedule:
+    - cron: "13,43 * * * *"
+  pull_request:
+    branches: [main]
+    paths:
+      - "config/research_director.json"
+      - "config/alpha_factory.json"
+      - "scripts/research_director.py"
+      - "scripts/research_queue_report.py"
+      - "tests/test_research_director.py"
+      - ".github/workflows/research-queue.yml"
+      - ".github/workflows/control-plane.yml"
 
 permissions:
-  actions: read
-  contents: read
-  issues: write
+  actions: write
+  contents: write
   pull-requests: read
 
 concurrency:
   group: polymarket-research-director
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   audit:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
           fetch-depth: 1
 
-      - name: Build research queue
+      - name: Validate research-director contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest tests/test_research_director.py -v
+          python3 -m py_compile scripts/research_director.py scripts/research_queue_report.py
+          python3 -m json.tool config/research_director.json >/dev/null
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          cfg=json.loads(Path('config/research_director.json').read_text())
+          assert cfg['paper_only'] is True
+          assert cfg['allow_authenticated_execution'] is False
+          assert cfg['allow_direct_champion_mutation'] is False
+          forbidden=set(cfg['forbidden_workflows'])
+          owners=set(cfg['owner_workflows'])
+          assert not owners & forbidden
+          workflow_dir=Path('.github/workflows')
+          for workflow in sorted(owners):
+              path=workflow_dir / workflow
+              if not path.is_file():
+                  raise SystemExit(f'research-director contract error: missing owner workflow {workflow}')
+              text=path.read_text(encoding='utf-8')
+              if not re.search(r'(?m)^  workflow_dispatch:\s*$', text):
+                  raise SystemExit(
+                      f'research-director contract error: owner workflow lacks workflow_dispatch: {workflow}'
+                  )
+          PY
+
+      - name: Materialize durable research evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p research-director/input research-director/output
+          git fetch --no-tags origin telemetry:refs/remotes/origin/telemetry || true
+          if git show origin/telemetry:telemetry/latest-alpha-factory.json > research-director/input/latest-alpha-factory.json 2>/dev/null; then
+            test -s research-director/input/latest-alpha-factory.json || printf '{}\n' > research-director/input/latest-alpha-factory.json
+          else
+            printf '{}\n' > research-director/input/latest-alpha-factory.json
+          fi
+          if git show origin/telemetry:telemetry/research-director-state.json > research-director/input/research-director-state.json 2>/dev/null; then
+            test -s research-director/input/research-director-state.json || printf '{}\n' > research-director/input/research-director-state.json
+          else
+            printf '{}\n' > research-director/input/research-director-state.json
+          fi
+
+      - name: Collect research queue and workflow context
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p /tmp/research-director
-          gh pr list --state open --limit 100 --json number,title,headRefName,baseRefName,isDraft,labels,statusCheckRollup,updatedAt > /tmp/research-director/prs.json
-          gh issue list --state open --limit 100 --json number,title,labels,updatedAt > /tmp/research-director/issues.json
-          gh api "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100" > /tmp/research-director/runs.json
-          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows" > /tmp/research-director/workflows.json
+          gh pr list --state open --base main --limit 100 \
+            --json number,title,url,headRefName,isDraft,labels,mergeStateStatus,statusCheckRollup,body,createdAt,updatedAt \
+            > research-director/input/research-prs.json
+          gh api "repos/${GITHUB_REPOSITORY}/branches?per_page=100" \
+            > research-director/input/research-branches.json
+          gh run list --limit 200 \
+            --json databaseId,workflowName,status,conclusion,headSha,headBranch,event,createdAt,updatedAt,url \
+            > research-director/input/workflow-runs.json
+          python3 scripts/research_queue_report.py \
+            --prs research-director/input/research-prs.json \
+            --branches research-director/input/research-branches.json \
+            --output research-director/output/research-queue-report.md
+
+      - name: Allocate adaptive research budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/research_director.py \
+            --config config/research_director.json \
+            --alpha-report research-director/input/latest-alpha-factory.json \
+            --state-in research-director/input/research-director-state.json \
+            --runs research-director/input/workflow-runs.json \
+            --state-out research-director/output/research-director-state.json \
+            --output-json research-director/output/latest-research-director.json \
+            --output-markdown research-director/output/latest-research-director.md \
+            --dispatch-file research-director/output/dispatch-plan.txt \
+            | tee research-director/output/research-director.log
+
+      - name: Dispatch bounded evidence-producing workers
+        if: github.event_name != 'pull_request' && success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          : > research-director/output/dispatch-results.txt
+          while IFS= read -r workflow; do
+            [[ -n "$workflow" ]] || continue
+            python3 - "$workflow" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          workflow=sys.argv[1]
+          cfg=json.loads(Path('config/research_director.json').read_text(encoding='utf-8'))
+          owners=set(cfg.get('owner_workflows') or {})
+          forbidden=set(cfg.get('forbidden_workflows') or [])
+          if workflow not in owners:
+              raise SystemExit(
+                  f'research-director dispatch contract error: workflow is not an allowed owner: {workflow}'
+              )
+          if workflow in forbidden:
+              raise SystemExit(
+                  f'research-director dispatch contract error: forbidden authority selected: {workflow}'
+              )
+          path=Path('.github/workflows') / workflow
+          if not path.is_file():
+              raise SystemExit(
+                  f'research-director dispatch contract error: owner workflow is missing: {workflow}'
+              )
+          text=path.read_text(encoding='utf-8')
+          if not re.search(r'(?m)^  workflow_dispatch:\s*$', text):
+              raise SystemExit(
+                  f'research-director dispatch contract error: owner workflow lacks workflow_dispatch: {workflow}'
+              )
+          PY
+            gh workflow run "$workflow" --ref main
+            printf 'dispatched=%s ref=main\n' "$workflow" | tee -a research-director/output/dispatch-results.txt
+          done < research-director/output/dispatch-plan.txt
           python3 - <<'PY'
           import json
           from pathlib import Path
-
-          workflows=json.loads(Path('/tmp/research-director/workflows.json').read_text()).get('workflows',[])
-          retired={
-              'forward-maker-research.yml',
-              'deploy-paper-server.yml',
-              'server-health.yml',
-              'grafana-access.yml',
-          }
-          enabled=[]
-          for workflow in workflows:
-              path=str(workflow.get('path') or '')
-              name=Path(path).name
-              if name in retired and str(workflow.get('state') or '').lower()=='active':
-                  raise SystemExit(f'retired workflow unexpectedly active: {name}')
-              if str(workflow.get('state') or '').lower()=='active':
-                  enabled.append(name)
-          Path('/tmp/research-director/enabled-workflows.json').write_text(json.dumps(enabled))
+          cfg=json.loads(Path('config/research_director.json').read_text(encoding='utf-8'))
+          forbidden=set(cfg.get('forbidden_workflows') or [])
+          results=Path('research-director/output/dispatch-results.txt').read_text(encoding='utf-8')
+          escaped=[name for name in sorted(forbidden) if f'dispatched={name} ' in results]
+          if escaped:
+              raise SystemExit(f'non-research authority escaped Research Director allowlist: {escaped}')
           PY
-          python3 scripts/research_director.py \
-            --prs /tmp/research-director/prs.json \
-            --issues /tmp/research-director/issues.json \
-            --runs /tmp/research-director/runs.json \
-            --root . \
-            --output-json /tmp/research-director/report.json \
-            --output-markdown /tmp/research-director/report.md
-          cat /tmp/research-director/report.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish/update director issue
+      - name: Publish research-director summary
+        if: always()
+        shell: bash
+        run: |
+          cat research-director/output/latest-research-director.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          cat research-director/output/research-queue-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          if test -s research-director/output/dispatch-results.txt; then
+            echo '## Dispatch results' >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            cat research-director/output/dispatch-results.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Publish durable research-director state to telemetry
+        if: github.event_name != 'pull_request' && success()
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          title="Polymarket Research Director — hourly queue"
-          body="$(cat /tmp/research-director/report.md)"
-          issue="$(gh issue list --state open --search 'in:title Polymarket Research Director hourly queue' --limit 1 --json number --jq '.[0].number // empty')"
-          if [[ -z "$issue" ]]; then
-            gh issue create --title "$title" --body "$body"
-          else
-            gh issue edit "$issue" --body "$body"
-          fi
+          publish_file() {
+            local local_path="$1" remote_path="$2" message="$3"
+            local endpoint="repos/${GITHUB_REPOSITORY}/contents/${remote_path}" content current_sha error_file
+            content="$(base64 -w0 "$local_path")"
+            error_file="$(mktemp)"
+            for attempt in 1 2 3 4 5; do
+              current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
+              local args=("$endpoint" --method PUT -f message="$message" -f content="$content" -f branch=telemetry)
+              if [[ -n "$current_sha" ]]; then args+=(-f sha="$current_sha"); fi
+              if gh api "${args[@]}" >/dev/null 2>"$error_file"; then
+                rm -f "$error_file"
+                return 0
+              fi
+              if [[ "$attempt" -eq 5 ]]; then cat "$error_file" >&2; rm -f "$error_file"; return 1; fi
+              sleep $((attempt * 2))
+            done
+          }
+          publish_file research-director/output/latest-research-director.json \
+            telemetry/latest-research-director.json \
+            "Update autonomous Research Director product"
+          publish_file research-director/output/latest-research-director.md \
+            telemetry/latest-research-director.md \
+            "Update autonomous Research Director report"
+          publish_file research-director/output/research-director-state.json \
+            telemetry/research-director-state.json \
+            "Update adaptive Research Director state"
 
-      - name: Enforce read-only scheduler
-        run: |
-          set -euo pipefail
-          git diff --exit-code
-          git status --porcelain --untracked-files=no | tee /tmp/research-director/git-status.txt
-          test ! -s /tmp/research-director/git-status.txt
+      - name: Upload research-director evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-director-${{ github.run_id }}
+          path: research-director/
+          if-no-files-found: warn
+          retention-days: 30
