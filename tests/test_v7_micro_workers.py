@@ -15,6 +15,7 @@ def test_maker_uses_canonical_cpp_runtime_and_fill_conditioned_research_core():
     assert lane_path.is_file()
     assert paper_path.is_file()
     assert core_path.is_file()
+    assert not (ROOT / "scripts/v7_market_maker_worker.py").exists()
     assert not (ROOT / "scripts/v7_micro_maker_worker.py").exists()
     assert not (ROOT / "scripts/v7_micro_maker_worker_eventtime_core.py").exists()
 
@@ -33,7 +34,8 @@ def test_maker_uses_canonical_cpp_runtime_and_fill_conditioned_research_core():
     assert "MarketWsShard" in runtime
     assert "MakerInstrumentLane" in runtime
     assert "MakerPaperMarketEngine" in runtime
-    assert "v7_ledger_spool" in runtime
+    assert 'run_root_ / "ledger" / "spool"' in runtime
+    assert 'run_root_ / "ledger" / "execution.jsonl"' not in runtime
     assert "operational_fill_scenario" in runtime
     assert "pessimistic" in runtime
     assert "LineageInvalidated" in runtime
