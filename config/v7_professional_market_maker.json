@@ -9,9 +9,38 @@
     "single_runtime_owner": true,
     "single_account_allocator": true,
     "single_canonical_ledger_writer": true,
+    "single_common_oms": true,
     "canonical_ledger_transport": "v7_ledger_spool",
     "fast_path": "cpp_websocket_event_driven",
-    "slow_path": "python_reward_selection_and_model_fit"
+    "slow_path": "python_reward_selection_and_model_fit",
+    "strategy_output": "v7_strategy_intent",
+    "maker_must_not_own_broker_ledger_or_global_risk": true
+  },
+  "thread_model": {
+    "public_ws_book_features_maker_same_owner_core_preferred": true,
+    "order_tx_separate_core": true,
+    "private_state_separate_core": true,
+    "async_ledger_telemetry_separate_core": true,
+    "python_training_separate_slow_plane": true,
+    "hot_path_global_mutex_forbidden": true,
+    "deterministic_market_sharding": true,
+    "cpu_affinity_benchmark_required": true,
+    "numa_tuning_only_after_measurement": true
+  },
+  "hot_path": {
+    "heap_allocations_per_decision_target": 0,
+    "filesystem_allowed": false,
+    "database_allowed": false,
+    "python_allowed": false,
+    "rest_market_lookup_allowed": false,
+    "synchronous_logging_allowed": false,
+    "remote_model_inference_allowed": false,
+    "integer_tick_prices": true,
+    "incremental_features": true,
+    "bounded_internal_queues": true,
+    "cancel_kill_priority_over_place": true,
+    "immutable_model_snapshot": true,
+    "book_copy_per_decision_allowed": false
   },
   "market_selection": {
     "max_active_markets": 40,
@@ -54,7 +83,8 @@
     "flow_weight": 0.10,
     "related_market_weight": 0.05,
     "max_microstructure_shift_ticks": 2.0,
-    "directional_alpha_required": false
+    "directional_alpha_required": false,
+    "prospective_feature_ablation_required": true
   },
   "quoting": {
     "actions": ["JOIN", "IMPROVE1", "FADE1", "FADE2", "ONE_SIDED", "WITHDRAW"],
@@ -70,7 +100,8 @@
     "never_cross_spread": true,
     "minimum_exploit_ev_per_dollar": 0.00001,
     "inventory_skew_strength": 1.0,
-    "toxicity_withdraw_threshold": 0.75
+    "toxicity_withdraw_threshold": 0.75,
+    "requote_only_for_material_economic_change": true
   },
   "exploration": {
     "enabled": true,
@@ -83,11 +114,27 @@
     "actions": ["JOIN", "FADE1", "IMPROVE1"],
     "epsilon": 0.10,
     "require_fresh_dual_clock_book": true,
-    "require_post_only": true
+    "require_post_only": true,
+    "propensity_logging_required": true
+  },
+  "paper_queue": {
+    "exact_fifo_claimed": false,
+    "queue_uncertainty_envelope": true,
+    "fields": ["queue_ahead_lower", "queue_ahead_expected", "queue_ahead_upper", "queue_confidence"],
+    "operational_fill_scenario": "pessimistic",
+    "dual_clock_post_arrival_required": true,
+    "public_print_conservation_required": true,
+    "cancel_pending_remains_fillable_until_effective": true,
+    "partial_fills_enabled": true,
+    "pre_arrival_flow_can_deplete_queue": false
   },
   "execution_model": {
     "fill_model": "empirical_beta_logistic_hybrid",
+    "fill_survival_challenger": true,
     "markout_model": "fill_conditioned_horizon_regression",
+    "distributional_markout_challenger": true,
+    "inventory_cost_model_required": true,
+    "latency_as_feature": true,
     "joint_yes_no_model": "direct_empirical_state_distribution",
     "product_of_marginals_forbidden": true,
     "minimum_orders_for_exploit": 50,
@@ -96,7 +143,18 @@
     "minimum_positive_fold_fraction": 0.60,
     "embargo_seconds": 60,
     "cold_start_fill_prior": 0.02,
-    "cold_start_adverse_markout_per_share": 0.002
+    "cold_start_adverse_markout_per_share": 0.002,
+    "hierarchical_partial_pooling_challenger": true,
+    "chronological_oos_only": true,
+    "random_shuffle_forbidden": true
+  },
+  "model_registry": {
+    "champion_challenger": true,
+    "atomic_snapshot_publish": true,
+    "record_model_version_on_every_decision": true,
+    "automatic_refit_is_not_automatic_promotion": true,
+    "rollback_required": true,
+    "required_identity": ["strategy", "family", "version", "hash", "feature_schema", "training_end_date", "training_window", "hyperparameters", "policy_version", "code_sha"]
   },
   "inventory": {
     "balanced_complete_sets_preferred": true,
@@ -109,13 +167,17 @@
     "max_event_gross_fraction": 0.10,
     "max_maker_gross_fraction": 0.30,
     "unwind_full_visible_depth_required": true,
-    "fail_closed_if_unmarkable": true
+    "fail_closed_if_unmarkable": true,
+    "track_inventory_age": true,
+    "track_capital_hours": true,
+    "track_pending_split_merge_settlement": true
   },
   "capital": {
     "target_account_fraction_for_paper_evidence": 0.60,
     "kelly_ceiling": 0.25,
     "queue_never_grants_size": true,
-    "size_from_capital_depth_and_ev_only": true
+    "size_from_capital_depth_and_ev_only": true,
+    "future_allocation_must_be_evidence_weighted": true
   },
   "rewards": {
     "maker_fee": 0.0,
@@ -127,6 +189,8 @@
     "trading_pnl_separate": true,
     "maker_rebate_pnl_separate": true,
     "liquidity_reward_pnl_separate": true,
+    "total_economic_pnl_separate": true,
+    "zero_reward_counterfactual_required": true,
     "subsidy_dependent_label_required": true,
     "promotion_requires_positive_total_pnl_after_50pct_reward_haircut": true,
     "promotion_requires_no_catastrophic_negative_trading_pnl": true
@@ -140,18 +204,35 @@
     "max_active_markets": 40,
     "news_toxicity_fail_closed": true,
     "stale_book_fail_closed": true,
-    "unknown_reward_or_fee_data_fail_closed_for_reward_credit": true
+    "unknown_reward_or_fee_data_fail_closed_for_reward_credit": true,
+    "instrument_market_event_strategy_global_kills_required": true,
+    "unknown_order_state_requires_reconciliation": true
   },
   "latency": {
     "event_driven": true,
     "rest_polling_not_allowed_on_quote_fast_path": true,
-    "target_decision_p50_us": 250,
-    "target_decision_p99_us": 1500,
-    "target_cancel_decision_p99_us": 1000,
+    "acceptance_receive_to_intent_us": {
+      "p50": 250,
+      "p95": 750,
+      "p99": 1500
+    },
+    "acceptance_toxicity_to_cancel_intent_p99_us": 1000,
+    "stretch_receive_to_intent_us": {
+      "p50": 50,
+      "p95": 150,
+      "p99": 500,
+      "p99_9": 1000
+    },
+    "stretch_toxicity_to_cancel_intent_p99_us": 250,
+    "required_percentiles": ["p50", "p90", "p95", "p99", "p99.9", "max"],
+    "required_segments": ["feed", "parse", "book", "features", "decision", "risk", "tx_queue", "transport", "ack", "cancel"],
     "max_feed_age_ms": 5000,
     "max_rest_snapshot_age_ms": 5000,
     "max_cross_book_skew_ms": 1500,
-    "ws_reconnect_invalidates_lineage": true
+    "ws_reconnect_invalidates_lineage": true,
+    "release_benchmark_required": true,
+    "representative_replay_required_for_claim": true,
+    "synthetic_empty_market_benchmark_not_sufficient": true
   },
   "evidence": {
     "exact_sha_required": true,
@@ -161,7 +242,9 @@
     "event_cluster_inference": true,
     "report_fill_conditioned_markout": true,
     "report_queue_position": true,
+    "report_queue_uncertainty": true,
     "report_cancel_latency": true,
-    "report_inventory_duration": true
+    "report_inventory_duration": true,
+    "freeze_code_model_policy_config_identity": true
   }
 }
