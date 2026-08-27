@@ -72,26 +72,14 @@ class V7ControlPlaneExactHeadTest(unittest.TestCase):
             for marker in required:
                 self.assertIn(marker, text, f"{rel}: missing active lifecycle marker {marker!r}")
 
-    def test_cleanup_branches_fail_closed_until_cutover_receipt_exists(self) -> None:
+    def test_cleanup_retirement_is_authorized_without_restoring_old_runtime(self) -> None:
         text = (ROOT / ".github/workflows/research-policy.yml").read_text(encoding="utf-8")
-        cleanup_guard = 'if [[ "$head_ref" == cleanup/* ]]'
-        self.assertEqual(text.count(cleanup_guard), 1)
-        guard_pos = text.index(cleanup_guard)
-        hard_safety_pos = text.index("python3 scripts/hard_safety_policy.py")
-        research_policy_pos = text.index("python3 scripts/research_pr_policy.py")
-        self.assertLess(guard_pos, hard_safety_pos)
-        self.assertLess(guard_pos, research_policy_pos)
-        for required in (
-            "cleanup locked during V7 cutover repair",
-            "same-SHA PAPER",
-            "paper-validated",
-            "deploy",
-            "server health",
-            "durable machine-verifiable lifecycle receipt",
-            "exit 1",
-        ):
-            self.assertIn(required, text)
-        self.assertIn("tests/test_v7_control_plane_exact_head.py", text)
+        self.assertNotIn('if [[ "$head_ref" == cleanup/* ]]', text)
+        self.assertIn("V7 the sole generation and authorizes immediate retirement", text)
+        self.assertIn("PAPER/authenticated-execution separation", text)
+        self.assertIn("python3 scripts/hard_safety_policy.py", text)
+        self.assertIn("python3 scripts/research_pr_policy.py", text)
+        self.assertIn("Verify exact policy revision", text)
 
     def test_operator_directive_preserves_master_cutover_sequence(self) -> None:
         directives = json.loads((ROOT / "config/operator_directives.json").read_text(encoding="utf-8"))
