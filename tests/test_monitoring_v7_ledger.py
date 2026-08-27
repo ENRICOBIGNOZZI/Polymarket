@@ -84,11 +84,24 @@ class V7LedgerMonitoringTest(unittest.TestCase):
         snapshot = {
             "sha": "a" * 40,
             "run_root": "paper_v7_live",
-            "runtime": {"version": 7, "paper_only": True, "authenticated_execution": False},
-            "execution_supervisor": {"paper_only": True, "authenticated_execution": False},
+            "runtime": {
+                "version": 7,
+                "paper_only": True,
+                "authenticated_execution": False,
+                "real_order_submission": False,
+            },
+            "runtime_alive": True,
+            "portfolio": {"paper_only": True, "authenticated_execution": False},
             "authority": {"valid": True, "max_drawdown": 0.15},
-            "proxy": {},
-            "evidence": {"summary": {}},
+            "canonical_economics": {
+                "paper_only": True,
+                "authenticated_execution": False,
+                "expected_model_sha": "a" * 40,
+                "promotion_ready": False,
+                "submitted_units": 1,
+                "complete_units": 0,
+            },
+            "trade_tape": {"rows": 1, "assets": 1},
             "ledger": {
                 "present": True,
                 "valid": True,
@@ -120,9 +133,7 @@ class V7LedgerMonitoringTest(unittest.TestCase):
                 "killed": False,
             },
             "ages": {},
-            "supervisor": {"execution_alive": True, "shadow_alive": True},
             "strategies": {},
-            "shadow_freshness": {},
         }
         metrics = exporter.render_prometheus(snapshot)
         self.assertIn("polymarket_execution_opportunities 2", metrics)
@@ -132,6 +143,8 @@ class V7LedgerMonitoringTest(unittest.TestCase):
         self.assertIn("polymarket_execution_final_pnl_usd -0.5", metrics)
         self.assertIn("polymarket_execution_capital_hours 1", metrics)
         self.assertIn('polymarket_execution_mean_markout{horizon="10s"} -0.02', metrics)
+        self.assertNotIn("execution_supervisor", metrics)
+        self.assertNotIn("market_proxy", metrics)
 
 
 if __name__ == "__main__":
