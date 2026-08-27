@@ -59,7 +59,10 @@ class V7UnifiedEvidenceRuntimeTest(unittest.TestCase):
             "contents: read",
             "pull-requests: read",
             "integration/v7-",
-            "source_head_sha",
+            "EVENT_HEAD_SHA",
+            "SOURCE_SHA",
+            "git merge-base --is-ancestor \"$MAIN_SHA\" \"$SOURCE_SHA\"",
+            "head_sha=${SOURCE_SHA}",
             "Private runtime single-writer validation",
             "scripts/paper_v7_execution_loop.sh",
             "scripts/v7_ledger_spool.py",
@@ -87,7 +90,8 @@ class V7UnifiedEvidenceRuntimeTest(unittest.TestCase):
     def test_candidate_contract_requires_current_main_operator_authority(self) -> None:
         text = (ROOT / "scripts/v7_evidence_candidate_contract.py").read_text()
         self.assertIn("candidate operator_directives.json must exactly match current main", text)
-        self.assertIn("single canonical ledger writer", text)
+        self.assertIn("require_single_canonical_ledger_writer", text)
+        self.assertIn("one canonical ledger writer", text)
         self.assertIn("complete non-overlapping execution cost vector", text)
         self.assertIn("account-level capital allocator", text)
 
