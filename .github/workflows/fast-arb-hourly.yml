@@ -18,7 +18,6 @@ on:
       - "config/operator_directives.json"
       - "scripts/arb_theory_scheduler.py"
       - "scripts/validate_fast_data_health.py"
-      - "scripts/paper_latest_loop.sh"
       - "tests/test_fast_*"
       - "tests/test_arb_theory_scheduler.py"
       - ".github/workflows/fast-arb-hourly.yml"
