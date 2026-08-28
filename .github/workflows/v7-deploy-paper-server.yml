@@ -257,30 +257,61 @@ jobs:
 
           if [[ "$primary_status" -ne 0 ]]; then
             printf 'primary_ssh_status=%s\n' "$primary_status" | tee -a deploy-evidence.txt
+            if [[ "$primary_status" -ne 255 ]]; then
+              echo "V7 remote deploy failed with non-transport status=$primary_status" >&2
+              exit "$primary_status"
+            fi
+
             recovered=0
             for _ in $(seq 1 18); do
               if ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST" \
                 "EXPECTED_VALIDATED_SHA='$validated_sha' bash -s" <<'VERIFY' >> deploy-evidence.txt 2>&1
           set -euo pipefail
           cd ~/polymarket
-          test "$(git rev-parse HEAD)" = "$EXPECTED_VALIDATED_SHA"
           root="$HOME/polymarket/runs/paper_v7_live"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_VALIDATED_SHA"
+          test "$(cat "$root/control/deployed_sha")" = "$EXPECTED_VALIDATED_SHA"
           python3 - "$root" "$EXPECTED_VALIDATED_SHA" <<'PY'
-          import json,os,sys,time
+          import csv,json,os,sys,time
           from pathlib import Path
-          root=Path(sys.argv[1]); sha=sys.argv[2]
+          root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
           runtime=json.loads((root/'control/runtime_status.json').read_text(encoding='utf-8'))
-          assert runtime.get('version') == 7
-          assert runtime.get('model_sha') == sha
-          assert runtime.get('paper_only') is True
-          assert runtime.get('authenticated_execution') is False
-          assert runtime.get('real_order_submission') is False
-          assert runtime.get('state') == 'running'
+          portfolio=json.loads((root/'control/portfolio_state.json').read_text(encoding='utf-8'))
+          graph=json.loads((root/'graph_rv/status.json').read_text(encoding='utf-8'))
+          economics=json.loads((root/'canonical_economics.json').read_text(encoding='utf-8'))
+          assert runtime.get('version') == 7 and runtime.get('model_sha') == sha
+          assert runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False
+          assert runtime.get('real_order_submission') is False and runtime.get('state') == 'running'
           assert runtime.get('killed') is False
           pid=int(runtime.get('pid') or 0); assert pid > 0; os.kill(pid,0)
-          assert int(time.time()) - int(runtime.get('timestamp') or 0) <= 180
+          assert now-int(runtime.get('timestamp') or 0) <= 180
+          assert portfolio.get('paper_only') is True and portfolio.get('authenticated_execution') is False
+          assert portfolio.get('killed') is False and float(portfolio.get('drawdown',1)) < .15
+          assert now-int(portfolio.get('timestamp') or 0) <= 30
+          assert graph.get('paper_only') is True and graph.get('authenticated_execution') is False
+          assert now-int(graph.get('timestamp') or 0) <= 180
+          assert economics.get('paper_only') is True and economics.get('authenticated_execution') is False
+          assert economics.get('expected_model_sha') == sha
+          with (root/'trade_tape.csv').open(newline='',encoding='utf-8') as handle:
+              rows=list(csv.DictReader(handle))
+          assert rows and max(int(float(r.get('received_ms') or 0)) for r in rows) > 0
           print(f'recovered_runtime_pid={pid}')
           PY
+          curl -fsS http://127.0.0.1:9108/healthz >/dev/null
+          metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
+          grep -q '^polymarket_v7_runtime_info 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_execution_alive 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_paper_only_contract_ok 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics"
+          curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
+          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+          uid="$(python3 - <<'PY'
+          import json
+          print(json.load(open('monitoring/v7_monitoring_manifest.json'))['grafana']['dashboard_uid'])
+          PY
+          )"
+          curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$uid" >/dev/null
           VERIFY
               then
                 recovered=1
