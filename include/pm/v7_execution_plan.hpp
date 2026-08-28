@@ -3,6 +3,7 @@
 #include "pm/v7_intent.hpp"
 
 #include <cstdint>
+#include <type_traits>
 
 namespace pm::v7 {
 
