@@ -199,15 +199,23 @@ pids+=("$!")
 
 (
   while [[ ! -e "$KILL" ]]; do
-    joint_args=()
-    [[ -s "$RUN_ROOT/learned_execution/joint_policy.json" ]] && joint_args=(--joint-model "$RUN_ROOT/learned_execution/joint_policy.json")
-    python3 scripts/v7_graph_rv.py \
-      --config "$ALLOC/graph_rv.json" \
-      --run-root "$RUN_ROOT" \
-      --intents "$RUN_ROOT/graph_rv/intents.csv" \
-      --trade-tape "$RUN_ROOT/trade_tape.csv" \
-      "${joint_args[@]}" \
-      >> "$RUN_ROOT/graph_rv/execution.log" 2>&1 || true
+    joint_policy="$RUN_ROOT/learned_execution/joint_policy.json"
+    if [[ -s "$joint_policy" ]]; then
+      python3 scripts/v7_graph_rv.py \
+        --config "$ALLOC/graph_rv.json" \
+        --run-root "$RUN_ROOT" \
+        --intents "$RUN_ROOT/graph_rv/intents.csv" \
+        --trade-tape "$RUN_ROOT/trade_tape.csv" \
+        --joint-model "$joint_policy" \
+        >> "$RUN_ROOT/graph_rv/execution.log" 2>&1 || true
+    else
+      python3 scripts/v7_graph_rv.py \
+        --config "$ALLOC/graph_rv.json" \
+        --run-root "$RUN_ROOT" \
+        --intents "$RUN_ROOT/graph_rv/intents.csv" \
+        --trade-tape "$RUN_ROOT/trade_tape.csv" \
+        >> "$RUN_ROOT/graph_rv/execution.log" 2>&1 || true
+    fi
     sleep 1
   done
 ) & pids+=("$!")
