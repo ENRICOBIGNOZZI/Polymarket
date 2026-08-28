@@ -13,6 +13,9 @@ SHA="$(git rev-parse HEAD)"
 MAKER_CHAMPION_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
 MAKER_CHALLENGER_MODEL="$RUN_ROOT/micro_maker/execution_model_challenger.json"
 MAKER_MODEL_REGISTRY="$RUN_ROOT/micro_maker/model_registry.json"
+PUBLIC_PROXY_PORT="${PM_V7_PUBLIC_PROXY_PORT:-19109}"
+PUBLIC_PROXY="http://127.0.0.1:$PUBLIC_PROXY_PORT"
+WS_PUBLIC_HOST="ws-subscriptions-clob.polymarket.com"
 # Bind the C++ slow-path execution-cell loader explicitly to the same exact SHA
 # and *champion* model file passed to the canonical Maker runtime. Challenger
 # refits are registered separately and can never be hot-reloaded by this loop.
@@ -93,6 +96,64 @@ if [[ ! -x "$MARKOUT_OBSERVER" ]]; then
   echo "missing V7 maker markout observer executable: $MARKOUT_OBSERVER" >&2
   exit 76
 fi
+if [[ ! -f scripts/v7_public_https_proxy.py ]]; then
+  echo "missing V7 public HTTPS proxy" >&2
+  exit 77
+fi
+
+# The PAPER server may sit behind an ISP resolver that filters Polymarket public
+# domains. Keep the operating-system DNS untouched: a loopback CONNECT tunnel
+# resolves through public DNS and relays end-to-end TLS without seeing payloads
+# or credentials. The latency-sensitive WebSocket is not proxied; it receives
+# only publicly resolved IPs below while retaining the original TLS hostname.
+python3 scripts/v7_public_https_proxy.py --host 127.0.0.1 --port "$PUBLIC_PROXY_PORT" \
+  >> "$RUN_ROOT/public_https_proxy.log" 2>&1 &
+pids+=("$!")
+proxy_ready=0
+for _ in $(seq 1 50); do
+  if python3 - "$PUBLIC_PROXY_PORT" <<'PY' >/dev/null 2>&1
+import socket,sys
+with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=.2):
+    pass
+PY
+  then
+    proxy_ready=1
+    break
+  fi
+  sleep 0.1
+done
+if [[ "$proxy_ready" != 1 ]]; then
+  echo "V7 public HTTPS proxy did not become ready" >&2
+  exit 77
+fi
+
+export PM_V7_HTTPS_PROXY="$PUBLIC_PROXY"
+export HTTPS_PROXY="$PUBLIC_PROXY"
+export https_proxy="$PUBLIC_PROXY"
+export HTTP_PROXY="$PUBLIC_PROXY"
+export http_proxy="$PUBLIC_PROXY"
+export NO_PROXY="127.0.0.1,localhost"
+export no_proxy="$NO_PROXY"
+if [[ -z "${PM_V7_WS_RESOLVE_IPS:-}" ]]; then
+  PM_V7_WS_RESOLVE_IPS="$(python3 scripts/v7_public_https_proxy.py --resolve "$WS_PUBLIC_HOST")"
+fi
+[[ -n "$PM_V7_WS_RESOLVE_IPS" ]] || { echo "public WS DNS resolution returned no addresses" >&2; exit 77; }
+export PM_V7_WS_RESOLVE_IPS
+
+maker_selection_ready() {
+  python3 - "$RUN_ROOT/micro_maker/reward_selection.json" <<'PY' >/dev/null 2>&1
+import json,sys
+from pathlib import Path
+path=Path(sys.argv[1])
+if not path.is_file(): raise SystemExit(1)
+try: obj=json.loads(path.read_text(encoding="utf-8"))
+except Exception: raise SystemExit(1)
+markets=obj.get("markets")
+ok=(obj.get("paper_only") is True and obj.get("authenticated_execution") is False
+    and isinstance(markets,list) and len(markets)>0)
+raise SystemExit(0 if ok else 1)
+PY
+}
 
 "$RECORDER" \
   --config "$CONFIG" \
@@ -148,31 +209,42 @@ pids+=("$!")
 ) & pids+=("$!")
 
 # Canonical Maker owner: public WS -> bounded V7 L2 -> C++ features/decision ->
-# common V7 OMS/queue PAPER engine -> spool. The model argument is deliberately
-# the champion path; challengers are physically incapable of hot reload here.
-"$MAKER_RUNTIME" \
-  --config "$ALLOC/micro_maker.json" \
-  --maker-policy "$MAKER_POLICY" \
-  --run-root "$RUN_ROOT" \
-  --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
-  --model "$MAKER_CHAMPION_MODEL" \
-  --model-sha "$SHA" \
-  >> "$RUN_ROOT/micro_maker/runtime.log" 2>&1 &
+# common V7 OMS/queue PAPER engine -> spool. Startup waits for the first valid
+# slow-plane selection instead of turning a transient public-data dependency
+# into a whole-runtime kill. Once started, the maker remains fail-closed.
+(
+  while [[ ! -e "$KILL" ]] && ! maker_selection_ready; do sleep 1; done
+  [[ ! -e "$KILL" ]] || exit 0
+  exec "$MAKER_RUNTIME" \
+    --config "$ALLOC/micro_maker.json" \
+    --maker-policy "$MAKER_POLICY" \
+    --run-root "$RUN_ROOT" \
+    --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
+    --model "$MAKER_CHAMPION_MODEL" \
+    --model-sha "$SHA"
+) >> "$RUN_ROOT/micro_maker/runtime.log" 2>&1 &
 pids+=("$!")
 
 # Evidence-only observer. It has no order/OMS/risk authority: it tails canonical
 # FILL events, observes the same bounded public WS/L10 state, and emits only
 # full-size executable MARKOUT records at 1/10/45/60/300s into the common spool.
-"$MARKOUT_OBSERVER" \
-  --config "$ALLOC/micro_maker.json" \
-  --run-root "$RUN_ROOT" \
-  --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
-  --model-sha "$SHA" \
-  >> "$RUN_ROOT/micro_maker/markout_observer.log" 2>&1 &
+(
+  while [[ ! -e "$KILL" ]] && ! maker_selection_ready; do sleep 1; done
+  [[ ! -e "$KILL" ]] || exit 0
+  exec "$MARKOUT_OBSERVER" \
+    --config "$ALLOC/micro_maker.json" \
+    --run-root "$RUN_ROOT" \
+    --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
+    --model-sha "$SHA"
+) >> "$RUN_ROOT/micro_maker/markout_observer.log" 2>&1 &
 pids+=("$!")
 
 (
   while [[ ! -e "$KILL" ]]; do
+    if ! maker_selection_ready; then
+      sleep 1
+      continue
+    fi
     if ! python3 scripts/v7_market_maker_status.py \
       --state "$RUN_ROOT/micro_maker/state.json" \
       --config "$ALLOC/micro_maker.json" \
