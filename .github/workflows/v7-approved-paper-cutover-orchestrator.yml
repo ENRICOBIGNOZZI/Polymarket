@@ -1,0 +1,122 @@
+name: V7 approved PAPER cutover orchestrator
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: v7-approved-paper-cutover
+  cancel-in-progress: false
+
+jobs:
+  exact-sha-cutover:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.user.login == github.repository_owner &&
+      startsWith(github.event.pull_request.title, 'V7 PAPER CUTOVER APPROVED:')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 80
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+    steps:
+      - name: Validate explicit owner approval and exact main SHA
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          test "$main_sha" = "$TARGET_SHA"
+
+      - name: Dispatch exact-SHA technical gates
+        run: |
+          set -euo pipefail
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref main -f expected_sha="$TARGET_SHA"
+          gh workflow run monitoring.yml --repo "$GITHUB_REPOSITORY" --ref main -f expected_sha="$TARGET_SHA"
+          gh workflow run private-runtime-single-writer-validation.yml \
+            --repo "$GITHUB_REPOSITORY" --ref main -f expected_sha="$TARGET_SHA"
+
+      - name: Require all exact-SHA gates green
+        run: |
+          set -euo pipefail
+          wait_for_workflow() {
+            local workflow="$1" label="$2" selected="" state=""
+            for _ in $(seq 1 150); do
+              selected="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&event=workflow_dispatch&per_page=50" \
+                --jq ".workflow_runs | map(select(.head_sha == \"$TARGET_SHA\")) | sort_by(.id) | last | [.id,.status,(.conclusion // \"\")] | @tsv")"
+              if [[ -n "$selected" ]]; then
+                IFS=$'\t' read -r run_id state conclusion <<< "$selected"
+                if [[ "$state" == "completed" ]]; then
+                  if [[ "$conclusion" == "success" ]]; then
+                    printf '%s_run_id=%s\n' "$label" "$run_id" >> "$GITHUB_STEP_SUMMARY"
+                    return 0
+                  fi
+                  gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log-failed || true
+                  echo "$label exact-SHA gate failed: run=$run_id conclusion=$conclusion" >&2
+                  return 1
+                fi
+              fi
+              sleep 10
+            done
+            echo "$label exact-SHA gate timed out" >&2
+            return 1
+          }
+          wait_for_workflow ci.yml ci
+          wait_for_workflow monitoring.yml monitoring
+          wait_for_workflow private-runtime-single-writer-validation.yml single_writer
+
+      - name: Dispatch canonical approved validation and advance paper-validated
+        run: |
+          set -euo pipefail
+          gh workflow run v7-live-paper-validation.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f expected_sha="$TARGET_SHA" -f cutover_approved=true
+          for _ in $(seq 1 240); do
+            selected="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/v7-live-paper-validation.yml/runs?branch=main&event=workflow_dispatch&per_page=50" \
+              --jq ".workflow_runs | map(select(.head_sha == \"$TARGET_SHA\")) | sort_by(.id) | last | [.id,.status,(.conclusion // \"\")] | @tsv")"
+            if [[ -n "$selected" ]]; then
+              IFS=$'\t' read -r run_id state conclusion <<< "$selected"
+              if [[ "$state" == "completed" ]]; then
+                if [[ "$conclusion" != "success" ]]; then
+                  gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log-failed || true
+                  exit 1
+                fi
+                echo "paper_validation_run_id=$run_id" >> "$GITHUB_STEP_SUMMARY"
+                break
+              fi
+            fi
+            sleep 10
+          done
+          validated_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/paper-validated" --jq .object.sha)"
+          test "$validated_sha" = "$TARGET_SHA"
+
+      - name: Dispatch canonical PAPER server deploy
+        run: |
+          set -euo pipefail
+          gh workflow run v7-deploy-paper-server.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f expected_sha="$TARGET_SHA" -f cutover_approved=true
+          for _ in $(seq 1 300); do
+            selected="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/v7-deploy-paper-server.yml/runs?branch=main&event=workflow_dispatch&per_page=50" \
+              --jq ".workflow_runs | map(select(.head_sha == \"$TARGET_SHA\")) | sort_by(.id) | last | [.id,.status,(.conclusion // \"\")] | @tsv")"
+            if [[ -n "$selected" ]]; then
+              IFS=$'\t' read -r run_id state conclusion <<< "$selected"
+              if [[ "$state" == "completed" ]]; then
+                if [[ "$conclusion" != "success" ]]; then
+                  gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log-failed || true
+                  exit 1
+                fi
+                echo "paper_deploy_run_id=$run_id" >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          echo "canonical PAPER deploy timed out" >&2
+          exit 1
+
+      - name: Start proven-merged branch cleanup
+        if: success()
+        run: |
+          gh workflow run v7-merged-branch-hygiene.yml --repo "$GITHUB_REPOSITORY" --ref main -f apply=true
