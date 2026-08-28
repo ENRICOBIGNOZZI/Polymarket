@@ -2,6 +2,19 @@ name: Private runtime single-writer validation
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/paper_v7_execution_loop.sh"
+      - "tests/test_v7_single_writer_contract.py"
+      - ".github/workflows/private-runtime-single-writer-validation.yml"
+      - "config/live_champion.json"
+      - "config/paper_v7.json"
+      - "src/v7_market_maker_runtime.cpp"
+      - "include/pm/v7_order_tx.hpp"
+      - "include/pm/v7_execution_plan.hpp"
+      - "include/pm/v7_execution_admission.hpp"
+      - "include/pm/v7_capital.hpp"
   pull_request:
     branches: [main]
     paths:
@@ -10,6 +23,11 @@ on:
       - ".github/workflows/private-runtime-single-writer-validation.yml"
       - "config/live_champion.json"
       - "config/paper_v7.json"
+      - "src/v7_market_maker_runtime.cpp"
+      - "include/pm/v7_order_tx.hpp"
+      - "include/pm/v7_execution_plan.hpp"
+      - "include/pm/v7_execution_admission.hpp"
+      - "include/pm/v7_capital.hpp"
 
 permissions:
   contents: read
