@@ -10,6 +10,13 @@
 
 namespace pm::fast {
 
+struct FeedReceiveStamp {
+    // Wall time is used only for exchange-vs-local lineage. Local latency must
+    // use the monotonic clock carried alongside it.
+    std::int64_t wall_ms = 0;
+    std::int64_t monotonic_ns = 0;
+};
+
 struct FeedSnapshot {
     std::size_t workers = 0;
     std::size_t connected_workers = 0;
@@ -20,7 +27,7 @@ struct FeedSnapshot {
 
 class MarketWebSocketFeed {
 public:
-    using MessageHandler = std::function<void(std::string_view, std::int64_t, std::size_t)>;
+    using MessageHandler = std::function<void(std::string_view, const FeedReceiveStamp&, std::size_t)>;
     using ErrorHandler = std::function<void(std::size_t, std::string_view)>;
 
     MarketWebSocketFeed(std::string url,

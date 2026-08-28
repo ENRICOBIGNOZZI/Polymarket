@@ -11,23 +11,24 @@ class V7CutoverUpdaterTest(unittest.TestCase):
     def test_updater_prevalidates_exact_candidate_before_checkout_mutation(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         self.assertIn('log "Validating exact V7 candidate $EXPECTED_SHA before active-checkout mutation"', text)
-        self.assertIn("git -C \"$APP_DIR\" worktree add --detach \"$candidate\" \"$EXPECTED_SHA\"", text)
+        self.assertIn('git -C "$APP_DIR" worktree add --detach "$candidate" "$EXPECTED_SHA"', text)
         self.assertIn("scripts/v7_cutover_contract.py", text)
         self.assertIn("ctest --test-dir build --output-on-failure", text)
         self.assertLess(text.index("prevalidate_candidate"), text.rindex('git checkout --detach "$EXPECTED_SHA"'))
 
-    def test_updater_stops_only_registered_production_runtime_owner(self) -> None:
+    def test_updater_stops_only_registered_v7_runtime_owner(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
-        self.assertIn('control/runtime_status.json', text)
+        self.assertIn("control/runtime_status.json", text)
         self.assertIn('Stopping production V7 pid=$pid only', text)
-        self.assertNotIn("pkill -f 'scripts/paper_v7_execution_loop.sh'", text)
-        self.assertNotIn('pgrep -af "paper_v7_execution_loop.sh"', text)
+        self.assertNotIn("pkill -f", text)
+        self.assertNotIn("pgrep -af", text)
 
-    def test_updater_deploys_new_canonical_loop_and_health_surfaces(self) -> None:
+    def test_updater_deploys_canonical_v7_loop_recorder_and_health_surfaces(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         for required in (
             "scripts/paper_v7_execution_loop.sh",
             "config/paper_v7.json",
+            "polymarket_v7_trade_recorder",
             "control/runtime_status.json",
             "control/portfolio_state.json",
             "control/allocations/manifest.json",
@@ -41,14 +42,6 @@ class V7CutoverUpdaterTest(unittest.TestCase):
             "control/deployed_sha",
         ):
             self.assertIn(required, text)
-        for retired in (
-            "scripts/paper_v7_loop.sh",
-            "v7_supervisor.json",
-            "v7_execution_supervisor.json",
-            "market_proxy_status.json",
-            "v7_execution_evidence.json",
-        ):
-            self.assertNotIn(retired, text)
 
     def test_updater_requires_main_and_paper_validated_same_exact_sha(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
@@ -56,19 +49,21 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn('[[ "$VALIDATED_SHA" == "$EXPECTED_SHA" ]]', text)
         self.assertIn('[[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]', text)
 
-    def test_updater_never_restores_legacy_writer(self) -> None:
-        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
-        self.assertIn("assert_no_legacy_writer", text)
-        # Retired generation names are allowed only as kill/fail-closed
-        # detection patterns. They must never become start/deploy commands.
-        for generation in ("v3", "v4", "v5", "v6"):
-            pattern = f"scripts/paper_{generation}_loop.sh"
-            self.assertIn(pattern, text)
-            self.assertNotIn(f"bash {pattern}", text)
-            self.assertNotIn(f"nohup {pattern}", text)
-        self.assertNotIn("start_legacy", text)
-        self.assertNotIn("rollback_v6", text)
-        self.assertNotIn("git checkout paper-validated~", text)
+    def test_updater_contains_no_legacy_generation_or_fallback_logic(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8").lower()
+        for forbidden in (
+            "paper_v3",
+            "paper_v4",
+            "paper_v5",
+            "paper_v6",
+            "paper_latest",
+            "polymarket_engine",
+            "legacy_compatibility",
+            "start_legacy",
+            "rollback_v6",
+            "paper-validated~",
+        ):
+            self.assertNotIn(forbidden, text)
 
     def test_monitoring_manifest_is_v2_and_canonical(self) -> None:
         manifest = json.loads((ROOT / "monitoring/v7_monitoring_manifest.json").read_text(encoding="utf-8"))

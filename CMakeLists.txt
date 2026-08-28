@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
-project(polymarket_quant_engine VERSION 1.0.0 LANGUAGES CXX)
+project(polymarket_v7 VERSION 7.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 if(POLICY CMP0167)
-    cmake_policy(SET CMP0167 NEW)
+  cmake_policy(SET CMP0167 NEW)
 endif()
 
 find_package(PkgConfig REQUIRED)
@@ -14,9 +14,15 @@ find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
 
-add_library(pm_core src/http.cpp src/api.cpp src/event_api.cpp src/engine.cpp src/boost_json.cpp)
+# Boost.JSON is compiled exactly once and shared by all V7 C++ components.
+# This keeps the bounded market-data decoder independent from HTTP/REST code.
+add_library(pm_json src/boost_json.cpp)
+target_include_directories(pm_json PUBLIC ${Boost_INCLUDE_DIRS})
+target_compile_options(pm_json PRIVATE -Wall -Wextra -Wpedantic)
+
+add_library(pm_core src/http.cpp src/api.cpp src/event_api.cpp src/config.cpp)
 target_include_directories(pm_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
-target_link_libraries(pm_core PUBLIC PkgConfig::LIBCURL)
+target_link_libraries(pm_core PUBLIC PkgConfig::LIBCURL pm_json)
 target_compile_options(pm_core PRIVATE -Wall -Wextra -Wpedantic)
 
 add_library(pm_fast_arb src/fast_arb.cpp src/fast_ws.cpp)
@@ -24,89 +30,133 @@ target_include_directories(pm_fast_arb PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/includ
 target_link_libraries(pm_fast_arb PUBLIC pm_core Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 target_compile_options(pm_fast_arb PRIVATE -Wall -Wextra -Wpedantic)
 
-add_executable(polymarket_engine src/main.cpp)
-target_link_libraries(polymarket_engine PRIVATE pm_core)
-add_executable(polymarket_trade_recorder src/trade_recorder.cpp)
-target_link_libraries(polymarket_trade_recorder PRIVATE pm_core)
-target_compile_options(polymarket_trade_recorder PRIVATE -Wall -Wextra -Wpedantic)
-add_executable(polymarket_rewards_scan src/rewards_scan.cpp)
-target_link_libraries(polymarket_rewards_scan PRIVATE pm_core)
-target_compile_options(polymarket_rewards_scan PRIVATE -Wall -Wextra -Wpedantic)
-add_executable(polymarket_fast_arb_shadow src/fast_arb_main.cpp)
-target_link_libraries(polymarket_fast_arb_shadow PRIVATE pm_fast_arb)
-target_compile_options(polymarket_fast_arb_shadow PRIVATE -Wall -Wextra -Wpedantic)
+add_library(pm_v7_common
+  src/v7_oms.cpp
+  src/v7_paper_queue.cpp
+  src/v7_market_state.cpp
+  src/v7_markout.cpp
+  src/v7_market_ws.cpp
+  src/v7_capital.cpp
+  src/v7_execution_admission.cpp
+  src/v7_private_state.cpp
+  src/v7_liveness.cpp)
+target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
+target_link_libraries(pm_v7_common PUBLIC pm_json)
+target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
+
+add_library(pm_v7_hft
+  src/v7_maker_hft.cpp
+  src/v7_maker_execution_cells.cpp
+  src/v7_maker_lane.cpp
+  src/v7_maker_paper.cpp
+  src/v7_maker_inventory.cpp
+  src/v7_maker_execution_policy.cpp)
+target_include_directories(pm_v7_hft PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
+target_link_libraries(pm_v7_hft PUBLIC pm_v7_common Threads::Threads)
+target_compile_options(pm_v7_hft PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(polymarket_v7_trade_recorder src/v7_trade_recorder.cpp)
+target_link_libraries(polymarket_v7_trade_recorder PRIVATE pm_core)
+target_compile_options(polymarket_v7_trade_recorder PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(polymarket_v7_maker_replay_bench src/v7_maker_replay_bench.cpp)
+target_link_libraries(polymarket_v7_maker_replay_bench PRIVATE pm_v7_hft)
+target_compile_options(polymarket_v7_maker_replay_bench PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(polymarket_v7_market_maker_runtime src/v7_market_maker_runtime.cpp)
+target_link_libraries(polymarket_v7_market_maker_runtime PRIVATE pm_v7_hft pm_fast_arb pm_core)
+target_compile_options(polymarket_v7_market_maker_runtime PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(polymarket_v7_maker_markout_observer src/v7_maker_markout_observer.cpp)
+target_link_libraries(polymarket_v7_maker_markout_observer PRIVATE pm_v7_common pm_fast_arb pm_core)
+target_compile_options(polymarket_v7_maker_markout_observer PRIVATE -Wall -Wextra -Wpedantic)
 
 include(CTest)
 if(BUILD_TESTING)
-    find_package(Python3 REQUIRED COMPONENTS Interpreter)
-    add_executable(pm_tests tests/test_core.cpp)
-    target_link_libraries(pm_tests PRIVATE pm_core)
-    add_executable(pm_execution_tests tests/test_execution.cpp)
-    target_link_libraries(pm_execution_tests PRIVATE pm_core)
-    add_executable(pm_reward_tests tests/test_rewards.cpp)
-    target_link_libraries(pm_reward_tests PRIVATE pm_core)
-    add_executable(pm_market_relation_tests tests/test_market_relation.cpp)
-    target_link_libraries(pm_market_relation_tests PRIVATE pm_core)
-    add_executable(pm_fast_arb_tests tests/test_fast_arb.cpp)
-    target_link_libraries(pm_fast_arb_tests PRIVATE pm_fast_arb)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_executable(pm_fast_arb_tests tests/test_fast_arb.cpp)
+  target_link_libraries(pm_fast_arb_tests PRIVATE pm_fast_arb)
+  add_test(NAME pm_fast_arb_tests COMMAND pm_fast_arb_tests)
 
-    add_test(NAME pm_tests COMMAND pm_tests)
-    add_test(NAME pm_execution_tests COMMAND pm_execution_tests)
-    add_test(NAME pm_reward_tests COMMAND pm_reward_tests)
-    add_test(NAME pm_market_relation_tests COMMAND pm_market_relation_tests)
-    add_test(NAME pm_fast_arb_tests COMMAND pm_fast_arb_tests)
-    add_test(NAME no_legacy_runtime_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_no_legacy_runtime.py)
-    add_test(NAME v7_authorized_paper_envelope_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_authorized_paper_envelope.py)
-    add_test(NAME v7_execution_evidence_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_execution_evidence.py)
-    add_test(NAME v7_execution_ledger_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_execution_ledger.py)
-    add_test(NAME v7_ledger_spool_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_ledger_spool.py)
-    add_test(NAME v7_learned_execution_model_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_learned_execution_model.py)
-    add_test(NAME v7_canonical_economics_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_canonical_economics.py)
-    add_test(NAME v7_joint_execution_policy_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_joint_execution_policy.py)
-    add_test(NAME v7_graph_rv_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_graph_rv.py)
-    add_test(NAME v7_graph_cost_vector_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_graph_cost_vector.py)
-    add_test(NAME v7_capital_allocator_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_capital_allocator.py)
-    add_test(NAME v7_portfolio_guard_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_portfolio_guard.py)
-    add_test(NAME v7_hard_arb_executable_mark_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_hard_arb_executable_mark.py)
-    add_test(NAME v7_complete_set_maker_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_complete_set_maker.py)
-    add_test(NAME v7_complete_set_maker_rolling_flow_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_complete_set_maker_rolling_flow.py)
-    add_test(NAME v7_model_intent_router_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_model_intent_router.py)
-    add_test(NAME v7_point_in_time_universe_native_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_point_in_time_universe_native.py)
-    add_test(NAME v7_ranking_causal_snapshot_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_ranking_causal_snapshot.py)
-    add_test(NAME v7_unified_evidence_runtime_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_unified_evidence_runtime.py)
-    add_test(NAME v7_native_monitoring_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitoring_v7_native.py)
-    add_test(NAME v7_ledger_monitoring_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitoring_v7_ledger.py)
-    add_test(NAME v7_dashboard_completion_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitoring_v7_dashboard_completion.py)
-    add_test(NAME external_intelligence_workflow_contract_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_external_intelligence_workflow_contract.py)
-    add_test(NAME v7_external_feed_current_runtime_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_external_feed_current_runtime.py)
-    add_test(NAME v7_live_paper_validation_contract_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_live_paper_validation_contract.py)
-    add_test(NAME v7_cutover_updater_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_cutover_updater.py)
-    add_test(NAME v7_paper_evidence_router_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_paper_evidence_router.py)
-    add_test(NAME v7_paper_entrypoint_cutover_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_paper_entrypoint_cutover.py)
-    add_test(NAME v7_fast_runtime_contract_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fast_runtime_contract.py)
-    add_test(NAME v7_fast_authority_sentinel_contract_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_fast_authority_sentinel_contract.py)
-    add_test(NAME v7_fast_arb_leg_freshness_contract_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_fast_arb_leg_freshness_contract.py)
-    add_test(NAME v7_current_model_state_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_current_model_state.py)
-    add_test(NAME v7_local_factor_by_contract_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_local_factor_by_contract.py)
-    add_test(NAME v7_local_factor_core_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_local_factor_core.py)
-    add_test(NAME v7_local_factor_inference_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_local_factor_inference.py)
-    add_test(NAME v7_local_factor_multiplicity_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_local_factor_multiplicity.py)
-    add_test(NAME v7_local_factor_orientation_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_local_factor_orientation.py)
-    add_test(NAME v7_local_factor_pairs_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_local_factor_pairs.py)
-    add_test(NAME v7_pca_stat_arb_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_pca_stat_arb.py)
-    add_test(NAME v7_pca_stat_arb_inference_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_pca_stat_arb_inference.py)
-    add_test(NAME v7_cross_sectional_history_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_cross_sectional_history.py)
-    add_test(NAME v7_cross_sectional_rank_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_cross_sectional_rank.py)
-    add_test(NAME v7_cross_sectional_rank_fast_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_cross_sectional_rank_fast.py)
-    add_test(NAME v7_cross_sectional_rank_forward_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_cross_sectional_rank_forward.py)
-    add_test(NAME v7_cross_sectional_rank_inference_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_cross_sectional_rank_inference.py)
-    add_test(NAME v7_cross_sectional_relative_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_cross_sectional_relative.py)
-    add_test(NAME v7_cross_sectional_rank_15m_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_cross_sectional_rank_15m.py)
-    add_test(NAME v7_micro_taker_core_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_micro_taker_core.py)
-    add_test(NAME v7_micro_target_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_micro_target.py)
-    add_test(NAME v7_market_maker_core_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_market_maker_core.py)
-    add_test(NAME v7_market_maker_model_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_market_maker_model.py)
-    add_test(NAME v7_market_maker_runtime_contract_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_market_maker_runtime_contract.py)
-    add_test(NAME v7_market_maker_status_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_market_maker_status.py)
-    add_test(NAME mock_integration COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_mock.sh $<TARGET_FILE:polymarket_engine>)
+  add_executable(pm_v7_oms_tests tests/test_v7_oms.cpp)
+  target_link_libraries(pm_v7_oms_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_oms_tests COMMAND pm_v7_oms_tests)
+
+  add_executable(pm_v7_paper_queue_tests tests/test_v7_paper_queue.cpp)
+  target_link_libraries(pm_v7_paper_queue_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_paper_queue_tests COMMAND pm_v7_paper_queue_tests)
+
+  add_executable(pm_v7_market_state_tests tests/test_v7_market_state.cpp)
+  target_link_libraries(pm_v7_market_state_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_market_state_tests COMMAND pm_v7_market_state_tests)
+
+  add_executable(pm_v7_markout_tests tests/test_v7_markout.cpp)
+  target_link_libraries(pm_v7_markout_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_markout_tests COMMAND pm_v7_markout_tests)
+
+  add_executable(pm_v7_jsonl_tail_tests tests/test_v7_jsonl_tail.cpp)
+  target_include_directories(pm_v7_jsonl_tail_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  add_test(NAME pm_v7_jsonl_tail_tests COMMAND pm_v7_jsonl_tail_tests)
+
+  add_executable(pm_v7_capital_tests tests/test_v7_capital.cpp)
+  target_link_libraries(pm_v7_capital_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_capital_tests COMMAND pm_v7_capital_tests)
+
+  add_executable(pm_v7_execution_admission_tests tests/test_v7_execution_admission.cpp)
+  target_link_libraries(pm_v7_execution_admission_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_execution_admission_tests COMMAND pm_v7_execution_admission_tests)
+
+  add_executable(pm_v7_private_state_tests tests/test_v7_private_state.cpp)
+  target_link_libraries(pm_v7_private_state_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_private_state_tests COMMAND pm_v7_private_state_tests)
+
+  add_executable(pm_v7_liveness_tests tests/test_v7_liveness.cpp)
+  target_link_libraries(pm_v7_liveness_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_liveness_tests COMMAND pm_v7_liveness_tests)
+
+  add_executable(pm_v7_order_tx_tests tests/test_v7_order_tx.cpp)
+  target_link_libraries(pm_v7_order_tx_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_order_tx_tests COMMAND pm_v7_order_tx_tests)
+
+  add_executable(pm_v7_queue_visibility_tests tests/test_v7_queue_visibility.cpp)
+  target_link_libraries(pm_v7_queue_visibility_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_queue_visibility_tests COMMAND pm_v7_queue_visibility_tests)
+
+  add_executable(pm_v7_market_ws_tests tests/test_v7_market_ws.cpp)
+  target_link_libraries(pm_v7_market_ws_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_market_ws_tests COMMAND pm_v7_market_ws_tests)
+
+  add_executable(pm_v7_maker_hft_tests tests/test_v7_maker_hft.cpp)
+  target_link_libraries(pm_v7_maker_hft_tests PRIVATE pm_v7_hft)
+  add_test(NAME pm_v7_maker_hft_tests COMMAND pm_v7_maker_hft_tests)
+
+  add_executable(pm_v7_maker_execution_cells_tests tests/test_v7_maker_execution_cells.cpp)
+  target_link_libraries(pm_v7_maker_execution_cells_tests PRIVATE pm_v7_hft)
+  add_test(NAME pm_v7_maker_execution_cells_tests COMMAND pm_v7_maker_execution_cells_tests)
+
+  add_executable(pm_v7_maker_lane_tests tests/test_v7_maker_lane.cpp)
+  target_link_libraries(pm_v7_maker_lane_tests PRIVATE pm_v7_hft)
+  add_test(NAME pm_v7_maker_lane_tests COMMAND pm_v7_maker_lane_tests)
+
+  add_executable(pm_v7_maker_paper_tests tests/test_v7_maker_paper.cpp)
+  target_link_libraries(pm_v7_maker_paper_tests PRIVATE pm_v7_hft)
+  add_test(NAME pm_v7_maker_paper_tests COMMAND pm_v7_maker_paper_tests)
+
+  add_executable(pm_v7_maker_inventory_tests tests/test_v7_maker_inventory.cpp)
+  target_link_libraries(pm_v7_maker_inventory_tests PRIVATE pm_v7_hft)
+  add_test(NAME pm_v7_maker_inventory_tests COMMAND pm_v7_maker_inventory_tests)
+
+  add_executable(pm_v7_maker_execution_policy_tests tests/test_v7_maker_execution_policy.cpp)
+  target_link_libraries(pm_v7_maker_execution_policy_tests PRIVATE pm_v7_hft)
+  add_test(NAME pm_v7_maker_execution_policy_tests COMMAND pm_v7_maker_execution_policy_tests)
+
+  add_test(NAME no_legacy_runtime COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_no_legacy_runtime.py)
+
+  file(GLOB V7_PY_TESTS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_*.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitoring_v7_*.py")
+  foreach(test_file IN LISTS V7_PY_TESTS)
+    get_filename_component(test_name "${test_file}" NAME_WE)
+    add_test(NAME "${test_name}" COMMAND ${Python3_EXECUTABLE} "${test_file}")
+  endforeach()
 endif()

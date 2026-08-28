@@ -1,194 +1,181 @@
-# Polymarket Quant Engine
+# Polymarket V7
 
-[![CI](https://github.com/ENRICOBIGNOZZI/Polymarket/actions/workflows/ci.yml/badge.svg)](https://github.com/ENRICOBIGNOZZI/Polymarket/actions/workflows/ci.yml)
-[![Live API smoke](https://github.com/ENRICOBIGNOZZI/Polymarket/actions/workflows/live-smoke.yml/badge.svg)](https://github.com/ENRICOBIGNOZZI/Polymarket/actions/workflows/live-smoke.yml)
+Canonical V7 PAPER trading and research system for Polymarket.
 
-C++20 live-data **paper-trading, structural-arbitrage and statistical-arbitrage research engine** for Polymarket.
+There is one architecture and one supported runtime generation: **V7**. Older numerical generations are retired; Git history is the archive.
 
-The core runtime is paper/read-only. An isolated Python tiny-live pilot exists for eventual execution validation, but it is dry-run by default, hard-capped, excluded from CI/paper loops, and cannot submit anything without explicit OOS approval, `--execute`, a consent environment variable and credentials.
+## Safety
 
-## Current architecture
+V7 is PAPER-only in this repository:
 
-| Component | Status |
-|---|---|
-| Structural / NegRisk scanner | Read-only, costed diagnostics |
-| B1 pair stat-arb | Timestamp-aligned relative-value scanner |
-| B2 PCA/factor stat-arb | Explicit factor-neutral basket scanner |
-| Public trade tape | Implemented |
-| Single-market maker paper simulator | Queue/taker-tape driven, partial-fill aware |
-| Multi-leg paper broker | Partial fills, leg risk, cancel/replace, unwind, persistence |
-| Walk-forward/OOS gate | Implemented with embargo, cost stress and block bootstrap |
-| Live champion selector | Explicit `config/live_champion.json`; never highest-version-by-name |
-| Grafana/Prometheus | Version-agnostic; auto-selects latest `paper_v*` runtime |
-| Tiny real-money pilot | Opt-in, <= $10 total / <= $5 per leg; never automatic |
-| External fundamental/news alpha | Intentionally deferred |
+- `paper_only = true`
+- `authenticated_execution = false`
+- `real_order_submission = false`
+- global maximum drawdown kill threshold: 15%
 
-The design keeps economically different objects separate:
+No wallet, key or authenticated order-submission path belongs in the canonical runtime.
+
+## Canonical runtime
 
 ```text
-Strategy A: algebraic / structural constraints
-Strategy B1/B2: expected mark-to-market convergence
-Terminal sleeve: terminal resolution probability
-Execution: fill / queue / leg-risk realization
+Public Polymarket market data
+        |
+        v
+V7 strategy/model sleeves
+        |
+        v
+Canonical intent/execution routing
+        |
+        v
+scripts/paper_v7_execution_loop.sh
+        |
+        +--> one append-only execution ledger / writer
+        +--> learned execution and empirical joint-state evidence
+        +--> one account-level capital allocator
+        +--> one global portfolio guard / kill switch
+        +--> one Prometheus / Grafana V7 monitoring plane
 ```
 
-Short-horizon relative-value signals are never silently reinterpreted as `P(YES)` or passed to binary Kelly sizing.
+Canonical surfaces:
 
-## Single live champion and research integration
+```text
+config/paper_v7.json
+config/live_champion.json
+runs/paper_v7_live/
+runs/paper_v7_live/ledger/execution.jsonl
+monitoring/exporter_v7.py
+monitoring/prometheus_v7.yml
+monitoring/grafana/dashboards/polymarket-v7.json
+ops/update_server_v7.sh
+```
 
-`main` contains one integrated paper champion. Specialized alpha experts may coexist inside it, but there is one model orchestrator, one live configuration, one portfolio/risk allocator and one execution path. `config/live_champion.json` explicitly selects the loop, config and run root; adding a numerically newer `paper_vN` implementation does not promote it.
+## Economic sleeves
 
-Unapproved work stays on `research/*`, `experiment/*` or `diagnostic/*`. A strictly isolated shadow diagnostic may enter `main` only when tests prove that it cannot emit production intents, book PnL or change risk. Once research is approved, System Watch creates a fresh `integration/*` branch from current `main`, consolidates the reusable improvement into the incumbent, removes superseded paths and merges only after the complete champion passes its gates.
+All sleeves share the same runtime, ledger, risk and deployment system.
 
-The hourly governance workflow reports the research/integration queue and may merge at most one non-draft, fully green `integration/*` PR carrying `approved-for-integration` and `single-model-reviewed`. Post-merge CI, monitoring and live-paper smoke are explicitly dispatched; the server remains on the previous `paper-validated` revision until the new revision passes. See [`docs/SYSTEM_WATCH.md`](docs/SYSTEM_WATCH.md).
+### Professional market maker
 
-## Strategy A — structural arbitrage
+Primary market-making sleeve. It uses action-specific `JOIN` / `IMPROVE` / `FADE` / one-sided / withdraw decisions, inventory-aware pricing, causal public-flow replay, queue-aware fillability, full-depth executable marks and canonical-ledger evidence. Trading PnL, maker rebates and liquidity rewards are separate quantities. Bounded PAPER exploration receives no promotion credit.
 
-`polymarket_negrisk_arb` scans:
+```text
+config/v7_professional_market_maker.json
+scripts/v7_market_maker_core.py
+scripts/v7_market_maker_model.py
+scripts/v7_market_maker_rewards.py
+scripts/v7_market_maker_worker.py
+scripts/v7_market_maker_status.py
+```
 
-- binary YES/NO parity;
-- complete non-augmented NegRisk buy-all-YES baskets;
-- `NO_i -> YES_{j != i}` NegRisk conversion structures;
-- displayed depth, taker fees and slippage.
+### Fast structural arbitrage
 
-On-chain conversion opportunities remain explicitly pre-gas/pre-latency until those costs are actually measured.
+Shared C++ WebSocket/L2 substrate with dual exchange/receive clocks, lineage invalidation, executable depth and strict freshness semantics.
 
-## Strategy B1 — pair statistical arbitrage
+```text
+src/fast_arb.cpp
+src/fast_ws.cpp
+src/fast_runtime/
+include/pm/fast_arb.hpp
+```
 
-`polymarket_stat_arb` works in timestamp-aligned logit probability space and screens residual relationships for mean reversion, half-life, stability and current dislocation. It reports expected convergence plus taker/taker and maker-entry/taker-exit economics.
+### Graph / relative value
 
-Timed sports markets inherit the current pre-game safety gate from `main`; in-play contamination is not admitted into the B1 universe.
+Native V7 multi-leg relative-value execution. Queue affects fillability only; it never creates capital capacity. Economics use direct empirical joint states and explicit partial/unwind losses.
 
-## Strategy B2 — factor-neutral PCA statistical arbitrage
+```text
+scripts/v7_graph_rv.py
+scripts/v7_graph_rv_executable_intents.py
+scripts/v7_graph_cost_vector.py
+```
 
-`polymarket_pca_stat_arb` builds a sparse timestamp-aware factor model. A signal is a **factor-neutral basket**, not a directional single-market residual. Every hedge leg is costed and the basket is rejected if factor-neutralization error is too large. Timed sports use the same pre-game safety gate as B1.
+### Hard Arb
 
-## Scanner → adapter → broker
+Native V7 structural complete-set execution research with authoritative fees, full depth, sequential leg revalidation and partial unwind.
 
-B1/B2 remain pure alpha scanners and write diagnostic CSVs. They do not know about broker state.
+```text
+scripts/v7_hard_arb_guard.py
+```
 
-`scripts/build_v4_intents.py` converts scanner diagnostics into a stable execution-intent schema; `scripts/merge_v4_intents.py` atomically admits only fresh, complete, non-duplicate bundles; `polymarket_multileg_paper` owns queue, fills and lifecycle state.
+### Micro Taker
 
-This separation is intentional: models can change without rewriting the broker, and the broker can become more realistic without contaminating model estimation.
+Selective short-horizon executable round-trip sleeve with entry/exit depth, fee, slippage and adverse-markout accounting.
 
-## Execution realism
+```text
+scripts/v7_micro_taker_worker.py
+scripts/v7_micro_taker_core.py
+```
 
-`polymarket_trade_recorder` records public taker prints. The paper brokers do **not** treat quote touches as fills.
+### Ranking / PCA / Local Factor
 
-The multi-leg broker models:
+V7-native research sleeves. Horizons remain separated and these models do not own runtime state or deployment.
 
-- displayed queue ahead;
-- submission and cancel latency;
-- partial fills;
-- cancel/replace and queue-priority reset;
-- minimum cross-leg completion;
-- execution timeout;
-- leg-risk aborts;
-- forced taker unwind;
-- depth, slippage and protocol fees;
-- adverse-selection marks;
-- persistent cash/equity/peak/drawdown/kill state.
+## Execution evidence
 
-A partially filled basket is not counted as a successful arbitrage.
+Quoted edge is not PnL. Canonical observations are bound to model SHA and execution identities. The economic rule accounts for completion probability, fill-conditioned alpha/spread capture, fees, slippage, adverse markout, partial/unwind loss, capital cost and latency cost.
 
-## Build
+For multi-leg execution, direct empirical joint completion/state evidence is canonical. Products or minima of marginal fill probabilities are not substitutes. Economic assessment stresses the same frozen observations rather than reselecting trades.
 
-Ubuntu/Debian:
+```text
+scripts/v7_execution_ledger.py
+scripts/v7_ledger_spool.py
+scripts/v7_execution_evidence.py
+scripts/v7_canonical_economics.py
+scripts/v7_joint_execution_policy.py
+scripts/v7_learned_execution_hardened.py
+```
+
+## Capital and risk
+
+```text
+scripts/v7_capital_allocator.py
+scripts/v7_portfolio_guard.py
+```
+
+Sleeve allocations are capacity budgets, not independent copies of the account. Cash, gross exposure, market/event exposure, inventory, drawdown and kill state reconcile at account level.
+
+## Public trade recorder
+
+```text
+build/polymarket_v7_trade_recorder
+src/v7_trade_recorder.cpp
+```
+
+The recorder writes the causal public tape used by the V7 PAPER execution models.
+
+## Build and test
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev python3
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Main executables:
+The active PAPER runtime is:
+
+```bash
+bash scripts/paper_v7_execution_loop.sh
+```
+
+## Validation and deployment
+
+The retained automation is deliberately small:
 
 ```text
-polymarket_engine
-polymarket_negrisk_arb
-polymarket_stat_arb
-polymarket_pca_stat_arb
-polymarket_maker_paper
-polymarket_trade_recorder
-polymarket_multileg_paper
+.github/workflows/ci.yml
+.github/workflows/monitoring.yml
+.github/workflows/private-runtime-single-writer-validation.yml
+.github/workflows/v7-live-paper-validation.yml
+.github/workflows/v7-deploy-paper-server.yml
+.github/workflows/v7-paper-server-health.yml
+.github/workflows/v7-cross-sectional-ranking-research.yml
+.github/workflows/v7-point-in-time-universe-archive.yml
 ```
 
-## Paper-live
+CI, monitoring and single-writer checks validate V7 directly. There is no promotion/research/scheduler control-plane layer between them and the V7 code.
 
-One full read-only/paper V4 cycle:
+## Repository invariant
 
-```bash
-bash scripts/paper_v4_once.sh config/paper_v4.json runs/paper_v4
-```
+Do not add alternate numerical runtimes, compatibility PAPER loops, duplicate maker engines, duplicate ledgers, duplicate state writers, generic deployment entrypoints or authenticated execution. `tests/test_no_legacy_runtime.py` enforces the slim V7-only repository shape.
 
-Continuous champion process:
-
-```bash
-bash scripts/paper_latest_loop.sh
-```
-
-`paper_latest_loop.sh` reads `config/live_champion.json`; it does not infer approval from the largest version number. The selected loop keeps the trade recorder and multi-leg broker alive, updates the single-market maker sleeve frequently, refits B1/B2 every 15 minutes, refreshes structural/terminal scans and writes a walk-forward report hourly.
-
-## Realized paper PnL
-
-The durable source is:
-
-```text
-runs/<run>/bundle_ledger.csv
-```
-
-For a finalized bundle:
-
-```text
-paper net PnL = realized exit proceeds - realized entry cash
-```
-
-with protocol fees and simulated execution slippage already reflected in the entry/exit accounting. Incomplete bundles that are forcibly unwound stay in the ledger and count against the strategy.
-
-## Walk-forward / OOS
-
-```bash
-python3 scripts/walk_forward_v4.py \
-  --ledger runs/paper_v4_live/bundle_ledger.csv \
-  --output runs/paper_v4_live/walk_forward.json
-```
-
-Thresholds are selected only on calibration data after an embargo and then frozen on each test fold. The default gate requires enough OOS trades, positive normal and 1.5x-cost-stressed PnL, controlled drawdown, profit factor, bootstrap evidence and fold stability.
-
-Zero eligible trades is a valid research result; thresholds are not lowered merely to force activity.
-
-## Grafana / Prometheus
-
-Monitoring is deliberately **not version-specific**.
-
-```bash
-bash scripts/monitoring_up.sh
-```
-
-`monitoring/exporter_latest.py` auto-selects the numerically highest `runs/paper_v*` runtime and exposes stable `polymarket_runtime_*` metrics. The home dashboard is `Polymarket — Latest Runtime`.
-
-Future V5/V6/... engines can change internal files freely and immediately reuse the same dashboard by publishing the atomic `runtime_status.json` contract in [`docs/TELEMETRY_CONTRACT.md`](docs/TELEMETRY_CONTRACT.md). They become live only through an explicit champion-manifest promotion after approved integration.
-
-## Tiny real-money pilot
-
-Dry-run only:
-
-```bash
-python3 scripts/tiny_live_pilot.py \
-  --report runs/paper_v4_live/walk_forward.json \
-  --intents runs/paper_v4_live/intents.csv
-```
-
-Real submission is additionally gated by the OOS report, hard source-code caps, explicit `--execute`, explicit consent and environment-only credentials. It is intentionally a tiny execution-validation tool, not the production broker. See [`docs/EXECUTION_V4.md`](docs/EXECUTION_V4.md) and [`docs/LIVE_GATE_V4.md`](docs/LIVE_GATE_V4.md).
-
-## Safety / current limitations
-
-- Paper fills are evidence under the documented queue model, not proof a live order would have filled.
-- REST-polled public trades are not a colocation-grade latency feed.
-- On-chain NegRisk conversion is not automatically executed.
-- The 15% drawdown setting is an operating kill constraint, not a mathematical guarantee against gaps, outages or software defects.
-- Real capital should not be scaled until realized paper/OOS evidence survives cost stress and a tiny forward execution pilot.
-
-Detailed documents: [`docs/SYSTEM_WATCH.md`](docs/SYSTEM_WATCH.md), [`docs/EXECUTION_V4.md`](docs/EXECUTION_V4.md), [`docs/OOS_V4.md`](docs/OOS_V4.md), [`docs/MONITORING.md`](docs/MONITORING.md), [`docs/HOTFIX_INPLAY_QUEUE.md`](docs/HOTFIX_INPLAY_QUEUE.md).
+Further documentation: `docs/EXECUTION_EVIDENCE_V7.md`.

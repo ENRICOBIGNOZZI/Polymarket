@@ -5,243 +5,36 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - "scripts/runtime_singleton_launcher.py"
-      - "scripts/run_paper.sh"
-      - "scripts/v7_runtime_status.py"
-      - "scripts/v7_cutover_contract.py"
-      - "scripts/v7_server_health.py"
-      - "ops/update_server.sh"
-      - "ops/update_server_macos.sh"
-      - "config/live_champion.json"
-      - "config/scheduler_registry.json"
-      - "scripts/validate_scheduler_registry.py"
-      - ".github/workflows/v7-*.yml"
+      - "scripts/paper_v7_execution_loop.sh"
+      - "tests/test_v7_single_writer_contract.py"
       - ".github/workflows/private-runtime-single-writer-validation.yml"
-      - "tests/test_fast_runtime_contract.py"
+      - "config/live_champion.json"
+      - "config/paper_v7.json"
 
 permissions:
   contents: read
 
 concurrency:
-  group: polymarket-private-single-writer-${{ github.event.pull_request.number || github.ref }}
+  group: polymarket-v7-single-writer-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   private-proof:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 5
     env:
-      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
-      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
-      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+      VALIDATION_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 1
-
-      - name: Bind validation to exact source head
-        id: source
-        shell: bash
+      - name: Bind exact V7 source head
         run: |
           set -euo pipefail
-          mkdir -p private-single-writer-evidence
-          sha="$(git rev-parse HEAD)"
-          test "$sha" = "${{ github.event.pull_request.head.sha || github.sha }}"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$sha" > private-single-writer-evidence/source-sha.txt
-          python3 -m unittest tests/test_fast_runtime_contract.py -v \
-            |& tee private-single-writer-evidence/local-contract-tests.txt
-
-      - name: Select existing Tailscale credential mode
-        id: tailscale_auth
-        shell: bash
-        env:
-          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
-          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
-          TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
+          [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
+      - name: Prove V7 direct single-writer ownership
         run: |
           set -euo pipefail
-          if [[ -n "${TS_AUTHKEY:-}" ]]; then
-            mode=authkey
-          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
-            test -n "${TS_TAGS:-}"
-            mode=oauth
-          else
-            echo "No visible Tailscale credential set" >&2
-            exit 1
-          fi
-          echo "mode=$mode" >> "$GITHUB_OUTPUT"
-
-      - name: Join private tailnet with auth key
-        if: steps.tailscale_auth.outputs.mode == 'authkey'
-        uses: tailscale/github-action@v4
-        with:
-          authkey: ${{ secrets.TS_AUTHKEY }}
-          ping: ${{ env.SERVER_HOST }}
-
-      - name: Join private tailnet with OAuth
-        if: steps.tailscale_auth.outputs.mode == 'oauth'
-        uses: tailscale/github-action@v4
-        with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
-          ping: ${{ env.SERVER_HOST }}
-
-      - name: Configure SSH identity
-        shell: bash
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
-        run: |
-          set -euo pipefail
-          test -n "${SSH_PRIVATE_KEY:-}" || { echo "missing POLYMARKET_SERVER_SSH_KEY" >&2; exit 1; }
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_validation
-          chmod 600 ~/.ssh/polymarket_validation
-          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
-
-      - name: Prove exact-head singleton orphan guard on private node
-        shell: bash
-        env:
-          SOURCE_SHA: ${{ steps.source.outputs.sha }}
-        run: |
-          set -euo pipefail
-          ssh -i ~/.ssh/polymarket_validation -o IdentitiesOnly=yes -o BatchMode=yes \
-            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
-            "SOURCE_SHA='$SOURCE_SHA' PROBE_ID='${GITHUB_RUN_ID}' bash -s" <<'REMOTE' \
-            | tee private-single-writer-evidence/remote-proof.txt
-          set -euo pipefail
-          repo="$HOME/polymarket"
-          root="$repo/.private_validation/$PROBE_ID"
-          source_dir="$root/source"
-          run_root="$root/run"
-          evidence="$root/evidence"
-          first_pid=0
-          child_pid=0
-
-          cleanup() {
-            set +e
-            if [[ "$first_pid" =~ ^[1-9][0-9]*$ ]]; then
-              kill -9 "$first_pid" 2>/dev/null || true
-              wait "$first_pid" 2>/dev/null || true
-            fi
-            if [[ "$child_pid" =~ ^[1-9][0-9]*$ ]]; then
-              kill -9 "$child_pid" 2>/dev/null || true
-            fi
-          }
-          trap cleanup EXIT INT TERM
-
-          rm -rf "$root"
-          mkdir -p "$source_dir" "$run_root" "$evidence"
-          cd "$repo"
-          git fetch -q origin "$SOURCE_SHA"
-          git cat-file -e "$SOURCE_SHA^{commit}"
-          test "$(git rev-parse "$SOURCE_SHA")" = "$SOURCE_SHA"
-          git archive "$SOURCE_SHA" | tar -x -C "$source_dir"
-
-          launcher="$source_dir/scripts/runtime_singleton_launcher.py"
-          lock="$run_root/runtime_owner.lock"
-          child_file="$evidence/child.pid"
-          test -f "$launcher"
-          python3 -m py_compile "$launcher"
-
-          # Ignore TERM so the watchdog grace interval is observable: after the
-          # supervisor is SIGKILLed, the child must still be alive while the
-          # watchdog continues to hold the lock, then be force-drained before a
-          # new owner can acquire it.
-          child_code='import os,signal,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1],"w",encoding="utf-8").write(str(os.getpid())); time.sleep(30)'
-          python3 "$launcher" --lock "$lock" -- \
-            python3 -c "$child_code" "$child_file" \
-            >"$evidence/first-owner.out" 2>"$evidence/first-owner.err" &
-          first_pid=$!
-
-          for _ in $(seq 1 150); do
-            if [[ -s "$lock" && -s "$child_file" ]]; then
-              break
-            fi
-            kill -0 "$first_pid" 2>/dev/null || {
-              echo "first singleton owner exited before materializing ownership" >&2
-              exit 1
-            }
-            sleep 0.05
-          done
-          test -s "$lock"
-          test -s "$child_file"
-          test "$(tr -d '[:space:]' < "$lock")" = "$first_pid"
-          child_pid="$(tr -d '[:space:]' < "$child_file")"
-          [[ "$child_pid" =~ ^[1-9][0-9]*$ ]]
-          kill -0 "$child_pid"
-
-          set +e
-          python3 "$launcher" --lock "$lock" -- python3 -c 'print("unexpected-owner")' \
-            >"$evidence/second-owner.out" 2>"$evidence/second-owner.err"
-          second_rc=$?
-          set -e
-          test "$second_rc" -eq 75
-          grep -q 'another paper runtime already owns' "$evidence/second-owner.err"
-
-          kill -9 "$first_pid"
-          wait "$first_pid" 2>/dev/null || true
-          first_pid=0
-          kill -0 "$child_pid"
-
-          set +e
-          python3 "$launcher" --lock "$lock" -- python3 -c 'print("unsafe-reacquire")' \
-            >"$evidence/post-loss-owner.out" 2>"$evidence/post-loss-owner.err"
-          post_loss_rc=$?
-          set -e
-          test "$post_loss_rc" -eq 75
-          grep -q 'another paper runtime already owns' "$evidence/post-loss-owner.err"
-
-          child_drained=false
-          for _ in $(seq 1 180); do
-            if ! kill -0 "$child_pid" 2>/dev/null; then
-              child_drained=true
-              break
-            fi
-            sleep 0.05
-          done
-          test "$child_drained" = true
-          child_pid=0
-
-          python3 "$launcher" --lock "$lock" -- python3 -c 'print("safe-reacquire")' \
-            >"$evidence/final-owner.out" 2>"$evidence/final-owner.err"
-          grep -qx 'safe-reacquire' "$evidence/final-owner.out"
-
-          python3 - "$evidence/summary.json" "$SOURCE_SHA" "$second_rc" "$post_loss_rc" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          output, source_sha, second_rc, post_loss_rc = sys.argv[1:]
-          payload = {
-              "schema": "polymarket_v7_private_single_writer_probe_v2",
-              "source_sha": source_sha,
-              "paper_only": True,
-              "authenticated_execution": False,
-              "isolated_probe": True,
-              "live_runtime_started": False,
-              "second_owner_exit_code": int(second_rc),
-              "post_supervisor_loss_competitor_exit_code": int(post_loss_rc),
-              "singleton_exclusion": True,
-              "runtime_does_not_inherit_lock_descriptor": True,
-              "watchdog_holds_lock_after_supervisor_loss": True,
-              "orphan_runtime_drained_before_reacquire": True,
-              "safe_reacquire_after_drain": True,
-          }
-          Path(output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-          print(json.dumps(payload, sort_keys=True))
-          PY
-          REMOTE
-
-      - name: Upload exact-head private proof
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: private-single-writer-${{ github.run_id }}
-          path: private-single-writer-evidence/
-          if-no-files-found: warn
-          retention-days: 30
+          bash -n scripts/paper_v7_execution_loop.sh
+          python3 -m unittest tests/test_v7_single_writer_contract.py -v

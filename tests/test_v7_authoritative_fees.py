@@ -9,7 +9,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-import v6_market_common as common
+import v7_market_common as common
 
 
 def test_explicit_gamma_fee_disabled_is_authoritative_zero():
@@ -30,11 +30,13 @@ def test_gamma_fee_schedule_is_authoritative():
 def test_clob_descriptor_is_allowed_but_fee_rate_endpoint_is_not_pnl_fallback():
     calls = []
     original = common.request_json
+
     def fake(url, payload=None, timeout=20):
         calls.append(url)
         if "/clob-markets/" in url:
             return {"fd": {"r": 0.02, "e": 1.5, "to": True}}
         raise AssertionError("unexpected endpoint")
+
     common.request_json = fake
     try:
         details = common.resolve_fee_details({}, "https://clob.example", "cond", "token")
@@ -45,12 +47,14 @@ def test_clob_descriptor_is_allowed_but_fee_rate_endpoint_is_not_pnl_fallback():
     assert all("/fee-rate" not in url for url in calls)
 
 
-def test_unknown_schedule_fails_closed_without_007():
+def test_unknown_schedule_fails_closed_without_uniform_fallback():
     calls = []
     original = common.request_json
+
     def fake(url, payload=None, timeout=20):
         calls.append(url)
         return {}
+
     common.request_json = fake
     try:
         details = common.resolve_fee_details({}, "https://clob.example", "cond", "token")
@@ -60,7 +64,7 @@ def test_unknown_schedule_fails_closed_without_007():
     assert details.rate == 0.0
     assert details.source == "unverified_fee_schedule"
     assert all("/fee-rate" not in url for url in calls)
-    source = (ROOT / "scripts" / "v6_market_common.py").read_text(encoding="utf-8")
+    source = (ROOT / "scripts" / "v7_market_common.py").read_text(encoding="utf-8")
     assert "legacy_unverified_fallback" not in source
     assert "FeeDetails(0.07" not in source
 

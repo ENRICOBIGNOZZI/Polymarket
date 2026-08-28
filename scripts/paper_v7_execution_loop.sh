@@ -5,8 +5,19 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 CONFIG="${PM_V7_CONFIG:-config/paper_v7.json}"
 RUN_ROOT="${PM_V7_RUN_ROOT:-runs/paper_v7_live}"
-RECORDER="${PM_TRADE_RECORDER:-build/polymarket_trade_recorder}"
+RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
+MAKER_RUNTIME="${PM_V7_MARKET_MAKER_RUNTIME:-build/polymarket_v7_market_maker_runtime}"
+MARKOUT_OBSERVER="${PM_V7_MAKER_MARKOUT_OBSERVER:-build/polymarket_v7_maker_markout_observer}"
+MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
 SHA="$(git rev-parse HEAD)"
+MAKER_CHAMPION_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
+MAKER_CHALLENGER_MODEL="$RUN_ROOT/micro_maker/execution_model_challenger.json"
+MAKER_MODEL_REGISTRY="$RUN_ROOT/micro_maker/model_registry.json"
+# Bind the C++ slow-path execution-cell loader explicitly to the same exact SHA
+# and *champion* model file passed to the canonical Maker runtime. Challenger
+# refits are registered separately and can never be hot-reloaded by this loop.
+export PM_V7_MODEL_SHA="$SHA"
+export PM_V7_MAKER_EXECUTION_MODEL="$MAKER_CHAMPION_MODEL"
 CONTROL="$RUN_ROOT/control"
 ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
@@ -14,16 +25,25 @@ LOCK="$CONTROL/runtime.lock"
 mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/learned_execution"
 touch "$RUN_ROOT/ledger/execution.jsonl"
 
-python3 - "$CONFIG" <<'PY'
+python3 - "$CONFIG" "$MAKER_POLICY" <<'PY'
 import json,sys
 cfg=json.load(open(sys.argv[1]))
 v7=cfg.get("v7") or {}
+maker=json.load(open(sys.argv[2]))
 assert cfg.get("engine_version")==7
 assert cfg.get("paper_only") is True
 assert v7.get("paper_only") is True
 assert v7.get("authenticated_execution") is False
 assert v7.get("real_order_submission") is False
 assert float(cfg.get("max_drawdown",0)) <= .15 + 1e-12
+assert maker.get("paper_only") is True
+assert maker.get("authenticated_execution") is False
+assert maker.get("real_order_submission") is False
+assert maker.get("architecture",{}).get("single_runtime_owner") is True
+assert maker.get("architecture",{}).get("single_account_allocator") is True
+assert maker.get("architecture",{}).get("single_canonical_ledger_writer") is True
+assert maker.get("architecture",{}).get("fast_path") == "cpp_websocket_event_driven"
+assert maker.get("architecture",{}).get("slow_path") == "python_reward_selection_and_model_fit"
 PY
 
 if [[ -d "$LOCK" ]]; then
@@ -46,7 +66,7 @@ write_runtime_status() {
   local now
   now="$(date +%s)"
   local tmp="$CONTROL/runtime_status.json.tmp.$$"
-  printf '{"schema":"polymarket_v7_runtime_status_v2","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"model_sha":"%s","pid":%s,"state":"%s","killed":%s}\n' \
+  printf '{"schema":"polymarket_v7_runtime_status_v2","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"model_sha":"%s","pid":%s,"state":"%s","killed":%s,"primary_economic_sleeve":"MICRO_MAKER_PRO"}\n' \
     "$now" "$SHA" "$$" "$state" "$killed" > "$tmp"
   mv "$tmp" "$CONTROL/runtime_status.json"
 }
@@ -62,8 +82,16 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if [[ ! -x "$RECORDER" ]]; then
-  echo "missing same-checkout trade recorder executable: $RECORDER" >&2
+  echo "missing canonical V7 trade recorder executable: $RECORDER" >&2
   exit 74
+fi
+if [[ ! -x "$MAKER_RUNTIME" ]]; then
+  echo "missing canonical V7 market-maker runtime executable: $MAKER_RUNTIME" >&2
+  exit 75
+fi
+if [[ ! -x "$MARKOUT_OBSERVER" ]]; then
+  echo "missing V7 maker markout observer executable: $MARKOUT_OBSERVER" >&2
+  exit 76
 fi
 
 "$RECORDER" \
@@ -75,9 +103,85 @@ fi
   >> "$RUN_ROOT/trade_recorder.log" 2>&1 &
 pids+=("$!")
 
+# One persistent canonical ledger router. 100ms transport cadence keeps FILL
+# evidence available before the 1s markout horizon without creating a second
+# ledger writer or repeatedly spawning Python processes.
+python3 scripts/v7_ledger_spool.py \
+  --run-root "$RUN_ROOT" --model-sha "$SHA" --loop --interval 0.1 \
+  >> "$RUN_ROOT/ledger_router.log" 2>&1 &
+pids+=("$!")
+
+# Slow-plane reward selection only. It may perform REST discovery, but it never
+# decides/cancels quotes and is not a second maker runtime.
 (
   while [[ ! -e "$KILL" ]]; do
-    python3 scripts/v7_ledger_spool.py --run-root "$RUN_ROOT" --model-sha "$SHA" >> "$RUN_ROOT/ledger_router.log" 2>&1 || true
+    python3 scripts/v7_market_maker_rewards.py \
+      --config "$MAKER_POLICY" \
+      --output "$RUN_ROOT/micro_maker/reward_selection.json" \
+      >> "$RUN_ROOT/micro_maker/reward_selection.log" 2>&1 || true
+    sleep 60
+  done
+) & pids+=("$!")
+
+# Slow-plane exact-SHA fill/markout fit. A refit is a CHALLENGER only. It is
+# written to a separate artifact and registered for OOS/shadow-PAPER review.
+# This loop NEVER overwrites the runtime champion and NEVER auto-promotes.
+(
+  while [[ ! -e "$KILL" ]]; do
+    if [[ -s "$RUN_ROOT/ledger/execution.jsonl" ]]; then
+      if python3 scripts/v7_market_maker_model.py \
+        --ledger "$RUN_ROOT/ledger/execution.jsonl" \
+        --model-sha "$SHA" \
+        --artifact-role challenger \
+        --output "$MAKER_CHALLENGER_MODEL" \
+        >> "$RUN_ROOT/micro_maker/model.log" 2>&1; then
+        python3 scripts/v7_maker_model_registry.py \
+          --registry "$MAKER_MODEL_REGISTRY" \
+          --model-sha "$SHA" \
+          --challenger "$MAKER_CHALLENGER_MODEL" \
+          --champion "$MAKER_CHAMPION_MODEL" \
+          >> "$RUN_ROOT/micro_maker/model_registry.log" 2>&1 || true
+      fi
+    fi
+    sleep 60
+  done
+) & pids+=("$!")
+
+# Canonical Maker owner: public WS -> bounded V7 L2 -> C++ features/decision ->
+# common V7 OMS/queue PAPER engine -> spool. The model argument is deliberately
+# the champion path; challengers are physically incapable of hot reload here.
+"$MAKER_RUNTIME" \
+  --config "$ALLOC/micro_maker.json" \
+  --maker-policy "$MAKER_POLICY" \
+  --run-root "$RUN_ROOT" \
+  --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
+  --model "$MAKER_CHAMPION_MODEL" \
+  --model-sha "$SHA" \
+  >> "$RUN_ROOT/micro_maker/runtime.log" 2>&1 &
+pids+=("$!")
+
+# Evidence-only observer. It has no order/OMS/risk authority: it tails canonical
+# FILL events, observes the same bounded public WS/L10 state, and emits only
+# full-size executable MARKOUT records at 1/10/45/60/300s into the common spool.
+"$MARKOUT_OBSERVER" \
+  --config "$ALLOC/micro_maker.json" \
+  --run-root "$RUN_ROOT" \
+  --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
+  --model-sha "$SHA" \
+  >> "$RUN_ROOT/micro_maker/markout_observer.log" 2>&1 &
+pids+=("$!")
+
+(
+  while [[ ! -e "$KILL" ]]; do
+    if ! python3 scripts/v7_market_maker_status.py \
+      --state "$RUN_ROOT/micro_maker/state.json" \
+      --config "$ALLOC/micro_maker.json" \
+      --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
+      --output "$RUN_ROOT/micro_maker/status.json" \
+      >> "$RUN_ROOT/micro_maker/status.log" 2>&1; then
+      printf '{"schema":"polymarket_v7_maker_risk_failure_v1","timestamp":%s,"paper_only":true,"authenticated_execution":false,"model_sha":"%s"}\n' "$(date +%s)" "$SHA" > "$KILL"
+      break
+    fi
     sleep 1
   done
 ) & pids+=("$!")
@@ -124,9 +228,6 @@ pids+=("$!")
   done
 ) & pids+=("$!")
 
-# Native Hard Arb and Micro Taker run in isolated capital sleeves. Their CSV/state
-# output remains research-only until a strict canonical-ledger producer preserves
-# their full causal execution identity; it is not credited by canonical economics.
 (
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_hard_arb_guard.py \
@@ -159,18 +260,8 @@ pids+=("$!")
   done
 ) & pids+=("$!")
 
-# Generic maker is intentionally not started: current forward evidence rejects
-# unconditional improvement. The capital sleeve stays reserved until the direct
-# joint execution model supports a selective positive-EV maker action.
-cat > "$RUN_ROOT/micro_maker/status.json.tmp" <<JSON
-{"schema":"polymarket_v7_selective_maker_status_v1","timestamp":$(date +%s),"paper_only":true,"authenticated_execution":false,"enabled":false,"reason":"direct_joint_fill_conditioned_ev_not_yet_mature_generic_maker_rejected"}
-JSON
-mv "$RUN_ROOT/micro_maker/status.json.tmp" "$RUN_ROOT/micro_maker/status.json"
-
 write_runtime_status running false
 
-# Account-level kill switch. Any unsafe/unmarkable sleeve or >=15% account DD
-# writes control/KILL; the parent then terminates the entire process group.
 while [[ ! -e "$KILL" ]]; do
   if ! python3 scripts/v7_portfolio_guard.py --run-root "$RUN_ROOT" \
       --allocation-manifest "$ALLOC/manifest.json" --max-drawdown 0.15 \

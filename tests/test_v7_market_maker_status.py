@@ -17,7 +17,11 @@ from v7_market_maker_status import assess, executable_sell_mark
 
 class MakerStatusTests(unittest.TestCase):
     def test_full_depth_walk_rejects_insufficient_liquidity(self) -> None:
-        self.assertEqual(executable_sell_mark([(0.50, 2.0), (0.49, 3.0)], 5.0), (0.494, 2.47))
+        walked = executable_sell_mark([(0.50, 2.0), (0.49, 3.0)], 5.0)
+        self.assertIsNotNone(walked)
+        assert walked is not None
+        self.assertAlmostEqual(walked[0], 0.494)
+        self.assertAlmostEqual(walked[1], 2.47)
         self.assertIsNone(executable_sell_mark([(0.50, 2.0)], 5.0))
 
     def fixture(self, root: Path) -> tuple[Path, Path, Path, Path]:
@@ -29,7 +33,10 @@ class MakerStatusTests(unittest.TestCase):
             "paper_only": True,
             "authenticated_execution": False,
             "model_sha": "a" * 40,
-            "cash": 50.0,
+            # Ten YES shares around 0.50 imply about $5 of deployed capital;
+            # keep the fixture economically coherent instead of fabricating a
+            # 45% account loss that should correctly trigger the hard guard.
+            "cash": 95.0,
             "starting_capital": 100.0,
             "realized_trading_pnl": 0.0,
             "inventory": {
@@ -70,7 +77,7 @@ class MakerStatusTests(unittest.TestCase):
             expected_fee = 10.0 * 0.04 * vwap * (1.0 - vwap)
             expected_slippage = gross * 10.0 / 10_000.0
             self.assertAlmostEqual(report["executable_inventory_value"], gross - expected_fee - expected_slippage)
-            self.assertAlmostEqual(report["equity"], 50.0 + gross - expected_fee - expected_slippage)
+            self.assertAlmostEqual(report["equity"], 95.0 + gross - expected_fee - expected_slippage)
             self.assertFalse(report["killed"])
             self.assertEqual(report["source"], "full_visible_bid_depth_net_verified_fee_and_slippage")
 

@@ -112,9 +112,11 @@ class V7ExternalFeedCurrentRuntimeTest(unittest.TestCase):
     def test_local_gate_alone_is_not_authorization(self) -> None:
         self.assertIsNone(bridge.approved_direct_candidate(self.report(approved=False)))
 
-    def test_entrypoint_runs_bridge_before_loop(self) -> None:
-        text = (ROOT / "scripts" / "run_paper.sh").read_text(encoding="utf-8")
-        self.assertLess(text.index("python3 scripts/v7_external_bridge.py"), text.index('exec bash "$LOOP" "$CONFIG" "$RUN_ROOT"'))
+    def test_canonical_v7_loop_owns_external_bridge(self) -> None:
+        text = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+        self.assertIn("python3 scripts/v7_external_bridge.py", text)
+        self.assertIn('while [[ ! -e "$KILL" ]]', text)
+        self.assertNotIn("scripts/run_paper.sh", text)
         self.assertNotIn("--allow-unvalidated", text)
 
 

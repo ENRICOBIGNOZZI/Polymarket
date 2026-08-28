@@ -4,19 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    - cron: "52 * * * *"
   workflow_dispatch:
     inputs:
       expected_sha:
-        description: Exact commit SHA to validate; defaults to PR source head or event SHA
         required: false
         type: string
 
 permissions:
-  actions: write
   contents: read
-  pull-requests: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -36,44 +31,30 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
-      - name: Verify exact validation revision
+      - name: Verify exact V7 revision
         run: |
           set -euo pipefail
           [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
-          echo "validation_sha=$VALIDATION_SHA"
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
-      - name: Configure
-        run: cmake -S . -B build-${{ matrix.build_type }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-      - name: Build
-        run: cmake --build build-${{ matrix.build_type }} --parallel 2
-      - name: Tests
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev python3
+      - name: Build V7
+        run: |
+          cmake -S . -B build-${{ matrix.build_type }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          cmake --build build-${{ matrix.build_type }} --parallel 2
+      - name: Test V7 only
         run: ctest --test-dir build-${{ matrix.build_type }} --output-on-failure
-      - name: Validate current V7 transition/control plane
+      - name: Static V7 contract
         run: |
           set -euo pipefail
-          python3 -m py_compile \
-            scripts/project_context_snapshot.py \
-            scripts/validate_project_context.py \
-            scripts/validate_scheduler_registry.py \
-            scripts/research_pr_policy.py \
-            scripts/promotion_gate.py \
-            scripts/integration_gate.py \
-            scripts/admin_supervisor_report.py
+          python3 -m py_compile scripts/v7_*.py monitoring/exporter_v7.py monitoring/v7_ledger_metrics.py
           python3 -m json.tool config/live_champion.json >/dev/null
-          python3 -m json.tool config/project_context.json >/dev/null
-          python3 -m json.tool config/scheduler_registry.json >/dev/null
           python3 -m json.tool config/operator_directives.json >/dev/null
-          python3 -m json.tool config/v7_execution_evidence.json >/dev/null
-          python3 -m json.tool config/v7_evidence_runtime.json >/dev/null
-          python3 scripts/validate_scheduler_registry.py --root . --registry config/scheduler_registry.json --output /tmp/scheduler-registry-report.md
-          python3 scripts/validate_project_context.py --root . --output /tmp/project-context-validation.md
-          python3 scripts/project_context_snapshot.py --root . --manifest config/project_context.json --output-json /tmp/project-context.json --output-markdown /tmp/project-context.md
-          python3 -m unittest \
-            tests/test_no_legacy_runtime.py \
-            tests/test_v7_authorized_paper_envelope.py \
-            tests/test_v7_control_plane_exact_head.py \
-            tests/test_external_intelligence_workflow_contract.py -v
+          python3 -m json.tool config/paper_v7.json >/dev/null
+          python3 -m json.tool config/v7_professional_market_maker.json >/dev/null
+          python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
+          bash -n scripts/paper_v7_execution_loop.sh
+          bash -n ops/update_server_v7.sh
+          python3 tests/test_no_legacy_runtime.py

@@ -83,12 +83,25 @@ def _existing_record_ids(path: Path) -> set[str]:
     return ids
 
 
-def drain_spool(run_root: Path, *, model_sha: str, writer_id: str = "v7-canonical-ledger-router") -> dict[str, int]:
+def _drain_with_existing(
+    run_root: Path,
+    *,
+    model_sha: str,
+    existing: set[str],
+    writer_id: str,
+) -> dict[str, int]:
+    """Drain one atomic batch using an already synchronized record-id cache.
+
+    The cache is safe only for the canonical single-writer process. It removes
+    the previous O(total-ledger-size) rescan from every 100ms transport cycle,
+    while the ledger ownership lock is still acquired only for the actual append
+    batch so an unclean process stop cannot leave a long-lived writer lock by
+    design.
+    """
     root = Path(run_root)
     directory = spool_dir(root)
     ledger_path = canonical_ledger_path(root)
     files = sorted(directory.glob("*.json")) if directory.exists() else []
-    existing = _existing_record_ids(ledger_path)
     appended = 0
     duplicates = 0
     rejected = 0
@@ -118,6 +131,43 @@ def drain_spool(run_root: Path, *, model_sha: str, writer_id: str = "v7-canonica
     return {"queued": len(files), "appended": appended, "duplicates": duplicates, "rejected": rejected}
 
 
+def drain_spool(
+    run_root: Path,
+    *,
+    model_sha: str,
+    writer_id: str = "v7-canonical-ledger-router",
+) -> dict[str, int]:
+    root = Path(run_root)
+    existing = _existing_record_ids(canonical_ledger_path(root))
+    return _drain_with_existing(
+        root,
+        model_sha=model_sha,
+        existing=existing,
+        writer_id=writer_id,
+    )
+
+
+def drain_spool_loop(
+    run_root: Path,
+    *,
+    model_sha: str,
+    writer_id: str = "v7-canonical-ledger-router",
+    interval: float = 1.0,
+) -> None:
+    """Run the canonical router with O(new-events) steady-state work."""
+    root = Path(run_root)
+    existing = _existing_record_ids(canonical_ledger_path(root))
+    while True:
+        result = _drain_with_existing(
+            root,
+            model_sha=model_sha,
+            existing=existing,
+            writer_id=writer_id,
+        )
+        print(json.dumps(result, sort_keys=True), flush=True)
+        time.sleep(max(0.1, interval))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Drain validated V7 strategy events into the canonical single-writer ledger")
     parser.add_argument("--run-root", type=Path, required=True)
@@ -126,12 +176,17 @@ def main() -> int:
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--interval", type=float, default=1.0)
     args = parser.parse_args()
-    while True:
-        result = drain_spool(args.run_root, model_sha=args.model_sha, writer_id=args.writer_id)
-        print(json.dumps(result, sort_keys=True), flush=True)
-        if not args.loop:
-            return 0
-        time.sleep(max(0.1, args.interval))
+    if args.loop:
+        drain_spool_loop(
+            args.run_root,
+            model_sha=args.model_sha,
+            writer_id=args.writer_id,
+            interval=args.interval,
+        )
+        return 0
+    result = drain_spool(args.run_root, model_sha=args.model_sha, writer_id=args.writer_id)
+    print(json.dumps(result, sort_keys=True), flush=True)
+    return 0
 
 
 if __name__ == "__main__":

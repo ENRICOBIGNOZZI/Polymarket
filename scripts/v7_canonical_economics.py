@@ -7,7 +7,8 @@ This module is deliberately stricter than the legacy CSV sidecar:
 - explicit non-overlapping fee/slippage/unwind/capital/latency cost vectors;
 - frozen-observation cost stress at 1x/1.5x/2x without trade reselection;
 - dynamic strategy/model-family and horizon identity (no silent dropping of unknown V7 families);
-- fail-closed completion/PnL maturity for multi-leg states.
+- fail-closed completion/PnL maturity for multi-leg states;
+- promotion inference clusters repeated economic units by canonical ``event_id`` and preserves chronology.
 
 It is an evidence consumer only. It cannot submit orders, mutate allocation, change risk,
 or enable authenticated/real-money execution.
@@ -38,6 +39,9 @@ SCHEMA = "polymarket_v7_canonical_economics_v1"
 COST_COMPONENTS = ("fee", "slippage", "unwind_loss", "capital_cost", "latency_cost")
 STRESS_MULTIPLIERS = (1.0, 1.5, 2.0)
 MARKOUT_HORIZONS_SECONDS = (1, 10, 45, 60, 300)
+MIN_EVENT_CLUSTERS_FOR_PROMOTION = 12
+CHRONOLOGICAL_EVENT_FOLDS = 4
+MIN_POSITIVE_EVENT_FOLD_FRACTION = 0.60
 
 
 class EconomicsContractError(ValueError):
@@ -161,6 +165,9 @@ class UnitState:
     fill_ids: set[str] = field(default_factory=set)
     terminal_ids: set[str] = field(default_factory=set)
     final_events: list[Any] = field(default_factory=list)
+    event_ids: set[str] = field(default_factory=set)
+    final_event_ids: set[str] = field(default_factory=set)
+    latest_recorded_ts_ms: int = 0
     markouts_by_horizon: dict[int, list[float]] = field(default_factory=lambda: defaultdict(list))
     cost_totals: dict[str, float] = field(default_factory=lambda: {name: 0.0 for name in COST_COMPONENTS})
     cost_component_observed: dict[str, bool] = field(default_factory=lambda: {name: False for name in COST_COMPONENTS})
@@ -186,6 +193,12 @@ class UnitState:
                     self.reasons.add("horizon_mismatch")
             elif event.event_type != "MARKOUT":
                 self.horizon_seconds = horizon
+        event_id = _text(getattr(event, "event_id", None))
+        if event_id:
+            self.event_ids.add(event_id)
+        recorded = getattr(event, "recorded_ts_ms", 0)
+        if isinstance(recorded, int) and not isinstance(recorded, bool):
+            self.latest_recorded_ts_ms = max(self.latest_recorded_ts_ms, recorded)
 
     def observe_contract(self, event: Any) -> None:
         metadata = event.metadata if isinstance(event.metadata, dict) else {}
@@ -267,6 +280,9 @@ class UnitState:
             return
         self.terminal_ids.add(terminal_id)
         self.final_events.append(event)
+        event_id = _text(getattr(event, "event_id", None))
+        if event_id:
+            self.final_event_ids.add(event_id)
 
     @property
     def is_multileg(self) -> bool:
@@ -307,6 +323,20 @@ class UnitState:
             self.reasons.add("multiple_realized_terminal_pnl")
             return None
         return realized[0] if realized else None
+
+    def economic_event_id(self) -> str | None:
+        if len(self.event_ids) != 1 or len(self.final_event_ids) != 1:
+            return None
+        if self.event_ids != self.final_event_ids:
+            return None
+        return next(iter(self.event_ids))
+
+    def event_identity_reason(self) -> str | None:
+        if not self.event_ids or not self.final_event_ids:
+            return "economic_event_id_missing"
+        if len(self.event_ids) != 1 or len(self.final_event_ids) != 1 or self.event_ids != self.final_event_ids:
+            return "economic_event_id_ambiguous"
+        return None
 
     def partial_unwind_accounted(self) -> bool:
         if self.completion_state() != "PARTIAL":
@@ -362,6 +392,38 @@ def _mean_or_none(values: Iterable[float]) -> float | None:
     return statistics.fmean(vals) if vals else None
 
 
+def _event_cluster_economics(mature: list[tuple[UnitState, float]]) -> tuple[dict[str, dict[str, float]], list[str], list[float], float | None]:
+    clusters: dict[str, list[tuple[UnitState, float]]] = defaultdict(list)
+    latest: dict[str, int] = {}
+    for unit, pnl in mature:
+        event_id = unit.economic_event_id()
+        if event_id is None:
+            continue
+        clusters[event_id].append((unit, pnl))
+        latest[event_id] = max(latest.get(event_id, 0), unit.latest_recorded_ts_ms)
+
+    stress: dict[str, dict[str, float]] = {}
+    for event_id, rows in clusters.items():
+        stress[event_id] = {
+            f"{multiplier:g}x": sum(_stress_pnl(pnl, unit.baseline_cost(), multiplier) for unit, pnl in rows)
+            for multiplier in STRESS_MULTIPLIERS
+        }
+
+    ordered = sorted(clusters, key=lambda event_id: (latest.get(event_id, 0), event_id))
+    fold_totals: list[float] = []
+    if ordered:
+        folds = min(CHRONOLOGICAL_EVENT_FOLDS, len(ordered))
+        fold_totals = [0.0 for _ in range(folds)]
+        for index, event_id in enumerate(ordered):
+            fold_index = min(folds - 1, index * folds // len(ordered))
+            fold_totals[fold_index] += stress[event_id]["2x"]
+    positive_fraction = (
+        sum(value > 0.0 for value in fold_totals) / len(fold_totals)
+        if fold_totals else None
+    )
+    return stress, ordered, fold_totals, positive_fraction
+
+
 def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = None, horizon_seconds: int | None = None) -> dict[str, Any]:
     units, global_reasons = _load_units(ledger_path, expected_model_sha)
     selected: list[UnitState] = []
@@ -378,7 +440,6 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
     unverifiable_completion = [u for u in submitted if u.completion_state() == "UNVERIFIABLE"]
 
     mature: list[tuple[UnitState, float]] = []
-    unit_reasons: dict[str, list[str]] = {}
     for unit in submitted:
         state = unit.completion_state()
         if state == "UNVERIFIABLE":
@@ -391,9 +452,13 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         if pnl is not None and not unit.cost_vector_verifiable():
             unit.reasons.add("full_cost_vector_unverifiable")
         if pnl is not None and unit.cost_vector_verifiable():
+            identity_reason = unit.event_identity_reason()
+            if identity_reason:
+                unit.reasons.add(identity_reason)
             mature.append((unit, pnl))
-        if unit.reasons:
-            unit_reasons[unit.unit_id] = sorted(unit.reasons)
+
+    unit_reasons = {unit.unit_id: sorted(unit.reasons) for unit in submitted if unit.reasons}
+    event_mature = [(unit, pnl) for unit, pnl in mature if unit.economic_event_id() is not None]
 
     completion_rate = len(complete) / len(submitted) if submitted else None
     if completion_rate is not None and not (0.0 <= completion_rate <= 1.0):
@@ -402,13 +467,16 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
     stress_totals: dict[str, float | None] = {}
     for multiplier in STRESS_MULTIPLIERS:
         key = f"{multiplier:g}x"
-        stress_totals[key] = sum(_stress_pnl(pnl, unit.baseline_cost(), multiplier) for unit, pnl in mature) if mature else None
+        stress_totals[key] = sum(_stress_pnl(pnl, unit.baseline_cost(), multiplier) for unit, pnl in event_mature) if event_mature else None
 
-    costs_by_component = {component: sum(unit.cost_totals[component] for unit, _ in mature) for component in COST_COMPONENTS}
+    costs_by_component = {component: sum(unit.cost_totals[component] for unit, _ in event_mature) for component in COST_COMPONENTS}
     markouts: dict[str, dict[str, float | int | None]] = {}
     for horizon in MARKOUT_HORIZONS_SECONDS:
         vals = [value for unit in selected for value in unit.markouts_by_horizon.get(horizon, [])]
         markouts[f"{horizon}s"] = {"observations": len(vals), "mean": _mean_or_none(vals)}
+
+    cluster_stress, ordered_clusters, chronological_folds_2x, positive_fold_fraction = _event_cluster_economics(event_mature)
+    distinct_event_clusters = len(ordered_clusters)
 
     family_values = sorted({u.family for u in selected if u.family})
     horizon_values = sorted({u.horizon_seconds for u in selected if u.horizon_seconds is not None})
@@ -426,12 +494,19 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         global_reasons.append("partial_unwind_provenance_incomplete")
     if not mature:
         global_reasons.append("no_mature_full_cost_terminal_observations")
+    if mature and len(event_mature) != len(mature):
+        global_reasons.append("economic_event_identity_incomplete")
+    if event_mature and distinct_event_clusters < MIN_EVENT_CLUSTERS_FOR_PROMOTION:
+        global_reasons.append("insufficient_distinct_event_clusters")
+    if distinct_event_clusters >= MIN_EVENT_CLUSTERS_FOR_PROMOTION:
+        if positive_fold_fraction is None or positive_fold_fraction + 1e-12 < MIN_POSITIVE_EVENT_FOLD_FRACTION:
+            global_reasons.append("event_cluster_chronological_stability_gate")
 
     stress_1x = stress_totals["1x"]
     stress_15x = stress_totals["1.5x"]
     stress_2x = stress_totals["2x"]
-    positive_under_all_stress = bool(mature and stress_1x is not None and stress_1x > 0 and stress_15x is not None and stress_15x > 0 and stress_2x is not None and stress_2x > 0)
-    if mature and not positive_under_all_stress:
+    positive_under_all_stress = bool(event_mature and stress_1x is not None and stress_1x > 0 and stress_15x is not None and stress_15x > 0 and stress_2x is not None and stress_2x > 0)
+    if event_mature and not positive_under_all_stress:
         global_reasons.append("positive_pnl_stress_gate")
 
     state = "ECONOMIC_EVIDENCE_READY" if not global_reasons and positive_under_all_stress else "MORE_EVIDENCE_REQUIRED"
@@ -451,11 +526,19 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         "unverifiable_completion_units": len(unverifiable_completion),
         "completion_rate": completion_rate,
         "mature_terminal_units": len(mature),
+        "event_eligible_mature_terminal_units": len(event_mature),
+        "distinct_event_clusters": distinct_event_clusters,
+        "minimum_event_clusters_for_promotion": MIN_EVENT_CLUSTERS_FOR_PROMOTION,
+        "event_cluster_stress": cluster_stress,
+        "event_cluster_order_chronological": ordered_clusters,
+        "chronological_event_folds_2x": chronological_folds_2x,
+        "minimum_positive_event_fold_fraction": MIN_POSITIVE_EVENT_FOLD_FRACTION,
+        "positive_chronological_event_fold_fraction_2x": positive_fold_fraction,
         "net_pnl": stress_1x,
         "stressed_net_pnl": stress_totals,
         "costs": {"components": costs_by_component, "baseline_total": sum(costs_by_component.values()), "stress_observations_frozen": True, "multipliers": list(STRESS_MULTIPLIERS)},
         "markouts": markouts,
-        "capital_hours": sum(unit.capital_duration_ms for unit, _ in mature) / 3_600_000.0,
+        "capital_hours": sum(unit.capital_duration_ms for unit, _ in event_mature) / 3_600_000.0,
         "model_families_observed": family_values,
         "model_horizons_seconds_observed": horizon_values,
         "positive_under_1x_1_5x_2x": positive_under_all_stress,

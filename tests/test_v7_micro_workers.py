@@ -6,18 +6,52 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_maker_uses_fill_conditioned_toxicity_objective_and_dual_clock():
-    adapter = (ROOT / "scripts/v7_micro_maker_worker.py").read_text(encoding="utf-8")
-    core = (ROOT / "scripts/v7_micro_maker_worker_eventtime_core.py").read_text(encoding="utf-8")
-    assert "maker_fill_conditioned_ev" in core
+def test_maker_uses_canonical_cpp_runtime_and_fill_conditioned_research_core():
+    runtime_path = ROOT / "src/v7_market_maker_runtime.cpp"
+    lane_path = ROOT / "src/v7_maker_lane.cpp"
+    paper_path = ROOT / "src/v7_maker_paper.cpp"
+    core_path = ROOT / "scripts/v7_market_maker_core.py"
+    assert runtime_path.is_file()
+    assert lane_path.is_file()
+    assert paper_path.is_file()
+    assert core_path.is_file()
+    assert not (ROOT / "scripts/v7_market_maker_worker.py").exists()
+    assert not (ROOT / "scripts/v7_micro_maker_worker.py").exists()
+    assert not (ROOT / "scripts/v7_micro_maker_worker_eventtime_core.py").exists()
+
+    runtime = runtime_path.read_text(encoding="utf-8")
+    lane = lane_path.read_text(encoding="utf-8")
+    paper = paper_path.read_text(encoding="utf-8")
+    core = core_path.read_text(encoding="utf-8")
+    assert "fill-conditioned trading economics" in core
     assert "toxicity_score" in core
-    assert "created_received_ms" in core
-    assert "created_event_ms" in core
-    assert "received_ms" in core
-    assert "broker_owned_tokens" in core
-    assert "full_depth_sell_vwap" in adapter
-    assert "shares_specific_full_visible_bid_depth_vwap_fail_closed" in adapter
-    assert "MAX_MARKOUT_LABEL_DELAY_SECONDS = 15" in adapter
+    assert "exchange_ts_ms" in core
+    assert "receive_ts_ms" in core
+    assert "complete_sets" in core
+    assert "expected_total_pnl" in core
+    assert "subsidy_dependent" in core
+    assert "MarketWebSocketFeed" in runtime
+    assert "MarketWsShard" in runtime
+    assert "MakerInstrumentLane" in runtime
+    assert "MakerPaperExecutionPolicy" in runtime
+    assert "SleeveCapitalAccount" in runtime
+    assert "class ExecutionCore final" in runtime
+    assert "std::thread execution_thread" in runtime
+    assert "pop_critical(command)" in runtime
+    assert "pop_normal(command)" in runtime
+    assert runtime.index("pop_critical(command)") < runtime.index("pop_normal(command)")
+    assert "market.paper.apply_intent" not in runtime
+    assert "market.paper.on_public_trade" not in runtime
+    assert "market.paper.advance_time" not in runtime
+    assert 'run_root_ / "ledger" / "spool"' in runtime
+    assert 'run_root_ / "ledger" / "execution.jsonl"' not in runtime
+    assert "operational_fill_scenario" in runtime
+    assert "pessimistic" in runtime
+    assert "LineageInvalidated" in runtime
+    assert "instrument_inventory_sign" in lane
+    assert "allocate_public_print" in paper
+    assert "CancelPending" in paper
+    assert "FinalMerge" in paper
 
 
 def test_taker_uses_complete_round_trip_contract():
@@ -44,7 +78,7 @@ def test_taker_freezes_new_risk_when_open_positions_are_unmarkable():
 
 
 if __name__ == "__main__":
-    test_maker_uses_fill_conditioned_toxicity_objective_and_dual_clock()
+    test_maker_uses_canonical_cpp_runtime_and_fill_conditioned_research_core()
     test_taker_uses_complete_round_trip_contract()
     test_taker_freezes_new_risk_when_open_positions_are_unmarkable()
     print("ok 3 v7 micro worker tests")
