@@ -17,6 +17,8 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             "ci.yml:ci",
             "monitoring.yml:monitoring",
             "private-runtime-single-writer-validation.yml:Private runtime single-writer validation",
+            "all_exact_green=true",
+            "validation_state=awaiting_all_exact_sha_technical_gates",
             "scripts/v7_cutover_contract.py",
             "scripts/paper_v7_execution_loop.sh",
             "polymarket_v7_trade_recorder",
