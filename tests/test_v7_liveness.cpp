@@ -1,3 +1,4 @@
+#include "pm/v7_kill_switch.hpp"
 #include "pm/v7_liveness.hpp"
 
 #include <cassert>
@@ -100,6 +101,73 @@ void test_oms_inconsistency_requires_reconciliation() {
     assert((decision.reason_mask & pm::v7::OmsInconsistent) != 0U);
 }
 
+void test_scoped_kill_switch_is_idempotent_and_precise() {
+    pm::v7::KillSwitchPlane kills;
+    const auto initial_version = kills.state_version();
+    auto decision = kills.evaluate(pm::v7::StrategyId::ProfessionalMaker, 17, 29, 41);
+    assert(!decision.killed);
+    assert(decision.reason_mask == pm::v7::KillNone);
+
+    const auto first = kills.set_market(17, true);
+    assert(first.accepted);
+    assert(first.changed);
+    assert(first.state_version > initial_version);
+
+    const auto repeated = kills.set_market(17, true);
+    assert(repeated.accepted);
+    assert(!repeated.changed);
+    assert(repeated.state_version == first.state_version);
+
+    decision = kills.evaluate(pm::v7::StrategyId::ProfessionalMaker, 17, 29, 41);
+    assert(decision.killed);
+    assert((decision.reason_mask & pm::v7::MarketKilled) != 0U);
+    assert((decision.reason_mask & pm::v7::InstrumentKilled) == 0U);
+
+    const auto cleared = kills.set_market(17, false);
+    assert(cleared.accepted);
+    assert(cleared.changed);
+    decision = kills.evaluate(pm::v7::StrategyId::ProfessionalMaker, 17, 29, 41);
+    assert(!decision.killed);
+}
+
+void test_scoped_kill_switch_composes_all_levels_and_global_dominates() {
+    pm::v7::KillSwitchPlane kills;
+    assert(kills.set_instrument(41, true).changed);
+    assert(kills.set_event(29, true).changed);
+    assert(kills.set_strategy(pm::v7::StrategyId::ProfessionalMaker, true).changed);
+
+    auto decision = kills.evaluate(pm::v7::StrategyId::ProfessionalMaker, 17, 29, 41);
+    assert(decision.killed);
+    assert((decision.reason_mask & pm::v7::InstrumentKilled) != 0U);
+    assert((decision.reason_mask & pm::v7::EventKilled) != 0U);
+    assert((decision.reason_mask & pm::v7::StrategyKilled) != 0U);
+    assert((decision.reason_mask & pm::v7::MarketKilled) == 0U);
+    assert((decision.reason_mask & pm::v7::GlobalKilled) == 0U);
+
+    assert(kills.set_global(true).changed);
+    decision = kills.evaluate(pm::v7::StrategyId::ProfessionalMaker, 17, 29, 41);
+    assert(decision.killed);
+    assert((decision.reason_mask & pm::v7::GlobalKilled) != 0U);
+
+    assert(kills.set_instrument(41, false).changed);
+    assert(kills.set_event(29, false).changed);
+    assert(kills.set_strategy(pm::v7::StrategyId::ProfessionalMaker, false).changed);
+    decision = kills.evaluate(pm::v7::StrategyId::ProfessionalMaker, 17, 29, 41);
+    assert(decision.killed);
+    assert(decision.reason_mask == pm::v7::GlobalKilled);
+}
+
+void test_scoped_kill_switch_fails_closed_on_invalid_handles() {
+    pm::v7::KillSwitchPlane kills;
+    const auto invalid_mutation = kills.set_instrument(0, true);
+    assert(!invalid_mutation.accepted);
+    assert(!invalid_mutation.changed);
+
+    const auto decision = kills.evaluate(pm::v7::StrategyId::ProfessionalMaker, 0, 29, 41);
+    assert(decision.killed);
+    assert((decision.reason_mask & pm::v7::KillInvalidHandle) != 0U);
+}
+
 } // namespace
 
 int main() {
@@ -111,5 +179,8 @@ int main() {
     test_clock_failure_requests_cancel_all();
     test_transport_failure_blocks_new_quotes_without_hiding_other_health();
     test_oms_inconsistency_requires_reconciliation();
+    test_scoped_kill_switch_is_idempotent_and_precise();
+    test_scoped_kill_switch_composes_all_levels_and_global_dominates();
+    test_scoped_kill_switch_fails_closed_on_invalid_handles();
     return 0;
 }
