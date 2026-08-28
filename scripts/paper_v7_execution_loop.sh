@@ -16,6 +16,15 @@ MAKER_MODEL_REGISTRY="$RUN_ROOT/micro_maker/model_registry.json"
 PUBLIC_PROXY_PORT="${PM_V7_PUBLIC_PROXY_PORT:-19109}"
 PUBLIC_PROXY="http://127.0.0.1:$PUBLIC_PROXY_PORT"
 WS_PUBLIC_HOST="ws-subscriptions-clob.polymarket.com"
+# Adaptive JSON arenas are bounded per decoder. With the current canonical
+# 40-market universe the Maker owns at most five 8-market shards, while the
+# evidence-only markout observer owns one all-market decoder. The defaults
+# therefore expose exactly 3.5 GiB of aggregate ceiling (5*512 MiB + 1 GiB)
+# without eagerly allocating it. Each decoder starts small and grows only when
+# an unusually large venue frame actually requires the memory.
+WS_JSON_ARENA_MAKER_MAX_BYTES="${PM_V7_WS_JSON_ARENA_MAKER_MAX_BYTES:-536870912}"
+WS_JSON_ARENA_OBSERVER_MAX_BYTES="${PM_V7_WS_JSON_ARENA_OBSERVER_MAX_BYTES:-1073741824}"
+WS_JSON_ARENA_TOTAL_BUDGET_BYTES="${PM_V7_WS_JSON_ARENA_TOTAL_BUDGET_BYTES:-3758096384}"
 # Bind the C++ slow-path execution-cell loader explicitly to the same exact SHA
 # and *champion* model file passed to the canonical Maker runtime. Challenger
 # refits are registered separately and can never be hot-reloaded by this loop.
@@ -28,11 +37,14 @@ LOCK="$CONTROL/runtime.lock"
 mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/learned_execution"
 touch "$RUN_ROOT/ledger/execution.jsonl"
 
-python3 - "$CONFIG" "$MAKER_POLICY" <<'PY'
+python3 - "$CONFIG" "$MAKER_POLICY" "$WS_JSON_ARENA_MAKER_MAX_BYTES" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
 import json,sys
 cfg=json.load(open(sys.argv[1]))
 v7=cfg.get("v7") or {}
 maker=json.load(open(sys.argv[2]))
+maker_arena=int(sys.argv[3])
+observer_arena=int(sys.argv[4])
+total_budget=int(sys.argv[5])
 assert cfg.get("engine_version")==7
 assert cfg.get("paper_only") is True
 assert v7.get("paper_only") is True
@@ -47,6 +59,9 @@ assert maker.get("architecture",{}).get("single_account_allocator") is True
 assert maker.get("architecture",{}).get("single_canonical_ledger_writer") is True
 assert maker.get("architecture",{}).get("fast_path") == "cpp_websocket_event_driven"
 assert maker.get("architecture",{}).get("slow_path") == "python_reward_selection_and_model_fit"
+assert maker_arena >= 16*1024*1024
+assert observer_arena >= 16*1024*1024
+assert maker_arena*5 + observer_arena <= total_budget
 PY
 
 if [[ -d "$LOCK" ]]; then
@@ -215,6 +230,7 @@ pids+=("$!")
 (
   while [[ ! -e "$KILL" ]] && ! maker_selection_ready; do sleep 1; done
   [[ ! -e "$KILL" ]] || exit 0
+  export PM_V7_WS_JSON_ARENA_MAX_BYTES="$WS_JSON_ARENA_MAKER_MAX_BYTES"
   exec "$MAKER_RUNTIME" \
     --config "$ALLOC/micro_maker.json" \
     --maker-policy "$MAKER_POLICY" \
@@ -231,6 +247,7 @@ pids+=("$!")
 (
   while [[ ! -e "$KILL" ]] && ! maker_selection_ready; do sleep 1; done
   [[ ! -e "$KILL" ]] || exit 0
+  export PM_V7_WS_JSON_ARENA_MAX_BYTES="$WS_JSON_ARENA_OBSERVER_MAX_BYTES"
   exec "$MARKOUT_OBSERVER" \
     --config "$ALLOC/micro_maker.json" \
     --run-root "$RUN_ROOT" \
