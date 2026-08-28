@@ -52,13 +52,25 @@ pm::v7::MarketWsEvent book_event(std::int32_t tick_e4 = 100) {
     return event;
 }
 
-pm::v7::maker::MakerLaneContext context_with_positive_yes_inventory() {
+pm::v7::maker::MakerLaneContext default_context() {
     pm::v7::maker::MakerLaneContext context;
-    context.inventory.yes_shares = 8.0;
-    context.inventory.no_shares = 0.0;
     context.risk.max_quote_shares = 1.0;
     context.risk.max_abs_residual_shares = 10.0;
     return context;
+}
+
+pm::v7::maker::MakerLaneContext context_with_positive_yes_inventory() {
+    auto context = default_context();
+    context.inventory.yes_shares = 8.0;
+    context.inventory.no_shares = 0.0;
+    return context;
+}
+
+void refresh_timestamp(pm::v7::MarketWsEvent& event) {
+    event.receive_monotonic_ns = monotonic_ns();
+    event.book.receive_monotonic_ns = event.receive_monotonic_ns;
+    ++event.state_version;
+    event.book.state_version = event.state_version;
 }
 
 void test_yes_lane_positive_yes_inventory_quotes_reducing_sell_side() {
@@ -88,10 +100,7 @@ void test_lane_uses_venue_tick_size_not_stale_model_tick() {
     auto model = profitable_model();
     model.tick_size = 0.01; // deliberately stale relative to event tick.
     auto event = book_event(10); // venue tick 0.001 => 480 / 520 tick indexes.
-    pm::v7::maker::MakerLaneContext context;
-    context.risk.max_quote_shares = 1.0;
-    context.risk.max_abs_residual_shares = 10.0;
-    const auto decision = lane.on_market_event(event, context, model);
+    const auto decision = lane.on_market_event(event, default_context(), model);
     assert(decision.reason == pm::v7::maker::DecisionReason::Quote);
     assert(decision.intent_count == 2);
     for (std::size_t i = 0; i < decision.intent_count; ++i) {
@@ -103,18 +112,48 @@ void test_lane_uses_venue_tick_size_not_stale_model_tick() {
 
 void test_trade_event_enters_incremental_trade_intensity() {
     pm::v7::maker::MakerInstrumentLane lane(+1);
-    pm::v7::maker::MakerLaneContext context;
-    context.risk.max_quote_shares = 1.0;
-    context.risk.max_abs_residual_shares = 10.0;
     auto event = book_event();
-    (void)lane.on_market_event(event, context, profitable_model());
+    (void)lane.on_market_event(event, default_context(), profitable_model());
     event.kind = pm::v7::MarketWsEventKind::Trade;
     event.side = pm::v7::Side::Buy;
     event.quantity_microunits = 5'000'000;
-    event.receive_monotonic_ns = monotonic_ns();
-    event.book.receive_monotonic_ns = event.receive_monotonic_ns;
-    const auto decision = lane.on_market_event(event, context, profitable_model());
+    refresh_timestamp(event);
+    const auto decision = lane.on_market_event(event, default_context(), profitable_model());
     assert(decision.features.trade_intensity > 0.0);
+}
+
+void test_book_depth_removal_enters_cancel_pressure() {
+    pm::v7::maker::MakerInstrumentLane lane(+1);
+    auto event = book_event();
+    (void)lane.on_market_event(event, default_context(), profitable_model());
+
+    event.book.bid_depth.l5_microunits = 70'000'000;
+    event.book.ask_depth.l5_microunits = 90'000'000;
+    refresh_timestamp(event);
+    const auto decision = lane.on_market_event(event, default_context(), profitable_model());
+    assert(decision.features.cancel_intensity > 0.0);
+}
+
+void test_public_print_is_not_double_counted_as_cancel_pressure() {
+    pm::v7::maker::MakerInstrumentLane lane(+1);
+    auto event = book_event();
+    (void)lane.on_market_event(event, default_context(), profitable_model());
+
+    event.kind = pm::v7::MarketWsEventKind::Trade;
+    event.side = pm::v7::Side::Buy; // consumes asks
+    event.quantity_microunits = 10'000'000;
+    refresh_timestamp(event);
+    const auto trade = lane.on_market_event(event, default_context(), profitable_model());
+    assert(trade.features.trade_intensity > 0.0);
+    assert(trade.features.cancel_intensity == 0.0);
+
+    event.kind = pm::v7::MarketWsEventKind::BookChanged;
+    event.side = pm::v7::Side::None;
+    event.quantity_microunits = 0;
+    event.book.ask_depth.l5_microunits = 90'000'000;
+    refresh_timestamp(event);
+    const auto book = lane.on_market_event(event, default_context(), profitable_model());
+    assert(book.features.cancel_intensity == 0.0);
 }
 
 void test_invalid_lineage_forces_feed_withdraw() {
@@ -123,10 +162,7 @@ void test_invalid_lineage_forces_feed_withdraw() {
     event.kind = pm::v7::MarketWsEventKind::LineageInvalidated;
     event.book.valid = 0;
     event.book.lineage_continuous = 0;
-    pm::v7::maker::MakerLaneContext context;
-    context.risk.max_quote_shares = 1.0;
-    context.risk.max_abs_residual_shares = 10.0;
-    const auto decision = lane.on_market_event(event, context, profitable_model());
+    const auto decision = lane.on_market_event(event, default_context(), profitable_model());
     assert(decision.reason == pm::v7::maker::DecisionReason::FeedUnhealthy);
     assert(decision.intent_count == 1);
     assert(decision.intents[0].type == pm::v7::IntentType::Withdraw);
@@ -134,10 +170,7 @@ void test_invalid_lineage_forces_feed_withdraw() {
 
 void test_invalid_inventory_orientation_fails_closed() {
     pm::v7::maker::MakerInstrumentLane lane(0);
-    pm::v7::maker::MakerLaneContext context;
-    context.risk.max_quote_shares = 1.0;
-    context.risk.max_abs_residual_shares = 10.0;
-    const auto decision = lane.on_market_event(book_event(), context, profitable_model());
+    const auto decision = lane.on_market_event(book_event(), default_context(), profitable_model());
     assert(decision.reason == pm::v7::maker::DecisionReason::FeedUnhealthy);
 }
 
@@ -148,6 +181,8 @@ int main() {
     test_no_lane_positive_yes_inventory_quotes_reducing_buy_side();
     test_lane_uses_venue_tick_size_not_stale_model_tick();
     test_trade_event_enters_incremental_trade_intensity();
+    test_book_depth_removal_enters_cancel_pressure();
+    test_public_print_is_not_double_counted_as_cancel_pressure();
     test_invalid_lineage_forces_feed_withdraw();
     test_invalid_inventory_orientation_fails_closed();
     return 0;
