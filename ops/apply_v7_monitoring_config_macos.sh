@@ -7,7 +7,7 @@ STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
 MANIFEST="$APP_DIR/monitoring/v7_monitoring_manifest.json"
 TAILSCALE_HOSTNAME="${POLYMARKET_TAILSCALE_HOSTNAME:-mamma-portfolio}"
 TAILSCALE_FQDN="${POLYMARKET_TAILSCALE_FQDN:-mamma-portfolio.tail1bae85.ts.net}"
-GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-http://${TAILSCALE_FQDN}}"
+GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-https://${TAILSCALE_FQDN}}"
 
 [[ "$(uname -s)" == "Darwin" ]] || { echo "fatal: macOS monitoring installer requires Darwin" >&2; exit 78; }
 [[ -f "$MANIFEST" ]] || { echo "fatal: missing V7 monitoring manifest" >&2; exit 78; }
@@ -81,11 +81,19 @@ configure_tailnet_grafana() {
     exit 78
   fi
 
+  # Canonical browser route: HTTPS with Tailscale-managed TLS. Keep HTTP:80
+  # alongside it for backwards-compatible probes and old bookmarks.
   serve_log="$(mktemp)"
-  if ! tailscale_admin "$ts" serve --bg --http=80 localhost:3000 >"$serve_log" 2>&1; then
+  if ! tailscale_admin "$ts" serve --bg --https=443 localhost:3000 >"$serve_log" 2>&1; then
     cat "$serve_log" >&2 || true
     rm -f "$serve_log"
-    echo "fatal: failed to configure Tailscale Serve for V7 Grafana" >&2
+    echo "fatal: failed to configure Tailscale HTTPS Serve for V7 Grafana" >&2
+    exit 78
+  fi
+  if ! tailscale_admin "$ts" serve --bg --http=80 localhost:3000 >>"$serve_log" 2>&1; then
+    cat "$serve_log" >&2 || true
+    rm -f "$serve_log"
+    echo "fatal: failed to configure Tailscale HTTP compatibility Serve for V7 Grafana" >&2
     exit 78
   fi
   rm -f "$serve_log"
