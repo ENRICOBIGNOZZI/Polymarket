@@ -158,12 +158,20 @@ jobs:
           trap - EXIT INT TERM
           echo "SMOKE_ROOT=$R" >> "$GITHUB_ENV"
 
-      - name: Economic gate remains closed
-        if: steps.gate.outputs.ready == 'true' && steps.economics.outputs.economic_ready != 'true'
-        run: echo "paper-validated unchanged: exact-SHA canonical PAPER economics need more evidence." >> "$GITHUB_STEP_SUMMARY"
+      - name: Record economic readiness separately from PAPER deployment
+        if: steps.gate.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.economics.outputs.economic_ready }}" == "true" ]]; then
+            echo "economic_readiness=promotion_ready" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "economic_readiness=more_evidence_required" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "PAPER deployment is a technical/safety evidence-collection state; it is not a real-money or profitability promotion." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Advance paper-validated to exact economically validated V7 SHA
-        if: steps.gate.outputs.ready == 'true' && steps.economics.outputs.economic_ready == 'true'
+      - name: Advance paper-validated to exact technically validated V7 PAPER SHA
+        if: steps.gate.outputs.ready == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -177,6 +185,8 @@ jobs:
             gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/paper-validated" -f sha="$VALIDATION_SHA" -F force=false >/dev/null
           fi
           echo "paper_validated_sha=$VALIDATION_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "paper_deployment_mode=evidence_collection" >> "$GITHUB_STEP_SUMMARY"
+          echo "economic_ready=${{ steps.economics.outputs.economic_ready }}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload exact-SHA V7 PAPER evidence
         if: always() && steps.gate.outputs.ready == 'true'
