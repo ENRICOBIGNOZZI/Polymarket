@@ -269,10 +269,14 @@ def _event_id(raw: dict[str, Any]) -> str:
 
 
 def discover_event_ids(gamma: str, limit: int, min_liquidity: float, max_events: int) -> list[str]:
+    """Discover all eligible events when limit=0; max_events is only a scan budget."""
+    del max_events
     out: list[str] = []
     offset = 0
-    while offset < min(max(100, limit), 5000) and len(out) < max_events:
-        page = min(100, max(1, limit - offset))
+    for _ in range(200):
+        if limit > 0 and offset >= limit:
+            break
+        page = 500 if limit <= 0 else min(500, max(1, limit - offset))
         query = urllib.parse.urlencode({
             "active": "true", "closed": "false", "limit": page, "offset": offset,
             "order": "liquidityNum", "ascending": "false",
@@ -288,12 +292,21 @@ def discover_event_ids(gamma: str, limit: int, min_liquidity: float, max_events:
             eid = _event_id(raw)
             if liq >= min_liquidity and eid and eid not in out:
                 out.append(eid)
-                if len(out) >= max_events:
-                    break
         if len(batch) < page:
             break
-        offset += page
+        offset += len(batch)
+    else:
+        raise RuntimeError("Gamma event discovery pagination guard reached before exhaustion")
     return out
+
+
+def rotating_window(values: Sequence[str], cursor: int, budget: int) -> tuple[list[str], int]:
+    if not values:
+        return [], 0
+    start = max(0, int(cursor)) % len(values)
+    count = min(len(values), max(1, int(budget)))
+    selected = [values[(start + index) % len(values)] for index in range(count)]
+    return selected, (start + count) % len(values)
 
 
 def event_spec(gamma: str, event_id: str) -> list[dict[str, Any]] | None:
@@ -406,6 +419,7 @@ def normalize_state(state: dict[str, Any], start: float) -> dict[str, Any]:
         "open_bundles": open_bundles,
         "aborting": aborting,
         "realized_pnl_total": finite(state.get("realized_pnl_total"), finite(state.get("realized_pnl"), 0.0)),
+        "scan_cursor": max(0, int(finite(state.get("scan_cursor"), 0.0))),
     }
 
 
@@ -551,6 +565,7 @@ def run(args: argparse.Namespace) -> int:
     cash, peak, killed = state["cash"], state["peak"], state["killed"]
     openb, aborting = state["open_bundles"], state["aborting"]
     realized_total, realized_tick = state["realized_pnl_total"], 0.0
+    scan_cursor = state["scan_cursor"]
     failures, stats, sources = [], _stats(), Counter()
     now = int(time.time())
 
@@ -610,8 +625,10 @@ def run(args: argparse.Namespace) -> int:
     best_edge = 0.0
 
     try:
-        event_ids = [] if killed or aborting else discover_event_ids(gamma, args.markets, args.min_liquidity, args.max_events)
+        discovered_event_ids = [] if killed or aborting else discover_event_ids(gamma, args.markets, args.min_liquidity, args.max_events)
+        event_ids, scan_cursor = rotating_window(discovered_event_ids, scan_cursor, args.max_events)
     except Exception as exc:
+        discovered_event_ids = []
         event_ids = []
         failures.append(f"discover:{type(exc).__name__}:{exc}")
 
@@ -760,6 +777,10 @@ def run(args: argparse.Namespace) -> int:
         "realized_pnl_total": realized_total,
         "locked_expected_profit": sum(max(0.0, finite(x.get("shares"), 0.0) - finite(x.get("capital_used"), 0.0)) for x in openb.values()),
         "scanned_events": scanned, "positive_candidates": positive, "candidate_rows": candidate_rows,
+        "discovered_events": len(discovered_event_ids), "scan_budget_events": max(1, args.max_events),
+        "scan_cursor": scan_cursor,
+        "full_cycle_fraction": (len(event_ids) / len(discovered_event_ids)) if discovered_event_ids else 0.0,
+        "discovery_exhaustive": args.markets <= 0,
         "entered": entered, "sequential_aborts": seq_aborts, "best_edge": best_edge,
         "fee_sources_last_tick": dict(sources), "failures": failures, "atomic_snapshot_assumption": False,
         "per_token_receive_timestamps": True, "exchange_snapshot_timestamps": True, "multi_level_depth": True,

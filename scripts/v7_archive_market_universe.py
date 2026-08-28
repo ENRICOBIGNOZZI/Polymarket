@@ -87,15 +87,18 @@ def discover(
     page_size: int = 100,
     fetcher=fetch_json,
 ) -> list[dict[str, Any]]:
-    limit = max(1, min(5000, int(market_limit)))
+    limit = max(0, int(market_limit))
     page = max(1, min(500, int(page_size)))
     out: list[dict[str, Any]] = []
     offset = 0
-    while len(out) < limit:
+    exhaustive = False
+    for _ in range(200):
+        if limit > 0 and len(out) >= limit:
+            break
         query = urllib.parse.urlencode({
             "active": "true",
             "closed": "false",
-            "limit": min(page, limit - len(out)),
+            "limit": page if limit <= 0 else min(page, limit - len(out)),
             "offset": offset,
             "order": "liquidityNum",
             "ascending": "false",
@@ -111,13 +114,17 @@ def discover(
             if market is None or market["liquidity"] + 1e-12 < float(min_liquidity):
                 continue
             out.append(market)
-            if len(out) >= limit:
+            if limit > 0 and len(out) >= limit:
                 break
-        if len(rows) < min(page, limit - min(len(out), limit)) or len(rows) < page:
+        if len(rows) < page:
+            exhaustive = True
             break
         offset += len(rows)
+    if limit <= 0 and not exhaustive:
+        raise RuntimeError("Gamma universe pagination guard reached before exhaustion")
     unique = {row["market_id"]: row for row in out}
-    return sorted(unique.values(), key=lambda row: (-float(row["liquidity"]), str(row["market_id"])))[:limit]
+    ordered = sorted(unique.values(), key=lambda row: (-float(row["liquidity"]), str(row["market_id"])))
+    return ordered if limit <= 0 else ordered[:limit]
 
 
 def snapshot(
@@ -149,6 +156,7 @@ def snapshot(
         "source": "gamma_active_closed_false_direct",
         "gamma_url": gamma_url.rstrip("/"),
         "market_limit": int(market_limit),
+        "discovery_exhaustive": int(market_limit) <= 0,
         "minimum_liquidity_usd": float(min_liquidity),
         "market_count": len(markets),
         "membership_sha256": hashlib.sha256(canonical_rows.encode("utf-8")).hexdigest(),

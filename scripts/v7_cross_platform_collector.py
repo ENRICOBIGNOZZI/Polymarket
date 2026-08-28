@@ -168,10 +168,39 @@ def _load_state(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"schema": STATE_SCHEMA, "sequences": {}, "last_hash": "0" * 64}
+        return {"schema": STATE_SCHEMA, "sequences": {}, "metadata_hashes": {},
+                "book_cursor": 0, "last_hash": "0" * 64}
     if value.get("schema") != STATE_SCHEMA or not isinstance(value.get("sequences"), dict):
         raise CrossCollectorError("collector_state_invalid")
     return value
+
+
+def _verified_tickers(mappings: Sequence[Mapping[str, Any]]) -> list[str]:
+    output: list[str] = []
+    for mapping in mappings:
+        candidates = [mapping.get("venue_b_contract_id"), mapping.get("contract_id_b")]
+        venue_b = mapping.get("venue_b") if isinstance(mapping.get("venue_b"), dict) else {}
+        candidates.extend((venue_b.get("contract_id"), venue_b.get("market_id"), venue_b.get("ticker")))
+        for value in candidates:
+            ticker = str(value or "").strip()
+            if ticker and ticker not in output:
+                output.append(ticker)
+    return output
+
+
+def _rotating_book_selection(tickers: Sequence[str], verified: Sequence[str], cursor: int,
+                             budget: int) -> tuple[list[str], int]:
+    ordered = list(dict.fromkeys(str(value) for value in tickers if str(value)))
+    priority = [value for value in verified if value in ordered]
+    remainder = [value for value in ordered if value not in set(priority)]
+    count = max(1, int(budget))
+    selected = priority[:count]
+    room = max(0, count - len(selected))
+    if not remainder or room <= 0:
+        return selected, 0 if not remainder else int(cursor) % len(remainder)
+    start = max(0, int(cursor)) % len(remainder)
+    selected.extend(remainder[(start + index) % len(remainder)] for index in range(min(room, len(remainder))))
+    return selected, (start + min(room, len(remainder))) % len(remainder)
 
 
 def append_record(path: Path, state: dict[str, Any], payload: Mapping[str, Any]) -> str:
@@ -226,31 +255,64 @@ def collect_once(*, repository_root: Path, config_path: Path, mappings_path: Pat
     blocker = ""
     transport_state = "DISCONNECTED"
     latency_samples: list[float] = []
+    discovery_exhaustive = False
+    metadata_changes = 0
+    poll_budget = 0
     try:
-        limit = max(1, min(1000, int(section.get("max_discovery_markets") or 20)))
-        market_data, timing = client.get(f"/markets?limit={limit}&status=open")
-        latency_samples.append(float(timing.get("request_ms") or 0.0))
-        markets = market_data.get("markets") if isinstance(market_data, dict) else None
-        if not isinstance(markets, list):
-            raise CrossCollectorError("venue_market_discovery_schema_invalid")
+        page_size = max(1, min(1000, int(section.get("metadata_page_size") or 1000)))
+        page_guard = max(1, int(section.get("pagination_loop_guard_pages") or 200))
+        markets: list[dict[str, Any]] = []
+        cursor = ""
+        discovery_exhaustive = False
+        for _ in range(page_guard):
+            path = f"/markets?limit={page_size}&status=open"
+            if cursor:
+                path += "&cursor=" + urllib.parse.quote(cursor, safe="")
+            market_data, timing = client.get(path)
+            latency_samples.append(float(timing.get("request_ms") or 0.0))
+            page = market_data.get("markets") if isinstance(market_data, dict) else None
+            if not isinstance(page, list):
+                raise CrossCollectorError("venue_market_discovery_schema_invalid")
+            markets.extend(row for row in page if isinstance(row, dict))
+            next_cursor = str(market_data.get("cursor") or "") if isinstance(market_data, dict) else ""
+            if not next_cursor or not page:
+                discovery_exhaustive = True
+                break
+            if next_cursor == cursor:
+                raise CrossCollectorError("venue_market_cursor_not_advancing")
+            cursor = next_cursor
+        if not discovery_exhaustive:
+            raise CrossCollectorError("venue_market_pagination_guard_hit")
         tickers = []
+        metadata_hashes = state.get("metadata_hashes") if isinstance(state.get("metadata_hashes"), dict) else {}
+        metadata_changes = 0
         for market in markets:
             if not isinstance(market, dict):
                 parse_failures += 1; continue
             ticker = str(market.get("ticker") or "")
             if ticker:
                 tickers.append(ticker)
-                append_record(tape_path, state, {
-                    "kind": "MARKET_METADATA", "venue": "kalshi", "contract_id": ticker,
-                    "received_at_ms": timestamp, "receive_monotonic_ns": monotonic,
-                    "transport": "PUBLIC_REST_POLLING", "source_event_time": None,
-                    "polling_latency_not_event_latency": True,
-                    "metadata_hash": hashlib.sha256(json.dumps(market, sort_keys=True).encode()).hexdigest(),
-                    "connection_epoch": timing.get("connection_epoch", 0),
-                    "repository_sha": sha,
-                })
+                metadata_hash = hashlib.sha256(json.dumps(market, sort_keys=True).encode()).hexdigest()
+                if metadata_hashes.get(ticker) != metadata_hash:
+                    append_record(tape_path, state, {
+                        "kind": "MARKET_METADATA", "venue": "kalshi", "contract_id": ticker,
+                        "received_at_ms": timestamp, "receive_monotonic_ns": monotonic,
+                        "transport": "PUBLIC_REST_POLLING", "source_event_time": None,
+                        "polling_latency_not_event_latency": True, "metadata_hash": metadata_hash,
+                        "connection_epoch": timing.get("connection_epoch", 0), "repository_sha": sha,
+                    })
+                    metadata_changes += 1
+                metadata_hashes[ticker] = metadata_hash
+        state["metadata_hashes"] = {ticker: metadata_hashes[ticker] for ticker in tickers}
+        tickers = list(dict.fromkeys(tickers))
         discovered = len(tickers)
-        for ticker in tickers:
+        poll_budget = max(1, int(float(section.get("orderbook_poll_time_budget_millis") or 0)
+                                 // float(section.get("estimated_orderbook_request_millis") or 1)))
+        selected_tickers, next_book_cursor = _rotating_book_selection(
+            tickers, _verified_tickers(verified), int(state.get("book_cursor") or 0), poll_budget
+        )
+        state["book_cursor"] = next_book_cursor
+        for ticker in selected_tickers:
             try:
                 raw, book_timing = client.get(
                     "/markets/" + urllib.parse.quote(ticker, safe="") + "/orderbook?depth=100"
@@ -296,6 +358,10 @@ def collect_once(*, repository_root: Path, config_path: Path, mappings_path: Pat
         "joint_execution_simulator": True, "second_venue": "kalshi",
         "transport": "PUBLIC_REST_POLLING", "polling_latency_not_event_latency": True,
         "discovered_markets": discovered, "synchronized_books": synced,
+        "discovery_exhaustive": discovery_exhaustive if transport_state != "DOWN" else False,
+        "metadata_changes": metadata_changes if transport_state != "DOWN" else 0,
+        "book_poll_budget": poll_budget if transport_state != "DOWN" else 0,
+        "book_poll_cursor": int(state.get("book_cursor") or 0),
         "feed_age_ms": 0 if synced else None, "last_sequence": max(state["sequences"].values(), default=0),
         "connection_epoch": int(getattr(client, "connection_epoch", 0)),
         "reconnect_count": int(getattr(client, "reconnect_count", 0)),

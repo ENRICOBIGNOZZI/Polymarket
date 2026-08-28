@@ -51,7 +51,10 @@
     "second_venue": "kalshi",
     "discovery_interval_seconds": 30,
     "orderbook_interval_seconds": 2,
-    "max_discovery_markets": 20,
+    "metadata_page_size": 1000,
+    "pagination_loop_guard_pages": 200,
+    "orderbook_poll_time_budget_millis": 5000,
+    "estimated_orderbook_request_millis": 100,
     "venues": [
       {
         "venue": "kalshi",

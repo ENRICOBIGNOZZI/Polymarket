@@ -1,0 +1,59 @@
+{
+  "schema": "polymarket_v7_adaptive_universe_config_v1",
+  "version": 7,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "source": {
+    "gamma_url": "https://gamma-api.polymarket.com",
+    "page_size": 500,
+    "pagination_loop_guard_pages": 200,
+    "request_timeout_seconds": 20,
+    "refresh_seconds": 60,
+    "retry_initial_seconds": 1,
+    "retry_max_seconds": 30
+  },
+  "eligibility": {
+    "active_required": true,
+    "closed_forbidden": true,
+    "accepting_orders_required": true,
+    "minimum_clob_tokens": 2,
+    "minimum_liquidity_usd": 2.0
+  },
+  "resource_budget": {
+    "hot": {
+      "websocket_asset_capacity": 800,
+      "assets_per_market": 2,
+      "memory_budget_bytes": 1073741824,
+      "estimated_bytes_per_market": 2097152,
+      "cpu_budget_micros_per_second": 240000,
+      "estimated_update_rate_hz_per_market": 3.0,
+      "estimated_cpu_micros_per_update": 200.0
+    },
+    "warm": {
+      "scan_time_budget_millis": 5000,
+      "estimated_scan_millis_per_market": 4.0,
+      "memory_budget_bytes": 536870912,
+      "estimated_bytes_per_market": 262144
+    },
+    "structural": {
+      "scan_time_budget_millis": 5000,
+      "estimated_event_scan_millis": 60
+    }
+  },
+  "tiering": {
+    "hot_score_weights": {
+      "log_liquidity": 0.50,
+      "log_volume_24h": 0.35,
+      "recency": 0.15
+    },
+    "prior_tier_hysteresis_bonus": {
+      "HOT": 0.08,
+      "WARM": 0.03,
+      "COLD": 0.0
+    }
+  },
+  "retention": {
+    "append_only_change_tape": true
+  }
+}

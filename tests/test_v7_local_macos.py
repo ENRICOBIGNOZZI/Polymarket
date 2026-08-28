@@ -5,11 +5,11 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "ops/run_v7_local_macos_fallback.sh"
+SCRIPT = ROOT / "ops/run_v7_local_macos.sh"
 
 
-class V7LocalMacosFallbackContractTest(unittest.TestCase):
-    def test_fallback_is_exact_sha_paper_only_and_isolated(self) -> None:
+class V7LocalMacosContractTest(unittest.TestCase):
+    def test_local_runtime_is_exact_sha_paper_only_and_isolated(self) -> None:
         text = SCRIPT.read_text(encoding="utf-8")
         self.assertIn('[[ "$(uname -s)" == "Darwin" ]]', text)
         self.assertIn("origin main paper-validated", text)
@@ -26,7 +26,7 @@ class V7LocalMacosFallbackContractTest(unittest.TestCase):
         self.assertNotIn("ssh ", text)
         self.assertNotIn("scp ", text)
 
-    def test_fallback_shell_is_syntactically_valid(self) -> None:
+    def test_local_runtime_shell_is_syntactically_valid(self) -> None:
         subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
 
 

@@ -241,14 +241,15 @@ std::string trade_id(const RecentTrade& t) {
 PolymarketApi::PolymarketApi(Config cfg) : cfg_(std::move(cfg)) {}
 
 std::vector<Market> PolymarketApi::discover_markets(std::size_t limit, double min_liquidity) const {
-    const std::size_t requested = std::min<std::size_t>(limit, 2000);
-    const std::size_t page_size = std::clamp<std::size_t>(cfg_.gamma_page_size, 1, 100);
+    const std::size_t requested = limit;
+    const std::size_t page_size = std::clamp<std::size_t>(cfg_.gamma_page_size, 1, 500);
     std::vector<Market> out;
     out.reserve(requested);
     std::unordered_set<std::string> seen;
     std::size_t offset = 0;
 
-    while (out.size() < requested && offset < 10000) {
+    std::size_t pages = 0;
+    while ((requested == 0 || out.size() < requested) && pages < 200) {
         std::ostringstream u;
         u << cfg_.gamma_url << "/markets?active=true&closed=false&limit=" << page_size
           << "&offset=" << offset << "&order=liquidityNum&ascending=false"
@@ -270,11 +271,15 @@ std::vector<Market> PolymarketApi::discover_markets(std::size_t limit, double mi
             if (!v.is_object()) continue;
             if (auto m = parse_market_object(v.as_object(), min_liquidity)) {
                 if (seen.insert(m->id).second) out.push_back(std::move(*m));
-                if (out.size() >= requested) break;
+                if (requested != 0 && out.size() >= requested) break;
             }
         }
         if (arr->size() < page_size) break;
         offset += page_size;
+        ++pages;
+    }
+    if (requested == 0 && pages >= 200) {
+        throw std::runtime_error("Gamma market pagination guard reached before exhaustion");
     }
     return out;
 }

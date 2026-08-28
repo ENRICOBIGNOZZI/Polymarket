@@ -10,7 +10,7 @@ INSTALL_DEPS="${POLYMARKET_LOCAL_INSTALL_DEPS:-0}"
 log(){ printf '[v7-local] %s\n' "$*"; }
 fail(){ printf '[v7-local] ERROR: %s\n' "$*" >&2; exit 1; }
 
-[[ "$(uname -s)" == "Darwin" ]] || fail "local fallback requires macOS"
+[[ "$(uname -s)" == "Darwin" ]] || fail "local V7 runtime requires macOS"
 [[ -d "$ROOT/.git" ]] || fail "$ROOT is not the primary git checkout"
 [[ "$LIVE_DIR" != "$ROOT" ]] || fail "local live checkout must be isolated from the development checkout"
 [[ "$INSTALL_DEPS" == "0" || "$INSTALL_DEPS" == "1" ]] || fail "POLYMARKET_LOCAL_INSTALL_DEPS must be 0 or 1"

@@ -20,6 +20,7 @@ OSINT_SOURCE_REGISTRY="${PM_V7_OSINT_SOURCE_REGISTRY:-config/v7_osint_sources.js
 LIVE_MODEL_SCOPE="${PM_V7_LIVE_MODEL_SCOPE:-config/v7_live_model_scope.json}"
 EXTERNAL_INPUT_CONFIG="${PM_V7_EXTERNAL_INPUT_CONFIG:-config/v7_external_inputs.json}"
 EXTERNAL_MAPPING_REGISTRY="${PM_V7_EXTERNAL_MAPPING_REGISTRY:-config/v7_external_mappings.json}"
+ADAPTIVE_UNIVERSE_CONFIG="${PM_V7_ADAPTIVE_UNIVERSE_CONFIG:-config/v7_adaptive_universe.json}"
 SHA="$(git rev-parse HEAD)"
 [[ "$EXACT_SHA_CI_GREEN" == "true" || "$EXACT_SHA_CI_GREEN" == "false" ]] || {
   echo "PM_V7_EXACT_SHA_CI_GREEN must be true or false" >&2
@@ -32,7 +33,7 @@ PUBLIC_PROXY_PORT="${PM_V7_PUBLIC_PROXY_PORT:-19109}"
 PUBLIC_PROXY="http://127.0.0.1:$PUBLIC_PROXY_PORT"
 WS_PUBLIC_HOST="ws-subscriptions-clob.polymarket.com"
 # Adaptive JSON arenas are bounded per decoder. With the current canonical
-# 40-market universe the Maker owns at most five 8-market shards, while the
+# resource-derived Maker universe owns the declared number of 8-market shards, while the
 # evidence-only markout and fillability observers each own one all-market
 # decoder. The defaults expose a 4 GiB aggregate ceiling without eagerly
 # allocating it; each decoder starts small and grows only for large venue frames.
@@ -49,10 +50,10 @@ CONTROL="$RUN_ROOT/control"
 ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
 LOCK="$CONTROL/runtime.lock"
-mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/fast_structural" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/osint" "$RUN_ROOT/market_open" "$RUN_ROOT/shadow/sports_latency" "$RUN_ROOT/shadow/cross_platform" "$RUN_ROOT/shadow/wallet_intelligence" "$RUN_ROOT/learned_execution"
+mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/osint" "$RUN_ROOT/market_open" "$RUN_ROOT/shadow/sports_latency" "$RUN_ROOT/shadow/cross_platform" "$RUN_ROOT/shadow/wallet_intelligence" "$RUN_ROOT/learned_execution"
 touch "$RUN_ROOT/ledger/execution.jsonl"
 
-python3 - "$CONFIG" "$MAKER_POLICY" "$EXTERNAL_FAIR_POLICY" "$OSINT_SOURCE_REGISTRY" "$LIVE_MODEL_SCOPE" "$EXTERNAL_INPUT_CONFIG" "$EXTERNAL_MAPPING_REGISTRY" "$WS_JSON_ARENA_MAKER_MAX_BYTES" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
+python3 - "$CONFIG" "$MAKER_POLICY" "$EXTERNAL_FAIR_POLICY" "$OSINT_SOURCE_REGISTRY" "$LIVE_MODEL_SCOPE" "$EXTERNAL_INPUT_CONFIG" "$EXTERNAL_MAPPING_REGISTRY" "$ADAPTIVE_UNIVERSE_CONFIG" "$WS_JSON_ARENA_MAKER_MAX_BYTES" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
 import json,sys
 cfg=json.load(open(sys.argv[1]))
 v7=cfg.get("v7") or {}
@@ -62,6 +63,7 @@ osint_sources=json.load(open(sys.argv[4]))
 live_scope=json.load(open(sys.argv[5]))
 external_inputs=json.load(open(sys.argv[6]))
 external_mappings=json.load(open(sys.argv[7]))
+adaptive_universe=json.load(open(sys.argv[8]))
 registry_path=v7.get("strategy_registry")
 assert isinstance(registry_path,str) and registry_path
 registry=json.load(open(registry_path))
@@ -111,10 +113,15 @@ assert external_mappings.get("version") == 7
 assert external_mappings.get("paper_only") is True
 assert external_mappings.get("automatic_promotion") is False
 assert all(isinstance(external_mappings.get(name), list) for name in ("osint","sports_latency","cross_platform"))
-maker_arena=int(sys.argv[8])
-observer_arena=int(sys.argv[9])
-fillability_arena=int(sys.argv[10])
-total_budget=int(sys.argv[11])
+assert adaptive_universe.get("schema") == "polymarket_v7_adaptive_universe_config_v1"
+assert adaptive_universe.get("version") == 7
+assert adaptive_universe.get("paper_only") is True
+assert adaptive_universe.get("authenticated_execution") is False
+assert adaptive_universe.get("real_order_submission") is False
+maker_arena=int(sys.argv[9])
+observer_arena=int(sys.argv[10])
+fillability_arena=int(sys.argv[11])
+total_budget=int(sys.argv[12])
 assert cfg.get("engine_version")==7
 assert cfg.get("paper_only") is True
 assert v7.get("paper_only") is True
@@ -129,6 +136,11 @@ assert maker.get("architecture",{}).get("single_account_allocator") is True
 assert maker.get("architecture",{}).get("single_canonical_ledger_writer") is True
 assert maker.get("architecture",{}).get("fast_path") == "cpp_websocket_event_driven"
 assert maker.get("architecture",{}).get("slow_path") == "python_reward_selection_and_model_fit"
+capacity=maker.get("market_selection",{}).get("resource_capacity",{})
+max_shards=int(capacity.get("shard_count_budget",0))
+markets_per_shard=int(capacity.get("markets_per_shard",0))
+assert max_shards > 0 and markets_per_shard == 8
+assert int(maker.get("market_selection",{}).get("max_active_markets",0)) == max_shards*markets_per_shard
 assert external.get("execution_authority") == "PAPER_EXECUTION_OWNER"
 assert external.get("paper_only") is True
 assert external.get("authenticated_execution") is False
@@ -140,7 +152,7 @@ assert external.get("gate_classes",{}).get("B_ECONOMIC_MATURITY",{}).get("may_bl
 assert maker_arena >= 16*1024*1024
 assert observer_arena >= 16*1024*1024
 assert fillability_arena >= 16*1024*1024
-assert maker_arena*5 + observer_arena + fillability_arena <= total_budget
+assert maker_arena*max_shards + observer_arena + fillability_arena <= total_budget
 PY
 
 if [[ -d "$LOCK" ]]; then
@@ -312,6 +324,47 @@ fi
 [[ -n "$PM_V7_WS_RESOLVE_IPS" ]] || { echo "public WS DNS resolution returned no addresses" >&2; exit 77; }
 export PM_V7_WS_RESOLVE_IPS
 
+# One canonical exhaustive metadata plane. The venue terminates pagination;
+# HOT/WARM capacities are calculated from declared CPU/memory/WS budgets and
+# COLD preserves the remainder. No strategy owns a parallel universe cache.
+python3 scripts/v7_adaptive_universe.py \
+  --config "$ADAPTIVE_UNIVERSE_CONFIG" --output-dir "$RUN_ROOT/universe" \
+  --model-sha "$SHA" --loop \
+  >> "$RUN_ROOT/universe/collector.log" 2>&1 &
+pids+=("$!")
+universe_ready=0
+for _ in $(seq 1 120); do
+  if python3 - "$RUN_ROOT/universe/status.json" "$SHA" <<'PY' >/dev/null 2>&1
+import json,sys
+value=json.load(open(sys.argv[1]))
+ok=(value.get("schema")=="polymarket_v7_adaptive_universe_status_v1"
+    and value.get("model_sha")==sys.argv[2] and value.get("state")=="OPERATIONAL"
+    and value.get("discovery_exhaustive") is True and int(value.get("eligible_markets") or 0)>0
+    and value.get("paper_only") is True and value.get("authenticated_execution") is False
+    and value.get("real_order_submission") is False)
+raise SystemExit(0 if ok else 1)
+PY
+  then
+    universe_ready=1
+    break
+  fi
+  sleep 0.5
+done
+if [[ "$universe_ready" != 1 ]]; then
+  echo "adaptive V7 universe did not complete exhaustive discovery" >&2
+  exit 77
+fi
+read -r HOT_MARKET_BUDGET ACTIVE_SCAN_MARKET_BUDGET STRUCTURAL_SCAN_EVENT_BUDGET < <(python3 - "$RUN_ROOT/universe/status.json" <<'PY'
+import json,sys
+value=json.load(open(sys.argv[1]))
+tiers=value.get("tier_counts") or {}
+hot=max(1,int(tiers.get("HOT") or 0))
+active=max(hot,hot+int(tiers.get("WARM") or 0))
+structural=max(1,int((value.get("resource_capacities") or {}).get("structural_scan_budget_events") or 0))
+print(hot,active,structural)
+PY
+)
+
 maker_selection_ready() {
   python3 - "$RUN_ROOT/micro_maker/reward_selection.json" <<'PY' >/dev/null 2>&1
 import json,sys
@@ -331,7 +384,7 @@ PY
   --config "$CONFIG" \
   --run-dir "$RUN_ROOT" \
   --data-url "https://data-api.polymarket.com" \
-  --markets 1000 --batch 40 --min-liquidity 2 \
+  --markets "$ACTIVE_SCAN_MARKET_BUDGET" --batch 40 --min-liquidity 2 \
   --lookback-seconds 180 --interval 5 --loop \
   >> "$RUN_ROOT/trade_recorder.log" 2>&1 &
 pids+=("$!")
@@ -366,7 +419,7 @@ pids+=("$!")
   --relations "$FAST_STRUCTURAL_RELATIONS" \
   --external-signals "$RUN_ROOT/external/external_signals.csv" \
   --run-dir "$RUN_ROOT/fast_structural" --run-root "$RUN_ROOT" --model-sha "$SHA" \
-  --markets 1000 --min-liquidity 2 --shard-size 200 \
+  --markets "$HOT_MARKET_BUDGET" --min-liquidity 2 --shard-size 200 \
   >> "$RUN_ROOT/fast_structural/runtime.log" 2>&1 &
 pids+=("$!")
 
@@ -516,7 +569,7 @@ pids+=("$!")
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_hard_arb_guard.py \
       --config "$ALLOC/hard_arb.json" --run-dir "$RUN_ROOT/hard_arb" \
-      --markets 1000 --min-liquidity 2 --max-events 80 --min-edge 0.00005 \
+      --markets 0 --min-liquidity 2 --max-events "$STRUCTURAL_SCAN_EVENT_BUDGET" --min-edge 0.00005 \
       --max-trade-usd 1e100 --slippage-bps 5 --leg-latency-ms 100 \
       >> "$RUN_ROOT/hard_arb/runtime.log" 2>&1 || true
     sleep 5
@@ -527,7 +580,7 @@ pids+=("$!")
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_micro_taker_worker.py \
       --config "$ALLOC/micro_taker.json" --run-dir "$RUN_ROOT/micro_taker" \
-      --trade-tape "$RUN_ROOT/trade_tape.csv" --markets 1000 --min-liquidity 2 \
+      --trade-tape "$RUN_ROOT/trade_tape.csv" --markets "$ACTIVE_SCAN_MARKET_BUDGET" --min-liquidity 2 \
       --horizon-seconds 30 --max-trade-usd 1e100 --min-edge 0.00005 --slippage-bps 5 \
       >> "$RUN_ROOT/micro_taker/runtime.log" 2>&1 || true
     sleep 5

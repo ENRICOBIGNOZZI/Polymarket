@@ -239,6 +239,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     osint = _json(run_root / "osint" / "status.json")
     osint_mapping = _json(run_root / "osint" / "mapping_status.json")
     market_open = _json(run_root / "market_open" / "status.json")
+    universe = _json(run_root / "universe" / "status.json")
     economics_path = run_root / "canonical_economics.json"
     canonical = _json(economics_path)
     joint = _json(run_root / "learned_execution" / "joint_policy.json")
@@ -336,6 +337,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "osint": osint,
         "osint_mapping": osint_mapping,
         "market_open": market_open,
+        "universe": universe,
         "canonical_economics": canonical,
         "joint_policy": joint,
         "ledger": ledger,
@@ -461,6 +463,21 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     osint = snapshot.get("osint") if isinstance(snapshot.get("osint"), dict) else {}
     osint_mapping = snapshot.get("osint_mapping") if isinstance(snapshot.get("osint_mapping"), dict) else {}
     market_open = snapshot.get("market_open") if isinstance(snapshot.get("market_open"), dict) else {}
+    universe = snapshot.get("universe") if isinstance(snapshot.get("universe"), dict) else {}
+    if (universe.get("schema") != "polymarket_v7_adaptive_universe_status_v1"
+            or universe.get("model_sha") != snapshot.get("sha")
+            or universe.get("state") != "OPERATIONAL"
+            or universe.get("discovery_exhaustive") is not True
+            or universe.get("pagination_loop_guard_hit") is not False
+            or universe.get("paper_only") is not True
+            or universe.get("authenticated_execution") is not False
+            or universe.get("real_order_submission") is not False
+            or _integer(universe.get("eligible_markets")) <= 0):
+        reasons.append("adaptive_universe_missing_incomplete_or_unsafe")
+    try: universe_age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(universe.get("timestamp_ms") or 0)
+    except (TypeError, ValueError, OverflowError): universe_age_ms = (max_runtime_age + 1) * 1000
+    if universe_age_ms < -5_000 or universe_age_ms > max_runtime_age * 1000:
+        reasons.append("adaptive_universe_stale")
     if osint.get("schema") != "polymarket_v7_osint_collector_status_v1" or osint.get("paper_only") is not True or osint.get("authenticated_execution") is not False or osint.get("real_order_submission") is not False: reasons.append("osint_live_collector_missing_or_unsafe")
     if (
         osint_mapping.get("schema") != "polymarket_v7_osint_mapping_status_v1"
@@ -709,6 +726,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     osint = snapshot.get("osint") if isinstance(snapshot.get("osint"), dict) else {}
     osint_mapping = snapshot.get("osint_mapping") if isinstance(snapshot.get("osint_mapping"), dict) else {}
     market_open = snapshot.get("market_open") if isinstance(snapshot.get("market_open"), dict) else {}
+    universe = snapshot.get("universe") if isinstance(snapshot.get("universe"), dict) else {}
     def collector_fresh(status: dict[str, Any]) -> bool:
         try:
             age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(status.get("timestamp_ms") or 0)
@@ -827,6 +845,12 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_market_open_new_markets", market_open.get("new_markets")),
         _metric("polymarket_v7_market_open_emitted_milestones", market_open.get("emitted_milestones")),
         _metric("polymarket_v7_market_open_semantic_verified", market_open.get("semantic_verified_markets")),
+        _metric("polymarket_v7_universe_discovery_exhaustive", 1 if universe.get("discovery_exhaustive") is True else 0),
+        _metric("polymarket_v7_universe_discovered_markets", universe.get("discovered_markets")),
+        _metric("polymarket_v7_universe_eligible_markets", universe.get("eligible_markets")),
+        _metric("polymarket_v7_universe_skipped_markets", universe.get("skipped_markets")),
+        _metric("polymarket_v7_universe_scan_duration_milliseconds", universe.get("scan_duration_ms")),
+        _metric("polymarket_v7_universe_pages", universe.get("pages")),
         _metric("polymarket_execution_opportunities", _integer(ledger_total.get("opportunities"))),
         _metric("polymarket_execution_candidates", _integer(ledger_total.get("candidates"))),
         _metric("polymarket_execution_makes", _integer(ledger_total.get("makes"))),
@@ -843,6 +867,15 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_execution_final_pnl_usd", _number(ledger_total.get("final_pnl"))),
         _metric("polymarket_execution_capital_hours", _number(ledger_total.get("capital_duration_ms")) / 3_600_000.0),
     ]
+    for tier, count in sorted((universe.get("tier_counts") or {}).items()):
+        lines.append(_metric("polymarket_v7_universe_tier_markets", count, {"tier": tier}))
+    for reason, count in sorted((universe.get("skipped_by_reason") or {}).items()):
+        lines.append(_metric("polymarket_v7_universe_skipped_by_reason", count, {"reason": reason}))
+    capacities = universe.get("resource_capacities") if isinstance(universe.get("resource_capacities"), dict) else {}
+    for dimension in capacities.get("hot_limiting_dimensions") or []:
+        lines.append(_metric("polymarket_v7_universe_resource_limit", 1, {"tier": "HOT", "dimension": dimension}))
+    for dimension in capacities.get("warm_limiting_dimensions") or []:
+        lines.append(_metric("polymarket_v7_universe_resource_limit", 1, {"tier": "WARM", "dimension": dimension}))
     if economics["gross_exposure"] is not None:
         lines.append(_metric("polymarket_runtime_gross_exposure_usd", economics["gross_exposure"]))
     if economics["capital_utilization"] is not None:

@@ -317,8 +317,7 @@ struct SelectedMarket {
     double rewards_min_size = 0.0;
 };
 
-[[nodiscard]] std::vector<SelectedMarket> load_selection(const fs::path& path,
-                                                         std::size_t max_markets) {
+[[nodiscard]] std::vector<SelectedMarket> load_selection(const fs::path& path) {
     const auto root = read_json(path);
     if (!root.is_object()) throw std::runtime_error("maker selection must be object");
     const auto& object = root.as_object();
@@ -327,6 +326,12 @@ struct SelectedMarket {
     }
     if (const auto* auth = find_value(object, "authenticated_execution"); auth != nullptr && boolean(auth, true)) {
         throw std::runtime_error("maker selection enables authenticated execution");
+    }
+    const auto* capacity_value = find_value(object, "resource_capacity_markets");
+    const auto max_markets = static_cast<std::size_t>(std::max<std::int64_t>(
+        0, integer(capacity_value, 0)));
+    if (max_markets == 0 || max_markets > pm::v7::maker::kMaxMakerExecutionMarkets) {
+        throw std::runtime_error("maker selection resource capacity is invalid");
     }
     const auto* raw = find_value(object, "markets");
     if (raw == nullptr || !raw->is_array()) throw std::runtime_error("maker selection missing markets");
@@ -1406,7 +1411,7 @@ std::vector<std::unique_ptr<MarketContext>> build_markets(
     while (!g_stop.load(std::memory_order_relaxed)) {
         try {
             if (fs::exists(options.selection) && fs::file_size(options.selection) > 0) {
-                selected = load_selection(options.selection, 40);
+                selected = load_selection(options.selection);
                 break;
             }
         } catch (const std::exception& error) {
