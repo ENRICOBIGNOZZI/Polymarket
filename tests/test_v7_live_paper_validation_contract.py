@@ -27,14 +27,16 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             "promotion_ready",
             "Record economic readiness separately from PAPER deployment",
             "PAPER deployment is a technical/safety evidence-collection state",
-            "Advance paper-validated to exact technically validated V7 PAPER SHA",
+            "cutover_approved:",
+            "Advance paper-validated after explicit cutover approval",
+            "github.event_name == 'workflow_dispatch' && inputs.cutover_approved == true",
+            "paper-validated unchanged: explicit cutover approval was not supplied",
             "paper_deployment_mode=evidence_collection",
             "git merge-base --is-ancestor \"$old_validated\" \"$VALIDATION_SHA\"",
             "-F force=false",
         ):
             self.assertIn(required, text)
         for forbidden in (
-            "paper-validated unchanged",
             "Advance paper-validated to exact economically validated V7 SHA",
             "Polymarket Research Policy",
             "research-policy.yml",
@@ -45,7 +47,21 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             "git push origin paper-validated",
             "force=true",
             "paper_v7_loop.sh",
+            "schedule:",
         ):
+            self.assertNotIn(forbidden, text)
+
+    def test_deploy_is_manual_exact_sha_cutover_only(self) -> None:
+        text = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text(encoding="utf-8")
+        for required in (
+            "expected_sha:",
+            "cutover_approved:",
+            "inputs.cutover_approved == true",
+            "EXPECTED_VALIDATED_SHA: ${{ inputs.expected_sha }}",
+            "canonical refs do not match the explicitly approved SHA",
+        ):
+            self.assertIn(required, text)
+        for forbidden in ("schedule:", "workflow_run:", "github.event_name == 'schedule'"):
             self.assertNotIn(forbidden, text)
 
     def test_cutover_contract_reads_v7_safety_authority(self) -> None:

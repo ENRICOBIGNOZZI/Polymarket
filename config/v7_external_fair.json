@@ -1,0 +1,239 @@
+{
+  "schema_version": 1,
+  "architecture": "V7",
+  "component": "settlement_aware_external_fair",
+  "enabled": true,
+  "execution_authority": "SHADOW_ZERO_AUTHORITY",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "incumbent_policy": {
+    "keep_healthy_incumbent_running": true,
+    "mutate_incumbent_worktree": false,
+    "simultaneous_blue_green_execution": false
+  },
+  "scope": {
+    "active_contract_families": [
+      "BTC_USD_UPDOWN_5M"
+    ],
+    "future_inactive_contract_families": [
+      "ETH_USD_UPDOWN",
+      "SOL_USD_UPDOWN",
+      "CRYPTO_15M",
+      "CRYPTO_4H"
+    ],
+    "unsupported_market_behavior": "INCUMBENT_V7_UNCHANGED",
+    "external_fair_required_market_failure": "CANCEL_WITHDRAW_NO_NEW_RISK"
+  },
+  "contract_registry": {
+    "path": "runs/paper_v7_live/external_fair/contract_registry.json",
+    "parser_version": "btc-updown-chainlink-twap-v1",
+    "verified_templates_only": true,
+    "rules_hash_required": true,
+    "rules_hash_binds_resolution_source": true,
+    "explicit_reference_semantics_required": true,
+    "fail_closed": true,
+    "fuzzy_parse_authorizes_execution": false
+  },
+  "oracle": {
+    "provider": "Chainlink",
+    "product": "contract_specific_data_streams_twap",
+    "transport_binding": "UNBOUND_FAIL_CLOSED_UNTIL_EXACT_PROVIDER_SCHEMA_AND_PROVENANCE_VERIFIED",
+    "resolution_source_from_contract": true,
+    "hardcoded_window_seconds": null,
+    "max_age_ns": 2000000000,
+    "continuity_states": [
+      "LIVE_CONTINUOUS",
+      "RECOVERED_SAME_ORACLE_SNAPSHOT",
+      "CONTINUITY_UNKNOWN"
+    ],
+    "unknown_continuity_behavior": "INVALID",
+    "exchange_price_may_replace_oracle": false,
+    "recovery_requires_same_oracle_provenance": true
+  },
+  "external_venues": {
+    "instrument_type": "SPOT",
+    "venues": [
+      "BINANCE_SPOT",
+      "COINBASE_SPOT",
+      "BYBIT_SPOT"
+    ],
+    "min_healthy_sources": 2,
+    "max_age_ns": 1000000000,
+    "max_disagreement_bps": 50.0,
+    "single_venue_fallback": false,
+    "receive_time_authoritative": true,
+    "source_timestamps_diagnostic_only": true,
+    "persistent_event_driven": true,
+    "rest_polling_hft_trigger": false
+  },
+  "causality": {
+    "causal_cut_required": true,
+    "invariant": "max_input_receive_monotonic_ns<=decision_monotonic_ns",
+    "deterministic_receive_order_replay": true,
+    "future_source_timestamp_rewritten": false,
+    "clock_anomaly_behavior": "QUARANTINE"
+  },
+  "fair_value": {
+    "benchmark_ladder": [
+      "PM_MID_DIAGNOSTIC_ONLY",
+      "ORACLE_ONLY",
+      "EXTERNAL_MEDIAN",
+      "STRUCTURAL",
+      "STRUCTURAL_PLUS_BRIDGE",
+      "FULL_EXTERNAL",
+      "CHAMPION",
+      "CHALLENGER"
+    ],
+    "pm_mid_directional_fallback": false,
+    "pure_external_benchmark_required": true,
+    "yes_no_complementarity_required": true,
+    "probability_bounds_required": true,
+    "default_model_mature": false,
+    "champion_pointer": "runs/paper_v7_live/external_fair/model_registry/fair_value_champion.json",
+    "challenger_pointer": "runs/paper_v7_live/external_fair/model_registry/fair_value_challenger.json",
+    "max_age_ns": 1000000000,
+    "uncertainty": {
+      "z": 1.64,
+      "max_probability_width": 0.25,
+      "components": [
+        "PARAMETER",
+        "ORACLE_BRIDGE",
+        "CALIBRATION",
+        "VENUE_DISAGREEMENT",
+        "JUMP",
+        "MODEL_DRIFT"
+      ],
+      "execution_uncertainty_is_separate": true
+    },
+    "microstructure": {
+      "enabled": true,
+      "challenger_only_initially": true,
+      "bounded_logit_adjustment": 0.25,
+      "may_dominate_structural_probability": false
+    }
+  },
+  "cancel_overlay": {
+    "implemented": true,
+    "enabled": true,
+    "authority": "SHADOW",
+    "robust_capture_floor_per_share": 0.0,
+    "bypass_min_quote_lifetime_for_critical_cancel": true,
+    "external_event_can_trigger_without_pm_event": true,
+    "critical_reasons": [
+      "FAIR_SHOCK",
+      "ORACLE_INVALID",
+      "EXTERNAL_STATE_INVALID",
+      "UNCERTAINTY_SPIKE",
+      "VENUE_DISAGREEMENT_LIMIT",
+      "RULES_HASH_MISMATCH",
+      "FEE_CHANGE",
+      "MODEL_INVALID",
+      "RISK",
+      "KILL"
+    ]
+  },
+  "maker": {
+    "external_fair_repricing_implemented": true,
+    "authority": "SHADOW",
+    "external_fair_enabled_for_live_quotes": false,
+    "pm_state_role": [
+      "BOOK",
+      "QUEUE",
+      "FILLABILITY",
+      "TOXICITY",
+      "PLACEMENT"
+    ],
+    "pm_mid_directional_weight": 0.0,
+    "inventory_skew_remains_active": true,
+    "execution_model_separate_from_fair_value": true,
+    "execution_evidence_maturity": "COLD_START",
+    "economic_promotion_requires_fill_conditioned_evidence": true
+  },
+  "taker": {
+    "native_v7_implemented": true,
+    "authority": "SHADOW",
+    "enabled_for_execution": false,
+    "economic_model": "HOLD_TO_SETTLEMENT",
+    "authoritative_fee_required": true,
+    "unknown_fee_behavior": "NO_TAKE",
+    "minimum_robust_ev_per_share": 0.001,
+    "max_depth_fraction": 0.5,
+    "depth_survival_fraction": 0.75,
+    "base_execution_risk_per_share": 0.0005,
+    "latency_risk_per_second": 0.001,
+    "fractional_kelly": 0.1,
+    "max_market_capital_fraction": 0.02,
+    "self_cross_policy": "CANCEL_CONFIRM_CANONICAL_STATE_THEN_TAKE",
+    "paper_tif": "FAK"
+  },
+  "unified_action": {
+    "space": [
+      "MAKE",
+      "TAKE",
+      "CANCEL",
+      "WITHDRAW",
+      "NOTHING"
+    ],
+    "purposes": [
+      "ALPHA",
+      "INVENTORY_REDUCTION",
+      "RISK",
+      "LIQUIDATION"
+    ],
+    "priority": [
+      "KILL",
+      "DANGEROUS_CANCEL",
+      "LIQUIDATION",
+      "INVENTORY_REDUCTION",
+      "POSITIVE_ROBUST_TAKE",
+      "POSITIVE_ROBUST_MAKE",
+      "NOTHING"
+    ],
+    "single_oms": true,
+    "single_inventory_truth": true,
+    "single_capital_allocator": true,
+    "single_ledger_writer": true
+  },
+  "training": {
+    "statistical_unit": "CONTRACT_TTE_BUCKET",
+    "random_shuffle": false,
+    "walk_forward": "EXPANDING",
+    "embargo_seconds": 60,
+    "calibration": "PLATT_INITIAL",
+    "refit_min_new_resolved_contracts": 20,
+    "refit_creates": "CHALLENGER",
+    "refit_promotes": false
+  },
+  "promotion": {
+    "automatic_promotion": false,
+    "minimum_oos_contracts": 100,
+    "minimum_forward_shadow_contracts": 50,
+    "forward_shadow_must_be_frozen": true,
+    "maximum_ece": 0.05,
+    "calibration_slope_range": [
+      0.75,
+      1.25
+    ],
+    "interval_coverage_range": [
+      0.85,
+      0.99
+    ],
+    "positive_conservative_net_replay_pnl_required": true,
+    "edge_monotonicity_required": true,
+    "zero_causality_failures_required": true,
+    "exact_code_sha_required": true,
+    "rules_scope_match_required": true
+  },
+  "hot_path": {
+    "python": false,
+    "rest": false,
+    "filesystem": false,
+    "database": false,
+    "synchronous_logging": false,
+    "remote_model_inference": false,
+    "hot_model_loading": false,
+    "unbounded_queue": false,
+    "global_decision_mutex": false
+  }
+}

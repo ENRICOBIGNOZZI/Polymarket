@@ -1,0 +1,225 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"text": "UNHEALTHY"}, "1": {"text": "HEALTHY"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "polymarket_external_fair_healthy", "refId": "A"}],
+      "title": "External Fair Health",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"text": "EXECUTION"}, "1": {"text": "SHADOW / ZERO AUTH"}}, "type": "value"}]}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "id": 2,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "polymarket_external_fair_shadow_zero_authority", "refId": "A"}],
+      "title": "Authority",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "id": 3,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "polymarket_external_fair_tte_seconds", "refId": "A"}],
+      "title": "Time to Expiry",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+      "id": 4,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "polymarket_external_fair_healthy_venue_count", "refId": "A"}],
+      "title": "Healthy Venues",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "decbytes"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+      "id": 5,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "polymarket_external_fair_tape_dropped", "refId": "A"}],
+      "title": "Tape Drops",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+      "id": 6,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "polymarket_external_fair_model_coverage", "refId": "A"}],
+      "title": "Interval Coverage",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "id": 7,
+      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {"expr": "polymarket_external_fair_yes", "legendFormat": "fair yes", "refId": "A"},
+        {"expr": "polymarket_external_fair_yes_lower", "legendFormat": "lower", "refId": "B"},
+        {"expr": "polymarket_external_fair_yes_upper", "legendFormat": "upper", "refId": "C"},
+        {"expr": "polymarket_external_fair_structural_probability", "legendFormat": "structural", "refId": "D"},
+        {"expr": "polymarket_external_fair_pm_mid", "legendFormat": "PM mid", "refId": "E"}
+      ],
+      "title": "Settlement Fair vs Polymarket",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "id": 8,
+      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {"expr": "polymarket_external_fair_reference_value", "legendFormat": "opening reference", "refId": "A"},
+        {"expr": "polymarket_external_fair_oracle_value", "legendFormat": "settlement oracle", "refId": "B"},
+        {"expr": "polymarket_external_fair_venue_price", "legendFormat": "{{venue}}", "refId": "C"}
+      ],
+      "title": "Reference / Oracle / External Spot",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 12},
+      "id": 9,
+      "options": {"legend": {"calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [{"expr": "polymarket_external_fair_latency_ms", "legendFormat": "{{stage}} {{quantile}}", "refId": "A"}],
+      "title": "External-Fair Latency Chain",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 12},
+      "id": 10,
+      "options": {"legend": {"calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [{"expr": "polymarket_external_fair_actions_total", "legendFormat": "{{action}}", "refId": "A"}],
+      "title": "MAKE / TAKE / CANCEL / WITHDRAW / NOTHING",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 12},
+      "id": 11,
+      "options": {"legend": {"calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [{"expr": "polymarket_external_fair_cancel_reason_total", "legendFormat": "{{reason}}", "refId": "A"}],
+      "title": "Critical Cancel Reasons",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 19},
+      "id": 12,
+      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {"expr": "polymarket_external_fair_maker_robust_ev", "legendFormat": "maker robust EV", "refId": "A"},
+        {"expr": "polymarket_external_fair_taker_robust_ev", "legendFormat": "taker robust EV", "refId": "B"},
+        {"expr": "polymarket_external_fair_realized_pnl", "legendFormat": "realized PnL", "refId": "C"},
+        {"expr": "polymarket_external_fair_terminal_pnl", "legendFormat": "terminal PnL", "refId": "D"}
+      ],
+      "title": "Economics",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 19},
+      "id": 13,
+      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {"expr": "polymarket_external_fair_model_log_loss", "legendFormat": "LogLoss", "refId": "A"},
+        {"expr": "polymarket_external_fair_model_brier", "legendFormat": "Brier", "refId": "B"},
+        {"expr": "polymarket_external_fair_model_ece", "legendFormat": "ECE", "refId": "C"},
+        {"expr": "polymarket_external_fair_model_drift_score", "legendFormat": "drift", "refId": "D"}
+      ],
+      "title": "Model Quality / Drift",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 19},
+      "id": 14,
+      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {"expr": "polymarket_external_fair_cancel_latency_ms", "legendFormat": "cancel {{quantile}}", "refId": "A"},
+        {"expr": "polymarket_external_fair_stale_quote_exposure_ms", "legendFormat": "stale quote exposure", "refId": "B"}
+      ],
+      "title": "Cancel Latency / Toxic Exposure",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "bps"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 26},
+      "id": 15,
+      "options": {"legend": {"calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {"expr": "polymarket_external_fair_venue_dispersion_bps", "legendFormat": "cross-venue dispersion", "refId": "A"},
+        {"expr": "polymarket_external_fair_venue_basis_bps", "legendFormat": "{{venue}} basis", "refId": "B"}
+      ],
+      "title": "Venue Disagreement / Basis",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 26},
+      "id": 16,
+      "options": {"legend": {"calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {"expr": "polymarket_external_fair_venue_actionable_lead_ms", "legendFormat": "{{venue}} actionable", "refId": "A"},
+        {"expr": "polymarket_external_fair_venue_economic_lead_ms", "legendFormat": "{{venue}} economic", "refId": "B"}
+      ],
+      "title": "Economic vs Receive-Time Actionable Lead",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 26},
+      "id": 17,
+      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {"expr": "polymarket_external_fair_tape_accepted", "legendFormat": "accepted", "refId": "A"},
+        {"expr": "polymarket_external_fair_tape_written", "legendFormat": "written", "refId": "B"},
+        {"expr": "polymarket_external_fair_tape_dropped", "legendFormat": "dropped", "refId": "C"}
+      ],
+      "title": "Causal Evidence Tape",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["polymarket", "v7", "external-fair", "settlement"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Polymarket V7 — Settlement-Aware External Fair",
+  "uid": "polymarket-v7-external-fair",
+  "version": 1,
+  "weekStart": ""
+}

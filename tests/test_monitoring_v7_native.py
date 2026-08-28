@@ -40,6 +40,12 @@ class V7NativeMonitoringTest(unittest.TestCase):
                 "authenticated_execution": False,
                 "real_order_submission": False,
                 "model_sha": sha,
+                "config_hash": "config-hash",
+                "policy_hash": "policy-hash",
+                "model_hash": "model-hash",
+                "run_id": "run-id",
+                "ledger_id": "ledger-id",
+                "server_id": "server-id",
                 "pid": os.getpid(),
                 "state": "running",
                 "killed": False,
@@ -140,6 +146,7 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertEqual(exporter.health_reasons(snapshot), [])
             metrics = exporter.render_prometheus(snapshot)
             self.assertIn("polymarket_v7_runtime_info 1", metrics)
+            self.assertIn("polymarket_v7_runtime_identity_info", metrics)
             self.assertIn('polymarket_runtime_info{adapter="v7_native",run_root="paper_v7_live",version="v7"} 1', metrics)
             self.assertIn("polymarket_v7_operator_authority_valid 1", metrics)
             self.assertIn("polymarket_v7_authority_max_drawdown_ratio 0.15", metrics)

@@ -1,0 +1,43 @@
+{
+  "schema": "polymarket_v7_strategy_registry_v1",
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "real_order_submission": false,
+    "real_capital_at_risk": false,
+    "maximum_drawdown": 0.15
+  },
+  "ownership": {
+    "single_runtime_owner": true,
+    "single_oms": true,
+    "single_ledger": true,
+    "single_inventory": true,
+    "single_allocator": true,
+    "single_risk": true
+  },
+  "governance": {
+    "automatic_promotion": false,
+    "chronological_oos_required": true,
+    "causal_replay_required": true,
+    "forward_shadow_required": true,
+    "robust_2x_cost_stress_required": true,
+    "operator_promotion_required": true
+  },
+  "strategies": [
+    {"family":"professional_maker","priority":"P0","frequency":"HFT-0","authority":"PAPER","actions":["MAKE","CANCEL","WITHDRAW","NOTHING"],"independent_sample_unit":"order_or_independent_market_event_cluster","strategy_specific_execution_model":"maker_queue_fill_hazard_and_fill_conditioned_markout","enabled":true,"reason":"canonical incumbent; fillability evidence remains promotion bottleneck"},
+    {"family":"fast_structural","priority":"P0","frequency":"HFT-0","authority":"PAPER","actions":["ARB","CANCEL","NOTHING"],"independent_sample_unit":"opportunity_bundle","strategy_specific_execution_model":"direct_multileg_joint_completion_states","enabled":true,"reason":"existing V7 structural PAPER sleeve"},
+    {"family":"hard_arb","priority":"P0","frequency":"HFT-0","authority":"PAPER","actions":["ARB","CANCEL","NOTHING"],"independent_sample_unit":"opportunity_bundle","strategy_specific_execution_model":"sequential_leg_state_and_unwind","enabled":true,"reason":"existing V7 full-depth PAPER complete-set sleeve"},
+    {"family":"graph_rv","priority":"P1","frequency":"FAST-1","authority":"PAPER","actions":["ARB","CANCEL","NOTHING"],"independent_sample_unit":"market_event_date_cluster","strategy_specific_execution_model":"graph_multileg_joint_completion_states","enabled":true,"reason":"existing V7 graph relative-value PAPER sleeve"},
+    {"family":"crypto_settlement_fair","priority":"P0","frequency":"HFT-0","authority":"SHADOW","actions":["CANCEL","WITHDRAW","NOTHING"],"independent_sample_unit":"contract","strategy_specific_execution_model":"settlement_oracle_bridge_with_contract_uncertainty","enabled":true,"reason":"implemented challenger; requires contract-level chronological and forward evidence"},
+    {"family":"crypto_informed_taker","priority":"P0","frequency":"HFT-0","authority":"SHADOW","actions":["TAKE","CANCEL","NOTHING"],"independent_sample_unit":"contract","strategy_specific_execution_model":"taker_fill_fraction_race_and_full_depth","enabled":true,"reason":"implemented challenger; no PAPER authority before fair-value gates pass"},
+    {"family":"micro_taker","priority":"P1","frequency":"FAST-1","authority":"PAPER","actions":["TAKE","NOTHING"],"independent_sample_unit":"order_or_independent_market_event_cluster","strategy_specific_execution_model":"short_horizon_round_trip_fill_and_exit","enabled":true,"reason":"existing selective V7 benchmark sleeve"},
+    {"family":"osint","priority":"P1","frequency":"EVENT-2","authority":"RESEARCH","actions":["MAKE","TAKE","CANCEL","NOTHING"],"independent_sample_unit":"independent_information_event","strategy_specific_execution_model":"event_family_edge_decay_and_taker_race","enabled":true,"reason":"kernel implemented; authoritative source adapters and OOS likelihoods not yet evidenced"},
+    {"family":"sports_latency","priority":"P1/P2","frequency":"HFT-0","authority":"RESEARCH","actions":["TAKE","CANCEL","NOTHING"],"independent_sample_unit":"game_event_sequence_cluster","strategy_specific_execution_model":"sport_state_transition_and_taker_race","enabled":true,"reason":"kernel implemented; verified streaming feed not configured"},
+    {"family":"cross_platform","priority":"P2","frequency":"FAST-1","authority":"RESEARCH","actions":["ARB","CANCEL","NOTHING"],"independent_sample_unit":"cross_venue_opportunity_bundle","strategy_specific_execution_model":"cross_venue_joint_race_and_inventory","enabled":true,"reason":"equivalence and economics kernel implemented; second venue adapter/capital not configured"},
+    {"family":"wallet_intelligence","priority":"P2","frequency":"EVENT-2","authority":"RESEARCH","actions":["NOTHING"],"independent_sample_unit":"wallet_market_event_cluster","strategy_specific_execution_model":"price_aware_hierarchical_skill_and_clustered_flow","enabled":true,"reason":"feature-only kernel; direct wallet copy execution is forbidden"},
+    {"family":"market_open","priority":"P1","frequency":"FAST-1","authority":"RESEARCH","actions":["MAKE","TAKE","NOTHING"],"independent_sample_unit":"market_open_event","strategy_specific_execution_model":"cold_start_fill_race_and_open_edge_decay","enabled":true,"reason":"kernel implemented; exact semantic parser coverage and forward open tape required"},
+    {"family":"ranking","priority":"RESEARCH","frequency":"SLOW-3","authority":"RESEARCH","actions":["ARB","NOTHING"],"independent_sample_unit":"market_event_date_cluster","strategy_specific_execution_model":"relative_pair_joint_completion_states","enabled":true,"reason":"existing V7 causal top-bottom research sleeve"},
+    {"family":"pca","priority":"RESEARCH","frequency":"SLOW-3","authority":"RESEARCH","actions":["TAKE","NOTHING"],"independent_sample_unit":"market_event_date_cluster","strategy_specific_execution_model":"single_leg_current_state_fill_and_holding","enabled":true,"reason":"existing V7 target-excluded current-state research sleeve"},
+    {"family":"local_factor","priority":"RESEARCH","frequency":"SLOW-3","authority":"RESEARCH","actions":["ARB","NOTHING"],"independent_sample_unit":"market_event_date_cluster","strategy_specific_execution_model":"pair_joint_completion_states","enabled":true,"reason":"existing V7 orientation-invariant current-state research sleeve"}
+  ]
+}

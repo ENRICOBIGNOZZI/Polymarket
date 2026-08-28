@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "directive_epoch": "2026-08-27T18:39:00+02:00",
-  "operator_instruction_id": "user-v7-master-multi-agent-operating-prompt-20260827",
-  "priority_instruction_id": "user-v7-only-heavy-cleanup-20260827",
+  "directive_epoch": "2026-08-28T18:38:17Z",
+  "operator_instruction_id": "user-v7-final-world-class-convergence-20260828",
+  "priority_instruction_id": "user-v7-final-world-class-convergence-20260828",
   "authority": "latest_explicit_user_instruction",
   "repository": "ENRICOBIGNOZZI/Polymarket",
   "scope": "all_registered_schedulers_and_paper_research",
@@ -10,6 +10,8 @@
   "paper_v7_authorization": {
     "paper_only": true,
     "authenticated_execution": false,
+    "real_order_submission": false,
+    "real_capital_at_risk": false,
     "market_limit": 1000,
     "min_liquidity": 2.0,
     "min_net_edge": 0.00005,
@@ -35,8 +37,8 @@
     "single_canonical_integration": true,
     "no_live_expert_averaging": true,
     "professional_market_maker_is_v7_sleeve_not_new_runtime": true,
-    "cleanup_sequence": "delete_all_legacy_now_then_validate_v7_only",
-    "legacy_rule": "Delete V3/V4/V5/V6 code and control-plane surfaces now. Keep only V7 plus common primitives imported by V7. Git history is the archive."
+    "cleanup_sequence": "audit_then_port_then_test_then_main_then_live_paper_then_delete_legacy",
+    "legacy_rule": "Quarantine obsolete operational generations immediately, but physically delete only after any unique useful capability is ported to V7 and the exact replacement is green on main and healthy in live-PAPER. Git history is the archive."
   },
   "economic_objective": {
     "decision_ev": "P(fill_or_joint_completion|X,a) * E[alpha_or_spread_capture-costs-adverse_markout|fill,X,a] - E[partial_or_inventory_unwind_loss|X,a] - capital_cost - latency_cost + conservatively_haircut_maker_rebate + conservatively_haircut_liquidity_reward",
@@ -44,7 +46,7 @@
     "success": "positive forward realized PAPER fill-conditioned post-cost PnL with causal data, realistic simulated fills, authoritative fees, executable depth, inventory/unwind losses, markout, reward/rebate attribution, cost stress and no leakage"
   },
   "current_priority_order": [
-    "Delete all V3/V4/V5/V6 executable/runtime/config/workflow/test/adapter/deploy/monitoring/documentation surfaces immediately.",
+    "Audit and quarantine every obsolete operational generation; port unique useful capability into V7 before deletion.",
     "Keep one V7 runtime, one broker authority, one canonical execution ledger, one allocator, one risk guard and one monitoring plane.",
     "Keep only generation-neutral/common primitives that are actually imported by V7.",
     "Professional Market Making V7 is the primary economic system.",
@@ -53,7 +55,12 @@
     "Ranking/PCA/Local Factor/Micro Taker remain V7 sleeves/research only.",
     "After deletion, run a repository-wide legacy-reference audit and V7-only CI/monitoring/runtime smoke tests."
   ],
-  "scheduler_assignments": {},
+  "scheduler_assignments": {
+    "registry": "config/v7_scheduler_freeze.json",
+    "automatic_deployment": false,
+    "automatic_champion_promotion": false,
+    "manual_exact_sha_cutover_required": true
+  },
   "forbidden_regressions": [
     "Do not create V8/V9/V10 or another numerical runtime generation.",
     "Do not create a second maker runtime, WebSocket market-data plane, state writer, broker owner, execution ledger or canonical integration.",

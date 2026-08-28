@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import exporter_v7 as base
-from v7_maker_fillability import summarize_maker_fillability
+from v7_maker_fillability_exact import summarize_best_available_fillability
 
 _FILLABILITY_CACHE_KEY: tuple[str, str, int] | None = None
 _FILLABILITY_CACHE_VALUE: dict[str, Any] | None = None
@@ -23,7 +23,7 @@ def _fillability_report(run_root: Path, repository_root: Path, runtime_sha: str,
     key = (str(run_root.resolve()), runtime_sha, clock_s // _FILLABILITY_REFRESH_SECONDS)
     if key == _FILLABILITY_CACHE_KEY and _FILLABILITY_CACHE_VALUE is not None:
         return _FILLABILITY_CACHE_VALUE
-    report = summarize_maker_fillability(
+    report = summarize_best_available_fillability(
         run_root.resolve() / "ledger" / "execution.jsonl",
         run_root.resolve() / "trade_tape.csv",
         repository_root / "config" / "v7_professional_market_maker.json",
@@ -99,6 +99,27 @@ def _append_fillability_metrics(lines: list[str], report: dict[str, Any]) -> Non
         ):
             lines.append(base._metric(metric, row.get(field), labels))
 
+    exact = report.get("forward_exact_ws") if isinstance(report.get("forward_exact_ws"), dict) else {}
+    exact_funnel = exact.get("funnel") if isinstance(exact.get("funnel"), dict) else {}
+    lines.extend([
+        base._metric("polymarket_maker_fillability_exact_ws_present", 1 if exact.get("present") else 0),
+        base._metric("polymarket_maker_fillability_exact_ws_complete", 1 if exact.get("evidence_complete") else 0),
+        base._metric("polymarket_maker_fillability_exact_ws_orders", exact_funnel.get("orders")),
+        base._metric("polymarket_maker_fillability_exact_ws_trade_reachable", exact_funnel.get("trade_reachable")),
+        base._metric("polymarket_maker_fillability_exact_ws_cancelled_before_future_flow", exact_funnel.get("cancelled_before_observed_future_flow")),
+        base._metric("polymarket_maker_fillability_exact_ws_root_cause_info", 1, {
+            "root_cause": exact.get("root_cause", "UNKNOWN"),
+            "simulator_bug": exact.get("simulator_bug_suspected", "UNKNOWN"),
+            "next_experiment": exact.get("next_experiment", "UNKNOWN"),
+        }),
+    ])
+    for scenario, key in (("lower", "lower_queue_depleted"), ("expected", "expected_queue_depleted"), ("pessimistic", "pessimistic_queue_depleted")):
+        lines.append(base._metric("polymarket_maker_fillability_exact_ws_queue_depleted", exact_funnel.get(key), {"scenario": scenario}))
+    for scenario, key in (("lower", "fill_opportunity_lower"), ("expected", "fill_opportunity_expected"), ("pessimistic", "fill_opportunity_pessimistic")):
+        lines.append(base._metric("polymarket_maker_fillability_exact_ws_opportunities", exact_funnel.get(key), {"scenario": scenario}))
+    for reason, value in sorted((exact.get("zero_fill_reasons") or {}).items()):
+        lines.append(base._metric("polymarket_maker_fillability_exact_ws_zero_fill_reason", value, {"reason": reason}))
+
 
 def render_prometheus(snapshot: dict[str, Any]) -> str:
     payload = base.render_prometheus(snapshot).rstrip("\n").splitlines()
@@ -169,4 +190,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Preserve the canonical deployment entrypoint while composing both
+    # diagnostics behind one listener and one V7 monitoring plane.
+    from exporter_v7_external import main as composed_main
+    raise SystemExit(composed_main())

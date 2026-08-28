@@ -44,6 +44,7 @@ jobs:
             monitoring/exporter_v7_fillability.py \
             monitoring/v7_ledger_metrics.py \
             monitoring/v7_maker_fillability.py \
+            monitoring/v7_maker_fillability_exact.py \
             scripts/v7_maker_fillability_report.py
           python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7.json >/dev/null

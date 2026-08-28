@@ -55,6 +55,24 @@ target_include_directories(pm_v7_hft PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include 
 target_link_libraries(pm_v7_hft PUBLIC pm_v7_common Threads::Threads)
 target_compile_options(pm_v7_hft PRIVATE -Wall -Wextra -Wpedantic)
 
+# Settlement-aware external information is a V7 capability, not a second
+# runtime/OMS. This library contains bounded ingress normalization, causal hot
+# state, fair-value economics, execution arbitration, async evidence tape and
+# deterministic offline replay primitives.
+add_library(pm_v7_external
+  src/v7_external_fair.cpp
+  src/v7_external_state.cpp
+  src/v7_external_execution.cpp
+  src/v7_external_kernel.cpp
+  src/v7_external_protocol.cpp
+  src/v7_external_ingress.cpp
+  src/v7_external_ws.cpp
+  src/v7_external_tape.cpp
+  src/v7_external_replay.cpp)
+target_include_directories(pm_v7_external PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
+target_link_libraries(pm_v7_external PUBLIC pm_v7_common Threads::Threads pm_json OpenSSL::SSL OpenSSL::Crypto)
+target_compile_options(pm_v7_external PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_trade_recorder src/v7_trade_recorder.cpp)
 target_link_libraries(polymarket_v7_trade_recorder PRIVATE pm_core)
 target_compile_options(polymarket_v7_trade_recorder PRIVATE -Wall -Wextra -Wpedantic)
@@ -70,6 +88,10 @@ target_compile_options(polymarket_v7_market_maker_runtime PRIVATE -Wall -Wextra 
 add_executable(polymarket_v7_maker_markout_observer src/v7_maker_markout_observer.cpp)
 target_link_libraries(polymarket_v7_maker_markout_observer PRIVATE pm_v7_common pm_fast_arb pm_core)
 target_compile_options(polymarket_v7_maker_markout_observer PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(polymarket_v7_maker_fillability_observer src/v7_maker_fillability_observer.cpp)
+target_link_libraries(polymarket_v7_maker_fillability_observer PRIVATE pm_v7_common pm_fast_arb pm_core)
+target_compile_options(polymarket_v7_maker_fillability_observer PRIVATE -Wall -Wextra -Wpedantic)
 
 include(CTest)
 if(BUILD_TESTING)
@@ -149,6 +171,38 @@ if(BUILD_TESTING)
   add_executable(pm_v7_maker_execution_policy_tests tests/test_v7_maker_execution_policy.cpp)
   target_link_libraries(pm_v7_maker_execution_policy_tests PRIVATE pm_v7_hft)
   add_test(NAME pm_v7_maker_execution_policy_tests COMMAND pm_v7_maker_execution_policy_tests)
+
+  add_executable(pm_v7_external_fair_tests tests/test_v7_external_fair.cpp)
+  target_link_libraries(pm_v7_external_fair_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_fair_tests COMMAND pm_v7_external_fair_tests)
+
+  add_executable(pm_v7_external_state_tests tests/test_v7_external_state.cpp)
+  target_link_libraries(pm_v7_external_state_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_state_tests COMMAND pm_v7_external_state_tests)
+
+  add_executable(pm_v7_external_execution_tests tests/test_v7_external_execution.cpp)
+  target_link_libraries(pm_v7_external_execution_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_execution_tests COMMAND pm_v7_external_execution_tests)
+
+  add_executable(pm_v7_external_kernel_tests tests/test_v7_external_kernel.cpp)
+  target_link_libraries(pm_v7_external_kernel_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_kernel_tests COMMAND pm_v7_external_kernel_tests)
+
+  add_executable(pm_v7_external_protocol_tests tests/test_v7_external_protocol.cpp)
+  target_link_libraries(pm_v7_external_protocol_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_protocol_tests COMMAND pm_v7_external_protocol_tests)
+
+  add_executable(pm_v7_external_ingress_tests tests/test_v7_external_ingress.cpp)
+  target_link_libraries(pm_v7_external_ingress_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_ingress_tests COMMAND pm_v7_external_ingress_tests)
+
+  add_executable(pm_v7_external_tape_tests tests/test_v7_external_tape.cpp)
+  target_link_libraries(pm_v7_external_tape_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_tape_tests COMMAND pm_v7_external_tape_tests)
+
+  add_executable(pm_v7_external_replay_tests tests/test_v7_external_replay.cpp)
+  target_link_libraries(pm_v7_external_replay_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_replay_tests COMMAND pm_v7_external_replay_tests)
 
   add_test(NAME no_legacy_runtime COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_no_legacy_runtime.py)
 

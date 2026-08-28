@@ -149,19 +149,20 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         directives = json.loads((ROOT / "config" / "operator_directives.json").read_text(encoding="utf-8"))
         self.assertEqual(
             directives["operator_instruction_id"],
-            "user-v7-master-multi-agent-operating-prompt-20260827",
+            "user-v7-final-world-class-convergence-20260828",
         )
         self.assertEqual(
             directives["priority_instruction_id"],
-            "user-v7-only-heavy-cleanup-20260827",
+            "user-v7-final-world-class-convergence-20260828",
         )
         self.assertTrue(directives["paper_v7_authorization"]["paper_only"])
         self.assertFalse(directives["paper_v7_authorization"]["authenticated_execution"])
+        self.assertFalse(directives["paper_v7_authorization"]["real_order_submission"])
         architecture = directives["architecture"]
         self.assertTrue(architecture["single_runtime_owner"])
         self.assertTrue(architecture["single_execution_ledger"])
         self.assertTrue(architecture["professional_market_maker_is_v7_sleeve_not_new_runtime"])
-        self.assertEqual(architecture["cleanup_sequence"], "delete_all_legacy_now_then_validate_v7_only")
+        self.assertEqual(architecture["cleanup_sequence"], "audit_then_port_then_test_then_main_then_live_paper_then_delete_legacy")
         self.assertIn("Git history is the archive", architecture["legacy_rule"])
         forbidden = "\n".join(directives["forbidden_regressions"])
         self.assertIn("Do not add authenticated or real-money execution", forbidden)

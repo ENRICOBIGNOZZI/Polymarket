@@ -6,10 +6,13 @@
   "run_root": "runs/paper_v7_live",
   "exporter": {
     "path": "monitoring/exporter_v7_fillability.py",
+    "composition": "maker_fillability_plus_external_fair",
     "host": "127.0.0.1",
     "port": 9108,
     "health_path": "/healthz",
-    "metrics_path": "/metrics"
+    "metrics_path": "/metrics",
+    "maker_fillability_path": "/maker-fillability.json",
+    "external_fair_path": "/external-fair.json"
   },
   "prometheus": {
     "config": "monitoring/prometheus_v7.yml",
@@ -20,14 +23,26 @@
   "grafana": {
     "dashboard_uid": "polymarket-v7",
     "dashboard_file": "monitoring/grafana/dashboards/polymarket-v7.json",
+    "maker_fillability_dashboard": "monitoring/grafana/dashboards/polymarket-v7-maker-fillability.json",
+    "external_fair_dashboard": "monitoring/grafana/dashboards/polymarket-v7-external-fair.json",
     "datasource_uid": "prometheus-v7",
     "datasource_file": "monitoring/grafana/provisioning/datasources/prometheus-v7.yml",
     "provider_file": "monitoring/grafana/provisioning/dashboards/v7.yml",
     "host": "127.0.0.1",
     "port": 3000
   },
+  "external_fair": {
+    "policy": "config/v7_external_fair.json",
+    "status": "external_fair/status.json",
+    "contract_registry": "external_fair/contract_registry.json",
+    "model_registry": "external_fair/model_registry",
+    "report": "scripts/v7_external_fair_report.py",
+    "shadow_missing_does_not_fail_health": true,
+    "active_invalid_state_fails_closed": true
+  },
   "required_surfaces": [
     "control/runtime_status.json",
+    "control/incumbent_identity.json",
     "control/portfolio_state.json",
     "control/allocations/manifest.json",
     "graph_rv/status.json",
@@ -40,7 +55,8 @@
     "runtime": 180,
     "graph": 180,
     "economics": 180,
-    "trade_tape": 180
+    "trade_tape": 180,
+    "external_fair_oracle": 2
   },
   "retired_surfaces": [
     "v7_supervisor.json",
