@@ -15,7 +15,9 @@ class V7SingleWriterContractTest(unittest.TestCase):
             'mkdir "$LOCK"',
             'echo $$ > "$LOCK/pid"',
             'rm -rf "$LOCK"',
-            'trap cleanup EXIT INT TERM',
+            'trap cleanup EXIT',
+            'trap shutdown INT TERM',
+            'cleanup_started=0',
             'exit 73',
             '"version":7',
             '"paper_only":true',
@@ -23,6 +25,7 @@ class V7SingleWriterContractTest(unittest.TestCase):
             '"real_order_submission":false',
         ):
             self.assertIn(required, text)
+        self.assertNotIn('trap cleanup EXIT INT TERM', text)
 
     def test_champion_points_only_to_v7_runtime(self) -> None:
         manifest = json.loads((ROOT / "config/live_champion.json").read_text(encoding="utf-8"))
