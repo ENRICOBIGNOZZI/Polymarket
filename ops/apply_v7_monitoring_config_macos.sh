@@ -9,6 +9,47 @@ MANIFEST="$APP_DIR/monitoring/v7_monitoring_manifest.json"
 [[ "$(uname -s)" == "Darwin" ]] || { echo "fatal: macOS monitoring installer requires Darwin" >&2; exit 78; }
 [[ -f "$MANIFEST" ]] || { echo "fatal: missing V7 monitoring manifest" >&2; exit 78; }
 
+# A stale/manual Grafana from an earlier deployment can keep 127.0.0.1:3000
+# bound even after `brew services stop grafana`. In that state the canonical V7
+# Grafana process exits on bind, while health probes accidentally hit the stale
+# instance and the V7 dashboard returns 404. Drain only a listener whose command
+# is actually Grafana; fail closed if another program owns the canonical port.
+stop_stale_grafana_listener() {
+  local lsof_bin="" pids="" pid="" command_line=""
+  for candidate in /usr/sbin/lsof /usr/bin/lsof; do
+    if [[ -x "$candidate" ]]; then lsof_bin="$candidate"; break; fi
+  done
+  if [[ -z "$lsof_bin" ]] && command -v lsof >/dev/null 2>&1; then
+    lsof_bin="$(command -v lsof)"
+  fi
+  [[ -n "$lsof_bin" ]] || return 0
+
+  pids="$("$lsof_bin" -nP -tiTCP:3000 -sTCP:LISTEN 2>/dev/null || true)"
+  for pid in $pids; do
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
+    command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    case "$command_line" in
+      *grafana*|*Grafana*)
+        printf '[v7-monitoring] stopping stale Grafana listener pid=%s on 127.0.0.1:3000\n' "$pid" >&2
+        kill -TERM "$pid" 2>/dev/null || true
+        for _ in $(seq 1 50); do
+          kill -0 "$pid" 2>/dev/null || break
+          sleep 0.1
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+          kill -KILL "$pid" 2>/dev/null || true
+        fi
+        ;;
+      *)
+        printf 'fatal: canonical Grafana port 3000 is owned by non-Grafana pid=%s command=%s\n' "$pid" "$command_line" >&2
+        exit 78
+        ;;
+    esac
+  done
+}
+
+stop_stale_grafana_listener
+
 read -r DASHBOARD_FILE DATASOURCE_FILE PROVIDER_FILE PROMETHEUS_FILE ALERT_RULES_FILE DASHBOARD_UID < <(
   python3 - "$MANIFEST" <<'PY'
 import json,sys
