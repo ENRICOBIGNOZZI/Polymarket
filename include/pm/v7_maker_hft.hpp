@@ -11,6 +11,11 @@
 namespace pm::v7::maker {
 
 inline constexpr std::size_t kFeatureCount = 10;
+inline constexpr std::size_t kExecutionActionCount = 4;
+inline constexpr std::size_t kExecutionOutcomeCount = 2;
+inline constexpr std::size_t kExecutionSideCount = 2;
+inline constexpr std::size_t kExecutionCellCount =
+    kExecutionActionCount * kExecutionOutcomeCount * kExecutionSideCount;
 
 enum class Action : std::uint8_t {
     Join = 1,
@@ -104,9 +109,33 @@ struct RiskSnapshot {
     std::uint8_t reserved = 0;
 };
 
+// A cell is pre-shrunk on the slow path toward the GLOBAL execution model.
+// The hot path never estimates or parses anything; it only selects one of the
+// fixed 4 actions x 2 outcomes x 2 execution sides.
+struct ExecutionCellBaseline {
+    double fill_probability = 0.0;
+    double adverse_markout_per_share = 0.0;
+    double fill_weight = 0.0;
+    double markout_weight = 0.0;
+    std::uint32_t orders = 0;
+    std::uint32_t filled_orders = 0;
+    std::uint32_t adverse_markouts = 0;
+    std::uint32_t event_clusters = 0;
+    std::uint8_t valid = 0;
+    std::array<std::uint8_t, 7> reserved{};
+};
+
+[[nodiscard]] std::size_t execution_cell_index(
+    Action action, std::int8_t instrument_inventory_sign, Side side) noexcept;
+
 // Slow-path training may be arbitrarily rich; only this compact immutable
 // snapshot is published to the C++ decision loop.
 struct MakerModelSnapshot {
+    // The constructor may enrich the snapshot from the exact-SHA slow-plane
+    // execution-model file before publication. It never throws; unavailable or
+    // stale evidence leaves all cells invalid and the kernel uses GLOBAL.
+    MakerModelSnapshot() noexcept;
+
     std::uint64_t model_version = 1;
     std::uint64_t policy_version = 1;
     double tick_size = 0.01;
@@ -131,6 +160,7 @@ struct MakerModelSnapshot {
         -2.8, -0.10, 0.35, 0.40, -0.15, 0.08, -0.05, -0.05, -0.10, -0.05};
     std::array<double, kFeatureCount> markout_coefficients{
         0.0015, 0.0001, -0.0002, -0.00025, 0.0002, 0.00005, 0.00005, 0.00005, 0.0002, 0.00005};
+    std::array<ExecutionCellBaseline, kExecutionCellCount> execution_cells{};
 
     [[nodiscard]] bool valid() const noexcept;
 };
