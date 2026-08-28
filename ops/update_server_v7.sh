@@ -55,6 +55,39 @@ record_deployed_sha(){
   mv "$tmp" "$run_root/control/deployed_sha"
 }
 
+record_incumbent_identity(){
+  local run_root="$(production_run_root)"
+  python3 - "$run_root" "$EXPECTED_SHA" <<'PY'
+import json,os,sys,time
+from pathlib import Path
+root=Path(sys.argv[1]); expected=sys.argv[2]
+runtime=json.loads((root/'control/runtime_status.json').read_text(encoding='utf-8'))
+required=('config_hash','policy_hash','model_hash','run_id','ledger_id','server_id')
+assert runtime.get('model_sha') == expected
+assert runtime.get('paper_only') is True
+assert runtime.get('authenticated_execution') is False
+assert runtime.get('real_order_submission') is False
+assert all(str(runtime.get(key) or '').strip() for key in required)
+value={
+    'schema':'polymarket_v7_incumbent_identity_v1',
+    'recorded_at':int(time.time()),
+    'paper_only':True,
+    'execution_authority':'FROZEN_BLUE_CHAMPION',
+    'runtime_sha':expected,
+    'config_hash':runtime['config_hash'],
+    'policy_hash':runtime['policy_hash'],
+    'model_hash':runtime['model_hash'],
+    'model_identity_source':runtime.get('model_identity_source'),
+    'run_id':runtime['run_id'],
+    'ledger_id':runtime['ledger_id'],
+    'server_id':runtime['server_id'],
+    'verified':True,
+}
+path=root/'control/incumbent_identity.json'; tmp=path.with_suffix(f'.tmp.{os.getpid()}')
+tmp.write_text(json.dumps(value,sort_keys=True)+'\n',encoding='utf-8'); os.replace(tmp,path)
+PY
+}
+
 production_pid(){
   local status="$(production_run_root)/control/runtime_status.json"
   python3 - "$status" <<'PY' 2>/dev/null || true
@@ -322,6 +355,7 @@ graph=json.loads((root/'graph_rv/status.json').read_text())
 economics=json.loads((root/'canonical_economics.json').read_text())
 assert runtime.get('version')==7 and runtime.get('model_sha')==sha
 assert runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False and runtime.get('real_order_submission') is False
+assert all(str(runtime.get(k) or '') for k in ('config_hash','policy_hash','model_hash','run_id','ledger_id','server_id'))
 pid=int(runtime.get('pid') or 0); assert pid>0; os.kill(pid,0)
 assert now-int(runtime.get('timestamp') or 0)<=180
 assert portfolio.get('paper_only') is True and portfolio.get('authenticated_execution') is False
@@ -410,5 +444,6 @@ if [[ "$healthy" != 1 ]]; then
 fi
 [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || fail "server checkout drifted after deployment"
 record_deployed_sha
+record_incumbent_identity
 write_status healthy "canonical V7 PAPER runtime and monitoring healthy"
 log "V7 deployed exact SHA $EXPECTED_SHA"

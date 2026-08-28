@@ -1,0 +1,14 @@
+{
+  "schema": "polymarket_v7_incumbent_identity_v1",
+  "paper_only": true,
+  "execution_authority": "FROZEN_BLUE_CHAMPION",
+  "runtime_sha": null,
+  "config_hash": null,
+  "policy_hash": null,
+  "model_hash": null,
+  "run_id": null,
+  "ledger_id": null,
+  "server_id": null,
+  "verified": false,
+  "reason": "Repository code cannot infer deployed identity. Deployment and cutover must fail closed until the server writes and verifies all identity fields."
+}

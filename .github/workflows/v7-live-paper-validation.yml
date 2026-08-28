@@ -7,14 +7,17 @@ on:
         description: Exact main V7 SHA to validate
         required: false
         type: string
+      cutover_approved:
+        description: Explicitly advance paper-validated after exact-SHA validation
+        required: false
+        default: false
+        type: boolean
   repository_dispatch:
     types: [v7-live-paper-validate]
   workflow_run:
     workflows: ["ci", "monitoring", "Private runtime single-writer validation"]
     types: [completed]
     branches: [main]
-  schedule:
-    - cron: "11,26,41,56 * * * *"
 
 permissions:
   actions: read
@@ -170,8 +173,8 @@ jobs:
           fi
           echo "PAPER deployment is a technical/safety evidence-collection state; it is not a real-money or profitability promotion." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Advance paper-validated to exact technically validated V7 PAPER SHA
-        if: steps.gate.outputs.ready == 'true'
+      - name: Advance paper-validated after explicit cutover approval
+        if: steps.gate.outputs.ready == 'true' && github.event_name == 'workflow_dispatch' && inputs.cutover_approved == true
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -187,6 +190,12 @@ jobs:
           echo "paper_validated_sha=$VALIDATION_SHA" >> "$GITHUB_STEP_SUMMARY"
           echo "paper_deployment_mode=evidence_collection" >> "$GITHUB_STEP_SUMMARY"
           echo "economic_ready=${{ steps.economics.outputs.economic_ready }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record validation-only result
+        if: steps.gate.outputs.ready == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.cutover_approved == true)
+        shell: bash
+        run: |
+          echo "paper-validated unchanged: explicit cutover approval was not supplied" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload exact-SHA V7 PAPER evidence
         if: always() && steps.gate.outputs.ready == 'true'

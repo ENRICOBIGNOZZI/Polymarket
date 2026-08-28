@@ -22,6 +22,7 @@ class V7DeployMonitoringManifestContractTest(unittest.TestCase):
         required = set(manifest["required_surfaces"])
         for surface in (
             "control/runtime_status.json",
+            "control/incumbent_identity.json",
             "control/portfolio_state.json",
             "control/allocations/manifest.json",
             "graph_rv/status.json",

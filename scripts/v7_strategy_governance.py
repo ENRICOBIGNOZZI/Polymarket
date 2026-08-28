@@ -253,7 +253,28 @@ class Candidate:
         return capital_time_score(self.expected_robust_net_pnl - max(0.0, self.uncertainty), self.capital, self.duration_seconds)
 
 
-_PURPOSE_PRIORITY = {"RISK": 6, "LIQUIDATION": 5, "CANCEL": 4, "STRUCTURAL_GUARANTEE": 3, "ALPHA": 2, "MAKER": 1}
+_PURPOSE_PRIORITY = {
+    "GLOBAL_KILL": 10,
+    "STRATEGY_MARKET_KILL": 9,
+    "CRITICAL_CANCEL": 8,
+    "LIQUIDATION": 7,
+    "URGENT_INVENTORY_REDUCTION": 6,
+    "NORMAL_RISK_REDUCTION": 5,
+    "STRUCTURAL_GUARANTEE": 4,
+    "INFORMED_ALPHA": 3,
+    "PASSIVE_MAKER": 2,
+    "NOTHING": 1,
+    # Accepted aliases for existing V7 callers.
+    "RISK": 5,
+    "CANCEL": 8,
+    "ALPHA": 3,
+    "MAKER": 2,
+}
+
+_NON_ALPHA_PURPOSES = {
+    "GLOBAL_KILL", "STRATEGY_MARKET_KILL", "CRITICAL_CANCEL", "LIQUIDATION",
+    "URGENT_INVENTORY_REDUCTION", "NORMAL_RISK_REDUCTION", "RISK", "CANCEL",
+}
 
 
 def resolve_conflicts(candidates: Iterable[Candidate]) -> tuple[Candidate, ...]:
@@ -265,7 +286,7 @@ def resolve_conflicts(candidates: Iterable[Candidate]) -> tuple[Candidate, ...]:
     for row in ordered:
         if row.family not in FAMILIES or row.action not in ACTIONS:
             raise ContractError("invalid_candidate")
-        if row.expected_robust_net_pnl <= 0.0 and row.purpose not in {"RISK", "LIQUIDATION", "CANCEL"}:
+        if row.expected_robust_net_pnl <= 0.0 and row.purpose not in _NON_ALPHA_PURPOSES:
             continue
         if occupied_markets.intersection(row.market_ids) or (row.event_id and row.event_id in occupied_events):
             continue

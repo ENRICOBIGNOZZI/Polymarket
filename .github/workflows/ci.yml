@@ -49,14 +49,19 @@ jobs:
       - name: Static V7 contract
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/v7_*.py monitoring/exporter_v7.py monitoring/exporter_v7_fillability.py monitoring/v7_ledger_metrics.py monitoring/v7_maker_fillability.py
+          python3 -m py_compile scripts/v7_*.py monitoring/exporter_v7.py monitoring/exporter_v7_fillability.py monitoring/v7_ledger_metrics.py monitoring/v7_maker_fillability.py monitoring/v7_maker_fillability_exact.py
           python3 -m json.tool config/live_champion.json >/dev/null
           python3 -m json.tool config/operator_directives.json >/dev/null
           python3 -m json.tool config/paper_v7.json >/dev/null
           python3 -m json.tool config/v7_professional_market_maker.json >/dev/null
           python3 -m json.tool config/v7_maker_fillability_experiments.json >/dev/null
+          python3 -m json.tool config/v7_strategy_registry.json >/dev/null
+          python3 -m json.tool config/v7_scheduler_freeze.json >/dev/null
+          python3 -m json.tool config/v7_capability_matrix.json >/dev/null
+          python3 -m json.tool config/v7_incumbent_identity.json >/dev/null
           python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-maker-fillability.json >/dev/null
           bash -n scripts/paper_v7_execution_loop.sh
           bash -n ops/update_server_v7.sh
           python3 tests/test_no_legacy_runtime.py
+          python3 scripts/v7_convergence_audit.py --repository-root . >/dev/null

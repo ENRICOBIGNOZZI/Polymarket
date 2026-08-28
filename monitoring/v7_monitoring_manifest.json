@@ -42,6 +42,7 @@
   },
   "required_surfaces": [
     "control/runtime_status.json",
+    "control/incumbent_identity.json",
     "control/portfolio_state.json",
     "control/allocations/manifest.json",
     "graph_rv/status.json",

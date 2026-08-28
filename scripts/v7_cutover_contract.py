@@ -63,7 +63,10 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
     authorization = directives.get("paper_v7_authorization")
     if not isinstance(authorization, dict):
         fail("V7 cutover blocked: paper_v7_authorization is missing")
-    if authorization.get("paper_only") is not True or authorization.get("authenticated_execution") is not False:
+    if (authorization.get("paper_only") is not True
+            or authorization.get("authenticated_execution") is not False
+            or authorization.get("real_order_submission") is not False
+            or authorization.get("real_capital_at_risk") is not False):
         fail("V7 cutover blocked: operator PAPER/authenticated boundary invalid")
 
     manifest = load_json(root / "config/live_champion.json")
@@ -96,6 +99,10 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "scripts/v7_learned_execution_model.py",
         "config/v7_frequency_matrix.json",
         "config/v7_execution_evidence.json",
+        "config/v7_scheduler_freeze.json",
+        "config/v7_capability_matrix.json",
+        "config/v7_incumbent_identity.json",
+        "scripts/v7_convergence_audit.py",
     )
     for rel in required_files:
         if not (root / rel).is_file():

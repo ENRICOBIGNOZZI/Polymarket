@@ -8,6 +8,7 @@ RUN_ROOT="${PM_V7_RUN_ROOT:-runs/paper_v7_live}"
 RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
 MAKER_RUNTIME="${PM_V7_MARKET_MAKER_RUNTIME:-build/polymarket_v7_market_maker_runtime}"
 MARKOUT_OBSERVER="${PM_V7_MAKER_MARKOUT_OBSERVER:-build/polymarket_v7_maker_markout_observer}"
+FILLABILITY_OBSERVER="${PM_V7_MAKER_FILLABILITY_OBSERVER:-build/polymarket_v7_maker_fillability_observer}"
 MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
 SHA="$(git rev-parse HEAD)"
 MAKER_CHAMPION_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
@@ -18,13 +19,13 @@ PUBLIC_PROXY="http://127.0.0.1:$PUBLIC_PROXY_PORT"
 WS_PUBLIC_HOST="ws-subscriptions-clob.polymarket.com"
 # Adaptive JSON arenas are bounded per decoder. With the current canonical
 # 40-market universe the Maker owns at most five 8-market shards, while the
-# evidence-only markout observer owns one all-market decoder. The defaults
-# therefore expose exactly 3.5 GiB of aggregate ceiling (5*512 MiB + 1 GiB)
-# without eagerly allocating it. Each decoder starts small and grows only when
-# an unusually large venue frame actually requires the memory.
+# evidence-only markout and fillability observers each own one all-market
+# decoder. The defaults expose a 4 GiB aggregate ceiling without eagerly
+# allocating it; each decoder starts small and grows only for large venue frames.
 WS_JSON_ARENA_MAKER_MAX_BYTES="${PM_V7_WS_JSON_ARENA_MAKER_MAX_BYTES:-536870912}"
 WS_JSON_ARENA_OBSERVER_MAX_BYTES="${PM_V7_WS_JSON_ARENA_OBSERVER_MAX_BYTES:-1073741824}"
-WS_JSON_ARENA_TOTAL_BUDGET_BYTES="${PM_V7_WS_JSON_ARENA_TOTAL_BUDGET_BYTES:-3758096384}"
+WS_JSON_ARENA_FILLABILITY_MAX_BYTES="${PM_V7_WS_JSON_ARENA_FILLABILITY_MAX_BYTES:-536870912}"
+WS_JSON_ARENA_TOTAL_BUDGET_BYTES="${PM_V7_WS_JSON_ARENA_TOTAL_BUDGET_BYTES:-4294967296}"
 # Bind the C++ slow-path execution-cell loader explicitly to the same exact SHA
 # and *champion* model file passed to the canonical Maker runtime. Challenger
 # refits are registered separately and can never be hot-reloaded by this loop.
@@ -37,7 +38,7 @@ LOCK="$CONTROL/runtime.lock"
 mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/learned_execution"
 touch "$RUN_ROOT/ledger/execution.jsonl"
 
-python3 - "$CONFIG" "$MAKER_POLICY" "$WS_JSON_ARENA_MAKER_MAX_BYTES" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
+python3 - "$CONFIG" "$MAKER_POLICY" "$WS_JSON_ARENA_MAKER_MAX_BYTES" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
 import json,sys
 cfg=json.load(open(sys.argv[1]))
 v7=cfg.get("v7") or {}
@@ -61,7 +62,8 @@ assert registry.get("governance",{}).get("automatic_promotion") is False
 assert all(row.get("authority") in {"RESEARCH","SHADOW","PAPER"} for row in registry.get("strategies",[]))
 maker_arena=int(sys.argv[3])
 observer_arena=int(sys.argv[4])
-total_budget=int(sys.argv[5])
+fillability_arena=int(sys.argv[5])
+total_budget=int(sys.argv[6])
 assert cfg.get("engine_version")==7
 assert cfg.get("paper_only") is True
 assert v7.get("paper_only") is True
@@ -78,7 +80,8 @@ assert maker.get("architecture",{}).get("fast_path") == "cpp_websocket_event_dri
 assert maker.get("architecture",{}).get("slow_path") == "python_reward_selection_and_model_fit"
 assert maker_arena >= 16*1024*1024
 assert observer_arena >= 16*1024*1024
-assert maker_arena*5 + observer_arena <= total_budget
+assert fillability_arena >= 16*1024*1024
+assert maker_arena*5 + observer_arena + fillability_arena <= total_budget
 PY
 
 if [[ -d "$LOCK" ]]; then
@@ -95,14 +98,28 @@ rm -f "$KILL"
 
 python3 scripts/v7_capital_allocator.py --config "$CONFIG" --output-dir "$ALLOC" >/dev/null
 
+CONFIG_HASH="$(git hash-object "$CONFIG")"
+POLICY_HASH="$(git hash-object "$MAKER_POLICY")"
+RUN_ID="${PM_V7_RUN_ID:-${SHA:0:12}-$(date +%s)-$$}"
+LEDGER_ID="${PM_V7_LEDGER_ID:-$RUN_ID:execution}"
+SERVER_ID="${PM_V7_SERVER_ID:-$(hostname -s 2>/dev/null || hostname)}"
+
 write_runtime_status() {
   local state="$1"
   local killed="${2:-false}"
   local now
   now="$(date +%s)"
+  local model_hash model_source
+  if [[ -s "$MAKER_CHAMPION_MODEL" ]]; then
+    model_hash="$(git hash-object "$MAKER_CHAMPION_MODEL")"
+    model_source="maker_execution_model"
+  else
+    model_hash="$POLICY_HASH"
+    model_source="cold_start_policy"
+  fi
   local tmp="$CONTROL/runtime_status.json.tmp.$$"
-  printf '{"schema":"polymarket_v7_runtime_status_v2","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"model_sha":"%s","pid":%s,"state":"%s","killed":%s,"primary_economic_sleeve":"MICRO_MAKER_PRO"}\n' \
-    "$now" "$SHA" "$$" "$state" "$killed" > "$tmp"
+  printf '{"schema":"polymarket_v7_runtime_status_v2","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"primary_economic_sleeve":"MICRO_MAKER_PRO"}\n' \
+    "$now" "$SHA" "$CONFIG_HASH" "$POLICY_HASH" "$model_hash" "$model_source" "$RUN_ID" "$LEDGER_ID" "$SERVER_ID" "$$" "$state" "$killed" > "$tmp"
   mv "$tmp" "$CONTROL/runtime_status.json"
 }
 write_runtime_status starting false
@@ -160,6 +177,10 @@ fi
 if [[ ! -x "$MARKOUT_OBSERVER" ]]; then
   echo "missing V7 maker markout observer executable: $MARKOUT_OBSERVER" >&2
   exit 76
+fi
+if [[ ! -x "$FILLABILITY_OBSERVER" ]]; then
+  echo "missing V7 maker exact-WS fillability observer executable: $FILLABILITY_OBSERVER" >&2
+  exit 78
 fi
 if [[ ! -f scripts/v7_public_https_proxy.py ]]; then
   echo "missing V7 public HTTPS proxy" >&2
@@ -291,9 +312,9 @@ pids+=("$!")
 ) >> "$RUN_ROOT/micro_maker/runtime.log" 2>&1 &
 pids+=("$!")
 
-# Evidence-only observer. It has no order/OMS/risk authority: it tails canonical
-# FILL events, observes the same bounded public WS/L10 state, and emits only
-# full-size executable MARKOUT records at 1/10/45/60/300s into the common spool.
+# Evidence-only markout observer. It has no order/OMS/risk authority: it tails
+# canonical FILL events, observes bounded public WS/L10 state, and emits only
+# executable MARKOUT records into the common spool.
 (
   while [[ ! -e "$KILL" ]] && ! maker_selection_ready; do sleep 1; done
   [[ ! -e "$KILL" ]] || exit 0
@@ -304,6 +325,22 @@ pids+=("$!")
     --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
     --model-sha "$SHA"
 ) >> "$RUN_ROOT/micro_maker/markout_observer.log" 2>&1 &
+pids+=("$!")
+
+# Evidence-only exact-WS fillability observer. It has no OMS, capital, risk or
+# order authority. The WS callback only pushes compact trade observations into
+# a bounded SPSC queue; disk serialization happens on the observer consumer
+# thread. Drops/decoder gaps are explicit in fillability_ws_status.json.
+(
+  while [[ ! -e "$KILL" ]] && ! maker_selection_ready; do sleep 1; done
+  [[ ! -e "$KILL" ]] || exit 0
+  export PM_V7_WS_JSON_ARENA_MAX_BYTES="$WS_JSON_ARENA_FILLABILITY_MAX_BYTES"
+  exec "$FILLABILITY_OBSERVER" \
+    --config "$ALLOC/micro_maker.json" \
+    --run-root "$RUN_ROOT" \
+    --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
+    --model-sha "$SHA"
+) >> "$RUN_ROOT/micro_maker/fillability_observer.log" 2>&1 &
 pids+=("$!")
 
 (

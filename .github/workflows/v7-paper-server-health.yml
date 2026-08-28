@@ -137,8 +137,10 @@ jobs:
           import csv,json,os,sys
           from pathlib import Path
           root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(sys.argv[3])
-          runtime=json.loads((root/'control/runtime_status.json').read_text()); portfolio=json.loads((root/'control/portfolio_state.json').read_text()); graph=json.loads((root/'graph_rv/status.json').read_text()); economics=json.loads((root/'canonical_economics.json').read_text())
+          runtime=json.loads((root/'control/runtime_status.json').read_text()); identity=json.loads((root/'control/incumbent_identity.json').read_text()); portfolio=json.loads((root/'control/portfolio_state.json').read_text()); graph=json.loads((root/'graph_rv/status.json').read_text()); economics=json.loads((root/'canonical_economics.json').read_text())
           assert runtime.get('version')==7 and runtime.get('model_sha')==sha and runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False and runtime.get('real_order_submission') is False
+          assert identity.get('schema')=='polymarket_v7_incumbent_identity_v1' and identity.get('verified') is True and identity.get('runtime_sha')==sha and identity.get('paper_only') is True
+          for key in ('config_hash','policy_hash','model_hash','run_id','ledger_id','server_id'): assert identity.get(key)==runtime.get(key) and str(identity.get(key) or '')
           pid=int(runtime.get('pid') or 0); assert pid>0; os.kill(pid,0); assert now-int(runtime.get('timestamp') or 0)<=180
           assert portfolio.get('paper_only') is True and portfolio.get('authenticated_execution') is False and portfolio.get('killed') is False and float(portfolio.get('drawdown',1))<.15 and now-int(portfolio.get('timestamp') or 0)<=30
           assert graph.get('paper_only') is True and graph.get('authenticated_execution') is False and now-int(graph.get('timestamp') or 0)<=180
@@ -155,6 +157,7 @@ jobs:
           grep -q '^polymarket_v7_execution_alive 1$' <<<"$metrics"
           grep -q '^polymarket_v7_paper_only_contract_ok 1$' <<<"$metrics"
           grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_runtime_identity_info{' <<<"$metrics"
           grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics"
           printf '%s\n' "$metrics" | grep -E '^(polymarket_execution_opportunities|polymarket_execution_orders_submitted|polymarket_execution_fills|polymarket_execution_complete_fills|polymarket_execution_partial_fills|polymarket_execution_final_pnl_usd|polymarket_runtime_pnl_usd|polymarket_runtime_realized_pnl_usd|polymarket_v7_canonical_submitted_units|polymarket_v7_canonical_complete_units|polymarket_maker_lab_orders|polymarket_maker_lab_fills|polymarket_maker_lab_realized_pnl_usd|polymarket_strategy_ledger_opportunities|polymarket_strategy_ledger_orders_submitted|polymarket_strategy_ledger_fills)(\{| )' | sort || true
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null

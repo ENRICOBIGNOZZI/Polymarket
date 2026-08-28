@@ -47,6 +47,19 @@ def test_conflict_priority_is_risk_then_structural_then_alpha():
     assert [x.candidate_id for x in selected] == ["risk"]
 
 
+def test_full_hard_priority_order_starts_with_global_kill():
+    rows = [
+        g.Candidate(name, "professional_maker", "CANCEL", purpose, "e", ("m",), -1, 1, 1, 0)
+        for name, purpose in (
+            ("maker", "PASSIVE_MAKER"),
+            ("risk", "NORMAL_RISK_REDUCTION"),
+            ("critical", "CRITICAL_CANCEL"),
+            ("global", "GLOBAL_KILL"),
+        )
+    ]
+    assert g.resolve_conflicts(rows)[0].candidate_id == "global"
+
+
 def test_all_strategy_ids_are_explicit_in_hot_path_contract():
     text = (ROOT / "include" / "pm" / "v7_intent.hpp").read_text()
     for name in ("HardArbitrage", "CryptoSettlementFair", "CryptoInformedTaker", "Osint",
