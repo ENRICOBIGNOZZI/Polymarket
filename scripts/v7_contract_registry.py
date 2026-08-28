@@ -2,8 +2,9 @@
 """Fail-closed V7 contract/settlement registry for external fair value.
 
 This is a slow-plane module. It may parse strings/JSON and persist approved
-rule hashes, but it never authorizes an HFT decision by fuzzy text matching.
-The C++ hot path consumes numeric handles projected from a fully verified spec.
+rule identities, but it never authorizes an HFT decision by fuzzy text matching.
+The approval identity binds normalized rules to the exact settlement source and
+oracle window, so a 30s/60s source change cannot inherit an older approval.
 """
 from __future__ import annotations
 
@@ -33,18 +34,21 @@ class ContractVerificationError(ValueError):
     pass
 
 
-def _norm(value: Any) -> str:
-    return str(value or "").strip()
-
-
 def normalize_rules(text: str) -> str:
     normalized = unicodedata.normalize("NFKC", str(text or ""))
     normalized = normalized.replace("\u201c", '"').replace("\u201d", '"').replace("\u2019", "'")
     return _WS_RE.sub(" ", normalized).strip().lower()
 
 
-def rules_hash(text: str) -> str:
-    return hashlib.sha256(normalize_rules(text).encode("utf-8")).hexdigest()
+def rules_hash(text: str, resolution_source: str = "") -> str:
+    payload = {
+        "normalized_rules": normalize_rules(text),
+        "resolution_source": str(resolution_source).strip(),
+        "parser_version": PARSER_VERSION,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def hash_handle(value: str) -> int:
@@ -295,7 +299,6 @@ def contract_from_market(raw: dict[str, Any], *, approved_rule_hashes: Iterable[
     rules = _rules_text(raw)
     source = _resolution_source(raw)
     normalized = normalize_rules(rules)
-    digest = rules_hash(rules)
     reasons: list[str] = []
 
     try:
@@ -306,6 +309,7 @@ def contract_from_market(raw: dict[str, Any], *, approved_rule_hashes: Iterable[
         settlement_source_verified = False
         reasons.append(str(exc))
 
+    digest = rules_hash(rules, canonical_source)
     try:
         comparator = parse_comparator(normalized)
     except ContractVerificationError as exc:
@@ -343,28 +347,25 @@ def contract_from_market(raw: dict[str, Any], *, approved_rule_hashes: Iterable[
                     continue
                 outcome = normalize_rules(token.get("outcome"))
                 token_id = _first(token, "token_id", "tokenId", "id")
-                if outcome in {"yes", "up"}: yes_token = token_id
-                elif outcome in {"no", "down"}: no_token = token_id
+                if outcome in {"yes", "up"}:
+                    yes_token = token_id
+                elif outcome in {"no", "down"}:
+                    no_token = token_id
         elif len(tokens) >= 2:
             yes_token, no_token = str(tokens[0]), str(tokens[1])
-    outcomes = raw.get("outcomes")
     if not yes_token or not no_token:
-        # Handles remain deterministic but an unknown token mapping fails the
-        # trading gate at integration time because the raw IDs are empty.
         yes_token = yes_token or f"unknown-yes:{market_id}"
         no_token = no_token or f"unknown-no:{market_id}"
         reasons.append("tokens:explicit_yes_no_mapping_missing")
         verified_template = False
-    if isinstance(outcomes, str):
-        try:
-            outcomes = json.loads(outcomes)
-        except json.JSONDecodeError:
-            outcomes = None
 
     fee_schedule = raw.get("feeSchedule") if isinstance(raw.get("feeSchedule"), dict) else {}
-    fee_version = hashlib.sha256(json.dumps(fee_schedule, sort_keys=True).encode()).hexdigest() if fee_schedule else "unknown"
+    fee_version = (
+        hashlib.sha256(json.dumps(fee_schedule, sort_keys=True).encode()).hexdigest()
+        if fee_schedule else "unknown"
+    )
     approved = digest in set(approved_rule_hashes)
-    contract_version = hash_handle(f"{digest}:{canonical_source}:{PARSER_VERSION}")
+    contract_version = hash_handle(f"{digest}:{PARSER_VERSION}")
     return ContractSpec(
         schema_version=SCHEMA_VERSION,
         parser_version=PARSER_VERSION,
@@ -453,7 +454,11 @@ def make_settlement_reference(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--market-json", type=Path, required=True)
-    parser.add_argument("--registry", type=Path, default=Path("runs/paper_v7_live/external_fair/contract_registry.json"))
+    parser.add_argument(
+        "--registry",
+        type=Path,
+        default=Path("runs/paper_v7_live/external_fair/contract_registry.json"),
+    )
     parser.add_argument("--approve", action="store_true")
     parser.add_argument("--approval-evidence", default="")
     args = parser.parse_args()
@@ -466,7 +471,11 @@ def main() -> int:
         spec = contract_from_market(raw, approved_rule_hashes=registry.approved_rule_hashes)
     registry.record_contract(spec)
     registry.save()
-    print(json.dumps({**asdict(spec), "informed_trading_authorized": spec.informed_trading_authorized}, indent=2, sort_keys=True))
+    print(json.dumps(
+        {**asdict(spec), "informed_trading_authorized": spec.informed_trading_authorized},
+        indent=2,
+        sort_keys=True,
+    ))
     return 0 if spec.verified_template else 2
 
 
