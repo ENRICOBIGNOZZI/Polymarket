@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cassert>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -109,6 +110,24 @@ void test_snapshot_delta_trade_and_reconnect_lineage() {
     assert(shard.snapshot(301).valid);
 }
 
+void test_large_live_snapshot_frame_fits_bounded_arena() {
+    auto shard = make_shard();
+    std::array<pm::v7::MarketWsEvent, 8> output{};
+
+    std::string snapshot = R"JSON({"event_type":"book","asset_id":"asset-yes","timestamp":1700000000300,"bids":[{"price":"0.48","size":"2"}],"asks":[{"price":"0.52","size":"3"}],"venue_payload_padding":")JSON";
+    snapshot.append(2 * 1024 * 1024, 'x');
+    snapshot += "\"}";
+
+    const auto result = shard.process_frame(
+        snapshot, stamp(2'500'000'000LL, 1'700'000'000'300LL), output);
+    assert(!result.invalid_frame);
+    assert(!result.arena_exhausted);
+    assert(!result.output_overflow);
+    assert(result.applied_state_events == 1);
+    assert(result.output_count == 1);
+    assert(shard.snapshot(301).valid);
+}
+
 void test_unknown_asset_is_ignored_without_poisoning_known_lineage() {
     auto shard = make_shard();
     std::array<pm::v7::MarketWsEvent, 8> output{};
@@ -172,6 +191,7 @@ void test_malformed_or_unconsumable_frame_invalidates_continuity() {
 
 int main() {
     test_snapshot_delta_trade_and_reconnect_lineage();
+    test_large_live_snapshot_frame_fits_bounded_arena();
     test_unknown_asset_is_ignored_without_poisoning_known_lineage();
     test_malformed_or_unconsumable_frame_invalidates_continuity();
     return 0;
