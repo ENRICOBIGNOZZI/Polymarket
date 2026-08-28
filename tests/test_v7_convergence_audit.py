@@ -46,6 +46,9 @@ class V7ConvergenceAuditTest(unittest.TestCase):
         self.assertIn("deployed identity verified: `False`", rendered)
         self.assertNotIn("engineering/repository acceptance: `True`", rendered)
 
+    def test_missing_shallow_checkout_refs_remain_unknown(self) -> None:
+        self.assertEqual(MODULE.optional_git_ref(ROOT, "refs/heads/definitely-missing"), "UNKNOWN_UNVERIFIED")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -39,6 +39,17 @@ def git(root: Path, *args: str) -> str:
     return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
 
 
+def optional_git_ref(root: Path, ref: str) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "--verify", ref],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except subprocess.CalledProcessError:
+        return "UNKNOWN_UNVERIFIED"
+
+
 def top_level_schedule(text: str) -> bool:
     return re.search(r"(?m)^  schedule:\s*$", text) is not None
 
@@ -158,8 +169,8 @@ def main() -> int:
     matrix = validate_capabilities(root)
     incumbent = validate_repository(root)
     candidate = git(root, "rev-parse", "HEAD")
-    main_sha = args.main_sha or git(root, "rev-parse", "origin/main")
-    paper_sha = args.paper_validated_sha or git(root, "rev-parse", "origin/paper-validated")
+    main_sha = args.main_sha or optional_git_ref(root, "origin/main")
+    paper_sha = args.paper_validated_sha or optional_git_ref(root, "origin/paper-validated")
     refs_equal = candidate == main_sha == paper_sha
     deployed_verified = bool(args.deployed_identity_verified and args.deployed_sha == candidate and incumbent.get("verified") is True)
     report = {
