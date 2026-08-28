@@ -32,6 +32,20 @@ class V7DeployMonitoringManifestContractTest(unittest.TestCase):
             self.assertIn(surface, required)
             self.assertIn(surface, workflow)
 
+    def test_macos_ssh_deploy_bootstraps_homebrew_and_runtime_tools(self) -> None:
+        workflow = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text(encoding="utf-8")
+        self.assertIn('/opt/homebrew/bin/brew', workflow)
+        self.assertIn('/usr/local/bin/brew', workflow)
+        self.assertIn('eval "$("$brew_bin" shellenv)"', workflow)
+        self.assertIn('for cmd in cmake pkg-config prometheus grafana', workflow)
+        self.assertIn('brew install $missing', workflow)
+        for command in ("cmake", "pkg-config", "prometheus", "grafana"):
+            self.assertIn(f'command -v "$cmd" >/dev/null 2>&1', workflow)
+        reconcile = workflow.index('Reconcile exact paper-validated V7 SHA on server')
+        bootstrap = workflow.index('eval "$("$brew_bin" shellenv)"', reconcile)
+        fetch = workflow.index('git fetch --no-tags origin main paper-validated', reconcile)
+        self.assertLess(bootstrap, fetch)
+
 
 if __name__ == "__main__":
     unittest.main()
