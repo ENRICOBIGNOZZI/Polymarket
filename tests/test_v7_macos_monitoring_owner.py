@@ -42,7 +42,7 @@ class V7MacosMonitoringOwnerTest(unittest.TestCase):
         )
         self.assertIn("GRAFANA_HOSTNAME: mamma-portfolio", text)
         self.assertIn("GRAFANA_FQDN: mamma-portfolio.tail1bae85.ts.net", text)
-        self.assertIn("GRAFANA_URL: http://mamma-portfolio.tail1bae85.ts.net", text)
+        self.assertIn("GRAFANA_URL: https://mamma-portfolio.tail1bae85.ts.net", text)
         self.assertIn('tailscale ping --until-direct=false --c 1 --timeout=10s "$GRAFANA_HOSTNAME"', text)
         self.assertIn('getent hosts "$GRAFANA_FQDN"', text)
         self.assertIn('$GRAFANA_URL/api/health', text)
