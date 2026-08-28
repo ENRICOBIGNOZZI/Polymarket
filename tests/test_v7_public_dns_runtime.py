@@ -29,6 +29,18 @@ class V7PublicDnsRuntimeContractTests(unittest.TestCase):
         self.assertIn('authenticated_execution":false', source)
         self.assertIn('real_order_submission":false', source)
 
+    def test_cpp_http_client_explicitly_uses_v7_proxy_only_for_polymarket_https(self) -> None:
+        source = (ROOT / "src" / "http.cpp").read_text(encoding="utf-8")
+        self.assertIn('std::getenv("PM_V7_HTTPS_PROXY")', source)
+        self.assertIn('constexpr std::string_view scheme = "https://"', source)
+        self.assertIn('host == "polymarket.com"', source)
+        self.assertIn('host.ends_with(suffix)', source)
+        self.assertIn("CURLOPT_PROXY", source)
+        self.assertIn("CURLPROXY_HTTP", source)
+        self.assertIn("CURLOPT_NOPROXY", source)
+        self.assertNotIn("CURLOPT_SSL_VERIFYPEER", source)
+        self.assertNotIn("CURLOPT_SSL_VERIFYHOST", source)
+
     def test_websocket_override_preserves_tls_hostname(self) -> None:
         source = (ROOT / "src" / "fast_ws.cpp").read_text(encoding="utf-8")
         self.assertIn('std::getenv("PM_V7_WS_RESOLVE_IPS")', source)
