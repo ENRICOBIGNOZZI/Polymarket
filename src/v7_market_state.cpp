@@ -172,7 +172,7 @@ bool CanonicalL2Book::mutate_level(Side side, std::int32_t price_e4,
         if (quantity_microunits > 0 && price_e4 > best_bid_e4_) best_bid_e4_ = price_e4;
         else if (quantity_microunits == 0 && price_e4 == best_bid_e4_) best_bid_e4_ = best_bid();
     } else {
-        if (quantity_microunits > 0 && (best_ask_e4_ == 0 || price_e4 < best_ask_e4_)) best_ask_e4_ = price_e4;
+        if (quantity_microunits > 0 && (best_ask_e4_ == 0 || price_e4 < best_ask_e4_) best_ask_e4_ = price_e4;
         else if (quantity_microunits == 0 && price_e4 == best_ask_e4_) best_ask_e4_ = best_ask();
     }
     exchange_event_ns_ = exchange_event_ns;
@@ -223,6 +223,23 @@ DepthSummary CanonicalL2Book::depth_summary(Side side) const noexcept {
     return out;
 }
 
+std::uint8_t CanonicalL2Book::fill_ladder(
+    Side side,
+    std::array<PriceLevelE4, kHotDepthLevels>& output) const noexcept {
+    output.fill({});
+    if (side == Side::None) return 0;
+    std::int32_t price = side == Side::Buy ? best_bid_e4_ : best_ask_e4_;
+    std::uint8_t count = 0;
+    while (price > 0 && count < kHotDepthLevels) {
+        const auto quantity = quantity_at(side, price);
+        if (quantity > 0) {
+            output[count++] = PriceLevelE4{price, quantity};
+        }
+        price = side == Side::Buy ? next_bid(price) : next_ask(price);
+    }
+    return count;
+}
+
 BookHotSnapshot CanonicalL2Book::hot_snapshot() const noexcept {
     BookHotSnapshot out;
     out.state_version = state_version_;
@@ -235,12 +252,15 @@ BookHotSnapshot CanonicalL2Book::hot_snapshot() const noexcept {
     out.best_ask_microunits = quantity_at(Side::Sell, best_ask_e4_);
     out.bid_depth = depth_summary(Side::Buy);
     out.ask_depth = depth_summary(Side::Sell);
+    out.bid_level_count = fill_ladder(Side::Buy, out.bid_levels);
+    out.ask_level_count = fill_ladder(Side::Sell, out.ask_levels);
     out.lineage_continuous = static_cast<std::uint8_t>(lineage_continuous_);
     out.valid = static_cast<std::uint8_t>(
         lineage_continuous_ && state_version_ > 0 && exchange_event_ns_ > 0
         && receive_monotonic_ns_ > 0 && best_bid_e4_ > 0
         && best_ask_e4_ > best_bid_e4_
-        && venue_tick_index(best_bid_e4_) > 0 && venue_tick_index(best_ask_e4_) > 0);
+        && venue_tick_index(best_bid_e4_) > 0 && venue_tick_index(best_ask_e4_) > 0
+        && out.bid_level_count > 0 && out.ask_level_count > 0);
     return out;
 }
 
