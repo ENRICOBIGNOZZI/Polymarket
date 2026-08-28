@@ -109,8 +109,15 @@ ctest --test-dir "$DEBUG_BUILD" --output-on-failure
 
 # Keep these named groups explicit even though CTest also discovers them.  The
 # command's contract remains readable and failures are attributable by domain.
-python3 -m pytest --quiet tests/test_v7_*.py
-python3 -m pytest --quiet tests/test_monitoring_v7_*.py
+pytest_files=()
+while IFS= read -r test_file; do
+  pytest_files+=("$test_file")
+done < <(git grep -l '^import pytest' -- 'tests/test_v7_*.py' || true)
+if ((${#pytest_files[@]} > 0)); then
+  python3 -m pytest --quiet "${pytest_files[@]}"
+fi
+python3 -m unittest discover -s tests -p 'test_v7_*.py'
+python3 -m unittest discover -s tests -p 'test_monitoring_v7_*.py'
 
 "$RELEASE_BUILD/polymarket_v7_maker_replay_bench" "$LATENCY_SAMPLES" \
   > "$RELEASE_BUILD/v7-latency-benchmark.json"

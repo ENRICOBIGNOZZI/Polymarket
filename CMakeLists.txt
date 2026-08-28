@@ -227,8 +227,13 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitoring_v7_*.py")
   foreach(test_file IN LISTS V7_PY_TESTS)
     get_filename_component(test_name "${test_file}" NAME_WE)
-    add_test(
-      NAME "${test_name}"
-      COMMAND ${Python3_EXECUTABLE} -m pytest --quiet "${test_file}")
+    file(READ "${test_file}" test_source)
+    if(test_source MATCHES "(^|\\n)[ \t]*import pytest")
+      add_test(
+        NAME "${test_name}"
+        COMMAND ${Python3_EXECUTABLE} -m pytest --quiet "${test_file}")
+    else()
+      add_test(NAME "${test_name}" COMMAND ${Python3_EXECUTABLE} "${test_file}")
+    endif()
   endforeach()
 endif()

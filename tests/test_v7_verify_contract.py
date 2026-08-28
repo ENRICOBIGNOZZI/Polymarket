@@ -17,8 +17,9 @@ class V7VerifyContractTests(unittest.TestCase):
         for required in (
             "missing required command", "CMAKE_BUILD_TYPE=Release", "CMAKE_BUILD_TYPE=Debug",
             "ctest --test-dir", "test_no_legacy_runtime.py", "test_v7_single_writer_contract.py",
-            "test_v7_*manifest.py", "pytest --quiet tests/test_v7_*.py",
-            "pytest --quiet tests/test_monitoring_v7_*.py", "v7_latency_gate.py",
+            "test_v7_*manifest.py", "git grep -l '^import pytest'",
+            'pytest --quiet "${pytest_files[@]}"', "test_monitoring_v7_*.py",
+            "v7_latency_gate.py",
             "v7_build_manifest.py create", "tracked-secret scan passed",
             "GitHub Action pin validation passed",
             "V7_VERIFY_SANITIZERS", "V7_VERIFY_TSAN",
