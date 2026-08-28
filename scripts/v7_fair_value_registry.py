@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -21,7 +22,9 @@ class RegistryError(ValueError):
 
 
 def canonical_hash(payload: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,8 @@ class FairModelArtifact:
             raise RegistryError("training_sample:invalid")
         if not self.assets or not self.contract_templates or not self.rules_hashes:
             raise RegistryError("scope:missing")
+        if any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in self.rules_hashes):
+            raise RegistryError("rules_hashes:invalid")
         if self.generated_timestamp_ns <= 0:
             raise RegistryError("generated_timestamp:invalid")
         expected = canonical_hash(self.hash_payload())
@@ -74,6 +79,8 @@ class FairModelArtifact:
     def hash_payload(self) -> dict[str, Any]:
         raw = asdict(self)
         raw.pop("model_hash", None)
+        # Governance role is not model content. Promotion changes the immutable
+        # pointer/role without pretending the statistical artifact changed.
         raw["artifact_role"] = "HASH_NEUTRAL"
         return raw
 
@@ -82,9 +89,9 @@ class FairModelArtifact:
             raise RegistryError("artifact_role:unsupported")
         raw = asdict(self)
         raw["artifact_role"] = role
-        # Hash is role-neutral so explicit promotion changes governance state
-        # without pretending model parameters changed.
-        return FairModelArtifact(**raw)
+        artifact = FairModelArtifact(**raw)
+        artifact.validate()
+        return artifact
 
     @classmethod
     def build(cls, **kwargs: Any) -> "FairModelArtifact":
@@ -107,6 +114,8 @@ class PromotionPolicy:
     maximum_ece: float = 0.05
     minimum_calibration_slope: float = 0.75
     maximum_calibration_slope: float = 1.25
+    minimum_interval_coverage: float = 0.85
+    maximum_interval_coverage: float = 0.99
     require_positive_net_replay_pnl: bool = True
     require_edge_monotonicity: bool = True
     require_no_causality_failures: bool = True
@@ -204,12 +213,16 @@ class FairValueRegistry:
             raise RegistryError("promotion:insufficient_oos_contracts")
         if shadow_contracts < policy.minimum_forward_shadow_contracts:
             raise RegistryError("promotion:insufficient_forward_shadow")
-        ece = float(evidence.get("ece", math.inf)) if "math" in globals() else float(evidence.get("ece", 1e9))
-        slope = float(evidence.get("calibration_slope", 0.0))
+
+        ece = float(evidence.get("ece", math.inf))
+        slope = float(evidence.get("calibration_slope", math.nan))
+        coverage = float(evidence.get("interval_coverage", math.nan))
         if not math.isfinite(ece) or ece > policy.maximum_ece:
             raise RegistryError("promotion:ece")
         if not math.isfinite(slope) or not policy.minimum_calibration_slope <= slope <= policy.maximum_calibration_slope:
             raise RegistryError("promotion:calibration_slope")
+        if not math.isfinite(coverage) or not policy.minimum_interval_coverage <= coverage <= policy.maximum_interval_coverage:
+            raise RegistryError("promotion:interval_coverage")
         if policy.require_positive_net_replay_pnl and float(evidence.get("net_replay_pnl", 0.0)) <= 0.0:
             raise RegistryError("promotion:nonpositive_net_replay_pnl")
         if policy.require_edge_monotonicity and evidence.get("edge_monotonicity_pass") is not True:
@@ -220,8 +233,5 @@ class FairValueRegistry:
             raise RegistryError("promotion:shadow_not_frozen")
         if evidence.get("exact_code_sha") != artifact.code_sha:
             raise RegistryError("promotion:sha_mismatch")
-
-
-# Imported at the end so build/import errors above stay explicit and the module
-# remains dependency-free.
-import math  # noqa: E402
+        if evidence.get("rules_hashes") != list(artifact.rules_hashes):
+            raise RegistryError("promotion:rules_scope_mismatch")
