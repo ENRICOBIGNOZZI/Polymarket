@@ -131,6 +131,11 @@ class ExporterHandler(BaseHTTPRequestHandler):
             payload = (json.dumps({"ok": not reasons, "reasons": reasons}, sort_keys=True) + "\n").encode()
             self.send_response(200 if not reasons else 503)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+        elif self.path == "/maker-fillability.json":
+            report = snapshot.get("maker_fillability") if isinstance(snapshot.get("maker_fillability"), dict) else {}
+            payload = (json.dumps(report, sort_keys=True) + "\n").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
         else:
             payload = b"not found\n"
             self.send_response(404)
