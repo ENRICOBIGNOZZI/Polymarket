@@ -32,6 +32,17 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertNotIn("pkill -f", text)
         self.assertNotIn("pgrep -af", text)
 
+    def test_successful_runtime_drain_returns_success_under_errexit(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        function = text[text.index("stop_production_runtime(){"):text.index("monitoring_contract(){")]
+        self.assertNotIn(
+            'kill -0 "$pid" 2>/dev/null && fail "production V7 pid=$pid did not drain"',
+            function,
+        )
+        self.assertIn('if kill -0 "$pid" 2>/dev/null; then', function)
+        self.assertIn('fail "production V7 pid=$pid did not drain"', function)
+        self.assertIn("return 0", function)
+
     def test_updater_deploys_canonical_v7_loop_recorder_and_health_surfaces(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         for required in (
