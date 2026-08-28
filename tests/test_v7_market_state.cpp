@@ -27,6 +27,44 @@ void test_snapshot_best_levels_and_cumulative_depth() {
     assert(hot.bid_depth.l5_microunits == 15'000'000);
     assert(hot.bid_depth.l10_microunits == 21'000'000);
     assert(hot.ask_depth.l5_microunits == 17'500'000);
+    assert(hot.bid_level_count == 6);
+    assert(hot.ask_level_count == 6);
+    assert(hot.bid_levels[0].price_e4 == 4800);
+    assert(hot.bid_levels[5].price_e4 == 4300);
+    assert(hot.bid_levels[5].quantity_microunits == 6'000'000);
+    assert(hot.ask_levels[0].price_e4 == 5200);
+    assert(hot.ask_levels[5].price_e4 == 5700);
+    assert(hot.ask_levels[5].quantity_microunits == 6'500'000);
+}
+
+void test_hot_l10_ladder_is_ordered_bounded_and_updates() {
+    pm::v7::CanonicalL2Book book(100);
+    std::array<pm::v7::PriceLevelE4, 12> bids{};
+    std::array<pm::v7::PriceLevelE4, 12> asks{};
+    for (std::size_t i = 0; i < bids.size(); ++i) {
+        bids[i] = {static_cast<std::int32_t>(6000 - 100 * static_cast<int>(i)),
+                   static_cast<std::int64_t>(i + 1) * 1'000'000};
+        asks[i] = {static_cast<std::int32_t>(7000 + 100 * static_cast<int>(i)),
+                   static_cast<std::int64_t>(i + 1) * 2'000'000};
+    }
+    assert(book.replace_snapshot(bids, asks, 200, 2000));
+    auto hot = book.hot_snapshot();
+    assert(hot.bid_level_count == pm::v7::kHotDepthLevels);
+    assert(hot.ask_level_count == pm::v7::kHotDepthLevels);
+    assert(hot.bid_levels[0].price_e4 == 6000);
+    assert(hot.bid_levels[9].price_e4 == 5100);
+    assert(hot.ask_levels[0].price_e4 == 7000);
+    assert(hot.ask_levels[9].price_e4 == 7900);
+    for (std::size_t i = 1; i < pm::v7::kHotDepthLevels; ++i) {
+        assert(hot.bid_levels[i - 1].price_e4 > hot.bid_levels[i].price_e4);
+        assert(hot.ask_levels[i - 1].price_e4 < hot.ask_levels[i].price_e4);
+    }
+
+    assert(book.mutate_level(pm::v7::Side::Buy, 6000, 0, 201, 2001));
+    hot = book.hot_snapshot();
+    assert(hot.best_bid_e4 == 5900);
+    assert(hot.bid_levels[0].price_e4 == 5900);
+    assert(hot.bid_levels[9].price_e4 == 5000);
 }
 
 void test_delete_best_uses_occupancy_index_without_sorting() {
@@ -105,6 +143,7 @@ void test_reconnect_invalidates_delta_lineage_until_fresh_snapshot() {
 
 int main() {
     test_snapshot_best_levels_and_cumulative_depth();
+    test_hot_l10_ladder_is_ordered_bounded_and_updates();
     test_delete_best_uses_occupancy_index_without_sorting();
     test_crossed_or_off_tick_updates_fail_closed();
     test_tick_change_requires_existing_levels_to_remain_valid();
