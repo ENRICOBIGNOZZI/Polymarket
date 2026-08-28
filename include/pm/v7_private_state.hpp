@@ -86,15 +86,14 @@ private:
     [[nodiscard]] const Slot* find(std::uint64_t client_order_id) const noexcept;
     [[nodiscard]] Slot* insert_slot(std::uint64_t client_order_id) noexcept;
     [[nodiscard]] static bool terminal(OrderState state) noexcept;
-    [[nodiscard]] OmsEvent control_event(OmsEventType type,
-                                         std::int64_t timestamp_ns) noexcept;
+    [[nodiscard]] static OmsEvent control_event(OmsEventType type,
+                                                std::int64_t timestamp_ns) noexcept;
     void erase(Slot& slot) noexcept;
     void bump_version() noexcept;
 
     std::array<Slot, kMaxPrivateOrders> slots_{};
     PrivateStreamState stream_state_ = PrivateStreamState::Disconnected;
     std::size_t tracked_orders_ = 0;
-    std::uint64_t event_sequence_ = 0;
     std::uint64_t state_version_ = 1;
 };
 
