@@ -10,6 +10,9 @@ remain explicit diagnostics.
 Adverse markout is fill-conditioned and filled-size weighted. A single causal
 markout horizon is selected for each execution group so multiple horizons from
 the same fill are never treated as independent observations of one target.
+
+The fitter produces a challenger artifact. Promotion is a separate operation:
+this process never overwrites the runtime champion by itself.
 """
 from __future__ import annotations
 
@@ -26,6 +29,8 @@ from typing import Any
 from v7_execution_ledger import LedgerEvent
 
 STRATEGY = "MICRO_MAKER_PRO"
+MODEL_FAMILY = "fractional_fill_beta_binomial_plus_fill_conditioned_markout_v1"
+FEATURE_SCHEMA_VERSION = 1
 MARKOUT_HORIZONS = ("1s", "10s", "45s", "60s", "300s")
 # 45s is the canonical adverse-selection target requested by the execution
 # evidence contract. If it is not observed yet, use exactly one shorter/nearby
@@ -117,6 +122,19 @@ def _adverse_target(
         if values:
             return horizon, values
     return None, []
+
+
+def _training_metadata(records: list[LedgerEvent]) -> dict[str, Any]:
+    timestamps = [int(event.recorded_ts_ms) for event in records if int(event.recorded_ts_ms) > 0]
+    orders = [event for event in records if event.event_type == "ORDER_SUBMITTED"]
+    clusters = {_event_cluster(event) for event in orders}
+    return {
+        "start_ts_ms": min(timestamps) if timestamps else None,
+        "end_ts_ms": max(timestamps) if timestamps else None,
+        "records": len(records),
+        "orders": len(orders),
+        "event_clusters": len(clusters),
+    }
 
 
 def fit(records: list[LedgerEvent], *, cold_fill_prior: float = 0.02,
@@ -223,12 +241,27 @@ def fit(records: list[LedgerEvent], *, cold_fill_prior: float = 0.02,
             "mature": n_orders >= 50 and n_any_fill >= 20 and len(event_clusters) >= 5,
         }
 
+    generated_ts_ms = time.time_ns() // 1_000_000
     return {
         "schema": "polymarket_v7_maker_execution_model_v1",
         "strategy": STRATEGY,
+        "family": MODEL_FAMILY,
+        "version": generated_ts_ms,
         "paper_only": True,
         "authenticated_execution": False,
-        "generated_ts_ms": time.time_ns() // 1_000_000,
+        "real_order_submission": False,
+        "generated_ts_ms": generated_ts_ms,
+        "feature_schema": {
+            "version": FEATURE_SCHEMA_VERSION,
+            "execution_cell_key": ["action", "outcome", "side"],
+            "targets": ["filled_fraction", "fill_conditioned_adverse_markout"],
+        },
+        "training_window": _training_metadata(records),
+        "hyperparameters": {
+            "cold_fill_prior": cold_fill_prior,
+            "prior_strength": prior_strength,
+            "adverse_horizon_priority": list(ADVERSE_HORIZON_PRIORITY),
+        },
         "fill_probability_semantics": "posterior_expected_filled_fraction_per_posted_share",
         "partial_fills_are_fractional_success_mass": True,
         "adverse_target_horizon": "45s",
@@ -245,11 +278,26 @@ def main() -> int:
     parser.add_argument("--model-sha", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cold-fill-prior", type=float, default=0.02)
+    parser.add_argument("--prior-strength", type=float, default=20.0)
+    parser.add_argument("--policy-version", type=int, default=1)
+    parser.add_argument("--artifact-role", choices=("challenger", "champion"), default="challenger")
     args = parser.parse_args()
     if len(args.model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in args.model_sha):
         raise SystemExit("exact 40-hex model SHA required")
-    result = fit(read_records(args.ledger, args.model_sha), cold_fill_prior=args.cold_fill_prior)
+    records = read_records(args.ledger, args.model_sha)
+    result = fit(
+        records,
+        cold_fill_prior=args.cold_fill_prior,
+        prior_strength=args.prior_strength,
+    )
     result["model_sha"] = args.model_sha
+    result["code_sha"] = args.model_sha
+    result["policy_version"] = max(1, int(args.policy_version))
+    result["artifact_role"] = args.artifact_role
+    result["promotion_state"] = (
+        "CHALLENGER_PENDING_OOS" if args.artifact_role == "challenger" else "CHAMPION"
+    )
+    result["eligible_for_live_reload"] = args.artifact_role == "champion"
     atomic_json(args.output, result)
     print(json.dumps(result, sort_keys=True))
     return 0
