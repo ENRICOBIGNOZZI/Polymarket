@@ -21,9 +21,14 @@ class RegistryError(ValueError):
     pass
 
 
+def _json_canonical(value: Any) -> Any:
+    """Round-trip through JSON so tuples/lists have one storage representation."""
+    return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
 def canonical_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        json.dumps(_json_canonical(payload), sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
 
 
@@ -82,7 +87,7 @@ class FairModelArtifact:
         # Governance role is not model content. Promotion changes the immutable
         # pointer/role without pretending the statistical artifact changed.
         raw["artifact_role"] = "HASH_NEUTRAL"
-        return raw
+        return _json_canonical(raw)
 
     def with_role(self, role: str) -> "FairModelArtifact":
         if role not in ROLES:
@@ -124,7 +129,8 @@ class PromotionPolicy:
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    canonical = _json_canonical(payload)
+    tmp.write_text(json.dumps(canonical, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(tmp, path)
 
 
@@ -142,9 +148,9 @@ class FairValueRegistry:
     def store(self, artifact: FairModelArtifact, *, experiment_status: str = "completed") -> Path:
         artifact.validate()
         path = self._artifact_path(artifact)
-        payload = asdict(artifact)
+        payload = _json_canonical(asdict(artifact))
         if path.exists():
-            existing = json.loads(path.read_text(encoding="utf-8"))
+            existing = _json_canonical(json.loads(path.read_text(encoding="utf-8")))
             existing["artifact_role"] = "HASH_NEUTRAL"
             candidate = dict(payload)
             candidate["artifact_role"] = "HASH_NEUTRAL"
