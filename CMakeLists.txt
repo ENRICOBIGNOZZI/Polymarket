@@ -37,7 +37,8 @@ add_library(pm_v7_common
   src/v7_markout.cpp
   src/v7_market_ws.cpp
   src/v7_capital.cpp
-  src/v7_execution_admission.cpp)
+  src/v7_execution_admission.cpp
+  src/v7_private_state.cpp)
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_common PUBLIC pm_json)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
@@ -102,6 +103,10 @@ if(BUILD_TESTING)
   add_executable(pm_v7_execution_admission_tests tests/test_v7_execution_admission.cpp)
   target_link_libraries(pm_v7_execution_admission_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_execution_admission_tests COMMAND pm_v7_execution_admission_tests)
+
+  add_executable(pm_v7_private_state_tests tests/test_v7_private_state.cpp)
+  target_link_libraries(pm_v7_private_state_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_private_state_tests COMMAND pm_v7_private_state_tests)
 
   add_executable(pm_v7_market_ws_tests tests/test_v7_market_ws.cpp)
   target_link_libraries(pm_v7_market_ws_tests PRIVATE pm_v7_common)
