@@ -139,7 +139,6 @@ jobs:
         uses: tailscale/github-action@v4
         with:
           authkey: ${{ secrets.TS_AUTHKEY }}
-          ping: ${{ env.SERVER_HOST }}
 
       - name: Join private tailnet with OAuth
         if: steps.preflight.outputs.ready == 'true' && steps.tailscale_auth.outputs.mode == 'oauth'
@@ -148,9 +147,8 @@ jobs:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: ${{ vars.TS_TAGS || 'tag:ci' }}
-          ping: ${{ env.SERVER_HOST }}
 
-      - name: Configure SSH identity
+      - name: Configure SSH identity and await private server
         if: steps.preflight.outputs.ready == 'true'
         shell: bash
         env:
@@ -161,10 +159,17 @@ jobs:
           install -d -m 700 ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_deploy
           chmod 600 ~/.ssh/polymarket_deploy
-          for _ in {1..20}; do
-            ssh-keyscan -T 3 -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null && break
-            sleep 2
+          : > ~/.ssh/known_hosts
+          ready=0
+          for _ in $(seq 1 30); do
+            tailscale ping --timeout=4s -c 1 "$SERVER_HOST" >/dev/null 2>&1 || true
+            if ssh-keyscan -T 3 -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 3
           done
+          test "$ready" = 1
           test -s ~/.ssh/known_hosts
 
       - name: Reconcile exact paper-validated V7 SHA on server
@@ -173,9 +178,19 @@ jobs:
         run: |
           set -euo pipefail
           validated_sha="$(git rev-parse origin/paper-validated)"
-          ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
-            -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+          ssh_common=(
+            -i ~/.ssh/polymarket_deploy
+            -o IdentitiesOnly=yes
+            -o BatchMode=yes
+            -o ConnectTimeout=10
+            -o ConnectionAttempts=3
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=4
+            -p "$SERVER_PORT"
+          )
+
+          set +e
+          ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST" \
             "EXPECTED_VALIDATED_SHA='$validated_sha' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
           set -euo pipefail
           cd ~/polymarket
@@ -232,10 +247,51 @@ jobs:
           POLYMARKET_APP_DIR="$HOME/polymarket" \
             EXPECTED_VALIDATED_SHA="$validated_sha" \
             POLYMARKET_DEPLOY_REF=paper-validated \
+            POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=60 \
             bash "$updater"
           printf 'deploy_result=success\ndeployed_sha=%s\norigin_main=%s\npaper_validated=%s\n' \
             "$validated_sha" "$main_sha" "$validated_sha"
           REMOTE
+          primary_status=${PIPESTATUS[0]}
+          set -e
+
+          if [[ "$primary_status" -ne 0 ]]; then
+            printf 'primary_ssh_status=%s\n' "$primary_status" | tee -a deploy-evidence.txt
+            recovered=0
+            for _ in $(seq 1 18); do
+              if ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST" \
+                "EXPECTED_VALIDATED_SHA='$validated_sha' bash -s" <<'VERIFY' >> deploy-evidence.txt 2>&1
+          set -euo pipefail
+          cd ~/polymarket
+          test "$(git rev-parse HEAD)" = "$EXPECTED_VALIDATED_SHA"
+          root="$HOME/polymarket/runs/paper_v7_live"
+          python3 - "$root" "$EXPECTED_VALIDATED_SHA" <<'PY'
+          import json,os,sys,time
+          from pathlib import Path
+          root=Path(sys.argv[1]); sha=sys.argv[2]
+          runtime=json.loads((root/'control/runtime_status.json').read_text(encoding='utf-8'))
+          assert runtime.get('version') == 7
+          assert runtime.get('model_sha') == sha
+          assert runtime.get('paper_only') is True
+          assert runtime.get('authenticated_execution') is False
+          assert runtime.get('real_order_submission') is False
+          assert runtime.get('state') == 'running'
+          assert runtime.get('killed') is False
+          pid=int(runtime.get('pid') or 0); assert pid > 0; os.kill(pid,0)
+          assert int(time.time()) - int(runtime.get('timestamp') or 0) <= 180
+          print(f'recovered_runtime_pid={pid}')
+          PY
+          VERIFY
+              then
+                recovered=1
+                break
+              fi
+              sleep 5
+            done
+            test "$recovered" = 1
+            printf 'deploy_result=recovered_after_transport_loss\ndeployed_sha=%s\n' \
+              "$validated_sha" | tee -a deploy-evidence.txt
+          fi
 
       - name: Upload deployment evidence
         if: always()
