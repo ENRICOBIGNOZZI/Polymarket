@@ -56,14 +56,18 @@ target_link_libraries(pm_v7_hft PUBLIC pm_v7_common Threads::Threads)
 target_compile_options(pm_v7_hft PRIVATE -Wall -Wextra -Wpedantic)
 
 # Settlement-aware external information is a V7 capability, not a second
-# runtime/OMS. This library contains only bounded hot-state, decision economics,
-# execution arbitration and PAPER execution primitives.
+# runtime/OMS. This library contains bounded ingress normalization, causal hot
+# state, fair-value economics, execution arbitration, async evidence tape and
+# deterministic offline replay primitives.
 add_library(pm_v7_external
   src/v7_external_fair.cpp
   src/v7_external_state.cpp
-  src/v7_external_execution.cpp)
+  src/v7_external_execution.cpp
+  src/v7_external_protocol.cpp
+  src/v7_external_tape.cpp
+  src/v7_external_replay.cpp)
 target_include_directories(pm_v7_external PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
-target_link_libraries(pm_v7_external PUBLIC pm_v7_common Threads::Threads)
+target_link_libraries(pm_v7_external PUBLIC pm_v7_common Threads::Threads pm_json)
 target_compile_options(pm_v7_external PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(polymarket_v7_trade_recorder src/v7_trade_recorder.cpp)
@@ -172,6 +176,18 @@ if(BUILD_TESTING)
   add_executable(pm_v7_external_execution_tests tests/test_v7_external_execution.cpp)
   target_link_libraries(pm_v7_external_execution_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_execution_tests COMMAND pm_v7_external_execution_tests)
+
+  add_executable(pm_v7_external_protocol_tests tests/test_v7_external_protocol.cpp)
+  target_link_libraries(pm_v7_external_protocol_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_protocol_tests COMMAND pm_v7_external_protocol_tests)
+
+  add_executable(pm_v7_external_tape_tests tests/test_v7_external_tape.cpp)
+  target_link_libraries(pm_v7_external_tape_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_tape_tests COMMAND pm_v7_external_tape_tests)
+
+  add_executable(pm_v7_external_replay_tests tests/test_v7_external_replay.cpp)
+  target_link_libraries(pm_v7_external_replay_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_replay_tests COMMAND pm_v7_external_replay_tests)
 
   add_test(NAME no_legacy_runtime COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_no_legacy_runtime.py)
 
