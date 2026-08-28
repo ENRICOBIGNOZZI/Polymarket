@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -11,18 +12,35 @@ from typing import Any
 import exporter_v7 as base
 from v7_maker_fillability import summarize_maker_fillability
 
+_FILLABILITY_CACHE_KEY: tuple[str, str, int] | None = None
+_FILLABILITY_CACHE_VALUE: dict[str, Any] | None = None
+_FILLABILITY_REFRESH_SECONDS = 30
+
+
+def _fillability_report(run_root: Path, repository_root: Path, runtime_sha: str, now: int | None) -> dict[str, Any]:
+    global _FILLABILITY_CACHE_KEY, _FILLABILITY_CACHE_VALUE
+    clock_s = int(time.time()) if now is None else int(now)
+    key = (str(run_root.resolve()), runtime_sha, clock_s // _FILLABILITY_REFRESH_SECONDS)
+    if key == _FILLABILITY_CACHE_KEY and _FILLABILITY_CACHE_VALUE is not None:
+        return _FILLABILITY_CACHE_VALUE
+    report = summarize_maker_fillability(
+        run_root.resolve() / "ledger" / "execution.jsonl",
+        run_root.resolve() / "trade_tape.csv",
+        repository_root / "config" / "v7_professional_market_maker.json",
+        model_sha=runtime_sha or None,
+        now_ms=clock_s * 1000,
+    )
+    _FILLABILITY_CACHE_KEY = key
+    _FILLABILITY_CACHE_VALUE = report
+    return report
+
 
 def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now: int | None = None) -> dict[str, Any]:
     snapshot = base.collect_snapshot(run_root, repository_root, now=now)
     repository_root = (repository_root or Path(".")).resolve()
     runtime = snapshot.get("runtime") if isinstance(snapshot.get("runtime"), dict) else {}
-    snapshot["maker_fillability"] = summarize_maker_fillability(
-        Path(run_root).resolve() / "ledger" / "execution.jsonl",
-        Path(run_root).resolve() / "trade_tape.csv",
-        repository_root / "config" / "v7_professional_market_maker.json",
-        model_sha=str(runtime.get("model_sha") or "") or None,
-        now_ms=(int(now) * 1000 if now is not None else None),
-    )
+    runtime_sha = str(runtime.get("model_sha") or "")
+    snapshot["maker_fillability"] = _fillability_report(Path(run_root), repository_root, runtime_sha, now)
     return snapshot
 
 
