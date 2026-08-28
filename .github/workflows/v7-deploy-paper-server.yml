@@ -193,11 +193,19 @@ jobs:
               exit 1
             }
             eval "$("$brew_bin" shellenv)"
-            if ! command -v cmake >/dev/null 2>&1; then
-              echo "[v7-deploy] Installing missing build dependency: cmake"
-              brew install cmake
+            missing=""
+            for cmd in cmake pkg-config prometheus grafana; do
+              if ! command -v "$cmd" >/dev/null 2>&1; then
+                missing="$missing $cmd"
+              fi
+            done
+            if [[ -n "$missing" ]]; then
+              echo "[v7-deploy] Installing missing macOS dependencies:$missing"
+              brew install $missing
             fi
-            command -v cmake >/dev/null 2>&1
+            for cmd in cmake pkg-config prometheus grafana; do
+              command -v "$cmd" >/dev/null 2>&1
+            done
           fi
 
           git fetch --no-tags origin main paper-validated
