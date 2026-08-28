@@ -55,6 +55,17 @@ target_include_directories(pm_v7_hft PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include 
 target_link_libraries(pm_v7_hft PUBLIC pm_v7_common Threads::Threads)
 target_compile_options(pm_v7_hft PRIVATE -Wall -Wextra -Wpedantic)
 
+# Settlement-aware external information is a V7 capability, not a second
+# runtime/OMS. This library contains only bounded hot-state, decision economics,
+# execution arbitration and PAPER execution primitives.
+add_library(pm_v7_external
+  src/v7_external_fair.cpp
+  src/v7_external_state.cpp
+  src/v7_external_execution.cpp)
+target_include_directories(pm_v7_external PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
+target_link_libraries(pm_v7_external PUBLIC pm_v7_common Threads::Threads)
+target_compile_options(pm_v7_external PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_trade_recorder src/v7_trade_recorder.cpp)
 target_link_libraries(polymarket_v7_trade_recorder PRIVATE pm_core)
 target_compile_options(polymarket_v7_trade_recorder PRIVATE -Wall -Wextra -Wpedantic)
@@ -149,6 +160,18 @@ if(BUILD_TESTING)
   add_executable(pm_v7_maker_execution_policy_tests tests/test_v7_maker_execution_policy.cpp)
   target_link_libraries(pm_v7_maker_execution_policy_tests PRIVATE pm_v7_hft)
   add_test(NAME pm_v7_maker_execution_policy_tests COMMAND pm_v7_maker_execution_policy_tests)
+
+  add_executable(pm_v7_external_fair_tests tests/test_v7_external_fair.cpp)
+  target_link_libraries(pm_v7_external_fair_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_fair_tests COMMAND pm_v7_external_fair_tests)
+
+  add_executable(pm_v7_external_state_tests tests/test_v7_external_state.cpp)
+  target_link_libraries(pm_v7_external_state_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_state_tests COMMAND pm_v7_external_state_tests)
+
+  add_executable(pm_v7_external_execution_tests tests/test_v7_external_execution.cpp)
+  target_link_libraries(pm_v7_external_execution_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_execution_tests COMMAND pm_v7_external_execution_tests)
 
   add_test(NAME no_legacy_runtime COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_no_legacy_runtime.py)
 
