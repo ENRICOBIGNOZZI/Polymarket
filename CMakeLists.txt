@@ -42,9 +42,10 @@ target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
 
 add_library(pm_v7_hft
   src/v7_maker_hft.cpp
+  src/v7_maker_execution_cells.cpp
   src/v7_maker_lane.cpp
   src/v7_maker_paper.cpp)
-target_include_directories(pm_v7_hft PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(pm_v7_hft PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_hft PUBLIC pm_v7_common Threads::Threads)
 target_compile_options(pm_v7_hft PRIVATE -Wall -Wextra -Wpedantic)
 
