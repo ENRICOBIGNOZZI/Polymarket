@@ -27,6 +27,25 @@ constexpr double kEps = 1e-12;
     return std::isfinite(value);
 }
 
+[[nodiscard]] std::uint64_t mix64(std::uint64_t x) noexcept {
+    x += 0x9e3779b97f4a7c15ULL;
+    x = (x ^ (x >> 30U)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27U)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31U);
+}
+
+[[nodiscard]] bool exploration_sample(const MarketUpdate& update, double epsilon) noexcept {
+    if (epsilon >= 1.0) return true;
+    if (!(epsilon > 0.0)) return false;
+    constexpr std::uint64_t kBuckets = 1'000'000ULL;
+    const auto threshold = static_cast<std::uint64_t>(
+        std::floor(clamp(epsilon, 0.0, 1.0) * static_cast<double>(kBuckets)));
+    const std::uint64_t seed = update.state_version
+        ^ (update.instrument_handle * 0x9e3779b97f4a7c15ULL)
+        ^ (update.market_handle * 0xbf58476d1ce4e5b9ULL);
+    return mix64(seed) % kBuckets < threshold;
+}
+
 [[nodiscard]] double logistic(double value) noexcept {
     if (value >= 0.0) {
         const double e = std::exp(-value);
@@ -125,10 +144,6 @@ struct Candidate {
         : static_cast<double>(quote_tick - update.best_ask_tick);
     const auto* cell = execution_cell(model, action, update, side);
 
-    // The slow plane publishes a pre-shrunk action x outcome x side baseline.
-    // Preserve the feature coefficients as deviations from the GLOBAL intercept;
-    // only the baseline is replaced by the selected execution cell. Missing or
-    // invalid cells are exactly backward-compatible with the GLOBAL model.
     const double global_fill_logit = model.fill_coefficients[0];
     const double baseline_fill_logit = cell != nullptr
         ? safe_logit(cell->fill_probability) : global_fill_logit;
@@ -271,6 +286,13 @@ bool MakerModelSnapshot::valid() const noexcept {
     if (!finite(base_quote_shares) || base_quote_shares <= 0.0) return false;
     if (!finite(toxicity_withdraw_threshold) || toxicity_withdraw_threshold < 0.0 || toxicity_withdraw_threshold > 1.0) return false;
     if (!finite(one_sided_inventory_fraction) || one_sided_inventory_fraction < 0.0) return false;
+    if (!finite(exploration_epsilon) || exploration_epsilon < 0.0 || exploration_epsilon > 1.0) return false;
+    if (!finite(exploration_quote_notional_fraction) || exploration_quote_notional_fraction < 0.0
+        || exploration_quote_notional_fraction > 1.0) return false;
+    if (exploration_enabled != 0
+        && (exploration_epsilon <= 0.0 || exploration_quote_notional_fraction <= 0.0
+            || exploration_max_active_markets == 0)) return false;
+    if (exploration_min_rest_ns < 0 || exploration_max_rest_ns < exploration_min_rest_ns) return false;
     if (min_quote_lifetime_ns < 0 || max_related_snapshot_age_ns < 0) return false;
     for (double value : fill_coefficients) if (!finite(value)) return false;
     for (double value : markout_coefficients) if (!finite(value)) return false;
@@ -431,6 +453,7 @@ MakerDecision MakerHotPath::on_market_update(
                             + 0.10 * cancel_component, 0.0, 1.0);
 
     if (decision.toxicity >= model.toxicity_withdraw_threshold) {
+        exploration_active_ = 0;
         decision.latency.decision_ns = monotonic_ns() - decision_start_ns;
         return control_exit(DecisionReason::Toxic, IntentType::Withdraw);
     }
@@ -438,6 +461,7 @@ MakerDecision MakerHotPath::on_market_update(
     const double quote_shares = std::min(std::max(0.0, model.base_quote_shares),
                                          std::max(0.0, risk.max_quote_shares));
     if (quote_shares <= 0.0 || risk.max_abs_residual_shares <= 0.0) {
+        exploration_active_ = 0;
         decision.latency.decision_ns = monotonic_ns() - decision_start_ns;
         return control_exit(DecisionReason::InventoryLimit, IntentType::Withdraw);
     }
@@ -477,11 +501,96 @@ MakerDecision MakerHotPath::on_market_update(
         if (best == nullptr || candidate.score > best->score) best = &candidate;
     }
 
-    if (best == nullptr || !finite(best->score) || best->score <= model.min_robust_ev_per_share) {
+    const bool economic_quote = best != nullptr && finite(best->score)
+                             && best->score > model.min_robust_ev_per_share;
+    const std::int64_t now = monotonic_ns();
+
+    if (!economic_quote) {
+        // PAPER-only exploration is intentionally BUY-only. A fresh account owns
+        // no outcome tokens, so exploratory asks would merely exercise the
+        // inventory rejection path. Quoting bids on both complementary tokens
+        // instead collects queue/fill/markout evidence while keeping the total
+        // notional bounded by the runtime-derived exploration risk cap.
+        const bool exploration_configured = model.exploration_enabled != 0
+            && risk.exploration_max_quote_shares > 0.0
+            && model.exploration_epsilon > 0.0
+            && !inventory_one_sided;
+        const double exploration_shares = std::min(
+            quote_shares, std::max(0.0, risk.exploration_max_quote_shares));
+        const std::int64_t elapsed = last_exploration_quote_ns_ > 0
+            ? std::max<std::int64_t>(0, now - last_exploration_quote_ns_)
+            : std::numeric_limits<std::int64_t>::max();
+
+        if (exploration_active_ && quotes.bid_active != 0) {
+            if (model.exploration_max_rest_ns > 0 && elapsed >= model.exploration_max_rest_ns) {
+                decision.action = Action::Withdraw;
+                decision.reason = DecisionReason::ExplorationExpired;
+                append_intent(decision, make_intent(++intent_sequence_, update, model,
+                                                    IntentType::CancelQuote, Side::Buy,
+                                                    quotes.bid_tick, 0.0, nullptr, now));
+                exploration_active_ = 0;
+            } else if (exploration_configured && exploration_shares > 0.0) {
+                const auto exploratory = evaluate_side(
+                    Action::Join, Side::Buy, update.best_bid_tick, update, inventory, risk,
+                    model, decision.features, reservation_value, exploration_shares);
+                decision.action = Action::Join;
+                decision.reason = DecisionReason::ExplorationHold;
+                decision.robust_ev = finite(exploratory.robust_ev) ? exploratory.robust_ev : 0.0;
+                decision.ev_uncertainty = exploratory.uncertainty;
+                const std::int64_t required_rest = std::max(
+                    model.min_quote_lifetime_ns, model.exploration_min_rest_ns);
+                if (quotes.bid_tick != exploratory.price_tick && elapsed >= required_rest
+                    && !quotes.cancel_pending) {
+                    append_intent(decision, make_intent(++intent_sequence_, update, model,
+                                                        IntentType::CancelQuote, Side::Buy,
+                                                        quotes.bid_tick, 0.0, nullptr, now));
+                }
+            } else {
+                exploration_active_ = 0;
+                decision.latency.decision_ns = monotonic_ns() - decision_start_ns;
+                return control_exit(DecisionReason::NoEconomicQuote, IntentType::Withdraw);
+            }
+
+            const std::int64_t end_ns = monotonic_ns();
+            decision.latency.decision_ns = end_ns - decision_start_ns;
+            decision.latency.receive_to_intent_ns = update.socket_receive_monotonic_ns > 0
+                ? std::max<std::int64_t>(0, end_ns - update.socket_receive_monotonic_ns) : 0;
+            return decision;
+        }
+
+        if (exploration_active_ && quotes.bid_active == 0) exploration_active_ = 0;
+        const bool sampled = last_exploration_quote_ns_ == 0
+            || exploration_sample(update, model.exploration_epsilon);
+        if (exploration_configured && exploration_shares > 0.0
+            && quotes.bid_active == 0 && quotes.ask_active == 0
+            && !quotes.cancel_pending && sampled) {
+            const auto exploratory = evaluate_side(
+                Action::Join, Side::Buy, update.best_bid_tick, update, inventory, risk,
+                model, decision.features, reservation_value, exploration_shares);
+            if (finite(exploratory.robust_ev) && exploratory.price_tick > 0) {
+                decision.action = Action::Join;
+                decision.reason = DecisionReason::ExplorationQuote;
+                decision.robust_ev = exploratory.robust_ev;
+                decision.ev_uncertainty = exploratory.uncertainty;
+                append_intent(decision, make_intent(++intent_sequence_, update, model,
+                                                    IntentType::Quote, Side::Buy,
+                                                    exploratory.price_tick, exploration_shares,
+                                                    &exploratory, now));
+                exploration_active_ = 1;
+                last_exploration_quote_ns_ = now;
+                const std::int64_t end_ns = monotonic_ns();
+                decision.latency.decision_ns = end_ns - decision_start_ns;
+                decision.latency.receive_to_intent_ns = update.socket_receive_monotonic_ns > 0
+                    ? std::max<std::int64_t>(0, end_ns - update.socket_receive_monotonic_ns) : 0;
+                return decision;
+            }
+        }
+
         decision.latency.decision_ns = monotonic_ns() - decision_start_ns;
         return control_exit(DecisionReason::NoEconomicQuote, IntentType::Withdraw);
     }
 
+    exploration_active_ = 0;
     const bool want_bid = best->bid.admissible;
     const bool want_ask = best->ask.admissible;
     decision.action = inventory_one_sided || (want_bid != want_ask) ? Action::OneSided : best->action;
@@ -490,7 +599,6 @@ MakerDecision MakerHotPath::on_market_update(
     decision.ev_uncertainty = (want_bid ? best->bid.uncertainty : 0.0)
                             + (want_ask ? best->ask.uncertainty : 0.0);
 
-    const std::int64_t now = monotonic_ns();
     const bool lifetime_hold = quotes.last_quote_monotonic_ns > 0
         && now - quotes.last_quote_monotonic_ns < model.min_quote_lifetime_ns;
 
@@ -503,8 +611,6 @@ MakerDecision MakerHotPath::on_market_update(
             append_intent(decision, make_intent(++intent_sequence_, update, model,
                                                 IntentType::CancelQuote, side, active_tick,
                                                 0.0, nullptr, now));
-            // Do not replace on the same cycle. The common OMS/private state must
-            // observe the cancel transition before a fresh quote is admitted.
             return;
         }
         if (wanted && !quotes.cancel_pending) {
