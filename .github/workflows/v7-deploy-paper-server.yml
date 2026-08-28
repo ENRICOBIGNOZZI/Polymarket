@@ -179,6 +179,27 @@ jobs:
             "EXPECTED_VALIDATED_SHA='$validated_sha' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
           set -euo pipefail
           cd ~/polymarket
+
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            brew_bin=""
+            for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+              if [[ -x "$candidate" ]]; then
+                brew_bin="$candidate"
+                break
+              fi
+            done
+            [[ -n "$brew_bin" ]] || {
+              echo "V7 deploy blocked: Homebrew not found on macOS server" >&2
+              exit 1
+            }
+            eval "$("$brew_bin" shellenv)"
+            if ! command -v cmake >/dev/null 2>&1; then
+              echo "[v7-deploy] Installing missing build dependency: cmake"
+              brew install cmake
+            fi
+            command -v cmake >/dev/null 2>&1
+          fi
+
           git fetch --no-tags origin main paper-validated
           main_sha="$(git rev-parse origin/main)"
           validated_sha="$(git rev-parse origin/paper-validated)"
