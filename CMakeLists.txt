@@ -49,7 +49,8 @@ add_library(pm_v7_hft
   src/v7_maker_execution_cells.cpp
   src/v7_maker_lane.cpp
   src/v7_maker_paper.cpp
-  src/v7_maker_inventory.cpp)
+  src/v7_maker_inventory.cpp
+  src/v7_maker_execution_policy.cpp)
 target_include_directories(pm_v7_hft PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_hft PUBLIC pm_v7_common Threads::Threads)
 target_compile_options(pm_v7_hft PRIVATE -Wall -Wextra -Wpedantic)
@@ -144,6 +145,10 @@ if(BUILD_TESTING)
   add_executable(pm_v7_maker_inventory_tests tests/test_v7_maker_inventory.cpp)
   target_link_libraries(pm_v7_maker_inventory_tests PRIVATE pm_v7_hft)
   add_test(NAME pm_v7_maker_inventory_tests COMMAND pm_v7_maker_inventory_tests)
+
+  add_executable(pm_v7_maker_execution_policy_tests tests/test_v7_maker_execution_policy.cpp)
+  target_link_libraries(pm_v7_maker_execution_policy_tests PRIVATE pm_v7_hft)
+  add_test(NAME pm_v7_maker_execution_policy_tests COMMAND pm_v7_maker_execution_policy_tests)
 
   add_test(NAME no_legacy_runtime COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_no_legacy_runtime.py)
 
