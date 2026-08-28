@@ -86,6 +86,9 @@ class V7CutoverUpdaterTest(unittest.TestCase):
             "control/runtime_status.json",
             "control/portfolio_state.json",
             "control/allocations/manifest.json",
+            "control/research_sleeves_manifest.json",
+            "scripts/v7_research_shadow_supervisor.py",
+            "config/v7_live_model_scope.json",
             "graph_rv/status.json",
             "canonical_economics.json",
             "ledger/execution.jsonl",
@@ -126,6 +129,7 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertTrue(manifest["paper_only"])
         self.assertFalse(manifest["authenticated_execution"])
         self.assertIn("control/runtime_status.json", manifest["required_surfaces"])
+        self.assertIn("control/research_sleeves_manifest.json", manifest["required_surfaces"])
         self.assertIn("canonical_economics.json", manifest["required_surfaces"])
         self.assertIn("ledger/execution.jsonl", manifest["required_surfaces"])
 

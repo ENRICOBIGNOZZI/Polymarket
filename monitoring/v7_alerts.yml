@@ -65,6 +65,38 @@ groups:
           summary: Canonical V7 supervisor is down
           description: The bounded exact-SHA FULL-PAPER supervisor is not alive.
 
+      - alert: PolymarketV7ResearchShadowSupervisorDown
+        expr: (polymarket_v7_research_supervisor_alive < 1) or (polymarket_v7_research_manifest_fresh < 1)
+        for: 30s
+        labels: {severity: critical}
+        annotations:
+          summary: V7 research-shadow supervisor is down
+          description: Sports latency, cross-platform and wallet intelligence are no longer attached to the exact-SHA live-PAPER runtime.
+
+      - alert: PolymarketV7LiveModelScopeIncomplete
+        expr: polymarket_v7_live_model_target_operational < 1
+        for: 30s
+        labels: {severity: critical}
+        annotations:
+          summary: Approved 12-model live-PAPER scope is incomplete
+          description: One or more of the 12 approved live-PAPER models is blocked or degraded; inspect operational, external-blocker and configuration-blocker metrics.
+
+      - alert: PolymarketV7ExternalInputImplementationMissing
+        expr: polymarket_v7_external_input_implementation_complete{strategy=~"sports_latency|cross_platform"} < 1
+        for: 30s
+        labels: {severity: critical}
+        annotations:
+          summary: V7 external input implementation is missing
+          description: A required sports or cross-platform component is no longer implementation-complete.
+
+      - alert: PolymarketV7ExternalFeedBlocked
+        expr: polymarket_v7_external_input_feed_operational{strategy=~"sports_latency|cross_platform"} < 1
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: V7 external feed is blocked
+          description: Inspect polymarket_v7_external_input_info for the exact provider, feed, mapping and blocker labels.
+
       - alert: PolymarketV7DuplicateWriter
         expr: polymarket_v7_single_writer_ok < 1
         for: 5s

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Causal, fail-closed sports-latency research and forward-shadow pipeline.
 
-The module intentionally does not implement a vendor-specific wire protocol. A
+Provider transport and decoding live in the canonical V7 sports collector. A
 source becomes usable only after an operator supplies a verified source spec and
 an exact decoder for that schema. The adapter never submits orders; decisions
 and race observations are PAPER shadow evidence only.
@@ -60,9 +60,13 @@ class SportsSourceSpec:
         )
         if not all(required) or not self.official_uri.startswith(("https://", "wss://")):
             raise SportsError("incomplete_official_source_spec")
-        if self.sequence_semantics != "STRICT_MONOTONIC_PER_GAME":
+        if self.sequence_semantics not in {
+            "STRICT_MONOTONIC_PER_GAME", "PROVIDER_EVENT_ID_AND_TIMELINE_ORDER",
+        }:
             raise SportsError("unsupported_sequence_semantics")
-        if self.correction_semantics != "NEW_SEQUENCE_REFERENCES_EVENT":
+        if self.correction_semantics not in {
+            "NEW_SEQUENCE_REFERENCES_EVENT", "TIMELINE_EVENT_REPLACEMENT_OR_REVERSAL",
+        }:
             raise SportsError("unsupported_correction_semantics")
         if self.state_semantics != "FULL_STATE_AFTER_EVENT":
             raise SportsError("unsupported_game_state_semantics")

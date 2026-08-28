@@ -138,7 +138,8 @@ jobs:
           import csv,json,os,sys
           from pathlib import Path
           root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(sys.argv[3])
-          runtime=json.loads((root/'control/runtime_status.json').read_text()); identity=json.loads((root/'control/incumbent_identity.json').read_text()); portfolio=json.loads((root/'control/portfolio_state.json').read_text()); graph=json.loads((root/'graph_rv/status.json').read_text()); economics=json.loads((root/'canonical_economics.json').read_text())
+          runtime=json.loads((root/'control/runtime_status.json').read_text()); identity=json.loads((root/'control/incumbent_identity.json').read_text()); portfolio=json.loads((root/'control/portfolio_state.json').read_text()); graph=json.loads((root/'graph_rv/status.json').read_text()); economics=json.loads((root/'canonical_economics.json').read_text()); research=json.loads((root/'control/research_sleeves_manifest.json').read_text()); osint=json.loads((root/'osint/status.json').read_text()); osint_mapping=json.loads((root/'osint/mapping_status.json').read_text()); market_open=json.loads((root/'market_open/status.json').read_text())
+          scope=json.loads(Path('config/v7_live_model_scope.json').read_text()); registry=json.loads(Path('config/v7_strategy_registry.json').read_text())
           assert runtime.get('version')==7 and runtime.get('model_sha')==sha and runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False and runtime.get('real_order_submission') is False
           assert identity.get('schema')=='polymarket_v7_incumbent_identity_v1' and identity.get('verified') is True and identity.get('runtime_sha')==sha and identity.get('paper_only') is True
           for key in ('config_hash','policy_hash','model_hash','run_id','ledger_id','server_id'): assert identity.get(key)==runtime.get(key) and str(identity.get(key) or '')
@@ -146,11 +147,45 @@ jobs:
           assert portfolio.get('paper_only') is True and portfolio.get('authenticated_execution') is False and portfolio.get('killed') is False and float(portfolio.get('drawdown',1))<.15 and now-int(portfolio.get('timestamp') or 0)<=30
           assert graph.get('paper_only') is True and graph.get('authenticated_execution') is False and now-int(graph.get('timestamp') or 0)<=180
           assert economics.get('paper_only') is True and economics.get('authenticated_execution') is False and economics.get('expected_model_sha')==sha
+          enabled={str(row.get('family') or '') for row in registry.get('strategies',[]) if isinstance(row,dict) and row.get('enabled') is True}
+          target=set(scope.get('target_live_families') or []); excluded=set(scope.get('excluded_live_families') or []); shadow=set(scope.get('research_shadow_supervised_families') or [])
+          assert len(enabled)==15 and scope.get('schema')=='polymarket_v7_live_model_scope_v1' and scope.get('target_live_count')==12
+          assert scope.get('paper_only') is True and scope.get('authenticated_execution') is False and scope.get('real_order_submission') is False
+          assert target|excluded==enabled and not target&excluded and excluded=={'ranking','pca','local_factor'}
+          assert shadow=={'sports_latency','cross_platform','wallet_intelligence'}
+          governance=scope.get('governance') or {}
+          assert governance.get('single_execution_owner') is True and governance.get('research_has_capital') is False and governance.get('research_has_oms_authority') is False and governance.get('research_has_ledger_writer_authority') is False and governance.get('automatic_promotion') is False
+          assert research.get('schema')=='polymarket_v7_research_sleeves_manifest_v1' and research.get('version')==7 and research.get('model_sha')==sha
+          assert research.get('paper_only') is True and research.get('authenticated_execution') is False and research.get('real_order_submission') is False
+          research_pid=int(research.get('supervisor_pid') or 0); assert research_pid>0; os.kill(research_pid,0); research_age=now-int(research.get('timestamp') or 0); assert -5<=research_age<=180
+          families=research.get('families'); assert isinstance(families,dict) and set(families)==shadow
+          for family,row in families.items():
+            assert row.get('authority')=='RESEARCH' and row.get('process_state')=='RUNNING'
+            assert row.get('paper_only') is True and row.get('authenticated_execution') is False and row.get('real_order_submission') is False
+            assert all(row.get(key) is False for key in ('execution_authority','capital_authority','oms_authority','ledger_write_authority','promotion_authority'))
+            if family=='wallet_intelligence':
+              assert row.get('evidence_state')=='BLOCKED_CONFIG' and row.get('last_attempt_ts')==0 and row.get('last_success_ts')==0
+            else:
+              assert row.get('evidence_state') in {'BLOCKED_EXTERNAL','ACTIVE'} and row.get('implementation_complete') is True and int(row.get('last_attempt_ts') or 0)>0
+              if row.get('evidence_state')=='ACTIVE': assert row.get('feed_operational') is True and int(row.get('verified_mappings') or 0)>0 and row.get('forward_collection_active') is True
+              else: assert str(row.get('blocker') or '')
+            status_path=Path(row.get('status_path') or ''); output_path=Path(row.get('output_path') or '')
+            assert status_path==root/'shadow'/family/'status.json' and output_path==root/'shadow'/family
+            status=json.loads(status_path.read_text()); assert status.get('schema')=='polymarket_v7_research_shadow_status_v1' and status.get('family')==family and status.get('model_sha')==sha
+            assert status.get('evidence_state')==row.get('evidence_state')
+            assert status.get('paper_only') is True and status.get('authenticated_execution') is False and status.get('real_order_submission') is False
+            assert -5<=now-int(status.get('timestamp') or 0)<=180
+          assert osint.get('schema')=='polymarket_v7_osint_collector_status_v1' and osint.get('paper_only') is True and osint.get('authenticated_execution') is False and osint.get('real_order_submission') is False
+          assert osint_mapping.get('schema')=='polymarket_v7_osint_mapping_status_v1' and osint_mapping.get('model_sha')==sha and osint_mapping.get('implementation_complete') is True and osint_mapping.get('mapping_pipeline') is True and osint_mapping.get('title_similarity_verification_forbidden') is True
+          assert market_open.get('schema')=='polymarket_v7_market_open_collector_status_v1' and market_open.get('paper_only') is True and market_open.get('authenticated_execution') is False and market_open.get('real_order_submission') is False
+          assert -5000<=now*1000-int(osint.get('timestamp_ms') or 0)<=180000
+          assert -5000<=now*1000-int(osint_mapping.get('timestamp_ms') or 0)<=180000
+          assert -5000<=now*1000-int(market_open.get('timestamp_ms') or 0)<=180000
           ledger=root/'ledger/execution.jsonl'; assert ledger.is_file()
           tape=root/'trade_tape.csv'; assert tape.is_file()
           with tape.open(newline='',encoding='utf-8') as h: rows=list(csv.DictReader(h))
           assert rows and max(int(float(r.get('received_ms') or 0)) for r in rows)>0
-          print(json.dumps({'runtime_sha':sha,'pid':pid,'drawdown':portfolio.get('drawdown'),'economic_state':economics.get('state'),'promotion_ready':economics.get('promotion_ready'),'submitted_units':economics.get('submitted_units'),'complete_units':economics.get('complete_units'),'net_pnl':economics.get('net_pnl'),'stressed_net_pnl':economics.get('stressed_net_pnl')},sort_keys=True))
+          print(json.dumps({'runtime_sha':sha,'pid':pid,'research_pid':research_pid,'live_model_target':len(target),'research_shadow_attached':len(families),'research_evidence_states':{name:row.get('evidence_state') for name,row in sorted(families.items())},'drawdown':portfolio.get('drawdown'),'economic_state':economics.get('state'),'promotion_ready':economics.get('promotion_ready'),'submitted_units':economics.get('submitted_units'),'complete_units':economics.get('complete_units'),'net_pnl':economics.get('net_pnl'),'stressed_net_pnl':economics.get('stressed_net_pnl')},sort_keys=True))
           PY
           curl -fsS http://127.0.0.1:9108/healthz
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
@@ -160,6 +195,20 @@ jobs:
           grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics"
           grep -q '^polymarket_v7_runtime_identity_info{' <<<"$metrics"
           grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_strategy_registry_enabled 15$' <<<"$metrics"
+          grep -q '^polymarket_v7_research_sleeves_attached 3$' <<<"$metrics"
+          grep -q '^polymarket_v7_research_supervisor_alive 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_research_manifest_fresh 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_live_model_target_count 12$' <<<"$metrics"
+          operational="$(awk '$1=="polymarket_v7_live_model_operational_count"{print int($2)}' <<<"$metrics")"
+          blocked="$(awk '$1=="polymarket_v7_live_model_blocked_count"{print int($2)}' <<<"$metrics")"
+          blocked_config="$(awk '$1=="polymarket_v7_live_model_blocked_config_count"{print int($2)}' <<<"$metrics")"
+          blocked_external="$(awk '$1=="polymarket_v7_live_model_blocked_external_count"{print int($2)}' <<<"$metrics")"
+          target_operational="$(awk '$1=="polymarket_v7_live_model_target_operational"{print int($2)}' <<<"$metrics")"
+          test "$((operational + blocked))" -eq 12
+          test "$((blocked_config + blocked_external))" -eq "$blocked"
+          if [[ "$operational" -eq 12 ]]; then test "$target_operational" -eq 1; else test "$target_operational" -eq 0; fi
+          grep -q '^polymarket_v7_live_model_scope_wired 1$' <<<"$metrics"
           printf '%s\n' "$metrics" | grep -E '^(polymarket_execution_opportunities|polymarket_execution_orders_submitted|polymarket_execution_fills|polymarket_execution_complete_fills|polymarket_execution_partial_fills|polymarket_execution_final_pnl_usd|polymarket_runtime_pnl_usd|polymarket_runtime_realized_pnl_usd|polymarket_v7_canonical_submitted_units|polymarket_v7_canonical_complete_units|polymarket_maker_lab_orders|polymarket_maker_lab_fills|polymarket_maker_lab_realized_pnl_usd|polymarket_strategy_ledger_opportunities|polymarket_strategy_ledger_orders_submitted|polymarket_strategy_ledger_fills)(\{| )' | sort || true
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
@@ -197,6 +246,8 @@ jobs:
         run: |
           echo '## V7 PAPER server health' >> "$GITHUB_STEP_SUMMARY"
           echo "- exact deployed SHA: $EXPECTED_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo '- approved live scope: 12; ranking/PCA/local-factor excluded; wiring: PASS' >> "$GITHUB_STEP_SUMMARY"
+          echo '- external inputs: exact per-component state exported; sports credentials and semantic mappings remain evidence-gated; no false 12/12 claim' >> "$GITHUB_STEP_SUMMARY"
           echo '- runtime/control/portfolio/Graph/canonical-economics/ledger/trade-tape: PASS' >> "$GITHUB_STEP_SUMMARY"
           echo '- exporter/Prometheus/Grafana backend: PASS' >> "$GITHUB_STEP_SUMMARY"
           echo "- Grafana Tailscale Serve: $GRAFANA_URL/d/polymarket-v7/polymarket-v7-canonical-paper-economics" >> "$GITHUB_STEP_SUMMARY"

@@ -85,6 +85,8 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             '"queue_never_grants_size"',
             '"partial_unwind_required"',
             '"cost_vector_required"',
+            '"config/v7_live_model_scope.json"',
+            '"scripts/v7_research_shadow_supervisor.py"',
         ):
             self.assertIn(required, text)
 

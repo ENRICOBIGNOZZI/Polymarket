@@ -17,6 +17,9 @@ EXTERNAL_FAIR_POLICY="${PM_V7_EXTERNAL_FAIR_POLICY:-config/v7_external_fair.json
 ORACLE_BINDING="${PM_V7_ORACLE_BINDING:-}"
 EXACT_SHA_CI_GREEN="${PM_V7_EXACT_SHA_CI_GREEN:-false}"
 OSINT_SOURCE_REGISTRY="${PM_V7_OSINT_SOURCE_REGISTRY:-config/v7_osint_sources.json}"
+LIVE_MODEL_SCOPE="${PM_V7_LIVE_MODEL_SCOPE:-config/v7_live_model_scope.json}"
+EXTERNAL_INPUT_CONFIG="${PM_V7_EXTERNAL_INPUT_CONFIG:-config/v7_external_inputs.json}"
+EXTERNAL_MAPPING_REGISTRY="${PM_V7_EXTERNAL_MAPPING_REGISTRY:-config/v7_external_mappings.json}"
 SHA="$(git rev-parse HEAD)"
 [[ "$EXACT_SHA_CI_GREEN" == "true" || "$EXACT_SHA_CI_GREEN" == "false" ]] || {
   echo "PM_V7_EXACT_SHA_CI_GREEN must be true or false" >&2
@@ -46,16 +49,19 @@ CONTROL="$RUN_ROOT/control"
 ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
 LOCK="$CONTROL/runtime.lock"
-mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/fast_structural" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/osint" "$RUN_ROOT/market_open" "$RUN_ROOT/learned_execution"
+mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/fast_structural" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/osint" "$RUN_ROOT/market_open" "$RUN_ROOT/shadow/sports_latency" "$RUN_ROOT/shadow/cross_platform" "$RUN_ROOT/shadow/wallet_intelligence" "$RUN_ROOT/learned_execution"
 touch "$RUN_ROOT/ledger/execution.jsonl"
 
-python3 - "$CONFIG" "$MAKER_POLICY" "$EXTERNAL_FAIR_POLICY" "$OSINT_SOURCE_REGISTRY" "$WS_JSON_ARENA_MAKER_MAX_BYTES" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
+python3 - "$CONFIG" "$MAKER_POLICY" "$EXTERNAL_FAIR_POLICY" "$OSINT_SOURCE_REGISTRY" "$LIVE_MODEL_SCOPE" "$EXTERNAL_INPUT_CONFIG" "$EXTERNAL_MAPPING_REGISTRY" "$WS_JSON_ARENA_MAKER_MAX_BYTES" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
 import json,sys
 cfg=json.load(open(sys.argv[1]))
 v7=cfg.get("v7") or {}
 maker=json.load(open(sys.argv[2]))
 external=json.load(open(sys.argv[3]))
 osint_sources=json.load(open(sys.argv[4]))
+live_scope=json.load(open(sys.argv[5]))
+external_inputs=json.load(open(sys.argv[6]))
+external_mappings=json.load(open(sys.argv[7]))
 registry_path=v7.get("strategy_registry")
 assert isinstance(registry_path,str) and registry_path
 registry=json.load(open(registry_path))
@@ -78,10 +84,37 @@ assert osint_sources.get("paper_only") is True
 assert osint_sources.get("authenticated_execution") is False
 assert osint_sources.get("real_order_submission") is False
 assert osint_sources.get("sources")
-maker_arena=int(sys.argv[5])
-observer_arena=int(sys.argv[6])
-fillability_arena=int(sys.argv[7])
-total_budget=int(sys.argv[8])
+target=set(live_scope.get("target_live_families") or [])
+excluded=set(live_scope.get("excluded_live_families") or [])
+shadow=set(live_scope.get("research_shadow_supervised_families") or [])
+assert live_scope.get("schema") == "polymarket_v7_live_model_scope_v1"
+assert live_scope.get("version") == 7 and live_scope.get("target_live_count") == 12
+assert live_scope.get("paper_only") is True
+assert live_scope.get("authenticated_execution") is False
+assert live_scope.get("real_order_submission") is False
+assert target | excluded == families and not target & excluded
+assert excluded == {"ranking", "pca", "local_factor"}
+assert shadow == {"sports_latency", "cross_platform", "wallet_intelligence"}
+governance=live_scope.get("governance") or {}
+assert governance.get("single_execution_owner") is True
+assert governance.get("research_has_capital") is False
+assert governance.get("research_has_oms_authority") is False
+assert governance.get("research_has_ledger_writer_authority") is False
+assert governance.get("automatic_promotion") is False
+assert external_inputs.get("schema") == "polymarket_v7_external_inputs_v1"
+assert external_inputs.get("version") == 7
+assert external_inputs.get("paper_only") is True
+assert external_inputs.get("authenticated_execution") is False
+assert external_inputs.get("real_order_submission") is False
+assert external_mappings.get("schema") == "polymarket_v7_external_mapping_registry_v1"
+assert external_mappings.get("version") == 7
+assert external_mappings.get("paper_only") is True
+assert external_mappings.get("automatic_promotion") is False
+assert all(isinstance(external_mappings.get(name), list) for name in ("osint","sports_latency","cross_platform"))
+maker_arena=int(sys.argv[8])
+observer_arena=int(sys.argv[9])
+fillability_arena=int(sys.argv[10])
+total_budget=int(sys.argv[11])
 assert cfg.get("engine_version")==7
 assert cfg.get("paper_only") is True
 assert v7.get("paper_only") is True
@@ -523,6 +556,22 @@ python3 scripts/v7_osint_collector.py \
   >> "$RUN_ROOT/osint/collector.log" 2>&1 &
 pids+=("$!")
 
+# Candidate discovery is isolated from verification: lexical similarity may
+# populate a review queue, but only exact attested semantic bundles can activate
+# the verified-only forward reaction path.
+python3 scripts/v7_osint_mapping_collector.py \
+  --repository-root "$ROOT" \
+  --config "$EXTERNAL_INPUT_CONFIG" \
+  --mappings "$EXTERNAL_MAPPING_REGISTRY" \
+  --raw-tape "$RUN_ROOT/osint/raw_events.jsonl" \
+  --candidate-tape "$RUN_ROOT/osint/mapping_candidates.jsonl" \
+  --forward-tape "$RUN_ROOT/osint/forward_reactions.jsonl" \
+  --state "$RUN_ROOT/osint/mapping_state.json" \
+  --status "$RUN_ROOT/osint/mapping_status.json" \
+  --interval 60 --loop \
+  >> "$RUN_ROOT/osint/mapping.log" 2>&1 &
+pids+=("$!")
+
 # Research-only market-creation/milestone collector. Its first snapshot is a
 # baseline and can never masquerade as a burst of new listings. Exact semantic
 # verification and a separate race/edge-decay gate are required before any
@@ -533,6 +582,47 @@ python3 scripts/v7_market_open_collector.py \
   --status "$RUN_ROOT/market_open/status.json" \
   --interval 5 --loop \
   >> "$RUN_ROOT/market_open/collector.log" 2>&1 &
+pids+=("$!")
+
+# Sports uses the credential-gated Sportradar Realtime adapter. Without its key
+# it remains alive and publishes CREDENTIALS_REQUIRED rather than fabricating a
+# feed, latency sample or mapping.
+python3 scripts/v7_sports_collector.py \
+  --repository-root "$ROOT" \
+  --config "$EXTERNAL_INPUT_CONFIG" \
+  --mappings "$EXTERNAL_MAPPING_REGISTRY" \
+  --tape "$RUN_ROOT/shadow/sports_latency/events.jsonl" \
+  --state "$RUN_ROOT/shadow/sports_latency/collector_state.json" \
+  --status "$RUN_ROOT/shadow/sports_latency/component_status.json" \
+  --interval 10 --loop \
+  >> "$RUN_ROOT/shadow/sports_latency/collector.log" 2>&1 &
+pids+=("$!")
+
+# Kalshi public REST market data begins collecting immediately. Polling is
+# explicitly distinguished from event latency; semantic equivalence and fees
+# remain independent fail-closed gates.
+python3 scripts/v7_cross_platform_collector.py \
+  --repository-root "$ROOT" \
+  --config "$EXTERNAL_INPUT_CONFIG" \
+  --mappings "$EXTERNAL_MAPPING_REGISTRY" \
+  --tape "$RUN_ROOT/shadow/cross_platform/books.jsonl" \
+  --state "$RUN_ROOT/shadow/cross_platform/collector_state.json" \
+  --status "$RUN_ROOT/shadow/cross_platform/component_status.json" \
+  --interval 30 --loop \
+  >> "$RUN_ROOT/shadow/cross_platform/collector.log" 2>&1 &
+pids+=("$!")
+
+# The exact-SHA supervisor aggregates measured sports/cross evidence and the
+# still configuration-blocked wallet sleeve. It owns no OMS, capital, ledger
+# writer, order or promotion authority.
+# Ranking, PCA and Local Factor are intentionally outside the approved live scope.
+python3 scripts/v7_research_shadow_supervisor.py \
+  --repository-root "$ROOT" \
+  --run-root "$RUN_ROOT" \
+  --scope "$LIVE_MODEL_SCOPE" \
+  --model-sha "$SHA" \
+  --heartbeat-seconds 5 \
+  >> "$RUN_ROOT/research_shadow_supervisor.log" 2>&1 &
 pids+=("$!")
 
 write_runtime_status running false

@@ -223,6 +223,11 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     run_root = run_root.resolve()
     repository_root = (repository_root or Path(".")).resolve()
     runtime = _json(run_root / "control" / "runtime_status.json")
+    research_sleeves = _json(run_root / "control" / "research_sleeves_manifest.json")
+    research_shadow_statuses = {
+        family: _json(run_root / "shadow" / family / "status.json")
+        for family in ("sports_latency", "cross_platform", "wallet_intelligence")
+    }
     portfolio = _json(run_root / "control" / "portfolio_state.json")
     allocations = _json(run_root / "control" / "allocations" / "manifest.json")
     graph = _json(run_root / "graph_rv" / "status.json")
@@ -232,6 +237,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     maker = _json(run_root / "micro_maker" / "status.json")
     external = _json(run_root / "external" / "status.json")
     osint = _json(run_root / "osint" / "status.json")
+    osint_mapping = _json(run_root / "osint" / "mapping_status.json")
     market_open = _json(run_root / "market_open" / "status.json")
     economics_path = run_root / "canonical_economics.json"
     canonical = _json(economics_path)
@@ -244,6 +250,8 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     maker_latency = _maker_latency(run_root / "micro_maker" / "latency.csv")
     tape = _trade_tape(run_root / "trade_tape.csv", now)
     directives = _json(repository_root / "config" / "operator_directives.json")
+    strategy_registry = _json(repository_root / "config" / "v7_strategy_registry.json")
+    live_model_scope = _json(repository_root / "config" / "v7_live_model_scope.json")
     authorization = directives.get("paper_v7_authorization") if isinstance(directives.get("paper_v7_authorization"), dict) else {}
     authority_max_drawdown = _number(authorization.get("max_drawdown"), 0.0)
     authority_valid = directives.get("authority") == "latest_explicit_user_instruction" and authorization.get("paper_only") is True and authorization.get("authenticated_execution") is False and 0.0 < authority_max_drawdown <= 1.0
@@ -312,6 +320,10 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "sha": sha,
         "run_root": run_root.name,
         "runtime": runtime,
+        "research_sleeves": research_sleeves,
+        "research_shadow_statuses": research_shadow_statuses,
+        "strategy_registry": strategy_registry,
+        "live_model_scope": live_model_scope,
         "runtime_alive": runtime_alive,
         "portfolio": portfolio,
         "allocations": allocations,
@@ -322,6 +334,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "maker": maker,
         "external": external,
         "osint": osint,
+        "osint_mapping": osint_mapping,
         "market_open": market_open,
         "canonical_economics": canonical,
         "joint_policy": joint,
@@ -352,6 +365,10 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
 def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_supervisor_age: int = 30) -> list[str]:
     reasons: list[str] = []
     runtime = snapshot["runtime"]
+    research = snapshot.get("research_sleeves") if isinstance(snapshot.get("research_sleeves"), dict) else {}
+    research_statuses = snapshot.get("research_shadow_statuses") if isinstance(snapshot.get("research_shadow_statuses"), dict) else {}
+    registry = snapshot.get("strategy_registry") if isinstance(snapshot.get("strategy_registry"), dict) else {}
+    live_scope = snapshot.get("live_model_scope") if isinstance(snapshot.get("live_model_scope"), dict) else {}
     portfolio = snapshot["portfolio"]
     graph = snapshot["graph"]
     canonical = snapshot["canonical_economics"]
@@ -363,6 +380,108 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     if runtime.get("paper_only") is not True: reasons.append("runtime_not_paper_only")
     if runtime.get("authenticated_execution") is not False or runtime.get("real_order_submission") is not False: reasons.append("authenticated_execution_not_disabled")
     if runtime.get("model_sha") != snapshot.get("sha"): reasons.append("runtime_sha_mismatch")
+    expected_research = {
+        "sports_latency", "cross_platform", "wallet_intelligence",
+    }
+    registered = registry.get("strategies") if isinstance(registry.get("strategies"), list) else []
+    registered_names = {
+        str(row.get("family") or "") for row in registered if isinstance(row, dict) and row.get("enabled") is True
+    }
+    if len(registered_names) != 15: reasons.append("strategy_registry_not_15_enabled")
+    target_live = set(live_scope.get("target_live_families") or [])
+    excluded_live = set(live_scope.get("excluded_live_families") or [])
+    if (live_scope.get("schema") != "polymarket_v7_live_model_scope_v1"
+            or live_scope.get("target_live_count") != 12
+            or live_scope.get("paper_only") is not True
+            or live_scope.get("authenticated_execution") is not False
+            or live_scope.get("real_order_submission") is not False): reasons.append("live_model_scope_missing_or_invalid")
+    if target_live | excluded_live != registered_names or target_live & excluded_live: reasons.append("live_model_scope_not_registry_partition")
+    if excluded_live != {"ranking", "pca", "local_factor"}: reasons.append("live_model_scope_exclusions_invalid")
+    if set(live_scope.get("research_shadow_supervised_families") or []) != expected_research: reasons.append("live_model_scope_shadow_set_invalid")
+    governance = live_scope.get("governance") if isinstance(live_scope.get("governance"), dict) else {}
+    if (governance.get("single_execution_owner") is not True
+            or governance.get("research_has_capital") is not False
+            or governance.get("research_has_oms_authority") is not False
+            or governance.get("research_has_ledger_writer_authority") is not False
+            or governance.get("automatic_promotion") is not False): reasons.append("live_model_scope_governance_invalid")
+    research_rows = research.get("families") if isinstance(research.get("families"), dict) else {}
+    if research.get("schema") != "polymarket_v7_research_sleeves_manifest_v1": reasons.append("research_sleeves_manifest_missing_or_invalid")
+    if research.get("version") != 7 or research.get("model_sha") != snapshot.get("sha"): reasons.append("research_sleeves_identity_drift")
+    if research.get("paper_only") is not True or research.get("authenticated_execution") is not False or research.get("real_order_submission") is not False: reasons.append("research_sleeves_execution_authority_unsafe")
+    if set(research_rows) != expected_research: reasons.append("research_sleeves_not_3_exact")
+    if not _pid_alive(research.get("supervisor_pid")): reasons.append("research_sleeves_supervisor_dead")
+    try: research_age = int(snapshot.get("timestamp") or 0) - int(research.get("timestamp") or 0)
+    except (TypeError, ValueError, OverflowError): research_age = max_runtime_age + 1
+    if research_age < -5 or research_age > max_runtime_age: reasons.append("research_sleeves_manifest_stale")
+    for family in expected_research:
+        row = research_rows.get(family) if isinstance(research_rows.get(family), dict) else {}
+        status = research_statuses.get(family) if isinstance(research_statuses.get(family), dict) else {}
+        if row.get("authority") != "RESEARCH" or row.get("process_state") != "RUNNING": reasons.append(f"research_sleeve_not_running:{family}")
+        if row.get("paper_only") is not True or row.get("authenticated_execution") is not False or row.get("real_order_submission") is not False: reasons.append(f"research_sleeve_unsafe:{family}")
+        if any(row.get(key) is not False for key in ("execution_authority", "capital_authority", "oms_authority", "ledger_write_authority", "promotion_authority")): reasons.append(f"research_sleeve_authority_violation:{family}")
+        evidence_state = row.get("evidence_state")
+        if family == "wallet_intelligence":
+            if evidence_state != "BLOCKED_CONFIG" or row.get("last_attempt_ts") != 0 or row.get("last_success_ts") != 0:
+                reasons.append(f"research_sleeve_unsubstantiated_state:{family}")
+        else:
+            if evidence_state not in {"BLOCKED_EXTERNAL", "ACTIVE"}:
+                reasons.append(f"research_sleeve_component_evidence_missing:{family}")
+            if row.get("implementation_complete") is not True or int(row.get("last_attempt_ts") or 0) <= 0:
+                reasons.append(f"research_sleeve_component_not_attempted:{family}")
+            if evidence_state == "ACTIVE" and (
+                row.get("feed_operational") is not True
+                or int(row.get("verified_mappings") or 0) <= 0
+                or row.get("forward_collection_active") is not True
+            ):
+                reasons.append(f"research_sleeve_false_active:{family}")
+            if evidence_state == "BLOCKED_EXTERNAL" and not str(row.get("blocker") or ""):
+                reasons.append(f"research_sleeve_blocker_missing:{family}")
+        status_path = Path(str(row.get("status_path") or ""))
+        output_path = Path(str(row.get("output_path") or ""))
+        if ".." in status_path.parts or tuple(status_path.parts[-3:]) != ("shadow", family, "status.json"): reasons.append(f"research_sleeve_status_path_invalid:{family}")
+        if ".." in output_path.parts or tuple(output_path.parts[-2:]) != ("shadow", family): reasons.append(f"research_sleeve_output_path_invalid:{family}")
+        if status.get("schema") != "polymarket_v7_research_shadow_status_v1" or status.get("model_sha") != snapshot.get("sha") or status.get("family") != family: reasons.append(f"research_sleeve_status_missing_or_invalid:{family}")
+        if status.get("evidence_state") != evidence_state:
+            reasons.append(f"research_sleeve_status_manifest_mismatch:{family}")
+        if family == "wallet_intelligence":
+            if status.get("evidence_state") != "BLOCKED_CONFIG" or status.get("last_attempt_ts") != 0 or status.get("last_success_ts") != 0:
+                reasons.append(f"research_sleeve_status_unsubstantiated:{family}")
+        elif (
+            status.get("implementation_complete") is not True
+            or int(status.get("last_attempt_ts") or 0) <= 0
+            or status.get("feed_status") != row.get("feed_status")
+            or status.get("mapping_status") != row.get("mapping_status")
+            or int(status.get("verified_mappings") or 0) != int(row.get("verified_mappings") or 0)
+        ):
+            reasons.append(f"research_sleeve_status_unsubstantiated:{family}")
+        if status.get("paper_only") is not True or status.get("authenticated_execution") is not False or status.get("real_order_submission") is not False: reasons.append(f"research_sleeve_status_unsafe:{family}")
+        try: status_age = int(snapshot.get("timestamp") or 0) - int(status.get("timestamp") or 0)
+        except (TypeError, ValueError, OverflowError): status_age = max_runtime_age + 1
+        if status_age < -5 or status_age > max_runtime_age: reasons.append(f"research_sleeve_status_stale:{family}")
+    osint = snapshot.get("osint") if isinstance(snapshot.get("osint"), dict) else {}
+    osint_mapping = snapshot.get("osint_mapping") if isinstance(snapshot.get("osint_mapping"), dict) else {}
+    market_open = snapshot.get("market_open") if isinstance(snapshot.get("market_open"), dict) else {}
+    if osint.get("schema") != "polymarket_v7_osint_collector_status_v1" or osint.get("paper_only") is not True or osint.get("authenticated_execution") is not False or osint.get("real_order_submission") is not False: reasons.append("osint_live_collector_missing_or_unsafe")
+    if (
+        osint_mapping.get("schema") != "polymarket_v7_osint_mapping_status_v1"
+        or osint_mapping.get("model_sha") != snapshot.get("sha")
+        or osint_mapping.get("implementation_complete") is not True
+        or osint_mapping.get("mapping_pipeline") is not True
+        or osint_mapping.get("paper_only") is not True
+        or osint_mapping.get("authenticated_execution") is not False
+        or osint_mapping.get("real_order_submission") is not False
+        or osint_mapping.get("title_similarity_verification_forbidden") is not True
+    ):
+        reasons.append("osint_mapping_pipeline_missing_or_unsafe")
+    if market_open.get("schema") != "polymarket_v7_market_open_collector_status_v1" or market_open.get("paper_only") is not True or market_open.get("authenticated_execution") is not False or market_open.get("real_order_submission") is not False: reasons.append("market_open_live_collector_missing_or_unsafe")
+    for name, status in (("osint", osint), ("market_open", market_open)):
+        try: age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(status.get("timestamp_ms") or 0)
+        except (TypeError, ValueError, OverflowError): age_ms = (max_runtime_age + 1) * 1000
+        if age_ms < -5_000 or age_ms > max_runtime_age * 1000: reasons.append(f"{name}_live_collector_stale")
+    try: osint_mapping_age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(osint_mapping.get("timestamp_ms") or 0)
+    except (TypeError, ValueError, OverflowError): osint_mapping_age_ms = (max_runtime_age + 1) * 1000
+    if osint_mapping_age_ms < -5_000 or osint_mapping_age_ms > max_runtime_age * 1000:
+        reasons.append("osint_mapping_pipeline_stale")
     if snapshot.get("runtime_alive") is not True: reasons.append("execution_not_alive")
     if portfolio.get("paper_only") is not True or portfolio.get("authenticated_execution") is not False: reasons.append("portfolio_guard_contract_invalid")
     if graph.get("paper_only") is not True or graph.get("authenticated_execution") is not False: reasons.append("graph_runtime_missing_or_unsafe")
@@ -470,6 +589,113 @@ def _append_maker_lab_metrics(lines: list[str], lab: dict[str, Any]) -> None:
 
 def render_prometheus(snapshot: dict[str, Any]) -> str:
     runtime = snapshot["runtime"]
+    research = snapshot.get("research_sleeves") if isinstance(snapshot.get("research_sleeves"), dict) else {}
+    research_statuses = snapshot.get("research_shadow_statuses") if isinstance(snapshot.get("research_shadow_statuses"), dict) else {}
+    registry = snapshot.get("strategy_registry") if isinstance(snapshot.get("strategy_registry"), dict) else {}
+    live_scope = snapshot.get("live_model_scope") if isinstance(snapshot.get("live_model_scope"), dict) else {}
+    research_rows = research.get("families") if isinstance(research.get("families"), dict) else {}
+    enabled_registry = [row for row in registry.get("strategies", []) if isinstance(row, dict) and row.get("enabled") is True] if isinstance(registry.get("strategies"), list) else []
+    expected_research = {"sports_latency", "cross_platform", "wallet_intelligence"}
+    target_live = set(live_scope.get("target_live_families") or [])
+    excluded_live = set(live_scope.get("excluded_live_families") or [])
+    enabled_names = {str(row.get("family") or "") for row in enabled_registry}
+    governance = live_scope.get("governance") if isinstance(live_scope.get("governance"), dict) else {}
+    scope_valid = (
+        live_scope.get("schema") == "polymarket_v7_live_model_scope_v1"
+        and live_scope.get("target_live_count") == 12
+        and live_scope.get("paper_only") is True
+        and live_scope.get("authenticated_execution") is False
+        and live_scope.get("real_order_submission") is False
+        and len(target_live) == 12
+        and target_live | excluded_live == enabled_names
+        and not target_live & excluded_live
+        and excluded_live == {"ranking", "pca", "local_factor"}
+        and set(live_scope.get("research_shadow_supervised_families") or []) == expected_research
+        and governance.get("single_execution_owner") is True
+        and governance.get("research_has_capital") is False
+        and governance.get("research_has_oms_authority") is False
+        and governance.get("research_has_ledger_writer_authority") is False
+        and governance.get("automatic_promotion") is False
+    )
+    def research_row_valid(family: str, row: Any) -> bool:
+        if not isinstance(row, dict):
+            return False
+        base = (
+            row.get("authority") == "RESEARCH"
+            and row.get("paper_only") is True
+            and row.get("authenticated_execution") is False
+            and row.get("real_order_submission") is False
+            and row.get("process_state") == "RUNNING"
+            and all(row.get(key) is False for key in ("execution_authority", "capital_authority", "oms_authority", "ledger_write_authority", "promotion_authority"))
+            and tuple(Path(str(row.get("status_path") or "")).parts[-3:]) == ("shadow", family, "status.json")
+            and tuple(Path(str(row.get("output_path") or "")).parts[-2:]) == ("shadow", family)
+        )
+        if not base:
+            return False
+        if family == "wallet_intelligence":
+            return row.get("evidence_state") == "BLOCKED_CONFIG" and row.get("last_attempt_ts") == 0 and row.get("last_success_ts") == 0
+        state = row.get("evidence_state")
+        return (
+            state in {"BLOCKED_EXTERNAL", "ACTIVE"}
+            and row.get("implementation_complete") is True
+            and _integer(row.get("last_attempt_ts")) > 0
+            and (state != "ACTIVE" or (
+                row.get("feed_operational") is True
+                and _integer(row.get("verified_mappings")) > 0
+                and row.get("forward_collection_active") is True
+            ))
+            and (state != "BLOCKED_EXTERNAL" or bool(str(row.get("blocker") or "")))
+        )
+    research_rows_valid = set(research_rows) == expected_research and all(
+        research_row_valid(family, row) for family, row in research_rows.items()
+    )
+    def collector_contract_valid(status: Any) -> bool:
+        return (
+            isinstance(status, dict)
+            and status.get("paper_only") is True
+            and status.get("authenticated_execution") is False
+            and status.get("real_order_submission") is False
+        )
+    collector_contracts_valid = all(
+        collector_contract_valid(snapshot.get(name)) for name in ("osint", "market_open")
+    )
+    try: research_manifest_age = int(snapshot.get("timestamp") or 0) - int(research.get("timestamp") or 0)
+    except (TypeError, ValueError, OverflowError): research_manifest_age = math.inf
+    research_manifest_fresh = -5 <= research_manifest_age <= 180
+    def shadow_status_valid(family: str, status: Any) -> bool:
+        if not isinstance(status, dict):
+            return False
+        try:
+            age = int(snapshot.get("timestamp") or 0) - int(status.get("timestamp") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        return (
+            status.get("schema") == "polymarket_v7_research_shadow_status_v1"
+            and status.get("family") == family
+            and status.get("model_sha") == snapshot.get("sha")
+            and status.get("paper_only") is True
+            and status.get("authenticated_execution") is False
+            and status.get("real_order_submission") is False
+            and status.get("process_state") == "RUNNING"
+            and status.get("evidence_state") == (research_rows.get(family) or {}).get("evidence_state")
+            and research_row_valid(family, status)
+            and -5 <= age <= 180
+        )
+    research_statuses_valid = set(research_statuses) == expected_research and all(
+        shadow_status_valid(family, status) for family, status in research_statuses.items()
+    )
+    research_attached = (
+        research.get("schema") == "polymarket_v7_research_sleeves_manifest_v1"
+        and research.get("model_sha") == snapshot.get("sha")
+        and research.get("paper_only") is True
+        and research.get("authenticated_execution") is False
+        and research.get("real_order_submission") is False
+        and research_rows_valid
+        and research_statuses_valid
+        and _pid_alive(research.get("supervisor_pid"))
+        and research_manifest_fresh
+    )
+    target_live_count = len(set(live_scope.get("target_live_families") or []))
     ledger = snapshot["ledger"]
     ledger_total = ledger.get("total") if isinstance(ledger.get("total"), dict) else {}
     economics = snapshot["economics"]
@@ -481,7 +707,53 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     disk = operations.get("disk") if isinstance(operations.get("disk"), dict) else {}
     supervisor = operations.get("supervisor") if isinstance(operations.get("supervisor"), dict) else {}
     osint = snapshot.get("osint") if isinstance(snapshot.get("osint"), dict) else {}
+    osint_mapping = snapshot.get("osint_mapping") if isinstance(snapshot.get("osint_mapping"), dict) else {}
     market_open = snapshot.get("market_open") if isinstance(snapshot.get("market_open"), dict) else {}
+    def collector_fresh(status: dict[str, Any]) -> bool:
+        try:
+            age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(status.get("timestamp_ms") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        return -5_000 <= age_ms <= 180_000
+    osint_operational = (
+        osint.get("schema") == "polymarket_v7_osint_collector_status_v1"
+        and collector_fresh(osint)
+        and collector_contract_valid(osint)
+        and _integer(osint.get("enabled_sources")) > 0
+        and _integer(osint.get("healthy_sources")) > 0
+        and osint_mapping.get("schema") == "polymarket_v7_osint_mapping_status_v1"
+        and _integer(osint_mapping.get("verified_mappings")) > 0
+        and osint_mapping.get("forward_collection_active") is True
+    )
+    market_open_operational = (
+        market_open.get("schema") == "polymarket_v7_market_open_collector_status_v1"
+        and collector_fresh(market_open)
+        and collector_contract_valid(market_open)
+        and _integer(market_open.get("observed_markets")) > 0
+    )
+    blocked_config_count = sum(
+        1 for row in research_rows.values()
+        if isinstance(row, dict) and row.get("evidence_state") == "BLOCKED_CONFIG"
+    )
+    blocked_external_count = sum(
+        1 for row in research_rows.values()
+        if isinstance(row, dict) and row.get("evidence_state") == "BLOCKED_EXTERNAL"
+    ) + (0 if osint_operational else 1)
+    active_research_count = sum(
+        1 for row in research_rows.values()
+        if isinstance(row, dict) and row.get("evidence_state") == "ACTIVE"
+    )
+    operational_count = (
+        (7 if snapshot.get("runtime_alive") is True else 0)
+        + (1 if osint_operational else 0)
+        + (1 if market_open_operational else 0)
+        + active_research_count
+    )
+    scope_wired = (
+        len(enabled_registry) == 15 and target_live_count == 12 and scope_valid
+        and research_attached and collector_contracts_valid
+        and snapshot.get("runtime_alive") is True
+    )
     labels = {"adapter":"v7_native","run_root":snapshot["run_root"],"version":"v7"}
     lines = [
         "# TYPE polymarket_v7_runtime_info gauge",
@@ -511,6 +783,17 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_restart_count_window", operations.get("restart_count")),
         _metric("polymarket_v7_single_writer_ok", 1 if operations.get("single_writer") else 0),
         _metric("polymarket_v7_exact_sha_ok", 1 if runtime.get("model_sha") == snapshot["sha"] else 0),
+        _metric("polymarket_v7_strategy_registry_enabled", len(enabled_registry)),
+        _metric("polymarket_v7_research_sleeves_attached", len(research_rows)),
+        _metric("polymarket_v7_research_supervisor_alive", 1 if _pid_alive(research.get("supervisor_pid")) else 0),
+        _metric("polymarket_v7_research_manifest_fresh", 1 if research_manifest_fresh else 0),
+        _metric("polymarket_v7_live_model_target_count", target_live_count),
+        _metric("polymarket_v7_live_model_operational_count", operational_count),
+        _metric("polymarket_v7_live_model_blocked_count", blocked_config_count + blocked_external_count),
+        _metric("polymarket_v7_live_model_blocked_config_count", blocked_config_count),
+        _metric("polymarket_v7_live_model_blocked_external_count", blocked_external_count),
+        _metric("polymarket_v7_live_model_scope_wired", 1 if scope_wired else 0),
+        _metric("polymarket_v7_live_model_target_operational", 1 if operational_count == target_live_count == 12 else 0),
         _metric("polymarket_v7_ledger_writable", 1 if operations.get("ledger_writable") else 0),
         _metric("polymarket_v7_disk_free_bytes", disk.get("free_bytes")),
         _metric("polymarket_v7_disk_free_ratio", disk.get("free_ratio")),
@@ -537,6 +820,9 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_osint_enabled_sources", osint.get("enabled_sources")),
         _metric("polymarket_v7_osint_healthy_sources", osint.get("healthy_sources")),
         _metric("polymarket_v7_osint_new_events", osint.get("new_events")),
+        _metric("polymarket_v7_osint_mapping_verified", osint_mapping.get("verified_mappings")),
+        _metric("polymarket_v7_osint_mapping_candidates", osint_mapping.get("candidate_mappings")),
+        _metric("polymarket_v7_osint_forward_collection_active", 1 if osint_mapping.get("forward_collection_active") is True else 0),
         _metric("polymarket_v7_market_open_tracked_markets", market_open.get("tracked_markets")),
         _metric("polymarket_v7_market_open_new_markets", market_open.get("new_markets")),
         _metric("polymarket_v7_market_open_emitted_milestones", market_open.get("emitted_milestones")),
@@ -575,6 +861,44 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
             if key in row and row[key] is not None: lines.append(_metric(metric_name,row[key],labels_s))
         if "killed" in row: lines.append(_metric("polymarket_strategy_killed",1 if row["killed"] else 0,labels_s))
         if "paper_eligible" in row: lines.append(_metric("polymarket_strategy_paper_eligible",1 if row["paper_eligible"] else 0,labels_s))
+    for family, row in sorted(research_rows.items()):
+        if not isinstance(row, dict):
+            continue
+        labels_r = {
+            "strategy": family,
+            "process_state": row.get("process_state", "UNKNOWN"),
+            "evidence_state": row.get("evidence_state", "UNKNOWN"),
+        }
+        lines.append(_metric("polymarket_v7_research_sleeve_attached", 1, labels_r))
+        blocker_labels = {
+            "strategy": family,
+            "feed_status": row.get("feed_status", "NOT_CONFIGURED"),
+            "mapping_status": row.get("mapping_status", "NOT_CONFIGURED"),
+            "blocker": row.get("blocker", "") or "NONE",
+        }
+        lines.append(_metric("polymarket_v7_external_input_info", 1, blocker_labels))
+        lines.append(_metric("polymarket_v7_external_input_implementation_complete",
+                             1 if row.get("implementation_complete") is True else 0,
+                             {"strategy": family}))
+        lines.append(_metric("polymarket_v7_external_input_feed_operational",
+                             1 if row.get("feed_operational") is True else 0,
+                             {"strategy": family}))
+        lines.append(_metric("polymarket_v7_external_input_verified_mappings",
+                             row.get("verified_mappings"), {"strategy": family}))
+        lines.append(_metric("polymarket_v7_external_input_forward_collection_active",
+                             1 if row.get("forward_collection_active") is True else 0,
+                             {"strategy": family}))
+        for key, metric_name in (
+            ("feed_age_ms", "polymarket_v7_external_input_feed_age_milliseconds"),
+            ("last_sequence", "polymarket_v7_external_input_last_sequence"),
+            ("connection_epoch", "polymarket_v7_external_input_connection_epoch"),
+            ("reconnect_count", "polymarket_v7_external_input_reconnect_total"),
+            ("gap_count", "polymarket_v7_external_input_gap_total"),
+            ("parse_failure_count", "polymarket_v7_external_input_parse_failure_total"),
+            ("dropped_event_count", "polymarket_v7_external_input_dropped_event_total"),
+        ):
+            if row.get(key) is not None:
+                lines.append(_metric(metric_name, row.get(key), {"strategy": family}))
     _append_maker_lab_metrics(lines, maker_lab)
     for source in osint.get("sources") if isinstance(osint.get("sources"), list) else []:
         if not isinstance(source, dict):

@@ -171,6 +171,21 @@ def test_same_outcome_two_buys_are_not_mislabeled_guaranteed_arb():
     assert not plan.executable and plan.blocker == "non_complement_legs_not_guaranteed"
 
 
+def test_robust_quantity_selects_q_star_after_all_cost_components():
+    small = c.CrossVenuePlan(5, 5, .8, .1, True, "")
+    large = c.CrossVenuePlan(10, 10, 1.2, .1, True, "")
+    selected = c.select_robust_quantity([
+        (small, c.RobustCostVector(fx_cost=.05, capital_cost=.05,
+                                   settlement_risk=.05, latency_buffer=.05, unwind_risk=.05)),
+        (large, c.RobustCostVector(fx_cost=.1, capital_cost=.1,
+                                   settlement_risk=.2, latency_buffer=.3, unwind_risk=.4)),
+    ])
+    assert selected.quantity == 5 and approximately(selected.robust_ev, .55)
+    with raises(c.CrossVenueError, "duplicate"):
+        c.select_robust_quantity([(small, c.RobustCostVector()),
+                                  (small, c.RobustCostVector())])
+
+
 def race(opportunity, bundle, a, b):
     return c.JointRaceObservation(
         opportunity, bundle, 1000, 1100, 10, a, b,

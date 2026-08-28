@@ -453,6 +453,65 @@ class CrossVenuePlan:
     paper_only: bool = True
 
 
+@dataclass(frozen=True)
+class RobustCostVector:
+    fx_cost: float = 0.0
+    capital_cost: float = 0.0
+    settlement_risk: float = 0.0
+    latency_buffer: float = 0.0
+    unwind_risk: float = 0.0
+
+    def validate(self) -> None:
+        values = (
+            self.fx_cost, self.capital_cost, self.settlement_risk,
+            self.latency_buffer, self.unwind_risk,
+        )
+        if any(not math.isfinite(value) or value < 0.0 for value in values):
+            raise CrossVenueError("invalid_robust_cost_vector")
+
+    @property
+    def total(self) -> float:
+        self.validate()
+        return sum((self.fx_cost, self.capital_cost, self.settlement_risk,
+                    self.latency_buffer, self.unwind_risk))
+
+
+@dataclass(frozen=True)
+class RobustQuantityPlan:
+    quantity: float
+    robust_ev: float
+    base_plan: CrossVenuePlan
+    cost_vector: RobustCostVector
+    executable: bool
+    blocker: str
+
+
+def select_robust_quantity(
+    candidates: Sequence[tuple[CrossVenuePlan, RobustCostVector]],
+) -> RobustQuantityPlan:
+    """Return q* by robust post-cost EV without interpolating missing depth."""
+    if not candidates:
+        raise CrossVenueError("robust_quantity_candidates_required")
+    seen: set[float] = set()
+    evaluated: list[RobustQuantityPlan] = []
+    for plan, costs in candidates:
+        costs.validate()
+        if plan.quantity <= 0.0 or not math.isfinite(plan.quantity) or plan.quantity in seen:
+            raise CrossVenueError("invalid_or_duplicate_robust_quantity")
+        seen.add(plan.quantity)
+        robust_ev = plan.expected_net_pnl - costs.total if plan.executable else -math.inf
+        evaluated.append(RobustQuantityPlan(
+            plan.quantity, robust_ev, plan, costs, plan.executable and robust_ev > 0.0,
+            "" if plan.executable and robust_ev > 0.0 else
+            (plan.blocker or "nonpositive_robust_ev"),
+        ))
+    best = max(evaluated, key=lambda row: (row.robust_ev, -row.quantity))
+    if best.executable:
+        return best
+    return RobustQuantityPlan(best.quantity, best.robust_ev, best.base_plan,
+                              best.cost_vector, False, best.blocker)
+
+
 def _joint_inputs(
     probabilities: Mapping[str, float], adjustments: Mapping[str, float],
 ) -> tuple[str, ...]:
@@ -656,7 +715,8 @@ __all__ = [
     "ContractEquivalence", "CrossPlatformForwardShadow", "CrossVenueContract",
     "CrossVenueError", "CrossVenuePlan", "DepthLevel", "EquivalenceType",
     "JointRaceObservation", "JointRaceState", "JointRaceTape", "PaperBalanceSnapshot",
+    "RobustCostVector", "RobustQuantityPlan",
     "SemanticVerification", "VenueBookEvent", "VenueBookTape", "VenueSourceSpec",
     "VenueWireDecoder", "VerifiedVenueAdapter", "classify", "depth_cost",
-    "equivalence_hash", "plan_cross_venue", "plan_cross_venue_exact",
+    "equivalence_hash", "plan_cross_venue", "plan_cross_venue_exact", "select_robust_quantity",
 ]
