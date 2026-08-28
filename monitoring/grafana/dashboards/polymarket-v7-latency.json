@@ -1,0 +1,75 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Latency evidence present",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "targets": [{"expr": "polymarket_v7_latency_samples_present", "refId": "A"}],
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "NO"}, "1": {"text": "YES"}}}]}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "textMode": "auto"}
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Receive → intent p99",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "targets": [{"expr": "polymarket_v7_latency_stage_nanoseconds{stage=\"receive_to_intent_ns\",percentile=\"p99\"} / 1e6", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "textMode": "auto"}
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Cancel/OMS queue p99",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "targets": [{"expr": "polymarket_v7_latency_stage_nanoseconds{stage=\"tx_queue_ns\",percentile=\"p99\"} / 1e6", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "textMode": "auto"}
+    },
+    {
+      "id": 4,
+      "type": "text",
+      "title": "Evidence boundary",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "options": {"mode": "markdown", "content": "Internal and PAPER measurements are not network/CLOB proof. Authenticated order/cancel probes remain disabled."}
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "V7 stage p99 latency",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "targets": [{"expr": "polymarket_v7_latency_stage_nanoseconds{percentile=\"p99\"} / 1e3", "legendFormat": "{{stage}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "µs"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "V7 stage p99.9 latency",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 14},
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "targets": [{"expr": "polymarket_v7_latency_stage_nanoseconds{percentile=\"p99_9\"} / 1e3", "legendFormat": "{{stage}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "µs"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["polymarket", "v7", "latency"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "Polymarket V7 Latency",
+  "uid": "polymarket-v7-latency",
+  "version": 1
+}

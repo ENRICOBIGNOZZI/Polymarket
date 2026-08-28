@@ -237,9 +237,13 @@ struct Features {
 };
 
 struct LatencyTrace {
+    std::int64_t parse_ns = 0;
+    std::int64_t book_ns = 0;
     std::int64_t feature_ns = 0;
     std::int64_t decision_ns = 0;
     std::int64_t risk_ns = 0;
+    std::int64_t tx_queue_ns = 0;
+    std::int64_t execution_ns = 0;
     std::int64_t receive_to_intent_ns = 0;
 };
 

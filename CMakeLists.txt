@@ -81,6 +81,10 @@ add_executable(polymarket_v7_maker_replay_bench src/v7_maker_replay_bench.cpp)
 target_link_libraries(polymarket_v7_maker_replay_bench PRIVATE pm_v7_hft)
 target_compile_options(polymarket_v7_maker_replay_bench PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(polymarket_v7_latency_probe src/v7_latency_probe.cpp)
+target_link_libraries(polymarket_v7_latency_probe PRIVATE pm_core)
+target_compile_options(polymarket_v7_latency_probe PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_market_maker_runtime src/v7_market_maker_runtime.cpp)
 target_link_libraries(polymarket_v7_market_maker_runtime PRIVATE pm_v7_hft pm_fast_arb pm_core)
 target_compile_options(polymarket_v7_market_maker_runtime PRIVATE -Wall -Wextra -Wpedantic)

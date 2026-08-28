@@ -49,6 +49,7 @@ jobs:
           python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-maker-fillability.json >/dev/null
+          python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-latency.json >/dev/null
           python3 -m json.tool config/v7_maker_fillability_experiments.json >/dev/null
           bash -n ops/apply_v7_monitoring_config_macos.sh
           test -s monitoring/prometheus_v7.yml

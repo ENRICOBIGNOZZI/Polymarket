@@ -107,6 +107,44 @@ def _trade_tape(path: Path, now: int) -> dict[str, Any]:
     return {"rows": rows, "assets": len(assets), "age": _age(now, newest_ts)}
 
 
+def _maker_latency(path: Path) -> dict[str, Any]:
+    stages = ("parse_ns", "book_ns", "feature_ns", "decision_ns", "risk_ns",
+              "tx_queue_ns", "execution_ns", "receive_to_intent_ns")
+    samples: dict[str, list[int]] = {stage: [] for stage in stages}
+    rows = 0
+    try:
+        with path.open(newline="", encoding="utf-8", errors="replace") as handle:
+            for row in csv.DictReader(handle):
+                rows += 1
+                for stage in stages:
+                    value = _integer(row.get(stage), 0)
+                    if value > 0:
+                        samples[stage].append(value)
+    except (OSError, csv.Error):
+        return {"present": False, "rows": 0, "stages": {}}
+
+    def percentile(values: list[int], probability: float) -> int:
+        if not values:
+            return 0
+        ordered = sorted(values)
+        return ordered[int(probability * (len(ordered) - 1))]
+
+    summary: dict[str, dict[str, int]] = {}
+    for stage, values in samples.items():
+        if not values:
+            continue
+        summary[stage] = {
+            "samples": len(values),
+            "p50": percentile(values, 0.50),
+            "p90": percentile(values, 0.90),
+            "p95": percentile(values, 0.95),
+            "p99": percentile(values, 0.99),
+            "p99_9": percentile(values, 0.999),
+            "max": max(values),
+        }
+    return {"present": rows > 0, "rows": rows, "stages": summary}
+
+
 def _graph_open_cost(path: Path) -> float | None:
     state = _json(path)
     bundles = state.get("bundles") if isinstance(state.get("bundles"), dict) else None
@@ -148,6 +186,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     maker_lab = summarize_maker_microstructure(
         ledger_path, run_root / "micro_maker" / "reward_selection.json"
     )
+    maker_latency = _maker_latency(run_root / "micro_maker" / "latency.csv")
     tape = _trade_tape(run_root / "trade_tape.csv", now)
     directives = _json(repository_root / "config" / "operator_directives.json")
     authorization = directives.get("paper_v7_authorization") if isinstance(directives.get("paper_v7_authorization"), dict) else {}
@@ -220,6 +259,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "joint_policy": joint,
         "ledger": ledger,
         "maker_lab": maker_lab,
+        "maker_latency": maker_latency,
         "trade_tape": tape,
         "authority": {"valid": authority_valid, "max_drawdown": authority_max_drawdown},
         "strategies": strategies,
@@ -367,6 +407,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     authority = snapshot["authority"]
     canonical = snapshot["canonical_economics"]
     maker_lab = snapshot.get("maker_lab") if isinstance(snapshot.get("maker_lab"), dict) else {}
+    maker_latency = snapshot.get("maker_latency") if isinstance(snapshot.get("maker_latency"), dict) else {}
     labels = {"adapter":"v7_native","run_root":snapshot["run_root"],"version":"v7"}
     lines = [
         "# TYPE polymarket_v7_runtime_info gauge",
@@ -404,6 +445,8 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_ledger_rows", _integer(ledger.get("rows"))),
         _metric("polymarket_v7_ledger_invalid_rows", _integer(ledger.get("invalid_rows"))),
         _metric("polymarket_v7_ledger_model_sha_count", len(ledger.get("model_shas") or [])),
+        _metric("polymarket_v7_latency_samples_present", 1 if maker_latency.get("present") else 0),
+        _metric("polymarket_v7_latency_rows", maker_latency.get("rows")),
         _metric("polymarket_execution_opportunities", _integer(ledger_total.get("opportunities"))),
         _metric("polymarket_execution_orders_submitted", _integer(ledger_total.get("orders_submitted"))),
         _metric("polymarket_execution_fills", _integer(ledger_total.get("fills"))),
@@ -432,6 +475,16 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         if "killed" in row: lines.append(_metric("polymarket_strategy_killed",1 if row["killed"] else 0,labels_s))
         if "paper_eligible" in row: lines.append(_metric("polymarket_strategy_paper_eligible",1 if row["paper_eligible"] else 0,labels_s))
     _append_maker_lab_metrics(lines, maker_lab)
+    for stage, row in sorted((maker_latency.get("stages") or {}).items()):
+        if not isinstance(row, dict):
+            continue
+        lines.append(_metric("polymarket_v7_latency_stage_samples", row.get("samples"), {"stage": stage}))
+        for percentile in ("p50", "p90", "p95", "p99", "p99_9", "max"):
+            lines.append(_metric(
+                "polymarket_v7_latency_stage_nanoseconds",
+                row.get(percentile),
+                {"stage": stage, "percentile": percentile},
+            ))
     return "\n".join(lines)+"\n"
 
 
