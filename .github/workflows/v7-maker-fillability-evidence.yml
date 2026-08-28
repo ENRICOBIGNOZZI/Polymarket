@@ -1,0 +1,144 @@
+name: V7 maker fillability evidence
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["V7 deploy PAPER server"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: polymarket-v7-maker-fillability-evidence
+  cancel-in-progress: true
+
+jobs:
+  collect:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+    steps:
+      - name: Select Tailscale credential mode
+        id: tailscale_auth
+        shell: bash
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${TS_AUTHKEY:-}" ]]; then
+            mode=authkey
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
+            test -n "${TS_TAGS:-}"
+            mode=oauth
+          else
+            echo "No visible Tailscale credential set" >&2
+            exit 1
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Join private tailnet with auth key
+        if: steps.tailscale_auth.outputs.mode == 'authkey'
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+
+      - name: Join private tailnet with OAuth
+        if: steps.tailscale_auth.outputs.mode == 'oauth'
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+
+      - name: Configure SSH identity
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_fillability
+          chmod 600 ~/.ssh/polymarket_fillability
+          : > ~/.ssh/known_hosts
+          ready=0
+          for _ in $(seq 1 30); do
+            tailscale ping --timeout=4s -c 1 "$SERVER_HOST" >/dev/null 2>&1 || true
+            if ssh-keyscan -T 3 -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 3
+          done
+          test "$ready" = 1
+
+      - name: Collect maker fillability report
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh_common=(
+            -i ~/.ssh/polymarket_fillability
+            -o IdentitiesOnly=yes
+            -o BatchMode=yes
+            -o ConnectTimeout=10
+            -p "$SERVER_PORT"
+          )
+          ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST" 'bash -s' > maker-fillability.json <<'REMOTE'
+          set -euo pipefail
+          cd ~/polymarket
+          root="$HOME/polymarket/runs/paper_v7_live"
+          deployed_sha="$(cat "$root/control/deployed_sha")"
+          runtime_sha="$(python3 - "$root" <<'PY'
+          import json,sys
+          from pathlib import Path
+          root=Path(sys.argv[1])
+          print(json.loads((root/'control/runtime_status.json').read_text(encoding='utf-8')).get('model_sha') or '')
+          PY
+          )"
+          test "$runtime_sha" = "$deployed_sha"
+          curl -fsS http://127.0.0.1:9108/maker-fillability.json
+          REMOTE
+          python3 - <<'PY' | tee maker-fillability-summary.txt
+          import json
+          from pathlib import Path
+          report=json.loads(Path('maker-fillability.json').read_text(encoding='utf-8'))
+          assert report.get('paper_only') is True
+          assert report.get('authenticated_execution') is False
+          assert report.get('real_order_submission') is False
+          assert report.get('exact_sha_ok') is True
+          funnel=report.get('funnel') or {}
+          print('runtime_sha=' + str(report.get('runtime_sha') or 'UNKNOWN'))
+          print('policy_hash=' + str(report.get('policy_hash') or 'UNKNOWN'))
+          for key in (
+              'orders','orders_effective','orders_rested','trade_reachable',
+              'lower_queue_depleted','expected_queue_depleted','pessimistic_queue_depleted',
+              'fill_opportunity_lower','fill_opportunity_expected','fill_opportunity_pessimistic',
+              'partial_fills','full_fills','cancelled_before_flow','priority_resets',
+          ):
+              print(f'{key}={int(funnel.get(key) or 0)}')
+          print('root_cause=' + str(report.get('root_cause') or 'UNKNOWN'))
+          print('simulator_bug_suspected=' + str(report.get('simulator_bug_suspected') or 'UNKNOWN'))
+          print('next_experiment=' + str(report.get('next_experiment') or 'UNKNOWN'))
+          for reason,count in sorted((report.get('zero_fill_reasons') or {}).items()):
+              print(f'zero_fill_reason[{reason}]={count}')
+          PY
+
+      - name: Upload exact-SHA fillability evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v7-maker-fillability-${{ github.run_id }}
+          path: |
+            maker-fillability.json
+            maker-fillability-summary.txt
+          if-no-files-found: warn
+          retention-days: 14

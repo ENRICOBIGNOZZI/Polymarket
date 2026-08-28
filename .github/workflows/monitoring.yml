@@ -36,10 +36,19 @@ jobs:
             tests/test_monitoring_v7_native.py \
             tests/test_monitoring_v7_ledger.py \
             tests/test_monitoring_v7_fill_rate_integrity.py \
-            tests/test_monitoring_v7_dashboard_completion.py -v
-          python3 -m py_compile monitoring/exporter_v7.py monitoring/v7_ledger_metrics.py
+            tests/test_monitoring_v7_dashboard_completion.py \
+            tests/test_v7_maker_fillability.py \
+            tests/test_v7_maker_fillability_monitoring.py -v
+          python3 -m py_compile \
+            monitoring/exporter_v7.py \
+            monitoring/exporter_v7_fillability.py \
+            monitoring/v7_ledger_metrics.py \
+            monitoring/v7_maker_fillability.py \
+            scripts/v7_maker_fillability_report.py
           python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7.json >/dev/null
+          python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-maker-fillability.json >/dev/null
+          python3 -m json.tool config/v7_maker_fillability_experiments.json >/dev/null
           bash -n ops/apply_v7_monitoring_config_macos.sh
           test -s monitoring/prometheus_v7.yml
           test -s monitoring/v7_alerts.yml
