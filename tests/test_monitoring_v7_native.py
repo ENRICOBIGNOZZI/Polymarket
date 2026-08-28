@@ -168,6 +168,18 @@ class V7NativeMonitoringTest(unittest.TestCase):
         self._write(root / "osint" / "status.json", {"schema": "polymarket_v7_osint_collector_status_v1", "timestamp_ms": (now - 5) * 1000, "paper_only": True, "authenticated_execution": False, "real_order_submission": False, "enabled_sources": 3, "healthy_sources": 3})
         self._write(root / "osint" / "mapping_status.json", {"schema": "polymarket_v7_osint_mapping_status_v1", "version": 7, "family": "osint", "model_sha": sha, "timestamp_ms": (now - 5) * 1000, "paper_only": True, "research_only": True, "authenticated_execution": False, "real_order_submission": False, "implementation_complete": True, "mapping_pipeline": True, "title_similarity_verification_forbidden": True, "verified_mappings": 0, "candidate_mappings": 2, "forward_collection_active": False})
         self._write(root / "market_open" / "status.json", {"schema": "polymarket_v7_market_open_collector_status_v1", "timestamp_ms": (now - 5) * 1000, "paper_only": True, "authenticated_execution": False, "real_order_submission": False, "observed_markets": 10})
+        self._write(root / "universe" / "status.json", {
+            "schema": "polymarket_v7_adaptive_universe_status_v1", "version": 7,
+            "timestamp_ms": (now - 5) * 1000, "model_sha": sha, "state": "OPERATIONAL",
+            "paper_only": True, "authenticated_execution": False, "real_order_submission": False,
+            "execution_authority": False, "discovery_exhaustive": True,
+            "pagination_loop_guard_hit": False, "discovered_markets": 2000,
+            "eligible_markets": 1800, "skipped_markets": 200,
+            "skipped_by_reason": {"BELOW_MINIMUM_LIQUIDITY": 200},
+            "tier_counts": {"HOT": 400, "WARM": 1250, "COLD": 150},
+            "resource_capacities": {"hot_limiting_dimensions": ["cpu"], "warm_limiting_dimensions": ["scan_time"]},
+            "pages": 4, "scan_duration_ms": 125.0,
+        })
         self._write(
             root / "canonical_economics.json",
             {
@@ -227,6 +239,10 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertIn("polymarket_v7_canonical_complete_units 1", metrics)
             self.assertIn("polymarket_runtime_realized_pnl_usd 7", metrics)
             self.assertIn("polymarket_v7_latency_samples_present 1", metrics)
+            self.assertIn("polymarket_v7_universe_discovery_exhaustive 1", metrics)
+            self.assertIn('polymarket_v7_universe_tier_markets{tier="HOT"} 400', metrics)
+            self.assertIn('polymarket_v7_universe_tier_markets{tier="WARM"} 1250', metrics)
+            self.assertIn('polymarket_v7_universe_tier_markets{tier="COLD"} 150', metrics)
             self.assertIn('polymarket_v7_latency_stage_nanoseconds{stage="parse_ns",percentile="p99"} 1000', metrics)
             self.assertIn('polymarket_v7_latency_stage_nanoseconds{stage="tx_queue_ns",percentile="p99"} 6000', metrics)
             self.assertNotIn("polymarket_v7_shadow_alive", metrics)

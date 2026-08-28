@@ -15,6 +15,7 @@ import re
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -79,34 +80,58 @@ def lexical_candidate_score(event: Mapping[str, Any], market: Mapping[str, Any])
 def fetch_markets(endpoint: str, *, timeout: float = 20.0) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not endpoint.startswith("https://gamma-api.polymarket.com/"):
         raise OsintMappingCollectorError("polymarket_market_endpoint_not_allowlisted")
-    request = urllib.request.Request(endpoint, headers={
-        "Accept": "application/json", "Accept-Encoding": "gzip",
-        "User-Agent": "PolymarketV7Research/1.0",
-    })
-    started = time.monotonic_ns()
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            first_byte = time.monotonic_ns()
-            body = response.read(MAX_RESPONSE_BYTES + 1)
-            completed = time.monotonic_ns()
-            if len(body) > MAX_RESPONSE_BYTES:
-                raise OsintMappingCollectorError("polymarket_market_response_too_large")
-            if response.headers.get("Content-Encoding", "").lower() == "gzip":
-                import gzip
-                body = gzip.decompress(body)
-    except (OSError, urllib.error.URLError) as exc:
-        raise OsintMappingCollectorError(f"polymarket_market_fetch_failed:{exc}") from exc
-    try:
-        value = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise OsintMappingCollectorError("polymarket_market_json_invalid") from exc
-    if not isinstance(value, list):
-        raise OsintMappingCollectorError("polymarket_market_schema_invalid")
-    rows = [row for row in value if isinstance(row, dict)]
-    return rows, {
-        "ttfb_ms": (first_byte - started) / 1_000_000.0,
-        "request_ms": (completed - started) / 1_000_000.0,
-        "body_sha256": hashlib.sha256(body).hexdigest(),
+    parsed = urllib.parse.urlsplit(endpoint)
+    query = urllib.parse.parse_qs(parsed.query)
+    page_size = max(1, min(500, int((query.get("limit") or [500])[0])))
+    base_query = {key: values[-1] for key, values in query.items() if key not in {"limit", "offset"}}
+    rows_by_id: dict[str, dict[str, Any]] = {}
+    page_hashes: list[str] = []
+    ttfb_ms = request_ms = 0.0
+    pages = 0
+    exhaustive = False
+    for page_index in range(200):
+        page_query = {**base_query, "limit": page_size, "offset": page_index * page_size}
+        url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urllib.parse.urlencode(page_query), ""))
+        request = urllib.request.Request(url, headers={
+            "Accept": "application/json", "Accept-Encoding": "gzip",
+            "User-Agent": "PolymarketV7Research/1.0",
+        })
+        started = time.monotonic_ns()
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                first_byte = time.monotonic_ns()
+                body = response.read(MAX_RESPONSE_BYTES + 1)
+                completed = time.monotonic_ns()
+                if len(body) > MAX_RESPONSE_BYTES:
+                    raise OsintMappingCollectorError("polymarket_market_response_too_large")
+                if response.headers.get("Content-Encoding", "").lower() == "gzip":
+                    import gzip
+                    body = gzip.decompress(body)
+        except (OSError, urllib.error.URLError) as exc:
+            raise OsintMappingCollectorError(f"polymarket_market_fetch_failed:{exc}") from exc
+        try:
+            value = json.loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise OsintMappingCollectorError("polymarket_market_json_invalid") from exc
+        if not isinstance(value, list):
+            raise OsintMappingCollectorError("polymarket_market_schema_invalid")
+        pages += 1
+        ttfb_ms += (first_byte - started) / 1_000_000.0
+        request_ms += (completed - started) / 1_000_000.0
+        page_hashes.append(hashlib.sha256(body).hexdigest())
+        for row in value:
+            if isinstance(row, dict):
+                key = str(row.get("id") or row.get("conditionId") or hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest())
+                rows_by_id[key] = row
+        if len(value) < page_size:
+            exhaustive = True
+            break
+    if not exhaustive:
+        raise OsintMappingCollectorError("polymarket_market_pagination_guard_hit")
+    return list(rows_by_id.values()), {
+        "ttfb_ms": ttfb_ms, "request_ms": request_ms,
+        "body_sha256": hashlib.sha256("".join(page_hashes).encode()).hexdigest(),
+        "pages": pages, "discovery_exhaustive": True,
     }
 
 
@@ -216,6 +241,8 @@ def collect_once(*, repository_root: Path, config_path: Path, mappings_path: Pat
         "title_similarity_verification_forbidden": True,
         "market_request_ttfb_ms": timing.get("ttfb_ms"),
         "market_request_ms": timing.get("request_ms"),
+        "market_discovery_pages": timing.get("pages"),
+        "market_discovery_exhaustive": timing.get("discovery_exhaustive", False),
         "blocker": blocker, "reason_codes": [blocker] if blocker else [],
         "paper_only": True, "research_only": True, "authenticated_execution": False,
         "real_order_submission": False, "execution_authority": False,

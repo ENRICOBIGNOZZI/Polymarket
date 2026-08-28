@@ -49,6 +49,28 @@ def test_kalshi_public_polling_collects_real_books_but_not_fake_equivalence(tmp_
     assert all(row["real_order_submission"] is False for row in [status])
 
 
+def test_kalshi_metadata_discovery_pages_to_exhaustion_and_polls_books(tmp_path):
+    class PagedClient(KalshiClient):
+        def get(self, path):
+            timing = {"request_ms": 2.0, "ttfb_ms": 1.0, "connection_epoch": 1,
+                      "body_sha256": "b" * 64}
+            if path.startswith("/markets?"):
+                if "cursor=next" in path:
+                    return {"markets": [{"ticker": "KX2", "title": "Second"}], "cursor": ""}, timing
+                return {"markets": [{"ticker": "KX1", "title": "First"}], "cursor": "next"}, timing
+            return {"orderbook_fp": {"yes_dollars": [["0.40", "10"]],
+                                      "no_dollars": [["0.50", "8"]]}}, timing
+    status = cross.collect_once(
+        repository_root=ROOT, config_path=ROOT / "config" / "v7_external_inputs.json",
+        mappings_path=ROOT / "config" / "v7_external_mappings.json",
+        tape_path=tmp_path / "books.jsonl", state_path=tmp_path / "state.json",
+        status_path=tmp_path / "status.json", client=PagedClient(), now_ms=1_800_000_000_000,
+    )
+    assert status["discovery_exhaustive"] is True
+    assert status["discovered_markets"] == status["synchronized_books"] == 2
+    assert status["metadata_changes"] == 2
+
+
 def test_kalshi_malformed_book_degrades_locally(tmp_path):
     status = cross.collect_once(
         repository_root=ROOT, config_path=ROOT / "config" / "v7_external_inputs.json",
@@ -151,6 +173,28 @@ def test_osint_candidates_never_become_verified_by_lexical_score(tmp_path):
     candidate = json.loads((tmp_path / "candidates.jsonl").read_text())
     assert candidate["candidate_only"] and candidate["verification_authority"] is False
     assert status["forward_collection_active"] is False
+
+
+def test_osint_gamma_discovery_pages_until_short_page(monkeypatch):
+    class Response:
+        headers = {}
+        def __init__(self, rows): self.rows = rows
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def read(self, _limit): return json.dumps(self.rows).encode()
+    seen = []
+    def urlopen(request, timeout):
+        del timeout
+        seen.append(request.full_url)
+        offset = int(request.full_url.split("offset=")[1].split("&")[0])
+        return Response([{"id": str(offset)}, {"id": str(offset + 1)}] if offset == 0 else [{"id": str(offset)}])
+    monkeypatch.setattr(osint_mapping.urllib.request, "urlopen", urlopen)
+    rows, timing = osint_mapping.fetch_markets(
+        "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=2"
+    )
+    assert [row["id"] for row in rows] == ["0", "1", "2"]
+    assert timing["pages"] == 2 and timing["discovery_exhaustive"] is True
+    assert len(seen) == 2
 
 
 def test_osint_market_discovery_failure_is_explicit_and_non_executing(tmp_path):

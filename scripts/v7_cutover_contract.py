@@ -173,6 +173,17 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
                    for name in ("osint", "sports_latency", "cross_platform"))):
         fail("V7 cutover blocked: external semantic mapping registry invalid")
 
+    adaptive_universe = load_json(root / "config/v7_adaptive_universe.json")
+    if (adaptive_universe.get("schema") != "polymarket_v7_adaptive_universe_config_v1"
+            or adaptive_universe.get("version") != 7
+            or adaptive_universe.get("paper_only") is not True
+            or adaptive_universe.get("authenticated_execution") is not False
+            or adaptive_universe.get("real_order_submission") is not False):
+        fail("V7 cutover blocked: adaptive universe safety contract invalid")
+    resources = adaptive_universe.get("resource_budget") if isinstance(adaptive_universe.get("resource_budget"), dict) else {}
+    if any(not isinstance(resources.get(name), dict) for name in ("hot", "warm", "structural")):
+        fail("V7 cutover blocked: adaptive universe resource budgets missing")
+
     cfg = load_json(root / config_rel)
     if cfg.get("engine_version") != 7 or cfg.get("paper_only") is not True:
         fail("V7 cutover blocked: config must be engine_version=7 and PAPER-only")
@@ -201,6 +212,8 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
     v7 = cfg.get("v7")
     if not isinstance(v7, dict):
         fail("V7 cutover blocked: config.v7 must be an object")
+    if v7.get("adaptive_universe_policy") != "config/v7_adaptive_universe.json":
+        fail("V7 cutover blocked: canonical adaptive universe policy is not configured")
     for key in ("paper_only","authoritative_fee_required","shared_execution_ledger_required","single_canonical_ledger_writer","joint_fill_state_required_for_multileg","queue_never_grants_size","partial_unwind_required"):
         if v7.get(key) is not True:
             fail(f"V7 cutover blocked: v7.{key} must be true")

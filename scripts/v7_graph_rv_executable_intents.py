@@ -8,14 +8,14 @@ import time
 from pathlib import Path
 from typing import Any
 
-from v7_graph_rv_intents import FIELDS, atomic_csv, books, discover, parse_market
+from v7_graph_rv_intents import FIELDS, atomic_csv, books, discover, parse_market, rotating_events, structural_scan_budget
 from v7_market_common import fee_per_share, request_json, resolve_fee_details
 
 
 def scan(cfg: dict[str, Any], now: int) -> tuple[list[dict[str, Any]], dict[str, int]]:
     gamma = str(cfg["gamma_url"]).rstrip("/")
     clob = str(cfg["clob_url"]).rstrip("/")
-    markets = discover(gamma, int(cfg.get("market_limit", 1000)), float(cfg.get("min_liquidity", 2.0)))
+    markets = discover(gamma, 0, float(cfg.get("min_liquidity", 2.0)))
     current = books(clob, [market.yes_token for market in markets])
     event_ids = list(dict.fromkeys(market.event_id for market in markets if market.neg_risk and market.event_id))
     v7 = cfg.get("v7") or {}
@@ -25,7 +25,10 @@ def scan(cfg: dict[str, Any], now: int) -> tuple[list[dict[str, Any]], dict[str,
     max_notional = max(0.0, allocation * capital)
     rows: list[dict[str, Any]] = []
     stats = {"events_considered": 0, "events_complete": 0, "bundles": 0, "taker_edge_rejects": 0}
-    for event_id in event_ids[: int(v7.get("hard_arb_max_events", 80))]:
+    budget = structural_scan_budget(cfg)
+    selected, cursor = rotating_events(event_ids, now, budget, int(v7.get("graph_execution_seconds", 1)))
+    stats.update({"discovered_markets": len(markets), "discovered_events": len(event_ids), "scan_budget_events": budget, "scan_cursor": cursor, "discovery_exhaustive": True})
+    for event_id in selected:
         stats["events_considered"] += 1
         try:
             event = request_json(f"{gamma}/events/{event_id}")

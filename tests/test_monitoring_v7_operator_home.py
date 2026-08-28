@@ -31,6 +31,9 @@ class V7OperatorHomeTest(unittest.TestCase):
             "polymarket_execution_withdraws",
             "polymarket_execution_effective_orders",
             "polymarket_v7_latency_stage_nanoseconds",
+            "polymarket_v7_universe_discovery_exhaustive",
+            "polymarket_v7_universe_tier_markets",
+            "polymarket_v7_universe_resource_limit",
             "ALERTS",
         ):
             self.assertIn(metric, serialized)

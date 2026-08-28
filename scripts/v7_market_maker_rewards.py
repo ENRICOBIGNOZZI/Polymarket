@@ -137,14 +137,19 @@ def fetch_reward_pools(clob_url: str) -> dict[str, RewardPool]:
             break
         seen.add(next_cursor)
         cursor = next_cursor
+    else:
+        raise RuntimeError("reward market pagination guard reached before exhaustion")
     return out
 
 
-def fetch_reward_markets(clob_url: str, *, limit: int = 1000) -> dict[str, RewardMarket]:
+def fetch_reward_markets(clob_url: str, *, limit: int = 0) -> dict[str, RewardMarket]:
+    """Fetch the full reward-eligible catalog; positive limit is test/diagnostic only."""
     out: dict[str, RewardMarket] = {}
     cursor = ""
     seen: set[str] = set()
-    while len(out) < limit:
+    for _ in range(200):
+        if limit > 0 and len(out) >= limit:
+            break
         url = clob_url.rstrip("/") + "/rewards/markets/multi?limit=500"
         if cursor:
             url += "&next_cursor=" + urllib.parse.quote(cursor, safe="")
@@ -178,7 +183,7 @@ def fetch_reward_markets(clob_url: str, *, limit: int = 1000) -> dict[str, Rewar
                     volume_24h=max(0.0, finite(row.get("volume_24hr"))),
                     market_competitiveness=max(0.0, finite(row.get("market_competitiveness"))),
                 )
-                if len(out) >= limit:
+                if limit > 0 and len(out) >= limit:
                     break
         if not next_cursor or next_cursor == "LTE=" or next_cursor == cursor or next_cursor in seen:
             break
@@ -236,13 +241,18 @@ def build_snapshot(config_path: Path) -> dict[str, Any]:
     if cfg.get("paper_only") is not True or cfg.get("authenticated_execution") is not False or cfg.get("real_order_submission") is not False:
         raise ValueError("maker_selector_requires_paper_auth_disabled")
     selection_cfg = cfg.get("market_selection") or {}
+    capacity_cfg = selection_cfg.get("resource_capacity") if isinstance(selection_cfg.get("resource_capacity"), dict) else {}
+    resource_capacity = int(capacity_cfg.get("shard_count_budget", 0)) * int(capacity_cfg.get("markets_per_shard", 0))
+    configured_capacity = int(selection_cfg.get("max_active_markets", 0))
+    if resource_capacity <= 0 or configured_capacity != resource_capacity:
+        raise ValueError("maker market capacity must equal declared shard resource capacity")
     clob_url = str(cfg.get("clob_url") or "https://clob.polymarket.com")
     pools = fetch_reward_pools(clob_url)
-    markets = fetch_reward_markets(clob_url, limit=max(1000, int(selection_cfg.get("max_active_markets", 40)) * 10))
+    markets = fetch_reward_markets(clob_url)
     selected = rank_markets(
         pools,
         markets,
-        max_active=int(selection_cfg.get("max_active_markets", 40)),
+        max_active=resource_capacity,
         min_volume_24h=float(selection_cfg.get("min_volume_24h", 100.0)),
     )
     return {
@@ -254,6 +264,8 @@ def build_snapshot(config_path: Path) -> dict[str, Any]:
         "reward_pool_count": len(pools),
         "reward_market_count": len(markets),
         "selected_count": len(selected),
+        "resource_capacity_markets": resource_capacity,
+        "resource_capacity": capacity_cfg,
         "markets": [asdict(row) for row in selected],
         "note": "Pool dollars are configuration facts; realized reward share remains competition-dependent and is not guaranteed.",
     }

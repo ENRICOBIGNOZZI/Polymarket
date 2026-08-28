@@ -1,0 +1,45 @@
+name: V7 merged branch hygiene
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Delete branches already merged into main
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v7-merged-branch-hygiene
+  cancel-in-progress: false
+
+jobs:
+  prune-merged:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prove ancestry and prune only merged branches
+        env:
+          APPLY_ON_PUSH: ${{ github.event_name == 'push' }}
+          APPLY_ON_DISPATCH: ${{ inputs.apply || false }}
+        run: |
+          set -euo pipefail
+          apply=()
+          if [[ "$APPLY_ON_PUSH" == "true" || "$APPLY_ON_DISPATCH" == "true" ]]; then
+            apply=(--apply)
+          fi
+          python3 scripts/v7_prune_merged_branches.py \
+            --repository-root . --remote origin --base main \
+            --report merged-branch-cleanup.json "${apply[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v7-merged-branch-cleanup-${{ github.sha }}
+          path: merged-branch-cleanup.json
+          retention-days: 30
