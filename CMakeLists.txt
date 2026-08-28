@@ -34,6 +34,7 @@ add_library(pm_v7_common
   src/v7_oms.cpp
   src/v7_paper_queue.cpp
   src/v7_market_state.cpp
+  src/v7_markout.cpp
   src/v7_market_ws.cpp)
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_common PUBLIC pm_json)
@@ -77,6 +78,10 @@ if(BUILD_TESTING)
   add_executable(pm_v7_market_state_tests tests/test_v7_market_state.cpp)
   target_link_libraries(pm_v7_market_state_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_market_state_tests COMMAND pm_v7_market_state_tests)
+
+  add_executable(pm_v7_markout_tests tests/test_v7_markout.cpp)
+  target_link_libraries(pm_v7_markout_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_markout_tests COMMAND pm_v7_markout_tests)
 
   add_executable(pm_v7_market_ws_tests tests/test_v7_market_ws.cpp)
   target_link_libraries(pm_v7_market_ws_tests PRIVATE pm_v7_common)
