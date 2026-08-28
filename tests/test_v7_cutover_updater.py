@@ -16,6 +16,15 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("ctest --test-dir build --output-on-failure", text)
         self.assertLess(text.index("prevalidate_candidate"), text.rindex('git checkout --detach "$EXPECTED_SHA"'))
 
+    def test_updater_recreates_active_cmake_build_in_final_path(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        function = text[text.index("build_current_checkout(){"):text.index("start_production_runtime(){")]
+        self.assertIn('rm -rf "$APP_DIR/build"', function)
+        self.assertIn('cmake -S "$APP_DIR" -B "$APP_DIR/build"', function)
+        self.assertLess(function.index('rm -rf "$APP_DIR/build"'), function.index('cmake -S "$APP_DIR" -B "$APP_DIR/build"'))
+        self.assertNotIn('-B "$APP_DIR/build.next"', function)
+        self.assertNotIn('mv "$APP_DIR/build.next"', function)
+
     def test_updater_stops_only_registered_v7_runtime_owner(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         self.assertIn("control/runtime_status.json", text)
