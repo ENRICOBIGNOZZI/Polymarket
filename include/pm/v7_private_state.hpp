@@ -65,6 +65,11 @@ public:
     [[nodiscard]] bool reconcile(const AuthoritativeOrderSnapshot& snapshot) noexcept;
     [[nodiscard]] bool complete_reconciliation() noexcept;
 
+    // Fixed-capacity state may recycle a slot only after the canonical ledger
+    // has consumed the terminal order record. Non-terminal retirement fails
+    // closed so an outstanding order cannot disappear from reconciliation.
+    [[nodiscard]] bool retire_terminal_order(std::uint64_t client_order_id) noexcept;
+
     [[nodiscard]] const OmsOrderRecord* order(std::uint64_t client_order_id) const noexcept;
     [[nodiscard]] PrivateStateSnapshot snapshot() const noexcept;
 
@@ -83,13 +88,13 @@ private:
     [[nodiscard]] static bool terminal(OrderState state) noexcept;
     [[nodiscard]] OmsEvent control_event(OmsEventType type,
                                          std::int64_t timestamp_ns) noexcept;
+    void erase(Slot& slot) noexcept;
     void bump_version() noexcept;
 
     std::array<Slot, kMaxPrivateOrders> slots_{};
     PrivateStreamState stream_state_ = PrivateStreamState::Disconnected;
     std::size_t tracked_orders_ = 0;
     std::uint64_t event_sequence_ = 0;
-    std::uint64_t source_version_ = 0;
     std::uint64_t state_version_ = 1;
 };
 
