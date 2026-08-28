@@ -22,6 +22,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
+#include <sstream>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -98,6 +100,40 @@ Endpoint parse_wss_url(std::string url) {
         throw std::runtime_error("invalid WebSocket endpoint");
     }
     return endpoint;
+}
+
+[[nodiscard]] std::vector<tcp::endpoint> public_dns_override(const Endpoint& endpoint) {
+    const char* raw = std::getenv("PM_V7_WS_RESOLVE_IPS");
+    if (raw == nullptr || *raw == '\0') return {};
+    if (!endpoint.host.ends_with(".polymarket.com")) {
+        throw std::runtime_error("V7 public WS IP override is restricted to polymarket.com");
+    }
+    unsigned long parsed_port = 0;
+    try {
+        parsed_port = std::stoul(endpoint.port);
+    } catch (...) {
+        throw std::runtime_error("invalid WebSocket port for public-DNS override");
+    }
+    if (parsed_port == 0 || parsed_port > 65535) {
+        throw std::runtime_error("invalid WebSocket port for public-DNS override");
+    }
+    std::vector<tcp::endpoint> output;
+    std::istringstream input(raw);
+    std::string token;
+    while (std::getline(input, token, ',')) {
+        token.erase(std::remove_if(token.begin(), token.end(), [](unsigned char ch) {
+            return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+        }), token.end());
+        if (token.empty()) continue;
+        boost::system::error_code error;
+        const auto address = asio::ip::make_address(token, error);
+        if (error) throw std::runtime_error("invalid PM_V7_WS_RESOLVE_IPS address: " + token);
+        output.emplace_back(address, static_cast<unsigned short>(parsed_port));
+    }
+    if (output.empty()) {
+        throw std::runtime_error("PM_V7_WS_RESOLVE_IPS provided but contained no usable addresses");
+    }
+    return output;
 }
 
 std::string subscription(const std::vector<std::string>& ids) {
@@ -180,8 +216,6 @@ struct MarketWebSocketFeed::Impl {
         (void)ids;
         int backoff_seconds = 1;
         bool first_attempt = true;
-        // One reusable receive buffer per shard. It can grow on an exceptional
-        // large frame, but normal frames no longer allocate/copy per message.
         beast::flat_buffer buffer;
         buffer.reserve(256 * 1024);
         while (!stop.stop_requested()) {
@@ -194,7 +228,6 @@ struct MarketWebSocketFeed::Impl {
                 tls.set_default_verify_paths();
                 tls.set_verify_mode(ssl::verify_peer);
 
-                tcp::resolver resolver(io);
                 websocket::stream<beast::ssl_stream<beast::tcp_stream>> ws(io, tls);
                 if (!::SSL_set_tlsext_host_name(ws.next_layer().native_handle(),
                                                 endpoint.host.c_str())) {
@@ -206,9 +239,15 @@ struct MarketWebSocketFeed::Impl {
                 ws.next_layer().set_verify_callback(ssl::rfc2818_verification(endpoint.host));
 #endif
 
-                const auto resolved = resolver.resolve(endpoint.host, endpoint.port);
                 beast::get_lowest_layer(ws).expires_after(std::chrono::seconds(10));
-                beast::get_lowest_layer(ws).connect(resolved);
+                const auto override_endpoints = public_dns_override(endpoint);
+                if (!override_endpoints.empty()) {
+                    beast::get_lowest_layer(ws).connect(override_endpoints);
+                } else {
+                    tcp::resolver resolver(io);
+                    const auto resolved = resolver.resolve(endpoint.host, endpoint.port);
+                    beast::get_lowest_layer(ws).connect(resolved);
+                }
                 ws.next_layer().handshake(ssl::stream_base::client);
 
                 beast::get_lowest_layer(ws).expires_never();
@@ -260,8 +299,6 @@ struct MarketWebSocketFeed::Impl {
                         static_cast<const char*>(front.data()), front.size()};
                     if (message != "PONG" && !message.empty()) {
                         messages.fetch_add(1, std::memory_order_relaxed);
-                        // The callback executes synchronously while `buffer` remains
-                        // valid, so no payload copy is needed on the feed hot path.
                         on_message(message, stamp, shard_index);
                     }
                     if (stamp.wall_ms - last_text_ping >= 10000) {
