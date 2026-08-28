@@ -32,6 +32,15 @@ class V7DeployMonitoringManifestContractTest(unittest.TestCase):
             self.assertIn(surface, required)
             self.assertIn(surface, workflow)
 
+    def test_macos_ssh_deploy_bootstraps_homebrew_and_cmake(self) -> None:
+        workflow = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text(encoding="utf-8")
+        self.assertIn('/opt/homebrew/bin/brew', workflow)
+        self.assertIn('/usr/local/bin/brew', workflow)
+        self.assertIn('eval "$("$brew_bin" shellenv)"', workflow)
+        self.assertIn('brew install cmake', workflow)
+        self.assertIn('command -v cmake >/dev/null 2>&1', workflow)
+        self.assertLess(workflow.index('eval "$("$brew_bin" shellenv)"'), workflow.index('git fetch --no-tags origin main paper-validated', workflow.index('Reconcile exact paper-validated V7 SHA on server')))
+
 
 if __name__ == "__main__":
     unittest.main()
