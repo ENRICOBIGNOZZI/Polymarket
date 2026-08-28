@@ -117,6 +117,10 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_order_tx_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_order_tx_tests COMMAND pm_v7_order_tx_tests)
 
+  add_executable(pm_v7_queue_visibility_tests tests/test_v7_queue_visibility.cpp)
+  target_link_libraries(pm_v7_queue_visibility_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_queue_visibility_tests COMMAND pm_v7_queue_visibility_tests)
+
   add_executable(pm_v7_market_ws_tests tests/test_v7_market_ws.cpp)
   target_link_libraries(pm_v7_market_ws_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_market_ws_tests COMMAND pm_v7_market_ws_tests)
