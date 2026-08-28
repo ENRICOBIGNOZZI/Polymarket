@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class V7LivePaperValidationContractTest(unittest.TestCase):
-    def test_workflow_is_exact_sha_v7_paper_only_and_economically_gated(self) -> None:
+    def test_workflow_is_exact_sha_v7_paper_only_with_separate_economic_gate(self) -> None:
         text = (ROOT / ".github/workflows/v7-live-paper-validation.yml").read_text(encoding="utf-8")
         for required in (
             "name: V7 live PAPER validation",
@@ -25,12 +25,17 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             "scripts/v7_portfolio_guard.py",
             "economic_ready",
             "promotion_ready",
-            "paper-validated unchanged",
+            "Record economic readiness separately from PAPER deployment",
+            "PAPER deployment is a technical/safety evidence-collection state",
+            "Advance paper-validated to exact technically validated V7 PAPER SHA",
+            "paper_deployment_mode=evidence_collection",
             "git merge-base --is-ancestor \"$old_validated\" \"$VALIDATION_SHA\"",
             "-F force=false",
         ):
             self.assertIn(required, text)
         for forbidden in (
+            "paper-validated unchanged",
+            "Advance paper-validated to exact economically validated V7 SHA",
             "Polymarket Research Policy",
             "research-policy.yml",
             "project_context",
