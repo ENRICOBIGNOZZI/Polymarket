@@ -69,8 +69,11 @@ stop_production_runtime(){
       kill -0 "$pid" 2>/dev/null || break
       sleep 0.1
     done
-    kill -0 "$pid" 2>/dev/null && fail "production V7 pid=$pid did not drain"
+    if kill -0 "$pid" 2>/dev/null; then
+      fail "production V7 pid=$pid did not drain"
+    fi
   fi
+  return 0
 }
 
 monitoring_contract(){
