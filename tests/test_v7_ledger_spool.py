@@ -11,7 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_execution_ledger import LedgerEvent, canonical_ledger_path
-from v7_ledger_spool import drain_spool, spool_event
+from v7_ledger_spool import (
+    _drain_with_existing,
+    _existing_record_ids,
+    drain_spool,
+    spool_event,
+)
 
 SHA = "1" * 40
 
@@ -39,6 +44,51 @@ class LedgerSpoolTests(unittest.TestCase):
             self.assertEqual(result["duplicates"], 1)
             rows2 = [json.loads(line) for line in canonical_ledger_path(root).read_text().splitlines() if line.strip()]
             self.assertEqual(len(rows2), 1)
+
+    def test_cached_loop_state_appends_new_events_without_ledger_rescan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = LedgerEvent(
+                event_type="OPPORTUNITY",
+                strategy="GRAPH_RV",
+                model_sha=SHA,
+                opportunity_id="opp-cache-1",
+            )
+            second = LedgerEvent(
+                event_type="OPPORTUNITY",
+                strategy="GRAPH_RV",
+                model_sha=SHA,
+                opportunity_id="opp-cache-2",
+            )
+            existing = _existing_record_ids(canonical_ledger_path(root))
+            self.assertEqual(existing, set())
+
+            spool_event(root, first)
+            result = _drain_with_existing(
+                root, model_sha=SHA, existing=existing,
+                writer_id="test-cached-router",
+            )
+            self.assertEqual(result["appended"], 1)
+            self.assertIn(first.record_id, existing)
+
+            # Re-spooling the same record is rejected from the in-memory cache;
+            # no full canonical-ledger scan is required for steady-state dedup.
+            spool_event(root, first)
+            result = _drain_with_existing(
+                root, model_sha=SHA, existing=existing,
+                writer_id="test-cached-router",
+            )
+            self.assertEqual(result["duplicates"], 1)
+
+            spool_event(root, second)
+            result = _drain_with_existing(
+                root, model_sha=SHA, existing=existing,
+                writer_id="test-cached-router",
+            )
+            self.assertEqual(result["appended"], 1)
+            self.assertIn(second.record_id, existing)
+            rows = [json.loads(line) for line in canonical_ledger_path(root).read_text().splitlines() if line.strip()]
+            self.assertEqual(len(rows), 2)
 
     def test_graph_outcome_side_is_preserved_but_execution_side_is_buy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
