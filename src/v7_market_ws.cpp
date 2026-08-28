@@ -16,7 +16,11 @@ namespace pm::v7 {
 namespace {
 namespace json = boost::json;
 
-constexpr std::size_t kJsonArenaBytes = 1024 * 1024;
+// The venue can batch the initial snapshots for the full 40-market maker
+// universe (YES+NO tokens) into a single WebSocket frame. Keep parsing fully
+// bounded/no-heap on the hot path, but size the cold-start arena for that
+// authoritative worst-case burst instead of the old 1 MiB lab-sized bound.
+constexpr std::size_t kJsonArenaBytes = 8 * 1024 * 1024;
 constexpr std::size_t kMaxSnapshotLevelsPerSide = 256;
 
 [[nodiscard]] bool ascii_ieq(std::string_view lhs, std::string_view rhs) noexcept {
