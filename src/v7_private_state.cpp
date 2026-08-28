@@ -60,14 +60,13 @@ bool PrivateOrderState::terminal(OrderState state) noexcept {
 OmsEvent PrivateOrderState::control_event(OmsEventType type,
                                           std::int64_t timestamp_ns) noexcept {
     OmsEvent event;
-    if (event_sequence_ == std::numeric_limits<std::uint64_t>::max()) event_sequence_ = 1;
-    else ++event_sequence_;
-    event.event_id = event_sequence_;
+    // event_id=0 deliberately means "local control transition". Venue/private
+    // event ids have their own namespace and must never collide with reconnect
+    // bookkeeping. OmsOrder only deduplicates non-zero event ids.
+    event.event_id = 0;
+    event.source_version = 0;
     event.type = type;
     event.timestamp_ns = timestamp_ns;
-    // Local control transitions do not claim an authoritative venue source
-    // version; that lineage remains reserved for actual private snapshots.
-    event.source_version = 0;
     return event;
 }
 
@@ -188,9 +187,7 @@ bool PrivateOrderState::reconcile(const AuthoritativeOrderSnapshot& snapshot) no
     if (current != OrderState::Unknown && current != OrderState::Reconciling) return false;
 
     OmsEvent event;
-    if (event_sequence_ == std::numeric_limits<std::uint64_t>::max()) event_sequence_ = 1;
-    else ++event_sequence_;
-    event.event_id = event_sequence_;
+    event.event_id = 0;
     event.source_version = snapshot.source_version;
     event.timestamp_ns = snapshot.timestamp_ns;
     event.exchange_order_handle = snapshot.exchange_order_handle;
