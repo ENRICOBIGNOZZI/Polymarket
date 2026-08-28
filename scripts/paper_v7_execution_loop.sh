@@ -197,17 +197,26 @@ pids+=("$!")
   done
 ) & pids+=("$!")
 
+# Avoid optional empty arrays here: macOS still ships Bash 3.2, where expanding
+# an empty array under `set -u` can raise an unbound-variable error. Positional
+# parameters are portable and safe when this helper is called with zero args.
+run_graph_rv() {
+  python3 scripts/v7_graph_rv.py \
+    --config "$ALLOC/graph_rv.json" \
+    --run-root "$RUN_ROOT" \
+    --intents "$RUN_ROOT/graph_rv/intents.csv" \
+    --trade-tape "$RUN_ROOT/trade_tape.csv" \
+    "$@" \
+    >> "$RUN_ROOT/graph_rv/execution.log" 2>&1 || true
+}
+
 (
   while [[ ! -e "$KILL" ]]; do
-    joint_args=()
-    [[ -s "$RUN_ROOT/learned_execution/joint_policy.json" ]] && joint_args=(--joint-model "$RUN_ROOT/learned_execution/joint_policy.json")
-    python3 scripts/v7_graph_rv.py \
-      --config "$ALLOC/graph_rv.json" \
-      --run-root "$RUN_ROOT" \
-      --intents "$RUN_ROOT/graph_rv/intents.csv" \
-      --trade-tape "$RUN_ROOT/trade_tape.csv" \
-      "${joint_args[@]}" \
-      >> "$RUN_ROOT/graph_rv/execution.log" 2>&1 || true
+    if [[ -s "$RUN_ROOT/learned_execution/joint_policy.json" ]]; then
+      run_graph_rv --joint-model "$RUN_ROOT/learned_execution/joint_policy.json"
+    else
+      run_graph_rv
+    fi
     sleep 1
   done
 ) & pids+=("$!")
