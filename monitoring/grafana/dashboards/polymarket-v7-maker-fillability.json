@@ -1,0 +1,181 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "gridPos": {"h": 4, "w": 3, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "polymarket_maker_fillability_orders", "refId": "A"}],
+      "title": "Orders",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "gridPos": {"h": 4, "w": 3, "x": 3, "y": 0},
+      "id": 2,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "polymarket_maker_fillability_trade_reachable", "refId": "A"}],
+      "title": "Trade reachable",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "gridPos": {"h": 4, "w": 3, "x": 6, "y": 0},
+      "id": 3,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "polymarket_maker_fillability_opportunities{scenario=\"lower\"}", "refId": "A"}],
+      "title": "Lower fill opps",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "gridPos": {"h": 4, "w": 3, "x": 9, "y": 0},
+      "id": 4,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "polymarket_maker_fillability_opportunities{scenario=\"expected\"}", "refId": "A"}],
+      "title": "Expected fill opps",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "gridPos": {"h": 4, "w": 3, "x": 12, "y": 0},
+      "id": 5,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "polymarket_maker_fillability_opportunities{scenario=\"pessimistic\"}", "refId": "A"}],
+      "title": "Pessimistic fill opps",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "gridPos": {"h": 4, "w": 3, "x": 15, "y": 0},
+      "id": 6,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "polymarket_maker_fillability_partial_fills", "refId": "A"}],
+      "title": "Partial fills",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "gridPos": {"h": 4, "w": 3, "x": 18, "y": 0},
+      "id": 7,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "polymarket_maker_fillability_full_fills", "refId": "A"}],
+      "title": "Full fills",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "gridPos": {"h": 4, "w": 3, "x": 21, "y": 0},
+      "id": 8,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "polymarket_maker_fillability_priority_resets", "refId": "A"}],
+      "title": "Priority resets",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "id": 9,
+      "options": {"displayMode": "gradient", "minVizHeight": 10, "minVizWidth": 0, "namePlacement": "auto", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showUnfilled": true, "sizing": "auto", "valueMode": "color"},
+      "targets": [{"expr": "polymarket_maker_fillability_zero_fill_reason", "instant": true, "legendFormat": "{{reason}}", "refId": "A"}],
+      "title": "Why zero fills?",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "id": 10,
+      "options": {"legend": {"calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {"expr": "polymarket_maker_fillability_queue_depleted{scenario=\"lower\"}", "legendFormat": "lower", "refId": "A"},
+        {"expr": "polymarket_maker_fillability_queue_depleted{scenario=\"expected\"}", "legendFormat": "expected", "refId": "B"},
+        {"expr": "polymarket_maker_fillability_queue_depleted{scenario=\"pessimistic\"}", "legendFormat": "pessimistic", "refId": "C"}
+      ],
+      "title": "Queue depletion sensitivity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "id": 11,
+      "options": {"legend": {"calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {"expr": "polymarket_maker_fillability_action_orders", "legendFormat": "orders {{action}}", "refId": "A"},
+        {"expr": "polymarket_maker_fillability_action_trade_reachable", "legendFormat": "reachable {{action}}", "refId": "B"},
+        {"expr": "polymarket_maker_fillability_action_fill_opportunities", "legendFormat": "pess opp {{action}}", "refId": "C"},
+        {"expr": "polymarket_maker_fillability_action_filled_orders", "legendFormat": "filled {{action}}", "refId": "D"}
+      ],
+      "title": "JOIN / IMPROVE / FADE funnel",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"decimals": 3}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "id": 12,
+      "options": {"displayMode": "gradient", "minVizHeight": 10, "minVizWidth": 0, "namePlacement": "auto", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showUnfilled": true, "sizing": "auto", "valueMode": "color"},
+      "targets": [{"expr": "topk(15, polymarket_maker_fillability_market_near_miss_ratio)", "instant": true, "legendFormat": "{{market}}", "refId": "A"}],
+      "title": "Markets closest to pessimistic fill",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 20},
+      "id": 13,
+      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [{"expr": "polymarket_maker_fillability_action_mean_rest_ms", "legendFormat": "{{action}}", "refId": "A"}],
+      "title": "Mean rest time by action",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 20},
+      "id": 14,
+      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [{"expr": "polymarket_maker_fillability_action_priority_resets", "legendFormat": "{{action}}", "refId": "A"}],
+      "title": "Priority resets by action",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 20},
+      "id": 15,
+      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [{"expr": "polymarket_maker_fillability_cancelled_before_flow", "legendFormat": "cancelled before flow", "refId": "A"}],
+      "title": "Cancellation censoring",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["v7", "paper", "maker", "fillability"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Polymarket V7 Maker Fillability",
+  "uid": "polymarket-v7-maker-fillability",
+  "version": 1,
+  "weekStart": ""
+}
