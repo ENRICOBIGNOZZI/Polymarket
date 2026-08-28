@@ -99,7 +99,7 @@ constexpr double kClusterShrinkage = 5.0;
     if (const char* value = std::getenv("PM_V7_MAKER_POLICY"); value != nullptr && *value) {
         return value;
     }
-    return {};
+    return fs::path("config/v7_professional_market_maker.json");
 }
 
 [[nodiscard]] const json::value* find_value(const json::object& object,
