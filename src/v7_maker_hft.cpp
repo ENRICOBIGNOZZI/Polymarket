@@ -12,6 +12,11 @@ namespace {
 
 using SteadyClock = std::chrono::steady_clock;
 constexpr double kEps = 1e-12;
+// ShardRuntime's canonical normal maker risk cap is one percent of the sleeve
+// before price conversion. The policy exploration quote fraction is expressed
+// against the same sleeve, so this ratio turns the already capital-bounded
+// max_quote_shares into a strictly smaller exploration share cap.
+constexpr double kNormalQuoteCapitalFraction = 0.01;
 
 [[nodiscard]] std::int64_t monotonic_ns() noexcept {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -288,7 +293,7 @@ bool MakerModelSnapshot::valid() const noexcept {
     if (!finite(one_sided_inventory_fraction) || one_sided_inventory_fraction < 0.0) return false;
     if (!finite(exploration_epsilon) || exploration_epsilon < 0.0 || exploration_epsilon > 1.0) return false;
     if (!finite(exploration_quote_notional_fraction) || exploration_quote_notional_fraction < 0.0
-        || exploration_quote_notional_fraction > 1.0) return false;
+        || exploration_quote_notional_fraction > kNormalQuoteCapitalFraction) return false;
     if (exploration_enabled != 0
         && (exploration_epsilon <= 0.0 || exploration_quote_notional_fraction <= 0.0
             || exploration_max_active_markets == 0)) return false;
@@ -509,14 +514,23 @@ MakerDecision MakerHotPath::on_market_update(
         // PAPER-only exploration is intentionally BUY-only. A fresh account owns
         // no outcome tokens, so exploratory asks would merely exercise the
         // inventory rejection path. Quoting bids on both complementary tokens
-        // instead collects queue/fill/markout evidence while keeping the total
-        // notional bounded by the runtime-derived exploration risk cap.
+        // instead collects queue/fill/markout evidence while keeping total
+        // notional bounded by the same sleeve-capital envelope as normal Maker.
+        const double exploration_scale = clamp(
+            model.exploration_quote_notional_fraction / kNormalQuoteCapitalFraction,
+            0.0, 1.0);
+        double exploration_cap = std::max(0.0, risk.max_quote_shares) * exploration_scale;
+        if (risk.exploration_max_quote_shares > 0.0) {
+            exploration_cap = std::min(exploration_cap, risk.exploration_max_quote_shares);
+        }
+        const double exploration_shares = std::min(quote_shares, exploration_cap);
         const bool exploration_configured = model.exploration_enabled != 0
-            && risk.exploration_max_quote_shares > 0.0
             && model.exploration_epsilon > 0.0
+            && model.exploration_quote_notional_fraction > 0.0
+            && update.market_handle > 0
+            && update.market_handle <= model.exploration_max_active_markets
+            && exploration_shares > 0.0
             && !inventory_one_sided;
-        const double exploration_shares = std::min(
-            quote_shares, std::max(0.0, risk.exploration_max_quote_shares));
         const std::int64_t elapsed = last_exploration_quote_ns_ > 0
             ? std::max<std::int64_t>(0, now - last_exploration_quote_ns_)
             : std::numeric_limits<std::int64_t>::max();
@@ -529,7 +543,7 @@ MakerDecision MakerHotPath::on_market_update(
                                                     IntentType::CancelQuote, Side::Buy,
                                                     quotes.bid_tick, 0.0, nullptr, now));
                 exploration_active_ = 0;
-            } else if (exploration_configured && exploration_shares > 0.0) {
+            } else if (exploration_configured) {
                 const auto exploratory = evaluate_side(
                     Action::Join, Side::Buy, update.best_bid_tick, update, inventory, risk,
                     model, decision.features, reservation_value, exploration_shares);
@@ -561,7 +575,7 @@ MakerDecision MakerHotPath::on_market_update(
         if (exploration_active_ && quotes.bid_active == 0) exploration_active_ = 0;
         const bool sampled = last_exploration_quote_ns_ == 0
             || exploration_sample(update, model.exploration_epsilon);
-        if (exploration_configured && exploration_shares > 0.0
+        if (exploration_configured
             && quotes.bid_active == 0 && quotes.ask_active == 0
             && !quotes.cancel_pending && sampled) {
             const auto exploratory = evaluate_side(
