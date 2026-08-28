@@ -1,0 +1,56 @@
+{
+  "schema": "polymarket_v7_maker_fillability_experiment_registry_v1",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "single_variable_changes_only": true,
+  "simulator_relaxation_forbidden": true,
+  "promotion_credit_for_exploration": false,
+  "required_fields": [
+    "experiment_id",
+    "hypothesis",
+    "primary_variable",
+    "incumbent_policy",
+    "challenger_policy",
+    "markets",
+    "start_time",
+    "end_time",
+    "minimum_evidence",
+    "primary_metric",
+    "secondary_metrics",
+    "success_rule",
+    "failure_rule",
+    "result"
+  ],
+  "experiments": [
+    {
+      "experiment_id": "fillability-bootstrap-observe-only-v1",
+      "hypothesis": "identify whether zero fills are caused primarily by flow reachability, queue depletion, quote lifetime/churn, market selection, or execution-model inconsistency",
+      "primary_variable": "NONE_OBSERVATION_ONLY",
+      "incumbent_policy": "CANONICAL_V7_MAKER",
+      "challenger_policy": "NONE",
+      "markets": "CURRENT_CANONICAL_SELECTION",
+      "start_time": null,
+      "end_time": null,
+      "minimum_evidence": {
+        "orders": 34,
+        "require_exact_sha": true,
+        "require_trade_tape": true,
+        "require_queue_uncertainty": true
+      },
+      "primary_metric": "fillability_funnel",
+      "secondary_metrics": [
+        "trade_reachability",
+        "lower_queue_depletion",
+        "expected_queue_depletion",
+        "pessimistic_queue_depletion",
+        "near_miss_ratio",
+        "cancel_before_flow",
+        "priority_reset_rate"
+      ],
+      "success_rule": "root cause is identified without changing simulator assumptions",
+      "failure_rule": "evidence remains insufficient or contradicts causal execution semantics",
+      "result": "RUNNING_DATA_ACCUMULATION"
+    }
+  ]
+}
