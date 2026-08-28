@@ -5,6 +5,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="${POLYMARKET_APP_DIR:-$ROOT}"
 STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
 MANIFEST="$APP_DIR/monitoring/v7_monitoring_manifest.json"
+TAILSCALE_HOSTNAME="${POLYMARKET_TAILSCALE_HOSTNAME:-mamma-portfolio}"
+TAILSCALE_FQDN="${POLYMARKET_TAILSCALE_FQDN:-mamma-portfolio.tail1bae85.ts.net}"
+GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-http://${TAILSCALE_FQDN}}"
 
 [[ "$(uname -s)" == "Darwin" ]] || { echo "fatal: macOS monitoring installer requires Darwin" >&2; exit 78; }
 [[ -f "$MANIFEST" ]] || { echo "fatal: missing V7 monitoring manifest" >&2; exit 78; }
@@ -41,6 +44,57 @@ stop_stale_grafana_listener() {
         ;;
     esac
   done
+}
+
+find_tailscale() {
+  for candidate in \
+    /Applications/Tailscale.app/Contents/MacOS/Tailscale \
+    /opt/homebrew/bin/tailscale \
+    /usr/local/bin/tailscale; do
+    if [[ -x "$candidate" ]]; then printf '%s\n' "$candidate"; return 0; fi
+  done
+  command -v tailscale 2>/dev/null || return 1
+}
+
+tailscale_admin() {
+  local binary="$1"
+  shift
+  if "$binary" "$@"; then
+    return 0
+  fi
+  sudo -n "$binary" "$@"
+}
+
+configure_tailnet_grafana() {
+  local ts actual_dns="" serve_status="" serve_log=""
+  ts="$(find_tailscale || true)"
+  [[ -n "$ts" ]] || { echo "fatal: tailscale CLI not found; Grafana would remain loopback-only" >&2; exit 78; }
+
+  tailscale_admin "$ts" set --hostname="$TAILSCALE_HOSTNAME" >/dev/null
+  for _ in $(seq 1 20); do
+    actual_dns="$("$ts" status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("Self",{}).get("DNSName", ""))' 2>/dev/null || true)"
+    [[ "$actual_dns" == "$TAILSCALE_FQDN" || "$actual_dns" == "$TAILSCALE_FQDN." ]] && break
+    sleep 1
+  done
+  if [[ "$actual_dns" != "$TAILSCALE_FQDN" && "$actual_dns" != "$TAILSCALE_FQDN." ]]; then
+    printf 'fatal: tailscale DNS mismatch expected=%s actual=%s\n' "$TAILSCALE_FQDN" "${actual_dns:-<empty>}" >&2
+    exit 78
+  fi
+
+  serve_log="$(mktemp)"
+  if ! tailscale_admin "$ts" serve --bg --http=80 localhost:3000 >"$serve_log" 2>&1; then
+    cat "$serve_log" >&2 || true
+    rm -f "$serve_log"
+    echo "fatal: failed to configure Tailscale Serve for V7 Grafana" >&2
+    exit 78
+  fi
+  rm -f "$serve_log"
+  serve_status="$("$ts" serve status 2>&1 || true)"
+  printf '%s\n' "$serve_status"
+  if ! grep -Fq "$TAILSCALE_FQDN" <<<"$serve_status"; then
+    printf 'fatal: Tailscale Serve did not publish expected FQDN %s\n' "$TAILSCALE_FQDN" >&2
+    exit 78
+  fi
 }
 
 stop_stale_grafana_listener
@@ -106,8 +160,11 @@ assert source.count(marker) == 1
 Path(sys.argv[2]).write_text(source.replace(marker, sys.argv[3]), encoding='utf-8')
 PY
 
+configure_tailnet_grafana
+
 printf 'v7_monitoring_configured=true\n'
 printf 'dashboard_uid=%s\n' "$DASHBOARD_UID"
 printf 'dashboard_file=%s\n' "$APP_DIR/$DASHBOARD_FILE"
 printf 'prometheus_config=%s\n' "$STATE_DIR/prometheus-v7.yml"
 printf 'prometheus_alert_rules=%s\n' "$STATE_DIR/prometheus-v7-alerts.yml"
+printf 'grafana_operator_url=%s/d/%s/polymarket-v7-canonical-paper-economics\n' "$GRAFANA_URL" "$DASHBOARD_UID"

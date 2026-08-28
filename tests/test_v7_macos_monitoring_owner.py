@@ -25,6 +25,38 @@ class V7MacosMonitoringOwnerTest(unittest.TestCase):
         self.assertIn("prometheus-v7.yml", text)
         self.assertIn("grafana/provisioning/dashboards/v7.yml", text)
 
+    def test_v7_monitoring_publishes_only_private_tailscale_serve_route(self) -> None:
+        text = (ROOT / "ops/apply_v7_monitoring_config_macos.sh").read_text(encoding="utf-8")
+        self.assertIn("mamma-portfolio.tail1bae85.ts.net", text)
+        self.assertIn('set --hostname="$TAILSCALE_HOSTNAME"', text)
+        self.assertIn("serve --bg --http=80 localhost:3000", text)
+        self.assertIn("serve status", text)
+        self.assertIn("polymarket-v7-canonical-paper-economics", text)
+        self.assertNotIn("funnel", text.lower())
+
+    def test_server_health_checks_operator_route_and_trade_funnel(self) -> None:
+        text = (ROOT / ".github" / "workflows" / "v7-paper-server-health.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("GRAFANA_HOSTNAME: mamma-portfolio", text)
+        self.assertIn("GRAFANA_FQDN: mamma-portfolio.tail1bae85.ts.net", text)
+        self.assertIn("GRAFANA_URL: http://mamma-portfolio.tail1bae85.ts.net", text)
+        self.assertIn('tailscale ping --until-direct=false --c 1 --timeout=10s "$GRAFANA_HOSTNAME"', text)
+        self.assertIn('getent hosts "$GRAFANA_FQDN"', text)
+        self.assertIn('$GRAFANA_URL/api/health', text)
+        self.assertIn('$GRAFANA_URL/api/dashboards/uid/polymarket-v7', text)
+        for metric in (
+            "polymarket_execution_opportunities",
+            "polymarket_execution_orders_submitted",
+            "polymarket_execution_fills",
+            "polymarket_execution_complete_fills",
+            "polymarket_execution_final_pnl_usd",
+            "polymarket_runtime_pnl_usd",
+            "polymarket_v7_canonical_submitted_units",
+            "polymarket_v7_canonical_complete_units",
+        ):
+            self.assertIn(metric, text)
+
 
 if __name__ == "__main__":
     unittest.main()
