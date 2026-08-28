@@ -32,6 +32,19 @@ pm::v7::StrategyIntent quote(pm::v7::Side side,
     return intent;
 }
 
+pm::v7::StrategyIntent aggressive(pm::v7::Side side,
+                                  std::uint64_t id = 20,
+                                  std::int64_t price_tick = 55,
+                                  std::int64_t quantity = 1'000'000) {
+    auto intent = quote(side, id, price_tick, quantity);
+    intent.strategy_id = pm::v7::StrategyId::ExternalInformation;
+    intent.type = pm::v7::IntentType::TargetPosition;
+    intent.urgency = pm::v7::Urgency::Aggressive;
+    intent.passive = 0;
+    intent.post_only = 0;
+    return intent;
+}
+
 void test_buy_reserves_limit_notional() {
     pm::v7::SleeveCapitalAccount capital(limits());
     const auto intent = quote(pm::v7::Side::Buy);
@@ -94,6 +107,37 @@ void test_control_traffic_bypasses_capital_pressure() {
     assert(!result.capital_reserved);
 }
 
+void test_aggressive_buy_reserves_limit_notional() {
+    pm::v7::SleeveCapitalAccount capital(limits());
+    auto intent = aggressive(pm::v7::Side::Buy, 20, 55, 2'000'000);
+    const auto result = pm::v7::ExecutionAdmission::admit(intent, 100, capital);
+    assert(result.accepted);
+    assert(result.capital_reserved);
+    assert(result.reserved_microdollars == 1'100'000);
+    std::int64_t out = 0;
+    assert(pm::v7::ExecutionAdmission::aggressive_buy_notional_microdollars(intent, 100, out));
+    assert(out == 1'100'000);
+}
+
+void test_critical_aggressive_trade_does_not_bypass_capital() {
+    pm::v7::SleeveCapitalAccount capital(limits(500'000));
+    auto intent = aggressive(pm::v7::Side::Buy, 21, 55, 1'000'000);
+    intent.urgency = pm::v7::Urgency::Critical;
+    intent.purpose = pm::v7::IntentPurpose::Liquidation;
+    const auto result = pm::v7::ExecutionAdmission::admit(intent, 100, capital);
+    assert(!result.accepted);
+    assert(result.reason == pm::v7::ExecutionAdmissionReason::CapitalDenied);
+}
+
+void test_aggressive_sell_requires_no_new_cash_here() {
+    pm::v7::SleeveCapitalAccount capital(limits());
+    auto intent = aggressive(pm::v7::Side::Sell, 22);
+    intent.purpose = pm::v7::IntentPurpose::InventoryReduction;
+    const auto result = pm::v7::ExecutionAdmission::admit(intent, 100, capital);
+    assert(result.accepted);
+    assert(!result.capital_reserved);
+}
+
 void test_unsupported_strategy_intent_fails_closed_until_planned() {
     pm::v7::SleeveCapitalAccount capital(limits());
     auto intent = quote(pm::v7::Side::Buy, 8);
@@ -107,7 +151,7 @@ void test_unsupported_strategy_intent_fails_closed_until_planned() {
 void test_invalid_price_domain_rejected() {
     pm::v7::SleeveCapitalAccount capital(limits());
     const auto result = pm::v7::ExecutionAdmission::admit(
-        quote(pm::v7::Side::Buy, 9, 100), 100, capital); // exactly $1.00
+        quote(pm::v7::Side::Buy, 9, 100), 100, capital);
     assert(!result.accepted);
     assert(result.reason == pm::v7::ExecutionAdmissionReason::InvalidTick);
 }
@@ -121,6 +165,9 @@ int main() {
     test_buy_fails_closed_on_capital_limit();
     test_sell_does_not_reserve_new_cash();
     test_control_traffic_bypasses_capital_pressure();
+    test_aggressive_buy_reserves_limit_notional();
+    test_critical_aggressive_trade_does_not_bypass_capital();
+    test_aggressive_sell_requires_no_new_cash_here();
     test_unsupported_strategy_intent_fails_closed_until_planned();
     test_invalid_price_domain_rejected();
     return 0;
