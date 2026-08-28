@@ -47,6 +47,14 @@ write_status(){
 
 production_run_root(){ printf '%s\n' "$APP_DIR/runs/paper_v7_live"; }
 
+record_deployed_sha(){
+  local run_root="$(production_run_root)" tmp
+  mkdir -p "$run_root/control"
+  tmp="$run_root/control/deployed_sha.tmp.$$"
+  printf '%s\n' "$EXPECTED_SHA" > "$tmp"
+  mv "$tmp" "$run_root/control/deployed_sha"
+}
+
 production_pid(){
   local status="$(production_run_root)/control/runtime_status.json"
   python3 - "$status" <<'PY' 2>/dev/null || true
@@ -99,8 +107,6 @@ while stack:
     order.append(pid)
     stack.extend(children.get(pid, ()))
 
-# Only the descendants of the registered canonical runtime PID are touched.
-# Give every owned child a short TERM opportunity before escalating.
 for pid in reversed(order):
     try:
         os.kill(pid, signal.SIGTERM)
@@ -209,11 +215,6 @@ prevalidate_candidate(){
 build_current_checkout(){
   local brew_prefix=""
   if command -v brew >/dev/null 2>&1; then brew_prefix="$(brew --prefix)"; fi
-  # CMake build directories are not relocatable: a historical deployment moved
-  # build.next to build, leaving absolute paths in CMakeCache.txt. Candidate
-  # validation above already proves this exact SHA builds/tests before runtime
-  # mutation, so always recreate the active checkout's build dir in its final
-  # path instead of reusing or moving a stale cache.
   log "Recreating active CMake build directory at $APP_DIR/build"
   rm -rf "$APP_DIR/build"
   cmake -S "$APP_DIR" -B "$APP_DIR/build" -DCMAKE_BUILD_TYPE=Release ${brew_prefix:+-DCMAKE_PREFIX_PATH="$brew_prefix"}
@@ -246,7 +247,20 @@ stop_owned_monitoring(){
       pid="$(cat "$pidfile" 2>/dev/null || true)"
       if [[ "$pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$pid" 2>/dev/null; then
         kill -TERM "$pid" 2>/dev/null || true
-        for _ in $(seq 1 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+        for _ in $(seq 1 50); do
+          kill -0 "$pid" 2>/dev/null || break
+          sleep 0.1
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+          kill -KILL "$pid" 2>/dev/null || true
+          for _ in $(seq 1 20); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.05
+          done
+        fi
+        if kill -0 "$pid" 2>/dev/null; then
+          fail "owned monitoring process $name pid=$pid survived bounded shutdown"
+        fi
       fi
       rm -f "$pidfile"
     fi
@@ -332,6 +346,34 @@ PY
   curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$uid" >/dev/null
 }
 
+http_diagnostic(){
+  local label="$1" url="$2" tmp code
+  tmp="$(mktemp)"
+  code="$(curl -sS -o "$tmp" -w '%{http_code}' "$url" 2>/dev/null || true)"
+  printf '[v7-health] %s http=%s url=%s\n' "$label" "${code:-curl_error}" "$url" >&2
+  if [[ -s "$tmp" ]]; then
+    head -c 800 "$tmp" >&2 || true
+    printf '\n' >&2
+  fi
+  rm -f "$tmp"
+}
+
+runtime_health_diagnostics(){
+  local uid="$1" run_root="$(production_run_root)"
+  http_diagnostic exporter_health http://127.0.0.1:9108/healthz
+  http_diagnostic exporter_metrics http://127.0.0.1:9108/metrics
+  http_diagnostic prometheus_ready http://127.0.0.1:9090/-/ready
+  http_diagnostic grafana_health http://127.0.0.1:3000/api/health
+  http_diagnostic grafana_search http://127.0.0.1:3000/api/search
+  http_diagnostic grafana_dashboard "http://127.0.0.1:3000/api/dashboards/uid/$uid"
+  printf '%s\n' '--- grafana-v7.log ---' >&2
+  tail -n 160 "$run_root/grafana-v7.log" >&2 2>/dev/null || true
+  printf '%s\n' '--- prometheus-v7.log ---' >&2
+  tail -n 80 "$run_root/prometheus-v7.log" >&2 2>/dev/null || true
+  printf '%s\n' '--- monitoring-exporter.log ---' >&2
+  tail -n 80 "$run_root/monitoring-exporter.log" >&2 2>/dev/null || true
+}
+
 cd "$APP_DIR"
 write_status validating "fetching canonical refs"
 git fetch --no-tags origin "$MAIN_REF" "$DEPLOY_REF"
@@ -351,6 +393,9 @@ python3 scripts/v7_cutover_contract.py --repository-root "$APP_DIR" --expected-h
 DASHBOARD_UID="$(monitoring_contract "$APP_DIR")"
 build_current_checkout
 start_production_runtime
+[[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || fail "server checkout drifted immediately after runtime start"
+record_deployed_sha
+write_status running "exact V7 SHA started; monitoring health pending"
 start_monitoring
 healthy=0
 for _ in $(seq 1 "$HEALTH_ATTEMPTS"); do
@@ -360,10 +405,10 @@ done
 if [[ "$healthy" != 1 ]]; then
   write_status failed "post-deploy canonical V7 health did not converge"
   runtime_health "$DASHBOARD_UID" || true
-  tail -n 200 "$(production_run_root)/deploy-runtime.log" >&2 || true
+  runtime_health_diagnostics "$DASHBOARD_UID" || true
   fail "canonical V7 runtime/monitoring health failed"
 fi
 [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || fail "server checkout drifted after deployment"
-printf '%s\n' "$EXPECTED_SHA" > "$(production_run_root)/control/deployed_sha"
+record_deployed_sha
 write_status healthy "canonical V7 PAPER runtime and monitoring healthy"
 log "V7 deployed exact SHA $EXPECTED_SHA"
