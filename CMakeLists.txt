@@ -35,7 +35,8 @@ add_library(pm_v7_common
   src/v7_paper_queue.cpp
   src/v7_market_state.cpp
   src/v7_markout.cpp
-  src/v7_market_ws.cpp)
+  src/v7_market_ws.cpp
+  src/v7_capital.cpp)
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_common PUBLIC pm_json)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
@@ -44,7 +45,8 @@ add_library(pm_v7_hft
   src/v7_maker_hft.cpp
   src/v7_maker_execution_cells.cpp
   src/v7_maker_lane.cpp
-  src/v7_maker_paper.cpp)
+  src/v7_maker_paper.cpp
+  src/v7_maker_inventory.cpp)
 target_include_directories(pm_v7_hft PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_hft PUBLIC pm_v7_common Threads::Threads)
 target_compile_options(pm_v7_hft PRIVATE -Wall -Wextra -Wpedantic)
@@ -92,6 +94,10 @@ if(BUILD_TESTING)
   target_include_directories(pm_v7_jsonl_tail_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   add_test(NAME pm_v7_jsonl_tail_tests COMMAND pm_v7_jsonl_tail_tests)
 
+  add_executable(pm_v7_capital_tests tests/test_v7_capital.cpp)
+  target_link_libraries(pm_v7_capital_tests PRIVATE pm_v7_common)
+  add_test(NAME pm_v7_capital_tests COMMAND pm_v7_capital_tests)
+
   add_executable(pm_v7_market_ws_tests tests/test_v7_market_ws.cpp)
   target_link_libraries(pm_v7_market_ws_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_market_ws_tests COMMAND pm_v7_market_ws_tests)
@@ -111,6 +117,10 @@ if(BUILD_TESTING)
   add_executable(pm_v7_maker_paper_tests tests/test_v7_maker_paper.cpp)
   target_link_libraries(pm_v7_maker_paper_tests PRIVATE pm_v7_hft)
   add_test(NAME pm_v7_maker_paper_tests COMMAND pm_v7_maker_paper_tests)
+
+  add_executable(pm_v7_maker_inventory_tests tests/test_v7_maker_inventory.cpp)
+  target_link_libraries(pm_v7_maker_inventory_tests PRIVATE pm_v7_hft)
+  add_test(NAME pm_v7_maker_inventory_tests COMMAND pm_v7_maker_inventory_tests)
 
   add_test(NAME no_legacy_runtime COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_no_legacy_runtime.py)
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pm/v7_capital.hpp"
 #include "pm/v7_maker_hft.hpp"
 #include "pm/v7_oms.hpp"
 #include "pm/v7_paper_queue.hpp"
@@ -20,6 +21,7 @@ enum class PaperMakerEventKind : std::uint8_t {
     Fill = 4,
     FinalMerge = 5,
     Rejected = 6,
+    InventorySplit = 7,
 };
 
 struct PaperMakerPolicy {
@@ -80,6 +82,17 @@ public:
                            std::uint64_t yes_instrument_handle,
                            std::uint64_t no_instrument_handle,
                            PaperMakerPolicy policy = {}) noexcept;
+
+    // Explicit inventory-factory primitive. The common V7 capital plane must
+    // approve the collateral conversion before this market-local engine mutates
+    // inventory.  One complete-set share costs one dollar, so share microunits
+    // and collateral microdollars are numerically identical here.  The caller
+    // releases committed capital when a FinalMerge/settlement event returns it
+    // to collateral.  This keeps capital ownership outside the Maker sleeve.
+    [[nodiscard]] PaperMakerResult split_complete_sets(
+        SleeveCapitalAccount& capital,
+        std::int64_t microunits,
+        std::int64_t timestamp_ns) noexcept;
 
     [[nodiscard]] PaperMakerResult apply_intent(
         const StrategyIntent& intent,
