@@ -196,10 +196,9 @@ TakerPaperFill simulate_taker_paper(
     const double robust_probability = oriented_lower_bound(fair, instrument_is_yes);
     out.robust_terminal_value = filled * robust_probability;
     out.robust_net_ev = out.robust_terminal_value - book_cost - total_fee;
-    out.slippage_vs_plan = filled * (out.average_fill_price - plan.intent.expected_cost
-        - std::max(0.0, plan.intent.expected_edge - plan.intent.expected_ev));
-    // The economic PnL above is authoritative for this simulator; the slippage
-    // field is diagnostic only and is never fed back into robust_net_ev.
+    // Limit-relative execution slippage is diagnostic only. For a BUY a
+    // negative value is price improvement; it is not double-counted in EV.
+    out.slippage_vs_plan = filled * (out.average_fill_price - limit_price);
     out.complete = remaining <= 1e-9 ? 1 : 0;
     return out;
 }
