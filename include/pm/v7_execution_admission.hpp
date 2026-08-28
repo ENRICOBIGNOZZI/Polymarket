@@ -27,11 +27,9 @@ struct ExecutionAdmissionResult {
 // single-leg intents. The intended owner is the single order-TX/arbitration
 // thread. It performs no I/O, no allocation and no model inference.
 //
-// Risk-off control traffic always bypasses new-capital admission. Quote BUY
-// reserves its worst-case limit notional; Quote SELL is cash-neutral here and
-// must independently pass the inventory reservation gate of its execution
-// policy. Multi-leg/target intents fail closed until their specialized planner
-// has produced atomic executable children with explicit capital semantics.
+// CANCEL/WITHDRAW/KILL bypass new-capital admission. Passive BUY and aggressive
+// target BUY both reserve their worst-case limit notional. SELL remains cash
+// neutral here and must independently pass canonical inventory reservation.
 class ExecutionAdmission final {
 public:
     [[nodiscard]] static ExecutionAdmissionResult admit(
@@ -40,6 +38,11 @@ public:
         SleeveCapitalAccount& capital) noexcept;
 
     [[nodiscard]] static bool quote_buy_notional_microdollars(
+        const StrategyIntent& intent,
+        std::int32_t tick_size_e4,
+        std::int64_t& out_microdollars) noexcept;
+
+    [[nodiscard]] static bool aggressive_buy_notional_microdollars(
         const StrategyIntent& intent,
         std::int32_t tick_size_e4,
         std::int64_t& out_microdollars) noexcept;
