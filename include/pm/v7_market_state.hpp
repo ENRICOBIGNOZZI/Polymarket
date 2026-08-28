@@ -88,6 +88,7 @@ private:
     [[nodiscard]] std::int32_t best_ask() const noexcept;
     [[nodiscard]] std::int32_t next_bid(std::int32_t from_exclusive) const noexcept;
     [[nodiscard]] std::int32_t next_ask(std::int32_t from_exclusive) const noexcept;
+    [[nodiscard]] DepthSummary depth_summary(Side side) const noexcept;
     [[nodiscard]] std::uint8_t fill_ladder(
         Side side,
         std::array<PriceLevelE4, kHotDepthLevels>& output) const noexcept;
