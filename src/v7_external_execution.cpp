@@ -237,8 +237,18 @@ CandidateAction build_external_make(
         return out;
     }
 
-    const double fair_point = oriented_point(fair, instrument_is_yes);
-    const double reservation = fair_point
+    // Quote from the robust interval boundary, not the point fair. Quoting at
+    // the point estimate and then requiring positive lower-bound capture makes
+    // every non-degenerate interval inadmissible unless the touch happens to
+    // cap the price. The uncertainty-aware anchor guarantees that admissible
+    // maker quotes have the required conservative capture by construction.
+    const double robust_anchor = side == Side::Buy
+        ? oriented_lower_bound(fair, instrument_is_yes)
+        : oriented_upper_bound(fair, instrument_is_yes);
+    const double capture_buffer = side == Side::Buy
+        ? -std::max(0.0, maker_policy.minimum_robust_capture_per_share)
+        :  std::max(0.0, maker_policy.minimum_robust_capture_per_share);
+    const double reservation = robust_anchor + capture_buffer
         - maker_policy.inventory_skew_ticks * tick_size * signed_inventory_fraction;
     std::int64_t quote_tick = 0;
     if (side == Side::Buy) {

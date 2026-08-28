@@ -31,6 +31,7 @@ ExternalKernelInput input() {
     in.reference.reference_value_numeric = 100.0;
     in.reference.reference_observation_ns = 80;
     in.reference.reference_receive_monotonic_ns = 90;
+    in.reference.oracle_feed_handle = 7;
     in.reference.oracle_window_seconds = 60;
     in.reference.source_state_version = 1;
     in.reference.valid = 1;

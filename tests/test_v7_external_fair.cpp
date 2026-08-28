@@ -234,13 +234,13 @@ int main() {
     // cancel of the resting YES ask.
     inputs.external_state_version = 4;
     inputs.external_receive_ns = 155;
-    const auto external_cut = make_causal_cut(2, 160, TriggerSource::ExternalPriceUpdate, 4, inputs);
+    const auto external_cut = make_causal_cut(2, now, TriggerSource::ExternalPriceUpdate, 4, inputs);
     assert(external_cut.valid == 1);
     assert(external_cut.pm_state_version == cut.pm_state_version);
     assert(external_cut.external_state_version > cut.external_state_version);
     auto shock_cancel = evaluate_cancel_overlay(c, fair, policy, Side::Sell, true,
                                                 c.yes_instrument_handle, 0.50, 50,
-                                                external_cut.causal_cut_id, 160, false);
+                                                external_cut.causal_cut_id, now, false);
     assert(shock_cancel.action == Action::Cancel);
     assert(shock_cancel.critical == 1);
 
