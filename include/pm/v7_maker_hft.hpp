@@ -165,6 +165,33 @@ struct MakerModelSnapshot {
     [[nodiscard]] bool valid() const noexcept;
 };
 
+// C++20 permits atomic operations on shared_ptr through the standardized
+// atomic_load/atomic_store free functions. Some Apple libc++ versions used on
+// the macOS runtime reject std::atomic<std::shared_ptr<T>> itself. Keep the
+// existing load/store call sites and memory-order semantics behind this small
+// portability wrapper so model snapshots remain immutable and atomically
+// published without introducing a mutex into the decision path.
+template <typename T>
+class AtomicSharedPtrCompat final {
+public:
+    AtomicSharedPtrCompat() noexcept = default;
+    explicit AtomicSharedPtrCompat(std::shared_ptr<T> initial) noexcept
+        : value_(std::move(initial)) {}
+
+    [[nodiscard]] std::shared_ptr<T> load(
+        std::memory_order order = std::memory_order_seq_cst) const noexcept {
+        return std::atomic_load_explicit(&value_, order);
+    }
+
+    void store(std::shared_ptr<T> next,
+               std::memory_order order = std::memory_order_seq_cst) noexcept {
+        std::atomic_store_explicit(&value_, std::move(next), order);
+    }
+
+private:
+    mutable std::shared_ptr<T> value_{};
+};
+
 class MakerModelStore final {
 public:
     explicit MakerModelStore(std::shared_ptr<const MakerModelSnapshot> initial);
@@ -173,7 +200,7 @@ public:
     [[nodiscard]] bool publish(std::shared_ptr<const MakerModelSnapshot> next) noexcept;
 
 private:
-    std::atomic<std::shared_ptr<const MakerModelSnapshot>> active_;
+    AtomicSharedPtrCompat<const MakerModelSnapshot> active_;
 };
 
 struct Features {
