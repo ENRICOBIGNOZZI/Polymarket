@@ -11,7 +11,7 @@
 namespace pm::v7::external_fair {
 
 inline constexpr std::size_t kMaxRestingQuotes = 4;
-inline constexpr std::size_t kMaxKernelCandidates = 16;
+inline constexpr std::size_t kMaxKernelCandidates = kMaxUnifiedCandidates;
 
 struct RestingQuoteSnapshot {
     std::uint64_t order_handle = 0;

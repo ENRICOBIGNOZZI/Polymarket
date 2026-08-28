@@ -63,11 +63,14 @@ add_library(pm_v7_external
   src/v7_external_fair.cpp
   src/v7_external_state.cpp
   src/v7_external_execution.cpp
+  src/v7_external_kernel.cpp
   src/v7_external_protocol.cpp
+  src/v7_external_ingress.cpp
+  src/v7_external_ws.cpp
   src/v7_external_tape.cpp
   src/v7_external_replay.cpp)
 target_include_directories(pm_v7_external PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
-target_link_libraries(pm_v7_external PUBLIC pm_v7_common Threads::Threads pm_json)
+target_link_libraries(pm_v7_external PUBLIC pm_v7_common Threads::Threads pm_json OpenSSL::SSL OpenSSL::Crypto)
 target_compile_options(pm_v7_external PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(polymarket_v7_trade_recorder src/v7_trade_recorder.cpp)
@@ -177,9 +180,17 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_external_execution_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_execution_tests COMMAND pm_v7_external_execution_tests)
 
+  add_executable(pm_v7_external_kernel_tests tests/test_v7_external_kernel.cpp)
+  target_link_libraries(pm_v7_external_kernel_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_kernel_tests COMMAND pm_v7_external_kernel_tests)
+
   add_executable(pm_v7_external_protocol_tests tests/test_v7_external_protocol.cpp)
   target_link_libraries(pm_v7_external_protocol_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_protocol_tests COMMAND pm_v7_external_protocol_tests)
+
+  add_executable(pm_v7_external_ingress_tests tests/test_v7_external_ingress.cpp)
+  target_link_libraries(pm_v7_external_ingress_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_ingress_tests COMMAND pm_v7_external_ingress_tests)
 
   add_executable(pm_v7_external_tape_tests tests/test_v7_external_tape.cpp)
   target_link_libraries(pm_v7_external_tape_tests PRIVATE pm_v7_external)

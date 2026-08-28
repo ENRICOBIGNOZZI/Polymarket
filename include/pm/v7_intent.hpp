@@ -17,6 +17,14 @@ enum class StrategyId : std::uint16_t {
     LocalFactor = 6,
     MicroTaker = 7,
     ExternalInformation = 8,
+    HardArbitrage = 9,
+    CryptoSettlementFair = 10,
+    CryptoInformedTaker = 11,
+    Osint = 12,
+    SportsLatency = 13,
+    CrossPlatform = 14,
+    WalletIntelligence = 15,
+    MarketOpen = 16,
 };
 
 enum class IntentType : std::uint8_t {

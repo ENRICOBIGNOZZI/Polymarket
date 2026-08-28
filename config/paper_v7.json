@@ -42,6 +42,7 @@
     "shadow_root": "runs/paper_v7_live/shadow",
     "market_data_root": "runs/paper_v7_live/market_data",
     "frequency_matrix": "config/v7_frequency_matrix.json",
+    "strategy_registry": "config/v7_strategy_registry.json",
     "intent_min_edge": 0.00005,
     "micro_maker_policy": "config/v7_professional_market_maker.json",
     "external_fair_policy": "config/v7_external_fair.json",

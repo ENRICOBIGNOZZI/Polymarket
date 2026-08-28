@@ -169,4 +169,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Preserve the canonical deployment entrypoint while composing both
+    # diagnostics behind one listener and one V7 monitoring plane.
+    from exporter_v7_external import main as composed_main
+    raise SystemExit(composed_main())

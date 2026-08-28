@@ -108,6 +108,30 @@ scripts/v7_micro_taker_core.py
 
 V7-native research sleeves. Horizons remain separated and these models do not own runtime state or deployment.
 
+### Strategy-wide registry and research kernels
+
+The complete 15-family economic registry is validated at canonical runtime
+startup. It fixes each sleeve's frequency, authority, action set, independent
+sample unit and strategy-specific execution model. OSINT, sports latency,
+cross-platform, wallet intelligence and market-open are implemented as
+fail-closed research/shadow kernels; they cannot submit orders or auto-promote.
+
+```text
+config/v7_strategy_registry.json
+scripts/v7_strategy_governance.py
+scripts/v7_structural_relations.py
+scripts/v7_osint_engine.py
+scripts/v7_sports_latency.py
+scripts/v7_cross_platform.py
+scripts/v7_wallet_intelligence.py
+scripts/v7_market_open.py
+```
+
+Their current authority is explicit in the registry. Code availability is not
+treated as economic validation: promotion requires causal replay,
+chronological OOS, forward shadow/PAPER observations, direct execution-state
+evidence and positive robust net PnL under cost stress.
+
 ## Execution evidence
 
 Quoted edge is not PnL. Canonical observations are bound to model SHA and execution identities. The economic rule accounts for completion probability, fill-conditioned alpha/spread capture, fees, slippage, adverse markout, partial/unwind loss, capital cost and latency cost.

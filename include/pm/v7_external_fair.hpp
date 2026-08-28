@@ -11,7 +11,10 @@ namespace pm::v7::external_fair {
 
 inline constexpr std::size_t kVenueCount = 3;
 inline constexpr std::size_t kMaxAggressiveLevels = 16;
-inline constexpr std::size_t kMaxUnifiedCandidates = 8;
+// Four resting-quote cancels + four maker actions + two informed-taker actions
+// can coexist in one causal cut. Keep the unified selector large enough to
+// evaluate the complete bounded kernel output without truncation.
+inline constexpr std::size_t kMaxUnifiedCandidates = 16;
 
 enum class VenueId : std::uint8_t {
     Unknown = 0,

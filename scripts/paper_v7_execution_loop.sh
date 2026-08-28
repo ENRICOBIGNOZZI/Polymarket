@@ -42,6 +42,23 @@ import json,sys
 cfg=json.load(open(sys.argv[1]))
 v7=cfg.get("v7") or {}
 maker=json.load(open(sys.argv[2]))
+registry_path=v7.get("strategy_registry")
+assert isinstance(registry_path,str) and registry_path
+registry=json.load(open(registry_path))
+families={
+    "professional_maker","fast_structural","hard_arb","graph_rv",
+    "crypto_settlement_fair","crypto_informed_taker","micro_taker","osint",
+    "sports_latency","cross_platform","wallet_intelligence","market_open",
+    "ranking","pca","local_factor",
+}
+registered=[row.get("family") for row in registry.get("strategies",[])]
+assert registry.get("schema")=="polymarket_v7_strategy_registry_v1"
+assert set(registered)==families and len(registered)==len(families)
+assert registry.get("safety",{}).get("paper_only") is True
+assert registry.get("safety",{}).get("authenticated_execution") is False
+assert registry.get("safety",{}).get("real_order_submission") is False
+assert registry.get("governance",{}).get("automatic_promotion") is False
+assert all(row.get("authority") in {"RESEARCH","SHADOW","PAPER"} for row in registry.get("strategies",[]))
 maker_arena=int(sys.argv[3])
 observer_arena=int(sys.argv[4])
 total_budget=int(sys.argv[5])

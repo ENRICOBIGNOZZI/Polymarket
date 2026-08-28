@@ -39,7 +39,6 @@ ExternalDecodeResult ExternalVenueIngress::on_frame(
 
     for (std::size_t i = 0; i < result.output_count; ++i) {
         auto event = decoded[i];
-        if (reconnect) event.reconnect = 1;
         if (gap_pending_.exchange(false, std::memory_order_acq_rel)) {
             event.gap = 1;
             propagated_gaps_.fetch_add(1, std::memory_order_relaxed);

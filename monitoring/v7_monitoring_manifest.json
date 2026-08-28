@@ -1,60 +1,66 @@
 {
-  "schema_version": 3,
-  "architecture": "V7",
-  "canonical_run_root": "runs/paper_v7_live",
-  "canonical_runtime_status": "runs/paper_v7_live/status/runtime_status.json",
-  "canonical_supervisor_status": "runs/paper_v7_live/status/supervisor_status.json",
-  "canonical_daily_summary": "runs/paper_v7_live/status/daily_summary.json",
-  "canonical_ledger": "runs/paper_v7_live/execution/ledger.jsonl",
-  "canonical_capital_summary": "runs/paper_v7_live/execution/capital_summary.json",
-  "canonical_maker_status": "runs/paper_v7_live/status/maker_runtime_status.json",
-  "canonical_maker_ledger": "runs/paper_v7_live/execution/maker_execution_ledger.jsonl",
-  "canonical_maker_policy": "config/v7_professional_market_maker.json",
-  "maker_fillability_report": "scripts/v7_maker_fillability_report.py",
-  "external_fair_policy": "config/v7_external_fair.json",
-  "external_fair_status": "runs/paper_v7_live/external_fair/status.json",
-  "external_fair_model_registry": "runs/paper_v7_live/external_fair/model_registry",
-  "external_fair_contract_registry": "runs/paper_v7_live/external_fair/contract_registry.json",
-  "external_fair_dashboard": "monitoring/grafana/dashboards/polymarket-v7-external-fair.json",
-  "external_fair_exporter": "monitoring/exporter_v7_external.py",
-  "external_fair_report": "scripts/v7_external_fair_report.py",
-  "prometheus": {
-    "config": "monitoring/prometheus.yml",
-    "rules": "monitoring/v7_alerts.yml",
-    "scrape_target": "127.0.0.1:9108",
-    "scrape_interval": "5s"
-  },
-  "grafana": {
-    "datasource": "monitoring/grafana/provisioning/datasources/prometheus.yml",
-    "dashboard_provider": "monitoring/grafana/provisioning/dashboards/v7.yml",
-    "home_dashboard": "monitoring/grafana/dashboards/polymarket-v7-overview.json",
-    "maker_fillability_dashboard": "monitoring/grafana/dashboards/polymarket-v7-maker-fillability.json",
-    "external_fair_dashboard": "monitoring/grafana/dashboards/polymarket-v7-external-fair.json"
-  },
+  "schema": "polymarket_v7_monitoring_manifest_v2",
+  "version": 7,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "run_root": "runs/paper_v7_live",
   "exporter": {
-    "path": "monitoring/exporter_v7_external.py",
+    "path": "monitoring/exporter_v7_fillability.py",
+    "composition": "maker_fillability_plus_external_fair",
     "host": "127.0.0.1",
     "port": 9108,
-    "metrics_path": "/metrics",
     "health_path": "/healthz",
+    "metrics_path": "/metrics",
     "maker_fillability_path": "/maker-fillability.json",
     "external_fair_path": "/external-fair.json"
   },
-  "alerts": {
-    "runtime_stale_seconds": 120,
-    "maker_stale_seconds": 120,
-    "maker_fill_cold_start_seconds": 1800,
-    "external_fair_oracle_stale_seconds": 2,
-    "external_fair_min_healthy_venues": 2,
-    "external_fair_cancel_p99_warning_ms": 100
+  "prometheus": {
+    "config": "monitoring/prometheus_v7.yml",
+    "alert_rules": "monitoring/v7_alerts.yml",
+    "host": "127.0.0.1",
+    "port": 9090
   },
-  "safety": {
-    "paper_only_required": true,
-    "authenticated_execution_must_be_disabled": true,
-    "real_order_submission_must_be_disabled": true,
-    "single_canonical_ledger_writer": true,
-    "single_inventory_truth": true,
-    "external_fair_shadow_missing_does_not_fail_blue": true,
-    "external_fair_required_active_failure_is_fail_closed": true
-  }
+  "grafana": {
+    "dashboard_uid": "polymarket-v7",
+    "dashboard_file": "monitoring/grafana/dashboards/polymarket-v7.json",
+    "maker_fillability_dashboard": "monitoring/grafana/dashboards/polymarket-v7-maker-fillability.json",
+    "external_fair_dashboard": "monitoring/grafana/dashboards/polymarket-v7-external-fair.json",
+    "datasource_uid": "prometheus-v7",
+    "datasource_file": "monitoring/grafana/provisioning/datasources/prometheus-v7.yml",
+    "provider_file": "monitoring/grafana/provisioning/dashboards/v7.yml",
+    "host": "127.0.0.1",
+    "port": 3000
+  },
+  "external_fair": {
+    "policy": "config/v7_external_fair.json",
+    "status": "external_fair/status.json",
+    "contract_registry": "external_fair/contract_registry.json",
+    "model_registry": "external_fair/model_registry",
+    "report": "scripts/v7_external_fair_report.py",
+    "shadow_missing_does_not_fail_health": true,
+    "active_invalid_state_fails_closed": true
+  },
+  "required_surfaces": [
+    "control/runtime_status.json",
+    "control/portfolio_state.json",
+    "control/allocations/manifest.json",
+    "graph_rv/status.json",
+    "canonical_economics.json",
+    "ledger/execution.jsonl",
+    "trade_tape.csv"
+  ],
+  "freshness_seconds": {
+    "portfolio": 30,
+    "runtime": 180,
+    "graph": 180,
+    "economics": 180,
+    "trade_tape": 180,
+    "external_fair_oracle": 2
+  },
+  "retired_surfaces": [
+    "v7_supervisor.json",
+    "execution/v7_execution_supervisor.json",
+    "execution/market_proxy_status.json",
+    "execution/v7_execution_evidence.json"
+  ]
 }
