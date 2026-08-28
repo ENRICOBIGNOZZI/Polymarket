@@ -163,6 +163,34 @@ bool SleeveCapitalAccount::release_order(std::uint64_t intent_id) noexcept {
     return true;
 }
 
+bool SleeveCapitalAccount::settle_partial_fill(
+    std::uint64_t intent_id,
+    std::int64_t committed_microdollars) noexcept {
+    auto* slot = find(intent_id);
+    if (slot == nullptr || !valid_market(slot->market_handle)
+        || committed_microdollars <= 0 || committed_microdollars > slot->microdollars) {
+        return false;
+    }
+    const auto market = static_cast<std::size_t>(slot->market_handle);
+    if (order_reserved_microdollars_ < committed_microdollars
+        || market_order_reserved_[market] < committed_microdollars) {
+        return false;
+    }
+
+    // This transition is exposure-neutral: the same dollars move from the open
+    // order bucket to committed inventory.  Keeping the residual in the slot is
+    // what prevents a PARTIAL fill from accidentally freeing capital that can
+    // still be consumed while the remainder remains live/cancel-pending.
+    order_reserved_microdollars_ -= committed_microdollars;
+    market_order_reserved_[market] -= committed_microdollars;
+    inventory_committed_microdollars_ += committed_microdollars;
+    market_inventory_committed_[market] += committed_microdollars;
+    slot->microdollars -= committed_microdollars;
+    if (slot->microdollars == 0) erase(*slot);
+    bump_version();
+    return true;
+}
+
 bool SleeveCapitalAccount::settle_order_to_inventory(
     std::uint64_t intent_id,
     std::int64_t committed_microdollars) noexcept {
@@ -177,6 +205,9 @@ bool SleeveCapitalAccount::settle_order_to_inventory(
         return false;
     }
 
+    // Terminal transition: any reservation beyond the economically filled cost
+    // is safe to release only because the caller has already established that
+    // this order can no longer fill.
     order_reserved_microdollars_ -= slot->microdollars;
     market_order_reserved_[market] -= slot->microdollars;
     inventory_committed_microdollars_ += committed_microdollars;
