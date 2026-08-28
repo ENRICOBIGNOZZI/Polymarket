@@ -1,6 +1,7 @@
 #include "pm/api.hpp"
 #include "pm/config.hpp"
 #include "pm/fast_ws.hpp"
+#include "pm/v7_jsonl_tail.hpp"
 #include "pm/v7_markout.hpp"
 #include "pm/v7_market_ws.hpp"
 
@@ -18,6 +19,8 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -29,6 +32,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <unistd.h>
 
 namespace {
 namespace fs = std::filesystem;
@@ -258,30 +262,42 @@ load_selected_pairs(const fs::path& path) {
         ids.push_back(pair.second.first);
         ids.push_back(pair.second.second);
     }
-    pm::PolymarketApi api(config);
-    const auto books = api.fetch_books(ids);
 
-    std::vector<SelectedToken> output;
-    std::uint64_t market_handle = 0;
-    std::uint64_t instrument_handle = 0;
-    for (const auto& pair : pairs) {
-        const auto split = pair.first.find('\n');
-        const std::string market_id = pair.first.substr(0, split);
-        const std::string event_id = split == std::string::npos ? std::string{} : pair.first.substr(split + 1);
-        const auto yes = books.find(pair.second.first);
-        const auto no = books.find(pair.second.second);
-        if (yes == books.end() || no == books.end()) continue;
-        const std::int32_t yes_tick = tick_e4(yes->second.tick_size);
-        const std::int32_t no_tick = tick_e4(no->second.tick_size);
-        if (yes_tick <= 0 || no_tick <= 0) continue;
-        const auto market = ++market_handle;
-        output.push_back({market_id, event_id, pair.second.first, market, market,
-                          ++instrument_handle, yes_tick});
-        output.push_back({market_id, event_id, pair.second.second, market, market,
-                          ++instrument_handle, no_tick});
+    // REST is used only once to discover authoritative venue tick sizes before
+    // the public WS evidence observer starts. Transient HTTP/API failures must
+    // not kill an otherwise healthy PAPER runtime, so this cold-start step is
+    // retried; no REST call is made after the WS observer is live.
+    pm::PolymarketApi api(config);
+    while (!g_stop.load(std::memory_order_relaxed)) {
+        try {
+            const auto books = api.fetch_books(ids);
+            std::vector<SelectedToken> output;
+            std::uint64_t market_handle = 0;
+            std::uint64_t instrument_handle = 0;
+            for (const auto& pair : pairs) {
+                const auto split = pair.first.find('\n');
+                const std::string market_id = pair.first.substr(0, split);
+                const std::string event_id = split == std::string::npos ? std::string{} : pair.first.substr(split + 1);
+                const auto yes = books.find(pair.second.first);
+                const auto no = books.find(pair.second.second);
+                if (yes == books.end() || no == books.end()) continue;
+                const std::int32_t yes_tick = tick_e4(yes->second.tick_size);
+                const std::int32_t no_tick = tick_e4(no->second.tick_size);
+                if (yes_tick <= 0 || no_tick <= 0) continue;
+                const auto market = ++market_handle;
+                output.push_back({market_id, event_id, pair.second.first, market, market,
+                                  ++instrument_handle, yes_tick});
+                output.push_back({market_id, event_id, pair.second.second, market, market,
+                                  ++instrument_handle, no_tick});
+            }
+            if (!output.empty()) return output;
+            std::cerr << "markout cold-start books incomplete; retrying\n";
+        } catch (const std::exception& error) {
+            std::cerr << "markout cold-start book fetch failed: " << error.what() << '\n';
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
-    if (output.empty()) throw std::runtime_error("markout observer cold-start books unavailable");
-    return output;
+    throw std::runtime_error("markout observer stopped before cold-start books became available");
 }
 
 struct LatestBook {
@@ -378,19 +394,12 @@ public:
         if (!fs::exists(ledger)) return;
         const auto size = fs::file_size(ledger);
         if (size < offset_) {
-            offset_ = 0;
             pending_.clear();
             bootstrap();
             return;
         }
         if (size == offset_) return;
-        std::ifstream input(ledger);
-        if (!input) return;
-        input.seekg(static_cast<std::streamoff>(offset_));
-        std::string line;
-        while (std::getline(input, line)) process_line(line, false);
-        const auto pos = input.tellg();
-        offset_ = pos < 0 ? size : static_cast<std::uint64_t>(pos);
+        read_complete_tail(ledger, false);
     }
 
     void observe(const BookObserver& books) {
@@ -419,13 +428,35 @@ public:
     }
 
 private:
+    void read_complete_tail(const fs::path& ledger, bool bootstrap_mode) {
+        std::ifstream input(ledger, std::ios::binary);
+        if (!input) return;
+        input.seekg(static_cast<std::streamoff>(offset_));
+        if (!input) return;
+        const std::string chunk(
+            std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+        const std::size_t complete = pm::v7::complete_jsonl_prefix_size(chunk);
+        if (complete == 0) return;
+
+        const std::string_view view(chunk.data(), complete);
+        std::size_t begin = 0;
+        while (begin < view.size()) {
+            const auto newline = view.find('\n', begin);
+            if (newline == std::string_view::npos) break;
+            process_line(view.substr(begin, newline - begin), bootstrap_mode);
+            begin = newline + 1;
+        }
+        // Crucially, do not advance over an unterminated final JSON record.
+        // The next poll starts at the same byte and sees it once the writer has
+        // completed the newline-terminated canonical ledger append.
+        offset_ += static_cast<std::uint64_t>(complete);
+    }
+
     void bootstrap() {
+        offset_ = 0;
         const fs::path ledger = run_root_ / "ledger" / "execution.jsonl";
-        if (!fs::exists(ledger)) { offset_ = 0; return; }
-        std::ifstream input(ledger);
-        std::string line;
-        while (std::getline(input, line)) process_line(line, true);
-        offset_ = fs::file_size(ledger);
+        if (!fs::exists(ledger)) return;
+        read_complete_tail(ledger, true);
         const std::int64_t now = wall_ms();
         for (auto& [_, fill] : pending_) {
             for (std::size_t h = 0; h < kHorizonSeconds.size(); ++h) {
@@ -519,7 +550,7 @@ private:
         metadata["fill_conditioned"] = true;
         metadata["full_l10_depth"] = true;
         metadata["future_vwap"] = markout.future_vwap;
-        metadata["levels_used"] = markout.levels_used;
+        metadata["levels_used"] = static_cast<std::int64_t>(markout.levels_used);
         metadata["horizon_seconds"] = kHorizonSeconds[horizon_index];
         metadata["measurement_delay_ms"] = std::max<std::int64_t>(
             0, latest.wall_receive_ms - fill.receive_ts_ms
