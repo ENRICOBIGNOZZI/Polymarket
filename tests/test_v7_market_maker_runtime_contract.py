@@ -69,6 +69,37 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertNotIn("polymarket_rewards_scan", source)
         self.assertNotIn("Generic maker is intentionally not started", source)
 
+    def test_runtime_routes_all_paper_execution_through_single_order_tx_owner(self) -> None:
+        runtime = (ROOT / "src" / "v7_market_maker_runtime.cpp").read_text(encoding="utf-8")
+        for required in (
+            '"pm/v7_maker_execution_policy.hpp"',
+            '"pm/v7_spsc.hpp"',
+            "class ExecutionCore final",
+            "MakerPaperExecutionPolicy policy_{}",
+            "SleeveCapitalAccount capital_{}",
+            "std::thread execution_thread",
+            "execution_plan_is_critical",
+            "pop_critical",
+            "pop_normal",
+            "push_execution_snapshot",
+            "ExecutionCommandKind::PublicTrade",
+            "ExecutionCommandKind::AdvanceTime",
+            "policy_.process(command.plan, capital_)",
+            "policy_.on_public_trade",
+            "policy_.advance_time",
+        ):
+            self.assertIn(required, runtime)
+        for forbidden in (
+            "market.paper.apply_intent",
+            "market.paper.on_public_trade",
+            "market.paper.advance_time",
+            "MakerPaperMarketEngine paper;",
+        ):
+            self.assertNotIn(forbidden, runtime)
+        critical_pos = runtime.index("pop_critical(command)")
+        normal_pos = runtime.index("pop_normal(command)")
+        self.assertLess(critical_pos, normal_pos)
+
     def test_execution_cells_are_exact_sha_slow_path_and_hot_path_bounded(self) -> None:
         loader = (ROOT / "src" / "v7_maker_execution_cells.cpp").read_text(encoding="utf-8")
         kernel = (ROOT / "src" / "v7_maker_hft.cpp").read_text(encoding="utf-8")
@@ -83,7 +114,6 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertIn("cell->fill_weight", kernel)
         self.assertIn("cell->markout_weight", kernel)
         self.assertIn("correlated_horizons_are_not_pooled", model)
-        # Filesystem/JSON parsing belongs only to the model-construction slow path.
         self.assertNotIn("filesystem", kernel)
         self.assertNotIn("boost/json", kernel)
 
