@@ -34,6 +34,16 @@ class V7SingleWriterContractTest(unittest.TestCase):
         self.assertFalse(manifest["real_order_submission"])
         self.assertFalse(manifest["legacy_fallback_allowed"])
 
+    def test_every_main_sha_gets_exact_single_writer_proof(self) -> None:
+        workflow = (ROOT / ".github/workflows/private-runtime-single-writer-validation.yml").read_text(encoding="utf-8")
+        push_start = workflow.index("  push:\n")
+        pr_start = workflow.index("  pull_request:\n", push_start)
+        push_block = workflow[push_start:pr_start]
+        self.assertIn("branches: [main]", push_block)
+        self.assertNotIn("paths:", push_block)
+        self.assertIn('VALIDATION_SHA: ${{ github.event.pull_request.head.sha || github.sha }}', workflow)
+        self.assertIn('test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"', workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
