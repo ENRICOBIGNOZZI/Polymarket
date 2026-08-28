@@ -6,7 +6,7 @@
   "target": "cross_sectional_tail_relative_logit_spread",
   "horizons_minutes": [15, 30, 60, 120, 360],
   "frequency_registration": {
-    "legacy_discovery_selected_horizons_minutes": [120, 360],
+    "predeclared_discovery_selected_horizons_minutes": [120, 360],
     "new_prospective_challenger_horizons_minutes": [15, 30, 60],
     "registration_date": "2026-08-27",
     "pool_evidence_across_horizons": false,

@@ -1,0 +1,54 @@
+{
+  "schema": "polymarket_v7_runtime_supervision_v1",
+  "version": 7,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "service": {
+    "command": ["bash", "scripts/paper_v7_execution_loop.sh"],
+    "startup_grace_seconds": 180,
+    "health_interval_seconds": 5,
+    "runtime_stale_seconds": 30,
+    "termination_grace_seconds": 15,
+    "restart": {
+      "maximum_attempts": 5,
+      "window_seconds": 900,
+      "backoff_seconds": [1, 2, 5, 15, 30]
+    }
+  },
+  "identity": {
+    "require_exact_40_character_sha": true,
+    "require_repository_head_match": true,
+    "require_runtime_sha_match": true,
+    "single_writer_lock": "control/runtime.lock/pid",
+    "supervisor_lock": "control/supervisor.lock"
+  },
+  "reconciliation": {
+    "ledger": "ledger/execution.jsonl",
+    "portfolio": "control/portfolio_state.json",
+    "runtime_status": "control/runtime_status.json",
+    "kill_marker": "control/KILL",
+    "lineage_epoch": "control/feed_lineage_epoch.json",
+    "require_complete_ledger_lines": true,
+    "reject_mixed_sha": true,
+    "reject_unsafe_paper_inventory": true,
+    "never_restart_killed_or_unsafe_state": true
+  },
+  "failure_domains": {
+    "market_ws": {"scope": "runtime", "action": "withdraw_and_restart", "critical": true},
+    "sequence_gap": {"scope": "affected_market", "action": "invalidate_book_and_resnapshot", "critical": false},
+    "duplicate_update": {"scope": "affected_market", "action": "deduplicate", "critical": false},
+    "out_of_order_update": {"scope": "affected_market", "action": "reject_and_resnapshot", "critical": false},
+    "rest_stale": {"scope": "dependent_sleeves", "action": "quarantine", "critical": false},
+    "external_feed": {"scope": "dependent_sleeves", "action": "quarantine", "critical": false},
+    "oracle_unknown": {"scope": "affected_contracts", "action": "quarantine", "critical": false},
+    "dns": {"scope": "dependent_feed", "action": "isolate_and_retry", "critical": false},
+    "http_timeout": {"scope": "dependent_feed", "action": "isolate_and_retry", "critical": false},
+    "ledger_write": {"scope": "runtime", "action": "withdraw_and_quarantine", "critical": true},
+    "disk_pressure_critical": {"scope": "runtime", "action": "withdraw_and_quarantine", "critical": true},
+    "monitoring": {"scope": "monitoring", "action": "restart_monitoring_only", "critical": false},
+    "clock_jump": {"scope": "runtime", "action": "withdraw_and_quarantine", "critical": true},
+    "cancel_pending_reconnect": {"scope": "affected_market", "action": "hold_withdrawn_until_reconciled", "critical": false}
+  }
+}

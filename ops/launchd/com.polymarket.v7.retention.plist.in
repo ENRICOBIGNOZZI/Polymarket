@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.polymarket.v7.retention</string>
+  <key>ProgramArguments</key><array>
+    <string>/usr/bin/python3</string><string>@APP_DIR@/monitoring/v7_retention.py</string>
+    <string>--run-root</string><string>@RUN_ROOT@</string>
+    <string>--config</string><string>@APP_DIR@/config/v7_data_retention.json</string>
+    <string>--expected-sha</string><string>@EXPECTED_SHA@</string>
+  </array>
+  <key>WorkingDirectory</key><string>@APP_DIR@</string>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>3600</integer>
+  <key>StandardOutPath</key><string>@RUN_ROOT@/retention-launchd.log</string>
+  <key>StandardErrorPath</key><string>@RUN_ROOT@/retention-launchd.log</string>
+</dict></plist>

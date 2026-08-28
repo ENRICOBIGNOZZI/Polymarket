@@ -18,6 +18,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -185,10 +186,12 @@ void atomic_write(const fs::path& path, const std::string& content) {
 
 struct Options {
     std::string config = "config/paper_v7.json";
-    std::string policy = "config/fast_arb_policy.json";
-    std::string relations = "config/fast_arb_relations.csv";
+    std::string policy = "config/v7_fast_structural.json";
+    std::string relations = "config/v7_fast_structural_relations.csv";
     std::string external_signals;
     std::string run_dir = "runs/paper_v7_live/fast";
+    std::string run_root = "runs/paper_v7_live";
+    std::string model_sha;
     std::string ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
     std::size_t markets = 1000;
     std::size_t shard_size = 200;
@@ -199,6 +202,12 @@ struct Options {
     int recycle_seconds = 900;
     std::size_t latency_sample_every = 20;
 };
+
+bool exact_sha(const std::string& value) {
+    return value.size() == 40 && std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return std::isdigit(c) || (c >= 'a' && c <= 'f');
+    });
+}
 
 pm::fast::Policy load_policy(const std::string& path) {
     pm::fast::Policy policy;
@@ -211,7 +220,7 @@ pm::fast::Policy load_policy(const std::string& path) {
     const auto& object = root.as_object();
     if (const auto it = object.find("real_order_submission");
         it != object.end() && boolean(it->value(), false)) {
-        throw std::runtime_error("fast shadow engine refuses real_order_submission=true");
+        throw std::runtime_error("V7 Fast Structural PAPER refuses real_order_submission=true");
     }
     policy.min_net_edge = get_number(object, "min_net_edge", policy.min_net_edge);
     policy.slippage_bps = get_number(object, "slippage_bps", policy.slippage_bps);
@@ -310,4 +319,3 @@ std::unordered_map<std::string, pm::ExternalSignal> load_external_signals(
     }
     return out;
 }
-

@@ -20,13 +20,19 @@ def main() -> None:
     external = load("config/v7_external_fair.json")
     paper = load("config/paper_v7.json")
 
-    # Current branch is intentionally GREEN / zero authority. It may have an
-    # unbound provider transport because that incompleteness cannot own risk.
+    # The core P0 stack has PAPER authority, with contract-local fail-closed
+    # safety. Static config proves architecture; live ownership is attested at
+    # cutover by the runtime status.
     failures = check_external_fair_invariants(external, paper)
     assert failures == [], failures
+    assert external["execution_authority"] == "PAPER_EXECUTION_OWNER"
+    assert external["taker"]["enabled_for_execution"] is True
+    assert external["maker"]["external_fair_enabled_for_live_quotes"] is True
 
     active = copy.deepcopy(external)
     active["execution_authority"] = "PAPER_EXECUTION_OWNER"
+    active["oracle"]["transport_binding"] = "UNBOUND"
+    active["old_micro_taker_migration"] = {}
     failures = check_external_fair_invariants(active, paper, {
         "execution_authority": "PAPER_EXECUTION_OWNER",
         "single_execution_owner": True,

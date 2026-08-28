@@ -1,0 +1,20 @@
+{
+  "schema": "polymarket_v7_runtime_alert_catalog_v1",
+  "version": 7,
+  "policy": "meaningful_failures_only",
+  "suppress_zero_trade_windows": true,
+  "required_alerts": [
+    "runtime_down",
+    "duplicate_writer",
+    "ledger_unavailable",
+    "kill_switch",
+    "severe_feed_outage",
+    "stale_oracle",
+    "exception_storm",
+    "exporter_down",
+    "grafana_down",
+    "disk_pressure",
+    "restart_storm",
+    "exact_sha_drift"
+  ]
+}

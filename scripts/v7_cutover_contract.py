@@ -98,7 +98,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "scripts/v7_portfolio_guard.py",
         "scripts/v7_learned_execution_model.py",
         "config/v7_frequency_matrix.json",
-        "config/v7_execution_evidence.json",
+        "config/v7_external_fair.json",
         "config/v7_scheduler_freeze.json",
         "config/v7_capability_matrix.json",
         "config/v7_incumbent_identity.json",

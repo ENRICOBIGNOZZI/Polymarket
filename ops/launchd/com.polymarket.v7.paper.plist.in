@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.polymarket.v7.paper</string>
+  <key>ProgramArguments</key><array><string>@APP_DIR@/ops/v7_service_entrypoint.sh</string></array>
+  <key>WorkingDirectory</key><string>@APP_DIR@</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>POLYMARKET_APP_DIR</key><string>@APP_DIR@</string>
+    <key>PM_V7_RUN_ROOT</key><string>@RUN_ROOT@</string>
+    <key>POLYMARKET_EXPECTED_SHA</key><string>@EXPECTED_SHA@</string>
+    <key>PM_V7_AUTHENTICATED_EXECUTION</key><string>0</string>
+    <key>PM_V7_REAL_ORDER_SUBMISSION</key><string>0</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>15</integer>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>@RUN_ROOT@/supervisor-launchd.log</string>
+  <key>StandardErrorPath</key><string>@RUN_ROOT@/supervisor-launchd.log</string>
+</dict></plist>

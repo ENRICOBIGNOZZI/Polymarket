@@ -1,0 +1,15 @@
+[Unit]
+Description=Polymarket V7 PAPER retention and immutable-ledger checkpoint
+
+[Service]
+Type=oneshot
+User=@SERVICE_USER@
+Group=@SERVICE_GROUP@
+WorkingDirectory=@APP_DIR@
+ExecStart=/usr/bin/python3 @APP_DIR@/monitoring/v7_retention.py --run-root @RUN_ROOT@ --config @APP_DIR@/config/v7_data_retention.json --expected-sha @EXPECTED_SHA@
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@RUN_ROOT@

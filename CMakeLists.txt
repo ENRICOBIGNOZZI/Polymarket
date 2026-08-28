@@ -89,6 +89,10 @@ add_executable(polymarket_v7_market_maker_runtime src/v7_market_maker_runtime.cp
 target_link_libraries(polymarket_v7_market_maker_runtime PRIVATE pm_v7_hft pm_fast_arb pm_core)
 target_compile_options(polymarket_v7_market_maker_runtime PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(polymarket_v7_fast_structural_runtime src/v7_fast_structural_runtime.cpp)
+target_link_libraries(polymarket_v7_fast_structural_runtime PRIVATE pm_fast_arb pm_core)
+target_compile_options(polymarket_v7_fast_structural_runtime PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_maker_markout_observer src/v7_maker_markout_observer.cpp)
 target_link_libraries(polymarket_v7_maker_markout_observer PRIVATE pm_v7_common pm_fast_arb pm_core)
 target_compile_options(polymarket_v7_maker_markout_observer PRIVATE -Wall -Wextra -Wpedantic)
@@ -100,6 +104,14 @@ target_compile_options(polymarket_v7_maker_fillability_observer PRIVATE -Wall -W
 include(CTest)
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  execute_process(
+    COMMAND ${Python3_EXECUTABLE} -c "import pytest"
+    RESULT_VARIABLE V7_PYTEST_IMPORT_RESULT
+    OUTPUT_QUIET
+    ERROR_QUIET)
+  if(NOT V7_PYTEST_IMPORT_RESULT EQUAL 0)
+    message(FATAL_ERROR "V7 Python tests require pytest (install python3-pytest)")
+  endif()
   add_executable(pm_fast_arb_tests tests/test_fast_arb.cpp)
   target_link_libraries(pm_fast_arb_tests PRIVATE pm_fast_arb)
   add_test(NAME pm_fast_arb_tests COMMAND pm_fast_arb_tests)
@@ -215,6 +227,13 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitoring_v7_*.py")
   foreach(test_file IN LISTS V7_PY_TESTS)
     get_filename_component(test_name "${test_file}" NAME_WE)
-    add_test(NAME "${test_name}" COMMAND ${Python3_EXECUTABLE} "${test_file}")
+    file(READ "${test_file}" test_source)
+    if(test_source MATCHES "(^|\\n)[ \t]*import pytest")
+      add_test(
+        NAME "${test_name}"
+        COMMAND ${Python3_EXECUTABLE} -m pytest --quiet "${test_file}")
+    else()
+      add_test(NAME "${test_name}" COMMAND ${Python3_EXECUTABLE} "${test_file}")
+    endif()
   endforeach()
 endif()

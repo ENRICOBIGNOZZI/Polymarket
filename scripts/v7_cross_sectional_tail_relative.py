@@ -22,6 +22,40 @@ import v7_cross_sectional_rank_inference as inference
 import v7_cross_sectional_relative as relative
 
 
+def frozen_evaluation_horizons(config: dict[str, Any]) -> list[int]:
+    """Return the horizons that this frozen run is allowed to evaluate.
+
+    A combined research config may also register new prospective challenger
+    horizons.  Those horizons must not inherit the discovery credit of the
+    pre-holdout selection.  Dedicated challenger configs have no predeclared
+    discovery horizons, so they evaluate their own explicit horizon list.
+    """
+    configured = [int(value) for value in (config.get("horizons_minutes") or [])]
+    if not configured or any(value <= 0 for value in configured):
+        raise ValueError("relative tail challenger requires at least one positive frozen horizon")
+    if len(set(configured)) != len(configured):
+        raise ValueError("relative tail challenger horizons must be unique")
+
+    registration = config.get("frequency_registration") or {}
+    selected = [
+        int(value)
+        for value in (registration.get("predeclared_discovery_selected_horizons_minutes") or [])
+    ]
+    prospective = [
+        int(value)
+        for value in (registration.get("new_prospective_challenger_horizons_minutes") or [])
+    ]
+    for label, values in (("predeclared", selected), ("prospective", prospective)):
+        if any(value <= 0 for value in values) or len(set(values)) != len(values):
+            raise ValueError(f"{label} registered horizons must be positive and unique")
+        if not set(values).issubset(configured):
+            raise ValueError(f"{label} registered horizons must be present in horizons_minutes")
+    if set(selected).intersection(prospective):
+        raise ValueError("predeclared and prospective horizons must be disjoint")
+
+    return selected or configured
+
+
 def atomic_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
@@ -75,11 +109,10 @@ def main() -> int:
         raise SystemExit("relative tail challenger must remain paper/research-only with live intents disabled")
     if cfg.get("target") != "cross_sectional_tail_relative_logit_spread":
         raise SystemExit("relative tail challenger target contract is not frozen")
-    horizons_minutes = [int(value) for value in (cfg.get("horizons_minutes") or [])]
-    if not horizons_minutes or any(value <= 0 for value in horizons_minutes):
-        raise SystemExit("relative tail challenger requires at least one positive frozen horizon")
-    if len(set(horizons_minutes)) != len(horizons_minutes):
-        raise SystemExit("relative tail challenger horizons must be unique")
+    try:
+        horizons_minutes = frozen_evaluation_horizons(cfg)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     if cfg.get("frequency_registration", {}).get("frozen_holdout_only") is not True:
         raise SystemExit("relative tail challenger requires frozen_holdout_only=true")
     pair_contract = cfg["relative_pair_contract"]

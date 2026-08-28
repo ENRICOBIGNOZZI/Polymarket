@@ -92,6 +92,7 @@ def validate(config: dict[str, Any]) -> list[str]:
     sleeve_keys = (
         "micro_maker_capital_fraction",
         "micro_taker_capital_fraction",
+        "fast_structural_capital_fraction",
         "relative_value_capital_fraction",
         "hard_arb_capital_fraction",
         "external_capital_fraction",
@@ -133,6 +134,7 @@ def authorized_config() -> dict[str, Any]:
             "paper_only": True,
             "micro_maker_capital_fraction": 0.22,
             "micro_taker_capital_fraction": 0.12,
+            "fast_structural_capital_fraction": 0.0,
             "relative_value_capital_fraction": 0.34,
             "hard_arb_capital_fraction": 0.22,
             "external_capital_fraction": 0.08,

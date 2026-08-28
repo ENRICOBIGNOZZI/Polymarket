@@ -28,7 +28,7 @@ jobs:
       matrix:
         build_type: [Release, Debug]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
       - name: Verify exact V7 revision
@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev python3
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev python3 python3-pytest
       - name: Build V7
         run: |
           cmake -S . -B build-${{ matrix.build_type }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}

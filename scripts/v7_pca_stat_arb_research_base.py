@@ -17,7 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from polymarket_fees import resolve_fee_details
-import v6_local_factor_intents as base
+import v7_local_factor_data as base
 import v7_pca_stat_arb_core as core
 import v7_pca_stat_arb_inference as inference
 

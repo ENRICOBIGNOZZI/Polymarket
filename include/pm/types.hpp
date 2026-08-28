@@ -171,7 +171,7 @@ struct Fill {
 struct Config {
     std::string gamma_url = "https://gamma-api.polymarket.com";
     std::string clob_url = "https://clob.polymarket.com";
-    std::string run_dir = "runs/paper_v2";
+    std::string run_dir = "runs/paper_v7_live";
     std::string external_signals_file = "data/external_signals.csv";
 
     std::size_t market_limit = 600;

@@ -220,6 +220,7 @@ public:
         std::size_t ws_snapshot_tokens = 0;
         std::size_t rest_snapshot_tokens = 0;
         std::size_t freshness_ready_tokens = 0;
+        std::vector<pm::fast::Opportunity> pending_candidates;
         std::int64_t last_message = 0;
         const auto snapshot_ms = now_ms();
         {
@@ -252,6 +253,7 @@ public:
             ws_snapshot_tokens = ws_snapshot_ready_.size();
             rest_snapshot_tokens = rest_snapshot_ready_.size();
             freshness_ready_tokens = ws_snapshot_tokens + rest_snapshot_tokens;
+            pending_candidates.swap(pending_candidates_);
             last_message = last_message_ms_;
             opportunity_log_.flush();
             latency_log_.flush();
@@ -269,6 +271,7 @@ public:
         csv << opportunity_header() << '\n';
         for (const auto& opportunity : latest) write_opportunity(csv, snapshot_ms, opportunity);
         atomic_write(run_dir_ / "fast_arb_latest.csv", csv.str());
+        for (const auto& opportunity : pending_candidates) spool_candidate(opportunity);
 
         std::size_t current_executable = 0;
         std::size_t current_hard = 0;
@@ -291,7 +294,9 @@ public:
         json::object status{
             {"schema_version", 1},
             {"timestamp_ms", snapshot_ms},
-            {"mode", "shadow"},
+            {"mode", "paper"},
+            {"paper_only", true},
+            {"authenticated_execution", false},
             {"real_order_submission", false},
             {"stopping", stopping},
             {"markets", static_cast<std::int64_t>(markets_.size())},
@@ -317,6 +322,8 @@ public:
             {"evaluations", static_cast<std::int64_t>(evaluations)},
             {"executable_observations", static_cast<std::int64_t>(executable)},
             {"hard_executable_observations", static_cast<std::int64_t>(hard_executable)},
+            {"canonical_candidates_spooled", static_cast<std::int64_t>(candidates_spooled_)},
+            {"canonical_candidates_dropped", static_cast<std::int64_t>(candidates_dropped_)},
             {"current_opportunities", static_cast<std::int64_t>(latest.size())},
             {"current_executable", static_cast<std::int64_t>(current_executable)},
             {"current_hard_executable", static_cast<std::int64_t>(current_hard)},

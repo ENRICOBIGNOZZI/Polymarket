@@ -38,6 +38,9 @@ def main() -> None:
     # second test runner/policy path for the external-fair plane.
     assert '"${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_*.py"' in cmake
     assert '"${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitoring_v7_*.py"' in cmake
+    assert "-m pytest --quiet" in cmake
+    assert 'COMMAND ${Python3_EXECUTABLE} "${test_file}"' in cmake
+    assert "V7 Python tests require pytest" in cmake
 
 
 if __name__ == "__main__":
