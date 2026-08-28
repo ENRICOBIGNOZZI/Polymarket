@@ -44,6 +44,39 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("return 0", function)
         self.assertNotIn('for _ in $(seq 1 300)', function)
 
+    def test_monitoring_processes_are_bounded_and_force_stopped_if_needed(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        function = text[text.index("stop_owned_monitoring(){"):text.index("start_monitoring(){")]
+        self.assertIn('kill -TERM "$pid"', function)
+        self.assertIn('for _ in $(seq 1 50)', function)
+        self.assertIn('kill -KILL "$pid"', function)
+        self.assertIn('survived bounded shutdown', function)
+
+    def test_exact_deploy_receipt_is_written_before_monitoring_health_gate(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        start = text.rindex("start_production_runtime\n")
+        receipt = text.index("record_deployed_sha\n", start)
+        monitoring = text.index("start_monitoring\n", receipt)
+        self.assertLess(start, receipt)
+        self.assertLess(receipt, monitoring)
+        self.assertIn('write_status running "exact V7 SHA started; monitoring health pending"', text)
+
+    def test_health_failure_emits_endpoint_and_monitoring_log_diagnostics(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        self.assertIn("runtime_health_diagnostics(){", text)
+        for required in (
+            "exporter_health",
+            "exporter_metrics",
+            "prometheus_ready",
+            "grafana_health",
+            "grafana_search",
+            "grafana_dashboard",
+            "grafana-v7.log",
+            "prometheus-v7.log",
+            "monitoring-exporter.log",
+        ):
+            self.assertIn(required, text)
+
     def test_updater_deploys_canonical_v7_loop_recorder_and_health_surfaces(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         for required in (
