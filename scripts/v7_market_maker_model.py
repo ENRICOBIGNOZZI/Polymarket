@@ -2,10 +2,10 @@
 """Fit the V7 maker execution model from the canonical exact-SHA ledger.
 
 The model is deliberately small and robust: Beta-Binomial fill estimates plus
-fill-conditioned executable markout summaries by action/outcome/side.  It is a
-causal execution model, not a directional probability model.  It can be
-replaced by richer logistic/GBM models later without changing the ledger or
-quote-control contract.
+fill-conditioned executable markout summaries by action/outcome/side. It is a
+causal execution model, not a directional probability model. A single causal
+markout horizon is selected for each execution group so multiple horizons from
+the same fill are never treated as independent observations of one target.
 """
 from __future__ import annotations
 
@@ -22,6 +22,11 @@ from typing import Any
 from v7_execution_ledger import LedgerEvent
 
 STRATEGY = "MICRO_MAKER_PRO"
+MARKOUT_HORIZONS = ("1s", "10s", "45s", "60s", "300s")
+# 45s is the canonical adverse-selection target requested by the execution
+# evidence contract. If it is not observed yet, use exactly one shorter/nearby
+# horizon rather than pooling correlated horizons from the same fill.
+ADVERSE_HORIZON_PRIORITY = ("45s", "60s", "10s", "1s", "300s")
 
 
 def finite(value: Any, default: float = 0.0) -> float:
@@ -68,16 +73,22 @@ def _event_cluster(event: LedgerEvent) -> str:
     return str(event.event_id or event.market_id or "UNKNOWN")
 
 
+def _adverse_target(markout_values: dict[str, list[float]]) -> tuple[str | None, list[float]]:
+    for horizon in ADVERSE_HORIZON_PRIORITY:
+        values = markout_values.get(horizon, [])
+        if values:
+            return horizon, values
+    return None, []
+
+
 def fit(records: list[LedgerEvent], *, cold_fill_prior: float = 0.02,
         prior_strength: float = 20.0) -> dict[str, Any]:
     orders = {e.order_id: e for e in records if e.event_type == "ORDER_SUBMITTED" and e.order_id}
     fills_by_order: dict[str, list[LedgerEvent]] = defaultdict(list)
-    fill_by_id: dict[str, LedgerEvent] = {}
     markouts_by_fill: dict[str, list[LedgerEvent]] = defaultdict(list)
     for event in records:
         if event.event_type == "FILL" and event.order_id and event.fill_id:
             fills_by_order[event.order_id].append(event)
-            fill_by_id[event.fill_id] = event
         elif event.event_type == "MARKOUT" and event.fill_id:
             markouts_by_fill[event.fill_id].append(event)
 
@@ -102,33 +113,36 @@ def fit(records: list[LedgerEvent], *, cold_fill_prior: float = 0.02,
                 for markout in markouts_by_fill.get(fill_event.fill_id or "", []):
                     for horizon, value in markout.markouts.items():
                         pnl_per_share = finite(value, math.nan)
-                        if math.isfinite(pnl_per_share):
+                        if horizon in MARKOUT_HORIZONS and math.isfinite(pnl_per_share):
                             markout_values[horizon].append(pnl_per_share)
-        markout_summary = {}
-        preferred = []
-        for horizon in ("1s", "10s", "45s", "60s", "300s"):
+
+        markout_summary: dict[str, Any] = {}
+        for horizon in MARKOUT_HORIZONS:
             values = markout_values.get(horizon, [])
             if values:
                 mean = statistics.fmean(values)
                 median = statistics.median(values)
                 stdev = statistics.pstdev(values) if len(values) > 1 else 0.0
                 markout_summary[horizon] = {
-                    "n": len(values), "mean_pnl_per_share": mean,
-                    "median_pnl_per_share": median, "stdev": stdev,
+                    "n": len(values),
+                    "mean_pnl_per_share": mean,
+                    "median_pnl_per_share": median,
+                    "stdev": stdev,
                     "adverse_cost_per_share": max(0.0, -mean),
                 }
-                if horizon in {"45s", "60s"}:
-                    preferred.extend(values)
-        if not preferred:
-            for values in markout_values.values():
-                preferred.extend(values)
-        adverse = max(0.0, -statistics.fmean(preferred)) if preferred else 0.002
+
+        adverse_horizon, adverse_values = _adverse_target(markout_values)
+        adverse_mean = statistics.fmean(adverse_values) if adverse_values else math.nan
+        adverse = max(0.0, -adverse_mean) if adverse_values else 0.002
         output[key] = {
             "orders": n_orders,
             "filled_orders": n_filled,
             "fill_probability": fill_probability,
             "event_clusters": len(event_clusters),
             "adverse_markout_per_share": adverse,
+            "adverse_markout_horizon": adverse_horizon,
+            "adverse_markout_n": len(adverse_values),
+            "adverse_markout_mean_pnl_per_share": adverse_mean if adverse_values else None,
             "markouts": markout_summary,
             "mature": n_orders >= 50 and n_filled >= 20 and len(event_clusters) >= 5,
         }
@@ -139,6 +153,9 @@ def fit(records: list[LedgerEvent], *, cold_fill_prior: float = 0.02,
         "paper_only": True,
         "authenticated_execution": False,
         "generated_ts_ms": time.time_ns() // 1_000_000,
+        "adverse_target_horizon": "45s",
+        "adverse_horizon_fallback_order": list(ADVERSE_HORIZON_PRIORITY),
+        "correlated_horizons_are_not_pooled": True,
         "groups": output,
     }
 
