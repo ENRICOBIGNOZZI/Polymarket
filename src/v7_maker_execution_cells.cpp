@@ -3,6 +3,7 @@
 #include <boost/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -53,9 +54,6 @@ constexpr double kClusterShrinkage = 5.0;
         if (exact_sha(sha)) return sha;
     }
 
-    // Canonical execution_loop.sh changes cwd to the repository root. Reading
-    // git metadata is a slow-path exact-SHA fallback only; no hot decision path
-    // touches the filesystem.
     fs::path git_dir = ".git";
     if (fs::is_regular_file(git_dir)) {
         const std::string link = trim(read_text(git_dir));
@@ -97,6 +95,13 @@ constexpr double kClusterShrinkage = 5.0;
     return fs::path("runs/paper_v7_live") / "micro_maker" / "execution_model.json";
 }
 
+[[nodiscard]] fs::path maker_policy_path() {
+    if (const char* value = std::getenv("PM_V7_MAKER_POLICY"); value != nullptr && *value) {
+        return value;
+    }
+    return {};
+}
+
 [[nodiscard]] const json::value* find_value(const json::object& object,
                                              std::string_view key) noexcept {
     const auto it = object.find(key);
@@ -123,6 +128,82 @@ constexpr double kClusterShrinkage = 5.0;
 
 [[nodiscard]] std::string text(const json::value* value) {
     return value != nullptr && value->is_string() ? std::string(value->as_string()) : std::string{};
+}
+
+[[nodiscard]] const json::object* object_child(const json::object& object,
+                                                std::string_view key) noexcept {
+    const auto* value = find_value(object, key);
+    return value != nullptr && value->is_object() ? &value->as_object() : nullptr;
+}
+
+[[nodiscard]] bool actions_include_join(const json::object& exploration) noexcept {
+    const auto* actions = find_value(exploration, "actions");
+    if (actions == nullptr || !actions->is_array()) return false;
+    for (const auto& item : actions->as_array()) {
+        if (item.is_string() && item.as_string() == "JOIN") return true;
+    }
+    return false;
+}
+
+void populate_exploration_policy(MakerModelSnapshot& model) noexcept {
+    try {
+        const fs::path path = maker_policy_path();
+        if (path.empty() || !fs::exists(path) || !fs::is_regular_file(path)) return;
+        const std::string payload = read_text(path);
+        if (payload.empty()) return;
+
+        boost::system::error_code error;
+        const auto root = json::parse(payload, error);
+        if (error || !root.is_object()) return;
+        const auto& policy = root.as_object();
+        if (!boolean(find_value(policy, "paper_only"), false)
+            || boolean(find_value(policy, "authenticated_execution"), true)
+            || boolean(find_value(policy, "real_order_submission"), true)
+            || text(find_value(policy, "mode")) != "explore_then_exploit") {
+            return;
+        }
+        const auto* exploration = object_child(policy, "exploration");
+        if (exploration == nullptr || !boolean(find_value(*exploration, "enabled"), false)
+            || !actions_include_join(*exploration)) {
+            return;
+        }
+
+        const double epsilon = std::clamp(number(find_value(*exploration, "epsilon"), 0.0), 0.0, 1.0);
+        const double configured_quote_fraction = std::clamp(
+            number(find_value(*exploration, "max_quote_notional_fraction"), 0.0), 0.0, 1.0);
+        const double market_fraction = std::clamp(
+            number(find_value(*exploration, "max_market_fraction"), 0.0), 0.0, 1.0);
+        const double capital_fraction = std::clamp(
+            number(find_value(*exploration, "max_capital_fraction"), 0.0), 0.0, 1.0);
+        // One eligible binary market can have at most two exploratory BUY quotes
+        // (YES and NO). Shrink the per-quote cap so both together remain within
+        // the configured per-market bound, then derive a hard market-count cap
+        // so the worst case also remains within max_capital_fraction.
+        const double quote_fraction = std::min(
+            configured_quote_fraction, market_fraction > 0.0 ? 0.5 * market_fraction : 0.0);
+        std::uint32_t max_markets = 0;
+        if (quote_fraction > 0.0 && capital_fraction > 0.0) {
+            max_markets = static_cast<std::uint32_t>(std::min<double>(
+                40.0, std::floor(capital_fraction / (2.0 * quote_fraction) + 1e-12)));
+        }
+        const double min_rest_ms = std::max(0.0, number(find_value(*exploration, "minimum_rest_ms"), 250.0));
+        const double max_rest_ms = std::max(min_rest_ms, number(find_value(*exploration, "maximum_rest_ms"), 3000.0));
+
+        if (epsilon <= 0.0 || quote_fraction <= 0.0 || max_markets == 0) return;
+        model.exploration_epsilon = epsilon;
+        model.exploration_quote_notional_fraction = quote_fraction;
+        model.exploration_max_active_markets = max_markets;
+        model.exploration_min_rest_ns = static_cast<std::int64_t>(std::llround(min_rest_ms * 1'000'000.0));
+        model.exploration_max_rest_ns = static_cast<std::int64_t>(std::llround(max_rest_ms * 1'000'000.0));
+        model.exploration_enabled = 1;
+    } catch (...) {
+        // Exploration is opt-in and PAPER-only. Any malformed policy disables it
+        // rather than changing normal exploit behavior.
+        model.exploration_enabled = 0;
+        model.exploration_epsilon = 0.0;
+        model.exploration_quote_notional_fraction = 0.0;
+        model.exploration_max_active_markets = 0;
+    }
 }
 
 [[nodiscard]] Action parse_action(std::string_view value) noexcept {
@@ -263,6 +344,7 @@ std::size_t execution_cell_index(Action action, std::int8_t instrument_inventory
 }
 
 MakerModelSnapshot::MakerModelSnapshot() noexcept {
+    populate_exploration_policy(*this);
     populate_execution_cells(*this);
 }
 
