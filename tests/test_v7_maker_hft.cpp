@@ -3,6 +3,7 @@
 
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <type_traits>
 
@@ -12,6 +13,10 @@ std::int64_t monotonic_ns() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
                std::chrono::steady_clock::now().time_since_epoch())
         .count();
+}
+
+double logit(double p) {
+    return std::log(p / (1.0 - p));
 }
 
 pm::v7::maker::MakerModelSnapshot profitable_model() {
@@ -28,7 +33,42 @@ pm::v7::maker::MakerModelSnapshot profitable_model() {
     model.min_quote_lifetime_ns = 100'000'000;
     model.toxicity_withdraw_threshold = 0.95;
     model.one_sided_inventory_fraction = 0.50;
+    for (auto& cell : model.execution_cells) cell = {};
     return model;
+}
+
+pm::v7::maker::MakerModelSnapshot cell_model() {
+    auto model = profitable_model();
+    model.fill_coefficients.fill(0.0);
+    model.fill_coefficients[0] = logit(0.01);
+    model.markout_coefficients.fill(0.0);
+    model.markout_coefficients[0] = 0.05;
+    model.base_quote_shares = 1.0;
+    for (auto& cell : model.execution_cells) {
+        cell.fill_probability = 0.01;
+        cell.adverse_markout_per_share = 0.05;
+        cell.fill_weight = 1.0;
+        cell.markout_weight = 1.0;
+        cell.orders = 100;
+        cell.filled_orders = 20;
+        cell.adverse_markouts = 20;
+        cell.event_clusters = 20;
+        cell.valid = 1;
+    }
+    return model;
+}
+
+void make_cell_good(pm::v7::maker::MakerModelSnapshot& model,
+                    pm::v7::maker::Action action,
+                    std::int8_t outcome_sign,
+                    pm::v7::Side side) {
+    const auto index = pm::v7::maker::execution_cell_index(action, outcome_sign, side);
+    assert(index < model.execution_cells.size());
+    auto& cell = model.execution_cells[index];
+    cell.fill_probability = 0.90;
+    cell.adverse_markout_per_share = 0.0;
+    cell.fill_weight = 1.0;
+    cell.markout_weight = 1.0;
 }
 
 pm::v7::maker::MarketUpdate normal_update() {
@@ -47,6 +87,7 @@ pm::v7::maker::MarketUpdate normal_update() {
     update.ask_depth_l10 = 150.0;
     update.socket_receive_monotonic_ns = monotonic_ns();
     update.exchange_event_ns = 123456789;
+    update.instrument_inventory_sign = 1;
     update.feed_healthy = 1;
     return update;
 }
@@ -54,6 +95,22 @@ pm::v7::maker::MarketUpdate normal_update() {
 void test_strategy_intent_is_pod() {
     static_assert(std::is_trivially_copyable_v<pm::v7::StrategyIntent>);
     static_assert(std::is_standard_layout_v<pm::v7::StrategyIntent>);
+}
+
+void test_execution_cell_index_is_action_outcome_side_specific() {
+    using pm::v7::Side;
+    using pm::v7::maker::Action;
+    using pm::v7::maker::execution_cell_index;
+    assert(execution_cell_index(Action::Join, 1, Side::Buy) == 0);
+    assert(execution_cell_index(Action::Join, 1, Side::Sell) == 1);
+    assert(execution_cell_index(Action::Join, -1, Side::Buy) == 2);
+    assert(execution_cell_index(Action::Join, -1, Side::Sell) == 3);
+    assert(execution_cell_index(Action::Improve1, 1, Side::Buy) == 4);
+    assert(execution_cell_index(Action::Fade2, -1, Side::Sell) == 15);
+    assert(execution_cell_index(Action::OneSided, 1, Side::Buy)
+           == pm::v7::maker::kExecutionCellCount);
+    assert(execution_cell_index(Action::Join, 0, Side::Buy)
+           == pm::v7::maker::kExecutionCellCount);
 }
 
 void test_bounded_spsc_and_cancel_priority() {
@@ -136,6 +193,78 @@ void test_profitable_two_sided_post_only_quote() {
     assert(decision.latency.receive_to_intent_ns >= 0);
 }
 
+void test_specific_improve_cell_changes_candidate_ranking() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    auto model = cell_model();
+    make_cell_good(model, pm::v7::maker::Action::Improve1, 1, pm::v7::Side::Buy);
+    make_cell_good(model, pm::v7::maker::Action::Improve1, 1, pm::v7::Side::Sell);
+    assert(model.valid());
+
+    pm::v7::maker::InventorySnapshot inventory;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 1.0;
+    risk.max_abs_residual_shares = 20.0;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(decision.reason == pm::v7::maker::DecisionReason::Quote);
+    assert(decision.action == pm::v7::maker::Action::Improve1);
+    assert(decision.intent_count == 2);
+    bool saw_49 = false;
+    bool saw_51 = false;
+    for (std::size_t i = 0; i < decision.intent_count; ++i) {
+        saw_49 = saw_49 || (decision.intents[i].side == pm::v7::Side::Buy
+                            && decision.intents[i].price_tick == 49);
+        saw_51 = saw_51 || (decision.intents[i].side == pm::v7::Side::Sell
+                            && decision.intents[i].price_tick == 51);
+    }
+    assert(saw_49 && saw_51);
+}
+
+void test_outcome_cell_orientation_is_respected() {
+    auto model = cell_model();
+    make_cell_good(model, pm::v7::maker::Action::Improve1, -1, pm::v7::Side::Buy);
+    make_cell_good(model, pm::v7::maker::Action::Improve1, -1, pm::v7::Side::Sell);
+    pm::v7::maker::InventorySnapshot inventory;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 1.0;
+    risk.max_abs_residual_shares = 20.0;
+
+    auto yes_update = normal_update();
+    yes_update.instrument_inventory_sign = 1;
+    pm::v7::maker::MakerHotPath yes_hot;
+    const auto yes = yes_hot.on_market_update(yes_update, inventory, quotes, risk, model);
+    assert(yes.reason == pm::v7::maker::DecisionReason::NoEconomicQuote);
+
+    auto no_update = normal_update();
+    no_update.instrument_inventory_sign = -1;
+    pm::v7::maker::MakerHotPath no_hot;
+    const auto no = no_hot.on_market_update(no_update, inventory, quotes, risk, model);
+    assert(no.reason == pm::v7::maker::DecisionReason::Quote);
+    assert(no.action == pm::v7::maker::Action::Improve1);
+}
+
+void test_sell_cell_controls_one_sided_inventory_reduction() {
+    auto model = cell_model();
+    make_cell_good(model, pm::v7::maker::Action::Improve1, 1, pm::v7::Side::Sell);
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    pm::v7::maker::InventorySnapshot inventory;
+    inventory.yes_shares = 8.0;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 1.0;
+    risk.max_abs_residual_shares = 10.0;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(decision.action == pm::v7::maker::Action::OneSided);
+    assert(decision.intent_count == 1);
+    assert(decision.intents[0].side == pm::v7::Side::Sell);
+    assert(decision.intents[0].price_tick == 51);
+}
+
 void test_inventory_forces_reducing_side() {
     pm::v7::maker::MakerHotPath hot;
     auto update = normal_update();
@@ -174,9 +303,13 @@ void test_global_kill_preempts_quote() {
 
 int main() {
     test_strategy_intent_is_pod();
+    test_execution_cell_index_is_action_outcome_side_specific();
     test_bounded_spsc_and_cancel_priority();
     test_atomic_model_snapshot();
     test_profitable_two_sided_post_only_quote();
+    test_specific_improve_cell_changes_candidate_ranking();
+    test_outcome_cell_orientation_is_respected();
+    test_sell_cell_controls_one_sided_inventory_reduction();
     test_inventory_forces_reducing_side();
     test_global_kill_preempts_quote();
     return 0;
