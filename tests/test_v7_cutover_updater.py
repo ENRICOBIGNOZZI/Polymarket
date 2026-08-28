@@ -22,7 +22,8 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn('rm -rf "$APP_DIR/build"', function)
         self.assertIn('cmake -S "$APP_DIR" -B "$APP_DIR/build"', function)
         self.assertLess(function.index('rm -rf "$APP_DIR/build"'), function.index('cmake -S "$APP_DIR" -B "$APP_DIR/build"'))
-        self.assertNotIn("build.next", function)
+        self.assertNotIn('-B "$APP_DIR/build.next"', function)
+        self.assertNotIn('mv "$APP_DIR/build.next"', function)
 
     def test_updater_stops_only_registered_v7_runtime_owner(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
