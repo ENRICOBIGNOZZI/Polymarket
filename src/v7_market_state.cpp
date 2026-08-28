@@ -172,7 +172,7 @@ bool CanonicalL2Book::mutate_level(Side side, std::int32_t price_e4,
         if (quantity_microunits > 0 && price_e4 > best_bid_e4_) best_bid_e4_ = price_e4;
         else if (quantity_microunits == 0 && price_e4 == best_bid_e4_) best_bid_e4_ = best_bid();
     } else {
-        if (quantity_microunits > 0 && (best_ask_e4_ == 0 || price_e4 < best_ask_e4_) best_ask_e4_ = price_e4;
+        if (quantity_microunits > 0 && (best_ask_e4_ == 0 || price_e4 < best_ask_e4_)) best_ask_e4_ = price_e4;
         else if (quantity_microunits == 0 && price_e4 == best_ask_e4_) best_ask_e4_ = best_ask();
     }
     exchange_event_ns_ = exchange_event_ns;
