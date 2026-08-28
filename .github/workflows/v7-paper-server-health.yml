@@ -35,7 +35,7 @@ jobs:
       EXPECTED_SHA: ${{ github.event.inputs.expected_sha || github.event.client_payload.expected_sha || github.event.workflow_run.head_sha || github.sha }}
       GRAFANA_HOSTNAME: mamma-portfolio
       GRAFANA_FQDN: mamma-portfolio.tail1bae85.ts.net
-      GRAFANA_URL: http://mamma-portfolio.tail1bae85.ts.net
+      GRAFANA_URL: https://mamma-portfolio.tail1bae85.ts.net
     steps:
       - name: Validate requested SHA syntax
         run: |
