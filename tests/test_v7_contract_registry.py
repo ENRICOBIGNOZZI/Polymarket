@@ -81,17 +81,25 @@ def main() -> None:
         assert hot["reference_value_numeric"] == 63742.123456789
         assert hot["valid"] == 1
 
+        # Same prose, different settlement product/window: this must be a new
+        # rules identity and may not inherit the prior 60-second approval.
+        source_30 = contract_from_market(
+            market("https://data.chain.link/streams/btc-usd-twap-30s-streams"),
+            approved_rule_hashes=registry.approved_rule_hashes,
+        )
+        assert source_30.verified_template is True
+        assert source_30.oracle_window_seconds == 30
+        assert source_30.normalized_rules_hash != approved.normalized_rules_hash
+        assert source_30.contract_version != approved.contract_version
+        assert source_30.rules_hash_recognized is False
+        assert source_30.informed_trading_authorized is False
+
     changed = market()
     changed["rules"] = changed["rules"].replace("greater than or equal to", "greater than")
     changed_spec = contract_from_market(changed, approved_rule_hashes={spec.normalized_rules_hash})
     assert changed_spec.comparator == "GREATER"
     assert changed_spec.normalized_rules_hash != spec.normalized_rules_hash
     assert changed_spec.rules_hash_recognized is False
-
-    source_30 = contract_from_market(market("https://data.chain.link/streams/btc-usd-twap-30s-streams"))
-    assert source_30.verified_template is True
-    assert source_30.oracle_window_seconds == 30
-    assert source_30.contract_version != spec.contract_version
 
     unknown = market("https://example.com/btc-usd")
     unknown_spec = contract_from_market(unknown)
