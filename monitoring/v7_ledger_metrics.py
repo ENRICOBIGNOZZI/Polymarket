@@ -15,6 +15,7 @@ EVENT_TYPES = {
     "ORDER_SUBMITTED",
     "ORDER_STATE",
     "FILL",
+    "MARKOUT",
     "POSITION_MARK",
     "EXIT",
     "FINAL",

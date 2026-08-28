@@ -24,6 +24,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 from v7_ledger_metrics import summarize_ledger
+from v7_maker_microstructure import summarize_maker_microstructure
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -142,7 +143,11 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     economics_path = run_root / "canonical_economics.json"
     canonical = _json(economics_path)
     joint = _json(run_root / "learned_execution" / "joint_policy.json")
-    ledger = summarize_ledger(run_root / "ledger" / "execution.jsonl")
+    ledger_path = run_root / "ledger" / "execution.jsonl"
+    ledger = summarize_ledger(ledger_path)
+    maker_lab = summarize_maker_microstructure(
+        ledger_path, run_root / "micro_maker" / "reward_selection.json"
+    )
     tape = _trade_tape(run_root / "trade_tape.csv", now)
     directives = _json(repository_root / "config" / "operator_directives.json")
     authorization = directives.get("paper_v7_authorization") if isinstance(directives.get("paper_v7_authorization"), dict) else {}
@@ -214,6 +219,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "canonical_economics": canonical,
         "joint_policy": joint,
         "ledger": ledger,
+        "maker_lab": maker_lab,
         "trade_tape": tape,
         "authority": {"valid": authority_valid, "max_drawdown": authority_max_drawdown},
         "strategies": strategies,
@@ -265,6 +271,94 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     return sorted(set(reasons))
 
 
+def _append_maker_lab_metrics(lines: list[str], lab: dict[str, Any]) -> None:
+    quality = lab.get("quality") if isinstance(lab.get("quality"), dict) else {}
+    lines.extend([
+        _metric("polymarket_maker_lab_present", 1 if lab.get("present") else 0),
+        _metric("polymarket_maker_lab_orders", lab.get("orders")),
+        _metric("polymarket_maker_lab_filled_orders", lab.get("filled_orders")),
+        _metric("polymarket_maker_lab_fills", lab.get("fills")),
+        _metric("polymarket_maker_lab_realized_pnl_usd", lab.get("realized_pnl")),
+        _metric("polymarket_maker_lab_attributed_realized_pnl_usd", lab.get("attributed_realized_pnl")),
+        _metric("polymarket_maker_lab_linked_fills", quality.get("linked_fills")),
+        _metric("polymarket_maker_lab_unlinked_fills", quality.get("unlinked_fills")),
+        _metric("polymarket_maker_lab_linked_markouts", quality.get("linked_markouts")),
+        _metric("polymarket_maker_lab_unlinked_markouts", quality.get("unlinked_markouts")),
+        _metric("polymarket_maker_lab_ofi_exact_orders", quality.get("ofi_exact_orders")),
+        _metric("polymarket_maker_lab_ofi_proxy_orders", quality.get("ofi_proxy_orders")),
+        _metric("polymarket_maker_lab_reward_known_orders", quality.get("reward_known_orders")),
+        _metric("polymarket_maker_lab_unattributed_sell_fills", quality.get("unattributed_sell_fills")),
+        _metric("polymarket_maker_lab_unattributed_merge_pnl_usd", quality.get("unattributed_merge_pnl")),
+        _metric("polymarket_maker_lab_measurement_info", 1, {
+            "ofi": quality.get("ofi_source", "unknown"),
+            "reward": quality.get("reward_source", "unknown"),
+            "pnl_attribution": quality.get("merge_pnl_attribution", "unknown"),
+        }),
+    ])
+    for horizon, count in sorted((lab.get("markouts") or {}).items()):
+        lines.append(_metric("polymarket_maker_lab_markout_observations_total", count, {"horizon": horizon}))
+
+    for row in lab.get("segments") if isinstance(lab.get("segments"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        labels = {
+            "action": row.get("action", "UNKNOWN"),
+            "variant": row.get("variant", "UNKNOWN"),
+            "dimension": row.get("dimension", "unknown"),
+            "bucket": row.get("bucket", "UNKNOWN"),
+        }
+        lines.append(_metric("polymarket_maker_lab_segment_orders", row.get("orders"), labels))
+        lines.append(_metric("polymarket_maker_lab_segment_filled_orders", row.get("filled_orders"), labels))
+        lines.append(_metric("polymarket_maker_lab_segment_fills", row.get("fills"), labels))
+        lines.append(_metric("polymarket_maker_lab_segment_filled_shares", row.get("filled_shares"), labels))
+        lines.append(_metric("polymarket_maker_lab_segment_realized_pnl_usd", row.get("realized_pnl"), labels))
+        markout_pnl = row.get("markout_pnl") if isinstance(row.get("markout_pnl"), dict) else {}
+        markout_shares = row.get("markout_shares") if isinstance(row.get("markout_shares"), dict) else {}
+        markout_count = row.get("markout_count") if isinstance(row.get("markout_count"), dict) else {}
+        for horizon in sorted(markout_count):
+            hlabels = dict(labels)
+            hlabels["horizon"] = horizon
+            lines.append(_metric("polymarket_maker_lab_segment_markout_pnl_usd", markout_pnl.get(horizon), hlabels))
+            lines.append(_metric("polymarket_maker_lab_segment_markout_shares", markout_shares.get(horizon), hlabels))
+            lines.append(_metric("polymarket_maker_lab_segment_markout_observations", markout_count.get(horizon), hlabels))
+
+    for row in lab.get("conditionals") if isinstance(lab.get("conditionals"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        labels = {
+            "action": row.get("action", "UNKNOWN"),
+            "toxicity": row.get("toxicity", "UNKNOWN"),
+            "queue": row.get("queue", "UNKNOWN"),
+        }
+        lines.append(_metric("polymarket_maker_lab_conditional_orders", row.get("orders"), labels))
+        lines.append(_metric("polymarket_maker_lab_conditional_filled_orders", row.get("filled_orders"), labels))
+        lines.append(_metric("polymarket_maker_lab_conditional_realized_pnl_usd", row.get("realized_pnl"), labels))
+        markout_pnl = row.get("markout_pnl") if isinstance(row.get("markout_pnl"), dict) else {}
+        markout_shares = row.get("markout_shares") if isinstance(row.get("markout_shares"), dict) else {}
+        markout_count = row.get("markout_count") if isinstance(row.get("markout_count"), dict) else {}
+        for horizon in sorted(markout_count):
+            hlabels = dict(labels)
+            hlabels["horizon"] = horizon
+            lines.append(_metric("polymarket_maker_lab_conditional_markout_pnl_usd", markout_pnl.get(horizon), hlabels))
+            lines.append(_metric("polymarket_maker_lab_conditional_markout_shares", markout_shares.get(horizon), hlabels))
+            lines.append(_metric("polymarket_maker_lab_conditional_markout_observations", markout_count.get(horizon), hlabels))
+
+    for row in lab.get("markets") if isinstance(lab.get("markets"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        labels = {"market": row.get("market", "UNKNOWN"), "action": row.get("action", "UNKNOWN")}
+        lines.append(_metric("polymarket_maker_lab_market_orders", row.get("orders"), labels))
+        lines.append(_metric("polymarket_maker_lab_market_filled_orders", row.get("filled_orders"), labels))
+        lines.append(_metric("polymarket_maker_lab_market_realized_pnl_usd", row.get("realized_pnl"), labels))
+        markout_pnl = row.get("markout_pnl") if isinstance(row.get("markout_pnl"), dict) else {}
+        markout_shares = row.get("markout_shares") if isinstance(row.get("markout_shares"), dict) else {}
+        for horizon in sorted(markout_pnl):
+            hlabels = dict(labels)
+            hlabels["horizon"] = horizon
+            lines.append(_metric("polymarket_maker_lab_market_markout_pnl_usd", markout_pnl.get(horizon), hlabels))
+            lines.append(_metric("polymarket_maker_lab_market_markout_shares", markout_shares.get(horizon), hlabels))
+
+
 def render_prometheus(snapshot: dict[str, Any]) -> str:
     runtime = snapshot["runtime"]
     ledger = snapshot["ledger"]
@@ -272,6 +366,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     economics = snapshot["economics"]
     authority = snapshot["authority"]
     canonical = snapshot["canonical_economics"]
+    maker_lab = snapshot.get("maker_lab") if isinstance(snapshot.get("maker_lab"), dict) else {}
     labels = {"adapter":"v7_native","run_root":snapshot["run_root"],"version":"v7"}
     lines = [
         "# TYPE polymarket_v7_runtime_info gauge",
@@ -327,6 +422,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
             if key in row and row[key] is not None: lines.append(_metric(metric_name,row[key],labels_s))
         if "killed" in row: lines.append(_metric("polymarket_strategy_killed",1 if row["killed"] else 0,labels_s))
         if "paper_eligible" in row: lines.append(_metric("polymarket_strategy_paper_eligible",1 if row["paper_eligible"] else 0,labels_s))
+    _append_maker_lab_metrics(lines, maker_lab)
     return "\n".join(lines)+"\n"
 
 
