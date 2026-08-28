@@ -433,8 +433,8 @@ private:
         if (!input) return;
         input.seekg(static_cast<std::streamoff>(offset_));
         if (!input) return;
-        const std::string chunk(
-            std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+        const std::string chunk{
+            std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
         const std::size_t complete = pm::v7::complete_jsonl_prefix_size(chunk);
         if (complete == 0) return;
 
