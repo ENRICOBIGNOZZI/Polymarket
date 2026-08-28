@@ -52,10 +52,18 @@ public:
                                      std::int64_t microdollars) noexcept;
     [[nodiscard]] bool release_order(std::uint64_t intent_id) noexcept;
 
-    // Convert a live-order reservation into inventory capital after a fill.  The
-    // committed cost must not exceed the reservation.  Partial fills can be
-    // settled by reserving each child order separately; the common OMS owns the
-    // exact lifecycle and calls this only on an economically final transition.
+    // Convert only the filled portion of a live-order reservation into committed
+    // inventory while leaving the unfilled residual reserved.  This is the
+    // correct transition for PARTIAL fills; terminal cancel/reject subsequently
+    // releases the residual reservation.  Once the reservation reaches zero the
+    // slot is retired automatically.
+    [[nodiscard]] bool settle_partial_fill(std::uint64_t intent_id,
+                                           std::int64_t committed_microdollars) noexcept;
+
+    // Terminal convenience transition: commit the supplied filled amount and
+    // release any unfilled residual in one operation.  Use only when the common
+    // OMS knows the order can no longer fill (FILLED/CANCELLED/REJECTED/EXPIRED
+    // after reconciliation).  It must not be used for a non-terminal PARTIAL.
     [[nodiscard]] bool settle_order_to_inventory(std::uint64_t intent_id,
                                                  std::int64_t committed_microdollars) noexcept;
 
