@@ -33,7 +33,16 @@ def test_maker_uses_canonical_cpp_runtime_and_fill_conditioned_research_core():
     assert "MarketWebSocketFeed" in runtime
     assert "MarketWsShard" in runtime
     assert "MakerInstrumentLane" in runtime
-    assert "MakerPaperMarketEngine" in runtime
+    assert "MakerPaperExecutionPolicy" in runtime
+    assert "SleeveCapitalAccount" in runtime
+    assert "class ExecutionCore final" in runtime
+    assert "std::thread execution_thread" in runtime
+    assert "pop_critical(command)" in runtime
+    assert "pop_normal(command)" in runtime
+    assert runtime.index("pop_critical(command)") < runtime.index("pop_normal(command)")
+    assert "market.paper.apply_intent" not in runtime
+    assert "market.paper.on_public_trade" not in runtime
+    assert "market.paper.advance_time" not in runtime
     assert 'run_root_ / "ledger" / "spool"' in runtime
     assert 'run_root_ / "ledger" / "execution.jsonl"' not in runtime
     assert "operational_fill_scenario" in runtime
