@@ -46,6 +46,25 @@ class V7DeployMonitoringManifestContractTest(unittest.TestCase):
         fetch = workflow.index('git fetch --no-tags origin main paper-validated', reconcile)
         self.assertLess(bootstrap, fetch)
 
+    def test_recovery_is_reserved_for_ssh_transport_loss_and_rechecks_full_health(self) -> None:
+        workflow = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text(encoding="utf-8")
+        self.assertIn('if [[ "$primary_status" -ne 255 ]]; then', workflow)
+        self.assertIn('V7 remote deploy failed with non-transport status=$primary_status', workflow)
+        self.assertIn('test "$(cat "$root/control/deployed_sha")" = "$EXPECTED_VALIDATED_SHA"', workflow)
+        for required in (
+            "control/runtime_status.json",
+            "control/portfolio_state.json",
+            "graph_rv/status.json",
+            "canonical_economics.json",
+            "trade_tape.csv",
+            "polymarket_v7_execution_alive 1",
+            "polymarket_v7_ledger_valid 1",
+            "127.0.0.1:9090/-/ready",
+            "127.0.0.1:3000/api/health",
+            "api/dashboards/uid/$uid",
+        ):
+            self.assertIn(required, workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
