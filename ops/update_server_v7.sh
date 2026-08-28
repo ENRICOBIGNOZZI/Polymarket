@@ -130,6 +130,13 @@ prevalidate_candidate(){
 build_current_checkout(){
   local brew_prefix=""
   if command -v brew >/dev/null 2>&1; then brew_prefix="$(brew --prefix)"; fi
+  # CMake build directories are not relocatable: a historical deployment moved
+  # build.next to build, leaving absolute paths in CMakeCache.txt. Candidate
+  # validation above already proves this exact SHA builds/tests before runtime
+  # mutation, so always recreate the active checkout's build dir in its final
+  # path instead of reusing or moving a stale cache.
+  log "Recreating active CMake build directory at $APP_DIR/build"
+  rm -rf "$APP_DIR/build"
   cmake -S "$APP_DIR" -B "$APP_DIR/build" -DCMAKE_BUILD_TYPE=Release ${brew_prefix:+-DCMAKE_PREFIX_PATH="$brew_prefix"}
   cmake --build "$APP_DIR/build" --parallel "${POLYMARKET_BUILD_JOBS:-2}"
 }
