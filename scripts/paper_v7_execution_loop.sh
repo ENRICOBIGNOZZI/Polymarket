@@ -16,6 +16,7 @@ FAST_STRUCTURAL_RELATIONS="${PM_V7_FAST_STRUCTURAL_RELATIONS:-config/v7_fast_str
 EXTERNAL_FAIR_POLICY="${PM_V7_EXTERNAL_FAIR_POLICY:-config/v7_external_fair.json}"
 ORACLE_BINDING="${PM_V7_ORACLE_BINDING:-}"
 EXACT_SHA_CI_GREEN="${PM_V7_EXACT_SHA_CI_GREEN:-false}"
+OSINT_SOURCE_REGISTRY="${PM_V7_OSINT_SOURCE_REGISTRY:-config/v7_osint_sources.json}"
 SHA="$(git rev-parse HEAD)"
 [[ "$EXACT_SHA_CI_GREEN" == "true" || "$EXACT_SHA_CI_GREEN" == "false" ]] || {
   echo "PM_V7_EXACT_SHA_CI_GREEN must be true or false" >&2
@@ -45,15 +46,16 @@ CONTROL="$RUN_ROOT/control"
 ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
 LOCK="$CONTROL/runtime.lock"
-mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/fast_structural" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/learned_execution"
+mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/fast_structural" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/osint" "$RUN_ROOT/market_open" "$RUN_ROOT/learned_execution"
 touch "$RUN_ROOT/ledger/execution.jsonl"
 
-python3 - "$CONFIG" "$MAKER_POLICY" "$EXTERNAL_FAIR_POLICY" "$WS_JSON_ARENA_MAKER_MAX_BYTES" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
+python3 - "$CONFIG" "$MAKER_POLICY" "$EXTERNAL_FAIR_POLICY" "$OSINT_SOURCE_REGISTRY" "$WS_JSON_ARENA_MAKER_MAX_BYTES" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
 import json,sys
 cfg=json.load(open(sys.argv[1]))
 v7=cfg.get("v7") or {}
 maker=json.load(open(sys.argv[2]))
 external=json.load(open(sys.argv[3]))
+osint_sources=json.load(open(sys.argv[4]))
 registry_path=v7.get("strategy_registry")
 assert isinstance(registry_path,str) and registry_path
 registry=json.load(open(registry_path))
@@ -71,10 +73,15 @@ assert registry.get("safety",{}).get("authenticated_execution") is False
 assert registry.get("safety",{}).get("real_order_submission") is False
 assert registry.get("governance",{}).get("automatic_promotion") is False
 assert all(row.get("authority") in {"RESEARCH","SHADOW","PAPER"} for row in registry.get("strategies",[]))
-maker_arena=int(sys.argv[4])
-observer_arena=int(sys.argv[5])
-fillability_arena=int(sys.argv[6])
-total_budget=int(sys.argv[7])
+assert osint_sources.get("schema") == "polymarket_v7_osint_source_registry_v1"
+assert osint_sources.get("paper_only") is True
+assert osint_sources.get("authenticated_execution") is False
+assert osint_sources.get("real_order_submission") is False
+assert osint_sources.get("sources")
+maker_arena=int(sys.argv[5])
+observer_arena=int(sys.argv[6])
+fillability_arena=int(sys.argv[7])
+total_budget=int(sys.argv[8])
 assert cfg.get("engine_version")==7
 assert cfg.get("paper_only") is True
 assert v7.get("paper_only") is True
@@ -503,6 +510,30 @@ pids+=("$!")
     sleep 60
   done
 ) & pids+=("$!")
+
+# Research-only official-source OSINT tape. It has no model-to-intent bridge,
+# OMS, capital, risk, order, or promotion authority. Source failures are
+# recorded per source and do not mutate or stop the economic PAPER runtime.
+python3 scripts/v7_osint_collector.py \
+  --registry "$OSINT_SOURCE_REGISTRY" \
+  --tape "$RUN_ROOT/osint/raw_events.jsonl" \
+  --state "$RUN_ROOT/osint/collector_state.json" \
+  --status "$RUN_ROOT/osint/status.json" \
+  --interval 60 --loop \
+  >> "$RUN_ROOT/osint/collector.log" 2>&1 &
+pids+=("$!")
+
+# Research-only market-creation/milestone collector. Its first snapshot is a
+# baseline and can never masquerade as a burst of new listings. Exact semantic
+# verification and a separate race/edge-decay gate are required before any
+# downstream authority can change.
+python3 scripts/v7_market_open_collector.py \
+  --tape "$RUN_ROOT/market_open/events.jsonl" \
+  --state "$RUN_ROOT/market_open/collector_state.json" \
+  --status "$RUN_ROOT/market_open/status.json" \
+  --interval 5 --loop \
+  >> "$RUN_ROOT/market_open/collector.log" 2>&1 &
+pids+=("$!")
 
 write_runtime_status running false
 

@@ -138,12 +138,16 @@ scripts/v7_strategy_governance.py
 scripts/v7_structural_relations.py
 scripts/v7_osint_engine.py
 scripts/v7_osint_pipeline.py
+scripts/v7_osint_collector.py
+scripts/v7_osint_likelihood.py
+config/v7_osint_sources.json
 scripts/v7_sports_latency.py
 scripts/v7_cross_platform.py
 scripts/v7_wallet_intelligence.py
 scripts/v7_wallet_dataset.py
 scripts/v7_market_open.py
 scripts/v7_market_open_pipeline.py
+scripts/v7_market_open_collector.py
 ```
 
 Their current authority is explicit in the registry. Code availability is not

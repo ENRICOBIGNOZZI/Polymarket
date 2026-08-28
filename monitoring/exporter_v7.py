@@ -231,6 +231,8 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     micro = _json(run_root / "micro_taker" / "status.json")
     maker = _json(run_root / "micro_maker" / "status.json")
     external = _json(run_root / "external" / "status.json")
+    osint = _json(run_root / "osint" / "status.json")
+    market_open = _json(run_root / "market_open" / "status.json")
     economics_path = run_root / "canonical_economics.json"
     canonical = _json(economics_path)
     joint = _json(run_root / "learned_execution" / "joint_policy.json")
@@ -267,6 +269,16 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         strategies.setdefault("micro_maker", {}).update({"killed": False, "paper_eligible": False})
     if external:
         strategies.setdefault("external", {}).update({"paper_eligible": False})
+    if osint:
+        strategies.setdefault("osint", {}).update({
+            "paper_eligible": False,
+            "signals": _integer(osint.get("new_events")),
+        })
+    if market_open:
+        strategies.setdefault("market_open", {}).update({
+            "paper_eligible": False,
+            "signals": _integer(market_open.get("new_markets")),
+        })
     for name, row in ledger.get("strategies", {}).items():
         if not isinstance(row, dict):
             continue
@@ -309,6 +321,8 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "micro": micro,
         "maker": maker,
         "external": external,
+        "osint": osint,
+        "market_open": market_open,
         "canonical_economics": canonical,
         "joint_policy": joint,
         "ledger": ledger,
@@ -466,6 +480,8 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     operations = snapshot.get("operations") if isinstance(snapshot.get("operations"), dict) else {}
     disk = operations.get("disk") if isinstance(operations.get("disk"), dict) else {}
     supervisor = operations.get("supervisor") if isinstance(operations.get("supervisor"), dict) else {}
+    osint = snapshot.get("osint") if isinstance(snapshot.get("osint"), dict) else {}
+    market_open = snapshot.get("market_open") if isinstance(snapshot.get("market_open"), dict) else {}
     labels = {"adapter":"v7_native","run_root":snapshot["run_root"],"version":"v7"}
     lines = [
         "# TYPE polymarket_v7_runtime_info gauge",
@@ -518,6 +534,13 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_ledger_model_sha_count", len(ledger.get("model_shas") or [])),
         _metric("polymarket_v7_latency_samples_present", 1 if maker_latency.get("present") else 0),
         _metric("polymarket_v7_latency_rows", maker_latency.get("rows")),
+        _metric("polymarket_v7_osint_enabled_sources", osint.get("enabled_sources")),
+        _metric("polymarket_v7_osint_healthy_sources", osint.get("healthy_sources")),
+        _metric("polymarket_v7_osint_new_events", osint.get("new_events")),
+        _metric("polymarket_v7_market_open_tracked_markets", market_open.get("tracked_markets")),
+        _metric("polymarket_v7_market_open_new_markets", market_open.get("new_markets")),
+        _metric("polymarket_v7_market_open_emitted_milestones", market_open.get("emitted_milestones")),
+        _metric("polymarket_v7_market_open_semantic_verified", market_open.get("semantic_verified_markets")),
         _metric("polymarket_execution_opportunities", _integer(ledger_total.get("opportunities"))),
         _metric("polymarket_execution_candidates", _integer(ledger_total.get("candidates"))),
         _metric("polymarket_execution_makes", _integer(ledger_total.get("makes"))),
@@ -553,6 +576,14 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         if "killed" in row: lines.append(_metric("polymarket_strategy_killed",1 if row["killed"] else 0,labels_s))
         if "paper_eligible" in row: lines.append(_metric("polymarket_strategy_paper_eligible",1 if row["paper_eligible"] else 0,labels_s))
     _append_maker_lab_metrics(lines, maker_lab)
+    for source in osint.get("sources") if isinstance(osint.get("sources"), list) else []:
+        if not isinstance(source, dict):
+            continue
+        source_labels = {"source": source.get("source_id", "UNKNOWN")}
+        lines.append(_metric("polymarket_v7_osint_source_healthy", 1 if source.get("healthy") else 0,
+                             source_labels))
+        lines.append(_metric("polymarket_v7_osint_source_new_events", source.get("new_events"),
+                             source_labels))
     for stage, row in sorted((maker_latency.get("stages") or {}).items()):
         if not isinstance(row, dict):
             continue
