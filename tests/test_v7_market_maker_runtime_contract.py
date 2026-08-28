@@ -55,11 +55,31 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertIn("v7_market_maker_status.py", source)
         self.assertIn("v7_ledger_spool.py", source)
         self.assertIn("--loop --interval 0.1", source)
+        self.assertIn('export PM_V7_MODEL_SHA="$SHA"', source)
+        self.assertIn('export PM_V7_MAKER_EXECUTION_MODEL="$RUN_ROOT/micro_maker/execution_model.json"', source)
         self.assertNotIn("v7_market_maker_worker.py", source)
         self.assertNotIn("--interval-ms 500", source)
         self.assertNotIn("v7_complete_set_maker", source)
         self.assertNotIn("polymarket_rewards_scan", source)
         self.assertNotIn("Generic maker is intentionally not started", source)
+
+    def test_execution_cells_are_exact_sha_slow_path_and_hot_path_bounded(self) -> None:
+        loader = (ROOT / "src" / "v7_maker_execution_cells.cpp").read_text(encoding="utf-8")
+        kernel = (ROOT / "src" / "v7_maker_hft.cpp").read_text(encoding="utf-8")
+        header = (ROOT / "include" / "pm" / "v7_maker_hft.hpp").read_text(encoding="utf-8")
+        model = (ROOT / "scripts" / "v7_market_maker_model.py").read_text(encoding="utf-8")
+        self.assertIn("PM_V7_MODEL_SHA", loader)
+        self.assertIn("PM_V7_MAKER_EXECUTION_MODEL", loader)
+        self.assertIn("kExecutionCellCount", header)
+        self.assertIn("execution_cell_index", kernel)
+        self.assertIn("safe_logit(cell->fill_probability)", kernel)
+        self.assertIn("cell->adverse_markout_per_share", kernel)
+        self.assertIn("cell->fill_weight", kernel)
+        self.assertIn("cell->markout_weight", kernel)
+        self.assertIn("correlated_horizons_are_not_pooled", model)
+        # Filesystem/JSON parsing belongs only to the model-construction slow path.
+        self.assertNotIn("filesystem", kernel)
+        self.assertNotIn("boost/json", kernel)
 
     def test_markout_observer_is_evidence_only_and_full_depth(self) -> None:
         observer = (ROOT / "src" / "v7_maker_markout_observer.cpp").read_text(encoding="utf-8")
