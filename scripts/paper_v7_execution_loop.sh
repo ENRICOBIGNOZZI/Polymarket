@@ -10,6 +10,11 @@ MAKER_RUNTIME="${PM_V7_MARKET_MAKER_RUNTIME:-build/polymarket_v7_market_maker_ru
 MARKOUT_OBSERVER="${PM_V7_MAKER_MARKOUT_OBSERVER:-build/polymarket_v7_maker_markout_observer}"
 MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
 SHA="$(git rev-parse HEAD)"
+# Bind the C++ slow-path execution-cell loader explicitly to the same exact SHA
+# and model file passed to the canonical Maker runtime. This keeps custom run
+# roots deterministic and makes .git inspection only a defensive fallback.
+export PM_V7_MODEL_SHA="$SHA"
+export PM_V7_MAKER_EXECUTION_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
 CONTROL="$RUN_ROOT/control"
 ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
