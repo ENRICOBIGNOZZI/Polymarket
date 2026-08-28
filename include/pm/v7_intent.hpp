@@ -42,6 +42,16 @@ enum class Urgency : std::uint8_t {
     Critical = 3,
 };
 
+// Every order-producing decision carries why it exists. This lets the common
+// risk/execution owner distinguish alpha seeking from mandatory risk reduction
+// without creating a second OMS or strategy-specific position truth.
+enum class IntentPurpose : std::uint8_t {
+    Alpha = 1,
+    InventoryReduction = 2,
+    Risk = 3,
+    Liquidation = 4,
+};
+
 struct StrategyIntent {
     std::uint64_t intent_id = 0;
     std::uint64_t market_handle = 0;
@@ -59,10 +69,10 @@ struct StrategyIntent {
     IntentType type = IntentType::Quote;
     Side side = Side::None;
     Urgency urgency = Urgency::Normal;
+    IntentPurpose purpose = IntentPurpose::Alpha;
     std::uint8_t passive = 1;
     std::uint8_t post_only = 1;
     std::uint8_t reserved0 = 0;
-    std::uint8_t reserved1 = 0;
     double expected_edge = 0.0;
     double expected_cost = 0.0;
     double expected_risk = 0.0;
