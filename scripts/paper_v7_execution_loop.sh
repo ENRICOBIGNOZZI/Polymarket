@@ -91,13 +91,46 @@ write_runtime_status() {
 write_runtime_status starting false
 
 pids=()
+cleanup_started=0
 cleanup() {
+  if [[ "$cleanup_started" == 1 ]]; then
+    return 0
+  fi
+  cleanup_started=1
   set +e
-  for pid in "${pids[@]:-}"; do kill "$pid" 2>/dev/null || true; done
-  for pid in "${pids[@]:-}"; do wait "$pid" 2>/dev/null || true; done
+  touch "$KILL"
+  for pid in "${pids[@]:-}"; do
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  for _ in $(seq 1 50); do
+    alive=0
+    for pid in "${pids[@]:-}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=1
+        break
+      fi
+    done
+    [[ "$alive" == 0 ]] && break
+    sleep 0.1
+  done
+  for pid in "${pids[@]:-}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  done
+  for pid in "${pids[@]:-}"; do
+    wait "$pid" 2>/dev/null || true
+  done
   rm -rf "$LOCK"
+  return 0
 }
-trap cleanup EXIT INT TERM
+shutdown() {
+  write_runtime_status stopping false || true
+  cleanup
+  exit 0
+}
+trap cleanup EXIT
+trap shutdown INT TERM
 
 if [[ ! -x "$RECORDER" ]]; then
   echo "missing canonical V7 trade recorder executable: $RECORDER" >&2
