@@ -33,6 +33,9 @@ jobs:
       SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
       SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
       EXPECTED_SHA: ${{ github.event.inputs.expected_sha || github.event.client_payload.expected_sha || github.event.workflow_run.head_sha || github.sha }}
+      GRAFANA_HOSTNAME: mamma-portfolio
+      GRAFANA_FQDN: mamma-portfolio.tail1bae85.ts.net
+      GRAFANA_URL: http://mamma-portfolio.tail1bae85.ts.net
     steps:
       - name: Validate requested SHA syntax
         run: |
@@ -153,10 +156,37 @@ jobs:
           grep -q '^polymarket_v7_paper_only_contract_ok 1$' <<<"$metrics"
           grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics"
           grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics"
+          printf '%s\n' "$metrics" | grep -E '^(polymarket_execution_opportunities|polymarket_execution_orders_submitted|polymarket_execution_fills|polymarket_execution_complete_fills|polymarket_execution_partial_fills|polymarket_execution_final_pnl_usd|polymarket_runtime_pnl_usd|polymarket_runtime_realized_pnl_usd|polymarket_v7_canonical_submitted_units|polymarket_v7_canonical_complete_units|polymarket_maker_lab_orders|polymarket_maker_lab_fills|polymarket_maker_lab_realized_pnl_usd|polymarket_strategy_ledger_opportunities|polymarket_strategy_ledger_orders_submitted|polymarket_strategy_ledger_fills)(\{| )' | sort || true
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
           curl -fsS http://127.0.0.1:3000/api/dashboards/uid/polymarket-v7 >/dev/null
           REMOTE
+
+      - name: Verify canonical Grafana route from tailnet
+        if: steps.gate.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tailscale ping --until-direct=false --c 1 --timeout=10s "$GRAFANA_HOSTNAME"
+          getent hosts "$GRAFANA_FQDN" | tee health-evidence/grafana-dns.txt
+          healthy=0
+          for _ in $(seq 1 20); do
+            if curl -fsS --max-time 5 "$GRAFANA_URL/api/health" > health-evidence/grafana-tailnet-health.json 2>/dev/null && \
+               curl -fsS --max-time 5 "$GRAFANA_URL/api/dashboards/uid/polymarket-v7" > health-evidence/grafana-tailnet-dashboard.json 2>/dev/null; then
+              healthy=1
+              break
+            fi
+            sleep 2
+          done
+          test "$healthy" = 1
+          python3 - <<'PY'
+          import json
+          health=json.load(open('health-evidence/grafana-tailnet-health.json', encoding='utf-8'))
+          dashboard=json.load(open('health-evidence/grafana-tailnet-dashboard.json', encoding='utf-8'))
+          assert health.get('database') == 'ok'
+          assert (dashboard.get('dashboard') or {}).get('uid') == 'polymarket-v7'
+          PY
+          printf 'grafana_operator_url=%s/d/polymarket-v7/polymarket-v7-canonical-paper-economics\n' "$GRAFANA_URL" | tee health-evidence/grafana-operator-url.txt
 
       - name: Publish exact-SHA health summary
         if: steps.gate.outputs.ready == 'true'
@@ -164,7 +194,8 @@ jobs:
           echo '## V7 PAPER server health' >> "$GITHUB_STEP_SUMMARY"
           echo "- exact deployed SHA: $EXPECTED_SHA" >> "$GITHUB_STEP_SUMMARY"
           echo '- runtime/control/portfolio/Graph/canonical-economics/ledger/trade-tape: PASS' >> "$GITHUB_STEP_SUMMARY"
-          echo '- exporter/Prometheus/Grafana: PASS' >> "$GITHUB_STEP_SUMMARY"
+          echo '- exporter/Prometheus/Grafana backend: PASS' >> "$GITHUB_STEP_SUMMARY"
+          echo "- Grafana Tailscale Serve: $GRAFANA_URL/d/polymarket-v7/polymarket-v7-canonical-paper-economics" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload health evidence
         if: always() && steps.gate.outputs.ready == 'true'
