@@ -60,6 +60,10 @@ add_executable(polymarket_v7_market_maker_runtime src/v7_market_maker_runtime.cp
 target_link_libraries(polymarket_v7_market_maker_runtime PRIVATE pm_v7_hft pm_fast_arb pm_core)
 target_compile_options(polymarket_v7_market_maker_runtime PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(polymarket_v7_maker_markout_observer src/v7_maker_markout_observer.cpp)
+target_link_libraries(polymarket_v7_maker_markout_observer PRIVATE pm_v7_common pm_fast_arb pm_core)
+target_compile_options(polymarket_v7_maker_markout_observer PRIVATE -Wall -Wextra -Wpedantic)
+
 include(CTest)
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
