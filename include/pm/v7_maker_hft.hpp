@@ -40,6 +40,9 @@ enum class DecisionReason : std::uint8_t {
     InvalidModel = 11,
     QuoteLifetimeHold = 12,
     NoChange = 13,
+    ExplorationQuote = 14,
+    ExplorationHold = 15,
+    ExplorationExpired = 16,
 };
 
 // One MakerHotPath instance is owned by exactly one market/instrument on one
@@ -102,6 +105,11 @@ struct QuoteSnapshot {
 struct RiskSnapshot {
     double max_quote_shares = 1.0;
     double max_abs_residual_shares = 1.0;
+    // PAPER-only cold-start exploration receives a strictly smaller quote cap
+    // computed by the owning runtime from the configured sleeve capital. Zero
+    // disables exploration for this market/instrument without weakening normal
+    // maker risk or any kill switch.
+    double exploration_max_quote_shares = 0.0;
     std::int64_t max_local_state_age_ns = 5'000'000'000LL;
     std::uint8_t global_kill = 0;
     std::uint8_t strategy_kill = 0;
@@ -154,6 +162,17 @@ struct MakerModelSnapshot {
     double base_quote_shares = 1.0;
     double feature_decay = 0.90;
     double min_requote_ev_delta = 0.00001;
+    // Exploration is PAPER-only and exists specifically to break the cold-start
+    // deadlock where a pessimistic fill prior cannot earn enough evidence to fit
+    // a better execution model. It never bypasses feed, toxicity, inventory,
+    // capital, post-only, queue or kill checks.
+    double exploration_epsilon = 0.0;
+    double exploration_quote_notional_fraction = 0.0;
+    std::uint32_t exploration_max_active_markets = 0;
+    std::uint8_t exploration_enabled = 0;
+    std::array<std::uint8_t, 3> exploration_reserved{};
+    std::int64_t exploration_min_rest_ns = 250'000'000LL;
+    std::int64_t exploration_max_rest_ns = 3'000'000'000LL;
     std::int64_t min_quote_lifetime_ns = 100'000'000LL;
     std::int64_t max_related_snapshot_age_ns = 1'500'000'000LL;
     std::array<double, kFeatureCount> fill_coefficients{
@@ -261,7 +280,9 @@ private:
     double ew_trade_intensity_ = 0.0;
     double ew_cancel_intensity_ = 0.0;
     std::uint64_t intent_sequence_ = 0;
+    std::int64_t last_exploration_quote_ns_ = 0;
     std::uint8_t initialized_ = 0;
+    std::uint8_t exploration_active_ = 0;
 };
 
 } // namespace pm::v7::maker
