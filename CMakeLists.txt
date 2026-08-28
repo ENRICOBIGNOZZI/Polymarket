@@ -87,6 +87,10 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_markout_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_markout_tests COMMAND pm_v7_markout_tests)
 
+  add_executable(pm_v7_jsonl_tail_tests tests/test_v7_jsonl_tail.cpp)
+  target_include_directories(pm_v7_jsonl_tail_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  add_test(NAME pm_v7_jsonl_tail_tests COMMAND pm_v7_jsonl_tail_tests)
+
   add_executable(pm_v7_market_ws_tests tests/test_v7_market_ws.cpp)
   target_link_libraries(pm_v7_market_ws_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_market_ws_tests COMMAND pm_v7_market_ws_tests)
