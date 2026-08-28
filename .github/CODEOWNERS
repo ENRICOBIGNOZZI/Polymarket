@@ -1,0 +1,9 @@
+# Canonical V7 ownership and required review surface.
+* @ENRICOBIGNOZZI
+
+/.github/ @ENRICOBIGNOZZI
+/config/ @ENRICOBIGNOZZI
+/scripts/ @ENRICOBIGNOZZI
+/src/ @ENRICOBIGNOZZI
+/include/ @ENRICOBIGNOZZI
+/monitoring/ @ENRICOBIGNOZZI

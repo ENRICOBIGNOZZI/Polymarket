@@ -1,5 +1,3 @@
-import hashlib
-import json
 import sys
 from pathlib import Path
 
@@ -10,13 +8,17 @@ import v7_cross_platform as c
 
 def contract(venue, cid, outcome):
     return c.CrossVenueContract(venue, cid, "event", outcome, "official", 1000, "UTC", ">=", "none",
-                                "refund", "none", 1.0, "rules")
+                                "refund", "none", 1.0, "rules", "binary_at_cutoff", "USD")
 
 
 def equivalence(a, b, kind):
-    payload = json.dumps({"a": a.semantic_payload(), "b": b.semantic_payload(), "type": kind.value},
-                         sort_keys=True, separators=(",", ":"))
-    return c.ContractEquivalence(a, b, kind, hashlib.sha256(payload.encode()).hexdigest(), True)
+    verification = c.SemanticVerification(
+        "reviewer", 1000, "https://official/rules", "evidence",
+        ("normalized_event", "resolution_source", "cutoff_ms", "timezone", "comparator",
+         "rounding", "cancellation_rules", "exception_rules", "payout",
+         "rules_hash", "outcome_semantics", "settlement_currency"),
+    )
+    return c.ContractEquivalence(a, b, kind, c.equivalence_hash(a, b, kind), True, verification)
 
 
 def test_exact_and_complement_equivalence_are_deterministic():

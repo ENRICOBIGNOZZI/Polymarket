@@ -21,6 +21,7 @@
     "port": 9090
   },
   "grafana": {
+    "canonical_operator_home": true,
     "dashboard_uid": "polymarket-v7",
     "dashboard_file": "monitoring/grafana/dashboards/polymarket-v7.json",
     "maker_fillability_dashboard": "monitoring/grafana/dashboards/polymarket-v7-maker-fillability.json",
@@ -31,6 +32,22 @@
     "provider_file": "monitoring/grafana/provisioning/dashboards/v7.yml",
     "host": "127.0.0.1",
     "port": 3000
+  },
+  "supervision": {
+    "policy": "config/v7_runtime_supervision.json",
+    "supervisor": "ops/v7_runtime_supervisor.py",
+    "entrypoint": "ops/v7_service_entrypoint.sh",
+    "status": "control/supervisor_status.json",
+    "single_writer_metric": "polymarket_v7_single_writer_ok",
+    "exact_sha_metric": "polymarket_v7_exact_sha_ok",
+    "bounded_restart_metric": "polymarket_v7_restart_count_window"
+  },
+  "retention": {
+    "policy": "config/v7_data_retention.json",
+    "runner": "monitoring/v7_retention.py",
+    "status": "control/retention_status.json",
+    "canonical_ledger_mode": "immutable_checkpoint_never_delete",
+    "durable_archive_required_before_local_prune": true
   },
   "external_fair": {
     "policy": "config/v7_external_fair.json",
@@ -62,7 +79,6 @@
   "retired_surfaces": [
     "v7_supervisor.json",
     "execution/v7_execution_supervisor.json",
-    "execution/market_proxy_status.json",
-    "execution/v7_execution_evidence.json"
+    "execution/market_proxy_status.json"
   ]
 }

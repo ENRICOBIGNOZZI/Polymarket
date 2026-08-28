@@ -6,4 +6,4 @@ The experiment registry separates fast state updates, parameter refits and polic
 
 The system should choose the next experiment by information gain. Current priority is exact-WS maker fillability and fill-conditioned markout. External/event strategies require real source adapters and independent forward evidence; slow models require survivorship-safe, coherent current-book holdouts.
 
-Code completion is reported separately from engineering validation and economic validation.
+Code completion is reported separately from engineering validation and economic validation. The OSINT, sports-latency, cross-platform, wallet-intelligence and market-open pipelines are implementation-complete; each remains RESEARCH with forward evidence and economics pending.

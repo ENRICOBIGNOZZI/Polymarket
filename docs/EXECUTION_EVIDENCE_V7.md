@@ -1,6 +1,6 @@
 # V7 execution evidence
 
-V7 adds a read-only, paper-only evidence sidecar. It exists to answer a
+V7 includes a read-only, paper-only evidence research utility. It exists to answer a
 specific question for every sleeve: is its claimed economic object supported by
 realized, executable observations?
 
@@ -35,7 +35,8 @@ stability, and a deterministic day-block bootstrap p-value. Models are labelled
 `PAPER_ELIGIBLE` only after all configured gates pass; otherwise they remain
 `INSUFFICIENT_EVIDENCE` with explicit reason codes.
 
-The current policy is intentionally fail-closed. It observes the V6 sleeves and
-publishes Grafana metrics, but does not reallocate capital automatically. A
-future allocator may consume only this typed evidence and must be promoted as a
-separate economic change.
+The utility is intentionally fail-closed and V7-only. The canonical 24/7
+runtime obtains operational truth from the append-only V7 ledger and
+`canonical_economics.json`; this utility does not own a required runtime
+surface, reallocate capital, or gate PAPER activity. A future allocator may
+consume only typed canonical evidence and remains a separate economic change.

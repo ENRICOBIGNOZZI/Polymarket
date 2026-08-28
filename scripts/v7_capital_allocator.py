@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 SLEEVES = {
+    "fast_structural": "fast_structural_capital_fraction",
     "graph_rv": "relative_value_capital_fraction",
     "hard_arb": "hard_arb_capital_fraction",
     "micro_taker": "micro_taker_capital_fraction",

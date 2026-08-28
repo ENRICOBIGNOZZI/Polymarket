@@ -11,6 +11,8 @@ Options parse_options(int argc, char** argv) {
         else if (argument == "--relations") options.relations = next();
         else if (argument == "--external-signals") options.external_signals = next();
         else if (argument == "--run-dir") options.run_dir = next();
+        else if (argument == "--run-root") options.run_root = next();
+        else if (argument == "--model-sha") options.model_sha = next();
         else if (argument == "--ws-url") options.ws_url = next();
         else if (argument == "--markets") options.markets = std::stoull(next());
         else if (argument == "--shard-size") options.shard_size = std::stoull(next());
@@ -27,8 +29,9 @@ Options parse_options(int argc, char** argv) {
             options.latency_sample_every = std::stoull(next());
         } else if (argument == "--help" || argument == "-h") {
             std::cout
-                << "polymarket_fast_arb_shadow [--config FILE] [--policy FILE] "
+                << "polymarket_v7_fast_structural_runtime [--config FILE] [--policy FILE] "
                    "[--relations CSV] [--external-signals CSV] [--run-dir DIR] "
+                   "[--run-root DIR] [--model-sha EXACT_SHA] "
                    "[--markets N] [--min-liquidity X] [--shard-size N] "
                    "[--snapshot-refresh-seconds N] [--status-interval-seconds N] "
                    "[--duration-seconds N] [--recycle-seconds N]\n";
@@ -42,6 +45,9 @@ Options parse_options(int argc, char** argv) {
     options.status_interval_seconds = std::max(1, options.status_interval_seconds);
     options.duration_seconds = std::max(0, options.duration_seconds);
     options.recycle_seconds = std::max(0, options.recycle_seconds);
+    if (!exact_sha(options.model_sha)) {
+        throw std::runtime_error("--model-sha must be an exact lowercase git SHA");
+    }
     return options;
 }
 
@@ -57,7 +63,7 @@ int main(int argc, char** argv) {
         auto policy = load_policy(options.policy);
 
         // V7 interprets the disabled fixed-dollar cap as metadata, not spendable
-        // notional. Shadow sizing remains bounded by PAPER capital and the
+        // notional. PAPER sizing remains bounded by sleeve capital and the
         // binding market/event/gross percentage ceilings.
         const double capital_fraction_ceiling = std::clamp(
             std::min({config.max_market_fraction, config.max_event_fraction,
@@ -65,7 +71,7 @@ int main(int argc, char** argv) {
             0.0, 1.0);
         const double capital_ceiling = config.starting_capital * capital_fraction_ceiling;
         if (!std::isfinite(capital_ceiling) || capital_ceiling <= 0.0) {
-            throw std::runtime_error("invalid PAPER capital ceiling for fast shadow");
+            throw std::runtime_error("invalid PAPER capital ceiling for Fast Structural");
         }
         if (!std::isfinite(policy.max_notional_usd) ||
             policy.max_notional_usd > capital_ceiling) {

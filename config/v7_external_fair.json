@@ -3,7 +3,7 @@
   "architecture": "V7",
   "component": "settlement_aware_external_fair",
   "enabled": true,
-  "execution_authority": "SHADOW_ZERO_AUTHORITY",
+  "execution_authority": "PAPER_EXECUTION_OWNER",
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
@@ -38,7 +38,13 @@
   "oracle": {
     "provider": "Chainlink",
     "product": "contract_specific_data_streams_twap",
-    "transport_binding": "UNBOUND_FAIL_CLOSED_UNTIL_EXACT_PROVIDER_SCHEMA_AND_PROVENANCE_VERIFIED",
+    "transport_binding": "VERIFIED_CHAINLINK_DATA_STREAMS_V3_ADAPTER_V1",
+    "adapter": "scripts/v7_same_oracle_adapter.py",
+    "official_rest_origin": "https://api.dataengine.chain.link",
+    "official_websocket_origin": "wss://ws.dataengine.chain.link",
+    "binding_file_env": "PM_V7_ORACLE_BINDING",
+    "credential_env": ["STREAMS_API_KEY", "STREAMS_API_SECRET"],
+    "credentials_absent_behavior": "CONTRACT_LOCAL_UNKNOWN_NO_NEW_RISK",
     "resolution_source_from_contract": true,
     "hardcoded_window_seconds": null,
     "max_age_ns": 2000000000,
@@ -116,7 +122,7 @@
   "cancel_overlay": {
     "implemented": true,
     "enabled": true,
-    "authority": "SHADOW",
+    "authority": "PAPER",
     "robust_capture_floor_per_share": 0.0,
     "bypass_min_quote_lifetime_for_critical_cancel": true,
     "external_event_can_trigger_without_pm_event": true,
@@ -135,8 +141,8 @@
   },
   "maker": {
     "external_fair_repricing_implemented": true,
-    "authority": "SHADOW",
-    "external_fair_enabled_for_live_quotes": false,
+    "authority": "PAPER",
+    "external_fair_enabled_for_live_quotes": true,
     "pm_state_role": [
       "BOOK",
       "QUEUE",
@@ -148,12 +154,13 @@
     "inventory_skew_remains_active": true,
     "execution_model_separate_from_fair_value": true,
     "execution_evidence_maturity": "COLD_START",
-    "economic_promotion_requires_fill_conditioned_evidence": true
+    "economic_validation_requires_fill_conditioned_evidence": true,
+    "economic_maturity_may_block_paper": false
   },
   "taker": {
     "native_v7_implemented": true,
-    "authority": "SHADOW",
-    "enabled_for_execution": false,
+    "authority": "PAPER",
+    "enabled_for_execution": true,
     "economic_model": "HOLD_TO_SETTLEMENT",
     "authoritative_fee_required": true,
     "unknown_fee_behavior": "NO_TAKE",
@@ -224,6 +231,25 @@
     "zero_causality_failures_required": true,
     "exact_code_sha_required": true,
     "rules_scope_match_required": true
+  },
+  "gate_classes": {
+    "A_HARD_CORRECTNESS_SAFETY": {
+      "may_block_paper": true,
+      "examples": ["INVALID_CONTRACT", "WRONG_OUTCOME_MAPPING", "FUTURE_DATA", "INVALID_L2", "SELF_CROSS", "RISK", "KILL", "ORACLE_UNKNOWN", "FEE_UNKNOWN"]
+    },
+    "B_ECONOMIC_MATURITY": {
+      "may_block_paper": false,
+      "reported_as": "ECONOMIC_CONFIDENCE",
+      "examples": ["INSUFFICIENT_FILLS", "INSUFFICIENT_EVENTS", "WEAK_SIGNIFICANCE", "NEGATIVE_2X_STRESS", "SHORT_FORWARD_HISTORY"]
+    },
+    "C_FUTURE_REAL_MONEY": {
+      "may_block_paper": false,
+      "in_scope": false
+    }
+  },
+  "old_micro_taker_migration": {
+    "overlapping_execution_authority_removed": true,
+    "canonical_micro_taker_remains_separate_non_settlement_benchmark": true
   },
   "hot_path": {
     "python": false,

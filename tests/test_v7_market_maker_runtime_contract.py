@@ -21,6 +21,7 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertAlmostEqual(
             sum(float(v7[key]) for key in (
                 "micro_maker_capital_fraction", "micro_taker_capital_fraction",
+                "fast_structural_capital_fraction",
                 "relative_value_capital_fraction", "hard_arb_capital_fraction",
                 "external_capital_fraction", "reserve_fraction",
             )),

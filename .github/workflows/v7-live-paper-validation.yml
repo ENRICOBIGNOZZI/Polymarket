@@ -39,7 +39,7 @@ jobs:
           set -euo pipefail
           [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ env.VALIDATION_SHA }}
           fetch-depth: 0
@@ -207,7 +207,7 @@ jobs:
 
       - name: Upload exact-SHA V7 PAPER evidence
         if: always() && steps.gate.outputs.ready == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: v7-live-paper-${{ env.VALIDATION_SHA }}-${{ github.run_id }}
           path: ${{ env.SMOKE_ROOT || format('runs/v7_cutover_validation/{0}', env.VALIDATION_SHA) }}/

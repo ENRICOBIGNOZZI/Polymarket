@@ -8,13 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-import v7_local_factor_data as v7_data
 import v7_model_book_snapshot as snapshots
-
-# The historical research driver imported a V6-named data helper. Current V7
-# supplies the same read-only discovery/history interface directly and never
-# restores the retired numerical runtime.
-sys.modules["v6_local_factor_intents"] = v7_data
 
 import v7_pca_stat_arb_research_base as driver
 
@@ -113,7 +107,7 @@ def _score_with_current_state(panel, model, current_logits, horizon_steps):
 def _atomic_json(path, value):
     if isinstance(value, dict):
         value = dict(value)
-        value["legacy_runtime_dependency"] = False
+        value["alternate_runtime_dependency"] = False
         value["historical_residual_z_used_for_admission"] = False
         value["current_residual_z_gate"] = _current_z_floor()
         value["common_factor_conditional_mean_forecast_required"] = True

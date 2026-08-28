@@ -23,6 +23,7 @@ private:
     std::unordered_map<std::string, std::int64_t> book_received_ts_ms_;
     std::unordered_set<std::string> ws_snapshot_ready_;
     std::unordered_set<std::string> rest_snapshot_ready_;
+    std::vector<pm::fast::Opportunity> pending_candidates_;
     std::deque<double> feed_latency_ms_;
     std::deque<double> decision_latency_us_;
     std::ofstream opportunity_log_;
@@ -39,6 +40,9 @@ private:
     std::uint64_t freshness_missing_rejections_ = 0;
     std::uint64_t freshness_age_rejections_ = 0;
     std::uint64_t freshness_skew_rejections_ = 0;
+    std::uint64_t candidate_sequence_ = 0;
+    std::uint64_t candidates_spooled_ = 0;
+    std::uint64_t candidates_dropped_ = 0;
 
     // A REST /books image is only a point-in-time snapshot, so its exchange age and
     // cross-leg skew are bounded strictly. A full WS book followed by uninterrupted,
@@ -99,6 +103,59 @@ private:
             << opportunity.expected_profit << ',' << opportunity.exchange_ts_ms << ','
             << opportunity.received_ts_ms << ',' << opportunity.decision_ts_ms << ','
             << feed_latency << ',' << csv_escape(leg_string(opportunity)) << '\n';
+    }
+
+    void spool_candidate(const pm::fast::Opportunity& opportunity) {
+        if (!opportunity.executable || opportunity.id.empty()
+            || opportunity.executable_shares <= 0.0 || !exact_sha(options_.model_sha)
+            || opportunity.exchange_ts_ms <= 0 || opportunity.received_ts_ms <= 0
+            || opportunity.decision_ts_ms < opportunity.received_ts_ms) return;
+        const auto recorded = std::max(now_ms(), opportunity.decision_ts_ms);
+        const auto sequence = ++candidate_sequence_;
+        const auto identity = std::to_string(std::hash<std::string>{}(opportunity.id));
+        const std::string record_id = "cpp-fast-" + std::to_string(recorded) + "-" +
+                                      std::to_string(sequence);
+        json::object metadata{
+            {"opportunity_kind", pm::fast::to_string(opportunity.kind)},
+            {"hard_arbitrage", opportunity.hard_arbitrage},
+            {"risk_class", opportunity.risk_class},
+            {"capital_required", opportunity.capital_required},
+            {"payoff_floor", opportunity.payoff_floor},
+            {"raw_edge_per_share", opportunity.raw_edge_per_share},
+            {"legs", leg_string(opportunity)},
+            {"paper_candidate_only", true},
+        };
+        json::object event{
+            {"schema_version", 1},
+            {"event_type", "CANDIDATE"},
+            {"strategy", "FAST_STRUCTURAL"},
+            {"model_sha", options_.model_sha},
+            {"paper_only", true},
+            {"authenticated_execution", false},
+            {"record_id", record_id},
+            {"recorded_ts_ms", recorded},
+            {"opportunity_id", opportunity.id},
+            {"candidate_id", "fast-candidate-" + identity + "-" +
+                             std::to_string(opportunity.decision_ts_ms)},
+            {"bundle_id", "fast-bundle-" + identity},
+            {"exchange_ts_ms", opportunity.exchange_ts_ms},
+            {"receive_ts_ms", opportunity.received_ts_ms},
+            {"decision_ts_ms", opportunity.decision_ts_ms},
+            {"book_snapshot_id", "fast-book-" + identity + "-" +
+                                 std::to_string(opportunity.exchange_ts_ms)},
+            {"predicted_alpha", opportunity.net_edge_per_share},
+            {"expected_ev", opportunity.expected_profit},
+            {"intended_action", "ARB"},
+            {"intended_size", opportunity.executable_shares},
+            {"capital_cost", 0.0},
+            {"latency_cost", 0.0},
+            {"metadata", std::move(metadata)},
+        };
+        if (!opportunity.event_id.empty()) event["event_id"] = opportunity.event_id;
+        const fs::path target = fs::path(options_.run_root) / "ledger" / "spool" /
+            (std::to_string(recorded) + "." + record_id + ".json");
+        atomic_write(target, json::serialize(event) + "\n");
+        ++candidates_spooled_;
     }
 
     void ensure_logs() {
@@ -590,6 +647,14 @@ private:
         if (changed && cooled) {
             write_opportunity(opportunity_log_, timestamp, opportunity);
             last_log_ms_[opportunity.id] = timestamp;
+            if (opportunity.executable) {
+                constexpr std::size_t kMaxPendingCandidates = 4096;
+                if (pending_candidates_.size() < kMaxPendingCandidates) {
+                    pending_candidates_.push_back(opportunity);
+                } else {
+                    ++candidates_dropped_;
+                }
+            }
         }
     }
 

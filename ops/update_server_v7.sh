@@ -103,6 +103,21 @@ if p.is_file():
 PY
 }
 
+production_supervisor_pid(){
+  local status="$(production_run_root)/control/supervisor_status.json"
+  python3 - "$status" <<'PY' 2>/dev/null || true
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1])
+if p.is_file():
+    try:
+        pid=int(json.loads(p.read_text()).get('supervisor_pid') or 0)
+        if pid>0: print(pid)
+    except Exception:
+        pass
+PY
+}
+
 force_stop_production_tree(){
   local root_pid="$1"
   python3 - "$root_pid" <<'PY'
@@ -168,7 +183,18 @@ PY
 }
 
 stop_production_runtime(){
-  local pid="$(production_pid)"
+  local supervisor_pid="$(production_supervisor_pid)" pid="$(production_pid)"
+  if [[ "$supervisor_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$supervisor_pid" 2>/dev/null; then
+    log "Stopping canonical V7 supervisor pid=$supervisor_pid"
+    kill -TERM "$supervisor_pid" 2>/dev/null || true
+    for _ in $(seq 1 $((DRAIN_ATTEMPTS * 4))); do
+      kill -0 "$supervisor_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$supervisor_pid" 2>/dev/null; then
+      fail "canonical V7 supervisor pid=$supervisor_pid did not stop cleanly"
+    fi
+  fi
   if [[ "$pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$pid" 2>/dev/null; then
     log "Stopping production V7 pid=$pid only"
     kill -TERM "$pid" 2>/dev/null || true
@@ -206,7 +232,13 @@ for rel in (
     'monitoring/exporter_v7.py',
     'monitoring/v7_ledger_metrics.py',
     'monitoring/v7_alerts.yml',
+    'monitoring/v7_runtime_contract.py',
+    'monitoring/v7_retention.py',
     'monitoring/grafana/dashboards/polymarket-v7.json',
+    'ops/v7_runtime_supervisor.py',
+    'ops/v7_service_entrypoint.sh',
+    'config/v7_runtime_supervision.json',
+    'config/v7_data_retention.json',
 ):
     assert (root/rel).is_file(), rel
 print(m['grafana']['dashboard_uid'])
@@ -234,12 +266,17 @@ prevalidate_candidate(){
       scripts/v7_canonical_economics.py \
       scripts/v7_portfolio_guard.py \
       monitoring/exporter_v7.py \
-      monitoring/v7_ledger_metrics.py
-    bash -n scripts/paper_v7_execution_loop.sh ops/update_server_v7.sh
+      monitoring/v7_ledger_metrics.py \
+      monitoring/v7_runtime_contract.py \
+      monitoring/v7_retention.py \
+      ops/v7_runtime_supervisor.py
+    bash -n scripts/paper_v7_execution_loop.sh ops/update_server_v7.sh ops/v7_service_entrypoint.sh
     python3 -m json.tool config/live_champion.json >/dev/null
     python3 -m json.tool config/paper_v7.json >/dev/null
     python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
     python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7.json >/dev/null
+    python3 -m json.tool config/v7_runtime_supervision.json >/dev/null
+    python3 -m json.tool config/v7_data_retention.json >/dev/null
   )
   git -C "$APP_DIR" worktree remove --force "$candidate" >/dev/null
   candidate=""
@@ -257,11 +294,16 @@ build_current_checkout(){
 start_production_runtime(){
   local run_root="$(production_run_root)"
   mkdir -p "$run_root"
+  # Only an explicitly authorized exact-SHA deployment clears a supervisor
+  # quarantine. Ledger, inventory and KILL evidence remain for reconciliation.
+  rm -f "$run_root/control/supervisor_status.json"
   nohup env \
-    PM_V7_CONFIG=config/paper_v7.json \
+    POLYMARKET_APP_DIR="$APP_DIR" \
     PM_V7_RUN_ROOT="$run_root" \
+    POLYMARKET_EXPECTED_SHA="$EXPECTED_SHA" \
+    PM_V7_EXACT_SHA_CI_GREEN=true \
     PM_TRADE_RECORDER="$APP_DIR/build/polymarket_v7_trade_recorder" \
-    bash "$APP_DIR/scripts/paper_v7_execution_loop.sh" \
+    bash "$APP_DIR/ops/v7_service_entrypoint.sh" \
     >>"$run_root/deploy-runtime.log" 2>&1 </dev/null &
   local pid=$!
   log "Started production V7 pid=$pid"
@@ -372,6 +414,9 @@ PY
   local metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
   grep -q '^polymarket_v7_runtime_info 1$' <<<"$metrics"
   grep -q '^polymarket_v7_execution_alive 1$' <<<"$metrics"
+  grep -q '^polymarket_v7_supervisor_alive 1$' <<<"$metrics"
+  grep -q '^polymarket_v7_single_writer_ok 1$' <<<"$metrics"
+  grep -q '^polymarket_v7_exact_sha_ok 1$' <<<"$metrics"
   grep -q '^polymarket_v7_paper_only_contract_ok 1$' <<<"$metrics"
   grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics"
   grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics"

@@ -31,7 +31,7 @@ class V7FastAuthoritySentinelContractTest(unittest.TestCase):
             "config.starting_capital * capital_fraction_ceiling",
             "policy.max_notional_usd > capital_ceiling",
             "policy.max_notional_usd = capital_ceiling",
-            "invalid PAPER capital ceiling for fast shadow",
+            "invalid PAPER capital ceiling for Fast Structural",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, source)
@@ -60,6 +60,18 @@ class V7FastAuthoritySentinelContractTest(unittest.TestCase):
                 self.assertIn(token, workflow)
         self.assertNotIn("fast_arb_v7_shadow.json", workflow)
         self.assertNotIn("fast-arb-hourly", workflow)
+
+    def test_fast_structural_is_built_started_and_spooled_canonically(self) -> None:
+        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        loop = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+        runtime = (ROOT / "src" / "fast_runtime" / "part3.inc").read_text(encoding="utf-8")
+        self.assertIn("polymarket_v7_fast_structural_runtime", cmake)
+        self.assertIn('FAST_STRUCTURAL_RUNTIME="${PM_V7_FAST_STRUCTURAL_RUNTIME', loop)
+        self.assertIn('--model-sha "$SHA"', loop)
+        self.assertIn('"strategy", "FAST_STRUCTURAL"', runtime)
+        self.assertIn('"event_type", "CANDIDATE"', runtime)
+        self.assertIn('"ledger" / "spool"', runtime)
+        self.assertIn('"paper_candidate_only", true', runtime)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly Polymarket V7 PAPER retention
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+RandomizedDelaySec=2min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

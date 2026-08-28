@@ -13,6 +13,8 @@ import csv
 import json
 import math
 import os
+import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -75,6 +77,57 @@ def _pid_alive(value: Any) -> bool:
     except (OSError, ProcessLookupError, PermissionError):
         return False
     return True
+
+
+def _runtime_operations(run_root: Path, runtime: dict[str, Any], now: int) -> dict[str, Any]:
+    supervisor = _json(run_root / "control" / "supervisor_status.json")
+    retention = _json(run_root / "control" / "retention_status.json")
+    lock_pid = 0
+    try:
+        lock_pid = int((run_root / "control" / "runtime.lock" / "pid").read_text(encoding="utf-8").strip())
+    except (OSError, TypeError, ValueError, OverflowError):
+        pass
+    runtime_pid = _integer(runtime.get("pid"), 0)
+    supervisor_pid = _integer(supervisor.get("supervisor_pid"), 0)
+    child_pid = _integer(supervisor.get("child_pid"), 0)
+    started_at = _integer(supervisor.get("started_at"), 0)
+    disk = retention.get("disk") if isinstance(retention.get("disk"), dict) else {}
+    if not disk:
+        try:
+            usage = shutil.disk_usage(run_root)
+            disk = {
+                "total_bytes": usage.total,
+                "used_bytes": usage.used,
+                "free_bytes": usage.free,
+                "free_ratio": usage.free / usage.total if usage.total else 0.0,
+                "state": "unknown",
+            }
+        except OSError:
+            disk = {}
+    ledger_path = run_root / "ledger" / "execution.jsonl"
+    ledger_parent = ledger_path.parent
+    ledger_writable = ledger_parent.is_dir() and os.access(ledger_parent, os.W_OK)
+    if ledger_path.exists():
+        ledger_writable = ledger_writable and os.access(ledger_path, os.W_OK)
+    return {
+        "supervisor": supervisor,
+        "supervisor_alive": _pid_alive(supervisor_pid),
+        "single_writer": runtime_pid > 0 and runtime_pid == lock_pid and _pid_alive(lock_pid) and (child_pid in {0, runtime_pid}),
+        "runtime_uptime": max(0, now - started_at) if started_at > 0 else 0,
+        "restart_count": _integer(supervisor.get("restart_count_window"), 0),
+        "ledger_writable": ledger_writable,
+        "disk": disk,
+        "retention_age": _age(now, retention.get("timestamp")),
+        "grafana_up": _local_port_up("127.0.0.1", 3000),
+    }
+
+
+def _local_port_up(host: str, port: int) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=0.025):
+            return True
+    except OSError:
+        return False
 
 
 def _safe_label(value: Any) -> str:
@@ -241,6 +294,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "economics": _file_age(economics_path, now),
         "trade_tape": tape["age"],
     }
+    operations = _runtime_operations(run_root, runtime, now)
     return {
         "timestamp": now,
         "sha": sha,
@@ -264,6 +318,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "authority": {"valid": authority_valid, "max_drawdown": authority_max_drawdown},
         "strategies": strategies,
         "ages": ages,
+        "operations": operations,
         "economics": {
             "starting_capital": starting,
             "cash": sum(_number(row.get("equity")) for name, row in sleeves.items() if isinstance(row, dict) and name == "reserve"),
@@ -408,6 +463,9 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     canonical = snapshot["canonical_economics"]
     maker_lab = snapshot.get("maker_lab") if isinstance(snapshot.get("maker_lab"), dict) else {}
     maker_latency = snapshot.get("maker_latency") if isinstance(snapshot.get("maker_latency"), dict) else {}
+    operations = snapshot.get("operations") if isinstance(snapshot.get("operations"), dict) else {}
+    disk = operations.get("disk") if isinstance(operations.get("disk"), dict) else {}
+    supervisor = operations.get("supervisor") if isinstance(operations.get("supervisor"), dict) else {}
     labels = {"adapter":"v7_native","run_root":snapshot["run_root"],"version":"v7"}
     lines = [
         "# TYPE polymarket_v7_runtime_info gauge",
@@ -428,6 +486,19 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_paper_only_contract_ok", 1 if runtime.get("paper_only") is True and snapshot["portfolio"].get("paper_only") is True else 0),
         _metric("polymarket_v7_authenticated_execution_disabled", 1 if runtime.get("authenticated_execution") is False and runtime.get("real_order_submission") is False and snapshot["portfolio"].get("authenticated_execution") is False else 0),
         _metric("polymarket_v7_execution_alive", 1 if snapshot["runtime_alive"] else 0),
+        _metric("polymarket_v7_component_ready", 1 if snapshot["runtime_alive"] else 0, {"component": "core_runtime"}),
+        _metric("polymarket_v7_supervisor_alive", 1 if operations.get("supervisor_alive") else 0),
+        _metric("polymarket_v7_monitoring_component_up", 1, {"component": "exporter"}),
+        _metric("polymarket_v7_monitoring_component_up", 1 if operations.get("grafana_up") else 0, {"component": "grafana"}),
+        _metric("polymarket_v7_supervisor_info", 1, {"state": supervisor.get("state", "UNKNOWN")}),
+        _metric("polymarket_v7_runtime_uptime_seconds", operations.get("runtime_uptime")),
+        _metric("polymarket_v7_restart_count_window", operations.get("restart_count")),
+        _metric("polymarket_v7_single_writer_ok", 1 if operations.get("single_writer") else 0),
+        _metric("polymarket_v7_exact_sha_ok", 1 if runtime.get("model_sha") == snapshot["sha"] else 0),
+        _metric("polymarket_v7_ledger_writable", 1 if operations.get("ledger_writable") else 0),
+        _metric("polymarket_v7_disk_free_bytes", disk.get("free_bytes")),
+        _metric("polymarket_v7_disk_free_ratio", disk.get("free_ratio")),
+        _metric("polymarket_v7_retention_status_age_seconds", 0 if not math.isfinite(float(operations.get("retention_age", math.inf))) else operations.get("retention_age")),
         _metric("polymarket_runtime_equity_usd", economics["equity"]),
         _metric("polymarket_runtime_pnl_usd", economics["pnl"]),
         _metric("polymarket_runtime_realized_pnl_usd", economics["realized_pnl"]),
@@ -448,7 +519,14 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_latency_samples_present", 1 if maker_latency.get("present") else 0),
         _metric("polymarket_v7_latency_rows", maker_latency.get("rows")),
         _metric("polymarket_execution_opportunities", _integer(ledger_total.get("opportunities"))),
+        _metric("polymarket_execution_candidates", _integer(ledger_total.get("candidates"))),
+        _metric("polymarket_execution_makes", _integer(ledger_total.get("makes"))),
+        _metric("polymarket_execution_takes", _integer(ledger_total.get("takes"))),
+        _metric("polymarket_execution_arbs", _integer(ledger_total.get("arbs"))),
+        _metric("polymarket_execution_cancels", _integer(ledger_total.get("cancels"))),
+        _metric("polymarket_execution_withdraws", _integer(ledger_total.get("withdraws"))),
         _metric("polymarket_execution_orders_submitted", _integer(ledger_total.get("orders_submitted"))),
+        _metric("polymarket_execution_effective_orders", _integer(ledger_total.get("effective_orders"))),
         _metric("polymarket_execution_fills", _integer(ledger_total.get("fills"))),
         _metric("polymarket_execution_complete_fills", _integer(ledger_total.get("complete_fills"))),
         _metric("polymarket_execution_partial_fills", _integer(ledger_total.get("partial_fills"))),

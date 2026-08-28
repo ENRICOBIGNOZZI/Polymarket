@@ -17,11 +17,13 @@ class CapitalAllocatorTests(unittest.TestCase):
             "authenticated_execution": False, "real_order_submission": False,
             "relative_value_capital_fraction": .34, "hard_arb_capital_fraction": .22,
             "micro_taker_capital_fraction": .12, "micro_maker_capital_fraction": .22,
+            "fast_structural_capital_fraction": 0.0,
             "external_capital_fraction": .08, "reserve_fraction": .02,
         }}
         budgets = allocate(cfg)
         self.assertAlmostEqual(sum(budgets.values()), 10000.0)
         self.assertAlmostEqual(budgets["graph_rv"], 3400.0)
+        self.assertAlmostEqual(budgets["fast_structural"], 0.0)
         self.assertAlmostEqual(budgets["reserve"], 200.0)
 
     def test_overallocation_fails_closed(self) -> None:

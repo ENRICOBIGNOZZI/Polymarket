@@ -1,0 +1,32 @@
+{
+  "schema": "polymarket_v7_data_retention_v1",
+  "version": 7,
+  "paper_only": true,
+  "disk": {
+    "warning_free_ratio": 0.20,
+    "critical_free_ratio": 0.10,
+    "minimum_free_bytes": 5368709120
+  },
+  "canonical_ledger": {
+    "path": "ledger/execution.jsonl",
+    "mode": "immutable_checkpoint_never_delete",
+    "archive_directory": "archive/canonical-ledger",
+    "checkpoint_interval_seconds": 3600,
+    "retain_local_checkpoints": 168,
+    "durable_archive_required_before_local_prune": true
+  },
+  "streams": [
+    {"name": "ws_tape", "patterns": ["market_data/*.csv.*", "market_data/*.jsonl.*"], "retention_days": 7},
+    {"name": "trade_tape", "patterns": ["trade_tape.csv.*"], "retention_days": 30},
+    {"name": "latency_telemetry", "patterns": ["micro_maker/latency.csv.*"], "retention_days": 14},
+    {"name": "external_events", "patterns": ["external/*.csv.*", "external/*.jsonl.*"], "retention_days": 30},
+    {"name": "sports_events", "patterns": ["sports/*.csv.*", "sports/*.jsonl.*"], "retention_days": 30},
+    {"name": "wallet_tape", "patterns": ["wallet/*.csv.*", "wallet/*.jsonl.*"], "retention_days": 30},
+    {"name": "runtime_logs", "patterns": ["**/*.log.*", "**/*.log.gz"], "retention_days": 14}
+  ],
+  "active_files": {
+    "diagnostic_log_max_bytes": 104857600,
+    "diagnostic_log_generations": 10,
+    "never_copytruncate": ["ledger/execution.jsonl", "trade_tape.csv", "micro_maker/latency.csv"]
+  }
+}

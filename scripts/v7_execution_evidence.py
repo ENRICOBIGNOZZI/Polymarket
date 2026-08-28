@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Fail-closed execution evidence for V6/V7 paper sleeves.
+"""Fail-closed research evidence utility for V7 PAPER sleeves.
 
 This sidecar deliberately measures each model against the economic target it
 claims to trade.  It is not an allocator and cannot mutate configs, intents,
 risk limits, credentials, or execution state.
+
+The canonical runtime evidence source is the append-only V7 ledger plus
+``v7_canonical_economics.py``. This module is optional research analysis and is
+never a liveness or PAPER-admission gate.
 """
 from __future__ import annotations
 

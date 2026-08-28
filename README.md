@@ -62,7 +62,7 @@ config/v7_professional_market_maker.json
 scripts/v7_market_maker_core.py
 scripts/v7_market_maker_model.py
 scripts/v7_market_maker_rewards.py
-scripts/v7_market_maker_worker.py
+build/polymarket_v7_market_maker_runtime
 scripts/v7_market_maker_status.py
 ```
 
@@ -74,7 +74,23 @@ Shared C++ WebSocket/L2 substrate with dual exchange/receive clocks, lineage inv
 src/fast_arb.cpp
 src/fast_ws.cpp
 src/fast_runtime/
+src/v7_fast_structural_runtime.cpp
 include/pm/fast_arb.hpp
+```
+
+### Settlement fair and informed taker
+
+PAPER authority is configured for settlement-aware maker repricing/cancel and
+full-depth informed taking. Contract correctness remains fail-closed: exact
+rules, outcome mapping, fee and same-oracle binding are mandatory. Missing
+bindings quarantine only the affected contracts; economic maturity is reported
+but does not add another PAPER gate. Runtime readiness remains false until the
+worker and oracle are actually healthy.
+
+```text
+config/v7_external_fair.json
+scripts/v7_same_oracle_adapter.py
+src/v7_external_*.cpp
 ```
 
 ### Graph / relative value
@@ -121,10 +137,13 @@ config/v7_strategy_registry.json
 scripts/v7_strategy_governance.py
 scripts/v7_structural_relations.py
 scripts/v7_osint_engine.py
+scripts/v7_osint_pipeline.py
 scripts/v7_sports_latency.py
 scripts/v7_cross_platform.py
 scripts/v7_wallet_intelligence.py
+scripts/v7_wallet_dataset.py
 scripts/v7_market_open.py
+scripts/v7_market_open_pipeline.py
 ```
 
 Their current authority is explicit in the registry. Code availability is not
@@ -170,9 +189,7 @@ The recorder writes the causal public tape used by the V7 PAPER execution models
 ```bash
 sudo apt-get update
 sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev python3
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
-ctest --test-dir build --output-on-failure
+bash scripts/verify_v7.sh
 ```
 
 The active PAPER runtime is:
@@ -180,6 +197,9 @@ The active PAPER runtime is:
 ```bash
 bash scripts/paper_v7_execution_loop.sh
 ```
+
+For unattended operation use the exact-SHA supervisor and the supplied
+systemd/launchd service templates under `ops/`.
 
 ## Validation and deployment
 

@@ -9,8 +9,18 @@ RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
 MAKER_RUNTIME="${PM_V7_MARKET_MAKER_RUNTIME:-build/polymarket_v7_market_maker_runtime}"
 MARKOUT_OBSERVER="${PM_V7_MAKER_MARKOUT_OBSERVER:-build/polymarket_v7_maker_markout_observer}"
 FILLABILITY_OBSERVER="${PM_V7_MAKER_FILLABILITY_OBSERVER:-build/polymarket_v7_maker_fillability_observer}"
+FAST_STRUCTURAL_RUNTIME="${PM_V7_FAST_STRUCTURAL_RUNTIME:-build/polymarket_v7_fast_structural_runtime}"
 MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
+FAST_STRUCTURAL_POLICY="${PM_V7_FAST_STRUCTURAL_POLICY:-config/v7_fast_structural.json}"
+FAST_STRUCTURAL_RELATIONS="${PM_V7_FAST_STRUCTURAL_RELATIONS:-config/v7_fast_structural_relations.csv}"
+EXTERNAL_FAIR_POLICY="${PM_V7_EXTERNAL_FAIR_POLICY:-config/v7_external_fair.json}"
+ORACLE_BINDING="${PM_V7_ORACLE_BINDING:-}"
+EXACT_SHA_CI_GREEN="${PM_V7_EXACT_SHA_CI_GREEN:-false}"
 SHA="$(git rev-parse HEAD)"
+[[ "$EXACT_SHA_CI_GREEN" == "true" || "$EXACT_SHA_CI_GREEN" == "false" ]] || {
+  echo "PM_V7_EXACT_SHA_CI_GREEN must be true or false" >&2
+  exit 72
+}
 MAKER_CHAMPION_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
 MAKER_CHALLENGER_MODEL="$RUN_ROOT/micro_maker/execution_model_challenger.json"
 MAKER_MODEL_REGISTRY="$RUN_ROOT/micro_maker/model_registry.json"
@@ -35,14 +45,15 @@ CONTROL="$RUN_ROOT/control"
 ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
 LOCK="$CONTROL/runtime.lock"
-mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/learned_execution"
+mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/fast_structural" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/learned_execution"
 touch "$RUN_ROOT/ledger/execution.jsonl"
 
-python3 - "$CONFIG" "$MAKER_POLICY" "$WS_JSON_ARENA_MAKER_MAX_BYTES" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
+python3 - "$CONFIG" "$MAKER_POLICY" "$EXTERNAL_FAIR_POLICY" "$WS_JSON_ARENA_MAKER_MAX_BYTES" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
 import json,sys
 cfg=json.load(open(sys.argv[1]))
 v7=cfg.get("v7") or {}
 maker=json.load(open(sys.argv[2]))
+external=json.load(open(sys.argv[3]))
 registry_path=v7.get("strategy_registry")
 assert isinstance(registry_path,str) and registry_path
 registry=json.load(open(registry_path))
@@ -60,10 +71,10 @@ assert registry.get("safety",{}).get("authenticated_execution") is False
 assert registry.get("safety",{}).get("real_order_submission") is False
 assert registry.get("governance",{}).get("automatic_promotion") is False
 assert all(row.get("authority") in {"RESEARCH","SHADOW","PAPER"} for row in registry.get("strategies",[]))
-maker_arena=int(sys.argv[3])
-observer_arena=int(sys.argv[4])
-fillability_arena=int(sys.argv[5])
-total_budget=int(sys.argv[6])
+maker_arena=int(sys.argv[4])
+observer_arena=int(sys.argv[5])
+fillability_arena=int(sys.argv[6])
+total_budget=int(sys.argv[7])
 assert cfg.get("engine_version")==7
 assert cfg.get("paper_only") is True
 assert v7.get("paper_only") is True
@@ -78,6 +89,14 @@ assert maker.get("architecture",{}).get("single_account_allocator") is True
 assert maker.get("architecture",{}).get("single_canonical_ledger_writer") is True
 assert maker.get("architecture",{}).get("fast_path") == "cpp_websocket_event_driven"
 assert maker.get("architecture",{}).get("slow_path") == "python_reward_selection_and_model_fit"
+assert external.get("execution_authority") == "PAPER_EXECUTION_OWNER"
+assert external.get("paper_only") is True
+assert external.get("authenticated_execution") is False
+assert external.get("real_order_submission") is False
+assert external.get("taker",{}).get("enabled_for_execution") is True
+assert external.get("maker",{}).get("external_fair_enabled_for_live_quotes") is True
+assert external.get("gate_classes",{}).get("A_HARD_CORRECTNESS_SAFETY",{}).get("may_block_paper") is True
+assert external.get("gate_classes",{}).get("B_ECONOMIC_MATURITY",{}).get("may_block_paper") is False
 assert maker_arena >= 16*1024*1024
 assert observer_arena >= 16*1024*1024
 assert fillability_arena >= 16*1024*1024
@@ -97,6 +116,31 @@ echo $$ > "$LOCK/pid"
 rm -f "$KILL"
 
 python3 scripts/v7_capital_allocator.py --config "$CONFIG" --output-dir "$ALLOC" >/dev/null
+pids=()
+
+# Official settlement-source data is optional at process level and mandatory at
+# contract level. Missing credentials/binding isolate only settlement-aware
+# contracts; unrelated maker/arb sleeves continue. When configured, the adapter
+# authenticates only to Chainlink market data and can never submit an order.
+if [[ -n "$ORACLE_BINDING" && -f "$ORACLE_BINDING" ]]; then
+  python3 scripts/v7_same_oracle_adapter.py \
+    --binding "$ORACLE_BINDING" \
+    --tape "$RUN_ROOT/external_fair/oracle_events.jsonl" \
+    --status "$RUN_ROOT/external_fair/oracle_status.json" \
+    >> "$RUN_ROOT/external_fair/oracle_adapter.log" 2>&1 &
+  pids+=("$!")
+else
+  python3 - "$RUN_ROOT/external_fair/oracle_status.json" <<'PY'
+import json,os,sys,time
+from pathlib import Path
+path=Path(sys.argv[1]); tmp=path.with_name(path.name+f'.tmp.{os.getpid()}')
+tmp.write_text(json.dumps({
+    'schema':'polymarket_v7_same_oracle_status_v1','state':'UNKNOWN',
+    'reason':'binding_not_configured_contracts_quarantined','timestamp_ns':time.time_ns(),
+    'paper_only':True,'authenticated_execution':False,'real_order_submission':False,
+},sort_keys=True)+'\n',encoding='utf-8'); os.replace(tmp,path)
+PY
+fi
 
 CONFIG_HASH="$(git hash-object "$CONFIG")"
 POLICY_HASH="$(git hash-object "$MAKER_POLICY")"
@@ -118,13 +162,11 @@ write_runtime_status() {
     model_source="cold_start_policy"
   fi
   local tmp="$CONTROL/runtime_status.json.tmp.$$"
-  printf '{"schema":"polymarket_v7_runtime_status_v2","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"primary_economic_sleeve":"MICRO_MAKER_PRO"}\n' \
-    "$now" "$SHA" "$CONFIG_HASH" "$POLICY_HASH" "$model_hash" "$model_source" "$RUN_ID" "$LEDGER_ID" "$SERVER_ID" "$$" "$state" "$killed" > "$tmp"
+  printf '{"schema":"polymarket_v7_runtime_status_v2","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"primary_economic_sleeve":"MICRO_MAKER_PRO","execution_authority":"PAPER_EXECUTION_OWNER","single_execution_owner":true,"canonical_state_reconciled":true,"exact_sha_ci_green":%s,"p0_authority_configured":["professional_maker","crypto_settlement_fair","crypto_informed_taker"],"p0_full_stack_ready":false,"readiness":"CORE_RUNTIME_ONLY","external_fair_runtime_ready":false}\n' \
+    "$now" "$SHA" "$CONFIG_HASH" "$POLICY_HASH" "$model_hash" "$model_source" "$RUN_ID" "$LEDGER_ID" "$SERVER_ID" "$$" "$state" "$killed" "$EXACT_SHA_CI_GREEN" > "$tmp"
   mv "$tmp" "$CONTROL/runtime_status.json"
 }
 write_runtime_status starting false
-
-pids=()
 cleanup_started=0
 cleanup() {
   if [[ "$cleanup_started" == 1 ]]; then
@@ -181,6 +223,10 @@ fi
 if [[ ! -x "$FILLABILITY_OBSERVER" ]]; then
   echo "missing V7 maker exact-WS fillability observer executable: $FILLABILITY_OBSERVER" >&2
   exit 78
+fi
+if [[ ! -x "$FAST_STRUCTURAL_RUNTIME" ]]; then
+  echo "missing V7 Fast Structural PAPER runtime executable: $FAST_STRUCTURAL_RUNTIME" >&2
+  exit 79
 fi
 if [[ ! -f scripts/v7_public_https_proxy.py ]]; then
   echo "missing V7 public HTTPS proxy" >&2
@@ -269,6 +315,20 @@ pids+=("$!")
     sleep 60
   done
 ) & pids+=("$!")
+
+# V7 Fast Structural is a PAPER-only detector/execution-planning sleeve. It
+# owns neither authenticated transport nor a second account; its child config
+# is pre-partitioned by the canonical allocator and all outputs remain inside
+# the canonical run root.
+"$FAST_STRUCTURAL_RUNTIME" \
+  --config "$ALLOC/fast_structural.json" \
+  --policy "$FAST_STRUCTURAL_POLICY" \
+  --relations "$FAST_STRUCTURAL_RELATIONS" \
+  --external-signals "$RUN_ROOT/external/external_signals.csv" \
+  --run-dir "$RUN_ROOT/fast_structural" --run-root "$RUN_ROOT" --model-sha "$SHA" \
+  --markets 1000 --min-liquidity 2 --shard-size 200 \
+  >> "$RUN_ROOT/fast_structural/runtime.log" 2>&1 &
+pids+=("$!")
 
 # Slow-plane exact-SHA fill/markout fit. A refit is a CHALLENGER only. It is
 # written to a separate artifact and registered for OOS/shadow-PAPER review.

@@ -57,6 +57,70 @@ groups:
           summary: Canonical V7 runtime process is down
           description: The exact-SHA V7 process-group owner is not alive.
 
+      - alert: PolymarketV7SupervisorDown
+        expr: polymarket_v7_supervisor_alive < 1
+        for: 30s
+        labels: {severity: critical}
+        annotations:
+          summary: Canonical V7 supervisor is down
+          description: The bounded exact-SHA FULL-PAPER supervisor is not alive.
+
+      - alert: PolymarketV7DuplicateWriter
+        expr: polymarket_v7_single_writer_ok < 1
+        for: 5s
+        labels: {severity: critical}
+        annotations:
+          summary: Canonical V7 single-writer proof failed
+          description: Runtime PID, live process, and canonical runtime lock no longer identify exactly one writer.
+
+      - alert: PolymarketV7ExactShaDrift
+        expr: polymarket_v7_exact_sha_ok < 1
+        for: 0s
+        labels: {severity: critical}
+        annotations:
+          summary: V7 runtime exact-SHA drift detected
+          description: The runtime-reported SHA differs from the deployed repository HEAD.
+
+      - alert: PolymarketV7CanonicalLedgerUnavailable
+        expr: (polymarket_v7_ledger_present < 1) or (polymarket_v7_ledger_writable < 1)
+        for: 5s
+        labels: {severity: critical}
+        annotations:
+          summary: Canonical V7 ledger is unavailable
+          description: The one append-only PAPER ledger is missing or its owned path is not writable.
+
+      - alert: PolymarketV7GrafanaDown
+        expr: polymarket_v7_monitoring_component_up{component="grafana"} < 1
+        for: 60s
+        labels: {severity: warning}
+        annotations:
+          summary: Canonical Grafana operator home is down
+          description: The local Grafana listener is unavailable while exporter telemetry remains healthy.
+
+      - alert: PolymarketV7DiskPressure
+        expr: polymarket_v7_disk_free_ratio < 0.20 or polymarket_v7_disk_free_bytes < 5368709120
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: V7 runtime disk is under pressure
+          description: Free disk is below 20 percent or 5 GiB; retention and immutable-ledger archival need attention.
+
+      - alert: PolymarketV7DiskPressureCritical
+        expr: polymarket_v7_disk_free_ratio < 0.10
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: V7 runtime disk pressure is critical
+          description: Free disk is below 10 percent; preserve the ledger and withdraw/quarantine safely.
+
+      - alert: PolymarketV7RestartStorm
+        expr: polymarket_v7_restart_count_window >= 3
+        for: 0s
+        labels: {severity: critical}
+        annotations:
+          summary: V7 runtime is repeatedly restarting
+          description: At least three bounded restart attempts occurred in the current supervision window.
+
       - alert: PolymarketV7StateMissing
         expr: polymarket_v7_state_present == 0
         for: 15s
@@ -96,3 +160,11 @@ groups:
         annotations:
           summary: Canonical V7 execution ledger is invalid
           description: The canonical ledger is present but invalid or mixed-SHA; fill and PnL evidence must not be trusted.
+
+      - alert: PolymarketV7SettlementOracleStale
+        expr: (polymarket_external_fair_present > 0) and (polymarket_external_fair_oracle_healthy < 1)
+        for: 30s
+        labels: {severity: critical}
+        annotations:
+          summary: Active settlement oracle is stale or unhealthy
+          description: Only settlement-dependent contracts must be quarantined; unrelated healthy maker markets may continue.

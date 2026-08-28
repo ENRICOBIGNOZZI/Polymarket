@@ -7,7 +7,12 @@ import v7_sports_latency as s
 
 
 def mapping():
-    return s.ContractMapping("m", "g", s.Sport.SOCCER, "MATCH_WINNER", "HOME", "league", "h", True)
+    return s.ContractMapping(
+        "m", "g", s.Sport.SOCCER, "MATCH_WINNER", "HOME", "league", "h", True,
+        cutoff_ms=10_000, timezone="UTC", cancellation_rules="refund",
+        outcome_semantics="home_wins_including_extra_time",
+        verification_uri="https://league/rules", verification_hash="evidence", verified_at_ms=1,
+    )
 
 
 def feed(seq=1, **state):
@@ -32,7 +37,12 @@ def test_sequence_gap_and_unverified_feed_fail_closed():
 
 
 def test_contract_semantics_are_not_reused_for_totals():
-    bad = s.ContractMapping("m", "g", s.Sport.SOCCER, "TOTAL", "HOME", "league", "h", True)
+    bad = s.ContractMapping(
+        "m", "g", s.Sport.SOCCER, "TOTAL", "HOME", "league", "h", True,
+        cutoff_ms=10_000, timezone="UTC", cancellation_rules="refund",
+        outcome_semantics="total_goals", verification_uri="https://league/rules",
+        verification_hash="evidence", verified_at_ms=1,
+    )
     guard = s.FeedGuard("g", 1000); guard.apply(feed(), 1100)
     assert s.decide(bad, guard, now_ms=1100, pm_bid=.4, pm_ask=.5,
                     uncertainty=.02, executable_cost=0, minimum_edge=0).action == "NOTHING"

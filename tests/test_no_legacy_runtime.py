@@ -1,10 +1,22 @@
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+TEXT_SCAN_ALLOWLIST = {
+    "config/live_champion.json",          # explicit prohibition/history
+    "config/operator_directives.json",    # explicit prohibition/history
+    "scripts/v7_archive_market_universe.py",  # archive boundary documentation
+}
+RETIRED_TEXT = re.compile(
+    r"(?i)(?:paper[_-]?v[1-6]|v[1-6][_-](?:runtime|broker|ledger|scheduler|config|paper)|"
+    r"(?:fallback|start|run)[_-]?v[1-6]|v6_local_factor_intents)"
+)
 
 FORBIDDEN_PATHS = {
     ".github/actions/project-context/action.yml",
@@ -72,6 +84,24 @@ class NoLegacyRuntimeTest(unittest.TestCase):
             rel = path.relative_to(ROOT).as_posix().lower()
             if any(token in rel for token in ("paper_v3", "paper_v4", "paper_v5", "paper_v6", "/v3_", "/v4_", "/v5_", "/v6_", "_v3.", "_v4.", "_v5.", "_v6.")):
                 bad.append(rel)
+        self.assertEqual(sorted(bad), [])
+
+    def test_all_tracked_operational_text_has_no_retired_generation_surface(self) -> None:
+        tracked = subprocess.check_output(
+            ["git", "ls-files", "-z"], cwd=ROOT
+        ).decode("utf-8").split("\0")
+        bad: list[str] = []
+        for rel in tracked:
+            if not rel or rel in TEXT_SCAN_ALLOWLIST or rel.startswith("tests/"):
+                continue
+            path = ROOT / rel
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            match = RETIRED_TEXT.search(text)
+            if match:
+                bad.append(f"{rel}:{match.group(0)}")
         self.assertEqual(sorted(bad), [])
 
     def test_workflows_are_v7_or_core_validation_only(self) -> None:

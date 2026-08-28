@@ -104,6 +104,9 @@ def check_external_fair_invariants(
     if promotion.get("automatic_promotion") is not False:
         failures.append("AUTOMATIC_PROMOTION_FORBIDDEN")
 
+    # Static configuration can declare PAPER authority, but process ownership is
+    # attested only by the live runtime status.  Deployment/cutover calls this
+    # check with that status; ordinary schema checks must not fabricate it.
     if active:
         if authority not in ACTIVE_AUTHORITIES:
             failures.append("UNKNOWN_ACTIVE_AUTHORITY")
@@ -114,12 +117,24 @@ def check_external_fair_invariants(
         old_taker = old_taker if isinstance(old_taker, dict) else {}
         if old_taker.get("overlapping_execution_authority_removed") is not True:
             failures.append("OLD_MICRO_TAKER_OVERLAP_NOT_PROVEN_REMOVED")
-        if runtime_status.get("single_execution_owner") is not True:
-            failures.append("RUNTIME_SINGLE_EXECUTION_OWNER_NOT_PROVEN")
-        if runtime_status.get("canonical_state_reconciled") is not True:
-            failures.append("CANONICAL_STATE_RECONCILIATION_NOT_PROVEN")
-        if runtime_status.get("exact_sha_ci_green") is not True:
-            failures.append("EXACT_SHA_CI_NOT_GREEN")
+        if runtime_status:
+            if runtime_status.get("single_execution_owner") is not True:
+                failures.append("RUNTIME_SINGLE_EXECUTION_OWNER_NOT_PROVEN")
+            if runtime_status.get("canonical_state_reconciled") is not True:
+                failures.append("CANONICAL_STATE_RECONCILIATION_NOT_PROVEN")
+            if runtime_status.get("exact_sha_ci_green") is not True:
+                failures.append("EXACT_SHA_CI_NOT_GREEN")
+
+    gates = external.get("gate_classes") if isinstance(external.get("gate_classes"), dict) else {}
+    hard = gates.get("A_HARD_CORRECTNESS_SAFETY") if isinstance(gates.get("A_HARD_CORRECTNESS_SAFETY"), dict) else {}
+    economic = gates.get("B_ECONOMIC_MATURITY") if isinstance(gates.get("B_ECONOMIC_MATURITY"), dict) else {}
+    real_money = gates.get("C_FUTURE_REAL_MONEY") if isinstance(gates.get("C_FUTURE_REAL_MONEY"), dict) else {}
+    if hard.get("may_block_paper") is not True:
+        failures.append("HARD_SAFETY_MUST_BLOCK_PAPER")
+    if economic.get("may_block_paper") is not False:
+        failures.append("ECONOMIC_MATURITY_MAY_NOT_BLOCK_PAPER")
+    if real_money.get("in_scope") is not False:
+        failures.append("REAL_MONEY_MUST_REMAIN_OUT_OF_SCOPE")
 
     # Cancel-only must precede maker/taker authority. Shadow implementation may
     # contain all candidates, but active authority has explicit phase semantics.

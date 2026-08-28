@@ -37,6 +37,10 @@ _spec.loader.exec_module(ledger)
 
 SCHEMA = "polymarket_v7_canonical_economics_v1"
 COST_COMPONENTS = ("fee", "slippage", "unwind_loss", "capital_cost", "latency_cost")
+PNL_COMPONENTS = (
+    "trading_pnl", "spread_capture", "adverse_markout", "inventory_pnl",
+    "maker_rebates", "liquidity_rewards",
+)
 STRESS_MULTIPLIERS = (1.0, 1.5, 2.0)
 MARKOUT_HORIZONS_SECONDS = (1, 10, 45, 60, 300)
 MIN_EVENT_CLUSTERS_FOR_PROMOTION = 12
@@ -171,6 +175,8 @@ class UnitState:
     markouts_by_horizon: dict[int, list[float]] = field(default_factory=lambda: defaultdict(list))
     cost_totals: dict[str, float] = field(default_factory=lambda: {name: 0.0 for name in COST_COMPONENTS})
     cost_component_observed: dict[str, bool] = field(default_factory=lambda: {name: False for name in COST_COMPONENTS})
+    pnl_components: dict[str, float] = field(default_factory=lambda: {name: 0.0 for name in PNL_COMPONENTS})
+    pnl_component_observed: dict[str, bool] = field(default_factory=lambda: {name: False for name in PNL_COMPONENTS})
     cost_vector_complete_flag: bool = False
     capital_duration_ms: int = 0
     reasons: set[str] = field(default_factory=set)
@@ -280,6 +286,19 @@ class UnitState:
             return
         self.terminal_ids.add(terminal_id)
         self.final_events.append(event)
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        decomposition = metadata.get("pnl_decomposition")
+        if isinstance(decomposition, dict):
+            for component in PNL_COMPONENTS:
+                value = _finite(decomposition.get(component))
+                if value is None:
+                    continue
+                # A configured reward pool is not own reward. Unknown own share
+                # is represented as zero, never as projected PnL.
+                if component == "liquidity_rewards" and decomposition.get("own_reward_share_verified") is not True:
+                    value = 0.0
+                self.pnl_components[component] += value
+                self.pnl_component_observed[component] = True
         event_id = _text(getattr(event, "event_id", None))
         if event_id:
             self.final_event_ids.add(event_id)
@@ -470,6 +489,14 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         stress_totals[key] = sum(_stress_pnl(pnl, unit.baseline_cost(), multiplier) for unit, pnl in event_mature) if event_mature else None
 
     costs_by_component = {component: sum(unit.cost_totals[component] for unit, _ in event_mature) for component in COST_COMPONENTS}
+    pnl_decomposition = {
+        component: (
+            sum(unit.pnl_components[component] for unit, _ in event_mature)
+            if any(unit.pnl_component_observed[component] for unit, _ in event_mature)
+            else (0.0 if component == "liquidity_rewards" else None)
+        )
+        for component in PNL_COMPONENTS
+    }
     markouts: dict[str, dict[str, float | int | None]] = {}
     for horizon in MARKOUT_HORIZONS_SECONDS:
         vals = [value for unit in selected for value in unit.markouts_by_horizon.get(horizon, [])]
@@ -535,6 +562,15 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         "minimum_positive_event_fold_fraction": MIN_POSITIVE_EVENT_FOLD_FRACTION,
         "positive_chronological_event_fold_fraction_2x": positive_fold_fraction,
         "net_pnl": stress_1x,
+        "pnl_decomposition": {
+            **pnl_decomposition,
+            "fees": costs_by_component["fee"],
+            "slippage": costs_by_component["slippage"],
+            "unwind_cost": costs_by_component["unwind_loss"],
+            "capital_cost": costs_by_component["capital_cost"],
+            "latency_cost": costs_by_component["latency_cost"],
+            "liquidity_reward_unknown_share_policy": "ZERO",
+        },
         "stressed_net_pnl": stress_totals,
         "costs": {"components": costs_by_component, "baseline_total": sum(costs_by_component.values()), "stress_observations_frozen": True, "multipliers": list(STRESS_MULTIPLIERS)},
         "markouts": markouts,

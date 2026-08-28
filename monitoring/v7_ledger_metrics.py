@@ -34,7 +34,13 @@ def _blank() -> dict[str, Any]:
     return {
         "opportunities": 0,
         "candidates": 0,
+        "makes": 0,
+        "takes": 0,
+        "arbs": 0,
+        "cancels": 0,
+        "withdraws": 0,
         "orders_submitted": 0,
+        "effective_orders": 0,
         "fills": 0,
         "complete_fills": 0,
         "partial_fills": 0,
@@ -102,8 +108,23 @@ def summarize_ledger(path: Path) -> dict[str, Any]:
                     aggregate["opportunities"] += 1
                 elif event_type == "CANDIDATE":
                     aggregate["candidates"] += 1
+                    action = str(row.get("intended_action") or "").upper()
+                    if action in {"MAKE", "JOIN", "IMPROVE", "FADE"}:
+                        aggregate["makes"] += 1
+                    elif action == "TAKE":
+                        aggregate["takes"] += 1
+                    elif "ARB" in action:
+                        aggregate["arbs"] += 1
                 elif event_type == "ORDER_SUBMITTED":
                     aggregate["orders_submitted"] += 1
+                elif event_type == "ORDER_STATE":
+                    state = str(row.get("order_state") or "").upper()
+                    if state in {"OPEN", "LIVE", "RESTING", "ACCEPTED", "PARTIAL"}:
+                        aggregate["effective_orders"] += 1
+                    elif state in {"CANCELLED", "CANCELED"}:
+                        aggregate["cancels"] += 1
+                    elif state in {"WITHDRAWN", "EXPIRED"}:
+                        aggregate["withdraws"] += 1
                 elif event_type == "FILL":
                     aggregate["fills"] += 1
                     if row.get("complete") is True:

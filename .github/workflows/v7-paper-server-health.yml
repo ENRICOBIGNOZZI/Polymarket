@@ -42,7 +42,7 @@ jobs:
           set -euo pipefail
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ env.EXPECTED_SHA }}
           fetch-depth: 0
@@ -59,8 +59,9 @@ jobs:
           main_sha="$(git rev-parse origin/main)"
           validated_sha="$(git rev-parse origin/paper-validated)"
           if [[ "$main_sha" != "$EXPECTED_SHA" || "$validated_sha" != "$EXPECTED_SHA" ]]; then
-            echo "health_state=noop_not_exact_validated_main" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            echo "health_state=failed_not_exact_validated_main" >> "$GITHUB_STEP_SUMMARY"
+            echo "V7 health cannot be green without exact main=paper-validated=expected SHA" >&2
+            exit 1
           fi
           python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$EXPECTED_SHA" >/dev/null
           runs="$(mktemp)"
@@ -92,14 +93,14 @@ jobs:
 
       - name: Join private tailnet with auth key
         if: steps.gate.outputs.ready == 'true' && steps.tailscale_auth.outputs.mode == 'authkey'
-        uses: tailscale/github-action@v4
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
         with:
           authkey: ${{ secrets.TS_AUTHKEY }}
           ping: ${{ env.SERVER_HOST }}
 
       - name: Join private tailnet with OAuth
         if: steps.gate.outputs.ready == 'true' && steps.tailscale_auth.outputs.mode == 'oauth'
-        uses: tailscale/github-action@v4
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
@@ -202,7 +203,7 @@ jobs:
 
       - name: Upload health evidence
         if: always() && steps.gate.outputs.ready == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: v7-paper-server-health-${{ env.EXPECTED_SHA }}-${{ github.run_id }}
           path: health-evidence/
