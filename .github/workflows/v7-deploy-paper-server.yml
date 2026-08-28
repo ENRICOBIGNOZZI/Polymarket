@@ -2,33 +2,36 @@ name: V7 deploy PAPER server
 
 on:
   workflow_dispatch:
+    inputs:
+      expected_validated_sha:
+        description: Exact validated V7 SHA to deploy
+        required: false
+        type: string
   workflow_run:
     workflows: ["V7 live PAPER validation"]
     types: [completed]
     branches: [main]
   schedule:
-    - cron: "12,42 * * * *"
+    - cron: "7,22,37,52 * * * *"
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
-  group: polymarket-v7-paper-server
+  group: polymarket-private-server
   cancel-in-progress: false
 
 jobs:
   deploy:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     env:
       SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
       SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
       SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
-      EXPECTED_VALIDATED_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
+      EXPECTED_VALIDATED_SHA: ${{ github.event.inputs.expected_validated_sha || github.event.workflow_run.head_sha || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,11 +88,22 @@ jobs:
           import json
           from pathlib import Path
           m=json.loads(Path('monitoring/v7_monitoring_manifest.json').read_text(encoding='utf-8'))
-          assert m.get('schema') == 'polymarket_v7_monitoring_manifest_v1'
+          assert m.get('schema') == 'polymarket_v7_monitoring_manifest_v2'
           assert m.get('version') == 7
           assert m.get('paper_only') is True
           assert m.get('authenticated_execution') is False
+          assert m.get('run_root') == 'runs/paper_v7_live'
           assert str((m.get('grafana') or {}).get('dashboard_uid') or '')
+          required=set(m.get('required_surfaces') or [])
+          assert {
+              'control/runtime_status.json',
+              'control/portfolio_state.json',
+              'control/allocations/manifest.json',
+              'graph_rv/status.json',
+              'canonical_economics.json',
+              'ledger/execution.jsonl',
+              'trade_tape.csv',
+          } <= required
           PY
             echo "ready=true" >> "$GITHUB_OUTPUT"
             printf 'reconciliation_result=ready\nvalidated_sha=%s\nmain_sha=%s\nexpected_validated_sha=%s\n' \
@@ -148,60 +162,29 @@ jobs:
           set -euo pipefail
           test -n "${SSH_PRIVATE_KEY:-}"
           install -d -m 700 ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_deploy
-          chmod 600 ~/.ssh/polymarket_deploy
-          for _ in {1..20}; do
-            ssh-keyscan -T 3 -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null && break
-            sleep 2
-          done
-          test -s ~/.ssh/known_hosts
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_v7_deploy
+          chmod 600 ~/.ssh/polymarket_v7_deploy
+          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
 
       - name: Reconcile exact paper-validated V7 SHA on server
         if: steps.preflight.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          validated_sha="$(git rev-parse origin/paper-validated)"
-          ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
-            -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
-            "EXPECTED_VALIDATED_SHA='$validated_sha' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
-          set -euo pipefail
-          cd ~/polymarket
-          git fetch --no-tags origin main paper-validated
-          main_sha="$(git rev-parse origin/main)"
-          validated_sha="$(git rev-parse origin/paper-validated)"
-          test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
-          test "$main_sha" = "$EXPECTED_VALIDATED_SHA"
-
-          tmp_checkout="$(mktemp -d)"
-          trap 'git worktree remove --force "$tmp_checkout" >/dev/null 2>&1 || true; rm -rf "$tmp_checkout"' EXIT
-          rmdir "$tmp_checkout"
-          git worktree add --detach "$tmp_checkout" "$validated_sha" >/dev/null
-          python3 "$tmp_checkout/scripts/v7_cutover_contract.py" \
-            --repository-root "$tmp_checkout" --expected-head "$validated_sha" >/dev/null
-          test -f "$tmp_checkout/ops/update_server_v7.sh"
-          test -f "$tmp_checkout/monitoring/v7_monitoring_manifest.json"
-          git worktree remove --force "$tmp_checkout" >/dev/null
-          trap - EXIT
-
-          updater="$(mktemp)"
-          trap 'rm -f "$updater"' EXIT
-          git show "$validated_sha:ops/update_server_v7.sh" > "$updater"
-          chmod 700 "$updater"
-          POLYMARKET_APP_DIR="$HOME/polymarket" \
-            EXPECTED_VALIDATED_SHA="$validated_sha" \
-            POLYMARKET_DEPLOY_REF=paper-validated \
-            bash "$updater"
-          printf 'deploy_result=success\ndeployed_sha=%s\norigin_main=%s\npaper_validated=%s\n' \
-            "$validated_sha" "$main_sha" "$validated_sha"
-          REMOTE
+          mkdir -p deploy-health
+          scp -i ~/.ssh/polymarket_v7_deploy -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -P "$SERVER_PORT" \
+            ops/update_server_v7.sh "$SERVER_USER@$SERVER_HOST:/tmp/update_server_v7.sh"
+          ssh -i ~/.ssh/polymarket_v7_deploy -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            "bash /tmp/update_server_v7.sh --paper-ref paper-validated --expected-sha '$V7_CUTOVER_SHA' --app-dir '$HOME/polymarket' --run-root '$HOME/polymarket/$V7_CHAMPION_RUN_ROOT'" \
+            | tee deploy-health/update.log
 
       - name: Upload deployment evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: v7-paper-server-deploy-${{ github.run_id }}
-          path: deploy-evidence.txt
+          path: |
+            deploy-evidence.txt
+            deploy-health/
           if-no-files-found: warn
           retention-days: 14
