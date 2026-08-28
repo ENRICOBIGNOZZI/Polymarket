@@ -36,6 +36,11 @@ constexpr double kEps = 1e-12;
     return e / (1.0 + e);
 }
 
+[[nodiscard]] double safe_logit(double probability) noexcept {
+    const double p = clamp(probability, 1e-6, 1.0 - 1e-6);
+    return std::log(p / (1.0 - p));
+}
+
 [[nodiscard]] double dot(const std::array<double, kFeatureCount>& a,
                          const std::array<double, kFeatureCount>& b) noexcept {
     double out = 0.0;
@@ -62,6 +67,17 @@ struct Candidate {
     double score = -std::numeric_limits<double>::infinity();
 };
 
+[[nodiscard]] const ExecutionCellBaseline* execution_cell(
+    const MakerModelSnapshot& model,
+    Action action,
+    const MarketUpdate& update,
+    Side side) noexcept {
+    const std::size_t index = execution_cell_index(action, update.instrument_inventory_sign, side);
+    if (index >= model.execution_cells.size()) return nullptr;
+    const auto& cell = model.execution_cells[index];
+    return cell.valid != 0 ? &cell : nullptr;
+}
+
 [[nodiscard]] std::array<double, kFeatureCount> model_features(
     const Features& features, Side side) noexcept {
     const double direction = side == Side::Buy ? 1.0 : -1.0;
@@ -80,6 +96,7 @@ struct Candidate {
 }
 
 [[nodiscard]] SideEconomics evaluate_side(
+    Action action,
     Side side,
     std::int64_t quote_tick,
     const MarketUpdate& update,
@@ -106,17 +123,27 @@ struct Candidate {
     const double distance_ticks = side == Side::Buy
         ? static_cast<double>(update.best_bid_tick - quote_tick)
         : static_cast<double>(quote_tick - update.best_ask_tick);
+    const auto* cell = execution_cell(model, action, update, side);
 
-    // The first deployed model is deliberately simple and interpretable. Queue
-    // depth and distance-to-touch enter causally; slow-path challengers can
-    // replace these coefficients via a future snapshot schema extension.
+    // The slow plane publishes a pre-shrunk action x outcome x side baseline.
+    // Preserve the feature coefficients as deviations from the GLOBAL intercept;
+    // only the baseline is replaced by the selected execution cell. Missing or
+    // invalid cells are exactly backward-compatible with the GLOBAL model.
+    const double global_fill_logit = model.fill_coefficients[0];
+    const double baseline_fill_logit = cell != nullptr
+        ? safe_logit(cell->fill_probability) : global_fill_logit;
+    const double feature_fill_logit = dot(model.fill_coefficients, x) - global_fill_logit;
     const double queue_penalty = 0.10 * std::log1p(std::max(0.0, touch_depth) /
                                                    std::max(kEps, quote_shares));
-    const double fill_logit = dot(model.fill_coefficients, x)
+    const double fill_logit = baseline_fill_logit + feature_fill_logit
                             - 0.55 * distance_ticks - queue_penalty;
     const double fill_probability = clamp(logistic(fill_logit), 0.0, 1.0);
 
-    double adverse_markout = std::max(0.0, dot(model.markout_coefficients, x));
+    const double global_markout = model.markout_coefficients[0];
+    const double baseline_markout = cell != nullptr
+        ? cell->adverse_markout_per_share : global_markout;
+    double adverse_markout = std::max(
+        0.0, baseline_markout + dot(model.markout_coefficients, x) - global_markout);
     if (distance_ticks < 0.0) adverse_markout += (-distance_ticks) * 0.0001;
 
     const double capture = side == Side::Buy ? fair_value - price : price - fair_value;
@@ -131,9 +158,14 @@ struct Candidate {
     const double rebate_ev = fill_probability * std::max(0.0, update.conservative_rebate_ev_per_share);
     const double reward_ev = std::max(0.0, update.conservative_reward_ev_per_share);
     const double expected_ev = fill_probability * (capture - expected_cost) + rebate_ev + reward_ev;
+    const double evidence_confidence = cell != nullptr
+        ? clamp(std::min(cell->fill_weight, cell->markout_weight), 0.0, 1.0) : 1.0;
+    const double evidence_uncertainty_multiplier = cell != nullptr
+        ? 1.0 + 0.50 * (1.0 - evidence_confidence) : 1.0;
     const double uncertainty = std::max(0.0, model.base_ev_se_per_share) *
         (1.0 + std::abs(features.ofi) + 0.25 * features.ew_vol_ticks
-             + 0.25 * std::abs(features.inventory_fraction));
+             + 0.25 * std::abs(features.inventory_fraction))
+        * evidence_uncertainty_multiplier;
     const double robust_ev = expected_ev - std::max(0.0, model.robust_ev_z) * uncertainty;
 
     out.admissible = finite(robust_ev) && robust_ev > model.min_robust_ev_per_share;
@@ -160,9 +192,9 @@ struct Candidate {
 
     Candidate candidate;
     candidate.action = action;
-    candidate.bid = evaluate_side(Side::Buy, bid_tick, update, inventory, risk, model,
+    candidate.bid = evaluate_side(action, Side::Buy, bid_tick, update, inventory, risk, model,
                                   features, fair_value, quote_shares);
-    candidate.ask = evaluate_side(Side::Sell, ask_tick, update, inventory, risk, model,
+    candidate.ask = evaluate_side(action, Side::Sell, ask_tick, update, inventory, risk, model,
                                   features, fair_value, quote_shares);
     candidate.score = 0.0;
     if (candidate.bid.admissible) candidate.score += candidate.bid.robust_ev;
@@ -242,6 +274,15 @@ bool MakerModelSnapshot::valid() const noexcept {
     if (min_quote_lifetime_ns < 0 || max_related_snapshot_age_ns < 0) return false;
     for (double value : fill_coefficients) if (!finite(value)) return false;
     for (double value : markout_coefficients) if (!finite(value)) return false;
+    for (const auto& cell : execution_cells) {
+        if (cell.valid == 0) continue;
+        if (!finite(cell.fill_probability) || cell.fill_probability <= 0.0
+            || cell.fill_probability >= 1.0) return false;
+        if (!finite(cell.adverse_markout_per_share) || cell.adverse_markout_per_share < 0.0) return false;
+        if (!finite(cell.fill_weight) || cell.fill_weight < 0.0 || cell.fill_weight > 1.0) return false;
+        if (!finite(cell.markout_weight) || cell.markout_weight < 0.0 || cell.markout_weight > 1.0) return false;
+        if (cell.filled_orders > cell.orders) return false;
+    }
     return true;
 }
 
