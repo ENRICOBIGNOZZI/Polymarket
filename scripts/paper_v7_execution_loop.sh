@@ -10,11 +10,14 @@ MAKER_RUNTIME="${PM_V7_MARKET_MAKER_RUNTIME:-build/polymarket_v7_market_maker_ru
 MARKOUT_OBSERVER="${PM_V7_MAKER_MARKOUT_OBSERVER:-build/polymarket_v7_maker_markout_observer}"
 MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
 SHA="$(git rev-parse HEAD)"
+MAKER_CHAMPION_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
+MAKER_CHALLENGER_MODEL="$RUN_ROOT/micro_maker/execution_model_challenger.json"
+MAKER_MODEL_REGISTRY="$RUN_ROOT/micro_maker/model_registry.json"
 # Bind the C++ slow-path execution-cell loader explicitly to the same exact SHA
-# and model file passed to the canonical Maker runtime. This keeps custom run
-# roots deterministic and makes .git inspection only a defensive fallback.
+# and *champion* model file passed to the canonical Maker runtime. Challenger
+# refits are registered separately and can never be hot-reloaded by this loop.
 export PM_V7_MODEL_SHA="$SHA"
-export PM_V7_MAKER_EXECUTION_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
+export PM_V7_MAKER_EXECUTION_MODEL="$MAKER_CHAMPION_MODEL"
 CONTROL="$RUN_ROOT/control"
 ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
@@ -120,29 +123,39 @@ pids+=("$!")
   done
 ) & pids+=("$!")
 
-# Slow-plane exact-SHA fill/markout fit. Refits publish immutable snapshots to
-# the C++ runtime; refit is not promotion.
+# Slow-plane exact-SHA fill/markout fit. A refit is a CHALLENGER only. It is
+# written to a separate artifact and registered for OOS/shadow-PAPER review.
+# This loop NEVER overwrites the runtime champion and NEVER auto-promotes.
 (
   while [[ ! -e "$KILL" ]]; do
     if [[ -s "$RUN_ROOT/ledger/execution.jsonl" ]]; then
-      python3 scripts/v7_market_maker_model.py \
+      if python3 scripts/v7_market_maker_model.py \
         --ledger "$RUN_ROOT/ledger/execution.jsonl" \
         --model-sha "$SHA" \
-        --output "$RUN_ROOT/micro_maker/execution_model.json" \
-        >> "$RUN_ROOT/micro_maker/model.log" 2>&1 || true
+        --artifact-role challenger \
+        --output "$MAKER_CHALLENGER_MODEL" \
+        >> "$RUN_ROOT/micro_maker/model.log" 2>&1; then
+        python3 scripts/v7_maker_model_registry.py \
+          --registry "$MAKER_MODEL_REGISTRY" \
+          --model-sha "$SHA" \
+          --challenger "$MAKER_CHALLENGER_MODEL" \
+          --champion "$MAKER_CHAMPION_MODEL" \
+          >> "$RUN_ROOT/micro_maker/model_registry.log" 2>&1 || true
+      fi
     fi
     sleep 60
   done
 ) & pids+=("$!")
 
 # Canonical Maker owner: public WS -> bounded V7 L2 -> C++ features/decision ->
-# common V7 OMS/queue PAPER engine -> spool. No Python/REST polling quote loop.
+# common V7 OMS/queue PAPER engine -> spool. The model argument is deliberately
+# the champion path; challengers are physically incapable of hot reload here.
 "$MAKER_RUNTIME" \
   --config "$ALLOC/micro_maker.json" \
   --maker-policy "$MAKER_POLICY" \
   --run-root "$RUN_ROOT" \
   --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
-  --model "$RUN_ROOT/micro_maker/execution_model.json" \
+  --model "$MAKER_CHAMPION_MODEL" \
   --model-sha "$SHA" \
   >> "$RUN_ROOT/micro_maker/runtime.log" 2>&1 &
 pids+=("$!")

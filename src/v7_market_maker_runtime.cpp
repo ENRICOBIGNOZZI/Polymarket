@@ -1,9 +1,10 @@
 #include "pm/api.hpp"
 #include "pm/config.hpp"
 #include "pm/fast_ws.hpp"
+#include "pm/v7_maker_execution_policy.hpp"
 #include "pm/v7_maker_lane.hpp"
-#include "pm/v7_maker_paper.hpp"
 #include "pm/v7_market_ws.hpp"
+#include "pm/v7_spsc.hpp"
 
 #include <boost/json.hpp>
 
@@ -19,6 +20,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -26,6 +28,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -34,28 +37,39 @@ namespace {
 namespace fs = std::filesystem;
 namespace json = boost::json;
 using pm::v7::BookHotSnapshot;
+using pm::v7::CapitalLimits;
+using pm::v7::ExecutionPlan;
+using pm::v7::ExecutionPolicyId;
 using pm::v7::IntentType;
 using pm::v7::MarketWsEvent;
 using pm::v7::MarketWsEventKind;
 using pm::v7::Side;
+using pm::v7::SleeveCapitalAccount;
 using pm::v7::StrategyIntent;
 using pm::v7::maker::Action;
 using pm::v7::maker::InventorySnapshot;
 using pm::v7::maker::MakerDecision;
+using pm::v7::maker::MakerExecutionReason;
 using pm::v7::maker::MakerInstrumentLane;
 using pm::v7::maker::MakerLaneContext;
 using pm::v7::maker::MakerModelSnapshot;
 using pm::v7::maker::MakerModelStore;
-using pm::v7::maker::MakerPaperMarketEngine;
+using pm::v7::maker::MakerPaperExecutionPolicy;
 using pm::v7::maker::PaperMakerEvent;
 using pm::v7::maker::PaperMakerEventKind;
 using pm::v7::maker::PaperMakerInventory;
 using pm::v7::maker::PaperMakerPolicy;
 using pm::v7::maker::PaperMakerResult;
+using pm::v7::maker::QuoteSnapshot;
 
 constexpr std::size_t kMarketsPerShard = 8;
 constexpr std::size_t kWsOutputCapacity = 512;
 constexpr std::size_t kTelemetryCapacity = 8192;
+constexpr std::size_t kExecutionCriticalCapacity = 512;
+constexpr std::size_t kExecutionNormalCapacity = 1024;
+constexpr std::size_t kExecutionSnapshotCapacity = 1024;
+constexpr std::size_t kExecutionTelemetryCapacity = 16384;
+constexpr std::size_t kExecutionBacklogSoftLimit = 768;
 constexpr double kMicrounitsPerShare = 1'000'000.0;
 constexpr double kPriceScaleE4 = 10'000.0;
 constexpr std::string_view kStrategy = "MICRO_MAKER_PRO";
@@ -182,11 +196,6 @@ void atomic_write(const fs::path& path, std::string_view content) {
     return object == nullptr ? fallback : integer(find_value(*object, key), fallback);
 }
 
-[[nodiscard]] bool object_boolean(const json::object* object, std::string_view key,
-                                  bool fallback) noexcept {
-    return object == nullptr ? fallback : boolean(find_value(*object, key), fallback);
-}
-
 [[nodiscard]] std::uint64_t fnv1a(std::string_view value) noexcept {
     std::uint64_t hash = 1469598103934665603ULL;
     for (const unsigned char ch : value) {
@@ -219,6 +228,13 @@ void atomic_write(const fs::path& path, std::string_view content) {
 
 [[nodiscard]] double micro_shares(std::int64_t value) noexcept {
     return static_cast<double>(std::max<std::int64_t>(0, value)) / kMicrounitsPerShare;
+}
+
+[[nodiscard]] std::int64_t microdollars(double dollars) noexcept {
+    if (!std::isfinite(dollars) || dollars <= 0.0) return 0;
+    const long double raw = static_cast<long double>(dollars) * 1'000'000.0L;
+    if (raw > static_cast<long double>(std::numeric_limits<std::int64_t>::max())) return 0;
+    return static_cast<std::int64_t>(std::floor(raw));
 }
 
 [[nodiscard]] const char* side_name(Side side) noexcept {
@@ -447,33 +463,6 @@ PaperMakerPolicy load_paper_policy(const fs::path& policy_path) {
     return policy;
 }
 
-template <typename T, std::size_t Capacity>
-class SpscRing final {
-    static_assert(Capacity >= 2 && (Capacity & (Capacity - 1)) == 0);
-public:
-    bool push(const T& value) noexcept {
-        const std::size_t head = head_.load(std::memory_order_relaxed);
-        const std::size_t next = (head + 1) & (Capacity - 1);
-        if (next == tail_.load(std::memory_order_acquire)) return false;
-        data_[head] = value;
-        head_.store(next, std::memory_order_release);
-        return true;
-    }
-
-    bool pop(T& value) noexcept {
-        const std::size_t tail = tail_.load(std::memory_order_relaxed);
-        if (tail == head_.load(std::memory_order_acquire)) return false;
-        value = data_[tail];
-        tail_.store((tail + 1) & (Capacity - 1), std::memory_order_release);
-        return true;
-    }
-
-private:
-    std::array<T, Capacity> data_{};
-    alignas(64) std::atomic<std::size_t> head_{0};
-    alignas(64) std::atomic<std::size_t> tail_{0};
-};
-
 enum class TelemetryKind : std::uint8_t {
     Candidate = 1,
     PaperEvent = 2,
@@ -500,6 +489,15 @@ struct TelemetryRecord {
     PaperMakerInventory inventory{};
 };
 
+struct ExecutionSnapshotUpdate {
+    std::uint64_t market_handle = 0;
+    std::uint64_t execution_version = 0;
+    InventorySnapshot inventory{};
+    QuoteSnapshot yes_quotes{};
+    QuoteSnapshot no_quotes{};
+    PaperMakerInventory paper_inventory{};
+};
+
 struct MarketContext {
     SelectedMarket cold;
     std::uint64_t market_handle = 0;
@@ -512,18 +510,15 @@ struct MarketContext {
     double no_min_order = 1.0;
     MakerInstrumentLane yes_lane{+1};
     MakerInstrumentLane no_lane{-1};
-    MakerPaperMarketEngine paper;
 
     MarketContext(SelectedMarket selected, std::uint64_t market,
                   std::uint64_t event, std::uint64_t yes_instrument,
                   std::uint64_t no_instrument, std::int32_t yes_tick,
-                  std::int32_t no_tick, double yes_min, double no_min,
-                  PaperMakerPolicy paper_policy)
+                  std::int32_t no_tick, double yes_min, double no_min)
         : cold(std::move(selected)), market_handle(market), event_handle(event),
           yes_instrument_handle(yes_instrument), no_instrument_handle(no_instrument),
           yes_tick_e4(yes_tick), no_tick_e4(no_tick),
-          yes_min_order(std::max(1e-6, yes_min)), no_min_order(std::max(1e-6, no_min)),
-          paper(market, yes_instrument, no_instrument, paper_policy) {}
+          yes_min_order(std::max(1e-6, yes_min)), no_min_order(std::max(1e-6, no_min)) {}
 };
 
 struct InstrumentRef {
@@ -534,9 +529,9 @@ struct InstrumentRef {
 
 [[nodiscard]] std::int64_t visible_queue_ahead(const StrategyIntent& intent,
                                                 const BookHotSnapshot& book,
-                                                std::int32_t tick_e4) noexcept {
-    if (intent.type != IntentType::Quote || tick_e4 <= 0 || intent.price_tick <= 0) return 0;
-    const std::int64_t quote_e4 = intent.price_tick * static_cast<std::int64_t>(tick_e4);
+                                                std::int32_t tick_e4_value) noexcept {
+    if (intent.type != IntentType::Quote || tick_e4_value <= 0 || intent.price_tick <= 0) return 0;
+    const std::int64_t quote_e4 = intent.price_tick * static_cast<std::int64_t>(tick_e4_value);
     if (intent.side == Side::Buy) {
         if (quote_e4 > book.best_bid_e4) return 0;
         if (quote_e4 == book.best_bid_e4) return std::max<std::int64_t>(0, book.best_bid_microunits);
@@ -550,6 +545,42 @@ struct InstrumentRef {
     return 0;
 }
 
+enum class ExecutionCommandKind : std::uint8_t {
+    Plan = 1,
+    PublicTrade = 2,
+    AdvanceTime = 3,
+};
+
+struct ExecutionContext {
+    std::uint64_t market_handle = 0;
+    std::uint64_t event_handle = 0;
+    std::uint64_t instrument_handle = 0;
+    std::uint64_t state_version = 0;
+    std::int64_t exchange_event_ns = 0;
+    std::int64_t receive_wall_ms = 0;
+    std::int64_t receive_monotonic_ns = 0;
+    std::int32_t tick_size_e4 = 0;
+    std::uint8_t outcome_yes = 0;
+    std::uint8_t reserved0 = 0;
+    std::uint16_t reserved1 = 0;
+    Action action = Action::Withdraw;
+    MakerDecision decision{};
+    StrategyIntent intent{};
+    BookHotSnapshot book{};
+};
+
+struct ExecutionCommand {
+    ExecutionCommandKind kind = ExecutionCommandKind::AdvanceTime;
+    ExecutionContext context{};
+    ExecutionPlan plan{};
+    pm::v7::PublicTradePrint trade{};
+    std::int64_t advance_monotonic_ns = 0;
+};
+
+static_assert(std::is_trivially_copyable_v<TelemetryRecord>);
+static_assert(std::is_trivially_copyable_v<ExecutionSnapshotUpdate>);
+static_assert(std::is_trivially_copyable_v<ExecutionCommand>);
+
 class ShardRuntime final {
 public:
     ShardRuntime(std::vector<MarketContext*> markets,
@@ -561,7 +592,9 @@ public:
           global_kill_(global_kill), fatal_(fatal), ws_url_(std::move(ws_url)) {
         std::vector<pm::v7::TokenBinding> bindings;
         std::size_t max_instrument = 0;
+        std::size_t max_market = 0;
         for (auto* market : markets_) {
+            max_market = std::max<std::size_t>(max_market, market->market_handle);
             max_instrument = std::max<std::size_t>(max_instrument, market->no_instrument_handle);
             bindings.push_back({market->cold.yes_token, market->market_handle, market->event_handle,
                                 market->yes_instrument_handle, market->yes_tick_e4});
@@ -571,9 +604,11 @@ public:
             tokens_.push_back(market->cold.no_token);
         }
         refs_.resize(max_instrument + 1);
+        execution_state_.resize(max_market + 1);
         for (auto* market : markets_) {
             refs_[market->yes_instrument_handle] = InstrumentRef{market, 1, 0};
             refs_[market->no_instrument_handle] = InstrumentRef{market, 0, 0};
+            execution_state_[market->market_handle].market_handle = market->market_handle;
         }
         decoder_ = std::make_unique<pm::v7::MarketWsShard>(std::move(bindings));
     }
@@ -591,7 +626,35 @@ public:
         if (feed_) feed_->stop();
     }
 
-    bool pop(TelemetryRecord& record) noexcept { return telemetry_.pop(record); }
+    [[nodiscard]] bool pop(TelemetryRecord& record) noexcept {
+        return telemetry_.try_pop(record);
+    }
+
+    [[nodiscard]] bool pop_critical(ExecutionCommand& command) noexcept {
+        return execution_critical_.try_pop(command);
+    }
+
+    [[nodiscard]] bool pop_normal(ExecutionCommand& command) noexcept {
+        return execution_normal_.try_pop(command);
+    }
+
+    [[nodiscard]] std::size_t critical_backlog() const noexcept {
+        return execution_critical_.approximate_size();
+    }
+
+    [[nodiscard]] std::size_t normal_backlog() const noexcept {
+        return execution_normal_.approximate_size();
+    }
+
+    void seed_execution_snapshot(const ExecutionSnapshotUpdate& update) noexcept {
+        if (update.market_handle < execution_state_.size()) {
+            execution_state_[static_cast<std::size_t>(update.market_handle)] = update;
+        }
+    }
+
+    [[nodiscard]] bool push_execution_snapshot(const ExecutionSnapshotUpdate& update) noexcept {
+        return execution_snapshots_.try_push(update);
+    }
 
 private:
     [[nodiscard]] InstrumentRef* ref(std::uint64_t instrument) noexcept {
@@ -599,40 +662,58 @@ private:
         return &refs_[instrument];
     }
 
-    void push(const TelemetryRecord& record) noexcept {
-        if (!telemetry_.push(record)) fatal_->store(true, std::memory_order_release);
+    [[nodiscard]] const ExecutionSnapshotUpdate& execution_state(
+        std::uint64_t market_handle) const noexcept {
+        static const ExecutionSnapshotUpdate empty{};
+        return market_handle < execution_state_.size()
+            ? execution_state_[static_cast<std::size_t>(market_handle)] : empty;
     }
 
-    void push_paper_result(const PaperMakerResult& result, MarketContext& market,
-                           std::uint64_t instrument, bool outcome_yes,
-                           Action action, const StrategyIntent* intent,
-                           const MakerDecision* decision, const BookHotSnapshot& book,
-                           std::int64_t exchange_ns, const pm::fast::FeedReceiveStamp& receive) noexcept {
-        for (std::size_t i = 0; i < result.event_count; ++i) {
-            TelemetryRecord record;
-            record.kind = TelemetryKind::PaperEvent;
-            record.market_handle = market.market_handle;
-            record.event_handle = market.event_handle;
-            record.instrument_handle = result.events[i].instrument_handle != 0
-                ? result.events[i].instrument_handle : instrument;
-            record.state_version = book.state_version;
-            record.exchange_event_ns = exchange_ns;
-            record.receive_wall_ms = receive.wall_ms;
-            record.receive_monotonic_ns = receive.monotonic_ns;
-            record.tick_size_e4 = result.events[i].tick_size_e4 > 0
-                ? result.events[i].tick_size_e4
-                : (outcome_yes ? market.yes_tick_e4 : market.no_tick_e4);
-            record.outcome_yes = static_cast<std::uint8_t>(
-                record.instrument_handle == market.yes_instrument_handle);
-            record.has_inventory = 1;
-            record.action = action;
-            if (intent != nullptr) record.intent = *intent;
-            if (decision != nullptr) record.decision = *decision;
-            record.paper = result.events[i];
-            record.book = book;
-            record.inventory = market.paper.inventory();
-            push(record);
+    void drain_execution_snapshots() noexcept {
+        ExecutionSnapshotUpdate update;
+        while (execution_snapshots_.try_pop(update)) {
+            if (update.market_handle < execution_state_.size()) {
+                execution_state_[static_cast<std::size_t>(update.market_handle)] = update;
+            }
         }
+    }
+
+    void push(const TelemetryRecord& record) noexcept {
+        if (!telemetry_.try_push(record)) fatal_->store(true, std::memory_order_release);
+    }
+
+    [[nodiscard]] ExecutionContext make_context(
+        MarketContext& market,
+        std::uint64_t instrument_handle,
+        bool outcome_yes,
+        Action action,
+        const BookHotSnapshot& book,
+        std::int64_t exchange_event_ns,
+        const pm::fast::FeedReceiveStamp& receive) const noexcept {
+        ExecutionContext context;
+        context.market_handle = market.market_handle;
+        context.event_handle = market.event_handle;
+        context.instrument_handle = instrument_handle;
+        context.state_version = book.state_version;
+        context.exchange_event_ns = exchange_event_ns;
+        context.receive_wall_ms = receive.wall_ms;
+        context.receive_monotonic_ns = receive.monotonic_ns;
+        context.tick_size_e4 = book.tick_size_e4 > 0
+            ? book.tick_size_e4 : (outcome_yes ? market.yes_tick_e4 : market.no_tick_e4);
+        context.outcome_yes = static_cast<std::uint8_t>(outcome_yes);
+        context.action = action;
+        context.book = book;
+        return context;
+    }
+
+    [[nodiscard]] bool enqueue_execution(const ExecutionCommand& command) noexcept {
+        const bool critical = command.kind != ExecutionCommandKind::Plan
+            || pm::v7::execution_plan_is_critical(command.plan);
+        const bool accepted = critical
+            ? execution_critical_.try_push(command)
+            : execution_normal_.try_push(command);
+        if (!accepted) fatal_->store(true, std::memory_order_release);
+        return accepted;
     }
 
     void push_candidate(MarketContext& market, bool outcome_yes,
@@ -664,6 +745,13 @@ private:
     void apply_decision(MarketContext& market, InstrumentRef& instrument,
                         const MarketWsEvent& source_event,
                         const pm::fast::FeedReceiveStamp& receive) noexcept {
+        if (normal_backlog() >= kExecutionBacklogSoftLimit
+            || critical_backlog() >= kExecutionCriticalCapacity / 2) {
+            // Execution ownership is authoritative. Never keep producing quote
+            // traffic when the order-TX core is materially behind the feed.
+            return;
+        }
+
         const auto shared_model = models_->snapshot();
         if (!shared_model) {
             fatal_->store(true, std::memory_order_release);
@@ -673,9 +761,10 @@ private:
         model.base_quote_shares = std::max(model.base_quote_shares,
                                            min_order(market, instrument.yes != 0));
 
+        const auto& state = execution_state(market.market_handle);
         MakerLaneContext context;
-        context.inventory = market.paper.inventory_snapshot();
-        context.quotes = market.paper.quote_snapshot(source_event.instrument_handle);
+        context.inventory = state.inventory;
+        context.quotes = instrument.yes ? state.yes_quotes : state.no_quotes;
         const double mid = source_event.book.valid
             ? 0.5 * (e4_price(source_event.book.best_bid_e4) + e4_price(source_event.book.best_ask_e4))
             : 0.5;
@@ -695,7 +784,7 @@ private:
             StrategyIntent intent = decision.intents[i];
             // Safety controls must remain executable even after canonical lineage
             // invalidation zeroes the book clock. Preserve the most recent proven
-            // exchange clock for the local PAPER OMS cancellation transition.
+            // exchange clock for the common PAPER OMS cancellation transition.
             if (intent.exchange_event_ns <= 0 && intent.type != IntentType::Quote) {
                 intent.exchange_event_ns = std::max<std::int64_t>(1, instrument.last_exchange_ns);
             }
@@ -705,14 +794,25 @@ private:
                 push_candidate(market, instrument.yes != 0, decision, intent,
                                source_event.book, receive);
             }
-            const std::int64_t queue = visible_queue_ahead(
-                intent, source_event.book, source_event.book.tick_size_e4);
-            const auto result = market.paper.apply_intent(
-                intent, queue, source_event.book.tick_size_e4);
-            push_paper_result(result, market, source_event.instrument_handle,
-                              instrument.yes != 0, decision.action, &intent, &decision,
-                              source_event.book, intent.exchange_event_ns, receive);
-            if (result.invariant_violation) fatal_->store(true, std::memory_order_release);
+
+            ExecutionCommand command;
+            command.kind = ExecutionCommandKind::Plan;
+            command.context = make_context(
+                market, source_event.instrument_handle, instrument.yes != 0,
+                decision.action, source_event.book, intent.exchange_event_ns, receive);
+            command.context.intent = intent;
+            command.context.decision = decision;
+            command.plan.intent = intent;
+            command.plan.public_queue_ahead_microunits = visible_queue_ahead(
+                intent, source_event.book, command.context.tick_size_e4);
+            command.plan.tick_size_e4 = command.context.tick_size_e4;
+            command.plan.market_state_version = source_event.book.state_version;
+            command.plan.policy = pm::v7::is_critical_intent(intent.type)
+                ? ExecutionPolicyId::Emergency : ExecutionPolicyId::PassiveMaker;
+            command.plan.public_queue_observable = static_cast<std::uint8_t>(
+                intent.type != IntentType::Quote
+                || (source_event.book.valid && source_event.book.tick_size_e4 > 0));
+            if (!enqueue_execution(command)) return;
         }
     }
 
@@ -720,10 +820,12 @@ private:
                         std::uint64_t instrument, bool yes, Action action,
                         std::int64_t exchange_ns,
                         const pm::fast::FeedReceiveStamp& receive) noexcept {
-        const auto result = market.paper.advance_time(receive.monotonic_ns);
-        push_paper_result(result, market, instrument, yes, action, nullptr, nullptr,
-                          book, exchange_ns, receive);
-        if (result.invariant_violation) fatal_->store(true, std::memory_order_release);
+        ExecutionCommand command;
+        command.kind = ExecutionCommandKind::AdvanceTime;
+        command.context = make_context(
+            market, instrument, yes, action, book, exchange_ns, receive);
+        command.advance_monotonic_ns = receive.monotonic_ns;
+        (void)enqueue_execution(command);
     }
 
     void process_event(MarketWsEvent event, const pm::fast::FeedReceiveStamp& receive,
@@ -744,19 +846,19 @@ private:
         if (event.kind == MarketWsEventKind::Trade && event.book.valid
             && event.book.tick_size_e4 > 0 && event.price_e4 > 0
             && event.price_e4 % event.book.tick_size_e4 == 0) {
-            pm::v7::PublicTradePrint trade;
-            trade.trade_id = trade_id == 0 ? 1 : trade_id;
-            trade.instrument_handle = event.instrument_handle;
-            trade.aggressor_side = event.side;
-            trade.price_tick = event.price_e4 / event.book.tick_size_e4;
-            trade.quantity_microunits = event.quantity_microunits;
-            trade.exchange_event_ns = event.exchange_event_ns;
-            trade.receive_monotonic_ns = receive.monotonic_ns;
-            const auto result = market.paper.on_public_trade(trade);
-            push_paper_result(result, market, event.instrument_handle, instrument->yes != 0,
-                              Action::Join, nullptr, nullptr, event.book,
-                              event.exchange_event_ns, receive);
-            if (result.invariant_violation) fatal_->store(true, std::memory_order_release);
+            ExecutionCommand command;
+            command.kind = ExecutionCommandKind::PublicTrade;
+            command.context = make_context(
+                market, event.instrument_handle, instrument->yes != 0,
+                Action::Join, event.book, event.exchange_event_ns, receive);
+            command.trade.trade_id = trade_id == 0 ? 1 : trade_id;
+            command.trade.instrument_handle = event.instrument_handle;
+            command.trade.aggressor_side = event.side;
+            command.trade.price_tick = event.price_e4 / event.book.tick_size_e4;
+            command.trade.quantity_microunits = event.quantity_microunits;
+            command.trade.exchange_event_ns = event.exchange_event_ns;
+            command.trade.receive_monotonic_ns = receive.monotonic_ns;
+            if (!enqueue_execution(command)) return;
         }
 
         apply_decision(market, *instrument, event, receive);
@@ -780,6 +882,7 @@ private:
     }
 
     void on_payload(std::string_view payload, const pm::fast::FeedReceiveStamp& receive) noexcept {
+        drain_execution_snapshots();
         std::array<MarketWsEvent, kWsOutputCapacity> events{};
         const auto result = decoder_->process_frame(payload, receive, events);
         const std::uint64_t frame_hash = fnv1a(payload);
@@ -797,6 +900,7 @@ private:
     }
 
     void on_transport_error() noexcept {
+        drain_execution_snapshots();
         invalidate_all_decisions(receive_now());
     }
 
@@ -813,10 +917,154 @@ private:
     std::string ws_url_;
     std::vector<std::string> tokens_;
     std::vector<InstrumentRef> refs_;
+    std::vector<ExecutionSnapshotUpdate> execution_state_;
     std::unique_ptr<pm::v7::MarketWsShard> decoder_;
     std::unique_ptr<pm::fast::MarketWebSocketFeed> feed_;
-    SpscRing<TelemetryRecord, kTelemetryCapacity> telemetry_{};
+    pm::v7::SpscRing<TelemetryRecord, kTelemetryCapacity> telemetry_{};
+    pm::v7::SpscRing<ExecutionCommand, kExecutionCriticalCapacity> execution_critical_{};
+    pm::v7::SpscRing<ExecutionCommand, kExecutionNormalCapacity> execution_normal_{};
+    pm::v7::SpscRing<ExecutionSnapshotUpdate, kExecutionSnapshotCapacity> execution_snapshots_{};
     double starting_capital_fraction_ = 5.0;
+};
+
+class ExecutionCore final {
+public:
+    [[nodiscard]] bool initialize(
+        const std::vector<std::unique_ptr<MarketContext>>& markets,
+        PaperMakerPolicy paper_policy,
+        double starting_capital) {
+        const std::int64_t budget = microdollars(starting_capital);
+        if (budget < 100) return false;
+        CapitalLimits limits;
+        limits.sleeve_budget_microdollars = budget;
+        limits.max_total_exposure_microdollars = budget;
+        limits.max_market_exposure_microdollars = std::max<std::int64_t>(1, budget / 20);
+        limits.max_single_order_microdollars = std::max<std::int64_t>(1, budget / 100);
+        limits.max_single_order_microdollars = std::min(
+            limits.max_single_order_microdollars, limits.max_market_exposure_microdollars);
+        if (!capital_.configure(limits)) return false;
+
+        std::size_t max_market = 0;
+        for (const auto& market : markets) {
+            max_market = std::max<std::size_t>(max_market, market->market_handle);
+        }
+        markets_.assign(max_market + 1, nullptr);
+        for (const auto& market : markets) {
+            if (market->yes_tick_e4 != market->no_tick_e4) return false;
+            if (!policy_.register_market(
+                    market->market_handle,
+                    market->yes_instrument_handle,
+                    market->no_instrument_handle,
+                    market->yes_tick_e4,
+                    paper_policy)) {
+                return false;
+            }
+            markets_[market->market_handle] = market.get();
+        }
+        execution_version_ = 1;
+        return true;
+    }
+
+    [[nodiscard]] bool process(const ExecutionCommand& command) noexcept {
+        if (command.context.market_handle == 0
+            || command.context.market_handle >= markets_.size()
+            || markets_[command.context.market_handle] == nullptr) {
+            return false;
+        }
+
+        pm::v7::maker::MakerExecutionResult result;
+        switch (command.kind) {
+            case ExecutionCommandKind::Plan:
+                result = policy_.process(command.plan, capital_);
+                break;
+            case ExecutionCommandKind::PublicTrade:
+                result = policy_.on_public_trade(
+                    command.context.market_handle, command.trade, capital_);
+                break;
+            case ExecutionCommandKind::AdvanceTime:
+                result = policy_.advance_time(
+                    command.context.market_handle, command.advance_monotonic_ns, capital_);
+                break;
+        }
+
+        ++execution_version_;
+        if (result.paper.event_count > 0) emit(command.context, result.paper);
+        if (result.capital_invariant_violation || result.paper.invariant_violation
+            || result.reason == MakerExecutionReason::CapitalInvariant
+            || result.reason == MakerExecutionReason::UnknownMarket) {
+            return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] ExecutionSnapshotUpdate snapshot(std::uint64_t market_handle) const noexcept {
+        ExecutionSnapshotUpdate update;
+        if (market_handle == 0 || market_handle >= markets_.size()) return update;
+        const auto* market = markets_[market_handle];
+        if (market == nullptr) return update;
+        update.market_handle = market_handle;
+        update.execution_version = execution_version_;
+        update.inventory = policy_.inventory_snapshot(market_handle);
+        update.yes_quotes = policy_.quote_snapshot(market_handle, market->yes_instrument_handle);
+        update.no_quotes = policy_.quote_snapshot(market_handle, market->no_instrument_handle);
+        if (const auto* inventory = policy_.inventory(market_handle); inventory != nullptr) {
+            update.paper_inventory = *inventory;
+        }
+        return update;
+    }
+
+    [[nodiscard]] bool pop_telemetry(TelemetryRecord& record) noexcept {
+        return telemetry_.try_pop(record);
+    }
+
+private:
+    void emit(const ExecutionContext& context, const PaperMakerResult& result) noexcept {
+        const auto* market = markets_[context.market_handle];
+        if (market == nullptr) return;
+        const auto* inventory = policy_.inventory(context.market_handle);
+        for (std::size_t i = 0; i < result.event_count; ++i) {
+            TelemetryRecord record;
+            record.kind = TelemetryKind::PaperEvent;
+            record.market_handle = context.market_handle;
+            record.event_handle = context.event_handle;
+            record.instrument_handle = result.events[i].instrument_handle != 0
+                ? result.events[i].instrument_handle : context.instrument_handle;
+            record.state_version = context.state_version;
+            record.exchange_event_ns = context.exchange_event_ns;
+            record.receive_wall_ms = context.receive_wall_ms;
+            record.receive_monotonic_ns = context.receive_monotonic_ns;
+            record.tick_size_e4 = result.events[i].tick_size_e4 > 0
+                ? result.events[i].tick_size_e4
+                : (record.instrument_handle == market->yes_instrument_handle
+                    ? market->yes_tick_e4 : market->no_tick_e4);
+            record.outcome_yes = static_cast<std::uint8_t>(
+                record.instrument_handle == market->yes_instrument_handle);
+            record.has_inventory = 1;
+            record.action = context.action;
+            record.intent = context.intent;
+            record.decision = context.decision;
+            record.paper = result.events[i];
+            record.book = context.book;
+            if (inventory != nullptr) record.inventory = *inventory;
+            if (!telemetry_.try_push(record)) {
+                telemetry_overflow_.store(true, std::memory_order_release);
+                return;
+            }
+        }
+    }
+
+public:
+    [[nodiscard]] bool telemetry_overflow() const noexcept {
+        return telemetry_overflow_.load(std::memory_order_acquire);
+    }
+
+private:
+    MakerPaperExecutionPolicy policy_{};
+    SleeveCapitalAccount capital_{};
+    std::vector<MarketContext*> markets_;
+    pm::v7::SpscRing<TelemetryRecord, kExecutionTelemetryCapacity> telemetry_{};
+    std::atomic<bool> telemetry_overflow_{false};
+    std::uint64_t execution_version_ = 1;
 };
 
 struct OrderMeta {
@@ -1135,7 +1383,7 @@ private:
 };
 
 std::vector<std::unique_ptr<MarketContext>> build_markets(
-    const Options& options, const pm::Config& config, const PaperMakerPolicy& paper_policy) {
+    const Options& options, const pm::Config& config) {
     std::vector<SelectedMarket> selected;
     while (!g_stop.load(std::memory_order_relaxed)) {
         try {
@@ -1177,7 +1425,9 @@ std::vector<std::unique_ptr<MarketContext>> build_markets(
         if (yes == books.end() || no == books.end()) continue;
         const std::int32_t yes_tick = tick_e4(yes->second.tick_size);
         const std::int32_t no_tick = tick_e4(no->second.tick_size);
-        if (yes_tick <= 0 || no_tick <= 0) continue;
+        // One binary market must use one execution tick contract in the common
+        // policy. Mixed token ticks fail closed instead of being silently coerced.
+        if (yes_tick <= 0 || no_tick <= 0 || yes_tick != no_tick) continue;
         const auto market = ++market_handle;
         const auto event = market;
         const auto yes_instrument = ++instrument_handle;
@@ -1185,7 +1435,7 @@ std::vector<std::unique_ptr<MarketContext>> build_markets(
         output.push_back(std::make_unique<MarketContext>(
             std::move(selected_market), market, event, yes_instrument, no_instrument,
             yes_tick, no_tick, std::max(yes->second.min_order_size, 1e-6),
-            std::max(no->second.min_order_size, 1e-6), paper_policy));
+            std::max(no->second.min_order_size, 1e-6)));
     }
     if (output.empty()) throw std::runtime_error("no selected maker market has valid cold-start books");
     return output;
@@ -1216,10 +1466,15 @@ int main(int argc, char** argv) {
         auto initial = std::make_shared<MakerModelSnapshot>(
             load_model_snapshot(options.maker_policy, options.model, options.model_sha));
         auto model_store = std::make_shared<MakerModelStore>(initial);
-        auto markets = build_markets(options, config, paper_policy);
+        auto markets = build_markets(options, config);
 
         std::atomic<bool> global_kill{false};
         std::atomic<bool> fatal{false};
+        auto execution = std::make_unique<ExecutionCore>();
+        if (!execution->initialize(markets, paper_policy, config.starting_capital)) {
+            throw std::runtime_error("cannot initialize single V7 Maker execution owner");
+        }
+
         std::vector<std::unique_ptr<ShardRuntime>> shards;
         for (std::size_t start = 0; start < markets.size(); start += kMarketsPerShard) {
             std::vector<MarketContext*> group;
@@ -1231,8 +1486,68 @@ int main(int argc, char** argv) {
             // Max quote dollars before per-event price conversion. The allocation
             // child config is already sleeve-bounded by v7_capital_allocator.py.
             shard->set_starting_capital_fraction(config.starting_capital * 0.01);
+            for (std::size_t i = start; i < std::min(markets.size(), start + kMarketsPerShard); ++i) {
+                shard->seed_execution_snapshot(execution->snapshot(markets[i]->market_handle));
+            }
             shards.push_back(std::move(shard));
         }
+
+        std::atomic<bool> execution_stop{false};
+        std::thread execution_thread([&]() {
+            std::size_t critical_cursor = 0;
+            std::size_t normal_cursor = 0;
+            auto pending = [&]() noexcept {
+                for (const auto& shard : shards) {
+                    if (shard->critical_backlog() != 0 || shard->normal_backlog() != 0) return true;
+                }
+                return false;
+            };
+            while (!execution_stop.load(std::memory_order_acquire) || pending()) {
+                ExecutionCommand command;
+                std::size_t source_shard = 0;
+                bool have = false;
+
+                // Risk-off/market-state commands are globally prioritized over
+                // new quote placements while preserving round-robin shard fairness.
+                for (std::size_t step = 0; step < shards.size(); ++step) {
+                    const std::size_t index = (critical_cursor + step) % shards.size();
+                    if (shards[index]->pop_critical(command)) {
+                        source_shard = index;
+                        critical_cursor = (index + 1) % shards.size();
+                        have = true;
+                        break;
+                    }
+                }
+                if (!have) {
+                    for (std::size_t step = 0; step < shards.size(); ++step) {
+                        const std::size_t index = (normal_cursor + step) % shards.size();
+                        if (shards[index]->pop_normal(command)) {
+                            source_shard = index;
+                            normal_cursor = (index + 1) % shards.size();
+                            have = true;
+                            break;
+                        }
+                    }
+                }
+                if (!have) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(50));
+                    continue;
+                }
+
+                if (!execution->process(command)) {
+                    fatal.store(true, std::memory_order_release);
+                    continue;
+                }
+                const auto update = execution->snapshot(command.context.market_handle);
+                if (update.market_handle != 0
+                    && !shards[source_shard]->push_execution_snapshot(update)) {
+                    fatal.store(true, std::memory_order_release);
+                }
+                if (execution->telemetry_overflow()) {
+                    fatal.store(true, std::memory_order_release);
+                }
+            }
+        });
 
         TelemetryWriter writer(options.run_root, options.model_sha,
                                config.starting_capital, markets);
@@ -1250,41 +1565,51 @@ int main(int argc, char** argv) {
             }
             if (fatal.load(std::memory_order_acquire)) {
                 global_kill.store(true, std::memory_order_release);
-                write_kill(options.run_root, options.model_sha, "maker_cpp_hot_path_invariant_or_telemetry_failure");
+                write_kill(options.run_root, options.model_sha, "maker_cpp_order_tx_or_telemetry_invariant_failure");
                 break;
             }
 
-            TelemetryRecord record;
-            for (auto& shard : shards) {
-                while (shard->pop(record)) writer.consume(record);
-            }
-
-            const auto now = wall_ms();
-            if (now - last_state_ms >= 1000) {
-                writer.write_state();
-                last_state_ms = now;
-            }
-            if (now - last_model_check_ms >= 2000) {
-                try {
-                    auto next = std::make_shared<MakerModelSnapshot>(
-                        load_model_snapshot(options.maker_policy, options.model, options.model_sha));
-                    if (next->model_version != current_model_version && model_store->publish(next)) {
-                        current_model_version = next->model_version;
-                    }
-                } catch (...) {
-                    // Preserve the last valid immutable snapshot.
+            try {
+                TelemetryRecord record;
+                for (auto& shard : shards) {
+                    while (shard->pop(record)) writer.consume(record);
                 }
-                last_model_check_ms = now;
+                while (execution->pop_telemetry(record)) writer.consume(record);
+
+                const auto now = wall_ms();
+                if (now - last_state_ms >= 1000) {
+                    writer.write_state();
+                    last_state_ms = now;
+                }
+                if (now - last_model_check_ms >= 2000) {
+                    try {
+                        auto next = std::make_shared<MakerModelSnapshot>(
+                            load_model_snapshot(options.maker_policy, options.model, options.model_sha));
+                        if (next->model_version != current_model_version && model_store->publish(next)) {
+                            current_model_version = next->model_version;
+                        }
+                    } catch (...) {
+                        // Preserve the last valid immutable champion snapshot.
+                    }
+                    last_model_check_ms = now;
+                }
+            } catch (...) {
+                fatal.store(true, std::memory_order_release);
+                continue;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
 
         global_kill.store(true, std::memory_order_release);
         for (auto& shard : shards) shard->stop();
+        execution_stop.store(true, std::memory_order_release);
+        if (execution_thread.joinable()) execution_thread.join();
+
         TelemetryRecord record;
         for (auto& shard : shards) {
             while (shard->pop(record)) writer.consume(record);
         }
+        while (execution->pop_telemetry(record)) writer.consume(record);
         writer.write_state();
         return fatal.load(std::memory_order_relaxed) ? 2 : 0;
     } catch (const std::exception& error) {

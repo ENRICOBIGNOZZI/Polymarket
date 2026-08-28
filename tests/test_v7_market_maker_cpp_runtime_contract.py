@@ -23,12 +23,16 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
             "MarketWebSocketFeed",
             "MarketWsShard",
             "MakerInstrumentLane",
-            "MakerPaperMarketEngine",
+            "MakerPaperExecutionPolicy",
+            "SleeveCapitalAccount",
             "MakerModelStore",
             "SpscRing",
+            "ExecutionCore",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, self.source)
+        self.assertNotIn("MakerPaperMarketEngine paper", self.source)
+        self.assertNotIn("market.paper.apply_intent", self.source)
 
     def test_hot_callback_has_no_rest_or_filesystem_path(self) -> None:
         start = self.source.index("void on_payload(std::string_view payload")
@@ -82,7 +86,19 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
     def test_feed_errors_invalidate_lineage_and_do_not_silently_continue(self) -> None:
         self.assertIn("invalidate_all_decisions(receive_now())", self.source)
         self.assertIn("global_kill", self.source)
-        self.assertIn("maker_cpp_hot_path_invariant_or_telemetry_failure", self.source)
+        self.assertIn("maker_cpp_order_tx_or_telemetry_invariant_failure", self.source)
+
+    def test_execution_core_owns_paper_state_and_prioritizes_control(self) -> None:
+        self.assertIn("class ExecutionCore final", self.source)
+        self.assertIn("MakerPaperExecutionPolicy policy_{}", self.source)
+        self.assertIn("SleeveCapitalAccount capital_{}", self.source)
+        self.assertIn("std::thread execution_thread", self.source)
+        self.assertIn("pop_critical(command)", self.source)
+        self.assertIn("pop_normal(command)", self.source)
+        self.assertLess(
+            self.source.index("pop_critical(command)"),
+            self.source.index("pop_normal(command)"),
+        )
 
 
 if __name__ == "__main__":
