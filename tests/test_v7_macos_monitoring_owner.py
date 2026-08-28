@@ -29,6 +29,8 @@ class V7MacosMonitoringOwnerTest(unittest.TestCase):
         text = (ROOT / "ops/apply_v7_monitoring_config_macos.sh").read_text(encoding="utf-8")
         self.assertIn("mamma-portfolio.tail1bae85.ts.net", text)
         self.assertIn('set --hostname="$TAILSCALE_HOSTNAME"', text)
+        self.assertIn("GRAFANA_URL=\"${POLYMARKET_GRAFANA_URL:-https://${TAILSCALE_FQDN}}\"", text)
+        self.assertIn("serve --bg --https=443 localhost:3000", text)
         self.assertIn("serve --bg --http=80 localhost:3000", text)
         self.assertIn("serve status", text)
         self.assertIn("polymarket-v7-canonical-paper-economics", text)
