@@ -10,6 +10,7 @@ STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
 LOCK_DIR="$CACHE_DIR/update-v7.lock"
 STATUS_FILE="$STATE_DIR/v7_deploy_status.env"
 HEALTH_ATTEMPTS="${POLYMARKET_RUNTIME_HEALTH_ATTEMPTS:-180}"
+DRAIN_ATTEMPTS="${POLYMARKET_RUNTIME_DRAIN_ATTEMPTS:-50}"
 
 log(){ printf '[v7-deploy] %s\n' "$*"; }
 fail(){ printf '[v7-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -18,6 +19,7 @@ fail(){ printf '[v7-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$DEPLOY_REF" == "paper-validated" ]] || fail "V7 deploy ref must remain paper-validated"
 [[ "$MAIN_REF" == "main" ]] || fail "V7 canonical integration ref must remain main"
 [[ "$HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS must be positive"
+[[ "$DRAIN_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_RUNTIME_DRAIN_ATTEMPTS must be positive"
 [[ -d "$APP_DIR/.git" ]] || fail "$APP_DIR is not a git checkout"
 
 mkdir -p "$CACHE_DIR" "$STATE_DIR"
@@ -60,17 +62,91 @@ if p.is_file():
 PY
 }
 
+force_stop_production_tree(){
+  local root_pid="$1"
+  python3 - "$root_pid" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+import time
+
+root = int(sys.argv[1])
+try:
+    raw = subprocess.check_output(["ps", "-axo", "pid=,ppid="], text=True)
+except Exception as exc:
+    raise SystemExit(f"cannot inspect V7 process tree: {exc}")
+
+children = {}
+for line in raw.splitlines():
+    fields = line.split()
+    if len(fields) != 2:
+        continue
+    try:
+        pid, ppid = map(int, fields)
+    except ValueError:
+        continue
+    children.setdefault(ppid, []).append(pid)
+
+stack = [root]
+seen = set()
+order = []
+while stack:
+    pid = stack.pop()
+    if pid in seen:
+        continue
+    seen.add(pid)
+    order.append(pid)
+    stack.extend(children.get(pid, ()))
+
+# Only the descendants of the registered canonical runtime PID are touched.
+# Give every owned child a short TERM opportunity before escalating.
+for pid in reversed(order):
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+end = time.monotonic() + 2.0
+while time.monotonic() < end:
+    alive = []
+    for pid in order:
+        try:
+            os.kill(pid, 0)
+            alive.append(pid)
+        except ProcessLookupError:
+            pass
+    if not alive:
+        raise SystemExit(0)
+    time.sleep(0.05)
+
+for pid in reversed(order):
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+PY
+}
+
 stop_production_runtime(){
   local pid="$(production_pid)"
   if [[ "$pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$pid" 2>/dev/null; then
     log "Stopping production V7 pid=$pid only"
     kill -TERM "$pid" 2>/dev/null || true
-    for _ in $(seq 1 300); do
+    for _ in $(seq 1 "$DRAIN_ATTEMPTS"); do
       kill -0 "$pid" 2>/dev/null || break
       sleep 0.1
     done
     if kill -0 "$pid" 2>/dev/null; then
-      fail "production V7 pid=$pid did not drain"
+      log "Graceful V7 drain timed out; force-stopping owned process tree rooted at pid=$pid"
+      force_stop_production_tree "$pid"
+      for _ in $(seq 1 50); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+      done
+    fi
+    if kill -0 "$pid" 2>/dev/null; then
+      fail "production V7 pid=$pid survived bounded owned-tree termination"
     fi
   fi
   return 0
