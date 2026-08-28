@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pm/v7_execution_plan.hpp"
 #include "pm/v7_spsc.hpp"
 
 #include <array>
@@ -35,22 +36,33 @@ public:
     // Producer API: shard_id must be stable and each shard_id must be written by
     // exactly one producer thread. Full queues reject instead of growing.
     [[nodiscard]] bool try_push(std::size_t shard_id,
-                                const StrategyIntent& intent) noexcept {
+                                const ExecutionPlan& plan) noexcept {
         if (shard_id >= active_shards_) return false;
         auto& channel = channels_[shard_id];
-        if (is_critical_intent(intent.type) || intent.urgency == Urgency::Critical) {
-            return channel.critical.try_push(intent);
-        }
-        return channel.normal.try_push(intent);
+        if (execution_plan_is_critical(plan)) return channel.critical.try_push(plan);
+        return channel.normal.try_push(plan);
+    }
+
+    // Convenience for strategy-neutral control traffic/tests. A raw intent has
+    // no passive-queue context and therefore must not be used to submit a normal
+    // PassiveMaker quote to the execution policy; that policy will fail closed
+    // on public_queue_observable=0.
+    [[nodiscard]] bool try_push(std::size_t shard_id,
+                                const StrategyIntent& intent) noexcept {
+        ExecutionPlan plan;
+        plan.intent = intent;
+        plan.policy = is_critical_intent(intent.type)
+            ? ExecutionPolicyId::Emergency : ExecutionPolicyId::PassiveMaker;
+        return try_push(shard_id, plan);
     }
 
     // Single-consumer API. Critical and normal cursors are independently
     // round-robin so no busy shard can permanently starve another.
-    [[nodiscard]] bool try_pop(StrategyIntent& intent,
+    [[nodiscard]] bool try_pop(ExecutionPlan& plan,
                                std::size_t& source_shard) noexcept {
         for (std::size_t step = 0; step < active_shards_; ++step) {
             const std::size_t shard = (critical_cursor_ + step) % active_shards_;
-            if (channels_[shard].critical.try_pop(intent)) {
+            if (channels_[shard].critical.try_pop(plan)) {
                 source_shard = shard;
                 critical_cursor_ = (shard + 1) % active_shards_;
                 return true;
@@ -58,7 +70,7 @@ public:
         }
         for (std::size_t step = 0; step < active_shards_; ++step) {
             const std::size_t shard = (normal_cursor_ + step) % active_shards_;
-            if (channels_[shard].normal.try_pop(intent)) {
+            if (channels_[shard].normal.try_pop(plan)) {
                 source_shard = shard;
                 normal_cursor_ = (shard + 1) % active_shards_;
                 return true;
@@ -80,8 +92,8 @@ public:
 
 private:
     struct Channel {
-        SpscRing<StrategyIntent, CriticalCapacity> critical{};
-        SpscRing<StrategyIntent, NormalCapacity> normal{};
+        SpscRing<ExecutionPlan, CriticalCapacity> critical{};
+        SpscRing<ExecutionPlan, NormalCapacity> normal{};
     };
 
     std::array<Channel, MaxShards> channels_{};
