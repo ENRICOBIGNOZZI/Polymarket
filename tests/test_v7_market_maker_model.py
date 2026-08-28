@@ -67,7 +67,7 @@ class MakerExecutionModelTests(unittest.TestCase):
             side="BUY",
             exchange_ts_ms=80_000 + index,
             receive_ts_ms=80_010 + index,
-            book_snapshot_id=f"mark{index}",
+            book_snapshot_id=f"mark{index}-{horizon}",
             executable_liquidation_value=4.7,
             markouts={horizon: value},
         )
@@ -90,7 +90,28 @@ class MakerExecutionModelTests(unittest.TestCase):
         model = fit(records)
         group = model["groups"]["JOIN|YES|BUY"]
         self.assertAlmostEqual(group["adverse_markout_per_share"], 0.005)
+        self.assertEqual(group["adverse_markout_horizon"], "60s")
+        self.assertEqual(group["adverse_markout_n"], 2)
         self.assertEqual(group["markouts"]["60s"]["n"], 2)
+
+    def test_correlated_45s_and_60s_markouts_are_not_pooled(self) -> None:
+        records = [self.order(i) for i in range(2)]
+        records += [self.fill_event(0), self.fill_event(1)]
+        # If these four values were pooled, adverse cost would be 0.0275.
+        # The canonical target is 45s, so only its two fill-level observations
+        # define the adverse-selection target.
+        records += [
+            self.markout(0, -0.01, "45s"),
+            self.markout(1, 0.01, "45s"),
+            self.markout(0, -0.05, "60s"),
+            self.markout(1, -0.06, "60s"),
+        ]
+        model = fit(records)
+        group = model["groups"]["JOIN|YES|BUY"]
+        self.assertEqual(group["adverse_markout_horizon"], "45s")
+        self.assertEqual(group["adverse_markout_n"], 2)
+        self.assertAlmostEqual(group["adverse_markout_per_share"], 0.0)
+        self.assertTrue(model["correlated_horizons_are_not_pooled"])
 
     def test_action_specific_groups_do_not_pool_join_and_improve(self) -> None:
         records = [self.order(i, action="JOIN") for i in range(5)]
