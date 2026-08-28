@@ -1,6 +1,9 @@
 #include "pm/http.hpp"
 #include <curl/curl.h>
+
+#include <cstdlib>
 #include <stdexcept>
+#include <string_view>
 
 namespace pm {
 namespace {
@@ -8,6 +11,23 @@ size_t write_cb(char* ptr, size_t size, size_t nmemb, void* userdata) {
     auto* out = static_cast<std::string*>(userdata);
     out->append(ptr, size * nmemb);
     return size * nmemb;
+}
+
+[[nodiscard]] bool is_public_polymarket_https(std::string_view url) noexcept {
+    constexpr std::string_view scheme = "https://";
+    if (!url.starts_with(scheme)) return false;
+    url.remove_prefix(scheme.size());
+    const auto end = url.find_first_of("/:?#");
+    const auto host = url.substr(0, end);
+    constexpr std::string_view suffix = ".polymarket.com";
+    return host == "polymarket.com" ||
+           (host.size() > suffix.size() && host.ends_with(suffix));
+}
+
+[[nodiscard]] const char* v7_public_proxy(std::string_view url) noexcept {
+    if (!is_public_polymarket_https(url)) return nullptr;
+    const char* proxy = std::getenv("PM_V7_HTTPS_PROXY");
+    return proxy != nullptr && *proxy != '\0' ? proxy : nullptr;
 }
 }
 
@@ -34,6 +54,17 @@ HttpResponse HttpClient::request(const std::string& method, const std::string& u
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp.body);
     curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+
+    // libcurl's environment-proxy behaviour differs across builds/platforms.
+    // V7 therefore supplies its PAPER public-data tunnel explicitly. The
+    // tunnel is loopback-only and only selected for HTTPS Polymarket hosts;
+    // TLS/SNI/certificate verification remain end-to-end inside libcurl.
+    if (const char* proxy = v7_public_proxy(url); proxy != nullptr) {
+        curl_easy_setopt(curl, CURLOPT_PROXY, proxy);
+        curl_easy_setopt(curl, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
+        curl_easy_setopt(curl, CURLOPT_NOPROXY, "127.0.0.1,localhost");
+    }
+
     if (list) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, list);
     if (method == "POST") {
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
