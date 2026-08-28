@@ -175,7 +175,7 @@ def test_osint_candidates_never_become_verified_by_lexical_score(tmp_path):
     assert status["forward_collection_active"] is False
 
 
-def test_osint_gamma_discovery_pages_until_short_page(monkeypatch):
+def test_osint_gamma_discovery_pages_until_short_page():
     class Response:
         headers = {}
         def __init__(self, rows): self.rows = rows
@@ -188,10 +188,14 @@ def test_osint_gamma_discovery_pages_until_short_page(monkeypatch):
         seen.append(request.full_url)
         offset = int(request.full_url.split("offset=")[1].split("&")[0])
         return Response([{"id": str(offset)}, {"id": str(offset + 1)}] if offset == 0 else [{"id": str(offset)}])
-    monkeypatch.setattr(osint_mapping.urllib.request, "urlopen", urlopen)
-    rows, timing = osint_mapping.fetch_markets(
-        "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=2"
-    )
+    original = osint_mapping.urllib.request.urlopen
+    osint_mapping.urllib.request.urlopen = urlopen
+    try:
+        rows, timing = osint_mapping.fetch_markets(
+            "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=2"
+        )
+    finally:
+        osint_mapping.urllib.request.urlopen = original
     assert [row["id"] for row in rows] == ["0", "1", "2"]
     assert timing["pages"] == 2 and timing["discovery_exhaustive"] is True
     assert len(seen) == 2
