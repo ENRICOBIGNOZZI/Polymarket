@@ -216,8 +216,6 @@ struct MarketWebSocketFeed::Impl {
         (void)ids;
         int backoff_seconds = 1;
         bool first_attempt = true;
-        // One reusable receive buffer per shard. It can grow on an exceptional
-        // large frame, but normal frames no longer allocate/copy per message.
         beast::flat_buffer buffer;
         buffer.reserve(256 * 1024);
         while (!stop.stop_requested()) {
@@ -301,8 +299,6 @@ struct MarketWebSocketFeed::Impl {
                         static_cast<const char*>(front.data()), front.size()};
                     if (message != "PONG" && !message.empty()) {
                         messages.fetch_add(1, std::memory_order_relaxed);
-                        // The callback executes synchronously while `buffer` remains
-                        // valid, so no payload copy is needed on the feed hot path.
                         on_message(message, stamp, shard_index);
                     }
                     if (stamp.wall_ms - last_text_ping >= 10000) {
@@ -367,7 +363,7 @@ MarketWebSocketFeed::MarketWebSocketFeed(std::string url,
                                          MessageHandler on_message,
                                          ErrorHandler on_error)
     : impl_(std::make_unique<Impl>(std::move(url), std::move(asset_ids), shard_size,
-                                   std::move(on_message), std::move(error_handler))) {}
+                                   std::move(on_message), std::move(on_error))) {}
 
 MarketWebSocketFeed::~MarketWebSocketFeed() { stop(); }
 
