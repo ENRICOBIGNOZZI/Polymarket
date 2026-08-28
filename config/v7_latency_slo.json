@@ -1,0 +1,93 @@
+{
+  "schema": "polymarket_v7_latency_slo_v1",
+  "priority": "P0",
+  "status": "ACTIVE_ENGINEERING_NOT_YET_LIVE_PROVEN",
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "real_order_submission": false,
+    "real_capital_at_risk": false,
+    "automatic_cutover": false
+  },
+  "claim_boundaries": {
+    "architecture_is_not_live_latency_proof": true,
+    "synthetic_ci_is_not_representative_venue_replay": true,
+    "public_get_probe_is_not_order_or_cancel_ack_proof": true,
+    "top_percentile_claim_allowed": false
+  },
+  "historical_noncanonical_baseline": {
+    "source": "older Fast forward run; not current exact-head V7 evidence",
+    "end_to_end_p99_ms": 545.7,
+    "feed_p99_ms": 524.0,
+    "decision_p99_ms": 39.1,
+    "opportunity_lifetime_p10_ms": 233.6,
+    "diagnosis": "feed_and_pipeline_dominated_and_too_slow_for_short_opportunities"
+  },
+  "ci_internal_guardrails_ns": {
+    "parse": {"p99": 300000},
+    "book": {"p99": 300000},
+    "features": {"p99": 100000},
+    "decision": {"p99": 100000},
+    "risk": {"p99": 150000},
+    "receive_to_intent": {"p99": 1000000, "p99_9": 2000000}
+  },
+  "live_targets_ns": {
+    "ws_bytes_to_book_p99": 300000,
+    "book_to_fair_features_p99": 100000,
+    "maker_decision_p99": 100000,
+    "risk_oms_intent_p99": 150000,
+    "serialization_sign_enqueue_p99": 300000,
+    "feed_received_to_packet_ready_p99": 1000000
+  },
+  "required_live_percentiles": ["p50", "p90", "p95", "p99", "p99.9", "max"],
+  "required_live_segments": [
+    "exchange_to_receive",
+    "parse",
+    "book",
+    "features",
+    "decision",
+    "risk",
+    "tx_queue",
+    "serialization_sign_enqueue",
+    "request_to_ack",
+    "cancel_to_ack",
+    "user_ws_confirmation"
+  ],
+  "transport": {
+    "persistent_dns_cache": true,
+    "persistent_tls_session_cache": true,
+    "persistent_connection_reuse": true,
+    "tcp_keepalive": true,
+    "dedicated_order_io_owner": true,
+    "synchronous_retry_on_decision_thread": false,
+    "filesystem_or_logging_on_decision_thread": false,
+    "prewarm_required_before_authority": true
+  },
+  "regional_shootout": {
+    "duration_hours": 24,
+    "candidate_regions": ["Frankfurt", "London", "Amsterdam", "New York", "Northern Virginia"],
+    "public_probe_endpoint": "https://clob.polymarket.com/time",
+    "same_binary_config_and_sha_required": true,
+    "winner_selected_by": "lowest stable p99 and p99.9 request/ack path subject to loss and reconnect health",
+    "authenticated_order_cancel_probe": "BLOCKED_UNTIL_EXPLICIT_OPERATOR_AUTHORITY"
+  },
+  "venue_constraints_verified_2026_08_28": {
+    "crypto_taker_delay_ms_for_applicable_markets": 250,
+    "resting_orders_cancelable_during_taker_delay": true,
+    "standard_signer_order_tokens_per_second": 40,
+    "standard_signer_order_burst": 60,
+    "standard_signer_cancel_tokens_per_second": 80,
+    "standard_signer_cancel_burst": 120,
+    "elite_signer_order_tokens_per_second": 600,
+    "elite_signer_cancel_tokens_per_second": 1200,
+    "post_order_cloudflare_burst_per_10_seconds": 5000,
+    "authoritative_refresh_required_before_authenticated_execution": true,
+    "rate_limit_headers_required": ["Poly-RateLimit-Remaining", "Poly-RateLimit-Reset", "Poly-RateLimit-Tier"]
+  },
+  "quote_policy": {
+    "maximize_information_per_order_or_cancel": true,
+    "preserve_queue_priority_when_quote_remains_economic": true,
+    "critical_toxicity_cancel_overrides_quote_dwell": true,
+    "blind_cancel_repost_loop_forbidden": true
+  }
+}

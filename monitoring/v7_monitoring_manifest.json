@@ -25,6 +25,7 @@
     "dashboard_file": "monitoring/grafana/dashboards/polymarket-v7.json",
     "maker_fillability_dashboard": "monitoring/grafana/dashboards/polymarket-v7-maker-fillability.json",
     "external_fair_dashboard": "monitoring/grafana/dashboards/polymarket-v7-external-fair.json",
+    "latency_dashboard": "monitoring/grafana/dashboards/polymarket-v7-latency.json",
     "datasource_uid": "prometheus-v7",
     "datasource_file": "monitoring/grafana/provisioning/datasources/prometheus-v7.yml",
     "provider_file": "monitoring/grafana/provisioning/dashboards/v7.yml",

@@ -137,6 +137,13 @@ class V7NativeMonitoringTest(unittest.TestCase):
             f"{now - 1},{(now - 1) * 1000},m,t,SELL,0.5,2,tr1\n",
             encoding="utf-8",
         )
+        latency = root / "micro_maker" / "latency.csv"
+        latency.write_text(
+            "recorded_ts_ms,record_kind,market_handle,instrument_handle,state_version,parse_ns,book_ns,feature_ns,decision_ns,risk_ns,tx_queue_ns,execution_ns,receive_to_intent_ns\n"
+            "999000,candidate,1,2,3,1000,2000,3000,4000,5000,0,0,15000\n"
+            "999001,paper_execution,1,2,3,1000,2000,3000,4000,5000,6000,7000,15000\n",
+            encoding="utf-8",
+        )
 
     def test_healthy_v7_fixture_exports_canonical_runtime_and_economics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -156,6 +163,9 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertIn("polymarket_v7_canonical_submitted_units 2", metrics)
             self.assertIn("polymarket_v7_canonical_complete_units 1", metrics)
             self.assertIn("polymarket_runtime_realized_pnl_usd 7", metrics)
+            self.assertIn("polymarket_v7_latency_samples_present 1", metrics)
+            self.assertIn('polymarket_v7_latency_stage_nanoseconds{stage="parse_ns",percentile="p99"} 1000', metrics)
+            self.assertIn('polymarket_v7_latency_stage_nanoseconds{stage="tx_queue_ns",percentile="p99"} 6000', metrics)
             self.assertNotIn("polymarket_v7_shadow_alive", metrics)
             self.assertNotIn("polymarket_v7_market_proxy_markets", metrics)
 

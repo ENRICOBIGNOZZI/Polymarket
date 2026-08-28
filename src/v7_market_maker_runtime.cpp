@@ -574,6 +574,7 @@ struct ExecutionCommand {
     ExecutionContext context{};
     ExecutionPlan plan{};
     pm::v7::PublicTradePrint trade{};
+    std::int64_t enqueue_monotonic_ns = 0;
     std::int64_t advance_monotonic_ns = 0;
 };
 
@@ -707,11 +708,13 @@ private:
     }
 
     [[nodiscard]] bool enqueue_execution(const ExecutionCommand& command) noexcept {
-        const bool critical = command.kind != ExecutionCommandKind::Plan
-            || pm::v7::execution_plan_is_critical(command.plan);
+        ExecutionCommand stamped = command;
+        stamped.enqueue_monotonic_ns = monotonic_ns();
+        const bool critical = stamped.kind != ExecutionCommandKind::Plan
+            || pm::v7::execution_plan_is_critical(stamped.plan);
         const bool accepted = critical
-            ? execution_critical_.try_push(command)
-            : execution_normal_.try_push(command);
+            ? execution_critical_.try_push(stamped)
+            : execution_normal_.try_push(stamped);
         if (!accepted) fatal_->store(true, std::memory_order_release);
         return accepted;
     }
@@ -779,7 +782,9 @@ private:
             global_kill_->load(std::memory_order_acquire));
 
         auto& lane = instrument.yes ? market.yes_lane : market.no_lane;
-        const MakerDecision decision = lane.on_market_event(source_event, context, model);
+        MakerDecision decision = lane.on_market_event(source_event, context, model);
+        decision.latency.parse_ns = source_event.frame_parse_ns;
+        decision.latency.book_ns = source_event.book_apply_ns;
         for (std::size_t i = 0; i < decision.intent_count; ++i) {
             StrategyIntent intent = decision.intents[i];
             // Safety controls must remain executable even after canonical lineage
@@ -972,6 +977,10 @@ public:
             return false;
         }
 
+        const std::int64_t execution_start_ns = monotonic_ns();
+        ExecutionContext measured_context = command.context;
+        measured_context.decision.latency.tx_queue_ns = command.enqueue_monotonic_ns > 0
+            ? std::max<std::int64_t>(0, execution_start_ns - command.enqueue_monotonic_ns) : 0;
         pm::v7::maker::MakerExecutionResult result;
         switch (command.kind) {
             case ExecutionCommandKind::Plan:
@@ -987,8 +996,11 @@ public:
                 break;
         }
 
+        const std::int64_t execution_end_ns = monotonic_ns();
+        measured_context.decision.latency.execution_ns = std::max<std::int64_t>(
+            0, execution_end_ns - execution_start_ns);
         ++execution_version_;
-        if (result.paper.event_count > 0) emit(command.context, result.paper);
+        if (result.paper.event_count > 0) emit(measured_context, result.paper);
         if (result.capital_invariant_violation || result.paper.invariant_violation
             || result.reason == MakerExecutionReason::CapitalInvariant
             || result.reason == MakerExecutionReason::UnknownMarket) {
@@ -1146,7 +1158,7 @@ public:
     void write_latency_header_if_needed() {
         const fs::path path = run_root_ / "micro_maker" / "latency.csv";
         if (!fs::exists(path)) {
-            atomic_write(path, "recorded_ts_ms,market_handle,instrument_handle,state_version,feature_ns,decision_ns,risk_ns,receive_to_intent_ns\n");
+            atomic_write(path, "recorded_ts_ms,record_kind,market_handle,instrument_handle,state_version,parse_ns,book_ns,feature_ns,decision_ns,risk_ns,tx_queue_ns,execution_ns,receive_to_intent_ns\n");
         }
     }
 
@@ -1262,15 +1274,20 @@ private:
     void append_latency(const TelemetryRecord& record) {
         write_latency_header_if_needed();
         std::ofstream out(run_root_ / "micro_maker" / "latency.csv", std::ios::app);
-        out << wall_ms() << ',' << record.market_handle << ',' << record.instrument_handle << ','
-            << record.state_version << ',' << record.decision.latency.feature_ns << ','
+        out << wall_ms() << ','
+            << (record.kind == TelemetryKind::Candidate ? "candidate" : "paper_execution") << ','
+            << record.market_handle << ',' << record.instrument_handle << ','
+            << record.state_version << ',' << record.decision.latency.parse_ns << ','
+            << record.decision.latency.book_ns << ',' << record.decision.latency.feature_ns << ','
             << record.decision.latency.decision_ns << ',' << record.decision.latency.risk_ns << ','
+            << record.decision.latency.tx_queue_ns << ',' << record.decision.latency.execution_ns << ','
             << record.decision.latency.receive_to_intent_ns << '\n';
     }
 
     void write_paper(const TelemetryRecord& record) {
         const auto& paper = record.paper;
         if (paper.kind == PaperMakerEventKind::OrderLive) {
+            append_latency(record);
             orders_[paper.order_id] = OrderMeta{paper.intent_id, record.market_handle,
                                                 record.instrument_handle, record.outcome_yes,
                                                 record.action};
@@ -1295,6 +1312,7 @@ private:
             return;
         }
         if (paper.kind == PaperMakerEventKind::CancelRequested) {
+            append_latency(record);
             write_order_state(record, "CANCEL_PENDING");
             return;
         }
@@ -1502,6 +1520,7 @@ int main(int argc, char** argv) {
                 }
                 return false;
             };
+            std::uint32_t idle_iterations = 0;
             while (!execution_stop.load(std::memory_order_acquire) || pending()) {
                 ExecutionCommand command;
                 std::size_t source_shard = 0;
@@ -1530,9 +1549,21 @@ int main(int argc, char** argv) {
                     }
                 }
                 if (!have) {
-                    std::this_thread::sleep_for(std::chrono::microseconds(50));
+                    // Avoid a fixed 50 us tax on a newly enqueued cancel/order.
+                    // The isolated order-TX owner spins briefly, then yields,
+                    // and only sleeps after a prolonged idle period.
+                    ++idle_iterations;
+                    if (idle_iterations < 256) {
+                        std::atomic_signal_fence(std::memory_order_seq_cst);
+                    } else if (idle_iterations < 1024) {
+                        std::this_thread::yield();
+                    } else {
+                        std::this_thread::sleep_for(std::chrono::microseconds(5));
+                        idle_iterations = 0;
+                    }
                     continue;
                 }
+                idle_iterations = 0;
 
                 if (!execution->process(command)) {
                     fatal.store(true, std::memory_order_release);

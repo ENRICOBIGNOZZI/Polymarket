@@ -3,6 +3,7 @@
   "directive_epoch": "2026-08-28T18:38:17Z",
   "operator_instruction_id": "user-v7-final-world-class-convergence-20260828",
   "priority_instruction_id": "user-v7-final-world-class-convergence-20260828",
+  "latency_priority_instruction_id": "user-v7-latency-domination-20260828",
   "authority": "latest_explicit_user_instruction",
   "repository": "ENRICOBIGNOZZI/Polymarket",
   "scope": "all_registered_schedulers_and_paper_research",
@@ -46,6 +47,7 @@
     "success": "positive forward realized PAPER fill-conditioned post-cost PnL with causal data, realistic simulated fills, authoritative fees, executable depth, inventory/unwind losses, markout, reward/rebate attribution, cost stress and no leakage"
   },
   "current_priority_order": [
+    "P0 V7 Latency Domination: exact stage timestamps, persistent transport, exact-head p99/p99.9 guardrails, regional shootout and maker cancel-latency optimization before additional alpha features.",
     "Audit and quarantine every obsolete operational generation; port unique useful capability into V7 before deletion.",
     "Keep one V7 runtime, one broker authority, one canonical execution ledger, one allocator, one risk guard and one monitoring plane.",
     "Keep only generation-neutral/common primitives that are actually imported by V7.",
@@ -60,6 +62,15 @@
     "automatic_deployment": false,
     "automatic_champion_promotion": false,
     "manual_exact_sha_cutover_required": true
+  },
+  "latency_engineering": {
+    "policy": "config/v7_latency_slo.json",
+    "architecture_is_not_live_latency_proof": true,
+    "internal_p99_target_ns": 1000000,
+    "persistent_transport_required": true,
+    "regional_shootout_required": true,
+    "authenticated_order_cancel_probe_authorized": false,
+    "top_percentile_claim_authorized": false
   },
   "forbidden_regressions": [
     "Do not create V8/V9/V10 or another numerical runtime generation.",

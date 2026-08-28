@@ -46,6 +46,15 @@ jobs:
           cmake --build build-${{ matrix.build_type }} --parallel 2
       - name: Test V7 only
         run: ctest --test-dir build-${{ matrix.build_type }} --output-on-failure
+      - name: Enforce V7 internal latency SLO
+        if: matrix.build_type == 'Release'
+        run: |
+          set -euo pipefail
+          build-Release/polymarket_v7_maker_replay_bench 200000 > build-Release/v7-latency-benchmark.json
+          python3 scripts/v7_latency_gate.py \
+            --config config/v7_latency_slo.json \
+            --benchmark build-Release/v7-latency-benchmark.json \
+            --output build-Release/v7-latency-gate.json
       - name: Static V7 contract
         run: |
           set -euo pipefail
@@ -59,8 +68,10 @@ jobs:
           python3 -m json.tool config/v7_scheduler_freeze.json >/dev/null
           python3 -m json.tool config/v7_capability_matrix.json >/dev/null
           python3 -m json.tool config/v7_incumbent_identity.json >/dev/null
+          python3 -m json.tool config/v7_latency_slo.json >/dev/null
           python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-maker-fillability.json >/dev/null
+          python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-latency.json >/dev/null
           bash -n scripts/paper_v7_execution_loop.sh
           bash -n ops/update_server_v7.sh
           python3 tests/test_no_legacy_runtime.py

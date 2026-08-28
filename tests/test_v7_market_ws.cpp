@@ -49,7 +49,12 @@ void test_snapshot_delta_trade_and_reconnect_lineage() {
     assert(!result.invalid_frame);
     assert(result.output_count == 1);
     assert(result.applied_state_events == 1);
+    assert(result.parse_ns > 0);
+    assert(result.book_apply_ns >= 0);
+    assert(result.receive_to_book_ns > 0);
     assert(output[0].kind == pm::v7::MarketWsEventKind::BookChanged);
+    assert(output[0].frame_parse_ns == result.parse_ns);
+    assert(output[0].book_apply_ns == result.book_apply_ns);
     assert(output[0].instrument_handle == 301);
     assert(output[0].receive_monotonic_ns == 2'000'000'000LL);
     assert(output[0].book.receive_monotonic_ns == 2'000'000'000LL);

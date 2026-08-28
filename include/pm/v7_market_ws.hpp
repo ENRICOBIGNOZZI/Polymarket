@@ -39,6 +39,9 @@ struct MarketWsEvent {
     std::int64_t quantity_microunits = 0;
     std::int64_t exchange_event_ns = 0;
     std::int64_t receive_monotonic_ns = 0;
+    std::int64_t frame_parse_ns = 0;
+    std::int64_t book_apply_ns = 0;
+    std::int64_t receive_to_book_ns = 0;
     BookHotSnapshot book{};
 };
 
@@ -48,6 +51,9 @@ struct MarketWsFrameResult {
     std::size_t applied_state_events = 0;
     std::size_t trade_events = 0;
     std::size_t ignored_unknown_assets = 0;
+    std::int64_t parse_ns = 0;
+    std::int64_t book_apply_ns = 0;
+    std::int64_t receive_to_book_ns = 0;
     std::uint8_t invalid_frame = 0;
     std::uint8_t arena_exhausted = 0;
     std::uint8_t output_overflow = 0;

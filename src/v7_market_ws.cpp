@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -26,6 +27,12 @@ constexpr std::size_t kJsonArenaHardMaxBytes = 2ULL * 1024ULL * kMiB;
 constexpr std::size_t kJsonArenaPayloadMultiplier = 8;
 constexpr std::size_t kJsonArenaHeadroomBytes = 4ULL * kMiB;
 constexpr std::size_t kMaxSnapshotLevelsPerSide = 256;
+
+[[nodiscard]] std::int64_t monotonic_ns() noexcept {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 [[nodiscard]] std::size_t json_arena_max_bytes_from_env() noexcept {
     const char* raw = std::getenv("PM_V7_WS_JSON_ARENA_MAX_BYTES");
@@ -499,6 +506,7 @@ MarketWsFrameResult MarketWsShard::process_frame(
     std::span<MarketWsEvent> output) noexcept {
 
     MarketWsFrameResult result;
+    const std::int64_t frame_start_ns = monotonic_ns();
     if (payload.empty() || receive.monotonic_ns <= 0) {
         result.invalid_frame = 1;
         impl_->invalidate_all();
@@ -517,6 +525,8 @@ MarketWsFrameResult MarketWsShard::process_frame(
         impl_->json_resource->release();
         boost::system::error_code error;
         const json::value root = json::parse(payload, error, impl_->json_resource.get());
+        const std::int64_t parse_end_ns = monotonic_ns();
+        result.parse_ns = std::max<std::int64_t>(0, parse_end_ns - frame_start_ns);
         if (error) {
             result.invalid_frame = 1;
             impl_->invalidate_all();
@@ -541,6 +551,17 @@ MarketWsFrameResult MarketWsShard::process_frame(
         result.arena_exhausted = 1;
     } catch (...) {
         result.invalid_frame = 1;
+    }
+
+    const std::int64_t book_end_ns = monotonic_ns();
+    result.book_apply_ns = std::max<std::int64_t>(
+        0, book_end_ns - frame_start_ns - result.parse_ns);
+    result.receive_to_book_ns = receive.monotonic_ns > 0
+        ? std::max<std::int64_t>(0, book_end_ns - receive.monotonic_ns) : 0;
+    for (std::size_t index = 0; index < result.output_count; ++index) {
+        output[index].frame_parse_ns = result.parse_ns;
+        output[index].book_apply_ns = result.book_apply_ns;
+        output[index].receive_to_book_ns = result.receive_to_book_ns;
     }
 
     if (result.invalid_frame || result.output_overflow) {
