@@ -37,6 +37,9 @@ jobs:
             tests/test_monitoring_v7_ledger.py \
             tests/test_monitoring_v7_fill_rate_integrity.py \
             tests/test_monitoring_v7_dashboard_completion.py \
+            tests/test_v7_semantic_mapping.py \
+            tests/test_v7_external_input_collectors.py \
+            tests/test_v7_research_shadow_supervisor.py \
             tests/test_v7_maker_fillability.py \
             tests/test_v7_maker_fillability_monitoring.py -v
           python3 -m py_compile \
@@ -45,12 +48,18 @@ jobs:
             monitoring/v7_ledger_metrics.py \
             monitoring/v7_maker_fillability.py \
             monitoring/v7_maker_fillability_exact.py \
+            scripts/v7_semantic_mapping.py \
+            scripts/v7_osint_mapping_collector.py \
+            scripts/v7_sports_collector.py \
+            scripts/v7_cross_platform_collector.py \
             scripts/v7_maker_fillability_report.py
           python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-maker-fillability.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-latency.json >/dev/null
           python3 -m json.tool config/v7_maker_fillability_experiments.json >/dev/null
+          python3 -m json.tool config/v7_external_inputs.json >/dev/null
+          python3 -m json.tool config/v7_external_mappings.json >/dev/null
           bash -n ops/apply_v7_monitoring_config_macos.sh
           test -s monitoring/prometheus_v7.yml
           test -s monitoring/v7_alerts.yml

@@ -1,0 +1,80 @@
+{
+  "schema": "polymarket_v7_external_inputs_v1",
+  "version": 7,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "automatic_promotion": false,
+  "common": {
+    "queue_capacity": 4096,
+    "status_max_age_ms": 180000,
+    "clock_future_tolerance_ms": 2000,
+    "retry_initial_ms": 1000,
+    "retry_max_ms": 60000,
+    "retry_jitter_fraction": 0.2
+  },
+  "sports_latency": {
+    "primary_provider": "sportradar_soccer_v4_push",
+    "optional_fallback_provider": "sportradar_soccer_v4_rest",
+    "providers": [
+      {
+        "provider_id": "sportradar_soccer_v4_push",
+        "authority_class": "LICENSED_LOW_LATENCY_PROVIDER",
+        "sports": ["SOCCER"],
+        "transport": "HTTP_CHUNKED_PUSH",
+        "endpoint": "https://api.sportradar.com/soccer/{access_level}/v4/stream/events/subscribe?format=json",
+        "documentation": "https://developer.sportradar.com/soccer/docs/soccer-ig-push",
+        "credentials_required": true,
+        "secret_env": "PM_V7_SPORTRADAR_API_KEY",
+        "access_level_env": "PM_V7_SPORTRADAR_ACCESS_LEVEL",
+        "default_access_level": "production",
+        "sequence_semantics": "PROVIDER_EVENT_ID_AND_TIMELINE_ORDER",
+        "correction_semantics": "TIMELINE_EVENT_REPLACEMENT_OR_REVERSAL",
+        "heartbeat_seconds": 5,
+        "max_feed_age_ms": 15000,
+        "enabled": true
+      },
+      {
+        "provider_id": "sportradar_soccer_v4_rest",
+        "authority_class": "LICENSED_DATA_PROVIDER",
+        "sports": ["SOCCER"],
+        "transport": "REST_RECOVERY",
+        "endpoint": "https://api.sportradar.com/soccer/{access_level}/v4/{language}/sport_events/{sport_event_id}/timeline.json",
+        "documentation": "https://developer.sportradar.com/soccer/docs/soccer-ig-live-match-retrieval",
+        "credentials_required": true,
+        "secret_env": "PM_V7_SPORTRADAR_API_KEY",
+        "enabled": true
+      }
+    ]
+  },
+  "cross_platform": {
+    "second_venue": "kalshi",
+    "discovery_interval_seconds": 30,
+    "orderbook_interval_seconds": 2,
+    "max_discovery_markets": 20,
+    "venues": [
+      {
+        "venue": "kalshi",
+        "authority_class": "REGULATED_PREDICTION_VENUE",
+        "public_rest_base": "https://external-api.kalshi.com/trade-api/v2",
+        "websocket_endpoint": "wss://external-api-ws.kalshi.com/trade-api/ws/v2",
+        "market_data_documentation": "https://docs.kalshi.com/getting_started/quick_start_market_data",
+        "orderbook_documentation": "https://docs.kalshi.com/api-reference/market/get-market-orderbook",
+        "websocket_documentation": "https://docs.kalshi.com/websockets/orderbook-updates",
+        "rest_authentication_required": false,
+        "websocket_authentication_required": true,
+        "key_id_env": "PM_V7_KALSHI_KEY_ID",
+        "private_key_path_env": "PM_V7_KALSHI_PRIVATE_KEY_PATH",
+        "transport": "PUBLIC_REST_POLLING",
+        "max_book_age_ms": 10000,
+        "enabled": true
+      }
+    ]
+  },
+  "osint": {
+    "polymarket_market_endpoint": "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=500",
+    "mapping_interval_seconds": 60,
+    "candidate_limit_per_event": 20,
+    "forward_horizons_ms": [100, 250, 500, 1000, 2000, 5000, 10000, 30000, 60000]
+  }
+}

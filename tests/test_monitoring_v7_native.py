@@ -30,6 +30,29 @@ class V7NativeMonitoringTest(unittest.TestCase):
 
     def _fixture(self, root: Path, *, now: int = 1_000) -> None:
         sha = self._sha()
+        family_rows = {}
+        for family in ("sports_latency", "cross_platform", "wallet_intelligence"):
+            wallet = family == "wallet_intelligence"
+            cross = family == "cross_platform"
+            family_rows[family] = {
+                "authority": "RESEARCH", "paper_only": True,
+                "authenticated_execution": False, "real_order_submission": False,
+                "process_state": "RUNNING",
+                "evidence_state": "BLOCKED_CONFIG" if wallet else "BLOCKED_EXTERNAL",
+                "last_attempt_ts": 0 if wallet else now - 2,
+                "last_success_ts": now - 2 if cross else 0,
+                "execution_authority": False, "capital_authority": False,
+                "oms_authority": False, "ledger_write_authority": False,
+                "promotion_authority": False,
+                "status_path": str(root / "shadow" / family / "status.json"),
+                "output_path": str(root / "shadow" / family),
+                "implementation_complete": not wallet,
+                "feed_status": "NOT_CONFIGURED" if wallet else ("OPERATIONAL" if cross else "CREDENTIALS_REQUIRED"),
+                "feed_operational": cross,
+                "mapping_status": "NOT_CONFIGURED" if wallet else ("NO_VERIFIED_EQUIVALENCE" if cross else "NO_VERIFIED_MAPPING"),
+                "verified_mappings": 0, "forward_collection_active": False,
+                "blocker": "" if wallet else ("BLOCKED_NO_VERIFIED_EQUIVALENCE" if cross else "BLOCKED_PROVIDER_CREDENTIALS:PM_V7_SPORTRADAR_API_KEY"),
+            }
         self._write(
             root / "control" / "runtime_status.json",
             {
@@ -51,6 +74,36 @@ class V7NativeMonitoringTest(unittest.TestCase):
                 "killed": False,
             },
         )
+        self._write(
+            root / "control" / "research_sleeves_manifest.json",
+            {
+                "schema": "polymarket_v7_research_sleeves_manifest_v1",
+                "version": 7,
+                "model_sha": sha,
+                "paper_only": True,
+                "authenticated_execution": False,
+                "real_order_submission": False,
+                "supervisor_pid": os.getpid(),
+                "timestamp": now - 2,
+                "families": family_rows,
+            },
+        )
+        for family in ("sports_latency", "cross_platform", "wallet_intelligence"):
+            self._write(
+                root / "shadow" / family / "status.json",
+                {
+                    "schema": "polymarket_v7_research_shadow_status_v1",
+                    "version": 7,
+                    "family": family,
+                    "model_sha": sha,
+                    "paper_only": True,
+                    "authenticated_execution": False,
+                    "real_order_submission": False,
+                    "process_state": "RUNNING",
+                    **family_rows[family],
+                    "timestamp": now - 2,
+                },
+            )
         budgets = {"graph_rv": 3400.0, "hard_arb": 2200.0, "micro_taker": 1200.0, "micro_maker": 2200.0, "external": 800.0, "reserve": 200.0}
         self._write(
             root / "control" / "allocations" / "manifest.json",
@@ -112,6 +165,9 @@ class V7NativeMonitoringTest(unittest.TestCase):
         )
         self._write(root / "micro_maker" / "status.json", {"timestamp": now - 5, "paper_only": True, "authenticated_execution": False, "enabled": False})
         self._write(root / "external" / "status.json", {"timestamp": now - 5, "paper_only": True, "authenticated_execution": False})
+        self._write(root / "osint" / "status.json", {"schema": "polymarket_v7_osint_collector_status_v1", "timestamp_ms": (now - 5) * 1000, "paper_only": True, "authenticated_execution": False, "real_order_submission": False, "enabled_sources": 3, "healthy_sources": 3})
+        self._write(root / "osint" / "mapping_status.json", {"schema": "polymarket_v7_osint_mapping_status_v1", "version": 7, "family": "osint", "model_sha": sha, "timestamp_ms": (now - 5) * 1000, "paper_only": True, "research_only": True, "authenticated_execution": False, "real_order_submission": False, "implementation_complete": True, "mapping_pipeline": True, "title_similarity_verification_forbidden": True, "verified_mappings": 0, "candidate_mappings": 2, "forward_collection_active": False})
+        self._write(root / "market_open" / "status.json", {"schema": "polymarket_v7_market_open_collector_status_v1", "timestamp_ms": (now - 5) * 1000, "paper_only": True, "authenticated_execution": False, "real_order_submission": False, "observed_markets": 10})
         self._write(
             root / "canonical_economics.json",
             {
@@ -159,6 +215,13 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertIn("polymarket_v7_authority_max_drawdown_ratio 0.15", metrics)
             self.assertIn("polymarket_v7_paper_only_contract_ok 1", metrics)
             self.assertIn("polymarket_v7_authenticated_execution_disabled 1", metrics)
+            self.assertIn("polymarket_v7_live_model_target_count 12", metrics)
+            self.assertIn("polymarket_v7_live_model_operational_count 8", metrics)
+            self.assertIn("polymarket_v7_live_model_blocked_count 4", metrics)
+            self.assertIn("polymarket_v7_live_model_blocked_config_count 1", metrics)
+            self.assertIn("polymarket_v7_live_model_blocked_external_count 3", metrics)
+            self.assertIn("polymarket_v7_live_model_scope_wired 1", metrics)
+            self.assertIn("polymarket_v7_live_model_target_operational 0", metrics)
             self.assertIn("polymarket_v7_trade_tape_rows 1", metrics)
             self.assertIn("polymarket_v7_canonical_submitted_units 2", metrics)
             self.assertIn("polymarket_v7_canonical_complete_units 1", metrics)
@@ -196,6 +259,49 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self._write(path, value)
             snapshot = exporter.collect_snapshot(run_root, ROOT, now=1_000)
             self.assertIn("authenticated_execution_not_disabled", exporter.health_reasons(snapshot))
+
+    def test_research_shadow_cannot_claim_active_without_adapter_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_root = Path(directory) / "paper_v7_live"
+            self._fixture(run_root)
+            path = run_root / "control" / "research_sleeves_manifest.json"
+            value = json.loads(path.read_text())
+            value["families"]["sports_latency"]["evidence_state"] = "ACTIVE"
+            value["families"]["sports_latency"]["last_success_ts"] = 999
+            self._write(path, value)
+            snapshot = exporter.collect_snapshot(run_root, ROOT, now=1_000)
+            self.assertIn(
+                "research_sleeve_false_active:sports_latency",
+                exporter.health_reasons(snapshot),
+            )
+            metrics = exporter.render_prometheus(snapshot)
+            self.assertIn("polymarket_v7_live_model_scope_wired 0", metrics)
+            self.assertIn("polymarket_v7_live_model_target_operational 0", metrics)
+
+    def test_research_manifest_and_collectors_are_fresh_and_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_root = Path(directory) / "paper_v7_live"
+            self._fixture(run_root)
+            manifest_path = run_root / "control" / "research_sleeves_manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["timestamp"] = 1
+            self._write(manifest_path, manifest)
+            osint_path = run_root / "osint" / "status.json"
+            osint = json.loads(osint_path.read_text())
+            osint["real_order_submission"] = True
+            self._write(osint_path, osint)
+            market_path = run_root / "market_open" / "status.json"
+            market = json.loads(market_path.read_text())
+            market["timestamp_ms"] = 1
+            self._write(market_path, market)
+            snapshot = exporter.collect_snapshot(run_root, ROOT, now=1_000)
+            reasons = exporter.health_reasons(snapshot)
+            self.assertIn("research_sleeves_manifest_stale", reasons)
+            self.assertIn("osint_live_collector_missing_or_unsafe", reasons)
+            self.assertIn("market_open_live_collector_stale", reasons)
+            metrics = exporter.render_prometheus(snapshot)
+            self.assertIn("polymarket_v7_research_manifest_fresh 0", metrics)
+            self.assertIn("polymarket_v7_live_model_scope_wired 0", metrics)
 
     def test_missing_graph_runtime_fails_health_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -253,6 +359,8 @@ class V7NativeMonitoringTest(unittest.TestCase):
             "polymarket_v7_trade_tape_rows",
             "polymarket_v7_state_age_seconds",
             "polymarket_v7_ledger_valid",
+            "polymarket_v7_research_supervisor_alive",
+            "polymarket_v7_live_model_target_operational",
         ):
             self.assertIn(metric, serialized)
         for retired in ("polymarket_v7_shadow_alive", "polymarket_v7_market_proxy_markets", "polymarket_strategy_fill_rate"):
@@ -267,6 +375,8 @@ class V7NativeMonitoringTest(unittest.TestCase):
             "PolymarketV7RuntimeContractInvalid",
             "PolymarketV7PaperContractInvalid",
             "PolymarketV7AuthenticatedExecutionEnabled",
+            "PolymarketV7ResearchShadowSupervisorDown",
+            "PolymarketV7LiveModelScopeIncomplete",
             "PolymarketV7KillSwitchEngaged",
             "PolymarketV7HardDrawdownLimitBreach",
             "PolymarketV7ExecutionOwnerDown",

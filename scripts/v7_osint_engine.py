@@ -159,6 +159,19 @@ class RawEvent:
     content: str = ""
     transport: str = ""
     connection_epoch: int = 0
+    source_url: str = ""
+    raw_hash: str = ""
+    normalized_hash: str = ""
+    effective_ts_ms: int = 0
+    first_observed_ts_ms: int = 0
+    parse_complete_ts_ms: int = 0
+    normalized_event_ts_ms: int = 0
+    signal_ready_ts_ms: int = 0
+    receive_monotonic_ns: int = 0
+    parser_version: str = ""
+    mapping_version: int = 0
+    repository_sha: str = ""
+    supersedes: str = ""
 
     def validate(self, decision_ts_ms: int) -> None:
         if not all((self.event_id, self.entity, self.source_id, self.source_event_id,
@@ -174,6 +187,21 @@ class RawEvent:
             raise OsintError("invalid_event_transport")
         if self.connection_epoch < 0:
             raise OsintError("invalid_connection_epoch")
+        clocks = tuple(x for x in (
+            self.first_observed_ts_ms, self.parse_complete_ts_ms,
+            self.normalized_event_ts_ms, self.signal_ready_ts_ms,
+        ) if x > 0)
+        if clocks and (clocks[0] < self.received_ts_ms or any(a > b for a, b in zip(clocks, clocks[1:]))):
+            raise OsintError("invalid_event_processing_clocks")
+        if self.effective_ts_ms and self.effective_ts_ms > decision_ts_ms:
+            raise OsintError("future_effective_event_used")
+        if self.receive_monotonic_ns < 0 or self.mapping_version < 0:
+            raise OsintError("invalid_event_causal_metadata")
+        if self.source_url and not self.source_url.startswith("https://"):
+            raise OsintError("invalid_event_source_url")
+        if self.repository_sha and (len(self.repository_sha) != 40 or any(
+                ch not in "0123456789abcdef" for ch in self.repository_sha.lower())):
+            raise OsintError("invalid_event_repository_sha")
 
 
 @dataclass(frozen=True)

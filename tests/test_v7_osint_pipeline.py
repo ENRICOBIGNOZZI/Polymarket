@@ -137,6 +137,25 @@ def test_llm_can_extract_but_cannot_verify_labels():
         label.validate(event)
 
 
+def test_forward_reaction_tape_requires_verified_mapping_and_causal_horizon(tmp_path):
+    point = pipeline.ForwardReactionPoint(
+        "event", "mapping", "market", 1_000, 250, 1_250,
+        .40, .45, 10, 12, .42, .60, .15, .12, .01, .02, None, 7, "a" * 40,
+    )
+    tape = pipeline.ForwardReactionTape(tmp_path / "reaction.jsonl")
+    with raises(kernel.OsintError, "verified_mapping"):
+        tape.append(point, mapping_verified=False)
+    record_hash = tape.append(point, mapping_verified=True)
+    row = json.loads((tmp_path / "reaction.jsonl").read_text())
+    assert row["record_hash"] == record_hash and row["horizon_ms"] == 250
+    with raises(kernel.OsintError, "duplicate"):
+        tape.append(point, mapping_verified=True)
+    with raises(kernel.OsintError, "noncausal"):
+        pipeline.ForwardReactionTape(tmp_path / "bad").append(
+            replace(point, observed_ts_ms=1_249), mapping_verified=True,
+        )
+
+
 load_tests = function_test_loader(globals())
 
 if __name__ == "__main__":

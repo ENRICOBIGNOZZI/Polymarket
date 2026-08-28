@@ -111,6 +111,12 @@ class SourceDocument:
     advertised_payload_sha256: str = ""
     correction_of: str = ""
     extracted_by_llm: bool = False
+    first_observed_ts_ms: int = 0
+    parse_complete_ts_ms: int = 0
+    receive_monotonic_ns: int = 0
+    parser_version: str = ""
+    repository_sha: str = ""
+    supersedes: str = ""
 
 
 def ingest_document(registry: SourceRegistry, document: SourceDocument) -> RawEvent:
@@ -141,6 +147,17 @@ def ingest_document(registry: SourceRegistry, document: SourceDocument) -> RawEv
         payload_hash=payload_hash,
         correction_of=document.correction_of,
         extracted_by_llm=document.extracted_by_llm,
+        source_url=document.source_url,
+        raw_hash=payload_hash,
+        normalized_hash=payload_hash,
+        effective_ts_ms=document.published_ts_ms,
+        first_observed_ts_ms=document.first_observed_ts_ms or document.received_ts_ms,
+        parse_complete_ts_ms=document.parse_complete_ts_ms or document.received_ts_ms,
+        normalized_event_ts_ms=document.parse_complete_ts_ms or document.received_ts_ms,
+        receive_monotonic_ns=document.receive_monotonic_ns,
+        parser_version=document.parser_version or source.adapter_version,
+        repository_sha=document.repository_sha,
+        supersedes=document.supersedes,
     )
     event.validate(document.received_ts_ms)
     return event
@@ -577,9 +594,92 @@ def evaluate_forward_shadow(
                        {**asdict(label), "decision_record_hash": decision_record_hash})
 
 
+FORWARD_REACTION_HORIZONS_MS = (0, 100, 250, 500, 1_000, 2_000, 5_000,
+                                10_000, 30_000, 60_000)
+
+
+@dataclass(frozen=True)
+class ForwardReactionPoint:
+    event_id: str
+    mapping_id: str
+    market_id: str
+    signal_ready_ts_ms: int
+    horizon_ms: int
+    observed_ts_ms: int
+    best_bid: float
+    best_ask: float
+    bid_depth: float
+    ask_depth: float
+    fair_before: float
+    fair_after: float
+    theoretical_edge: float
+    executable_edge: float
+    fees: float
+    slippage: float
+    markout: float | None
+    book_sequence: int
+    repository_sha: str
+
+    def validate(self) -> None:
+        if not all((self.event_id, self.mapping_id, self.market_id, self.repository_sha)):
+            raise OsintError("incomplete_forward_reaction_identity")
+        if len(self.repository_sha) != 40 or self.horizon_ms not in FORWARD_REACTION_HORIZONS_MS:
+            raise OsintError("invalid_forward_reaction_identity")
+        if self.signal_ready_ts_ms <= 0 or self.observed_ts_ms < self.signal_ready_ts_ms + self.horizon_ms:
+            raise OsintError("noncausal_forward_reaction_clock")
+        if not (0.0 <= self.best_bid <= self.best_ask <= 1.0):
+            raise OsintError("invalid_forward_reaction_book")
+        if any(not math.isfinite(x) or x < 0.0 for x in (
+                self.bid_depth, self.ask_depth, self.fees, self.slippage)):
+            raise OsintError("invalid_forward_reaction_economics")
+        if any(not math.isfinite(x) for x in (
+                self.fair_before, self.fair_after, self.theoretical_edge,
+                self.executable_edge)) or not 0.0 <= self.fair_before <= 1.0 or not 0.0 <= self.fair_after <= 1.0:
+            raise OsintError("invalid_forward_reaction_fair_value")
+        if self.markout is not None and not math.isfinite(self.markout):
+            raise OsintError("invalid_forward_reaction_markout")
+        if self.book_sequence <= 0:
+            raise OsintError("forward_reaction_book_lineage_required")
+
+
+class ForwardReactionTape:
+    """Append-only verified mapping/book reaction observations; no backfill."""
+
+    def __init__(self, path: str | Path):
+        self.path = Path(path)
+
+    def append(self, point: ForwardReactionPoint, *, mapping_verified: bool) -> str:
+        point.validate()
+        if not mapping_verified:
+            raise OsintError("forward_reaction_requires_verified_mapping")
+        identity = (point.event_id, point.mapping_id, point.horizon_ms)
+        if self.path.exists():
+            with self.path.open(encoding="utf-8") as handle:
+                for line in handle:
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        raise OsintError("invalid_forward_reaction_tape") from exc
+                    if (row.get("event_id"), row.get("mapping_id"), row.get("horizon_ms")) == identity:
+                        raise OsintError("duplicate_forward_reaction_horizon")
+        payload = {
+            "schema": "polymarket_v7_osint_forward_reaction_v1",
+            "paper_only": True, "real_order_submission": False,
+            **asdict(point),
+        }
+        record_hash = _sha(payload)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({**payload, "record_hash": record_hash},
+                                    sort_keys=True, separators=(",", ":")) + "\n")
+            handle.flush(); os.fsync(handle.fileno())
+        return record_hash
+
+
 __all__ = [
     "AuthoritativeSource", "CausalEventTape", "CorroborationResult", "DatasetManifest",
-    "EventFamilyRow",
+    "EventFamilyRow", "FORWARD_REACTION_HORIZONS_MS", "ForwardReactionPoint",
+    "ForwardReactionTape",
     "FittedLikelihood", "ResolvedLabel", "ResolvedLabelDocument", "SourceDocument",
     "SourceRegistry", "TapeRecord",
     "build_dataset_manifest", "corroborate", "evaluate_forward_shadow", "fit_chronological_oos",

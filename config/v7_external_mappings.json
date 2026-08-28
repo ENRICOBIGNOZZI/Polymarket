@@ -1,0 +1,14 @@
+{
+  "schema": "polymarket_v7_external_mapping_registry_v1",
+  "version": 7,
+  "paper_only": true,
+  "automatic_promotion": false,
+  "osint": [],
+  "sports_latency": [],
+  "cross_platform": [],
+  "blockers": {
+    "osint": "NO_VERIFIED_MAPPING: no authoritative event-to-contract rule bundle has been attested yet",
+    "sports_latency": "NO_VERIFIED_MAPPING: no provider game-to-Polymarket settlement bundle has been attested yet",
+    "cross_platform": "NO_VERIFIED_EQUIVALENCE: no pair has passed exact settlement-rule comparison yet"
+  }
+}

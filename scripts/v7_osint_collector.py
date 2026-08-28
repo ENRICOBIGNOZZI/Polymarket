@@ -13,6 +13,7 @@ import email.utils
 import hashlib
 import json
 import os
+import random
 import time
 import urllib.error
 import urllib.parse
@@ -108,17 +109,27 @@ def fetch(source: CollectorSource, conditional: Mapping[str, Any], timeout: floa
         headers["If-None-Match"] = str(conditional["etag"])
     if conditional.get("last_modified"):
         headers["If-Modified-Since"] = str(conditional["last_modified"])
-    request = urllib.request.Request(source.endpoint, headers=headers)
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = response.read(MAX_RESPONSE_BYTES + 1)
-            if len(body) > MAX_RESPONSE_BYTES:
-                raise CollectorError("source_response_too_large")
-            return HttpResponse(int(response.status), dict(response.headers.items()), body)
-    except urllib.error.HTTPError as exc:
-        if exc.code == 304:
-            return HttpResponse(304, dict(exc.headers.items()), b"")
-        raise
+    for attempt in range(3):
+        request = urllib.request.Request(source.endpoint, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(body) > MAX_RESPONSE_BYTES:
+                    raise CollectorError("source_response_too_large")
+                return HttpResponse(int(response.status), dict(response.headers.items()), body)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 304:
+                return HttpResponse(304, dict(exc.headers.items()), b"")
+            retryable = exc.code == 429 or 500 <= exc.code <= 599
+            if not retryable or attempt == 2:
+                raise
+            try:
+                retry_after = min(60.0, max(0.0, float(exc.headers.get("Retry-After") or 0)))
+            except (TypeError, ValueError, OverflowError):
+                retry_after = 0.0
+            delay = retry_after if retry_after > 0 else min(8.0, 2.0 ** attempt)
+            time.sleep(delay * random.uniform(0.8, 1.2))
+    raise CollectorError("source_retry_exhausted")
 
 
 def _canonical_item(source: CollectorSource, item: Mapping[str, Any], received_ts_ms: int) -> dict[str, Any] | None:
@@ -203,6 +214,9 @@ def materialize_events(
     source: CollectorSource, items: Sequence[Mapping[str, Any]], *, received_ts_ms: int,
     source_state: Mapping[str, Any], connection_epoch: int,
     authority_registry: SourceRegistry | None = None,
+    parse_complete_ts_ms: int | None = None,
+    receive_monotonic_ns: int = 0,
+    repository_sha: str = "",
 ) -> tuple[RawEvent, ...]:
     if len(source.event_types) != 1:
         raise CollectorError("collector_requires_one_deterministic_event_family")
@@ -229,6 +243,12 @@ def materialize_events(
             payload=canonical["content"].encode("utf-8"),
             advertised_payload_sha256=canonical["payload_hash"],
             correction_of=str(old.get("event_id") or ""), extracted_by_llm=False,
+            first_observed_ts_ms=received_ts_ms,
+            parse_complete_ts_ms=parse_complete_ts_ms or received_ts_ms,
+            receive_monotonic_ns=receive_monotonic_ns,
+            parser_version=source.adapter_version,
+            repository_sha=repository_sha,
+            supersedes=str(old.get("event_id") or ""),
         ))
         events.append(replace(event, content=canonical["content"],
                               transport=source.transport.value,
@@ -298,6 +318,8 @@ def collect_once(
     ) for source in registry.enabled()))
     statuses: list[dict[str, Any]] = []
     total_events = 0
+    dropped_events = 0
+    parse_failures = 0
     for source in registry.enabled():
         current = source_states.get(source.source_id)
         if not isinstance(current, dict):
@@ -312,9 +334,14 @@ def collect_once(
                 events: tuple[RawEvent, ...] = ()
             elif response.status == 200:
                 items = parse_source(source, response.body)
+                parsed_ms = started_ms if now_ms is not None else time.time_ns() // 1_000_000
                 events = materialize_events(source, items, received_ts_ms=received_ms,
                                             source_state=current, connection_epoch=epoch,
-                                            authority_registry=authority_registry)
+                                            authority_registry=authority_registry,
+                                            parse_complete_ts_ms=parsed_ms,
+                                            receive_monotonic_ns=time.monotonic_ns(),
+                                            repository_sha=os.environ.get("PM_V7_MODEL_SHA", ""))
+                dropped_events += max(0, len(items) - len(events))
                 append_tape(tape_path, events,
                             source_registry_sha=authority_registry.registry_sha)
                 seen = dict(current.get("seen") or {})
@@ -342,6 +369,8 @@ def collect_once(
             statuses.append({"source_id": source.source_id, "healthy": True,
                              "http_status": response.status, "new_events": len(events), "blocker": ""})
         except Exception as exc:
+            parse_failures += 1
+            current["reconnect_count"] = int(current.get("reconnect_count") or 0) + 1
             current.update({"connection_epoch": epoch, "last_error": f"{type(exc).__name__}:{exc}"})
             statuses.append({"source_id": source.source_id, "healthy": False, "http_status": 0,
                              "new_events": 0, "blocker": current["last_error"]})
@@ -355,6 +384,17 @@ def collect_once(
         "source_registry_sha": authority_registry.registry_sha,
         "enabled_sources": len(registry.enabled()), "new_events": total_events,
         "healthy_sources": sum(bool(x["healthy"]) for x in statuses), "sources": statuses,
+        "feed_age_ms": 0 if any(x["healthy"] for x in statuses) else None,
+        "last_sequence": sum(len((row.get("seen") or {})) for row in source_states.values()
+                             if isinstance(row, dict)),
+        "connection_epoch": max((int((row or {}).get("connection_epoch") or 0)
+                                 for row in source_states.values() if isinstance(row, dict)), default=0),
+        "reconnect_count": sum(int((row or {}).get("reconnect_count") or 0)
+                               for row in source_states.values() if isinstance(row, dict)),
+        "gap_count": 0, "parse_failure_count": parse_failures,
+        "dropped_event_count": dropped_events, "mapping_verified": False,
+        "mapping_version": 0, "source_health": "OPERATIONAL" if any(
+            x["healthy"] for x in statuses) else "DOWN",
     }
 
 

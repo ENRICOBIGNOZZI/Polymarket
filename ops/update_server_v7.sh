@@ -237,6 +237,14 @@ for rel in (
     'monitoring/grafana/dashboards/polymarket-v7.json',
     'ops/v7_runtime_supervisor.py',
     'ops/v7_service_entrypoint.sh',
+    'scripts/v7_research_shadow_supervisor.py',
+    'scripts/v7_semantic_mapping.py',
+    'scripts/v7_sports_collector.py',
+    'scripts/v7_cross_platform_collector.py',
+    'scripts/v7_osint_mapping_collector.py',
+    'config/v7_live_model_scope.json',
+    'config/v7_external_inputs.json',
+    'config/v7_external_mappings.json',
     'config/v7_runtime_supervision.json',
     'config/v7_data_retention.json',
 ):
@@ -265,6 +273,11 @@ prevalidate_candidate(){
       scripts/v7_ledger_spool.py \
       scripts/v7_canonical_economics.py \
       scripts/v7_portfolio_guard.py \
+      scripts/v7_research_shadow_supervisor.py \
+      scripts/v7_semantic_mapping.py \
+      scripts/v7_sports_collector.py \
+      scripts/v7_cross_platform_collector.py \
+      scripts/v7_osint_mapping_collector.py \
       monitoring/exporter_v7.py \
       monitoring/v7_ledger_metrics.py \
       monitoring/v7_runtime_contract.py \
@@ -277,6 +290,9 @@ prevalidate_candidate(){
     python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7.json >/dev/null
     python3 -m json.tool config/v7_runtime_supervision.json >/dev/null
     python3 -m json.tool config/v7_data_retention.json >/dev/null
+    python3 -m json.tool config/v7_live_model_scope.json >/dev/null
+    python3 -m json.tool config/v7_external_inputs.json >/dev/null
+    python3 -m json.tool config/v7_external_mappings.json >/dev/null
   )
   git -C "$APP_DIR" worktree remove --force "$candidate" >/dev/null
   candidate=""
@@ -389,7 +405,7 @@ runtime_health(){
 import csv,json,os,sys,time
 from pathlib import Path
 root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
-required=[root/'control/runtime_status.json',root/'control/portfolio_state.json',root/'control/allocations/manifest.json',root/'graph_rv/status.json',root/'canonical_economics.json',root/'ledger/execution.jsonl',root/'trade_tape.csv']
+required=[root/'control/runtime_status.json',root/'control/portfolio_state.json',root/'control/allocations/manifest.json',root/'control/research_sleeves_manifest.json',root/'osint/status.json',root/'osint/mapping_status.json',root/'shadow/sports_latency/component_status.json',root/'shadow/cross_platform/component_status.json',root/'market_open/status.json',root/'graph_rv/status.json',root/'canonical_economics.json',root/'ledger/execution.jsonl',root/'trade_tape.csv']
 assert all(p.exists() for p in required), [str(p) for p in required if not p.exists()]
 runtime=json.loads((root/'control/runtime_status.json').read_text())
 portfolio=json.loads((root/'control/portfolio_state.json').read_text())
@@ -420,6 +436,21 @@ PY
   grep -q '^polymarket_v7_paper_only_contract_ok 1$' <<<"$metrics"
   grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics"
   grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics"
+  grep -q '^polymarket_v7_strategy_registry_enabled 15$' <<<"$metrics"
+  grep -q '^polymarket_v7_research_sleeves_attached 3$' <<<"$metrics"
+  grep -q '^polymarket_v7_research_supervisor_alive 1$' <<<"$metrics"
+  grep -q '^polymarket_v7_research_manifest_fresh 1$' <<<"$metrics"
+  grep -q '^polymarket_v7_live_model_target_count 12$' <<<"$metrics"
+  local operational blocked blocked_config blocked_external target_operational
+  operational="$(awk '$1=="polymarket_v7_live_model_operational_count"{print int($2)}' <<<"$metrics")"
+  blocked="$(awk '$1=="polymarket_v7_live_model_blocked_count"{print int($2)}' <<<"$metrics")"
+  blocked_config="$(awk '$1=="polymarket_v7_live_model_blocked_config_count"{print int($2)}' <<<"$metrics")"
+  blocked_external="$(awk '$1=="polymarket_v7_live_model_blocked_external_count"{print int($2)}' <<<"$metrics")"
+  target_operational="$(awk '$1=="polymarket_v7_live_model_target_operational"{print int($2)}' <<<"$metrics")"
+  test "$((operational + blocked))" -eq 12
+  test "$((blocked_config + blocked_external))" -eq "$blocked"
+  if [[ "$operational" -eq 12 ]]; then test "$target_operational" -eq 1; else test "$target_operational" -eq 0; fi
+  grep -q '^polymarket_v7_live_model_scope_wired 1$' <<<"$metrics"
   curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
   curl -fsS http://127.0.0.1:3000/api/health >/dev/null
   curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$uid" >/dev/null

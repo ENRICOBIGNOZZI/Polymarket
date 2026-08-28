@@ -1,0 +1,54 @@
+{
+  "schema": "polymarket_v7_live_model_scope_v1",
+  "version": 7,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "target_live_count": 12,
+  "target_live_families": [
+    "professional_maker",
+    "fast_structural",
+    "hard_arb",
+    "graph_rv",
+    "crypto_settlement_fair",
+    "crypto_informed_taker",
+    "micro_taker",
+    "osint",
+    "sports_latency",
+    "cross_platform",
+    "wallet_intelligence",
+    "market_open"
+  ],
+  "paper_execution_families": [
+    "professional_maker",
+    "fast_structural",
+    "hard_arb",
+    "graph_rv",
+    "crypto_settlement_fair",
+    "crypto_informed_taker",
+    "micro_taker"
+  ],
+  "research_collector_families": [
+    "osint",
+    "market_open"
+  ],
+  "research_shadow_supervised_families": [
+    "sports_latency",
+    "cross_platform",
+    "wallet_intelligence"
+  ],
+  "excluded_live_families": [
+    "ranking",
+    "pca",
+    "local_factor"
+  ],
+  "governance": {
+    "single_execution_owner": true,
+    "research_has_capital": false,
+    "research_has_oms_authority": false,
+    "research_has_ledger_writer_authority": false,
+    "blocked_config_is_not_operational_evidence": true,
+    "automatic_promotion": false
+  }
+}
