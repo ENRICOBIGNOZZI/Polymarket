@@ -1,13 +1,14 @@
 import json
 import math
 import sys
+import unittest
 from dataclasses import asdict, replace
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+from v7_function_test_support import approximately, function_test_loader, raises
+
 import v7_wallet_dataset as wd
 import v7_wallet_intelligence as w
 
@@ -66,12 +67,12 @@ def test_reconstruction_is_point_in_time_price_aware_and_deduplicated():
 
 
 def test_mapping_must_be_authoritatively_verified_before_fill_observation():
-    with pytest.raises(w.WalletError, match="mapping_not_known_at_decision"):
+    with raises(w.WalletError, "mapping_not_known_at_decision"):
         w.reconstruct_trades([fill()], [mapping(verified_at=1020)], as_of_ms=3000)
-    with pytest.raises(w.WalletError, match="not_authoritative"):
+    with raises(w.WalletError, "not_authoritative"):
         bad = replace(mapping(), verification_method="LLM")
         w.reconstruct_trades([fill()], [bad], as_of_ms=3000)
-    with pytest.raises(w.WalletError, match="outcome_mapping_lineage_mismatch"):
+    with raises(w.WalletError, "outcome_mapping_lineage_mismatch"):
         w.reconstruct_trades([fill()], [mapping()],
                              [replace(outcome(), rules_hash="other")], as_of_ms=3000)
 
@@ -86,7 +87,7 @@ def test_causal_tape_is_deterministic_hash_chained_and_fail_closed():
     assert all(tape[index].previous_hash == tape[index - 1].record_hash
                for index in range(1, len(tape)))
     assert tape == w.build_causal_tape([fill()], [mapping()], [outcome()], as_of_ms=3000)
-    with pytest.raises(w.WalletError, match="future_outcome_used"):
+    with raises(w.WalletError, "future_outcome_used"):
         w.build_causal_tape([fill()], [mapping()], [outcome(observed=4000)], as_of_ms=3000)
 
 
@@ -185,6 +186,12 @@ def test_forward_features_are_bounded_feature_only_and_one_per_copy_cluster():
     assert features.qualified_wallets == 2
     assert features.fair_value_logit_shift == .1
     assert features.toxicity == .1
-    assert features.market_selection_score == pytest.approx(1 - math.exp(-1))
+    assert approximately(features.market_selection_score, 1 - math.exp(-1))
     assert features.feature_only and not features.execution_authority
     assert not hasattr(features, "action")
+
+
+load_tests = function_test_loader(globals())
+
+if __name__ == "__main__":
+    unittest.main()

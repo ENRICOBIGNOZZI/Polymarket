@@ -1,11 +1,12 @@
 import json
 import sys
+import unittest
 from pathlib import Path
-
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+from v7_function_test_support import approximately, function_test_loader, raises
+
 import v7_cross_platform as c
 
 
@@ -79,7 +80,7 @@ def test_verified_read_only_adapter_and_causal_book_resume():
 
     adapter = c.VerifiedVenueAdapter(source(), decoder)
     assert adapter.decode_book(b'{"seq":1}', 1010).sequence == 1
-    with pytest.raises(c.CrossVenueError, match="unverified_venue_source"):
+    with raises(c.CrossVenueError, "unverified_venue_source"):
         c.VerifiedVenueAdapter(source(verified=False), decoder)
 
     tape = c.VenueBookTape("A", "cid", max_age_ms=100)
@@ -137,7 +138,7 @@ def test_exact_plan_uses_fee_quotes_full_depth_and_paper_balances():
         execution_state_probabilities=joint_probabilities(), state_pnl_adjustments=joint_pnl(),
         transfer_cost=0, duration_seconds=10,
     )
-    assert plan.executable and plan.expected_net_pnl == pytest.approx(.9)
+    assert plan.executable and approximately(plan.expected_net_pnl, .9)
 
     blocked = c.plan_cross_venue_exact(
         eq, quantity=10, asks_a=[c.DepthLevel(.45, 10)], asks_b=[c.DepthLevel(.45, 10)],
@@ -148,7 +149,7 @@ def test_exact_plan_uses_fee_quotes_full_depth_and_paper_balances():
     )
     assert not blocked.executable and blocked.blocker == "prepositioned_balance_insufficient"
 
-    with pytest.raises(c.CrossVenueError, match="fee_quote_notional_mismatch"):
+    with raises(c.CrossVenueError, "fee_quote_notional_mismatch"):
         c.plan_cross_venue_exact(
             eq, quantity=10, asks_a=[c.DepthLevel(.45, 10)], asks_b=[c.DepthLevel(.45, 10)],
             fee_quote_a=fee("A", "A-contract", 1, 4.4), fee_quote_b=fee("B", "B-contract", 2),
@@ -183,7 +184,7 @@ def test_joint_race_tape_preserves_dependence_and_independent_bundle_units():
     tape.append(race("o2", "bundle-2", 10, 10))
     probabilities = tape.probabilities(minimum_independent_bundles=2)
     assert probabilities == {"NONE": 0, "A_ONLY": .5, "B_ONLY": 0, "FULL": .5}
-    with pytest.raises(c.CrossVenueError, match="duplicate_joint_race"):
+    with raises(c.CrossVenueError, "duplicate_joint_race"):
         tape.append(race("o1", "bundle-3", 0, 0))
 
 
@@ -207,3 +208,9 @@ def test_cross_platform_forward_shadow_has_exact_lineage_and_no_real_orders(tmp_
     row = json.loads(output.read_text())
     assert row["record_hash"] == record_hash and row["race_state"] == "FULL"
     assert row["paper_only"] and not row["real_order_submission"]
+
+
+load_tests = function_test_loader(globals())
+
+if __name__ == "__main__":
+    unittest.main()

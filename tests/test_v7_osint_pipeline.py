@@ -1,12 +1,13 @@
 import json
 import sys
+import unittest
 from dataclasses import replace
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+from v7_function_test_support import function_test_loader, raises
+
 import v7_osint_engine as kernel
 import v7_osint_pipeline as pipeline
 
@@ -54,9 +55,9 @@ def test_authoritative_adapter_is_deny_by_default_and_hash_verified():
     event = pipeline.ingest_document(registry(), document())
     assert event.source_tier == kernel.SourceTier.PRIMARY
     assert event.payload_hash
-    with pytest.raises(kernel.OsintError, match="source_origin_not_allowed"):
+    with raises(kernel.OsintError, "source_origin_not_allowed"):
         pipeline.ingest_document(registry(), document(source_url="https://copy.example/release"))
-    with pytest.raises(kernel.OsintError, match="source_payload_hash_mismatch"):
+    with raises(kernel.OsintError, "source_payload_hash_mismatch"):
         pipeline.ingest_document(registry(), document(advertised_payload_sha256="0" * 64))
 
 
@@ -84,7 +85,7 @@ def test_causal_event_tape_detects_history_tampering(tmp_path):
     wire = json.loads(path.read_text().strip())
     wire["payload"]["entity"] = "tampered"
     path.write_text(json.dumps(wire) + "\n")
-    with pytest.raises(kernel.OsintError, match="event_tape_hash_mismatch"):
+    with raises(kernel.OsintError, "event_tape_hash_mismatch"):
         tape.read_verified()
 
 
@@ -108,7 +109,7 @@ def test_dataset_fit_is_point_in_time_chronological_and_forward_shadow(tmp_path)
     assert fitted.training_dataset_sha == manifest.dataset_sha
     artifact = tmp_path / "court-v1.json"
     pipeline.write_dataset_artifact(artifact, manifest, rows)
-    with pytest.raises(kernel.OsintError, match="already_exists"):
+    with raises(kernel.OsintError, "already_exists"):
         pipeline.write_dataset_artifact(artifact, manifest, rows)
 
     future_event = oos[0].event
@@ -132,5 +133,11 @@ def test_llm_can_extract_but_cannot_verify_labels():
     event = pipeline.ingest_document(registry(), document(extracted_by_llm=True))
     label = pipeline.ResolvedLabel("l", event.event_id, "m", "court", True, 2_000, 2_001,
                                       "court", "r", "hash", True, "LLM", registry().registry_sha)
-    with pytest.raises(kernel.OsintError, match="llm_cannot_verify_label"):
+    with raises(kernel.OsintError, "llm_cannot_verify_label"):
         label.validate(event)
+
+
+load_tests = function_test_loader(globals())
+
+if __name__ == "__main__":
+    unittest.main()
