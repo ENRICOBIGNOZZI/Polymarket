@@ -83,8 +83,9 @@ int main(int argc, char** argv) {
 
         pm::fast::MarketWebSocketFeed feed(
             options.ws_url, runtime.tokens(), options.shard_size,
-            [&](std::string_view message, std::int64_t received_ms, std::size_t shard) {
-                runtime.on_payload(message, received_ms, shard);
+            [&](std::string_view message, const pm::fast::FeedReceiveStamp& receive,
+                std::size_t shard) {
+                runtime.on_payload(message, receive.wall_ms, shard);
             },
             [&](std::size_t shard, std::string_view message) {
                 runtime.append_feed_error(shard, message);
