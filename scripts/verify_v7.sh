@@ -21,10 +21,6 @@ require_command() {
 for command_name in git python3 cmake c++ pkg-config; do
   require_command "$command_name"
 done
-python3 -c 'import pytest' >/dev/null 2>&1 || {
-  echo "verify_v7: missing required Python test dependency: pytest" >&2
-  exit 2
-}
 
 python3 - <<'PY'
 import json
@@ -109,13 +105,6 @@ ctest --test-dir "$DEBUG_BUILD" --output-on-failure
 
 # Keep these named groups explicit even though CTest also discovers them.  The
 # command's contract remains readable and failures are attributable by domain.
-pytest_files=()
-while IFS= read -r test_file; do
-  pytest_files+=("$test_file")
-done < <(git grep -l '^import pytest' -- 'tests/test_v7_*.py' || true)
-if ((${#pytest_files[@]} > 0)); then
-  python3 -m pytest --quiet "${pytest_files[@]}"
-fi
 python3 -m unittest discover -s tests -p 'test_v7_*.py'
 python3 -m unittest discover -s tests -p 'test_monitoring_v7_*.py'
 

@@ -1,11 +1,12 @@
 import json
 import sys
+import unittest
 from pathlib import Path
-
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+from v7_function_test_support import approximately, function_test_loader, raises
+
 import v7_sports_latency as s
 
 
@@ -50,7 +51,7 @@ def test_verified_adapter_attests_schema_and_source():
     adapter = s.VerifiedSportsStreamAdapter(source_spec(), decoder)
     raw = json.dumps({"id": "e1", "game": "game", "seq": 1, "source_ts": 1000, "state": state()}).encode()
     assert adapter.decode(raw, 1010).sequence == 1
-    with pytest.raises(s.SportsError, match="unverified_official_source"):
+    with raises(s.SportsError, "unverified_official_source"):
         s.VerifiedSportsStreamAdapter(source_spec(False), decoder)
 
 
@@ -104,7 +105,7 @@ def test_contract_sport_selection_and_mapping_evidence_are_exact():
         "rules", True, 10_000, "UTC", "refund", "player_wins",
         "https://league.example/rules", "evidence", 1000,
     )
-    with pytest.raises(s.SportsError, match="unsupported_selection"):
+    with raises(s.SportsError, "unsupported_selection"):
         invalid.validate()
     assert len(mapping().semantic_hash) == 64
 
@@ -134,9 +135,15 @@ def test_chronological_calibration_enforces_independent_game_units():
         s.CalibrationPoint("g2", 20, .3, 0, 1),
         s.CalibrationPoint("future", 200, 1.0, 1, 100),
     ], cutoff_ms=100)
-    assert metrics.observations == 2 and metrics.brier == pytest.approx(.065)
-    with pytest.raises(s.SportsError, match="independent_games"):
+    assert metrics.observations == 2 and approximately(metrics.brier, .065)
+    with raises(s.SportsError, "independent_games"):
         s.chronological_calibration([
             s.CalibrationPoint("g1", 10, .8, 1, 1),
             s.CalibrationPoint("g1", 20, .7, 1, 1),
         ], cutoff_ms=100)
+
+
+load_tests = function_test_loader(globals())
+
+if __name__ == "__main__":
+    unittest.main()
