@@ -8,20 +8,42 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <memory>
 #include <new>
 #include <utility>
+#include <vector>
 
 namespace pm::v7 {
 namespace {
 namespace json = boost::json;
 
-// The venue can batch the initial snapshots for the full 40-market maker
-// universe (YES+NO tokens) into a single WebSocket frame. Keep parsing fully
-// bounded/no-heap on the hot path, but size the cold-start arena for that
-// authoritative worst-case burst instead of the old 1 MiB lab-sized bound.
-constexpr std::size_t kJsonArenaBytes = 8 * 1024 * 1024;
+constexpr std::size_t kMiB = 1024ULL * 1024ULL;
+constexpr std::size_t kJsonArenaInitialBytes = 16ULL * kMiB;
+constexpr std::size_t kJsonArenaDefaultMaxBytes = 512ULL * kMiB;
+constexpr std::size_t kJsonArenaHardMaxBytes = 2ULL * 1024ULL * kMiB;
+constexpr std::size_t kJsonArenaPayloadMultiplier = 8;
+constexpr std::size_t kJsonArenaHeadroomBytes = 4ULL * kMiB;
 constexpr std::size_t kMaxSnapshotLevelsPerSide = 256;
+
+[[nodiscard]] std::size_t json_arena_max_bytes_from_env() noexcept {
+    const char* raw = std::getenv("PM_V7_WS_JSON_ARENA_MAX_BYTES");
+    if (raw == nullptr || *raw == '\0') return kJsonArenaDefaultMaxBytes;
+
+    std::uint64_t value = 0;
+    for (const char* cursor = raw; *cursor != '\0'; ++cursor) {
+        if (*cursor < '0' || *cursor > '9') return kJsonArenaDefaultMaxBytes;
+        const std::uint64_t digit = static_cast<std::uint64_t>(*cursor - '0');
+        if (value > (std::numeric_limits<std::uint64_t>::max() - digit) / 10ULL) {
+            return kJsonArenaDefaultMaxBytes;
+        }
+        value = value * 10ULL + digit;
+    }
+    if (value < kJsonArenaInitialBytes) return kJsonArenaInitialBytes;
+    if (value > kJsonArenaHardMaxBytes) return kJsonArenaHardMaxBytes;
+    return static_cast<std::size_t>(value);
+}
 
 [[nodiscard]] bool ascii_ieq(std::string_view lhs, std::string_view rhs) noexcept {
     if (lhs.size() != rhs.size()) return false;
@@ -202,13 +224,16 @@ struct MarketWsShard::Impl {
     };
 
     std::vector<TokenState> states;
-    std::array<unsigned char, kJsonArenaBytes> json_arena{};
-    json::static_resource json_resource;
+    std::vector<unsigned char> json_arena;
+    std::size_t json_arena_max_bytes = kJsonArenaDefaultMaxBytes;
+    std::unique_ptr<json::static_resource> json_resource;
     std::array<PriceLevelE4, kMaxSnapshotLevelsPerSide> bid_scratch{};
     std::array<PriceLevelE4, kMaxSnapshotLevelsPerSide> ask_scratch{};
 
     explicit Impl(std::vector<TokenBinding> bindings)
-        : json_resource(json_arena.data(), json_arena.size()) {
+        : json_arena(kJsonArenaInitialBytes),
+          json_arena_max_bytes(json_arena_max_bytes_from_env()),
+          json_resource(std::make_unique<json::static_resource>(json_arena.data(), json_arena.size())) {
         std::sort(bindings.begin(), bindings.end(), [](const TokenBinding& lhs, const TokenBinding& rhs) {
             return lhs.asset_id < rhs.asset_id;
         });
@@ -220,6 +245,29 @@ struct MarketWsShard::Impl {
             if (binding.asset_id.empty() || binding.instrument_handle == 0) continue;
             states.emplace_back(std::move(binding));
         }
+    }
+
+    [[nodiscard]] bool ensure_json_capacity(std::size_t payload_bytes) {
+        if (payload_bytes > (json_arena_max_bytes - kJsonArenaHeadroomBytes) / kJsonArenaPayloadMultiplier) {
+            return false;
+        }
+        const std::size_t required = payload_bytes * kJsonArenaPayloadMultiplier + kJsonArenaHeadroomBytes;
+        if (required <= json_arena.size()) return true;
+
+        std::size_t target = json_arena.size();
+        while (target < required && target < json_arena_max_bytes) {
+            const std::size_t doubled = target > json_arena_max_bytes / 2 ? json_arena_max_bytes : target * 2;
+            if (doubled <= target) break;
+            target = doubled;
+        }
+        if (target < required || target > json_arena_max_bytes) return false;
+
+        std::vector<unsigned char> expanded(target);
+        auto expanded_resource = std::make_unique<json::static_resource>(expanded.data(), expanded.size());
+        json_resource.reset();
+        json_arena.swap(expanded);
+        json_resource = std::move(expanded_resource);
+        return true;
     }
 
     [[nodiscard]] TokenState* find_asset(std::string_view asset) noexcept {
@@ -458,10 +506,17 @@ MarketWsFrameResult MarketWsShard::process_frame(
         return result;
     }
 
-    impl_->json_resource.release();
     try {
+        if (!impl_->ensure_json_capacity(payload.size())) {
+            result.invalid_frame = 1;
+            result.arena_exhausted = 1;
+            impl_->invalidate_all();
+            result.lineage_invalidated = 1;
+            return result;
+        }
+        impl_->json_resource->release();
         boost::system::error_code error;
-        const json::value root = json::parse(payload, error, &impl_->json_resource);
+        const json::value root = json::parse(payload, error, impl_->json_resource.get());
         if (error) {
             result.invalid_frame = 1;
             impl_->invalidate_all();
