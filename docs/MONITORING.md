@@ -12,3 +12,12 @@ The Grafana operator home separates authority from readiness and shows runtime
 identity, single-writer proof, action funnel, data-source health, latency tails,
 disk pressure and restart/quarantine state. Missing external-fair artifacts are
 reported as not ready, never as a healthy P0 stack.
+
+OSINT metrics expose enabled and healthy source counts, newly appended events,
+and per-source health/new-event counts. Because OSINT remains RESEARCH-only,
+source unavailability is diagnostic and does not by itself kill the economic
+PAPER runtime.
+
+Market Open metrics expose tracked markets, genuinely post-bootstrap new
+markets, emitted milestones and the count with verified semantics. The latter
+remains zero unless deterministic rule verification is present.

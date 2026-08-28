@@ -12,3 +12,13 @@ launchd templates keep the runtime, exporter and retention jobs alive after
 shell logout without creating another execution owner.
 
 Development must use a separate worktree. Never modify the incumbent checkout in place and never start a second writer.
+
+The runtime also starts one research-only OSINT collector. It can append raw
+official-source events and publish source health, but it has no intent bridge,
+OMS, inventory, capital, risk or promotion authority. Source fetch failures are
+recorded per source and leave the PAPER execution owner unchanged.
+
+The Market Open child is likewise research-only. It polls public discovery,
+persists causal milestones and never emits an intent. Its bootstrap guard is a
+hard invariant: markets already present at startup are baseline inventory, not
+new-listing opportunities.
