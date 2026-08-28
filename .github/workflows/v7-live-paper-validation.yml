@@ -69,13 +69,14 @@ jobs:
           assert m.get('real_order_submission') is False
           assert m.get('legacy_fallback_allowed') is False
           PY
+          all_exact_green=true
           for pair in \
             "ci.yml:ci" \
             "monitoring.yml:monitoring" \
             "private-runtime-single-writer-validation.yml:Private runtime single-writer validation"; do
             workflow="${pair%%:*}"; name="${pair#*:}"; tmp="/tmp/${workflow%.yml}-runs.json"
             gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&per_page=50" > "$tmp"
-            python3 - "$tmp" "$VALIDATION_SHA" "$name" <<'PY'
+            if ! python3 - "$tmp" "$VALIDATION_SHA" "$name" <<'PY'
           import json,sys
           path,sha,name=sys.argv[1:]
           rows=json.load(open(path)).get('workflow_runs',[])
@@ -83,7 +84,14 @@ jobs:
           if not any(r.get('conclusion')=='success' for r in exact):
               raise SystemExit(f'{name} has no exact-SHA success for {sha}')
           PY
+            then
+              all_exact_green=false
+            fi
           done
+          if [[ "$all_exact_green" != "true" ]]; then
+            echo "validation_state=awaiting_all_exact_sha_technical_gates" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Enforce V7 PAPER safety contract
