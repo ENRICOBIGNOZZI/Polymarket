@@ -1,1 +1,0 @@
-paper_champion version=6 loop=scripts/paper_v6_loop.sh config=/Users/enrico/polymarket/.private_validation/32905089074/probe_config.json run_root=/Users/enrico/polymarket/.private_validation/32905089074/run deploy_ref=paper-validated manifest=/Users/enrico/polymarket/.private_validation/32905089074/source/config/live_champion.json

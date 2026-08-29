@@ -1,1 +1,0 @@
-V7 Local Factor uses pair-excluded temporal PC1 from X'X and is invariant to individual control YES/NO sign recoding.
