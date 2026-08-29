@@ -366,7 +366,7 @@ PY
 )
 
 maker_selection_ready() {
-  python3 - "$RUN_ROOT/micro_maker/reward_selection.json" <<'PY' >/dev/null 2>&1
+  python3 - "$RUN_ROOT/micro_maker/reward_selection.json" "$SHA" <<'PY' >/dev/null 2>&1
 import json,sys
 from pathlib import Path
 path=Path(sys.argv[1])
@@ -375,6 +375,8 @@ try: obj=json.loads(path.read_text(encoding="utf-8"))
 except Exception: raise SystemExit(1)
 markets=obj.get("markets")
 ok=(obj.get("paper_only") is True and obj.get("authenticated_execution") is False
+    and obj.get("real_order_submission") is False and obj.get("model_sha")==sys.argv[2]
+    and obj.get("source") in {"public_clob_rewards","adaptive_universe_fallback"}
     and isinstance(markets,list) and len(markets)>0)
 raise SystemExit(0 if ok else 1)
 PY
@@ -404,6 +406,9 @@ pids+=("$!")
     python3 scripts/v7_market_maker_rewards.py \
       --config "$MAKER_POLICY" \
       --output "$RUN_ROOT/micro_maker/reward_selection.json" \
+      --status "$RUN_ROOT/micro_maker/selector_status.json" \
+      --fallback-universe "$RUN_ROOT/universe/current.json" \
+      --model-sha "$SHA" \
       >> "$RUN_ROOT/micro_maker/reward_selection.log" 2>&1 || true
     sleep 60
   done

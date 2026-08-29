@@ -235,6 +235,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     hard = _json(run_root / "hard_arb" / "status.json")
     micro = _json(run_root / "micro_taker" / "status.json")
     maker = _json(run_root / "micro_maker" / "status.json")
+    maker_selector = _json(run_root / "micro_maker" / "selector_status.json")
     external = _json(run_root / "external" / "status.json")
     osint = _json(run_root / "osint" / "status.json")
     osint_mapping = _json(run_root / "osint" / "mapping_status.json")
@@ -333,6 +334,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "hard": hard,
         "micro": micro,
         "maker": maker,
+        "maker_selector": maker_selector,
         "external": external,
         "osint": osint,
         "osint_mapping": osint_mapping,
@@ -377,11 +379,38 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     ledger = snapshot["ledger"]
     ages = snapshot["ages"]
     authority = snapshot["authority"]
+    maker = snapshot.get("maker") if isinstance(snapshot.get("maker"), dict) else {}
+    selector = snapshot.get("maker_selector") if isinstance(snapshot.get("maker_selector"), dict) else {}
     if authority.get("valid") is not True: reasons.append("operator_authority_missing_or_invalid")
     if runtime.get("version") != 7: reasons.append("runtime_version_not_v7")
     if runtime.get("paper_only") is not True: reasons.append("runtime_not_paper_only")
     if runtime.get("authenticated_execution") is not False or runtime.get("real_order_submission") is not False: reasons.append("authenticated_execution_not_disabled")
     if runtime.get("model_sha") != snapshot.get("sha"): reasons.append("runtime_sha_mismatch")
+    try: maker_age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(maker.get("timestamp_ms") or 0)
+    except (TypeError, ValueError, OverflowError): maker_age_ms = (max_runtime_age + 1) * 1000
+    if (
+        maker.get("schema") != "polymarket_v7_professional_maker_status_v1"
+        or maker.get("model_sha") != snapshot.get("sha")
+        or maker.get("paper_only") is not True
+        or maker.get("authenticated_execution") is not False
+        or maker.get("killed") is True
+        or maker.get("source") in {None, "", "not_started"}
+        or maker_age_ms < -5_000
+        or maker_age_ms > max_runtime_age * 1000
+    ): reasons.append("professional_maker_missing_stale_or_unsafe")
+    try: selector_age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(selector.get("timestamp_ms") or 0)
+    except (TypeError, ValueError, OverflowError): selector_age_ms = (max_runtime_age + 1) * 1000
+    if (
+        selector.get("schema") != "polymarket_v7_maker_selector_status_v1"
+        or selector.get("model_sha") != snapshot.get("sha")
+        or selector.get("paper_only") is not True
+        or selector.get("authenticated_execution") is not False
+        or selector.get("real_order_submission") is not False
+        or selector.get("ready") is not True
+        or selector.get("state") not in {"OPERATIONAL_REWARDED", "OPERATIONAL_FALLBACK"}
+        or selector_age_ms < -5_000
+        or selector_age_ms > max_runtime_age * 1000
+    ): reasons.append("maker_selector_missing_stale_or_unsafe")
     expected_research = {
         "sports_latency", "cross_platform", "wallet_intelligence",
     }
@@ -727,6 +756,8 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     osint_mapping = snapshot.get("osint_mapping") if isinstance(snapshot.get("osint_mapping"), dict) else {}
     market_open = snapshot.get("market_open") if isinstance(snapshot.get("market_open"), dict) else {}
     universe = snapshot.get("universe") if isinstance(snapshot.get("universe"), dict) else {}
+    maker = snapshot.get("maker") if isinstance(snapshot.get("maker"), dict) else {}
+    selector = snapshot.get("maker_selector") if isinstance(snapshot.get("maker_selector"), dict) else {}
     def collector_fresh(status: dict[str, Any]) -> bool:
         try:
             age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(status.get("timestamp_ms") or 0)
@@ -748,6 +779,32 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         and collector_fresh(market_open)
         and collector_contract_valid(market_open)
         and _integer(market_open.get("observed_markets")) > 0
+    )
+    def fresh_milliseconds(status: dict[str, Any]) -> bool:
+        try:
+            age = int(snapshot.get("timestamp") or 0) * 1000 - int(status.get("timestamp_ms") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        return -5_000 <= age <= 180_000
+    selector_ready = (
+        selector.get("schema") == "polymarket_v7_maker_selector_status_v1"
+        and selector.get("model_sha") == snapshot.get("sha")
+        and selector.get("paper_only") is True
+        and selector.get("authenticated_execution") is False
+        and selector.get("real_order_submission") is False
+        and selector.get("ready") is True
+        and selector.get("state") in {"OPERATIONAL_REWARDED", "OPERATIONAL_FALLBACK"}
+        and fresh_milliseconds(selector)
+    )
+    maker_operational = (
+        maker.get("schema") == "polymarket_v7_professional_maker_status_v1"
+        and maker.get("model_sha") == snapshot.get("sha")
+        and maker.get("paper_only") is True
+        and maker.get("authenticated_execution") is False
+        and maker.get("killed") is not True
+        and maker.get("source") not in {None, "", "not_started"}
+        and fresh_milliseconds(maker)
+        and selector_ready
     )
     blocked_config_count = sum(
         1 for row in research_rows.values()
@@ -793,6 +850,14 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_authenticated_execution_disabled", 1 if runtime.get("authenticated_execution") is False and runtime.get("real_order_submission") is False and snapshot["portfolio"].get("authenticated_execution") is False else 0),
         _metric("polymarket_v7_execution_alive", 1 if snapshot["runtime_alive"] else 0),
         _metric("polymarket_v7_component_ready", 1 if snapshot["runtime_alive"] else 0, {"component": "core_runtime"}),
+        _metric("polymarket_v7_component_ready", 1 if maker_operational else 0, {"component": "professional_maker"}),
+        _metric("polymarket_v7_maker_selector_ready", 1 if selector_ready else 0),
+        _metric("polymarket_v7_maker_selector_fallback_active", 1 if selector_ready and selector.get("degraded") is True else 0),
+        _metric("polymarket_v7_maker_selector_selected_markets", selector.get("selected_count")),
+        _metric("polymarket_v7_maker_selector_info", 1 if selector_ready else 0, {
+            "state": selector.get("state", "UNKNOWN"),
+            "source": selector.get("source", "UNKNOWN"),
+        }),
         _metric("polymarket_v7_supervisor_alive", 1 if operations.get("supervisor_alive") else 0),
         _metric("polymarket_v7_monitoring_component_up", 1, {"component": "exporter"}),
         _metric("polymarket_v7_monitoring_component_up", 1 if operations.get("grafana_up") else 0, {"component": "grafana"}),

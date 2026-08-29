@@ -163,7 +163,28 @@ class V7NativeMonitoringTest(unittest.TestCase):
             root / "micro_taker" / "status.json",
             {"timestamp": now - 5, "paper_only": True, "authenticated_execution": False, "cash": 1180.0, "equity": 1220.0, "realized_pnl_total": 20.0, "signals": 3, "best_edge": 0.002, "open_positions": 1, "killed": False},
         )
-        self._write(root / "micro_maker" / "status.json", {"timestamp": now - 5, "paper_only": True, "authenticated_execution": False, "enabled": False})
+        self._write(root / "micro_maker" / "status.json", {
+            "schema": "polymarket_v7_professional_maker_status_v1",
+            "timestamp_ms": (now - 5) * 1000,
+            "model_sha": sha,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "killed": False,
+            "source": "full_visible_bid_depth_net_verified_fee_and_slippage",
+        })
+        self._write(root / "micro_maker" / "selector_status.json", {
+            "schema": "polymarket_v7_maker_selector_status_v1",
+            "timestamp_ms": (now - 5) * 1000,
+            "model_sha": sha,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "state": "OPERATIONAL_REWARDED",
+            "ready": True,
+            "degraded": False,
+            "source": "public_clob_rewards",
+            "selected_count": 40,
+        })
         self._write(root / "external" / "status.json", {"timestamp": now - 5, "paper_only": True, "authenticated_execution": False})
         self._write(root / "osint" / "status.json", {"schema": "polymarket_v7_osint_collector_status_v1", "timestamp_ms": (now - 5) * 1000, "paper_only": True, "authenticated_execution": False, "real_order_submission": False, "enabled_sources": 3, "healthy_sources": 3})
         self._write(root / "osint" / "mapping_status.json", {"schema": "polymarket_v7_osint_mapping_status_v1", "version": 7, "family": "osint", "model_sha": sha, "timestamp_ms": (now - 5) * 1000, "paper_only": True, "research_only": True, "authenticated_execution": False, "real_order_submission": False, "implementation_complete": True, "mapping_pipeline": True, "title_similarity_verification_forbidden": True, "verified_mappings": 0, "candidate_mappings": 2, "forward_collection_active": False})
@@ -227,6 +248,9 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertIn("polymarket_v7_authority_max_drawdown_ratio 0.15", metrics)
             self.assertIn("polymarket_v7_paper_only_contract_ok 1", metrics)
             self.assertIn("polymarket_v7_authenticated_execution_disabled 1", metrics)
+            self.assertIn('polymarket_v7_component_ready{component="professional_maker"} 1', metrics)
+            self.assertIn("polymarket_v7_maker_selector_ready 1", metrics)
+            self.assertIn("polymarket_v7_maker_selector_fallback_active 0", metrics)
             self.assertIn("polymarket_v7_live_model_target_count 12", metrics)
             self.assertIn("polymarket_v7_live_model_operational_count 8", metrics)
             self.assertIn("polymarket_v7_live_model_blocked_count 4", metrics)

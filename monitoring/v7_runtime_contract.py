@@ -205,7 +205,8 @@ def failure_action(policy: dict[str, Any], failure: str) -> dict[str, Any]:
 
 
 def runtime_health(run_root: Path, expected_sha: str, *, now: int, stale_seconds: int) -> Assessment:
-    runtime = read_json(Path(run_root) / "control" / "runtime_status.json")
+    run_root = Path(run_root)
+    runtime = read_json(run_root / "control" / "runtime_status.json")
     if not runtime:
         return Assessment(RECOVERABLE, ("runtime_status_missing",))
     unsafe: list[str] = []
@@ -226,6 +227,54 @@ def runtime_health(run_root: Path, expected_sha: str, *, now: int, stale_seconds
         unsafe.append("runtime_clock_in_future")
     elif age > stale_seconds:
         recoverable.append("runtime_status_stale")
+    if runtime.get("state") == "running":
+        selector = read_json(run_root / "micro_maker" / "selector_status.json")
+        maker = read_json(run_root / "micro_maker" / "status.json")
+        if selector:
+            if (
+                selector.get("paper_only") is not True
+                or selector.get("authenticated_execution") is not False
+                or selector.get("real_order_submission") is not False
+            ):
+                unsafe.append("maker_selector_execution_authority_unsafe")
+            if selector.get("model_sha") != expected_sha:
+                unsafe.append("maker_selector_identity_drift")
+            if selector.get("ready") is not True or selector.get("state") not in {
+                "OPERATIONAL_REWARDED", "OPERATIONAL_FALLBACK",
+            }:
+                recoverable.append("maker_selector_not_ready")
+            try:
+                selector_age = now * 1000 - int(selector.get("timestamp_ms") or 0)
+            except (TypeError, ValueError, OverflowError):
+                selector_age = stale_seconds * 1000 + 1
+            if selector_age < -5_000:
+                unsafe.append("maker_selector_clock_in_future")
+            # The slow selector refreshes every 60s after a bounded network
+            # attempt; its heartbeat contract is intentionally slower than the
+            # 1s maker/runtime state loop.
+            elif selector_age > max(120, stale_seconds * 4) * 1000:
+                recoverable.append("maker_selector_stale")
+        else:
+            recoverable.append("maker_selector_status_missing")
+        if maker:
+            if maker.get("paper_only") is not True or maker.get("authenticated_execution") is not False:
+                unsafe.append("professional_maker_execution_authority_unsafe")
+            if maker.get("model_sha") != expected_sha:
+                unsafe.append("professional_maker_identity_drift")
+            if maker.get("killed") is True:
+                recoverable.append("professional_maker_killed")
+            if maker.get("source") in {None, "", "not_started"}:
+                recoverable.append("professional_maker_not_started")
+            try:
+                maker_age = now * 1000 - int(maker.get("timestamp_ms") or 0)
+            except (TypeError, ValueError, OverflowError):
+                maker_age = stale_seconds * 1000 + 1
+            if maker_age < -5_000:
+                unsafe.append("professional_maker_clock_in_future")
+            elif maker_age > stale_seconds * 1000:
+                recoverable.append("professional_maker_status_stale")
+        else:
+            recoverable.append("professional_maker_status_missing")
     if unsafe:
         return Assessment(UNSAFE, tuple(sorted(set(unsafe + recoverable))))
     if recoverable:

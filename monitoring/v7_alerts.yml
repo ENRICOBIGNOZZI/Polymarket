@@ -57,6 +57,22 @@ groups:
           summary: Canonical V7 runtime process is down
           description: The exact-SHA V7 process-group owner is not alive.
 
+      - alert: PolymarketV7ProfessionalMakerDown
+        expr: polymarket_v7_component_ready{component="professional_maker"} < 1
+        for: 30s
+        labels: {severity: critical}
+        annotations:
+          summary: Professional maker is not operational
+          description: The primary PAPER maker or its exact-SHA market selector is missing, stale, unsafe or not started.
+
+      - alert: PolymarketV7MakerRewardFallback
+        expr: polymarket_v7_maker_selector_fallback_active > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: Maker is using the liquidity-universe fallback
+          description: PAPER quoting remains operational with reward assumptions forced to zero, but the public rewards catalog is unavailable.
+
       - alert: PolymarketV7SupervisorDown
         expr: polymarket_v7_supervisor_alive < 1
         for: 30s
