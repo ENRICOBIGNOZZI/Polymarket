@@ -121,7 +121,21 @@ jobs:
           PY
           )"
           test "$runtime_sha" = "$deployed_sha"
-          curl -fsS http://127.0.0.1:9108/maker-fillability.json
+          if curl -fsS http://127.0.0.1:9108/maker-fillability.json; then
+            exit 0
+          fi
+          # A healthy exporter process may predate the composed JSON route even
+          # when the deployed checkout already contains the exact-SHA reporter.
+          # Compute the same read-only report from the incumbent ledger/tape so
+          # evidence collection does not require a runtime restart or cutover.
+          tmp_report="$(mktemp)"
+          trap 'rm -f "$tmp_report"' EXIT
+          python3 scripts/v7_maker_fillability_report.py \
+            --run-root "$root" \
+            --model-sha "$runtime_sha" \
+            --output-json "$tmp_report" \
+            >/dev/null
+          cat "$tmp_report"
           REMOTE
           python3 - <<'PY' | tee maker-fillability-summary.txt
           import json

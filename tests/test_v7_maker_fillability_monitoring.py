@@ -97,6 +97,16 @@ class V7MakerFillabilityMonitoringTest(unittest.TestCase):
         self.assertIn('"config/v7_professional_market_maker.json"', workflow)
         self.assertIn('"src/v7_maker_fillability_observer.cpp"', workflow)
 
+    def test_fillability_collection_has_exact_sha_offline_fallback(self) -> None:
+        workflow = (ROOT / ".github/workflows/v7-maker-fillability-evidence.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("test \"$runtime_sha\" = \"$deployed_sha\"", workflow)
+        self.assertIn("if curl -fsS http://127.0.0.1:9108/maker-fillability.json", workflow)
+        self.assertIn("python3 scripts/v7_maker_fillability_report.py", workflow)
+        self.assertIn('--model-sha "$runtime_sha"', workflow)
+        self.assertIn("tmp_report=\"$(mktemp)\"", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
