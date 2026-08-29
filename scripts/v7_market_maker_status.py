@@ -89,6 +89,7 @@ def assess(
 ) -> dict[str, Any]:
     state = read_json(state_path)
     cfg = read_json(sleeve_config)
+    selection = read_json(selection_path) if selection_path is not None else {}
     v7 = cfg.get("v7") if isinstance(cfg.get("v7"), dict) else {}
     if cfg.get("paper_only") is not True or v7.get("authenticated_execution") is not False or v7.get("real_order_submission") is not False:
         raise ValueError("maker_status_requires_paper_auth_disabled")
@@ -98,6 +99,11 @@ def assess(
             "timestamp_ms": time.time_ns() // 1_000_000,
             "paper_only": True,
             "authenticated_execution": False,
+            "real_order_submission": False,
+            # During bootstrap the C++ state does not exist yet.  The pinned
+            # selection is already exact-SHA bound and is therefore the
+            # authoritative identity until the first maker state arrives.
+            "model_sha": selection.get("model_sha"),
             "equity": float(cfg.get("starting_capital", 0.0)),
             "killed": False,
             "source": "not_started",

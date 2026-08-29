@@ -57,9 +57,22 @@ class MakerStatusTests(unittest.TestCase):
             "v7": {"authenticated_execution": False, "real_order_submission": False},
         }))
         selection.write_text(json.dumps({
+            "model_sha": "a" * 40,
             "markets": [{"market_id": "market-1", "condition_id": "cond-1"}]
         }))
         return state, cfg, selection, output
+
+    def test_bootstrap_status_inherits_exact_identity_from_pinned_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state, cfg, selection, output = self.fixture(Path(tmp))
+            state.unlink()
+            report = assess(state, cfg, output, selection_path=selection)
+            self.assertEqual(report["source"], "not_started")
+            self.assertEqual(report["model_sha"], "a" * 40)
+            self.assertTrue(report["paper_only"])
+            self.assertFalse(report["authenticated_execution"])
+            self.assertFalse(report["real_order_submission"])
+            self.assertFalse(report["killed"])
 
     def test_equity_is_net_of_fee_and_slippage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
