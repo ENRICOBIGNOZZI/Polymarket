@@ -529,9 +529,10 @@ stop_owned_monitoring(){
 }
 
 stop_stale_monitoring_listener(){
-  local name="$1" port="$2" expected="$3" pid command_line
+  local name="$1" port="$2" expected="$3" pid command_line pids
   command -v lsof >/dev/null 2>&1 || return 0
-  for pid in $(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | sort -u); do
+  pids="$(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | sort -u || true)"
+  for pid in $pids; do
     [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
     command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
     [[ "$command_line" == *"$expected"* ]] || \
@@ -556,18 +557,69 @@ stop_stale_monitoring_listener(){
 start_monitoring(){
   local run_root="$(production_run_root)" monitoring_root="$APP_DIR/runs/monitoring"
   if [[ "$(uname -s)" == "Darwin" ]]; then
+    local domain="gui/$(id -u)" label template destination
+    for label in exporter prometheus grafana; do
+      launchctl bootout "$domain/com.polymarket.v7.$label" >/dev/null 2>&1 || true
+    done
     POLYMARKET_APP_DIR="$APP_DIR" POLYMARKET_STATE_DIR="$STATE_DIR" \
       bash "$APP_DIR/ops/apply_v7_monitoring_config_macos.sh" >/dev/null
     if command -v brew >/dev/null 2>&1; then
       brew services stop prometheus >/dev/null 2>&1 || true
       brew services stop grafana >/dev/null 2>&1 || true
     fi
+    stop_owned_monitoring
+    # PID files can be lost across interrupted deployments. Resolve every
+    # canonical port after booting out launchd and replace only a positively
+    # identified V7 process. Unknown listeners remain fail-closed.
+    stop_stale_monitoring_listener exporter 9108 "$APP_DIR/monitoring/exporter_v7.py"
+    stop_stale_monitoring_listener prometheus 9090 "prometheus"
+    stop_stale_monitoring_listener grafana 3000 "grafana"
+    local prometheus_bin="$(command -v prometheus)" grafana_bin="$(command -v grafana)"
+    local grafana_home="${POLYMARKET_GRAFANA_HOME:-}"
+    [[ -n "$prometheus_bin" && -n "$grafana_bin" ]] || fail "canonical monitoring binaries unavailable"
+    if [[ -z "$grafana_home" ]] && command -v brew >/dev/null 2>&1; then
+      grafana_home="$(brew --prefix grafana)/share/grafana"
+    fi
+    [[ -n "$grafana_home" ]] || grafana_home="/usr/share/grafana"
+    mkdir -p "$monitoring_root/prometheus"
+    mkdir -p "$monitoring_root/grafana/data" "$monitoring_root/grafana/logs" \
+      "$monitoring_root/grafana/plugins"
+    python3 - "$APP_DIR" "$run_root" "$STATE_DIR" "$prometheus_bin" "$grafana_bin" "$grafana_home" <<'PY'
+import os, sys
+from pathlib import Path
+app,run,state,prometheus,grafana,grafana_home=map(str,sys.argv[1:])
+launch_agents=Path.home()/'Library'/'LaunchAgents'
+launch_agents.mkdir(parents=True,exist_ok=True)
+contracts={
+ 'exporter': {'@APP_DIR@':app,'@RUN_ROOT@':run},
+ 'prometheus': {'@APP_DIR@':app,'@RUN_ROOT@':run,'@STATE_DIR@':state,'@PROMETHEUS_BIN@':prometheus},
+ 'grafana': {'@APP_DIR@':app,'@RUN_ROOT@':run,'@STATE_DIR@':state,'@GRAFANA_BIN@':grafana,'@GRAFANA_HOME@':grafana_home},
+}
+for name,replacements in contracts.items():
+    source=Path(app)/'ops'/'launchd'/f'com.polymarket.v7.{name}.plist.in'
+    payload=source.read_text(encoding='utf-8')
+    for marker,value in replacements.items():
+        assert payload.count(marker)>=1, (name,marker)
+        payload=payload.replace(marker,value)
+    assert '@' not in payload, name
+    destination=launch_agents/f'com.polymarket.v7.{name}.plist'
+    temporary=destination.with_name(destination.name+f'.tmp.{os.getpid()}')
+    temporary.write_text(payload,encoding='utf-8')
+    os.chmod(temporary,0o644); os.replace(temporary,destination)
+PY
+    for label in exporter prometheus grafana; do
+      destination="$HOME/Library/LaunchAgents/com.polymarket.v7.$label.plist"
+      plutil -lint "$destination" >/dev/null
+      launchctl bootstrap "$domain" "$destination"
+    done
+    sleep 1
+    for label in exporter prometheus grafana; do
+      launchctl print "$domain/com.polymarket.v7.$label" 2>/dev/null | grep -q 'state = running' || \
+        fail "launchd monitoring service failed to start: $label"
+    done
+    return 0
   fi
   stop_owned_monitoring
-  # PID files can be lost or replaced across interrupted deployments. A live
-  # listener from an older SHA must never satisfy the new deployment's health
-  # gate, so resolve each port and replace only a positively identified V7
-  # monitoring process. Unknown listeners remain fail-closed.
   stop_stale_monitoring_listener exporter 9108 "$APP_DIR/monitoring/exporter_v7.py"
   stop_stale_monitoring_listener prometheus 9090 "prometheus"
   stop_stale_monitoring_listener grafana 3000 "grafana"
@@ -583,22 +635,13 @@ start_monitoring(){
     echo $! > "$STATE_DIR/prometheus-v7.pid"
   fi
   if command -v grafana >/dev/null 2>&1; then
-    local grafana_home="${POLYMARKET_GRAFANA_HOME:-}"
-    if [[ -z "$grafana_home" && "$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
-      grafana_home="$(brew --prefix grafana)/share/grafana"
-    fi
-    [[ -n "$grafana_home" ]] || grafana_home="/usr/share/grafana"
-    mkdir -p "$monitoring_root/grafana/data" "$monitoring_root/grafana/logs" \
-      "$monitoring_root/grafana/plugins"
-    nohup env \
-      GF_SERVER_HTTP_ADDR=127.0.0.1 GF_SERVER_HTTP_PORT=3000 \
+    local grafana_home="${POLYMARKET_GRAFANA_HOME:-/usr/share/grafana}"
+    mkdir -p "$monitoring_root/grafana/data" "$monitoring_root/grafana/logs" "$monitoring_root/grafana/plugins"
+    nohup env GF_SERVER_HTTP_ADDR=127.0.0.1 GF_SERVER_HTTP_PORT=3000 \
       GF_AUTH_ANONYMOUS_ENABLED=true GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer \
-      GF_PATHS_PROVISIONING="$STATE_DIR/grafana/provisioning" \
-      GF_PATHS_DATA="$monitoring_root/grafana/data" \
-      GF_PATHS_LOGS="$monitoring_root/grafana/logs" \
-      GF_PATHS_PLUGINS="$monitoring_root/grafana/plugins" \
-      grafana server --homepath "$grafana_home" \
-      >>"$run_root/grafana-v7.log" 2>&1 </dev/null &
+      GF_PATHS_PROVISIONING="$STATE_DIR/grafana/provisioning" GF_PATHS_DATA="$monitoring_root/grafana/data" \
+      GF_PATHS_LOGS="$monitoring_root/grafana/logs" GF_PATHS_PLUGINS="$monitoring_root/grafana/plugins" \
+      grafana server --homepath "$grafana_home" >>"$run_root/grafana-v7.log" 2>&1 </dev/null &
     echo $! > "$STATE_DIR/grafana-v7.pid"
   fi
 }

@@ -184,6 +184,12 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("refusing to replace unknown listener", text)
         self.assertIn("polymarket_external_fair_present 1", text)
         self.assertIn("http://127.0.0.1:9108/external-fair.json", text)
+        self.assertIn("'exporter': {'@APP_DIR@':app", text)
+        self.assertIn("'prometheus': {'@APP_DIR@':app", text)
+        self.assertIn("'grafana': {'@APP_DIR@':app", text)
+        self.assertIn("f'com.polymarket.v7.{name}.plist.in'", text)
+        self.assertIn('launchctl bootout "$domain/com.polymarket.v7.$label"', text)
+        self.assertIn('launchctl bootstrap "$domain" "$destination"', text)
 
     def test_updater_requires_exact_approved_main_sha(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
