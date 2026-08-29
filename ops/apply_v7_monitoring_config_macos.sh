@@ -8,9 +8,36 @@ MANIFEST="$APP_DIR/monitoring/v7_monitoring_manifest.json"
 TAILSCALE_HOSTNAME="${POLYMARKET_TAILSCALE_HOSTNAME:-mamma-portfolio}"
 TAILSCALE_FQDN="${POLYMARKET_TAILSCALE_FQDN:-mamma-portfolio.tail1bae85.ts.net}"
 GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-https://${TAILSCALE_FQDN}}"
+COMMAND_TIMEOUT_SECONDS="${POLYMARKET_MONITORING_COMMAND_TIMEOUT_SECONDS:-15}"
 
 [[ "$(uname -s)" == "Darwin" ]] || { echo "fatal: macOS monitoring installer requires Darwin" >&2; exit 78; }
 [[ -f "$MANIFEST" ]] || { echo "fatal: missing V7 monitoring manifest" >&2; exit 78; }
+
+run_bounded() {
+  python3 - "$COMMAND_TIMEOUT_SECONDS" "$@" <<'PY'
+import os, signal, subprocess, sys
+
+seconds = float(sys.argv[1])
+command = sys.argv[2:]
+if not command or seconds <= 0:
+    raise SystemExit(78)
+process = subprocess.Popen(command, start_new_session=True)
+try:
+    raise SystemExit(process.wait(timeout=seconds))
+except subprocess.TimeoutExpired:
+    print(f"[v7-monitoring] bounded command timed out after {seconds:g}s: {command[0]}", file=sys.stderr)
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=2)
+    except (ProcessLookupError, subprocess.TimeoutExpired):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+    raise SystemExit(124)
+PY
+}
 
 stop_stale_grafana_listener() {
   local lsof_bin="" pids="" pid="" command_line=""
@@ -22,10 +49,10 @@ stop_stale_grafana_listener() {
   fi
   [[ -n "$lsof_bin" ]] || return 0
 
-  pids="$("$lsof_bin" -nP -tiTCP:3000 -sTCP:LISTEN 2>/dev/null || true)"
+  pids="$(run_bounded "$lsof_bin" -nP -tiTCP:3000 -sTCP:LISTEN 2>/dev/null || true)"
   for pid in $pids; do
     [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
-    command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    command_line="$(run_bounded ps -p "$pid" -o command= 2>/dev/null || true)"
     case "$command_line" in
       *grafana*|*Grafana*)
         printf '[v7-monitoring] stopping stale Grafana listener pid=%s on 127.0.0.1:3000\n' "$pid" >&2
@@ -59,10 +86,10 @@ find_tailscale() {
 tailscale_admin() {
   local binary="$1"
   shift
-  if "$binary" "$@"; then
+  if run_bounded "$binary" "$@"; then
     return 0
   fi
-  sudo -n "$binary" "$@"
+  run_bounded sudo -n "$binary" "$@"
 }
 
 configure_tailnet_grafana() {
@@ -72,7 +99,7 @@ configure_tailnet_grafana() {
 
   tailscale_admin "$ts" set --hostname="$TAILSCALE_HOSTNAME" >/dev/null
   for _ in $(seq 1 20); do
-    actual_dns="$("$ts" status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("Self",{}).get("DNSName", ""))' 2>/dev/null || true)"
+    actual_dns="$(run_bounded "$ts" status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("Self",{}).get("DNSName", ""))' 2>/dev/null || true)"
     [[ "$actual_dns" == "$TAILSCALE_FQDN" || "$actual_dns" == "$TAILSCALE_FQDN." ]] && break
     sleep 1
   done
@@ -97,7 +124,7 @@ configure_tailnet_grafana() {
     exit 78
   fi
   rm -f "$serve_log"
-  serve_status="$("$ts" serve status 2>&1 || true)"
+  serve_status="$(run_bounded "$ts" serve status 2>&1 || true)"
   printf '%s\n' "$serve_status"
   if ! grep -Fq "$TAILSCALE_FQDN" <<<"$serve_status"; then
     printf 'fatal: Tailscale Serve did not publish expected FQDN %s\n' "$TAILSCALE_FQDN" >&2
