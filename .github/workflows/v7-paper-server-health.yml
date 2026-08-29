@@ -138,13 +138,20 @@ jobs:
           import csv,json,os,sys
           from pathlib import Path
           root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(sys.argv[3])
-          runtime=json.loads((root/'control/runtime_status.json').read_text()); identity=json.loads((root/'control/incumbent_identity.json').read_text()); portfolio=json.loads((root/'control/portfolio_state.json').read_text()); graph=json.loads((root/'graph_rv/status.json').read_text()); economics=json.loads((root/'canonical_economics.json').read_text()); research=json.loads((root/'control/research_sleeves_manifest.json').read_text()); osint=json.loads((root/'osint/status.json').read_text()); osint_mapping=json.loads((root/'osint/mapping_status.json').read_text()); market_open=json.loads((root/'market_open/status.json').read_text())
+          runtime=json.loads((root/'control/runtime_status.json').read_text()); identity=json.loads((root/'control/incumbent_identity.json').read_text()); portfolio=json.loads((root/'control/portfolio_state.json').read_text()); graph=json.loads((root/'graph_rv/status.json').read_text()); economics=json.loads((root/'canonical_economics.json').read_text()); research=json.loads((root/'control/research_sleeves_manifest.json').read_text()); osint=json.loads((root/'osint/status.json').read_text()); osint_mapping=json.loads((root/'osint/mapping_status.json').read_text()); market_open=json.loads((root/'market_open/status.json').read_text()); allocation=json.loads((root/'control/allocations/manifest.json').read_text())
           scope=json.loads(Path('config/v7_live_model_scope.json').read_text()); registry=json.loads(Path('config/v7_strategy_registry.json').read_text())
           assert runtime.get('version')==7 and runtime.get('model_sha')==sha and runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False and runtime.get('real_order_submission') is False
           assert identity.get('schema')=='polymarket_v7_incumbent_identity_v1' and identity.get('verified') is True and identity.get('runtime_sha')==sha and identity.get('paper_only') is True
           for key in ('config_hash','policy_hash','model_hash','run_id','ledger_id','server_id'): assert identity.get(key)==runtime.get(key) and str(identity.get(key) or '')
           pid=int(runtime.get('pid') or 0); assert pid>0; os.kill(pid,0); assert now-int(runtime.get('timestamp') or 0)<=180
           assert portfolio.get('paper_only') is True and portfolio.get('authenticated_execution') is False and portfolio.get('killed') is False and float(portfolio.get('drawdown',1))<.15 and now-int(portfolio.get('timestamp') or 0)<=30
+          expected_strategy_budgets={'professional_maker','fast_structural','hard_arb','graph_rv','crypto_settlement_fair','crypto_informed_taker','micro_taker'}
+          strategy_budgets=allocation.get('strategy_budgets') or {}
+          assert allocation.get('schema')=='polymarket_v7_capital_allocation_v2' and allocation.get('paper_only') is True and allocation.get('authenticated_execution') is False and allocation.get('real_order_submission') is False and allocation.get('real_capital_at_risk') is False
+          assert float(allocation.get('account_starting_capital') or 0)==14000.0 and int(allocation.get('execution_strategy_count') or 0)==7 and set(strategy_budgets)==expected_strategy_budgets
+          assert all(abs(float(value)-2000.0)<=1e-9 for value in strategy_budgets.values()) and abs(float(allocation.get('strategy_budget_sum') or 0)-14000.0)<=1e-9
+          assert allocation.get('research_strategy_budgets')=={} and allocation.get('research_has_capital') is False and abs(float((allocation.get('budgets') or {}).get('reserve') or 0))<=1e-9
+          assert float(portfolio.get('account_starting_capital') or 0)==14000.0
           assert graph.get('paper_only') is True and graph.get('authenticated_execution') is False and now-int(graph.get('timestamp') or 0)<=180
           assert economics.get('paper_only') is True and economics.get('authenticated_execution') is False and economics.get('expected_model_sha')==sha
           enabled={str(row.get('family') or '') for row in registry.get('strategies',[]) if isinstance(row,dict) and row.get('enabled') is True}
@@ -185,7 +192,7 @@ jobs:
           tape=root/'trade_tape.csv'; assert tape.is_file()
           with tape.open(newline='',encoding='utf-8') as h: rows=list(csv.DictReader(h))
           assert rows and max(int(float(r.get('received_ms') or 0)) for r in rows)>0
-          print(json.dumps({'runtime_sha':sha,'pid':pid,'research_pid':research_pid,'live_model_target':len(target),'research_shadow_attached':len(families),'research_evidence_states':{name:row.get('evidence_state') for name,row in sorted(families.items())},'drawdown':portfolio.get('drawdown'),'economic_state':economics.get('state'),'promotion_ready':economics.get('promotion_ready'),'submitted_units':economics.get('submitted_units'),'complete_units':economics.get('complete_units'),'net_pnl':economics.get('net_pnl'),'stressed_net_pnl':economics.get('stressed_net_pnl')},sort_keys=True))
+          print(json.dumps({'runtime_sha':sha,'pid':pid,'research_pid':research_pid,'live_model_target':len(target),'research_shadow_attached':len(families),'research_evidence_states':{name:row.get('evidence_state') for name,row in sorted(families.items())},'account_starting_capital':portfolio.get('account_starting_capital'),'strategy_budgets':strategy_budgets,'drawdown':portfolio.get('drawdown'),'economic_state':economics.get('state'),'promotion_ready':economics.get('promotion_ready'),'submitted_units':economics.get('submitted_units'),'complete_units':economics.get('complete_units'),'net_pnl':economics.get('net_pnl'),'stressed_net_pnl':economics.get('stressed_net_pnl')},sort_keys=True))
           PY
           curl -fsS http://127.0.0.1:9108/healthz
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
