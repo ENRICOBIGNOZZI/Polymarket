@@ -132,6 +132,14 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
             self.source.index("pop_critical(command)"),
             self.source.index("pop_normal(command)"),
         )
+        # A priority cancel can overtake an older placement. The execution owner
+        # must then suppress that stale quote instead of resurrecting it.
+        self.assertIn("record_control_watermark(intent", self.source)
+        self.assertIn("quote_is_superseded(intent)", self.source)
+        self.assertLess(
+            self.source.index("quote_is_superseded(intent)"),
+            self.source.index("policy_.process(command.plan, capital_)"),
+        )
 
 
 if __name__ == "__main__":

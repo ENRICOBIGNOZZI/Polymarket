@@ -1016,10 +1016,15 @@ public:
         if (!capital_.configure(limits)) return false;
 
         std::size_t max_market = 0;
+        std::size_t max_instrument = 0;
         for (const auto& market : markets) {
             max_market = std::max<std::size_t>(max_market, market->market_handle);
+            max_instrument = std::max<std::size_t>(
+                max_instrument, std::max(market->yes_instrument_handle,
+                                         market->no_instrument_handle));
         }
         markets_.assign(max_market + 1, nullptr);
+        control_watermarks_.assign(max_instrument + 1, {});
         for (const auto& market : markets) {
             if (market->yes_tick_e4 != market->no_tick_e4) return false;
             if (!policy_.register_market(
@@ -1049,9 +1054,20 @@ public:
             ? std::max<std::int64_t>(0, execution_start_ns - command.enqueue_monotonic_ns) : 0;
         pm::v7::maker::MakerExecutionResult result;
         switch (command.kind) {
-            case ExecutionCommandKind::Plan:
+            case ExecutionCommandKind::Plan: {
+                const auto& intent = command.plan.intent;
+                // Cancels use a priority queue, so they may legitimately overtake
+                // an older quote still waiting in the normal queue. Remember the
+                // control boundary and suppress that stale quote when it arrives;
+                // otherwise cancel-before-place would resurrect unwanted risk.
+                if (intent.type == IntentType::Quote && quote_is_superseded(intent)) {
+                    ++execution_version_;
+                    return true;
+                }
+                record_control_watermark(intent, *markets_[command.context.market_handle]);
                 result = policy_.process(command.plan, capital_);
                 break;
+            }
             case ExecutionCommandKind::PublicTrade:
                 result = policy_.on_public_trade(
                     command.context.market_handle, command.trade, capital_);
@@ -1096,6 +1112,48 @@ public:
     }
 
 private:
+    struct SideControlWatermark {
+        std::int64_t bid_ns = 0;
+        std::int64_t ask_ns = 0;
+    };
+
+    [[nodiscard]] bool quote_is_superseded(const StrategyIntent& intent) const noexcept {
+        if (intent.instrument_handle >= control_watermarks_.size()) return true;
+        const auto& watermark = control_watermarks_[intent.instrument_handle];
+        const std::int64_t boundary = intent.side == Side::Buy ? watermark.bid_ns
+            : intent.side == Side::Sell ? watermark.ask_ns
+            : std::numeric_limits<std::int64_t>::max();
+        return intent.decision_monotonic_ns <= boundary;
+    }
+
+    void watermark_instrument(std::uint64_t instrument_handle, Side side,
+                              std::int64_t decision_ns) noexcept {
+        if (instrument_handle >= control_watermarks_.size() || decision_ns <= 0) return;
+        auto& watermark = control_watermarks_[instrument_handle];
+        if (side == Side::Buy || side == Side::None) {
+            watermark.bid_ns = std::max(watermark.bid_ns, decision_ns);
+        }
+        if (side == Side::Sell || side == Side::None) {
+            watermark.ask_ns = std::max(watermark.ask_ns, decision_ns);
+        }
+    }
+
+    void record_control_watermark(const StrategyIntent& intent,
+                                  const MarketContext& market) noexcept {
+        if (intent.type == IntentType::CancelQuote) {
+            watermark_instrument(intent.instrument_handle, intent.side,
+                                 intent.decision_monotonic_ns);
+        } else if (intent.type == IntentType::Withdraw) {
+            watermark_instrument(intent.instrument_handle, Side::None,
+                                 intent.decision_monotonic_ns);
+        } else if (intent.type == IntentType::Kill) {
+            watermark_instrument(market.yes_instrument_handle, Side::None,
+                                 intent.decision_monotonic_ns);
+            watermark_instrument(market.no_instrument_handle, Side::None,
+                                 intent.decision_monotonic_ns);
+        }
+    }
+
     void emit(const ExecutionContext& context, const PaperMakerResult& result) noexcept {
         const auto* market = markets_[context.market_handle];
         if (market == nullptr) return;
@@ -1140,6 +1198,7 @@ private:
     MakerPaperExecutionPolicy policy_{};
     SleeveCapitalAccount capital_{};
     std::vector<MarketContext*> markets_;
+    std::vector<SideControlWatermark> control_watermarks_;
     pm::v7::SpscRing<TelemetryRecord, kExecutionTelemetryCapacity> telemetry_{};
     std::atomic<bool> telemetry_overflow_{false};
     std::uint64_t execution_version_ = 1;
