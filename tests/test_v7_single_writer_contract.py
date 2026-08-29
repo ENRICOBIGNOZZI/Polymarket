@@ -44,7 +44,14 @@ class V7SingleWriterContractTest(unittest.TestCase):
         push_block = workflow[push_start:pr_start]
         self.assertIn("branches: [main]", push_block)
         self.assertNotIn("paths:", push_block)
-        self.assertIn('VALIDATION_SHA: ${{ github.event.pull_request.head.sha || github.sha }}', workflow)
+        self.assertIn(
+            'VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}',
+            workflow,
+        )
+        self.assertIn(
+            'ref: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}',
+            workflow,
+        )
         self.assertIn('test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"', workflow)
 
 

@@ -2,6 +2,10 @@ name: Private runtime single-writer validation
 
 on:
   workflow_dispatch:
+    inputs:
+      expected_sha:
+        required: false
+        type: string
   # Live PAPER validation is exact-SHA. Therefore every main SHA needs a
   # single-writer proof, even when the commit changes only deploy/monitoring
   # orchestration and does not touch the runtime files themselves.
@@ -33,11 +37,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
-      VALIDATION_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
       - name: Bind exact V7 source head
         run: |
           set -euo pipefail
