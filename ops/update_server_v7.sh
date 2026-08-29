@@ -217,43 +217,6 @@ PY
   log "Requested fail-closed PAPER position drain from $current_sha to $EXPECTED_SHA"
 }
 
-maker_positions_flat(){
-  local run_root="$(production_run_root)"
-  python3 - "$run_root" <<'PY'
-import json, sys
-from pathlib import Path
-root=Path(sys.argv[1])
-def read(rel):
-    value=json.loads((root/rel).read_text(encoding='utf-8'))
-    assert isinstance(value,dict)
-    return value
-status=read('micro_maker/status.json'); state=read('micro_maker/state.json')
-assert status.get('paper_only') is True and status.get('authenticated_execution') is False
-inventory=state.get('inventory'); positions=status.get('positions')
-assert isinstance(inventory,dict) and isinstance(positions,list)
-durable=0
-for row in inventory.values():
-    assert isinstance(row,dict)
-    yes=float(row.get('yes_shares') or 0.0); no=float(row.get('no_shares') or 0.0)
-    assert yes >= 0.0 and no >= 0.0
-    durable += int(yes > 1e-9) + int(no > 1e-9)
-assert durable == len(positions) == 0
-PY
-}
-
-wait_for_maker_flat(){
-  local current_sha="$1"
-  [[ "$current_sha" != "$EXPECTED_SHA" ]] || return 0
-  for _ in $(seq 1 "$POSITION_DRAIN_ATTEMPTS"); do
-    if maker_positions_flat >/dev/null 2>&1; then
-      log "Professional maker is flat; arming global PAPER entry drain"
-      return 0
-    fi
-    sleep 1
-  done
-  fail "professional maker did not reach a flat executable inventory state"
-}
-
 cutover_positions_drained(){
   local run_root="$(production_run_root)"
   python3 - "$run_root" "$LOCK_NONCE" <<'PY'
@@ -292,7 +255,8 @@ for row in maker_inventory.values():
 assert int(external_status.get('open_positions',-1)) == external_open
 assert int(micro_status.get('open_positions',-1)) == micro_open
 assert len(maker_positions) == maker_open
-assert external_open == 0 and micro_open == 0 and maker_open == 0
+assert external_open == 0 and micro_open == 0
+assert maker_status.get('marking_complete') is True and maker_status.get('killed') is not True
 # Drain-aware runtimes must prove that entry is disabled.  A pre-contract
 # incumbent may be bootstrapped only while already flat; the post-stop
 # archiver repeats the durable-state check and catches any race fail-closed.
@@ -307,7 +271,6 @@ if 'drain_requested' in micro_status:
     assert micro_status.get('new_risk_frozen') is True
 if 'drain_requested' in maker_status:
     assert maker_status.get('drain_requested') is True
-    assert maker_status.get('drain_complete') is True
     assert maker_status.get('new_risk_frozen') is True
 PY
 }
@@ -556,6 +519,7 @@ prevalidate_candidate(){
       scripts/v7_canonical_economics.py \
       scripts/v7_portfolio_guard.py \
       scripts/v7_prepare_cutover_run_root.py \
+      scripts/v7_finalize_maker_cutover.py \
       scripts/v7_research_shadow_supervisor.py \
       scripts/v7_semantic_mapping.py \
       scripts/v7_sports_collector.py \
@@ -909,11 +873,32 @@ MAIN_SHA="$(git rev-parse "origin/$DEPLOY_REF")"
 prevalidate_candidate
 OLD_SHA="$(git rev-parse HEAD)"
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || fail "tracked server checkout is dirty"
-wait_for_maker_flat "$OLD_SHA"
 request_cutover_drain "$OLD_SHA"
 wait_for_cutover_drain "$OLD_SHA"
+MAKER_STATUS_REFRESHER="${POLYMARKET_MAKER_STATUS_REFRESHER:-$APP_DIR/scripts/v7_market_maker_status.py}"
+[[ -f "$MAKER_STATUS_REFRESHER" ]] || fail "maker status refresher missing: $MAKER_STATUS_REFRESHER"
+if [[ "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
+  env https_proxy=http://127.0.0.1:19109 http_proxy=http://127.0.0.1:19109 \
+    HTTPS_PROXY=http://127.0.0.1:19109 HTTP_PROXY=http://127.0.0.1:19109 \
+    no_proxy=127.0.0.1,localhost NO_PROXY=127.0.0.1,localhost \
+    python3 "$MAKER_STATUS_REFRESHER" \
+      --state "$(production_run_root)/micro_maker/state.json" \
+      --config "$(production_run_root)/control/allocations/micro_maker.json" \
+      --selection "$(production_run_root)/micro_maker/reward_selection.json" \
+      --output "$(production_run_root)/control/maker_cutover_mark.json" \
+      >/dev/null
+fi
 stop_production_runtime
 stop_owned_monitoring
+MAKER_CUTOVER_FINALIZER="${POLYMARKET_MAKER_CUTOVER_FINALIZER:-$APP_DIR/scripts/v7_finalize_maker_cutover.py}"
+[[ -f "$MAKER_CUTOVER_FINALIZER" ]] || fail "maker cutover finalizer missing: $MAKER_CUTOVER_FINALIZER"
+if [[ "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
+  python3 "$MAKER_CUTOVER_FINALIZER" \
+    --run-root "$(production_run_root)" \
+    --model-sha "$OLD_SHA" \
+    --nonce "$LOCK_NONCE" \
+    --mark "$(production_run_root)/control/maker_cutover_mark.json" | tee -a deploy-evidence.txt
+fi
 CUTOVER_ARCHIVER="${POLYMARKET_CUTOVER_ARCHIVER:-$APP_DIR/scripts/v7_prepare_cutover_run_root.py}"
 [[ -f "$CUTOVER_ARCHIVER" ]] || fail "cutover archiver missing: $CUTOVER_ARCHIVER"
 python3 "$CUTOVER_ARCHIVER" \

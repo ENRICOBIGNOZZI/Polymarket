@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -82,6 +83,7 @@ class MakerStatusTests(unittest.TestCase):
             state, cfg, selection, output = self.fixture(Path(tmp))
             book = [{
                 "asset_id": "yes-1",
+                "timestamp": str(time.time_ns() // 1_000_000),
                 "bids": [{"price": "0.50", "size": "5"}, {"price": "0.49", "size": "5"}],
             }]
             fee = FeeDetails(rate=0.04, exponent=1.0, taker_only=True, verified=True, source="test")
@@ -104,6 +106,7 @@ class MakerStatusTests(unittest.TestCase):
             selection.write_text(json.dumps({"markets": []}))
             book = [{
                 "asset_id": "yes-1",
+                "timestamp": str(time.time_ns() // 1_000_000),
                 "bids": [{"price": "0.50", "size": "10"}],
             }]
             fee = FeeDetails(rate=0.04, exponent=1.0, taker_only=True, verified=True, source="test")
@@ -118,7 +121,8 @@ class MakerStatusTests(unittest.TestCase):
     def test_unverified_fee_schedule_zero_values_inventory_and_freezes_new_risk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state, cfg, selection, output = self.fixture(Path(tmp))
-            book = [{"asset_id": "yes-1", "bids": [{"price": "0.50", "size": "10"}]}]
+            book = [{"asset_id": "yes-1", "timestamp": str(time.time_ns() // 1_000_000),
+                     "bids": [{"price": "0.50", "size": "10"}]}]
             fee = FeeDetails(rate=0.0, exponent=1.0, taker_only=True, verified=False, source="unknown")
             with patch("v7_market_maker_status.request_json", return_value=book), patch(
                 "v7_market_maker_status.resolve_fee_details", return_value=fee
@@ -147,7 +151,8 @@ class MakerStatusTests(unittest.TestCase):
             payload = json.loads(state.read_text())
             payload["cash"] = 80.0
             state.write_text(json.dumps(payload))
-            book = [{"asset_id": "yes-1", "bids": [{"price": "0.50", "size": "10"}]}]
+            book = [{"asset_id": "yes-1", "timestamp": str(time.time_ns() // 1_000_000),
+                     "bids": [{"price": "0.50", "size": "10"}]}]
             fee = FeeDetails(rate=0.0, exponent=1.0, taker_only=True, verified=False, source="unknown")
             with patch("v7_market_maker_status.request_json", return_value=book), patch(
                 "v7_market_maker_status.resolve_fee_details", return_value=fee

@@ -10,6 +10,7 @@ remain valid; only a real conservative drawdown triggers the global kill path.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -163,15 +164,26 @@ def assess(
 
     tokens = list(dict.fromkeys(token for _, token, _ in positions if token))
     books: dict[str, dict[str, Any]] = {}
+    book_clocks: dict[str, tuple[int, int, str]] = {}
     clob = str(cfg.get("clob_url") or "https://clob.polymarket.com").rstrip("/")
     for start in range(0, len(tokens), 80):
         try:
             rows = request_json(f"{clob}/books", [{"token_id": t} for t in tokens[start:start + 80]])
         except Exception:
             rows = []
+        receive_ms = time.time_ns() // 1_000_000
         for raw in rows if isinstance(rows, list) else []:
             if isinstance(raw, dict) and raw.get("asset_id"):
-                books[str(raw["asset_id"])] = raw
+                token = str(raw["asset_id"])
+                books[token] = raw
+                exchange_ms = int(finite(raw.get("timestamp"), 0.0))
+                if 0 < exchange_ms < 10_000_000_000:
+                    exchange_ms *= 1000
+                exchange_ms = min(exchange_ms, receive_ms) if exchange_ms > 0 else 0
+                snapshot_id = str(raw.get("hash") or "") or hashlib.sha256(
+                    json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+                book_clocks[token] = (exchange_ms, receive_ms, snapshot_id)
 
     slippage_bps = max(0.0, finite(cfg.get("slippage_bps"), 0.0))
     liquidation = 0.0
@@ -206,6 +218,13 @@ def assess(
         exit_fee = fee_per_share(vwap, fees, taker=True) * shares
         slippage_haircut = gross_value * slippage_bps / 10_000.0
         net_value = max(0.0, gross_value - exit_fee - slippage_haircut)
+        exchange_ms, receive_ms, snapshot_id = book_clocks.get(token, (0, 0, ""))
+        if exchange_ms <= 0 or receive_ms <= 0 or not snapshot_id:
+            unmarkable.append({
+                "market_id": market_id, "token_id": token, "shares": shares,
+                "reason": "missing_causal_book_clock",
+            })
+            continue
         liquidation += net_value
         total_exit_fees += exit_fee
         total_slippage_haircut += slippage_haircut
@@ -220,6 +239,9 @@ def assess(
             "exit_fee_source": fees.source,
             "slippage_haircut": slippage_haircut,
             "net_executable_liquidation_value": net_value,
+            "exchange_ts_ms": exchange_ms,
+            "receive_ts_ms": receive_ms,
+            "book_snapshot_id": snapshot_id,
         })
 
     cash = finite(state.get("cash"), 0.0)
