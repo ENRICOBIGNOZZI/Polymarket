@@ -100,6 +100,32 @@ class MakerStatusTests(unittest.TestCase):
             self.assertFalse(report["killed"])
             self.assertEqual(report["source"], "full_visible_bid_depth_net_verified_fee_and_slippage")
 
+    def test_complement_buy_and_merge_marks_inventory_without_direct_bid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state, cfg, selection, output = self.fixture(Path(tmp))
+            timestamp = str(time.time_ns() // 1_000_000)
+            books = [
+                {"asset_id": "yes-1", "timestamp": timestamp,
+                 "bids": [{"price": "0.001", "size": "10"}]},
+                {"asset_id": "no-1", "timestamp": timestamp,
+                 "asks": [{"price": "0.51", "size": "10"}]},
+            ]
+            fee = FeeDetails(rate=0.04, exponent=1.0, taker_only=True, verified=True, source="test")
+            with patch("v7_market_maker_status.request_json", return_value=books), patch(
+                "v7_market_maker_status.resolve_fee_details", return_value=fee
+            ):
+                report = assess(state, cfg, output, selection_path=selection)
+            mark = report["positions"][0]
+            purchase = 5.10
+            gross = 10.0 - purchase
+            expected_fee = 10.0 * 0.04 * 0.51 * (1.0 - 0.51)
+            expected_slippage = purchase * 10.0 / 10_000.0
+            self.assertTrue(report["marking_complete"])
+            self.assertEqual(mark["liquidation_method"], "COMPLEMENT_BUY_AND_MERGE")
+            self.assertEqual(mark["execution_token_id"], "no-1")
+            self.assertEqual(mark["execution_side"], "BUY")
+            self.assertAlmostEqual(mark["net_executable_liquidation_value"], gross - expected_fee - expected_slippage)
+
     def test_held_inventory_survives_reward_selection_rotation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state, cfg, selection, output = self.fixture(Path(tmp))

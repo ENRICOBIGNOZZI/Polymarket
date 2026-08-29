@@ -247,12 +247,27 @@ def finalize(
         if shares <= 1e-9 or abs(shares - durable_shares) > 1e-8:
             raise MakerCutoverError("maker_mark_share_mismatch")
         cost = number("cost", row.get(f"{outcome}_cost"), minimum=0.0)
+        method = str(mark.get("liquidation_method") or "DIRECT_SELL")
+        execution_token = str(mark.get("execution_token_id") or token_id)
+        execution_side = str(mark.get("execution_side") or "SELL").upper()
         vwap = number("full_depth_vwap", mark.get("full_depth_vwap"), minimum=0.0)
         gross = number("gross_value", mark.get("gross_executable_liquidation_value"), minimum=0.0)
         fee = number("exit_fee", mark.get("exit_fee"), minimum=0.0)
         slippage = number("slippage_haircut", mark.get("slippage_haircut"), minimum=0.0)
         net = number("net_value", mark.get("net_executable_liquidation_value"), minimum=0.0)
-        if not 0.0 < vwap < 1.0 or abs(gross - shares * vwap) > 1e-7:
+        if not 0.0 < vwap < 1.0:
+            raise MakerCutoverError("maker_mark_price_invalid")
+        expected_gross = shares * vwap
+        if method == "COMPLEMENT_BUY_AND_MERGE":
+            if execution_side != "BUY" or not execution_token or execution_token == token_id:
+                raise MakerCutoverError("maker_complement_execution_identity_invalid")
+            expected_gross = shares * (1.0 - vwap)
+        elif method == "DIRECT_SELL":
+            if execution_side != "SELL" or execution_token != token_id:
+                raise MakerCutoverError("maker_direct_execution_identity_invalid")
+        else:
+            raise MakerCutoverError("maker_liquidation_method_invalid")
+        if abs(gross - expected_gross) > 1e-7:
             raise MakerCutoverError("maker_mark_gross_mismatch")
         if abs(net - max(0.0, gross - fee - slippage)) > 1e-7:
             raise MakerCutoverError("maker_mark_net_mismatch")
@@ -263,14 +278,14 @@ def finalize(
         if exchange_ms > receive_ms or receive_ms > status_ms or not snapshot_id or not fee_source:
             raise MakerCutoverError("maker_mark_causality_invalid")
         order_id = f"maker-cutover-order-{stable_id(nonce, market_id, token_id)}"
-        fill_id = f"maker-cutover-fill-{stable_id(order_id, snapshot_id)}"
+        fill_id = f"maker-cutover-fill-{stable_id(order_id, execution_token, snapshot_id)}"
         position_id = f"maker-position-{stable_id(model_sha, market_id, token_id)}"
         pnl = net - cost
         common = dict(
             strategy=STRATEGY, model_sha=model_sha, model_version="cutover-liquidation-v1",
             order_id=order_id, fill_id=fill_id, position_id=position_id,
-            market_id=market_id, event_id=condition_id or None, token_id=token_id,
-            side="SELL", recorded_ts_ms=current_ms,
+            market_id=market_id, event_id=condition_id or None, token_id=execution_token,
+            side=execution_side, recorded_ts_ms=current_ms,
         )
         events.append(LedgerEvent(
             event_type="FILL", record_id=stable_id("FILL", nonce, market_id, token_id),
@@ -279,7 +294,9 @@ def finalize(
             fee_source=fee_source, slippage=slippage,
             executable_liquidation_value=net,
             metadata={"purpose": "LIQUIDATION", "cutover": True, "nonce": nonce,
-                      "full_visible_depth": True, "paper_tif": "FAK"}, **common,
+                      "full_visible_depth": True, "paper_tif": "FAK",
+                      "liquidation_method": method, "inventory_token_id": token_id,
+                      "complete_set_merge": method == "COMPLEMENT_BUY_AND_MERGE"}, **common,
         ))
         events.append(LedgerEvent(
             event_type="FINAL", record_id=stable_id("FINAL", nonce, market_id, token_id),
@@ -287,6 +304,8 @@ def finalize(
             capital_cost=0.0, latency_cost=0.0,
             metadata={
                 "purpose": "LIQUIDATION", "cutover": True, "nonce": nonce, "realized": True,
+                "liquidation_method": method, "inventory_token_id": token_id,
+                "complete_set_merge": method == "COMPLEMENT_BUY_AND_MERGE",
                 "cost_vector_complete": True, "unwind_accounted": True,
                 "pnl_decomposition": {"gross_exit_value": gross, "entry_cost": cost,
                                       "exit_fee": fee, "slippage_haircut": slippage},
@@ -296,7 +315,9 @@ def finalize(
         updated_inventory[market_id][f"{outcome}_cost"] = 0.0
         total_net += net
         total_pnl += pnl
-        liquidations.append({"market_id": market_id, "token_id": token_id, "shares": shares,
+        liquidations.append({"market_id": market_id, "token_id": token_id,
+                             "execution_token_id": execution_token, "execution_side": execution_side,
+                             "liquidation_method": method, "shares": shares,
                              "net_cashflow": net, "final_pnl": pnl})
     if by_identity:
         raise MakerCutoverError("maker_inventory_mark_missing")

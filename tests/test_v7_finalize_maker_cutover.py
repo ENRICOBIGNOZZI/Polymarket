@@ -106,6 +106,28 @@ class MakerCutoverFinalizerTest(unittest.TestCase):
             state = json.loads((root / "micro_maker/state.json").read_text())
             self.assertEqual(state["inventory"]["m1"]["yes_shares"], 0.0)
 
+    def test_complement_buy_and_merge_is_audited_as_the_actual_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = 1_788_040_000_000
+            self.fixture(root, now)
+            status_path = root / "micro_maker/status.json"
+            status = json.loads(status_path.read_text())
+            mark = status["positions"][0]
+            mark.update({
+                "liquidation_method": "COMPLEMENT_BUY_AND_MERGE",
+                "execution_token_id": "no", "execution_side": "BUY",
+                "full_depth_vwap": 0.51,
+            })
+            write(status_path, status)
+            receipt = cutover.finalize(root, SHA, NONCE, now_ms=now)
+            self.assertEqual(receipt["liquidations"][0]["liquidation_method"], "COMPLEMENT_BUY_AND_MERGE")
+            events = [json.loads(line) for line in (root / "ledger/execution.jsonl").read_text().splitlines()]
+            self.assertEqual(events[0]["side"], "BUY")
+            self.assertEqual(events[0]["token_id"], "no")
+            self.assertTrue(events[0]["metadata"]["complete_set_merge"])
+            self.assertEqual(events[0]["metadata"]["inventory_token_id"], "yes")
+
     def test_stale_or_incomplete_mark_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

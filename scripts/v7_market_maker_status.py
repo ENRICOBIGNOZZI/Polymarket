@@ -85,6 +85,18 @@ def parse_bids(raw: dict[str, Any]) -> list[tuple[float, float]]:
     return out
 
 
+def parse_asks(raw: dict[str, Any]) -> list[tuple[float, float]]:
+    out = []
+    for row in raw.get("asks", []) if isinstance(raw.get("asks"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        px, qty = finite(row.get("price"), math.nan), max(0.0, finite(row.get("size"), 0.0))
+        if math.isfinite(px) and 0.0 < px < 1.0 and qty > 0.0:
+            out.append((px, qty))
+    out.sort(key=lambda x: x[0])
+    return out
+
+
 def executable_sell_mark(levels: list[tuple[float, float]], shares: float) -> tuple[float, float] | None:
     remaining = max(0.0, float(shares))
     value = 0.0
@@ -101,6 +113,10 @@ def executable_sell_mark(levels: list[tuple[float, float]], shares: float) -> tu
     if remaining > 1e-9 or filled <= 0.0:
         return None
     return value / filled, value
+
+
+def executable_buy_mark(levels: list[tuple[float, float]], shares: float) -> tuple[float, float] | None:
+    return executable_sell_mark(levels, shares)
 
 
 def assess(
@@ -145,7 +161,7 @@ def assess(
 
     inventory = state.get("inventory") if isinstance(state.get("inventory"), dict) else {}
     conditions = selection_conditions(selection_path)
-    positions: list[tuple[str, str, float]] = []
+    positions: list[tuple[str, str, str, float]] = []
     for market_id, row in inventory.items():
         if not isinstance(row, dict):
             continue
@@ -157,12 +173,17 @@ def assess(
             conditions[str(market_id)] = condition_id
         yes = max(0.0, finite(row.get("yes_shares"), 0.0))
         no = max(0.0, finite(row.get("no_shares"), 0.0))
+        yes_token = str(row.get("yes_token") or "")
+        no_token = str(row.get("no_token") or "")
         if yes > 1e-9:
-            positions.append((str(market_id), str(row.get("yes_token") or ""), yes))
+            positions.append((str(market_id), yes_token, no_token, yes))
         if no > 1e-9:
-            positions.append((str(market_id), str(row.get("no_token") or ""), no))
+            positions.append((str(market_id), no_token, yes_token, no))
 
-    tokens = list(dict.fromkeys(token for _, token, _ in positions if token))
+    tokens = list(dict.fromkeys(
+        token for _, held_token, complement_token, _ in positions
+        for token in (held_token, complement_token) if token
+    ))
     books: dict[str, dict[str, Any]] = {}
     book_clocks: dict[str, tuple[int, int, str]] = {}
     clob = str(cfg.get("clob_url") or "https://clob.polymarket.com").rstrip("/")
@@ -191,40 +212,83 @@ def assess(
     total_slippage_haircut = 0.0
     unmarkable: list[dict[str, Any]] = []
     position_marks: list[dict[str, Any]] = []
-    for market_id, token, shares in positions:
+    for market_id, token, complement_token, shares in positions:
         condition_id = conditions.get(market_id, "")
         if not condition_id:
             unmarkable.append({"market_id": market_id, "token_id": token, "shares": shares, "reason": "missing_condition_id"})
             continue
-        raw_book = books.get(token)
-        if not token or raw_book is None:
-            unmarkable.append({"market_id": market_id, "token_id": token, "shares": shares, "reason": "missing_book"})
+        if not token or not complement_token:
+            unmarkable.append({"market_id": market_id, "token_id": token, "shares": shares, "reason": "missing_binary_token_identity"})
             continue
-        walked = executable_sell_mark(parse_bids(raw_book), shares)
-        if walked is None:
-            unmarkable.append({"market_id": market_id, "token_id": token, "shares": shares, "reason": "insufficient_bid_depth"})
-            continue
-        vwap, gross_value = walked
-        fees = resolve_fee_details({}, clob, condition_id, token)
-        if not fees.verified:
+        routes: list[dict[str, Any]] = []
+        direct = executable_sell_mark(parse_bids(books.get(token, {})), shares)
+        if direct is not None:
+            vwap, transaction_value = direct
+            routes.append({
+                "method": "DIRECT_SELL", "execution_token": token, "execution_side": "SELL",
+                "vwap": vwap, "gross_value": transaction_value, "slippage_base": transaction_value,
+            })
+        complement = executable_buy_mark(parse_asks(books.get(complement_token, {})), shares)
+        if complement is not None:
+            vwap, transaction_value = complement
+            routes.append({
+                "method": "COMPLEMENT_BUY_AND_MERGE", "execution_token": complement_token,
+                "execution_side": "BUY", "vwap": vwap,
+                "gross_value": max(0.0, shares - transaction_value),
+                "slippage_base": transaction_value,
+            })
+        if not routes:
             unmarkable.append({
-                "market_id": market_id,
-                "condition_id": condition_id,
-                "token_id": token,
-                "shares": shares,
-                "reason": "unverified_exit_fee_schedule",
+                "market_id": market_id, "token_id": token,
+                "complement_token_id": complement_token, "shares": shares,
+                "reason": "insufficient_direct_and_complement_depth",
             })
             continue
-        exit_fee = fee_per_share(vwap, fees, taker=True) * shares
-        slippage_haircut = gross_value * slippage_bps / 10_000.0
-        net_value = max(0.0, gross_value - exit_fee - slippage_haircut)
-        exchange_ms, receive_ms, snapshot_id = book_clocks.get(token, (0, 0, ""))
-        if exchange_ms <= 0 or receive_ms <= 0 or not snapshot_id:
+
+        executable_routes: list[dict[str, Any]] = []
+        route_failures: list[str] = []
+        for route in routes:
+            if route["gross_value"] <= 0.0:
+                route_failures.append("nonpositive_liquidation_value")
+                continue
+            execution_token = route["execution_token"]
+            fees = resolve_fee_details({}, clob, condition_id, execution_token)
+            if not fees.verified:
+                route_failures.append("unverified_exit_fee_schedule")
+                continue
+            exchange_ms, receive_ms, snapshot_id = book_clocks.get(execution_token, (0, 0, ""))
+            if exchange_ms <= 0 or receive_ms <= 0 or not snapshot_id:
+                route_failures.append("missing_causal_book_clock")
+                continue
+            route["exit_fee"] = fee_per_share(route["vwap"], fees, taker=True) * shares
+            route["exit_fee_source"] = fees.source
+            route["slippage_haircut"] = route["slippage_base"] * slippage_bps / 10_000.0
+            route["net_value"] = max(
+                0.0, route["gross_value"] - route["exit_fee"] - route["slippage_haircut"]
+            )
+            route["exchange_ms"] = exchange_ms
+            route["receive_ms"] = receive_ms
+            route["snapshot_id"] = snapshot_id
+            executable_routes.append(route)
+        if not executable_routes:
             unmarkable.append({
-                "market_id": market_id, "token_id": token, "shares": shares,
-                "reason": "missing_causal_book_clock",
+                "market_id": market_id, "condition_id": condition_id,
+                "token_id": token, "shares": shares,
+                "reason": route_failures[0] if route_failures else "no_verified_causal_liquidation_route",
             })
             continue
+        best = max(executable_routes, key=lambda route: route["net_value"])
+        method = best["method"]
+        execution_token = best["execution_token"]
+        execution_side = best["execution_side"]
+        vwap = best["vwap"]
+        gross_value = best["gross_value"]
+        exit_fee = best["exit_fee"]
+        slippage_haircut = best["slippage_haircut"]
+        net_value = best["net_value"]
+        exchange_ms = best["exchange_ms"]
+        receive_ms = best["receive_ms"]
+        snapshot_id = best["snapshot_id"]
         liquidation += net_value
         total_exit_fees += exit_fee
         total_slippage_haircut += slippage_haircut
@@ -232,11 +296,14 @@ def assess(
             "market_id": market_id,
             "condition_id": condition_id,
             "token_id": token,
+            "execution_token_id": execution_token,
+            "execution_side": execution_side,
+            "liquidation_method": method,
             "shares": shares,
             "full_depth_vwap": vwap,
             "gross_executable_liquidation_value": gross_value,
             "exit_fee": exit_fee,
-            "exit_fee_source": fees.source,
+            "exit_fee_source": best["exit_fee_source"],
             "slippage_haircut": slippage_haircut,
             "net_executable_liquidation_value": net_value,
             "exchange_ts_ms": exchange_ms,
