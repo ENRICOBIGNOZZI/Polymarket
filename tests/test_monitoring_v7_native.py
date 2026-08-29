@@ -180,6 +180,9 @@ class V7NativeMonitoringTest(unittest.TestCase):
             "authenticated_execution": False,
             "real_order_submission": False,
             "state": "OPERATIONAL_REWARDED",
+            "runtime_selection_pinned": True,
+            "candidate_rotation_pending": True,
+            "candidate_selected_count": 40,
             "ready": True,
             "degraded": False,
             "source": "public_clob_rewards",
@@ -251,6 +254,9 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertIn('polymarket_v7_component_ready{component="professional_maker"} 1', metrics)
             self.assertIn("polymarket_v7_maker_selector_ready 1", metrics)
             self.assertIn("polymarket_v7_maker_selector_fallback_active 0", metrics)
+            self.assertIn("polymarket_v7_maker_runtime_selection_pinned 1", metrics)
+            self.assertIn("polymarket_v7_maker_candidate_rotation_pending 1", metrics)
+            self.assertIn("polymarket_v7_maker_candidate_selected_markets 40", metrics)
             self.assertIn("polymarket_v7_live_model_target_count 12", metrics)
             self.assertIn("polymarket_v7_live_model_operational_count 8", metrics)
             self.assertIn("polymarket_v7_live_model_blocked_count 4", metrics)

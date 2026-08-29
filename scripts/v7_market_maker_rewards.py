@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
+import hashlib
 import json
 import math
 import os
@@ -46,6 +47,22 @@ def atomic_json(path: Path, value: Any) -> None:
     tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
     tmp.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(tmp, path)
+
+
+def selection_membership_sha256(snapshot: dict[str, Any]) -> str:
+    markets = snapshot.get("markets") if isinstance(snapshot.get("markets"), list) else []
+    membership = sorted(
+        (
+            str(row.get("condition_id") or ""),
+            str(row.get("market_id") or ""),
+            str(row.get("yes_token") or ""),
+            str(row.get("no_token") or ""),
+        )
+        for row in markets
+        if isinstance(row, dict)
+    )
+    payload = json.dumps(membership, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -626,22 +643,84 @@ def build_snapshot(
         )
 
 
-def selector_status(snapshot: dict[str, Any]) -> dict[str, Any]:
+def _validated_pinned_selection(path: Path, *, model_sha: str) -> dict[str, Any]:
+    snapshot = json.loads(path.read_text(encoding="utf-8"))
+    markets = snapshot.get("markets") if isinstance(snapshot.get("markets"), list) else []
+    if (
+        snapshot.get("schema") != "polymarket_v7_maker_reward_selection_v1"
+        or snapshot.get("paper_only") is not True
+        or snapshot.get("authenticated_execution") is not False
+        or snapshot.get("real_order_submission") is not False
+        or snapshot.get("model_sha") != model_sha
+        or snapshot.get("source") not in {"public_clob_rewards", "adaptive_universe_fallback"}
+        or not markets
+        or int(snapshot.get("selected_count") or 0) != len(markets)
+        or len(markets) > int(snapshot.get("resource_capacity_markets") or 0)
+        or any(
+            not all(str(row.get(key) or "") for key in (
+                "condition_id", "market_id", "yes_token", "no_token",
+            ))
+            or str(row.get("yes_token")) == str(row.get("no_token"))
+            for row in markets
+            if isinstance(row, dict)
+        )
+        or any(not isinstance(row, dict) for row in markets)
+    ):
+        raise ValueError("maker_pinned_runtime_selection_invalid")
+    return snapshot
+
+
+def publish_runtime_selection(
+    candidate: dict[str, Any],
+    output_path: Path,
+    *,
+    pin_runtime_selection: bool,
+    candidate_output_path: Path | None = None,
+) -> tuple[dict[str, Any], bool]:
+    if candidate_output_path is not None:
+        atomic_json(candidate_output_path, candidate)
+    pinned = pin_runtime_selection and output_path.is_file()
+    if pinned:
+        runtime = _validated_pinned_selection(
+            output_path, model_sha=str(candidate.get("model_sha") or "")
+        )
+    else:
+        atomic_json(output_path, candidate)
+        runtime = candidate
+    return runtime, pinned
+
+
+def selector_status(
+    snapshot: dict[str, Any],
+    *,
+    candidate_snapshot: dict[str, Any] | None = None,
+    runtime_selection_pinned: bool = False,
+) -> dict[str, Any]:
+    candidate = snapshot if candidate_snapshot is None else candidate_snapshot
+    runtime_membership = selection_membership_sha256(snapshot)
+    candidate_membership = selection_membership_sha256(candidate)
     return {
         "schema": SELECTOR_STATUS_SCHEMA,
-        "timestamp_ms": snapshot.get("timestamp_ms"),
+        "timestamp_ms": candidate.get("timestamp_ms"),
         "paper_only": True,
         "authenticated_execution": False,
         "real_order_submission": False,
         "model_sha": snapshot.get("model_sha"),
-        "state": "OPERATIONAL_FALLBACK" if snapshot.get("degraded") else "OPERATIONAL_REWARDED",
+        "state": "OPERATIONAL_FALLBACK" if candidate.get("degraded") else "OPERATIONAL_REWARDED",
         "ready": True,
-        "degraded": snapshot.get("degraded") is True,
-        "source": snapshot.get("source"),
+        "degraded": candidate.get("degraded") is True,
+        "source": candidate.get("source"),
         "selected_count": snapshot.get("selected_count", 0),
-        "reward_pool_count": snapshot.get("reward_pool_count", 0),
-        "reward_market_count": snapshot.get("reward_market_count", 0),
-        "primary_error": snapshot.get("primary_error", ""),
+        "reward_pool_count": candidate.get("reward_pool_count", 0),
+        "reward_market_count": candidate.get("reward_market_count", 0),
+        "primary_error": candidate.get("primary_error", ""),
+        "runtime_selection_pinned": runtime_selection_pinned,
+        "runtime_membership_sha256": runtime_membership,
+        "candidate_membership_sha256": candidate_membership,
+        "candidate_rotation_pending": runtime_membership != candidate_membership,
+        "candidate_source": candidate.get("source"),
+        "candidate_degraded": candidate.get("degraded") is True,
+        "candidate_selected_count": candidate.get("selected_count", 0),
     }
 
 
@@ -649,6 +728,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path("config/v7_professional_market_maker.json"))
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--candidate-output", type=Path)
+    parser.add_argument("--pin-runtime-selection", action="store_true")
     parser.add_argument("--status", type=Path)
     parser.add_argument("--fallback-universe", type=Path)
     parser.add_argument("--allocation", type=Path)
@@ -664,10 +745,19 @@ def main() -> int:
         deadline_seconds=args.deadline_seconds,
         request_timeout_seconds=args.request_timeout_seconds,
     )
-    atomic_json(args.output, snapshot)
+    runtime_snapshot, pinned = publish_runtime_selection(
+        snapshot,
+        args.output,
+        pin_runtime_selection=args.pin_runtime_selection,
+        candidate_output_path=args.candidate_output,
+    )
     if args.status is not None:
-        atomic_json(args.status, selector_status(snapshot))
-    print(json.dumps(snapshot, sort_keys=True))
+        atomic_json(args.status, selector_status(
+            runtime_snapshot,
+            candidate_snapshot=snapshot,
+            runtime_selection_pinned=pinned,
+        ))
+    print(json.dumps(runtime_snapshot, sort_keys=True))
     return 0
 
 

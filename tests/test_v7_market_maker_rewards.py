@@ -271,6 +271,60 @@ class MakerRewardSelectorTests(unittest.TestCase):
             [],
         )
 
+    def test_live_publication_pins_runtime_membership_and_tracks_candidate(self) -> None:
+        from tempfile import TemporaryDirectory
+        base = {
+            "schema": "polymarket_v7_maker_reward_selection_v1",
+            "timestamp_ms": 1000,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "model_sha": SHA,
+            "source": "public_clob_rewards",
+            "selection_mode": "REWARDED",
+            "degraded": False,
+            "reward_pool_count": 1,
+            "reward_market_count": 1,
+            "selected_count": 1,
+            "resource_capacity_markets": 40,
+            "markets": [{
+                "condition_id": "c1", "market_id": "m1",
+                "yes_token": "y1", "no_token": "n1",
+            }],
+        }
+        rotated = json.loads(json.dumps(base))
+        rotated["timestamp_ms"] = 2000
+        rotated["markets"][0].update({
+            "condition_id": "c2", "market_id": "m2",
+            "yes_token": "y2", "no_token": "n2",
+        })
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "runtime.json"
+            candidate_output = Path(directory) / "candidate.json"
+            first, first_pinned = rewards.publish_runtime_selection(
+                base, output, pin_runtime_selection=True,
+                candidate_output_path=candidate_output,
+            )
+            second, second_pinned = rewards.publish_runtime_selection(
+                rotated, output, pin_runtime_selection=True,
+                candidate_output_path=candidate_output,
+            )
+            status = rewards.selector_status(
+                second, candidate_snapshot=rotated,
+                runtime_selection_pinned=second_pinned,
+            )
+            published = json.loads(output.read_text(encoding="utf-8"))
+            candidate = json.loads(candidate_output.read_text(encoding="utf-8"))
+        self.assertFalse(first_pinned)
+        self.assertTrue(second_pinned)
+        self.assertEqual(first["markets"][0]["market_id"], "m1")
+        self.assertEqual(second["markets"][0]["market_id"], "m1")
+        self.assertEqual(published["markets"][0]["market_id"], "m1")
+        self.assertEqual(candidate["markets"][0]["market_id"], "m2")
+        self.assertTrue(status["runtime_selection_pinned"])
+        self.assertTrue(status["candidate_rotation_pending"])
+        self.assertEqual(status["timestamp_ms"], 2000)
+
 
 if __name__ == "__main__":
     unittest.main()

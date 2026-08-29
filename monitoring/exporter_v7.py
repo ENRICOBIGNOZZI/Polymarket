@@ -888,6 +888,9 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_maker_selector_ready", 1 if selector_ready else 0),
         _metric("polymarket_v7_maker_selector_fallback_active", 1 if selector_ready and selector.get("degraded") is True else 0),
         _metric("polymarket_v7_maker_selector_selected_markets", selector.get("selected_count")),
+        _metric("polymarket_v7_maker_runtime_selection_pinned", 1 if selector.get("runtime_selection_pinned") is True else 0),
+        _metric("polymarket_v7_maker_candidate_rotation_pending", 1 if selector.get("candidate_rotation_pending") is True else 0),
+        _metric("polymarket_v7_maker_candidate_selected_markets", selector.get("candidate_selected_count")),
         _metric("polymarket_v7_maker_selector_info", 1 if selector_ready else 0, {
             "state": selector.get("state", "UNKNOWN"),
             "source": selector.get("source", "UNKNOWN"),

@@ -446,6 +446,8 @@ pids+=("$!")
     python3 scripts/v7_market_maker_rewards.py \
       --config "$MAKER_POLICY" \
       --output "$RUN_ROOT/micro_maker/reward_selection.json" \
+      --candidate-output "$RUN_ROOT/micro_maker/reward_selection_candidate.json" \
+      --pin-runtime-selection \
       --status "$RUN_ROOT/micro_maker/selector_status.json" \
       --fallback-universe "$RUN_ROOT/universe/current.json" \
       --allocation "$ALLOC/micro_maker.json" \
