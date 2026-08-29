@@ -89,6 +89,26 @@ def main() -> None:
         assert status["execution_authority"] == "PAPER_EXECUTION_OWNER"
         assert status["order_submission_enabled"] is True
         assert status["fills"] == 1
+        assert status["book_requests"] == 2
+        assert status["book_request_failures"] == 0
+        assert status["book_parse_failures"] == 0
+        assert status["last_decision"]["outcome"] == "FILLED"
+
+        failing = router.PaperRouter(
+            run_root, "b" * 40, ROOT / "config" / "v7_external_fair.json",
+            "https://clob.invalid", "https://gamma.invalid",
+        )
+        failed_status = snapshot()
+        failed_status["code_sha"] = "b" * 40
+        failed_status["market"].update({"market_id": "m2", "event_id": "e2"})
+        (external / "status.json").write_text(json.dumps(failed_status))
+        with mock.patch.object(router, "request_json", side_effect=TimeoutError("bounded")):
+            failing.step()
+        status = json.loads((external / "paper_router_status.json").read_text())
+        assert status["book_requests"] == 1
+        assert status["book_request_failures"] == 1
+        assert status["last_decision"]["outcome"] == "CLOB_BOOK_REQUEST_TIMEOUTERROR"
+        assert status["rejection_reasons"]["CLOB_BOOK_REQUEST_TIMEOUTERROR"] == 1
 
 
 if __name__ == "__main__":

@@ -187,10 +187,19 @@ class PaperRouter:
             "candidates": 0, "nothing": 0, "realized_pnl": 0.0,
             "peak_equity": starting_capital, "killed": False,
             "attempted_at": {}, "traded_markets": [], "positions": {},
+            "book_requests": 0, "book_request_failures": 0,
+            "book_parse_failures": 0, "rejection_reasons": {},
+            "last_decision": {},
         }
         prior = load(self.state_path)
         if prior.get("model_sha") == model_sha:
             self.state.update(prior)
+        self.last_book_error = ""
+        self.last_attempt_reason = ""
+
+    def reject(self, reason: str) -> None:
+        reasons = self.state.setdefault("rejection_reasons", {})
+        reasons[reason] = int(reasons.get(reason) or 0) + 1
 
     def emit(self, event: LedgerEvent) -> None:
         spool_event(self.root, event)
@@ -210,17 +219,24 @@ class PaperRouter:
         tokens = [token for token in (
             str(market.get("yes_token") or ""), str(market.get("no_token") or "")
         ) if token]
+        self.state["book_requests"] = int(self.state.get("book_requests") or 0) + 1
+        self.last_book_error = ""
         try:
             rows = request_json(
                 f"{self.clob_url}/books", [{"token_id": token} for token in tokens], timeout=4
             )
-        except Exception:
+        except Exception as exc:
+            self.state["book_request_failures"] = int(self.state.get("book_request_failures") or 0) + 1
+            self.last_book_error = f"CLOB_BOOK_REQUEST_{type(exc).__name__.upper()}"
             rows = []
         received = now_ms()
         for raw in rows if isinstance(rows, list) else []:
             book = parse_book(raw, received)
             if book is not None and book.token_id in tokens:
                 output[book.token_id] = book
+        if tokens and len(output) != len(tokens) and not self.last_book_error:
+            self.state["book_parse_failures"] = int(self.state.get("book_parse_failures") or 0) + 1
+            self.last_book_error = "CLOB_BOOK_SNAPSHOT_INCOMPLETE"
         return output
 
     def order_size(self, row: dict[str, Any]) -> float:
@@ -268,19 +284,24 @@ class PaperRouter:
         )
 
     def attempt(self, status: dict[str, Any], row: dict[str, Any]) -> bool:
+        self.last_attempt_reason = ""
         if self.state.get("killed") or (self.root / "control" / "KILL").exists():
+            self.last_attempt_reason = "GLOBAL_OR_SLEEVE_KILLED"
             return False
         market = status.get("market") if isinstance(status.get("market"), dict) else {}
         market_id = str(market.get("market_id") or "")
         if not market_id or market_id in set(self.state.get("traded_markets") or []):
+            self.last_attempt_reason = "MARKET_ALREADY_TRADED_OR_MISSING"
             return False
         key = f"{market_id}:{row['outcome']}"
         current_ms = now_ms()
         if current_ms - int((self.state.get("attempted_at") or {}).get(key) or 0) < 5000:
+            self.last_attempt_reason = "ATTEMPT_COOLDOWN"
             return False
         self.state.setdefault("attempted_at", {})[key] = current_ms
         size = self.order_size(row)
         if size <= 0.0:
+            self.last_attempt_reason = "BELOW_MINIMUM_EXECUTABLE_SIZE"
             return False
         order_id = f"external-paper-{stable_id(self.sha, market_id, row['outcome'], current_ms)}"
         common = self.common(status, row, order_id, size)
@@ -299,6 +320,7 @@ class PaperRouter:
                                   model_version=MODEL_VERSION, order_id=order_id, order_state="CANCELLED",
                                   cancel_reason="ARRIVAL_REVALIDATION_FAILED", market_id=market_id,
                                   event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY"))
+            self.last_attempt_reason = "ARRIVAL_REVALIDATION_FAILED"
             return False
         arrival_book: Book = arrival["book"]
         ask, visible = arrival_book.asks[0]
@@ -307,6 +329,7 @@ class PaperRouter:
                                   model_version=MODEL_VERSION, order_id=order_id, order_state="CANCELLED",
                                   cancel_reason="FAK_VISIBLE_DEPTH_OR_LIMIT", market_id=market_id,
                                   event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY"))
+            self.last_attempt_reason = "FAK_VISIBLE_DEPTH_OR_LIMIT"
             return False
         schedule = (arrival_status.get("market") or {}).get("fee_schedule") or {}
         fee_share = fee_per_share(ask, schedule)
@@ -318,6 +341,7 @@ class PaperRouter:
                                   model_version=MODEL_VERSION, order_id=order_id, order_state="REJECTED",
                                   cancel_reason="ARRIVAL_EV_OR_CAPITAL", market_id=market_id,
                                   event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY"))
+            self.last_attempt_reason = "ARRIVAL_EV_OR_CAPITAL"
             return False
         fill_id = f"external-fill-{stable_id(order_id, arrival_book.exchange_ts_ms, arrival_book.receive_ts_ms)}"
         position_id = f"external-position-{market_id}-{row['outcome']}"
@@ -346,6 +370,7 @@ class PaperRouter:
             "executable_value": executable_value, "opened_ms": arrival_book.receive_ts_ms,
             "fee_schedule": schedule, "markouts": [], "settled": False,
         }
+        self.last_attempt_reason = "FILLED"
         return True
 
     def observe_positions(self) -> None:
@@ -428,6 +453,11 @@ class PaperRouter:
             "cash": float(self.state.get("cash") or 0.0), "equity": equity,
             "peak_equity": peak, "drawdown": drawdown, "killed": killed,
             "order_submission_enabled": not killed and not blocker, "blocker": blocker,
+            "book_requests": int(self.state.get("book_requests") or 0),
+            "book_request_failures": int(self.state.get("book_request_failures") or 0),
+            "book_parse_failures": int(self.state.get("book_parse_failures") or 0),
+            "rejection_reasons": self.state.get("rejection_reasons") or {},
+            "last_decision": self.state.get("last_decision") or {},
             "actions": {"MAKE": 0, "TAKE": int(self.state.get("orders") or 0), "CANCEL": 0,
                         "WITHDRAW": 0, "NOTHING": int(self.state.get("nothing") or 0)},
         })
@@ -435,6 +465,7 @@ class PaperRouter:
     def step(self) -> None:
         status = load(self.source)
         blocker = ""
+        books: dict[str, Book] = {}
         if status.get("code_sha") != self.sha:
             blocker = "EXTERNAL_FAIR_SHA_MISMATCH"
             rows: list[dict[str, Any]] = []
@@ -448,6 +479,27 @@ class PaperRouter:
                 break
         if not filled:
             self.state["nothing"] = int(self.state.get("nothing") or 0) + 1
+            if blocker:
+                reason = blocker
+            elif self.last_book_error:
+                reason = self.last_book_error
+            elif len(books) < 2:
+                reason = "CLOB_BOOKS_UNAVAILABLE"
+            elif rows and self.last_attempt_reason:
+                reason = self.last_attempt_reason
+            elif rows:
+                reason = "ROBUST_CANDIDATE_NOT_FILLED"
+            else:
+                reason = "NO_ROBUST_EV"
+            self.reject(reason)
+        else:
+            reason = "FILLED"
+        self.state["last_decision"] = {
+            "timestamp_ms": now_ms(),
+            "market_id": str((status.get("market") or {}).get("market_id") or ""),
+            "books": len(books), "robust_candidates": len(rows), "outcome": reason,
+            "best_robust_ev_per_share": max((float(row["robust_ev"]) for row in rows), default=None),
+        }
         self.observe_positions()
         self.publish(len(rows), blocker)
 

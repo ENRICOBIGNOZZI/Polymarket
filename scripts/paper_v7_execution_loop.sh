@@ -173,6 +173,50 @@ rm -f "$KILL"
 python3 scripts/v7_capital_allocator.py --config "$CONFIG" --output-dir "$ALLOC" >/dev/null
 pids=()
 
+if [[ ! -f scripts/v7_public_https_proxy.py ]]; then
+  echo "missing V7 public HTTPS proxy" >&2
+  exit 77
+fi
+
+# Start the public-DNS HTTPS tunnel before any child that performs public REST
+# traffic.  Environment exports are inherited only by subsequently spawned
+# children; starting the External Fair PAPER router before this block leaves
+# its CLOB `/books` calls on the filtered operating-system resolver and turns
+# every economically actionable fair into a silent `NOTHING` decision.
+python3 scripts/v7_public_https_proxy.py --host 127.0.0.1 --port "$PUBLIC_PROXY_PORT" \
+  >> "$RUN_ROOT/public_https_proxy.log" 2>&1 &
+pids+=("$!")
+proxy_ready=0
+for _ in $(seq 1 50); do
+  if python3 - "$PUBLIC_PROXY_PORT" <<'PY' >/dev/null 2>&1
+import socket,sys
+with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=.2):
+    pass
+PY
+  then
+    proxy_ready=1
+    break
+  fi
+  sleep 0.1
+done
+if [[ "$proxy_ready" != 1 ]]; then
+  echo "V7 public HTTPS proxy did not become ready" >&2
+  exit 77
+fi
+
+export PM_V7_HTTPS_PROXY="$PUBLIC_PROXY"
+export HTTPS_PROXY="$PUBLIC_PROXY"
+export https_proxy="$PUBLIC_PROXY"
+export HTTP_PROXY="$PUBLIC_PROXY"
+export http_proxy="$PUBLIC_PROXY"
+export NO_PROXY="127.0.0.1,localhost"
+export no_proxy="$NO_PROXY"
+if [[ -z "${PM_V7_WS_RESOLVE_IPS:-}" ]]; then
+  PM_V7_WS_RESOLVE_IPS="$(python3 scripts/v7_public_https_proxy.py --resolve "$WS_PUBLIC_HOST")"
+fi
+[[ -n "$PM_V7_WS_RESOLVE_IPS" ]] || { echo "public WS DNS resolution returned no addresses" >&2; exit 77; }
+export PM_V7_WS_RESOLVE_IPS
+
 # Official settlement-source data is optional at process level and mandatory at
 # contract level. Missing credentials/binding isolate only settlement-aware
 # contracts; unrelated maker/arb sleeves continue. When configured, the adapter
@@ -320,50 +364,6 @@ if [[ ! -x "$FAST_STRUCTURAL_RUNTIME" ]]; then
   echo "missing V7 Fast Structural PAPER runtime executable: $FAST_STRUCTURAL_RUNTIME" >&2
   exit 79
 fi
-if [[ ! -f scripts/v7_public_https_proxy.py ]]; then
-  echo "missing V7 public HTTPS proxy" >&2
-  exit 77
-fi
-
-# The PAPER server may sit behind an ISP resolver that filters Polymarket public
-# domains. Keep the operating-system DNS untouched: a loopback CONNECT tunnel
-# resolves through public DNS and relays end-to-end TLS without seeing payloads
-# or credentials. The latency-sensitive WebSocket is not proxied; it receives
-# only publicly resolved IPs below while retaining the original TLS hostname.
-python3 scripts/v7_public_https_proxy.py --host 127.0.0.1 --port "$PUBLIC_PROXY_PORT" \
-  >> "$RUN_ROOT/public_https_proxy.log" 2>&1 &
-pids+=("$!")
-proxy_ready=0
-for _ in $(seq 1 50); do
-  if python3 - "$PUBLIC_PROXY_PORT" <<'PY' >/dev/null 2>&1
-import socket,sys
-with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=.2):
-    pass
-PY
-  then
-    proxy_ready=1
-    break
-  fi
-  sleep 0.1
-done
-if [[ "$proxy_ready" != 1 ]]; then
-  echo "V7 public HTTPS proxy did not become ready" >&2
-  exit 77
-fi
-
-export PM_V7_HTTPS_PROXY="$PUBLIC_PROXY"
-export HTTPS_PROXY="$PUBLIC_PROXY"
-export https_proxy="$PUBLIC_PROXY"
-export HTTP_PROXY="$PUBLIC_PROXY"
-export http_proxy="$PUBLIC_PROXY"
-export NO_PROXY="127.0.0.1,localhost"
-export no_proxy="$NO_PROXY"
-if [[ -z "${PM_V7_WS_RESOLVE_IPS:-}" ]]; then
-  PM_V7_WS_RESOLVE_IPS="$(python3 scripts/v7_public_https_proxy.py --resolve "$WS_PUBLIC_HOST")"
-fi
-[[ -n "$PM_V7_WS_RESOLVE_IPS" ]] || { echo "public WS DNS resolution returned no addresses" >&2; exit 77; }
-export PM_V7_WS_RESOLVE_IPS
-
 # One canonical exhaustive metadata plane. The venue terminates pagination;
 # HOT/WARM capacities are calculated from declared CPU/memory/WS budgets and
 # COLD preserves the remainder. No strategy owns a parallel universe cache.

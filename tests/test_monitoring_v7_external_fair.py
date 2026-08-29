@@ -72,6 +72,12 @@ def status(authority: str = "SHADOW_ZERO_AUTHORITY") -> dict:
             "valid_until_monotonic_ns": 200,
         },
         "actions": {"MAKE": 1, "TAKE": 2, "CANCEL": 3, "WITHDRAW": 4, "NOTHING": 5},
+        "paper_router": {
+            "active_candidates": 1, "orders_submitted": 2, "fills": 1,
+            "book_requests": 9, "book_request_failures": 2, "book_parse_failures": 1,
+            "rejection_reasons": {"NO_ROBUST_EV": 4},
+            "last_decision": {"outcome": "NO_ROBUST_EV"},
+        },
         "purposes": {"ALPHA": 3, "INVENTORY_REDUCTION": 1, "RISK": 5, "LIQUIDATION": 0},
         "cancel": {"fair_shock": 3, "latency_p50_ms": 1.0, "latency_p99_ms": 5.0},
         "economics": {"maker_robust_ev": 0.01, "taker_robust_ev": 0.02, "realized_pnl": 0.1},
@@ -117,6 +123,8 @@ def main() -> None:
         assert 'polymarket_external_fair_actions_total{action="TAKE"} 2' in text
         assert 'polymarket_external_fair_oracle_continuity_info{continuity="LIVE_CONTINUOUS"} 1' in text
         assert 'polymarket_external_fair_venue_healthy{venue="BINANCE_SPOT"} 1' in text
+        assert "polymarket_external_fair_router_book_requests_total 9" in text
+        assert 'polymarket_external_fair_router_rejections_total{reason="NO_ROBUST_EV"} 4' in text
         assert "polymarket_external_fair_blockers 1" in text
 
         # An active required market with invalid oracle must become a hard reason.

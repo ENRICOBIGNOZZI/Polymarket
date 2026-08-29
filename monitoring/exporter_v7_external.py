@@ -106,6 +106,21 @@ def _append_external_fair_metrics(lines: list[str], report: dict[str, Any]) -> N
     actions = report.get("actions") if isinstance(report.get("actions"), dict) else {}
     for action in ("MAKE", "TAKE", "CANCEL", "WITHDRAW", "NOTHING"):
         lines.append(metric("polymarket_external_fair_actions_total", actions.get(action), {"action": action}))
+    router = report.get("paper_router") if isinstance(report.get("paper_router"), dict) else {}
+    lines.extend([
+        metric("polymarket_external_fair_router_active_candidates", router.get("active_candidates")),
+        metric("polymarket_external_fair_router_orders_submitted_total", router.get("orders_submitted")),
+        metric("polymarket_external_fair_router_fills_total", router.get("fills")),
+        metric("polymarket_external_fair_router_book_requests_total", router.get("book_requests")),
+        metric("polymarket_external_fair_router_book_request_failures_total", router.get("book_request_failures")),
+        metric("polymarket_external_fair_router_book_parse_failures_total", router.get("book_parse_failures")),
+    ])
+    for reason, count in sorted((router.get("rejection_reasons") or {}).items()):
+        lines.append(metric("polymarket_external_fair_router_rejections_total", count, {"reason": reason}))
+    last_decision = router.get("last_decision") if isinstance(router.get("last_decision"), dict) else {}
+    lines.append(metric("polymarket_external_fair_router_last_decision_info", 1, {
+        "outcome": last_decision.get("outcome", "UNKNOWN"),
+    }))
     purposes = report.get("purposes") if isinstance(report.get("purposes"), dict) else {}
     for purpose in ("ALPHA", "INVENTORY_REDUCTION", "RISK", "LIQUIDATION"):
         lines.append(metric("polymarket_external_fair_action_purpose_total", purposes.get(purpose), {"purpose": purpose}))

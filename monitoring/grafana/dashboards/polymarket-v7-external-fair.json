@@ -209,6 +209,24 @@
       ],
       "title": "Causal Evidence Tape",
       "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 33},
+      "id": 18,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "polymarket_external_fair_router_book_requests_total", "legendFormat": "book requests", "refId": "A"},
+        {"expr": "polymarket_external_fair_router_book_request_failures_total", "legendFormat": "book request failures", "refId": "B"},
+        {"expr": "polymarket_external_fair_router_book_parse_failures_total", "legendFormat": "book parse failures", "refId": "C"},
+        {"expr": "polymarket_external_fair_router_active_candidates", "legendFormat": "active robust candidates", "refId": "D"},
+        {"expr": "polymarket_external_fair_router_orders_submitted_total", "legendFormat": "orders", "refId": "E"},
+        {"expr": "polymarket_external_fair_router_fills_total", "legendFormat": "fills", "refId": "F"},
+        {"expr": "polymarket_external_fair_router_rejections_total", "legendFormat": "reject {{reason}}", "refId": "G"}
+      ],
+      "title": "CLOB Router Decisions / Rejections",
+      "type": "timeseries"
     }
   ],
   "refresh": "10s",

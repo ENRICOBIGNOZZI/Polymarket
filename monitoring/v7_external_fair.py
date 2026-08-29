@@ -122,6 +122,7 @@ def summarize_external_fair(
     latency = _dict(status.get("latency"))
     model = _dict(status.get("model"))
     tape = _dict(status.get("tape"))
+    paper_router = _dict(status.get("paper_router"))
     blockers = sorted({str(value) for value in _list(status.get("blockers")) if str(value)})
 
     continuity = str(oracle.get("continuity") or "CONTINUITY_UNKNOWN").upper()
@@ -253,6 +254,19 @@ def summarize_external_fair(
             "valid_until_monotonic_ns": valid_until_ns,
         },
         "actions": actions,
+        "paper_router": {
+            "active_candidates": max(0, _integer(paper_router.get("active_candidates"), 0)),
+            "orders_submitted": max(0, _integer(paper_router.get("orders_submitted"), 0)),
+            "fills": max(0, _integer(paper_router.get("fills"), 0)),
+            "book_requests": max(0, _integer(paper_router.get("book_requests"), 0)),
+            "book_request_failures": max(0, _integer(paper_router.get("book_request_failures"), 0)),
+            "book_parse_failures": max(0, _integer(paper_router.get("book_parse_failures"), 0)),
+            "rejection_reasons": {
+                str(reason): max(0, _integer(count, 0))
+                for reason, count in _dict(paper_router.get("rejection_reasons")).items()
+            },
+            "last_decision": _dict(paper_router.get("last_decision")),
+        },
         "purposes": purposes,
         "cancel": {
             "fair_shock": max(0, _integer(cancel.get("fair_shock"), 0)),
