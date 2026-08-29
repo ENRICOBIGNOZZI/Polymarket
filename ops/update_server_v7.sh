@@ -316,6 +316,7 @@ prevalidate_candidate(){
       scripts/v7_ledger_spool.py \
       scripts/v7_canonical_economics.py \
       scripts/v7_portfolio_guard.py \
+      scripts/v7_prepare_cutover_run_root.py \
       scripts/v7_research_shadow_supervisor.py \
       scripts/v7_semantic_mapping.py \
       scripts/v7_sports_collector.py \
@@ -542,6 +543,12 @@ prevalidate_candidate
 OLD_SHA="$(git rev-parse HEAD)"
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || fail "tracked server checkout is dirty"
 stop_production_runtime
+stop_owned_monitoring
+python3 scripts/v7_prepare_cutover_run_root.py \
+  --run-root "$(production_run_root)" \
+  --archive-root "$APP_DIR/runs/paper_v7_archives" \
+  --repository-root "$APP_DIR" \
+  --target-sha "$EXPECTED_SHA" | tee -a deploy-evidence.txt
 if [[ "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
   git checkout --detach "$EXPECTED_SHA"
   git reset --hard "$EXPECTED_SHA"
