@@ -54,6 +54,25 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["window_seconds"], 60)
 
+    def test_boundary_reference_is_causal_bounded_and_prefers_latest(self) -> None:
+        history = {
+            7_000: {"timestamp_ms": 7_000, "price": 70.0},
+            9_000: {"timestamp_ms": 9_000, "price": 90.0},
+            11_000: {"timestamp_ms": 11_000, "price": 110.0},
+        }
+        self.assertEqual(module.boundary_reference(history, 10_000)["timestamp_ms"], 9_000)
+        self.assertIsNone(module.boundary_reference({7_000: history[7_000]}, 10_000))
+        self.assertIsNone(module.boundary_reference({11_000: history[11_000]}, 10_000))
+        exact = {10_000: {"timestamp_ms": 10_000, "price": 100.0}, **history}
+        self.assertEqual(module.boundary_reference(exact, 10_000)["timestamp_ms"], 10_000)
+
+    def test_full_accuracy_oracle_value_is_preserved_as_decimal(self) -> None:
+        rows = list(module.observations({
+            "topic": module.ORACLE_TOPIC, "symbol": "btc/usd", "timestamp": 10_000,
+            "value": 65000.5, "full_accuracy_value": "65000500000000000000000", "window_s": 60,
+        }))
+        self.assertEqual(rows[0]["price_decimal"], "65000.5")
+
     def test_runtime_contract_uses_official_twap_topic_and_application_heartbeat(self) -> None:
         source = (ROOT / "scripts" / "v7_rtds_external_fair_monitor.py").read_text()
         self.assertIn('ORACLE_TOPIC = "crypto_prices_twap_sixty"', source)
@@ -112,7 +131,8 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
             )
             monitor.connection_epoch = 1
             monitor.ingest({"topic": module.ORACLE_TOPIC, "symbol": "btc/usd",
-                            "price": 77000.0, "timestamp_ms": start * 1000})
+                            "price": 77000.0, "price_decimal": "77000.0",
+                            "timestamp_ms": start * 1000 - 1000})
             monitor.ingest({"topic": module.ORACLE_TOPIC, "symbol": "btc/usd",
                             "price": 77010.0, "timestamp_ms": now * 1000})
             monitor.ingest({"topic": module.EXTERNAL_TOPIC, "symbol": "btcusdt",
@@ -122,6 +142,9 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
             self.assertTrue(status["contract"]["verified"])
             self.assertTrue(status["contract"]["rules_hash_recognized"])
             self.assertTrue(status["settlement_reference"]["valid"])
+            self.assertTrue(status["settlement_reference"]["boundary_fallback"])
+            self.assertEqual(status["settlement_reference"]["boundary_gap_ms"], 1000)
+            self.assertEqual(status["settlement_reference"]["observation_timestamp_ms"], start * 1000 - 1000)
             self.assertTrue(status["external"]["healthy"])
             self.assertTrue(status["fair"]["valid"])
             self.assertEqual(status["blockers"], ["OMS_EXTERNAL_FAIR_ROUTING_NOT_RUNNING"])

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import math
@@ -30,6 +31,7 @@ ORACLE_TOPIC = "crypto_prices_twap_sixty"
 EXTERNAL_TOPIC = "crypto_prices"
 ORACLE_WINDOW_SECONDS = 60
 APPLICATION_HEARTBEAT_SECONDS = 5.0
+REFERENCE_MAX_GAP_MS = 2_000
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 FRESH_NS = 3_000_000_000
 
@@ -170,6 +172,33 @@ def _timestamp_ms(raw: Any) -> int:
     return value
 
 
+def _oracle_decimal(value: dict[str, Any]) -> str | None:
+    raw = value.get("full_accuracy_value")
+    if raw is not None:
+        try:
+            return format(Decimal(str(raw)) / Decimal(10**18), "f")
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+    raw = value.get("value", value.get("price"))
+    try:
+        number = Decimal(str(raw))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return format(number, "f") if number.is_finite() and number > 0 else None
+
+
+def boundary_reference(
+    history: dict[int, dict[str, Any]], boundary_ms: int, *, max_gap_ms: int = REFERENCE_MAX_GAP_MS
+) -> dict[str, Any] | None:
+    eligible = [timestamp for timestamp in history if timestamp <= boundary_ms]
+    if not eligible:
+        return None
+    timestamp = max(eligible)
+    if boundary_ms - timestamp > max_gap_ms:
+        return None
+    return history[timestamp]
+
+
 def observations(value: Any, inherited_topic: str = "") -> Iterator[dict[str, Any]]:
     if isinstance(value, list):
         for row in value:
@@ -199,6 +228,10 @@ def observations(value: Any, inherited_topic: str = "") -> Iterator[dict[str, An
     row = {"topic": topic, "symbol": symbol, "price": price, "timestamp_ms": timestamp_ms}
     if topic == ORACLE_TOPIC:
         row["window_seconds"] = ORACLE_WINDOW_SECONDS
+        price_decimal = _oracle_decimal(value)
+        if price_decimal is None:
+            return
+        row["price_decimal"] = price_decimal
     yield row
 
 
@@ -282,16 +315,24 @@ class Monitor:
         self.active_market["contract_start_epoch"] = start
         self.active_contract = dict(spec.__dict__)
         self.active_contract["verification_reasons"] = list(spec.verification_reasons)
-        reference_event = self.oracle_history.get(start * 1000)
+        boundary_ms = start * 1000
+        reference_event = boundary_reference(self.oracle_history, boundary_ms)
+        observation_ms = int(reference_event.get("timestamp_ms") or 0) if reference_event else 0
+        gap_ms = boundary_ms - observation_ms if reference_event else 0
         self.reference = {
             "valid": bool(reference_event and spec.informed_trading_authorized),
             "value": float(reference_event.get("price") or 0.0) if reference_event else 0.0,
+            "exact_value": str(reference_event.get("price_decimal") or "") if reference_event else "",
             "version": start,
-            "observation_timestamp_ms": start * 1000,
+            "contract_boundary_timestamp_ms": boundary_ms,
+            "observation_timestamp_ms": observation_ms,
+            "boundary_gap_ms": gap_ms,
+            "boundary_fallback": bool(reference_event and gap_ms > 0),
             "receive_monotonic_ns": int(reference_event.get("receive_monotonic_ns") or 0) if reference_event else 0,
             "provenance": (
                 "Polymarket public RTDS Chainlink BTC/USD 60-second TWAP "
-                "exact contract-boundary observation"
+                + ("exact contract-boundary observation" if reference_event and gap_ms == 0 else
+                   "latest causal observation within 2 seconds before contract boundary")
             ),
         }
         atomic_json(self.root / "contract_registry.json", {
