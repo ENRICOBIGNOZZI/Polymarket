@@ -66,6 +66,12 @@ class V7LiveModelScopeTest(unittest.TestCase):
             "polymarket_v7_live_model_blocked_external_count",
             "polymarket_v7_live_model_scope_wired 1",
             "polymarket_v7_live_model_target_operational",
+            "polymarket_v7_capital_allocation_v2",
+            "execution_strategy_count",
+            "strategy_budgets",
+            "account_starting_capital",
+            "research_has_capital",
+            "real_capital_at_risk",
         ):
             self.assertIn(required, health)
 

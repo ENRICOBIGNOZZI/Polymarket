@@ -15,8 +15,18 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertTrue(cfg["paper_only"])
         self.assertFalse(v7["authenticated_execution"])
         self.assertFalse(v7["real_order_submission"])
-        self.assertGreater(v7["micro_maker_capital_fraction"], v7["relative_value_capital_fraction"])
-        self.assertGreaterEqual(v7["micro_maker_capital_fraction"], 0.50)
+        target = float(v7["execution_strategy_budget_usd"])
+        self.assertAlmostEqual(
+            float(cfg["starting_capital"]) * float(v7["micro_maker_capital_fraction"]),
+            target,
+        )
+        self.assertAlmostEqual(
+            v7["micro_maker_capital_fraction"], v7["relative_value_capital_fraction"]
+        )
+        self.assertAlmostEqual(
+            float(cfg["starting_capital"]) * float(v7["external_capital_fraction"]),
+            2.0 * target,
+        )
         self.assertEqual(v7["micro_maker_policy"], "config/v7_professional_market_maker.json")
         self.assertAlmostEqual(
             sum(float(v7[key]) for key in (
