@@ -22,8 +22,9 @@ spec.loader.exec_module(module)
 class RtdsExternalFairMonitorTests(unittest.TestCase):
     def test_observations_decode_history_and_live_envelopes(self) -> None:
         envelope = [
-            {"topic": "crypto_prices_chainlink", "payload": [
-                {"symbol": "btc/usd", "timestamp": 1788019000123, "value": 77001.25},
+            {"topic": "crypto_prices_twap_sixty", "payload": [
+                {"symbol": "btc/usd", "timestamp": 1788019000123, "value": 77001.25,
+                 "window_s": 60},
             ]},
             {"topic": "crypto_prices", "payload": {
                 "symbol": "BTCUSDT", "timestamp": 1788019001123, "value": "77002.5"
@@ -31,16 +32,32 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
         ]
         rows = list(module.observations(envelope))
         self.assertEqual([row["topic"] for row in rows], [
-            "crypto_prices_chainlink", "crypto_prices"
+            "crypto_prices_twap_sixty", "crypto_prices"
         ])
         self.assertEqual(rows[0]["timestamp_ms"], 1788019000123)
+        self.assertEqual(rows[0]["window_seconds"], 60)
         self.assertEqual(rows[1]["price"], 77002.5)
 
     def test_invalid_or_unrelated_values_fail_closed(self) -> None:
         self.assertEqual(list(module.observations({"topic": "comments", "value": 1})), [])
         self.assertEqual(list(module.observations({
-            "topic": "crypto_prices_chainlink", "value": "nan", "timestamp": 1
+            "topic": "crypto_prices_twap_sixty", "value": "nan", "timestamp": 1,
+            "window_s": 60
         })), [])
+
+    def test_oracle_observation_requires_explicit_sixty_second_window(self) -> None:
+        base = {"topic": module.ORACLE_TOPIC, "symbol": "btc/usd",
+                "value": 77001.25, "timestamp": 1788019000000}
+        self.assertEqual(list(module.observations(base)), [])
+        self.assertEqual(list(module.observations({**base, "window_s": 30})), [])
+        rows = list(module.observations({**base, "windowSeconds": 60}))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["window_seconds"], 60)
+
+    def test_runtime_contract_uses_official_twap_topic_and_application_heartbeat(self) -> None:
+        source = (ROOT / "scripts" / "v7_rtds_external_fair_monitor.py").read_text()
+        self.assertIn('ORACLE_TOPIC = "crypto_prices_twap_sixty"', source)
+        self.assertIn('send_frame(stream, 0x1, b"PING")', source)
 
     def test_status_reports_inputs_but_never_fake_fair_readiness(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

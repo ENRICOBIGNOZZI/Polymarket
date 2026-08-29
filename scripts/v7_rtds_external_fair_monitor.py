@@ -26,8 +26,10 @@ from v7_public_https_proxy import DEFAULT_DNS, PublicResolver
 from v7_contract_registry import contract_from_market
 
 HOST = "ws-live-data.polymarket.com"
-ORACLE_TOPIC = "crypto_prices_chainlink"
+ORACLE_TOPIC = "crypto_prices_twap_sixty"
 EXTERNAL_TOPIC = "crypto_prices"
+ORACLE_WINDOW_SECONDS = 60
+APPLICATION_HEARTBEAT_SECONDS = 5.0
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 FRESH_NS = 3_000_000_000
 
@@ -185,9 +187,19 @@ def observations(value: Any, inherited_topic: str = "") -> Iterator[dict[str, An
     price = _finite(value.get("value", value.get("price")))
     timestamp_ms = _timestamp_ms(value.get("timestamp", value.get("timestamp_ms")))
     symbol = str(value.get("symbol") or "").lower()
+    if topic == ORACLE_TOPIC:
+        try:
+            window_seconds = int(value.get("window_s", value.get("windowSeconds")))
+        except (TypeError, ValueError, OverflowError):
+            return
+        if window_seconds != ORACLE_WINDOW_SECONDS:
+            return
     if price is None or price <= 0.0 or timestamp_ms <= 0:
         return
-    yield {"topic": topic, "symbol": symbol, "price": price, "timestamp_ms": timestamp_ms}
+    row = {"topic": topic, "symbol": symbol, "price": price, "timestamp_ms": timestamp_ms}
+    if topic == ORACLE_TOPIC:
+        row["window_seconds"] = ORACLE_WINDOW_SECONDS
+    yield row
 
 
 class Monitor:
@@ -277,7 +289,10 @@ class Monitor:
             "version": start,
             "observation_timestamp_ms": start * 1000,
             "receive_monotonic_ns": int(reference_event.get("receive_monotonic_ns") or 0) if reference_event else 0,
-            "provenance": "Polymarket public RTDS Chainlink BTC/USD exact contract-boundary observation",
+            "provenance": (
+                "Polymarket public RTDS Chainlink BTC/USD 60-second TWAP "
+                "exact contract-boundary observation"
+            ),
         }
         atomic_json(self.root / "contract_registry.json", {
             "schema": "polymarket_v7_live_contract_registry_v1", "code_sha": self.code_sha,
@@ -441,13 +456,18 @@ class Monitor:
                     self.gaps += 1
                 stream = connect_websocket(resolver)
                 send_json(stream, {"action": "subscribe", "subscriptions": [
-                    {"topic": ORACLE_TOPIC, "type": "*", "filters": "{\"symbol\":\"btc/usd\"}"},
+                    {"topic": ORACLE_TOPIC, "type": "update", "filters": "{\"symbol\":\"btc/usd\"}"},
                     {"topic": EXTERNAL_TOPIC, "type": "*", "filters": "{\"symbol\":\"BTCUSDT\"}"},
                 ]})
                 fragments, fragment_opcode = bytearray(), 0
+                last_application_heartbeat = time.monotonic()
                 self.last_error = "awaiting_public_rtds_observation"
                 self.publish()
                 while True:
+                    now_monotonic = time.monotonic()
+                    if now_monotonic - last_application_heartbeat >= APPLICATION_HEARTBEAT_SECONDS:
+                        send_frame(stream, 0x1, b"PING")
+                        last_application_heartbeat = now_monotonic
                     try:
                         final, opcode, payload = read_frame(stream)
                     except socket.timeout:

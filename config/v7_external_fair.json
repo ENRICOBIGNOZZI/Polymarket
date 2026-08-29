@@ -61,7 +61,7 @@
     "provider": "Polymarket RTDS",
     "websocket_origin": "wss://ws-live-data.polymarket.com",
     "adapter": "scripts/v7_rtds_external_fair_monitor.py",
-    "chainlink_topic": "crypto_prices_chainlink",
+    "chainlink_topic": "crypto_prices_twap_sixty",
     "external_comparison_topic": "crypto_prices",
     "credentials_required": false,
     "execution_authority": "SHADOW_ZERO_AUTHORITY",
