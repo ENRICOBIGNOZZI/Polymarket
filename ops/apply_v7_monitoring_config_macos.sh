@@ -15,7 +15,7 @@ COMMAND_TIMEOUT_SECONDS="${POLYMARKET_MONITORING_COMMAND_TIMEOUT_SECONDS:-15}"
 
 run_bounded() {
   python3 - "$COMMAND_TIMEOUT_SECONDS" "$@" <<'PY'
-import os, signal, subprocess, sys
+import os, shlex, signal, subprocess, sys
 
 seconds = float(sys.argv[1])
 command = sys.argv[2:]
@@ -25,7 +25,7 @@ process = subprocess.Popen(command, start_new_session=True)
 try:
     raise SystemExit(process.wait(timeout=seconds))
 except subprocess.TimeoutExpired:
-    print(f"[v7-monitoring] bounded command timed out after {seconds:g}s: {command[0]}", file=sys.stderr)
+    print(f"[v7-monitoring] bounded command timed out after {seconds:g}s: {shlex.join(command)}", file=sys.stderr)
     try:
         os.killpg(process.pid, signal.SIGTERM)
         process.wait(timeout=2)
@@ -97,12 +97,19 @@ configure_tailnet_grafana() {
   ts="$(find_tailscale || true)"
   [[ -n "$ts" ]] || { echo "fatal: tailscale CLI not found; Grafana would remain loopback-only" >&2; exit 78; }
 
-  tailscale_admin "$ts" set --hostname="$TAILSCALE_HOSTNAME" >/dev/null
-  for _ in $(seq 1 20); do
+  for _ in $(seq 1 3); do
     actual_dns="$(run_bounded "$ts" status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("Self",{}).get("DNSName", ""))' 2>/dev/null || true)"
     [[ "$actual_dns" == "$TAILSCALE_FQDN" || "$actual_dns" == "$TAILSCALE_FQDN." ]] && break
     sleep 1
   done
+  if [[ "$actual_dns" != "$TAILSCALE_FQDN" && "$actual_dns" != "$TAILSCALE_FQDN." ]]; then
+    tailscale_admin "$ts" set --hostname="$TAILSCALE_HOSTNAME" >/dev/null
+    for _ in $(seq 1 20); do
+      actual_dns="$(run_bounded "$ts" status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("Self",{}).get("DNSName", ""))' 2>/dev/null || true)"
+      [[ "$actual_dns" == "$TAILSCALE_FQDN" || "$actual_dns" == "$TAILSCALE_FQDN." ]] && break
+      sleep 1
+    done
+  fi
   if [[ "$actual_dns" != "$TAILSCALE_FQDN" && "$actual_dns" != "$TAILSCALE_FQDN." ]]; then
     printf 'fatal: tailscale DNS mismatch expected=%s actual=%s\n' "$TAILSCALE_FQDN" "${actual_dns:-<empty>}" >&2
     exit 78

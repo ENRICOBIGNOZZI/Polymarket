@@ -46,6 +46,10 @@ class V7MacosMonitoringOwnerTest(unittest.TestCase):
         self.assertIn('run_bounded "$binary" "$@"', text)
         self.assertIn('run_bounded "$ts" status --json', text)
         self.assertIn('run_bounded "$ts" serve status', text)
+        self.assertIn("shlex.join(command)", text)
+        status = text.index('run_bounded "$ts" status --json')
+        mutate = text.index('tailscale_admin "$ts" set --hostname=')
+        self.assertLess(status, mutate)
 
     def test_server_health_checks_operator_route_and_trade_funnel(self) -> None:
         text = (ROOT / ".github" / "workflows" / "v7-paper-server-health.yml").read_text(

@@ -53,8 +53,7 @@ recover_orphaned_live_deploy(){
     { log "Orphan recovery rejected: lock owner is not a bash updater"; return 1; }
   runtime_path="$APP_DIR/runs/paper_v7_live/control/runtime_status.json"
   status_path="$STATUS_FILE"
-  python3 - "$runtime_path" "$status_path" "$owner_sha" "$owner_pid" <<'PY' ||
-    { log "Orphan recovery rejected: runtime/deploy status proof invalid"; return 1; }
+  if ! python3 - "$runtime_path" "$status_path" "$owner_sha" "$owner_pid" <<'PY'
 import json, os, sys
 from pathlib import Path
 runtime=json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
@@ -76,6 +75,10 @@ runtime_pid=int(runtime.get('pid') or 0)
 assert runtime_pid > 0 and runtime_pid != owner_pid
 os.kill(runtime_pid, 0)
 PY
+  then
+    log "Orphan recovery rejected: runtime/deploy status proof invalid"
+    return 1
+  fi
   kill -TERM "$owner_pid" 2>/dev/null || true
   for _ in $(seq 1 50); do
     kill -0 "$owner_pid" 2>/dev/null || break
