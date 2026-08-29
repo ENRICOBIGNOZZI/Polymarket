@@ -40,3 +40,11 @@ def test_orchestrator_requires_exact_sha_health_after_deploy_before_cleanup():
     assert deploy < health < cleanup
     assert 'expected_sha="$TARGET_SHA"' in text[health:cleanup]
     assert "paper_health_run_id=" in text[health:cleanup]
+
+
+def test_orchestrator_health_step_is_structurally_uncorrupted():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    health = text[text.index("- name: Dispatch exact-SHA PAPER server health"):]
+    assert "IFS=$'\\t' read -r run_id state conclusion" in health
+    assert text.count("- name: Start proven-merged branch cleanup") == 1
+    assert health.index("paper_health_run_id=") < health.index("- name: Start proven-merged branch cleanup")
