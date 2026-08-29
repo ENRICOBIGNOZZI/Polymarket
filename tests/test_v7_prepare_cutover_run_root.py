@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sys
+import tempfile
+import unittest
 from pathlib import Path
-
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -44,43 +43,53 @@ def fixture(root: Path) -> bytes:
     return ledger
 
 
-def test_prior_sha_run_is_atomically_archived_with_lineage(tmp_path: Path) -> None:
-    run = tmp_path / "paper_v7_live"
-    archive = tmp_path / "paper_v7_archives"
-    ledger = fixture(run)
-    result = cutover.prepare(run, archive, tmp_path, NEW, now=123, ancestor_check=lambda *_: True)
-    destination = Path(result["archive_path"])
-    assert result["state"] == "ARCHIVED_PRIOR_SHA"
-    assert (destination / "forward-tape.jsonl").read_text() == "preserve-me\n"
-    assert (destination / "ledger/execution.jsonl").read_bytes() == ledger
-    assert result["ledger_sha256"] == hashlib.sha256(ledger).hexdigest()
-    receipt = json.loads((run / "control/cutover_lineage.json").read_text())
-    assert receipt["previous_runtime_sha"] == OLD and receipt["target_sha"] == NEW
+class V7PrepareCutoverRunRootTest(unittest.TestCase):
+    def test_prior_sha_run_is_atomically_archived_with_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            run = tmp_path / "paper_v7_live"
+            archive = tmp_path / "paper_v7_archives"
+            ledger = fixture(run)
+            result = cutover.prepare(run, archive, tmp_path, NEW, now=123, ancestor_check=lambda *_: True)
+            destination = Path(result["archive_path"])
+            self.assertEqual(result["state"], "ARCHIVED_PRIOR_SHA")
+            self.assertEqual((destination / "forward-tape.jsonl").read_text(), "preserve-me\n")
+            self.assertEqual((destination / "ledger/execution.jsonl").read_bytes(), ledger)
+            self.assertEqual(result["ledger_sha256"], hashlib.sha256(ledger).hexdigest())
+            receipt = json.loads((run / "control/cutover_lineage.json").read_text())
+            self.assertEqual(receipt["previous_runtime_sha"], OLD)
+            self.assertEqual(receipt["target_sha"], NEW)
+
+    def test_same_sha_recovery_does_not_rotate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            run = tmp_path / "paper_v7_live"
+            fixture(run)
+            result = cutover.prepare(run, tmp_path / "archives", tmp_path, OLD, ancestor_check=lambda *_: True)
+            self.assertEqual(result, {"state": "SAME_SHA_RECOVERY", "target_sha": OLD, "archived": False})
+            self.assertTrue((run / "forward-tape.jsonl").is_file())
+
+    def test_unsafe_prior_state_is_not_moved(self) -> None:
+        for mutation, reason in (
+            ("portfolio", "prior_portfolio_killed"),
+            ("ledger", "ledger_sha_mismatch:1"),
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                tmp_path = Path(directory)
+                run = tmp_path / "paper_v7_live"
+                fixture(run)
+                if mutation == "portfolio":
+                    value = json.loads((run / "control/portfolio_state.json").read_text())
+                    value["killed"] = True
+                    write_json(run / "control/portfolio_state.json", value)
+                else:
+                    write_json(run / "ledger/execution.jsonl", {
+                        "model_sha": "c" * 40, "paper_only": True, "authenticated_execution": False,
+                    })
+                with self.assertRaisesRegex(cutover.CutoverArchiveError, reason):
+                    cutover.prepare(run, tmp_path / "archives", tmp_path, NEW, ancestor_check=lambda *_: True)
+                self.assertTrue((run / "forward-tape.jsonl").is_file())
 
 
-def test_same_sha_recovery_does_not_rotate(tmp_path: Path) -> None:
-    run = tmp_path / "paper_v7_live"
-    fixture(run)
-    result = cutover.prepare(run, tmp_path / "archives", tmp_path, OLD, ancestor_check=lambda *_: True)
-    assert result == {"state": "SAME_SHA_RECOVERY", "target_sha": OLD, "archived": False}
-    assert (run / "forward-tape.jsonl").is_file()
-
-
-@pytest.mark.parametrize("mutation,reason", [
-    ("portfolio", "prior_portfolio_killed"),
-    ("ledger", "ledger_sha_mismatch:1"),
-])
-def test_unsafe_prior_state_is_not_moved(tmp_path: Path, mutation: str, reason: str) -> None:
-    run = tmp_path / "paper_v7_live"
-    fixture(run)
-    if mutation == "portfolio":
-        value = json.loads((run / "control/portfolio_state.json").read_text())
-        value["killed"] = True
-        write_json(run / "control/portfolio_state.json", value)
-    else:
-        write_json(run / "ledger/execution.jsonl", {
-            "model_sha": "c" * 40, "paper_only": True, "authenticated_execution": False,
-        })
-    with pytest.raises(cutover.CutoverArchiveError, match=reason):
-        cutover.prepare(run, tmp_path / "archives", tmp_path, NEW, ancestor_check=lambda *_: True)
-    assert (run / "forward-tape.jsonl").is_file()
+if __name__ == "__main__":
+    unittest.main()
