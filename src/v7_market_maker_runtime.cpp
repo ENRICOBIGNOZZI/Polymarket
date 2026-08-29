@@ -1003,7 +1003,8 @@ public:
     [[nodiscard]] bool initialize(
         const std::vector<std::unique_ptr<MarketContext>>& markets,
         PaperMakerPolicy paper_policy,
-        double starting_capital) {
+        double starting_capital,
+        std::int64_t minimum_quote_lifetime_ns) {
         const std::int64_t budget = microdollars(starting_capital);
         if (budget < 100) return false;
         CapitalLimits limits;
@@ -1025,6 +1026,7 @@ public:
         }
         markets_.assign(max_market + 1, nullptr);
         control_watermarks_.assign(max_instrument + 1, {});
+        minimum_quote_lifetime_ns_ = std::max<std::int64_t>(0, minimum_quote_lifetime_ns);
         for (const auto& market : markets) {
             if (market->yes_tick_e4 != market->no_tick_e4) return false;
             if (!policy_.register_market(
@@ -1061,6 +1063,10 @@ public:
                 // control boundary and suppress that stale quote when it arrives;
                 // otherwise cancel-before-place would resurrect unwanted risk.
                 if (intent.type == IntentType::Quote && quote_is_superseded(intent)) {
+                    ++execution_version_;
+                    return true;
+                }
+                if (economic_control_preempts_fresh_quote(command)) {
                     ++execution_version_;
                     return true;
                 }
@@ -1116,6 +1122,33 @@ private:
         std::int64_t bid_ns = 0;
         std::int64_t ask_ns = 0;
     };
+
+    [[nodiscard]] bool economic_control_preempts_fresh_quote(
+        const ExecutionCommand& command) const noexcept {
+        const auto& intent = command.plan.intent;
+        if (minimum_quote_lifetime_ns_ <= 0
+            || (intent.type != IntentType::CancelQuote
+                && intent.type != IntentType::Withdraw)) {
+            return false;
+        }
+        using Reason = pm::v7::maker::DecisionReason;
+        const auto reason = command.context.decision.reason;
+        if (reason != Reason::Quote && reason != Reason::NoEconomicQuote
+            && reason != Reason::ExplorationHold
+            && reason != Reason::ExplorationExpired) {
+            return false;
+        }
+        const auto snapshot = policy_.quote_snapshot(
+            intent.market_handle, intent.instrument_handle);
+        const bool targeted_active = intent.type == IntentType::Withdraw
+            ? snapshot.bid_active != 0 || snapshot.ask_active != 0
+            : intent.side == Side::Buy ? snapshot.bid_active != 0
+            : intent.side == Side::Sell ? snapshot.ask_active != 0
+            : false;
+        if (!targeted_active || snapshot.last_quote_monotonic_ns <= 0) return false;
+        return intent.decision_monotonic_ns - snapshot.last_quote_monotonic_ns
+            < minimum_quote_lifetime_ns_;
+    }
 
     [[nodiscard]] bool quote_is_superseded(const StrategyIntent& intent) const noexcept {
         if (intent.instrument_handle >= control_watermarks_.size()) return true;
@@ -1199,6 +1232,7 @@ private:
     SleeveCapitalAccount capital_{};
     std::vector<MarketContext*> markets_;
     std::vector<SideControlWatermark> control_watermarks_;
+    std::int64_t minimum_quote_lifetime_ns_ = 0;
     pm::v7::SpscRing<TelemetryRecord, kExecutionTelemetryCapacity> telemetry_{};
     std::atomic<bool> telemetry_overflow_{false};
     std::uint64_t execution_version_ = 1;
@@ -1609,7 +1643,8 @@ int main(int argc, char** argv) {
         std::atomic<bool> new_risk_frozen{false};
         std::atomic<bool> fatal{false};
         auto execution = std::make_unique<ExecutionCore>();
-        if (!execution->initialize(markets, paper_policy, config.starting_capital)) {
+        if (!execution->initialize(markets, paper_policy, config.starting_capital,
+                                   initial->min_quote_lifetime_ns)) {
             throw std::runtime_error("cannot initialize single V7 Maker execution owner");
         }
 

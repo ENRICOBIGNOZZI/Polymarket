@@ -136,6 +136,8 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
         # must then suppress that stale quote instead of resurrecting it.
         self.assertIn("record_control_watermark(intent", self.source)
         self.assertIn("quote_is_superseded(intent)", self.source)
+        self.assertIn("economic_control_preempts_fresh_quote(command)", self.source)
+        self.assertIn("minimum_quote_lifetime_ns_", self.source)
         self.assertLess(
             self.source.index("quote_is_superseded(intent)"),
             self.source.index("policy_.process(command.plan, capital_)"),
