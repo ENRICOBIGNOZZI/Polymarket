@@ -142,6 +142,8 @@ max_shards=int(capacity.get("shard_count_budget",0))
 markets_per_shard=int(capacity.get("markets_per_shard",0))
 assert max_shards > 0 and markets_per_shard == 8
 assert int(maker.get("market_selection",{}).get("max_active_markets",0)) == max_shards*markets_per_shard
+expected_maker_capital=float(cfg.get("starting_capital",0))*float(v7.get("micro_maker_capital_fraction",0))
+assert abs(float(maker.get("market_selection",{}).get("reward_sleeve_capital_usd",0))-expected_maker_capital) <= 1e-9
 assert external.get("execution_authority") == "PAPER_EXECUTION_OWNER"
 assert external.get("paper_only") is True
 assert external.get("authenticated_execution") is False
@@ -446,6 +448,7 @@ pids+=("$!")
       --output "$RUN_ROOT/micro_maker/reward_selection.json" \
       --status "$RUN_ROOT/micro_maker/selector_status.json" \
       --fallback-universe "$RUN_ROOT/universe/current.json" \
+      --allocation "$ALLOC/micro_maker.json" \
       --model-sha "$SHA" \
       >> "$RUN_ROOT/micro_maker/reward_selection.log" 2>&1 || true
     sleep 60

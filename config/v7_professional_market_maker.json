@@ -74,6 +74,8 @@
     "selector_request_timeout_seconds": 8,
     "selector_max_pool_pages": 100,
     "selector_max_market_pages": 200,
+    "reward_sleeve_capital_usd": 2000,
+    "reward_max_quote_shares": 100,
     "fallback_universe_max_age_seconds": 180,
     "reward_settings_endpoint": "/rewards/markets/current",
     "reward_markets_endpoint": "/rewards/markets/multi"

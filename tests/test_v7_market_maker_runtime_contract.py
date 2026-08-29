@@ -62,6 +62,7 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertIn("polymarket_v7_maker_markout_observer", source)
         self.assertIn("PM_V7_MAKER_MARKOUT_OBSERVER", source)
         self.assertIn("v7_market_maker_rewards.py", source)
+        self.assertIn('--allocation "$ALLOC/micro_maker.json"', source)
         self.assertIn("v7_market_maker_model.py", source)
         self.assertIn("v7_market_maker_status.py", source)
         self.assertIn("v7_ledger_spool.py", source)

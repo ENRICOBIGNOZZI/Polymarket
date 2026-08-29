@@ -69,6 +69,9 @@ class RewardMarket:
     no_token: str
     volume_24h: float
     market_competitiveness: float
+    yes_price: float = 0.5
+    no_price: float = 0.5
+    spread: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -89,6 +92,8 @@ class MarketSelection:
     total_daily_rate: float
     reward_intensity: float
     selection_score: float
+    reward_qualification_notional_usd: float
+    reward_touch_qualifies_at_selection: bool
 
 
 def _pagination(root: Any) -> tuple[list[Any], str]:
@@ -144,6 +149,8 @@ def _reward_market(row: Any) -> RewardMarket | None:
     condition = str(row.get("condition_id") or "")
     yes_token = ""
     no_token = ""
+    yes_price = 0.5
+    no_price = 0.5
     tokens = row.get("tokens")
     if isinstance(tokens, list):
         for token in tokens:
@@ -153,8 +160,10 @@ def _reward_market(row: Any) -> RewardMarket | None:
             token_id = str(token.get("token_id") or "")
             if outcome == "yes":
                 yes_token = token_id
+                yes_price = min(1.0, max(0.0, finite(token.get("price"), 0.5)))
             elif outcome == "no":
                 no_token = token_id
+                no_price = min(1.0, max(0.0, finite(token.get("price"), 0.5)))
     if not condition or not yes_token or not no_token:
         return None
     return RewardMarket(
@@ -167,6 +176,9 @@ def _reward_market(row: Any) -> RewardMarket | None:
         no_token=no_token,
         volume_24h=max(0.0, finite(row.get("volume_24hr"))),
         market_competitiveness=max(0.0, finite(row.get("market_competitiveness"))),
+        yes_price=yes_price,
+        no_price=no_price,
+        spread=max(0.0, finite(row.get("spread"))),
     )
 
 
@@ -285,11 +297,21 @@ def rank_markets(
     *,
     max_active: int,
     min_volume_24h: float,
+    max_order_notional_usd: float = math.inf,
+    max_quote_shares: float = 100.0,
 ) -> list[MarketSelection]:
     rows: list[MarketSelection] = []
     for condition, pool in pools.items():
         market = markets.get(condition)
         if market is None or market.volume_24h < min_volume_24h:
+            continue
+        qualification_notional = pool.min_size * max(market.yes_price, market.no_price)
+        touch_distance_cents = 50.0 * market.spread
+        if (
+            pool.min_size > max_quote_shares + 1e-12
+            or qualification_notional > max_order_notional_usd + 1e-12
+            or touch_distance_cents > pool.max_spread_cents + 1e-12
+        ):
             continue
         # Reward intensity is a useful slow-path prior, not a guaranteed return.
         # Competition is penalized smoothly and minimum qualifying size captures
@@ -318,6 +340,8 @@ def rank_markets(
             total_daily_rate=pool.total_daily_rate,
             reward_intensity=reward_intensity,
             selection_score=score,
+            reward_qualification_notional_usd=qualification_notional,
+            reward_touch_qualifies_at_selection=True,
         ))
     rows.sort(key=lambda row: (row.selection_score, row.reward_intensity, row.volume_24h), reverse=True)
     return rows[: max(1, int(max_active))]
@@ -336,6 +360,32 @@ def _validated_config(config_path: Path) -> tuple[dict[str, Any], dict[str, Any]
     return cfg, selection_cfg, capacity_cfg, resource_capacity
 
 
+def _validated_sleeve_capital(allocation_path: Path) -> float:
+    allocation = json.loads(allocation_path.read_text(encoding="utf-8"))
+    v7 = allocation.get("v7") if isinstance(allocation.get("v7"), dict) else {}
+    scope = allocation.get("capital_scope") if isinstance(allocation.get("capital_scope"), dict) else {}
+    strategy_budgets = scope.get("strategy_budgets") if isinstance(scope.get("strategy_budgets"), dict) else {}
+    if (
+        allocation.get("paper_only") is not True
+        or v7.get("authenticated_execution") is not False
+        or v7.get("real_order_submission") is not False
+        or scope.get("sleeve") != "micro_maker"
+        or scope.get("double_counting_forbidden") is not True
+        or set(strategy_budgets) != {"professional_maker"}
+    ):
+        raise ValueError("maker_reward_allocation_contract_invalid")
+    capital = finite(allocation.get("starting_capital"), -1.0)
+    declared = finite(scope.get("sleeve_starting_capital"), -2.0)
+    strategy_budget = finite(strategy_budgets.get("professional_maker"), -3.0)
+    strategy_sum = finite(scope.get("strategy_budget_sum"), -4.0)
+    if capital <= 0.0 or any(
+        abs(value - capital) > 1e-9
+        for value in (declared, strategy_budget, strategy_sum)
+    ):
+        raise ValueError("maker_reward_allocation_capital_mismatch")
+    return capital
+
+
 def _primary_snapshot(
     cfg: dict[str, Any],
     selection_cfg: dict[str, Any],
@@ -347,6 +397,8 @@ def _primary_snapshot(
     request_timeout_seconds: float,
     max_pool_pages: int,
     max_market_pages: int,
+    max_order_notional_usd: float,
+    max_quote_shares: float,
 ) -> dict[str, Any]:
     clob_url = str(cfg.get("clob_url") or "https://clob.polymarket.com")
     deadline = time.monotonic() + max(0.1, float(deadline_seconds))
@@ -362,6 +414,8 @@ def _primary_snapshot(
         markets,
         max_active=resource_capacity,
         min_volume_24h=float(selection_cfg.get("min_volume_24h", 100.0)),
+        max_order_notional_usd=max_order_notional_usd,
+        max_quote_shares=max_quote_shares,
     )
     if not selected:
         raise RuntimeError("reward selector returned no eligible markets")
@@ -379,6 +433,8 @@ def _primary_snapshot(
         "reward_pool_count": len(pools),
         "reward_market_count": len(markets),
         "selected_count": len(selected),
+        "reward_qualification_max_order_notional_usd": max_order_notional_usd,
+        "reward_qualification_max_quote_shares": max_quote_shares,
         "resource_capacity_markets": resource_capacity,
         "resource_capacity": capacity_cfg,
         "markets": [asdict(row) for row in selected],
@@ -524,6 +580,8 @@ def build_snapshot(
     max_pool_pages: int | None = None,
     max_market_pages: int | None = None,
     now_ms: int | None = None,
+    sleeve_capital: float | None = None,
+    allocation_path: Path | None = None,
 ) -> dict[str, Any]:
     cfg, selection_cfg, capacity_cfg, resource_capacity = _validated_config(config_path)
     if model_sha and (len(model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in model_sha.lower())):
@@ -533,12 +591,29 @@ def build_snapshot(
     request_timeout_seconds = float(request_timeout_seconds if request_timeout_seconds is not None else selection_cfg.get("selector_request_timeout_seconds", 5.0))
     max_pool_pages = int(max_pool_pages if max_pool_pages is not None else selection_cfg.get("selector_max_pool_pages", 100))
     max_market_pages = int(max_market_pages if max_market_pages is not None else selection_cfg.get("selector_max_market_pages", 200))
+    if sleeve_capital is not None and allocation_path is not None:
+        raise ValueError("maker_reward_capital_source_ambiguous")
+    if allocation_path is not None:
+        sleeve_capital = _validated_sleeve_capital(allocation_path)
+    elif sleeve_capital is None:
+        sleeve_capital = finite(selection_cfg.get("reward_sleeve_capital_usd"), 0.0)
+    configured_sleeve_capital = finite(selection_cfg.get("reward_sleeve_capital_usd"), 0.0)
+    if configured_sleeve_capital <= 0.0 or abs(float(sleeve_capital) - configured_sleeve_capital) > 1e-9:
+        raise ValueError("maker_reward_sleeve_capital_policy_mismatch")
+    max_order_notional_usd = max(0.0, float(sleeve_capital)) * max(
+        0.0, float((cfg.get("risk") or {}).get("max_order_fraction_of_sleeve", 0.0))
+    )
+    max_quote_shares = max(0.0, float(selection_cfg.get("reward_max_quote_shares", 100.0)))
+    if max_order_notional_usd <= 0.0 or max_quote_shares <= 0.0:
+        raise ValueError("maker_reward_qualification_budget_invalid")
     try:
         return _primary_snapshot(
             cfg, selection_cfg, capacity_cfg, resource_capacity,
             model_sha=model_sha, deadline_seconds=deadline_seconds,
             request_timeout_seconds=request_timeout_seconds,
             max_pool_pages=max_pool_pages, max_market_pages=max_market_pages,
+            max_order_notional_usd=max_order_notional_usd,
+            max_quote_shares=max_quote_shares,
         )
     except Exception as error:
         if fallback_universe_path is None:
@@ -576,6 +651,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--status", type=Path)
     parser.add_argument("--fallback-universe", type=Path)
+    parser.add_argument("--allocation", type=Path)
     parser.add_argument("--model-sha", default="")
     parser.add_argument("--deadline-seconds", type=float)
     parser.add_argument("--request-timeout-seconds", type=float)
@@ -583,6 +659,7 @@ def main() -> int:
     snapshot = build_snapshot(
         args.config,
         fallback_universe_path=args.fallback_universe,
+        allocation_path=args.allocation,
         model_sha=args.model_sha,
         deadline_seconds=args.deadline_seconds,
         request_timeout_seconds=args.request_timeout_seconds,

@@ -198,6 +198,79 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertEqual(snapshot["reward_market_count"], 1)
         self.assertEqual(snapshot["selected_count"], 1)
 
+    def test_live_allocation_is_the_validated_reward_budget_source(self) -> None:
+        from tempfile import TemporaryDirectory
+        allocation = {
+            "paper_only": True,
+            "starting_capital": 2000.0,
+            "v7": {"authenticated_execution": False, "real_order_submission": False},
+            "capital_scope": {
+                "sleeve": "micro_maker",
+                "sleeve_starting_capital": 2000.0,
+                "strategy_budgets": {"professional_maker": 2000.0},
+                "strategy_budget_sum": 2000.0,
+                "double_counting_forbidden": True,
+            },
+        }
+        pool = rewards.RewardPool("c1", 3.0, 20.0, 4.0, 0.0, 4.0)
+        market = rewards.RewardMarket("c1", "m1", "e1", "m", "Q", "yes", "no", 1000.0, 1.0)
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "micro_maker.json"
+            path.write_text(json.dumps(allocation), encoding="utf-8")
+            with mock.patch.object(
+                rewards, "fetch_reward_catalog", return_value=({"c1": pool}, {"c1": market})
+            ):
+                snapshot = rewards.build_snapshot(
+                    ROOT / "config" / "v7_professional_market_maker.json",
+                    allocation_path=path,
+                    model_sha=SHA,
+                )
+            allocation["capital_scope"]["strategy_budget_sum"] = 1999.0
+            path.write_text(json.dumps(allocation), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "allocation_capital_mismatch"):
+                rewards.build_snapshot(
+                    ROOT / "config" / "v7_professional_market_maker.json",
+                    allocation_path=path,
+                    model_sha=SHA,
+                )
+        self.assertEqual(snapshot["reward_qualification_max_order_notional_usd"], 20.0)
+
+    def test_rank_rejects_reward_size_outside_sleeve_risk_budget(self) -> None:
+        market = rewards.RewardMarket(
+            "c1", "m1", "e1", "m", "Q", "yes", "no", 1000.0, 1.0,
+            yes_price=0.6, no_price=0.4, spread=0.02,
+        )
+        affordable = rewards.RewardPool("c1", 3.0, 20.0, 4.0, 0.0, 4.0)
+        too_large = rewards.RewardPool("c1", 3.0, 50.0, 4.0, 0.0, 4.0)
+        rows = rewards.rank_markets(
+            {"c1": affordable}, {"c1": market}, max_active=1,
+            min_volume_24h=100.0, max_order_notional_usd=20.0,
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].reward_qualification_notional_usd, 12.0)
+        self.assertTrue(rows[0].reward_touch_qualifies_at_selection)
+        self.assertEqual(
+            rewards.rank_markets(
+                {"c1": too_large}, {"c1": market}, max_active=1,
+                min_volume_24h=100.0, max_order_notional_usd=20.0,
+            ),
+            [],
+        )
+
+    def test_rank_rejects_touch_outside_reward_spread(self) -> None:
+        market = rewards.RewardMarket(
+            "c1", "m1", "e1", "m", "Q", "yes", "no", 1000.0, 1.0,
+            yes_price=0.5, no_price=0.5, spread=0.10,
+        )
+        pool = rewards.RewardPool("c1", 4.0, 20.0, 4.0, 0.0, 4.0)
+        self.assertEqual(
+            rewards.rank_markets(
+                {"c1": pool}, {"c1": market}, max_active=1,
+                min_volume_24h=100.0, max_order_notional_usd=20.0,
+            ),
+            [],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

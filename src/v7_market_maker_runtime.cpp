@@ -768,6 +768,8 @@ private:
         MakerModelSnapshot model = *shared_model;
         model.base_quote_shares = std::max(model.base_quote_shares,
                                            min_order(market, instrument.yes != 0));
+        model.base_quote_shares = std::max(model.base_quote_shares,
+                                           market.cold.rewards_min_size);
 
         const auto& state = execution_state(market.market_handle);
         MakerLaneContext context;
