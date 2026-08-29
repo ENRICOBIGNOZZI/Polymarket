@@ -29,26 +29,45 @@ fail(){ printf '[v7-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 
 mkdir -p "$CACHE_DIR" "$STATE_DIR"
 recover_orphaned_live_deploy(){
-  local owner_pid="$1" started_at="" nonce="" owner_sha="" age_seconds=""
-  local process_meta="" parent_pid="" command_line="" runtime_path="" quarantine=""
+  local owner_pid="$1" started_at="" nonce="" owner_sha="" nonce_started="" age_seconds=""
+  local process_meta="" parent_pid="" command_line="" runtime_path="" status_path="" quarantine=""
   started_at="$(cat "$LOCK_DIR/started_at" 2>/dev/null || true)"
   nonce="$(cat "$LOCK_DIR/nonce" 2>/dev/null || true)"
-  [[ "$started_at" =~ ^[0-9]+$ ]] || return 1
-  owner_sha="${nonce%%.*}"
-  [[ "$owner_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
-  [[ "$nonce" == "$owner_sha.$owner_pid.$started_at" ]] || return 1
+  [[ "$started_at" =~ ^[0-9]+$ ]] || { log "Orphan recovery rejected: invalid started_at"; return 1; }
+  [[ "$nonce" =~ ^([0-9a-f]{40})\.([1-9][0-9]*)\.([0-9]+)$ ]] ||
+    { log "Orphan recovery rejected: invalid nonce"; return 1; }
+  owner_sha="${BASH_REMATCH[1]}"
+  [[ "${BASH_REMATCH[2]}" == "$owner_pid" ]] ||
+    { log "Orphan recovery rejected: nonce PID mismatch"; return 1; }
+  nonce_started="${BASH_REMATCH[3]}"
+  (( nonce_started >= started_at - 5 && nonce_started <= started_at + 5 )) ||
+    { log "Orphan recovery rejected: nonce timestamp mismatch"; return 1; }
   age_seconds="$(( $(date +%s) - started_at ))"
-  (( age_seconds >= LOCK_ORPHAN_GRACE_SECONDS )) || return 1
-  git -C "$APP_DIR" merge-base --is-ancestor "$owner_sha" "$EXPECTED_SHA" >/dev/null 2>&1 || return 1
+  (( age_seconds >= LOCK_ORPHAN_GRACE_SECONDS )) ||
+    { log "Orphan recovery rejected: grace period active"; return 1; }
+  git -C "$APP_DIR" merge-base --is-ancestor "$owner_sha" "$EXPECTED_SHA" >/dev/null 2>&1 ||
+    { log "Orphan recovery rejected: owner SHA is not target ancestor"; return 1; }
   process_meta="$(ps -p "$owner_pid" -o ppid=,command= 2>/dev/null || true)"
   read -r parent_pid command_line <<<"$process_meta"
-  [[ "$parent_pid" == "1" && "$command_line" == *bash* ]] || return 1
+  [[ "$parent_pid" =~ ^[1-9][0-9]*$ && "$command_line" == *bash* ]] ||
+    { log "Orphan recovery rejected: lock owner is not a bash updater"; return 1; }
   runtime_path="$APP_DIR/runs/paper_v7_live/control/runtime_status.json"
-  python3 - "$runtime_path" "$owner_sha" "$owner_pid" <<'PY' || return 1
+  status_path="$STATUS_FILE"
+  python3 - "$runtime_path" "$status_path" "$owner_sha" "$owner_pid" <<'PY' ||
+    { log "Orphan recovery rejected: runtime/deploy status proof invalid"; return 1; }
 import json, os, sys
 from pathlib import Path
 runtime=json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
-owner_sha=sys.argv[2]; owner_pid=int(sys.argv[3])
+status={}
+for raw in Path(sys.argv[2]).read_text(encoding='utf-8').splitlines():
+    if '=' in raw:
+        key, value=raw.split('=', 1)
+        status[key]=value
+owner_sha=sys.argv[3]; owner_pid=int(sys.argv[4])
+assert status.get('state') == 'running'
+assert status.get('expected_sha') == owner_sha
+assert status.get('server_head') == owner_sha
+assert status.get('detail') == 'exact V7 SHA started; monitoring health pending'
 assert runtime.get('model_sha') == owner_sha
 assert runtime.get('paper_only') is True
 assert runtime.get('authenticated_execution') is False
@@ -69,7 +88,7 @@ PY
       sleep 0.05
     done
   fi
-  kill -0 "$owner_pid" 2>/dev/null && return 1
+  kill -0 "$owner_pid" 2>/dev/null && { log "Orphan recovery rejected: updater survived bounded termination"; return 1; }
   if [[ ! -e "$LOCK_DIR" ]]; then
     mkdir "$LOCK_DIR" 2>/dev/null || return 1
     log "Recovered verified orphan deployment pid=$owner_pid sha=$owner_sha age=${age_seconds}s"
