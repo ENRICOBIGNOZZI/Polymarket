@@ -48,3 +48,13 @@ def test_orchestrator_health_step_is_structurally_uncorrupted():
     assert "IFS=$'\\t' read -r run_id state conclusion" in health
     assert text.count("- name: Start proven-merged branch cleanup") == 1
     assert health.index("paper_health_run_id=") < health.index("- name: Start proven-merged branch cleanup")
+
+
+def test_orchestrator_never_reuses_historical_exact_sha_runs():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "CI_PRIOR_RUN_ID=" in text
+    assert "MONITORING_PRIOR_RUN_ID=" in text
+    assert "SINGLE_WRITER_PRIOR_RUN_ID=" in text
+    assert text.count(".id > $prior_run_id") == 4
+    assert text.count("prior_run_id=\"$(gh api") == 3
+    assert 'wait_for_workflow ci.yml ci "$CI_PRIOR_RUN_ID"' in text
