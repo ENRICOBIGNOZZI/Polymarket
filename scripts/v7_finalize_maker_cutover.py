@@ -339,10 +339,11 @@ def finalize(
             strategy=STRATEGY, model_sha=model_sha, model_version="cutover-liquidation-v1",
             order_id=order_id, fill_id=fill_id, position_id=position_id,
             market_id=market_id, event_id=condition_id or None, token_id=execution_token,
-            side=execution_side, recorded_ts_ms=current_ms,
+            side=execution_side,
         )
         events.append(LedgerEvent(
             event_type="FILL", record_id=stable_id("FILL", nonce, market_id, token_id),
+            recorded_ts_ms=current_ms,
             exchange_ts_ms=exchange_ms, receive_ts_ms=receive_ms, book_snapshot_id=snapshot_id,
             fill_price=vwap, filled_size=shares, complete=True, fee=fee,
             fee_source=fee_source, slippage=slippage,
@@ -354,6 +355,7 @@ def finalize(
         ))
         events.append(LedgerEvent(
             event_type="FINAL", record_id=stable_id("FINAL", nonce, market_id, token_id),
+            recorded_ts_ms=current_ms + 1,
             final_pnl=pnl, realized_cashflow=net, unwind_loss=slippage,
             capital_cost=0.0, latency_cost=0.0,
             metadata={

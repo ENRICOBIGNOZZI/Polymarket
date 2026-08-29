@@ -71,6 +71,7 @@ class MakerCutoverFinalizerTest(unittest.TestCase):
             self.assertTrue(status["drain_complete"])
             events = [json.loads(line) for line in (root / "ledger/execution.jsonl").read_text().splitlines()]
             self.assertEqual([row["event_type"] for row in events], ["FILL", "FINAL"])
+            self.assertLess(events[0]["recorded_ts_ms"], events[1]["recorded_ts_ms"])
             self.assertEqual(events[0]["side"], "SELL")
             self.assertEqual(events[0]["metadata"]["purpose"], "LIQUIDATION")
             self.assertAlmostEqual(events[1]["final_pnl"], -0.21)
