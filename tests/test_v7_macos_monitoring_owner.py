@@ -36,6 +36,17 @@ class V7MacosMonitoringOwnerTest(unittest.TestCase):
         self.assertIn("polymarket-v7-canonical-paper-economics", text)
         self.assertNotIn("funnel", text.lower())
 
+    def test_external_macos_monitoring_commands_are_bounded(self) -> None:
+        text = (ROOT / "ops/apply_v7_monitoring_config_macos.sh").read_text(encoding="utf-8")
+        self.assertIn('POLYMARKET_MONITORING_COMMAND_TIMEOUT_SECONDS:-15', text)
+        self.assertIn("run_bounded()", text)
+        self.assertIn("start_new_session=True", text)
+        self.assertIn("os.killpg(process.pid, signal.SIGTERM)", text)
+        self.assertIn("os.killpg(process.pid, signal.SIGKILL)", text)
+        self.assertIn('run_bounded "$binary" "$@"', text)
+        self.assertIn('run_bounded "$ts" status --json', text)
+        self.assertIn('run_bounded "$ts" serve status', text)
+
     def test_server_health_checks_operator_route_and_trade_funnel(self) -> None:
         text = (ROOT / ".github" / "workflows" / "v7-paper-server-health.yml").read_text(
             encoding="utf-8"
