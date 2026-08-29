@@ -32,6 +32,8 @@ class V7ConvergenceAuditTest(unittest.TestCase):
         self.assertEqual(by_id["v7-deploy-paper-server.yml"]["decision"], "MANUAL_CUTOVER_ONLY")
         self.assertFalse(by_id["v7-deploy-paper-server.yml"]["scheduled"])
         self.assertFalse(by_id["v7-live-paper-validation.yml"]["scheduled"])
+        self.assertTrue(by_id["v7-maker-fillability-evidence.yml"]["scheduled"])
+        self.assertTrue(by_id["v7-maker-fillability-evidence.yml"]["collects_data_only"])
 
     def test_report_refuses_to_call_unverified_deployment_accepted(self) -> None:
         matrix = MODULE.validate_capabilities(ROOT)
