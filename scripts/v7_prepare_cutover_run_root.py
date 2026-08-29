@@ -50,13 +50,20 @@ def git_is_ancestor(repository_root: Path, older: str, newer: str) -> bool:
     ).returncode == 0
 
 
-def validate_ledger(path: Path, previous_sha: str) -> tuple[int, str]:
+def validate_ledger(
+    path: Path,
+    repository_root: Path,
+    target_sha: str,
+    ancestor_check: Callable[[Path, str, str], bool],
+) -> tuple[int, str, dict[str, int]]:
     try:
         handle = path.open("rb")
     except FileNotFoundError:
-        return 0, hashlib.sha256(b"").hexdigest()
+        return 0, hashlib.sha256(b"").hexdigest(), {}
     digest = hashlib.sha256()
     rows = 0
+    model_sha_counts: dict[str, int] = {}
+    ancestry: dict[str, bool] = {}
     with handle:
         for number, raw in enumerate(handle, start=1):
             digest.update(raw)
@@ -73,9 +80,15 @@ def validate_ledger(path: Path, previous_sha: str) -> tuple[int, str]:
                 raise CutoverArchiveError(f"ledger_invalid_record:{number}")
             if value.get("paper_only") is not True or value.get("authenticated_execution") is not False:
                 raise CutoverArchiveError(f"ledger_unsafe_record:{number}")
-            if value.get("model_sha") != previous_sha:
-                raise CutoverArchiveError(f"ledger_sha_mismatch:{number}")
-    return rows, digest.hexdigest()
+            model_sha = str(value.get("model_sha") or "")
+            if not SHA40.fullmatch(model_sha):
+                raise CutoverArchiveError(f"ledger_sha_invalid:{number}")
+            if model_sha not in ancestry:
+                ancestry[model_sha] = ancestor_check(repository_root, model_sha, target_sha)
+            if not ancestry[model_sha]:
+                raise CutoverArchiveError(f"ledger_sha_not_ancestor:{number}")
+            model_sha_counts[model_sha] = model_sha_counts.get(model_sha, 0) + 1
+    return rows, digest.hexdigest(), dict(sorted(model_sha_counts.items()))
 
 
 def prepare(
@@ -128,7 +141,9 @@ def prepare(
         if drawdown >= maximum:
             raise CutoverArchiveError("prior_portfolio_drawdown_limit")
 
-    ledger_rows, ledger_sha256 = validate_ledger(run_root / "ledger/execution.jsonl", previous_sha)
+    ledger_rows, ledger_sha256, ledger_model_sha_counts = validate_ledger(
+        run_root / "ledger/execution.jsonl", repository_root, target_sha, ancestor_check,
+    )
     archived_at = int(now if now is not None else time.time())
     archive_root.mkdir(parents=True, exist_ok=True)
     destination = archive_root / f"cutover-{previous_sha}-{archived_at}-{os.getpid()}"
@@ -149,6 +164,7 @@ def prepare(
         "archive_path": str(destination),
         "ledger_rows": ledger_rows,
         "ledger_sha256": ledger_sha256,
+        "ledger_model_sha_counts": ledger_model_sha_counts,
     }
     temporary = control / f"cutover_lineage.json.tmp.{os.getpid()}"
     temporary.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
