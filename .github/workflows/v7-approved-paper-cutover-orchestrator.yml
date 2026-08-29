@@ -116,6 +116,33 @@ jobs:
           echo "canonical PAPER deploy timed out" >&2
           exit 1
 
+      - name: Dispatch exact-SHA PAPER server health
+        run: |
+          set -euo pipefail
+          gh workflow run v7-paper-server-health.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f expected_sha="$TARGET_SHA"
+          for _ in $(seq 1 180); do
+            selected="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/v7-paper-server-health.yml/runs?branch=main&event=workflow_dispatch&per_page=50" \
+              --jq ".workflow_runs | map(select(.head_sha == \"$TARGET_SHA\")) | sort_by(.id) | last | [.id,.status,(.conclusion // \"\")] | @tsv")"
+            if [[ -n "$selected" ]]; then
+              IFS=        if: success()
+        run: |
+          gh workflow run v7-merged-branch-hygiene.yml --repo "$GITHUB_REPOSITORY" --ref main -f apply=true
+\t' read -r run_id state conclusion <<< "$selected"
+              if [[ "$state" == "completed" ]]; then
+                if [[ "$conclusion" != "success" ]]; then
+                  gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log-failed || true
+                  exit 1
+                fi
+                echo "paper_health_run_id=$run_id" >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          echo "exact-SHA PAPER server health timed out" >&2
+          exit 1
+
       - name: Start proven-merged branch cleanup
         if: success()
         run: |
