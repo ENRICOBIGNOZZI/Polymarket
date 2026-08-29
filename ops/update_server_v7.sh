@@ -12,6 +12,7 @@ STATUS_FILE="$STATE_DIR/v7_deploy_status.env"
 HEALTH_ATTEMPTS="${POLYMARKET_RUNTIME_HEALTH_ATTEMPTS:-180}"
 DRAIN_ATTEMPTS="${POLYMARKET_RUNTIME_DRAIN_ATTEMPTS:-50}"
 LOCK_STALE_SECONDS="${POLYMARKET_DEPLOY_LOCK_STALE_SECONDS:-7200}"
+LOCK_ORPHAN_GRACE_SECONDS="${POLYMARKET_DEPLOY_ORPHAN_GRACE_SECONDS:-300}"
 LOCK_NONCE="${EXPECTED_SHA}.$$.$(date +%s)"
 
 log(){ printf '[v7-deploy] %s\n' "$*"; }
@@ -23,17 +24,81 @@ fail(){ printf '[v7-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS must be positive"
 [[ "$DRAIN_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_RUNTIME_DRAIN_ATTEMPTS must be positive"
 [[ "$LOCK_STALE_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_LOCK_STALE_SECONDS must be positive"
+[[ "$LOCK_ORPHAN_GRACE_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_ORPHAN_GRACE_SECONDS must be positive"
 [[ -d "$APP_DIR/.git" ]] || fail "$APP_DIR is not a git checkout"
 
 mkdir -p "$CACHE_DIR" "$STATE_DIR"
+recover_orphaned_live_deploy(){
+  local owner_pid="$1" started_at="" nonce="" owner_sha="" age_seconds=""
+  local process_meta="" parent_pid="" command_line="" runtime_path="" quarantine=""
+  started_at="$(cat "$LOCK_DIR/started_at" 2>/dev/null || true)"
+  nonce="$(cat "$LOCK_DIR/nonce" 2>/dev/null || true)"
+  [[ "$started_at" =~ ^[0-9]+$ ]] || return 1
+  owner_sha="${nonce%%.*}"
+  [[ "$owner_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [[ "$nonce" == "$owner_sha.$owner_pid.$started_at" ]] || return 1
+  age_seconds="$(( $(date +%s) - started_at ))"
+  (( age_seconds >= LOCK_ORPHAN_GRACE_SECONDS )) || return 1
+  git -C "$APP_DIR" merge-base --is-ancestor "$owner_sha" "$EXPECTED_SHA" >/dev/null 2>&1 || return 1
+  process_meta="$(ps -p "$owner_pid" -o ppid=,command= 2>/dev/null || true)"
+  read -r parent_pid command_line <<<"$process_meta"
+  [[ "$parent_pid" == "1" && "$command_line" == *bash* ]] || return 1
+  runtime_path="$APP_DIR/runs/paper_v7_live/control/runtime_status.json"
+  python3 - "$runtime_path" "$owner_sha" "$owner_pid" <<'PY' || return 1
+import json, os, sys
+from pathlib import Path
+runtime=json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+owner_sha=sys.argv[2]; owner_pid=int(sys.argv[3])
+assert runtime.get('model_sha') == owner_sha
+assert runtime.get('paper_only') is True
+assert runtime.get('authenticated_execution') is False
+assert runtime.get('real_order_submission') is False
+runtime_pid=int(runtime.get('pid') or 0)
+assert runtime_pid > 0 and runtime_pid != owner_pid
+os.kill(runtime_pid, 0)
+PY
+  kill -TERM "$owner_pid" 2>/dev/null || true
+  for _ in $(seq 1 50); do
+    kill -0 "$owner_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$owner_pid" 2>/dev/null; then
+    kill -KILL "$owner_pid" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      kill -0 "$owner_pid" 2>/dev/null || break
+      sleep 0.05
+    done
+  fi
+  kill -0 "$owner_pid" 2>/dev/null && return 1
+  if [[ ! -e "$LOCK_DIR" ]]; then
+    mkdir "$LOCK_DIR" 2>/dev/null || return 1
+    log "Recovered verified orphan deployment pid=$owner_pid sha=$owner_sha age=${age_seconds}s"
+    return 0
+  fi
+  [[ "$(cat "$LOCK_DIR/nonce" 2>/dev/null || true)" == "$nonce" ]] || return 1
+  find "$LOCK_DIR" -mindepth 1 -maxdepth 1 \
+    ! -name owner_pid ! -name started_at ! -name nonce -print -quit | grep -q . && return 1
+  quarantine="$CACHE_DIR/update-v7.orphan.$$.${age_seconds}"
+  mv "$LOCK_DIR" "$quarantine" 2>/dev/null || return 1
+  rm -f "$quarantine/owner_pid" "$quarantine/started_at" "$quarantine/nonce"
+  rmdir "$quarantine" || return 1
+  mkdir "$LOCK_DIR" 2>/dev/null || return 1
+  log "Recovered verified orphan deployment pid=$owner_pid sha=$owner_sha age=${age_seconds}s"
+}
+
 acquire_deploy_lock(){
-  local owner_pid="" age_seconds="" quarantine=""
+  local owner_pid="" age_seconds="" quarantine="" recovered_live=0
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     owner_pid="$(cat "$LOCK_DIR/owner_pid" 2>/dev/null || true)"
     if [[ "$owner_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$owner_pid" 2>/dev/null; then
-      fail "another live V7 deployment pid=$owner_pid owns $LOCK_DIR"
+      if recover_orphaned_live_deploy "$owner_pid"; then
+        recovered_live=1
+      else
+        fail "another live V7 deployment pid=$owner_pid owns $LOCK_DIR"
+      fi
     fi
-    age_seconds="$(python3 - "$LOCK_DIR" <<'PY'
+    if [[ "$recovered_live" == 0 ]]; then
+      age_seconds="$(python3 - "$LOCK_DIR" <<'PY'
 import os,sys,time
 try:
     print(max(0, int(time.time() - os.stat(sys.argv[1]).st_mtime)))
@@ -41,22 +106,23 @@ except FileNotFoundError:
     print(0)
 PY
 )"
-    [[ "$age_seconds" =~ ^[0-9]+$ ]] || fail "cannot determine V7 deployment lock age"
-    if (( age_seconds < LOCK_STALE_SECONDS )); then
-      fail "V7 deployment lock owner is unavailable but lease is not stale: age=${age_seconds}s"
+      [[ "$age_seconds" =~ ^[0-9]+$ ]] || fail "cannot determine V7 deployment lock age"
+      if (( age_seconds < LOCK_STALE_SECONDS )); then
+        fail "V7 deployment lock owner is unavailable but lease is not stale: age=${age_seconds}s"
+      fi
+      find "$LOCK_DIR" -mindepth 1 -maxdepth 1 \
+        ! -name owner_pid ! -name started_at ! -name nonce -print -quit | grep -q . && \
+        fail "expired V7 deployment lock contains unexpected state: $LOCK_DIR"
+      quarantine="$CACHE_DIR/update-v7.stale.$$.${age_seconds}"
+      mv "$LOCK_DIR" "$quarantine" 2>/dev/null || fail "V7 deployment lock changed during stale-lock recovery"
+      rm -f "$quarantine/owner_pid" "$quarantine/started_at" "$quarantine/nonce"
+      if ! rmdir "$quarantine"; then
+        if [[ ! -e "$LOCK_DIR" ]]; then mv "$quarantine" "$LOCK_DIR" 2>/dev/null || true; fi
+        fail "could not retire stale V7 deployment lock"
+      fi
+      mkdir "$LOCK_DIR" 2>/dev/null || fail "another V7 deployment won stale-lock recovery"
+      log "Recovered expired orphan deployment lock age=${age_seconds}s"
     fi
-    find "$LOCK_DIR" -mindepth 1 -maxdepth 1 \
-      ! -name owner_pid ! -name started_at ! -name nonce -print -quit | grep -q . && \
-      fail "expired V7 deployment lock contains unexpected state: $LOCK_DIR"
-    quarantine="$CACHE_DIR/update-v7.stale.$$.${age_seconds}"
-    mv "$LOCK_DIR" "$quarantine" 2>/dev/null || fail "V7 deployment lock changed during stale-lock recovery"
-    rm -f "$quarantine/owner_pid" "$quarantine/started_at" "$quarantine/nonce"
-    if ! rmdir "$quarantine"; then
-      if [[ ! -e "$LOCK_DIR" ]]; then mv "$quarantine" "$LOCK_DIR" 2>/dev/null || true; fi
-      fail "could not retire stale V7 deployment lock"
-    fi
-    mkdir "$LOCK_DIR" 2>/dev/null || fail "another V7 deployment won stale-lock recovery"
-    log "Recovered expired orphan deployment lock age=${age_seconds}s"
   fi
   umask 077
   printf '%s\n' "$$" > "$LOCK_DIR/owner_pid"
