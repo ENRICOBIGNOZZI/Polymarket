@@ -1,9 +1,10 @@
+import sys
 from pathlib import Path
 
-from scripts import v7_prune_workflow_metadata as hygiene
-
-
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import v7_prune_workflow_metadata as hygiene
 
 
 def test_only_active_untracked_workflows_are_stale():
