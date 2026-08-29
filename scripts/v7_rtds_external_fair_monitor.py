@@ -20,9 +20,12 @@ import socket
 import ssl
 import struct
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any, Iterator
 
+from v7_adaptive_universe import normalize_market
 from v7_public_https_proxy import DEFAULT_DNS, PublicResolver
 from v7_contract_registry import contract_from_market
 
@@ -56,6 +59,25 @@ def load_json(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def fetch_market_by_slug(gamma_url: str, slug: str, timeout: int = 4) -> dict[str, Any] | None:
+    """Fetch one exact Gamma market without general-universe eligibility filters."""
+    query = urllib.parse.urlencode({"slug": slug})
+    request = urllib.request.Request(
+        gamma_url.rstrip("/") + "/markets?" + query,
+        headers={"User-Agent": "polymarket-v7-external-fair/1"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        value = json.loads(response.read().decode("utf-8"))
+    rows = value if isinstance(value, list) else value.get("markets", []) if isinstance(value, dict) else []
+    for raw in rows:
+        if not isinstance(raw, dict) or str(raw.get("slug") or "") != slug:
+            continue
+        market = normalize_market(raw)
+        if market is not None:
+            return market
+    return None
 
 
 def _recv_exact(stream: ssl.SSLSocket, size: int) -> bytes:
@@ -237,10 +259,12 @@ def observations(value: Any, inherited_topic: str = "") -> Iterator[dict[str, An
 
 class Monitor:
     def __init__(self, root: Path, code_sha: str, *, universe_path: Path | None = None,
-                 approvals_path: Path | None = None, external_venues_path: Path | None = None) -> None:
+                 approvals_path: Path | None = None, external_venues_path: Path | None = None,
+                 gamma_url: str = "https://gamma-api.polymarket.com") -> None:
         self.root, self.code_sha = root, code_sha
         self.universe_path = universe_path
         self.external_venues_path = external_venues_path
+        self.gamma_url = gamma_url.rstrip("/")
         self.latest: dict[str, dict[str, Any]] = {}
         self.oracle_history: dict[int, dict[str, Any]] = {}
         self.accepted = self.written = self.dropped = 0
@@ -306,6 +330,30 @@ class Monitor:
             start = int(match.group(1))
             if start <= now_seconds < start + 300 and market.get("accepting_orders") is True:
                 candidates.append((start, market))
+        if not candidates:
+            # The adaptive universe is flow-eligible and can remove a still-
+            # open 5m contract after its volume falls below the general floor.
+            # Preserve a verified binding through its contractual window so a
+            # metadata refresh cannot erase causal settlement state.
+            active_start = int(self.active_market.get("contract_start_epoch") or 0)
+            if (active_start <= now_seconds < active_start + 300
+                    and self.active_contract.get("verified_template") is True
+                    and self.active_contract.get("rules_hash_recognized") is True):
+                return
+            # At rollover the specialized contract may not yet be in the
+            # general universe. Discover its deterministic slug directly;
+            # transport/schema/contract failures remain fail-closed.
+            current_start = now_seconds - now_seconds % 300
+            try:
+                targeted = fetch_market_by_slug(
+                    self.gamma_url, f"btc-updown-5m-{current_start}"
+                )
+            except (OSError, TimeoutError, ValueError, json.JSONDecodeError):
+                targeted = None
+            if (targeted is not None and targeted.get("active") is True
+                    and targeted.get("closed") is not True
+                    and targeted.get("accepting_orders") is True):
+                candidates.append((current_start, targeted))
         if not candidates:
             self.active_market = self.active_contract = self.reference = {}
             return
@@ -561,12 +609,14 @@ def main() -> int:
     parser.add_argument("--universe", type=Path)
     parser.add_argument("--approvals", type=Path)
     parser.add_argument("--external-venues", type=Path)
+    parser.add_argument("--gamma-url", default="https://gamma-api.polymarket.com")
     parser.add_argument("--dns", action="append", default=[])
     args = parser.parse_args()
     if len(args.code_sha) != 40 or any(char not in "0123456789abcdef" for char in args.code_sha):
         raise SystemExit("--code-sha must be a lowercase 40-character Git SHA")
     Monitor(args.output_dir.resolve(), args.code_sha, universe_path=args.universe,
-            approvals_path=args.approvals, external_venues_path=args.external_venues).run(
+            approvals_path=args.approvals, external_venues_path=args.external_venues,
+            gamma_url=args.gamma_url).run(
         PublicResolver(args.dns or list(DEFAULT_DNS)))
     return 0
 
