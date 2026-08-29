@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_market_common import FeeDetails
-from v7_market_maker_status import assess, executable_sell_mark
+from v7_market_maker_status import assess, executable_sell_mark, sync_freeze
 
 
 class MakerStatusTests(unittest.TestCase):
@@ -73,6 +73,9 @@ class MakerStatusTests(unittest.TestCase):
             self.assertFalse(report["authenticated_execution"])
             self.assertFalse(report["real_order_submission"])
             self.assertFalse(report["killed"])
+            self.assertFalse(report["new_risk_frozen"])
+            self.assertTrue(report["marking_complete"])
+            self.assertFalse(report["degraded"])
 
     def test_equity_is_net_of_fee_and_slippage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -112,7 +115,7 @@ class MakerStatusTests(unittest.TestCase):
             self.assertEqual(report["positions"][0]["condition_id"], "cond-1")
             self.assertEqual(report["unmarkable_tokens"], [])
 
-    def test_unverified_fee_schedule_fails_closed(self) -> None:
+    def test_unverified_fee_schedule_zero_values_inventory_and_freezes_new_risk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state, cfg, selection, output = self.fixture(Path(tmp))
             book = [{"asset_id": "yes-1", "bids": [{"price": "0.50", "size": "10"}]}]
@@ -121,9 +124,38 @@ class MakerStatusTests(unittest.TestCase):
                 "v7_market_maker_status.resolve_fee_details", return_value=fee
             ):
                 report = assess(state, cfg, output, selection_path=selection)
-            self.assertTrue(report["killed"])
-            self.assertEqual(report["equity"], 0.0)
+            self.assertFalse(report["killed"])
+            self.assertEqual(report["equity"], 95.0)
+            self.assertTrue(report["new_risk_frozen"])
+            self.assertFalse(report["marking_complete"])
+            self.assertTrue(report["degraded"])
+            self.assertFalse(report["real_order_submission"])
             self.assertEqual(report["unmarkable_tokens"][0]["reason"], "unverified_exit_fee_schedule")
+
+            freeze = Path(tmp) / "control" / "MAKER_FREEZE"
+            sync_freeze(freeze, report)
+            event = json.loads(freeze.read_text())
+            self.assertEqual(event["schema"], "polymarket_v7_maker_freeze_v1")
+            self.assertEqual(event["reason"], "unmarkable_inventory")
+            report["new_risk_frozen"] = False
+            sync_freeze(freeze, report)
+            self.assertFalse(freeze.exists())
+
+    def test_conservative_cash_drawdown_still_kills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state, cfg, selection, output = self.fixture(Path(tmp))
+            payload = json.loads(state.read_text())
+            payload["cash"] = 80.0
+            state.write_text(json.dumps(payload))
+            book = [{"asset_id": "yes-1", "bids": [{"price": "0.50", "size": "10"}]}]
+            fee = FeeDetails(rate=0.0, exponent=1.0, taker_only=True, verified=False, source="unknown")
+            with patch("v7_market_maker_status.request_json", return_value=book), patch(
+                "v7_market_maker_status.resolve_fee_details", return_value=fee
+            ):
+                report = assess(state, cfg, output, selection_path=selection)
+            self.assertTrue(report["killed"])
+            self.assertTrue(report["new_risk_frozen"])
+            self.assertAlmostEqual(report["drawdown"], 0.20)
 
 
 if __name__ == "__main__":

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Fail-closed executable equity mark for the V7 professional maker sleeve.
+"""Conservative executable equity mark for the V7 professional maker sleeve.
 
 Residual maker inventory is valued only at full visible bid depth, net of the
 verified taker fee schedule and an explicit liquidation slippage haircut.  If
-market identity, fee provenance, or executable depth is missing, the sleeve is
-unmarkable and the account-level guard must fail closed.
+market identity, fee provenance, or executable depth is missing, that inventory
+is valued at zero and new maker risk is frozen. Cash and other verified marks
+remain valid; only a real conservative drawdown triggers the global kill path.
 """
 from __future__ import annotations
 
@@ -24,6 +25,27 @@ def atomic_json(path: Path, value: Any) -> None:
     tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
     tmp.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(tmp, path)
+
+
+def sync_freeze(path: Path | None, report: dict[str, Any]) -> None:
+    if path is None:
+        return
+    if report.get("new_risk_frozen") is True:
+        atomic_json(path, {
+            "schema": "polymarket_v7_maker_freeze_v1",
+            "timestamp_ms": report.get("timestamp_ms"),
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "model_sha": report.get("model_sha"),
+            "reason": "unmarkable_inventory",
+            "unmarkable_tokens": report.get("unmarkable_tokens", []),
+        })
+    else:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -105,6 +127,9 @@ def assess(
             # authoritative identity until the first maker state arrives.
             "model_sha": selection.get("model_sha"),
             "equity": float(cfg.get("starting_capital", 0.0)),
+            "marking_complete": True,
+            "new_risk_frozen": False,
+            "degraded": False,
             "killed": False,
             "source": "not_started",
             "unmarkable_tokens": [],
@@ -195,18 +220,22 @@ def assess(
         })
 
     cash = finite(state.get("cash"), 0.0)
-    equity = cash + liquidation if not unmarkable else 0.0
+    # Unmarkable positions contribute zero, but never erase valid cash or
+    # independently verified executable inventory marks.
+    equity = cash + liquidation
     starting = max(0.0, finite(state.get("starting_capital"), finite(cfg.get("starting_capital"), 0.0)))
     previous = read_json(output)
     peak = max(starting, finite(previous.get("peak_equity"), starting), equity)
     drawdown = max(0.0, 1.0 - equity / peak) if peak > 0.0 else 1.0
     policy_hard = 0.10
-    killed = bool(unmarkable) or drawdown >= policy_hard
+    new_risk_frozen = bool(unmarkable)
+    killed = drawdown >= policy_hard
     report = {
         "schema": "polymarket_v7_professional_maker_status_v1",
         "timestamp_ms": time.time_ns() // 1_000_000,
         "paper_only": True,
         "authenticated_execution": False,
+        "real_order_submission": False,
         "model_sha": state.get("model_sha"),
         "cash": cash,
         "gross_exit_fees": total_exit_fees,
@@ -216,6 +245,9 @@ def assess(
         "peak_equity": peak,
         "drawdown": drawdown,
         "maker_hard_drawdown": policy_hard,
+        "marking_complete": not unmarkable,
+        "new_risk_frozen": new_risk_frozen,
+        "degraded": new_risk_frozen,
         "killed": killed,
         "source": "full_visible_bid_depth_net_verified_fee_and_slippage" if not unmarkable else "fail_closed_unmarkable",
         "positions": position_marks,
@@ -234,8 +266,10 @@ def main() -> int:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--selection", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--freeze-path", type=Path)
     args = parser.parse_args()
     report = assess(args.state, args.config, args.output, selection_path=args.selection)
+    sync_freeze(args.freeze_path, report)
     print(json.dumps(report, sort_keys=True))
     return 2 if report.get("killed") else 0
 

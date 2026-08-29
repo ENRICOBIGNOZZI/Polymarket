@@ -43,6 +43,7 @@ enum class DecisionReason : std::uint8_t {
     ExplorationQuote = 14,
     ExplorationHold = 15,
     ExplorationExpired = 16,
+    NewRiskFrozen = 17,
 };
 
 // One MakerHotPath instance is owned by exactly one market/instrument on one
@@ -114,7 +115,9 @@ struct RiskSnapshot {
     std::uint8_t global_kill = 0;
     std::uint8_t strategy_kill = 0;
     std::uint8_t market_kill = 0;
-    std::uint8_t reserved = 0;
+    // Cold control-plane mark failures withdraw quotes and reject new maker
+    // risk without irreversibly killing the sleeve or the whole V7 runtime.
+    std::uint8_t new_risk_frozen = 0;
 };
 
 // A cell is pre-shrunk on the slow path toward the GLOBAL execution model.

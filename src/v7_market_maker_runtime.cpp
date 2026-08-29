@@ -592,10 +592,12 @@ public:
     ShardRuntime(std::vector<MarketContext*> markets,
                  std::shared_ptr<MakerModelStore> models,
                  std::atomic<bool>* global_kill,
+                 std::atomic<bool>* new_risk_frozen,
                  std::atomic<bool>* fatal,
                  std::string ws_url)
         : markets_(std::move(markets)), models_(std::move(models)),
-          global_kill_(global_kill), fatal_(fatal), ws_url_(std::move(ws_url)) {
+          global_kill_(global_kill), new_risk_frozen_(new_risk_frozen),
+          fatal_(fatal), ws_url_(std::move(ws_url)) {
         std::vector<pm::v7::TokenBinding> bindings;
         std::size_t max_instrument = 0;
         std::size_t max_market = 0;
@@ -787,6 +789,8 @@ private:
         context.risk.max_local_state_age_ns = 5'000'000'000LL;
         context.risk.global_kill = static_cast<std::uint8_t>(
             global_kill_->load(std::memory_order_acquire));
+        context.risk.new_risk_frozen = static_cast<std::uint8_t>(
+            new_risk_frozen_->load(std::memory_order_acquire));
 
         auto& lane = instrument.yes ? market.yes_lane : market.no_lane;
         MakerDecision decision = lane.on_market_event(source_event, context, model);
@@ -925,6 +929,7 @@ private:
     std::vector<MarketContext*> markets_;
     std::shared_ptr<MakerModelStore> models_;
     std::atomic<bool>* global_kill_ = nullptr;
+    std::atomic<bool>* new_risk_frozen_ = nullptr;
     std::atomic<bool>* fatal_ = nullptr;
     std::string ws_url_;
     std::vector<std::string> tokens_;
@@ -1488,6 +1493,7 @@ int main(int argc, char** argv) {
         auto markets = build_markets(options, config);
 
         std::atomic<bool> global_kill{false};
+        std::atomic<bool> new_risk_frozen{false};
         std::atomic<bool> fatal{false};
         auto execution = std::make_unique<ExecutionCore>();
         if (!execution->initialize(markets, paper_policy, config.starting_capital)) {
@@ -1501,7 +1507,8 @@ int main(int argc, char** argv) {
                 group.push_back(markets[i].get());
             }
             auto shard = std::make_unique<ShardRuntime>(
-                std::move(group), model_store, &global_kill, &fatal, options.ws_url);
+                std::move(group), model_store, &global_kill, &new_risk_frozen,
+                &fatal, options.ws_url);
             // Max quote dollars before per-event price conversion. The allocation
             // child config is already sleeve-bounded by v7_capital_allocator.py.
             shard->set_starting_capital_fraction(config.starting_capital * 0.01);
@@ -1590,6 +1597,9 @@ int main(int argc, char** argv) {
         std::int64_t last_model_check_ms = 0;
         std::uint64_t current_model_version = initial->model_version;
         const fs::path kill_path = fs::path(options.run_root) / "control" / "KILL";
+        const fs::path maker_freeze_path =
+            fs::path(options.run_root) / "control" / "MAKER_FREEZE";
+        std::int64_t last_control_check_ms = 0;
         while (!g_stop.load(std::memory_order_relaxed)) {
             if (fs::exists(kill_path)) {
                 global_kill.store(true, std::memory_order_release);
@@ -1609,6 +1619,13 @@ int main(int argc, char** argv) {
                 while (execution->pop_telemetry(record)) writer.consume(record);
 
                 const auto now = wall_ms();
+                if (now - last_control_check_ms >= 100) {
+                    // Filesystem access stays on this cold control thread. The
+                    // hot shards only read the resulting atomic flag.
+                    new_risk_frozen.store(
+                        fs::exists(maker_freeze_path), std::memory_order_release);
+                    last_control_check_ms = now;
+                }
                 if (now - last_state_ms >= 1000) {
                     writer.write_state();
                     last_state_ms = now;

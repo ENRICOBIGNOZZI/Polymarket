@@ -836,6 +836,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         and maker.get("paper_only") is True
         and maker.get("authenticated_execution") is False
         and maker.get("killed") is not True
+        and maker.get("new_risk_frozen") is not True
         and maker.get("source") not in {None, "", "not_started"}
         and fresh_milliseconds(maker)
         and selector_ready
@@ -891,6 +892,8 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_maker_runtime_selection_pinned", 1 if selector.get("runtime_selection_pinned") is True else 0),
         _metric("polymarket_v7_maker_candidate_rotation_pending", 1 if selector.get("candidate_rotation_pending") is True else 0),
         _metric("polymarket_v7_maker_candidate_selected_markets", selector.get("candidate_selected_count")),
+        _metric("polymarket_v7_maker_new_risk_frozen", 1 if maker.get("new_risk_frozen") is True else 0),
+        _metric("polymarket_v7_maker_marking_complete", 1 if maker.get("marking_complete") is True else 0),
         _metric("polymarket_v7_maker_selector_info", 1 if selector_ready else 0, {
             "state": selector.get("state", "UNKNOWN"),
             "source": selector.get("source", "UNKNOWN"),

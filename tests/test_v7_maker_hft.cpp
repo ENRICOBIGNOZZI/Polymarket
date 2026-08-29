@@ -299,6 +299,22 @@ void test_global_kill_preempts_quote() {
     assert(decision.intents[0].urgency == pm::v7::Urgency::Critical);
 }
 
+void test_new_risk_freeze_withdraws_without_irreversible_kill() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    const auto model = profitable_model();
+    pm::v7::maker::InventorySnapshot inventory;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.new_risk_frozen = 1;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(decision.reason == pm::v7::maker::DecisionReason::NewRiskFrozen);
+    assert(decision.intent_count == 1);
+    assert(decision.intents[0].type == pm::v7::IntentType::Withdraw);
+    assert(decision.intents[0].urgency == pm::v7::Urgency::Critical);
+}
+
 } // namespace
 
 int main() {
@@ -312,5 +328,6 @@ int main() {
     test_sell_cell_controls_one_sided_inventory_reduction();
     test_inventory_forces_reducing_side();
     test_global_kill_preempts_quote();
+    test_new_risk_freeze_withdraws_without_irreversible_kill();
     return 0;
 }

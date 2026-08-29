@@ -91,6 +91,11 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
         self.assertIn("global_kill", self.source)
         self.assertIn("maker_cpp_order_tx_or_telemetry_invariant_failure", self.source)
 
+    def test_cold_control_plane_freezes_new_maker_risk_without_filesystem_on_hot_path(self) -> None:
+        self.assertIn('"MAKER_FREEZE"', self.source)
+        self.assertIn("new_risk_frozen.store", self.source)
+        self.assertIn("context.risk.new_risk_frozen", self.source)
+
     def test_execution_core_owns_paper_state_and_prioritizes_control(self) -> None:
         self.assertIn("class ExecutionCore final", self.source)
         self.assertIn("MakerPaperExecutionPolicy policy_{}", self.source)

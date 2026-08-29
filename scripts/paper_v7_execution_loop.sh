@@ -50,6 +50,7 @@ export PM_V7_MAKER_EXECUTION_MODEL="$MAKER_CHAMPION_MODEL"
 CONTROL="$RUN_ROOT/control"
 ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
+MAKER_FREEZE="$CONTROL/MAKER_FREEZE"
 LOCK="$CONTROL/runtime.lock"
 mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/osint" "$RUN_ROOT/market_open" "$RUN_ROOT/shadow/sports_latency" "$RUN_ROOT/shadow/cross_platform" "$RUN_ROOT/shadow/wallet_intelligence" "$RUN_ROOT/learned_execution"
 touch "$RUN_ROOT/ledger/execution.jsonl"
@@ -168,7 +169,7 @@ if [[ -d "$LOCK" ]]; then
 fi
 mkdir "$LOCK"
 echo $$ > "$LOCK/pid"
-rm -f "$KILL"
+rm -f "$KILL" "$MAKER_FREEZE"
 
 python3 scripts/v7_capital_allocator.py --config "$CONFIG" --output-dir "$ALLOC" >/dev/null
 pids=()
@@ -577,6 +578,7 @@ pids+=("$!")
       --config "$ALLOC/micro_maker.json" \
       --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
       --output "$RUN_ROOT/micro_maker/status.json" \
+      --freeze-path "$MAKER_FREEZE" \
       >> "$RUN_ROOT/micro_maker/status.log" 2>&1; then
       printf '{"schema":"polymarket_v7_maker_risk_failure_v1","timestamp":%s,"paper_only":true,"authenticated_execution":false,"model_sha":"%s"}\n' "$(date +%s)" "$SHA" > "$KILL"
       break

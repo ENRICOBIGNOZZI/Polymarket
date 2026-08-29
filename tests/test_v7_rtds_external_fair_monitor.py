@@ -107,6 +107,11 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
             root = Path(directory)
             now = int(time.time())
             start = now - now % 300
+            # Keep the live observation strictly after the contract boundary.
+            # At an exact five-minute wall-clock boundary, using ``now`` here
+            # would accidentally turn this fallback test into an exact-match
+            # test and make the assertion depend on test start time.
+            live_timestamp_ms = max(now * 1000, start * 1000 + 1000)
             universe = root / "universe.json"
             universe.write_text(json.dumps({"markets": [{
                 "market_id": "m1", "condition_id": "c1", "event_ids": ["e1"],
@@ -134,9 +139,9 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
                             "price": 77000.0, "price_decimal": "77000.0",
                             "timestamp_ms": start * 1000 - 1000})
             monitor.ingest({"topic": module.ORACLE_TOPIC, "symbol": "btc/usd",
-                            "price": 77010.0, "timestamp_ms": now * 1000})
+                            "price": 77010.0, "timestamp_ms": live_timestamp_ms})
             monitor.ingest({"topic": module.EXTERNAL_TOPIC, "symbol": "btcusdt",
-                            "price": 77019.0, "timestamp_ms": now * 1000})
+                            "price": 77019.0, "timestamp_ms": live_timestamp_ms})
             monitor.publish()
             status = json.loads((root / "external" / "status.json").read_text())
             self.assertTrue(status["contract"]["verified"])

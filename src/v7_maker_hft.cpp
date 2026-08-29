@@ -409,6 +409,9 @@ MakerDecision MakerHotPath::on_market_update(
     if (risk.global_kill) return control_exit(DecisionReason::GlobalKill, IntentType::Kill);
     if (risk.strategy_kill) return control_exit(DecisionReason::StrategyKill, IntentType::Kill);
     if (risk.market_kill) return control_exit(DecisionReason::MarketKill, IntentType::Kill);
+    if (risk.new_risk_frozen) {
+        return control_exit(DecisionReason::NewRiskFrozen, IntentType::Withdraw);
+    }
     if (!update.feed_healthy) return control_exit(DecisionReason::FeedUnhealthy, IntentType::Withdraw);
     if (risk.max_local_state_age_ns > 0 && local_age_ns > risk.max_local_state_age_ns) {
         return control_exit(DecisionReason::StaleState, IntentType::Withdraw);
