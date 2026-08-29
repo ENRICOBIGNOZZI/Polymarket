@@ -413,12 +413,16 @@ class PaperRouter:
                 continue
             if not isinstance(raw, dict) or raw.get("closed") is not True:
                 continue
-            outcomes = [str(value).upper() for value in parse_array(raw.get("outcomes"))]
+            outcomes = [str(value) for value in parse_array(raw.get("outcomes"))]
+            tokens = [str(value) for value in parse_array(raw.get("clobTokenIds"))]
             prices = [finite(value) for value in parse_array(raw.get("outcomePrices"))]
-            resolved = next((name for name, price in zip(outcomes, prices) if math.isfinite(price) and price >= 1.0 - 1e-9), "")
-            if resolved not in {"YES", "NO"}:
+            winning_index = next((index for index, price in enumerate(prices)
+                                  if math.isfinite(price) and price >= 1.0 - 1e-9), -1)
+            if winning_index < 0 or winning_index >= len(tokens):
                 continue
-            payout = float(position["shares"]) if resolved == position["outcome"] else 0.0
+            winning_token = tokens[winning_index]
+            resolved = outcomes[winning_index] if winning_index < len(outcomes) else ""
+            payout = float(position["shares"]) if winning_token == str(position["token_id"]) else 0.0
             pnl = payout - float(position["entry_cost"]) - float(position["entry_fee"])
             self.state["cash"] = float(self.state.get("cash") or 0.0) + payout
             self.state["realized_pnl"] = float(self.state.get("realized_pnl") or 0.0) + pnl
@@ -430,7 +434,8 @@ class PaperRouter:
                 fill_id=str(position["fill_id"]), market_id=str(position["market_id"]),
                 event_id=str(position["event_id"]), token_id=str(position["token_id"]), side="BUY",
                 final_pnl=pnl, capital_duration_ms=current_ms - int(position["opened_ms"]),
-                metadata={"settlement_outcome": resolved, "hold_to_settlement": True},
+                metadata={"settlement_outcome": resolved, "winning_token_id": winning_token,
+                          "hold_to_settlement": True},
             ))
 
     def publish(self, active_candidates: int, blocker: str = "") -> None:

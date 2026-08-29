@@ -130,6 +130,36 @@ def main() -> None:
         assert status["last_decision"]["outcome"] == "CLOB_BOOK_REQUEST_TIMEOUTERROR"
         assert status["rejection_reasons"]["CLOB_BOOK_REQUEST_TIMEOUTERROR"] == 1
 
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        settling = router.PaperRouter(
+            run_root, "c" * 40, ROOT / "config" / "v7_external_fair.json",
+            "https://clob.invalid", "https://gamma.invalid",
+        )
+        opened_ms = router.now_ms() - 301_000
+        settling.state["cash"] = 90.0
+        settling.state["positions"] = {"position-up": {
+            "position_id": "position-up", "order_id": "order-up", "fill_id": "fill-up",
+            "market_id": "market-up-down", "event_id": "event-up-down", "token_id": "up-token",
+            "outcome": "YES", "shares": 10.0, "entry_price": 0.4, "entry_cost": 4.0,
+            "entry_fee": 0.2, "executable_value": 0.0, "opened_ms": opened_ms,
+            "fee_schedule": {"rate": 0.07, "exponent": 1},
+            "markouts": list(router.HORIZONS), "settled": False,
+        }}
+        resolution = {
+            "closed": True, "outcomes": '["Up", "Down"]',
+            "clobTokenIds": '["up-token", "down-token"]', "outcomePrices": '["1", "0"]',
+        }
+        with mock.patch.object(router, "request_json", return_value=resolution):
+            settling.observe_positions()
+        position = settling.state["positions"]["position-up"]
+        assert position["settled"] is True and position["resolved_outcome"] == "Up"
+        assert abs(settling.state["realized_pnl"] - 5.8) < 1e-12
+        events = [json.loads(path.read_text()) for path in (run_root / "ledger" / "spool").glob("*.json")]
+        final = next(event for event in events if event["event_type"] == "FINAL")
+        assert final["final_pnl"] == 5.8
+        assert final["metadata"]["winning_token_id"] == "up-token"
+
 
 if __name__ == "__main__":
     main()
