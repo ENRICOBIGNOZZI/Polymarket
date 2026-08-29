@@ -8,6 +8,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class V7CutoverUpdaterTest(unittest.TestCase):
+    def test_deploy_lock_is_owned_and_only_expired_orphans_are_recovered(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        function = text[text.index("acquire_deploy_lock(){"):text.index("write_status(){")]
+        self.assertIn('LOCK_STALE_SECONDS="${POLYMARKET_DEPLOY_LOCK_STALE_SECONDS:-7200}"', text)
+        self.assertIn('kill -0 "$owner_pid"', function)
+        self.assertIn('age_seconds < LOCK_STALE_SECONDS', function)
+        self.assertIn('mv "$LOCK_DIR" "$quarantine"', function)
+        self.assertIn('! -name owner_pid ! -name started_at ! -name nonce', function)
+        self.assertIn('printf \'%s\\n\' "$$" > "$LOCK_DIR/owner_pid"', function)
+        self.assertIn('"$(cat "$LOCK_DIR/nonce"', function)
+        self.assertNotIn('rm -rf "$LOCK_DIR"', function)
+
     def test_updater_prevalidates_exact_candidate_before_checkout_mutation(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         self.assertIn('log "Validating exact V7 candidate $EXPECTED_SHA before active-checkout mutation"', text)

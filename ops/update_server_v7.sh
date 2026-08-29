@@ -11,6 +11,8 @@ LOCK_DIR="$CACHE_DIR/update-v7.lock"
 STATUS_FILE="$STATE_DIR/v7_deploy_status.env"
 HEALTH_ATTEMPTS="${POLYMARKET_RUNTIME_HEALTH_ATTEMPTS:-180}"
 DRAIN_ATTEMPTS="${POLYMARKET_RUNTIME_DRAIN_ATTEMPTS:-50}"
+LOCK_STALE_SECONDS="${POLYMARKET_DEPLOY_LOCK_STALE_SECONDS:-7200}"
+LOCK_NONCE="${EXPECTED_SHA}.$$.$(date +%s)"
 
 log(){ printf '[v7-deploy] %s\n' "$*"; }
 fail(){ printf '[v7-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -20,16 +22,57 @@ fail(){ printf '[v7-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$MAIN_REF" == "main" ]] || fail "V7 canonical integration ref must remain main"
 [[ "$HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS must be positive"
 [[ "$DRAIN_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_RUNTIME_DRAIN_ATTEMPTS must be positive"
+[[ "$LOCK_STALE_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_LOCK_STALE_SECONDS must be positive"
 [[ -d "$APP_DIR/.git" ]] || fail "$APP_DIR is not a git checkout"
 
 mkdir -p "$CACHE_DIR" "$STATE_DIR"
-mkdir "$LOCK_DIR" 2>/dev/null || fail "another V7 deployment owns $LOCK_DIR"
+acquire_deploy_lock(){
+  local owner_pid="" age_seconds="" quarantine=""
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    owner_pid="$(cat "$LOCK_DIR/owner_pid" 2>/dev/null || true)"
+    if [[ "$owner_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$owner_pid" 2>/dev/null; then
+      fail "another live V7 deployment pid=$owner_pid owns $LOCK_DIR"
+    fi
+    age_seconds="$(python3 - "$LOCK_DIR" <<'PY'
+import os,sys,time
+try:
+    print(max(0, int(time.time() - os.stat(sys.argv[1]).st_mtime)))
+except FileNotFoundError:
+    print(0)
+PY
+)"
+    [[ "$age_seconds" =~ ^[0-9]+$ ]] || fail "cannot determine V7 deployment lock age"
+    if (( age_seconds < LOCK_STALE_SECONDS )); then
+      fail "V7 deployment lock owner is unavailable but lease is not stale: age=${age_seconds}s"
+    fi
+    find "$LOCK_DIR" -mindepth 1 -maxdepth 1 \
+      ! -name owner_pid ! -name started_at ! -name nonce -print -quit | grep -q . && \
+      fail "expired V7 deployment lock contains unexpected state: $LOCK_DIR"
+    quarantine="$CACHE_DIR/update-v7.stale.$$.${age_seconds}"
+    mv "$LOCK_DIR" "$quarantine" 2>/dev/null || fail "V7 deployment lock changed during stale-lock recovery"
+    rm -f "$quarantine/owner_pid" "$quarantine/started_at" "$quarantine/nonce"
+    if ! rmdir "$quarantine"; then
+      if [[ ! -e "$LOCK_DIR" ]]; then mv "$quarantine" "$LOCK_DIR" 2>/dev/null || true; fi
+      fail "could not retire stale V7 deployment lock"
+    fi
+    mkdir "$LOCK_DIR" 2>/dev/null || fail "another V7 deployment won stale-lock recovery"
+    log "Recovered expired orphan deployment lock age=${age_seconds}s"
+  fi
+  umask 077
+  printf '%s\n' "$$" > "$LOCK_DIR/owner_pid"
+  printf '%s\n' "$(date +%s)" > "$LOCK_DIR/started_at"
+  printf '%s\n' "$LOCK_NONCE" > "$LOCK_DIR/nonce"
+}
+acquire_deploy_lock
 candidate=""
 cleanup(){
   if [[ -n "$candidate" && -d "$candidate" ]]; then
     git -C "$APP_DIR" worktree remove --force "$candidate" >/dev/null 2>&1 || true
   fi
-  rmdir "$LOCK_DIR" >/dev/null 2>&1 || true
+  if [[ "$(cat "$LOCK_DIR/nonce" 2>/dev/null || true)" == "$LOCK_NONCE" ]]; then
+    rm -f "$LOCK_DIR/owner_pid" "$LOCK_DIR/started_at" "$LOCK_DIR/nonce"
+    rmdir "$LOCK_DIR" >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT INT TERM
 
