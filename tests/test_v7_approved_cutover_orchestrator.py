@@ -17,6 +17,7 @@ def test_orchestrator_uses_canonical_workflows_without_direct_deploy_or_ref_patc
     for workflow in (
         "ci.yml", "monitoring.yml", "private-runtime-single-writer-validation.yml",
         "v7-live-paper-validation.yml", "v7-deploy-paper-server.yml",
+        "v7-paper-server-health.yml",
     ):
         assert f"gh workflow run {workflow}" in text
     assert "cutover_approved=true" in text
@@ -29,3 +30,13 @@ def test_single_writer_accepts_exact_sha_dispatch_input():
     text = (ROOT / ".github/workflows/private-runtime-single-writer-validation.yml").read_text()
     assert "expected_sha:" in text
     assert "github.event.inputs.expected_sha" in text
+
+
+def test_orchestrator_requires_exact_sha_health_after_deploy_before_cleanup():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    deploy = text.index("- name: Dispatch canonical PAPER server deploy")
+    health = text.index("- name: Dispatch exact-SHA PAPER server health")
+    cleanup = text.index("- name: Start proven-merged branch cleanup")
+    assert deploy < health < cleanup
+    assert 'expected_sha="$TARGET_SHA"' in text[health:cleanup]
+    assert "paper_health_run_id=" in text[health:cleanup]
