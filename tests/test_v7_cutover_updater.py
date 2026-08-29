@@ -20,6 +20,23 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn('"$(cat "$LOCK_DIR/nonce"', function)
         self.assertNotIn('rm -rf "$LOCK_DIR"', function)
 
+    def test_live_lock_recovery_is_limited_to_verified_orphan_updater(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        function = text[text.index("recover_orphaned_live_deploy(){"):text.index("acquire_deploy_lock(){")]
+        self.assertIn('POLYMARKET_DEPLOY_ORPHAN_GRACE_SECONDS:-300', text)
+        self.assertIn('[[ "$nonce" == "$owner_sha.$owner_pid.$started_at" ]]', function)
+        self.assertIn('merge-base --is-ancestor "$owner_sha" "$EXPECTED_SHA"', function)
+        self.assertIn('ps -p "$owner_pid" -o ppid=,command=', function)
+        self.assertIn('[[ "$parent_pid" == "1" && "$command_line" == *bash* ]]', function)
+        self.assertIn("runtime.get('model_sha') == owner_sha", function)
+        self.assertIn("runtime.get('paper_only') is True", function)
+        self.assertIn("runtime.get('authenticated_execution') is False", function)
+        self.assertIn("runtime.get('real_order_submission') is False", function)
+        self.assertIn('runtime_pid != owner_pid', function)
+        self.assertIn('kill -TERM "$owner_pid"', function)
+        self.assertIn('kill -KILL "$owner_pid"', function)
+        self.assertNotIn("pkill", function)
+
     def test_external_ws_stop_token_has_explicit_apple_libcpp_fallback(self) -> None:
         header = (ROOT / "include/pm/v7_external_ws.hpp").read_text(encoding="utf-8")
         source = (ROOT / "src/v7_external_ws.cpp").read_text(encoding="utf-8")
