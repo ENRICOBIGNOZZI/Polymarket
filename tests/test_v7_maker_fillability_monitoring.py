@@ -87,6 +87,16 @@ class V7MakerFillabilityMonitoringTest(unittest.TestCase):
         ):
             self.assertIn(metric, serialized)
 
+    def test_fillability_evidence_is_collected_hourly_and_on_contract_changes(self) -> None:
+        workflow = (ROOT / ".github/workflows/v7-maker-fillability-evidence.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('cron: "17 * * * *"', workflow)
+        self.assertIn("github.event_name == 'schedule'", workflow)
+        self.assertIn("github.event_name == 'push'", workflow)
+        self.assertIn('"config/v7_professional_market_maker.json"', workflow)
+        self.assertIn('"src/v7_maker_fillability_observer.cpp"', workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
