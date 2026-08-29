@@ -40,6 +40,7 @@ jobs:
             --repository-root . --remote origin --base main \
             --github-repository "$GITHUB_REPOSITORY" \
             --include-merged-pr-branches \
+            --include-closed-operational-branches \
             --report merged-branch-cleanup.json "${apply[@]}"
       - uses: actions/upload-artifact@v4
         with:

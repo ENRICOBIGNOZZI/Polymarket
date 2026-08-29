@@ -32,6 +32,7 @@ def test_workflow_has_write_scope_and_ancestry_cleanup_only():
     assert "contents: write" in workflow
     assert "--merged=" in script
     assert "--include-merged-pr-branches" in workflow
+    assert "--include-closed-operational-branches" in workflow
     assert "GITHUB_TOKEN" in workflow
     assert "unmerged_branches_deleted" in script
     assert "paper-validated" in script
@@ -93,3 +94,26 @@ def test_merged_pr_cleanup_protects_open_heads_bases_and_unmerged_work():
 
 def test_telemetry_is_protected():
     assert hygiene.is_protected_branch("telemetry")
+
+
+def test_closed_operational_cleanup_preserves_research_and_open_stacks():
+    repository = "ENRICOBIGNOZZI/Polymarket"
+    same_repo = {"full_name": repository}
+    branches = {
+        "fix/superseded": "fix-sha",
+        "integration/obsolete": "integration-sha",
+        "research/unique": "research-sha",
+        "fix/open-base": "base-sha",
+        "research/open-head": "open-sha",
+    }
+    pulls = [
+        {"state": "closed", "merged_at": None, "head": {"ref": "fix/superseded", "repo": same_repo}, "base": {"ref": "main"}},
+        {"state": "closed", "merged_at": None, "head": {"ref": "integration/obsolete", "repo": same_repo}, "base": {"ref": "main"}},
+        {"state": "closed", "merged_at": None, "head": {"ref": "research/unique", "repo": same_repo}, "base": {"ref": "main"}},
+        {"state": "closed", "merged_at": None, "head": {"ref": "fix/open-base", "repo": same_repo}, "base": {"ref": "main"}},
+        {"state": "open", "merged_at": None, "head": {"ref": "research/open-head", "repo": same_repo}, "base": {"ref": "fix/open-base"}},
+    ]
+    assert hygiene.closed_operational_pr_branches(branches, pulls, repository) == [
+        "fix/superseded",
+        "integration/obsolete",
+    ]

@@ -22,6 +22,7 @@ from typing import Any
 SAFE_BRANCH = re.compile(r"^[A-Za-z0-9._/-]+$")
 PROTECTED_EXACT = {"HEAD", "main", "paper-validated", "telemetry"}
 PROTECTED_PREFIXES = ("release/", "hotfix/")
+RESEARCH_ARCHIVE_PREFIXES = ("research/", "experiment/", "improve/", "agent/", "review/")
 DISPOSABLE_BRANCH = re.compile(r"^tmp-unused(?:-[0-9]+)?$")
 
 
@@ -115,6 +116,38 @@ def merged_pr_branches(
     return sorted(candidates)
 
 
+def closed_operational_pr_branches(
+    branches: dict[str, str], pull_requests: list[dict[str, Any]], repository: str,
+) -> list[str]:
+    """Return closed-unmerged operational heads while preserving research archives."""
+    open_refs: set[str] = set()
+    for pull in pull_requests:
+        if pull.get("state") != "open":
+            continue
+        for side in ("head", "base"):
+            ref = (pull.get(side) or {}).get("ref")
+            if ref:
+                open_refs.add(str(ref))
+
+    candidates: set[str] = set()
+    for pull in pull_requests:
+        head = pull.get("head") or {}
+        head_repo = head.get("repo") or {}
+        branch = str(head.get("ref") or "")
+        if (
+            pull.get("state") != "closed"
+            or pull.get("merged_at")
+            or head_repo.get("full_name") != repository
+            or branch not in branches
+            or branch in open_refs
+            or branch.startswith(RESEARCH_ARCHIVE_PREFIXES)
+            or is_protected_branch(branch)
+        ):
+            continue
+        candidates.add(branch)
+    return sorted(candidates)
+
+
 def fetch_pull_requests(repository: str, token: str | None) -> list[dict[str, Any]]:
     pulls: list[dict[str, Any]] = []
     page = 1
@@ -151,6 +184,7 @@ def main() -> int:
     parser.add_argument("--base", default="main")
     parser.add_argument("--github-repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
     parser.add_argument("--include-merged-pr-branches", action="store_true")
+    parser.add_argument("--include-closed-operational-branches", action="store_true")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
@@ -159,16 +193,25 @@ def main() -> int:
         "+refs/heads/*:refs/remotes/origin/*")
     ancestry_candidates = merged_remote_branches(root, args.remote, args.base)
     pr_candidates: list[str] = []
+    closed_operational_candidates: list[str] = []
     pull_request_count = 0
-    if args.include_merged_pr_branches:
+    if args.include_merged_pr_branches or args.include_closed_operational_branches:
         if not args.github_repository:
-            raise RuntimeError("--github-repository is required for merged-PR cleanup")
+            raise RuntimeError("--github-repository is required for PR-aware cleanup")
         pulls = fetch_pull_requests(args.github_repository, os.environ.get("GITHUB_TOKEN"))
         pull_request_count = len(pulls)
+        branches = remote_branches(root, args.remote)
+    if args.include_merged_pr_branches:
         pr_candidates = merged_pr_branches(
-            remote_branches(root, args.remote), pulls, args.github_repository,
+            branches, pulls, args.github_repository,
         )
-    candidates = sorted(set(ancestry_candidates) | set(pr_candidates))
+    if args.include_closed_operational_branches:
+        closed_operational_candidates = closed_operational_pr_branches(
+            branches, pulls, args.github_repository,
+        )
+    candidates = sorted(
+        set(ancestry_candidates) | set(pr_candidates) | set(closed_operational_candidates)
+    )
     deleted: list[str] = []
     failures: list[dict[str, str]] = []
     if args.apply:
@@ -179,7 +222,7 @@ def main() -> int:
             except RuntimeError as error:
                 failures.append({"branch": branch, "error": str(error)})
     report = {
-        "schema": "polymarket_v7_merged_branch_cleanup_v2",
+        "schema": "polymarket_v7_merged_branch_cleanup_v3",
         "base": f"{args.remote}/{args.base}",
         "apply": args.apply,
         "protected_exact": sorted(PROTECTED_EXACT),
@@ -187,14 +230,16 @@ def main() -> int:
         "pull_request_count": pull_request_count,
         "ancestry_candidate_count": len(ancestry_candidates),
         "merged_pr_candidate_count": len(pr_candidates),
+        "closed_operational_candidate_count": len(closed_operational_candidates),
         "ancestry_candidates": ancestry_candidates,
         "merged_pr_candidates": pr_candidates,
+        "closed_operational_candidates": closed_operational_candidates,
         "candidate_count": len(candidates),
         "candidates": candidates,
         "deleted_count": len(deleted),
         "deleted": deleted,
         "failures": failures,
-        "unmerged_branches_deleted": 0,
+        "unmerged_branches_deleted": len(set(deleted) & set(closed_operational_candidates)),
     }
     encoded = json.dumps(report, sort_keys=True, indent=2) + "\n"
     if args.report:
