@@ -26,6 +26,7 @@ from v7_market_common import finite, parse_array, request_json
 STRATEGY = "CRYPTO_INFORMED_TAKER"
 MODEL_VERSION = "external-fair-structural-v7-paper"
 HORIZONS = (1, 10, 45, 60, 300)
+MAX_CLOB_CLOCK_SKEW_MS = 250
 
 
 def load(path: Path) -> dict[str, Any]:
@@ -96,8 +97,13 @@ def parse_book(raw: Any, receive_ts_ms: int) -> Book | None:
     exchange = int(finite(raw.get("timestamp"), 0.0))
     if exchange and exchange < 10_000_000_000:
         exchange *= 1000
-    if not token or not bids or not asks or exchange <= 0 or exchange > receive_ts_ms:
+    if (not token or not bids or not asks or exchange <= 0
+            or exchange > receive_ts_ms + MAX_CLOB_CLOCK_SKEW_MS):
         return None
+    # The public CLOB clock can lead the local host by a few milliseconds.  A
+    # bounded skew is safe to accept, but the canonical ledger clock must stay
+    # causal (exchange <= receive).  Larger future timestamps still fail closed.
+    exchange = min(exchange, receive_ts_ms)
     snapshot = str(raw.get("hash") or "") or stable_id(token, exchange, bids, asks)
     return Book(
         token, tuple(bids), tuple(asks), max(1e-6, finite(raw.get("tick_size"), 0.01)),

@@ -43,6 +43,17 @@ def main() -> None:
     expected = 2.0 * (0.50 - 0.0175) + 3.0 * (0.49 - 0.07 * 0.49 * 0.51)
     assert abs(executable_sell_value(depth_book, 5.0, {"rate": 0.07, "exponent": 1}) - expected) < 1e-12
     assert executable_sell_value(depth_book, 6.0, {"rate": 0.07, "exponent": 1}) == 0.0
+    receive_ms = 1_788_032_000_000
+    raw_book = {
+        "asset_id": "yes", "timestamp": str(receive_ms + 15), "hash": "clock-skew",
+        "tick_size": "0.01", "min_order_size": "5",
+        "bids": [{"price": "0.49", "size": "10"}],
+        "asks": [{"price": "0.50", "size": "10"}],
+    }
+    skewed = router.parse_book(raw_book, receive_ms)
+    assert skewed is not None and skewed.exchange_ts_ms == receive_ms
+    raw_book["timestamp"] = str(receive_ms + router.MAX_CLOB_CLOCK_SKEW_MS + 1)
+    assert router.parse_book(raw_book, receive_ms) is None
     policy = {"minimum_robust_ev_per_share": 0.001, "base_execution_risk_per_share": 0.0005}
     rows = robust_candidates(snapshot(), {"yes": book("yes", 0.50), "no": book("no", 0.81)}, policy)
     assert len(rows) == 1 and rows[0]["outcome"] == "YES"
