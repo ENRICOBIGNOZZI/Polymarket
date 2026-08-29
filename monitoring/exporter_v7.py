@@ -26,7 +26,30 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 from v7_ledger_metrics import summarize_ledger
+from v7_external_fair import summarize_external_fair
+from v7_maker_fillability_exact import summarize_best_available_fillability
 from v7_maker_microstructure import summarize_maker_microstructure
+
+_FILLABILITY_CACHE_KEY: tuple[str, str, int] | None = None
+_FILLABILITY_CACHE_VALUE: dict[str, Any] | None = None
+_FILLABILITY_REFRESH_SECONDS = 30
+
+
+def _fillability_report(run_root: Path, repository_root: Path, runtime_sha: str, now: int) -> dict[str, Any]:
+    global _FILLABILITY_CACHE_KEY, _FILLABILITY_CACHE_VALUE
+    key = (str(run_root.resolve()), runtime_sha, now // _FILLABILITY_REFRESH_SECONDS)
+    if key == _FILLABILITY_CACHE_KEY and _FILLABILITY_CACHE_VALUE is not None:
+        return _FILLABILITY_CACHE_VALUE
+    report = summarize_best_available_fillability(
+        run_root / "ledger" / "execution.jsonl",
+        run_root / "trade_tape.csv",
+        repository_root / "config" / "v7_professional_market_maker.json",
+        model_sha=runtime_sha or None,
+        now_ms=now * 1000,
+    )
+    _FILLABILITY_CACHE_KEY = key
+    _FILLABILITY_CACHE_VALUE = report
+    return report
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -259,6 +282,11 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     authority_valid = directives.get("authority") == "latest_explicit_user_instruction" and authorization.get("paper_only") is True and authorization.get("authenticated_execution") is False and 0.0 < authority_max_drawdown <= 1.0
     sha = _git_head(repository_root)
     runtime_alive = _pid_alive(runtime.get("pid")) and not (run_root / "control" / "KILL").exists()
+    runtime_sha = str(runtime.get("model_sha") or "")
+    maker_fillability = _fillability_report(run_root, repository_root, runtime_sha, now)
+    external_fair = summarize_external_fair(
+        run_root, repository_root, runtime_sha=runtime_sha, now_s=now,
+    )
 
     budgets = allocations.get("budgets") if isinstance(allocations.get("budgets"), dict) else {}
     sleeves = portfolio.get("sleeves") if isinstance(portfolio.get("sleeves"), dict) else {}
@@ -344,6 +372,8 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "joint_policy": joint,
         "ledger": ledger,
         "maker_lab": maker_lab,
+        "maker_fillability": maker_fillability,
+        "external_fair": external_fair,
         "maker_latency": maker_latency,
         "trade_tape": tape,
         "authority": {"valid": authority_valid, "max_drawdown": authority_max_drawdown},
@@ -381,6 +411,7 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     authority = snapshot["authority"]
     maker = snapshot.get("maker") if isinstance(snapshot.get("maker"), dict) else {}
     selector = snapshot.get("maker_selector") if isinstance(snapshot.get("maker_selector"), dict) else {}
+    external_fair = snapshot.get("external_fair") if isinstance(snapshot.get("external_fair"), dict) else {}
     if authority.get("valid") is not True: reasons.append("operator_authority_missing_or_invalid")
     if runtime.get("version") != 7: reasons.append("runtime_version_not_v7")
     if runtime.get("paper_only") is not True: reasons.append("runtime_not_paper_only")
@@ -542,6 +573,8 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     if snapshot["economics"]["killed"]: reasons.append("runtime_killed")
     max_drawdown = _number(authority.get("max_drawdown"), 0.0)
     if max_drawdown > 0.0 and snapshot["economics"]["drawdown"] >= max_drawdown - 1e-12: reasons.append("drawdown_limit_breached")
+    if external_fair.get("external_fair_required_markets", 0) and not external_fair.get("shadow_zero_authority", True):
+        reasons.extend(str(reason) for reason in external_fair.get("hard_reasons", []))
     return sorted(set(reasons))
 
 
@@ -916,6 +949,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_universe_skipped_markets", universe.get("skipped_markets")),
         _metric("polymarket_v7_universe_scan_duration_milliseconds", universe.get("scan_duration_ms")),
         _metric("polymarket_v7_universe_pages", universe.get("pages")),
+        _metric("polymarket_v7_universe_request_retries", universe.get("request_retries")),
         _metric("polymarket_execution_opportunities", _integer(ledger_total.get("opportunities"))),
         _metric("polymarket_execution_candidates", _integer(ledger_total.get("candidates"))),
         _metric("polymarket_execution_makes", _integer(ledger_total.get("makes"))),
@@ -1016,6 +1050,12 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
                 row.get(percentile),
                 {"stage": stage, "percentile": percentile},
             ))
+    # These appenders contain metrics only; the canonical exporter remains the
+    # sole HTTP listener and snapshot owner.
+    from exporter_v7_fillability import _append_fillability_metrics
+    from exporter_v7_external import _append_external_fair_metrics
+    _append_fillability_metrics(lines, snapshot.get("maker_fillability") or {})
+    _append_external_fair_metrics(lines, snapshot.get("external_fair") or {})
     return "\n".join(lines)+"\n"
 
 
@@ -1027,6 +1067,8 @@ class ExporterHandler(BaseHTTPRequestHandler):
         if self.path=="/metrics": payload=render_prometheus(snapshot).encode(); self.send_response(200); self.send_header("Content-Type","text/plain; version=0.0.4; charset=utf-8")
         elif self.path=="/healthz":
             reasons=health_reasons(snapshot,max_runtime_age=self.max_runtime_age,max_supervisor_age=self.max_supervisor_age); payload=(json.dumps({"ok":not reasons,"reasons":reasons},sort_keys=True)+"\n").encode(); self.send_response(200 if not reasons else 503); self.send_header("Content-Type","application/json; charset=utf-8")
+        elif self.path=="/maker-fillability.json": payload=(json.dumps(snapshot.get("maker_fillability") or {},sort_keys=True)+"\n").encode(); self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8")
+        elif self.path=="/external-fair.json": payload=(json.dumps(snapshot.get("external_fair") or {},sort_keys=True)+"\n").encode(); self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8")
         else: payload=b"not found\n"; self.send_response(404); self.send_header("Content-Type","text/plain; charset=utf-8")
         self.send_header("Content-Length",str(len(payload))); self.end_headers(); self.wfile.write(payload)
 

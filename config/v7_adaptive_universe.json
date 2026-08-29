@@ -6,10 +6,11 @@
   "real_order_submission": false,
   "source": {
     "gamma_url": "https://gamma-api.polymarket.com",
-    "page_size": 500,
-    "pagination_loop_guard_pages": 200,
+    "page_size": 100,
+    "pagination_loop_guard_pages": 1000,
     "request_timeout_seconds": 20,
-    "refresh_seconds": 60,
+    "request_attempts_per_page": 4,
+    "refresh_seconds": 300,
     "retry_initial_seconds": 1,
     "retry_max_seconds": 30
   },
@@ -18,7 +19,8 @@
     "closed_forbidden": true,
     "accepting_orders_required": true,
     "minimum_clob_tokens": 2,
-    "minimum_liquidity_usd": 2.0
+    "minimum_liquidity_usd": 2.0,
+    "minimum_volume_24h_usd": 1.0
   },
   "resource_budget": {
     "hot": {

@@ -358,19 +358,28 @@ def _fallback_snapshot(
         raise ValueError(f"maker_fallback_universe_stale:{age_ms}")
     minimum_volume = float(selection_cfg.get("min_volume_24h", 100.0))
     minimum_liquidity = float(selection_cfg.get("min_liquidity", 25.0))
-    selected: list[dict[str, Any]] = []
+    minimum_mid = float(selection_cfg.get("min_mid", 0.02))
+    maximum_mid = float(selection_cfg.get("max_mid", 0.98))
+    weights = selection_cfg.get("fallback_score_weights") if isinstance(selection_cfg.get("fallback_score_weights"), dict) else {}
+    candidates: list[dict[str, Any]] = []
     for raw in universe.get("markets") if isinstance(universe.get("markets"), list) else []:
-        if not isinstance(raw, dict) or len(selected) >= resource_capacity:
-            break
+        if not isinstance(raw, dict):
+            continue
         tokens = raw.get("clob_token_ids") if isinstance(raw.get("clob_token_ids"), list) else []
         events = raw.get("event_ids") if isinstance(raw.get("event_ids"), list) else []
+        liquidity = max(0.0, finite(raw.get("liquidity")))
+        volume_24h = max(0.0, finite(raw.get("volume_24h")))
+        midpoint = finite(raw.get("midpoint"), -1.0)
+        spread = max(0.0, finite(raw.get("spread")))
         if (
             raw.get("active") is not True
             or raw.get("closed") is True
             or raw.get("accepting_orders") is not True
             or len(tokens) < 2
-            or finite(raw.get("liquidity")) < minimum_liquidity
-            or finite(raw.get("volume_24h")) < minimum_volume
+            or liquidity < minimum_liquidity
+            or volume_24h < minimum_volume
+            or midpoint < minimum_mid
+            or midpoint > maximum_mid
         ):
             continue
         condition_id = str(raw.get("condition_id") or "")
@@ -378,7 +387,15 @@ def _fallback_snapshot(
         yes_token, no_token = str(tokens[0] or ""), str(tokens[1] or "")
         if not condition_id or not market_id or not yes_token or not no_token or yes_token == no_token:
             continue
-        selected.append({
+        flow_to_depth = volume_24h / max(liquidity, minimum_liquidity)
+        mid_balance = max(0.0, 1.0 - abs(midpoint - 0.5) / 0.5)
+        score = (
+            finite(weights.get("log_volume_24h"), 1.0) * math.log1p(volume_24h)
+            + finite(weights.get("log_flow_to_depth"), 1.0) * math.log1p(flow_to_depth)
+            + finite(weights.get("mid_balance"), 0.25) * mid_balance
+            + finite(weights.get("log_spread_cents"), 0.1) * math.log1p(spread * 100.0)
+        )
+        candidates.append({
             "condition_id": condition_id,
             "market_id": market_id,
             "event_id": str(events[0] if events else ""),
@@ -386,7 +403,11 @@ def _fallback_snapshot(
             "question": str(raw.get("question") or ""),
             "yes_token": yes_token,
             "no_token": no_token,
-            "volume_24h": max(0.0, finite(raw.get("volume_24h"))),
+            "volume_24h": volume_24h,
+            "liquidity": liquidity,
+            "midpoint": midpoint,
+            "spread": spread,
+            "flow_to_depth_24h": flow_to_depth,
             "market_competitiveness": 0.0,
             "rewards_max_spread_cents": 0.0,
             "rewards_min_size": 0.0,
@@ -394,8 +415,24 @@ def _fallback_snapshot(
             "sponsored_daily_rate": 0.0,
             "total_daily_rate": 0.0,
             "reward_intensity": 0.0,
-            "selection_score": finite(raw.get("score")),
+            "selection_score": score,
         })
+    candidates.sort(key=lambda row: (
+        -finite(row.get("selection_score")),
+        -finite(row.get("volume_24h")),
+        finite(row.get("liquidity")),
+        str(row.get("market_id") or ""),
+    ))
+    selected: list[dict[str, Any]] = []
+    selected_events: set[str] = set()
+    for row in candidates:
+        event_key = str(row.get("event_id") or f"market:{row.get('market_id')}")
+        if event_key in selected_events:
+            continue
+        selected_events.add(event_key)
+        selected.append(row)
+        if len(selected) >= resource_capacity:
+            break
     if not selected:
         raise ValueError("maker_fallback_universe_has_no_eligible_markets")
     return {
@@ -406,7 +443,7 @@ def _fallback_snapshot(
         "real_order_submission": False,
         "model_sha": model_sha,
         "source": "adaptive_universe_fallback",
-        "selection_mode": "LIQUIDITY_FALLBACK",
+        "selection_mode": "FLOW_FILLABILITY_FALLBACK",
         "degraded": True,
         "reward_data_available": False,
         "primary_error": primary_error,
@@ -417,7 +454,7 @@ def _fallback_snapshot(
         "resource_capacity": capacity_cfg,
         "universe_membership_sha256": str(universe.get("membership_sha256") or ""),
         "markets": selected,
-        "note": "Reward REST was unavailable; PAPER maker remains operational on the fresh exhaustive liquidity universe with reward assumptions forced to zero.",
+        "note": "Reward REST was unavailable; PAPER maker uses the fresh exhaustive universe ranked by public flow-to-depth fillability signals, with reward assumptions forced to zero.",
     }
 
 

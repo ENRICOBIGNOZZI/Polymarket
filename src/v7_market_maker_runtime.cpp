@@ -1084,14 +1084,6 @@ private:
     std::uint64_t execution_version_ = 1;
 };
 
-struct OrderMeta {
-    std::uint64_t intent_id = 0;
-    std::uint64_t market_handle = 0;
-    std::uint64_t instrument_handle = 0;
-    std::uint8_t outcome_yes = 0;
-    Action action = Action::Withdraw;
-};
-
 class TelemetryWriter final {
 public:
     TelemetryWriter(fs::path run_root, std::string model_sha,
@@ -1196,8 +1188,8 @@ private:
         return "mmc-" + hex64(intent);
     }
 
-    [[nodiscard]] std::string order_id(std::uint64_t order) const {
-        return "mmo-" + std::to_string(order);
+    [[nodiscard]] std::string order_id(std::uint64_t market, std::uint64_t order) const {
+        return "mmo-" + std::to_string(market) + "-" + std::to_string(order);
     }
 
     [[nodiscard]] json::object common(const char* event_type) {
@@ -1293,14 +1285,11 @@ private:
         const auto& paper = record.paper;
         if (paper.kind == PaperMakerEventKind::OrderLive) {
             append_latency(record);
-            orders_[paper.order_id] = OrderMeta{paper.intent_id, record.market_handle,
-                                                record.instrument_handle, record.outcome_yes,
-                                                record.action};
             auto event = common("ORDER_SUBMITTED");
             attach_market(event, record);
             attach_book(event, record);
             event["candidate_id"] = candidate_id(paper.intent_id);
-            event["order_id"] = order_id(paper.order_id);
+            event["order_id"] = order_id(record.market_handle, paper.order_id);
             event["model_version"] = std::to_string(record.intent.model_version);
             event["exchange_ts_ms"] = exchange_ms(record);
             event["receive_ts_ms"] = record.receive_wall_ms;
@@ -1355,7 +1344,7 @@ private:
         if (record.paper.order_id == 0) return;
         auto event = common("ORDER_STATE");
         attach_market(event, record);
-        event["order_id"] = order_id(record.paper.order_id);
+        event["order_id"] = order_id(record.market_handle, record.paper.order_id);
         event["order_state"] = state;
         event["side"] = side_name(record.paper.side);
         json::object metadata;
@@ -1369,8 +1358,9 @@ private:
         const auto& paper = record.paper;
         auto event = common("FILL");
         attach_market(event, record);
-        event["order_id"] = order_id(paper.order_id);
-        event["fill_id"] = "mmf-" + std::to_string(paper.order_id) + "-" + hex64(paper.trade_id);
+        event["order_id"] = order_id(record.market_handle, paper.order_id);
+        event["fill_id"] = "mmf-" + std::to_string(record.market_handle) + "-" +
+                           std::to_string(paper.order_id) + "-" + hex64(paper.trade_id);
         event["exchange_ts_ms"] = exchange_ms(record);
         event["receive_ts_ms"] = record.receive_wall_ms;
         event["side"] = side_name(paper.side);
@@ -1400,7 +1390,6 @@ private:
     std::vector<MarketContext*> markets_;
     std::vector<InstrumentCold> instruments_;
     std::vector<PaperMakerInventory> inventory_;
-    std::unordered_map<std::uint64_t, OrderMeta> orders_;
     std::uint64_t record_sequence_ = 0;
     std::uint64_t merge_sequence_ = 0;
 };

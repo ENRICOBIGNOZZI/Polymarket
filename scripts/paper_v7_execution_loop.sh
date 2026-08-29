@@ -333,7 +333,7 @@ python3 scripts/v7_adaptive_universe.py \
   >> "$RUN_ROOT/universe/collector.log" 2>&1 &
 pids+=("$!")
 universe_ready=0
-for _ in $(seq 1 120); do
+for _ in $(seq 1 600); do
   if python3 - "$RUN_ROOT/universe/status.json" "$SHA" <<'PY' >/dev/null 2>&1
 import json,sys
 value=json.load(open(sys.argv[1]))

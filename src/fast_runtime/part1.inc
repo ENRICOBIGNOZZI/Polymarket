@@ -199,7 +199,10 @@ struct Options {
     int snapshot_refresh_seconds = 30;
     int status_interval_seconds = 1;
     int duration_seconds = 0;
-    int recycle_seconds = 900;
+    // The canonical service owns process supervision. A timed self-exit is
+    // indistinguishable from a component crash to the single-writer runtime
+    // and previously quarantined the whole PAPER stack every 15 minutes.
+    int recycle_seconds = 0;
     std::size_t latency_sample_every = 20;
 };
 

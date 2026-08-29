@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Exhaustive, resource-tiered active-market discovery for canonical V7 PAPER.
 
-Gamma pagination ends only when the venue returns a short/empty page.  HOT and
-WARM capacities are derived from declared resource budgets; COLD retains every
-remaining eligible market.  This component owns metadata discovery only and
-has no execution, capital, OMS, risk or ledger authority.
+Gamma keyset pagination exhausts the declared liquid, recently traded domain.
+HOT and WARM capacities are derived from declared resource budgets; COLD keeps
+every remaining eligible market in that domain. This component owns metadata
+discovery only and has no execution, capital, OMS, risk or ledger authority.
 """
 from __future__ import annotations
 
@@ -71,9 +71,10 @@ def validate_config(config: dict[str, Any]) -> None:
     source = config.get("source") if isinstance(config.get("source"), dict) else {}
     page_size = int(source.get("page_size", 0))
     guard = int(source.get("pagination_loop_guard_pages", 0))
+    request_attempts = int(source.get("request_attempts_per_page", 0))
     if not str(source.get("gamma_url") or "").startswith("https://"):
         raise ValueError("source.gamma_url must use HTTPS")
-    if not 1 <= page_size <= 500 or guard < 1:
+    if not 1 <= page_size <= 100 or guard < 1 or request_attempts < 1:
         raise ValueError("invalid pagination controls")
     hot = ((config.get("resource_budget") or {}).get("hot") or {})
     warm = ((config.get("resource_budget") or {}).get("warm") or {})
@@ -105,6 +106,14 @@ def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
         return None
     events = raw.get("events") if isinstance(raw.get("events"), list) else []
     event_ids = sorted({str(row.get("id")).strip() for row in events if isinstance(row, dict) and str(row.get("id") or "").strip()})
+    outcome_prices = [min(1.0, max(0.0, _finite(value))) for value in _array(raw.get("outcomePrices"))]
+    best_bid = min(1.0, max(0.0, _finite(raw.get("bestBid"))))
+    best_ask = min(1.0, max(0.0, _finite(raw.get("bestAsk"))))
+    midpoint = (
+        (best_bid + best_ask) / 2.0
+        if best_bid > 0.0 and best_ask >= best_bid
+        else outcome_prices[0] if outcome_prices else 0.0
+    )
     return {
         "market_id": market_id,
         "condition_id": condition_id,
@@ -113,6 +122,12 @@ def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
         "slug": str(raw.get("slug") or ""),
         "clob_token_ids": token_ids,
         "outcomes": [str(value) for value in _array(raw.get("outcomes"))],
+        "outcome_prices": outcome_prices,
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "midpoint": midpoint,
+        "spread": max(0.0, _finite(raw.get("spread"), best_ask - best_bid)),
+        "last_trade_price": min(1.0, max(0.0, _finite(raw.get("lastTradePrice")))),
         "liquidity": max(0.0, _finite(raw.get("liquidityNum"), _finite(raw.get("liquidity")))),
         "volume_24h": max(0.0, _finite(raw.get("volume24hr"), _finite(raw.get("volume24h")))),
         "created_at": str(raw.get("createdAt") or ""),
@@ -131,20 +146,39 @@ def discover_exhaustive(
     page_size = int(source["page_size"])
     guard_pages = int(source["pagination_loop_guard_pages"])
     timeout = int(source.get("request_timeout_seconds", 20))
+    request_attempts = max(1, int(source.get("request_attempts_per_page", 3)))
     gamma_url = str(source["gamma_url"]).rstrip("/")
+    minimum_volume_24h = max(0.0, _finite(config["eligibility"].get("minimum_volume_24h_usd")))
     rows_by_id: dict[str, dict[str, Any]] = {}
     raw_rows = 0
     duplicate_rows = 0
-    offset = 0
+    cursor = ""
+    seen_cursors: set[str] = set()
     pages = 0
+    request_retries = 0
     exhaustive = False
     started_ns = time.monotonic_ns()
     for _ in range(guard_pages):
-        query = urllib.parse.urlencode({
+        query_values = {
             "active": "true", "closed": "false", "limit": page_size,
-            "offset": offset, "order": "liquidityNum", "ascending": "false",
-        })
-        value = fetcher(gamma_url + "/markets?" + query, timeout)
+            "order": "volume24hr", "ascending": "false",
+            # The filter is identical to the local eligibility floor and only
+            # removes rows that would be discarded after download. This keeps
+            # the exact keyset walk bounded as the venue accumulates markets.
+            "liquidity_num_min": _finite(config["eligibility"].get("minimum_liquidity_usd")),
+        }
+        if cursor:
+            query_values["after_cursor"] = cursor
+        query = urllib.parse.urlencode(query_values)
+        for attempt in range(request_attempts):
+            try:
+                value = fetcher(gamma_url + "/markets/keyset?" + query, timeout)
+                break
+            except (OSError, TimeoutError):
+                if attempt + 1 >= request_attempts:
+                    raise
+                request_retries += 1
+                time.sleep(min(2.0, 0.25 * (2 ** attempt)))
         page_rows = value if isinstance(value, list) else value.get("markets", []) if isinstance(value, dict) else []
         pages += 1
         if not page_rows:
@@ -160,15 +194,29 @@ def discover_exhaustive(
             if normalized["market_id"] in rows_by_id:
                 duplicate_rows += 1
             rows_by_id[normalized["market_id"]] = normalized
-        offset += len(page_rows)
-        if len(page_rows) < page_size:
+        # Keyset ordering is part of the cursor identity. Once an entire page
+        # is below the declared 24h-flow eligibility floor, every subsequent
+        # row is ineligible and the economically tradable domain is exhausted.
+        if minimum_volume_24h > 0.0 and all(
+            _finite(raw.get("volume24hr"), _finite(raw.get("volume24h"))) < minimum_volume_24h
+            for raw in page_rows if isinstance(raw, dict)
+        ):
             exhaustive = True
             break
+        next_cursor = str(value.get("next_cursor") or "") if isinstance(value, dict) else ""
+        if not next_cursor:
+            exhaustive = True
+            break
+        if next_cursor == cursor or next_cursor in seen_cursors:
+            break
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
     return list(rows_by_id.values()), {
         "discovery_exhaustive": exhaustive,
         "pages": pages,
         "raw_rows": raw_rows,
         "duplicate_rows": duplicate_rows,
+        "request_retries": request_retries,
         "pagination_loop_guard_hit": not exhaustive,
         "scan_duration_ms": (time.monotonic_ns() - started_ns) / 1_000_000.0,
     }
@@ -188,6 +236,8 @@ def _eligibility(market: dict[str, Any], config: dict[str, Any]) -> str | None:
         return "MISSING_CLOB_TOKENS"
     if _finite(market.get("liquidity")) + 1e-12 < _finite(rules.get("minimum_liquidity_usd")):
         return "BELOW_MINIMUM_LIQUIDITY"
+    if _finite(market.get("volume_24h")) + 1e-12 < _finite(rules.get("minimum_volume_24h_usd")):
+        return "BELOW_MINIMUM_VOLUME_24H"
     return None
 
 
@@ -280,13 +330,14 @@ def build_snapshot(
         "execution_authority": False,
         "model_sha": model_sha.lower(),
         "timestamp_ms": int(timestamp_ms),
-        "source": "gamma_active_closed_false_exhaustive",
+        "source": "gamma_keyset_active_flow_eligible_exhaustive",
         "discovery_exhaustive": bool(discovery.get("discovery_exhaustive")),
         "pagination_loop_guard_hit": bool(discovery.get("pagination_loop_guard_hit")),
         "pages": int(discovery.get("pages", 0)),
         "scan_duration_ms": _finite(discovery.get("scan_duration_ms")),
         "raw_rows": int(discovery.get("raw_rows", 0)),
         "duplicate_rows": int(discovery.get("duplicate_rows", 0)),
+        "request_retries": int(discovery.get("request_retries", 0)),
         "discovered_markets": len(markets),
         "eligible_markets": len(eligible),
         "skipped_markets": len(skipped),
@@ -321,6 +372,7 @@ def status_from_snapshot(snapshot: dict[str, Any], *, state: str = "OPERATIONAL"
         "tier_counts": snapshot.get("tier_counts", {}),
         "resource_capacities": snapshot.get("resource_capacities", {}),
         "pages": snapshot.get("pages", 0),
+        "request_retries": snapshot.get("request_retries", 0),
         "scan_duration_ms": snapshot.get("scan_duration_ms", 0.0),
         "membership_sha256": snapshot.get("membership_sha256", ""),
     }

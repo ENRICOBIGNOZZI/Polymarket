@@ -19,7 +19,26 @@ SPEC.loader.exec_module(rewards)
 SHA = "a" * 40
 
 
-def _universe(path: Path, *, timestamp_ms: int, model_sha: str = SHA) -> Path:
+def _universe(path: Path, *, timestamp_ms: int, model_sha: str = SHA, markets=None) -> Path:
+    default_markets = [{
+        "market_id": "m1",
+        "condition_id": "c1",
+        "event_ids": ["e1"],
+        "question": "Question?",
+        "slug": "question",
+        "clob_token_ids": ["yes", "no"],
+        "outcome_prices": [0.45, 0.55],
+        "best_bid": 0.44,
+        "best_ask": 0.46,
+        "midpoint": 0.45,
+        "spread": 0.02,
+        "liquidity": 1000.0,
+        "volume_24h": 500.0,
+        "score": 12.0,
+        "active": True,
+        "closed": False,
+        "accepting_orders": True,
+    }]
     path.write_text(json.dumps({
         "schema": "polymarket_v7_adaptive_universe_snapshot_v1",
         "paper_only": True,
@@ -31,20 +50,7 @@ def _universe(path: Path, *, timestamp_ms: int, model_sha: str = SHA) -> Path:
         "discovery_exhaustive": True,
         "pagination_loop_guard_hit": False,
         "membership_sha256": "membership",
-        "markets": [{
-            "market_id": "m1",
-            "condition_id": "c1",
-            "event_ids": ["e1"],
-            "question": "Question?",
-            "slug": "question",
-            "clob_token_ids": ["yes", "no"],
-            "liquidity": 1000.0,
-            "volume_24h": 500.0,
-            "score": 12.0,
-            "active": True,
-            "closed": False,
-            "accepting_orders": True,
-        }],
+        "markets": default_markets if markets is None else markets,
     }), encoding="utf-8")
     return path
 
@@ -64,7 +70,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
                         now_ms=now_ms,
                     )
         self.assertEqual(snapshot["source"], "adaptive_universe_fallback")
-        self.assertEqual(snapshot["selection_mode"], "LIQUIDITY_FALLBACK")
+        self.assertEqual(snapshot["selection_mode"], "FLOW_FILLABILITY_FALLBACK")
         self.assertTrue(snapshot["degraded"])
         self.assertFalse(snapshot["reward_data_available"])
         self.assertTrue(snapshot["paper_only"])
@@ -73,6 +79,8 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertEqual(snapshot["model_sha"], SHA)
         self.assertEqual(snapshot["selected_count"], 1)
         self.assertEqual(snapshot["markets"][0]["reward_intensity"], 0.0)
+        self.assertEqual(snapshot["markets"][0]["midpoint"], 0.45)
+        self.assertEqual(snapshot["markets"][0]["flow_to_depth_24h"], 0.5)
         status = rewards.selector_status(snapshot)
         self.assertTrue(status["ready"])
         self.assertEqual(status["state"], "OPERATIONAL_FALLBACK")
@@ -89,6 +97,31 @@ class MakerRewardSelectorTests(unittest.TestCase):
                         model_sha=SHA,
                         now_ms=1_000_000,
                     )
+
+    def test_fallback_excludes_extreme_prices_and_prefers_flow_to_depth(self) -> None:
+        from tempfile import TemporaryDirectory
+        base = {
+            "event_ids": ["e"], "question": "Q", "slug": "q",
+            "active": True, "closed": False, "accepting_orders": True,
+            "spread": 0.02,
+        }
+        rows = [
+            {**base, "event_ids": ["eh"], "market_id": "huge", "condition_id": "ch", "clob_token_ids": ["yh", "nh"],
+             "midpoint": 0.50, "liquidity": 1_000_000, "volume_24h": 10_000},
+            {**base, "event_ids": ["ef"], "market_id": "flow", "condition_id": "cf", "clob_token_ids": ["yf", "nf"],
+             "midpoint": 0.45, "liquidity": 1_000, "volume_24h": 10_000},
+            {**base, "event_ids": ["ee"], "market_id": "extreme", "condition_id": "ce", "clob_token_ids": ["ye", "ne"],
+             "midpoint": 0.001, "liquidity": 100, "volume_24h": 1_000_000},
+        ]
+        with TemporaryDirectory() as directory:
+            universe = _universe(Path(directory) / "current.json", timestamp_ms=999_000, markets=rows)
+            with mock.patch.object(rewards, "_primary_snapshot", side_effect=TimeoutError("endpoint")):
+                snapshot = rewards.build_snapshot(
+                    ROOT / "config" / "v7_professional_market_maker.json",
+                    fallback_universe_path=universe, model_sha=SHA, now_ms=1_000_000,
+                )
+        self.assertEqual([row["market_id"] for row in snapshot["markets"]], ["flow", "huge"])
+        self.assertGreater(snapshot["markets"][0]["flow_to_depth_24h"], snapshot["markets"][1]["flow_to_depth_24h"])
 
     def test_request_budget_caps_each_network_call(self) -> None:
         seen: list[float] = []

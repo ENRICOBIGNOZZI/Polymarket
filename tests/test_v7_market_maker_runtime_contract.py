@@ -80,6 +80,11 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertNotIn("polymarket_rewards_scan", source)
         self.assertNotIn("Generic maker is intentionally not started", source)
 
+    def test_fast_structural_does_not_self_terminate_on_a_timer(self) -> None:
+        options = (ROOT / "src" / "fast_runtime" / "part1.inc").read_text(encoding="utf-8")
+        self.assertIn("int recycle_seconds = 0;", options)
+        self.assertNotIn("int recycle_seconds = 900;", options)
+
     def test_runtime_routes_all_paper_execution_through_single_order_tx_owner(self) -> None:
         runtime = (ROOT / "src" / "v7_market_maker_runtime.cpp").read_text(encoding="utf-8")
         for required in (
@@ -110,6 +115,13 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         critical_pos = runtime.index("pop_critical(command)")
         normal_pos = runtime.index("pop_normal(command)")
         self.assertLess(critical_pos, normal_pos)
+
+    def test_maker_ledger_ids_are_globally_unique_across_market_engines(self) -> None:
+        runtime = (ROOT / "src" / "v7_market_maker_runtime.cpp").read_text(encoding="utf-8")
+        self.assertIn('return "mmo-" + std::to_string(market) + "-" + std::to_string(order);', runtime)
+        self.assertIn('"mmf-" + std::to_string(record.market_handle) + "-" +', runtime)
+        self.assertNotIn("struct OrderMeta", runtime)
+        self.assertNotIn("orders_[paper.order_id]", runtime)
 
     def test_execution_cells_are_exact_sha_slow_path_and_hot_path_bounded(self) -> None:
         loader = (ROOT / "src" / "v7_maker_execution_cells.cpp").read_text(encoding="utf-8")

@@ -53,6 +53,12 @@
     "min_volume_24h": 100.0,
     "min_mid": 0.02,
     "max_mid": 0.98,
+    "fallback_score_weights": {
+      "log_volume_24h": 1.0,
+      "log_flow_to_depth": 2.0,
+      "mid_balance": 0.25,
+      "log_spread_cents": 0.1
+    },
     "rewarded_market_bonus": 1.0,
     "maker_rebate_market_bonus": 0.5,
     "weights": {
