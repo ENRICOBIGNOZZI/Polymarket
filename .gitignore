@@ -19,6 +19,8 @@ __pycache__/
 # Runtime and paper-trading state
 runs/
 run/
+.private_validation/
+/deploy-evidence.txt
 artifacts/
 !artifacts/
 artifacts/*

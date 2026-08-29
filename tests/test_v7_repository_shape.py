@@ -85,12 +85,27 @@ class V7RepositoryShapeTest(unittest.TestCase):
             ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=ROOT
         ).decode("utf-8").split("\0")
         for raw in repository_paths:
-            if raw.startswith(".private_validation/"):
-                continue
             rel = raw.lower()
             if any(token in rel for token in ("paper_v3", "paper_v4", "paper_v5", "paper_v6", "/v3_", "/v4_", "/v5_", "/v6_", "_v3.", "_v4.", "_v5.", "_v6.")):
                 bad.append(rel)
         self.assertEqual(sorted(bad), [])
+
+    def test_private_validation_output_is_ignored_untracked_and_guarded(self) -> None:
+        tracked = subprocess.check_output(
+            ["git", "ls-files", "-z", "--", ".private_validation", "deploy-evidence.txt"], cwd=ROOT
+        ).decode("utf-8").split("\0")
+        self.assertEqual([path for path in tracked if path], [])
+
+        for probe in (".private_validation/probe.json", "deploy-evidence.txt"):
+            ignored = subprocess.run(
+                ["git", "check-ignore", "--quiet", probe], cwd=ROOT, check=False
+            )
+            self.assertEqual(ignored.returncode, 0, probe)
+
+        for hook in ("pre-commit", "pre-push"):
+            path = ROOT / ".githooks" / hook
+            self.assertTrue(path.is_file(), hook)
+            self.assertTrue(path.stat().st_mode & 0o111, hook)
 
     def test_all_tracked_operational_text_has_no_retired_generation_surface(self) -> None:
         tracked = subprocess.check_output(

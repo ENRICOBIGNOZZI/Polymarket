@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly zero_oid='0000000000000000000000000000000000000000'
+
+find_forbidden_tree_paths() {
+  git ls-tree -r --name-only -z "$1" |
+    while IFS= read -r -d '' path; do
+      case "$path" in
+        .private_validation/*|deploy-evidence.txt)
+          printf '%s\n' "$path"
+          ;;
+      esac
+    done
+}
+
+while read -r local_ref local_oid remote_ref remote_oid; do
+  if [[ "$local_oid" == "$zero_oid" ]]; then
+    continue
+  fi
+
+  forbidden_paths="$(find_forbidden_tree_paths "$local_oid")"
+
+  if [[ -n "$forbidden_paths" ]]; then
+    printf '%s\n' \
+      "V7 repository guard: refusing to push $local_ref ($local_oid)." \
+      'The pushed tree contains private validation/evidence output:' >&2
+    printf '%s\n' "$forbidden_paths" >&2
+    exit 1
+  fi
+done
