@@ -112,7 +112,7 @@ def run(run_root: Path, model_sha: str, interval: float) -> None:
             }
             spool_event(run_root, LedgerEvent(
                 event_type="CANDIDATE", strategy="EXTERNAL_INFORMATION", model_sha=model_sha,
-                model_version="external-fair-cold-start-v1", opportunity_id=identity,
+                model_version="external-fair-cold-start-current", opportunity_id=identity,
                 candidate_id=identity, market_id=str(market.get("market_id") or ""),
                 event_id=str(market.get("event_id") or ""), token_id=row["token_id"],
                 receive_ts_ms=receive_ms, exchange_ts_ms=receive_ms, decision_ts_ms=now_ms,
