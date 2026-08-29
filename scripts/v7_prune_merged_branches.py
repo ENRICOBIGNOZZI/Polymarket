@@ -22,6 +22,7 @@ from typing import Any
 SAFE_BRANCH = re.compile(r"^[A-Za-z0-9._/-]+$")
 PROTECTED_EXACT = {"HEAD", "main", "paper-validated", "telemetry"}
 PROTECTED_PREFIXES = ("release/", "hotfix/")
+DISPOSABLE_BRANCH = re.compile(r"^tmp-unused(?:-[0-9]+)?$")
 
 
 def git(root: Path, *args: str, check: bool = True) -> str:
@@ -57,18 +58,23 @@ def is_protected_branch(branch: str) -> bool:
     )
 
 
-def remote_branches(root: Path, remote: str) -> set[str]:
+def remote_branches(root: Path, remote: str) -> dict[str, str]:
     output = git(
         root,
         "for-each-ref",
-        "--format=%(refname:strip=3)",
+        "--format=%(refname:strip=3) %(objectname)",
         f"refs/remotes/{remote}",
     )
-    return {branch.strip() for branch in output.splitlines() if branch.strip()}
+    branches: dict[str, str] = {}
+    for line in output.splitlines():
+        branch, separator, sha = line.strip().partition(" ")
+        if branch and separator and sha:
+            branches[branch] = sha
+    return branches
 
 
 def merged_pr_branches(
-    branches: set[str], pull_requests: list[dict[str, Any]], repository: str,
+    branches: dict[str, str], pull_requests: list[dict[str, Any]], repository: str,
 ) -> list[str]:
     """Return same-repository merged PR heads unused by any open PR.
 
@@ -84,7 +90,8 @@ def merged_pr_branches(
             if ref:
                 open_refs.add(str(ref))
 
-    candidates: set[str] = set()
+    merged_refs: set[str] = set()
+    merged_head_shas: set[str] = set()
     for pull in pull_requests:
         head = pull.get("head") or {}
         head_repo = head.get("repo") or {}
@@ -92,12 +99,19 @@ def merged_pr_branches(
         if (
             not pull.get("merged_at")
             or head_repo.get("full_name") != repository
-            or branch not in branches
-            or branch in open_refs
-            or is_protected_branch(branch)
         ):
             continue
-        candidates.add(branch)
+        merged_refs.add(branch)
+        head_sha = str(head.get("sha") or "")
+        if head_sha:
+            merged_head_shas.add(head_sha)
+
+    candidates: set[str] = set()
+    for branch, sha in branches.items():
+        if branch in open_refs or is_protected_branch(branch):
+            continue
+        if branch in merged_refs or sha in merged_head_shas or DISPOSABLE_BRANCH.fullmatch(branch):
+            candidates.add(branch)
     return sorted(candidates)
 
 
