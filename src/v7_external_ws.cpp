@@ -39,7 +39,7 @@ constexpr std::size_t kMaxWsMessageBytes = 1U << 20;
     return host;
 }
 
-void bounded_backoff(std::stop_token stop, std::uint64_t failures) noexcept {
+void bounded_backoff(ExternalStopToken stop, std::uint64_t failures) noexcept {
     const auto capped = std::min<std::uint64_t>(failures, 5);
     const auto delay = std::chrono::milliseconds(100ULL << capped);
     const auto deadline = std::chrono::steady_clock::now() + delay;
@@ -108,7 +108,7 @@ ExternalVenueWsClient::ExternalVenueWsClient(
     }
 }
 
-void ExternalVenueWsClient::run(std::stop_token stop) noexcept {
+void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
     std::uint64_t consecutive_failures = 0;
     while (!stop.stop_requested()) {
         connection_attempts_.fetch_add(1, std::memory_order_relaxed);
