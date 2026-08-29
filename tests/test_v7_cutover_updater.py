@@ -84,6 +84,18 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertLess(receipt, monitoring)
         self.assertIn('write_status running "exact V7 SHA started; monitoring health pending"', text)
 
+    def test_exact_sha_transition_archives_prior_evidence_before_new_runtime(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        stop = text.rindex("stop_production_runtime\n")
+        stop_monitoring = text.index("stop_owned_monitoring\n", stop)
+        archive = text.index("scripts/v7_prepare_cutover_run_root.py", stop_monitoring)
+        start = text.rindex("start_production_runtime\n")
+        self.assertLess(stop, stop_monitoring)
+        self.assertLess(stop_monitoring, archive)
+        self.assertLess(archive, start)
+        self.assertIn('paper_v7_archives', text)
+        self.assertNotIn('rm -rf "$(production_run_root)"', text)
+
     def test_health_failure_emits_endpoint_and_monitoring_log_diagnostics(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         self.assertIn("=== V7 DEPLOY EPOCH expected_sha=%s started_at=%s ===", text)
