@@ -29,6 +29,7 @@ jobs:
         env:
           APPLY_ON_PUSH: ${{ github.event_name == 'push' }}
           APPLY_ON_DISPATCH: ${{ inputs.apply || false }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           apply=()
@@ -37,6 +38,8 @@ jobs:
           fi
           python3 scripts/v7_prune_merged_branches.py \
             --repository-root . --remote origin --base main \
+            --github-repository "$GITHUB_REPOSITORY" \
+            --include-merged-pr-branches \
             --report merged-branch-cleanup.json "${apply[@]}"
       - uses: actions/upload-artifact@v4
         with:
