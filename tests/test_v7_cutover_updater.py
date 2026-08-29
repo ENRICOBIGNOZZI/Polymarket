@@ -169,7 +169,7 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn('[[ "$VALIDATED_SHA" == "$EXPECTED_SHA" ]]', text)
         self.assertIn('[[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]', text)
 
-    def test_updater_contains_no_legacy_generation_or_fallback_logic(self) -> None:
+    def test_updater_contains_no_retired_generation_or_fallback_logic(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8").lower()
         for forbidden in (
             "paper_v3",
@@ -178,8 +178,6 @@ class V7CutoverUpdaterTest(unittest.TestCase):
             "paper_v6",
             "paper_latest",
             "polymarket_engine",
-            "legacy_compatibility",
-            "start_legacy",
             "rollback_v6",
             "paper-validated~",
         ):

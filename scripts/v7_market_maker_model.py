@@ -172,8 +172,8 @@ def fit(records: list[LedgerEvent], *, cold_fill_prior: float = 0.02,
         filled_fraction_mass = sum(fill_fractions)
 
         # Decision-facing quantity: expected fraction of posted shares that fill.
-        # With full fills only this reduces to the former Beta-Bernoulli estimate,
-        # so existing cold-start behavior remains backward compatible.
+        # With full fills only, this reduces to the canonical Beta-Bernoulli
+        # cold-start estimate.
         fill_probability = _posterior_rate(filled_fraction_mass, n_orders, alpha0, beta0)
         any_fill_probability = _posterior_rate(n_any_fill, n_orders, alpha0, beta0)
         full_fill_probability = _posterior_rate(n_full_fill, n_orders, alpha0, beta0)

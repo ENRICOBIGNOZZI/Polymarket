@@ -31,7 +31,7 @@ def test_restart_budget_is_scoped_to_exact_sha(tmp_path: Path) -> None:
     assert instance(path, "a" * 40)._restart_times() == [now - 1, now]
 
 
-def test_legacy_or_malformed_restart_budget_starts_a_new_exact_sha_counter(tmp_path: Path) -> None:
+def test_unscoped_or_malformed_restart_budget_starts_a_new_exact_sha_counter(tmp_path: Path) -> None:
     path = tmp_path / "supervisor_restarts.json"
     path.write_text(json.dumps({"timestamps": [int(time.time())]}))
     assert instance(path, "c" * 40)._restart_times() == []

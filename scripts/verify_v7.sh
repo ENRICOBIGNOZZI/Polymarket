@@ -90,7 +90,7 @@ if unpinned:
 print("verify_v7: GitHub Action pin validation passed")
 PY
 
-python3 tests/test_no_legacy_runtime.py
+python3 tests/test_v7_repository_shape.py
 python3 tests/test_v7_single_writer_contract.py
 python3 -m unittest discover -s tests -p 'test_v7_*manifest.py'
 python3 scripts/v7_convergence_audit.py --repository-root . >/dev/null

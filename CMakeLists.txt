@@ -212,8 +212,6 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_external_replay_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_replay_tests COMMAND pm_v7_external_replay_tests)
 
-  add_test(NAME no_legacy_runtime COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_no_legacy_runtime.py)
-
   file(GLOB V7_PY_TESTS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_*.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitoring_v7_*.py")

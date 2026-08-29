@@ -75,5 +75,5 @@ jobs:
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-latency.json >/dev/null
           bash -n scripts/paper_v7_execution_loop.sh
           bash -n ops/update_server_v7.sh
-          python3 tests/test_no_legacy_runtime.py
+          python3 tests/test_v7_repository_shape.py
           python3 scripts/v7_convergence_audit.py --repository-root . >/dev/null

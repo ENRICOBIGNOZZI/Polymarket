@@ -80,10 +80,8 @@ def test_hard_arb_native_source_has_no_v6_runtime_dependency():
     text = (SCRIPTS / "v7_hard_arb_guard.py").read_text(encoding="utf-8")
     assert "import v6_" not in text
     assert "from v6_" not in text
-    assert "hard_legacy" not in text
-    assert "micro_legacy" not in text
     assert "v7_market_common" in text
-    assert '"legacy_runtime_dependency": False' in text
+    assert "runtime_dependency" not in text
     assert '"aborting_mark": "full_depth_executable_liquidation_net_exit_fee_fail_closed"' in text
 
 

@@ -3,7 +3,6 @@
 #include <boost/json.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -226,20 +225,6 @@ void populate_exploration_policy(MakerModelSnapshot& model) noexcept {
     return n > 0.0 ? n / (n + shrinkage) : 0.0;
 }
 
-[[nodiscard]] std::uint32_t legacy_adverse_count(const json::object& group) noexcept {
-    const auto* raw = find_value(group, "markouts");
-    if (raw == nullptr || !raw->is_object()) return 0;
-    const auto& markouts = raw->as_object();
-    constexpr std::array<std::string_view, 5> priority{{"45s", "60s", "10s", "1s", "300s"}};
-    for (const auto horizon : priority) {
-        const auto it = markouts.find(horizon);
-        if (it == markouts.end() || !it->value().is_object()) continue;
-        const auto n = count(find_value(it->value().as_object(), "n"));
-        if (n > 0) return n;
-    }
-    return 0;
-}
-
 void populate_execution_cells(MakerModelSnapshot& model) noexcept {
     try {
         const std::string sha = expected_sha();
@@ -286,8 +271,7 @@ void populate_execution_cells(MakerModelSnapshot& model) noexcept {
             const std::uint32_t orders = count(find_value(group, "orders"));
             const std::uint32_t fills = count(find_value(group, "filled_orders"));
             const std::uint32_t clusters = count(find_value(group, "event_clusters"));
-            std::uint32_t markouts = count(find_value(group, "adverse_markout_n"));
-            if (markouts == 0) markouts = legacy_adverse_count(group);
+            const std::uint32_t markouts = count(find_value(group, "adverse_markout_n"));
 
             const double raw_fill = std::clamp(
                 number(find_value(group, "fill_probability"), global_fill), 1e-6, 1.0 - 1e-6);

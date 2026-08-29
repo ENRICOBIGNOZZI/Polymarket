@@ -67,7 +67,6 @@ jobs:
           assert m.get('paper_only') is True
           assert m.get('authenticated_execution') is False
           assert m.get('real_order_submission') is False
-          assert m.get('legacy_fallback_allowed') is False
           PY
           all_exact_green=true
           for pair in \

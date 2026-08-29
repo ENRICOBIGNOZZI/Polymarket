@@ -32,7 +32,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest \
-            tests/test_no_legacy_runtime.py \
+            tests/test_v7_repository_shape.py \
             tests/test_monitoring_v7_native.py \
             tests/test_monitoring_v7_ledger.py \
             tests/test_monitoring_v7_fill_rate_integrity.py \

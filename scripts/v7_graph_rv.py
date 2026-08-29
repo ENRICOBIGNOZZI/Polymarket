@@ -91,14 +91,14 @@ def market_event_id(raw: dict[str, Any]) -> str:
     return str(raw.get("eventId") or raw.get("event_id") or "")
 
 
-def side_token(raw: dict[str, Any], side: str) -> str:
+def outcome_token(raw: dict[str, Any], outcome: str) -> str:
     ids = [str(x) for x in parse_array(raw.get("clobTokenIds"))]
     outcomes = [str(x).strip().upper() for x in parse_array(raw.get("outcomes"))]
     for i, name in enumerate(outcomes[:len(ids)]):
-        if name == side.upper():
+        if name == outcome.upper():
             return ids[i]
     if len(ids) >= 2:
-        return ids[0] if side.upper() == "YES" else ids[1]
+        return ids[0] if outcome.upper() == "YES" else ids[1]
     return ""
 
 
@@ -247,13 +247,13 @@ class Broker:
             for row in rows:
                 raw = self.market(str(row.get("market_id") or ""))
                 if not raw or raw.get("closed") or not raw.get("active", True): prepared = []; break
-                event = market_event_id(raw); token = side_token(raw, str(row.get("side") or ""))
+                event = market_event_id(raw); outcome = str(row.get("outcome") or "").upper(); token = outcome_token(raw, outcome)
                 if not event or not token: prepared = []; break
                 book = self.books([token]).get(token)
                 fee = resolve_fee_details(raw, self.clob, str(raw.get("conditionId") or ""), token)
                 weight = max(0.0, finite(row.get("weight"), 0.0))
                 if not book or not fee.verified or weight <= 0: prepared = []; break
-                prepared.append({"row": row, "raw": raw, "event": event, "token": token, "book": book, "fee": fee, "weight": weight})
+                prepared.append({"row": row, "raw": raw, "event": event, "outcome": outcome, "token": token, "book": book, "fee": fee, "weight": weight})
             if len(prepared) != len(rows): continue
             style, p_complete, expected_ev = choose_style(prepared, self.model)
             eq = max(1.0, float(self.state["cash"])); room = min(max_notional, eq * float(self.cfg.get("max_trade_fraction", 1.0)))
@@ -270,10 +270,10 @@ class Broker:
                 book = x["book"]; leg_id = f"leg-{i}"; shares = units * x["weight"]
                 limit = book.bid if action == "MAKER" else book.ask; queue = book.queue_at(limit) if action == "MAKER" else 0.0
                 order_id = f"paper:{bundle_id}:{leg_id}"; target[leg_id] = shares
-                common = dict(strategy=STRATEGY, model_sha=self.sha, bundle_id=bundle_id, order_id=order_id, leg_id=leg_id, market_id=str(x["row"]["market_id"]), event_id=x["event"], token_id=x["token"], decision_ts_ms=decision, exchange_ts_ms=book.exchange_ts_ms, receive_ts_ms=book.receive_ts_ms, book_snapshot_id=book.snapshot_id, side=str(x["row"]["side"]).upper(), bid=book.bid, ask=book.ask, bid_depth=book.bid_depth, ask_depth=book.ask_depth, queue_ahead=queue, limit_price=limit, predicted_alpha=edge, predicted_fill_probability=p_complete, expected_ev=expected_ev, intended_action=action, intended_size=shares, metadata={"target_quantities": target, "entry_style": "/".join(style), "queue_never_grants_size": True, "unwind_depth_bounds_size": True})
+                common = dict(strategy=STRATEGY, model_sha=self.sha, bundle_id=bundle_id, order_id=order_id, leg_id=leg_id, market_id=str(x["row"]["market_id"]), event_id=x["event"], token_id=x["token"], decision_ts_ms=decision, exchange_ts_ms=book.exchange_ts_ms, receive_ts_ms=book.receive_ts_ms, book_snapshot_id=book.snapshot_id, side="BUY", bid=book.bid, ask=book.ask, bid_depth=book.bid_depth, ask_depth=book.ask_depth, queue_ahead=queue, limit_price=limit, predicted_alpha=edge, predicted_fill_probability=p_complete, expected_ev=expected_ev, intended_action=action, intended_size=shares, metadata={"outcome_side": x["outcome"], "execution_side": "BUY", "target_quantities": target, "entry_style": "/".join(style), "queue_never_grants_size": True, "unwind_depth_bounds_size": True})
                 self.emit(LedgerEvent(event_type="CANDIDATE", candidate_id=f"{bundle_id}:{leg_id}", **common))
                 self.emit(LedgerEvent(event_type="ORDER_SUBMITTED", order_state="RESTING" if action == "MAKER" else "CROSS", **common))
-                legs[leg_id] = {"leg_id": leg_id, "order_id": order_id, "market_id": common["market_id"], "event_id": x["event"], "token_id": x["token"], "side": common["side"], "weight": x["weight"], "target": shares, "filled": 0.0, "entry_action": action, "limit": limit, "queue": queue, "arrival_ms": decision + int((self.cfg.get("v7") or {}).get("graph_submit_latency_ms", 100)), "cancel_ms": deadline * 1000, "fills": [], "book": {"snapshot_id": book.snapshot_id}} 
+                legs[leg_id] = {"leg_id": leg_id, "order_id": order_id, "market_id": common["market_id"], "event_id": x["event"], "token_id": x["token"], "side": common["side"], "outcome": x["outcome"], "weight": x["weight"], "target": shares, "filled": 0.0, "entry_action": action, "limit": limit, "queue": queue, "arrival_ms": decision + int((self.cfg.get("v7") or {}).get("graph_submit_latency_ms", 100)), "cancel_ms": deadline * 1000, "fills": [], "book": {"snapshot_id": book.snapshot_id}}
             bundle = {"bundle_id": bundle_id, "event_id": str(rows[0]["event_id"]), "status": "RESTING", "expected_edge": edge, "execution_deadline_ts": deadline, "hold_deadline_ts": hold, "legs": legs, "final": False}
             self.state["bundles"][bundle_id] = bundle
             # Sequential taker execution is revalidated leg-by-leg.
@@ -292,7 +292,7 @@ class Broker:
         self.state["cash"] -= cash; leg["filled"] += shares
         fid = stable_id(self.sha, bundle["bundle_id"], leg["leg_id"], len(leg["fills"]), exchange, receive)
         leg["fills"].append({"fill_id": fid, "shares": shares, "price": price, "fee": amount, "fee_rate": fee.rate, "fee_source": fee.source, "exchange": exchange, "receive": receive, "markouts": []})
-        self.emit(LedgerEvent(event_type="FILL", strategy=STRATEGY, model_sha=self.sha, bundle_id=bundle["bundle_id"], order_id=leg["order_id"], fill_id=fid, leg_id=leg["leg_id"], market_id=leg["market_id"], event_id=leg["event_id"], token_id=leg["token_id"], exchange_ts_ms=exchange, receive_ts_ms=receive, side=leg["side"], fill_price=price, filled_size=shares, complete=leg["filled"] + 1e-9 >= leg["target"], fee=amount, fee_rate=fee.rate, fee_source=fee.source, metadata={"bundle_state": bundle["status"]}))
+        self.emit(LedgerEvent(event_type="FILL", strategy=STRATEGY, model_sha=self.sha, bundle_id=bundle["bundle_id"], order_id=leg["order_id"], fill_id=fid, leg_id=leg["leg_id"], market_id=leg["market_id"], event_id=leg["event_id"], token_id=leg["token_id"], exchange_ts_ms=exchange, receive_ts_ms=receive, side=leg["side"], fill_price=price, filled_size=shares, complete=leg["filled"] + 1e-9 >= leg["target"], fee=amount, fee_rate=fee.rate, fee_source=fee.source, metadata={"bundle_state": bundle["status"], "outcome_side": leg["outcome"], "execution_side": "BUY"}))
         return True
 
     def fill_taker(self, bundle: dict[str, Any], leg: dict[str, Any]) -> bool:
@@ -370,7 +370,7 @@ class Broker:
                 for leg in bundle["legs"].values():
                     raw = self.market(leg["market_id"]); yes = resolved_yes(raw) if raw else None
                     if yes is None: resolved = False; break
-                    wins = (leg["side"] == "YES" and yes == 1) or (leg["side"] == "NO" and yes == 0); payout += leg["filled"] if wins else 0.0
+                    wins = (leg["outcome"] == "YES" and yes == 1) or (leg["outcome"] == "NO" and yes == 0); payout += leg["filled"] if wins else 0.0
                 if resolved:
                     self.state["cash"] += payout; self.finalize(bundle, "settled", payout, 0.0, 0.0, False); bundle["status"] = "CLOSED"
                 elif now >= bundle["hold_deadline_ts"]: self.unwind(bundle, "hold_deadline")

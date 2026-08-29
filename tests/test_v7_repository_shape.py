@@ -61,6 +61,8 @@ FORBIDDEN_PATHS = {
     "scripts/v7_canonical_convergence_policy.py",
     "scripts/v7_evidence_candidate_contract.py",
     "scripts/v7_market_maker_worker.py",
+    "scripts/v7_local_factor_core_base.py",
+    "scripts/v7_pca_stat_arb_core_base.py",
     "src/fast_arb_main.cpp",
     "tests/test_fast_runtime_contract.py",
     "tests/test_v7_canonical_convergence_policy.py",
@@ -71,17 +73,20 @@ FORBIDDEN_PATHS = {
 }
 
 
-class NoLegacyRuntimeTest(unittest.TestCase):
-    def test_forbidden_control_plane_and_legacy_surfaces_are_absent(self) -> None:
+class V7RepositoryShapeTest(unittest.TestCase):
+    def test_forbidden_control_plane_and_retired_surfaces_are_absent(self) -> None:
         present = sorted(path for path in FORBIDDEN_PATHS if (ROOT / path).exists())
         self.assertEqual(present, [])
 
     def test_no_versioned_v3_v6_paths_remain(self) -> None:
         bad = []
-        for path in ROOT.rglob("*"):
-            if not path.is_file():
+        repository_paths = subprocess.check_output(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=ROOT
+        ).decode("utf-8").split("\0")
+        for raw in repository_paths:
+            if raw.startswith(".private_validation/"):
                 continue
-            rel = path.relative_to(ROOT).as_posix().lower()
+            rel = raw.lower()
             if any(token in rel for token in ("paper_v3", "paper_v4", "paper_v5", "paper_v6", "/v3_", "/v4_", "/v5_", "/v6_", "_v3.", "_v4.", "_v5.", "_v6.")):
                 bad.append(rel)
         self.assertEqual(sorted(bad), [])
@@ -121,7 +126,14 @@ class NoLegacyRuntimeTest(unittest.TestCase):
         self.assertTrue(manifest["paper_only"])
         self.assertFalse(manifest["authenticated_execution"])
         self.assertFalse(manifest["real_order_submission"])
-        self.assertFalse(manifest["legacy_fallback_allowed"])
+        self.assertEqual(
+            set(manifest),
+            {
+                "schema_version", "enabled", "version", "loop", "config", "run_root",
+                "deployment_ref", "promotion_policy", "paper_only", "authenticated_execution",
+                "real_order_submission", "candidate_only_until_promoted", "reason",
+            },
+        )
 
     def test_canonical_v7_surfaces_exist(self) -> None:
         required = (
@@ -130,6 +142,8 @@ class NoLegacyRuntimeTest(unittest.TestCase):
             "scripts/v7_canonical_economics.py",
             "scripts/v7_capital_allocator.py",
             "scripts/v7_portfolio_guard.py",
+            "scripts/v7_local_factor_primitives.py",
+            "scripts/v7_pca_stat_arb_primitives.py",
             "config/paper_v7.json",
             "config/v7_professional_market_maker.json",
             "monitoring/exporter_v7.py",

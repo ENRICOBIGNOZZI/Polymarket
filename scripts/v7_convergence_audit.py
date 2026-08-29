@@ -114,9 +114,14 @@ def validate_repository(root: Path) -> dict[str, Any]:
         raise AuditError(f"canonical_docs_missing:{missing_docs}")
     bad_paths = []
     generation = re.compile(r"(^|[/_.-])v[3-6]([/_.-]|$)", re.IGNORECASE)
-    for path in root.rglob("*"):
-        if path.is_file() and ".git" not in path.parts and generation.search(path.relative_to(root).as_posix()):
-            bad_paths.append(path.relative_to(root).as_posix())
+    repository_paths = subprocess.check_output(
+        ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"]
+    ).decode("utf-8").split("\0")
+    for relative in repository_paths:
+        if not relative or relative.startswith(".private_validation/"):
+            continue
+        if generation.search(relative):
+            bad_paths.append(relative)
     if bad_paths:
         raise AuditError(f"obsolete_generation_paths:{sorted(bad_paths)}")
     return incumbent

@@ -790,7 +790,7 @@ def run(args: argparse.Namespace) -> int:
         "max_cross_leg_skew_ms": max(0, args.max_cross_leg_skew_ms),
         "max_exchange_snapshot_age_ms": max(0, args.max_exchange_snapshot_age_ms),
         "max_exchange_snapshot_skew_ms": max(0, args.max_exchange_snapshot_skew_ms),
-        "freshness_guard": stats, "legacy_runtime_dependency": False,
+        "freshness_guard": stats,
         "execution_model": "v7_native_depth_fee_freshness_sequential_fok_unwind",
     }
     atomic_json(state_path, status)

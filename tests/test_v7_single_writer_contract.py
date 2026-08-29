@@ -35,7 +35,6 @@ class V7SingleWriterContractTest(unittest.TestCase):
         self.assertTrue(manifest["paper_only"])
         self.assertFalse(manifest["authenticated_execution"])
         self.assertFalse(manifest["real_order_submission"])
-        self.assertFalse(manifest["legacy_fallback_allowed"])
 
     def test_every_main_sha_gets_exact_single_writer_proof(self) -> None:
         workflow = (ROOT / ".github/workflows/private-runtime-single-writer-validation.yml").read_text(encoding="utf-8")

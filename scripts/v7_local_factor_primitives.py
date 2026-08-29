@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-# Frozen predecessor implementation. The canonical v7_local_factor_core adapter
-# reuses all statistical/execution primitives from this module but replaces only
-# the pair-excluded factor construction with an orientation-invariant temporal
-# PC1. This file is temporary and will be removed in the post-V7 legacy cleanup.
+"""Shared statistical primitives for the canonical V7 Local Factor model."""
 
 import itertools
 import math
@@ -170,53 +167,15 @@ def adf_t_stat(levels: Sequence[float]) -> float:
     return gamma/se if se>1e-12 else 0.0
 
 
-def fit_pair(panel: StandardizedPanel, market_a: str, market_b: str, min_controls: int=2) -> PairFit|None:
-    if market_a==market_b or market_a not in panel.values or market_b not in panel.values:return None
-    controls=tuple(sorted(mid for mid in panel.values if mid not in {market_a,market_b}))
-    if len(controls)<min_controls:return None
-    n=len(panel.times);factor=tuple(statistics.fmean(panel.values[mid][j] for mid in controls) for j in range(n))
-    loading_a=ols_loading(panel.values[market_a],factor);loading_b=ols_loading(panel.values[market_b],factor)
-    if loading_a is None or loading_b is None:return None
-    residual_a=tuple(y-loading_a*f for y,f in zip(panel.values[market_a],factor));residual_b=tuple(y-loading_b*f for y,f in zip(panel.values[market_b],factor))
-    phi_a,mu_a,sd_a=ar1_fit(residual_a);phi_b,mu_b,sd_b=ar1_fit(residual_b)
-    if sd_a<=1e-8 or sd_b<=1e-8:return None
-    adf_a=adf_t_stat(residual_a);adf_b=adf_t_stat(residual_b);pair_stat=max(adf_a,adf_b)
-    return PairFit(market_a,market_b,controls,loading_a,loading_b,residual_a,residual_b,phi_a,phi_b,mu_a,mu_b,sd_a,sd_b,(residual_a[-1]-mu_a)/sd_a,(residual_b[-1]-mu_b)/sd_b,adf_a,adf_b,pair_stat)
-
-
 def all_pairs(panel: StandardizedPanel) -> list[tuple[str,str]]: return list(itertools.combinations(sorted(panel.values),2))
 
-def _joint_block_indices(n_increments:int,block:int,rng:random.Random)->list[int]:
-    out=[]
-    while len(out)<n_increments:
-        start=rng.randrange(n_increments);out.extend((start+j)%n_increments for j in range(block))
+
+def _joint_block_indices(n_increments: int, block: int, rng: random.Random) -> list[int]:
+    out: list[int] = []
+    while len(out) < n_increments:
+        start = rng.randrange(n_increments)
+        out.extend((start + offset) % n_increments for offset in range(block))
     return out[:n_increments]
-
-def null_panel_bootstrap(panel:StandardizedPanel,rng:random.Random,block:int|None=None)->StandardizedPanel|None:
-    mids=sorted(panel.values);n=len(panel.times)
-    if n<12:return None
-    ninc=n-1;block=block or max(2,min(ninc,int(round(math.sqrt(ninc)))));increments={};drift={}
-    for mid in mids:
-        vals=panel.values[mid];diffs=[vals[i]-vals[i-1] for i in range(1,n)];drift[mid]=statistics.fmean(diffs);increments[mid]=[x-drift[mid] for x in diffs]
-    indices=_joint_block_indices(ninc,block,rng);levels={mid:[panel.values[mid][0]] for mid in mids}
-    for idx in indices:
-        for mid in mids:levels[mid].append(levels[mid][-1]+drift[mid]+increments[mid][idx])
-    return standardize_levels(levels,panel.times)
-
-def panel_pair_bootstrap_pvalues(panel:StandardizedPanel,pairs:Sequence[tuple[str,str]]|None=None,reps:int=300,seed:int=20260826,min_controls:int=2)->dict[tuple[str,str],tuple[PairFit,float]]:
-    pairs=list(pairs or all_pairs(panel));observed={}
-    for pair in pairs:
-        fit=fit_pair(panel,pair[0],pair[1],min_controls=min_controls)
-        if fit is not None:observed[pair]=fit
-    if not observed:return {}
-    left={pair:0 for pair in observed};total=max(50,int(reps));rng=random.Random(seed)
-    for _ in range(total):
-        boot=null_panel_bootstrap(panel,rng)
-        if boot is None:continue
-        for pair,observed_fit in observed.items():
-            fit=fit_pair(boot,pair[0],pair[1],min_controls=min_controls)
-            if fit is not None and fit.pair_stat<=observed_fit.pair_stat:left[pair]+=1
-    return {pair:(fit,(left[pair]+1.0)/(total+1.0)) for pair,fit in observed.items()}
 
 def bh_selected(pvalues:Mapping[tuple[str,str],float],q:float)->set[tuple[str,str]]:
     ordered=sorted((p,pair) for pair,p in pvalues.items() if math.isfinite(p));m=len(ordered);cutoff=0.0
@@ -232,20 +191,6 @@ def residual_change(phi:float,current:float,mean:float,steps:float)->float:
 
 def price_factor_exposure(side:str,probability:float,yes_sd:float,loading:float)->float:
     sign=1.0 if side.upper()=="YES" else -1.0;p=clamp(probability,1e-6,1.0-1e-6);return sign*p*(1-p)*yes_sd*loading
-
-def build_pair_signal(fit:PairFit,pvalue:float,probabilities:Mapping[str,float],yes_scales:Mapping[str,float],bucket_seconds:int,now:int,resolution_ts:Mapping[str,int],exit_buffer_seconds:int,min_abs_z:float=0.75,max_hold_seconds:int=48*3600)->PairSignal|None:
-    if abs(fit.residual_z_a)<min_abs_z or abs(fit.residual_z_b)<min_abs_z:return None
-    if not(0.0<fit.phi_a<1.0 and 0.0<fit.phi_b<1.0):return None
-    hl=max(half_life_bars(fit.phi_a),half_life_bars(fit.phi_b));hold=max(bucket_seconds,min(max_hold_seconds,int(math.ceil(hl*bucket_seconds))))
-    ttr=min(int(resolution_ts.get(fit.market_a,0)),int(resolution_ts.get(fit.market_b,0)))-now-max(0,exit_buffer_seconds)
-    if ttr<=0:return None
-    hold=min(hold,ttr);steps=max(1.0,hold/max(1,bucket_seconds));cur_a=fit.residual_a[-1];cur_b=fit.residual_b[-1]
-    ch_a=residual_change(fit.phi_a,cur_a,fit.residual_mean_a,steps);ch_b=residual_change(fit.phi_b,cur_b,fit.residual_mean_b,steps)
-    side_a="YES" if ch_a>0 else "NO";side_b="YES" if ch_b>0 else "NO";p_a=probabilities[fit.market_a];p_b=probabilities[fit.market_b]
-    exp_a=price_factor_exposure(side_a,p_a,yes_scales[fit.market_a],fit.loading_a);exp_b=price_factor_exposure(side_b,p_b,yes_scales[fit.market_b],fit.loading_b)
-    if abs(exp_a)<=1e-12 or abs(exp_b)<=1e-12 or exp_a*exp_b>=0:return None
-    ratio=clamp(abs(exp_a/exp_b),0.05,10.0);weight_a=1.0;weight_b=ratio
-    return PairSignal(fit.market_a,fit.market_b,side_a,side_b,weight_a,weight_b,hold,ch_a,ch_b,exp_a*weight_a,exp_b*weight_b,pvalue)
 
 def estimate_joint_distribution(states:Sequence[tuple[bool,bool]],prior:float=0.5)->JointFillDistribution:
     counts=[max(0.0,float(prior))]*4

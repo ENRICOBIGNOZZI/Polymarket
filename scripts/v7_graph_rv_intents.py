@@ -16,7 +16,7 @@ from typing import Any
 from v7_graph_rv import Book, parse_book
 from v7_market_common import fee_per_share, finite, parse_array, request_json, resolve_fee_details
 
-FIELDS = ["bundle_id","strategy","event_id","created_ts","mode","expected_edge","max_notional","market_id","side","weight","limit_price","execution_deadline_ts","hold_deadline_ts"]
+FIELDS = ["bundle_id","strategy","event_id","created_ts","mode","expected_edge","max_notional","market_id","outcome","weight","limit_price","execution_deadline_ts","hold_deadline_ts"]
 
 
 def parse_ts(value: Any) -> int:
@@ -140,7 +140,7 @@ def scan(cfg:dict[str,Any], now:int) -> tuple[list[dict[str,Any]],dict[str,int]]
         bucket=now//3600; bundle=f"GRAPH_RV:{event_id}:{bucket}"
         for m in em:
             book=initial[m.yes_token]
-            rows.append({"bundle_id":bundle,"strategy":"GRAPH_RV","event_id":event_id,"created_ts":now,"mode":"POLICY","expected_edge":edge,"max_notional":max_notional,"market_id":m.market_id,"side":"YES","weight":1.0,"limit_price":book.bid,"execution_deadline_ts":execution,"hold_deadline_ts":hold})
+            rows.append({"bundle_id":bundle,"strategy":"GRAPH_RV","event_id":event_id,"created_ts":now,"mode":"POLICY","expected_edge":edge,"max_notional":max_notional,"market_id":m.market_id,"outcome":"YES","weight":1.0,"limit_price":book.bid,"execution_deadline_ts":execution,"hold_deadline_ts":hold})
         stats["events_complete"]+=1; stats["bundles"]+=1
     return rows,stats
 

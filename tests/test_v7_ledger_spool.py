@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from v7_execution_ledger import LedgerEvent, canonical_ledger_path
+from v7_execution_ledger import LedgerContractError, LedgerEvent, canonical_ledger_path
 from v7_ledger_spool import (
     _drain_with_existing,
     _existing_record_ids,
@@ -90,7 +90,7 @@ class LedgerSpoolTests(unittest.TestCase):
             rows = [json.loads(line) for line in canonical_ledger_path(root).read_text().splitlines() if line.strip()]
             self.assertEqual(len(rows), 2)
 
-    def test_graph_outcome_side_is_preserved_but_execution_side_is_buy(self) -> None:
+    def test_graph_events_must_arrive_with_canonical_execution_side(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             event = LedgerEvent(
@@ -102,13 +102,14 @@ class LedgerSpoolTests(unittest.TestCase):
                 fill_id="f",
                 leg_id="l",
                 token_id="t",
-                side="YES",
+                side="BUY",
                 exchange_ts_ms=1000,
                 receive_ts_ms=1100,
                 fill_price=0.5,
                 filled_size=1.0,
                 fee=0.0,
                 fee_source="test:authoritative",
+                metadata={"outcome_side": "YES", "execution_side": "BUY"},
             )
             path = spool_event(root, event)
             raw = json.loads(path.read_text())
@@ -116,6 +117,24 @@ class LedgerSpoolTests(unittest.TestCase):
             self.assertEqual(raw["metadata"]["outcome_side"], "YES")
             self.assertEqual(raw["metadata"]["execution_side"], "BUY")
             self.assertEqual(drain_spool(root, model_sha=SHA)["appended"], 1)
+
+    def test_spool_rejects_graph_outcome_as_execution_side(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            event = LedgerEvent(
+                event_type="FILL",
+                strategy="GRAPH_RV",
+                model_sha=SHA,
+                bundle_id="b",
+                order_id="o",
+                fill_id="f",
+                side="YES",
+                fill_price=0.5,
+                filled_size=1.0,
+                fee=0.0,
+                fee_source="test:authoritative",
+            )
+            with self.assertRaises(LedgerContractError):
+                spool_event(Path(tmp), event)
 
     def test_mixed_sha_spool_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

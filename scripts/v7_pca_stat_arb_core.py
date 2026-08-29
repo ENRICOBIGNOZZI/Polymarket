@@ -20,12 +20,12 @@ def _load(name: str, filename: str) -> Any:
     return module
 
 
-base = _load("v7_pca_stat_arb_core_base_runtime", "v7_pca_stat_arb_core_base.py")
-_base_fit_target = base.fit_target
+primitives = _load("v7_pca_stat_arb_primitives_runtime", "v7_pca_stat_arb_primitives.py")
+_primitive_fit_target = primitives.fit_target
 
 
 @dataclass(frozen=True)
-class CurrentPcaTargetModel(base.PcaTargetModel):
+class CurrentPcaTargetModel(primitives.PcaTargetModel):
     factor_phis: tuple[float, ...] = ()
     factor_means: tuple[float, ...] = ()
     factor_sds: tuple[float, ...] = ()
@@ -34,13 +34,13 @@ class CurrentPcaTargetModel(base.PcaTargetModel):
 
 
 @dataclass(frozen=True)
-class CurrentPcaScore(base.PcaScore):
+class CurrentPcaScore(primitives.PcaScore):
     predicted_common_logit_move: float = 0.0
     predicted_residual_logit_move: float = 0.0
     common_factor_forecast_identified: bool = False
 
 
-def _factor_histories(panel, model: base.PcaTargetModel) -> list[list[float]] | None:
+def _factor_histories(panel, model: primitives.PcaTargetModel) -> list[list[float]] | None:
     if any(control not in panel.values for control in model.controls):
         return None
     controls_std: list[list[float]] = []
@@ -52,7 +52,7 @@ def _factor_histories(panel, model: base.PcaTargetModel) -> list[list[float]] | 
     for index in range(len(panel.times)):
         current_controls = [controls_std[j][index] for j in range(len(model.controls))]
         for factor_index, vector in enumerate(model.eigenvectors):
-            factors[factor_index].append(base.dot(vector, current_controls))
+            factors[factor_index].append(primitives.dot(vector, current_controls))
     return factors
 
 
@@ -63,7 +63,7 @@ def fit_target(
     explained_variance_threshold: float = 0.80,
     ridge: float = 1e-4,
 ):
-    fitted = _base_fit_target(
+    fitted = _primitive_fit_target(
         panel,
         target,
         max_components=max_components,
@@ -81,7 +81,7 @@ def fit_target(
     innovations: list[float] = []
     last: list[float] = []
     for series in histories:
-        phi, mean, sd, innovation_sd = base.ar1_fit(series)
+        phi, mean, sd, innovation_sd = primitives.ar1_fit(series)
         if not all(math.isfinite(value) for value in (phi, mean, sd, innovation_sd)):
             return None
         phis.append(float(phi))
@@ -122,14 +122,14 @@ def score_current(model: CurrentPcaTargetModel, current_logits: Mapping[str, flo
         if not math.isfinite(value):
             return None
         controls_std.append((value - mean) / scale)
-    factors = [base.dot(vector, controls_std) for vector in model.eigenvectors]
+    factors = [primitives.dot(vector, controls_std) for vector in model.eigenvectors]
     if not all(math.isfinite(value) for value in factors):
         return None
     target_value = float(current_logits[model.target])
     if not math.isfinite(target_value):
         return None
     target_std = (target_value - model.target_mean) / model.target_scale
-    common_current = base.dot(model.beta, factors)
+    common_current = primitives.dot(model.beta, factors)
     residual = target_std - common_current
     steps = max(1, int(horizon_steps))
 
@@ -146,7 +146,7 @@ def score_current(model: CurrentPcaTargetModel, current_logits: Mapping[str, flo
             return None
         factor_moves.append((phi ** steps - 1.0) * (current - mean))
 
-    common_move_std = base.dot(model.beta, factor_moves)
+    common_move_std = primitives.dot(model.beta, factor_moves)
     residual_move_std = (model.phi ** steps - 1.0) * (residual - model.residual_mean)
     common_move = common_move_std * model.target_scale
     residual_move = residual_move_std * model.target_scale
@@ -161,7 +161,7 @@ def score_current(model: CurrentPcaTargetModel, current_logits: Mapping[str, flo
     sigma_logit = math.sqrt(max(1e-12, residual_variance + factor_variance)) * model.target_scale
     return CurrentPcaScore(
         target=model.target,
-        current_probability=base.logistic(current_logits[model.target]),
+        current_probability=primitives.logistic(current_logits[model.target]),
         current_residual=residual,
         residual_z=(residual - model.residual_mean) / model.residual_sd,
         predicted_logit_move=predicted_logit_move,
@@ -173,11 +173,11 @@ def score_current(model: CurrentPcaTargetModel, current_logits: Mapping[str, flo
     )
 
 
-base.fit_target = fit_target
-base.score_current = score_current
-for _name in dir(base):
+primitives.fit_target = fit_target
+primitives.score_current = score_current
+for _name in dir(primitives):
     if not _name.startswith("__") and _name not in {"fit_target", "score_current", "PcaTargetModel", "PcaScore"}:
-        globals()[_name] = getattr(base, _name)
+        globals()[_name] = getattr(primitives, _name)
 
 globals()["PcaTargetModel"] = CurrentPcaTargetModel
 globals()["PcaScore"] = CurrentPcaScore

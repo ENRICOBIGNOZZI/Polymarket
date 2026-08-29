@@ -40,8 +40,7 @@ void write_model(const std::filesystem::path& path, const std::string& sha) {
       "event_clusters": 2,
       "fill_probability": 0.02,
       "adverse_markout_per_share": 0.04,
-      "adverse_markout_n": 0,
-      "markouts": {"10s": {"n": 5}}
+      "adverse_markout_n": 0
     }
   }
 })";
@@ -71,12 +70,12 @@ void test_exact_sha_loader_shrinks_to_global() {
     assert(cell.adverse_markouts == 20);
     assert(cell.event_clusters == 10);
 
-    const auto legacy_index = pm::v7::maker::execution_cell_index(
+    const auto zero_markout_index = pm::v7::maker::execution_cell_index(
         pm::v7::maker::Action::Fade1, -1, pm::v7::Side::Sell);
-    const auto& legacy = model.execution_cells[legacy_index];
-    assert(legacy.valid);
-    assert(legacy.adverse_markouts == 5);
-    assert(legacy.markout_weight > 0.0);
+    const auto& zero_markout = model.execution_cells[zero_markout_index];
+    assert(zero_markout.valid);
+    assert(zero_markout.adverse_markouts == 0);
+    assert(zero_markout.markout_weight == 0.0);
 
     unsetenv("PM_V7_MAKER_EXECUTION_MODEL");
     unsetenv("PM_V7_MODEL_SHA");

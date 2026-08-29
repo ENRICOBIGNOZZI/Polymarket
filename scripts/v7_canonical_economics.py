@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Canonical V7 PAPER economics from the append-only execution ledger.
 
-This module is deliberately stricter than the legacy CSV sidecar:
+This module accepts only canonical ledger evidence:
 - one economic unit per bundle/position/order, never leg fills divided by bundle submissions;
 - exact-SHA and PAPER-only evidence through ``v7_execution_ledger``;
 - explicit non-overlapping fee/slippage/unwind/capital/latency cost vectors;

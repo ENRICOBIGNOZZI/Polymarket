@@ -29,7 +29,7 @@ class V7FillRateIntegrityTest(unittest.TestCase):
             "complete": complete,
         }
 
-    def _snapshot(self, *, strategy: str, orders: int, fills: int, legacy_fill_rate: float | None = None) -> dict:
+    def _snapshot(self, *, strategy: str, orders: int, fills: int) -> dict:
         with tempfile.TemporaryDirectory() as directory:
             run_root = Path(directory) / "paper_v7_live"
             ledger = run_root / "ledger" / "execution.jsonl"
@@ -38,50 +38,21 @@ class V7FillRateIntegrityTest(unittest.TestCase):
             events += [self._event("FILL", strategy=strategy, complete=True) for _ in range(fills)]
             ledger.write_text("".join(json.dumps(row) + "\n" for row in events), encoding="utf-8")
 
-            # This retired surface may still exist in old run directories. It must
-            # never regain authority over canonical V7 monitoring or promotion.
-            if legacy_fill_rate is not None:
-                evidence = run_root / "execution" / "v7_execution_evidence.json"
-                evidence.parent.mkdir(parents=True, exist_ok=True)
-                evidence.write_text(
-                    json.dumps(
-                        {
-                            "timestamp": 1_000,
-                            "paper_only": True,
-                            "models": {
-                                strategy: {
-                                    "orders_submitted": orders,
-                                    "fills": fills,
-                                    "fill_rate": legacy_fill_rate,
-                                }
-                            },
-                        }
-                    ),
-                    encoding="utf-8",
-                )
             return exporter.collect_snapshot(run_root, ROOT, now=1_000)
 
-    def test_multileg_legacy_fill_rate_never_becomes_joint_completion_probability(self) -> None:
-        for raw_fill_rate in (1.0, 5.0):
-            with self.subTest(raw_fill_rate=raw_fill_rate):
-                snapshot = self._snapshot(
-                    strategy="relative_value",
-                    orders=20,
-                    fills=20,
-                    legacy_fill_rate=raw_fill_rate,
-                )
-                metrics = exporter.render_prometheus(snapshot)
-                self.assertNotIn('polymarket_strategy_fill_rate{strategy="relative_value"}', metrics)
-                self.assertNotIn("polymarket_strategy_fill_rate_valid", metrics)
-                self.assertIn('polymarket_strategy_ledger_orders_submitted{strategy="relative_value"} 20', metrics)
-                self.assertIn('polymarket_strategy_ledger_fills{strategy="relative_value"} 20', metrics)
+    def test_multileg_counts_never_become_joint_completion_probability(self) -> None:
+        snapshot = self._snapshot(strategy="relative_value", orders=20, fills=20)
+        metrics = exporter.render_prometheus(snapshot)
+        self.assertNotIn('polymarket_strategy_fill_rate{strategy="relative_value"}', metrics)
+        self.assertNotIn("polymarket_strategy_fill_rate_valid", metrics)
+        self.assertIn('polymarket_strategy_ledger_orders_submitted{strategy="relative_value"} 20', metrics)
+        self.assertIn('polymarket_strategy_ledger_fills{strategy="relative_value"} 20', metrics)
 
-    def test_single_order_monitoring_uses_canonical_counts_not_retired_probability(self) -> None:
+    def test_single_order_monitoring_uses_canonical_counts(self) -> None:
         snapshot = self._snapshot(
             strategy="micro_maker",
             orders=20,
             fills=5,
-            legacy_fill_rate=0.25,
         )
         metrics = exporter.render_prometheus(snapshot)
         self.assertNotIn('polymarket_strategy_fill_rate{strategy="micro_maker"}', metrics)

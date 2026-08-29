@@ -18,13 +18,12 @@ class V7FastAuthoritySentinelContractTest(unittest.TestCase):
         self.assertTrue(champion["paper_only"])
         self.assertFalse(champion["authenticated_execution"])
         self.assertFalse(champion["real_order_submission"])
-        self.assertFalse(champion["legacy_fallback_allowed"])
         self.assertEqual(champion["version"], 7)
         self.assertEqual(champion["loop"], "scripts/paper_v7_execution_loop.sh")
         self.assertFalse(auth["fixed_dollar_trade_cap_enabled"])
         self.assertEqual(auth["max_drawdown"], 0.15)
 
-    def test_compatibility_sentinel_is_not_spendable_notional(self) -> None:
+    def test_unbounded_config_value_is_not_spendable_notional(self) -> None:
         source = (ROOT / "src" / "fast_runtime" / "part4.inc").read_text(encoding="utf-8")
         for token in (
             "capital_fraction_ceiling",

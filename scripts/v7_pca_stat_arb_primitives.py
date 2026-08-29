@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+"""Shared statistical primitives for the canonical V7 PCA stat-arb model."""
+
 import math
 import random
 import statistics

@@ -20,7 +20,7 @@ def _load(name: str, filename: str) -> Any:
     return module
 
 
-core_base = _load("v7_local_factor_core_base_runtime", "v7_local_factor_core_base.py")
+primitives = _load("v7_local_factor_primitives_runtime", "v7_local_factor_primitives.py")
 orientation = _load("v7_local_factor_orientation_runtime", "v7_local_factor_orientation.py")
 
 
@@ -36,7 +36,7 @@ class PanelFreshness:
 
 
 @dataclass(frozen=True)
-class CurrentPairFit(core_base.PairFit):
+class CurrentPairFit(primitives.PairFit):
     """Frozen LF fit plus the nuisance projection needed for a causal current score."""
 
     control_factor_loadings: tuple[tuple[str, float], ...] = ()
@@ -54,7 +54,7 @@ class CurrentResidualState:
 
 
 @dataclass(frozen=True)
-class CurrentPairSignal(core_base.PairSignal):
+class CurrentPairSignal(primitives.PairSignal):
     current_factor: float = 0.0
     current_residual_a: float = 0.0
     current_residual_b: float = 0.0
@@ -125,13 +125,13 @@ def fit_pair(panel, market_a: str, market_b: str, min_controls: int = 2):
     factor = orientation.orientation_invariant_pc1({mid: panel.values[mid] for mid in controls})
     if factor is None:
         return None
-    loading_a = core_base.ols_loading(panel.values[market_a], factor)
-    loading_b = core_base.ols_loading(panel.values[market_b], factor)
+    loading_a = primitives.ols_loading(panel.values[market_a], factor)
+    loading_b = primitives.ols_loading(panel.values[market_b], factor)
     if loading_a is None or loading_b is None:
         return None
     control_loadings: list[tuple[str, float]] = []
     for control in controls:
-        loading = core_base.ols_loading(panel.values[control], factor)
+        loading = primitives.ols_loading(panel.values[control], factor)
         if loading is None or not math.isfinite(loading):
             return None
         control_loadings.append((control, float(loading)))
@@ -140,12 +140,12 @@ def fit_pair(panel, market_a: str, market_b: str, min_controls: int = 2):
         return None
     residual_a = tuple(y - loading_a * f for y, f in zip(panel.values[market_a], factor))
     residual_b = tuple(y - loading_b * f for y, f in zip(panel.values[market_b], factor))
-    phi_a, mu_a, sd_a = core_base.ar1_fit(residual_a)
-    phi_b, mu_b, sd_b = core_base.ar1_fit(residual_b)
+    phi_a, mu_a, sd_a = primitives.ar1_fit(residual_a)
+    phi_b, mu_b, sd_b = primitives.ar1_fit(residual_b)
     if sd_a <= 1e-8 or sd_b <= 1e-8:
         return None
-    adf_a = core_base.adf_t_stat(residual_a)
-    adf_b = core_base.adf_t_stat(residual_b)
+    adf_a = primitives.adf_t_stat(residual_a)
+    adf_b = primitives.adf_t_stat(residual_b)
     required = (market_a, market_b, *controls)
     if any(mid not in panel.means or mid not in panel.scales for mid in required):
         return None
@@ -189,7 +189,7 @@ def current_residual_state(fit: CurrentPairFit, probabilities: Mapping[str, floa
         probability = float(probabilities[mid])
         if not math.isfinite(probability) or not 0.0 < probability < 1.0:
             return None
-        z[mid] = (core_base.logit(probability) - means[mid]) / scales[mid]
+        z[mid] = (primitives.logit(probability) - means[mid]) / scales[mid]
     numerator = 0.0
     denominator = 0.0
     for control, loading in fit.control_factor_loadings:
@@ -235,7 +235,7 @@ def build_pair_signal(
         return None
     if fit.market_a not in yes_scales or fit.market_b not in yes_scales:
         return None
-    hl = max(core_base.half_life_bars(fit.phi_a), core_base.half_life_bars(fit.phi_b))
+    hl = max(primitives.half_life_bars(fit.phi_a), primitives.half_life_bars(fit.phi_b))
     hold = max(bucket_seconds, min(max_hold_seconds, int(math.ceil(hl * bucket_seconds))))
     resolved = end_ts if end_ts is not None else resolution_ts
     if resolved is None:
@@ -249,21 +249,21 @@ def build_pair_signal(
         return None
     hold = min(hold, ttr)
     steps = max(1.0, hold / max(1, int(bucket_seconds)))
-    change_a = core_base.residual_change(fit.phi_a, state.residual_a, fit.residual_mean_a, steps)
-    change_b = core_base.residual_change(fit.phi_b, state.residual_b, fit.residual_mean_b, steps)
+    change_a = primitives.residual_change(fit.phi_a, state.residual_a, fit.residual_mean_a, steps)
+    change_b = primitives.residual_change(fit.phi_b, state.residual_b, fit.residual_mean_b, steps)
     if abs(change_a) <= 1e-12 or abs(change_b) <= 1e-12:
         return None
     side_a = "YES" if change_a > 0 else "NO"
     side_b = "YES" if change_b > 0 else "NO"
     p_a = float(probabilities[fit.market_a])
     p_b = float(probabilities[fit.market_b])
-    exposure_a = core_base.price_factor_exposure(side_a, p_a, float(yes_scales[fit.market_a]), fit.loading_a)
-    exposure_b = core_base.price_factor_exposure(side_b, p_b, float(yes_scales[fit.market_b]), fit.loading_b)
+    exposure_a = primitives.price_factor_exposure(side_a, p_a, float(yes_scales[fit.market_a]), fit.loading_a)
+    exposure_b = primitives.price_factor_exposure(side_b, p_b, float(yes_scales[fit.market_b]), fit.loading_b)
     if abs(exposure_a) <= 1e-12 or abs(exposure_b) <= 1e-12 or exposure_a * exposure_b >= 0:
         return None
     lo = max(1e-6, float(min_weight))
     hi = max(lo, float(max_weight))
-    ratio = core_base.clamp(abs(exposure_a / exposure_b), lo, hi)
+    ratio = primitives.clamp(abs(exposure_a / exposure_b), lo, hi)
     weight_a = 1.0
     weight_b = ratio
     return CurrentPairSignal(
@@ -287,10 +287,10 @@ def build_pair_signal(
     )
 
 
-core_base.fit_pair = fit_pair
-for _name in dir(core_base):
+primitives.fit_pair = fit_pair
+for _name in dir(primitives):
     if not _name.startswith("__") and _name not in {"fit_pair", "build_pair_signal", "PairFit"}:
-        globals()[_name] = getattr(core_base, _name)
+        globals()[_name] = getattr(primitives, _name)
 
 globals()["PairFit"] = CurrentPairFit
 globals()["fit_pair"] = fit_pair

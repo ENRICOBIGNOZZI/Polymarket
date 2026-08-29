@@ -12,7 +12,6 @@ import argparse
 import json
 import os
 import time
-from dataclasses import replace
 from pathlib import Path
 from typing import Iterable
 
@@ -28,29 +27,7 @@ def spool_dir(run_root: Path) -> Path:
     return Path(run_root) / "ledger" / "spool"
 
 
-def canonicalize_producer_event(event: LedgerEvent) -> LedgerEvent:
-    """Map strategy-domain outcome labels into canonical execution semantics.
-
-    The canonical ledger's ``side`` is deliberately BUY/SELL only. Graph/RV
-    trades a token representing a YES/NO outcome and historically used that
-    outcome label as ``side``. Preserve it explicitly as metadata while mapping
-    the actual entry execution to BUY. No other strategy/domain label is
-    silently accepted.
-    """
-    raw_side = str(event.side or "").upper()
-    if event.strategy == "GRAPH_RV" and raw_side in {"YES", "NO"}:
-        metadata = dict(event.metadata) if isinstance(event.metadata, dict) else {}
-        existing = str(metadata.get("outcome_side") or "").upper()
-        if existing and existing != raw_side:
-            raise LedgerContractError("graph_rv:outcome_side_conflict")
-        metadata["outcome_side"] = raw_side
-        metadata["execution_side"] = "BUY"
-        return replace(event, side="BUY", metadata=metadata)
-    return event
-
-
 def spool_event(run_root: Path, event: LedgerEvent) -> Path:
-    event = canonicalize_producer_event(event)
     event.validate()
     directory = spool_dir(run_root)
     directory.mkdir(parents=True, exist_ok=True)

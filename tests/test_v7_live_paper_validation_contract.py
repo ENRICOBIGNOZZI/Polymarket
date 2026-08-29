@@ -99,7 +99,6 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
         self.assertTrue(manifest["paper_only"])
         self.assertFalse(manifest["authenticated_execution"])
         self.assertFalse(manifest["real_order_submission"])
-        self.assertFalse(manifest["legacy_fallback_allowed"])
         self.assertEqual(manifest["loop"], "scripts/paper_v7_execution_loop.sh")
         self.assertEqual(manifest["config"], "config/paper_v7.json")
 
