@@ -10,7 +10,7 @@
     "pagination_loop_guard_pages": 1000,
     "request_timeout_seconds": 20,
     "request_attempts_per_page": 4,
-    "refresh_seconds": 300,
+    "refresh_seconds": 120,
     "retry_initial_seconds": 1,
     "retry_max_seconds": 30
   },

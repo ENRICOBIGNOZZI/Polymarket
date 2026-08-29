@@ -364,8 +364,10 @@ for rel in (
     'monitoring/v7_runtime_contract.py',
     'monitoring/v7_retention.py',
     'monitoring/grafana/dashboards/polymarket-v7.json',
+    'monitoring/grafana/dashboards/polymarket-v7-external-fair.json',
     'ops/v7_runtime_supervisor.py',
     'ops/v7_service_entrypoint.sh',
+    'scripts/v7_rtds_external_fair_monitor.py',
     'scripts/v7_research_shadow_supervisor.py',
     'scripts/v7_semantic_mapping.py',
     'scripts/v7_sports_collector.py',
@@ -408,6 +410,7 @@ prevalidate_candidate(){
       scripts/v7_sports_collector.py \
       scripts/v7_cross_platform_collector.py \
       scripts/v7_osint_mapping_collector.py \
+      scripts/v7_rtds_external_fair_monitor.py \
       monitoring/exporter_v7.py \
       monitoring/v7_ledger_metrics.py \
       monitoring/v7_runtime_contract.py \
@@ -447,21 +450,51 @@ start_production_runtime(){
   printf '\n=== V7 DEPLOY EPOCH expected_sha=%s started_at=%s ===\n' \
     "$EXPECTED_SHA" "$(date +%s)" >> "$runtime_log"
   log_epoch_line="$(wc -l < "$runtime_log" | tr -d ' ')"
-  nohup env \
-    POLYMARKET_APP_DIR="$APP_DIR" \
-    PM_V7_RUN_ROOT="$run_root" \
-    POLYMARKET_EXPECTED_SHA="$EXPECTED_SHA" \
-    PM_V7_EXACT_SHA_CI_GREEN=true \
-    PM_TRADE_RECORDER="$APP_DIR/build/polymarket_v7_trade_recorder" \
-    bash "$APP_DIR/ops/v7_service_entrypoint.sh" \
-    >>"$runtime_log" 2>&1 </dev/null &
-  local pid=$!
-  log "Started production V7 pid=$pid"
+  local pid=""
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    local domain="gui/$(id -u)" label="com.polymarket.v7.paper"
+    local template="$APP_DIR/ops/launchd/com.polymarket.v7.paper.plist.in"
+    local destination="$HOME/Library/LaunchAgents/$label.plist"
+    mkdir -p "$HOME/Library/LaunchAgents"
+    python3 - "$template" "$destination" "$APP_DIR" "$run_root" "$EXPECTED_SHA" <<'PY'
+import os,sys
+from pathlib import Path
+source,destination,app,run_root,sha=map(str,sys.argv[1:])
+payload=Path(source).read_text(encoding='utf-8')
+for marker,value in (("@APP_DIR@",app),("@RUN_ROOT@",run_root),("@EXPECTED_SHA@",sha)):
+    payload=payload.replace(marker,value)
+assert "@" not in payload
+path=Path(destination); temporary=path.with_name(path.name+f'.tmp.{os.getpid()}')
+temporary.write_text(payload,encoding='utf-8'); os.chmod(temporary,0o644); os.replace(temporary,path)
+PY
+    plutil -lint "$destination" >/dev/null
+    launchctl bootout "$domain/$label" >/dev/null 2>&1 || true
+    launchctl bootstrap "$domain" "$destination"
+    log "Started production V7 under launchd label=$label"
+  else
+    nohup env \
+      POLYMARKET_APP_DIR="$APP_DIR" \
+      PM_V7_RUN_ROOT="$run_root" \
+      POLYMARKET_EXPECTED_SHA="$EXPECTED_SHA" \
+      PM_V7_EXACT_SHA_CI_GREEN=true \
+      PM_TRADE_RECORDER="$APP_DIR/build/polymarket_v7_trade_recorder" \
+      bash "$APP_DIR/ops/v7_service_entrypoint.sh" \
+      >>"$runtime_log" 2>&1 </dev/null &
+    pid=$!
+    log "Started production V7 pid=$pid"
+  fi
   sleep 2
-  kill -0 "$pid" 2>/dev/null || {
-    tail -n "+$log_epoch_line" "$runtime_log" >&2 || true
-    fail "production V7 exited during startup"
-  }
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    launchctl print "gui/$(id -u)/com.polymarket.v7.paper" 2>/dev/null | grep -q 'state = running' || {
+      tail -n 80 "$run_root/supervisor-launchd.log" >&2 || true
+      fail "launchd production V7 exited during startup"
+    }
+  else
+    kill -0 "$pid" 2>/dev/null || {
+      tail -n "+$log_epoch_line" "$runtime_log" >&2 || true
+      fail "production V7 exited during startup"
+    }
+  fi
 }
 
 stop_owned_monitoring(){

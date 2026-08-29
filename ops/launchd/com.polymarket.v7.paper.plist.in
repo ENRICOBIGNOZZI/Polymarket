@@ -8,6 +8,7 @@
     <key>POLYMARKET_APP_DIR</key><string>@APP_DIR@</string>
     <key>PM_V7_RUN_ROOT</key><string>@RUN_ROOT@</string>
     <key>POLYMARKET_EXPECTED_SHA</key><string>@EXPECTED_SHA@</string>
+    <key>PM_V7_EXACT_SHA_CI_GREEN</key><string>true</string>
     <key>PM_V7_AUTHENTICATED_EXECUTION</key><string>0</string>
     <key>PM_V7_REAL_ORDER_SUBMISSION</key><string>0</string>
   </dict>

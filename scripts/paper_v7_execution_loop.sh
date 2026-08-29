@@ -182,16 +182,13 @@ if [[ -n "$ORACLE_BINDING" && -f "$ORACLE_BINDING" ]]; then
     >> "$RUN_ROOT/external_fair/oracle_adapter.log" 2>&1 &
   pids+=("$!")
 else
-  python3 - "$RUN_ROOT/external_fair/oracle_status.json" <<'PY'
-import json,os,sys,time
-from pathlib import Path
-path=Path(sys.argv[1]); tmp=path.with_name(path.name+f'.tmp.{os.getpid()}')
-tmp.write_text(json.dumps({
-    'schema':'polymarket_v7_same_oracle_status_v1','state':'UNKNOWN',
-    'reason':'binding_not_configured_contracts_quarantined','timestamp_ns':time.time_ns(),
-    'paper_only':True,'authenticated_execution':False,'real_order_submission':False,
-},sort_keys=True)+'\n',encoding='utf-8'); os.replace(tmp,path)
-PY
+  # Public RTDS restores the real Chainlink/Binance data plane without
+  # credentials. Contract, fair-value and OMS authorization remain fail-closed
+  # and are reported explicitly instead of being represented as missing data.
+  python3 scripts/v7_rtds_external_fair_monitor.py \
+    --output-dir "$RUN_ROOT/external_fair" --code-sha "$SHA" \
+    >> "$RUN_ROOT/external_fair/rtds_monitor.log" 2>&1 &
+  pids+=("$!")
 fi
 
 CONFIG_HASH="$(git hash-object "$CONFIG")"

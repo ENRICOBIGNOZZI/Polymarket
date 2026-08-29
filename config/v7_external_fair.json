@@ -57,6 +57,16 @@
     "exchange_price_may_replace_oracle": false,
     "recovery_requires_same_oracle_provenance": true
   },
+  "public_observability_transport": {
+    "provider": "Polymarket RTDS",
+    "websocket_origin": "wss://ws-live-data.polymarket.com",
+    "adapter": "scripts/v7_rtds_external_fair_monitor.py",
+    "chainlink_topic": "crypto_prices_chainlink",
+    "external_comparison_topic": "crypto_prices",
+    "credentials_required": false,
+    "execution_authority": "SHADOW_ZERO_AUTHORITY",
+    "may_authorize_contract_or_fair_execution": false
+  },
   "external_venues": {
     "instrument_type": "SPOT",
     "venues": [

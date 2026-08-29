@@ -28,6 +28,14 @@ class V7PublicDnsRuntimeContractTests(unittest.TestCase):
         self.assertIn("if ! maker_selection_ready; then", source)
         self.assertIn('authenticated_execution":false', source)
         self.assertIn('real_order_submission":false', source)
+        self.assertIn("v7_rtds_external_fair_monitor.py", source)
+
+    def test_macos_deploy_transfers_runtime_ownership_to_launchd(self) -> None:
+        updater = (ROOT / "ops" / "update_server_v7.sh").read_text(encoding="utf-8")
+        template = (ROOT / "ops" / "launchd" / "com.polymarket.v7.paper.plist.in").read_text(encoding="utf-8")
+        self.assertIn('launchctl bootstrap "$domain" "$destination"', updater)
+        self.assertIn('launchctl print "gui/$(id -u)/com.polymarket.v7.paper"', updater)
+        self.assertIn("PM_V7_EXACT_SHA_CI_GREEN", template)
 
     def test_cpp_http_client_explicitly_uses_v7_proxy_only_for_polymarket_https(self) -> None:
         source = (ROOT / "src" / "http.cpp").read_text(encoding="utf-8")

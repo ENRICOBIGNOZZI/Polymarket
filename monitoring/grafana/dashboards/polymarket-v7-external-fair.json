@@ -13,8 +13,8 @@
       "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
       "id": 1,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
-      "targets": [{"expr": "polymarket_external_fair_present * polymarket_external_fair_healthy", "refId": "A"}],
-      "title": "External Fair Health",
+      "targets": [{"expr": "polymarket_external_fair_present * polymarket_external_fair_oracle_healthy", "refId": "A"}],
+      "title": "RTDS Oracle Data Plane",
       "type": "stat"
     },
     {
