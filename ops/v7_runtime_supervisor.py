@@ -153,6 +153,11 @@ class Supervisor:
     def _restart_times(self) -> list[int]:
         now = int(time.time())
         value = _json(self.restart_path)
+        if (
+            value.get("schema") != "polymarket_v7_supervisor_restarts_v1"
+            or value.get("expected_sha") != self.expected_sha
+        ):
+            return []
         raw = value.get("timestamps") if isinstance(value.get("timestamps"), list) else []
         return sorted(int(item) for item in raw if isinstance(item, (int, float)) and now - int(item) <= self.restart_window)
 

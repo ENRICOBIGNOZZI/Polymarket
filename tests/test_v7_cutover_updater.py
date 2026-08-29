@@ -86,6 +86,8 @@ class V7CutoverUpdaterTest(unittest.TestCase):
 
     def test_health_failure_emits_endpoint_and_monitoring_log_diagnostics(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        self.assertIn("=== V7 DEPLOY EPOCH expected_sha=%s started_at=%s ===", text)
+        self.assertIn('tail -n "+$log_epoch_line" "$runtime_log"', text)
         self.assertIn("runtime_health_diagnostics(){", text)
         for required in (
             "exporter_health",

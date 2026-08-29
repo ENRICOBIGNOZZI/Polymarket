@@ -351,11 +351,15 @@ build_current_checkout(){
 }
 
 start_production_runtime(){
-  local run_root="$(production_run_root)"
+  local run_root="$(production_run_root)" runtime_log log_epoch_line
+  runtime_log="$run_root/deploy-runtime.log"
   mkdir -p "$run_root"
   # Only an explicitly authorized exact-SHA deployment clears a supervisor
   # quarantine. Ledger, inventory and KILL evidence remain for reconciliation.
   rm -f "$run_root/control/supervisor_status.json"
+  printf '\n=== V7 DEPLOY EPOCH expected_sha=%s started_at=%s ===\n' \
+    "$EXPECTED_SHA" "$(date +%s)" >> "$runtime_log"
+  log_epoch_line="$(wc -l < "$runtime_log" | tr -d ' ')"
   nohup env \
     POLYMARKET_APP_DIR="$APP_DIR" \
     PM_V7_RUN_ROOT="$run_root" \
@@ -363,12 +367,12 @@ start_production_runtime(){
     PM_V7_EXACT_SHA_CI_GREEN=true \
     PM_TRADE_RECORDER="$APP_DIR/build/polymarket_v7_trade_recorder" \
     bash "$APP_DIR/ops/v7_service_entrypoint.sh" \
-    >>"$run_root/deploy-runtime.log" 2>&1 </dev/null &
+    >>"$runtime_log" 2>&1 </dev/null &
   local pid=$!
   log "Started production V7 pid=$pid"
   sleep 2
   kill -0 "$pid" 2>/dev/null || {
-    tail -n 200 "$run_root/deploy-runtime.log" >&2 || true
+    tail -n "+$log_epoch_line" "$runtime_log" >&2 || true
     fail "production V7 exited during startup"
   }
 }
