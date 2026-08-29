@@ -183,8 +183,10 @@ write_status(){
 production_run_root(){ printf '%s\n' "$APP_DIR/runs/paper_v7_live"; }
 
 resolve_incumbent_sha(){
-  local run_root="$(production_run_root)" deployed="$run_root/control/deployed_sha"
-  local runtime="$run_root/control/runtime_status.json"
+  local run_root deployed runtime
+  run_root="$(production_run_root)"
+  deployed="$run_root/control/deployed_sha"
+  runtime="$run_root/control/runtime_status.json"
   if [[ ! -f "$deployed" && ! -f "$runtime" ]]; then
     git -C "$APP_DIR" rev-parse HEAD
     return 0

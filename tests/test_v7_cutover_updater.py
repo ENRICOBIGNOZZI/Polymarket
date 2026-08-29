@@ -128,6 +128,8 @@ class V7CutoverUpdaterTest(unittest.TestCase):
     def test_cutover_identity_comes_from_deployed_runtime_not_checkout_head(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         resolver = text[text.index("resolve_incumbent_sha(){"):text.index("clear_cutover_drain(){")]
+        self.assertIn("local run_root deployed runtime", resolver)
+        self.assertIn('run_root="$(production_run_root)"', resolver)
         self.assertIn("control/deployed_sha", resolver)
         self.assertIn("control/runtime_status.json", resolver)
         self.assertIn("runtime_sha != deployed", resolver)
