@@ -550,8 +550,11 @@ stop_stale_monitoring_listener(){
         sleep 0.05
       done
     fi
-    kill -0 "$pid" 2>/dev/null && fail "stale monitoring listener $name pid=$pid survived shutdown"
+    if kill -0 "$pid" 2>/dev/null; then
+      fail "stale monitoring listener $name pid=$pid survived shutdown"
+    fi
   done
+  return 0
 }
 
 start_monitoring(){

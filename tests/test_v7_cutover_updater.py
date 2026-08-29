@@ -99,6 +99,10 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn('for _ in $(seq 1 50)', function)
         self.assertIn('kill -KILL "$pid"', function)
         self.assertIn('survived bounded shutdown', function)
+        stale = function[function.index("stop_stale_monitoring_listener(){"):]
+        self.assertIn('if kill -0 "$pid" 2>/dev/null; then', stale)
+        self.assertTrue(stale.rstrip().endswith("return 0\n}"))
+        self.assertNotIn('kill -0 "$pid" 2>/dev/null && fail', stale)
 
     def test_transient_monitoring_uses_the_same_canonical_state_as_launchd(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
