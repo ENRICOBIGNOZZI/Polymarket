@@ -125,10 +125,7 @@ jobs:
             selected="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/v7-paper-server-health.yml/runs?branch=main&event=workflow_dispatch&per_page=50" \
               --jq ".workflow_runs | map(select(.head_sha == \"$TARGET_SHA\")) | sort_by(.id) | last | [.id,.status,(.conclusion // \"\")] | @tsv")"
             if [[ -n "$selected" ]]; then
-              IFS=        if: success()
-        run: |
-          gh workflow run v7-merged-branch-hygiene.yml --repo "$GITHUB_REPOSITORY" --ref main -f apply=true
-\t' read -r run_id state conclusion <<< "$selected"
+              IFS=$'\t' read -r run_id state conclusion <<< "$selected"
               if [[ "$state" == "completed" ]]; then
                 if [[ "$conclusion" != "success" ]]; then
                   gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log-failed || true
