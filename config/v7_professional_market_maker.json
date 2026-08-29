@@ -70,8 +70,8 @@
       "competition_penalty": 0.05
     },
     "refresh_seconds": 60,
-    "selector_deadline_seconds": 12,
-    "selector_request_timeout_seconds": 5,
+    "selector_deadline_seconds": 45,
+    "selector_request_timeout_seconds": 8,
     "selector_max_pool_pages": 100,
     "selector_max_market_pages": 200,
     "fallback_universe_max_age_seconds": 180,

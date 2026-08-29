@@ -107,6 +107,69 @@ def _bounded_timeout(deadline: float, request_timeout: float) -> float:
     return max(0.05, min(float(request_timeout), remaining))
 
 
+def _reward_pool(row: Any) -> RewardPool | None:
+    if not isinstance(row, dict):
+        return None
+    condition = str(row.get("condition_id") or "")
+    max_spread = finite(row.get("rewards_max_spread"))
+    min_size = finite(row.get("rewards_min_size"))
+    native = finite(row.get("native_daily_rate"), -1.0)
+    sponsored = max(0.0, finite(row.get("sponsored_daily_rate"), 0.0))
+    config_sum = 0.0
+    cfg = row.get("rewards_config")
+    if isinstance(cfg, list):
+        for item in cfg:
+            if isinstance(item, dict):
+                config_sum += max(0.0, finite(item.get("rate_per_day")))
+    if native < 0.0:
+        native = config_sum
+    total = finite(row.get("total_daily_rate"), -1.0)
+    if total < 0.0:
+        total = max(0.0, native) + sponsored
+    if not condition or max_spread <= 0.0 or min_size <= 0.0 or total <= 0.0:
+        return None
+    return RewardPool(
+        condition_id=condition,
+        max_spread_cents=max_spread,
+        min_size=min_size,
+        native_daily_rate=max(0.0, native),
+        sponsored_daily_rate=sponsored,
+        total_daily_rate=max(0.0, total),
+    )
+
+
+def _reward_market(row: Any) -> RewardMarket | None:
+    if not isinstance(row, dict):
+        return None
+    condition = str(row.get("condition_id") or "")
+    yes_token = ""
+    no_token = ""
+    tokens = row.get("tokens")
+    if isinstance(tokens, list):
+        for token in tokens:
+            if not isinstance(token, dict):
+                continue
+            outcome = str(token.get("outcome") or "").strip().lower()
+            token_id = str(token.get("token_id") or "")
+            if outcome == "yes":
+                yes_token = token_id
+            elif outcome == "no":
+                no_token = token_id
+    if not condition or not yes_token or not no_token:
+        return None
+    return RewardMarket(
+        condition_id=condition,
+        market_id=str(row.get("market_id") or ""),
+        event_id=str(row.get("event_id") or ""),
+        slug=str(row.get("market_slug") or row.get("slug") or ""),
+        question=str(row.get("question") or ""),
+        yes_token=yes_token,
+        no_token=no_token,
+        volume_24h=max(0.0, finite(row.get("volume_24hr"))),
+        market_competitiveness=max(0.0, finite(row.get("market_competitiveness"))),
+    )
+
+
 def fetch_reward_pools(
     clob_url: str,
     *,
@@ -125,33 +188,9 @@ def fetch_reward_pools(
             url += "?next_cursor=" + urllib.parse.quote(cursor, safe="")
         rows, next_cursor = _pagination(fetcher(url, timeout=_bounded_timeout(deadline, request_timeout)))
         for row in rows:
-            if not isinstance(row, dict):
-                continue
-            condition = str(row.get("condition_id") or "")
-            max_spread = finite(row.get("rewards_max_spread"))
-            min_size = finite(row.get("rewards_min_size"))
-            native = finite(row.get("native_daily_rate"), -1.0)
-            sponsored = max(0.0, finite(row.get("sponsored_daily_rate"), 0.0))
-            config_sum = 0.0
-            cfg = row.get("rewards_config")
-            if isinstance(cfg, list):
-                for item in cfg:
-                    if isinstance(item, dict):
-                        config_sum += max(0.0, finite(item.get("rate_per_day")))
-            if native < 0.0:
-                native = config_sum
-            total = finite(row.get("total_daily_rate"), -1.0)
-            if total < 0.0:
-                total = max(0.0, native) + sponsored
-            if condition and max_spread > 0.0 and min_size > 0.0 and total > 0.0:
-                out[condition] = RewardPool(
-                    condition_id=condition,
-                    max_spread_cents=max_spread,
-                    min_size=min_size,
-                    native_daily_rate=max(0.0, native),
-                    sponsored_daily_rate=sponsored,
-                    total_daily_rate=max(0.0, total),
-                )
+            pool = _reward_pool(row)
+            if pool is not None:
+                out[pool.condition_id] = pool
         if not next_cursor or next_cursor == "LTE=" or next_cursor == cursor or next_cursor in seen:
             break
         seen.add(next_cursor)
@@ -178,39 +217,14 @@ def fetch_reward_markets(
     for _ in range(max(1, int(max_pages))):
         if limit > 0 and len(out) >= limit:
             break
-        url = clob_url.rstrip("/") + "/rewards/markets/multi?limit=500"
+        url = clob_url.rstrip("/") + "/rewards/markets/multi?page_size=500"
         if cursor:
             url += "&next_cursor=" + urllib.parse.quote(cursor, safe="")
         rows, next_cursor = _pagination(fetcher(url, timeout=_bounded_timeout(deadline, request_timeout)))
         for row in rows:
-            if not isinstance(row, dict):
-                continue
-            condition = str(row.get("condition_id") or "")
-            yes_token = ""
-            no_token = ""
-            tokens = row.get("tokens")
-            if isinstance(tokens, list):
-                for token in tokens:
-                    if not isinstance(token, dict):
-                        continue
-                    outcome = str(token.get("outcome") or "").strip().lower()
-                    token_id = str(token.get("token_id") or "")
-                    if outcome == "yes":
-                        yes_token = token_id
-                    elif outcome == "no":
-                        no_token = token_id
-            if condition and yes_token and no_token and condition not in out:
-                out[condition] = RewardMarket(
-                    condition_id=condition,
-                    market_id=str(row.get("market_id") or ""),
-                    event_id=str(row.get("event_id") or ""),
-                    slug=str(row.get("market_slug") or row.get("slug") or ""),
-                    question=str(row.get("question") or ""),
-                    yes_token=yes_token,
-                    no_token=no_token,
-                    volume_24h=max(0.0, finite(row.get("volume_24hr"))),
-                    market_competitiveness=max(0.0, finite(row.get("market_competitiveness"))),
-                )
+            market = _reward_market(row)
+            if market is not None and market.condition_id not in out:
+                out[market.condition_id] = market
                 if limit > 0 and len(out) >= limit:
                     break
         if not next_cursor or next_cursor == "LTE=" or next_cursor == cursor or next_cursor in seen:
@@ -220,6 +234,49 @@ def fetch_reward_markets(
     else:
         raise RuntimeError("reward catalog pagination guard reached before exhaustion")
     return out
+
+
+def fetch_reward_catalog(
+    clob_url: str,
+    *,
+    min_volume_24h: float,
+    deadline: float,
+    request_timeout: float = 20.0,
+    max_pages: int = 200,
+    fetcher: Callable[..., Any] = request_json,
+) -> tuple[dict[str, RewardPool], dict[str, RewardMarket]]:
+    """Fetch the exhaustive eligible catalog once, deriving pool and market facts together."""
+    pools: dict[str, RewardPool] = {}
+    markets: dict[str, RewardMarket] = {}
+    cursor = ""
+    seen: set[str] = set()
+    query = {
+        "page_size": "500",
+        "min_volume_24hr": f"{max(0.0, float(min_volume_24h)):.12g}",
+        "order_by": "volume_24hr",
+        "position": "DESC",
+    }
+    for _ in range(max(1, int(max_pages))):
+        if cursor:
+            query["next_cursor"] = cursor
+        url = clob_url.rstrip("/") + "/rewards/markets/multi?" + urllib.parse.urlencode(query)
+        rows, next_cursor = _pagination(
+            fetcher(url, timeout=_bounded_timeout(deadline, request_timeout))
+        )
+        for row in rows:
+            pool = _reward_pool(row)
+            market = _reward_market(row)
+            if pool is not None:
+                pools[pool.condition_id] = pool
+            if market is not None:
+                markets[market.condition_id] = market
+        if not next_cursor or next_cursor == "LTE=" or next_cursor == cursor or next_cursor in seen:
+            break
+        seen.add(next_cursor)
+        cursor = next_cursor
+    else:
+        raise RuntimeError("reward catalog pagination guard reached before exhaustion")
+    return pools, markets
 
 
 def rank_markets(
@@ -293,13 +350,12 @@ def _primary_snapshot(
 ) -> dict[str, Any]:
     clob_url = str(cfg.get("clob_url") or "https://clob.polymarket.com")
     deadline = time.monotonic() + max(0.1, float(deadline_seconds))
-    pools = fetch_reward_pools(
-        clob_url, deadline=deadline, request_timeout=request_timeout_seconds,
-        max_pages=max_pool_pages,
-    )
-    markets = fetch_reward_markets(
-        clob_url, deadline=deadline, request_timeout=request_timeout_seconds,
-        max_pages=max_market_pages,
+    pools, markets = fetch_reward_catalog(
+        clob_url,
+        min_volume_24h=float(selection_cfg.get("min_volume_24h", 100.0)),
+        deadline=deadline,
+        request_timeout=request_timeout_seconds,
+        max_pages=min(max_pool_pages, max_market_pages),
     )
     selected = rank_markets(
         pools,

@@ -142,6 +142,62 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertGreater(seen[0], 0.0)
         self.assertLessEqual(seen[0], 0.5)
 
+    def test_catalog_uses_documented_page_size_and_single_pass_pool_market_join(self) -> None:
+        seen: list[str] = []
+
+        def fetcher(url: str, *, timeout: float) -> dict[str, object]:
+            seen.append(url)
+            self.assertGreater(timeout, 0.0)
+            return {
+                "data": [{
+                    "condition_id": "c1",
+                    "market_id": "m1",
+                    "event_id": "e1",
+                    "market_slug": "market",
+                    "question": "Question?",
+                    "market_competitiveness": 2.0,
+                    "volume_24hr": 1234.0,
+                    "rewards_max_spread": 3.5,
+                    "rewards_min_size": 20.0,
+                    "rewards_config": [{"rate_per_day": 5.0}],
+                    "tokens": [
+                        {"outcome": "Yes", "token_id": "yes"},
+                        {"outcome": "No", "token_id": "no"},
+                    ],
+                }],
+                "next_cursor": "LTE=",
+            }
+
+        pools, markets = rewards.fetch_reward_catalog(
+            "https://clob.polymarket.com",
+            min_volume_24h=100.0,
+            deadline=rewards.time.monotonic() + 1.0,
+            request_timeout=0.5,
+            fetcher=fetcher,
+        )
+        self.assertEqual(len(seen), 1)
+        self.assertIn("page_size=500", seen[0])
+        self.assertIn("min_volume_24hr=100", seen[0])
+        self.assertNotIn("limit=500", seen[0])
+        self.assertEqual(pools["c1"].total_daily_rate, 5.0)
+        self.assertEqual(markets["c1"].yes_token, "yes")
+
+    def test_primary_snapshot_uses_one_catalog_fetch(self) -> None:
+        pool = rewards.RewardPool("c1", 3.0, 20.0, 4.0, 0.0, 4.0)
+        market = rewards.RewardMarket("c1", "m1", "e1", "m", "Q", "yes", "no", 1000.0, 1.0)
+        with mock.patch.object(
+            rewards, "fetch_reward_catalog", return_value=({"c1": pool}, {"c1": market})
+        ) as fetch:
+            snapshot = rewards.build_snapshot(
+                ROOT / "config" / "v7_professional_market_maker.json",
+                model_sha=SHA,
+            )
+        fetch.assert_called_once()
+        self.assertEqual(snapshot["source"], "public_clob_rewards")
+        self.assertEqual(snapshot["reward_pool_count"], 1)
+        self.assertEqual(snapshot["reward_market_count"], 1)
+        self.assertEqual(snapshot["selected_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
