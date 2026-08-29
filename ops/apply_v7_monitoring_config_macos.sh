@@ -93,7 +93,7 @@ tailscale_admin() {
 }
 
 configure_tailnet_grafana() {
-  local ts actual_dns="" serve_status="" serve_log=""
+  local ts actual_dns="" serve_status="" serve_log="" https_route="" http_route=""
   ts="$(find_tailscale || true)"
   [[ -n "$ts" ]] || { echo "fatal: tailscale CLI not found; Grafana would remain loopback-only" >&2; exit 78; }
 
@@ -119,8 +119,11 @@ configure_tailnet_grafana() {
   # alongside it for backwards-compatible probes and old bookmarks. Treat an
   # already-correct route as converged; macOS Tailscale Serve mutation can block
   # while the GUI-owned daemon is already serving the requested configuration.
+  https_route="https://${TAILSCALE_FQDN}"
+  http_route="http://${TAILSCALE_FQDN}"
   serve_status="$(run_bounded "$ts" serve status 2>&1 || true)"
-  if ! grep -Fq "$TAILSCALE_FQDN" <<<"$serve_status" ||
+  if ! grep -Fq "$https_route" <<<"$serve_status" ||
+     ! grep -Fq "$http_route" <<<"$serve_status" ||
      ! grep -Fq "localhost:3000" <<<"$serve_status"; then
     serve_log="$(mktemp)"
     if ! tailscale_admin "$ts" serve --bg --https=443 localhost:3000 >"$serve_log" 2>&1; then
@@ -139,8 +142,10 @@ configure_tailnet_grafana() {
     serve_status="$(run_bounded "$ts" serve status 2>&1 || true)"
   fi
   printf '%s\n' "$serve_status"
-  if ! grep -Fq "$TAILSCALE_FQDN" <<<"$serve_status"; then
-    printf 'fatal: Tailscale Serve did not publish expected FQDN %s\n' "$TAILSCALE_FQDN" >&2
+  if ! grep -Fq "$https_route" <<<"$serve_status" ||
+     ! grep -Fq "$http_route" <<<"$serve_status" ||
+     ! grep -Fq "localhost:3000" <<<"$serve_status"; then
+    printf 'fatal: Tailscale Serve routes incomplete for FQDN %s\n' "$TAILSCALE_FQDN" >&2
     exit 78
   fi
 }

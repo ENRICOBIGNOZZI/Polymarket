@@ -53,7 +53,11 @@ class V7MacosMonitoringOwnerTest(unittest.TestCase):
         serve_status = text.index('serve_status="$(run_bounded "$ts" serve status')
         serve_mutate = text.index('tailscale_admin "$ts" serve --bg --https=443')
         self.assertLess(serve_status, serve_mutate)
-        self.assertIn('grep -Fq "localhost:3000" <<<"$serve_status"', text)
+        self.assertIn('https_route="https://${TAILSCALE_FQDN}"', text)
+        self.assertIn('http_route="http://${TAILSCALE_FQDN}"', text)
+        self.assertGreaterEqual(text.count('grep -Fq "$https_route" <<<"$serve_status"'), 2)
+        self.assertGreaterEqual(text.count('grep -Fq "$http_route" <<<"$serve_status"'), 2)
+        self.assertGreaterEqual(text.count('grep -Fq "localhost:3000" <<<"$serve_status"'), 2)
 
     def test_server_health_checks_operator_route_and_trade_funnel(self) -> None:
         text = (ROOT / ".github" / "workflows" / "v7-paper-server-health.yml").read_text(
