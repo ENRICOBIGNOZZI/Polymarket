@@ -53,8 +53,8 @@
       "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
       "id": 5,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
-      "targets": [{"expr": "polymarket_external_fair_tape_dropped", "refId": "A"}],
-      "title": "Tape Drops",
+      "targets": [{"expr": "polymarket_external_fair_blockers", "refId": "A"}],
+      "title": "Remaining Blockers",
       "type": "stat"
     },
     {

@@ -21,6 +21,9 @@ def market(index: int, **overrides):
         "outcomes": ["Yes", "No"], "liquidityNum": 10000 - index,
         "outcomePrices": ["0.45", "0.55"], "bestBid": 0.44, "bestAsk": 0.46,
         "spread": 0.02, "lastTradePrice": 0.45,
+        "description": "rules", "resolutionSource": "https://data.chain.link/streams/btc-usd-twap-60s-streams",
+        "eventStartTime": "2026-08-29T16:30:00Z",
+        "feeSchedule": {"rate": 0.07, "exponent": 1, "takerOnly": True}, "feesEnabled": True,
         "volume24hr": index + 1, "active": True, "closed": False, "acceptingOrders": True,
         "events": [{"id": f"e{index // 2}"}],
     }
@@ -91,6 +94,8 @@ def test_normalization_preserves_public_price_and_spread_signals():
     assert normalized["midpoint"] == 0.45
     assert normalized["spread"] == 0.02
     assert normalized["last_trade_price"] == 0.45
+    assert normalized["event_start_time"] == "2026-08-29T16:30:00Z"
+    assert normalized["fee_schedule"]["rate"] == 0.07
 
 
 def test_tiers_are_resource_derived_and_cover_every_eligible_market():

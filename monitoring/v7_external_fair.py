@@ -122,6 +122,7 @@ def summarize_external_fair(
     latency = _dict(status.get("latency"))
     model = _dict(status.get("model"))
     tape = _dict(status.get("tape"))
+    blockers = sorted({str(value) for value in _list(status.get("blockers")) if str(value)})
 
     continuity = str(oracle.get("continuity") or "CONTINUITY_UNKNOWN").upper()
     if continuity not in _CONTINUITY:
@@ -301,6 +302,7 @@ def summarize_external_fair(
             "written": max(0, _integer(tape.get("written"), 0)),
             "dropped": max(0, _integer(tape.get("dropped"), 0)),
         },
+        "blockers": blockers,
         "hard_reasons": sorted(set(hard_reasons)),
         "healthy": not hard_reasons,
     }

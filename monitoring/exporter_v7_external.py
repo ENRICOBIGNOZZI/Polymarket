@@ -177,6 +177,10 @@ def _append_external_fair_metrics(lines: list[str], report: dict[str, Any]) -> N
     ])
     for reason in report.get("hard_reasons") if isinstance(report.get("hard_reasons"), list) else []:
         lines.append(metric("polymarket_external_fair_hard_reason", 1, {"reason": reason}))
+    blockers = report.get("blockers") if isinstance(report.get("blockers"), list) else []
+    lines.append(metric("polymarket_external_fair_blockers", len(blockers)))
+    for blocker in blockers:
+        lines.append(metric("polymarket_external_fair_blocker", 1, {"blocker": blocker}))
 
 
 def render_prometheus(snapshot: dict[str, Any]) -> str:

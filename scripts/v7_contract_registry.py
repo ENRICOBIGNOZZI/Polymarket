@@ -87,6 +87,18 @@ def _first(raw: dict[str, Any], *keys: str) -> str:
     return ""
 
 
+def _array(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return decoded if isinstance(decoded, list) else []
+    return []
+
+
 def parse_chainlink_twap_source(url: str) -> tuple[str, str, int, str]:
     parsed = urlparse(str(url).strip())
     host = parsed.netloc.lower()
@@ -329,6 +341,9 @@ def contract_from_market(raw: dict[str, Any], *, approved_rule_hashes: Iterable[
 
     market_id = _first(raw, "id", "market_id", "conditionId", "condition_id")
     event_id = _first(raw, "eventId", "event_id")
+    if not event_id:
+        event_ids = _array(raw.get("event_ids"))
+        event_id = str(event_ids[0]) if event_ids else ""
     event = raw.get("event")
     if not event_id and isinstance(event, dict):
         event_id = _first(event, "id", "event_id")
@@ -337,21 +352,22 @@ def contract_from_market(raw: dict[str, Any], *, approved_rule_hashes: Iterable[
     market_handle = hash_handle(market_id or condition_id or slug or title)
     event_handle = hash_handle(event_id or slug or title)
 
-    tokens = raw.get("tokens") or raw.get("clobTokenIds") or raw.get("clob_token_ids")
+    tokens = _array(raw.get("tokens") or raw.get("clobTokenIds") or raw.get("clob_token_ids"))
     yes_token = ""
     no_token = ""
-    if isinstance(tokens, list):
-        if tokens and isinstance(tokens[0], dict):
-            for token in tokens:
-                if not isinstance(token, dict):
-                    continue
-                outcome = normalize_rules(token.get("outcome"))
-                token_id = _first(token, "token_id", "tokenId", "id")
-                if outcome in {"yes", "up"}:
-                    yes_token = token_id
-                elif outcome in {"no", "down"}:
-                    no_token = token_id
-        elif len(tokens) >= 2:
+    if tokens and isinstance(tokens[0], dict):
+        for token in tokens:
+            if not isinstance(token, dict):
+                continue
+            outcome = normalize_rules(token.get("outcome"))
+            token_id = _first(token, "token_id", "tokenId", "id")
+            if outcome in {"yes", "up"}:
+                yes_token = token_id
+            elif outcome in {"no", "down"}:
+                no_token = token_id
+    elif len(tokens) >= 2:
+        outcomes = [normalize_rules(value) for value in _array(raw.get("outcomes"))]
+        if outcomes[:2] in (["yes", "no"], ["up", "down"]):
             yes_token, no_token = str(tokens[0]), str(tokens[1])
     if not yes_token or not no_token:
         yes_token = yes_token or f"unknown-yes:{market_id}"
@@ -359,7 +375,8 @@ def contract_from_market(raw: dict[str, Any], *, approved_rule_hashes: Iterable[
         reasons.append("tokens:explicit_yes_no_mapping_missing")
         verified_template = False
 
-    fee_schedule = raw.get("feeSchedule") if isinstance(raw.get("feeSchedule"), dict) else {}
+    fee_schedule = raw.get("feeSchedule", raw.get("fee_schedule"))
+    fee_schedule = fee_schedule if isinstance(fee_schedule, dict) else {}
     fee_version = (
         hashlib.sha256(json.dumps(fee_schedule, sort_keys=True).encode()).hexdigest()
         if fee_schedule else "unknown"
@@ -380,7 +397,7 @@ def contract_from_market(raw: dict[str, Any], *, approved_rule_hashes: Iterable[
         asset=asset,
         quote_currency=quote,
         contract_family="BTC_USD_UPDOWN_5M" if verified_template else "UNVERIFIED",
-        start_timestamp=_first(raw, "startDate", "start_date", "startTime", "start_time"),
+        start_timestamp=_first(raw, "eventStartTime", "event_start_time", "startTime", "start_time", "startDate", "start_date"),
         end_timestamp=_first(raw, "endDate", "end_date", "endTime", "end_time"),
         settlement_provider="Chainlink" if settlement_source_verified else "unknown",
         settlement_oracle="Chainlink Data Streams TWAP" if settlement_source_verified else "unknown",

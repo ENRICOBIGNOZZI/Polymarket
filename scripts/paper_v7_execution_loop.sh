@@ -9,6 +9,7 @@ RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
 MAKER_RUNTIME="${PM_V7_MARKET_MAKER_RUNTIME:-build/polymarket_v7_market_maker_runtime}"
 MARKOUT_OBSERVER="${PM_V7_MAKER_MARKOUT_OBSERVER:-build/polymarket_v7_maker_markout_observer}"
 FILLABILITY_OBSERVER="${PM_V7_MAKER_FILLABILITY_OBSERVER:-build/polymarket_v7_maker_fillability_observer}"
+EXTERNAL_VENUE_RUNTIME="${PM_V7_EXTERNAL_VENUE_RUNTIME:-build/polymarket_v7_external_venue_runtime}"
 FAST_STRUCTURAL_RUNTIME="${PM_V7_FAST_STRUCTURAL_RUNTIME:-build/polymarket_v7_fast_structural_runtime}"
 MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
 FAST_STRUCTURAL_POLICY="${PM_V7_FAST_STRUCTURAL_POLICY:-config/v7_fast_structural.json}"
@@ -187,9 +188,22 @@ else
   # and are reported explicitly instead of being represented as missing data.
   python3 scripts/v7_rtds_external_fair_monitor.py \
     --output-dir "$RUN_ROOT/external_fair" --code-sha "$SHA" \
+    --universe "$RUN_ROOT/universe/current.json" \
+    --approvals "config/v7_external_fair_rule_approvals.json" \
+    --external-venues "$RUN_ROOT/external_fair/external_venues.json" \
     >> "$RUN_ROOT/external_fair/rtds_monitor.log" 2>&1 &
   pids+=("$!")
 fi
+
+"$EXTERNAL_VENUE_RUNTIME" \
+  --output "$RUN_ROOT/external_fair/external_venues.json" --model-sha "$SHA" \
+  >> "$RUN_ROOT/external_fair/external_venues.log" 2>&1 &
+pids+=("$!")
+
+python3 scripts/v7_external_fair_shadow_router.py \
+  --run-root "$RUN_ROOT" --model-sha "$SHA" --interval 1 \
+  >> "$RUN_ROOT/external_fair/shadow_router.log" 2>&1 &
+pids+=("$!")
 
 CONFIG_HASH="$(git hash-object "$CONFIG")"
 POLICY_HASH="$(git hash-object "$MAKER_POLICY")"

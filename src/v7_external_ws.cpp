@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <stdexcept>
 #include <thread>
 
@@ -151,17 +152,21 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
             healthy_.store(true, std::memory_order_release);
             successful_connections_.fetch_add(1, std::memory_order_relaxed);
             consecutive_failures = 0;
+            // macOS worker threads default to a 512 KiB stack. The bounded
+            // 1 MiB Beast buffer must therefore live on the heap once per
+            // connection, not on every read-loop stack frame.
+            auto buffer = std::make_unique<beast::flat_static_buffer<kMaxWsMessageBytes>>();
 
             while (!stop.stop_requested()) {
-                beast::flat_static_buffer<kMaxWsMessageBytes> buffer;
-                ws.read(buffer);
+                buffer->consume(buffer->size());
+                ws.read(*buffer);
                 const auto receive_ns = monotonic_now_ns();
                 const auto wall_ns = wall_now_ns();
                 frames_received_.fetch_add(1, std::memory_order_relaxed);
                 last_receive_monotonic_ns_.store(receive_ns, std::memory_order_release);
                 last_receive_wall_ns_.store(wall_ns, std::memory_order_release);
 
-                const auto sequence = buffer.data();
+                const auto sequence = buffer->data();
                 const auto front = beast::buffers_front(sequence);
                 const auto total = net::buffer_size(sequence);
                 if (front.size() != total) {

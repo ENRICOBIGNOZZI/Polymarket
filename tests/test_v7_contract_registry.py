@@ -106,6 +106,16 @@ def main() -> None:
     assert unknown_spec.verified_template is False
     assert unknown_spec.informed_trading_authorized is False
 
+    gamma = market()
+    gamma.pop("tokens")
+    gamma["clobTokenIds"] = '["yes-token", "no-token"]'
+    gamma["outcomes"] = '["Up", "Down"]'
+    gamma["eventStartTime"] = "2026-08-29T16:30:00Z"
+    gamma["startDate"] = "2026-08-28T16:38:25Z"
+    gamma_spec = contract_from_market(gamma, approved_rule_hashes={spec.normalized_rules_hash})
+    assert gamma_spec.verified_template is True
+    assert gamma_spec.start_timestamp == gamma["eventStartTime"]
+
 
 if __name__ == "__main__":
     main()

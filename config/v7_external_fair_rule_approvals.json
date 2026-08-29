@@ -1,0 +1,14 @@
+{
+  "schema": "polymarket_v7_external_fair_rule_approvals_v1",
+  "version": 1,
+  "paper_only": true,
+  "automatic_promotion": false,
+  "approved_rule_hashes": {
+    "0530f18f4d63fd3b9a8aa873a96337252969e21a7ce6837a29c224d9c7e7374b": {
+      "parser_version": "btc-updown-chainlink-twap-v1",
+      "resolution_source": "https://data.chain.link/streams/btc-usd-twap-60s-streams",
+      "contract_family": "BTC_USD_UPDOWN_5M",
+      "evidence": "Exact production Gamma rules template reviewed 2026-08-29; any text or settlement-source change creates a new fail-closed hash."
+    }
+  }
+}

@@ -79,6 +79,7 @@ def status(authority: str = "SHADOW_ZERO_AUTHORITY") -> dict:
                   "coverage": 0.9, "drift_score": 0.5},
         "latency": {"source_to_state": {"p50": 0.1, "p99": 0.5}},
         "tape": {"evidence_valid": True, "accepted": 10, "written": 10, "dropped": 0},
+        "blockers": ["OMS_EXTERNAL_FAIR_ROUTING_NOT_RUNNING"],
     }
 
 
@@ -107,6 +108,7 @@ def main() -> None:
         assert shadow["fair"]["probability_order_ok"] is True
         assert shadow["external"]["fresh_venue_count"] == 3
         assert shadow["hard_reasons"] == []
+        assert shadow["blockers"] == ["OMS_EXTERNAL_FAIR_ROUTING_NOT_RUNNING"]
 
         lines: list[str] = []
         exporter_v7_external._append_external_fair_metrics(lines, shadow)
@@ -115,6 +117,7 @@ def main() -> None:
         assert 'polymarket_external_fair_actions_total{action="TAKE"} 2' in text
         assert 'polymarket_external_fair_oracle_continuity_info{continuity="LIVE_CONTINUOUS"} 1' in text
         assert 'polymarket_external_fair_venue_healthy{venue="BINANCE_SPOT"} 1' in text
+        assert "polymarket_external_fair_blockers 1" in text
 
         # An active required market with invalid oracle must become a hard reason.
         active = status("PAPER_EXECUTION_OWNER")
