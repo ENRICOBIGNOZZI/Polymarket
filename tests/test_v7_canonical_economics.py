@@ -71,6 +71,81 @@ def write_events(path: Path, events) -> None:
 
 
 class CanonicalEconomicsTest(unittest.TestCase):
+    def test_order_to_position_identity_is_one_mature_economic_unit(self) -> None:
+        now = clock()
+        order_id = "external-order-1"
+        position_id = "external-position-1"
+        token_id = "yes-token"
+        common = dict(
+            strategy="CRYPTO_INFORMED_TAKER", model_sha=SHA,
+            order_id=order_id, event_id="event-external", token_id=token_id,
+            side="BUY", metadata=metadata("CRYPTO_INFORMED_TAKER", 300),
+        )
+        events = [
+            ledger.LedgerEvent(
+                event_type="ORDER_SUBMITTED", intended_size=10.0,
+                intended_action="TAKE", limit_price=0.4,
+                exchange_ts_ms=now, receive_ts_ms=now + 1,
+                decision_ts_ms=now + 2, book_snapshot_id="book-submit", **common,
+            ),
+            ledger.LedgerEvent(
+                event_type="FILL", position_id=position_id, fill_id="fill-external",
+                fill_price=0.4, filled_size=10.0, fee=0.2, slippage=0.0,
+                fee_source="GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
+                exchange_ts_ms=now + 3, receive_ts_ms=now + 4, **common,
+            ),
+            ledger.LedgerEvent(
+                event_type="FINAL", position_id=position_id, final_pnl=5.8,
+                realized_cashflow=10.0, unwind_loss=0.0, capital_cost=0.0,
+                latency_cost=0.0, capital_duration_ms=300_000,
+                metadata=metadata(
+                    "CRYPTO_INFORMED_TAKER", 300, realized=True,
+                    cost_vector_complete=True, unwind_accounted=True,
+                ),
+                strategy="CRYPTO_INFORMED_TAKER", model_sha=SHA,
+                order_id=order_id, event_id="event-external", token_id=token_id,
+                side="BUY",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "execution.jsonl"
+            write_events(path, events)
+            report = econ.assess(
+                path, expected_model_sha=SHA, family="CRYPTO_INFORMED_TAKER",
+            )
+        self.assertEqual(report["economic_units"], 1)
+        self.assertEqual(report["submitted_units"], 1)
+        self.assertEqual(report["complete_units"], 1)
+        self.assertEqual(report["mature_terminal_units"], 1)
+        self.assertAlmostEqual(report["net_pnl"], 5.8)
+
+    def test_order_to_multiple_positions_fails_closed(self) -> None:
+        now = clock()
+        order_event = order(
+            strategy="micro_taker", order_id="conflicted-order", leg_id="YES",
+            family="micro_taker", horizon=300,
+        )
+        fills = [
+            ledger.LedgerEvent(
+                event_type="FILL", strategy="micro_taker", model_sha=SHA,
+                order_id="conflicted-order", position_id=position_id,
+                fill_id=f"fill-{position_id}", event_id="event-conflict",
+                token_id="YES", side="BUY", fill_price=0.4, filled_size=1.0,
+                fee=0.0, fee_source="GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
+                exchange_ts_ms=now, receive_ts_ms=now + 1,
+                metadata=metadata("micro_taker", 300),
+            )
+            for position_id in ("position-a", "position-b")
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "execution.jsonl"
+            write_events(path, [order_event, *fills])
+            report = econ.assess(path, expected_model_sha=SHA)
+        self.assertIn(
+            "order_position_identity_conflict:conflicted-order",
+            report["reason_codes"],
+        )
+
     def test_empty_ledger_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             report = econ.assess(Path(tmp) / "missing.jsonl", expected_model_sha=SHA)

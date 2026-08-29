@@ -181,6 +181,7 @@
     "latency_risk_per_second": 0.001,
     "fractional_kelly": 0.1,
     "max_market_capital_fraction": 0.02,
+    "immature_exploration_capital_fraction": 0.0025,
     "self_cross_policy": "CANCEL_CONFIRM_CANONICAL_STATE_THEN_TAKE",
     "paper_tif": "FAK"
   },

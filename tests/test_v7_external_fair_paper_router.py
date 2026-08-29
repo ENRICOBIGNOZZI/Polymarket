@@ -100,6 +100,15 @@ def main() -> None:
             run_root, "a" * 40, ROOT / "config" / "v7_external_fair.json",
             "https://clob.invalid", "https://gamma.invalid",
         )
+        exploration_row = robust_candidates(
+            live, {"yes": book("yes", 0.50), "no": book("no", 0.81)}, paper.policy,
+        )[0]
+        exploration_size = paper.order_size(exploration_row)
+        assert paper.model_mature is False
+        assert exploration_size >= exploration_row["book"].min_order_size
+        assert exploration_size * (
+            exploration_row["ask"] + exploration_row["fee_per_share"]
+        ) <= 10.0 + 1e-9
         with mock.patch.object(router, "request_json", side_effect=public_request):
             paper.step()
         events = [json.loads(path.read_text()) for path in (run_root / "ledger" / "spool").glob("*.json")]
@@ -109,6 +118,9 @@ def main() -> None:
         assert status["execution_authority"] == "PAPER_EXECUTION_OWNER"
         assert status["order_submission_enabled"] is True
         assert status["fills"] == 1
+        assert status["model_mature"] is False
+        assert status["sizing_regime"] == "IMMATURE_FIXED_EXPLORATION"
+        assert status["market_capital_ceiling"] == 10.0
         assert status["book_requests"] == 2
         assert status["book_request_failures"] == 0
         assert status["book_parse_failures"] == 0
@@ -158,6 +170,13 @@ def main() -> None:
         events = [json.loads(path.read_text()) for path in (run_root / "ledger" / "spool").glob("*.json")]
         final = next(event for event in events if event["event_type"] == "FINAL")
         assert final["final_pnl"] == 5.8
+        assert final["realized_cashflow"] == 10.0
+        assert final["unwind_loss"] == 0.0
+        assert final["capital_cost"] == 0.0
+        assert final["latency_cost"] == 0.0
+        assert final["metadata"]["realized"] is True
+        assert final["metadata"]["cost_vector_complete"] is True
+        assert final["metadata"]["unwind_accounted"] is True
         assert final["metadata"]["winning_token_id"] == "up-token"
 
 

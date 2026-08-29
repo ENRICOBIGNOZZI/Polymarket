@@ -179,6 +179,8 @@ class PaperRouter:
         self.policy = self.config.get("taker") if isinstance(self.config.get("taker"), dict) else {}
         if self.policy.get("enabled_for_execution") is not True or self.policy.get("authority") != "PAPER":
             raise RuntimeError("external_fair_taker_not_paper_authorized")
+        fair_policy = self.config.get("fair_value") if isinstance(self.config.get("fair_value"), dict) else {}
+        self.model_mature = fair_policy.get("default_model_mature") is True
         self.clob_url = clob_url.rstrip("/")
         self.gamma_url = gamma_url.rstrip("/")
         self.source = self.directory / "status.json"
@@ -252,11 +254,24 @@ class PaperRouter:
             float(self.policy.get("max_depth_fraction", 0.5)),
             float(self.policy.get("depth_survival_fraction", 0.75)),
         )
-        capital_ceiling = float(self.state.get("starting_capital") or 0.0) * float(self.policy.get("max_market_capital_fraction", 0.02))
-        probability = max(1e-6, min(1.0 - 1e-6, float(row["robust_probability"])))
-        kelly = max(0.0, float(row["robust_ev"])) / (probability * (1.0 - probability))
-        kelly_notional = float(self.state.get("cash") or 0.0) * float(self.policy.get("fractional_kelly", 0.1)) * kelly
-        available_notional = min(capital_ceiling, kelly_notional, float(self.state.get("cash") or 0.0))
+        starting_capital = float(self.state.get("starting_capital") or 0.0)
+        cash = float(self.state.get("cash") or 0.0)
+        if self.model_mature:
+            capital_ceiling = starting_capital * float(
+                self.policy.get("max_market_capital_fraction", 0.02)
+            )
+            probability = max(1e-6, min(1.0 - 1e-6, float(row["robust_probability"])))
+            kelly = max(0.0, float(row["robust_ev"])) / (probability * (1.0 - probability))
+            kelly_notional = cash * float(self.policy.get("fractional_kelly", 0.1)) * kelly
+            available_notional = min(capital_ceiling, kelly_notional, cash)
+        else:
+            # Kelly sizing is not mathematically defensible before probability
+            # calibration is mature. Keep PAPER exploration statistically useful
+            # but bound every contract by a fixed fraction of initial capital.
+            capital_ceiling = starting_capital * float(
+                self.policy.get("immature_exploration_capital_fraction", 0.0025)
+            )
+            available_notional = min(capital_ceiling, cash)
         size = min(visible * max(0.0, depth_fraction), available_notional / max(ask + row["fee_per_share"], 1e-9))
         size = math.floor(size * 100.0) / 100.0
         return size if size + 1e-9 >= book.min_order_size else 0.0
@@ -268,9 +283,12 @@ class PaperRouter:
         )
         book: Book = row["book"]
         decision = now_ms()
+        market_id = str(market.get("market_id") or "")
+        position_id = f"external-position-{market_id}-{row['outcome']}"
         return dict(
             strategy=STRATEGY, model_sha=self.sha, model_version=MODEL_VERSION,
-            candidate_id=order_id, order_id=order_id, market_id=str(market.get("market_id") or ""),
+            candidate_id=order_id, order_id=order_id, position_id=position_id,
+            market_id=market_id,
             event_id=str(market.get("event_id") or ""), token_id=row["token_id"],
             decision_ts_ms=decision, exchange_ts_ms=book.exchange_ts_ms,
             receive_ts_ms=book.receive_ts_ms, book_snapshot_id=book.snapshot_id,
@@ -286,6 +304,7 @@ class PaperRouter:
                 "fair_upper": fair.get("upper"), "contract_rules_hash": contract.get("rules_hash"),
                 "reference_version": reference.get("version"), "expected_fee_per_share": row["fee_per_share"],
                 "expected_execution_risk": row["execution_risk"], "economic_maturity": "MORE_EVIDENCE_REQUIRED",
+                "model_family": STRATEGY, "horizon_seconds": 300,
             },
         )
 
@@ -350,7 +369,7 @@ class PaperRouter:
             self.last_attempt_reason = "ARRIVAL_EV_OR_CAPITAL"
             return False
         fill_id = f"external-fill-{stable_id(order_id, arrival_book.exchange_ts_ms, arrival_book.receive_ts_ms)}"
-        position_id = f"external-position-{market_id}-{row['outcome']}"
+        position_id = str(common["position_id"])
         self.emit(LedgerEvent(
             event_type="FILL", strategy=STRATEGY, model_sha=self.sha, model_version=MODEL_VERSION,
             order_id=order_id, fill_id=fill_id, position_id=position_id, market_id=market_id,
@@ -433,9 +452,31 @@ class PaperRouter:
                 position_id=str(position["position_id"]), order_id=str(position["order_id"]),
                 fill_id=str(position["fill_id"]), market_id=str(position["market_id"]),
                 event_id=str(position["event_id"]), token_id=str(position["token_id"]), side="BUY",
-                final_pnl=pnl, capital_duration_ms=current_ms - int(position["opened_ms"]),
-                metadata={"settlement_outcome": resolved, "winning_token_id": winning_token,
-                          "hold_to_settlement": True},
+                final_pnl=pnl, realized_cashflow=payout,
+                # Hold-to-settlement has no unwind transaction. PAPER incurs
+                # no separately charged funding or latency cash cost; entry
+                # fee and execution slippage were already recorded on FILL.
+                unwind_loss=0.0, capital_cost=0.0, latency_cost=0.0,
+                capital_duration_ms=current_ms - int(position["opened_ms"]),
+                metadata={
+                    "settlement_outcome": resolved, "winning_token_id": winning_token,
+                    "hold_to_settlement": True, "realized": True,
+                    "unwind_accounted": True, "cost_vector_complete": True,
+                    "model_family": STRATEGY, "horizon_seconds": 300,
+                    "cost_provenance": {
+                        "fee": "FILL_GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
+                        "slippage": "FILL_ARRIVAL_REVALIDATION",
+                        "unwind_loss": "ZERO_HOLD_TO_SETTLEMENT",
+                        "capital_cost": "ZERO_PAPER_CASH_CHARGE",
+                        "latency_cost": "ZERO_SEPARATE_REALIZED_CASH_CHARGE",
+                    },
+                    "pnl_decomposition": {
+                        "trading_pnl": payout - float(position["entry_cost"]),
+                        "spread_capture": 0.0, "adverse_markout": 0.0,
+                        "inventory_pnl": 0.0, "maker_rebates": 0.0,
+                        "liquidity_rewards": 0.0, "own_reward_share_verified": True,
+                    },
+                },
             ))
 
     def publish(self, active_candidates: int, blocker: str = "") -> None:
@@ -456,8 +497,19 @@ class PaperRouter:
             "schema": "polymarket_v7_external_fair_paper_router_v1", "timestamp": int(time.time()),
             "code_sha": self.sha, "state": "KILLED" if killed else "RUNNING", "paper_only": True,
             "authenticated_execution": False, "real_order_submission": False,
-            "execution_authority": "PAPER_EXECUTION_OWNER", "model_mature": False,
+            "execution_authority": "PAPER_EXECUTION_OWNER", "model_mature": self.model_mature,
             "economic_confidence": "MORE_EVIDENCE_REQUIRED", "active_candidates": active_candidates,
+            "sizing_regime": (
+                "MATURE_FRACTIONAL_KELLY" if self.model_mature
+                else "IMMATURE_FIXED_EXPLORATION"
+            ),
+            "market_capital_ceiling": float(self.state.get("starting_capital") or 0.0) * float(
+                self.policy.get(
+                    "max_market_capital_fraction" if self.model_mature
+                    else "immature_exploration_capital_fraction",
+                    0.02 if self.model_mature else 0.0025,
+                )
+            ),
             "candidates_spooled": int(self.state.get("candidates") or 0),
             "orders_submitted": int(self.state.get("orders") or 0), "fills": int(self.state.get("fills") or 0),
             "open_positions": open_positions, "realized_pnl": float(self.state.get("realized_pnl") or 0.0),

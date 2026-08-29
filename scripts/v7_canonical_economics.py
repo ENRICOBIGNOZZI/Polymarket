@@ -88,13 +88,16 @@ def _family(event: Any) -> str:
     return _text(metadata.get("model_family")) or _text(event.strategy)
 
 
-def _economic_unit_id(event: Any) -> str:
+def _economic_unit_id(event: Any, order_positions: dict[str, str] | None = None) -> str:
     if _text(event.bundle_id):
         return f"bundle:{event.bundle_id}"
+    order_id = _text(event.order_id)
+    if order_id and order_positions and order_id in order_positions:
+        return f"position:{order_positions[order_id]}"
     if _text(event.position_id):
         return f"position:{event.position_id}"
-    if _text(event.order_id):
-        return f"order:{event.order_id}"
+    if order_id:
+        return f"order:{order_id}"
     if _text(event.candidate_id):
         return f"candidate:{event.candidate_id}"
     if _text(event.opportunity_id):
@@ -380,8 +383,28 @@ def _load_units(path: Path, expected_model_sha: str) -> tuple[dict[str, UnitStat
         events = list(ledger.iter_events(path, expected_model_sha=expected_model_sha))
     except (OSError, ledger.LedgerContractError) as exc:
         return {}, [f"canonical_ledger_unreadable:{type(exc).__name__}:{exc}"]
+    # A submitted order does not necessarily know its eventual position id,
+    # while its FILL and FINAL do. Resolve that canonical relationship in a
+    # first pass so one economic trade cannot be split into an order unit and
+    # a position unit merely because identity becomes richer over time.
+    order_positions: dict[str, str] = {}
+    conflicted_orders: set[str] = set()
     for event in events:
-        unit_id = _economic_unit_id(event)
+        order_id = _text(event.order_id)
+        position_id = _text(event.position_id)
+        if not order_id or not position_id:
+            continue
+        previous = order_positions.get(order_id)
+        if previous is not None and previous != position_id:
+            conflicted_orders.add(order_id)
+            continue
+        order_positions[order_id] = position_id
+    for order_id in conflicted_orders:
+        order_positions.pop(order_id, None)
+        global_reasons.append(f"order_position_identity_conflict:{order_id}")
+
+    for event in events:
+        unit_id = _economic_unit_id(event, order_positions)
         if not unit_id:
             if event.event_type in {"ORDER_SUBMITTED", "FILL", "FINAL"}:
                 global_reasons.append(f"{event.event_type.lower()}_economic_unit_missing")
