@@ -16,7 +16,7 @@ def test_protected_branches_and_unmerged_refs_are_never_delete_candidates(tmp_pa
     subprocess.run(["git", "-C", str(tmp_path), "add", "x"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "base"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "branch", "-M", "main"], check=True)
-    for branch in ("main", "paper-validated", "release/keep", "merged/topic"):
+    for branch in ("main", "release/keep", "merged/topic"):
         subprocess.run(["git", "-C", str(tmp_path), "update-ref", f"refs/remotes/origin/{branch}", "HEAD"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "checkout", "-qb", "unmerged"], check=True)
     (tmp_path / "x").write_text("unique")
@@ -35,14 +35,13 @@ def test_workflow_has_write_scope_and_ancestry_cleanup_only():
     assert "--include-closed-operational-branches" in workflow
     assert "GITHUB_TOKEN" in workflow
     assert "unmerged_branches_deleted" in script
-    assert "paper-validated" in script
+    assert 'PROTECTED_EXACT = {"HEAD", "main", "telemetry"}' in script
 
 
 def test_merged_pr_cleanup_protects_open_heads_bases_and_unmerged_work():
     repository = "ENRICOBIGNOZZI/Polymarket"
     branches = {
         "main": "main-sha",
-        "paper-validated": "main-sha",
         "telemetry": "telemetry-sha",
         "merged/topic": "merged-sha",
         "merged/alias": "merged-sha",

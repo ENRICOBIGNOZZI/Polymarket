@@ -43,6 +43,10 @@ class V7SingleWriterContractTest(unittest.TestCase):
         push_block = workflow[push_start:pr_start]
         self.assertIn("branches: [main]", push_block)
         self.assertNotIn("paths:", push_block)
+        pr_block = workflow[pr_start:workflow.index("\npermissions:", pr_start)]
+        self.assertIn("branches: [main]", pr_block)
+        self.assertNotIn("paths:", pr_block)
+        self.assertIn("name: single-writer-v7", workflow)
         self.assertIn(
             'VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}',
             workflow,

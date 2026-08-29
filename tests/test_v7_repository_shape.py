@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 TEXT_SCAN_ALLOWLIST = {
+    "artifacts/v7_repository_convergence_audit.json",  # immutable forensic inventory
     "config/live_champion.json",          # explicit prohibition/history
     "config/operator_directives.json",    # explicit prohibition/history
     "scripts/v7_archive_market_universe.py",  # archive boundary documentation
@@ -126,6 +127,8 @@ class V7RepositoryShapeTest(unittest.TestCase):
         self.assertTrue(manifest["paper_only"])
         self.assertFalse(manifest["authenticated_execution"])
         self.assertFalse(manifest["real_order_submission"])
+        self.assertEqual(manifest["deployment_ref"], "main")
+        self.assertEqual(manifest["promotion_policy"], "operator_approved_exact_main_sha")
         self.assertEqual(
             set(manifest),
             {
@@ -154,6 +157,30 @@ class V7RepositoryShapeTest(unittest.TestCase):
         )
         missing = [path for path in required if not (ROOT / path).is_file()]
         self.assertEqual(missing, [])
+
+    def test_main_ruleset_is_machine_actionable_and_requires_unique_v7_checks(self) -> None:
+        ruleset = json.loads((ROOT / "artifacts/github_main_ruleset.json").read_text(encoding="utf-8"))
+        self.assertEqual(ruleset["target"], "branch")
+        self.assertEqual(ruleset["enforcement"], "active")
+        self.assertEqual(ruleset["conditions"]["ref_name"]["include"], ["~DEFAULT_BRANCH"])
+        by_type = {rule["type"]: rule for rule in ruleset["rules"]}
+        self.assertIn("deletion", by_type)
+        self.assertIn("non_fast_forward", by_type)
+        self.assertIn("required_linear_history", by_type)
+        required = by_type["required_status_checks"]["parameters"]["required_status_checks"]
+        self.assertEqual(
+            {row["context"] for row in required},
+            {"ci-v7-Release", "ci-v7-Debug", "monitoring-v7", "single-writer-v7"},
+        )
+
+    def test_forensic_audit_classifies_every_remote_branch_and_external_blocker(self) -> None:
+        audit = json.loads((ROOT / "artifacts/v7_repository_convergence_audit.json").read_text(encoding="utf-8"))
+        branches = audit["remote_branches"]["items"]
+        self.assertEqual(len(branches), audit["remote_branches"]["initial_count_including_main"])
+        self.assertEqual([row["name"] for row in branches if row["classification"] == "KEEP_CANONICAL"], ["main"])
+        self.assertTrue(all(row["classification"] == "DELETE" for row in branches if row["name"] != "main"))
+        self.assertEqual(audit["remote_branches"]["target_count"], 1)
+        self.assertEqual(audit["github_governance"]["classification"], "BLOCKER")
 
 
 if __name__ == "__main__":

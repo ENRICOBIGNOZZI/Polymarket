@@ -39,8 +39,8 @@ class V7ConvergenceAuditTest(unittest.TestCase):
         matrix = MODULE.validate_capabilities(ROOT)
         report = {
             "valid": True,
-            "identity": {"candidate_sha":"a"*40,"main_sha":"a"*40,"paper_validated_sha":"a"*40,"deployed_sha":"UNKNOWN_UNVERIFIED"},
-            "canonical_refs_equal_candidate": True,
+            "identity": {"candidate_sha":"a"*40,"main_sha":"a"*40,"deployed_sha":"UNKNOWN_UNVERIFIED"},
+            "canonical_main_equals_candidate": True,
             "deployed_identity_verified": False,
             "engineering_acceptance": False,
         }

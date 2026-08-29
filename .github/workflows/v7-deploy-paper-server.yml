@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       expected_sha:
-        description: Exact main and paper-validated SHA approved for cutover
+        description: Exact main SHA approved for cutover
         required: true
         type: string
       cutover_approved:
@@ -29,11 +29,11 @@ jobs:
       SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
       SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
       SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
-      EXPECTED_VALIDATED_SHA: ${{ inputs.expected_sha }}
+      EXPECTED_DEPLOY_SHA: ${{ inputs.expected_sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: paper-validated
+          ref: main
           fetch-depth: 0
 
       - name: Fail-closed V7 deploy preflight
@@ -41,23 +41,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --no-tags origin main paper-validated
-          validated_sha="$(git rev-parse origin/paper-validated)"
+          git fetch --no-tags origin main
           main_sha="$(git rev-parse origin/main)"
-          test "$(git rev-parse HEAD)" = "$validated_sha"
+          test "$(git rev-parse HEAD)" = "$main_sha"
 
-          if [[ "$main_sha" != "$validated_sha" ]]; then
-            echo "V7 deploy blocked: main and paper-validated are not the same SHA" >&2
+          [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$main_sha" != "$EXPECTED_DEPLOY_SHA" ]]; then
+            echo "V7 deploy blocked: canonical main does not match the explicitly approved SHA" >&2
             exit 1
           fi
 
-          [[ "$EXPECTED_VALIDATED_SHA" =~ ^[0-9a-f]{40}$ ]]
-          if [[ "$validated_sha" != "$EXPECTED_VALIDATED_SHA" || "$main_sha" != "$EXPECTED_VALIDATED_SHA" ]]; then
-            echo "V7 deploy blocked: canonical refs do not match the explicitly approved SHA" >&2
-            exit 1
-          fi
-
-          if python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$validated_sha" --github-env "$GITHUB_ENV"; then
+          if python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$main_sha" --github-env "$GITHUB_ENV"; then
             test -f monitoring/v7_monitoring_manifest.json
             python3 - <<'PY'
           import json
@@ -82,8 +76,8 @@ jobs:
           } <= required
           PY
             echo "ready=true" >> "$GITHUB_OUTPUT"
-            printf 'reconciliation_result=ready\nvalidated_sha=%s\nmain_sha=%s\nexpected_validated_sha=%s\n' \
-              "$validated_sha" "$main_sha" "${EXPECTED_VALIDATED_SHA:-none}" | tee deploy-evidence.txt
+            printf 'reconciliation_result=ready\nmain_sha=%s\nexpected_deploy_sha=%s\n' \
+              "$main_sha" "${EXPECTED_DEPLOY_SHA:-none}" | tee deploy-evidence.txt
           else
             echo "V7 deploy preflight failed" >&2
             exit 1
@@ -149,12 +143,12 @@ jobs:
           test "$ready" = 1
           test -s ~/.ssh/known_hosts
 
-      - name: Reconcile exact paper-validated V7 SHA on server
+      - name: Reconcile exact approved main V7 SHA on server
         if: steps.preflight.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          validated_sha="$(git rev-parse origin/paper-validated)"
+          deploy_sha="$(git rev-parse origin/main)"
           ssh_common=(
             -i ~/.ssh/polymarket_deploy
             -o IdentitiesOnly=yes
@@ -168,7 +162,7 @@ jobs:
 
           set +e
           ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST" \
-            "EXPECTED_VALIDATED_SHA='$validated_sha' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
+            "EXPECTED_DEPLOY_SHA='$deploy_sha' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
           set -euo pipefail
           cd ~/polymarket
 
@@ -200,18 +194,16 @@ jobs:
             done
           fi
 
-          git fetch --no-tags origin main paper-validated
+          git fetch --no-tags origin main
           main_sha="$(git rev-parse origin/main)"
-          validated_sha="$(git rev-parse origin/paper-validated)"
-          test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
-          test "$main_sha" = "$EXPECTED_VALIDATED_SHA"
+          test "$main_sha" = "$EXPECTED_DEPLOY_SHA"
 
           tmp_checkout="$(mktemp -d)"
           trap 'git worktree remove --force "$tmp_checkout" >/dev/null 2>&1 || true; rm -rf "$tmp_checkout"' EXIT
           rmdir "$tmp_checkout"
-          git worktree add --detach "$tmp_checkout" "$validated_sha" >/dev/null
+          git worktree add --detach "$tmp_checkout" "$main_sha" >/dev/null
           python3 "$tmp_checkout/scripts/v7_cutover_contract.py" \
-            --repository-root "$tmp_checkout" --expected-head "$validated_sha" >/dev/null
+            --repository-root "$tmp_checkout" --expected-head "$main_sha" >/dev/null
           test -f "$tmp_checkout/ops/update_server_v7.sh"
           test -f "$tmp_checkout/monitoring/v7_monitoring_manifest.json"
           git worktree remove --force "$tmp_checkout" >/dev/null
@@ -220,18 +212,18 @@ jobs:
           updater="$(mktemp)"
           archiver="$(mktemp)"
           trap 'rm -f "$updater" "$archiver"' EXIT
-          git show "$validated_sha:ops/update_server_v7.sh" > "$updater"
-          git show "$validated_sha:scripts/v7_prepare_cutover_run_root.py" > "$archiver"
+          git show "$main_sha:ops/update_server_v7.sh" > "$updater"
+          git show "$main_sha:scripts/v7_prepare_cutover_run_root.py" > "$archiver"
           chmod 700 "$updater"
           chmod 600 "$archiver"
           POLYMARKET_APP_DIR="$HOME/polymarket" \
             POLYMARKET_CUTOVER_ARCHIVER="$archiver" \
-            EXPECTED_VALIDATED_SHA="$validated_sha" \
-            POLYMARKET_DEPLOY_REF=paper-validated \
+            EXPECTED_DEPLOY_SHA="$main_sha" \
+            POLYMARKET_DEPLOY_REF=main \
             POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=60 \
             bash "$updater"
-          printf 'deploy_result=success\ndeployed_sha=%s\norigin_main=%s\npaper_validated=%s\n' \
-            "$validated_sha" "$main_sha" "$validated_sha"
+          printf 'deploy_result=success\ndeployed_sha=%s\norigin_main=%s\n' \
+            "$main_sha" "$main_sha"
           REMOTE
           primary_status=${PIPESTATUS[0]}
           set -e
@@ -246,13 +238,13 @@ jobs:
             recovered=0
             for _ in $(seq 1 18); do
               if ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST" \
-                "EXPECTED_VALIDATED_SHA='$validated_sha' bash -s" <<'VERIFY' >> deploy-evidence.txt 2>&1
+                "EXPECTED_DEPLOY_SHA='$deploy_sha' bash -s" <<'VERIFY' >> deploy-evidence.txt 2>&1
           set -euo pipefail
           cd ~/polymarket
           root="$HOME/polymarket/runs/paper_v7_live"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_VALIDATED_SHA"
-          test "$(cat "$root/control/deployed_sha")" = "$EXPECTED_VALIDATED_SHA"
-          python3 - "$root" "$EXPECTED_VALIDATED_SHA" <<'PY'
+          test "$(git rev-parse HEAD)" = "$EXPECTED_DEPLOY_SHA"
+          test "$(cat "$root/control/deployed_sha")" = "$EXPECTED_DEPLOY_SHA"
+          python3 - "$root" "$EXPECTED_DEPLOY_SHA" <<'PY'
           import csv,json,os,sys,time
           from pathlib import Path
           root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
@@ -307,7 +299,7 @@ jobs:
             done
             test "$recovered" = 1
             printf 'deploy_result=recovered_after_transport_loss\ndeployed_sha=%s\n' \
-              "$validated_sha" | tee -a deploy-evidence.txt
+              "$deploy_sha" | tee -a deploy-evidence.txt
           fi
 
       - name: Upload deployment evidence

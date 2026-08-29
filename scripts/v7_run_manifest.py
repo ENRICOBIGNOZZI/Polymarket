@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-SCHEMA = "polymarket_v7_run_manifest_v1"
+SCHEMA = "polymarket_v7_run_manifest_v2"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID_RE = re.compile(r"^v7-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$")
@@ -127,7 +127,7 @@ def _hash_or_file(value: str, field: str, base: Path) -> dict[str, str]:
 def build_manifest(
     *,
     code_sha: str,
-    paper_validated_sha: str,
+    deployment_sha: str,
     config: Path,
     strategy_registry: Path,
     models: list[str],
@@ -145,8 +145,8 @@ def build_manifest(
 ) -> dict[str, Any]:
     if not GIT_SHA_RE.fullmatch(code_sha):
         raise ManifestError("code_sha:not_exact_git_sha")
-    if not GIT_SHA_RE.fullmatch(paper_validated_sha):
-        raise ManifestError("paper_validated_sha:not_exact_git_sha")
+    if not GIT_SHA_RE.fullmatch(deployment_sha):
+        raise ManifestError("deployment_sha:not_exact_git_sha")
     if not fee_schedule_version.strip():
         raise ManifestError("fee_schedule_version:empty")
     if not execution_model_version.strip():
@@ -188,7 +188,7 @@ def build_manifest(
 
     identity = {
         "code_sha": code_sha,
-        "paper_validated_sha": paper_validated_sha,
+        "deployment_sha": deployment_sha,
         "config_sha": config_artifact["sha256"],
         "strategy_registry_sha": registry_artifact["sha256"],
         "model_sha": model_sha,
@@ -213,7 +213,7 @@ def build_manifest(
         "schema": SCHEMA,
         "run_id": resolved_run_id,
         "code_sha": code_sha,
-        "paper_validated_sha": paper_validated_sha,
+        "deployment_sha": deployment_sha,
         "config": config_artifact,
         "config_sha": config_artifact["sha256"],
         "strategy_registry": registry_artifact,
@@ -252,7 +252,7 @@ def validate_manifest(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ManifestError("manifest:not_an_object")
     required = {
-        "schema", "run_id", "code_sha", "paper_validated_sha", "config", "config_sha",
+        "schema", "run_id", "code_sha", "deployment_sha", "config", "config_sha",
         "strategy_registry", "strategy_registry_sha", "models", "model_sha",
         "dataset_manifests", "dataset_manifest_sha", "universe_snapshot",
         "universe_snapshot_sha", "fee_schedule_version", "execution_model_version",
@@ -267,7 +267,7 @@ def validate_manifest(value: Any) -> dict[str, Any]:
         raise ManifestError("schema:unsupported")
     if not RUN_ID_RE.fullmatch(str(value["run_id"])):
         raise ManifestError("run_id:invalid")
-    for field in ("code_sha", "paper_validated_sha"):
+    for field in ("code_sha", "deployment_sha"):
         if not GIT_SHA_RE.fullmatch(str(value[field])):
             raise ManifestError(f"{field}:not_exact_git_sha")
     for field in (
@@ -340,7 +340,7 @@ def validate_manifest(value: Any) -> dict[str, Any]:
     _, start_parsed = _iso_time(str(value["start_time"]))
     identity = {
         "code_sha": value["code_sha"],
-        "paper_validated_sha": value["paper_validated_sha"],
+        "deployment_sha": value["deployment_sha"],
         "config_sha": value["config_sha"],
         "strategy_registry_sha": value["strategy_registry_sha"],
         "model_sha": value["model_sha"],
@@ -385,7 +385,7 @@ def main(argv: list[str] | None = None) -> int:
     create.add_argument("--runs-root", type=Path, default=Path("runs"))
     create.add_argument("--output", type=Path)
     create.add_argument("--code-sha")
-    create.add_argument("--paper-validated-sha", required=True)
+    create.add_argument("--deployment-sha", required=True)
     create.add_argument("--config", type=Path, required=True)
     create.add_argument("--strategy-registry", type=Path, required=True)
     create.add_argument("--model", action="append", required=True, metavar="NAME=PATH_OR_SHA256")
@@ -410,7 +410,7 @@ def main(argv: list[str] | None = None) -> int:
         code_sha = args.code_sha or repository_identity(args.repository_root)
         value = build_manifest(
             code_sha=code_sha,
-            paper_validated_sha=args.paper_validated_sha,
+            deployment_sha=args.deployment_sha,
             config=args.config,
             strategy_registry=args.strategy_registry,
             models=args.model,

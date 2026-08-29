@@ -42,16 +42,16 @@ class V7DeployMonitoringManifestContractTest(unittest.TestCase):
         self.assertIn('brew install $missing', workflow)
         for command in ("cmake", "pkg-config", "prometheus", "grafana"):
             self.assertIn(f'command -v "$cmd" >/dev/null 2>&1', workflow)
-        reconcile = workflow.index('Reconcile exact paper-validated V7 SHA on server')
+        reconcile = workflow.index('Reconcile exact approved main V7 SHA on server')
         bootstrap = workflow.index('eval "$("$brew_bin" shellenv)"', reconcile)
-        fetch = workflow.index('git fetch --no-tags origin main paper-validated', reconcile)
+        fetch = workflow.index('git fetch --no-tags origin main', reconcile)
         self.assertLess(bootstrap, fetch)
 
     def test_recovery_is_reserved_for_ssh_transport_loss_and_rechecks_full_health(self) -> None:
         workflow = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text(encoding="utf-8")
         self.assertIn('if [[ "$primary_status" -ne 255 ]]; then', workflow)
         self.assertIn('V7 remote deploy failed with non-transport status=$primary_status', workflow)
-        self.assertIn('test "$(cat "$root/control/deployed_sha")" = "$EXPECTED_VALIDATED_SHA"', workflow)
+        self.assertIn('test "$(cat "$root/control/deployed_sha")" = "$EXPECTED_DEPLOY_SHA"', workflow)
         for required in (
             "control/runtime_status.json",
             "control/portfolio_state.json",

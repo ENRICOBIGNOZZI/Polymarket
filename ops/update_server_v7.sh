@@ -2,9 +2,8 @@
 set -euo pipefail
 
 APP_DIR="${POLYMARKET_APP_DIR:-$HOME/polymarket}"
-EXPECTED_SHA="${EXPECTED_VALIDATED_SHA:-${POLYMARKET_EXPECTED_SHA:-}}"
-DEPLOY_REF="${POLYMARKET_DEPLOY_REF:-paper-validated}"
-MAIN_REF="${POLYMARKET_MAIN_REF:-main}"
+EXPECTED_SHA="${EXPECTED_DEPLOY_SHA:-${POLYMARKET_EXPECTED_SHA:-}}"
+DEPLOY_REF="${POLYMARKET_DEPLOY_REF:-main}"
 CACHE_DIR="${POLYMARKET_DEPLOY_CACHE:-$HOME/.cache/polymarket-v7-deploy}"
 STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
 LOCK_DIR="$CACHE_DIR/update-v7.lock"
@@ -18,9 +17,8 @@ LOCK_NONCE="${EXPECTED_SHA}.$$.$(date +%s)"
 log(){ printf '[v7-deploy] %s\n' "$*"; }
 fail(){ printf '[v7-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 
-[[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "EXPECTED_VALIDATED_SHA must be the exact 40-char validated SHA"
-[[ "$DEPLOY_REF" == "paper-validated" ]] || fail "V7 deploy ref must remain paper-validated"
-[[ "$MAIN_REF" == "main" ]] || fail "V7 canonical integration ref must remain main"
+[[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "EXPECTED_DEPLOY_SHA must be the exact 40-char approved SHA"
+[[ "$DEPLOY_REF" == "main" ]] || fail "V7 deploy ref must remain main"
 [[ "$HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS must be positive"
 [[ "$DRAIN_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_RUNTIME_DRAIN_ATTEMPTS must be positive"
 [[ "$LOCK_STALE_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_LOCK_STALE_SECONDS must be positive"
@@ -622,11 +620,9 @@ runtime_health_diagnostics(){
 
 cd "$APP_DIR"
 write_status validating "fetching canonical refs"
-git fetch --no-tags origin "$MAIN_REF" "$DEPLOY_REF"
-MAIN_SHA="$(git rev-parse "origin/$MAIN_REF")"
-VALIDATED_SHA="$(git rev-parse "origin/$DEPLOY_REF")"
-[[ "$MAIN_SHA" == "$EXPECTED_SHA" ]] || fail "origin/main $MAIN_SHA != exact validated SHA $EXPECTED_SHA"
-[[ "$VALIDATED_SHA" == "$EXPECTED_SHA" ]] || fail "origin/paper-validated $VALIDATED_SHA != exact validated SHA $EXPECTED_SHA"
+git fetch --no-tags origin "$DEPLOY_REF"
+MAIN_SHA="$(git rev-parse "origin/$DEPLOY_REF")"
+[[ "$MAIN_SHA" == "$EXPECTED_SHA" ]] || fail "origin/main $MAIN_SHA != exact approved SHA $EXPECTED_SHA"
 prevalidate_candidate
 OLD_SHA="$(git rev-parse HEAD)"
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || fail "tracked server checkout is dirty"

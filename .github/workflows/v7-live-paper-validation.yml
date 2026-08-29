@@ -7,11 +7,6 @@ on:
         description: Exact main V7 SHA to validate
         required: false
         type: string
-      cutover_approved:
-        description: Explicitly advance paper-validated after exact-SHA validation
-        required: false
-        default: false
-        type: boolean
   repository_dispatch:
     types: [v7-live-paper-validate]
   workflow_run:
@@ -21,7 +16,7 @@ on:
 
 permissions:
   actions: read
-  contents: write
+  contents: read
 
 concurrency:
   group: v7-live-paper-validation
@@ -52,7 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "ready=false" >> "$GITHUB_OUTPUT"
-          git fetch --no-tags origin main paper-validated
+          git fetch --no-tags origin main
           test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
           if [[ "$(git rev-parse origin/main)" != "$VALIDATION_SHA" ]]; then
             echo "validation_state=stale_non_main_sha" >> "$GITHUB_STEP_SUMMARY"
@@ -97,8 +92,6 @@ jobs:
         if: steps.gate.outputs.ready == 'true'
         run: |
           set -euo pipefail
-          current_validated="$(git rev-parse origin/paper-validated)"
-          git merge-base --is-ancestor "$current_validated" "$VALIDATION_SHA"
           python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$VALIDATION_SHA" --github-env "$GITHUB_ENV"
 
       - name: Install build dependencies
@@ -180,29 +173,13 @@ jobs:
           fi
           echo "PAPER deployment is a technical/safety evidence-collection state; it is not a real-money or profitability promotion." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Advance paper-validated after explicit cutover approval
-        if: steps.gate.outputs.ready == 'true' && github.event_name == 'workflow_dispatch' && inputs.cutover_approved == true
+      - name: Record immutable main-SHA validation result
+        if: steps.gate.outputs.ready == 'true'
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          git fetch --no-tags origin main paper-validated
-          main_sha="$(git rev-parse origin/main)"; old_validated="$(git rev-parse origin/paper-validated)"
-          test "$main_sha" = "$VALIDATION_SHA"; test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
-          git merge-base --is-ancestor "$old_validated" "$VALIDATION_SHA"
-          if [[ "$old_validated" != "$VALIDATION_SHA" ]]; then
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/paper-validated" -f sha="$VALIDATION_SHA" -F force=false >/dev/null
-          fi
-          echo "paper_validated_sha=$VALIDATION_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "validated_main_sha=$VALIDATION_SHA" >> "$GITHUB_STEP_SUMMARY"
           echo "paper_deployment_mode=evidence_collection" >> "$GITHUB_STEP_SUMMARY"
           echo "economic_ready=${{ steps.economics.outputs.economic_ready }}" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Record validation-only result
-        if: steps.gate.outputs.ready == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.cutover_approved == true)
-        shell: bash
-        run: |
-          echo "paper-validated unchanged: explicit cutover approval was not supplied" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload exact-SHA V7 PAPER evidence
         if: always() && steps.gate.outputs.ready == 'true'

@@ -24,7 +24,7 @@ run = load("v7_run_manifest")
 dataset = load("v7_dataset_manifest")
 build = load("v7_build_manifest")
 SHA = "c" * 40
-VALIDATED_SHA = "d" * 40
+DEPLOY_SHA = "d" * 40
 
 
 class V7RunManifestTests(unittest.TestCase):
@@ -67,7 +67,7 @@ class V7RunManifestTests(unittest.TestCase):
                 path.write_text(payload, encoding="utf-8")
 
             value = run.build_manifest(
-                code_sha=SHA, paper_validated_sha=VALIDATED_SHA, config=config,
+                code_sha=SHA, deployment_sha=DEPLOY_SHA, config=config,
                 strategy_registry=registry, models=[f"maker={model}"],
                 dataset_manifests=[dataset_path], universe_snapshot=universe,
                 fee_schedule_version="clob-fees-2026-08-28",
@@ -77,6 +77,8 @@ class V7RunManifestTests(unittest.TestCase):
                 host="paper-node-test", repository_root=root,
             )
             self.assertRegex(value["run_id"], r"^v7-20260828T200000Z-[0-9a-f]{12}$")
+            self.assertEqual(value["schema"], "polymarket_v7_run_manifest_v2")
+            self.assertEqual(value["deployment_sha"], DEPLOY_SHA)
             for field in (
                 "code_sha", "config_sha", "model_sha", "dataset_manifest_sha",
                 "universe_snapshot_sha", "strategy_registry_sha", "contract_mapping_sha",

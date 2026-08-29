@@ -19,6 +19,7 @@ concurrency:
 
 jobs:
   build-test:
+    name: ci-v7-${{ matrix.build_type }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -70,6 +71,8 @@ jobs:
           python3 -m json.tool config/v7_incumbent_identity.json >/dev/null
           python3 -m json.tool config/v7_latency_slo.json >/dev/null
           python3 -m json.tool config/v7_osint_sources.json >/dev/null
+          python3 -m json.tool artifacts/github_main_ruleset.json >/dev/null
+          python3 -m json.tool artifacts/v7_repository_convergence_audit.json >/dev/null
           python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-maker-fillability.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-latency.json >/dev/null

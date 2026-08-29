@@ -55,12 +55,11 @@ jobs:
         run: |
           set -euo pipefail
           echo "ready=false" >> "$GITHUB_OUTPUT"
-          git fetch --no-tags origin main paper-validated
+          git fetch --no-tags origin main
           main_sha="$(git rev-parse origin/main)"
-          validated_sha="$(git rev-parse origin/paper-validated)"
-          if [[ "$main_sha" != "$EXPECTED_SHA" || "$validated_sha" != "$EXPECTED_SHA" ]]; then
-            echo "health_state=failed_not_exact_validated_main" >> "$GITHUB_STEP_SUMMARY"
-            echo "V7 health cannot be green without exact main=paper-validated=expected SHA" >&2
+          if [[ "$main_sha" != "$EXPECTED_SHA" ]]; then
+            echo "health_state=failed_not_exact_main" >> "$GITHUB_STEP_SUMMARY"
+            echo "V7 health cannot be green without exact main=expected SHA" >&2
             exit 1
           fi
           python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$EXPECTED_SHA" >/dev/null
@@ -131,8 +130,8 @@ jobs:
           set -euo pipefail
           app="$HOME/polymarket"; root="$app/runs/paper_v7_live"; now="$(date +%s)"
           cd "$app"
-          head_sha="$(git rev-parse HEAD)"; validated_sha="$(git rev-parse origin/paper-validated 2>/dev/null || true)"; main_sha="$(git rev-parse origin/main 2>/dev/null || true)"
-          test "$head_sha" = "$EXPECTED_SHA"; test "$validated_sha" = "$EXPECTED_SHA"; test "$main_sha" = "$EXPECTED_SHA"
+          head_sha="$(git rev-parse HEAD)"; main_sha="$(git rev-parse origin/main 2>/dev/null || true)"
+          test "$head_sha" = "$EXPECTED_SHA"; test "$main_sha" = "$EXPECTED_SHA"
           test "$(cat "$root/control/deployed_sha")" = "$EXPECTED_SHA"
           python3 - "$root" "$EXPECTED_SHA" "$now" <<'PY'
           import csv,json,os,sys

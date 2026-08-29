@@ -163,11 +163,11 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         ):
             self.assertIn(required, text)
 
-    def test_updater_requires_main_and_paper_validated_same_exact_sha(self) -> None:
+    def test_updater_requires_exact_approved_main_sha(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         self.assertIn('[[ "$MAIN_SHA" == "$EXPECTED_SHA" ]]', text)
-        self.assertIn('[[ "$VALIDATED_SHA" == "$EXPECTED_SHA" ]]', text)
         self.assertIn('[[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]', text)
+        self.assertIn('[[ "$DEPLOY_REF" == "main" ]]', text)
 
     def test_updater_contains_no_retired_generation_or_fallback_logic(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8").lower()
@@ -179,7 +179,6 @@ class V7CutoverUpdaterTest(unittest.TestCase):
             "paper_latest",
             "polymarket_engine",
             "rollback_v6",
-            "paper-validated~",
         ):
             self.assertNotIn(forbidden, text)
 

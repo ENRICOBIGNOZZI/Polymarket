@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 SAFE_BRANCH = re.compile(r"^[A-Za-z0-9._/-]+$")
-PROTECTED_EXACT = {"HEAD", "main", "paper-validated", "telemetry"}
+PROTECTED_EXACT = {"HEAD", "main", "telemetry"}
 PROTECTED_PREFIXES = ("release/", "hotfix/")
 RESEARCH_ARCHIVE_PREFIXES = ("research/", "experiment/", "improve/", "agent/", "review/")
 DISPOSABLE_BRANCH = re.compile(r"^tmp-unused(?:-[0-9]+)?$")

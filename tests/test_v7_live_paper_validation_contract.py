@@ -29,27 +29,26 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             "promotion_ready",
             "Record economic readiness separately from PAPER deployment",
             "PAPER deployment is a technical/safety evidence-collection state",
-            "cutover_approved:",
-            "Advance paper-validated after explicit cutover approval",
-            "github.event_name == 'workflow_dispatch' && inputs.cutover_approved == true",
-            "paper-validated unchanged: explicit cutover approval was not supplied",
+            "Record immutable main-SHA validation result",
+            "validated_main_sha=$VALIDATION_SHA",
             "paper_deployment_mode=evidence_collection",
-            "git merge-base --is-ancestor \"$old_validated\" \"$VALIDATION_SHA\"",
-            "-F force=false",
+            "git fetch --no-tags origin main",
+            "contents: read",
         ):
             self.assertIn(required, text)
         for forbidden in (
-            "Advance paper-validated to exact economically validated V7 SHA",
             "Polymarket Research Policy",
             "research-policy.yml",
             "project_context",
             "scheduler_registry",
             "gh pr merge",
             "git push origin main",
-            "git push origin paper-validated",
+            "git/refs/heads/",
             "force=true",
             "paper_v7_loop.sh",
             "schedule:",
+            "contents: write",
+            "cutover_approved:",
         ):
             self.assertNotIn(forbidden, text)
 
@@ -59,13 +58,13 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             "expected_sha:",
             "cutover_approved:",
             "inputs.cutover_approved == true",
-            "EXPECTED_VALIDATED_SHA: ${{ inputs.expected_sha }}",
-            "canonical refs do not match the explicitly approved SHA",
+            "EXPECTED_DEPLOY_SHA: ${{ inputs.expected_sha }}",
+            "canonical main does not match the explicitly approved SHA",
         ):
             self.assertIn(required, text)
         for forbidden in ("schedule:", "workflow_run:", "github.event_name == 'schedule'"):
             self.assertNotIn(forbidden, text)
-        self.assertIn('git show "$validated_sha:scripts/v7_prepare_cutover_run_root.py" > "$archiver"', text)
+        self.assertIn('git show "$main_sha:scripts/v7_prepare_cutover_run_root.py" > "$archiver"', text)
         self.assertIn('POLYMARKET_CUTOVER_ARCHIVER="$archiver"', text)
 
     def test_cutover_contract_reads_v7_safety_authority(self) -> None:

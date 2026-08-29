@@ -38,13 +38,11 @@ if [[ -n "$missing" ]]; then
   fi
 fi
 
-log "Fetching canonical V7 refs"
-git -C "$ROOT" fetch --no-tags origin main paper-validated
+log "Fetching canonical V7 main"
+git -C "$ROOT" fetch --no-tags origin main
 MAIN_SHA="$(git -C "$ROOT" rev-parse origin/main)"
-VALIDATED_SHA="$(git -C "$ROOT" rev-parse origin/paper-validated)"
-[[ "$MAIN_SHA" == "$VALIDATED_SHA" ]] || fail "main=$MAIN_SHA differs from paper-validated=$VALIDATED_SHA"
 
-if [[ -z "$EXPECTED_SHA" ]]; then EXPECTED_SHA="$VALIDATED_SHA"; fi
+if [[ -z "$EXPECTED_SHA" ]]; then EXPECTED_SHA="$MAIN_SHA"; fi
 [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "POLYMARKET_EXPECTED_SHA must be an exact 40-char SHA"
 [[ "$EXPECTED_SHA" == "$MAIN_SHA" ]] || fail "requested SHA is not current exact validated main"
 
@@ -58,9 +56,8 @@ fi
 [[ -d "$LIVE_DIR/.git" ]] || fail "$LIVE_DIR is not a standalone git checkout"
 [[ -z "$(git -C "$LIVE_DIR" status --porcelain --untracked-files=no)" ]] || fail "isolated live checkout has tracked local changes"
 git -C "$LIVE_DIR" remote set-url origin "$REMOTE_URL"
-git -C "$LIVE_DIR" fetch --no-tags origin main paper-validated
+git -C "$LIVE_DIR" fetch --no-tags origin main
 [[ "$(git -C "$LIVE_DIR" rev-parse origin/main)" == "$EXPECTED_SHA" ]] || fail "local clone origin/main is not expected SHA"
-[[ "$(git -C "$LIVE_DIR" rev-parse origin/paper-validated)" == "$EXPECTED_SHA" ]] || fail "local clone origin/paper-validated is not expected SHA"
 
 UPDATER="$(mktemp "${TMPDIR:-/tmp}/polymarket-v7-local-updater.XXXXXX")"
 cleanup(){ rm -f "$UPDATER"; }
@@ -71,9 +68,8 @@ chmod 700 "$UPDATER"
 log "Starting exact-SHA V7 PAPER runtime locally"
 POLYMARKET_APP_DIR="$LIVE_DIR" \
 POLYMARKET_STATE_DIR="$STATE_DIR" \
-EXPECTED_VALIDATED_SHA="$EXPECTED_SHA" \
-POLYMARKET_DEPLOY_REF=paper-validated \
-POLYMARKET_MAIN_REF=main \
+EXPECTED_DEPLOY_SHA="$EXPECTED_SHA" \
+POLYMARKET_DEPLOY_REF=main \
 bash "$UPDATER"
 
 curl -fsS http://127.0.0.1:9108/healthz >/dev/null || fail "local exporter is unhealthy"

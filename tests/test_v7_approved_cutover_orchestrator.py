@@ -21,7 +21,8 @@ def test_orchestrator_uses_canonical_workflows_without_direct_deploy_or_ref_patc
     ):
         assert f"gh workflow run {workflow}" in text
     assert "cutover_approved=true" in text
-    assert "git/refs/heads/paper-validated" not in text
+    assert 'test "$validation_complete" = 1' in text
+    assert "git/refs/heads/" not in text
     assert "ssh " not in text
     assert "real_order_submission" not in text
 

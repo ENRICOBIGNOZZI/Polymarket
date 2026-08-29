@@ -102,6 +102,15 @@ def validate_capabilities(root: Path) -> dict[str, Any]:
 
 def validate_repository(root: Path) -> dict[str, Any]:
     Registry.load(root / "config/v7_strategy_registry.json")
+    champion = load(root / "config/live_champion.json")
+    if (
+        champion.get("enabled") is not True
+        or champion.get("version") != 7
+        or champion.get("loop") != "scripts/paper_v7_execution_loop.sh"
+        or champion.get("deployment_ref") != "main"
+        or champion.get("promotion_policy") != "operator_approved_exact_main_sha"
+    ):
+        raise AuditError("champion_or_deployment_authority_not_canonical")
     directives = load(root / "config/operator_directives.json")
     auth = directives.get("paper_v7_authorization") or {}
     if auth.get("paper_only") is not True or auth.get("authenticated_execution") is not False or auth.get("real_order_submission") is not False:
@@ -134,7 +143,6 @@ def markdown(report: dict[str, Any], matrix: dict[str, Any]) -> str:
         "## Repository identity", "",
         f"- candidate SHA: `{identity['candidate_sha']}`",
         f"- main SHA: `{identity['main_sha']}`",
-        f"- paper-validated SHA: `{identity['paper_validated_sha']}`",
         f"- deployed live-PAPER SHA: `{identity['deployed_sha']}`",
         "", "## Architecture", "",
         "Single V7 runtime, OMS/execution owner, physical inventory truth, capital allocator, risk owner and canonical ledger writer are enforced by repository contracts.",
@@ -147,7 +155,7 @@ def markdown(report: dict[str, Any], matrix: dict[str, Any]) -> str:
     lines.extend([
         "", "## Acceptance", "",
         f"- exact-head repository audit: `{report['valid']}`",
-        f"- canonical refs equal candidate: `{report['canonical_refs_equal_candidate']}`",
+        f"- canonical main equals candidate: `{report['canonical_main_equals_candidate']}`",
         f"- deployed identity verified: `{report['deployed_identity_verified']}`",
         f"- engineering/repository acceptance: `{report['engineering_acceptance']}`",
         "- economic acceptance: strategy-specific; code existence is not alpha evidence.",
@@ -163,7 +171,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository-root", type=Path, default=Path("."))
     parser.add_argument("--main-sha")
-    parser.add_argument("--paper-validated-sha")
     parser.add_argument("--deployed-sha", default="UNKNOWN_UNVERIFIED")
     parser.add_argument("--deployed-identity-verified", action="store_true")
     parser.add_argument("--output", type=Path)
@@ -175,15 +182,14 @@ def main() -> int:
     incumbent = validate_repository(root)
     candidate = git(root, "rev-parse", "HEAD")
     main_sha = args.main_sha or optional_git_ref(root, "origin/main")
-    paper_sha = args.paper_validated_sha or optional_git_ref(root, "origin/paper-validated")
-    refs_equal = candidate == main_sha == paper_sha
+    main_equal = candidate == main_sha
     deployed_verified = bool(args.deployed_identity_verified and args.deployed_sha == candidate and incumbent.get("verified") is True)
     report = {
         "schema": "polymarket_v7_convergence_audit_v1", "valid": True,
-        "identity": {"candidate_sha": candidate, "main_sha": main_sha, "paper_validated_sha": paper_sha, "deployed_sha": args.deployed_sha},
+        "identity": {"candidate_sha": candidate, "main_sha": main_sha, "deployed_sha": args.deployed_sha},
         "scheduler_count": len(scheduler), "strategy_count": len(matrix["strategies"]),
-        "canonical_refs_equal_candidate": refs_equal, "deployed_identity_verified": deployed_verified,
-        "engineering_acceptance": bool(refs_equal and deployed_verified),
+        "canonical_main_equals_candidate": main_equal, "deployed_identity_verified": deployed_verified,
+        "engineering_acceptance": bool(main_equal and deployed_verified),
         "paper_only": True, "automatic_promotion": False, "automatic_deployment": False,
     }
     payload = json.dumps(report, indent=2, sort_keys=True) + "\n"

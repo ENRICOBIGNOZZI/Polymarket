@@ -53,7 +53,7 @@ class V7FastAuthoritySentinelContractTest(unittest.TestCase):
             "Require exact-main V7 technical gates",
             "Enforce V7 PAPER safety contract",
             "Bounded same-SHA public-data PAPER runtime",
-            "paper-validated",
+            "validated_main_sha=$VALIDATION_SHA",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, workflow)

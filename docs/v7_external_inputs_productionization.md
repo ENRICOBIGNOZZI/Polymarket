@@ -1,7 +1,8 @@
 # V7 external inputs productionization
 
-Base truth audited on 2026-08-28: `origin/main` and `origin/paper-validated`
-both resolved to `53c86714a6745beb6e5fe650fcd4bf9c3a6b8608`.
+Base truth was originally audited at commit
+`53c86714a6745beb6e5fe650fcd4bf9c3a6b8608`; current deployment authority is an
+explicit immutable SHA from canonical `main`.
 
 This implementation extends V7 only. It does not add an OMS, ledger, allocator,
 inventory owner, risk plane, execution engine, portfolio state, or monitoring

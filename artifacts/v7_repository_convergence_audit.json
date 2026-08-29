@@ -1,0 +1,3751 @@
+{
+  "audit_identity": {
+    "local_cleanup_parent_sha": "e6d54b7da180704b7274970e3c339db839b92d57",
+    "main_sha_at_start": "dd60afabf3f89f4c6624f0eca39ec1627d3485fa",
+    "retired_secondary_ref_sha_at_start": "f564d9cc76fef30755b7cbfc3a8f1a1ca674a722",
+    "target_branch": "main"
+  },
+  "canonical_ownership": [
+    {
+      "classification": "KEEP_CANONICAL",
+      "owner": "scripts/paper_v7_execution_loop.sh",
+      "surface": "champion/runtime/entrypoint"
+    },
+    {
+      "classification": "KEEP_CANONICAL",
+      "owner": "single V7 C++ execution path",
+      "surface": "OMS/execution"
+    },
+    {
+      "classification": "KEEP_CANONICAL",
+      "owner": "scripts/v7_execution_ledger.py",
+      "surface": "ledger"
+    },
+    {
+      "classification": "KEEP_CANONICAL",
+      "owner": "canonical V7 portfolio state",
+      "surface": "inventory"
+    },
+    {
+      "classification": "KEEP_CANONICAL",
+      "owner": "scripts/v7_capital_allocator.py",
+      "surface": "capital allocator"
+    },
+    {
+      "classification": "KEEP_CANONICAL",
+      "owner": "scripts/v7_portfolio_guard.py",
+      "surface": "portfolio risk and kill switch"
+    },
+    {
+      "classification": "KEEP_CANONICAL",
+      "owner": "monitoring/exporter_v7.py plus the canonical V7 manifest",
+      "surface": "monitoring"
+    },
+    {
+      "classification": "KEEP_CANONICAL",
+      "owner": "exact current main SHA",
+      "surface": "deployment identity"
+    },
+    {
+      "classification": "RESEARCH_ONLY",
+      "owner": "bounded research modules without OMS, ledger, or capital authority",
+      "surface": "ranking/PCA/local-factor primitives"
+    },
+    {
+      "classification": "ARCHIVE_HISTORY_ONLY",
+      "owner": "Git and PR history",
+      "surface": "retired compatibility paths and duplicate control planes"
+    }
+  ],
+  "classification_legend": [
+    "KEEP_CANONICAL",
+    "MERGE_INTO_CANONICAL",
+    "RESEARCH_ONLY",
+    "ARCHIVE_HISTORY_ONLY",
+    "DELETE",
+    "BLOCKER"
+  ],
+  "cleanup_status": {
+    "blocker_reason": "No authenticated GitHub credential is available in this execution environment.",
+    "local_code_convergence": "MERGE_INTO_CANONICAL",
+    "obsolete_open_pr_closure": "BLOCKER",
+    "remote_branch_deletion": "BLOCKER",
+    "ruleset_application": "BLOCKER"
+  },
+  "github_governance": {
+    "classification": "BLOCKER",
+    "main_protection_observed": {},
+    "main_protection_query": "UNAVAILABLE_HTTP_401",
+    "required_action": "apply artifacts/github_main_ruleset.json with an authenticated repository-owner token",
+    "rulesets_observed": [],
+    "rulesets_query_error": null
+  },
+  "observed_at": "2026-08-29T13:40:57.503218+00:00",
+  "pull_requests": {
+    "closed_unmerged_count": 416,
+    "closed_unmerged_numbers": [
+      1,
+      2,
+      5,
+      8,
+      9,
+      10,
+      11,
+      14,
+      19,
+      21,
+      22,
+      23,
+      24,
+      27,
+      37,
+      41,
+      43,
+      59,
+      60,
+      61,
+      62,
+      65,
+      67,
+      70,
+      74,
+      75,
+      76,
+      77,
+      79,
+      80,
+      84,
+      86,
+      87,
+      89,
+      90,
+      91,
+      101,
+      107,
+      108,
+      113,
+      115,
+      116,
+      118,
+      120,
+      123,
+      124,
+      125,
+      128,
+      130,
+      139,
+      141,
+      142,
+      147,
+      148,
+      149,
+      151,
+      153,
+      154,
+      156,
+      157,
+      158,
+      159,
+      161,
+      162,
+      163,
+      165,
+      169,
+      171,
+      173,
+      174,
+      176,
+      179,
+      180,
+      181,
+      183,
+      184,
+      187,
+      188,
+      190,
+      191,
+      192,
+      194,
+      195,
+      196,
+      197,
+      198,
+      199,
+      203,
+      205,
+      206,
+      208,
+      209,
+      210,
+      213,
+      214,
+      215,
+      217,
+      219,
+      220,
+      224,
+      225,
+      226,
+      228,
+      232,
+      233,
+      234,
+      239,
+      241,
+      242,
+      243,
+      244,
+      245,
+      246,
+      248,
+      251,
+      255,
+      257,
+      258,
+      259,
+      260,
+      261,
+      263,
+      264,
+      266,
+      268,
+      269,
+      270,
+      272,
+      273,
+      274,
+      275,
+      276,
+      277,
+      279,
+      281,
+      282,
+      283,
+      285,
+      288,
+      289,
+      290,
+      291,
+      292,
+      293,
+      296,
+      297,
+      298,
+      299,
+      301,
+      302,
+      303,
+      304,
+      305,
+      306,
+      307,
+      309,
+      310,
+      314,
+      315,
+      316,
+      317,
+      319,
+      320,
+      323,
+      324,
+      325,
+      327,
+      328,
+      329,
+      332,
+      333,
+      334,
+      335,
+      336,
+      338,
+      339,
+      343,
+      345,
+      346,
+      347,
+      348,
+      350,
+      351,
+      352,
+      356,
+      357,
+      358,
+      359,
+      361,
+      363,
+      366,
+      369,
+      371,
+      372,
+      374,
+      375,
+      376,
+      378,
+      379,
+      382,
+      383,
+      386,
+      388,
+      389,
+      391,
+      393,
+      395,
+      396,
+      398,
+      400,
+      401,
+      402,
+      405,
+      409,
+      410,
+      411,
+      412,
+      413,
+      414,
+      417,
+      419,
+      423,
+      424,
+      425,
+      426,
+      427,
+      428,
+      429,
+      432,
+      433,
+      435,
+      436,
+      437,
+      440,
+      442,
+      444,
+      445,
+      447,
+      448,
+      449,
+      451,
+      455,
+      456,
+      458,
+      462,
+      463,
+      464,
+      466,
+      468,
+      469,
+      470,
+      471,
+      474,
+      475,
+      476,
+      477,
+      479,
+      480,
+      481,
+      482,
+      484,
+      485,
+      487,
+      492,
+      496,
+      500,
+      502,
+      503,
+      504,
+      506,
+      507,
+      512,
+      513,
+      514,
+      515,
+      516,
+      517,
+      519,
+      520,
+      521,
+      524,
+      525,
+      526,
+      527,
+      528,
+      529,
+      530,
+      531,
+      532,
+      536,
+      537,
+      538,
+      539,
+      540,
+      541,
+      542,
+      546,
+      549,
+      552,
+      553,
+      555,
+      557,
+      558,
+      559,
+      560,
+      563,
+      564,
+      565,
+      566,
+      567,
+      568,
+      569,
+      570,
+      571,
+      572,
+      573,
+      574,
+      575,
+      577,
+      578,
+      579,
+      580,
+      581,
+      582,
+      584,
+      586,
+      588,
+      589,
+      591,
+      595,
+      596,
+      598,
+      603,
+      604,
+      606,
+      607,
+      608,
+      609,
+      610,
+      611,
+      612,
+      613,
+      614,
+      615,
+      616,
+      617,
+      618,
+      619,
+      620,
+      621,
+      623,
+      624,
+      625,
+      629,
+      630,
+      631,
+      632,
+      633,
+      635,
+      637,
+      638,
+      639,
+      640,
+      641,
+      642,
+      643,
+      644,
+      646,
+      647,
+      648,
+      649,
+      651,
+      652,
+      653,
+      661,
+      664,
+      665,
+      666,
+      669,
+      674,
+      678,
+      680,
+      684,
+      690,
+      693,
+      696,
+      698,
+      703,
+      704,
+      706,
+      712,
+      713,
+      714,
+      716,
+      718,
+      719,
+      720,
+      721,
+      732,
+      734,
+      735,
+      736,
+      737,
+      738,
+      739,
+      742,
+      743,
+      744,
+      747,
+      750,
+      756,
+      763,
+      767,
+      774,
+      775,
+      776
+    ],
+    "merged_count": 329,
+    "merged_numbers": [
+      3,
+      4,
+      6,
+      7,
+      12,
+      15,
+      16,
+      17,
+      20,
+      25,
+      26,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      38,
+      39,
+      40,
+      42,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      63,
+      64,
+      66,
+      68,
+      71,
+      72,
+      78,
+      82,
+      83,
+      85,
+      88,
+      93,
+      94,
+      95,
+      96,
+      97,
+      98,
+      99,
+      100,
+      102,
+      103,
+      104,
+      109,
+      110,
+      111,
+      112,
+      114,
+      117,
+      119,
+      121,
+      122,
+      126,
+      127,
+      129,
+      131,
+      133,
+      134,
+      136,
+      137,
+      138,
+      140,
+      143,
+      144,
+      145,
+      146,
+      150,
+      152,
+      155,
+      160,
+      164,
+      166,
+      170,
+      172,
+      175,
+      177,
+      178,
+      182,
+      185,
+      186,
+      193,
+      200,
+      201,
+      202,
+      204,
+      207,
+      211,
+      212,
+      216,
+      218,
+      221,
+      223,
+      227,
+      229,
+      230,
+      231,
+      235,
+      236,
+      237,
+      238,
+      240,
+      249,
+      250,
+      252,
+      254,
+      256,
+      262,
+      267,
+      271,
+      280,
+      284,
+      286,
+      287,
+      294,
+      295,
+      300,
+      308,
+      311,
+      312,
+      313,
+      318,
+      321,
+      322,
+      326,
+      330,
+      331,
+      337,
+      340,
+      341,
+      342,
+      344,
+      349,
+      353,
+      354,
+      355,
+      360,
+      362,
+      364,
+      367,
+      368,
+      370,
+      373,
+      377,
+      380,
+      384,
+      387,
+      390,
+      392,
+      397,
+      399,
+      403,
+      404,
+      406,
+      407,
+      408,
+      416,
+      418,
+      421,
+      422,
+      430,
+      431,
+      438,
+      441,
+      446,
+      450,
+      452,
+      453,
+      454,
+      457,
+      459,
+      460,
+      461,
+      467,
+      472,
+      473,
+      478,
+      483,
+      486,
+      488,
+      489,
+      490,
+      491,
+      493,
+      494,
+      495,
+      497,
+      498,
+      499,
+      501,
+      505,
+      508,
+      510,
+      511,
+      518,
+      522,
+      533,
+      535,
+      543,
+      544,
+      545,
+      547,
+      548,
+      550,
+      551,
+      554,
+      556,
+      561,
+      562,
+      583,
+      585,
+      587,
+      590,
+      592,
+      594,
+      597,
+      605,
+      622,
+      645,
+      650,
+      654,
+      656,
+      659,
+      660,
+      663,
+      667,
+      668,
+      670,
+      671,
+      672,
+      673,
+      675,
+      676,
+      679,
+      681,
+      682,
+      683,
+      685,
+      687,
+      688,
+      692,
+      694,
+      697,
+      701,
+      702,
+      705,
+      707,
+      710,
+      715,
+      722,
+      723,
+      724,
+      725,
+      727,
+      731,
+      740,
+      741,
+      745,
+      746,
+      748,
+      749,
+      751,
+      752,
+      753,
+      754,
+      755,
+      757,
+      758,
+      759,
+      760,
+      761,
+      762,
+      764,
+      765,
+      766,
+      768,
+      769,
+      770,
+      771,
+      772,
+      773,
+      777,
+      778,
+      779,
+      780,
+      781,
+      782,
+      783,
+      784,
+      785,
+      786,
+      787,
+      788,
+      789,
+      790,
+      791,
+      792,
+      793,
+      794,
+      795,
+      796,
+      797,
+      798,
+      799,
+      800,
+      801,
+      802,
+      803,
+      804,
+      805,
+      806,
+      807
+    ],
+    "merged_prs_with_surviving_head_refs": [
+      83,
+      94,
+      95,
+      102,
+      104,
+      137,
+      140,
+      143,
+      145,
+      408,
+      446,
+      497,
+      505,
+      518,
+      654,
+      659,
+      731,
+      741,
+      748
+    ],
+    "open_count": 26,
+    "open_items": [
+      {
+        "base_ref": "main",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/hf-microprice-queue-guard-v1-20260824",
+        "head_sha": "4713a44f1566295d646462aba9685a2e0902dbc9",
+        "number": 105,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Quantify forward-maker queue fragility before HF promotion"
+      },
+      {
+        "base_ref": "main",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/lf-external-validation-v2-20260824",
+        "head_sha": "d74ed0c627e28a387ecd8fe8b3bf29d6786c2370",
+        "number": 106,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research LF external validation against incremental and terminal baselines"
+      },
+      {
+        "base_ref": "main",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/lf-external-executable-target-audit-20260825",
+        "head_sha": "cc4653ab96e24f24eabe0522ed9d2f8deca40665",
+        "number": 385,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research LF horizon-executable admission for external signals"
+      },
+      {
+        "base_ref": "main",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/alpha-factory-maker-history-v7-current-20260826",
+        "head_sha": "bad7eb257b6bc5daec081b9ca7976a2ee265104e",
+        "number": 593,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research: repair Alpha Factory maker-history ingestion on current V7"
+      },
+      {
+        "base_ref": "research/v7-unified-final-evidence-20260826",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-graph-queue-decoupled-sizing-20260827",
+        "head_sha": "cb86bb67f789f7a119b7a74095541fbe2b0e1a9c",
+        "number": 600,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7 Graph/RV queue-decoupled target sizing"
+      },
+      {
+        "base_ref": "research/v7-unified-final-evidence-20260826",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-ranking-frozen-holdout-audit-20260827",
+        "head_sha": "182668c7bf8f0ae44181f939030846cef5525a94",
+        "number": 601,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research: audit frozen 2h/6h ranking holdout refits"
+      },
+      {
+        "base_ref": "research/v7-unified-final-evidence-20260826",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/hf-v7-selective-improvement-fallback-20260827",
+        "head_sha": "771a4110a8a71c70432a388cae4351105ae72937",
+        "number": 602,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research HF: preserve at-touch fallback when inside quote fails V7 admission floors"
+      },
+      {
+        "base_ref": "research/v7-unified-final-evidence-20260826",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-ranking-true-frozen-holdout-20260827",
+        "head_sha": "e981e0a9d5b6ebf1975de3dfc7868a87662f52e5",
+        "number": 626,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7: enforce true frozen 2h/6h ranking holdout"
+      },
+      {
+        "base_ref": "research/v7-unified-final-evidence-20260826",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-pca-current-state-z-gate-20260827",
+        "head_sha": "33b0c1a9bbe4850b9829fe86ce2c474ebb8c4ea9",
+        "number": 627,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7 PCA: gate on current residual state"
+      },
+      {
+        "base_ref": "main",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-external-multiplicity-audit-20260827",
+        "head_sha": "bee89e8bd55e58756fd474579a62916dd3f6b5cf",
+        "number": 628,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7 External: multiplicity passed; executable replay still blocking"
+      },
+      {
+        "base_ref": "research/v7-canonical-ledger-main-r2-20260827",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-fast-economic-gate-ledger-20260827",
+        "head_sha": "879bcfd279e51769021a0dab12e98e55bcbb53d4",
+        "number": 655,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "V7 Fast Arb: canonical-ledger realized economic gate"
+      },
+      {
+        "base_ref": "research/v7-canonical-ledger-main-r2-20260827",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-fast-canonical-ledger-producer-20260827",
+        "head_sha": "662f29fbe789374f909db918d93f4682f8227720",
+        "number": 657,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7 Fast Structural: canonical ledger producer"
+      },
+      {
+        "base_ref": "research/v7-canonical-ledger-main-r2-20260827",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-learned-execution-main-r2-20260827",
+        "head_sha": "e04e84f69d221fc5ca6558402856b8401d964eff",
+        "number": 658,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "V7: learned execution on canonical ledger r2"
+      },
+      {
+        "base_ref": "research/v7-unified-final-evidence-20260826",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-local-factor-current-state-residual-20260827",
+        "head_sha": "caa61f7b5548f91f821eca6daa74caf88786eaa2",
+        "number": 677,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7 Local Factor: reconstruct residual state at current book"
+      },
+      {
+        "base_ref": "research/v7-unified-final-evidence-20260826",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-pca-common-factor-mean-audit-20260827",
+        "head_sha": "c9e66f2cfe850e2170be4befdfc97adc31e24a7d",
+        "number": 686,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7 PCA: model common-factor mean before single-leg direction"
+      },
+      {
+        "base_ref": "research/v7-unified-final-evidence-20260826",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-lf-current-book-snapshot-coherence-20260827",
+        "head_sha": "5f6a1bb135d78622d8bc526c6dc963efa78e7266",
+        "number": 689,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7 LF/PCA: require coherent current-book snapshots"
+      },
+      {
+        "base_ref": "main",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-lf-canonical-source-anchor-20260827",
+        "head_sha": "7db697a3f7f7763bdf651f667f18dad08266e929",
+        "number": 691,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7 LF/PCA: anchor model research to canonical main"
+      },
+      {
+        "base_ref": "main",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-ranking-survivorship-gate-20260827",
+        "head_sha": "742587e8f910ef2ca44e7ec7e1b49e8eb1e60ed4",
+        "number": 699,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7 ranking: fail closed on survivorship-unsafe holdout evidence"
+      },
+      {
+        "base_ref": "main",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-maker-persistent-complete-set-handoff-20260827",
+        "head_sha": "b1c1904b147f9f4b15729ff23c856bc4180beb20",
+        "number": 708,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7 Maker: pre-register persistent complete-set leads"
+      },
+      {
+        "base_ref": "main",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-execution-evidence-cost-stress-audit-20260827",
+        "head_sha": "e5561a2bcf6a5a5f38dee448116a139269c80269",
+        "number": 709,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7: audit full-vector execution cost stress"
+      },
+      {
+        "base_ref": "main",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-lf-model-evidence-horizon-audit-20260827",
+        "head_sha": "6daa08471b1e6088005114583d2cd1338ea5855d",
+        "number": 711,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7 LF/PCA/ranking: preserve model and horizon execution evidence"
+      },
+      {
+        "base_ref": "main",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-multileg-completion-evidence-audit-20260827",
+        "head_sha": "365f256530f96055b4bece7328416e7efb2c3ec0",
+        "number": 717,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7: measure multi-leg completion at bundle unit"
+      },
+      {
+        "base_ref": "main",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-profit-stack-current-main-20260827",
+        "head_sha": "a7acf8a8c6bef006c27312a6f73936137e0da914",
+        "number": 728,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7: unified profit stack with complete-set maker"
+      },
+      {
+        "base_ref": "main",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/lf-v7-event-cluster-pnl-20260827",
+        "head_sha": "03e2d1b5bc3e49f81b3453aec5246ebb3a005911",
+        "number": 729,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7: preserve event dependence in execution-PnL evidence"
+      },
+      {
+        "base_ref": "research/v7-profit-stack-current-main-20260827",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/hf-v7-maker-rolling-flow-window-20260827",
+        "head_sha": "46fd58d710e7580d8706878802a6773048454e95",
+        "number": 730,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research HF: audit V7 maker rolling-flow admission blocker"
+      },
+      {
+        "base_ref": "research/v7-profit-stack-current-main-20260827",
+        "classification": "DELETE",
+        "draft": true,
+        "head_ref": "research/v7-graph-execution-profit-stack-r2-20260827",
+        "head_sha": "dd5160134ea6ed995e30011cd1807f6795cbc1c1",
+        "number": 733,
+        "required_action": "close as superseded by V7 total convergence; preserve PR history",
+        "title": "Research V7 Graph: joint-state execution on current profit stack"
+      }
+    ],
+    "total_count": 771
+  },
+  "remote_branches": {
+    "initial_count_including_main": 147,
+    "initial_noncanonical_count": 146,
+    "items": [
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 14,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-28T14:02:42+00:00",
+        "main_commits_not_in_branch": 111,
+        "name": "diagnostic/v7-runtime-child-logs-20260828",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "90a2171e1e68c91c9e440a6daf1d7dea9e19aec6"
+      },
+      {
+        "associated_pr_numbers": [
+          693
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 26,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T06:03:20+02:00",
+        "main_commits_not_in_branch": 869,
+        "name": "experiment/v7-fast-authority-ws-continuity-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "12f60caf0d8df74fa56500129d9c0cb18b5abe23"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T16:19:59+02:00",
+        "main_commits_not_in_branch": 979,
+        "name": "fix/change-policy-authorized-paper-envelope-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "25a932657e40d72abb13ca6e6f5ccf2b6e92a452"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T23:10:25+02:00",
+        "main_commits_not_in_branch": 906,
+        "name": "fix/enforce-event-bridge-directive-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "0a8ccec6f829043226aac4691a6a2004ad795c93"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 2,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T00:59:11+02:00",
+        "main_commits_not_in_branch": 1070,
+        "name": "fix/fail-closed-promotion-policy-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "4cddffd97adbc6a21bb45bd2d877f06eb74e33a7"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 9,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T16:45:10+02:00",
+        "main_commits_not_in_branch": 977,
+        "name": "fix/pr319-ctest-import-path-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "aeda66666f62993839cd1cdbdbf8eb5541d510c9"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 5,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-24T12:39:24+02:00",
+        "main_commits_not_in_branch": 1143,
+        "name": "fix/publish-deploy-health-evidence-20260824",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "26f6503bfa77dd6ce0655c3717b853f7425c15d2"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-24T21:28:17+02:00",
+        "main_commits_not_in_branch": 1099,
+        "name": "fix/sensitive-surface-policy-after-provenance-20260824",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "48861a5246a755f4405397104bb1938b6f0bc8d0"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 2,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-28T16:51:30+02:00",
+        "main_commits_not_in_branch": 96,
+        "name": "fix/v7-bounded-process-tree-drain-20260828",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "7f0af08ae0adc70de8579b685b6e1f6fd474084f"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T12:22:54+02:00",
+        "main_commits_not_in_branch": 459,
+        "name": "fix/v7-candidate-project-context-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "842262ce45c2a88dd3244f37e1423d443dcc3453"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 13,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:41:20+02:00",
+        "main_commits_not_in_branch": 890,
+        "name": "fix/v7-cutover-ops-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "dc81be9f5237bde75ad7cc91bb3cabb0b13654ba"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:25:19+02:00",
+        "main_commits_not_in_branch": 890,
+        "name": "fix/v7-deploy-health-control-plane-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "de26c6eadb31bb8f10b0daadb21360d846ccc9e1"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 2,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-28T16:22:49+02:00",
+        "main_commits_not_in_branch": 99,
+        "name": "fix/v7-deploy-successful-stop-status-20260828",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "7f185431145ad8eb1d320d562e73420fd9b6b19d"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 2,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:31:11+02:00",
+        "main_commits_not_in_branch": 888,
+        "name": "fix/v7-evidence-no-incumbent-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "a9600bf5afdae3ed8c409b38250159244a2717da"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T12:14:50+02:00",
+        "main_commits_not_in_branch": 467,
+        "name": "fix/v7-hard-safety-first-baseline-20260827-copy",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "6f2acb399c238fabc14c34275c44fa1467322b62"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T12:14:50+02:00",
+        "main_commits_not_in_branch": 467,
+        "name": "fix/v7-hard-safety-first-baseline-20260827-final",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "6f2acb399c238fabc14c34275c44fa1467322b62"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T12:14:50+02:00",
+        "main_commits_not_in_branch": 467,
+        "name": "fix/v7-hard-safety-first-baseline-20260827-pr",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "6f2acb399c238fabc14c34275c44fa1467322b62"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T12:14:50+02:00",
+        "main_commits_not_in_branch": 467,
+        "name": "fix/v7-hard-safety-first-baseline-20260827-pull",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "6f2acb399c238fabc14c34275c44fa1467322b62"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T12:14:50+02:00",
+        "main_commits_not_in_branch": 467,
+        "name": "fix/v7-hard-safety-first-baseline-20260827-r2",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "6f2acb399c238fabc14c34275c44fa1467322b62"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T22:03:22+02:00",
+        "main_commits_not_in_branch": 909,
+        "name": "governance/register-v7-ranking-scheduler-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "3814e8c6438a909536b75fe49fc4c2bd3bbd7070"
+      },
+      {
+        "associated_pr_numbers": [
+          62
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 6,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-24T14:52:11+02:00",
+        "main_commits_not_in_branch": 1140,
+        "name": "improve/empirical-maker-policy-gate-20260824",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "677c45910d22e96600a5b7c559bed2f4d425643f"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 2,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-28T14:36:22+02:00",
+        "main_commits_not_in_branch": 119,
+        "name": "improve/v7-maker-microstructure-lab-20260828",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "bae9098528e3949ec25337670e9408a346101298"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-24T14:04:19+02:00",
+        "main_commits_not_in_branch": 1141,
+        "name": "integration/action-report-hedges-grafana-20260824",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "25853d1d8c069b2b728ee7bed85ec9bf34975c47"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 5,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T00:32:38+02:00",
+        "main_commits_not_in_branch": 1087,
+        "name": "integration/harden-automatic-paper-promotion",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "3c897b4fd92bd4d67d4cc67a09d0c43d12106ff0"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-24T16:53:57+02:00",
+        "main_commits_not_in_branch": 1132,
+        "name": "integration/recover-grafana-validation-chain",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "6b8488aa0d748538f8346794db7741d8244d7879"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T06:29:58+02:00",
+        "main_commits_not_in_branch": 866,
+        "name": "integration/v7-maker-history-normalization-current-20260827-r2",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "981f4477f6f8bc444263be2c53d2879fdfe3fba8"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T20:11:18+02:00",
+        "main_commits_not_in_branch": 674,
+        "name": "integration/v7-unified-current-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "817600d1d469e7af67fd86fc672ce76072dea2b5"
+      },
+      {
+        "associated_pr_numbers": [
+          83,
+          94,
+          95,
+          102,
+          104,
+          137,
+          140,
+          143,
+          145,
+          149,
+          408,
+          446,
+          497,
+          505,
+          518,
+          555,
+          654,
+          659,
+          680,
+          731,
+          741,
+          748
+        ],
+        "associated_pr_states": [
+          "MERGED",
+          "MERGED",
+          "MERGED",
+          "MERGED",
+          "MERGED",
+          "MERGED",
+          "MERGED",
+          "MERGED",
+          "MERGED",
+          "CLOSED",
+          "MERGED",
+          "MERGED",
+          "MERGED",
+          "MERGED",
+          "MERGED",
+          "CLOSED",
+          "MERGED",
+          "MERGED",
+          "CLOSED",
+          "MERGED",
+          "MERGED",
+          "MERGED"
+        ],
+        "branch_commits_not_in_main": 0,
+        "classification": "KEEP_CANONICAL",
+        "last_commit_at": "2026-08-29T13:58:02+02:00",
+        "main_commits_not_in_branch": 0,
+        "name": "main",
+        "required_action": "retain as the only canonical deployment/code branch",
+        "tip_sha": "dd60afab7aa0b3626cef389eb1b715b7a2fab464"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 2,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T20:36:32+02:00",
+        "main_commits_not_in_branch": 914,
+        "name": "operator/restore-current-paper-envelope-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "768e786b3ce1a8ee6ad0373d34c9c8f08b251bb6"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T12:49:03+02:00",
+        "main_commits_not_in_branch": 849,
+        "name": "operator/v7-convergence-policy-sync-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "93555264781b76365f25f0eb887e68241e38ee0a"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 15,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T00:18:40+02:00",
+        "main_commits_not_in_branch": 1090,
+        "name": "ops/automatic-paper-promotion",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "b91e9392b7da44915de16cbbc675ee83d981e046"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 0,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-29T12:01:18+02:00",
+        "main_commits_not_in_branch": 5,
+        "name": "paper-validated",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "f564d9ccd453c15ab4dcd713797b24ae4e464849"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T01:45:04+02:00",
+        "main_commits_not_in_branch": 1052,
+        "name": "probe/price-history-api",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "cde49605e8ae565cee845fc2b988dd3cc76a7fa8"
+      },
+      {
+        "associated_pr_numbers": [
+          192
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 11,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T08:25:45+02:00",
+        "main_commits_not_in_branch": 1026,
+        "name": "research/aggressive-paper-experts-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "cf55de29a9a4029e34f259094ab1359acfc43315"
+      },
+      {
+        "associated_pr_numbers": [
+          442
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T07:19:54+02:00",
+        "main_commits_not_in_branch": 942,
+        "name": "research/alpha-factory-data-health-gate-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "59b490316d65da049bb8546eca543e64468f0ee9"
+      },
+      {
+        "associated_pr_numbers": [
+          484
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T13:20:09+02:00",
+        "main_commits_not_in_branch": 926,
+        "name": "research/alpha-factory-forward-history-current-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "98dfd233c90a9689ab3c5dd2a102c33141cced4a"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T15:20:54+02:00",
+        "main_commits_not_in_branch": 922,
+        "name": "research/alpha-factory-forward-history-current-main-20260826-r2",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "d6501e329892c92cc9672a87628c3f06bce9973c"
+      },
+      {
+        "associated_pr_numbers": [
+          502
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T17:16:25+02:00",
+        "main_commits_not_in_branch": 921,
+        "name": "research/alpha-factory-forward-history-current-main-20260826-r3",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "9fb1fe3e0ba9a6e05c4aeddb90e29e0880e578c8"
+      },
+      {
+        "associated_pr_numbers": [
+          525
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 6,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T18:22:36+02:00",
+        "main_commits_not_in_branch": 920,
+        "name": "research/alpha-factory-forward-history-failclosed-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "5049a401ba485d0ff9240d0edae6e43f1b9f7c5a"
+      },
+      {
+        "associated_pr_numbers": [
+          383
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T21:24:19+02:00",
+        "main_commits_not_in_branch": 957,
+        "name": "research/alpha-factory-forward-history-normalization-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "404f8a51f29856761edb590ab379f3277ed4fc66"
+      },
+      {
+        "associated_pr_numbers": [
+          539
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 5,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T19:23:07+02:00",
+        "main_commits_not_in_branch": 918,
+        "name": "research/alpha-factory-history-current-main-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "7bae777d0502437a2a7861bef9d826fc60a74ca6"
+      },
+      {
+        "associated_pr_numbers": [
+          549
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T20:34:56+02:00",
+        "main_commits_not_in_branch": 912,
+        "name": "research/alpha-factory-history-current-main-r2-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "8acab13f754bf9b3e6d3f9e76d65c441b91e3b85"
+      },
+      {
+        "associated_pr_numbers": [
+          593
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 8,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T23:24:04+02:00",
+        "main_commits_not_in_branch": 903,
+        "name": "research/alpha-factory-maker-history-v7-current-20260826",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "bad7eb257b6bc5daec081b9ca7976a2ee265104e"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T21:09:52+00:00",
+        "main_commits_not_in_branch": 905,
+        "name": "research/auto-fast-arb-policy",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "b4b89cd22de78f69c25b65190e22152fa5866bf5"
+      },
+      {
+        "associated_pr_numbers": [
+          43
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-24T02:45:27+02:00",
+        "main_commits_not_in_branch": 1197,
+        "name": "research/b1-z-cost",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "bc3a009d686f0563498fe86e2c73d88788df8aee"
+      },
+      {
+        "associated_pr_numbers": [
+          213
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 16,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T09:44:25+02:00",
+        "main_commits_not_in_branch": 1013,
+        "name": "research/b2-sparse-hedge-cost-frontier-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "479dd6e5f19ead6691b47995cc1ef051293e177e"
+      },
+      {
+        "associated_pr_numbers": [
+          107
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 22,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-24T20:44:45+02:00",
+        "main_commits_not_in_branch": 1119,
+        "name": "research/cross-venue-independent-engine",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "a19ccf1ef4d3ee23a83605b581ac1ecedd539f42"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 27,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-24T20:59:37+02:00",
+        "main_commits_not_in_branch": 1113,
+        "name": "research/cross-venue-single-broker",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "9f454e6762b2df989face02100f2c175e5e7c68c"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 27,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-24T20:59:37+02:00",
+        "main_commits_not_in_branch": 1113,
+        "name": "research/cross-venue-streaming-contract-review",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "9f454e6762b2df989face02100f2c175e5e7c68c"
+      },
+      {
+        "associated_pr_numbers": [
+          435
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T06:26:36+02:00",
+        "main_commits_not_in_branch": 942,
+        "name": "research/external-frozen-trade-cost-stress-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "04c4c2859860ca15f57de2eeca3e8068d0b7f1e0"
+      },
+      {
+        "associated_pr_numbers": [
+          225
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T11:01:45+02:00",
+        "main_commits_not_in_branch": 1007,
+        "name": "research/external-paper-feed-fail-closed-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "703bc67b9b038f1d66fac4e5b07dad63c8fde395"
+      },
+      {
+        "associated_pr_numbers": [
+          198
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 7,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T08:12:53+02:00",
+        "main_commits_not_in_branch": 1026,
+        "name": "research/external-paper-feed-wiring-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "bb8772d74b3a755daa50a1947656075c9c59d033"
+      },
+      {
+        "associated_pr_numbers": [
+          260
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T12:33:56+02:00",
+        "main_commits_not_in_branch": 998,
+        "name": "research/fast-arb-aggressive-public-shadow-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "5db011451a1482250b4a00338cdde8ff77f24b0c"
+      },
+      {
+        "associated_pr_numbers": [
+          514
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 10,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T21:31:29+02:00",
+        "main_commits_not_in_branch": 920,
+        "name": "research/hf-live-maker-flow-admission-audit-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "267884f8b70a7bd39f3f902dcde801fb56e90947"
+      },
+      {
+        "associated_pr_numbers": [
+          427
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 17,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T05:27:58+02:00",
+        "main_commits_not_in_branch": 944,
+        "name": "research/hf-maker-authorized-ab-current-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "5b1221669f6e73afe6b47d9a8397f31a14a1a5a2"
+      },
+      {
+        "associated_pr_numbers": [
+          386
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 43,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T04:48:09+02:00",
+        "main_commits_not_in_branch": 947,
+        "name": "research/hf-maker-policy-abc-current-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "1e025592975d778a074306cc0fed55e8ac8d19fa"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 5,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:24:59+02:00",
+        "main_commits_not_in_branch": 890,
+        "name": "research/hf-v7-fast-shadow-authority-repair-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "51ea4c7624792737653c46404645ab3de543c10b"
+      },
+      {
+        "associated_pr_numbers": [
+          526
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 10,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T17:34:37+02:00",
+        "main_commits_not_in_branch": 723,
+        "name": "research/hf-v7-maker-event-time-replay-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "3f572e6c28f3502d2bdacf683722fd9b423827b9"
+      },
+      {
+        "associated_pr_numbers": [
+          575
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T22:27:00+02:00",
+        "main_commits_not_in_branch": 611,
+        "name": "research/hf-v7-maker-replay-continuity-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "c9542e052e709e529ffe4e7a57db67358d1b77ad"
+      },
+      {
+        "associated_pr_numbers": [
+          730
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 10,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T11:29:58+02:00",
+        "main_commits_not_in_branch": 839,
+        "name": "research/hf-v7-maker-rolling-flow-window-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "46fd58d710e7580d8706878802a6773048454e95"
+      },
+      {
+        "associated_pr_numbers": [
+          602
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T00:30:21+02:00",
+        "main_commits_not_in_branch": 585,
+        "name": "research/hf-v7-selective-improvement-fallback-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "771a4110a8a71c70432a388cae4351105ae72937"
+      },
+      {
+        "associated_pr_numbers": [
+          60
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-24T14:08:54+02:00",
+        "main_commits_not_in_branch": 1141,
+        "name": "research/kalshi-cross-venue-shadow-20260824",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "084ce47b3cc19e67e1298da0619b2f8fc94604b5"
+      },
+      {
+        "associated_pr_numbers": [
+          455
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 5,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T09:43:46+02:00",
+        "main_commits_not_in_branch": 938,
+        "name": "research/lf-active-flow-universe-audit-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "2b65b2ae3f10ac723ee4f2ed03b72fbbeb778de8"
+      },
+      {
+        "associated_pr_numbers": [
+          385
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T21:28:46+02:00",
+        "main_commits_not_in_branch": 957,
+        "name": "research/lf-external-executable-target-audit-20260825",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "cc4653ab96e24f24eabe0522ed9d2f8deca40665"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T14:51:17+02:00",
+        "main_commits_not_in_branch": 924,
+        "name": "research/lf-external-frozen-cost-stress-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "f364a8d28876fcf6350e2608de0e0eeb70e6e6fe"
+      },
+      {
+        "associated_pr_numbers": [
+          176
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T04:39:20+02:00",
+        "main_commits_not_in_branch": 1031,
+        "name": "research/lf-external-sleeve-activation-audit-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "54643d83e2ba46b9750d6bfabd3d3e2747a0683a"
+      },
+      {
+        "associated_pr_numbers": [
+          180
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T05:25:15+02:00",
+        "main_commits_not_in_branch": 1028,
+        "name": "research/lf-graph-basket-semantics-audit-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "3b5083bdc75a624b3c908a148fe0507c557f0ba9"
+      },
+      {
+        "associated_pr_numbers": [
+          165
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T02:31:12+02:00",
+        "main_commits_not_in_branch": 1049,
+        "name": "research/lf-resolution-calibration-audit-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "a1e923265b655d839059fec184a12759603b9875"
+      },
+      {
+        "associated_pr_numbers": [
+          171
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 7,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T03:58:41+02:00",
+        "main_commits_not_in_branch": 1034,
+        "name": "research/lf-semantic-polarity-threshold-audit-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "0e7840db5aef80b47e5e5088346c17ba05f2f07a"
+      },
+      {
+        "associated_pr_numbers": [
+          426
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 5,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T03:32:01+02:00",
+        "main_commits_not_in_branch": 945,
+        "name": "research/lf-shared-flow-capacity-audit-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "9cf39347d2234e5fea00be69c8298d1c8b91ab5d"
+      },
+      {
+        "associated_pr_numbers": [
+          528
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 7,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T17:41:21+02:00",
+        "main_commits_not_in_branch": 920,
+        "name": "research/lf-structural-stable-event-id-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "9f907e93d873a3b3b7bedf48ff23865845736cc5"
+      },
+      {
+        "associated_pr_numbers": [
+          541
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T19:26:02+02:00",
+        "main_commits_not_in_branch": 918,
+        "name": "research/lf-v7-control-orientation-factor-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "10d4646c3dd24837eada71fc2b1ab8ec06797675"
+      },
+      {
+        "associated_pr_numbers": [
+          729
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T11:26:47+02:00",
+        "main_commits_not_in_branch": 849,
+        "name": "research/lf-v7-event-cluster-pnl-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "03e2d1b5bc3e49f81b3453aec5246ebb3a005911"
+      },
+      {
+        "associated_pr_numbers": [
+          474
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T11:54:57+02:00",
+        "main_commits_not_in_branch": 935,
+        "name": "research/lf-v7-fdr-dependence-audit-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "a22eec602b4e42ce89bd36ce7f888f2197580f36"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T16:30:17+02:00",
+        "main_commits_not_in_branch": 739,
+        "name": "research/lf-v7-graph-evidence-transport-audit-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "120dc187500105df81af46cc4f802562784273e4"
+      },
+      {
+        "associated_pr_numbers": [
+          557
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T21:34:10+02:00",
+        "main_commits_not_in_branch": 912,
+        "name": "research/lf-v7-history-freshness-audit-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "69cc9e9856421b436a4712eba8a35953a500df16"
+      },
+      {
+        "associated_pr_numbers": [
+          573
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T22:24:02+02:00",
+        "main_commits_not_in_branch": 611,
+        "name": "research/lf-v7-orientation-consistent-bootstrap-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "5925ba33dcac8dff755c74cd75239bd5c386595b"
+      },
+      {
+        "associated_pr_numbers": [
+          500
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 5,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T15:02:48+02:00",
+        "main_commits_not_in_branch": 923,
+        "name": "research/lf-v7-pairwise-panel-testability-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "e76629cf01b9ae6832a1c276411bb579ff04d67e"
+      },
+      {
+        "associated_pr_numbers": [
+          487
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 2,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T14:45:59+02:00",
+        "main_commits_not_in_branch": 924,
+        "name": "research/lf-v7-pca-composite-null-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "295feb3d01aeb9a8a38cc0a00363789ffdebf0e5"
+      },
+      {
+        "associated_pr_numbers": [
+          476
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 5,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T12:29:48+02:00",
+        "main_commits_not_in_branch": 934,
+        "name": "research/lf-v7-relative-rank-direction-audit-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "7ea8e72200edc91919c0e054e6003ccfaa5d8e51"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-24T19:52:18+02:00",
+        "main_commits_not_in_branch": 1120,
+        "name": "research/limitless-readonly-adapter",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "d95ca5b687c53e84dcc85479fb9bb8770f73db68"
+      },
+      {
+        "associated_pr_numbers": [
+          357,
+          372
+        ],
+        "associated_pr_states": [
+          "CLOSED",
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T18:53:16+02:00",
+        "main_commits_not_in_branch": 966,
+        "name": "research/market-specific-fees-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "215b33f3f3f6dd8db1b60e63ec00ac1029c93243"
+      },
+      {
+        "associated_pr_numbers": [
+          41
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-24T02:34:55+02:00",
+        "main_commits_not_in_branch": 1198,
+        "name": "research/pca-hedge-cost",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "fbeab222d65dd7b6a05ae72cbbf99e24118ebb77"
+      },
+      {
+        "associated_pr_numbers": [
+          577,
+          579
+        ],
+        "associated_pr_states": [
+          "CLOSED",
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T22:29:48+02:00",
+        "main_commits_not_in_branch": 611,
+        "name": "research/pr546-governance-authority-bound-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "863abcacb68df549afe48845dc4ec4ac552854d4"
+      },
+      {
+        "associated_pr_numbers": [
+          580
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 8,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T22:47:17+02:00",
+        "main_commits_not_in_branch": 610,
+        "name": "research/pr546-governance-authority-current-head-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "09adfd631c14447e57501b1b961d07e553602ade"
+      },
+      {
+        "associated_pr_numbers": [
+          568
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 11,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T22:27:00+02:00",
+        "main_commits_not_in_branch": 611,
+        "name": "research/pr546-ranking-governance-2h6h-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "01d8889fbae3605d4d1353505c699f5c0db2c732"
+      },
+      {
+        "associated_pr_numbers": [
+          273
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T13:21:55+02:00",
+        "main_commits_not_in_branch": 998,
+        "name": "research/promotion-evidence-binding-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "a28b6b32b25198150cd82c10b22f2800665a5391"
+      },
+      {
+        "associated_pr_numbers": [
+          113
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-24T21:19:56+02:00",
+        "main_commits_not_in_branch": 1103,
+        "name": "research/restore-validated-edge-gate-20260824",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "d5d9d69675990ca7d2c78c7989714e84d71f6e3a"
+      },
+      {
+        "associated_pr_numbers": [
+          396
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 6,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T22:20:18+02:00",
+        "main_commits_not_in_branch": 954,
+        "name": "research/runtime-owner-supervisor-handoff-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "9ad6018fba9d12d74b71f786fa0dcddc3e0eacaa"
+      },
+      {
+        "associated_pr_numbers": [
+          328
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 12,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T17:55:50+02:00",
+        "main_commits_not_in_branch": 971,
+        "name": "research/runtime-single-writer-integrity-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "863e53a4083dfdaf8fcd60f5b0348abdaca06804"
+      },
+      {
+        "associated_pr_numbers": [
+          401
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 2,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T22:43:56+02:00",
+        "main_commits_not_in_branch": 953,
+        "name": "research/stale-relay-cache-liveness-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "9f0c08d5bbd32d919e7291f345eba099c13eab83"
+      },
+      {
+        "associated_pr_numbers": [
+          516
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 8,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T17:22:54+02:00",
+        "main_commits_not_in_branch": 723,
+        "name": "research/v7-authorized-paper-envelope-repair-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "0e21fd34f375e511875e28ba323c4ef6d547842c"
+      },
+      {
+        "associated_pr_numbers": [
+          537
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T18:53:32+02:00",
+        "main_commits_not_in_branch": 699,
+        "name": "research/v7-bounded-paper-policy-current-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "5bde5598fc4a016456ec304a6f9a9048323e645c"
+      },
+      {
+        "associated_pr_numbers": [
+          629
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:27:51+02:00",
+        "main_commits_not_in_branch": 583,
+        "name": "research/v7-canonical-execution-ledger-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "3e8742bc9b12941eb6399c1eedb5340b3d991cd4"
+      },
+      {
+        "associated_pr_numbers": [
+          640
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:33:23+02:00",
+        "main_commits_not_in_branch": 888,
+        "name": "research/v7-canonical-ledger-main-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "ded86ce4f96e3c4d645c098a3ec074702fb953a7"
+      },
+      {
+        "associated_pr_numbers": [
+          642
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 5,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:41:43+02:00",
+        "main_commits_not_in_branch": 887,
+        "name": "research/v7-canonical-ledger-main-r2-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "6cbba3bd9f67a1d58d072c03fc0560e870e92329"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 2,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T22:34:39+02:00",
+        "main_commits_not_in_branch": 611,
+        "name": "research/v7-canonical-no-legacy-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "192f6f2201a54a318bbf4653fc7b7b52b823469c"
+      },
+      {
+        "associated_pr_numbers": [
+          451
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T08:53:35+02:00",
+        "main_commits_not_in_branch": 940,
+        "name": "research/v7-canonical-runtime-cleanup-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "1cb783dd384bb07bd9905d5b573015d4ee9257ca"
+      },
+      {
+        "associated_pr_numbers": [
+          462
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T12:49:07+02:00",
+        "main_commits_not_in_branch": 912,
+        "name": "research/v7-cross-sectional-ranking-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "3156e174c9151df81d4927c22bf3f8be3bd57603"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T10:02:13+02:00",
+        "main_commits_not_in_branch": 861,
+        "name": "research/v7-current-main-model-core-20260827-r2",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "8d231764a4ff2e3fe6c3275d3f1110d0de2e9b7e"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T10:06:50+02:00",
+        "main_commits_not_in_branch": 856,
+        "name": "research/v7-current-main-model-core-20260827-r3",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "9e84fa6ec2fa094f2a64e507611d410376891e96"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 5,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T10:24:31+02:00",
+        "main_commits_not_in_branch": 856,
+        "name": "research/v7-current-main-model-core-20260827-r4",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "82e165d2edc068a8d1a05c0b9c8c8a6b50182e49"
+      },
+      {
+        "associated_pr_numbers": [
+          335
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-25T17:23:49+02:00",
+        "main_commits_not_in_branch": 972,
+        "name": "research/v7-execution-evidence-20260825",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "c347ff6001477bf087d763390440b3ac88160439"
+      },
+      {
+        "associated_pr_numbers": [
+          709
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T08:26:16+02:00",
+        "main_commits_not_in_branch": 862,
+        "name": "research/v7-execution-evidence-cost-stress-audit-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "e5561a2bcf6a5a5f38dee448116a139269c80269"
+      },
+      {
+        "associated_pr_numbers": [
+          703
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 8,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T07:26:27+02:00",
+        "main_commits_not_in_branch": 864,
+        "name": "research/v7-execution-evidence-fill-accounting-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "7444ef6f7d742dcaab6f46cce2ae3a2a3a7f6331"
+      },
+      {
+        "associated_pr_numbers": [
+          712
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T10:00:59+02:00",
+        "main_commits_not_in_branch": 861,
+        "name": "research/v7-external-feed-current-main-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "0607166c2a488412115a10e8639ea0111bc0e939"
+      },
+      {
+        "associated_pr_numbers": [
+          713
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 5,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T10:08:13+02:00",
+        "main_commits_not_in_branch": 851,
+        "name": "research/v7-external-feed-current-main-r2-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "94d8f23e161b03af8ef0771ade6b16cdec6d33e7"
+      },
+      {
+        "associated_pr_numbers": [
+          719
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T12:01:29+02:00",
+        "main_commits_not_in_branch": 849,
+        "name": "research/v7-external-feed-current-main-r3-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "9adf79985b60298e6a1fad8071b668d979bb9bf4"
+      },
+      {
+        "associated_pr_numbers": [
+          706
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T08:07:34+02:00",
+        "main_commits_not_in_branch": 864,
+        "name": "research/v7-external-feed-current-runtime-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "0fc84e2c7960f32f991083e4d34edc12433901cf"
+      },
+      {
+        "associated_pr_numbers": [
+          607
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 2,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:06:14+02:00",
+        "main_commits_not_in_branch": 583,
+        "name": "research/v7-external-feed-health-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "764ec293010263eb9d76332618982972df2035e3"
+      },
+      {
+        "associated_pr_numbers": [
+          628
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 6,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:27:12+02:00",
+        "main_commits_not_in_branch": 888,
+        "name": "research/v7-external-multiplicity-audit-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "bee89e8bd55e58756fd474579a62916dd3f6b5cf"
+      },
+      {
+        "associated_pr_numbers": [
+          620
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:16:40+02:00",
+        "main_commits_not_in_branch": 583,
+        "name": "research/v7-fast-arb-cross-leg-freshness-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "b7f9a6ff448da2a24d7aa94cf684a274ba0f0094"
+      },
+      {
+        "associated_pr_numbers": [
+          704
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 2,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T08:23:28+02:00",
+        "main_commits_not_in_branch": 862,
+        "name": "research/v7-fast-authority-freshness-current-main-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "4376b8f810707daca607b75dfcbea98acac77427"
+      },
+      {
+        "associated_pr_numbers": [
+          698
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 13,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T06:34:52+02:00",
+        "main_commits_not_in_branch": 867,
+        "name": "research/v7-fast-authority-sentinel-current-main-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "2921874efa66b7a48cbd411f8474401758477122"
+      },
+      {
+        "associated_pr_numbers": [
+          657
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 11,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:49:26+02:00",
+        "main_commits_not_in_branch": 887,
+        "name": "research/v7-fast-canonical-ledger-producer-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "662f29fbe789374f909db918d93f4682f8227720"
+      },
+      {
+        "associated_pr_numbers": [
+          655
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 12,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:50:45+02:00",
+        "main_commits_not_in_branch": 887,
+        "name": "research/v7-fast-economic-gate-ledger-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "879bcfd279e51769021a0dab12e98e55bcbb53d4"
+      },
+      {
+        "associated_pr_numbers": [
+          678
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 20,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T03:26:40+02:00",
+        "main_commits_not_in_branch": 878,
+        "name": "research/v7-fast-fresh-broad-shadow-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "66886a810b628ad5c726b6a0993d864cf066d3e5"
+      },
+      {
+        "associated_pr_numbers": [
+          684
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 10,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T04:32:26+02:00",
+        "main_commits_not_in_branch": 873,
+        "name": "research/v7-fast-per-leg-freshness-port-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "77f5b6f16c34c2396d1de22d4cc761240a9bd153"
+      },
+      {
+        "associated_pr_numbers": [
+          614
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 17,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:25:18+02:00",
+        "main_commits_not_in_branch": 583,
+        "name": "research/v7-fast-structural-evidence-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "45107054da454347f692a1c15f499551a3240deb"
+      },
+      {
+        "associated_pr_numbers": [
+          732
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 9,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T11:39:02+02:00",
+        "main_commits_not_in_branch": 839,
+        "name": "research/v7-graph-execution-current-main-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "bf78c70f309e773291cab0577dcf4fd2e055a494"
+      },
+      {
+        "associated_pr_numbers": [
+          733
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 35,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T12:00:41+02:00",
+        "main_commits_not_in_branch": 839,
+        "name": "research/v7-graph-execution-profit-stack-r2-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "dd5160134ea6ed995e30011cd1807f6795cbc1c1"
+      },
+      {
+        "associated_pr_numbers": [
+          600
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T00:22:24+02:00",
+        "main_commits_not_in_branch": 585,
+        "name": "research/v7-graph-queue-decoupled-sizing-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "cb86bb67f789f7a119b7a74095541fbe2b0e1a9c"
+      },
+      {
+        "associated_pr_numbers": [
+          532
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T18:40:16+02:00",
+        "main_commits_not_in_branch": 702,
+        "name": "research/v7-graph-roundtrip-authorized-envelope-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "d0fc8ef60960a7c46e83c9f74db9930e8d7b4bf6"
+      },
+      {
+        "associated_pr_numbers": [
+          658
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 17,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T10:47:45+02:00",
+        "main_commits_not_in_branch": 887,
+        "name": "research/v7-learned-execution-main-r2-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "e04e84f69d221fc5ca6558402856b8401d964eff"
+      },
+      {
+        "associated_pr_numbers": [
+          648
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 7,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:38:54+02:00",
+        "main_commits_not_in_branch": 583,
+        "name": "research/v7-learned-execution-model-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "c48ab6ef822d06939e5cf51c4ff65dc2b5158239"
+      },
+      {
+        "associated_pr_numbers": [
+          691
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T05:27:40+02:00",
+        "main_commits_not_in_branch": 869,
+        "name": "research/v7-lf-canonical-source-anchor-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "7db697a3f7f7763bdf651f667f18dad08266e929"
+      },
+      {
+        "associated_pr_numbers": [
+          689
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T04:27:28+02:00",
+        "main_commits_not_in_branch": 583,
+        "name": "research/v7-lf-current-book-snapshot-coherence-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "5f6a1bb135d78622d8bc526c6dc963efa78e7266"
+      },
+      {
+        "associated_pr_numbers": [
+          711
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T09:29:57+02:00",
+        "main_commits_not_in_branch": 861,
+        "name": "research/v7-lf-model-evidence-horizon-audit-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "6daa08471b1e6088005114583d2cd1338ea5855d"
+      },
+      {
+        "associated_pr_numbers": [
+          677
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T02:29:23+02:00",
+        "main_commits_not_in_branch": 583,
+        "name": "research/v7-local-factor-current-state-residual-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "caa61f7b5548f91f821eca6daa74caf88786eaa2"
+      },
+      {
+        "associated_pr_numbers": [
+          464
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 24,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T12:28:56+02:00",
+        "main_commits_not_in_branch": 935,
+        "name": "research/v7-local-factor-final-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "08dc2463a2879c616fe91180df4c49429744fef7"
+      },
+      {
+        "associated_pr_numbers": [
+          708
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 12,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T09:34:11+02:00",
+        "main_commits_not_in_branch": 863,
+        "name": "research/v7-maker-persistent-complete-set-handoff-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "b1c1904b147f9f4b15729ff23c856bc4180beb20"
+      },
+      {
+        "associated_pr_numbers": [
+          717
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T10:28:26+02:00",
+        "main_commits_not_in_branch": 850,
+        "name": "research/v7-multileg-completion-evidence-audit-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "365f256530f96055b4bece7328416e7efb2c3ec0"
+      },
+      {
+        "associated_pr_numbers": [
+          686
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T03:27:17+02:00",
+        "main_commits_not_in_branch": 583,
+        "name": "research/v7-pca-common-factor-mean-audit-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "c9e66f2cfe850e2170be4befdfc97adc31e24a7d"
+      },
+      {
+        "associated_pr_numbers": [
+          627
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:25:00+02:00",
+        "main_commits_not_in_branch": 583,
+        "name": "research/v7-pca-current-state-z-gate-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "33b0c1a9bbe4850b9829fe86ce2c474ebb8c4ea9"
+      },
+      {
+        "associated_pr_numbers": [
+          747
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 24,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T12:56:18+02:00",
+        "main_commits_not_in_branch": 466,
+        "name": "research/v7-professional-market-maker-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "ef1793401a26e293d092d16a5200a12cf832df7b"
+      },
+      {
+        "associated_pr_numbers": [
+          728,
+          742
+        ],
+        "associated_pr_states": [
+          "OPEN",
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 36,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T12:47:18+02:00",
+        "main_commits_not_in_branch": 839,
+        "name": "research/v7-profit-stack-current-main-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "a7acf8a8c6bef006c27312a6f73936137e0da914"
+      },
+      {
+        "associated_pr_numbers": [
+          621
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 10,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:20:06+02:00",
+        "main_commits_not_in_branch": 583,
+        "name": "research/v7-ranking-15m-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "23cadf8918693275b7e9a69bd7a02d946a1a5712"
+      },
+      {
+        "associated_pr_numbers": [
+          632
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 14,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:26:25+02:00",
+        "main_commits_not_in_branch": 583,
+        "name": "research/v7-ranking-15m-true-frozen-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "1198abbce04e11e451aeafa56dadd3ada6b33828"
+      },
+      {
+        "associated_pr_numbers": [
+          480,
+          492
+        ],
+        "associated_pr_states": [
+          "CLOSED",
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-26T12:56:40+02:00",
+        "main_commits_not_in_branch": 926,
+        "name": "research/v7-ranking-forward-observer-20260826",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "1f3d49dfb47d364b1be3f986934435f7fbc6902f"
+      },
+      {
+        "associated_pr_numbers": [
+          601
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 3,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T00:28:23+02:00",
+        "main_commits_not_in_branch": 585,
+        "name": "research/v7-ranking-frozen-holdout-audit-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "182668c7bf8f0ae44181f939030846cef5525a94"
+      },
+      {
+        "associated_pr_numbers": [
+          699
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 4,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T06:28:07+02:00",
+        "main_commits_not_in_branch": 866,
+        "name": "research/v7-ranking-survivorship-gate-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "742587e8f910ef2ca44e7ec7e1b49e8eb1e60ed4"
+      },
+      {
+        "associated_pr_numbers": [
+          626
+        ],
+        "associated_pr_states": [
+          "OPEN"
+        ],
+        "branch_commits_not_in_main": 9,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:13:07+02:00",
+        "main_commits_not_in_branch": 583,
+        "name": "research/v7-ranking-true-frozen-holdout-20260827",
+        "required_action": "close open PR as superseded, then delete ref",
+        "tip_sha": "e981e0a9d5b6ebf1975de3dfc7868a87662f52e5"
+      },
+      {
+        "associated_pr_numbers": [
+          774
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 61,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-28T19:08:50+02:00",
+        "main_commits_not_in_branch": 59,
+        "name": "research/v7-settlement-fair-value-20260828",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "3a890fe21d4cc9fb84a82665e20fd576d3dbcfbb"
+      },
+      {
+        "associated_pr_numbers": [
+          633
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 6,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-27T01:34:18+02:00",
+        "main_commits_not_in_branch": 888,
+        "name": "research/v7-shadow-evidence-contract-20260827",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "cf8379611937b8985bdf63a850fd2b8203cbd5c5"
+      },
+      {
+        "associated_pr_numbers": [
+          776
+        ],
+        "associated_pr_states": [
+          "CLOSED"
+        ],
+        "branch_commits_not_in_main": 63,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-28T20:24:48+02:00",
+        "main_commits_not_in_branch": 59,
+        "name": "research/v7-strategy-bible-20260828",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "3f99ba30049c6c215f776fafe57bf29e957d3523"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-28T07:47:42+02:00",
+        "main_commits_not_in_branch": 206,
+        "name": "review/v7-maker-gap-fixes-r2-20260828",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "6600d812f3761c39eaf2e89844279da88a0e5a06"
+      },
+      {
+        "associated_pr_numbers": [],
+        "associated_pr_states": [],
+        "branch_commits_not_in_main": 1297,
+        "classification": "DELETE",
+        "last_commit_at": "2026-08-28T05:59:42+00:00",
+        "main_commits_not_in_branch": 1200,
+        "name": "telemetry",
+        "required_action": "delete ref; retain commit SHA and PR/Git history as provenance",
+        "tip_sha": "7e808fe092884738c07bb37abe031f7a17cdff7c"
+      }
+    ],
+    "target_count": 1
+  },
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "required_invariants": {
+    "automatic_research_to_live_promotion": false,
+    "canonical_deployment_branch_count": 1,
+    "canonical_ledger_count": 1,
+    "canonical_live_entrypoint_count": 1,
+    "capital_allocator_count": 1,
+    "duplicate_state_writer_count": 0,
+    "execution_owner_count": 1,
+    "inventory_owner_count": 1,
+    "kill_switch_owner_count": 1,
+    "legacy_fallback_count": 0,
+    "legacy_runtime_count": 0,
+    "live_champion_count": 1,
+    "oms_count": 1,
+    "portfolio_risk_owner_count": 1,
+    "research_ledger_writer_authority": 0,
+    "research_oms_authority": 0,
+    "research_real_capital_authority": 0,
+    "supported_runtime_generations": [
+      7
+    ]
+  },
+  "schema": "polymarket_v7_repository_convergence_audit_v1",
+  "workflow_records": {
+    "active_tracked_count": 11,
+    "count": 64,
+    "historical_disabled_count": 53,
+    "items": [
+      {
+        "classification": "KEEP_CANONICAL",
+        "id": 340434442,
+        "name": "ci",
+        "path": ".github/workflows/ci.yml",
+        "required_action": "retain",
+        "state": "active"
+      },
+      {
+        "classification": "KEEP_CANONICAL",
+        "id": 340651866,
+        "name": "monitoring",
+        "path": ".github/workflows/monitoring.yml",
+        "required_action": "retain",
+        "state": "active"
+      },
+      {
+        "classification": "KEEP_CANONICAL",
+        "id": 342211639,
+        "name": "Private runtime single-writer validation",
+        "path": ".github/workflows/private-runtime-single-writer-validation.yml",
+        "required_action": "retain",
+        "state": "active"
+      },
+      {
+        "classification": "KEEP_CANONICAL",
+        "id": 342757634,
+        "name": "V7 cross-sectional relative tail research",
+        "path": ".github/workflows/v7-cross-sectional-ranking-research.yml",
+        "required_action": "retain",
+        "state": "active"
+      },
+      {
+        "classification": "KEEP_CANONICAL",
+        "id": 343161612,
+        "name": "V7 point-in-time universe archive",
+        "path": ".github/workflows/v7-point-in-time-universe-archive.yml",
+        "required_action": "retain",
+        "state": "active"
+      },
+      {
+        "classification": "KEEP_CANONICAL",
+        "id": 343357148,
+        "name": "V7 live PAPER validation",
+        "path": ".github/workflows/v7-live-paper-validation.yml",
+        "required_action": "retain",
+        "state": "active"
+      },
+      {
+        "classification": "KEEP_CANONICAL",
+        "id": 343377816,
+        "name": "V7 deploy PAPER server",
+        "path": ".github/workflows/v7-deploy-paper-server.yml",
+        "required_action": "retain",
+        "state": "active"
+      },
+      {
+        "classification": "KEEP_CANONICAL",
+        "id": 343377817,
+        "name": "V7 PAPER server health",
+        "path": ".github/workflows/v7-paper-server-health.yml",
+        "required_action": "retain",
+        "state": "active"
+      },
+      {
+        "classification": "KEEP_CANONICAL",
+        "id": 344763856,
+        "name": "V7 maker fillability evidence",
+        "path": ".github/workflows/v7-maker-fillability-evidence.yml",
+        "required_action": "retain",
+        "state": "active"
+      },
+      {
+        "classification": "KEEP_CANONICAL",
+        "id": 345007362,
+        "name": "V7 merged branch hygiene",
+        "path": ".github/workflows/v7-merged-branch-hygiene.yml",
+        "required_action": "retain",
+        "state": "active"
+      },
+      {
+        "classification": "KEEP_CANONICAL",
+        "id": 345010121,
+        "name": "V7 approved PAPER cutover orchestrator",
+        "path": ".github/workflows/v7-approved-paper-cutover-orchestrator.yml",
+        "required_action": "retain",
+        "state": "active"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 340633163,
+        "name": "source-export",
+        "path": ".github/workflows/source-export.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 340701954,
+        "name": "live-full-now",
+        "path": ".github/workflows/live-full-now.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 340707348,
+        "name": "apply-terminal-evidence-gate",
+        "path": ".github/workflows/apply-terminal-evidence-gate.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 340708468,
+        "name": "live-terminal-fix-now",
+        "path": ".github/workflows/live-terminal-fix-now.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 340728204,
+        "name": "source-export-v4",
+        "path": ".github/workflows/source-export-v4.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 340735798,
+        "name": "v4-ci",
+        "path": ".github/workflows/v4-ci.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 340737246,
+        "name": "apply-v4-payload",
+        "path": ".github/workflows/apply-v4-payload.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 340737478,
+        "name": "v4-forward-experiment",
+        "path": ".github/workflows/v4-forward-experiment.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 340758414,
+        "name": "experiment-v3-live-paper-10m",
+        "path": ".github/workflows/experiment-v3-live-10m.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 340785474,
+        "name": "apply-pregame-queue-hotfix",
+        "path": ".github/workflows/apply-pregame-queue-hotfix.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 340789800,
+        "name": "finalize-pregame-queue-hotfix",
+        "path": ".github/workflows/finalize-pregame-queue-hotfix.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 340791354,
+        "name": "scope-sports-gate",
+        "path": ".github/workflows/scope-sports-gate.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 340794484,
+        "name": "source-export-v4-post",
+        "path": ".github/workflows/source-export-v4-post.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 340800521,
+        "name": "merge-main-v4",
+        "path": ".github/workflows/merge-main-v4.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 340847761,
+        "name": "research-pca-hedge-cost",
+        "path": ".github/workflows/research-pca-hedges.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 340851173,
+        "name": "research-b1-z-cost",
+        "path": ".github/workflows/research-b1-z.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341190876,
+        "name": "Polymarket System Watch - Model Governance",
+        "path": ".github/workflows/model-governance.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341201861,
+        "name": "continuous-alpha-research",
+        "path": ".github/workflows/alpha-research.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341204812,
+        "name": "cross-venue-external-information-shadow",
+        "path": ".github/workflows/cross-venue-shadow.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341206168,
+        "name": "Validate Unified Alpha V5",
+        "path": ".github/workflows/validate-unified-alpha-v5.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341208956,
+        "name": "Integrate Unified Alpha V5",
+        "path": ".github/workflows/integrate-unified-alpha-v5.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341304893,
+        "name": "Repair PR68 control-plane contracts",
+        "path": ".github/workflows/pr68-control-plane-repair.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341317701,
+        "name": "Finalize PR68 scheduler registry",
+        "path": ".github/workflows/pr68-finalize-registry.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341326647,
+        "name": "Recover Grafana validation chain",
+        "path": ".github/workflows/recover-grafana-validation-chain.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341337389,
+        "name": "Bootstrap Alpha V5",
+        "path": ".github/workflows/bootstrap-alpha-v5.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341374034,
+        "name": "Bootstrap Hourly Alpha Council",
+        "path": ".github/workflows/bootstrap-hourly-alpha-council.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341418633,
+        "name": "all-market-capacity-smoke",
+        "path": ".github/workflows/all-market-capacity.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341432128,
+        "name": "Bootstrap External Intelligence",
+        "path": ".github/workflows/bootstrap-external-intelligence.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341639270,
+        "name": "apply-aggressive-v5-patch",
+        "path": ".github/workflows/apply-aggressive-v5-patch.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341640408,
+        "name": "Apply aggressive V5 patch",
+        "path": ".github/workflows/apply-aggressive-v5.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341647358,
+        "name": "apply-aggressive-core-gates",
+        "path": ".github/workflows/apply-aggressive-core-gates.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341651589,
+        "name": "Probe price history API",
+        "path": ".github/workflows/probe-price-history.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341652665,
+        "name": "Apply price history fix",
+        "path": ".github/workflows/apply-price-history-fix.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341652920,
+        "name": "apply-price-history-backfill",
+        "path": ".github/workflows/apply-price-history-backfill.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341657648,
+        "name": "Apply external probability fix",
+        "path": ".github/workflows/apply-external-probability-fix.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341841061,
+        "name": "Apply validated V6 prepared tree",
+        "path": ".github/workflows/apply-v6-prepared-tree.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341863034,
+        "name": "Apply V6 cross-venue and cross-asset paper planes",
+        "path": ".github/workflows/apply-v6-cross-planes.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341878801,
+        "name": "Materialize V6 research candidate",
+        "path": ".github/workflows/materialize-v6-research.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 341995666,
+        "name": "V6 execution-cost smoke",
+        "path": ".github/workflows/v6-execution-smoke.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 342202024,
+        "name": "v6-frontier-models",
+        "path": ".github/workflows/v6-frontier-models.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 342761346,
+        "name": "V7 final Local Factor research",
+        "path": ".github/workflows/v7-local-factor-research.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 342766023,
+        "name": "V7 PCA single-leg stat-arb research",
+        "path": ".github/workflows/v7-pca-stat-arb-research.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 342850065,
+        "name": "V7 Local Factor BY evidence",
+        "path": ".github/workflows/v7-local-factor-by-evidence.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 343327429,
+        "name": "Temporary V7 frozen holdout validation",
+        "path": ".github/workflows/tmp-v7-ranking-frozen-fix-validation.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 343331068,
+        "name": "Temporary V7 15m ranking validation",
+        "path": ".github/workflows/tmp-v7-ranking-15m-validation.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 343333942,
+        "name": "Temporary V7 15m true-frozen validation",
+        "path": ".github/workflows/tmp-v7-ranking-15m-true-frozen-validation.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 344135182,
+        "name": "V7 one-shot repository cleanup",
+        "path": ".github/workflows/v7-mass-cleanup-once.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 344147173,
+        "name": "V7 prune legacy-version branch refs",
+        "path": ".github/workflows/v7-prune-legacy-branches-once.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 344149208,
+        "name": "V7 one-shot control-plane compatibility cleanup",
+        "path": ".github/workflows/v7-control-plane-compat-cleanup-once.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 344617649,
+        "name": "V7 runtime child diagnostics",
+        "path": ".github/workflows/v7-runtime-child-diagnostics.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 344631527,
+        "name": "V7 operational monitoring cleanup",
+        "path": ".github/workflows/v7-operational-monitoring-cleanup.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 344633423,
+        "name": "V7 public DNS smoke",
+        "path": ".github/workflows/v7-public-dns-smoke.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      },
+      {
+        "classification": "ARCHIVE_HISTORY_ONLY",
+        "id": 344644885,
+        "name": "V7 recorder proxy smoke",
+        "path": ".github/workflows/v7-recorder-proxy-smoke.yml",
+        "required_action": "leave disabled; delete record if GitHub later permits",
+        "state": "disabled_manually"
+      }
+    ]
+  }
+}
