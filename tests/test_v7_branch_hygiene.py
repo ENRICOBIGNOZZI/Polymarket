@@ -31,5 +31,59 @@ def test_workflow_has_write_scope_and_ancestry_cleanup_only():
     script = (ROOT / "scripts/v7_prune_merged_branches.py").read_text()
     assert "contents: write" in workflow
     assert "--merged=" in script
+    assert "--include-merged-pr-branches" in workflow
+    assert "GITHUB_TOKEN" in workflow
     assert "unmerged_branches_deleted" in script
     assert "paper-validated" in script
+
+
+def test_merged_pr_cleanup_protects_open_heads_bases_and_unmerged_work():
+    repository = "ENRICOBIGNOZZI/Polymarket"
+    branches = {
+        "main",
+        "paper-validated",
+        "telemetry",
+        "merged/topic",
+        "shared/stack-base",
+        "open/topic",
+        "closed/research",
+        "fork/head",
+    }
+    same_repo = {"full_name": repository}
+    pulls = [
+        {
+            "state": "closed",
+            "merged_at": "2026-08-29T00:00:00Z",
+            "head": {"ref": "merged/topic", "repo": same_repo},
+            "base": {"ref": "main"},
+        },
+        {
+            "state": "closed",
+            "merged_at": "2026-08-29T00:00:00Z",
+            "head": {"ref": "shared/stack-base", "repo": same_repo},
+            "base": {"ref": "main"},
+        },
+        {
+            "state": "open",
+            "merged_at": None,
+            "head": {"ref": "open/topic", "repo": same_repo},
+            "base": {"ref": "shared/stack-base"},
+        },
+        {
+            "state": "closed",
+            "merged_at": None,
+            "head": {"ref": "closed/research", "repo": same_repo},
+            "base": {"ref": "main"},
+        },
+        {
+            "state": "closed",
+            "merged_at": "2026-08-29T00:00:00Z",
+            "head": {"ref": "fork/head", "repo": {"full_name": "other/fork"}},
+            "base": {"ref": "main"},
+        },
+    ]
+    assert hygiene.merged_pr_branches(branches, pulls, repository) == ["merged/topic"]
+
+
+def test_telemetry_is_protected():
+    assert hygiene.is_protected_branch("telemetry")
