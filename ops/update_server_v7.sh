@@ -302,6 +302,13 @@ if 'drain_requested' in micro_status:
 if 'drain_requested' in maker_status:
     assert maker_status.get('drain_requested') is True
     assert maker_status.get('new_risk_frozen') is True
+    # The Maker finalizer runs after the process tree is stopped and converts a
+    # fresh executable full-depth mark into terminal PAPER liquidation records.
+    # Therefore open, markable Maker inventory is expected here; requiring
+    # drain_complete before invoking that finalizer creates a cutover deadlock.
+    assert maker_status.get('drain_complete') is (maker_open == 0)
+    assert maker_status.get('marking_complete') is True
+    assert not maker_status.get('unmarkable_tokens')
 PY
 }
 

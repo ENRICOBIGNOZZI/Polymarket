@@ -116,6 +116,8 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("maker_status.get('marking_complete') is True", function)
         self.assertIn("order_submission_enabled') is False", function)
         self.assertIn("new_risk_frozen') is True", function)
+        self.assertIn("drain_complete') is (maker_open == 0)", function)
+        self.assertIn("not maker_status.get('unmarkable_tokens')", function)
         self.assertIn("archiver repeats the durable-state check", function)
         self.assertIn("clear_cutover_drain", text[text.index("cleanup(){"):text.index("write_status(){")])
         finalizer = text.index('python3 "$MAKER_CUTOVER_FINALIZER"', stop)
