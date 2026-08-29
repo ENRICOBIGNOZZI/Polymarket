@@ -17,6 +17,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1059,27 +1060,159 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     return "\n".join(lines)+"\n"
 
 
+class SnapshotCache:
+    """Refresh expensive ledger diagnostics off the HTTP request path.
+
+    The canonical ledger is append-only and can grow by thousands of records a
+    minute.  Re-reading it for every Prometheus scrape eventually exceeds the
+    scrape timeout and creates a request stampede.  One worker owns snapshot
+    construction; readers always receive the most recent complete snapshot.
+    """
+
+    def __init__(
+        self,
+        run_root: Path,
+        repository_root: Path,
+        *,
+        refresh_seconds: float = 10.0,
+    ) -> None:
+        self.run_root = Path(run_root)
+        self.repository_root = Path(repository_root)
+        self.refresh_seconds = max(1.0, float(refresh_seconds))
+        self._lock = threading.Lock()
+        self._ready = threading.Event()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._snapshot: dict[str, Any] | None = None
+        self._metrics = b""
+        self._maker_fillability = b"{}\n"
+        self._external_fair = b"{}\n"
+        self._completed_monotonic = 0.0
+        self._completed_wall = 0.0
+        self._refresh_duration = 0.0
+        self._refresh_errors = 0
+        self._last_error = ""
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(
+            target=self._refresh_loop,
+            name="v7-exporter-snapshot",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=max(2.0, self.refresh_seconds + 1.0))
+
+    def wait_ready(self, timeout: float | None = None) -> bool:
+        return self._ready.wait(timeout)
+
+    def _refresh_loop(self) -> None:
+        while not self._stop.is_set():
+            started = time.monotonic()
+            try:
+                snapshot = collect_snapshot(self.run_root, self.repository_root)
+                duration = time.monotonic() - started
+                completed_wall = time.time()
+                metrics_text = render_prometheus(snapshot).rstrip("\n")
+                metrics_text += (
+                    "\n"
+                    f"polymarket_v7_exporter_snapshot_generated_unixtime {completed_wall}\n"
+                    f"polymarket_v7_exporter_snapshot_refresh_duration_seconds {duration}\n"
+                    f"polymarket_v7_exporter_snapshot_refresh_errors_total {self._refresh_errors}\n"
+                )
+                maker = snapshot.get("maker_fillability")
+                external = snapshot.get("external_fair")
+                with self._lock:
+                    self._snapshot = snapshot
+                    self._metrics = metrics_text.encode()
+                    self._maker_fillability = (
+                        json.dumps(maker if isinstance(maker, dict) else {}, sort_keys=True) + "\n"
+                    ).encode()
+                    self._external_fair = (
+                        json.dumps(external if isinstance(external, dict) else {}, sort_keys=True) + "\n"
+                    ).encode()
+                    self._completed_monotonic = time.monotonic()
+                    self._completed_wall = completed_wall
+                    self._refresh_duration = duration
+                    self._last_error = ""
+                self._ready.set()
+            except Exception as exc:  # pragma: no cover - defensive service boundary
+                with self._lock:
+                    self._refresh_errors += 1
+                    self._last_error = f"{type(exc).__name__}:{exc}"
+            elapsed = time.monotonic() - started
+            self._stop.wait(max(0.1, self.refresh_seconds - elapsed))
+
+    def read(self) -> dict[str, Any]:
+        with self._lock:
+            age = (
+                max(0.0, time.monotonic() - self._completed_monotonic)
+                if self._completed_monotonic > 0.0
+                else math.inf
+            )
+            return {
+                "ready": self._snapshot is not None,
+                "snapshot": self._snapshot,
+                "metrics": self._metrics,
+                "maker_fillability": self._maker_fillability,
+                "external_fair": self._external_fair,
+                "age_seconds": age,
+                "completed_wall": self._completed_wall,
+                "refresh_duration_seconds": self._refresh_duration,
+                "refresh_errors": self._refresh_errors,
+                "last_error": self._last_error,
+            }
+
+
 class ExporterHandler(BaseHTTPRequestHandler):
-    run_root=Path("runs/paper_v7_live"); repository_root=Path("."); max_runtime_age=180; max_supervisor_age=30
+    run_root=Path("runs/paper_v7_live"); repository_root=Path("."); max_runtime_age=180; max_supervisor_age=30; max_snapshot_age=45.0
+    snapshot_cache: SnapshotCache | None = None
     def log_message(self,_format:str,*_args:object)->None: return
     def do_GET(self)->None:  # noqa: N802
-        snapshot=collect_snapshot(self.run_root,self.repository_root)
-        if self.path=="/metrics": payload=render_prometheus(snapshot).encode(); self.send_response(200); self.send_header("Content-Type","text/plain; version=0.0.4; charset=utf-8")
+        cached = self.snapshot_cache.read() if self.snapshot_cache is not None else None
+        if cached is None:
+            snapshot=collect_snapshot(self.run_root,self.repository_root)
+            cached={
+                "ready": True,
+                "snapshot": snapshot,
+                "metrics": render_prometheus(snapshot).encode(),
+                "maker_fillability": (json.dumps(snapshot.get("maker_fillability") or {},sort_keys=True)+"\n").encode(),
+                "external_fair": (json.dumps(snapshot.get("external_fair") or {},sort_keys=True)+"\n").encode(),
+                "age_seconds": 0.0,
+                "last_error": "",
+            }
+        if not cached.get("ready"):
+            payload=(json.dumps({"ok":False,"reasons":["exporter_snapshot_not_ready"]},sort_keys=True)+"\n").encode()
+            self.send_response(503); self.send_header("Content-Type","application/json; charset=utf-8")
+            self.send_header("Retry-After","1")
+            self.send_header("Content-Length",str(len(payload))); self.end_headers(); self.wfile.write(payload); return
+        snapshot=cached["snapshot"]
+        if self.path=="/metrics": payload=cached["metrics"]; self.send_response(200); self.send_header("Content-Type","text/plain; version=0.0.4; charset=utf-8")
         elif self.path=="/healthz":
-            reasons=health_reasons(snapshot,max_runtime_age=self.max_runtime_age,max_supervisor_age=self.max_supervisor_age); payload=(json.dumps({"ok":not reasons,"reasons":reasons},sort_keys=True)+"\n").encode(); self.send_response(200 if not reasons else 503); self.send_header("Content-Type","application/json; charset=utf-8")
-        elif self.path=="/maker-fillability.json": payload=(json.dumps(snapshot.get("maker_fillability") or {},sort_keys=True)+"\n").encode(); self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8")
-        elif self.path=="/external-fair.json": payload=(json.dumps(snapshot.get("external_fair") or {},sort_keys=True)+"\n").encode(); self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8")
+            reasons=health_reasons(snapshot,max_runtime_age=self.max_runtime_age,max_supervisor_age=self.max_supervisor_age)
+            snapshot_age = cached.get("age_seconds")
+            if not isinstance(snapshot_age, (int, float)) or float(snapshot_age) > self.max_snapshot_age: reasons.append("exporter_snapshot_stale")
+            reasons=sorted(set(reasons)); payload=(json.dumps({"ok":not reasons,"reasons":reasons},sort_keys=True)+"\n").encode(); self.send_response(200 if not reasons else 503); self.send_header("Content-Type","application/json; charset=utf-8")
+        elif self.path=="/maker-fillability.json": payload=cached["maker_fillability"]; self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8")
+        elif self.path=="/external-fair.json": payload=cached["external_fair"]; self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8")
         else: payload=b"not found\n"; self.send_response(404); self.send_header("Content-Type","text/plain; charset=utf-8")
         self.send_header("Content-Length",str(len(payload))); self.end_headers(); self.wfile.write(payload)
 
 
 def main()->int:
-    parser=argparse.ArgumentParser(description=__doc__); parser.add_argument("--run-root",type=Path,default=Path("runs/paper_v7_live")); parser.add_argument("--repository-root",type=Path,default=Path(".")); parser.add_argument("--host",default="127.0.0.1"); parser.add_argument("--port",type=int,default=9108); parser.add_argument("--max-runtime-age",type=int,default=180); parser.add_argument("--max-supervisor-age",type=int,default=30); args=parser.parse_args()
-    ExporterHandler.run_root=args.run_root; ExporterHandler.repository_root=args.repository_root; ExporterHandler.max_runtime_age=max(1,args.max_runtime_age); ExporterHandler.max_supervisor_age=max(1,args.max_supervisor_age)
+    parser=argparse.ArgumentParser(description=__doc__); parser.add_argument("--run-root",type=Path,default=Path("runs/paper_v7_live")); parser.add_argument("--repository-root",type=Path,default=Path(".")); parser.add_argument("--host",default="127.0.0.1"); parser.add_argument("--port",type=int,default=9108); parser.add_argument("--max-runtime-age",type=int,default=180); parser.add_argument("--max-supervisor-age",type=int,default=30); parser.add_argument("--snapshot-refresh-seconds",type=float,default=10.0); parser.add_argument("--max-snapshot-age",type=float,default=45.0); args=parser.parse_args()
+    ExporterHandler.run_root=args.run_root; ExporterHandler.repository_root=args.repository_root; ExporterHandler.max_runtime_age=max(1,args.max_runtime_age); ExporterHandler.max_supervisor_age=max(1,args.max_supervisor_age); ExporterHandler.max_snapshot_age=max(5.0,args.max_snapshot_age)
+    cache=SnapshotCache(args.run_root,args.repository_root,refresh_seconds=args.snapshot_refresh_seconds); cache.start(); ExporterHandler.snapshot_cache=cache
     server=ThreadingHTTPServer((args.host,args.port),ExporterHandler)
     try: server.serve_forever()
     except KeyboardInterrupt: pass
-    finally: server.server_close()
+    finally: server.server_close(); cache.stop()
     return 0
 
 if __name__=="__main__": raise SystemExit(main())
