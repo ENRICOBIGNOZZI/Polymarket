@@ -34,6 +34,7 @@ FORBIDDEN_PATHS = {
     ".github/workflows/v7-unified-paper-evidence.yml",
     "config/autonomous_research.json",
     "config/experiment_registry.json",
+    "config/v7_execution_evidence.json",
     "config/external_intelligence.json",
     "config/fast_arb_policy.json",
     "config/fast_arb_relations.csv",
@@ -47,6 +48,7 @@ FORBIDDEN_PATHS = {
     "scripts/arb_theory_scheduler.py",
     "scripts/external_intelligence.py",
     "scripts/external_request_policy.py",
+    "scripts/v7_external_bridge.py",
     "scripts/hard_safety_policy.py",
     "scripts/integration_base_gate.py",
     "scripts/integration_gate.py",
@@ -61,6 +63,7 @@ FORBIDDEN_PATHS = {
     "scripts/validate_scheduler_registry.py",
     "scripts/v7_canonical_convergence_policy.py",
     "scripts/v7_evidence_candidate_contract.py",
+    "scripts/v7_execution_evidence.py",
     "scripts/v7_market_maker_worker.py",
     "scripts/v7_local_factor_core_base.py",
     "scripts/v7_pca_stat_arb_core_base.py",
@@ -70,6 +73,9 @@ FORBIDDEN_PATHS = {
     "tests/test_v7_control_plane_exact_head.py",
     "tests/test_v7_paper_evidence_router.py",
     "tests/test_v7_paper_entrypoint_cutover.py",
+    "tests/test_v7_external_feed_current_runtime.py",
+    "tests/test_v7_execution_evidence.py",
+    "docs/EXECUTION_EVIDENCE_V7.md",
     "tests/test_v7_unified_evidence_runtime.py",
 }
 

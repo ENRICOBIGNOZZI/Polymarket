@@ -172,7 +172,7 @@ struct Config {
     std::string gamma_url = "https://gamma-api.polymarket.com";
     std::string clob_url = "https://clob.polymarket.com";
     std::string run_dir = "runs/paper_v7_live";
-    std::string external_signals_file = "data/external_signals.csv";
+    std::string external_signals_file;
 
     std::size_t market_limit = 600;
     std::size_t gamma_page_size = 100;

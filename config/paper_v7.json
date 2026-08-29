@@ -5,7 +5,6 @@
   "gamma_url": "https://gamma-api.polymarket.com",
   "clob_url": "https://clob.polymarket.com",
   "data_url": "https://data-api.polymarket.com",
-  "external_signals_file": "runs/paper_v7_live/execution/external_signals.csv",
   "market_limit": 1000,
   "gamma_page_size": 100,
   "books_batch_size": 80,

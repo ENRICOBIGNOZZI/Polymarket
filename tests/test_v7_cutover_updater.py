@@ -167,6 +167,7 @@ class V7CutoverUpdaterTest(unittest.TestCase):
             "control/portfolio_state.json",
             "control/allocations/manifest.json",
             "control/research_sleeves_manifest.json",
+            "external_fair/paper_router_status.json",
             "scripts/v7_research_shadow_supervisor.py",
             "config/v7_live_model_scope.json",
             "graph_rv/status.json",
@@ -175,6 +176,7 @@ class V7CutoverUpdaterTest(unittest.TestCase):
             "trade_tape.csv",
             "monitoring/exporter_v7.py",
             "polymarket_v7_ledger_valid 1",
+            "polymarket_external_fair_router_book_requests_total",
             "api/dashboards/uid",
             "control/deployed_sha",
         ):

@@ -164,7 +164,6 @@ For multi-leg execution, direct empirical joint completion/state evidence is can
 ```text
 scripts/v7_execution_ledger.py
 scripts/v7_ledger_spool.py
-scripts/v7_execution_evidence.py
 scripts/v7_canonical_economics.py
 scripts/v7_joint_execution_policy.py
 scripts/v7_learned_execution_hardened.py
@@ -227,5 +226,3 @@ CI, monitoring and single-writer checks validate V7 directly. There is no promot
 Do not add alternate numerical runtimes, compatibility PAPER loops, duplicate maker engines, duplicate ledgers, duplicate state writers, generic deployment entrypoints or authenticated execution. `tests/test_v7_repository_shape.py` enforces the slim V7-only repository shape.
 
 Canonical documentation: [architecture](docs/ARCHITECTURE.md), [runtime](docs/RUNTIME.md), [execution](docs/EXECUTION.md), [latency](docs/LATENCY.md), [models](docs/MODELS.md), [data](docs/DATA.md), [replay](docs/REPLAY.md), [deployment](docs/DEPLOYMENT.md), [monitoring](docs/MONITORING.md), [model governance](docs/MODEL_GOVERNANCE.md), and [research](docs/RESEARCH.md).
-
-Further documentation: `docs/EXECUTION_EVIDENCE_V7.md`.

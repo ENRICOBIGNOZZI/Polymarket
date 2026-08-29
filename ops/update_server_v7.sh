@@ -655,11 +655,12 @@ runtime_health(){
 import csv,json,os,sys,time
 from pathlib import Path
 root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
-required=[root/'control/runtime_status.json',root/'control/portfolio_state.json',root/'control/allocations/manifest.json',root/'control/research_sleeves_manifest.json',root/'osint/status.json',root/'osint/mapping_status.json',root/'shadow/sports_latency/component_status.json',root/'shadow/cross_platform/component_status.json',root/'market_open/status.json',root/'graph_rv/status.json',root/'canonical_economics.json',root/'ledger/execution.jsonl',root/'trade_tape.csv']
+required=[root/'control/runtime_status.json',root/'control/portfolio_state.json',root/'control/allocations/manifest.json',root/'control/research_sleeves_manifest.json',root/'osint/status.json',root/'osint/mapping_status.json',root/'shadow/sports_latency/component_status.json',root/'shadow/cross_platform/component_status.json',root/'market_open/status.json',root/'graph_rv/status.json',root/'external_fair/paper_router_status.json',root/'canonical_economics.json',root/'ledger/execution.jsonl',root/'trade_tape.csv']
 assert all(p.exists() for p in required), [str(p) for p in required if not p.exists()]
 runtime=json.loads((root/'control/runtime_status.json').read_text())
 portfolio=json.loads((root/'control/portfolio_state.json').read_text())
 graph=json.loads((root/'graph_rv/status.json').read_text())
+router=json.loads((root/'external_fair/paper_router_status.json').read_text())
 economics=json.loads((root/'canonical_economics.json').read_text())
 assert runtime.get('version')==7 and runtime.get('model_sha')==sha
 assert runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False and runtime.get('real_order_submission') is False
@@ -671,6 +672,11 @@ assert portfolio.get('killed') is False and float(portfolio.get('drawdown',1))<.
 assert now-int(portfolio.get('timestamp') or 0)<=30
 assert graph.get('paper_only') is True and graph.get('authenticated_execution') is False
 assert now-int(graph.get('timestamp') or 0)<=180
+assert router.get('code_sha')==sha and router.get('state')=='RUNNING'
+assert router.get('paper_only') is True and router.get('authenticated_execution') is False and router.get('real_order_submission') is False
+assert int(router.get('book_requests') or 0)>0
+assert int((router.get('last_decision') or {}).get('books') or 0)==2
+assert now-int(router.get('timestamp') or 0)<=30
 assert economics.get('paper_only') is True and economics.get('authenticated_execution') is False
 assert economics.get('expected_model_sha')==sha
 with (root/'trade_tape.csv').open(newline='',encoding='utf-8') as handle: rows=list(csv.DictReader(handle))
@@ -691,6 +697,7 @@ PY
   grep -q '^polymarket_v7_research_supervisor_alive 1$' <<<"$metrics"
   grep -q '^polymarket_v7_research_manifest_fresh 1$' <<<"$metrics"
   grep -q '^polymarket_external_fair_present 1$' <<<"$metrics"
+  awk '$1=="polymarket_external_fair_router_book_requests_total"{found=1; if ($2+0>0) ok=1} END{exit !(found&&ok)}' <<<"$metrics"
   curl -fsS http://127.0.0.1:9108/external-fair.json >/dev/null
   grep -q '^polymarket_v7_live_model_target_count 12$' <<<"$metrics"
   local operational blocked blocked_config blocked_external target_operational
@@ -734,6 +741,9 @@ runtime_health_diagnostics(){
   tail -n 80 "$run_root/prometheus-v7.log" >&2 2>/dev/null || true
   printf '%s\n' '--- monitoring-exporter.log ---' >&2
   tail -n 80 "$run_root/monitoring-exporter.log" >&2 2>/dev/null || true
+  printf '%s\n' '--- external-fair-paper-router ---' >&2
+  head -c 4000 "$run_root/external_fair/paper_router_status.json" >&2 2>/dev/null || true
+  printf '\n' >&2
 }
 
 cd "$APP_DIR"

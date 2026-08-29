@@ -54,6 +54,15 @@ def main() -> None:
     assert skewed is not None and skewed.exchange_ts_ms == receive_ms
     raw_book["timestamp"] = str(receive_ms + router.MAX_CLOB_CLOCK_SKEW_MS + 1)
     assert router.parse_book(raw_book, receive_ms) is None
+    raw_book["timestamp"] = str(receive_ms)
+    raw_book["asks"] = []
+    one_sided = router.parse_book(raw_book, receive_ms)
+    assert one_sided is not None and one_sided.bids and not one_sided.asks
+    assert robust_candidates(snapshot(), {"yes": one_sided}, {
+        "minimum_robust_ev_per_share": 0.001, "base_execution_risk_per_share": 0.0005,
+    }) == []
+    raw_book["bids"] = []
+    assert router.parse_book(raw_book, receive_ms) is None
     policy = {"minimum_robust_ev_per_share": 0.001, "base_execution_risk_per_share": 0.0005}
     rows = robust_candidates(snapshot(), {"yes": book("yes", 0.50), "no": book("no", 0.81)}, policy)
     assert len(rows) == 1 and rows[0]["outcome"] == "YES"

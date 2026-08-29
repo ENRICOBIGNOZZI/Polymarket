@@ -465,7 +465,6 @@ pids+=("$!")
   --config "$ALLOC/fast_structural.json" \
   --policy "$FAST_STRUCTURAL_POLICY" \
   --relations "$FAST_STRUCTURAL_RELATIONS" \
-  --external-signals "$RUN_ROOT/external/external_signals.csv" \
   --run-dir "$RUN_ROOT/fast_structural" --run-root "$RUN_ROOT" --model-sha "$SHA" \
   --markets "$HOT_MARKET_BUDGET" --min-liquidity 2 --shard-size 200 \
   >> "$RUN_ROOT/fast_structural/runtime.log" 2>&1 &
@@ -632,16 +631,6 @@ pids+=("$!")
       --horizon-seconds 30 --max-trade-usd 1e100 --min-edge 0.00005 --slippage-bps 5 \
       >> "$RUN_ROOT/micro_taker/runtime.log" 2>&1 || true
     sleep 5
-  done
-) & pids+=("$!")
-
-(
-  while [[ ! -e "$KILL" ]]; do
-    python3 scripts/v7_external_bridge.py \
-      --output "$RUN_ROOT/external/external_signals.csv" \
-      --status "$RUN_ROOT/external/status.json" --max-age-seconds 7200 \
-      >> "$RUN_ROOT/external/bridge.log" 2>&1 || true
-    sleep 60
   done
 ) & pids+=("$!")
 

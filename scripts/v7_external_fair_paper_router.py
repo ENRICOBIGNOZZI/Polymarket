@@ -97,7 +97,7 @@ def parse_book(raw: Any, receive_ts_ms: int) -> Book | None:
     exchange = int(finite(raw.get("timestamp"), 0.0))
     if exchange and exchange < 10_000_000_000:
         exchange *= 1000
-    if (not token or not bids or not asks or exchange <= 0
+    if (not token or (not bids and not asks) or exchange <= 0
             or exchange > receive_ts_ms + MAX_CLOB_CLOCK_SKEW_MS):
         return None
     # The public CLOB clock can lead the local host by a few milliseconds.  A
@@ -138,7 +138,7 @@ def robust_candidates(status: dict[str, Any], books: dict[str, Book], policy: di
         ("NO", str(market.get("no_token") or ""), 1.0 - float(fair.get("upper") or 1.0)),
     ):
         book = books.get(token)
-        if book is None:
+        if book is None or not book.asks:
             continue
         ask = book.asks[0][0]
         fee = fee_per_share(ask, schedule)
@@ -274,7 +274,7 @@ class PaperRouter:
             event_id=str(market.get("event_id") or ""), token_id=row["token_id"],
             decision_ts_ms=decision, exchange_ts_ms=book.exchange_ts_ms,
             receive_ts_ms=book.receive_ts_ms, book_snapshot_id=book.snapshot_id,
-            side="BUY", bid=book.bids[0][0], ask=book.asks[0][0],
+            side="BUY", bid=book.bids[0][0] if book.bids else None, ask=book.asks[0][0],
             bid_depth=sum(size for _, size in book.bids), ask_depth=sum(size for _, size in book.asks),
             limit_price=book.asks[0][0], predicted_alpha=row["robust_ev"],
             predicted_fill_probability=1.0, expected_ev=row["robust_ev"] * size,
