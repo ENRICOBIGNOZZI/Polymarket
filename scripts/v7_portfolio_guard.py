@@ -24,7 +24,7 @@ def read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def sleeve_equity(run_root: Path, sleeve: str, budget: float) -> tuple[float, bool, str]:
+def sleeve_equity(run_root: Path, sleeve: str, budget: float) -> tuple[float, bool, str, bool]:
     if sleeve == "graph_rv":
         state = read_json(run_root / "graph_rv" / "status.json")
         key = "equity"
@@ -41,18 +41,20 @@ def sleeve_equity(run_root: Path, sleeve: str, budget: float) -> tuple[float, bo
         state = read_json(run_root / "external_fair" / "paper_router_status.json")
         key = "equity"
     else:
-        return budget, False, "inactive_reserved"
+        return budget, False, "inactive_reserved", False
     if not state:
-        return budget, False, "not_started"
+        return budget, False, "not_started", False
     if state.get("paper_only") is not True or state.get("authenticated_execution") is not False:
-        return 0.0, True, "unsafe_state_contract"
+        return 0.0, True, "unsafe_state_contract", True
     try:
         value = float(state[key])
     except (KeyError, TypeError, ValueError, OverflowError):
-        return 0.0, True, "unmarkable_equity"
+        return 0.0, True, "unmarkable_equity", True
     if value < 0:
-        return 0.0, True, "negative_equity"
-    return value, bool(state.get("killed")), "reported"
+        return 0.0, True, "negative_equity", True
+    reported_source = str(state.get("source") or "reported")
+    fatal = reported_source in {"fail_closed_unmarkable", "unsafe_state_contract"}
+    return value, bool(state.get("killed")), reported_source, fatal
 
 
 def assess(run_root: Path, allocation_manifest: Path, *, max_drawdown: float) -> dict[str, Any]:
@@ -63,20 +65,29 @@ def assess(run_root: Path, allocation_manifest: Path, *, max_drawdown: float) ->
         raise ValueError("valid_allocation_manifest_required")
     states: dict[str, Any] = {}
     equity = 0.0
-    killed = False
+    fatal_state = False
+    locally_killed_sleeves: list[str] = []
+    fatal_sleeves: list[str] = []
     for sleeve, raw_budget in budgets.items():
         budget = float(raw_budget)
         if sleeve == "reserve":
-            value, sleeve_killed, source = budget, False, "reserve"
+            value, sleeve_killed, source, sleeve_fatal = budget, False, "reserve", False
         else:
-            value, sleeve_killed, source = sleeve_equity(run_root, sleeve, budget)
+            value, sleeve_killed, source, sleeve_fatal = sleeve_equity(run_root, sleeve, budget)
         equity += value
-        killed = killed or sleeve_killed
-        states[sleeve] = {"budget": budget, "equity": value, "source": source, "killed": sleeve_killed}
+        if sleeve_killed:
+            locally_killed_sleeves.append(sleeve)
+        if sleeve_fatal:
+            fatal_sleeves.append(sleeve)
+        fatal_state = fatal_state or sleeve_fatal
+        states[sleeve] = {
+            "budget": budget, "equity": value, "source": source,
+            "killed": sleeve_killed, "fatal_to_portfolio": sleeve_fatal,
+        }
     previous = read_json(run_root / "control" / "portfolio_state.json")
     peak = max(account, float(previous.get("peak", account)), equity)
     drawdown = max(0.0, 1.0 - equity / peak) if peak > 0 else 1.0
-    killed = killed or drawdown >= max(0.0, min(1.0, float(max_drawdown)))
+    killed = fatal_state or drawdown >= max(0.0, min(1.0, float(max_drawdown)))
     report = {
         "schema": "polymarket_v7_portfolio_guard_v1",
         "timestamp": int(time.time()),
@@ -88,6 +99,8 @@ def assess(run_root: Path, allocation_manifest: Path, *, max_drawdown: float) ->
         "drawdown": drawdown,
         "max_drawdown": max_drawdown,
         "killed": killed,
+        "locally_killed_sleeves": locally_killed_sleeves,
+        "fatal_sleeves": fatal_sleeves,
         "sleeves": states,
     }
     atomic_json(run_root / "control" / "portfolio_state.json", report)

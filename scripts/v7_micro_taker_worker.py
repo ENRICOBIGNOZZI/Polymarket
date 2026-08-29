@@ -320,7 +320,13 @@ def main() -> int:
     gamma, clob = str(cfg["gamma_url"]), str(cfg["clob_url"])
     start_capital = float(cfg["starting_capital"])
     max_drawdown = float(cfg.get("max_drawdown", 0.15))
-    max_market_fraction = float(cfg.get("max_market_fraction", 0.05))
+    v7 = cfg.get("v7") if isinstance(cfg.get("v7"), dict) else {}
+    # The online ridge is not promotion-mature. The sleeve allocation is a
+    # ceiling, not permission to concentrate it in one exploratory market.
+    max_market_fraction = min(
+        float(cfg.get("max_market_fraction", 0.05)),
+        max(0.0, float(v7.get("micro_taker_immature_max_market_fraction", 0.005))),
+    )
     args.run_dir.mkdir(parents=True, exist_ok=True)
     trade_tape = args.trade_tape or (args.run_dir.parent / "trade_tape.csv")
     state_path = args.run_dir / "state.json"
@@ -401,7 +407,8 @@ def main() -> int:
     new_risk_frozen = bool(unmarkable_positions)
     peak = max(peak, equity)
     drawdown = max(0.0, 1.0 - equity / peak) if peak > 0.0 else 0.0
-    killed = bool(state.get("killed")) or drawdown >= max_drawdown
+    marking_complete = not unmarkable_positions
+    killed = bool(state.get("killed")) or (marking_complete and drawdown >= max_drawdown)
 
     signals = 0
     opened = 0
@@ -504,7 +511,8 @@ def main() -> int:
     new_risk_frozen = bool(unmarkable_positions)
     peak = max(peak, equity)
     drawdown = max(0.0, 1.0 - equity / peak) if peak > 0.0 else 0.0
-    killed = killed or drawdown >= max_drawdown
+    marking_complete = not unmarkable_positions
+    killed = killed or (marking_complete and drawdown >= max_drawdown)
     labeled = sum(row.get("y") is not None for row in samples)
     model_labeled = sum(row.get("y") is not None and isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM for row in samples)
 
@@ -518,6 +526,8 @@ def main() -> int:
         "drawdown": drawdown,
         "killed": killed,
         "new_risk_frozen": new_risk_frozen,
+        "marking_complete": marking_complete,
+        "market_capital_ceiling": start_capital * max_market_fraction,
         "unmarkable_positions": unmarkable_positions,
         "marking_contract": CONSERVATIVE_MARKING_CONTRACT,
         "positions": positions,
@@ -541,7 +551,8 @@ def main() -> int:
     base.atomic_json(state_path, new_state)
     base.atomic_json(args.run_dir / "status.json", {k: new_state[k] for k in (
         "timestamp", "paper_only", "authenticated_execution", "cash", "equity", "peak", "drawdown", "killed",
-        "new_risk_frozen", "unmarkable_positions", "marking_contract",
+        "new_risk_frozen", "marking_complete", "market_capital_ceiling",
+        "unmarkable_positions", "marking_contract",
         "prediction_sigma_probability", "labeled_samples", "model_labeled_samples", "signals", "opened", "best_edge",
         "realized_pnl_last_tick", "realized_pnl_total", "admission_contract", "execution_contract", "feature_contract", "exit_liquidity_contract", "failures"
     )} | {"open_positions": len(positions)})

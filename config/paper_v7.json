@@ -49,6 +49,7 @@
     "micro_maker_bootstrap_interval_ms": 500,
     "micro_maker_capital_fraction": 0.14285714285714285,
     "micro_taker_capital_fraction": 0.14285714285714285,
+    "micro_taker_immature_max_market_fraction": 0.005,
     "fast_structural_capital_fraction": 0.14285714285714285,
     "relative_value_capital_fraction": 0.14285714285714285,
     "hard_arb_capital_fraction": 0.14285714285714285,

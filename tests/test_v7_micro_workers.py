@@ -74,6 +74,10 @@ def test_taker_freezes_new_risk_when_open_positions_are_unmarkable():
     assert "if not killed and not new_risk_frozen and model_labeled >= 40:" in text
     assert '"new_risk_frozen": new_risk_frozen' in text
     assert '"unmarkable_positions": unmarkable_positions' in text
+    assert "marking_complete = not unmarkable_positions" in text
+    assert "marking_complete and drawdown >= max_drawdown" in text
+    assert '"micro_taker_immature_max_market_fraction"' in text
+    assert '"market_capital_ceiling": start_capital * max_market_fraction' in text
     assert 'value += float(position["shares"]) * float(position["entry_price"])' not in text
 
 

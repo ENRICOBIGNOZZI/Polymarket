@@ -158,11 +158,10 @@ def prepare(
         raise CutoverArchiveError("prior_runtime_safety_contract_invalid")
 
     portfolio = read_json(run_root / "control/portfolio_state.json")
+    prior_quarantined_sleeves: list[str] = []
     if portfolio:
         if portfolio.get("paper_only") is not True or portfolio.get("authenticated_execution") is not False:
             raise CutoverArchiveError("prior_portfolio_safety_contract_invalid")
-        if portfolio.get("killed") is True:
-            raise CutoverArchiveError("prior_portfolio_killed")
         try:
             drawdown = float(portfolio.get("drawdown") or 0.0)
             maximum = float(portfolio.get("max_drawdown") or 0.15)
@@ -170,6 +169,18 @@ def prepare(
             raise CutoverArchiveError("prior_portfolio_drawdown_invalid") from exc
         if drawdown >= maximum:
             raise CutoverArchiveError("prior_portfolio_drawdown_limit")
+        if portfolio.get("killed") is True:
+            sleeves = portfolio.get("sleeves") if isinstance(portfolio.get("sleeves"), dict) else {}
+            prior_quarantined_sleeves = sorted(
+                name for name, row in sleeves.items()
+                if isinstance(row, dict) and row.get("killed") is True and row.get("source") == "reported"
+            )
+            fatal = [
+                name for name, row in sleeves.items()
+                if isinstance(row, dict) and row.get("killed") is True and row.get("source") != "reported"
+            ]
+            if not prior_quarantined_sleeves or fatal:
+                raise CutoverArchiveError("prior_portfolio_killed")
 
     ledger_rows, ledger_sha256, ledger_model_sha_counts = validate_ledger(
         run_root / "ledger/execution.jsonl", repository_root, target_sha, ancestor_check,
@@ -196,6 +207,7 @@ def prepare(
         "ledger_sha256": ledger_sha256,
         "ledger_model_sha_counts": ledger_model_sha_counts,
         "runtime_checkout_drift_detected": runtime_checkout_drift,
+        "prior_quarantined_sleeves": prior_quarantined_sleeves,
     }
     temporary = control / f"cutover_lineage.json.tmp.{os.getpid()}"
     temporary.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")

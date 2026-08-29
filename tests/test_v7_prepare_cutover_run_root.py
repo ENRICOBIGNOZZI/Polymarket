@@ -162,6 +162,25 @@ class V7PrepareCutoverRunRootTest(unittest.TestCase):
             )
             self.assertEqual(result["ledger_model_sha_counts"], {OLD: 1, OLDER: 1})
 
+    def test_legacy_global_kill_from_reported_local_sleeve_can_be_archived(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            run = tmp_path / "paper_v7_live"
+            fixture(run)
+            write_json(run / "control/portfolio_state.json", {
+                "paper_only": True, "authenticated_execution": False,
+                "killed": True, "drawdown": 0.10, "max_drawdown": 0.15,
+                "sleeves": {
+                    "micro_taker": {"killed": True, "source": "reported"},
+                    "reserve": {"killed": False, "source": "reserve"},
+                },
+            })
+            result = cutover.prepare(
+                run, tmp_path / "archives", tmp_path, NEW, now=127,
+                ancestor_check=lambda *_: True,
+            )
+            self.assertEqual(result["prior_quarantined_sleeves"], ["micro_taker"])
+
     def test_non_ancestor_ledger_sha_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             tmp_path = Path(directory)

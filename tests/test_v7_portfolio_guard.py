@@ -89,6 +89,26 @@ class PortfolioGuardTests(unittest.TestCase):
             self.assertTrue(report["killed"])
             self.assertTrue((root / "control" / "KILL").exists())
 
+    def test_locally_killed_sleeve_is_quarantined_without_global_kill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            alloc = root / "manifest.json"
+            alloc.write_text(json.dumps({
+                "account_starting_capital": 100.0,
+                "budgets": {"micro_taker": 20.0, "reserve": 80.0},
+            }))
+            status = root / "micro_taker" / "status.json"
+            status.parent.mkdir(parents=True)
+            status.write_text(json.dumps({
+                "paper_only": True, "authenticated_execution": False,
+                "equity": 17.0, "killed": True,
+            }))
+            report = assess(root, alloc, max_drawdown=.15)
+            self.assertFalse(report["killed"])
+            self.assertEqual(report["locally_killed_sleeves"], ["micro_taker"])
+            self.assertEqual(report["fatal_sleeves"], [])
+            self.assertFalse((root / "control" / "KILL").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
