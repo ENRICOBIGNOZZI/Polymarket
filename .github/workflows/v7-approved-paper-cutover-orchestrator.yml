@@ -34,6 +34,16 @@ jobs:
       - name: Dispatch exact-SHA technical gates
         run: |
           set -euo pipefail
+          max_exact_run_id() {
+            local workflow="$1"
+            gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&event=workflow_dispatch&per_page=50" \
+              --jq "(.workflow_runs | map(select(.head_sha == \"$TARGET_SHA\")) | map(.id) | max) // 0"
+          }
+          CI_PRIOR_RUN_ID="$(max_exact_run_id ci.yml)"
+          MONITORING_PRIOR_RUN_ID="$(max_exact_run_id monitoring.yml)"
+          SINGLE_WRITER_PRIOR_RUN_ID="$(max_exact_run_id private-runtime-single-writer-validation.yml)"
+          printf 'CI_PRIOR_RUN_ID=%s\nMONITORING_PRIOR_RUN_ID=%s\nSINGLE_WRITER_PRIOR_RUN_ID=%s\n' \
+            "$CI_PRIOR_RUN_ID" "$MONITORING_PRIOR_RUN_ID" "$SINGLE_WRITER_PRIOR_RUN_ID" >> "$GITHUB_ENV"
           gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref main -f expected_sha="$TARGET_SHA"
           gh workflow run monitoring.yml --repo "$GITHUB_REPOSITORY" --ref main -f expected_sha="$TARGET_SHA"
           gh workflow run private-runtime-single-writer-validation.yml \
@@ -43,10 +53,10 @@ jobs:
         run: |
           set -euo pipefail
           wait_for_workflow() {
-            local workflow="$1" label="$2" selected="" state=""
+            local workflow="$1" label="$2" prior_run_id="$3" selected="" state=""
             for _ in $(seq 1 150); do
               selected="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&event=workflow_dispatch&per_page=50" \
-                --jq ".workflow_runs | map(select(.head_sha == \"$TARGET_SHA\")) | sort_by(.id) | last | [.id,.status,(.conclusion // \"\")] | @tsv")"
+                --jq ".workflow_runs | map(select(.head_sha == \"$TARGET_SHA\" and .id > $prior_run_id)) | sort_by(.id) | last | [.id,.status,(.conclusion // \"\")] | @tsv")"
               if [[ -n "$selected" ]]; then
                 IFS=$'\t' read -r run_id state conclusion <<< "$selected"
                 if [[ "$state" == "completed" ]]; then
@@ -64,18 +74,21 @@ jobs:
             echo "$label exact-SHA gate timed out" >&2
             return 1
           }
-          wait_for_workflow ci.yml ci
-          wait_for_workflow monitoring.yml monitoring
-          wait_for_workflow private-runtime-single-writer-validation.yml single_writer
+          wait_for_workflow ci.yml ci "$CI_PRIOR_RUN_ID"
+          wait_for_workflow monitoring.yml monitoring "$MONITORING_PRIOR_RUN_ID"
+          wait_for_workflow private-runtime-single-writer-validation.yml single_writer "$SINGLE_WRITER_PRIOR_RUN_ID"
 
       - name: Dispatch canonical approved validation and advance paper-validated
         run: |
           set -euo pipefail
+          prior_run_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/v7-live-paper-validation.yml/runs?branch=main&event=workflow_dispatch&per_page=50" \
+            --jq "(.workflow_runs | map(select(.head_sha == \"$TARGET_SHA\")) | map(.id) | max) // 0")"
+          [[ "$prior_run_id" =~ ^[0-9]+$ ]]
           gh workflow run v7-live-paper-validation.yml --repo "$GITHUB_REPOSITORY" --ref main \
             -f expected_sha="$TARGET_SHA" -f cutover_approved=true
           for _ in $(seq 1 240); do
             selected="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/v7-live-paper-validation.yml/runs?branch=main&event=workflow_dispatch&per_page=50" \
-              --jq ".workflow_runs | map(select(.head_sha == \"$TARGET_SHA\")) | sort_by(.id) | last | [.id,.status,(.conclusion // \"\")] | @tsv")"
+              --jq ".workflow_runs | map(select(.head_sha == \"$TARGET_SHA\" and .id > $prior_run_id)) | sort_by(.id) | last | [.id,.status,(.conclusion // \"\")] | @tsv")"
             if [[ -n "$selected" ]]; then
               IFS=$'\t' read -r run_id state conclusion <<< "$selected"
               if [[ "$state" == "completed" ]]; then
@@ -95,11 +108,14 @@ jobs:
       - name: Dispatch canonical PAPER server deploy
         run: |
           set -euo pipefail
+          prior_run_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/v7-deploy-paper-server.yml/runs?branch=main&event=workflow_dispatch&per_page=50" \
+            --jq "(.workflow_runs | map(select(.head_sha == \"$TARGET_SHA\")) | map(.id) | max) // 0")"
+          [[ "$prior_run_id" =~ ^[0-9]+$ ]]
           gh workflow run v7-deploy-paper-server.yml --repo "$GITHUB_REPOSITORY" --ref main \
             -f expected_sha="$TARGET_SHA" -f cutover_approved=true
           for _ in $(seq 1 300); do
             selected="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/v7-deploy-paper-server.yml/runs?branch=main&event=workflow_dispatch&per_page=50" \
-              --jq ".workflow_runs | map(select(.head_sha == \"$TARGET_SHA\")) | sort_by(.id) | last | [.id,.status,(.conclusion // \"\")] | @tsv")"
+              --jq ".workflow_runs | map(select(.head_sha == \"$TARGET_SHA\" and .id > $prior_run_id)) | sort_by(.id) | last | [.id,.status,(.conclusion // \"\")] | @tsv")"
             if [[ -n "$selected" ]]; then
               IFS=$'\t' read -r run_id state conclusion <<< "$selected"
               if [[ "$state" == "completed" ]]; then
@@ -119,11 +135,14 @@ jobs:
       - name: Dispatch exact-SHA PAPER server health
         run: |
           set -euo pipefail
+          prior_run_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/v7-paper-server-health.yml/runs?branch=main&event=workflow_dispatch&per_page=50" \
+            --jq "(.workflow_runs | map(select(.head_sha == \"$TARGET_SHA\")) | map(.id) | max) // 0")"
+          [[ "$prior_run_id" =~ ^[0-9]+$ ]]
           gh workflow run v7-paper-server-health.yml --repo "$GITHUB_REPOSITORY" --ref main \
             -f expected_sha="$TARGET_SHA"
           for _ in $(seq 1 180); do
             selected="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/v7-paper-server-health.yml/runs?branch=main&event=workflow_dispatch&per_page=50" \
-              --jq ".workflow_runs | map(select(.head_sha == \"$TARGET_SHA\")) | sort_by(.id) | last | [.id,.status,(.conclusion // \"\")] | @tsv")"
+              --jq ".workflow_runs | map(select(.head_sha == \"$TARGET_SHA\" and .id > $prior_run_id)) | sort_by(.id) | last | [.id,.status,(.conclusion // \"\")] | @tsv")"
             if [[ -n "$selected" ]]; then
               IFS=$'\t' read -r run_id state conclusion <<< "$selected"
               if [[ "$state" == "completed" ]]; then
