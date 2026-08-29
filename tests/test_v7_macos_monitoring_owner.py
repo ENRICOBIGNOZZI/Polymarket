@@ -50,6 +50,10 @@ class V7MacosMonitoringOwnerTest(unittest.TestCase):
         status = text.index('run_bounded "$ts" status --json')
         mutate = text.index('tailscale_admin "$ts" set --hostname=')
         self.assertLess(status, mutate)
+        serve_status = text.index('serve_status="$(run_bounded "$ts" serve status')
+        serve_mutate = text.index('tailscale_admin "$ts" serve --bg --https=443')
+        self.assertLess(serve_status, serve_mutate)
+        self.assertIn('grep -Fq "localhost:3000" <<<"$serve_status"', text)
 
     def test_server_health_checks_operator_route_and_trade_funnel(self) -> None:
         text = (ROOT / ".github" / "workflows" / "v7-paper-server-health.yml").read_text(

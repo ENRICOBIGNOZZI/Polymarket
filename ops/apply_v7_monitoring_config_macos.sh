@@ -116,22 +116,28 @@ configure_tailnet_grafana() {
   fi
 
   # Canonical browser route: HTTPS with Tailscale-managed TLS. Keep HTTP:80
-  # alongside it for backwards-compatible probes and old bookmarks.
-  serve_log="$(mktemp)"
-  if ! tailscale_admin "$ts" serve --bg --https=443 localhost:3000 >"$serve_log" 2>&1; then
-    cat "$serve_log" >&2 || true
-    rm -f "$serve_log"
-    echo "fatal: failed to configure Tailscale HTTPS Serve for V7 Grafana" >&2
-    exit 78
-  fi
-  if ! tailscale_admin "$ts" serve --bg --http=80 localhost:3000 >>"$serve_log" 2>&1; then
-    cat "$serve_log" >&2 || true
-    rm -f "$serve_log"
-    echo "fatal: failed to configure Tailscale HTTP compatibility Serve for V7 Grafana" >&2
-    exit 78
-  fi
-  rm -f "$serve_log"
+  # alongside it for backwards-compatible probes and old bookmarks. Treat an
+  # already-correct route as converged; macOS Tailscale Serve mutation can block
+  # while the GUI-owned daemon is already serving the requested configuration.
   serve_status="$(run_bounded "$ts" serve status 2>&1 || true)"
+  if ! grep -Fq "$TAILSCALE_FQDN" <<<"$serve_status" ||
+     ! grep -Fq "localhost:3000" <<<"$serve_status"; then
+    serve_log="$(mktemp)"
+    if ! tailscale_admin "$ts" serve --bg --https=443 localhost:3000 >"$serve_log" 2>&1; then
+      cat "$serve_log" >&2 || true
+      rm -f "$serve_log"
+      echo "fatal: failed to configure Tailscale HTTPS Serve for V7 Grafana" >&2
+      exit 78
+    fi
+    if ! tailscale_admin "$ts" serve --bg --http=80 localhost:3000 >>"$serve_log" 2>&1; then
+      cat "$serve_log" >&2 || true
+      rm -f "$serve_log"
+      echo "fatal: failed to configure Tailscale HTTP compatibility Serve for V7 Grafana" >&2
+      exit 78
+    fi
+    rm -f "$serve_log"
+    serve_status="$(run_bounded "$ts" serve status 2>&1 || true)"
+  fi
   printf '%s\n' "$serve_status"
   if ! grep -Fq "$TAILSCALE_FQDN" <<<"$serve_status"; then
     printf 'fatal: Tailscale Serve did not publish expected FQDN %s\n' "$TAILSCALE_FQDN" >&2
