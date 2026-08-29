@@ -159,6 +159,7 @@ def prepare(
 
     portfolio = read_json(run_root / "control/portfolio_state.json")
     prior_quarantined_sleeves: list[str] = []
+    prior_reconciled_fatal_sleeves: list[str] = []
     if portfolio:
         if portfolio.get("paper_only") is not True or portfolio.get("authenticated_execution") is not False:
             raise CutoverArchiveError("prior_portfolio_safety_contract_invalid")
@@ -179,7 +180,44 @@ def prepare(
                 name for name, row in sleeves.items()
                 if isinstance(row, dict) and row.get("killed") is True and row.get("source") != "reported"
             ]
-            if not prior_quarantined_sleeves or fatal:
+            maker_row = sleeves.get("micro_maker") if isinstance(sleeves.get("micro_maker"), dict) else {}
+            maker_status = read_json(run_root / "micro_maker/status.json")
+            maker_state = read_json(run_root / "micro_maker/state.json")
+            maker_receipt = read_json(run_root / "control/maker_cutover_liquidation.json")
+            kill_receipt = read_json(run_root / "control/KILL")
+            maker_inventory = maker_state.get("inventory") if isinstance(maker_state.get("inventory"), dict) else {}
+            maker_flat = bool(maker_inventory) and all(
+                isinstance(row, dict)
+                and float(row.get("yes_shares") or 0.0) <= 1e-9
+                and float(row.get("no_shares") or 0.0) <= 1e-9
+                for row in maker_inventory.values()
+            )
+            recovered_maker_fatal = (
+                portfolio.get("fatal_sleeves") == ["micro_maker"]
+                and maker_row.get("source") == "fail_closed_unmarkable"
+                and maker_row.get("fatal_to_portfolio") is True
+                and maker_row.get("killed") is False
+                and kill_receipt.get("schema") == portfolio.get("schema")
+                and kill_receipt.get("timestamp") == portfolio.get("timestamp")
+                and kill_receipt.get("killed") is True
+                and maker_receipt.get("state") == "MAKER_FLAT"
+                and maker_receipt.get("model_sha") == previous_sha
+                and maker_receipt.get("paper_only") is True
+                and maker_receipt.get("authenticated_execution") is False
+                and maker_receipt.get("real_order_submission") is False
+                and maker_state.get("cutover_liquidation_nonce") == maker_receipt.get("nonce")
+                and maker_state.get("paper_only") is True
+                and maker_state.get("authenticated_execution") is False
+                and maker_flat
+                and maker_status.get("source") == "verified_cutover_full_depth_liquidation"
+                and maker_status.get("marking_complete") is True
+                and maker_status.get("killed") is False
+                and maker_status.get("positions") == []
+                and maker_status.get("drain_complete") is True
+            )
+            if recovered_maker_fatal:
+                prior_reconciled_fatal_sleeves = ["micro_maker"]
+            if (not prior_quarantined_sleeves and not recovered_maker_fatal) or fatal:
                 raise CutoverArchiveError("prior_portfolio_killed")
 
     # A SHA cutover must never turn live PAPER inventory into an orphaned
@@ -265,6 +303,7 @@ def prepare(
         "ledger_model_sha_counts": ledger_model_sha_counts,
         "runtime_checkout_drift_detected": runtime_checkout_drift,
         "prior_quarantined_sleeves": prior_quarantined_sleeves,
+        "prior_reconciled_fatal_sleeves": prior_reconciled_fatal_sleeves,
         "prior_open_positions": durable_open,
     }
     temporary = control / f"cutover_lineage.json.tmp.{os.getpid()}"

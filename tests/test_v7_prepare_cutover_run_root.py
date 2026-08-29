@@ -193,6 +193,45 @@ class V7PrepareCutoverRunRootTest(unittest.TestCase):
             )
             self.assertEqual(result["prior_quarantined_sleeves"], ["micro_taker"])
 
+    def test_stale_unmarkable_maker_kill_requires_verified_flat_liquidation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            run = tmp_path / "paper_v7_live"
+            fixture(run)
+            portfolio = {
+                "schema": "polymarket_v7_portfolio_guard_v1", "timestamp": 100,
+                "paper_only": True, "authenticated_execution": False,
+                "killed": True, "drawdown": 0.01, "max_drawdown": 0.15,
+                "fatal_sleeves": ["micro_maker"],
+                "sleeves": {"micro_maker": {
+                    "killed": False, "source": "fail_closed_unmarkable",
+                    "fatal_to_portfolio": True,
+                }},
+            }
+            write_json(run / "control/portfolio_state.json", portfolio)
+            write_json(run / "control/KILL", portfolio)
+            write_json(run / "control/maker_cutover_liquidation.json", {
+                "state": "MAKER_FLAT", "model_sha": OLD, "nonce": "nonce-1",
+                "paper_only": True, "authenticated_execution": False,
+                "real_order_submission": False,
+            })
+            write_json(run / "micro_maker/state.json", {
+                "paper_only": True, "authenticated_execution": False,
+                "cutover_liquidation_nonce": "nonce-1",
+                "inventory": {"m1": {"yes_shares": 0.0, "no_shares": 0.0}},
+            })
+            write_json(run / "micro_maker/status.json", {
+                "paper_only": True, "authenticated_execution": False,
+                "source": "verified_cutover_full_depth_liquidation",
+                "marking_complete": True, "killed": False,
+                "positions": [], "drain_complete": True,
+            })
+            result = cutover.prepare(
+                run, tmp_path / "archives", tmp_path, NEW, now=128,
+                ancestor_check=lambda *_: True,
+            )
+            self.assertEqual(result["prior_reconciled_fatal_sleeves"], ["micro_maker"])
+
     def test_non_ancestor_ledger_sha_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             tmp_path = Path(directory)
