@@ -1,0 +1,42 @@
+{
+  "counts": {
+    "graph_research_ev.py": 0,
+    "paper_v6_loop.sh": 1,
+    "polymarket_engine": 0,
+    "polymarket_maker_paper": 0,
+    "polymarket_multileg_paper": 0,
+    "polymarket_trade_recorder": 0,
+    "v6_external_bridge.py": 0,
+    "v6_intent_guard.py": 0,
+    "v6_local_factor_intents.py": 0,
+    "v6_market_proxy.py": 1,
+    "v6_queue_filter.py hard": 0,
+    "v6_queue_filter.py micro": 0,
+    "v6_relation_intents.py": 0
+  },
+  "descendants": [
+    {
+      "command": "bash /Users/enrico/polymarket/.private_validation/32891340204/source/scripts/paper_v6_loop.sh /Users/enrico/polymarket/.private_validation/32891340204/probe_config.json /Users/enrico/polymarket/.private_validation/32891340204/run",
+      "pid": 58446,
+      "ppid": 58431
+    },
+    {
+      "command": "sleep 5",
+      "pid": 58457,
+      "ppid": 58431
+    },
+    {
+      "command": "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python scripts/v6_market_proxy.py --host 127.0.0.1 --port 59426 --gamma https://gamma-api.polymarket.com --clob https://clob.polymarket.com --cache /Users/enrico/polymarket/.private_validation/32891340204/run/market_proxy_cache.json --status /Users/enrico/polymarket/.private_validation/32891340204/run/market_proxy_status.json",
+      "pid": 58569,
+      "ppid": 58446
+    },
+    {
+      "command": "sleep 0.1",
+      "pid": 58571,
+      "ppid": 58446
+    }
+  ],
+  "duplicates": {},
+  "label": "after-stale-handoff",
+  "owner": 58431
+}

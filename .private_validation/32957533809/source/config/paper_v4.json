@@ -1,0 +1,50 @@
+{
+  "gamma_url": "https://gamma-api.polymarket.com",
+  "clob_url": "https://clob.polymarket.com",
+  "run_dir": "runs/paper_v4_terminal",
+  "external_signals_file": "data/external_signals.csv",
+
+  "market_limit": 600,
+  "gamma_page_size": 100,
+  "books_batch_size": 80,
+  "interval_seconds": 10,
+  "starting_capital": 10000.0,
+  "min_liquidity": 100.0,
+  "min_volume24h": 0.0,
+  "min_mid": 0.01,
+  "max_mid": 0.99,
+  "max_spread": 0.15,
+
+  "min_net_edge": 0.003,
+  "uncertainty_penalty": 0.20,
+  "slippage_bps": 5.0,
+  "fractional_kelly": 0.10,
+  "max_trade_usd": 250.0,
+  "max_market_fraction": 0.03,
+  "max_event_fraction": 0.08,
+  "max_gross_fraction": 0.25,
+  "max_drawdown": 0.15,
+
+  "history_bootstrap": true,
+  "bootstrap_market_limit": 240,
+  "history_lookback_hours": 336,
+  "history_fidelity_minutes": 30,
+  "pca_window": 336,
+  "pca_min_history": 48,
+  "pca_universe": 200,
+  "pca_mr_strength": 0.35,
+  "pca_min_residual_z": 1.50,
+
+  "graph_max_sum_error": 0.08,
+  "semantic_min_similarity": 0.68,
+  "semantic_shrink": 0.08,
+  "scan_only": false,
+
+  "expert_weights": {
+    "micro": 0.0,
+    "pca": 0.0,
+    "graph": 0.80,
+    "semantic": 0.08,
+    "external": 1.0
+  }
+}

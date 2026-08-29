@@ -1,0 +1,53 @@
+name: Polymarket Post-Merge Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact merged SHA to validate
+        required: false
+        type: string
+  repository_dispatch:
+    types: [champion-integration-merged]
+  schedule:
+    - cron: "6,21,36,51 * * * *"
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: polymarket-post-merge-validation
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Dispatch exact-SHA validation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_SHA: ${{ inputs.expected_sha }}
+          DISPATCH_SHA: ${{ github.event.client_payload.sha }}
+        run: |
+          set -euo pipefail
+          EXPECTED_SHA="${INPUT_SHA:-${DISPATCH_SHA:-}}"
+          if [[ -z "$EXPECTED_SHA" ]]; then
+            EXPECTED_SHA="$(git rev-parse HEAD)"
+          fi
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          for workflow in ci.yml monitoring.yml; do
+            gh workflow run "$workflow" --ref main -f expected_sha="$EXPECTED_SHA"
+          done
+          echo "validation_sha=$EXPECTED_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "dispatched=ci.yml monitoring.yml" >> "$GITHUB_STEP_SUMMARY"
+          echo "live_paper=disabled_until_validated_v7_integration" >> "$GITHUB_STEP_SUMMARY"

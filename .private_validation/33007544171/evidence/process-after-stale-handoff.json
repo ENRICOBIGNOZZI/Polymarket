@@ -1,0 +1,41 @@
+{
+  "counts": {
+    "paper_v6_loop.sh": 1,
+    "polymarket_engine": 0,
+    "polymarket_maker_paper": 0,
+    "polymarket_multileg_paper": 0,
+    "polymarket_trade_recorder": 0,
+    "v6_external_bridge.py": 1,
+    "v6_hard_arb_paper.py": 0,
+    "v6_intent_guard.py": 0,
+    "v6_local_factor_intents.py": 0,
+    "v6_market_proxy.py": 1,
+    "v6_micro_taker.py": 0,
+    "v6_relation_intents.py": 0
+  },
+  "descendants": [
+    {
+      "command": "bash /Users/enrico/polymarket/.private_validation/33007544171/source/scripts/paper_latest_loop.sh",
+      "pid": 27324
+    },
+    {
+      "command": "bash /Users/enrico/polymarket/.private_validation/33007544171/source/scripts/paper_v6_loop.sh /Users/enrico/polymarket/.private_validation/33007544171/probe_config.json /Users/enrico/polymarket/.private_validation/33007544171/run",
+      "pid": 27333
+    },
+    {
+      "command": "sleep 5",
+      "pid": 27345
+    },
+    {
+      "command": "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python scripts/v6_market_proxy.py --host 127.0.0.1 --port 63631 --gamma https://gamma-api.polymarket.com --clob https://clob.polymarket.com --cache /Users/enrico/polymarket/.private_validation/33007544171/run/market_proxy_cache.json --status /Users/enrico/polymarket/.private_validation/33007544171/run/market_proxy_status.json",
+      "pid": 27656
+    },
+    {
+      "command": "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python scripts/v6_external_bridge.py --output /Users/enrico/polymarket/.private_validation/33007544171/run/external_signals.csv --status /Users/enrico/polymarket/.private_validation/33007544171/run/external_bridge_status.json --max-age-seconds 21600 --min-confidence 0.35",
+      "pid": 27672
+    }
+  ],
+  "duplicates": {},
+  "label": "after-stale-handoff",
+  "owner": 26481
+}

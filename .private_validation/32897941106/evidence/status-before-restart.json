@@ -1,0 +1,76 @@
+{
+  "cash": 0.0,
+  "drawdown": 0.0,
+  "equity": 0.0,
+  "execution_imbalance": 0.0,
+  "execution_staleness": 0.0,
+  "external_bridge": {},
+  "gross_exposure": 0.0,
+  "killed": false,
+  "live_units": 0,
+  "local_factor": {},
+  "paper_only": true,
+  "peak_equity": 0.0,
+  "pnl": 0.0,
+  "realized_pnl": 0.0,
+  "relations": {},
+  "reserved_cash": 0.0,
+  "schema": "polymarket_v6_runtime_status_v1",
+  "starting_capital": 0.0,
+  "strategies": {
+    "external": {
+      "buy_fills": 0,
+      "equity": 0.0,
+      "fills": 0,
+      "killed": false,
+      "live_units": 0,
+      "pnl": 0.0,
+      "sell_fills": 0,
+      "settle_fills": 0
+    },
+    "graph_hard": {
+      "best_edge": 0.0,
+      "buy_fills": 0,
+      "entered": 0,
+      "equity": 0.0,
+      "fills": 0,
+      "killed": false,
+      "live_units": 0,
+      "pnl": 0.0,
+      "sell_fills": 0,
+      "settle_fills": 0,
+      "signals": 0
+    },
+    "micro_maker": {
+      "buy_fills": 0,
+      "equity": 0.0,
+      "fills": 0,
+      "killed": false,
+      "live_units": 0,
+      "pnl": 0.0,
+      "sell_fills": 0,
+      "settle_fills": 0
+    },
+    "micro_taker": {
+      "best_edge": 0.0,
+      "buy_fills": 0,
+      "equity": 0.0,
+      "fills": 0,
+      "killed": false,
+      "labeled_samples": 0,
+      "live_units": 0,
+      "pnl": 0.0,
+      "sell_fills": 0,
+      "settle_fills": 0,
+      "signals": 0
+    },
+    "relative_value": {
+      "equity": 0.0,
+      "killed": false,
+      "live_units": 0,
+      "pnl": 0.0
+    }
+  },
+  "timestamp": 1787691258,
+  "version": 6
+}

@@ -1,0 +1,31 @@
+name: Polymarket Integration Merge
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "3,18,33,48 * * * *"
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: polymarket-integration-merge
+  cancel-in-progress: true
+
+# TEMPORARY V7 FIXED-SHA PAPER EVIDENCE FREEZE.
+# Preserve the canonical integration contract marker for registry validation only:
+# gh pr merge "$PR_NUMBER" --squash --delete-branch
+# Automatic canonical mutation is deliberately disabled while V7 accumulates
+# same-SHA PAPER fills, completion/partial-unwind states and audited post-cost PnL.
+# Re-enable only by an explicit operator change after the evidence window.
+
+jobs:
+  merge:
+    if: ${{ false }}
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          echo "V7 fixed-SHA freeze: automatic integration merge disabled."

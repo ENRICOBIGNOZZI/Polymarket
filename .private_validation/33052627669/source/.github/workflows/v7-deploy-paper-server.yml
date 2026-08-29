@@ -1,0 +1,38 @@
+name: V7 deploy PAPER server
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["V7 live PAPER validation"]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: "12,42 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: polymarket-v7-paper-server
+  cancel-in-progress: true
+
+# TEMPORARY V7 FIXED-SHA PAPER EVIDENCE FREEZE.
+# Contract markers preserved for repository validation only:
+# ref: paper-validated
+# scripts/v7_cutover_contract.py
+# EXPECTED_VALIDATED_SHA
+# POLYMARKET_DEPLOY_REF=paper-validated
+# V7 live PAPER validation
+# ops/update_server_v7.sh
+# monitoring/v7_monitoring_manifest.json
+# test "$main_sha" = "$EXPECTED_VALIDATED_SHA"
+# test "$validated_sha" = "$EXPECTED_VALIDATED_SHA"
+# Deployment is hard-skipped so the PAPER server cannot change revision while
+# the canonical V7 SHA is being evaluated economically.
+
+jobs:
+  deploy:
+    if: ${{ false }}
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "V7 fixed-SHA freeze: automatic PAPER server deploy disabled."

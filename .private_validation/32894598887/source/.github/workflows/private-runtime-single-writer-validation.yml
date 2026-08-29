@@ -1,0 +1,714 @@
+name: Private runtime single-writer validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/runtime_singleton_launcher.py"
+      - "scripts/paper_latest_loop.sh"
+      - "scripts/paper_v6_loop.sh"
+      - "ops/update_server_macos.sh"
+      - "scripts/v6_hard_arb_paper.py"
+      - "scripts/v6_micro_taker.py"
+      - "scripts/v6_external_bridge.py"
+      - "scripts/v6_relation_intents.py"
+      - "scripts/v6_local_factor_intents.py"
+      - "scripts/v6_intent_guard.py"
+      - "scripts/v6_runtime_status.py"
+      - "scripts/runtime_action_report.py"
+      - "scripts/v7_execution_evidence.py"
+      - "scripts/v6_market_proxy.py"
+      - "scripts/v6_market_snapshot.py"
+      - "tests/test_v6_market_snapshot.py"
+      - "tests/test_v6_market_cache_relay_contract.py"
+      - "config/scheduler_registry.json"
+      - ".github/workflows/v6-market-cache-relay.yml"
+      - "config/live_champion.json"
+      - "config/paper_v6.json"
+      - "tests/test_fast_runtime_contract.py"
+      - "tests/test_v6_runtime_contract.py"
+      - "tests/test_v6_market_proxy_deadline.py"
+      - "scripts/validate_scheduler_registry.py"
+      - ".github/workflows/private-runtime-single-writer-validation.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: polymarket-private-single-writer-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  private-proof:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Bind validation to exact source head
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          test "$sha" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          python3 -m unittest tests/test_fast_runtime_contract.py -v
+
+      - name: Build exact-head V6 public relay cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p private-single-writer-evidence
+          python3 scripts/v6_market_snapshot.py \
+            --output private-single-writer-evidence/relay-source-cache.json \
+            --status private-single-writer-evidence/relay-source-status.json \
+            --markets 300 --min-markets 100 --min-liquidity 10 \
+            --max-cache-age-seconds 90 | tee private-single-writer-evidence/relay-source-summary.json
+          python3 - private-single-writer-evidence/relay-source-cache.json <<'PY'
+          import json,sys,time
+          value=json.load(open(sys.argv[1],encoding="utf-8"))
+          assert value.get("schema") == "polymarket_v6_market_proxy_cache_v1"
+          assert time.time()-float(value["timestamp"]) <= 90
+          assert len(value.get("markets") or []) >= 100
+          PY
+
+      - name: Select existing Tailscale credential mode
+        id: tailscale_auth
+        shell: bash
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${TS_AUTHKEY:-}" ]]; then
+            mode=authkey
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
+            test -n "${TS_TAGS:-}"
+            mode=oauth
+          else
+            echo "No visible Tailscale credential set" >&2
+            exit 1
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Join private tailnet with auth key
+        if: steps.tailscale_auth.outputs.mode == 'authkey'
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Join private tailnet with OAuth
+        if: steps.tailscale_auth.outputs.mode == 'oauth'
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Configure SSH identity
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}" || { echo "missing POLYMARKET_SERVER_SSH_KEY" >&2; exit 1; }
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_deploy
+          chmod 600 ~/.ssh/polymarket_deploy
+          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
+
+      - name: Prove exact-head single ownership on private macOS node
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p private-single-writer-evidence
+          ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            "SOURCE_SHA='$SOURCE_SHA' PROBE_ID='${GITHUB_RUN_ID}' bash -s" <<'REMOTE' | tee private-single-writer-evidence/remote-proof.txt
+          set -euo pipefail
+          repo="$HOME/polymarket"
+          root="$repo/.private_validation/$PROBE_ID"
+          source_dir="$root/source"
+          run_root="$root/run"
+          evidence="$root/evidence"
+          first_pid=0
+          restart_pid=0
+          stale_owner_pid=0
+          stale_owner_child_pid=0
+          orphan_owner_pid=0
+          orphan_child_pid=0
+          stale_pid=0
+          resistant_pid=0
+          failed_runtime_pid=0
+
+          cleanup() {
+            set +e
+            for pid in "$failed_runtime_pid" "$resistant_pid" "$restart_pid" "$first_pid" "$stale_pid" "$orphan_child_pid" "$orphan_owner_pid" "$stale_owner_child_pid" "$stale_owner_pid"; do
+              if [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 0 )); then
+                kill "$pid" 2>/dev/null || true
+                for _ in {1..20}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
+                kill -9 "$pid" 2>/dev/null || true
+                wait "$pid" 2>/dev/null || true
+              fi
+            done
+          }
+          trap cleanup EXIT INT TERM
+
+          rm -rf "$root"
+          mkdir -p "$source_dir" "$run_root" "$evidence"
+          cd "$repo"
+          git fetch -q origin "$SOURCE_SHA"
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          git archive "$SOURCE_SHA" | tar -x -C "$source_dir"
+          test "$(git rev-parse "$SOURCE_SHA")" = "$SOURCE_SHA"
+          ln -s "$repo/build" "$source_dir/build"
+
+          python3 - "$source_dir" "$evidence" <<'PY'
+          import json
+          import sys
+          import time
+          from pathlib import Path
+
+          source = Path(sys.argv[1])
+          evidence = Path(sys.argv[2])
+          sys.path.insert(0, str(source))
+          from scripts.v6_market_proxy import Proxy
+
+          probe = evidence / "relay-cache-reload"
+          proxy = Proxy(
+              "http://127.0.0.1:9",
+              "http://127.0.0.1:9",
+              probe / "cache.json",
+              probe / "status.json",
+          )
+          payload = {
+              "schema": "polymarket_v6_market_proxy_cache_v1",
+              "timestamp": int(time.time()),
+              "markets": [{"id": "relay", "conditionId": "relay", "liquidityNum": 25.0}],
+              "gamma_to_condition": {"relay": "relay"},
+          }
+          (probe / "cache.json").parent.mkdir(parents=True, exist_ok=True)
+          (probe / "cache.json").write_text(json.dumps(payload), encoding="utf-8")
+          rows = proxy.markets({"limit": ["1"], "offset": ["0"], "liquidity_num_min": ["10"]})
+          status = json.loads((probe / "status.json").read_text(encoding="utf-8"))
+          assert rows[0]["id"] == "relay"
+          assert proxy.idmap["relay"] == "relay"
+          assert str(status.get("source") or "").endswith("_cache"), status
+          summary = {"source": proxy.source, "markets": len(rows), "paper_only": True}
+          (evidence / "relay-cache-reload.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print("relay_cache_reload=PASS " + json.dumps(summary, sort_keys=True))
+          PY
+
+          python3 - "$source_dir/config/paper_v6.json" "$root/probe_config.json" <<'PY'
+          import json,sys
+          src,dst=sys.argv[1:]
+          cfg=json.load(open(src,encoding='utf-8'))
+          cfg['starting_capital']=0.0
+          cfg['max_drawdown']=0.15
+          json.dump(cfg,open(dst,'w',encoding='utf-8'),indent=2,sort_keys=True)
+          open(dst,'a',encoding='utf-8').write('\n')
+          PY
+
+          port="$(python3 - <<'PY'
+          import socket
+          s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()
+          PY
+          )"
+
+          runtime_env=(
+            env
+            POLYMARKET_RUN_ROOT="$run_root"
+            POLYMARKET_CONFIG="$root/probe_config.json"
+            POLYMARKET_FAST_ARB_ENABLED=0
+            V6_MARKET_PROXY_PORT="$port"
+            V6_MARKETS=1
+            V6_RECORDER_MARKETS=1
+          )
+
+          cd "$source_dir"
+          # This is an isolated process-tree canary.  The simulated process uses
+          # the historical relative `scripts/paper_v6_loop.sh` argv form, while
+          # its cwd is the exact source repository.  It never starts a proxy,
+          # recorder or model writer, so it exercises production selection and
+          # termination without introducing another paper runtime into the node.
+          simulated_v6_visible() {
+            local pid="$1" cwd=""
+            pgrep -f 'paper_v6_loop\.sh' 2>/dev/null | grep -qx "$pid" || return 1
+            cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)"
+            [[ "$cwd" == "$source_dir" ]]
+          }
+          pid_descends_from() {
+            local pid="$1" ancestor="$2" parent=""
+            for _ in {1..64}; do
+              [[ "$pid" == "$ancestor" ]] && return 0
+              parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+              [[ "$parent" =~ ^[1-9][0-9]*$ && "$parent" != "$pid" ]] || return 1
+              pid="$parent"
+            done
+            return 1
+          }
+          stopped_or_zombie() {
+            local pid="$1"
+            local state=""
+            if ! kill -0 "$pid" 2>/dev/null; then return 0; fi
+            state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+            [[ "$state" == Z* ]]
+          }
+          start_simulated_v6_loop(){
+            local mode="$1" log="$2"
+            (
+              cd "$source_dir"
+              if [[ "$mode" == "resistant" ]]; then
+                exec /usr/bin/env bash -c 'trap "" TERM; while :; do sleep 1; done' \
+                  'scripts/paper_v6_loop.sh'
+              fi
+              exec /usr/bin/env bash -c 'trap "exit 0" TERM INT; while :; do sleep 1; done' \
+                'scripts/paper_v6_loop.sh'
+            ) >"$log" 2>&1 &
+            SIMULATED_V6_PID=$!
+          }
+
+          # Mimic the historical singleton launcher precisely enough to retain
+          # its lock fd in a child process after the top-level wrapper exits.
+          # The new exact-head launcher must both reap this verified old tree
+          # and ensure that its own descendants never inherit that descriptor.
+          simulated_legacy_runtime_owner_visible() {
+            local pid="$1" cwd=""
+            pgrep -f 'paper_latest_loop\.sh' 2>/dev/null | grep -qx "$pid" || return 1
+            cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)"
+            [[ "$cwd" == "$source_dir" ]]
+          }
+          start_simulated_legacy_runtime_owner() {
+            local lock="$1" child_file="$2" log="$3"
+            (
+              cd "$source_dir"
+              exec python3 - "$lock" "$child_file" <<'PY'
+          import fcntl
+          import os
+          import sys
+
+          lock, child_file = sys.argv[1:]
+          fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+          fcntl.flock(fd, fcntl.LOCK_EX)
+          os.ftruncate(fd, 0)
+          os.write(fd, f"{os.getpid()}\\n".encode())
+          os.fsync(fd)
+          os.set_inheritable(fd, True)
+          env = dict(os.environ, SIMULATED_OWNER_CHILD_FILE=child_file)
+          os.execvpe(
+              "/usr/bin/env",
+              [
+                  "/usr/bin/env",
+                  "bash",
+                  "-c",
+                  'trap "exit 0" TERM INT; sleep 300 & child=$!; printf "%s\\n" "$child" > "$SIMULATED_OWNER_CHILD_FILE"; wait',
+                  "scripts/paper_latest_loop.sh",
+              ],
+              env,
+          )
+          PY
+            ) >"$log" 2>&1 &
+            SIMULATED_OWNER_PID=$!
+          }
+
+          start_simulated_legacy_runtime_owner \
+            "$run_root/runtime_owner.lock" "$evidence/stale-owner-child.pid" "$evidence/stale-owner.log"
+          stale_owner_pid="$SIMULATED_OWNER_PID"
+          for _ in {1..40}; do
+            owner_in_lock="$(tr -dc '0-9' < "$run_root/runtime_owner.lock" 2>/dev/null || true)"
+            if simulated_legacy_runtime_owner_visible "$stale_owner_pid" && [[ "$owner_in_lock" == "$stale_owner_pid" ]] && [[ -s "$evidence/stale-owner-child.pid" ]]; then
+              break
+            fi
+            kill -0 "$stale_owner_pid" 2>/dev/null || { echo 'legacy stale-owner simulator exited early' >&2; exit 1; }
+            sleep 0.1
+          done
+          if ! simulated_legacy_runtime_owner_visible "$stale_owner_pid"; then
+            echo "legacy stale owner is not visible to the production matcher: pid=$stale_owner_pid" >&2
+            exit 1
+          fi
+          stale_owner_child_pid="$(tr -dc '0-9' < "$evidence/stale-owner-child.pid")"
+          [[ "$stale_owner_child_pid" =~ ^[1-9][0-9]*$ ]] || { echo 'legacy stale owner did not expose inherited-lock child' >&2; exit 1; }
+          lsof -t "$run_root/runtime_owner.lock" 2>/dev/null | grep -qx "$stale_owner_pid"
+          lsof -t "$run_root/runtime_owner.lock" 2>/dev/null | grep -qx "$stale_owner_child_pid"
+          {
+            printf 'target_sha=%s\n' "$SOURCE_SHA"
+            printf 'requested_ts=%s\n' "$(date +%s)"
+            printf 'reason=private_legacy_owner_handoff\n'
+          } > "$run_root/runtime_handoff.request"
+          printf 'legacy_stale_owner_pid=%s\nlegacy_inherited_lock_child_pid=%s\n' "$stale_owner_pid" "$stale_owner_child_pid"
+
+          start_simulated_v6_loop graceful "$evidence/stale-graceful.log"
+          stale_pid="$SIMULATED_V6_PID"
+          for _ in {1..40}; do
+            simulated_v6_visible "$stale_pid" && break
+            kill -0 "$stale_pid" 2>/dev/null || { echo 'graceful stale-loop simulator exited early' >&2; exit 1; }
+            sleep 0.1
+          done
+          if ! simulated_v6_visible "$stale_pid"; then
+            echo "graceful stale-loop simulator is not visible to the production matcher: pid=$stale_pid" >&2
+            exit 1
+          fi
+          printf 'relative_stale_loop_pid=%s\n' "$stale_pid"
+
+          "${runtime_env[@]}" /usr/bin/env bash scripts/paper_latest_loop.sh \
+            >"$evidence/first-runtime.log" 2>&1 &
+          first_pid=$!
+
+          for _ in {1..80}; do
+            [[ -s "$run_root/runtime_owner.lock" ]] && kill -0 "$first_pid" 2>/dev/null && break
+            kill -0 "$first_pid" 2>/dev/null || { cat "$evidence/first-runtime.log" >&2; exit 1; }
+            sleep 0.25
+          done
+          test -s "$run_root/runtime_owner.lock"
+          owner_pid="$(tr -dc '0-9' < "$run_root/runtime_owner.lock")"
+          test "$owner_pid" = "$first_pid"
+          kill -0 "$owner_pid"
+          grep -q "stale_runtime_owner_reaped=$stale_owner_pid" "$evidence/first-runtime.log"
+          for _ in {1..40}; do
+            stopped_or_zombie "$stale_owner_pid" && stopped_or_zombie "$stale_owner_child_pid" && break
+            sleep 0.25
+          done
+          if ! stopped_or_zombie "$stale_owner_pid" || ! stopped_or_zombie "$stale_owner_child_pid"; then
+            echo 'legacy runtime owner or inherited-lock child survived handoff' >&2
+            cat "$evidence/first-runtime.log" >&2 || true
+            exit 1
+          fi
+          wait "$stale_owner_pid" 2>/dev/null || true
+          stale_owner_pid=0
+          stale_owner_child_pid=0
+          if [[ -e "$run_root/runtime_handoff.request" ]]; then
+            echo 'runtime handoff marker was not consumed by the new singleton owner' >&2
+            exit 1
+          fi
+          holder_count="$(lsof -t "$run_root/runtime_owner.lock" 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [[ "$holder_count" != "1" ]] || ! lsof -t "$run_root/runtime_owner.lock" 2>/dev/null | grep -qx "$first_pid"; then
+            echo "singleton lock leaked into descendants: owner=$first_pid holders=$holder_count" >&2
+            lsof "$run_root/runtime_owner.lock" >&2 || true
+            exit 1
+          fi
+          printf 'source_sha=%s\nfirst_owner_pid=%s\nproxy_port=%s\n' "$SOURCE_SHA" "$owner_pid" "$port"
+
+          for _ in {1..40}; do
+            stopped_or_zombie "$stale_pid" && break
+            sleep 0.25
+          done
+          if ! stopped_or_zombie "$stale_pid"; then
+            echo "graceful stale loop was not reaped within deadline: pid=$stale_pid" >&2
+            exit 1
+          fi
+          grep -q "stale_v6_loop_reaped=$stale_pid" "$evidence/first-runtime.log"
+          wait "$stale_pid" 2>/dev/null || true
+          stale_pid=0
+          active_v6_pid=""
+          while IFS= read -r candidate; do
+            if pid_descends_from "$candidate" "$first_pid"; then
+              active_v6_pid="$candidate"
+              break
+            fi
+          done < <(pgrep -f 'paper_v6_loop\.sh' 2>/dev/null || true)
+          if [[ ! "$active_v6_pid" =~ ^[1-9][0-9]*$ ]] || ! kill -0 "$first_pid" 2>/dev/null; then
+            echo "active runtime or V6 descendant was disturbed by stale-loop handoff" >&2
+            cat "$evidence/first-runtime.log" >&2 || true
+            exit 1
+          fi
+          printf 'graceful_stale_loop_reaped=1\nactive_v6_descendant_pid=%s\n' "$active_v6_pid"
+
+          set +e
+          "${runtime_env[@]}" /usr/bin/env bash scripts/paper_latest_loop.sh \
+            >"$evidence/competing-runtime.out" 2>"$evidence/competing-runtime.err"
+          competing_rc=$?
+          set -e
+          printf 'competing_rc=%s\n' "$competing_rc"
+          test "$competing_rc" -eq 75
+          grep -q 'another paper runtime already owns' "$evidence/competing-runtime.err"
+
+          snapshot_tree() {
+            local label="$1"
+            python3 - "$first_pid" "$label" "$evidence" <<'PY'
+          import json,subprocess,sys
+          owner=int(sys.argv[1]); label=sys.argv[2]; out=sys.argv[3]
+          rows=[]
+          for line in subprocess.check_output(['ps','-axo','pid=,ppid=,command='],text=True).splitlines():
+              parts=line.strip().split(None,2)
+              if len(parts)<3: continue
+              try: pid=int(parts[0]); ppid=int(parts[1])
+              except ValueError: continue
+              rows.append((pid,ppid,parts[2]))
+          children={}
+          for pid,ppid,cmd in rows: children.setdefault(ppid,[]).append((pid,cmd))
+          desc=[]; stack=[owner]; seen={owner}
+          while stack:
+              parent=stack.pop()
+              for pid,cmd in children.get(parent,[]):
+                  if pid in seen: continue
+                  seen.add(pid); desc.append({'pid':pid,'command':cmd}); stack.append(pid)
+          markers=[
+              'paper_v6_loop.sh','v6_market_proxy.py','polymarket_trade_recorder',
+              'polymarket_multileg_paper','polymarket_engine','polymarket_maker_paper',
+              'v6_micro_taker.py','v6_hard_arb_paper.py','v6_local_factor_intents.py',
+              'v6_relation_intents.py','v6_intent_guard.py','v6_external_bridge.py'
+          ]
+          counts={m:sum(m in row['command'] for row in desc) for m in markers}
+          bad={k:v for k,v in counts.items() if v>1}
+          payload={'owner':owner,'label':label,'descendants':desc,'counts':counts,'duplicates':bad}
+          open(f'{out}/process-{label}.json','w',encoding='utf-8').write(json.dumps(payload,indent=2,sort_keys=True)+'\n')
+          print(json.dumps({'label':label,'counts':counts,'duplicates':bad},sort_keys=True))
+          if counts['paper_v6_loop.sh'] != 1:
+              raise SystemExit(f"expected exactly one active V6 loop descendant, got {counts['paper_v6_loop.sh']}")
+          if bad: raise SystemExit(1)
+          PY
+          }
+
+          snapshot_tree "after-stale-handoff"
+          for i in 1 2 3; do
+            sleep 10
+            kill -0 "$first_pid"
+            snapshot_tree "steady-$i"
+          done
+
+          python3 scripts/v6_runtime_status.py --config "$root/probe_config.json" --run-root "$run_root" >/dev/null
+          cp "$run_root/runtime_status.json" "$evidence/status-before-restart.json"
+          if find "$run_root" -type f \( -name '*.tmp' -o -name '*.tmp.*' \) -print | tee "$evidence/temp-files-before.txt" | grep -q .; then
+            echo 'temporary state files remain before restart' >&2
+            exit 1
+          fi
+
+          kill "$first_pid"
+          for _ in {1..40}; do
+            stopped_or_zombie "$first_pid" && break
+            sleep 0.25
+          done
+          if ! stopped_or_zombie "$first_pid"; then
+            echo 'first runtime did not stop cleanly' >&2
+            exit 1
+          fi
+          # kill -0 remains true for an unreaped zombie on macOS. Reap it before
+          # asserting lock recovery; lingering children would still retain the lock.
+          wait "$first_pid" 2>/dev/null || true
+          first_pid=0
+
+          port2="$(python3 - <<'PY'
+          import socket
+          s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()
+          PY
+          )"
+          runtime_env2=(
+            env
+            POLYMARKET_RUN_ROOT="$run_root"
+            POLYMARKET_CONFIG="$root/probe_config.json"
+            POLYMARKET_FAST_ARB_ENABLED=0
+            V6_MARKET_PROXY_PORT="$port2"
+            V6_MARKETS=1
+            V6_RECORDER_MARKETS=1
+          )
+          # Reproduce the harder failure mode: the old wrapper is already gone,
+          # but its inherited descriptor remains open in an orphan child.  A
+          # fresh validated wrapper must recover only that provenance-checked
+          # holder before it can acquire the singleton lock.
+          start_simulated_legacy_runtime_owner \
+            "$run_root/runtime_owner.lock" "$evidence/orphan-owner-child.pid" "$evidence/orphan-owner.log"
+          orphan_owner_pid="$SIMULATED_OWNER_PID"
+          for _ in {1..40}; do
+            owner_in_lock="$(tr -dc '0-9' < "$run_root/runtime_owner.lock" 2>/dev/null || true)"
+            if simulated_legacy_runtime_owner_visible "$orphan_owner_pid" && [[ "$owner_in_lock" == "$orphan_owner_pid" ]] && [[ -s "$evidence/orphan-owner-child.pid" ]]; then
+              break
+            fi
+            kill -0 "$orphan_owner_pid" 2>/dev/null || { echo 'orphan stale-owner simulator exited early' >&2; exit 1; }
+            sleep 0.1
+          done
+          orphan_child_pid="$(tr -dc '0-9' < "$evidence/orphan-owner-child.pid")"
+          [[ "$orphan_child_pid" =~ ^[1-9][0-9]*$ ]] || { echo 'orphan simulator did not expose inherited-lock child' >&2; exit 1; }
+          kill -KILL "$orphan_owner_pid"
+          wait "$orphan_owner_pid" 2>/dev/null || true
+          orphan_owner_pid=0
+          kill -0 "$orphan_child_pid"
+          lsof -t "$run_root/runtime_owner.lock" 2>/dev/null | grep -qx "$orphan_child_pid"
+          {
+            printf 'target_sha=%s\n' "$SOURCE_SHA"
+            printf 'requested_ts=%s\n' "$(date +%s)"
+            printf 'reason=private_orphan_lock_handoff\n'
+          } > "$run_root/runtime_handoff.request"
+          "${runtime_env2[@]}" /usr/bin/env bash scripts/paper_latest_loop.sh \
+            >"$evidence/restarted-runtime.log" 2>&1 &
+          restart_pid=$!
+          restarted_owner=""
+          candidate_owner=""
+          for _ in {1..80}; do
+            kill -0 "$restart_pid" 2>/dev/null || { cat "$evidence/restarted-runtime.log" >&2; exit 1; }
+            if [[ -s "$run_root/runtime_owner.lock" ]]; then
+              candidate_owner="$(tr -dc '0-9' < "$run_root/runtime_owner.lock")"
+              if [[ "$candidate_owner" = "$restart_pid" ]]; then
+                restarted_owner="$candidate_owner"
+                break
+              fi
+            fi
+            sleep 0.25
+          done
+          if [[ "$restarted_owner" != "$restart_pid" ]]; then
+            echo "restart lock owner mismatch: expected=$restart_pid observed=${candidate_owner:-empty}" >&2
+            cat "$evidence/restarted-runtime.log" >&2 || true
+            exit 1
+          fi
+          grep -q "stale_runtime_orphan_lock_holder_reaped=$orphan_child_pid" "$evidence/restarted-runtime.log"
+          for _ in {1..40}; do
+            stopped_or_zombie "$orphan_child_pid" && break
+            sleep 0.25
+          done
+          if ! stopped_or_zombie "$orphan_child_pid"; then
+            echo 'orphan inherited-lock child survived bounded handoff' >&2
+            cat "$evidence/restarted-runtime.log" >&2 || true
+            exit 1
+          fi
+          orphan_child_pid=0
+          if [[ -e "$run_root/runtime_handoff.request" ]]; then
+            echo 'orphan runtime handoff marker was not consumed by the new singleton owner' >&2
+            exit 1
+          fi
+          holder_count="$(lsof -t "$run_root/runtime_owner.lock" 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [[ "$holder_count" != "1" ]] || ! lsof -t "$run_root/runtime_owner.lock" 2>/dev/null | grep -qx "$restart_pid"; then
+            echo "singleton lock leaked after orphan handoff: owner=$restart_pid holders=$holder_count" >&2
+            lsof "$run_root/runtime_owner.lock" >&2 || true
+            exit 1
+          fi
+          printf 'restart_owner_pid=%s\n' "$restarted_owner"
+          sleep 10
+
+          python3 scripts/v6_runtime_status.py --config "$root/probe_config.json" --run-root "$run_root" >/dev/null
+          cp "$run_root/runtime_status.json" "$evidence/status-after-restart.json"
+          python3 - "$evidence/status-before-restart.json" "$evidence/status-after-restart.json" <<'PY'
+          import json,math,sys
+          a=json.load(open(sys.argv[1],encoding='utf-8')); b=json.load(open(sys.argv[2],encoding='utf-8'))
+          keys=['starting_capital','cash','equity','pnl','realized_pnl','reserved_cash','gross_exposure']
+          for obj in (a,b):
+              assert obj.get('paper_only') is True
+              assert abs(float(obj['equity'])-float(obj['starting_capital'])-float(obj['pnl'])) < 1e-8
+              assert float(obj['drawdown']) <= 0.15 + 1e-12
+          for key in keys:
+              av=float(a.get(key,0.0)); bv=float(b.get(key,0.0))
+              assert math.isclose(av,bv,rel_tol=1e-9,abs_tol=1e-8),(key,av,bv)
+          print('restart_accounting_identity=stable')
+          PY
+
+          if find "$run_root" -type f \( -name '*.tmp' -o -name '*.tmp.*' \) -print | tee "$evidence/temp-files-after.txt" | grep -q .; then
+            echo 'temporary state files remain after restart' >&2
+            exit 1
+          fi
+          test -z "$(grep -R -E 'Cannot replace state file|another V6 multi-leg broker already owns|FileNotFoundError.*\.tmp' "$run_root" --include='*.log' 2>/dev/null || true)"
+
+          # Stop the valid handoff runtime before starting the resistant case:
+          # otherwise a correct reaper would also see that independent runtime.
+          kill "$restart_pid"
+          for _ in {1..40}; do
+            stopped_or_zombie "$restart_pid" && break
+            sleep 0.25
+          done
+          if ! stopped_or_zombie "$restart_pid"; then
+            echo 'restarted runtime did not stop cleanly before resistant canary' >&2
+            exit 1
+          fi
+          wait "$restart_pid" 2>/dev/null || true
+          restart_pid=0
+
+          resistant_run_root="$root/resistant-run"
+          port3="$(python3 - <<'PY'
+          import socket
+          s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()
+          PY
+          )"
+          runtime_env3=(
+            env
+            POLYMARKET_RUN_ROOT="$resistant_run_root"
+            POLYMARKET_CONFIG="$root/probe_config.json"
+            POLYMARKET_FAST_ARB_ENABLED=0
+            V6_MARKET_PROXY_PORT="$port3"
+            V6_MARKETS=1
+            V6_RECORDER_MARKETS=1
+          )
+          start_simulated_v6_loop resistant "$evidence/stale-resistant.log"
+          resistant_pid="$SIMULATED_V6_PID"
+          for _ in {1..40}; do
+            simulated_v6_visible "$resistant_pid" && break
+            kill -0 "$resistant_pid" 2>/dev/null || { echo 'resistant stale-loop simulator exited early' >&2; exit 1; }
+            sleep 0.1
+          done
+          if ! simulated_v6_visible "$resistant_pid"; then
+            echo "resistant stale-loop simulator is not visible to the production matcher: pid=$resistant_pid" >&2
+            exit 1
+          fi
+          "${runtime_env3[@]}" /usr/bin/env bash scripts/paper_latest_loop.sh \
+            >"$evidence/resistant-runtime.log" 2>&1 &
+          failed_runtime_pid=$!
+          for _ in {1..48}; do
+            stopped_or_zombie "$failed_runtime_pid" && break
+            sleep 0.25
+          done
+          if ! stopped_or_zombie "$failed_runtime_pid"; then
+            echo 'resistant stale loop did not force fail-closed startup' >&2
+            exit 1
+          fi
+          set +e
+          wait "$failed_runtime_pid"
+          resistant_rc=$?
+          set -e
+          failed_runtime_pid=0
+          if [[ "$resistant_rc" -eq 0 ]]; then
+            echo 'resistant stale loop unexpectedly allowed startup' >&2
+            exit 1
+          fi
+          grep -q "stale_v6_loop_reaped=$resistant_pid" "$evidence/resistant-runtime.log"
+          grep -q 'fatal: stale V6 loop did not exit before startup' "$evidence/resistant-runtime.log"
+          if ! kill -0 "$resistant_pid" 2>/dev/null; then
+            echo 'resistant stale-loop simulator did not survive TERM as expected' >&2
+            exit 1
+          fi
+          python3 - "$resistant_run_root/runtime_owner.lock" <<'PY'
+          import fcntl,os,sys
+          fd=os.open(sys.argv[1],os.O_CREAT|os.O_RDWR,0o600)
+          try:
+              fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+              print('resistant_fail_closed_lock_released=1')
+          finally:
+              os.close(fd)
+          PY
+          if find "$resistant_run_root" -type f \( -name '*.tmp' -o -name '*.tmp.*' \) -print | tee "$evidence/temp-files-resistant.txt" | grep -q .; then
+            echo 'temporary state files remain after resistant fail-closed startup' >&2
+            exit 1
+          fi
+          kill -9 "$resistant_pid" 2>/dev/null || true
+          wait "$resistant_pid" 2>/dev/null || true
+          resistant_pid=0
+          printf 'resistant_stale_loop_fail_closed=1\n'
+
+          printf 'private_single_writer_validation=PASS\n'
+          REMOTE
+
+          scp -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
+            -P "$SERVER_PORT" -r "$SERVER_USER@$SERVER_HOST:~/polymarket/.private_validation/${GITHUB_RUN_ID}/evidence/." \
+            private-single-writer-evidence/
+
+      - name: Upload private exact-head evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-single-writer-${{ github.run_id }}
+          path: private-single-writer-evidence/
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,328 @@
+name: Polymarket Promotion Controller
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "1,16,31,46 * * * *"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/promotion-controller.yml"
+      - ".github/workflows/integration-merge.yml"
+      - "config/promotion_policy.json"
+      - "config/alpha_factory.json"
+      - "scripts/promotion_gate.py"
+      - "scripts/research_pr_policy.py"
+      - "tests/test_promotion_gate.py"
+      - "tests/test_promotion_evidence_binding.py"
+      - "tests/test_research_verdict_provenance.py"
+      - "config/scheduler_registry.json"
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: polymarket-promotion-controller
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
+          fetch-depth: 0
+
+      - name: Validate automatic-promotion contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest tests/test_promotion_gate.py tests/test_promotion_evidence_binding.py -v
+          python3 -m py_compile scripts/promotion_gate.py scripts/research_pr_policy.py
+          python3 -m json.tool config/promotion_policy.json >/dev/null
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          policy = json.loads(Path('config/promotion_policy.json').read_text())
+          assert policy['paper_only'] is True
+          assert policy['manual_approval_required'] is False
+          assert policy['approval_label'] == 'autonomous-promotion-approved'
+          PY
+
+      - name: Evaluate integration queue and authorize one promotion
+        if: github.event_name != 'pull_request' && success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p promotion-controller/probes
+          gh label create autonomous-promotion-approved \
+            --color 0E8A16 \
+            --description 'Machine-authorized paper promotion after objective gates' \
+            --force >/dev/null
+
+          current_main="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          echo "current_main=$current_main" > promotion-controller/context.txt
+          gh pr list --state open --base main --limit 100 \
+            --json number,title,url,headRefName,headRefOid,baseRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
+            > promotion-controller/integration-prs.json
+
+          python3 - <<'PY' > promotion-controller/previously-authorized.txt
+          import json
+          for pr in json.load(open('promotion-controller/integration-prs.json')):
+              labels = {x.get('name') for x in pr.get('labels', []) if isinstance(x, dict)}
+              if 'autonomous-promotion-approved' in labels:
+                  print(pr['number'])
+          PY
+          while read -r number; do
+            [[ -n "$number" ]] || continue
+            gh pr edit "$number" --remove-label autonomous-promotion-approved >/dev/null 2>&1 || true
+          done < promotion-controller/previously-authorized.txt
+
+          python3 - <<'PY' > promotion-controller/queue.txt
+          import json
+          rows = json.load(open('promotion-controller/integration-prs.json'))
+          for row in sorted(rows, key=lambda item: int(item.get('number') or 0)):
+              if str(row.get('headRefName') or '').startswith('integration/') and not row.get('isDraft'):
+                  print(row['number'])
+          PY
+
+          : > promotion-controller/decisions.tsv
+          : > promotion-controller/controller-report.md
+          : > promotion-controller/eligible.jsonl
+          while read -r number; do
+            [[ -n "$number" ]] || continue
+            probe_dir="promotion-controller/probes/$number"
+            mkdir -p "$probe_dir"
+            gh pr view "$number" \
+              --json number,title,url,headRefName,headRefOid,baseRefOid,isDraft,labels,mergeStateStatus,statusCheckRollup,body \
+              > "$probe_dir/candidate.json"
+
+            candidate_base="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["baseRefOid"])' "$probe_dir/candidate.json")"
+            if [[ "$candidate_base" != "$current_main" ]]; then
+              printf '%s\tblocked\tstale_base\n' "$number" >> promotion-controller/decisions.tsv
+              continue
+            fi
+
+            source_number="$(python3 - "$probe_dir/candidate.json" <<'PY'
+          import json,re,sys
+          body = json.load(open(sys.argv[1])).get('body') or ''
+          match = re.search(r'source research pr/branch/commit:\s*#(\d+)\b', body, re.I)
+          print(match.group(1) if match else '')
+          PY
+            )"
+            if [[ -z "$source_number" ]]; then
+              printf '%s\tblocked\tmissing_source\n' "$number" >> promotion-controller/decisions.tsv
+              continue
+            fi
+            if ! gh pr view "$source_number" \
+              --json number,headRefName,headRefOid,isDraft,labels,state,body,statusCheckRollup,comments,reviews \
+              > "$probe_dir/source.json" 2>/dev/null; then
+              printf '%s\tblocked\tsource_unavailable\n' "$number" >> promotion-controller/decisions.tsv
+              continue
+            fi
+            gh pr diff "$number" --name-only > "$probe_dir/changed-files.txt"
+
+            # Authorization itself must use the same trusted, exact-head research
+            # governance contract as PR policy. Re-fetch REST comments/reviews so
+            # untrusted text cannot spoof a verdict and source drift revokes approval.
+            if ! gh api "repos/${GITHUB_REPOSITORY}/pulls/${source_number}" \
+              > "$probe_dir/source-pr.json" 2>/dev/null; then
+              printf '%s\tblocked\tsource_unavailable\n' "$number" >> promotion-controller/decisions.tsv
+              continue
+            fi
+            gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/issues/${source_number}/comments?per_page=100" \
+              > "$probe_dir/source-comments-pages.json"
+            gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/pulls/${source_number}/reviews?per_page=100" \
+              > "$probe_dir/source-reviews-pages.json"
+            python3 - "$probe_dir" <<'PY'
+          import json,sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          def flatten(path: Path) -> list[dict]:
+              raw = json.loads(path.read_text(encoding='utf-8'))
+              if not isinstance(raw, list):
+                  return []
+              if raw and all(isinstance(page, list) for page in raw):
+                  return [item for page in raw for item in page if isinstance(item, dict)]
+              return [item for item in raw if isinstance(item, dict)]
+
+          source = json.loads((root/'source-pr.json').read_text(encoding='utf-8'))
+          source['comments'] = flatten(root/'source-comments-pages.json')
+          source['reviews'] = flatten(root/'source-reviews-pages.json')
+          (root/'source-research.json').write_text(
+              json.dumps(source, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          candidate = json.loads((root/'candidate.json').read_text(encoding='utf-8'))
+          event = {
+              'pull_request': {
+                  'head': {'ref': candidate.get('headRefName') or ''},
+                  'draft': bool(candidate.get('isDraft')),
+                  'body': candidate.get('body') or '',
+                  'labels': candidate.get('labels') or [],
+              }
+          }
+          (root/'policy-event.json').write_text(
+              json.dumps(event, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          PY
+            if ! python3 scripts/research_pr_policy.py \
+              --event "$probe_dir/policy-event.json" \
+              --changed-files "$probe_dir/changed-files.txt" \
+              --manifest-existed-on-base true \
+              --source-research-json "$probe_dir/source-research.json" \
+              --output "$probe_dir/research-policy.md"; then
+              printf '%s\tblocked\ttrusted_research_policy\n' "$number" >> promotion-controller/decisions.tsv
+              {
+                echo
+                echo "## Candidate #$number / source #$source_number"
+                cat "$probe_dir/research-policy.md" 2>/dev/null || true
+              } >> promotion-controller/controller-report.md
+              continue
+            fi
+
+            evidence_path="$(python3 - "$probe_dir/candidate.json" <<'PY'
+          import json,re,sys
+          body = json.load(open(sys.argv[1])).get('body') or ''
+          match = re.search(r'promotion evidence file:\s*([^\s`]+\.json)\b', body, re.I)
+          print(match.group(1) if match else '')
+          PY
+            )"
+            gate_args=(
+              python3 scripts/promotion_gate.py
+              --candidate "$probe_dir/candidate.json"
+              --source "$probe_dir/source.json"
+              --changed-files "$probe_dir/changed-files.txt"
+              --alpha-config config/alpha_factory.json
+              --policy config/promotion_policy.json
+              --report "$probe_dir/report.md"
+              --json-output "$probe_dir/result.json"
+            )
+            if [[ -n "$evidence_path" ]]; then
+              actual_source_sha="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["headRefOid"])' "$probe_dir/source.json")"
+              if ! gh api "repos/${GITHUB_REPOSITORY}/contents/${evidence_path}?ref=${actual_source_sha}" \
+                --jq .content > "$probe_dir/evidence.b64" 2>/dev/null; then
+                printf '%s\tblocked\tevidence_unavailable\n' "$number" >> promotion-controller/decisions.tsv
+                continue
+              fi
+              base64 -d "$probe_dir/evidence.b64" > "$probe_dir/evidence.json"
+              bound_source_sha="$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1])).get("source_head_sha") or ""))' "$probe_dir/evidence.json")"
+              if [[ ! "$bound_source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                printf '%s\tblocked\tinvalid_evidence_source_sha\n' "$number" >> promotion-controller/decisions.tsv
+                continue
+              fi
+              if ! git fetch --quiet --no-tags origin "$actual_source_sha" "$bound_source_sha" || \
+                 ! git merge-base --is-ancestor "$bound_source_sha" "$actual_source_sha"; then
+                printf '%s\tblocked\tevidence_source_not_ancestor\n' "$number" >> promotion-controller/decisions.tsv
+                continue
+              fi
+              python3 - "$probe_dir/source.json" "$actual_source_sha" "$bound_source_sha" <<'PY'
+          import json,sys
+          path=sys.argv[1]; source=json.load(open(path)); source['actualHeadRefOid']=sys.argv[2]; source['headRefOid']=sys.argv[3]
+          with open(path,'w') as handle: json.dump(source,handle)
+          PY
+              gate_args+=(--evidence "$probe_dir/evidence.json")
+            fi
+
+            set +e
+            "${gate_args[@]}"
+            gate_rc=$?
+            set -e
+            {
+              echo
+              echo "## Candidate #$number / source #$source_number"
+              cat "$probe_dir/research-policy.md" 2>/dev/null || true
+              cat "$probe_dir/report.md" 2>/dev/null || true
+            } >> promotion-controller/controller-report.md
+            if [[ "$gate_rc" -ne 0 ]]; then
+              printf '%s\tblocked\tobjective_gate\n' "$number" >> promotion-controller/decisions.tsv
+              continue
+            fi
+
+            python3 - "$probe_dir/result.json" <<'PY' > "$probe_dir/source-match-files.txt"
+          import json,sys
+          for path in json.load(open(sys.argv[1])).get('source_content_match_files', []):
+              print(path)
+          PY
+            candidate_head="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["headRefOid"])' "$probe_dir/candidate.json")"
+            source_actual_head="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("actualHeadRefOid") or d["headRefOid"])' "$probe_dir/source.json")"
+            source_bound_head="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["headRefOid"])' "$probe_dir/source.json")"
+            provenance_ok=1
+            : > "$probe_dir/provenance.tsv"
+            while IFS= read -r path; do
+              [[ -n "$path" ]] || continue
+              candidate_blob="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${candidate_head}" --jq .sha 2>/dev/null || echo __missing__)"
+              source_blob="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${source_actual_head}" --jq .sha 2>/dev/null || echo __missing__)"
+              bound_blob="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${source_bound_head}" --jq .sha 2>/dev/null || echo __missing__)"
+              printf '%s\t%s\t%s\t%s\n' "$path" "$candidate_blob" "$source_blob" "$bound_blob" >> "$probe_dir/provenance.tsv"
+              if [[ "$candidate_blob" != "$source_blob" || "$candidate_blob" != "$bound_blob" ]]; then
+                provenance_ok=0
+              fi
+            done < "$probe_dir/source-match-files.txt"
+            if [[ "$provenance_ok" -ne 1 ]]; then
+              printf '%s\tblocked\teconomic_source_content_mismatch\n' "$number" >> promotion-controller/decisions.tsv
+              continue
+            fi
+
+            class="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["promotion_class"])' "$probe_dir/result.json")"
+            score="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["score"])' "$probe_dir/result.json")"
+            printf '%s\teligible\t%s\t%s\n' "$number" "$class" "$score" >> promotion-controller/decisions.tsv
+            python3 - "$number" "$class" "$score" >> promotion-controller/eligible.jsonl <<'PY'
+          import json,sys
+          print(json.dumps({'number': int(sys.argv[1]), 'promotion_class': sys.argv[2], 'score': float(sys.argv[3])}))
+          PY
+          done < promotion-controller/queue.txt
+
+          selected="$(python3 - <<'PY'
+          import json
+          rows = []
+          for line in open('promotion-controller/eligible.jsonl'):
+              if line.strip(): rows.append(json.loads(line))
+          if not rows:
+              print('')
+          else:
+              rows.sort(key=lambda x: (0 if x['promotion_class']=='operational' else 1,-float(x['score']) if x['promotion_class']=='economic' else 0.0,int(x['number'])))
+              print(rows[0]['number'])
+          PY
+          )"
+
+          if [[ -n "$selected" ]]; then
+            gh pr edit "$selected" --add-label autonomous-promotion-approved >/dev/null
+            echo "selected_pr=$selected" | tee promotion-controller/authorization.txt
+            if ! grep -qx "$selected" promotion-controller/previously-authorized.txt 2>/dev/null; then
+              gh pr comment "$selected" --body \
+                "Promotion Controller authorized this paper integration for the current cycle. Trusted exact-head Research Governance provenance plus objective candidate/source checks passed; economic surfaces additionally passed ancestor-bound exact-source code provenance, machine-readable OOS, cost-stress, drawdown, FDR, stability, incremental-utility, independent-window and data-health gates. Authorization is re-evaluated every cycle and does not authorize real-money execution."
+            fi
+          else
+            echo 'selected_pr=none' | tee promotion-controller/authorization.txt
+          fi
+
+      - name: Publish promotion decision
+        if: always()
+        shell: bash
+        run: |
+          echo '## Polymarket Promotion Controller' >> "$GITHUB_STEP_SUMMARY"
+          cat promotion-controller/authorization.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          cat promotion-controller/decisions.tsv >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat promotion-controller/controller-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      - name: Upload promotion evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: promotion-controller-${{ github.run_id }}
+          path: promotion-controller/
+          if-no-files-found: warn
+          retention-days: 30

@@ -1,0 +1,1 @@
+{"schema": "polymarket_v6_market_proxy_cache_v1", "timestamp": 1787729575, "markets": [{"id": "relay", "conditionId": "relay", "liquidityNum": 25.0}], "gamma_to_condition": {"relay": "relay"}}

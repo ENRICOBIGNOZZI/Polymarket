@@ -1,0 +1,11 @@
+{
+  "cache_age_seconds": 1000000000000.0,
+  "failures": 2,
+  "last_error": "request failed: http://127.0.0.1:9/markets/keyset?liquidity_num_min=1&active=true&closed=false&limit=100: <urlopen error [Errno 61] Connection refused>; CLOB fallback failed: clob_sampling: curl request failed: https://clob.polymarket.com/sampling-markets: exit=28 curl: (28) Connection timed out after 8011 milliseconds; clob_markets: curl request failed: https://clob.polymarket.com/markets: exit=28 curl: (28) Connection timed out after 8002 milliseconds",
+  "markets": 0,
+  "paper_only": true,
+  "schema": "polymarket_v6_market_proxy_status_v1",
+  "source": "unavailable",
+  "timestamp": 1787676399,
+  "upstream_gamma_ok": false
+}

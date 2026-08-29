@@ -1,0 +1,10 @@
+# Canonical SSH client stanza for the Polymarket host.
+# This file contains no private key or credential. Copy/include it from ~/.ssh/config as needed.
+Host polymarket
+    HostName 100.104.183.109
+    Port 22
+    User enrico
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
+    RequestTTY yes
+    RemoteCommand cd ~/polymarket && exec ${SHELL:-/bin/zsh} -l

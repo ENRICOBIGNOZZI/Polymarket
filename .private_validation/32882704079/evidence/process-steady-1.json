@@ -1,0 +1,92 @@
+{
+  "counts": {
+    "graph_research_ev.py": 0,
+    "paper_v6_loop.sh": 0,
+    "polymarket_engine": 1,
+    "polymarket_maker_paper": 1,
+    "polymarket_multileg_paper": 1,
+    "polymarket_trade_recorder": 1,
+    "v6_external_bridge.py": 0,
+    "v6_intent_guard.py": 0,
+    "v6_local_factor_intents.py": 0,
+    "v6_market_proxy.py": 1,
+    "v6_queue_filter.py hard": 1,
+    "v6_queue_filter.py micro": 1,
+    "v6_relation_intents.py": 0
+  },
+  "descendants": [
+    {
+      "command": "bash /Users/enrico/polymarket/.private_validation/32882704079/source/scripts/paper_v6_loop.sh /Users/enrico/polymarket/.private_validation/32882704079/probe_config.json /Users/enrico/polymarket/.private_validation/32882704079/run",
+      "pid": 75821,
+      "ppid": 48076
+    },
+    {
+      "command": "sleep 5",
+      "pid": 76029,
+      "ppid": 48076
+    },
+    {
+      "command": "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python scripts/v6_market_proxy.py --host 127.0.0.1 --port 57450 --gamma https://gamma-api.polymarket.com --clob https://clob.polymarket.com --cache /Users/enrico/polymarket/.private_validation/32882704079/run/market_proxy_cache.json --status /Users/enrico/polymarket/.private_validation/32882704079/run/market_proxy_status.json",
+      "pid": 75834,
+      "ppid": 48076
+    },
+    {
+      "command": "./build/polymarket_trade_recorder --config /Users/enrico/polymarket/.private_validation/32882704079/run/runtime_config.json --run-dir /Users/enrico/polymarket/.private_validation/32882704079/run --markets 1 --batch 40 --min-liquidity 10 --lookback-seconds 900 --interval 5 --loop",
+      "pid": 75838,
+      "ppid": 48076
+    },
+    {
+      "command": "./build/polymarket_multileg_paper --config /Users/enrico/polymarket/.private_validation/32882704079/run/broker_config.json --run-dir /Users/enrico/polymarket/.private_validation/32882704079/run --intents /Users/enrico/polymarket/.private_validation/32882704079/run/intents.csv --trade-tape /Users/enrico/polymarket/.private_validation/32882704079/run/trade_tape.csv --min-edge 0.00020 --completion-threshold 0.75 --submit-latency-ms 100 --cancel-latency-ms 100 --max-replaces 6 --max-leg-risk-usd 12 --adverse-horizon-seconds 45 --interval 1 --loop",
+      "pid": 75839,
+      "ppid": 48076
+    },
+    {
+      "command": "./build/polymarket_engine --config /Users/enrico/polymarket/.private_validation/32882704079/run/external_config.json --markets 1 --min-liquidity 10 --paper --loop",
+      "pid": 75840,
+      "ppid": 48076
+    },
+    {
+      "command": "bash /Users/enrico/polymarket/.private_validation/32882704079/source/scripts/paper_v6_loop.sh /Users/enrico/polymarket/.private_validation/32882704079/probe_config.json /Users/enrico/polymarket/.private_validation/32882704079/run",
+      "pid": 76038,
+      "ppid": 48076
+    },
+    {
+      "command": "bash /Users/enrico/polymarket/.private_validation/32882704079/source/scripts/paper_v6_loop.sh /Users/enrico/polymarket/.private_validation/32882704079/probe_config.json /Users/enrico/polymarket/.private_validation/32882704079/run",
+      "pid": 76041,
+      "ppid": 48076
+    },
+    {
+      "command": "bash /Users/enrico/polymarket/.private_validation/32882704079/source/scripts/paper_v6_loop.sh /Users/enrico/polymarket/.private_validation/32882704079/probe_config.json /Users/enrico/polymarket/.private_validation/32882704079/run",
+      "pid": 76044,
+      "ppid": 48076
+    },
+    {
+      "command": "sleep 5",
+      "pid": 76045,
+      "ppid": 48076
+    },
+    {
+      "command": "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python scripts/v6_queue_filter.py hard --config /Users/enrico/polymarket/.private_validation/32882704079/run/hard_arb_config.json --run-dir /Users/enrico/polymarket/.private_validation/32882704079/run/hard_arb --markets 1 --min-liquidity 10 --max-events 80 --min-edge 0.00020 --max-trade-usd 60 --slippage-bps 5 --leg-latency-ms 100",
+      "pid": 76046,
+      "ppid": 48076
+    },
+    {
+      "command": "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python scripts/v6_queue_filter.py micro --config /Users/enrico/polymarket/.private_validation/32882704079/run/micro_taker_config.json --run-dir /Users/enrico/polymarket/.private_validation/32882704079/run/micro_taker --markets 250 --min-liquidity 25 --horizon-seconds 30 --max-target-staleness-seconds 10 --max-trade-usd 15 --min-edge 0.00030 --slippage-bps 5 --max-positions 20 --trade-tape /Users/enrico/polymarket/.private_validation/32882704079/run/trade_tape.csv --exploration-enabled --exploration-max-trade-usd 5.0 --exploration-max-opens-per-hour 6 --exploration-max-positions 2 --exploration-hold-seconds 45 --exploration-min-activity 1",
+      "pid": 76043,
+      "ppid": 48076
+    },
+    {
+      "command": "./build/polymarket_maker_paper --config /Users/enrico/polymarket/.private_validation/32882704079/run/maker_config.json --run-dir /Users/enrico/polymarket/.private_validation/32882704079/run/maker --markets 1 --min-liquidity 10 --min-edge 0.00020 --max-order-usd 60 --ttl-seconds 90 --hold-seconds 240 --adverse-selection-mult 0.10 --improve-ticks 1 --max-queue-multiple 6 --once",
+      "pid": 76039,
+      "ppid": 48076
+    },
+    {
+      "command": "/usr/bin/curl --silent --show-error --fail --location --ipv4 --compressed --max-time 5 --user-agent polymarket-v6-market-proxy/2 --header Accept: application/json https://clob.polymarket.com/sampling-markets",
+      "pid": 76019,
+      "ppid": 48076
+    }
+  ],
+  "duplicates": {},
+  "label": "steady-1",
+  "owner": 75806
+}

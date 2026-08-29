@@ -1,0 +1,110 @@
+groups:
+  - name: polymarket-v7-hard-safety
+    rules:
+      - alert: PolymarketV7ExporterDown
+        expr: up{job="polymarket-v7"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: V7 PAPER exporter is unreachable
+          description: Prometheus cannot scrape the canonical V7 PAPER exporter.
+
+      - alert: PolymarketV7RuntimeContractInvalid
+        expr: polymarket_v7_runtime_info < 1
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: Canonical runtime is not V7
+          description: The monitored PAPER runtime does not identify as the canonical V7 runtime.
+
+      - alert: PolymarketV7PaperContractInvalid
+        expr: polymarket_v7_paper_only_contract_ok < 1
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: V7 PAPER-only contract is not satisfied
+          description: Runtime or execution-supervisor PAPER-only state is missing or false.
+
+      - alert: PolymarketV7AuthenticatedExecutionEnabled
+        expr: polymarket_v7_authenticated_execution_disabled < 1
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: Authenticated execution prohibition is not satisfied
+          description: Runtime or execution-supervisor authenticated execution is not explicitly disabled.
+
+      - alert: PolymarketV7KillSwitchEngaged
+        expr: polymarket_runtime_killed > 0
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: V7 PAPER kill switch is engaged
+          description: The canonical PAPER runtime reports a killed state.
+
+      - alert: PolymarketV7HardDrawdownLimitBreach
+        expr: polymarket_runtime_drawdown_ratio >= polymarket_v7_authority_max_drawdown_ratio
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: V7 PAPER drawdown reached the current operator ceiling
+          description: Runtime drawdown is at or above the max-drawdown value read from current operator_directives.json.
+
+      - alert: PolymarketV7ExecutionOwnerDown
+        expr: polymarket_v7_execution_alive < 1
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: V7 execution owner is down
+          description: The canonical single execution owner is not alive.
+
+      - alert: PolymarketV7StateMissing
+        expr: polymarket_v7_state_present == 0
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: Required V7 state surface is missing
+          description: A monitored V7 runtime state surface is absent; inspect the surface label.
+
+      - alert: PolymarketV7SupervisorStale
+        expr: polymarket_v7_state_age_seconds{surface="supervisor"} > 30
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: V7 supervisor state is stale
+          description: Canonical V7 supervisor state exceeds the monitoring-manifest freshness bound.
+
+      - alert: PolymarketV7RuntimeStateStale
+        expr: polymarket_v7_state_age_seconds{surface=~"runtime|execution_supervisor|proxy|evidence"} > 180
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: V7 runtime state is stale
+          description: A canonical V7 execution/data/evidence surface exceeds the monitoring-manifest freshness bound.
+
+      - alert: PolymarketV7MarketProxyEmpty
+        expr: polymarket_v7_market_proxy_markets <= 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: V7 market proxy has no markets
+          description: Executable market-data visibility is empty and economic interpretation must fail closed.
+
+      - alert: PolymarketV7CanonicalLedgerInvalid
+        expr: (polymarket_v7_ledger_present > 0) and (polymarket_v7_ledger_valid < 1)
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: Canonical V7 execution ledger is invalid
+          description: The canonical ledger is present but invalid or mixed-SHA; fill and PnL evidence must not be trusted.

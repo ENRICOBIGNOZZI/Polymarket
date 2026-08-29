@@ -1,0 +1,32 @@
+{
+  "schema": "polymarket_v7_profit_stack_v1",
+  "version": 7,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "cycle_interval_seconds": 2.0,
+  "economics_interval_seconds": 30,
+  "external_refresh_seconds": 300,
+  "trade_recorder": {
+    "config": "config/v7_market_data_recorder.json",
+    "market_limit": 1000,
+    "minimum_liquidity_usd": 2.0,
+    "batch_size": 100,
+    "lookback_seconds": 300,
+    "interval_seconds": 10
+  },
+  "maker": {
+    "config": "config/v7_complete_set_maker.json",
+    "enabled": true
+  },
+  "external": {
+    "enabled": true,
+    "output": "data/external_signals.csv",
+    "maximum_age_seconds": 7200,
+    "minimum_confidence": 0.35
+  },
+  "candidate_models": {
+    "local_factor": {"execution_enabled": false},
+    "pca": {"execution_enabled": false},
+    "ranking": {"execution_enabled": false}
+  }
+}

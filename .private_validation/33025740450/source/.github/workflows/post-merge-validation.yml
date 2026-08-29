@@ -1,0 +1,298 @@
+name: Polymarket Post-Merge Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact current-main SHA to validate and, when eligible, advance to paper-validated
+        required: false
+        type: string
+  repository_dispatch:
+    types: [champion-integration-merged]
+  schedule:
+    - cron: "6,21,36,51 * * * *"
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: polymarket-post-merge-validation
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve exact current-main V7 state
+        id: source
+        shell: bash
+        env:
+          INPUT_SHA: ${{ inputs.expected_sha }}
+          DISPATCH_SHA: ${{ github.event.client_payload.sha }}
+        run: |
+          set -euo pipefail
+          EXPECTED_SHA="${INPUT_SHA:-${DISPATCH_SHA:-}}"
+          git fetch --no-tags origin main paper-validated
+          MAIN_SHA="$(git rev-parse origin/main)"
+          if [[ -z "$EXPECTED_SHA" ]]; then EXPECTED_SHA="$MAIN_SHA"; fi
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$MAIN_SHA" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+          python3 - "$EXPECTED_SHA" <<'PY' > /tmp/post-merge-state.json
+          import json,re,sys
+          from pathlib import Path, PurePosixPath
+          sha=sys.argv[1]
+          assert re.fullmatch(r'[0-9a-f]{40}',sha)
+          manifest=json.loads(Path('config/live_champion.json').read_text(encoding='utf-8'))
+          enabled=manifest.get('enabled') is True
+          state={'sha':sha,'enabled':enabled}
+          if enabled:
+              assert manifest.get('version') == 7
+              assert manifest.get('paper_only') is True
+              assert manifest.get('authenticated_execution') is False
+              assert manifest.get('deployment_ref') == 'paper-validated'
+              for field,prefix in (('loop','scripts'),('config','config'),('run_root','runs')):
+                  raw=str(manifest.get(field) or '')
+                  p=PurePosixPath(raw)
+                  assert raw and not p.is_absolute() and '..' not in p.parts and p.parts[0] == prefix, (field,raw)
+              loop=Path(str(manifest['loop'])); config_path=Path(str(manifest['config']))
+              assert loop.is_file(), loop
+              assert config_path.is_file(), config_path
+              cfg=json.loads(config_path.read_text(encoding='utf-8'))
+              assert cfg.get('paper_only') is True
+              v7=cfg.get('v7') if isinstance(cfg.get('v7'),dict) else cfg
+              assert v7.get('authenticated_execution') is False
+              assert v7.get('authoritative_fee_required') is True
+              assert v7.get('shared_execution_ledger_required') is True
+              assert v7.get('joint_fill_state_required_for_multileg') is True
+              assert float(cfg.get('max_drawdown',0.15)) <= 0.15 + 1e-12
+              for required in (
+                  'scripts/v7_execution_ledger.py',
+                  '.github/workflows/v7-unified-paper-evidence.yml',
+                  '.github/workflows/private-runtime-single-writer-validation.yml',
+              ):
+                  assert Path(required).is_file(), required
+          print(json.dumps(state,sort_keys=True))
+          PY
+          cat /tmp/post-merge-state.json
+          ENABLED="$(python3 -c 'import json; print("true" if json.load(open("/tmp/post-merge-state.json"))["enabled"] else "false")')"
+          echo "expected_sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
+          echo "enabled=$ENABLED" >> "$GITHUB_OUTPUT"
+          echo "validation_sha=$EXPECTED_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "v7_champion_enabled=$ENABLED" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check exact-head gates and dispatch only missing validators
+        id: gates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ steps.source.outputs.expected_sha }}
+          CHAMPION_ENABLED: ${{ steps.source.outputs.enabled }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$EXPECTED_SHA"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${EXPECTED_SHA}&per_page=100" > /tmp/exact-head-runs.json
+          python3 - "$CHAMPION_ENABLED" <<'PY' > /tmp/gate-state.json
+          import json,sys
+          enabled=sys.argv[1]=='true'
+          runs=json.load(open('/tmp/exact-head-runs.json')).get('workflow_runs') or []
+          required=['ci','monitoring']
+          if enabled:
+              required += ['Polymarket Research Policy','Private runtime single-writer validation']
+          latest={}
+          for row in sorted(runs,key=lambda r:(r.get('created_at') or '',int(r.get('id') or 0)),reverse=True):
+              name=str(row.get('name') or '')
+              if name in required and name not in latest:
+                  latest[name]=row
+          evidence={}; missing=[]; pending=[]; failed=[]
+          for name in required:
+              row=latest.get(name)
+              if not row:
+                  missing.append(name); evidence[name]=None; continue
+              item={'id':int(row.get('id') or 0),'head_sha':row.get('head_sha'),'status':row.get('status'),'conclusion':row.get('conclusion')}
+              evidence[name]=item
+              if row.get('status') != 'completed': pending.append(name)
+              elif row.get('conclusion') != 'success': failed.append(name)
+          payload={'required':required,'evidence':evidence,'missing':missing,'pending':pending,'failed':failed,'ready':enabled and not missing and not pending and not failed}
+          print(json.dumps(payload,sort_keys=True))
+          PY
+          cat /tmp/gate-state.json
+
+          missing="$(python3 -c 'import json; print("\n".join(json.load(open("/tmp/gate-state.json"))["missing"]))')"
+          for workflow in ci.yml monitoring.yml; do
+            case "$workflow" in
+              ci.yml) name=ci ;;
+              monitoring.yml) name=monitoring ;;
+            esac
+            if grep -Fxq "$name" <<<"$missing"; then
+              gh workflow run "$workflow" --ref main -f expected_sha="$EXPECTED_SHA"
+              echo "dispatched=$workflow" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          if [[ "$CHAMPION_ENABLED" == "true" ]]; then
+            if grep -Fxq 'Polymarket Research Policy' <<<"$missing"; then
+              gh workflow run research-policy.yml --ref main
+              echo "dispatched=research-policy.yml" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            if grep -Fxq 'Private runtime single-writer validation' <<<"$missing"; then
+              gh workflow run private-runtime-single-writer-validation.yml --ref main
+              echo "dispatched=private-runtime-single-writer-validation.yml" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+          READY="$(python3 -c 'import json; print("true" if json.load(open("/tmp/gate-state.json"))["ready"] else "false")')"
+          echo "ready=$READY" >> "$GITHUB_OUTPUT"
+          if [[ "$CHAMPION_ENABLED" != "true" ]]; then
+            echo "paper_validated=unchanged champion_disabled" >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$READY" != "true" ]]; then
+            echo "paper_validated=unchanged exact_head_gates_not_green" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Prove pre-main same-SHA PAPER evidence and canonical ledger
+        id: paper
+        if: steps.source.outputs.enabled == 'true' && steps.gates.outputs.ready == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ steps.source.outputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          test -f .github/workflows/v7-unified-paper-evidence.yml
+          test -f scripts/v7_execution_ledger.py
+          rm -rf /tmp/paper-evidence-search
+          mkdir -p /tmp/paper-evidence-search
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/v7-unified-paper-evidence.yml/runs?status=success&per_page=100" > /tmp/paper-evidence-runs.json
+          python3 - <<'PY' > /tmp/paper-evidence-run-ids.txt
+          import json
+          rows=json.load(open('/tmp/paper-evidence-runs.json')).get('workflow_runs') or []
+          for row in sorted(rows,key=lambda r:(r.get('created_at') or '',int(r.get('id') or 0)),reverse=True):
+              if row.get('status')=='completed' and row.get('conclusion')=='success':
+                  print(int(row['id']))
+          PY
+
+          FOUND=false
+          SELECTED_RUN=''
+          PRE_MAIN_SHA=''
+          while IFS= read -r run_id; do
+            [[ "$run_id" =~ ^[1-9][0-9]*$ ]] || continue
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "/tmp/paper-evidence-artifacts-${run_id}.json"
+            artifact_name="v7-unified-paper-evidence-${run_id}"
+            artifact_id="$(python3 - "$artifact_name" "/tmp/paper-evidence-artifacts-${run_id}.json" <<'PY'
+          import json,sys
+          name,path=sys.argv[1:]
+          rows=json.load(open(path)).get('artifacts') or []
+          ids=[int(r['id']) for r in rows if r.get('name')==name and not r.get('expired')]
+          print(ids[0] if ids else '')
+          PY
+          )"
+            [[ -n "$artifact_id" ]] || continue
+            target="/tmp/paper-evidence-search/${run_id}"
+            rm -rf "$target"; mkdir -p "$target"
+            if ! gh run download "$run_id" -n "$artifact_name" -D "$target" >/dev/null 2>&1; then
+              continue
+            fi
+            set +e
+            python3 - "$target" "$EXPECTED_SHA" <<'PY' > "$target/verification.json"
+          import json,sys
+          from pathlib import Path
+          root=Path(sys.argv[1]); expected=sys.argv[2]
+          def read(rel):
+              p=root/rel
+              if not p.is_file(): raise AssertionError(f'missing:{rel}')
+              return json.loads(p.read_text(encoding='utf-8'))
+          meta=read('v7-evidence/selection-meta.json')
+          gate=read('v7-evidence/check-gate.json')
+          status=read('v7-evidence/runtime/evidence_router_status.json')
+          hardened=read('v7-evidence/runtime/v7_execution_evidence.json')
+          assert meta.get('source_sha') == expected
+          pre_main=str(meta.get('main_sha') or '')
+          assert len(pre_main)==40 and pre_main != expected
+          assert gate.get('source_sha') == expected and gate.get('ready') is True
+          assert not (gate.get('missing_or_not_green') or [])
+          assert status.get('source_sha') == expected
+          assert status.get('paper_only') is True
+          assert status.get('authenticated_execution') is False
+          assert status.get('runtime_alive') is True
+          summary=hardened.get('summary') if isinstance(hardened,dict) else None
+          assert isinstance(summary,dict)
+          assert summary.get('capital_allocation_mutated') is False
+          assert hardened.get('cost_accounting_contract') == 'realized_net_pnl_plus_explicit_nonoverlapping_monetary_cost_stress_with_full_pnl_key_coverage'
+
+          ledger=root/'v7-evidence/runtime/ledger/execution.jsonl'
+          assert ledger.is_file() and ledger.stat().st_size > 0, 'canonical ledger artifact missing/empty'
+          sys.path.insert(0,str(Path.cwd()/'scripts'))
+          from v7_execution_ledger import LedgerEvent
+          rows=0
+          for number,line in enumerate(ledger.read_text(encoding='utf-8').splitlines(),1):
+              if not line.strip(): continue
+              raw=json.loads(line)
+              event=LedgerEvent.from_dict(raw)
+              assert event.model_sha == expected, (number,event.model_sha,expected)
+              assert event.paper_only is True
+              assert event.authenticated_execution is False
+              rows += 1
+          assert rows > 0
+          print(json.dumps({'source_sha':expected,'pre_main_sha':pre_main,'ledger_rows':rows},sort_keys=True))
+          PY
+            rc=$?
+            set -e
+            if [[ "$rc" -ne 0 ]]; then continue; fi
+            PRE_MAIN_SHA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pre_main_sha"])' "$target/verification.json")"
+            [[ "$PRE_MAIN_SHA" =~ ^[0-9a-f]{40}$ ]]
+            git cat-file -e "${PRE_MAIN_SHA}^{commit}"
+            git merge-base --is-ancestor "$PRE_MAIN_SHA" "$EXPECTED_SHA"
+            FOUND=true
+            SELECTED_RUN="$run_id"
+            cp "$target/verification.json" /tmp/selected-paper-verification.json
+            break
+          done < /tmp/paper-evidence-run-ids.txt
+
+          if [[ "$FOUND" != "true" ]]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "paper_validated=unchanged no_same_sha_paper_artifact_with_canonical_ledger" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "run_id=$SELECTED_RUN" >> "$GITHUB_OUTPUT"
+          echo "pre_main_sha=$PRE_MAIN_SHA" >> "$GITHUB_OUTPUT"
+          echo "paper_evidence_run=$SELECTED_RUN" >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/selected-paper-verification.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Non-force advance paper-validated to the exact current main SHA
+        if: steps.source.outputs.enabled == 'true' && steps.gates.outputs.ready == 'true' && steps.paper.outputs.ready == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ steps.source.outputs.expected_sha }}
+          PRE_MAIN_SHA: ${{ steps.paper.outputs.pre_main_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PRE_MAIN_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin main paper-validated
+          MAIN_SHA="$(git rev-parse origin/main)"
+          CURRENT_VALIDATED="$(git rev-parse origin/paper-validated)"
+          test "$MAIN_SHA" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git merge-base --is-ancestor "$PRE_MAIN_SHA" "$EXPECTED_SHA"
+          if [[ "$CURRENT_VALIDATED" == "$EXPECTED_SHA" ]]; then
+            echo "paper_validated_sha=$EXPECTED_SHA already_current=true" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git merge-base --is-ancestor "$CURRENT_VALIDATED" "$EXPECTED_SHA"
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/git/refs/heads/paper-validated" \
+            -f sha="$EXPECTED_SHA" -F force=false >/dev/null
+          git fetch --no-tags origin paper-validated
+          test "$(git rev-parse origin/paper-validated)" = "$EXPECTED_SHA"
+          echo "paper_validated_sha=$EXPECTED_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "promotion_mode=non_force_fast_forward_same_sha" >> "$GITHUB_STEP_SUMMARY"

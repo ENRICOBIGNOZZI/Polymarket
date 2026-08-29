@@ -1,0 +1,45 @@
+{
+  "counts": {
+    "paper_v6_loop.sh": 1,
+    "polymarket_engine": 1,
+    "polymarket_maker_paper": 0,
+    "polymarket_multileg_paper": 1,
+    "polymarket_trade_recorder": 0,
+    "v6_external_bridge.py": 0,
+    "v6_hard_arb_paper.py": 0,
+    "v6_intent_guard.py": 0,
+    "v6_local_factor_intents.py": 0,
+    "v6_market_proxy.py": 1,
+    "v6_micro_taker.py": 0,
+    "v6_relation_intents.py": 0
+  },
+  "descendants": [
+    {
+      "command": "bash /Users/enrico/polymarket/.private_validation/32873038318/source/scripts/paper_v6_loop.sh /Users/enrico/polymarket/.private_validation/32873038318/probe_config.json /Users/enrico/polymarket/.private_validation/32873038318/run",
+      "pid": 19577
+    },
+    {
+      "command": "sleep 5",
+      "pid": 19687
+    },
+    {
+      "command": "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python scripts/v6_market_proxy.py --host 127.0.0.1 --port 52639 --gamma https://gamma-api.polymarket.com --clob https://clob.polymarket.com --cache /Users/enrico/polymarket/.private_validation/32873038318/run/market_proxy_cache.json --status /Users/enrico/polymarket/.private_validation/32873038318/run/market_proxy_status.json",
+      "pid": 19588
+    },
+    {
+      "command": "./build/polymarket_multileg_paper --config /Users/enrico/polymarket/.private_validation/32873038318/run/broker_config.json --run-dir /Users/enrico/polymarket/.private_validation/32873038318/run --intents /Users/enrico/polymarket/.private_validation/32873038318/run/intents.csv --trade-tape /Users/enrico/polymarket/.private_validation/32873038318/run/trade_tape.csv --min-edge 0.00020 --completion-threshold 0.75 --submit-latency-ms 100 --cancel-latency-ms 100 --max-replaces 6 --max-leg-risk-usd 12 --adverse-horizon-seconds 45 --interval 1 --loop",
+      "pid": 19593
+    },
+    {
+      "command": "./build/polymarket_engine --config /Users/enrico/polymarket/.private_validation/32873038318/run/external_config.json --markets 1 --min-liquidity 10 --paper --loop",
+      "pid": 19594
+    },
+    {
+      "command": "./build/polymarket_stat_arb --config /Users/enrico/polymarket/.private_validation/32873038318/run/broker_config.json --markets 1 --history-universe 300 --lookback-hours 720 --fidelity-minutes 30 --min-z 1.25 --min-t-reversion 2.00 --max-half-life-hours 168 --top 150 --csv /Users/enrico/polymarket/.private_validation/32873038318/run/stat_arb_pairs_diagnostic.csv",
+      "pid": 19663
+    }
+  ],
+  "duplicates": {},
+  "label": "steady-1",
+  "owner": 19562
+}

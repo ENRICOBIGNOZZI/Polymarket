@@ -1,0 +1,11 @@
+{
+  "schema": "polymarket_automatic_promotion_policy_v1",
+  "paper_only": true,
+  "manual_approval_required": false,
+  "approval_label": "autonomous-promotion-approved",
+  "evidence_path_prefix": "research/promotion_evidence/",
+  "max_evidence_age_seconds": 21600,
+  "require_source_head_binding": true,
+  "require_non_overlapping_test_windows": true,
+  "block_negative_research_verdicts": true
+}

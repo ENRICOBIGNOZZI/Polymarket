@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "source_pr": 546,
+  "source_branch": "research/v7-unified-final-evidence-20260826",
+  "runtime_root": "runs/v7_candidate_evidence",
+  "proxy_port": 9130,
+  "required_successful_workflows": [
+    "ci",
+    "Polymarket Research Policy",
+    "monitoring",
+    "Private runtime single-writer validation"
+  ],
+  "require_source_draft": true,
+  "require_source_live_champion_unchanged": true,
+  "require_operator_directives_match_main": true,
+  "state_partition": "source_head_sha",
+  "restart_on_source_head_change": true,
+  "publish_telemetry": true,
+  "telemetry_latest_path": "telemetry/latest-v7-unified-evidence.json",
+  "telemetry_runtime_path": "telemetry/latest-v7-unified-runtime.json",
+  "rule": "Run the exact validated V7 research head continuously in a separate PAPER-only server runtime. Never mutate the incumbent champion, paper-validated, authenticated execution, or another runtime state root. Evidence is partitioned by source SHA and never pooled across code revisions."
+}

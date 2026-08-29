@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "enabled": true,
+  "version": 7,
+  "loop": "scripts/paper_v7_execution_loop.sh",
+  "config": "config/paper_v7.json",
+  "run_root": "runs/paper_v7_live",
+  "deployment_ref": "paper-validated",
+  "promotion_policy": "operator_forced_v7_paper_champion",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "candidate_only_until_promoted": true,
+  "legacy_fallback_allowed": false,
+  "reason": "V7 is the sole destination and professional market making is the primary PAPER lane, but this integration head remains candidate-only until exact-SHA technical gates and same-SHA canonical economic evidence pass the required lifecycle. Authenticated and real-order execution remain disabled."
+}

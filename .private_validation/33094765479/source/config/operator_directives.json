@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "directive_epoch": "2026-08-27T18:39:00+02:00",
+  "operator_instruction_id": "user-v7-master-multi-agent-operating-prompt-20260827",
+  "priority_instruction_id": "user-v7-only-heavy-cleanup-20260827",
+  "authority": "latest_explicit_user_instruction",
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "scope": "all_registered_schedulers_and_paper_research",
+  "rule": "V7 is the only destination and the only supported runtime generation. Aggressively remove V3/V4/V5/V6 runtime, config, workflow, test, adapter, monitoring, deployment and documentation surfaces. Preserve only V7 and generation-neutral/common primitives that V7 imports. Do not restore legacy compatibility wrappers. PAPER-only safety remains mandatory; authenticated_execution=false and real_order_submission=false.",
+  "paper_v7_authorization": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "market_limit": 1000,
+    "min_liquidity": 2.0,
+    "min_net_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "fixed_dollar_trade_cap_enabled": false,
+    "max_trade_fraction": 1.0,
+    "max_market_fraction": 1.0,
+    "max_event_fraction": 1.0,
+    "max_gross_fraction": 1.0,
+    "max_drawdown": 0.15,
+    "hard_arb_fixed_dollar_trade_cap_enabled": false,
+    "hard_arb_max_trade_fraction": 1.0,
+    "max_trade_usd_compatibility_sentinel": 1e100,
+    "hard_arb_max_trade_usd_compatibility_sentinel": 1e100,
+    "interpretation": "100% is a hard ceiling, not a target. Kelly, executable depth, authoritative fees, spread/slippage, inventory and unwind risk, adverse markout, capital/latency costs, state integrity and the 15% drawdown kill switch still bind."
+  },
+  "architecture": {
+    "target": "one slim canonical V7 PAPER codebase",
+    "single_execution_ledger": true,
+    "single_runtime_owner": true,
+    "single_broker_authority": true,
+    "single_canonical_integration": true,
+    "no_live_expert_averaging": true,
+    "professional_market_maker_is_v7_sleeve_not_new_runtime": true,
+    "cleanup_sequence": "delete_all_legacy_now_then_validate_v7_only",
+    "legacy_rule": "Delete V3/V4/V5/V6 code and control-plane surfaces now. Keep only V7 plus common primitives imported by V7. Git history is the archive."
+  },
+  "economic_objective": {
+    "decision_ev": "P(fill_or_joint_completion|X,a) * E[alpha_or_spread_capture-costs-adverse_markout|fill,X,a] - E[partial_or_inventory_unwind_loss|X,a] - capital_cost - latency_cost + conservatively_haircut_maker_rebate + conservatively_haircut_liquidity_reward",
+    "multi_leg_rule": "Estimate the empirical joint completion/state distribution; product or minimum of marginal fill probabilities is not an accepted substitute.",
+    "success": "positive forward realized PAPER fill-conditioned post-cost PnL with causal data, realistic simulated fills, authoritative fees, executable depth, inventory/unwind losses, markout, reward/rebate attribution, cost stress and no leakage"
+  },
+  "current_priority_order": [
+    "Delete all V3/V4/V5/V6 executable/runtime/config/workflow/test/adapter/deploy/monitoring/documentation surfaces immediately.",
+    "Keep one V7 runtime, one broker authority, one canonical execution ledger, one allocator, one risk guard and one monitoring plane.",
+    "Keep only generation-neutral/common primitives that are actually imported by V7.",
+    "Professional Market Making V7 is the primary economic system.",
+    "Fast Structural Arb/HFT remains a V7 secondary sleeve.",
+    "Graph/RV remains a V7 secondary sleeve.",
+    "Ranking/PCA/Local Factor/Micro Taker remain V7 sleeves/research only.",
+    "After deletion, run a repository-wide legacy-reference audit and V7-only CI/monitoring/runtime smoke tests."
+  ],
+  "scheduler_assignments": {},
+  "forbidden_regressions": [
+    "Do not create V8/V9/V10 or another numerical runtime generation.",
+    "Do not create a second maker runtime, WebSocket market-data plane, state writer, broker owner, execution ledger or canonical integration.",
+    "Do not add or restore V3/V4/V5/V6 runtime logic or compatibility wrappers.",
+    "Do not add authenticated or real-money execution.",
+    "Do not use product/minimum of marginal fill probabilities as a generic multi-leg joint completion estimator."
+  ]
+}

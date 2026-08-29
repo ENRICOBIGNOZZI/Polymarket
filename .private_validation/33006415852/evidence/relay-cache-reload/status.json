@@ -1,0 +1,11 @@
+{
+  "cache_age_seconds": 0.18946003913879395,
+  "failures": 0,
+  "last_error": "",
+  "markets": 1,
+  "paper_only": true,
+  "schema": "polymarket_v6_market_proxy_status_v1",
+  "source": "startup_cache",
+  "timestamp": 1787773255,
+  "upstream_gamma_ok": false
+}

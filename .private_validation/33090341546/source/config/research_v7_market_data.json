@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "paper_only": true,
+  "research_only": true,
+  "authenticated_execution": false,
+  "gamma_url": "https://gamma-api.polymarket.com",
+  "clob_url": "https://clob.polymarket.com",
+  "books_batch_size": 80,
+  "maximum_book_age_seconds": 5,
+  "maximum_cross_book_exchange_skew_ms": 1500,
+  "maximum_cross_book_receive_skew_ms": 1500,
+  "require_exchange_timestamp": true,
+  "require_snapshot_hash": true,
+  "purpose": "Read-only point-in-time market data for V7 model research; not an operational PAPER runtime configuration."
+}

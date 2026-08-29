@@ -1,0 +1,9 @@
+{
+  "date": "2026-08-26",
+  "purpose": "Preserve a correct V6 compatibility runtime while V7 is integrated before cleanup.",
+  "config_runtime_source": "research/v6-authorized-envelope-runtime-current-main-20260825",
+  "single_broker_authority_source": "integration/v6-single-multileg-recovery-authority-20260826-r3",
+  "synthesis_commit": "5a7eaddd1bc7bc7e50e8527d0db566da79c09553",
+  "paper_v6_loop_blob": "4dd81e826b5fda29ea8d04d9208458b31a0fbcc1",
+  "cleanup_after_v7_main": true
+}

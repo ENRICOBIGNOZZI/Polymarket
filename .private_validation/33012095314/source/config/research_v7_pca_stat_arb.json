@@ -1,0 +1,72 @@
+{
+  "schema_version": 2,
+  "paper_only": true,
+  "research_only": true,
+  "live_intents_enabled": false,
+  "model_family": "single_leg_pca_residual_stat_arb",
+  "terminal_probability_interpretation": false,
+  "hedge_legs_allowed": false,
+  "horizons_minutes": [30, 60, 120, 360],
+  "universe": {
+    "maximum_markets": 1000,
+    "minimum_liquidity_usd": 2.0,
+    "maximum_clusters": 40,
+    "minimum_cluster_markets": 3,
+    "promotion_requires_point_in_time_or_forward_universe": true
+  },
+  "history": {
+    "lookback_hours": 720,
+    "fidelity_minutes": 30,
+    "minimum_regular_common_points": 72,
+    "require_regular_common_suffix": true,
+    "allow_irregular_transition_as_one_bar": false
+  },
+  "pca": {
+    "target_excluded_from_factor_estimation": true,
+    "minimum_predeclared_controls": 2,
+    "maximum_predeclared_controls": 8,
+    "control_selection": "metadata_only_same_event_then_text_similarity_before_history",
+    "missing_predeclared_control_pvalue": 1.0,
+    "maximum_components": 3,
+    "control_only_explained_variance_threshold": 0.80,
+    "target_factor_ridge": 0.0001,
+    "bootstrap_repetitions": 300,
+    "bootstrap_type": "conditional_target_residual_increment_blocks_controls_fixed_refit_target_factor",
+    "multiplicity_method": "benjamini_yekutieli_arbitrary_dependence",
+    "fdr_q": 0.10,
+    "apply_multiplicity_before_residual_z_and_economic_filters": true,
+    "minimum_abs_residual_z_after_multiplicity": 1.0,
+    "single_leg_uncertainty": "empirical_total_forecast_error_common_component_plus_residual_ar_error",
+    "residual_only_sigma_is_total_single_leg_risk": false
+  },
+  "execution_shadow": {
+    "mode": "TAKER",
+    "minimum_net_edge": 0.00005,
+    "minimum_liquidity_usd": 2.0,
+    "maximum_spread": 0.25,
+    "slippage_bps": 5.0,
+    "uncertainty_z": 1.0,
+    "capital_cost_bps_per_hour": 0.25,
+    "adverse_markout_penalty_bps": 2.0,
+    "maximum_book_age_seconds": 30,
+    "maximum_candidates_per_horizon": 20,
+    "maximum_trade_usd": 60.0,
+    "binary_kelly": false
+  },
+  "promotion_gate": {
+    "require_dependence_robust_by_survivors": true,
+    "require_conditional_target_residual_null": true,
+    "require_predeclared_metadata_only_controls": true,
+    "require_unestimable_hypotheses_in_family_at_p1": true,
+    "require_target_excluded_pca": true,
+    "require_total_single_leg_forecast_risk": true,
+    "require_uncertainty_deducted_from_executable_ev": true,
+    "require_fixed_horizon_phi_power_forecast": true,
+    "require_single_leg_only": true,
+    "require_authoritative_market_fee": true,
+    "require_fresh_executable_book": true,
+    "require_shared_execution_ledger": true,
+    "require_positive_fill_conditioned_cost_stressed_pnl": true,
+    "require_point_in_time_or_forward_universe": true
+  }
+}

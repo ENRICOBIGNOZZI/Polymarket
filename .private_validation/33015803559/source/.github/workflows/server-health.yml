@@ -1,0 +1,230 @@
+name: paper-server-health
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/server-health.yml"
+      - "scripts/runtime_contract_health.py"
+      - "monitoring/exporter_latest.py"
+      - "monitoring/grafana/**"
+  workflow_run:
+    workflows: ["deploy-paper-server", "Grafana Permanent Access"]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: "23 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: polymarket-paper-server
+  cancel-in-progress: false
+
+jobs:
+  health:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success'
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+      GRAFANA_HOSTNAME: mamma-portfolio
+      GRAFANA_FQDN: mamma-portfolio.tail1bae85.ts.net
+      GRAFANA_URL: http://mamma-portfolio.tail1bae85.ts.net
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve stable Grafana UID
+        shell: bash
+        run: |
+          set -euo pipefail
+          uid="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          print(json.loads(Path('config/project_context.json').read_text(encoding='utf-8'))['grafana']['dashboard_uid'])
+          PY
+          )"
+          test -n "$uid"
+          echo "GRAFANA_DASHBOARD_UID=$uid" >> "$GITHUB_ENV"
+
+      - name: Select existing Tailscale credential mode
+        id: tailscale_auth
+        shell: bash
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${TS_AUTHKEY:-}" ]]; then
+            mode=authkey
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
+            test -n "${TS_TAGS:-}" || { echo "OAuth credentials are visible but TS_TAGS is empty" >&2; exit 1; }
+            mode=oauth
+          else
+            echo "No visible Tailscale credential set." >&2
+            exit 1
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Join private tailnet with auth key
+        if: steps.tailscale_auth.outputs.mode == 'authkey'
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Join private tailnet with OAuth
+        if: steps.tailscale_auth.outputs.mode == 'oauth'
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Configure SSH identity
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}" || { echo "missing POLYMARKET_SERVER_SSH_KEY" >&2; exit 1; }
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_deploy
+          chmod 600 ~/.ssh/polymarket_deploy
+          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
+
+      - name: Verify operator Grafana route and exact dashboard
+        shell: bash
+        run: |
+          set -euo pipefail
+          tailscale ping --until-direct=false --c 1 --timeout=10s "$GRAFANA_HOSTNAME"
+          getent hosts "$GRAFANA_FQDN"
+          curl --fail --silent --show-error --retry 10 --retry-delay 2 --retry-all-errors \
+            "$GRAFANA_URL/api/health" | tee grafana-health.json
+          curl --fail --silent --show-error --retry 5 --retry-delay 2 --retry-all-errors \
+            "$GRAFANA_URL/api/dashboards/uid/$GRAFANA_DASHBOARD_UID" > grafana-dashboard.json
+          python3 - "$GRAFANA_DASHBOARD_UID" grafana-dashboard.json <<'PY'
+          import json,sys
+          uid,path=sys.argv[1:]
+          payload=json.load(open(path,encoding='utf-8'))
+          dashboard=payload.get('dashboard') or {}
+          assert dashboard.get('uid') == uid, dashboard.get('uid')
+          PY
+
+      - name: Inspect version-neutral PAPER server
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            "GRAFANA_DASHBOARD_UID='$GRAFANA_DASHBOARD_UID' bash -s" <<'REMOTE' | tee server-health.txt
+          set -euo pipefail
+          cd ~/polymarket
+          printf 'timestamp=%s\nos=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(uname -s)"
+          head_sha="$(git rev-parse HEAD)"
+          git fetch -q origin main paper-validated
+          main_sha="$(git rev-parse origin/main)"
+          validated_sha="$(git rev-parse origin/paper-validated)"
+          printf 'head=%s\norigin_main=%s\npaper_validated=%s\nbranch=%s\n' \
+            "$head_sha" "$main_sha" "$validated_sha" "$(git branch --show-current)"
+          test "$head_sha" = "$validated_sha"
+          git merge-base --is-ancestor "$validated_sha" "$main_sha"
+
+          champion_meta="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path('config/live_champion.json').read_text(encoding='utf-8'))
+          print(f"{int(m['version'])}\t{m['run_root']}\t{Path(m['run_root']).name}")
+          PY
+          )"
+          IFS=$'\t' read -r version run_root_rel run_name <<<"$champion_meta"
+          [[ "$version" =~ ^[1-9][0-9]*$ ]]
+          printf 'champion_version=%s\nchampion_run_root=%s\n' "$version" "$run_root_rel"
+
+          if (( version == 5 )); then
+            python3 scripts/v5_runtime_readiness.py \
+              --run-root "$HOME/polymarket/$run_root_rel" \
+              --supervisor-max-age 60 --allocator-max-age 30 \
+              --model-output-max-age 120 --startup-grace 600
+          else
+            python3 scripts/runtime_contract_health.py \
+              --manifest config/live_champion.json --repository-root . \
+              --max-age-seconds 180
+          fi
+
+          exporter_healthz_file="$(mktemp)"
+          trap 'rm -f "$exporter_healthz_file"' EXIT
+          exporter_healthz_code="$(curl --silent --show-error \
+            --output "$exporter_healthz_file" --write-out '%{http_code}' \
+            http://127.0.0.1:9108/healthz || true)"
+          printf 'exporter_healthz_http=%s\nexporter_healthz_body_begin\n' "${exporter_healthz_code:-000}"
+          cat "$exporter_healthz_file"
+          printf '\nexporter_healthz_body_end\n'
+          test "$exporter_healthz_code" = "200"
+
+          metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
+          grep -Eq "^polymarket_runtime_info\\{adapter=\"[^\"]+\",run_root=\"${run_name}\",version=\"v${version}\"\\} 1$" <<<"$metrics"
+          grep -q '^polymarket_runtime_pnl_usd ' <<<"$metrics"
+          grep -q '^polymarket_runtime_equity_usd ' <<<"$metrics"
+          if (( version >= 6 )); then
+            grep -q '^polymarket_runtime_contract_present 1$' <<<"$metrics"
+          fi
+          printf '%s\n' "$metrics" | grep -E '^polymarket_(runtime_info|runtime_contract_present|runtime_equity_usd|runtime_pnl_usd|runtime_drawdown_ratio|runtime_kill_switch|runtime_realized_pnl_usd_total|runtime_execution_staleness_seconds|model_)' | head -n 160 || true
+
+          curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
+          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+          curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$GRAFANA_DASHBOARD_UID" >/dev/null
+
+          state_root="$(python3 scripts/runtime_contract_health.py \
+            --manifest config/live_champion.json --repository-root . \
+            --max-age-seconds 180 --json 2>/dev/null | \
+            python3 -c 'import json,sys; print(json.load(sys.stdin)["state_root"])' 2>/dev/null || true)"
+          if [[ -n "$state_root" ]]; then
+            printf 'state_root=%s\n' "$state_root"
+            for log in trade_recorder.log multileg.log maker.log micro_taker.log hard_arb.log; do
+              if [[ -s "$state_root/$log" ]]; then
+                printf '%s_tail_begin\n' "${log%.log}"
+                tail -n 20 "$state_root/$log"
+                printf '%s_tail_end\n' "${log%.log}"
+              fi
+            done
+          fi
+
+          case "$(uname -s)" in
+            Darwin)
+              bash ops/macos_service_control.sh status
+              /bin/launchctl print system/com.polymarket.autoupdate >/dev/null
+              ;;
+            Linux)
+              systemctl is-active --quiet polymarket-paper.service
+              systemctl is-active --quiet polymarket-monitoring.service
+              ;;
+            *) exit 1 ;;
+          esac
+          REMOTE
+
+      - name: Upload health evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-server-health-${{ github.run_id }}
+          path: |
+            server-health.txt
+            grafana-health.json
+            grafana-dashboard.json
+          if-no-files-found: warn
+          retention-days: 7

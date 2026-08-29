@@ -1,0 +1,103 @@
+{
+  "schema": "polymarket_experiment_registry_v1",
+  "registry_version": 1,
+  "experiments": [
+    {
+      "experiment_id": "external-data-lineage-audit",
+      "hypothesis_id": "external-point-in-time-contract-remains-valid",
+      "family": "external_information_operations",
+      "status": "planned",
+      "priority": 10,
+      "cadence_seconds": 900,
+      "required_new_observations": 0,
+      "run_without_new_input": true,
+      "allow_missing_inputs": true,
+      "input_files": [
+        "config/autonomous_research.json",
+        "runs/research/external_data_status.json"
+      ],
+      "command": [
+        "python3",
+        "scripts/external_data_plane.py",
+        "--config",
+        "config/autonomous_research.json",
+        "audit"
+      ],
+      "timeout_seconds": 120,
+      "target_type": "data_product_health",
+      "evaluation_protocol": "point_in_time_lineage_v1"
+    },
+    {
+      "experiment_id": "global-opportunity-book-refresh",
+      "hypothesis_id": "all-market-search-frontier-after-approved-integration",
+      "family": "global_opportunity_search",
+      "status": "planned",
+      "priority": 20,
+      "cadence_seconds": 300,
+      "required_new_observations": 1,
+      "run_without_new_input": false,
+      "allow_missing_inputs": false,
+      "input_files": [],
+      "command": [],
+      "timeout_seconds": 180,
+      "target_type": "executable_opportunity_ranking",
+      "evaluation_protocol": "source_specific_executable_cost_v1"
+    },
+    {
+      "experiment_id": "dynamic-factor-challenger",
+      "hypothesis_id": "dynamic-factor-beats-static-pca",
+      "family": "statistical_arbitrage",
+      "status": "planned",
+      "priority": 40,
+      "cadence_seconds": 21600,
+      "required_new_observations": 100,
+      "input_files": [],
+      "command": [],
+      "timeout_seconds": 900,
+      "target_type": "relative_value",
+      "evaluation_protocol": "purged_chronological_oos_v2"
+    },
+    {
+      "experiment_id": "graph-projection-challenger",
+      "hypothesis_id": "joint-constraint-projection-improves-graph-expert",
+      "family": "graph_logic",
+      "status": "planned",
+      "priority": 50,
+      "cadence_seconds": 21600,
+      "required_new_observations": 100,
+      "input_files": [],
+      "command": [],
+      "timeout_seconds": 900,
+      "target_type": "terminal_probability",
+      "evaluation_protocol": "chronological_brier_and_incremental_utility_v1"
+    },
+    {
+      "experiment_id": "semantic-encoder-challenger",
+      "hypothesis_id": "learned-event-embeddings-beat-token-jaccard",
+      "family": "semantic_relative_value",
+      "status": "planned",
+      "priority": 60,
+      "cadence_seconds": 43200,
+      "required_new_observations": 250,
+      "input_files": [],
+      "command": [],
+      "timeout_seconds": 1800,
+      "target_type": "terminal_probability",
+      "evaluation_protocol": "point_in_time_neighbor_ablation_v1"
+    },
+    {
+      "experiment_id": "external-terminal-challenger",
+      "hypothesis_id": "calibrated-external-data-adds-incremental-utility",
+      "family": "external_information",
+      "status": "planned",
+      "priority": 70,
+      "cadence_seconds": 21600,
+      "required_new_observations": 100,
+      "input_files": [],
+      "command": [],
+      "timeout_seconds": 900,
+      "target_type": "terminal_probability",
+      "evaluation_protocol": "point_in_time_brier_logloss_incremental_utility_v1"
+    }
+  ]
+}

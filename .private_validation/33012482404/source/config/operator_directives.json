@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "directive_epoch": "2026-08-26T20:20:00+02:00",
+  "operator_instruction_id": "user-v7-paper-100pct-20260826",
+  "authority": "latest_explicit_user_instruction",
+  "supersedes_prs": [513, 516, 519, 537, 547],
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "scope": "all_registered_schedulers_and_paper_research",
+  "rule": "These directives encode the latest explicit user instruction and supersede older PR descriptions, comments, tests, scheduler summaries and inferred policy whenever they conflict. Autonomous research, remediation, promotion and integration workflows may enforce but may not redefine this file.",
+  "paper_v7_authorization": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "market_limit": 1000,
+    "min_liquidity": 2.0,
+    "min_net_edge": 0.00005,
+    "uncertainty_penalty": 0.0,
+    "fractional_kelly_ceiling": 0.25,
+    "fixed_dollar_trade_cap_enabled": false,
+    "max_trade_fraction": 1.0,
+    "max_market_fraction": 1.0,
+    "max_event_fraction": 1.0,
+    "max_gross_fraction": 1.0,
+    "max_drawdown": 0.15,
+    "hard_arb_fixed_dollar_trade_cap_enabled": false,
+    "hard_arb_max_trade_fraction": 1.0,
+    "max_trade_usd_compatibility_sentinel": 1e100,
+    "hard_arb_max_trade_usd_compatibility_sentinel": 1e100,
+    "interpretation": "100% is a hard ceiling, not a target. Kelly, available sleeve cash, executable depth, authoritative fees, slippage, adverse markout, uncertainty/capital-time economics, state integrity and the 15% drawdown kill switch still bind."
+  },
+  "architecture": {
+    "target": "one unified V7 PAPER engine on main",
+    "single_execution_ledger": true,
+    "single_runtime_owner": true,
+    "single_broker_authority": true,
+    "no_live_expert_averaging": true,
+    "no_terminal_probability_interpretation_for_fixed_horizon_stat_arb": true,
+    "cleanup_sequence": "unify_and_validate_on_main_then_delete_legacy"
+  },
+  "model_contracts": {
+    "pca": "single-leg residual statistical arbitrage only; evaluate 30m, 1h, 2h and 6h separately; no mandatory hedge basket, terminal-probability semantics or binary Kelly",
+    "local_factor": "leave-targets-out factor basis, null-preserving inference, dependence-robust multiplicity, phi^h forecast and PnL-unit hedge ratios; evaluate 30m and 60m separately",
+    "cross_sectional_ranking": "relative top-vs-bottom executable ranking; evaluate 30m, 1h, 2h and 6h separately; do not pool inference across horizons",
+    "micro_maker": "optimize fill-conditioned net PnL, not fill probability; queue, OFI, imbalance, microprice, depth, toxicity and adverse markout are required; exits/markouts are quantity-specific depth-aware",
+    "micro_taker": "complete executable round-trip target with entry ask VWAP, expected/realized exit bid VWAP, both authoritative fees, slippage, uncertainty, adverse markout and capital-time costs",
+    "graph_rv": "prospective dual-clock joint-state evidence only; no product/minimum of marginal fill probabilities; explicit partial-state unwind; fixed-horizon executable liquidation for full and partial states; dependence-robust chronological inference",
+    "external_intelligence": "fail closed; raw external features never become a synthetic terminal probability without approved probability mapping and evidence"
+  },
+  "frequency_research": {
+    "execution_seconds": {
+      "micro_maker": [1, 2, 5, 10],
+      "micro_taker": [2, 5, 10, 30],
+      "hard_arb": [1, 2, 5, 10],
+      "graph_rv": [5, 15, 30, 60]
+    },
+    "forecast_minutes": [30, 60, 120, 360],
+    "rules": [
+      "keep state, PnL, labels and inference separate by frequency",
+      "do not select a new frequency post hoc on the same holdout",
+      "new frequencies require prospective chronological evidence"
+    ]
+  },
+  "current_priority_order": [
+    "Stop policy regressions that reintroduce V7 $125 or 5%/15%/70% caps.",
+    "Validate and integrate the Graph/RV v3 executable dependence-robust successor.",
+    "Validate and integrate runtime process-group draining so no proxy, recorder, broker or state-writer descendant survives its owner.",
+    "Rebase the HF event-time/depth-aware maker, causal-flow/depth-aware taker and hard-arb freshness successor onto the authorized 100% V7 policy without carrying bounded-policy config changes.",
+    "Consolidate PCA, Local Factor, cross-sectional ranking, Micro Maker, Micro Taker, Graph/RV, hard arb and External Intelligence into the single V7 structure.",
+    "Run the unified V7 candidate continuously in isolated PAPER research mode to accumulate machine-readable prospective execution evidence without mutating the incumbent champion.",
+    "Create one fresh integration branch from current main, bind exact source SHA/provenance, merge to main only after deterministic and economic gates are satisfied.",
+    "Run exact-SHA CI, monitoring, live-paper, private single-writer and server-health validation; advance paper-validated and deploy the same SHA for continuous PAPER operation.",
+    "Only after the validated V7 deployment is healthy, delete superseded V3/V4/V5/V6 entrypoints, migration adapters, stale workflows, obsolete tests/configs and superseded research branches."
+  ],
+  "scheduler_assignments": {
+    "administrator-supervisor": "Report any scheduler/PR that conflicts with this directive; never recommend an older sizing artifact as current authorization.",
+    "research-policy": "Treat this file as the current operator authorization. Reject PRs that reintroduce a fixed-dollar V7 cap or reduce the V7 100% trade/market/event/gross ceilings as an alleged operator requirement. Continue enforcing PAPER-only and authenticated-execution separation.",
+    "research-queue": "Prioritize Graph v3, runtime process-group drain, HF successor on the 100% V7 base, unified prospective V7 PAPER evidence, multi-frequency PCA/LF/ranking evidence, then external-intelligence integration. Do not dispatch bounded-policy restoration work.",
+    "promotion-controller": "Do not treat the authorized V7 100% PAPER ceilings as a safety-policy violation. Promotion remains evidence-gated by exact source provenance, executable costs, OOS evidence, stability, data health and drawdown controls.",
+    "integration-merge": "Merge only the single canonical V7 integration. Refuse bounded-policy rollback PRs, predecessor Graph guards, duplicate runtime owners and cleanup-before-deploy branches.",
+    "control-plane-event-bridge": "Dispatch only the existing Promotion Controller after validator completion and the existing Integration Merge after a successful controller completion. Never merge, deploy, mutate paper-validated, reinterpret operator directives, change model policy or execute orders directly.",
+    "post-merge-validation": "Bind CI, monitoring and live-paper validation to the exact merged V7 SHA.",
+    "code-validation": "Enforce this V7 authorization in deterministic tests; fixed-dollar-cap-disabled and 100% percentage ceilings are valid for PAPER V7.",
+    "monitoring-validation": "Validate V7 per-strategy/frequency PnL, fills, markouts, queue/depth, process ownership and exact deployed revision.",
+    "live-paper-validation": "Validate the unified V7 PAPER engine using public data; do not require arbitrary trade count by weakening economics; advance paper-validated only on exact-SHA success.",
+    "paper-server-deploy": "Deploy only the exact paper-validated V7 revision and preserve PAPER-only/authenticated-disabled separation.",
+    "paper-server-health": "Verify single writer/process ownership, recorder, broker, proxy, Grafana/metrics and deployed SHA; report rather than rewriting policy.",
+    "forward-maker-research": "Continue prospective maker evidence across HF cadences with fill-conditioned PnL and bounded-delay depth-aware markouts; do not optimize fill count alone.",
+    "v6-live-data-research": "Compatibility evidence only. Do not expand V6 architecture or create new V6 production paths; migrate useful evidence/contracts into V7.",
+    "alpha-factory": "Rank challengers by executable OOS economics and incremental utility under the V7 contracts; do not propose bounded-policy rollback as alpha work.",
+    "meta-supervisor": "Coordinate the current priority order in this file. Dispatch remediation/research only; never reinterpret stale PR text as current authorization.",
+    "fast-arb-shadow-research": "Test multiple HF cadences with strict receive/exchange freshness, depth, fee, legging and unwind accounting.",
+    "arb-theory-research": "Derive structural/Graph opportunities under the v3 joint-state/fixed-horizon execution contract, not marginal-fill products or assumed terminal payout floors.",
+    "external-intelligence": "Collect, store and chronologically validate public information; publish research evidence only and keep probability mapping fail-closed.",
+    "live-api-smoke": "Read-only connectivity only; no policy mutation.",
+    "v7-point-in-time-universe-archive": "Every 30 minutes archive the exact paper-validated public universe from the existing compatibility cache into immutable point-in-time snapshots for causal V7 PCA, Local Factor and ranking research. Remain read-only with respect to champion, orders, PnL and risk state.",
+    "v7-unified-paper-evidence": "Continuously reconcile only the exact-green head of final research PR #546 into a separate Git clone, proxy port and per-SHA PAPER runtime. Preserve the incumbent champion and paper-validated ref, never submit authenticated orders, never merge/deploy, and never pool evidence across code revisions.",
+    "v6-market-cache-relay": "Keep the compatibility cache fresh only; do not mutate V7 model policy or champion selection."
+  },
+  "forbidden_regressions": [
+    "Do not reopen, recreate or merge a V7 policy whose purpose is to restore a $125 fixed trade cap or 5%/15%/70% market/event/gross caps as current authorization.",
+    "Do not use PR #513, #516, #519, #537 or #547, or an equivalent bounded-policy successor, as V7 integration/governance source.",
+    "Do not delete legacy code before the unified V7 SHA is merged to main, validated, advanced to paper-validated and healthy on the PAPER server.",
+    "Do not add authenticated or real-money execution.",
+    "Do not create a second live state writer, broker owner or execution ledger.",
+    "Do not write scheduler-generated code or artifacts outside this repository except the existing private PAPER runtime/deployment/telemetry channels explicitly registered by the control plane."
+  ]
+}

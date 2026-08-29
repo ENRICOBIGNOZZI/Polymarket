@@ -1,0 +1,62 @@
+{
+  "schema": "hf_forward_maker_calibration_snapshot_v1",
+  "generated_from": {
+    "workflow": "forward-maker-alpha-research",
+    "run_id": 32986792947,
+    "source_main_sha": "fccbdd036093c2f7973635c3c47431ad8381b261",
+    "completed_utc": "2026-08-26T16:21:19Z"
+  },
+  "current_session": {
+    "duration_seconds": 480,
+    "markets": 15,
+    "quote_definitions": 45,
+    "snapshots": 48,
+    "any_fills": 0,
+    "pair_fills": 0,
+    "one_sided_fills": 0,
+    "pnl_ex_rewards_usd": 0.0
+  },
+  "history": {
+    "valid_sessions": 61,
+    "history_span_seconds": 166335,
+    "probes_per_policy": 887
+  },
+  "policies": {
+    "join": {
+      "any_fills": 1,
+      "one_sided_only": 1,
+      "pair_fills": 0,
+      "total_pnl_ex_rewards_usd": -0.13894351315407616,
+      "filled_share_weighted_markout_60_bid_per_share": -0.0020000000000000018,
+      "filled_share_weighted_markout_300_bid_per_share": null,
+      "block_bootstrap_ucb_mean_pnl_ex_rewards_per_probe_usd": 0.0,
+      "eligible_for_paper_shadow": false
+    },
+    "improve1": {
+      "any_fills": 10,
+      "one_sided_only": 10,
+      "pair_fills": 0,
+      "total_pnl_ex_rewards_usd": -5.744892566366351,
+      "filled_share_weighted_markout_60_bid_per_share": -0.0034036496350365055,
+      "filled_share_weighted_markout_300_bid_per_share": -0.0027398311588641617,
+      "block_bootstrap_lcb_mean_pnl_ex_rewards_per_probe_usd": -0.01176650636019128,
+      "block_bootstrap_ucb_mean_pnl_ex_rewards_per_probe_usd": -0.0019956289330349815,
+      "positive_active_sessions": 0,
+      "eligible_for_paper_shadow": false,
+      "decision": "REJECT_UNCONDITIONAL_INSIDE_SPREAD_CURRENT_SAMPLE"
+    },
+    "fade1": {
+      "any_fills": 1,
+      "one_sided_only": 1,
+      "pair_fills": 0,
+      "total_pnl_ex_rewards_usd": -0.45605470219999944,
+      "filled_share_weighted_markout_60_bid_per_share": 0.0,
+      "filled_share_weighted_markout_300_bid_per_share": null,
+      "block_bootstrap_ucb_mean_pnl_ex_rewards_per_probe_usd": 0.0,
+      "eligible_for_paper_shadow": false
+    }
+  },
+  "selected_policy_for_paper_shadow": null,
+  "production_action": "no_change",
+  "research_conclusion": "Unconditional one-tick inside-spread improvement is rejected on the current repeated-session sample. Further HF maker research must condition improvement on prospective fill-conditioned EV and preserve the 0.5 bp post-cost floor."
+}

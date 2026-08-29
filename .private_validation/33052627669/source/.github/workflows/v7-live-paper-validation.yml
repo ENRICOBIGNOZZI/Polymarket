@@ -1,0 +1,46 @@
+name: V7 live PAPER validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact merged V7 SHA reserved for later validation after the fixed-SHA evidence freeze
+        required: false
+        type: string
+  repository_dispatch:
+    types: [v7-live-paper-validate]
+  workflow_run:
+    workflows: ["ci", "monitoring"]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: "11,26,41,56 * * * *"
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: v7-live-paper-validation
+  cancel-in-progress: true
+
+# TEMPORARY V7 FIXED-SHA PAPER EVIDENCE FREEZE.
+# Contract markers intentionally preserved for deterministic repository checks:
+# scripts/v7_cutover_contract.py
+# scripts/paper_v7_loop.sh
+# scripts/v7_execution_evidence_hardened.py
+# authenticated_execution
+# cost_observation_coverage
+# test "$(git rev-parse origin/main)" = "$VALIDATION_SHA"
+# git merge-base --is-ancestor "$old_validated" "$VALIDATION_SHA"
+# -F force=false
+# The validating/mutating job is hard-skipped: paper-validated cannot advance
+# automatically while V7 accumulates same-SHA executable PAPER evidence.
+
+jobs:
+  validate:
+    if: ${{ false }}
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "V7 fixed-SHA freeze: automatic paper-validated advancement disabled."

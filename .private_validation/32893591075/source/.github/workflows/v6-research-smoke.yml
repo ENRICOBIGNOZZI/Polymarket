@@ -1,0 +1,255 @@
+name: V6 live-data research smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "27 * * * *"
+  pull_request:
+    branches: [main]
+    paths:
+      - "config/paper_v6.json"
+      - "config/v6_model_architecture.json"
+      - "scripts/paper_v6_loop.sh"
+      - "scripts/v6_*.py"
+      - "scripts/graph_research_ev.py"
+      - "scripts/execution_ev.py"
+      - "monitoring/exporter_v6.py"
+      - "monitoring/grafana/dashboards/polymarket-v6-model-operations.json"
+      - "tests/test_v6_model_contracts.py"
+      - "tests/test_v6_runtime_contract.py"
+      - "tests/test_v6_execution_costs.py"
+      - "tests/test_graph_research_ev.py"
+      - "tests/test_monitoring_v6_exporter.py"
+      - "tests/test_grafana_v6_operations_contract.py"
+      - ".github/workflows/v6-research-smoke.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v6-research-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  research-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Enforce isolated paper-only contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path('scripts').resolve()))
+          from hard_safety_policy import V6_AUTHORIZED_CEILINGS, V6_AUTHORIZED_FLOORS
+          cfg=json.loads(Path('config/paper_v6.json').read_text());arch=json.loads(Path('config/v6_model_architecture.json').read_text());live=json.loads(Path('config/live_champion.json').read_text())
+          assert cfg['v6']['paper_only'] is True;assert cfg['multi_strategy']['paper_only'] is True;assert arch['paper_only'] is True;assert arch['allow_authenticated_execution'] is False
+          event='${{ github.event_name }}'; head='${{ github.head_ref }}'; base_sha='${{ github.event.pull_request.base.sha }}'
+          if event == 'pull_request':
+              if head.startswith('integration/'):
+                  assert live['version'] == 6, 'V6 integration smoke requires the V6 live selector'
+              else:
+                  assert base_sha, 'non-integration PR must expose its base SHA'
+                  base_live=json.loads(subprocess.check_output(['git','show',f'{base_sha}:config/live_champion.json'],text=True))
+                  assert live == base_live, 'non-integration V6 smoke must preserve the base live champion selector'
+          assert float(cfg['max_drawdown']) <= V6_AUTHORIZED_CEILINGS['max_drawdown']
+          assert float(cfg['max_market_fraction']) <= V6_AUTHORIZED_CEILINGS['max_market_fraction']
+          assert float(cfg['max_event_fraction']) <= V6_AUTHORIZED_CEILINGS['max_event_fraction']
+          assert float(cfg['max_gross_fraction']) <= V6_AUTHORIZED_CEILINGS['max_gross_fraction']
+          assert float(cfg['multi_strategy']['global_max_gross_fraction']) <= V6_AUTHORIZED_CEILINGS['global_max_gross_fraction']
+          assert float(cfg['fractional_kelly']) <= V6_AUTHORIZED_CEILINGS['fractional_kelly']
+          assert float(cfg['max_trade_usd']) <= V6_AUTHORIZED_CEILINGS['max_trade_usd']
+          assert float(cfg['min_liquidity']) >= V6_AUTHORIZED_FLOORS['min_liquidity']
+          assert float(cfg['min_net_edge']) >= V6_AUTHORIZED_FLOORS['min_net_edge']
+          assert float(cfg['uncertainty_penalty']) >= V6_AUTHORIZED_FLOORS['uncertainty_penalty']
+          v=cfg['v6']; total=sum(float(v[k]) for k in ('micro_maker_capital_fraction','micro_taker_capital_fraction','relative_value_capital_fraction','hard_arb_capital_fraction','external_capital_fraction','reserve_fraction'));assert abs(total-1.0)<1e-9
+          assert float(v['intent_min_edge']) >= V6_AUTHORIZED_FLOORS['intent_min_edge']
+          assert float(v['hard_arb_min_net_edge']) >= V6_AUTHORIZED_FLOORS['hard_arb_min_net_edge']
+          assert float(v['hard_arb_max_trade_usd']) <= V6_AUTHORIZED_CEILINGS['hard_arb_max_trade_usd']
+          PY
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev
+      - name: Build V6 dependencies and deterministic contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2
+          python3 -m py_compile scripts/v6_queue_filter.py scripts/execution_ev.py scripts/graph_research_ev.py
+          python3 scripts/v6_queue_filter.py self-test
+          python3 -m unittest tests/test_v6_model_contracts.py tests/test_v6_runtime_contract.py tests/test_v6_execution_costs.py tests/test_graph_research_ev.py tests/test_monitoring_v6_exporter.py tests/test_grafana_v6_operations_contract.py -v
+      - name: Live public-data relation probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p v6_evidence
+          python3 scripts/v6_relation_intents.py --config config/paper_v6.json --output v6_evidence/relation_raw.csv --status v6_evidence/relation_status.json --markets 300 --min-liquidity 10 --min-edge 0.0002 --max-trade-usd 60 --max-events 50 > v6_evidence/relation.log 2>&1 || true
+          python3 scripts/v6_intent_guard.py --input v6_evidence/relation_raw.csv --output v6_evidence/relation_guarded.csv --status v6_evidence/relation_guard_status.json --min-edge 0.0002 --stress-bps 10 --max-age-seconds 240 > v6_evidence/relation_guard.log 2>&1 || true
+          python3 scripts/graph_research_ev.py --input v6_evidence/relation_guarded.csv --ledger v6_evidence/bundle_ledger.csv --events v6_evidence/multileg_events.csv --output v6_evidence/graph_research_ev.csv --status v6_evidence/graph_research_status.json --min-observations 30 --minimum-ev-usd 0 --capital-latency-bps 1 --completion-threshold 0.75 --cost-quantile 0.75 > v6_evidence/graph_research.log 2>&1 || true
+          ./build/polymarket_negrisk_arb --config config/paper_v6.json --markets 300 --min-liquidity 10 --top 100 > v6_evidence/graph_hard_taker_scan.csv 2> v6_evidence/graph_hard_taker_errors.log || true
+      - name: Live public-data executable hard-arb paper probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p v6_evidence/hard_arb
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          cfg=json.loads(Path('config/paper_v6.json').read_text()); cfg['starting_capital']=1500.0; cfg['run_dir']='v6_evidence/hard_arb'; Path('v6_evidence/hard_arb_config.json').write_text(json.dumps(cfg,indent=2,sort_keys=True)+'\n')
+          PY
+          python3 scripts/v6_queue_filter.py hard --config v6_evidence/hard_arb_config.json --run-dir v6_evidence/hard_arb --markets 300 --min-liquidity 10 --max-events 50 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 --leg-latency-ms 100 > v6_evidence/hard_arb.log 2>&1 || true
+      - name: Live public-data FDR local-factor probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/v6_local_factor_intents.py --config config/paper_v6.json --output v6_evidence/local_factor_intents.csv --status v6_evidence/local_factor_status.json --markets 250 --min-liquidity 10 --lookback-hours 168 --fidelity-minutes 60 --max-clusters 12 --min-common-points 48 --min-z 1.00 --fdr 0.10 --min-edge 0.0002 --max-trade-usd 60 --slippage-bps 5 > v6_evidence/local_factor.log 2>&1 || true
+      - name: Live public-data maker economics probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p v6_evidence/maker
+          ./build/polymarket_maker_paper --config config/paper_v6.json --run-dir v6_evidence/maker --markets 250 --min-liquidity 10 --min-edge 0.00035 --max-order-usd 25 --ttl-seconds 30 --hold-seconds 60 --adverse-selection-mult 0.15 --once > v6_evidence/maker.log 2>&1 || true
+      - name: Live public-data micro-taker causal warmup/markout probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p v6_evidence/micro_taker
+          probe_markets=250
+          recorder_pid=0
+          stop_smoke_recorder() {
+            if (( recorder_pid > 0 )); then
+              kill -TERM "$recorder_pid" 2>/dev/null || true
+              wait "$recorder_pid" 2>/dev/null || true
+              recorder_pid=0
+            fi
+          }
+          trap stop_smoke_recorder EXIT
+          ./build/polymarket_trade_recorder \
+            --config config/paper_v6.json --run-dir v6_evidence --markets "$probe_markets" --batch 40 \
+            --min-liquidity 25 --lookback-seconds 900 --interval 5 --loop \
+            >> v6_evidence/trade_recorder.log 2>&1 &
+          recorder_pid=$!
+          for _ in $(seq 1 30); do
+            [[ -s v6_evidence/trade_tape.csv ]] && break
+            kill -0 "$recorder_pid"
+            sleep 1
+          done
+          test -s v6_evidence/trade_tape.csv
+          # Sixteen observations span two complete 45-second exits while a
+          # 10-second target can still use a strictly pre-horizon REST mark.
+          # This produces causal labels and multiple tiny paper outcomes in one
+          # bounded smoke instead of merely proving that a position can open.
+          # Keep the execution probe on the recorder's exact market universe;
+          # otherwise active mid-price tokens can exist in the tape but remain
+          # invisible to the smaller liquidity-ranked book scan.
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
+            kill -0 "$recorder_pid"
+            python3 scripts/v6_queue_filter.py micro --config config/paper_v6.json --run-dir v6_evidence/micro_taker --markets "$probe_markets" --min-liquidity 25 --horizon-seconds 10 --max-target-staleness-seconds 5 --max-trade-usd 15 --min-edge 0.0003 --slippage-bps 5 --max-positions 10 --trade-tape v6_evidence/trade_tape.csv --exploration-enabled --exploration-max-trade-usd 5 --exploration-max-opens-per-hour 3 --exploration-max-positions 1 --exploration-hold-seconds 45 --exploration-min-activity 1 >> v6_evidence/micro_taker.log 2>&1
+            if (( i < 16 )); then sleep 5; fi
+          done
+          stop_smoke_recorder
+          trap - EXIT
+      - name: Summarize V6 evidence
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import csv,json,re
+          from pathlib import Path
+          root=Path('v6_evidence'); root.mkdir(parents=True,exist_ok=True)
+          def js(name):
+              p=root/name
+              try:return json.loads(p.read_text())
+              except Exception:return {}
+          hard=(root/'graph_hard_taker_scan.csv').read_text(errors='ignore') if (root/'graph_hard_taker_scan.csv').exists() else ''
+          m=re.search(r'net_positive_pre_gas=(\d+)',hard)
+          summary={'paper_only':True,'authenticated_execution':False,'relation':js('relation_status.json'),'relation_guard':js('relation_guard_status.json'),'graph_research':js('graph_research_status.json'),'local_factor':js('local_factor_status.json'),'hard_arb':js('hard_arb/status.json'),'graph_hard_net_positive_pre_gas':int(m.group(1)) if m else 0}
+          state=root/'micro_taker/state.json'
+          if state.exists():
+              try:
+                  s=json.loads(state.read_text());samples=s.get('samples') or []
+                  labeled=[x for x in samples if isinstance(x,dict) and x.get('y') is not None]
+                  bad=[x for x in labeled if int(x.get('target_observation_ts') or 0)>int(x.get('ts') or 0)+10]
+                  lags=[int(x['target_staleness_seconds']) for x in labeled if x.get('target_staleness_seconds') is not None]
+                  summary['micro_taker_samples']=len(samples)
+                  summary['micro_taker_labeled']=len(labeled)
+                  summary['micro_taker_post_horizon_labels']=len(bad)
+                  summary['micro_taker_target_staleness_max_seconds']=max(lags) if lags else None
+                  summary['micro_taker_open_positions']=len(s.get('positions') or {})
+                  summary['micro_taker_signals_last_tick']=int(s.get('signals') or 0)
+                  summary['micro_taker_opened_last_tick']=int(s.get('opened') or 0)
+                  summary['micro_taker_best_edge_last_tick']=float(s.get('best_edge') or 0.0)
+                  summary['micro_taker_realized_pnl_total']=float(s.get('realized_pnl_total') or 0.0)
+                  summary['micro_taker_equity']=float(s.get('equity') or 0.0)
+                  summary['micro_taker_drawdown']=float(s.get('drawdown') or 0.0)
+                  summary['micro_taker_label_stats_last_tick']=s.get('label_stats_last_tick') or {}
+                  summary['micro_taker_execution_model']=s.get('execution_model')
+                  summary['micro_taker_depth_rejections_last_tick']=int(s.get('depth_rejections_last_tick') or 0)
+                  summary['micro_taker_fee_sources_last_tick']=s.get('fee_sources_last_tick') or {}
+                  alpha=s.get('alpha') if isinstance(s.get('alpha'),dict) else {}
+                  summary['micro_taker_alpha_training']=alpha.get('training') or {}
+                  summary['micro_taker_alpha_training_ready']=alpha.get('training_ready') is True
+                  summary['micro_taker_alpha_training_rejections']=alpha.get('training_rejections_hour') or {}
+                  summary['micro_taker_alpha_economic_rejections']=alpha.get('economic_rejections_hour') or {}
+                  summary['micro_taker_alpha_fee_sources']=alpha.get('fee_sources_hour') or {}
+                  summary['micro_taker_alpha_best_round_trip_cost_fraction']=alpha.get('best_round_trip_cost_fraction_hour')
+                  summary['micro_taker_alpha_best_expected_net_edge']=alpha.get('best_expected_net_edge_hour')
+                  exploration=s.get('exploration') if isinstance(s.get('exploration'),dict) else {}
+                  summary['micro_taker_exploration_hourly_opens']=int(exploration.get('hourly_opens') or 0)
+                  summary['micro_taker_exploration_active_positions']=int(exploration.get('active_positions') or 0)
+                  summary['micro_taker_exploration_realized_pnl_total']=float(exploration.get('realized_pnl_total') or 0.0)
+                  summary['micro_taker_exploration_probe_ticks']=int(exploration.get('probe_ticks_hour') or 0)
+                  summary['micro_taker_exploration_activity_candidates']=int(exploration.get('activity_candidates_hour') or 0)
+                  summary['micro_taker_exploration_economic_rejections']=exploration.get('economic_rejections_hour') or {}
+                  summary['micro_taker_exploration_fee_sources']=exploration.get('fee_sources_hour') or {}
+                  summary['micro_taker_exploration_best_round_trip_cost_fraction']=exploration.get('best_round_trip_cost_fraction_hour')
+                  outcomes=root/'micro_taker'/'exploration_outcomes.csv'
+                  summary['micro_taker_exploration_closed']=max(0,len(outcomes.read_text().splitlines())-1) if outcomes.exists() else 0
+                  if bad: raise RuntimeError('micro taker used a post-horizon target observation')
+              except Exception as exc:
+                  summary['micro_taker_summary_error']=f'{type(exc).__name__}:{exc}'
+          fills=root/'micro_taker/fills.csv'
+          if fills.exists():
+              try:
+                  rows=list(csv.DictReader(fills.open(newline='',encoding='utf-8')))
+                  summary['micro_taker_buy_fills']=sum((r.get('action') or '').upper()=='BUY' for r in rows)
+                  summary['micro_taker_sell_fills']=sum((r.get('action') or '').upper() in {'SELL','SELL_PARTIAL'} for r in rows)
+                  summary['micro_taker_closed_fill_pnl']=sum(float(r.get('pnl') or 0.0) for r in rows if (r.get('action') or '').upper() in {'SELL','SELL_PARTIAL'})
+                  summary['micro_taker_exploration_buy_fills']=sum((r.get('action') or '').upper()=='BUY_EXPLORATION' for r in rows)
+                  summary['micro_taker_exploration_sell_fills']=sum((r.get('action') or '').upper() in {'SELL_EXPLORATION','SELL_PARTIAL_EXPLORATION'} for r in rows)
+                  summary['micro_taker_exploration_fill_pnl']=sum(float(r.get('pnl') or 0.0) for r in rows if (r.get('action') or '').upper() in {'SELL_EXPLORATION','SELL_PARTIAL_EXPLORATION'})
+              except Exception as exc:
+                  summary['micro_taker_fills_summary_error']=f'{type(exc).__name__}:{exc}'
+          markouts=root/'micro_taker/markouts.csv'
+          if markouts.exists():
+              try:
+                  rows=list(csv.DictReader(markouts.open(newline='',encoding='utf-8')))
+                  grouped={}
+                  for row in rows:
+                      key=f"{(row.get('experiment_kind') or 'UNKNOWN').upper()}:{int(float(row.get('horizon_seconds') or 0))}s"
+                      grouped.setdefault(key,[]).append(float(row.get('markout_pnl') or 0.0))
+                  summary['micro_taker_markouts']={key:{'count':len(values),'sum':sum(values),'mean':sum(values)/len(values)} for key,values in sorted(grouped.items())}
+              except Exception as exc:
+                  summary['micro_taker_markouts_summary_error']=f'{type(exc).__name__}:{exc}'
+          (root/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n');print(json.dumps(summary,indent=2,sort_keys=True))
+          if summary.get('micro_taker_post_horizon_labels',0): raise SystemExit('causal micro target contract failed')
+          PY
+          echo '## V6 live-data research smoke' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat v6_evidence/summary.json >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload V6 research evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v6-research-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: v6_evidence/
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,77 @@
+{
+  "schema": "polymarket_v6_model_architecture_v1",
+  "version": 6,
+  "paper_only": true,
+  "allow_authenticated_execution": false,
+  "production_rule": "No mixture-of-experts fair-value path is used in the live paper champion. Each model must emit the economic object it is designed to estimate and use a matching execution style.",
+  "semantic_role": "Contract parsing, entity extraction, threshold-family construction and logical relation discovery. Semantic similarity alone must never create a fair probability or trade.",
+  "models": {
+    "micro": {
+      "outputs": ["short_horizon_return", "maker_fill_value", "adverse_selection"],
+      "execution": ["MAKER", "TAKER"],
+      "required_evidence": ["forward_markout", "fill_probability", "adverse_selection", "trade_conversion"]
+    },
+    "local_factor": {
+      "outputs": ["cluster_residual_forecast", "hedged_relative_value"],
+      "clusters": ["event", "structured_threshold_family", "category"],
+      "execution": ["MAKER"],
+      "rule": "Many local factor models are allowed; one PCA per single market is forbidden because PCA requires a cross-section.",
+      "required_evidence": ["cluster_coherence", "negative_residual_autocorrelation", "walk_forward_markout", "hedge_error"]
+    },
+    "graph_hard": {
+      "outputs": ["executable_multileg_guarantee"],
+      "execution": ["TAKER"],
+      "relations": ["YES_NO_parity", "complete_NegRisk_event", "logical_implication"],
+      "rule": "Hard event arbitrage requires a Gamma-verified complete active outcome set and full live book revalidation before entry.",
+      "required_evidence": ["worst_case_payout", "VWAP", "fees", "slippage", "leg_depth"]
+    },
+    "graph_rv": {
+      "outputs": ["constrained_probability_projection"],
+      "execution": ["RESEARCH_ONLY"],
+      "rule": "The raw relation spread is not an execution edge. GRAPH_RV remains a paper research scanner until an empirical joint full/partial/zero fill distribution yields positive conditional execution EV; it cannot emit broker intents.",
+      "required_evidence": ["constraint_violation", "joint_fill_distribution", "conditional_execution_ev", "post_fill_markout", "event_completeness"]
+    },
+    "structural": {
+      "outputs": ["monotone_implied_distribution", "threshold_curve_fair_probability"],
+      "execution": ["MAKER", "TAKER"],
+      "families": ["price_thresholds", "vote_share", "seats", "rate_cuts", "temperature", "count_thresholds"],
+      "required_evidence": ["monotonicity_violation", "curve_stability", "forward_markout"]
+    },
+    "external": {
+      "outputs": ["terminal_probability", "source_confidence", "timestamp"],
+      "execution": ["MAKER", "TAKER"],
+      "rule": "Universalize the signal interface, not the domain model. Sources remain specialist and point-in-time.",
+      "required_evidence": ["source_provenance", "freshness", "match_quality", "Brier_improvement", "cost_stress"]
+    }
+  },
+  "operability_contract": {
+    "required_diagnostics": [
+      "markets_considered",
+      "candidate_count",
+      "emitted_count",
+      "best_executable_edge",
+      "coverage",
+      "rejection_histogram",
+      "fills",
+      "forward_markout",
+      "realized_pnl"
+    ],
+    "rule": "A silent model is a defect. A model may abstain, but it must publish the exact reason distribution and the scheduler must distinguish no alpha, failed data, failed execution and failed risk admission.",
+    "aggressiveness": "Increase operations by expanding valid edge sources, maker participation, local models and executable relation coverage. Do not manufacture trades by ignoring costs or logical completeness."
+  },
+  "scheduler_directive": {
+    "mandatory_context": [
+      "config/project_context.json",
+      "config/v6_model_architecture.json",
+      "config/live_champion.json"
+    ],
+    "all_schedulers": "Treat V6 model roles and output contracts as authoritative. Research that reintroduces semantic peer averaging, global heterogeneous PCA, midpoint-only hard arbitrage or a live fair-value mixture is non-promotable.",
+    "alpha_factory": "Maintain challengers separately for micro, local_factor, graph_hard, graph_rv, structural and external; rank by executable OOS utility and incremental trade coverage.",
+    "forward_maker": "Optimize micro maker fill EV and adverse selection; also test short-horizon taker forecasts separately.",
+    "fast_arb": "Prioritize executable graph_hard relations and full multi-leg VWAP revalidation.",
+    "arb_theory": "Expand proof-backed implication, exhaustive-event and structural payoff relations, then emit standardized intents.",
+    "external_intelligence": "Produce timestamped specialist probabilities only after point-in-time match validation and OOS evidence.",
+    "promotion_controller": "Promotion must preserve the V6 contracts and require exact-source OOS evidence, cost stress, drawdown control, data health and non-degrading incremental utility.",
+    "monitoring": "Expose model coverage, rejections, emitted bundles, fills and PnL by V6 family and execution mode."
+  }
+}

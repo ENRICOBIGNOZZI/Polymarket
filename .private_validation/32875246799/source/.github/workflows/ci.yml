@@ -1,0 +1,103 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "52 * * * *"
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact commit SHA to validate; defaults to the event SHA
+        required: false
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.sha }}
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Release, Debug]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.expected_sha || github.sha }}
+      - name: Verify exact validation revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
+          echo "validation_sha=$VALIDATION_SHA"
+      - name: Backfill missing exact-head PR CI
+        if: github.event_name == 'schedule' && matrix.build_type == 'Release'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"; page=1; dispatched=0
+          while :; do
+            page_rows="$(gh api "repos/${repo}/pulls?state=open&per_page=100&page=${page}" --jq '.[] | [.number, .head.ref, .head.sha, .head.repo.full_name] | @tsv')"
+            row_count=0
+            while IFS=$'\t' read -r pr_number head_ref head_sha head_repo; do
+              [[ -n "${pr_number:-}" ]] || continue; row_count=$((row_count + 1)); [[ "$head_repo" == "$repo" ]] || continue; [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || continue
+              run_count="$(gh api "repos/${repo}/actions/workflows/ci.yml/runs?head_sha=${head_sha}&per_page=1" --jq '.total_count')"; [[ "$run_count" =~ ^[0-9]+$ ]]; (( run_count == 0 )) || continue
+              current_sha="$(gh api "repos/${repo}/pulls/${pr_number}" --jq '.head.sha')"; [[ "$current_sha" == "$head_sha" ]] || continue
+              gh workflow run ci.yml --ref "$head_ref" -f expected_sha="$head_sha"; printf 'backfilled_pr=%s head=%s sha=%s\n' "$pr_number" "$head_ref" "$head_sha"; dispatched=$((dispatched + 1))
+            done <<< "$page_rows"
+            (( row_count == 100 )) || break; page=$((page + 1))
+          done
+          echo "backfilled_pr_heads=$dispatched"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+      - name: Configure (${{ matrix.build_type }})
+        run: >-
+          cmake -S . -B build-${{ matrix.build_type }}
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+      - name: Build (${{ matrix.build_type }})
+        run: cmake --build build-${{ matrix.build_type }} --parallel 2
+      - name: Unit and mock integration tests (${{ matrix.build_type }})
+        run: ctest --test-dir build-${{ matrix.build_type }} --output-on-failure
+      - name: Deployment, scheduler context, and V6 runtime contracts
+        run: |
+          set -euo pipefail
+          bash -n scripts/paper_latest_loop.sh scripts/paper_v5_loop.sh scripts/paper_v6_loop.sh \
+            ops/bootstrap_server.sh ops/update_server.sh ops/bootstrap_macos.sh ops/update_server_macos.sh \
+            ops/macos_service_control.sh ops/install_autoupdate_macos.sh ops/finish_bootstrap_macos.sh ops/apply_runtime_config_macos.sh
+          python3 -m py_compile \
+            scripts/multi_strategy_paper.py scripts/compact_strategy_logs.py scripts/project_context_snapshot.py \
+            scripts/validate_project_context.py scripts/validate_scheduler_registry.py \
+            scripts/v6_external_bridge.py scripts/v6_relation_intents.py scripts/v6_intent_guard.py \
+            scripts/v6_local_factor_intents.py scripts/v6_micro_taker.py scripts/v6_hard_arb_paper.py \
+            scripts/v6_runtime_status.py scripts/v7_execution_evidence.py monitoring/exporter_v5.py monitoring/exporter_v6.py monitoring/exporter_latest.py
+          python3 -m json.tool config/paper_v5.json >/dev/null
+          python3 -m json.tool config/paper_v6.json >/dev/null
+          python3 -m json.tool config/v6_model_architecture.json >/dev/null
+          python3 -m json.tool config/v7_execution_evidence.json >/dev/null
+          python3 -m json.tool config/live_champion.json >/dev/null
+          python3 -m json.tool config/project_context.json >/dev/null
+          python3 -m json.tool monitoring/grafana/dashboards/polymarket-multi-strategy.json >/dev/null
+          python3 scripts/validate_scheduler_registry.py --root . --registry config/scheduler_registry.json --output /tmp/scheduler-registry-report.md
+          python3 scripts/validate_project_context.py --root . --output /tmp/project-context-validation.md
+          python3 scripts/project_context_snapshot.py --root . --manifest config/project_context.json --output-json /tmp/project-context.json --output-markdown /tmp/project-context.md
+          test -s /tmp/project-context.json; test -s /tmp/project-context.md
+          python3 -m unittest tests/test_v6_runtime_contract.py tests/test_v6_model_contracts.py tests/test_v7_execution_evidence.py \
+            tests/test_compact_strategy_logs.py tests/test_ops_macos.py tests/test_workflow_yaml_contracts.py -v

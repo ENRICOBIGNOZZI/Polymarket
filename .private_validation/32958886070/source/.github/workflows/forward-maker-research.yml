@@ -1,0 +1,271 @@
+name: forward-maker-alpha-research
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/forward_maker_probe.py"
+      - "scripts/select_forward_candidates.py"
+      - "scripts/finalize_forward_probe.py"
+      - "scripts/calibrate_forward_maker.py"
+      - "scripts/apply_reward_payout_floor.py"
+      - "scripts/build_github_contents_request.py"
+      - "src/rewards_scan.cpp"
+      - "include/pm/rewards.hpp"
+      - "tests/test_forward_maker_probe.py"
+      - "tests/test_forward_candidate_selection.py"
+      - "tests/test_finalize_forward_probe.py"
+      - "tests/test_calibrate_forward_maker.py"
+      - "tests/test_github_contents_request.py"
+      - "CMakeLists.txt"
+      - ".github/workflows/forward-maker-research.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/forward_maker_probe.py"
+      - "scripts/select_forward_candidates.py"
+      - "scripts/finalize_forward_probe.py"
+      - "scripts/calibrate_forward_maker.py"
+      - "scripts/apply_reward_payout_floor.py"
+      - "scripts/build_github_contents_request.py"
+      - "src/rewards_scan.cpp"
+      - "include/pm/rewards.hpp"
+      - "tests/test_forward_maker_probe.py"
+      - "tests/test_forward_candidate_selection.py"
+      - "tests/test_finalize_forward_probe.py"
+      - "tests/test_calibrate_forward_maker.py"
+      - "tests/test_github_contents_request.py"
+      - "CMakeLists.txt"
+      - ".github/workflows/forward-maker-research.yml"
+  schedule:
+    - cron: "17,47 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: forward-maker-alpha-research-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  forward-shadow:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+
+      - name: Build and test
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+
+      - name: Run forward read-only maker experiment
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          R=forward_maker
+          mkdir -p "$R"
+
+          # Reuse bounded public sufficient statistics. The raw per-market probe
+          # stays in the current run artifact; only compact policy/session totals
+          # are carried forward for inference.
+          : > "$R/history_existing.jsonl"
+          history_endpoint="repos/${GITHUB_REPOSITORY}/contents/telemetry/forward-maker-history.jsonl"
+          gh api "${history_endpoint}?ref=telemetry" --jq .content 2>/dev/null \
+            | tr -d '\n' | base64 -d > "$R/history_existing.jsonl" 2>/dev/null || true
+
+          DURATION=480
+          MARKETS=15
+          POLL=10
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            DURATION=180
+            MARKETS=9
+            POLL=10
+          fi
+
+          : > "$R/reward_scan.log"
+          scan_ok=0
+          for attempt in 1 2 3; do
+            rm -f "$R/reward_opportunities.csv"
+            if ./build/polymarket_rewards_scan \
+              --config config/paper_v4.json --markets 1500 --top 40 \
+              --quote-shares 50 --max-notional 100 --improve-ticks 0 \
+              --competition-multiplier 2.0 --reward-haircut 0.25 \
+              --native-reward-unit-usd 1.0 --annual-capital-rate 0.20 \
+              --adverse-bps 50 --one-sided-fills-per-day 1.0 \
+              --csv "$R/reward_opportunities.csv" \
+              2>&1 | tee -a "$R/reward_scan.log"; then
+              scan_ok=1
+              break
+            fi
+            echo "reward_scan_retry attempt=$attempt" | tee -a "$R/reward_scan.log"
+            sleep $((attempt * 5))
+          done
+          if [[ "$scan_ok" -ne 1 ]]; then
+            echo "reward_scan_failed_after_retries" | tee -a "$R/reward_scan.log"
+            exit 1
+          fi
+
+          python3 scripts/apply_reward_payout_floor.py \
+            --csv "$R/reward_opportunities.csv" --minimum-daily-payout-usd 1.0 \
+            | tee -a "$R/reward_scan.log"
+
+          python3 scripts/select_forward_candidates.py \
+            --input "$R/reward_opportunities.csv" \
+            --output "$R/forward_candidates.csv" \
+            --markets "$MARKETS" \
+            | tee "$R/forward_candidate_selection.log"
+
+          python3 scripts/forward_maker_probe.py \
+            --opportunities "$R/forward_candidates.csv" \
+            --output "$R/forward_maker_probe.json" \
+            --csv "$R/forward_maker_probe.csv" \
+            --markets "$MARKETS" --duration-seconds "$DURATION" --poll-seconds "$POLL" \
+            --policies join,improve1,fade1 \
+            --arrival-latency-ms 250 --max-quote-shares 50 --max-notional 100 \
+            --exit-slippage-bps 10 \
+            | tee "$R/forward_maker_probe.log"
+
+          python3 scripts/finalize_forward_probe.py \
+            --input "$R/forward_maker_probe.json" \
+            --csv "$R/forward_maker_probe.csv" \
+            | tee -a "$R/forward_maker_probe.log"
+
+          python3 - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path("forward_maker")
+          sys.path.insert(0, str(Path("scripts").resolve()))
+          from calibrate_forward_maker import compact_session
+
+          payload = json.loads((root / "forward_maker_probe.json").read_text(encoding="utf-8"))
+          payload["git_sha"] = "${{ github.sha }}"
+          payload["github_run_id"] = "${{ github.run_id }}"
+          compact = compact_session(payload)
+          (root / "forward_maker_history_line.jsonl").write_text(
+              json.dumps(compact, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          cat "$R/history_existing.jsonl" "$R/forward_maker_history_line.jsonl" \
+            | tail -n 336 > "$R/forward-maker-history.jsonl"
+
+          # Keep the GitHub contents object below 900 kB even if schemas grow.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("forward_maker/forward-maker-history.jsonl")
+          lines = path.read_bytes().splitlines()
+          while len(lines) > 1 and sum(len(line) + 1 for line in lines) > 900_000:
+              lines.pop(0)
+          path.write_bytes((b"\n".join(lines) + b"\n") if lines else b"")
+          PY
+
+          python3 scripts/calibrate_forward_maker.py \
+            --history "$R/forward-maker-history.jsonl" \
+            --output "$R/forward_maker_calibration.json" \
+            --min-sessions 12 --min-history-span-seconds 18000 \
+            --min-probes 180 --min-any-fills 20 --min-pair-fills 10 \
+            --min-positive-active-session-rate 0.55 \
+            --max-one-sided-given-fill-upper 0.40 \
+            --bootstrap-reps 2000 --bootstrap-alpha 0.05 \
+            --bootstrap-block-sessions 4 \
+            | tee "$R/forward_maker_calibration.log"
+
+      - name: Publish experiment summary
+        if: always()
+        shell: bash
+        run: |
+          R=forward_maker
+          echo '## Forward maker alpha experiment' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No orders are submitted. All policies are read-only counterfactuals.' >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 5 "$R/forward_candidate_selection.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          tail -n 5 "$R/forward_maker_probe.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          tail -n 5 "$R/forward_maker_calibration.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if test -s "$R/forward_maker_probe.json"; then
+            echo '### Current session' >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          p = json.loads(Path("forward_maker/forward_maker_probe.json").read_text())
+          print(json.dumps(p.get("aggregate_by_policy", {}), indent=2, sort_keys=True))
+          PY
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if test -s "$R/forward_maker_calibration.json"; then
+            echo '### Repeated-session calibration' >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat "$R/forward_maker_calibration.json" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Publish latest and bounded empirical history
+        if: github.event_name != 'pull_request' && success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          R=forward_maker
+          test -s "$R/forward_maker_probe.json"
+          test -s "$R/forward-maker-history.jsonl"
+          test -s "$R/forward_maker_calibration.json"
+
+          publish_file() {
+            local local_path="$1"
+            local remote_path="$2"
+            local message="$3"
+            local endpoint="repos/${GITHUB_REPOSITORY}/contents/${remote_path}"
+            local current_sha request_path
+            current_sha="$(gh api "${endpoint}?ref=telemetry" --jq .sha 2>/dev/null || true)"
+            request_path="$(mktemp)"
+            local payload_args=(
+              --input "$local_path"
+              --message "$message"
+              --branch telemetry
+              --output "$request_path"
+            )
+            if [[ -n "$current_sha" ]]; then
+              payload_args+=(--sha "$current_sha")
+            fi
+            python3 scripts/build_github_contents_request.py "${payload_args[@]}"
+            gh api "$endpoint" --method PUT --input "$request_path" >/dev/null
+            rm -f "$request_path"
+          }
+
+          publish_file "$R/forward_maker_probe.json" \
+            "telemetry/latest-forward-maker.json" \
+            "Update latest forward maker experiment"
+
+          publish_file "$R/forward-maker-history.jsonl" \
+            "telemetry/forward-maker-history.jsonl" \
+            "Append bounded forward maker evidence"
+
+          publish_file "$R/forward_maker_calibration.json" \
+            "telemetry/latest-forward-maker-calibration.json" \
+            "Update empirical forward maker policy gate"
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forward-maker-alpha-${{ github.run_id }}
+          path: forward_maker/
+          if-no-files-found: error
+          retention-days: 14

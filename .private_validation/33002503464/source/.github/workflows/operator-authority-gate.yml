@@ -1,0 +1,76 @@
+name: Operator Authority Gate
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: operator-authority-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+    steps:
+      - name: Reject pull-request mutation of operator authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p gate
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
+            > gate/files-pages.json
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          protected = {
+              'config/operator_directives.json',
+              'config/project_context.json',
+              'scripts/hard_safety_policy.py',
+              'scripts/project_context_snapshot.py',
+              'scripts/validate_project_context.py',
+              'tests/test_hard_safety_policy.py',
+              'tests/test_v7_authorized_paper_envelope.py',
+              '.github/workflows/operator-authority-gate.yml',
+          }
+
+          pages = json.loads(Path('gate/files-pages.json').read_text())
+          files = [item for page in pages for item in page] if pages and all(isinstance(page, list) for page in pages) else pages
+          changed = {str(item.get('filename') or '') for item in files if isinstance(item, dict)}
+          blocked = sorted(changed & protected)
+          report = {
+              'head_sha': os.environ['HEAD_SHA'].lower(),
+              'head_ref': os.environ['HEAD_REF'],
+              'protected_changed': blocked,
+              'policy': 'fail' if blocked else 'pass',
+              'rule': 'operator authority is immutable through pull requests; autonomous schedulers may enforce but may not redefine it',
+          }
+          Path('gate/report.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(report, indent=2, sort_keys=True))
+          if blocked:
+              print('::error::operator authority surfaces are immutable through pull requests: ' + ', '.join(blocked))
+              raise SystemExit(1)
+          PY
+
+      - name: Publish gate report
+        if: always()
+        shell: bash
+        run: |
+          if test -s gate/report.json; then
+            echo '## Operator Authority Gate' >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat gate/report.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi

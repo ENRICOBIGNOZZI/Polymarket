@@ -1,0 +1,50 @@
+{
+  "schema": "polymarket_research_director_config_v1",
+  "paper_only": true,
+  "allow_authenticated_execution": false,
+  "allow_direct_champion_mutation": false,
+  "max_dispatches_per_cycle": 2,
+  "dispatch_cooldown_seconds": 1800,
+  "max_stagnant_cycles": 4,
+  "stagnation_retry_seconds": 7200,
+  "economic_stagnation_seconds": 7200,
+  "max_alpha_report_age_seconds": 10800,
+  "owner_workflows": {
+    "forward-maker-research.yml": {
+      "workflow_name": "forward-maker-alpha-research",
+      "priority_bias": 0
+    },
+    "external-intelligence.yml": {
+      "workflow_name": "Polymarket External Intelligence",
+      "priority_bias": 0
+    },
+    "v6-research-smoke.yml": {
+      "workflow_name": "V6 live-data research smoke",
+      "priority_bias": 0
+    },
+    "fast-arb-hourly.yml": {
+      "workflow_name": "Fast Arbitrage Hourly Shadow",
+      "priority_bias": 1
+    },
+    "arb-theory-hourly.yml": {
+      "workflow_name": "Arbitrage Theory Hourly Research",
+      "priority_bias": 1
+    }
+  },
+  "owner_remap": {
+    "alpha-factory.yml": "v6-research-smoke.yml"
+  },
+  "experiment_prefix_owner": {
+    "external_": "external-intelligence.yml",
+    "b2_": "v6-research-smoke.yml",
+    "fast_arb_": "fast-arb-hourly.yml",
+    "arb_theory_": "arb-theory-hourly.yml"
+  },
+  "forbidden_workflows": [
+    "integration-merge.yml",
+    "deploy-paper-server.yml",
+    "server-health.yml",
+    "promotion-controller.yml",
+    "post-merge-validation.yml"
+  ]
+}

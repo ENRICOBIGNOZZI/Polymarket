@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "research_state": "MORE_EVIDENCE_REQUIRED",
+  "source_pr": 546,
+  "source_head": "77ae32f7302840d8af70b2da037889c3b1a97a55",
+  "finding": "The observed V7 Local Factor PairFit uses a pair-excluded orientation-invariant temporal PC1, while the marginal residual-unit-root bootstrap rebuilt its nuisance factor as an arithmetic mean of controls. The observed statistic and bootstrap null were therefore conditioned on different factor constructions, reintroducing YES/NO sign-coding cancellation inside inference.",
+  "counterexample": {
+    "controls": ["+F", "+F", "-F", "-F"],
+    "arithmetic_control_mean": 0.0,
+    "orientation_invariant_pc1": "non-degenerate and invariant to independently flipping control signs",
+    "consequence": "The old bootstrap factor can collapse even when the observed PairFit factor is strong, so its marginal p-value is not calibrated for the statistic actually used by the model."
+  },
+  "repair": {
+    "observed_fit_factor": "pair-excluded orientation-invariant temporal PC1",
+    "bootstrap_factor": "same exact pair-excluded orientation-invariant temporal PC1",
+    "null": "conditional marginal residual I(1); resample dependent residual increments and reconstruct the target residual level path",
+    "pair_pvalue": "intersection-union max(p_A,p_B)",
+    "multiplicity": "dependence-robust layer remains separate",
+    "threshold_aggression": "not justified by this repair alone"
+  },
+  "regressions": [
+    "bootstrap factor equals the observed orientation-invariant factor on a +,+,-,- control fixture",
+    "arithmetic control mean collapses to zero on the same fixture",
+    "marginal bootstrap p-value is invariant to independent sign recoding of nuisance controls",
+    "existing mixed composite-null and other-target-path invariance tests remain required"
+  ],
+  "operator_contract": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "max_drawdown": 0.15,
+    "fixed_dollar_trade_cap_enabled": false,
+    "trade_fraction_ceiling": 1.0,
+    "market_fraction_ceiling": 1.0,
+    "event_fraction_ceiling": 1.0,
+    "gross_fraction_ceiling": 1.0,
+    "min_liquidity": 2.0,
+    "min_post_cost_edge": 0.00005,
+    "fractional_kelly_ceiling": 0.25
+  }
+}

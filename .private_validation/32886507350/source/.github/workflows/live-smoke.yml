@@ -1,0 +1,62 @@
+name: live-api-smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-api-smoke
+  cancel-in-progress: true
+
+jobs:
+  live-api-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev python3
+
+      - name: Build Release engine
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2
+
+      - name: Read-only Gamma and CLOB scan
+        run: |
+          mkdir -p live-smoke-output
+          ./build/polymarket_engine \
+            --config config/paper.example.json \
+            --once --scan-only --markets 10 --min-liquidity 100 \
+            --run-dir live-smoke-output
+          test -s live-smoke-output/status.json
+          test -s live-smoke-output/signals.csv
+
+      - name: Publish status summary
+        if: always()
+        run: |
+          echo "## Read-only live API smoke" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          if test -s live-smoke-output/status.json; then
+            python3 -m json.tool live-smoke-output/status.json >> "$GITHUB_STEP_SUMMARY" || cat live-smoke-output/status.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '{"status":"missing"}' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-smoke-${{ github.run_id }}
+          path: live-smoke-output/
+          if-no-files-found: warn
+          retention-days: 7

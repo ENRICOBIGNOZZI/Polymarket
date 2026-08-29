@@ -1,0 +1,222 @@
+name: Polymarket Research Policy
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "9,24,39,54 * * * *"
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft, labeled, unlabeled]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: polymarket-research-policy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  enforce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Verify exact policy revision
+        shell: bash
+        env:
+          POLICY_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$POLICY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$POLICY_SHA"
+          echo "policy_sha=$POLICY_SHA"
+
+      - name: Enforce main provenance or explicit operator authority
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          merged_pr="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" --jq '[.[] | select(.base.ref == "main" and .merged_at != null)] | first | .number // empty' 2>/dev/null || true)"
+          if [[ -n "$merged_pr" ]]; then
+            echo "main_push_pr=$merged_pr"
+            exit 0
+          fi
+          parent="$(git rev-parse HEAD^)"
+          git diff --name-only "$parent" HEAD | sort -u > /tmp/direct-main-files.txt
+          git log -1 --pretty=%s | grep -q '^Operator:'
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          changed={line.strip() for line in Path('/tmp/direct-main-files.txt').read_text().splitlines() if line.strip()}
+          directive_only={'config/operator_directives.json'}
+          authority_package={
+              'config/project_context.json',
+              'scripts/project_context_snapshot.py',
+              'scripts/validate_project_context.py',
+              '.github/workflows/research-policy.yml',
+          }
+          if changed != directive_only and changed != authority_package:
+              raise SystemExit(f'unauthorized direct-main operator package: {sorted(changed)}')
+          d=json.loads(Path('config/operator_directives.json').read_text())
+          assert d['authority']=='latest_explicit_user_instruction'
+          assert d['operator_instruction_id']=='user-v7-master-multi-agent-operating-prompt-20260827'
+          assert d['architecture']['cleanup_sequence']=='v7_implementation_then_tests_then_same_sha_paper_then_main_then_paper_validated_then_deploy_then_server_health_then_legacy_deletion'
+          assert d['paper_v7_authorization']['paper_only'] is True
+          assert d['paper_v7_authorization']['authenticated_execution'] is False
+          PY
+          echo 'direct_operator_authority_update=true'
+
+      - name: Validate scheduler and project context
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_scheduler_registry.py --root . --registry config/scheduler_registry.json --output scheduler-registry-report.md
+          python3 scripts/validate_project_context.py --root . --output project-context-validation.md
+          python3 scripts/project_context_snapshot.py --root . --manifest config/project_context.json --output-json project-context.json --output-markdown project-context.md
+
+      - name: Test current V7 master policy contracts
+        run: |
+          set -euo pipefail
+          python3 -m unittest \
+            tests/test_no_legacy_runtime.py \
+            tests/test_v7_authorized_paper_envelope.py \
+            tests/test_v7_control_plane_exact_head.py \
+            tests/test_v7_canonical_convergence_policy.py \
+            tests/test_promotion_gate.py -v
+
+      - name: Enforce pull-request lifecycle
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          base_sha="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["base"]["sha"])')"
+          head_sha="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["sha"])')"
+          head_ref="$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["ref"])')"
+          [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "$base_sha^{commit}" 2>/dev/null || git fetch --no-tags origin "$base_sha"
+          git cat-file -e "$head_sha^{commit}" 2>/dev/null || git fetch --no-tags origin "$head_sha"
+          git diff --name-only "$base_sha...$head_sha" | sort -u > changed-files.txt
+
+          # cleanup/* remains fail closed until a durable machine-verifiable lifecycle receipt
+          # proves tests -> same-SHA PAPER -> main -> paper-validated -> deploy -> server health.
+          if [[ "$head_ref" == cleanup/* ]]; then
+            receipt="evidence/v7_cutover_receipt.json"
+            if [[ ! -s "$receipt" ]]; then
+              cat > research-policy-report.md <<'EOF'
+          # Research pull-request policy
+
+          - policy: `fail`
+          - lifecycle: `cleanup locked during V7 cutover repair`
+          - requirement: one exact V7 SHA must complete tests, same-SHA PAPER, main, paper-validated, deploy and server health before remaining legacy deletion can be authorized.
+          - unlock: requires a durable machine-verifiable lifecycle receipt at `evidence/v7_cutover_receipt.json`.
+          EOF
+              cat research-policy-report.md >&2
+              exit 1
+            fi
+            BASE_SHA="$base_sha" python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          r=json.loads(Path('evidence/v7_cutover_receipt.json').read_text(encoding='utf-8'))
+          assert r.get('schema') == 'polymarket_v7_cutover_receipt_v1'
+          base=os.environ['BASE_SHA']
+          assert re.fullmatch(r'[0-9a-f]{40}', base)
+          sha_fields=('tested_sha','paper_evidence_sha','main_sha','paper_validated_sha','deployed_sha','server_sha')
+          assert all(r.get(k) == base for k in sha_fields), {k:r.get(k) for k in sha_fields}
+          assert r.get('paper_only') is True
+          assert r.get('authenticated_execution') is False
+          assert r.get('real_order_submission') is False
+          assert r.get('single_writer') is True
+          assert r.get('server_health') == 'green'
+          assert r.get('monitoring') == 'green'
+          runs=r.get('runs')
+          assert isinstance(runs, dict)
+          required=('ci','monitoring','research_policy','single_writer','paper_validation','deploy','server_health')
+          for key in required:
+              assert isinstance(runs.get(key), int) and runs[key] > 0, (key, runs.get(key))
+          d=json.loads(Path('config/operator_directives.json').read_text(encoding='utf-8'))
+          assert d['operator_instruction_id']=='user-v7-master-multi-agent-operating-prompt-20260827'
+          assert d['architecture']['cleanup_sequence']=='v7_implementation_then_tests_then_same_sha_paper_then_main_then_paper_validated_then_deploy_then_server_health_then_legacy_deletion'
+          assert d['paper_v7_authorization']['paper_only'] is True
+          assert d['paper_v7_authorization']['authenticated_execution'] is False
+          PY
+            receipt_sha="$(python3 -c 'import json; print(json.load(open("evidence/v7_cutover_receipt.json"))["main_sha"])')"
+            main_now="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+            validated_now="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/paper-validated" --jq .object.sha)"
+            test "$main_now" = "$base_sha"
+            test "$validated_now" = "$base_sha"
+            test "$receipt_sha" = "$base_sha"
+            for key in ci monitoring research_policy single_writer paper_validation deploy server_health; do
+              run_id="$(KEY="$key" python3 -c 'import json,os; print(json.load(open("evidence/v7_cutover_receipt.json"))["runs"][os.environ["KEY"]])')"
+              run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+              RUN_JSON="$run_json" RECEIPT_SHA="$receipt_sha" python3 - <<'PY'
+          import json, os
+          run=json.loads(os.environ['RUN_JSON'])
+          assert run.get('conclusion') == 'success', (run.get('name'), run.get('conclusion'))
+          assert run.get('head_sha') == os.environ['RECEIPT_SHA'], (run.get('name'), run.get('head_sha'))
+          PY
+            done
+            echo "cleanup_receipt_verified_sha=$receipt_sha"
+          fi
+
+          manifest_existed=false
+          if git cat-file -e "$base_sha:config/live_champion.json" 2>/dev/null; then manifest_existed=true; fi
+          python3 scripts/hard_safety_policy.py \
+            --base-ref "$base_sha" \
+            --changed-files changed-files.txt \
+            --root . \
+            --output hard-safety-policy-report.md
+
+          if [[ "$head_ref" == "integration/v7-complete-20260827" ]]; then
+            python3 scripts/v7_canonical_convergence_policy.py \
+              --event "$GITHUB_EVENT_PATH" \
+              --changed-files changed-files.txt \
+              --root . \
+              --output research-policy-report.md
+          else
+            python3 scripts/research_pr_policy.py \
+              --event "$GITHUB_EVENT_PATH" \
+              --changed-files changed-files.txt \
+              --manifest-existed-on-base "$manifest_existed" \
+              --output research-policy-report.md
+          fi
+
+      - name: Write non-PR report
+        if: github.event_name != 'pull_request'
+        run: |
+          printf '# Research pull-request policy\n\n- event: `%s`\n- current V7 master / exact-SHA policy validated\n' "$GITHUB_EVENT_NAME" > research-policy-report.md
+
+      - name: Publish policy report
+        if: always()
+        run: |
+          for f in scheduler-registry-report.md project-context-validation.md project-context.md hard-safety-policy-report.md research-policy-report.md; do
+            cat "$f" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+            printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload policy evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-policy-${{ github.run_id }}
+          path: |
+            scheduler-registry-report.md
+            project-context-validation.md
+            project-context.md
+            project-context.json
+            hard-safety-policy-report.md
+            research-policy-report.md
+            changed-files.txt
+          if-no-files-found: ignore
+          retention-days: 14

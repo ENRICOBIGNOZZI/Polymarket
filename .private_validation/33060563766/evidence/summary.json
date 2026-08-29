@@ -1,0 +1,15 @@
+{
+  "authenticated_execution": false,
+  "isolated_probe": true,
+  "live_runtime_started": false,
+  "orphan_runtime_drained_before_reacquire": true,
+  "paper_only": true,
+  "post_supervisor_loss_competitor_exit_code": 75,
+  "runtime_does_not_inherit_lock_descriptor": true,
+  "safe_reacquire_after_drain": true,
+  "schema": "polymarket_v7_private_single_writer_probe_v2",
+  "second_owner_exit_code": 75,
+  "singleton_exclusion": true,
+  "source_sha": "a190e8e1f921d9334a6bf1aa24a0069ef67ffd53",
+  "watchdog_holds_lock_after_supervisor_loss": true
+}

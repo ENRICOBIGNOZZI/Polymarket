@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "canonical_branch": "main",
+  "deployment_ref": "paper-validated",
+  "live_champion_manifest": "config/live_champion.json",
+  "model_architecture_manifest": null,
+  "scheduler_registry": "config/scheduler_registry.json",
+  "operator_directives": "config/operator_directives.json",
+  "cutover_receipt": "evidence/v7_cutover_receipt.json",
+  "context_policy": {
+    "scope": "entire_repository",
+    "require_full_worktree_inventory": true,
+    "require_operator_directives": true,
+    "inventory_command": "git ls-files",
+    "rule": "V7 is the sole PAPER champion and final runtime generation by latest explicit operator instruction. Do not restore V3-V6 for compatibility. The canonical server process group is scripts/paper_v7_execution_loop.sh; exact-SHA technical, deploy and server-health evidence remains fail-closed and authenticated/real-order execution remains disabled."
+  },
+  "cutover": {
+    "target_version": 7,
+    "canonical_loop": "scripts/paper_v7_execution_loop.sh",
+    "canonical_config": "config/paper_v7.json",
+    "canonical_run_root": "runs/paper_v7_live",
+    "required_sequence": "v7_implementation_then_tests_then_same_sha_paper_then_main_then_paper_validated_then_deploy_then_server_health_then_legacy_deletion",
+    "current_state": "operator_forced_v7_paper_champion_exact_head_validation"
+  },
+  "required_surfaces": [
+    ".github/workflows",
+    "config",
+    "docs",
+    "include",
+    "ops",
+    "scripts",
+    "src",
+    "tests",
+    "CMakeLists.txt",
+    "README.md"
+  ],
+  "runtime": {
+    "host_alias": "polymarket",
+    "host": "100.104.183.109",
+    "user": "enrico",
+    "port": 22,
+    "remote_root": "~/polymarket",
+    "ssh_config_source": "ops/ssh_config_polymarket",
+    "active_champion": true
+  },
+  "grafana": {
+    "canonical_operator_url": "http://mamma-portfolio.tail1bae85.ts.net",
+    "active": true,
+    "dashboard_uid": "polymarket-v7",
+    "dashboard_file": "monitoring/grafana/dashboards/polymarket-v7.json",
+    "rule": "The only canonical monitoring plane is V7: monitoring/exporter_v7.py -> Prometheus V7 -> Grafana dashboard polymarket-v7. Server health must independently verify the deployed plane and exact SHA."
+  },
+  "security": {
+    "private_keys_in_repository": false,
+    "authenticated_real_money_execution": false,
+    "rule": "SSH private keys and other credentials must remain outside version control; V7 remains PAPER-only with authenticated_execution=false and real_order_submission=false."
+  }
+}

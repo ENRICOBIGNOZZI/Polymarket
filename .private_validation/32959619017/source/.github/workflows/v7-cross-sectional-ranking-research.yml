@@ -1,0 +1,114 @@
+name: V7 cross-sectional ranking research
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/v7_cross_sectional_rank.py"
+      - "scripts/v7_cross_sectional_rank_core.py"
+      - "scripts/v7_cross_sectional_rank_fast.py"
+      - "scripts/v7_cross_sectional_rank_inference.py"
+      - "scripts/v7_cross_sectional_history.py"
+      - "config/research_v7_cross_sectional_rank.json"
+      - "tests/test_v7_cross_sectional_rank.py"
+      - "tests/test_v7_cross_sectional_rank_fast.py"
+      - "tests/test_v7_cross_sectional_rank_inference.py"
+      - "tests/test_v7_cross_sectional_history.py"
+      - "docs/V7_CROSS_SECTIONAL_RANKING.md"
+      - ".github/workflows/v7-cross-sectional-ranking-research.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v7-cross-sectional-ranking-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deterministic ranking contracts
+        run: |
+          set -euo pipefail
+          python3 -m unittest \
+            tests/test_v7_cross_sectional_rank.py \
+            tests/test_v7_cross_sectional_rank_fast.py \
+            tests/test_v7_cross_sectional_rank_inference.py \
+            tests/test_v7_cross_sectional_history.py -v
+          python3 -m py_compile \
+            scripts/v7_cross_sectional_rank_core.py \
+            scripts/v7_cross_sectional_rank_fast.py \
+            scripts/v7_cross_sectional_rank_inference.py \
+            scripts/v7_cross_sectional_rank.py \
+            scripts/v7_cross_sectional_history.py
+          python3 -m json.tool config/research_v7_cross_sectional_rank.json >/dev/null
+
+      - name: Live public-data cross-sectional research
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ranking_evidence
+          # Preserve the full 30-day information set and all original statistical
+          # gates. Independent history batches are bounded-parallel. Walk-forward
+          # beta uses the exact rolling sufficient-statistics path. Daily-block
+          # inference is diagnostic only and cannot mutate the original gate.
+          python3 -c 'import sys; sys.path.insert(0,"scripts"); import v7_cross_sectional_rank as m, v7_cross_sectional_history as h, v7_cross_sectional_rank_inference as i; m.fetch_histories=h.fetch_histories; m.core.walk_forward_evaluate=i.walk_forward_evaluate; m.HISTORY_SINGLE_FALLBACK_BUDGET_PER_WINDOW=0; raise SystemExit(m.main())' \
+            --config config/research_v7_cross_sectional_rank.json \
+            --market-limit 150 \
+            --output-json ranking_evidence/report.json \
+            --output-shadow-intents ranking_evidence/shadow_intents.csv \
+            | tee ranking_evidence/run.log
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("ranking_evidence/report.json").read_text())
+          assert report["paper_only"] is True
+          assert report["research_only"] is True
+          assert report["live_intents_enabled"] is False
+          assert report["submitted_orders"] == 0
+          assert report["promotion_ready"] is False
+          assert report["economic_pnl_validated"] is False
+          assert report["survivorship_safe"] is False
+          assert report["history_data_healthy"] is True
+          assert report["history_market_count"] >= report["history_required_market_count"]
+          assert len(report["horizons"]) == 4
+          assert all("blocked_inference" in item["oos"] for item in report["horizons"])
+          PY
+
+      - name: Publish ranking summary
+        if: always()
+        shell: bash
+        run: |
+          echo '## V7 cross-sectional ranking research' >> "$GITHUB_STEP_SUMMARY"
+          if test -s ranking_evidence/report.json; then
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          r=json.loads(Path('ranking_evidence/report.json').read_text())
+          print(f"- markets: {r['market_count']}")
+          print(f"- history markets: {r['history_market_count']} / required {r['history_required_market_count']}")
+          print(f"- history data healthy: {r['history_data_healthy']}")
+          print(f"- books: {r['book_market_count']}")
+          print(f"- authoritative fee books: {r['authoritative_fee_book_count']}")
+          print(f"- survivorship safe: {r['survivorship_safe']}")
+          for h in r['horizons']:
+              o=h['oos']; b=o['blocked_inference']
+              print(f"- {h['horizon_minutes']}m: original_gate={h['statistical_gate']}, robustness={o['discovery_robustness_gate']}, median_IC={o['median_rank_ic']:.4f}, +IC={o['positive_ic_fraction']:.3f}, median_tail={o['median_top_bottom_logit_spread']:.6f}, daily_IC={b['mean_daily_rank_ic']:.4f}, daily_tail={b['mean_daily_top_bottom_logit_spread']:.6f}, pIC={b['rank_ic_bootstrap_p_mean_nonpositive']}, pTail={b['top_bottom_bootstrap_p_mean_nonpositive']}")
+          PY
+          else
+            echo '- report missing' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload ranking evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v7-cross-sectional-ranking-${{ github.run_id }}
+          path: ranking_evidence/
+          if-no-files-found: warn
+          retention-days: 30

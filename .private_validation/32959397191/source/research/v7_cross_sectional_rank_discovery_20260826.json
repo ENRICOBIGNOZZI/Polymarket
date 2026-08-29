@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "source_head": "10517e237fd40917f1a6fd8f5fe57e443a4a8300",
+  "workflow_run_id": 32958692798,
+  "artifact_id": 9603024774,
+  "artifact_digest": "sha256:f69f9324b1f620a21aba5033b1f126a1083ef0b682a7772f7d51d6c9521a7bf9",
+  "paper_only": true,
+  "research_only": true,
+  "survivorship_safe": false,
+  "universe_backtest_mode": "current_active_survivors",
+  "markets": 150,
+  "histories": 150,
+  "history_data_healthy": true,
+  "history_failures": 0,
+  "authoritative_fee_books": 102,
+  "horizons": {
+    "30m": {
+      "cross_sections": 1344,
+      "predictions": 193028,
+      "median_rank_ic": 0.0,
+      "positive_ic_fraction": 0.37202380952380953,
+      "median_top_bottom_logit_spread": 0.0,
+      "decile_monotonicity": 0.5891529624506191,
+      "gate": false,
+      "gate_reasons": ["rank_ic", "ic_stability", "top_bottom_spread"]
+    },
+    "60m": {
+      "cross_sections": 1342,
+      "predictions": 192765,
+      "median_rank_ic": 0.0,
+      "positive_ic_fraction": 0.4791356184798808,
+      "median_top_bottom_logit_spread": 0.0,
+      "decile_monotonicity": 0.3941854076699122,
+      "gate": false,
+      "gate_reasons": ["rank_ic", "ic_stability", "decile_monotonicity", "top_bottom_spread"]
+    },
+    "120m": {
+      "cross_sections": 1339,
+      "predictions": 192380,
+      "mean_rank_ic": 0.04077610480493079,
+      "median_rank_ic": 0.036033788824231194,
+      "positive_ic_fraction": 0.5937266616878267,
+      "mean_top_bottom_logit_spread": 0.0022922616242389495,
+      "median_top_bottom_logit_spread": 0.0016041384701687184,
+      "directional_hit_rate": 0.5932611311672683,
+      "decile_monotonicity": 0.35118099277083975,
+      "gate": false,
+      "gate_reasons": ["decile_monotonicity"]
+    },
+    "360m": {
+      "cross_sections": 1328,
+      "predictions": 191013,
+      "mean_rank_ic": 0.0503755626334,
+      "median_rank_ic": 0.05614699854583792,
+      "positive_ic_fraction": 0.6731927710843374,
+      "mean_top_bottom_logit_spread": 0.00488863996326522,
+      "median_top_bottom_logit_spread": 0.003666881330953805,
+      "directional_hit_rate": 0.579683698296837,
+      "decile_monotonicity": 0.23182262569996348,
+      "gate": false,
+      "gate_reasons": ["decile_monotonicity"]
+    }
+  },
+  "discovery_decision": "PROMISING_2H_6H_TAIL_RANKING_MORE_EVIDENCE_REQUIRED",
+  "interpretation": "The 2h and 6h horizons pass the predeclared rank-IC, sign-stability and positive top-bottom spread hurdles but fail full-decile monotonicity. Because this pattern was observed on the discovery sample, the decile gate is not relaxed on this evidence. The successor must freeze a tail-only 2h/6h contract before a new forward holdout, use blocked time-series inference for IC and top-bottom spread, collect a point-in-time universe, and attach executable ledger economics before integration.",
+  "promotion_ready": false,
+  "promotion_blockers": [
+    "discovery_sample_used_to_select_2h_6h_tail_contract",
+    "new_forward_holdout_not_yet_observed",
+    "point_in_time_universe_not_yet_attached",
+    "blocked_inference_not_yet_attached",
+    "shared_execution_ledger_cost_stressed_pnl_not_yet_attached"
+  ]
+}

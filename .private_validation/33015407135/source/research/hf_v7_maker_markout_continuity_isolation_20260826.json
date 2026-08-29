@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-08-26T21:17:51Z",
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "source_research_pr": 546,
+  "source_head_before_fix": "9694ede21d0ae9a85bb4d0718d74af8eb824488b",
+  "operator_directive_epoch": "2026-08-26T20:20:00+02:00",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "objective": "actual PAPER fills and positive fill-conditioned audited post-cost PnL",
+  "finding": {
+    "severity": "blocking_execution_evidence_defect",
+    "component": "V7 Micro Maker replay continuity",
+    "pre_fix_contract": "tracked_market_and_token_book_required_before_tape_replay",
+    "pre_fix_behavior": "orders, positions and markout_watch were pooled into one continuity gate; a missing measurement-only markout market/book could return FAIL_CLOSED_NO_REPLAY_NO_CANCEL and therefore stall unrelated tape replay and cancel finalization",
+    "economic_risk": "measurement-only 45/60/300s watches can persist after a position closes; tying them to execution continuity can inflate zero-fill/dead-queue capital time without improving safety"
+  },
+  "fix": {
+    "execution_continuity": "orders and open positions remain fail-closed before tape replay",
+    "markout_continuity": "markout_watch gaps are audited separately and never block unrelated execution; strict bounded-delay markout filtering remains authoritative",
+    "cancel_contract": "OPEN -> CANCEL_PENDING -> CANCELLED latency and delayed pre-cancel replay remain unchanged",
+    "markout_contract": "event_time_horizon_with_bounded_observation_delay",
+    "exit_liquidity_contract": "shares_specific_full_visible_bid_depth_vwap_fail_closed"
+  },
+  "deterministic_regressions": [
+    "missing order/position market or token book still blocks replay and cancel finalization",
+    "missing markout-only market or token book does not block replay",
+    "markout-only gaps remain separately observable",
+    "delayed pre-cancel fills and explicit cancel latency remain unchanged"
+  ],
+  "research_state": "STRUCTURAL_EXECUTION_EVIDENCE_FIX_MORE_EVIDENCE_REQUIRED"
+}
