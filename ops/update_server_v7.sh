@@ -493,7 +493,7 @@ stop_owned_monitoring(){
 }
 
 start_monitoring(){
-  local run_root="$(production_run_root)"
+  local run_root="$(production_run_root)" monitoring_root="$APP_DIR/runs/monitoring"
   if [[ "$(uname -s)" == "Darwin" ]]; then
     POLYMARKET_APP_DIR="$APP_DIR" POLYMARKET_STATE_DIR="$STATE_DIR" \
       bash "$APP_DIR/ops/apply_v7_monitoring_config_macos.sh" >/dev/null
@@ -508,9 +508,9 @@ start_monitoring(){
     >>"$run_root/monitoring-exporter.log" 2>&1 </dev/null &
   echo $! > "$STATE_DIR/exporter-v7.pid"
   if command -v prometheus >/dev/null 2>&1; then
-    mkdir -p "$STATE_DIR/prometheus-data"
+    mkdir -p "$monitoring_root/prometheus"
     nohup prometheus --config.file="$STATE_DIR/prometheus-v7.yml" \
-      --web.listen-address=127.0.0.1:9090 --storage.tsdb.path="$STATE_DIR/prometheus-data" \
+      --web.listen-address=127.0.0.1:9090 --storage.tsdb.path="$monitoring_root/prometheus" \
       >>"$run_root/prometheus-v7.log" 2>&1 </dev/null &
     echo $! > "$STATE_DIR/prometheus-v7.pid"
   fi
@@ -520,13 +520,15 @@ start_monitoring(){
       grafana_home="$(brew --prefix grafana)/share/grafana"
     fi
     [[ -n "$grafana_home" ]] || grafana_home="/usr/share/grafana"
-    mkdir -p "$STATE_DIR/grafana/data" "$STATE_DIR/grafana/log" "$STATE_DIR/grafana/plugins"
+    mkdir -p "$monitoring_root/grafana/data" "$monitoring_root/grafana/logs" \
+      "$monitoring_root/grafana/plugins"
     nohup env \
       GF_SERVER_HTTP_ADDR=127.0.0.1 GF_SERVER_HTTP_PORT=3000 \
       GF_AUTH_ANONYMOUS_ENABLED=true GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer \
       GF_PATHS_PROVISIONING="$STATE_DIR/grafana/provisioning" \
-      GF_PATHS_DATA="$STATE_DIR/grafana/data" GF_PATHS_LOGS="$STATE_DIR/grafana/log" \
-      GF_PATHS_PLUGINS="$STATE_DIR/grafana/plugins" \
+      GF_PATHS_DATA="$monitoring_root/grafana/data" \
+      GF_PATHS_LOGS="$monitoring_root/grafana/logs" \
+      GF_PATHS_PLUGINS="$monitoring_root/grafana/plugins" \
       grafana server --homepath "$grafana_home" \
       >>"$run_root/grafana-v7.log" 2>&1 </dev/null &
     echo $! > "$STATE_DIR/grafana-v7.pid"

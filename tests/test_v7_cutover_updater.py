@@ -100,6 +100,19 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn('kill -KILL "$pid"', function)
         self.assertIn('survived bounded shutdown', function)
 
+    def test_transient_monitoring_uses_the_same_canonical_state_as_launchd(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        function = text[text.index("start_monitoring(){"):text.index("runtime_health(){")]
+        self.assertIn('monitoring_root="$APP_DIR/runs/monitoring"', function)
+        self.assertIn('--storage.tsdb.path="$monitoring_root/prometheus"', function)
+        self.assertIn('GF_PATHS_DATA="$monitoring_root/grafana/data"', function)
+        self.assertIn('GF_PATHS_LOGS="$monitoring_root/grafana/logs"', function)
+        self.assertIn('GF_PATHS_PLUGINS="$monitoring_root/grafana/plugins"', function)
+        self.assertNotIn('$STATE_DIR/prometheus-data', function)
+        self.assertNotIn('$STATE_DIR/grafana/data', function)
+        self.assertNotIn('$STATE_DIR/grafana/log', function)
+        self.assertNotIn('$STATE_DIR/grafana/plugins', function)
+
     def test_exact_deploy_receipt_is_written_before_monitoring_health_gate(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         start = text.rindex("start_production_runtime\n")
