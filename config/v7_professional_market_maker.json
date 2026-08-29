@@ -109,7 +109,7 @@
     "post_only": true,
     "two_sided_preferred": true,
     "one_sided_allowed": true,
-    "min_quote_lifetime_ms": 100,
+    "min_quote_lifetime_ms": 1000,
     "max_quote_lifetime_ms": 5000,
     "cancel_replace_cooldown_ms": 50,
     "cancel_latency_ms": 100,

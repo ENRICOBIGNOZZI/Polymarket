@@ -391,6 +391,25 @@ MakerModelSnapshot load_model_snapshot(const fs::path& policy_path,
         quoting, "minimum_exploit_ev_per_dollar", model.min_robust_ev_per_share);
     model.min_quote_lifetime_ns = object_integer(
         quoting, "min_quote_lifetime_ms", model.min_quote_lifetime_ns / 1'000'000LL) * 1'000'000LL;
+    const auto* inventory = child_object(policy, "inventory");
+    model.one_sided_inventory_fraction = std::max(0.0, object_number(
+        inventory, "soft_directional_inventory_fraction", model.one_sided_inventory_fraction));
+
+    const auto* exploration = child_object(policy, "exploration");
+    model.exploration_enabled = static_cast<std::uint8_t>(exploration != nullptr
+        && boolean(find_value(*exploration, "enabled"), false));
+    model.exploration_epsilon = std::clamp(object_number(
+        exploration, "epsilon", model.exploration_epsilon), 0.0, 1.0);
+    model.exploration_quote_notional_fraction = std::clamp(object_number(
+        exploration, "max_quote_notional_fraction", model.exploration_quote_notional_fraction),
+        0.0, 0.01);
+    model.exploration_min_rest_ns = object_integer(
+        exploration, "minimum_rest_ms", model.exploration_min_rest_ns / 1'000'000LL) * 1'000'000LL;
+    model.exploration_max_rest_ns = object_integer(
+        exploration, "maximum_rest_ms", model.exploration_max_rest_ns / 1'000'000LL) * 1'000'000LL;
+    const auto* market_selection = child_object(policy, "market_selection");
+    model.exploration_max_active_markets = static_cast<std::uint32_t>(std::max<std::int64_t>(
+        0, object_integer(market_selection, "max_active_markets", 0)));
 
     const auto* latency = child_object(policy, "latency");
     model.max_related_snapshot_age_ns = object_integer(
@@ -770,13 +789,20 @@ private:
         MakerModelSnapshot model = *shared_model;
         model.base_quote_shares = std::max(model.base_quote_shares,
                                            min_order(market, instrument.yes != 0));
-        model.base_quote_shares = std::max(model.base_quote_shares,
-                                           market.cold.rewards_min_size);
+        // Reward qualification is not guaranteed P&L and is currently credited
+        // as zero. Do not inflate trading inventory to the reward-program minimum;
+        // size from the venue minimum and the common capital/risk envelope only.
 
         const auto& state = execution_state(market.market_handle);
         MakerLaneContext context;
         context.inventory = state.inventory;
         context.quotes = instrument.yes ? state.yes_quotes : state.no_quotes;
+        // The runtime does not yet receive authoritative per-order rebate or
+        // reward accruals. Keep both decision credits explicitly at zero until
+        // that attribution exists; eligibility metadata alone is not economic
+        // P&L and must never make an otherwise negative quote admissible.
+        context.conservative_rebate_ev_per_share = 0.0;
+        context.conservative_reward_ev_per_share = 0.0;
         const double mid = source_event.book.valid
             ? 0.5 * (e4_price(source_event.book.best_bid_e4) + e4_price(source_event.book.best_ask_e4))
             : 0.5;
@@ -786,6 +812,10 @@ private:
                                                  std::min(100.0, capital_bound));
         context.risk.max_abs_residual_shares = std::max(
             2.0 * context.risk.max_quote_shares, 10.0 * min_order(market, instrument.yes != 0));
+        const double exploration_cap = context.risk.max_quote_shares
+            * model.exploration_quote_notional_fraction / 0.01;
+        context.risk.exploration_max_quote_shares = exploration_cap + 1e-12
+            >= min_order(market, instrument.yes != 0) ? exploration_cap : 0.0;
         context.risk.max_local_state_age_ns = 5'000'000'000LL;
         context.risk.global_kill = static_cast<std::uint8_t>(
             global_kill_->load(std::memory_order_acquire));

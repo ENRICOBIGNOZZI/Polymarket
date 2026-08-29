@@ -283,6 +283,55 @@ void test_inventory_forces_reducing_side() {
     assert(decision.intents[0].side == pm::v7::Side::Sell);
 }
 
+void test_partial_inventory_sizes_reducing_quote_to_available_residual() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    auto model = profitable_model();
+    model.base_quote_shares = 20.0;
+    model.one_sided_inventory_fraction = 0.01;
+    pm::v7::maker::InventorySnapshot inventory;
+    inventory.yes_shares = 10.0;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 20.0;
+    risk.max_abs_residual_shares = 200.0;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(decision.action == pm::v7::maker::Action::OneSided);
+    assert(decision.intent_count == 1);
+    assert(decision.intents[0].side == pm::v7::Side::Sell);
+    assert(decision.intents[0].quantity_microunits == 10'000'000);
+}
+
+void test_transient_no_economic_quote_cannot_cancel_before_minimum_lifetime() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    auto profitable = profitable_model();
+    pm::v7::maker::InventorySnapshot inventory;
+    pm::v7::maker::QuoteSnapshot quotes;
+    quotes.bid_active = 1;
+    quotes.ask_active = 1;
+    quotes.bid_tick = update.best_bid_tick;
+    quotes.ask_tick = update.best_ask_tick;
+    quotes.last_quote_monotonic_ns = monotonic_ns();
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 2.0;
+    risk.max_abs_residual_shares = 20.0;
+
+    auto unprofitable = profitable;
+    unprofitable.markout_coefficients.fill(1.0);
+    unprofitable.min_quote_lifetime_ns = 1'000'000'000LL;
+    const auto held = hot.on_market_update(update, inventory, quotes, risk, unprofitable);
+    assert(held.reason == pm::v7::maker::DecisionReason::QuoteLifetimeHold);
+    assert(held.intent_count == 0);
+
+    quotes.last_quote_monotonic_ns = monotonic_ns() - 2'000'000'000LL;
+    const auto cancelled = hot.on_market_update(update, inventory, quotes, risk, unprofitable);
+    assert(cancelled.reason == pm::v7::maker::DecisionReason::NoEconomicQuote);
+    assert(cancelled.intent_count == 1);
+    assert(cancelled.intents[0].type == pm::v7::IntentType::Withdraw);
+}
+
 void test_global_kill_preempts_quote() {
     pm::v7::maker::MakerHotPath hot;
     auto update = normal_update();
@@ -327,6 +376,8 @@ int main() {
     test_outcome_cell_orientation_is_respected();
     test_sell_cell_controls_one_sided_inventory_reduction();
     test_inventory_forces_reducing_side();
+    test_partial_inventory_sizes_reducing_quote_to_available_residual();
+    test_transient_no_economic_quote_cannot_cancel_before_minimum_lifetime();
     test_global_kill_preempts_quote();
     test_new_risk_freeze_withdraws_without_irreversible_kill();
     return 0;

@@ -77,8 +77,14 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
         self.assertTrue(queue["cancel_pending_remains_fillable_until_effective"])
         self.assertFalse(queue["pre_arrival_flow_can_deplete_queue"])
 
-    def test_reward_quote_size_uses_selected_pool_minimum(self) -> None:
-        self.assertIn("market.cold.rewards_min_size", self.source)
+    def test_unmeasured_rewards_neither_authorize_nor_inflate_quotes(self) -> None:
+        self.assertIn("context.conservative_rebate_ev_per_share = 0.0;", self.source)
+        self.assertIn("context.conservative_reward_ev_per_share = 0.0;", self.source)
+        self.assertNotIn(
+            "model.base_quote_shares = std::max(model.base_quote_shares,\n"
+            "                                           market.cold.rewards_min_size);",
+            self.source,
+        )
 
     def test_spool_remains_transport_and_python_stays_canonical_writer(self) -> None:
         self.assertIn('run_root_ / "ledger" / "spool"', self.source)

@@ -76,6 +76,7 @@ struct SideEconomics {
     bool admissible = false;
     Side side = Side::None;
     std::int64_t price_tick = 0;
+    double quote_shares = 0.0;
     double fill_probability = 0.0;
     double gross_capture = 0.0;
     double expected_cost = 0.0;
@@ -134,6 +135,7 @@ struct Candidate {
     SideEconomics out;
     out.side = side;
     out.price_tick = quote_tick;
+    out.quote_shares = quote_shares;
 
     if (quote_shares <= 0.0 || quote_tick <= 0) return out;
     if (side == Side::Buy && quote_tick >= update.best_ask_tick) return out;
@@ -208,14 +210,15 @@ struct Candidate {
     const MakerModelSnapshot& model,
     const Features& features,
     double fair_value,
-    double quote_shares) noexcept {
+    double bid_quote_shares,
+    double ask_quote_shares) noexcept {
 
     Candidate candidate;
     candidate.action = action;
     candidate.bid = evaluate_side(action, Side::Buy, bid_tick, update, inventory, risk, model,
-                                  features, fair_value, quote_shares);
+                                  features, fair_value, bid_quote_shares);
     candidate.ask = evaluate_side(action, Side::Sell, ask_tick, update, inventory, risk, model,
-                                  features, fair_value, quote_shares);
+                                  features, fair_value, ask_quote_shares);
     candidate.score = 0.0;
     if (candidate.bid.admissible) candidate.score += candidate.bid.robust_ev;
     if (candidate.ask.admissible) candidate.score += candidate.ask.robust_ev;
@@ -474,26 +477,42 @@ MakerDecision MakerHotPath::on_market_update(
         return control_exit(DecisionReason::InventoryLimit, IntentType::Withdraw);
     }
 
+    const double residual_shares = inventory.residual_shares();
+    const bool inventory_one_sided = std::abs(decision.features.inventory_fraction)
+                                  >= model.one_sided_inventory_fraction;
+    // Once inventory is outside the soft band, never ask the OMS to reduce more
+    // than the actual directional residual. This is especially important after
+    // a partial fill: a reward-qualified 20-share quote may leave only 10 shares
+    // to unwind, and an uncovered 20-share SELL would correctly be rejected.
+    const double bid_quote_shares = inventory_one_sided && residual_shares < 0.0
+        ? std::min(quote_shares, -residual_shares)
+        : (inventory_one_sided ? 0.0 : quote_shares);
+    const double ask_quote_shares = inventory_one_sided && residual_shares > 0.0
+        ? std::min(quote_shares, residual_shares)
+        : (inventory_one_sided ? 0.0 : quote_shares);
+
     std::array<Candidate, 4> candidates{};
     std::size_t candidate_count = 0;
     candidates[candidate_count++] = evaluate_candidate(
         Action::Join, update.best_bid_tick, update.best_ask_tick,
-        update, inventory, risk, model, decision.features, reservation_value, quote_shares);
+        update, inventory, risk, model, decision.features, reservation_value,
+        bid_quote_shares, ask_quote_shares);
     if (update.best_ask_tick - update.best_bid_tick >= 3) {
         candidates[candidate_count++] = evaluate_candidate(
             Action::Improve1, update.best_bid_tick + 1, update.best_ask_tick - 1,
-            update, inventory, risk, model, decision.features, reservation_value, quote_shares);
+            update, inventory, risk, model, decision.features, reservation_value,
+            bid_quote_shares, ask_quote_shares);
     }
     candidates[candidate_count++] = evaluate_candidate(
         Action::Fade1, update.best_bid_tick - 1, update.best_ask_tick + 1,
-        update, inventory, risk, model, decision.features, reservation_value, quote_shares);
+        update, inventory, risk, model, decision.features, reservation_value,
+        bid_quote_shares, ask_quote_shares);
     candidates[candidate_count++] = evaluate_candidate(
         Action::Fade2, update.best_bid_tick - 2, update.best_ask_tick + 2,
-        update, inventory, risk, model, decision.features, reservation_value, quote_shares);
+        update, inventory, risk, model, decision.features, reservation_value,
+        bid_quote_shares, ask_quote_shares);
 
     Candidate* best = nullptr;
-    const bool inventory_one_sided = std::abs(decision.features.inventory_fraction)
-                                  >= model.one_sided_inventory_fraction;
     for (std::size_t i = 0; i < candidate_count; ++i) {
         auto& candidate = candidates[i];
         if (inventory_one_sided) {
@@ -512,8 +531,24 @@ MakerDecision MakerHotPath::on_market_update(
     const bool economic_quote = best != nullptr && finite(best->score)
                              && best->score > model.min_robust_ev_per_share;
     const std::int64_t now = monotonic_ns();
+    const bool lifetime_hold = quotes.last_quote_monotonic_ns > 0
+        && now - quotes.last_quote_monotonic_ns < model.min_quote_lifetime_ns;
 
     if (!economic_quote) {
+        // A transient feature update must not turn a freshly accepted quote into
+        // an immediate cancel. The old path bypassed min_quote_lifetime here,
+        // producing LIVE -> CANCEL_PENDING in the same millisecond and making
+        // almost every quote impossible to hit. Safety exits above (kill, stale
+        // feed, toxicity and inventory controls) remain immediate.
+        if ((quotes.bid_active != 0 || quotes.ask_active != 0) && lifetime_hold) {
+            decision.action = Action::Withdraw;
+            decision.reason = DecisionReason::QuoteLifetimeHold;
+            const std::int64_t end_ns = monotonic_ns();
+            decision.latency.decision_ns = end_ns - decision_start_ns;
+            decision.latency.receive_to_intent_ns = update.socket_receive_monotonic_ns > 0
+                ? std::max<std::int64_t>(0, end_ns - update.socket_receive_monotonic_ns) : 0;
+            return decision;
+        }
         // PAPER-only exploration is intentionally BUY-only. A fresh account owns
         // no outcome tokens, so exploratory asks would merely exercise the
         // inventory rejection path. Quoting bids on both complementary tokens
@@ -616,9 +651,6 @@ MakerDecision MakerHotPath::on_market_update(
     decision.ev_uncertainty = (want_bid ? best->bid.uncertainty : 0.0)
                             + (want_ask ? best->ask.uncertainty : 0.0);
 
-    const bool lifetime_hold = quotes.last_quote_monotonic_ns > 0
-        && now - quotes.last_quote_monotonic_ns < model.min_quote_lifetime_ns;
-
     auto reconcile_side = [&](Side side, bool active, std::int64_t active_tick,
                               bool wanted, const SideEconomics& economics) noexcept {
         const bool same = active && wanted && active_tick == economics.price_tick;
@@ -633,7 +665,7 @@ MakerDecision MakerHotPath::on_market_update(
         if (wanted && !quotes.cancel_pending) {
             append_intent(decision, make_intent(++intent_sequence_, update, model,
                                                 IntentType::Quote, side, economics.price_tick,
-                                                quote_shares, &economics, now));
+                                                economics.quote_shares, &economics, now));
         }
     };
 
