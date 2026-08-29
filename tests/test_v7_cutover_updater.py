@@ -20,6 +20,17 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn('"$(cat "$LOCK_DIR/nonce"', function)
         self.assertNotIn('rm -rf "$LOCK_DIR"', function)
 
+    def test_external_ws_stop_token_has_explicit_apple_libcpp_fallback(self) -> None:
+        header = (ROOT / "include/pm/v7_external_ws.hpp").read_text(encoding="utf-8")
+        source = (ROOT / "src/v7_external_ws.cpp").read_text(encoding="utf-8")
+        self.assertIn("!defined(__APPLE__)", header)
+        self.assertIn("PM_V7_EXTERNAL_USE_STD_STOP_TOKEN", header)
+        self.assertIn("class ExternalStopToken final", header)
+        self.assertIn("const std::atomic<bool>* requested_", header)
+        self.assertIn("void run(ExternalStopToken stop)", header)
+        self.assertIn("void bounded_backoff(ExternalStopToken stop", source)
+        self.assertNotIn("std::stop_token stop", source)
+
     def test_updater_prevalidates_exact_candidate_before_checkout_mutation(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         self.assertIn('log "Validating exact V7 candidate $EXPECTED_SHA before active-checkout mutation"', text)

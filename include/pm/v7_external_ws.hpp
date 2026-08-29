@@ -4,12 +4,39 @@
 
 #include <atomic>
 #include <cstdint>
-#include <stop_token>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <version>
+
+#if !defined(__APPLE__) && defined(__cpp_lib_jthread) && __cpp_lib_jthread >= 201911L
+#include <stop_token>
+#define PM_V7_EXTERNAL_USE_STD_STOP_TOKEN 1
+#else
+#define PM_V7_EXTERNAL_USE_STD_STOP_TOKEN 0
+#endif
 
 namespace pm::v7::external_fair {
+
+#if PM_V7_EXTERNAL_USE_STD_STOP_TOKEN
+using ExternalStopToken = std::stop_token;
+#else
+// Apple's deployed libc++ does not expose std::stop_token even in C++20 mode.
+// Keep cancellation explicit and allocation-free instead of depending on a
+// transitive or unavailable standard-library implementation.
+class ExternalStopToken final {
+public:
+    explicit ExternalStopToken(const std::atomic<bool>& requested) noexcept
+        : requested_(&requested) {}
+
+    [[nodiscard]] bool stop_requested() const noexcept {
+        return requested_->load(std::memory_order_relaxed);
+    }
+
+private:
+    const std::atomic<bool>* requested_;
+};
+#endif
 
 struct ExternalVenueConnectionSpec {
     VenueId venue = VenueId::Unknown;
@@ -55,7 +82,7 @@ public:
     // Blocking IO-loop intended for one dedicated jthread per venue. Returns
     // when stop is requested. Transport failures reconnect with bounded backoff
     // and increment connection_epoch so continuity loss is observable.
-    void run(std::stop_token stop) noexcept;
+    void run(ExternalStopToken stop) noexcept;
 
     [[nodiscard]] ExternalWsSnapshot snapshot() const noexcept;
 
@@ -77,3 +104,5 @@ private:
 static_assert(std::is_trivially_copyable_v<ExternalWsSnapshot>);
 
 } // namespace pm::v7::external_fair
+
+#undef PM_V7_EXTERNAL_USE_STD_STOP_TOKEN
