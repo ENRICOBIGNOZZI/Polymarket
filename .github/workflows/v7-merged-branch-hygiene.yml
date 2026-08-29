@@ -12,6 +12,7 @@ on:
         default: false
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -42,8 +43,14 @@ jobs:
             --include-merged-pr-branches \
             --include-closed-operational-branches \
             --report merged-branch-cleanup.json "${apply[@]}"
+          python3 scripts/v7_prune_workflow_metadata.py \
+            --repository-root . \
+            --github-repository "$GITHUB_REPOSITORY" \
+            --report workflow-metadata-cleanup.json "${apply[@]}"
       - uses: actions/upload-artifact@v4
         with:
           name: v7-merged-branch-cleanup-${{ github.sha }}
-          path: merged-branch-cleanup.json
+          path: |
+            merged-branch-cleanup.json
+            workflow-metadata-cleanup.json
           retention-days: 30
