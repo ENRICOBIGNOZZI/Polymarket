@@ -1,6 +1,18 @@
 name: V7 maker fillability evidence
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/v7-maker-fillability-evidence.yml"
+      - "config/v7_maker_fillability_experiments.json"
+      - "config/v7_professional_market_maker.json"
+      - "monitoring/v7_maker_fillability*.py"
+      - "scripts/v7_maker_fillability_report.py"
+      - "src/v7_maker_fillability_observer.cpp"
+      - "tests/test_v7_maker_fillability*.py"
+  schedule:
+    - cron: "17 * * * *"
   workflow_dispatch:
   workflow_run:
     workflows: ["V7 deploy PAPER server"]
@@ -16,7 +28,11 @@ concurrency:
 
 jobs:
   collect:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'push' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
