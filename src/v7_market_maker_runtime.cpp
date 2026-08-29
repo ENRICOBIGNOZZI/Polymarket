@@ -395,21 +395,45 @@ MakerModelSnapshot load_model_snapshot(const fs::path& policy_path,
     model.one_sided_inventory_fraction = std::max(0.0, object_number(
         inventory, "soft_directional_inventory_fraction", model.one_sided_inventory_fraction));
 
-    const auto* exploration = child_object(policy, "exploration");
-    model.exploration_enabled = static_cast<std::uint8_t>(exploration != nullptr
-        && boolean(find_value(*exploration, "enabled"), false));
-    model.exploration_epsilon = std::clamp(object_number(
-        exploration, "epsilon", model.exploration_epsilon), 0.0, 1.0);
-    model.exploration_quote_notional_fraction = std::clamp(object_number(
-        exploration, "max_quote_notional_fraction", model.exploration_quote_notional_fraction),
-        0.0, 0.01);
-    model.exploration_min_rest_ns = object_integer(
-        exploration, "minimum_rest_ms", model.exploration_min_rest_ns / 1'000'000LL) * 1'000'000LL;
-    model.exploration_max_rest_ns = object_integer(
-        exploration, "maximum_rest_ms", model.exploration_max_rest_ns / 1'000'000LL) * 1'000'000LL;
     const auto* market_selection = child_object(policy, "market_selection");
-    model.exploration_max_active_markets = static_cast<std::uint32_t>(std::max<std::int64_t>(
-        0, object_integer(market_selection, "max_active_markets", 0)));
+    const auto* exploration = child_object(policy, "exploration");
+    const double configured_exploration_quote_fraction = std::clamp(object_number(
+        exploration, "max_quote_notional_fraction", 0.0), 0.0, 0.01);
+    const double exploration_market_fraction = std::clamp(object_number(
+        exploration, "max_market_fraction", 0.0), 0.0, 1.0);
+    const double exploration_capital_fraction = std::clamp(object_number(
+        exploration, "max_capital_fraction", 0.0), 0.0, 1.0);
+    // A binary market can expose two exploratory BUYs (YES and NO). Bound each
+    // quote to half the per-market allowance, then bound the eligible market
+    // handles so the worst-case aggregate remains inside the sleeve allowance.
+    // This mirrors the constructor-side policy enrichment but uses the explicit
+    // runtime policy path rather than depending on process environment.
+    const double exploration_quote_fraction = std::min(
+        configured_exploration_quote_fraction,
+        exploration_market_fraction > 0.0 ? 0.5 * exploration_market_fraction : 0.0);
+    const std::uint32_t configured_market_capacity = static_cast<std::uint32_t>(
+        std::max<std::int64_t>(0, object_integer(market_selection, "max_active_markets", 0)));
+    std::uint32_t exploration_market_cap = 0;
+    if (exploration_quote_fraction > 0.0 && exploration_capital_fraction > 0.0) {
+        exploration_market_cap = static_cast<std::uint32_t>(std::min<double>(
+            configured_market_capacity,
+            std::floor(exploration_capital_fraction
+                       / (2.0 * exploration_quote_fraction) + 1e-12)));
+    }
+    model.exploration_epsilon = std::clamp(object_number(
+        exploration, "epsilon", 0.0), 0.0, 1.0);
+    model.exploration_quote_notional_fraction = exploration_quote_fraction;
+    model.exploration_max_active_markets = exploration_market_cap;
+    model.exploration_min_rest_ns = std::max<std::int64_t>(0, object_integer(
+        exploration, "minimum_rest_ms", 0)) * 1'000'000LL;
+    model.exploration_max_rest_ns = std::max(model.exploration_min_rest_ns,
+        std::max<std::int64_t>(0, object_integer(exploration, "maximum_rest_ms", 0))
+            * 1'000'000LL);
+    model.exploration_enabled = static_cast<std::uint8_t>(exploration != nullptr
+        && boolean(find_value(*exploration, "enabled"), false)
+        && model.exploration_epsilon > 0.0
+        && exploration_quote_fraction > 0.0
+        && exploration_market_cap > 0);
 
     const auto* latency = child_object(policy, "latency");
     model.max_related_snapshot_age_ns = object_integer(

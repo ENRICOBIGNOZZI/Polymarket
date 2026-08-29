@@ -332,6 +332,32 @@ void test_transient_no_economic_quote_cannot_cancel_before_minimum_lifetime() {
     assert(cancelled.intents[0].type == pm::v7::IntentType::Withdraw);
 }
 
+void test_bounded_exploration_breaks_cold_start_with_a_real_quote() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    auto model = profitable_model();
+    model.markout_coefficients.fill(1.0);
+    model.exploration_enabled = 1;
+    model.exploration_epsilon = 1.0;
+    model.exploration_quote_notional_fraction = 0.002;
+    model.exploration_max_active_markets = 20;
+    model.exploration_min_rest_ns = 3'000'000'000LL;
+    model.exploration_max_rest_ns = 15'000'000'000LL;
+    pm::v7::maker::InventorySnapshot inventory;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 20.0;
+    risk.exploration_max_quote_shares = 2.0;
+    risk.max_abs_residual_shares = 200.0;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(decision.reason == pm::v7::maker::DecisionReason::ExplorationQuote);
+    assert(decision.intent_count == 1);
+    assert(decision.intents[0].type == pm::v7::IntentType::Quote);
+    assert(decision.intents[0].side == pm::v7::Side::Buy);
+    assert(decision.intents[0].quantity_microunits == 2'000'000);
+}
+
 void test_global_kill_preempts_quote() {
     pm::v7::maker::MakerHotPath hot;
     auto update = normal_update();
@@ -378,6 +404,7 @@ int main() {
     test_inventory_forces_reducing_side();
     test_partial_inventory_sizes_reducing_quote_to_available_residual();
     test_transient_no_economic_quote_cannot_cancel_before_minimum_lifetime();
+    test_bounded_exploration_breaks_cold_start_with_a_real_quote();
     test_global_kill_preempts_quote();
     test_new_risk_freeze_withdraws_without_irreversible_kill();
     return 0;

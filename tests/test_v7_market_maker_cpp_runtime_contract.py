@@ -86,6 +86,25 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
             self.source,
         )
 
+    def test_runtime_loads_bounded_exploration_and_soft_inventory_policy(self) -> None:
+        exploration = self.policy["exploration"]
+        per_quote = float(exploration["max_quote_notional_fraction"])
+        per_market = float(exploration["max_market_fraction"])
+        total = float(exploration["max_capital_fraction"])
+        self.assertLessEqual(2.0 * per_quote, per_market)
+        expected_market_cap = int(total // (2.0 * per_quote))
+        self.assertEqual(expected_market_cap, 5)
+        for token in (
+            'inventory, "soft_directional_inventory_fraction"',
+            'exploration, "max_quote_notional_fraction"',
+            'exploration, "max_market_fraction"',
+            'exploration, "max_capital_fraction"',
+            "exploration_market_cap",
+            "context.risk.exploration_max_quote_shares",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.source)
+
     def test_spool_remains_transport_and_python_stays_canonical_writer(self) -> None:
         self.assertIn('run_root_ / "ledger" / "spool"', self.source)
         self.assertNotIn('run_root_ / "ledger" / "execution.jsonl"', self.source)
