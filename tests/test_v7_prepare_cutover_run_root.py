@@ -35,6 +35,18 @@ def fixture(root: Path) -> bytes:
         "paper_only": True, "authenticated_execution": False,
         "killed": False, "drawdown": 0.01, "max_drawdown": 0.15,
     })
+    write_json(root / "external_fair/paper_router_status.json", {
+        "paper_only": True, "authenticated_execution": False, "open_positions": 0,
+    })
+    write_json(root / "external_fair/paper_router_state.json", {"positions": {}})
+    write_json(root / "micro_taker/status.json", {
+        "paper_only": True, "authenticated_execution": False, "open_positions": 0,
+    })
+    write_json(root / "micro_taker/state.json", {"positions": {}})
+    write_json(root / "micro_maker/status.json", {
+        "paper_only": True, "authenticated_execution": False, "positions": [],
+    })
+    write_json(root / "micro_maker/state.json", {"inventory": {}})
     ledger = (json.dumps({
         "model_sha": OLD, "paper_only": True, "authenticated_execution": False,
         "event_type": "OPPORTUNITY",
@@ -195,6 +207,42 @@ class V7PrepareCutoverRunRootTest(unittest.TestCase):
                     ancestor_check=lambda _root, older, _newer: older != OLDER,
                 )
             self.assertTrue((run / "forward-tape.jsonl").is_file())
+
+    def test_open_position_blocks_archive_until_terminal_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            run = tmp_path / "paper_v7_live"
+            fixture(run)
+            write_json(run / "external_fair/paper_router_status.json", {
+                "paper_only": True, "authenticated_execution": False, "open_positions": 1,
+            })
+            write_json(run / "external_fair/paper_router_state.json", {
+                "positions": {"position-1": {"settled": False}},
+            })
+            with self.assertRaisesRegex(cutover.CutoverArchiveError, "prior_open_positions:external=1"):
+                cutover.prepare(
+                    run, tmp_path / "archives", tmp_path, NEW,
+                    ancestor_check=lambda *_: True,
+                )
+            self.assertTrue((run / "forward-tape.jsonl").is_file())
+
+    def test_maker_inventory_blocks_archive_until_flat(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            run = tmp_path / "paper_v7_live"
+            fixture(run)
+            write_json(run / "micro_maker/status.json", {
+                "paper_only": True, "authenticated_execution": False,
+                "positions": [{"market_id": "m1", "token_id": "yes", "shares": 2.0}],
+            })
+            write_json(run / "micro_maker/state.json", {
+                "inventory": {"m1": {"yes_shares": 2.0, "no_shares": 0.0}},
+            })
+            with self.assertRaisesRegex(cutover.CutoverArchiveError, "prior_open_positions:maker=1"):
+                cutover.prepare(
+                    run, tmp_path / "archives", tmp_path, NEW,
+                    ancestor_check=lambda *_: True,
+                )
 
 
 if __name__ == "__main__":

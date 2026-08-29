@@ -38,7 +38,7 @@ def sync_freeze(path: Path | None, report: dict[str, Any]) -> None:
             "authenticated_execution": False,
             "real_order_submission": False,
             "model_sha": report.get("model_sha"),
-            "reason": "unmarkable_inventory",
+            "reason": "cutover_drain" if report.get("drain_requested") is True else "unmarkable_inventory",
             "unmarkable_tokens": report.get("unmarkable_tokens", []),
         })
     else:
@@ -110,6 +110,7 @@ def assess(
     selection_path: Path | None = None,
 ) -> dict[str, Any]:
     state = read_json(state_path)
+    drain_requested = (state_path.parent.parent / "control" / "CUTOVER_DRAIN").exists()
     cfg = read_json(sleeve_config)
     selection = read_json(selection_path) if selection_path is not None else {}
     v7 = cfg.get("v7") if isinstance(cfg.get("v7"), dict) else {}
@@ -128,7 +129,9 @@ def assess(
             "model_sha": selection.get("model_sha"),
             "equity": float(cfg.get("starting_capital", 0.0)),
             "marking_complete": True,
-            "new_risk_frozen": False,
+            "new_risk_frozen": drain_requested,
+            "drain_requested": drain_requested,
+            "drain_complete": drain_requested,
             "degraded": False,
             "killed": False,
             "source": "not_started",
@@ -228,7 +231,7 @@ def assess(
     peak = max(starting, finite(previous.get("peak_equity"), starting), equity)
     drawdown = max(0.0, 1.0 - equity / peak) if peak > 0.0 else 1.0
     policy_hard = 0.10
-    new_risk_frozen = bool(unmarkable)
+    new_risk_frozen = bool(unmarkable) or drain_requested
     killed = drawdown >= policy_hard
     report = {
         "schema": "polymarket_v7_professional_maker_status_v1",
@@ -247,6 +250,8 @@ def assess(
         "maker_hard_drawdown": policy_hard,
         "marking_complete": not unmarkable,
         "new_risk_frozen": new_risk_frozen,
+        "drain_requested": drain_requested,
+        "drain_complete": drain_requested and not positions,
         "degraded": new_risk_frozen,
         "killed": killed,
         "source": "full_visible_bid_depth_net_verified_fee_and_slippage" if not unmarkable else "fail_closed_unmarkable",

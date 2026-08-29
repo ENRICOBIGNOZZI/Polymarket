@@ -13,6 +13,7 @@ STATUS_FILE="$STATE_DIR/v7_deploy_status.env"
 # bootstrap slack before the fail-closed health gate can judge the runtime.
 HEALTH_ATTEMPTS="${POLYMARKET_RUNTIME_HEALTH_ATTEMPTS:-390}"
 DRAIN_ATTEMPTS="${POLYMARKET_RUNTIME_DRAIN_ATTEMPTS:-50}"
+POSITION_DRAIN_ATTEMPTS="${POLYMARKET_POSITION_DRAIN_ATTEMPTS:-1200}"
 LOCK_STALE_SECONDS="${POLYMARKET_DEPLOY_LOCK_STALE_SECONDS:-7200}"
 LOCK_ORPHAN_GRACE_SECONDS="${POLYMARKET_DEPLOY_ORPHAN_GRACE_SECONDS:-300}"
 LOCK_NONCE="${EXPECTED_SHA}.$$.$(date +%s)"
@@ -24,6 +25,7 @@ fail(){ printf '[v7-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$DEPLOY_REF" == "main" ]] || fail "V7 deploy ref must remain main"
 [[ "$HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS must be positive"
 [[ "$DRAIN_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_RUNTIME_DRAIN_ATTEMPTS must be positive"
+[[ "$POSITION_DRAIN_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_POSITION_DRAIN_ATTEMPTS must be positive"
 [[ "$LOCK_STALE_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_LOCK_STALE_SECONDS must be positive"
 [[ "$LOCK_ORPHAN_GRACE_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_ORPHAN_GRACE_SECONDS must be positive"
 [[ -d "$APP_DIR/.git" ]] || fail "$APP_DIR is not a git checkout"
@@ -162,6 +164,7 @@ cleanup(){
     rm -f "$LOCK_DIR/owner_pid" "$LOCK_DIR/started_at" "$LOCK_DIR/nonce"
     rmdir "$LOCK_DIR" >/dev/null 2>&1 || true
   fi
+  clear_cutover_drain
 }
 trap cleanup EXIT INT TERM
 
@@ -178,6 +181,149 @@ write_status(){
 }
 
 production_run_root(){ printf '%s\n' "$APP_DIR/runs/paper_v7_live"; }
+
+clear_cutover_drain(){
+  local path="$(production_run_root)/control/CUTOVER_DRAIN"
+  python3 - "$path" "$LOCK_NONCE" <<'PY' 2>/dev/null || true
+import json, os, sys
+from pathlib import Path
+path=Path(sys.argv[1]); nonce=sys.argv[2]
+try:
+    value=json.loads(path.read_text(encoding='utf-8'))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(0)
+if value.get('nonce') == nonce:
+    path.unlink(missing_ok=True)
+PY
+}
+
+request_cutover_drain(){
+  local current_sha="$1" run_root="$(production_run_root)"
+  [[ "$current_sha" != "$EXPECTED_SHA" ]] || return 0
+  python3 - "$run_root" "$LOCK_NONCE" "$current_sha" "$EXPECTED_SHA" <<'PY'
+import json, os, sys, time
+from pathlib import Path
+root=Path(sys.argv[1]); nonce,current_sha,target_sha=sys.argv[2:]
+control=root/'control'; control.mkdir(parents=True,exist_ok=True)
+path=control/'CUTOVER_DRAIN'; temporary=path.with_name(f'{path.name}.tmp.{os.getpid()}')
+value={
+    'schema':'polymarket_v7_cutover_drain_v1', 'nonce':nonce,
+    'paper_only':True, 'authenticated_execution':False, 'real_order_submission':False,
+    'current_sha':current_sha, 'target_sha':target_sha, 'requested_at':int(time.time()),
+}
+temporary.write_text(json.dumps(value,sort_keys=True)+'\n',encoding='utf-8')
+os.replace(temporary,path)
+PY
+  log "Requested fail-closed PAPER position drain from $current_sha to $EXPECTED_SHA"
+}
+
+maker_positions_flat(){
+  local run_root="$(production_run_root)"
+  python3 - "$run_root" <<'PY'
+import json, sys
+from pathlib import Path
+root=Path(sys.argv[1])
+def read(rel):
+    value=json.loads((root/rel).read_text(encoding='utf-8'))
+    assert isinstance(value,dict)
+    return value
+status=read('micro_maker/status.json'); state=read('micro_maker/state.json')
+assert status.get('paper_only') is True and status.get('authenticated_execution') is False
+inventory=state.get('inventory'); positions=status.get('positions')
+assert isinstance(inventory,dict) and isinstance(positions,list)
+durable=0
+for row in inventory.values():
+    assert isinstance(row,dict)
+    yes=float(row.get('yes_shares') or 0.0); no=float(row.get('no_shares') or 0.0)
+    assert yes >= 0.0 and no >= 0.0
+    durable += int(yes > 1e-9) + int(no > 1e-9)
+assert durable == len(positions) == 0
+PY
+}
+
+wait_for_maker_flat(){
+  local current_sha="$1"
+  [[ "$current_sha" != "$EXPECTED_SHA" ]] || return 0
+  for _ in $(seq 1 "$POSITION_DRAIN_ATTEMPTS"); do
+    if maker_positions_flat >/dev/null 2>&1; then
+      log "Professional maker is flat; arming global PAPER entry drain"
+      return 0
+    fi
+    sleep 1
+  done
+  fail "professional maker did not reach a flat executable inventory state"
+}
+
+cutover_positions_drained(){
+  local run_root="$(production_run_root)"
+  python3 - "$run_root" "$LOCK_NONCE" <<'PY'
+import json, sys
+from pathlib import Path
+root=Path(sys.argv[1]); nonce=sys.argv[2]
+def read(rel):
+    try:
+        value=json.loads((root/rel).read_text(encoding='utf-8'))
+    except (OSError,json.JSONDecodeError):
+        return {}
+    return value if isinstance(value,dict) else {}
+sentinel=read('control/CUTOVER_DRAIN')
+external_status=read('external_fair/paper_router_status.json')
+external_state=read('external_fair/paper_router_state.json')
+micro_status=read('micro_taker/status.json')
+micro_state=read('micro_taker/state.json')
+maker_status=read('micro_maker/status.json')
+maker_state=read('micro_maker/state.json')
+assert sentinel.get('nonce') == nonce and sentinel.get('paper_only') is True
+assert external_status.get('paper_only') is True and external_status.get('authenticated_execution') is False
+assert micro_status.get('paper_only') is True and micro_status.get('authenticated_execution') is False
+assert maker_status.get('paper_only') is True and maker_status.get('authenticated_execution') is False
+external_positions=external_state.get('positions'); micro_positions=micro_state.get('positions')
+maker_inventory=maker_state.get('inventory'); maker_positions=maker_status.get('positions')
+assert isinstance(external_positions,dict) and isinstance(micro_positions,dict)
+assert isinstance(maker_inventory,dict) and isinstance(maker_positions,list)
+external_open=sum(1 for row in external_positions.values() if isinstance(row,dict) and row.get('settled') is not True)
+micro_open=len(micro_positions)
+maker_open=0
+for row in maker_inventory.values():
+    assert isinstance(row,dict)
+    yes=float(row.get('yes_shares') or 0.0); no=float(row.get('no_shares') or 0.0)
+    assert yes >= 0.0 and no >= 0.0
+    maker_open += int(yes > 1e-9) + int(no > 1e-9)
+assert int(external_status.get('open_positions',-1)) == external_open
+assert int(micro_status.get('open_positions',-1)) == micro_open
+assert len(maker_positions) == maker_open
+assert external_open == 0 and micro_open == 0 and maker_open == 0
+# Drain-aware runtimes must prove that entry is disabled.  A pre-contract
+# incumbent may be bootstrapped only while already flat; the post-stop
+# archiver repeats the durable-state check and catches any race fail-closed.
+if 'drain_requested' in external_status:
+    assert external_status.get('drain_requested') is True
+    assert external_status.get('drain_complete') is True
+    assert external_status.get('order_submission_enabled') is False
+    assert external_status.get('blocker') == 'CUTOVER_DRAIN'
+if 'drain_requested' in micro_status:
+    assert micro_status.get('drain_requested') is True
+    assert micro_status.get('drain_complete') is True
+    assert micro_status.get('new_risk_frozen') is True
+if 'drain_requested' in maker_status:
+    assert maker_status.get('drain_requested') is True
+    assert maker_status.get('drain_complete') is True
+    assert maker_status.get('new_risk_frozen') is True
+PY
+}
+
+wait_for_cutover_drain(){
+  local current_sha="$1"
+  [[ "$current_sha" != "$EXPECTED_SHA" ]] || return 0
+  for _ in $(seq 1 "$POSITION_DRAIN_ATTEMPTS"); do
+    if cutover_positions_drained >/dev/null 2>&1; then
+      log "PAPER position drain complete; all durable positions are terminal"
+      return 0
+    fi
+    sleep 1
+  done
+  fail "PAPER position drain did not reach zero terminally-accounted positions"
+}
 
 record_deployed_sha(){
   local run_root="$(production_run_root)" tmp
@@ -763,6 +909,9 @@ MAIN_SHA="$(git rev-parse "origin/$DEPLOY_REF")"
 prevalidate_candidate
 OLD_SHA="$(git rev-parse HEAD)"
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || fail "tracked server checkout is dirty"
+wait_for_maker_flat "$OLD_SHA"
+request_cutover_drain "$OLD_SHA"
+wait_for_cutover_drain "$OLD_SHA"
 stop_production_runtime
 stop_owned_monitoring
 CUTOVER_ARCHIVER="${POLYMARKET_CUTOVER_ARCHIVER:-$APP_DIR/scripts/v7_prepare_cutover_run_root.py}"

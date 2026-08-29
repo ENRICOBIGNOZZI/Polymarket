@@ -52,6 +52,7 @@ def test_maker_uses_canonical_cpp_runtime_and_fill_conditioned_research_core():
     assert "allocate_public_print" in paper
     assert "CancelPending" in paper
     assert "FinalMerge" in paper
+    assert 'fs::exists(maker_freeze_path) || fs::exists(cutover_drain_path)' in runtime
 
 
 def test_taker_uses_complete_round_trip_contract():
@@ -78,6 +79,9 @@ def test_taker_freezes_new_risk_when_open_positions_are_unmarkable():
     assert "marking_complete and drawdown >= max_drawdown" in text
     assert '"micro_taker_immature_max_market_fraction"' in text
     assert '"market_capital_ceiling": start_capital * max_market_fraction' in text
+    assert '(args.run_dir.parent / "control" / "CUTOVER_DRAIN").exists()' in text
+    assert "or drain_requested" in text
+    assert '"drain_complete": drain_requested and not positions' in text
     assert 'value += float(position["shares"]) * float(position["entry_price"])' not in text
 
 

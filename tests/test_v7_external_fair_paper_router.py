@@ -126,6 +126,18 @@ def main() -> None:
         assert status["book_parse_failures"] == 0
         assert status["last_decision"]["outcome"] == "FILLED"
 
+        (run_root / "control").mkdir(exist_ok=True)
+        (run_root / "control" / "CUTOVER_DRAIN").write_text("{}\n")
+        paper.step()
+        status = json.loads((external / "paper_router_status.json").read_text())
+        assert status["state"] == "DRAINING"
+        assert status["drain_requested"] is True
+        assert status["drain_complete"] is False
+        assert status["order_submission_enabled"] is False
+        assert status["blocker"] == "CUTOVER_DRAIN"
+        assert status["fills"] == 1
+        (run_root / "control" / "CUTOVER_DRAIN").unlink()
+
         failing = router.PaperRouter(
             run_root, "b" * 40, ROOT / "config" / "v7_external_fair.json",
             "https://clob.invalid", "https://gamma.invalid",

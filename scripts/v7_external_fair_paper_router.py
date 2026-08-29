@@ -186,6 +186,7 @@ class PaperRouter:
         self.source = self.directory / "status.json"
         self.status_path = self.directory / "paper_router_status.json"
         self.state_path = self.directory / "paper_router_state.json"
+        self.drain_path = run_root / "control" / "CUTOVER_DRAIN"
         allocation = load(run_root / "control" / "allocations" / "manifest.json")
         budgets = allocation.get("budgets") if isinstance(allocation.get("budgets"), dict) else {}
         starting_capital = max(1.0, finite(budgets.get("external"), 4000.0))
@@ -310,6 +311,9 @@ class PaperRouter:
 
     def attempt(self, status: dict[str, Any], row: dict[str, Any]) -> bool:
         self.last_attempt_reason = ""
+        if self.drain_path.exists():
+            self.last_attempt_reason = "CUTOVER_DRAIN"
+            return False
         if self.state.get("killed") or (self.root / "control" / "KILL").exists():
             self.last_attempt_reason = "GLOBAL_OR_SLEEVE_KILLED"
             return False
@@ -490,12 +494,15 @@ class PaperRouter:
         peak = max(starting_capital, float(self.state.get("peak_equity") or starting_capital), equity)
         drawdown = max(0.0, 1.0 - equity / peak) if peak > 0.0 else 1.0
         killed = bool(self.state.get("killed")) or drawdown >= 0.15 or (self.root / "control" / "KILL").exists()
+        drain_requested = self.drain_path.exists()
+        if drain_requested:
+            blocker = "CUTOVER_DRAIN"
         self.state["peak_equity"] = peak
         self.state["killed"] = killed
         atomic_json(self.state_path, self.state)
         atomic_json(self.status_path, {
             "schema": "polymarket_v7_external_fair_paper_router_v1", "timestamp": int(time.time()),
-            "code_sha": self.sha, "state": "KILLED" if killed else "RUNNING", "paper_only": True,
+            "code_sha": self.sha, "state": "KILLED" if killed else "DRAINING" if drain_requested else "RUNNING", "paper_only": True,
             "authenticated_execution": False, "real_order_submission": False,
             "execution_authority": "PAPER_EXECUTION_OWNER", "model_mature": self.model_mature,
             "economic_confidence": "MORE_EVIDENCE_REQUIRED", "active_candidates": active_candidates,
@@ -515,7 +522,9 @@ class PaperRouter:
             "open_positions": open_positions, "realized_pnl": float(self.state.get("realized_pnl") or 0.0),
             "cash": float(self.state.get("cash") or 0.0), "equity": equity,
             "peak_equity": peak, "drawdown": drawdown, "killed": killed,
-            "order_submission_enabled": not killed and not blocker, "blocker": blocker,
+            "order_submission_enabled": not killed and not blocker,
+            "drain_requested": drain_requested, "drain_complete": drain_requested and open_positions == 0,
+            "blocker": blocker,
             "book_requests": int(self.state.get("book_requests") or 0),
             "book_request_failures": int(self.state.get("book_request_failures") or 0),
             "book_parse_failures": int(self.state.get("book_parse_failures") or 0),
@@ -529,7 +538,10 @@ class PaperRouter:
         status = load(self.source)
         blocker = ""
         books: dict[str, Book] = {}
-        if status.get("code_sha") != self.sha:
+        if self.drain_path.exists():
+            blocker = "CUTOVER_DRAIN"
+            rows = []
+        elif status.get("code_sha") != self.sha:
             blocker = "EXTERNAL_FAIR_SHA_MISMATCH"
             rows: list[dict[str, Any]] = []
         else:

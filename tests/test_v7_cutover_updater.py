@@ -97,6 +97,27 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("return 0", function)
         self.assertNotIn('for _ in $(seq 1 300)', function)
 
+    def test_sha_cutover_drains_durable_paper_positions_before_stop_and_archive(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        self.assertIn('POLYMARKET_POSITION_DRAIN_ATTEMPTS:-1200', text)
+        self.assertIn('control/CUTOVER_DRAIN', text)
+        self.assertIn("polymarket_v7_cutover_drain_v1", text)
+        maker = text.rindex('wait_for_maker_flat "$OLD_SHA"')
+        request = text.rindex('request_cutover_drain "$OLD_SHA"')
+        wait = text.rindex('wait_for_cutover_drain "$OLD_SHA"')
+        stop = text.rindex("stop_production_runtime\n")
+        archive = text.index('python3 "$CUTOVER_ARCHIVER"', stop)
+        self.assertLess(maker, request)
+        self.assertLess(request, wait)
+        self.assertLess(wait, stop)
+        self.assertLess(stop, archive)
+        function = text[text.index("cutover_positions_drained(){"):text.index("wait_for_cutover_drain(){")]
+        self.assertIn("external_open == 0 and micro_open == 0 and maker_open == 0", function)
+        self.assertIn("order_submission_enabled') is False", function)
+        self.assertIn("new_risk_frozen') is True", function)
+        self.assertIn("archiver repeats the durable-state check", function)
+        self.assertIn("clear_cutover_drain", text[text.index("cleanup(){"):text.index("write_status(){")])
+
     def test_monitoring_processes_are_bounded_and_force_stopped_if_needed(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         function = text[text.index("stop_owned_monitoring(){"):text.index("start_monitoring(){")]

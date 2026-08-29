@@ -1599,6 +1599,8 @@ int main(int argc, char** argv) {
         const fs::path kill_path = fs::path(options.run_root) / "control" / "KILL";
         const fs::path maker_freeze_path =
             fs::path(options.run_root) / "control" / "MAKER_FREEZE";
+        const fs::path cutover_drain_path =
+            fs::path(options.run_root) / "control" / "CUTOVER_DRAIN";
         std::int64_t last_control_check_ms = 0;
         while (!g_stop.load(std::memory_order_relaxed)) {
             if (fs::exists(kill_path)) {
@@ -1623,7 +1625,8 @@ int main(int argc, char** argv) {
                     // Filesystem access stays on this cold control thread. The
                     // hot shards only read the resulting atomic flag.
                     new_risk_frozen.store(
-                        fs::exists(maker_freeze_path), std::memory_order_release);
+                        fs::exists(maker_freeze_path) || fs::exists(cutover_drain_path),
+                        std::memory_order_release);
                     last_control_check_ms = now;
                 }
                 if (now - last_state_ms >= 1000) {

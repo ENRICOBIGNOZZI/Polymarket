@@ -328,6 +328,7 @@ def main() -> int:
         max(0.0, float(v7.get("micro_taker_immature_max_market_fraction", 0.005))),
     )
     args.run_dir.mkdir(parents=True, exist_ok=True)
+    drain_requested = (args.run_dir.parent / "control" / "CUTOVER_DRAIN").exists()
     trade_tape = args.trade_tape or (args.run_dir.parent / "trade_tape.csv")
     state_path = args.run_dir / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {"cash": start_capital, "peak": start_capital, "killed": False, "positions": {}, "samples": []}
@@ -404,7 +405,7 @@ def main() -> int:
     realized_total += realized_last_tick
 
     equity, unmarkable_positions = conservative_marked_equity(cash, positions, current)
-    new_risk_frozen = bool(unmarkable_positions)
+    new_risk_frozen = bool(unmarkable_positions) or drain_requested
     peak = max(peak, equity)
     drawdown = max(0.0, 1.0 - equity / peak) if peak > 0.0 else 0.0
     marking_complete = not unmarkable_positions
@@ -508,7 +509,7 @@ def main() -> int:
         samples.append({"ts": now, "market_id": market_id, "mid": feature[1], "spread": feature[2], "x": feature[0], "y": None})
     samples = samples[-50000:]
     equity, unmarkable_positions = conservative_marked_equity(cash, positions, current)
-    new_risk_frozen = bool(unmarkable_positions)
+    new_risk_frozen = bool(unmarkable_positions) or drain_requested
     peak = max(peak, equity)
     drawdown = max(0.0, 1.0 - equity / peak) if peak > 0.0 else 0.0
     marking_complete = not unmarkable_positions
@@ -526,6 +527,8 @@ def main() -> int:
         "drawdown": drawdown,
         "killed": killed,
         "new_risk_frozen": new_risk_frozen,
+        "drain_requested": drain_requested,
+        "drain_complete": drain_requested and not positions,
         "marking_complete": marking_complete,
         "market_capital_ceiling": start_capital * max_market_fraction,
         "unmarkable_positions": unmarkable_positions,
@@ -551,7 +554,7 @@ def main() -> int:
     base.atomic_json(state_path, new_state)
     base.atomic_json(args.run_dir / "status.json", {k: new_state[k] for k in (
         "timestamp", "paper_only", "authenticated_execution", "cash", "equity", "peak", "drawdown", "killed",
-        "new_risk_frozen", "marking_complete", "market_capital_ceiling",
+        "new_risk_frozen", "drain_requested", "drain_complete", "marking_complete", "market_capital_ceiling",
         "unmarkable_positions", "marking_contract",
         "prediction_sigma_probability", "labeled_samples", "model_labeled_samples", "signals", "opened", "best_edge",
         "realized_pnl_last_tick", "realized_pnl_total", "admission_contract", "execution_contract", "feature_contract", "exit_liquidity_contract", "failures"

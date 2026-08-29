@@ -182,6 +182,63 @@ def prepare(
             if not prior_quarantined_sleeves or fatal:
                 raise CutoverArchiveError("prior_portfolio_killed")
 
+    # A SHA cutover must never turn live PAPER inventory into an orphaned
+    # archive.  Status and durable worker state are cross-checked after the
+    # process tree has stopped; any open position blocks the transition until
+    # its real PAPER exit/settlement has emitted terminal evidence.
+    external_status = read_json(run_root / "external_fair/paper_router_status.json")
+    external_state = read_json(run_root / "external_fair/paper_router_state.json")
+    micro_status = read_json(run_root / "micro_taker/status.json")
+    micro_state = read_json(run_root / "micro_taker/state.json")
+    maker_status = read_json(run_root / "micro_maker/status.json")
+    maker_state = read_json(run_root / "micro_maker/state.json")
+    for name, value in (("external_status", external_status), ("external_state", external_state),
+                        ("micro_status", micro_status), ("micro_state", micro_state),
+                        ("maker_status", maker_status), ("maker_state", maker_state)):
+        if not value:
+            raise CutoverArchiveError(f"prior_position_state_missing:{name}")
+    for name, value in (("external_status", external_status), ("micro_status", micro_status),
+                        ("maker_status", maker_status)):
+        if value.get("paper_only") is not True or value.get("authenticated_execution") is not False:
+            raise CutoverArchiveError(f"prior_position_state_unsafe:{name}")
+    external_positions = external_state.get("positions")
+    micro_positions = micro_state.get("positions")
+    maker_inventory = maker_state.get("inventory")
+    if (not isinstance(external_positions, dict) or not isinstance(micro_positions, dict)
+            or not isinstance(maker_inventory, dict)):
+        raise CutoverArchiveError("prior_position_state_invalid")
+    maker_open = 0
+    for row in maker_inventory.values():
+        if not isinstance(row, dict):
+            raise CutoverArchiveError("prior_position_state_invalid")
+        try:
+            yes_shares = float(row.get("yes_shares") or 0.0)
+            no_shares = float(row.get("no_shares") or 0.0)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CutoverArchiveError("prior_position_state_invalid") from exc
+        if yes_shares < 0.0 or no_shares < 0.0:
+            raise CutoverArchiveError("prior_position_state_invalid")
+        maker_open += int(yes_shares > 1e-9) + int(no_shares > 1e-9)
+    durable_open = {
+        "external": sum(1 for row in external_positions.values()
+                        if isinstance(row, dict) and row.get("settled") is not True),
+        "maker": maker_open,
+        "micro_taker": len(micro_positions),
+    }
+    try:
+        reported_open = {
+            "external": int(external_status["open_positions"]),
+            "maker": len(maker_status["positions"]),
+            "micro_taker": int(micro_status["open_positions"]),
+        }
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise CutoverArchiveError("prior_open_positions_invalid") from exc
+    if any(value < 0 for value in reported_open.values()) or reported_open != durable_open:
+        raise CutoverArchiveError("prior_open_positions_state_mismatch")
+    open_summary = ",".join(f"{name}={value}" for name, value in sorted(durable_open.items()) if value)
+    if open_summary:
+        raise CutoverArchiveError(f"prior_open_positions:{open_summary}")
+
     ledger_rows, ledger_sha256, ledger_model_sha_counts = validate_ledger(
         run_root / "ledger/execution.jsonl", repository_root, target_sha, ancestor_check,
     )
@@ -208,6 +265,7 @@ def prepare(
         "ledger_model_sha_counts": ledger_model_sha_counts,
         "runtime_checkout_drift_detected": runtime_checkout_drift,
         "prior_quarantined_sleeves": prior_quarantined_sleeves,
+        "prior_open_positions": durable_open,
     }
     temporary = control / f"cutover_lineage.json.tmp.{os.getpid()}"
     temporary.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
