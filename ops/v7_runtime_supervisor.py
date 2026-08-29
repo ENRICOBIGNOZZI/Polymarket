@@ -35,6 +35,48 @@ def _json(path: Path) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def external_fair_ready(run_root: Path, expected_sha: str, *, now: int | None = None) -> bool:
+    """Require the complete External Fair chain, not merely a live router PID."""
+    current = int(time.time()) if now is None else int(now)
+    status = _json(run_root / "external_fair" / "status.json")
+    router = _json(run_root / "external_fair" / "paper_router_status.json")
+    contract = status.get("contract") if isinstance(status.get("contract"), dict) else {}
+    reference = status.get("settlement_reference") if isinstance(status.get("settlement_reference"), dict) else {}
+    fair = status.get("fair") if isinstance(status.get("fair"), dict) else {}
+    oracle = status.get("oracle") if isinstance(status.get("oracle"), dict) else {}
+    external = status.get("external") if isinstance(status.get("external"), dict) else {}
+    decision = router.get("last_decision") if isinstance(router.get("last_decision"), dict) else {}
+    return bool(
+        status.get("schema") == "polymarket_v7_external_fair_status_v1"
+        and status.get("code_sha") == expected_sha
+        and status.get("state") == "FULL_FAIR_PAPER_OPERATIONAL"
+        and status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and not status.get("blockers")
+        and int(status.get("external_fair_required_markets") or 0) >= 1
+        and contract.get("verified") is True
+        and contract.get("rules_hash_recognized") is True
+        and reference.get("valid") is True
+        and fair.get("valid") is True
+        and oracle.get("healthy") is True
+        and external.get("healthy") is True
+        and router.get("schema") == "polymarket_v7_external_fair_paper_router_v1"
+        and router.get("code_sha") == expected_sha
+        and router.get("state") == "RUNNING"
+        and router.get("paper_only") is True
+        and router.get("authenticated_execution") is False
+        and router.get("real_order_submission") is False
+        and router.get("execution_authority") == "PAPER_EXECUTION_OWNER"
+        and router.get("order_submission_enabled") is True
+        and router.get("killed") is False
+        and not router.get("blocker")
+        and int(router.get("book_requests") or 0) > 0
+        and int(decision.get("books") or 0) == 2
+        and current - int(router.get("timestamp") or 0) <= 15
+    )
+
+
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f"{path.name}.tmp.{os.getpid()}")
@@ -129,21 +171,7 @@ class Supervisor:
             pass
 
     def status(self, state: str, reasons: list[str] | tuple[str, ...] = ()) -> None:
-        router = _json(self.run_root / "external_fair" / "paper_router_status.json")
-        router_ready = bool(
-            state == "running"
-            and router.get("schema") == "polymarket_v7_external_fair_paper_router_v1"
-            and router.get("code_sha") == self.expected_sha
-            and router.get("state") == "RUNNING"
-            and router.get("paper_only") is True
-            and router.get("authenticated_execution") is False
-            and router.get("real_order_submission") is False
-            and router.get("execution_authority") == "PAPER_EXECUTION_OWNER"
-            and router.get("order_submission_enabled") is True
-            and router.get("killed") is False
-            and not router.get("blocker")
-            and int(time.time()) - int(router.get("timestamp") or 0) <= 15
-        )
+        router_ready = state == "running" and external_fair_ready(self.run_root, self.expected_sha)
         _atomic_json(
             self.status_path,
             {

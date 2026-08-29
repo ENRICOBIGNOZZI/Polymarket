@@ -258,14 +258,35 @@ LEDGER_ID="${PM_V7_LEDGER_ID:-$RUN_ID:execution}"
 SERVER_ID="${PM_V7_SERVER_ID:-$(hostname -s 2>/dev/null || hostname)}"
 
 paper_router_ready() {
-  python3 - "$RUN_ROOT/external_fair/paper_router_status.json" "$SHA" <<'PY'
+  python3 - "$RUN_ROOT/external_fair/status.json" "$RUN_ROOT/external_fair/paper_router_status.json" "$SHA" <<'PY'
 import json,sys,time
 try:
-    value=json.load(open(sys.argv[1], encoding="utf-8"))
+    status=json.load(open(sys.argv[1], encoding="utf-8"))
+    value=json.load(open(sys.argv[2], encoding="utf-8"))
 except (OSError, json.JSONDecodeError):
     raise SystemExit(1)
-ok=(value.get("schema")=="polymarket_v7_external_fair_paper_router_v1"
-    and value.get("code_sha")==sys.argv[2]
+contract=status.get("contract") if isinstance(status.get("contract"),dict) else {}
+reference=status.get("settlement_reference") if isinstance(status.get("settlement_reference"),dict) else {}
+fair=status.get("fair") if isinstance(status.get("fair"),dict) else {}
+oracle=status.get("oracle") if isinstance(status.get("oracle"),dict) else {}
+external=status.get("external") if isinstance(status.get("external"),dict) else {}
+decision=value.get("last_decision") if isinstance(value.get("last_decision"),dict) else {}
+ok=(status.get("schema")=="polymarket_v7_external_fair_status_v1"
+    and status.get("code_sha")==sys.argv[3]
+    and status.get("state")=="FULL_FAIR_PAPER_OPERATIONAL"
+    and status.get("paper_only") is True
+    and status.get("authenticated_execution") is False
+    and status.get("real_order_submission") is False
+    and not status.get("blockers")
+    and int(status.get("external_fair_required_markets") or 0)>=1
+    and contract.get("verified") is True
+    and contract.get("rules_hash_recognized") is True
+    and reference.get("valid") is True
+    and fair.get("valid") is True
+    and oracle.get("healthy") is True
+    and external.get("healthy") is True
+    and value.get("schema")=="polymarket_v7_external_fair_paper_router_v1"
+    and value.get("code_sha")==sys.argv[3]
     and value.get("state")=="RUNNING"
     and value.get("paper_only") is True
     and value.get("authenticated_execution") is False
@@ -274,6 +295,8 @@ ok=(value.get("schema")=="polymarket_v7_external_fair_paper_router_v1"
     and value.get("order_submission_enabled") is True
     and value.get("killed") is False
     and not value.get("blocker")
+    and int(value.get("book_requests") or 0)>0
+    and int(decision.get("books") or 0)==2
     and int(time.time())-int(value.get("timestamp") or 0)<=5)
 raise SystemExit(0 if ok else 1)
 PY

@@ -30,6 +30,22 @@ class V7PaperLoopBash3PortabilityTest(unittest.TestCase):
         self.assertIn("trap cleanup EXIT", cleanup)
         self.assertIn("trap shutdown INT TERM", cleanup)
 
+    def test_runtime_readiness_requires_full_external_fair_chain(self) -> None:
+        text = LOOP.read_text(encoding="utf-8")
+        ready = text[text.index("paper_router_ready()") : text.index("write_runtime_status()")]
+        for required in (
+            'FULL_FAIR_PAPER_OPERATIONAL',
+            'external_fair_required_markets',
+            'rules_hash_recognized',
+            'settlement_reference',
+            'fair.get("valid") is True',
+            'oracle.get("healthy") is True',
+            'external.get("healthy") is True',
+            'book_requests',
+            'decision.get("books") or 0)==2',
+        ):
+            self.assertIn(required, ready)
+
 
 if __name__ == "__main__":
     unittest.main()
