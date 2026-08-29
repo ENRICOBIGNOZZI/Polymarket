@@ -544,7 +544,9 @@ OLD_SHA="$(git rev-parse HEAD)"
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || fail "tracked server checkout is dirty"
 stop_production_runtime
 stop_owned_monitoring
-python3 scripts/v7_prepare_cutover_run_root.py \
+CUTOVER_ARCHIVER="${POLYMARKET_CUTOVER_ARCHIVER:-$APP_DIR/scripts/v7_prepare_cutover_run_root.py}"
+[[ -f "$CUTOVER_ARCHIVER" ]] || fail "cutover archiver missing: $CUTOVER_ARCHIVER"
+python3 "$CUTOVER_ARCHIVER" \
   --run-root "$(production_run_root)" \
   --archive-root "$APP_DIR/runs/paper_v7_archives" \
   --repository-root "$APP_DIR" \

@@ -65,6 +65,8 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             self.assertIn(required, text)
         for forbidden in ("schedule:", "workflow_run:", "github.event_name == 'schedule'"):
             self.assertNotIn(forbidden, text)
+        self.assertIn('git show "$validated_sha:scripts/v7_prepare_cutover_run_root.py" > "$archiver"', text)
+        self.assertIn('POLYMARKET_CUTOVER_ARCHIVER="$archiver"', text)
 
     def test_cutover_contract_reads_v7_safety_authority(self) -> None:
         text = (ROOT / "scripts/v7_cutover_contract.py").read_text(encoding="utf-8")

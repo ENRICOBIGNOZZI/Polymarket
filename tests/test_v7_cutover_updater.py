@@ -88,12 +88,13 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         stop = text.rindex("stop_production_runtime\n")
         stop_monitoring = text.index("stop_owned_monitoring\n", stop)
-        archive = text.index("scripts/v7_prepare_cutover_run_root.py", stop_monitoring)
+        archive = text.index('python3 "$CUTOVER_ARCHIVER"', stop_monitoring)
         start = text.rindex("start_production_runtime\n")
         self.assertLess(stop, stop_monitoring)
         self.assertLess(stop_monitoring, archive)
         self.assertLess(archive, start)
         self.assertIn('paper_v7_archives', text)
+        self.assertIn('POLYMARKET_CUTOVER_ARCHIVER', text)
         self.assertNotIn('rm -rf "$(production_run_root)"', text)
 
     def test_health_failure_emits_endpoint_and_monitoring_log_diagnostics(self) -> None:

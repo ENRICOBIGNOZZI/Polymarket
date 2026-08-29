@@ -218,10 +218,14 @@ jobs:
           trap - EXIT
 
           updater="$(mktemp)"
-          trap 'rm -f "$updater"' EXIT
+          archiver="$(mktemp)"
+          trap 'rm -f "$updater" "$archiver"' EXIT
           git show "$validated_sha:ops/update_server_v7.sh" > "$updater"
+          git show "$validated_sha:scripts/v7_prepare_cutover_run_root.py" > "$archiver"
           chmod 700 "$updater"
+          chmod 600 "$archiver"
           POLYMARKET_APP_DIR="$HOME/polymarket" \
+            POLYMARKET_CUTOVER_ARCHIVER="$archiver" \
             EXPECTED_VALIDATED_SHA="$validated_sha" \
             POLYMARKET_DEPLOY_REF=paper-validated \
             POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=60 \
