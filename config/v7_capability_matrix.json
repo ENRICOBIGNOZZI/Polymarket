@@ -2,7 +2,7 @@
   "schema": "polymarket_v7_capability_matrix_v1",
   "evidence_cutoff": "2026-08-28T23:55:00Z",
   "core": [
-    {"component":"runtime","implementation_status":"IMPLEMENTATION_COMPLETE","validation_status":"ENGINEERING_VALIDATED","operational_readiness":"CORE_RUNTIME_ONLY_UNTIL_EXTERNAL_WORKER_AND_ORACLE_HEALTHY","owner":"scripts/paper_v7_execution_loop.sh"},
+    {"component":"runtime","implementation_status":"IMPLEMENTATION_COMPLETE","validation_status":"ENGINEERING_VALIDATED","operational_readiness":"FULL_PAPER_RUNTIME_WITH_FAIL_CLOSED_EXTERNAL_ROUTER","owner":"scripts/paper_v7_execution_loop.sh"},
     {"component":"OMS_execution","implementation_status":"IMPLEMENTATION_COMPLETE","validation_status":"ENGINEERING_VALIDATED","owner":"single V7 C++ execution path"},
     {"component":"inventory","implementation_status":"IMPLEMENTATION_COMPLETE","validation_status":"ENGINEERING_VALIDATED","owner":"canonical V7 portfolio state"},
     {"component":"capital","implementation_status":"IMPLEMENTATION_COMPLETE","validation_status":"ENGINEERING_VALIDATED","owner":"scripts/v7_capital_allocator.py"},

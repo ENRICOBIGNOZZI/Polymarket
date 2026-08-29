@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Observe public Polymarket RTDS inputs for the V7 External Fair PAPER plane.
 
-This zero-authority process consumes the public Chainlink and Binance topics,
-writes an evidence tape, and reports real data-plane liveness. It deliberately
-keeps contract binding, fair value and OMS routing fail-closed.
+The monitor itself has zero execution authority. It binds the contract,
+captures the exact Chainlink reference, computes the fair interval and reports
+the separately supervised PAPER router only after that router proves its safe
+runtime contract.
 """
 from __future__ import annotations
 
@@ -43,6 +44,14 @@ def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
     with path.open("a", encoding="utf-8") as output:
         output.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
         output.flush()
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _recv_exact(stream: ssl.SSLSocket, size: int) -> bytes:
@@ -344,6 +353,20 @@ class Monitor:
         continuity = "LIVE_CONTINUOUS" if oracle_healthy and self.accepted >= 2 else "CONTINUITY_UNKNOWN"
         fair = self.fair_snapshot(now, oracle_healthy, venue_runtime)
         common = {"paper_only": True, "authenticated_execution": False, "real_order_submission": False}
+        router = load_json(self.root / "paper_router_status.json")
+        router_active = bool(
+            router.get("schema") == "polymarket_v7_external_fair_paper_router_v1"
+            and router.get("code_sha") == self.code_sha
+            and router.get("state") == "RUNNING"
+            and router.get("paper_only") is True
+            and router.get("authenticated_execution") is False
+            and router.get("real_order_submission") is False
+            and router.get("execution_authority") == "PAPER_EXECUTION_OWNER"
+            and router.get("order_submission_enabled") is True
+            and router.get("killed") is False
+            and not router.get("blocker")
+            and int(time.time()) - int(router.get("timestamp") or 0) <= 5
+        )
         atomic_json(self.root / "oracle_status.json", {
             "schema": "polymarket_v7_same_oracle_status_v1", "state": continuity,
             "reason": "" if oracle_healthy else self.last_error, "timestamp_ns": now,
@@ -354,9 +377,12 @@ class Monitor:
         })
         status = {
             "schema": "polymarket_v7_external_fair_status_v1",
-            "state": ("FULL_FAIR_SHADOW_OPERATIONAL" if fair.get("valid") else
+            "state": ("FULL_FAIR_PAPER_OPERATIONAL" if fair.get("valid") and router_active else
+                      "FULL_FAIR_SHADOW_OPERATIONAL" if fair.get("valid") else
                       "DATA_PLANE_OPERATIONAL" if oracle_healthy else "DATA_PLANE_DEGRADED"),
-            "code_sha": self.code_sha, "execution_authority": "SHADOW_ZERO_AUTHORITY",
+            "code_sha": self.code_sha, "execution_authority": (
+                "PAPER_EXECUTION_OWNER" if router_active else "SHADOW_ZERO_AUTHORITY"
+            ),
             "external_fair_required_markets": 1 if self.active_contract else 0, **common,
             "market": {
                 "market_id": str(self.active_market.get("market_id") or ""),
@@ -388,7 +414,11 @@ class Monitor:
                 "spread_bps": 0.0, "weight": 1.0, "basis_bps": 0.0,
                 "disabled": not (multi_venue_healthy or external_fresh)}]},
             "fair": fair,
-            "model": {"mature": False, "coverage": 0.0},
+            "model": {"mature": False, "coverage": 0.0,
+                      "economic_confidence": router.get("economic_confidence", "MORE_EVIDENCE_REQUIRED")},
+            "actions": router.get("actions") if router_active else {},
+            "economics": {"realized_pnl": float(router.get("realized_pnl") or 0.0)},
+            "paper_router": router,
             "tape": {"evidence_valid": True, "accepted": self.accepted,
                      "written": self.written, "dropped": self.dropped},
             "blockers": (["CONTRACT_BINDING_NOT_RUNNING"] if not self.active_contract else [])
@@ -396,7 +426,8 @@ class Monitor:
                         + (["SETTLEMENT_REFERENCE_NOT_CAPTURED"] if not self.reference.get("valid") else [])
                         + (["MULTI_VENUE_EXTERNAL_COMPOSITE_NOT_RUNNING"] if not multi_venue_healthy else [])
                         + (["FAIR_VALUE_INVALID"] if not fair.get("valid") else [])
-                        + ["OMS_EXTERNAL_FAIR_ROUTING_NOT_RUNNING"],
+                        + ([] if router_active else ["OMS_EXTERNAL_FAIR_ROUTING_NOT_RUNNING"])
+                        + ([str(router.get("blocker"))] if router.get("blocker") else []),
         }
         atomic_json(self.root / "status.json", status)
 

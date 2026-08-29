@@ -41,6 +41,7 @@ class MakerStatusTests(unittest.TestCase):
             "realized_trading_pnl": 0.0,
             "inventory": {
                 "market-1": {
+                    "condition_id": "cond-1",
                     "yes_token": "yes-1",
                     "no_token": "no-1",
                     "yes_shares": 10.0,
@@ -80,6 +81,23 @@ class MakerStatusTests(unittest.TestCase):
             self.assertAlmostEqual(report["equity"], 95.0 + gross - expected_fee - expected_slippage)
             self.assertFalse(report["killed"])
             self.assertEqual(report["source"], "full_visible_bid_depth_net_verified_fee_and_slippage")
+
+    def test_held_inventory_survives_reward_selection_rotation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state, cfg, selection, output = self.fixture(Path(tmp))
+            selection.write_text(json.dumps({"markets": []}))
+            book = [{
+                "asset_id": "yes-1",
+                "bids": [{"price": "0.50", "size": "10"}],
+            }]
+            fee = FeeDetails(rate=0.04, exponent=1.0, taker_only=True, verified=True, source="test")
+            with patch("v7_market_maker_status.request_json", return_value=book), patch(
+                "v7_market_maker_status.resolve_fee_details", return_value=fee
+            ):
+                report = assess(state, cfg, output, selection_path=selection)
+            self.assertFalse(report["killed"])
+            self.assertEqual(report["positions"][0]["condition_id"], "cond-1")
+            self.assertEqual(report["unmarkable_tokens"], [])
 
     def test_unverified_fee_schedule_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

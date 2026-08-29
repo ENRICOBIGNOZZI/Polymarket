@@ -114,6 +114,12 @@ def assess(
     for market_id, row in inventory.items():
         if not isinstance(row, dict):
             continue
+        # The state snapshot is the immutable source of identity for held
+        # inventory.  Current reward selection is only a backward-compatible
+        # fallback because it can legitimately rotate a filled market out.
+        condition_id = str(row.get("condition_id") or "")
+        if condition_id:
+            conditions[str(market_id)] = condition_id
         yes = max(0.0, finite(row.get("yes_shares"), 0.0))
         no = max(0.0, finite(row.get("no_shares"), 0.0))
         if yes > 1e-9:

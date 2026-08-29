@@ -4,7 +4,7 @@ Run `scripts/paper_v7_execution_loop.sh` only from an isolated exact-SHA checkou
 
 Required safety state is `paper_only=true`, `authenticated_execution=false`, `real_order_submission=false`. Startup fails closed on registry, ownership, fee, risk, model-identity or executable mismatches.
 
-The deployed runtime must publish source SHA, configuration hash, policy hash, model hash, run ID, ledger ID and server ID. It also publishes component readiness. Configured PAPER authority is not equivalent to live readiness: the status remains `CORE_RUNTIME_ONLY` and `p0_full_stack_ready=false` until the settlement worker and verified oracle are observed healthy. Repository code never guesses missing deployed identity.
+The deployed runtime must publish source SHA, configuration hash, policy hash, model hash, run ID, ledger ID and server ID. It also publishes component readiness. Configured PAPER authority is not equivalent to live readiness: the status becomes `FULL_PAPER_RUNTIME` with `p0_full_stack_ready=true` only after the settlement-aware PAPER router proves its exact-SHA, zero-authentication runtime contract. Contract, oracle, fee, fair and arrival-book failures remain fail-closed. Repository code never guesses missing deployed identity.
 
 `ops/v7_runtime_supervisor.py` supplies bounded restarts, persistent backoff,
 duplicate-writer rejection and fail-closed reconciliation. The systemd and

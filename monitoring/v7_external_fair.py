@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Read-only monitoring summary for the V7 settlement-aware external-fair plane.
 
-The external-fair plane starts in SHADOW_ZERO_AUTHORITY. Missing shadow status
-must not take the incumbent BLUE runtime down. Once a market is explicitly
-external_fair_required, status fields are surfaced so Prometheus rules can fail
-closed on invalid contract/oracle/external/fair state.
+The component reports its observed PAPER or zero-authority state explicitly.
+Missing status must not take the incumbent runtime down. Once a market is
+explicitly external_fair_required, status fields are surfaced so Prometheus
+rules can fail closed on invalid contract/oracle/external/fair state.
 """
 from __future__ import annotations
 
@@ -186,6 +186,7 @@ def summarize_external_fair(
             hard_reasons.append("FAIR_VALIDITY_WINDOW_INVALID")
         if not bool(tape.get("evidence_valid", True)):
             hard_reasons.append("EXTERNAL_TAPE_INVALID")
+        hard_reasons.extend(blockers)
 
     champion = _model_pointer(
         external_root / "model_registry" / "fair_value_champion.json"

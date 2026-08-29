@@ -109,6 +109,22 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
             self.assertTrue(status["fair"]["valid"])
             self.assertEqual(status["blockers"], ["OMS_EXTERNAL_FAIR_ROUTING_NOT_RUNNING"])
 
+            (root / "external" / "paper_router_status.json").write_text(json.dumps({
+                "schema": "polymarket_v7_external_fair_paper_router_v1",
+                "timestamp": int(time.time()), "code_sha": "a" * 40, "state": "RUNNING",
+                "paper_only": True, "authenticated_execution": False,
+                "real_order_submission": False, "execution_authority": "PAPER_EXECUTION_OWNER",
+                "order_submission_enabled": True, "economic_confidence": "MORE_EVIDENCE_REQUIRED",
+                "killed": False,
+                "actions": {"TAKE": 2, "NOTHING": 3}, "realized_pnl": 0.0, "blocker": "",
+            }))
+            monitor.publish()
+            active = json.loads((root / "external" / "status.json").read_text())
+            self.assertEqual(active["state"], "FULL_FAIR_PAPER_OPERATIONAL")
+            self.assertEqual(active["execution_authority"], "PAPER_EXECUTION_OWNER")
+            self.assertEqual(active["blockers"], [])
+            self.assertEqual(active["actions"]["TAKE"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

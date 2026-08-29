@@ -37,6 +37,9 @@ def sleeve_equity(run_root: Path, sleeve: str, budget: float) -> tuple[float, bo
     elif sleeve == "micro_maker":
         state = read_json(run_root / "micro_maker" / "status.json")
         key = "equity"
+    elif sleeve == "external":
+        state = read_json(run_root / "external_fair" / "paper_router_status.json")
+        key = "equity"
     else:
         return budget, False, "inactive_reserved"
     if not state:

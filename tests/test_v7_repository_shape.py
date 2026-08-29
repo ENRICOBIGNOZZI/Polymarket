@@ -16,7 +16,7 @@ TEXT_SCAN_ALLOWLIST = {
 }
 RETIRED_TEXT = re.compile(
     r"(?i)(?:paper[_-]?v[1-6]|v[1-6][_-](?:runtime|broker|ledger|scheduler|config|paper)|"
-    r"(?:fallback|start|run)[_-]?v[1-6]|v6_local_factor_intents)"
+    r"(?:fallback|start|run)[_-]?v[1-6]|v6_local_factor_intents|shared_v6_v7)"
 )
 
 FORBIDDEN_PATHS = {

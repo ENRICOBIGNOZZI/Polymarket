@@ -109,7 +109,7 @@
     "relative_pair_only": true,
     "requires_authoritative_market_fee": true,
     "requires_fresh_executable_books_for_both_legs": true,
-    "requires_shared_v6_v7_broker_ledger": true,
+    "requires_canonical_v7_oms_ledger": true,
     "requires_empirical_joint_fill_states": true,
     "requires_partial_abort_unwind_pnl": true,
     "direct_authenticated_execution": false

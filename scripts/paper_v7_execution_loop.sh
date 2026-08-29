@@ -200,9 +200,9 @@ fi
   >> "$RUN_ROOT/external_fair/external_venues.log" 2>&1 &
 pids+=("$!")
 
-python3 scripts/v7_external_fair_shadow_router.py \
-  --run-root "$RUN_ROOT" --model-sha "$SHA" --interval 1 \
-  >> "$RUN_ROOT/external_fair/shadow_router.log" 2>&1 &
+python3 scripts/v7_external_fair_paper_router.py \
+  --run-root "$RUN_ROOT" --model-sha "$SHA" --config "$EXTERNAL_FAIR_POLICY" --interval 1 \
+  >> "$RUN_ROOT/external_fair/paper_router.log" 2>&1 &
 pids+=("$!")
 
 CONFIG_HASH="$(git hash-object "$CONFIG")"
@@ -211,11 +211,38 @@ RUN_ID="${PM_V7_RUN_ID:-${SHA:0:12}-$(date +%s)-$$}"
 LEDGER_ID="${PM_V7_LEDGER_ID:-$RUN_ID:execution}"
 SERVER_ID="${PM_V7_SERVER_ID:-$(hostname -s 2>/dev/null || hostname)}"
 
+paper_router_ready() {
+  python3 - "$RUN_ROOT/external_fair/paper_router_status.json" "$SHA" <<'PY'
+import json,sys,time
+try:
+    value=json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+ok=(value.get("schema")=="polymarket_v7_external_fair_paper_router_v1"
+    and value.get("code_sha")==sys.argv[2]
+    and value.get("state")=="RUNNING"
+    and value.get("paper_only") is True
+    and value.get("authenticated_execution") is False
+    and value.get("real_order_submission") is False
+    and value.get("execution_authority")=="PAPER_EXECUTION_OWNER"
+    and value.get("order_submission_enabled") is True
+    and value.get("killed") is False
+    and not value.get("blocker")
+    and int(time.time())-int(value.get("timestamp") or 0)<=5)
+raise SystemExit(0 if ok else 1)
+PY
+}
+
 write_runtime_status() {
   local state="$1"
   local killed="${2:-false}"
-  local now
+  local now p0_ready=false readiness="CORE_RUNTIME_ONLY" external_ready=false
   now="$(date +%s)"
+  if [[ "$state" == "running" ]] && paper_router_ready; then
+    p0_ready=true
+    readiness="FULL_PAPER_RUNTIME"
+    external_ready=true
+  fi
   local model_hash model_source
   if [[ -s "$MAKER_CHAMPION_MODEL" ]]; then
     model_hash="$(git hash-object "$MAKER_CHAMPION_MODEL")"
@@ -225,8 +252,8 @@ write_runtime_status() {
     model_source="cold_start_policy"
   fi
   local tmp="$CONTROL/runtime_status.json.tmp.$$"
-  printf '{"schema":"polymarket_v7_runtime_status_v2","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"primary_economic_sleeve":"MICRO_MAKER_PRO","execution_authority":"PAPER_EXECUTION_OWNER","single_execution_owner":true,"canonical_state_reconciled":true,"exact_sha_ci_green":%s,"p0_authority_configured":["professional_maker","crypto_settlement_fair","crypto_informed_taker"],"p0_full_stack_ready":false,"readiness":"CORE_RUNTIME_ONLY","external_fair_runtime_ready":false}\n' \
-    "$now" "$SHA" "$CONFIG_HASH" "$POLICY_HASH" "$model_hash" "$model_source" "$RUN_ID" "$LEDGER_ID" "$SERVER_ID" "$$" "$state" "$killed" "$EXACT_SHA_CI_GREEN" > "$tmp"
+  printf '{"schema":"polymarket_v7_runtime_status_v2","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"primary_economic_sleeve":"MICRO_MAKER_PRO","execution_authority":"PAPER_EXECUTION_OWNER","single_execution_owner":true,"canonical_state_reconciled":true,"exact_sha_ci_green":%s,"p0_authority_configured":["professional_maker","crypto_settlement_fair","crypto_informed_taker"],"p0_full_stack_ready":%s,"readiness":"%s","external_fair_runtime_ready":%s}\n' \
+    "$now" "$SHA" "$CONFIG_HASH" "$POLICY_HASH" "$model_hash" "$model_source" "$RUN_ID" "$LEDGER_ID" "$SERVER_ID" "$$" "$state" "$killed" "$EXACT_SHA_CI_GREEN" "$p0_ready" "$readiness" "$external_ready" > "$tmp"
   mv "$tmp" "$CONTROL/runtime_status.json"
 }
 write_runtime_status starting false

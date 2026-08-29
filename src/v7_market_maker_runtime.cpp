@@ -1136,6 +1136,11 @@ public:
             remaining_cost += state.yes_cost + state.no_cost;
             realized += state.realized_trading_pnl;
             json::object row;
+            // Inventory identity must remain self-contained.  The live reward
+            // selection rotates independently of held PAPER inventory, so a
+            // risk mark cannot rely on the current selection still containing
+            // the market that produced an earlier fill.
+            row["condition_id"] = market->cold.condition_id;
             row["yes_token"] = market->cold.yes_token;
             row["no_token"] = market->cold.no_token;
             row["yes_shares"] = micro_shares(state.yes_microunits);

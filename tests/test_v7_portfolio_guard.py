@@ -37,6 +37,22 @@ class PortfolioGuardTests(unittest.TestCase):
             self.assertFalse(report["killed"])
             self.assertEqual(report["equity"], 100.0)
 
+    def test_external_paper_router_equity_joins_global_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            alloc = root / "manifest.json"
+            alloc.write_text(json.dumps({"account_starting_capital": 100.0, "budgets": {"external": 60.0, "reserve": 40.0}}))
+            status = root / "external_fair" / "paper_router_status.json"
+            status.parent.mkdir(parents=True)
+            status.write_text(json.dumps({
+                "paper_only": True, "authenticated_execution": False,
+                "equity": 55.0, "killed": False,
+            }))
+            report = assess(root, alloc, max_drawdown=.15)
+            self.assertFalse(report["killed"])
+            self.assertEqual(report["sleeves"]["external"]["source"], "reported")
+            self.assertAlmostEqual(report["equity"], 95.0)
+
     def test_professional_maker_equity_is_not_treated_as_reserved(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

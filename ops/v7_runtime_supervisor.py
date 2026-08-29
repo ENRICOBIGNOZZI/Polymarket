@@ -129,6 +129,21 @@ class Supervisor:
             pass
 
     def status(self, state: str, reasons: list[str] | tuple[str, ...] = ()) -> None:
+        router = _json(self.run_root / "external_fair" / "paper_router_status.json")
+        router_ready = bool(
+            state == "running"
+            and router.get("schema") == "polymarket_v7_external_fair_paper_router_v1"
+            and router.get("code_sha") == self.expected_sha
+            and router.get("state") == "RUNNING"
+            and router.get("paper_only") is True
+            and router.get("authenticated_execution") is False
+            and router.get("real_order_submission") is False
+            and router.get("execution_authority") == "PAPER_EXECUTION_OWNER"
+            and router.get("order_submission_enabled") is True
+            and router.get("killed") is False
+            and not router.get("blocker")
+            and int(time.time()) - int(router.get("timestamp") or 0) <= 15
+        )
         _atomic_json(
             self.status_path,
             {
@@ -142,8 +157,8 @@ class Supervisor:
                 "supervisor_pid": os.getpid(),
                 "child_pid": self.child.pid if self.child and self.child.poll() is None else 0,
                 "state": state,
-                "readiness": "CORE_RUNTIME_ONLY" if state == "running" else "NOT_READY",
-                "p0_full_stack_ready": False,
+                "readiness": "FULL_PAPER_RUNTIME" if router_ready else "CORE_RUNTIME_ONLY" if state == "running" else "NOT_READY",
+                "p0_full_stack_ready": router_ready,
                 "reasons": sorted(set(reasons)),
                 "started_at": self.started_at,
                 "restart_count_window": len(self._restart_times()),
