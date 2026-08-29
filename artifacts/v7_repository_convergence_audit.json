@@ -66,10 +66,10 @@
     "BLOCKER"
   ],
   "cleanup_status": {
-    "blocker_reason": "No authenticated GitHub credential is available in this execution environment.",
-    "local_code_convergence": "MERGE_INTO_CANONICAL",
+    "blocker_reason": "Git transport is authenticated by SSH, but no authenticated GitHub API credential is available for rulesets or formal PR closure.",
+    "local_code_convergence": "COMPLETE",
     "obsolete_open_pr_closure": "BLOCKER",
-    "remote_branch_deletion": "BLOCKER",
+    "remote_branch_deletion": "COMPLETE",
     "ruleset_application": "BLOCKER"
   },
   "github_governance": {
@@ -81,6 +81,22 @@
     "rulesets_query_error": null
   },
   "observed_at": "2026-08-29T13:40:57.503218+00:00",
+  "post_merge_execution": {
+    "active_tracked_workflow_records": 11,
+    "disabled_historical_workflow_records": 53,
+    "final_canonical_branch": "main",
+    "final_open_pr_numbers": [
+      105,
+      106
+    ],
+    "final_remote_branch_count": 1,
+    "formal_pr_closure_blocker": "GitHub REST/GraphQL write authentication unavailable; both remaining PR head refs are absent.",
+    "merged_to_main": true,
+    "obsolete_prs_auto_closed_by_branch_deletion": 24,
+    "observed_at": "2026-08-29T13:50:59Z",
+    "remote_branch_refs_deleted": 146,
+    "ruleset_applied": false
+  },
   "pull_requests": {
     "closed_unmerged_count": 416,
     "closed_unmerged_numbers": [
