@@ -76,6 +76,17 @@ class V7OperatorHomeTest(unittest.TestCase):
         self.assertIn("KeepAlive", launchd)
         self.assertIn("SuccessfulExit", launchd)
 
+    def test_macos_monitoring_services_are_persistent_and_v7_only(self) -> None:
+        prometheus = (ROOT / "ops/launchd/com.polymarket.v7.prometheus.plist.in").read_text()
+        grafana = (ROOT / "ops/launchd/com.polymarket.v7.grafana.plist.in").read_text()
+        for text in (prometheus, grafana):
+            self.assertIn("<key>RunAtLoad</key><true/>", text)
+            self.assertIn("<key>KeepAlive</key><true/>", text)
+            self.assertIn("com.polymarket.v7.", text)
+        self.assertIn("prometheus-v7.yml", prometheus)
+        self.assertIn("grafana.ini", grafana)
+        self.assertIn("grafana/provisioning", grafana)
+
 
 if __name__ == "__main__":
     unittest.main()

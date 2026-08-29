@@ -24,6 +24,38 @@ class V7MacosMonitoringOwnerTest(unittest.TestCase):
         self.assertIn("dashboard.get('uid') == expected", text)
         self.assertIn("prometheus-v7.yml", text)
         self.assertIn("grafana/provisioning/dashboards/v7.yml", text)
+        self.assertIn('"$STATE_DIR/grafana/provisioning/plugins"', text)
+        self.assertIn('"$STATE_DIR/grafana/provisioning/alerting"', text)
+        self.assertIn('"$STATE_DIR/grafana.ini" "$APP_DIR/$DASHBOARD_FILE"', text)
+        self.assertIn("root_url = https://{fqdn}/", text)
+        self.assertIn("default_home_dashboard_path = {dashboard}", text)
+
+    def test_every_dashboard_uses_only_the_canonical_v7_datasource(self) -> None:
+        import json
+
+        observed: set[str] = set()
+
+        def collect(value: object) -> None:
+            if isinstance(value, dict):
+                datasource = value.get("datasource")
+                if isinstance(datasource, dict) and datasource.get("uid"):
+                    observed.add(str(datasource["uid"]))
+                for child in value.values():
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        for path in (ROOT / "monitoring/grafana/dashboards").glob("*.json"):
+            collect(json.loads(path.read_text(encoding="utf-8")))
+        self.assertEqual(observed, {"prometheus-v7"})
+
+    def test_removed_v7_dashboard_files_are_removed_from_grafana(self) -> None:
+        provider = (ROOT / "monitoring/grafana/provisioning/dashboards/v7.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("disableDeletion: false", provider)
+        self.assertNotIn("disableDeletion: true", provider)
 
     def test_v7_monitoring_publishes_only_private_tailscale_serve_route(self) -> None:
         text = (ROOT / "ops/apply_v7_monitoring_config_macos.sh").read_text(encoding="utf-8")

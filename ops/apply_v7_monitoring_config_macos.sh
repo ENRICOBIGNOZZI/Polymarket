@@ -193,8 +193,60 @@ assert dashboard.get('uid') == expected
 assert 'V7' in str(dashboard.get('title',''))
 PY
 
-mkdir -p "$STATE_DIR/grafana/provisioning/datasources" "$STATE_DIR/grafana/provisioning/dashboards"
+mkdir -p \
+  "$STATE_DIR/grafana/provisioning/datasources" \
+  "$STATE_DIR/grafana/provisioning/dashboards" \
+  "$STATE_DIR/grafana/provisioning/plugins" \
+  "$STATE_DIR/grafana/provisioning/alerting"
 install -m 0644 "$APP_DIR/$DATASOURCE_FILE" "$STATE_DIR/grafana/provisioning/datasources/prometheus-v7.yml"
+
+python3 - "$STATE_DIR/grafana.ini" "$APP_DIR/$DASHBOARD_FILE" "$TAILSCALE_FQDN" <<'PY'
+import os,sys
+from pathlib import Path
+
+path=Path(sys.argv[1]); dashboard=Path(sys.argv[2]).resolve(); fqdn=sys.argv[3]
+assert dashboard.is_file()
+assert fqdn and all(ch.isalnum() or ch in '.-' for ch in fqdn)
+value=f"""[server]
+http_addr = 127.0.0.1
+http_port = 3000
+root_url = https://{fqdn}/
+
+[users]
+allow_sign_up = false
+auto_assign_org = true
+auto_assign_org_id = 1
+auto_assign_org_role = Viewer
+
+[auth]
+disable_login_form = true
+disable_signout_menu = true
+
+[auth.basic]
+enabled = false
+
+[auth.anonymous]
+enabled = true
+org_name = Main Org.
+org_role = Viewer
+hide_version = true
+
+[analytics]
+reporting_enabled = false
+check_for_updates = false
+check_for_plugin_updates = false
+
+[news]
+news_feed_enabled = false
+
+[dashboards]
+default_home_dashboard_path = {dashboard}
+"""
+path.parent.mkdir(parents=True,exist_ok=True)
+temporary=path.with_suffix(f'.tmp.{os.getpid()}')
+temporary.write_text(value,encoding='utf-8')
+os.replace(temporary,path)
+PY
 
 python3 - "$APP_DIR/$PROVIDER_FILE" "$STATE_DIR/grafana/provisioning/dashboards/v7.yml" "$APP_DIR/monitoring/grafana/dashboards" <<'PY'
 import sys
@@ -218,6 +270,7 @@ configure_tailnet_grafana
 printf 'v7_monitoring_configured=true\n'
 printf 'dashboard_uid=%s\n' "$DASHBOARD_UID"
 printf 'dashboard_file=%s\n' "$APP_DIR/$DASHBOARD_FILE"
+printf 'grafana_config=%s\n' "$STATE_DIR/grafana.ini"
 printf 'prometheus_config=%s\n' "$STATE_DIR/prometheus-v7.yml"
 printf 'prometheus_alert_rules=%s\n' "$STATE_DIR/prometheus-v7-alerts.yml"
 printf 'grafana_operator_url=%s/d/%s/polymarket-v7-canonical-paper-economics\n' "$GRAFANA_URL" "$DASHBOARD_UID"

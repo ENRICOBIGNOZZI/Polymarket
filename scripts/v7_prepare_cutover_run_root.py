@@ -113,17 +113,47 @@ def prepare(
     supervisor = read_json(run_root / "control/supervisor_status.json")
     deployed_path = run_root / "control/deployed_sha"
     deployed_sha = deployed_path.read_text(encoding="utf-8").strip() if deployed_path.is_file() else ""
-    previous_sha = str(runtime.get("model_sha") or deployed_sha)
-    if previous_sha == target_sha:
-        return {"state": "SAME_SHA_RECOVERY", "target_sha": target_sha, "archived": False}
-    if not SHA40.fullmatch(previous_sha):
+    runtime_sha = str(runtime.get("model_sha") or "")
+
+    if not runtime and not deployed_sha:
+        lineage = read_json(run_root / "control/cutover_lineage.json")
+        if not any(run_root.iterdir()):
+            return {"state": "NEW_RUN_ROOT", "target_sha": target_sha, "archived": False}
+        if (
+            lineage.get("schema") == "polymarket_v7_cutover_lineage_v1"
+            and lineage.get("target_sha") == target_sha
+            and lineage.get("paper_only") is True
+            and lineage.get("authenticated_execution") is False
+            and lineage.get("real_order_submission") is False
+            and not (run_root / "ledger/execution.jsonl").exists()
+        ):
+            return {"state": "PREPARED_RUN_ROOT", "target_sha": target_sha, "archived": False}
         raise CutoverArchiveError("previous_runtime_sha_missing_or_invalid")
-    if deployed_sha and deployed_sha != previous_sha:
-        raise CutoverArchiveError("previous_deployed_runtime_sha_mismatch")
-    if not ancestor_check(repository_root, previous_sha, target_sha):
-        raise CutoverArchiveError("previous_runtime_not_ancestor_of_target")
+
+    if deployed_sha and not SHA40.fullmatch(deployed_sha):
+        raise CutoverArchiveError("previous_deployed_sha_invalid")
+    if runtime and not SHA40.fullmatch(runtime_sha):
+        raise CutoverArchiveError("previous_runtime_sha_missing_or_invalid")
     if pid_alive(runtime.get("pid")) or pid_alive(supervisor.get("supervisor_pid")):
         raise CutoverArchiveError("prior_runtime_or_supervisor_still_alive")
+
+    previous_sha = deployed_sha or runtime_sha
+    if not SHA40.fullmatch(previous_sha):
+        raise CutoverArchiveError("previous_runtime_sha_missing_or_invalid")
+    runtime_checkout_drift = bool(
+        deployed_sha and runtime_sha and runtime_sha == target_sha and runtime_sha != deployed_sha
+    )
+    if deployed_sha and runtime_sha and runtime_sha != deployed_sha and not runtime_checkout_drift:
+        raise CutoverArchiveError("previous_deployed_runtime_sha_mismatch")
+    if previous_sha == target_sha:
+        _, _, model_sha_counts = validate_ledger(
+            run_root / "ledger/execution.jsonl", repository_root, target_sha, ancestor_check,
+        )
+        if any(model_sha != target_sha for model_sha in model_sha_counts):
+            raise CutoverArchiveError("same_sha_ledger_mismatch")
+        return {"state": "SAME_SHA_RECOVERY", "target_sha": target_sha, "archived": False}
+    if not ancestor_check(repository_root, previous_sha, target_sha):
+        raise CutoverArchiveError("previous_runtime_not_ancestor_of_target")
     if runtime.get("paper_only") is not True or runtime.get("authenticated_execution") is not False or runtime.get("real_order_submission") is not False:
         raise CutoverArchiveError("prior_runtime_safety_contract_invalid")
 
@@ -165,6 +195,7 @@ def prepare(
         "ledger_rows": ledger_rows,
         "ledger_sha256": ledger_sha256,
         "ledger_model_sha_counts": ledger_model_sha_counts,
+        "runtime_checkout_drift_detected": runtime_checkout_drift,
     }
     temporary = control / f"cutover_lineage.json.tmp.{os.getpid()}"
     temporary.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")

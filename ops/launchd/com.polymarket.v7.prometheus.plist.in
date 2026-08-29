@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.polymarket.v7.prometheus</string>
+  <key>ProgramArguments</key><array>
+    <string>@PROMETHEUS_BIN@</string>
+    <string>--config.file=@STATE_DIR@/prometheus-v7.yml</string>
+    <string>--storage.tsdb.path=@APP_DIR@/runs/monitoring/prometheus</string>
+    <string>--web.listen-address=127.0.0.1:9090</string>
+    <string>--web.enable-lifecycle</string>
+  </array>
+  <key>WorkingDirectory</key><string>@APP_DIR@</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>@RUN_ROOT@/prometheus-v7.log</string>
+  <key>StandardErrorPath</key><string>@RUN_ROOT@/prometheus-v7.log</string>
+</dict></plist>

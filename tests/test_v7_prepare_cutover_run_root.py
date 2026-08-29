@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -70,6 +71,60 @@ class V7PrepareCutoverRunRootTest(unittest.TestCase):
             result = cutover.prepare(run, tmp_path / "archives", tmp_path, OLD, ancestor_check=lambda *_: True)
             self.assertEqual(result, {"state": "SAME_SHA_RECOVERY", "target_sha": OLD, "archived": False})
             self.assertTrue((run / "forward-tape.jsonl").is_file())
+
+    def test_stopped_runtime_checkout_drift_uses_immutable_deployed_sha(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            run = tmp_path / "paper_v7_live"
+            fixture(run)
+            runtime = json.loads((run / "control/runtime_status.json").read_text())
+            runtime["model_sha"] = NEW
+            write_json(run / "control/runtime_status.json", runtime)
+            result = cutover.prepare(
+                run, tmp_path / "archives", tmp_path, NEW, now=125,
+                ancestor_check=lambda *_: True,
+            )
+            self.assertEqual(result["previous_runtime_sha"], OLD)
+            self.assertTrue(result["runtime_checkout_drift_detected"])
+            self.assertEqual(result["ledger_model_sha_counts"], {OLD: 1})
+
+    def test_live_runtime_checkout_drift_still_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            run = tmp_path / "paper_v7_live"
+            fixture(run)
+            runtime = json.loads((run / "control/runtime_status.json").read_text())
+            runtime.update({"model_sha": NEW, "pid": os.getpid()})
+            write_json(run / "control/runtime_status.json", runtime)
+            with self.assertRaisesRegex(cutover.CutoverArchiveError, "prior_runtime_or_supervisor_still_alive"):
+                cutover.prepare(
+                    run, tmp_path / "archives", tmp_path, NEW,
+                    ancestor_check=lambda *_: True,
+                )
+
+    def test_prepared_lineage_only_run_root_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            run = tmp_path / "paper_v7_live"
+            archive = tmp_path / "paper_v7_archives"
+            fixture(run)
+            cutover.prepare(run, archive, tmp_path, NEW, now=126, ancestor_check=lambda *_: True)
+            result = cutover.prepare(run, archive, tmp_path, NEW, ancestor_check=lambda *_: True)
+            self.assertEqual(result, {"state": "PREPARED_RUN_ROOT", "target_sha": NEW, "archived": False})
+
+    def test_unrelated_runtime_and_deployed_sha_mismatch_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            run = tmp_path / "paper_v7_live"
+            fixture(run)
+            runtime = json.loads((run / "control/runtime_status.json").read_text())
+            runtime["model_sha"] = OLDER
+            write_json(run / "control/runtime_status.json", runtime)
+            with self.assertRaisesRegex(cutover.CutoverArchiveError, "previous_deployed_runtime_sha_mismatch"):
+                cutover.prepare(
+                    run, tmp_path / "archives", tmp_path, NEW,
+                    ancestor_check=lambda *_: True,
+                )
 
     def test_unsafe_prior_state_is_not_moved(self) -> None:
         for mutation, reason in (
