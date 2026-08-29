@@ -128,6 +128,25 @@ class MakerCutoverFinalizerTest(unittest.TestCase):
             self.assertTrue(events[0]["metadata"]["complete_set_merge"])
             self.assertEqual(events[0]["metadata"]["inventory_token_id"], "yes")
 
+    def test_invalid_spool_record_is_preserved_with_hash_before_liquidation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = 1_788_040_000_000
+            self.fixture(root, now)
+            invalid = root / "ledger/spool/invalid.json"
+            invalid.parent.mkdir(parents=True)
+            payload = b'{"not":"a ledger event"}\n'
+            invalid.write_bytes(payload)
+            receipt = cutover.finalize(root, SHA, NONCE, now_ms=now)
+            self.assertEqual(receipt["rejected_spool_records"], 1)
+            reconciliations = list((root / "control").glob("spool_reconciliation.*.json"))
+            self.assertEqual(len(reconciliations), 1)
+            reconciliation = json.loads(reconciliations[0].read_text())
+            self.assertEqual(reconciliation["rejected_count"], 1)
+            quarantined = root / reconciliation["quarantine"] / "invalid.json"
+            self.assertEqual(quarantined.read_bytes(), payload)
+            self.assertFalse(invalid.exists())
+
     def test_stale_or_incomplete_mark_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

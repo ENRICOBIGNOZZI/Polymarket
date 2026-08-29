@@ -76,6 +76,59 @@ def maker_flat(state: dict[str, Any]) -> bool:
     return True
 
 
+def reconcile_invalid_spool(root: Path, model_sha: str, nonce: str) -> dict[str, Any]:
+    """Losslessly quarantine records that can never enter the canonical ledger."""
+    spool = root / "ledger/spool"
+    quarantine = root / "ledger/rejected_cutover" / stable_id(nonce)
+    quarantine.mkdir(parents=True, exist_ok=True)
+    for path in sorted(spool.glob("*.json")) if spool.exists() else []:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            event = LedgerEvent.from_dict(raw)
+            if event.model_sha != model_sha:
+                raise MakerCutoverError("mixed_model_sha")
+        except Exception:
+            destination = quarantine / path.name
+            if destination.exists():
+                if destination.read_bytes() != path.read_bytes():
+                    raise MakerCutoverError("spool_quarantine_name_collision")
+                path.unlink()
+            else:
+                os.replace(path, destination)
+
+    rejected: list[dict[str, Any]] = []
+    for path in sorted(quarantine.glob("*.json")):
+        payload = path.read_bytes()
+        reason = "unknown"
+        try:
+            raw = json.loads(payload)
+            event = LedgerEvent.from_dict(raw)
+            if event.model_sha != model_sha:
+                reason = "mixed_model_sha"
+            else:
+                raise MakerCutoverError("valid_record_in_rejected_quarantine")
+        except MakerCutoverError as exc:
+            if str(exc) == "valid_record_in_rejected_quarantine":
+                raise
+            reason = str(exc)
+        except Exception as exc:
+            reason = f"{type(exc).__name__}:{exc}"
+        rejected.append({
+            "file": path.name, "bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(), "reason": reason,
+        })
+    receipt = {
+        "schema": "polymarket_v7_cutover_spool_reconciliation_v1",
+        "timestamp_ms": time.time_ns() // 1_000_000,
+        "paper_only": True, "authenticated_execution": False,
+        "real_order_submission": False, "model_sha": model_sha, "nonce": nonce,
+        "rejected_records": rejected, "rejected_count": len(rejected),
+        "quarantine": str(quarantine.relative_to(root)),
+    }
+    atomic_json(root / "control" / f"spool_reconciliation.{stable_id(nonce)}.json", receipt)
+    return receipt
+
+
 def resume_transaction(
     root: Path,
     model_sha: str,
@@ -145,6 +198,7 @@ def resume_transaction(
             events = [LedgerEvent.from_dict(raw) for raw in raw_events]
         except Exception as exc:
             raise MakerCutoverError("maker_liquidation_journal_events_invalid") from exc
+        reconcile_invalid_spool(root, model_sha, nonce)
         spool_events(root, events)
         drained = drain_spool(root, model_sha=model_sha, writer_id=f"cutover-maker-{nonce}")
         if drained["rejected"]:
@@ -324,6 +378,7 @@ def finalize(
 
     # First drain any events produced immediately before shutdown.  The
     # liquidation itself is journaled before its first externally visible write.
+    reconciliation = reconcile_invalid_spool(root, model_sha, nonce)
     before = drain_spool(root, model_sha=model_sha, writer_id=f"cutover-pre-{nonce}")
     if before["rejected"]:
         raise MakerCutoverError("pre_cutover_spool_rejected")
@@ -350,6 +405,7 @@ def finalize(
         "real_order_submission": False, "model_sha": model_sha, "nonce": nonce,
         "positions_liquidated": len(liquidations), "net_cashflow": total_net,
         "final_pnl": total_pnl, "liquidations": liquidations,
+        "rejected_spool_records": reconciliation["rejected_count"],
         "ledger_record_ids": [event.record_id for event in events],
         "original_state_digest": object_digest(state),
         "final_state_digest": object_digest(updated),
