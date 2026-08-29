@@ -67,6 +67,20 @@ def fee_per_share(price: float, schedule: dict[str, Any], *, taker: bool = True)
     return rate * (price * (1.0 - price)) ** exponent
 
 
+def entry_tte_allowed(fair: dict[str, Any], policy: dict[str, Any]) -> bool:
+    """Fail closed unless the forecast is inside the configured entry window."""
+    tte = finite(fair.get("tte_seconds"))
+    minimum = finite(policy.get("minimum_entry_tte_seconds"))
+    maximum = finite(policy.get("maximum_entry_tte_seconds"))
+    return (
+        math.isfinite(tte)
+        and math.isfinite(minimum)
+        and math.isfinite(maximum)
+        and 0.0 <= minimum <= maximum
+        and minimum <= tte <= maximum
+    )
+
+
 @dataclass(frozen=True)
 class Book:
     token_id: str
@@ -124,6 +138,8 @@ def robust_candidates(status: dict[str, Any], books: dict[str, Book], policy: di
             and oracle.get("healthy") and oracle.get("continuity") != "CONTINUITY_UNKNOWN"
             and external.get("healthy") and fair.get("valid")):
         return []
+    if not entry_tte_allowed(fair, policy):
+        return []
     calculated = int(fair.get("calculated_monotonic_ns") or 0)
     valid_until = int(fair.get("valid_until_monotonic_ns") or 0)
     current = time.monotonic_ns()
@@ -148,6 +164,7 @@ def robust_candidates(status: dict[str, Any], books: dict[str, Book], policy: di
                 "outcome": outcome, "token_id": token, "book": book, "ask": ask,
                 "fee_per_share": fee, "execution_risk": execution_risk,
                 "robust_probability": robust_value, "robust_ev": robust_ev,
+                "tte_seconds": float(fair["tte_seconds"]),
             })
     return sorted(rows, key=lambda row: (-row["robust_ev"], row["outcome"]))
 
@@ -305,6 +322,8 @@ class PaperRouter:
                 "fair_upper": fair.get("upper"), "contract_rules_hash": contract.get("rules_hash"),
                 "reference_version": reference.get("version"), "expected_fee_per_share": row["fee_per_share"],
                 "expected_execution_risk": row["execution_risk"], "economic_maturity": "MORE_EVIDENCE_REQUIRED",
+                "tte_seconds": row["tte_seconds"], "robust_probability": row["robust_probability"],
+                "robust_ev_per_share": row["robust_ev"],
                 "model_family": STRATEGY, "horizon_seconds": 300,
             },
         )
@@ -382,7 +401,13 @@ class PaperRouter:
             fill_price=ask, filled_size=size, complete=True, fee=total_fee,
             fee_rate=float(schedule.get("rate") or 0.0), fee_source="GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
             slippage=max(0.0, ask - float(common["ask"])) * size,
-            metadata={**common["metadata"], "robust_net_ev": robust_ev, "arrival_snapshot_id": arrival_book.snapshot_id},
+            metadata={
+                **common["metadata"], "robust_net_ev": robust_ev,
+                "arrival_snapshot_id": arrival_book.snapshot_id,
+                "arrival_tte_seconds": arrival["tte_seconds"],
+                "arrival_robust_probability": arrival["robust_probability"],
+                "arrival_robust_ev_per_share": arrival["robust_ev"],
+            },
         ))
         self.emit(LedgerEvent(event_type="ORDER_STATE", strategy=STRATEGY, model_sha=self.sha,
                               model_version=MODEL_VERSION, order_id=order_id, order_state="FILLED",
@@ -506,6 +531,10 @@ class PaperRouter:
             "authenticated_execution": False, "real_order_submission": False,
             "execution_authority": "PAPER_EXECUTION_OWNER", "model_mature": self.model_mature,
             "economic_confidence": "MORE_EVIDENCE_REQUIRED", "active_candidates": active_candidates,
+            "entry_tte_window_seconds": {
+                "minimum": self.policy.get("minimum_entry_tte_seconds"),
+                "maximum": self.policy.get("maximum_entry_tte_seconds"),
+            },
             "sizing_regime": (
                 "MATURE_FRACTIONAL_KELLY" if self.model_mature
                 else "IMMATURE_FIXED_EXPLORATION"
@@ -564,6 +593,9 @@ class PaperRouter:
                 reason = self.last_attempt_reason
             elif rows:
                 reason = "ROBUST_CANDIDATE_NOT_FILLED"
+            elif (status.get("fair") or {}).get("valid") and not entry_tte_allowed(
+                    status.get("fair") or {}, self.policy):
+                reason = "ENTRY_TTE_OUTSIDE_WINDOW"
             else:
                 reason = "NO_ROBUST_EV"
             self.reject(reason)

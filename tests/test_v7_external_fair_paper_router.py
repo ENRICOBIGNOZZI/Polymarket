@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import v7_external_fair_paper_router as router  # noqa: E402
 from v7_external_fair_paper_router import (  # noqa: E402
-    Book, executable_sell_value, fee_per_share, robust_candidates,
+    Book, entry_tte_allowed, executable_sell_value, fee_per_share, robust_candidates,
 )
 
 
@@ -25,7 +25,7 @@ def snapshot() -> dict:
         "settlement_reference": {"valid": True},
         "oracle": {"healthy": True, "continuity": "LIVE_CONTINUOUS"},
         "external": {"healthy": True},
-        "fair": {"valid": True, "lower": 0.75, "upper": 0.80,
+        "fair": {"valid": True, "lower": 0.75, "upper": 0.80, "tte_seconds": 45.0,
                  "calculated_monotonic_ns": current - 1, "valid_until_monotonic_ns": current + 1_000_000_000},
         "market": {"yes_token": "yes", "no_token": "no",
                    "fee_schedule": {"rate": 0.07, "exponent": 1, "takerOnly": True}},
@@ -63,10 +63,25 @@ def main() -> None:
     }) == []
     raw_book["bids"] = []
     assert router.parse_book(raw_book, receive_ms) is None
-    policy = {"minimum_robust_ev_per_share": 0.001, "base_execution_risk_per_share": 0.0005}
+    policy = {
+        "minimum_entry_tte_seconds": 5.0, "maximum_entry_tte_seconds": 60.0,
+        "minimum_robust_ev_per_share": 0.001, "base_execution_risk_per_share": 0.0005,
+    }
     rows = robust_candidates(snapshot(), {"yes": book("yes", 0.50), "no": book("no", 0.81)}, policy)
     assert len(rows) == 1 and rows[0]["outcome"] == "YES"
     assert rows[0]["robust_ev"] > 0.20
+    assert rows[0]["tte_seconds"] == 45.0
+    early = snapshot(); early["fair"]["tte_seconds"] = 60.001
+    assert not entry_tte_allowed(early["fair"], policy)
+    assert robust_candidates(early, {"yes": book("yes", 0.50)}, policy) == []
+    boundary = snapshot(); boundary["fair"]["tte_seconds"] = 60.0
+    assert entry_tte_allowed(boundary["fair"], policy)
+    assert robust_candidates(boundary, {"yes": book("yes", 0.50)}, policy)
+    expired = snapshot(); expired["fair"]["tte_seconds"] = 4.999
+    assert not entry_tte_allowed(expired["fair"], policy)
+    assert robust_candidates(expired, {"yes": book("yes", 0.50)}, policy) == []
+    missing_tte = snapshot(); missing_tte["fair"].pop("tte_seconds")
+    assert robust_candidates(missing_tte, {"yes": book("yes", 0.50)}, policy) == []
     invalid = snapshot(); invalid["fair"]["valid"] = False
     assert robust_candidates(invalid, {"yes": book("yes", 0.50)}, policy) == []
     unsafe = snapshot(); unsafe["real_order_submission"] = True
@@ -121,10 +136,17 @@ def main() -> None:
         assert status["model_mature"] is False
         assert status["sizing_regime"] == "IMMATURE_FIXED_EXPLORATION"
         assert status["market_capital_ceiling"] == 10.0
+        assert status["entry_tte_window_seconds"] == {"minimum": 5.0, "maximum": 60.0}
         assert status["book_requests"] == 2
         assert status["book_request_failures"] == 0
         assert status["book_parse_failures"] == 0
         assert status["last_decision"]["outcome"] == "FILLED"
+        fill = next(event for event in events if event["event_type"] == "FILL")
+        assert fill["metadata"]["tte_seconds"] == 45.0
+        assert fill["metadata"]["arrival_tte_seconds"] == 45.0
+        assert fill["metadata"]["robust_probability"] == 0.75
+        assert fill["metadata"]["robust_ev_per_share"] > 0.20
+        assert fill["metadata"]["arrival_robust_ev_per_share"] > 0.20
 
         (run_root / "control").mkdir(exist_ok=True)
         (run_root / "control" / "CUTOVER_DRAIN").write_text("{}\n")
