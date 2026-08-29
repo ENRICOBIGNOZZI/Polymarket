@@ -10,11 +10,6 @@ constexpr double kEps = 1e-12;
 
 [[nodiscard]] bool finite(double value) noexcept { return std::isfinite(value); }
 
-[[nodiscard]] double oriented_point(const FairValueSnapshot& fair,
-                                    bool instrument_is_yes) noexcept {
-    return instrument_is_yes ? fair.fair_yes : 1.0 - fair.fair_yes;
-}
-
 [[nodiscard]] double oriented_lower_bound(const FairValueSnapshot& fair,
                                           bool instrument_is_yes) noexcept {
     return instrument_is_yes ? fair.fair_yes_lower : 1.0 - fair.fair_yes_upper;

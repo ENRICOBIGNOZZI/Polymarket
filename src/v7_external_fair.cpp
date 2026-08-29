@@ -425,7 +425,6 @@ CandidateAction build_informed_take(
         * clamp(policy.depth_survival_fraction, 0.0, 1.0);
     double total_quantity = 0.0;
     double total_book_cost = 0.0;
-    double total_fee = 0.0;
     double total_execution_risk = 0.0;
     double total_ev = 0.0;
     double last_price = 0.0;
@@ -449,7 +448,6 @@ CandidateAction build_informed_take(
         if (quantity <= 0.0) break;
         total_quantity += quantity;
         total_book_cost += quantity * level.price;
-        total_fee += quantity * per_share_fee;
         total_execution_risk += quantity * execution_risk_per_share;
         total_ev += quantity * mev;
         remaining_budget -= quantity * unit_cash_cost;

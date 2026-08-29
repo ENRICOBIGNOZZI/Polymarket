@@ -22,7 +22,10 @@ std::string text(const json::value&v){if(v.is_string())return std::string(v.as_s
 std::vector<std::string> array_strings(const json::object&o,const char*key){
     std::vector<std::string> out;auto it=o.find(key);if(it==o.end())return out;json::value v=it->value();
     if(v.is_string()){boost::system::error_code ec;auto p=json::parse(v.as_string(),ec);if(!ec)v=std::move(p);}
-    if(v.is_array())for(auto const&x:v.as_array())out.push_back(text(x));return out;
+    if(v.is_array()) {
+        for(auto const&x:v.as_array())out.push_back(text(x));
+    }
+    return out;
 }
 std::optional<Market> parse_event_market(const json::object&o,const std::string&event_id){
     Market m;m.event_id=event_id;m.neg_risk=true;
@@ -54,7 +57,13 @@ std::vector<Market> PolymarketApi::fetch_event_markets(const std::string&event_i
     auto root=json::parse(r.body);if(!root.is_object())throw std::runtime_error("Unexpected Gamma event response");auto const&o=root.as_object();
     auto ni=o.find("negRisk");if(ni!=o.end()&&!boolean(ni->value(),false))return{};
     auto it=o.find("markets");if(it==o.end()||!it->value().is_array())return{};
-    std::vector<Market>out;for(auto const&v:it->value().as_array())if(v.is_object())if(auto m=parse_event_market(v.as_object(),event_id))out.push_back(std::move(*m));return out;
+    std::vector<Market>out;
+    for(auto const&v:it->value().as_array()) {
+        if(v.is_object()) {
+            if(auto m=parse_event_market(v.as_object(),event_id))out.push_back(std::move(*m));
+        }
+    }
+    return out;
 }
 
 } // namespace pm
