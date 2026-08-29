@@ -14,6 +14,7 @@ import v7_prepare_cutover_run_root as cutover
 
 OLD = "a" * 40
 NEW = "b" * 40
+OLDER = "c" * 40
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -56,6 +57,7 @@ class V7PrepareCutoverRunRootTest(unittest.TestCase):
             self.assertEqual((destination / "forward-tape.jsonl").read_text(), "preserve-me\n")
             self.assertEqual((destination / "ledger/execution.jsonl").read_bytes(), ledger)
             self.assertEqual(result["ledger_sha256"], hashlib.sha256(ledger).hexdigest())
+            self.assertEqual(result["ledger_model_sha_counts"], {OLD: 1})
             receipt = json.loads((run / "control/cutover_lineage.json").read_text())
             self.assertEqual(receipt["previous_runtime_sha"], OLD)
             self.assertEqual(receipt["target_sha"], NEW)
@@ -72,7 +74,7 @@ class V7PrepareCutoverRunRootTest(unittest.TestCase):
     def test_unsafe_prior_state_is_not_moved(self) -> None:
         for mutation, reason in (
             ("portfolio", "prior_portfolio_killed"),
-            ("ledger", "ledger_sha_mismatch:1"),
+            ("ledger", "ledger_sha_invalid:1"),
         ):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
                 tmp_path = Path(directory)
@@ -84,11 +86,41 @@ class V7PrepareCutoverRunRootTest(unittest.TestCase):
                     write_json(run / "control/portfolio_state.json", value)
                 else:
                     write_json(run / "ledger/execution.jsonl", {
-                        "model_sha": "c" * 40, "paper_only": True, "authenticated_execution": False,
+                        "model_sha": "not-a-sha", "paper_only": True, "authenticated_execution": False,
                     })
                 with self.assertRaisesRegex(cutover.CutoverArchiveError, reason):
                     cutover.prepare(run, tmp_path / "archives", tmp_path, NEW, ancestor_check=lambda *_: True)
                 self.assertTrue((run / "forward-tape.jsonl").is_file())
+
+    def test_mixed_historical_ledger_shas_are_preserved_with_audited_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            run = tmp_path / "paper_v7_live"
+            archive = tmp_path / "paper_v7_archives"
+            fixture(run)
+            with (run / "ledger/execution.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "model_sha": OLDER, "paper_only": True, "authenticated_execution": False,
+                }) + "\n")
+            result = cutover.prepare(
+                run, archive, tmp_path, NEW, now=124, ancestor_check=lambda *_: True,
+            )
+            self.assertEqual(result["ledger_model_sha_counts"], {OLD: 1, OLDER: 1})
+
+    def test_non_ancestor_ledger_sha_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            run = tmp_path / "paper_v7_live"
+            fixture(run)
+            write_json(run / "ledger/execution.jsonl", {
+                "model_sha": OLDER, "paper_only": True, "authenticated_execution": False,
+            })
+            with self.assertRaisesRegex(cutover.CutoverArchiveError, "ledger_sha_not_ancestor:1"):
+                cutover.prepare(
+                    run, tmp_path / "archives", tmp_path, NEW,
+                    ancestor_check=lambda _root, older, _newer: older != OLDER,
+                )
+            self.assertTrue((run / "forward-tape.jsonl").is_file())
 
 
 if __name__ == "__main__":
