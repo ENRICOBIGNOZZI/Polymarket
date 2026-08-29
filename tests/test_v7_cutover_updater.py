@@ -8,6 +8,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class V7CutoverUpdaterTest(unittest.TestCase):
+    def test_health_window_covers_a_full_external_fair_contract_boundary(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        self.assertIn('POLYMARKET_RUNTIME_HEALTH_ATTEMPTS:-390', text)
+        self.assertIn("one full window plus", text)
+
     def test_deploy_lock_is_owned_and_only_expired_orphans_are_recovered(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         function = text[text.index("acquire_deploy_lock(){"):text.index("write_status(){")]

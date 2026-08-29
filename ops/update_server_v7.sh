@@ -8,7 +8,10 @@ CACHE_DIR="${POLYMARKET_DEPLOY_CACHE:-$HOME/.cache/polymarket-v7-deploy}"
 STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
 LOCK_DIR="$CACHE_DIR/update-v7.lock"
 STATUS_FILE="$STATE_DIR/v7_deploy_status.env"
-HEALTH_ATTEMPTS="${POLYMARKET_RUNTIME_HEALTH_ATTEMPTS:-180}"
+# External Fair must observe an exact 5-minute Chainlink boundary causally.
+# A cutover immediately after a boundary therefore needs one full window plus
+# bootstrap slack before the fail-closed health gate can judge the runtime.
+HEALTH_ATTEMPTS="${POLYMARKET_RUNTIME_HEALTH_ATTEMPTS:-390}"
 DRAIN_ATTEMPTS="${POLYMARKET_RUNTIME_DRAIN_ATTEMPTS:-50}"
 LOCK_STALE_SECONDS="${POLYMARKET_DEPLOY_LOCK_STALE_SECONDS:-7200}"
 LOCK_ORPHAN_GRACE_SECONDS="${POLYMARKET_DEPLOY_ORPHAN_GRACE_SECONDS:-300}"
