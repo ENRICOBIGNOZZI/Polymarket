@@ -182,6 +182,34 @@ write_status(){
 
 production_run_root(){ printf '%s\n' "$APP_DIR/runs/paper_v7_live"; }
 
+resolve_incumbent_sha(){
+  local run_root="$(production_run_root)" deployed="$run_root/control/deployed_sha"
+  local runtime="$run_root/control/runtime_status.json"
+  if [[ ! -f "$deployed" && ! -f "$runtime" ]]; then
+    git -C "$APP_DIR" rev-parse HEAD
+    return 0
+  fi
+  python3 - "$deployed" "$runtime" <<'PY'
+import json,re,sys
+from pathlib import Path
+sha_pattern=re.compile(r'^[0-9a-f]{40}$')
+deployed_path,runtime_path=map(Path,sys.argv[1:])
+try:
+    deployed=deployed_path.read_text(encoding='utf-8').strip()
+    runtime=json.loads(runtime_path.read_text(encoding='utf-8'))
+except (OSError,json.JSONDecodeError) as exc:
+    raise SystemExit(f'incumbent_identity_unreadable:{type(exc).__name__}')
+runtime_sha=str(runtime.get('model_sha') or '')
+if not sha_pattern.fullmatch(deployed) or runtime_sha != deployed:
+    raise SystemExit('incumbent_identity_mismatch')
+if runtime.get('paper_only') is not True or runtime.get('authenticated_execution') is not False:
+    raise SystemExit('incumbent_safety_mismatch')
+if runtime.get('real_order_submission') is not False:
+    raise SystemExit('incumbent_real_submission_enabled')
+print(deployed)
+PY
+}
+
 clear_cutover_drain(){
   local path="$(production_run_root)/control/CUTOVER_DRAIN"
   python3 - "$path" "$LOCK_NONCE" <<'PY' 2>/dev/null || true
@@ -871,7 +899,10 @@ git fetch --no-tags origin "$DEPLOY_REF"
 MAIN_SHA="$(git rev-parse "origin/$DEPLOY_REF")"
 [[ "$MAIN_SHA" == "$EXPECTED_SHA" ]] || fail "origin/main $MAIN_SHA != exact approved SHA $EXPECTED_SHA"
 prevalidate_candidate
-OLD_SHA="$(git rev-parse HEAD)"
+OLD_SHA="$(resolve_incumbent_sha)"
+[[ "$OLD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "cannot resolve exact deployed incumbent SHA"
+git merge-base --is-ancestor "$OLD_SHA" "$EXPECTED_SHA" >/dev/null 2>&1 || \
+  fail "deployed incumbent $OLD_SHA is not an ancestor of target $EXPECTED_SHA"
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || fail "tracked server checkout is dirty"
 request_cutover_drain "$OLD_SHA"
 wait_for_cutover_drain "$OLD_SHA"

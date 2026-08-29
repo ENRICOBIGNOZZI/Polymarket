@@ -125,6 +125,19 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("POLYMARKET_MAKER_STATUS_REFRESHER", text)
         self.assertIn("control/maker_cutover_mark.json", text)
 
+    def test_cutover_identity_comes_from_deployed_runtime_not_checkout_head(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        resolver = text[text.index("resolve_incumbent_sha(){"):text.index("clear_cutover_drain(){")]
+        self.assertIn("control/deployed_sha", resolver)
+        self.assertIn("control/runtime_status.json", resolver)
+        self.assertIn("runtime_sha != deployed", resolver)
+        self.assertIn("incumbent_safety_mismatch", resolver)
+        self.assertIn("incumbent_real_submission_enabled", resolver)
+        assignment = text.rindex('OLD_SHA="$(resolve_incumbent_sha)"')
+        request = text.rindex('request_cutover_drain "$OLD_SHA"')
+        self.assertLess(assignment, request)
+        self.assertNotIn('OLD_SHA="$(git rev-parse HEAD)"', text)
+
     def test_monitoring_processes_are_bounded_and_force_stopped_if_needed(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         function = text[text.index("stop_owned_monitoring(){"):text.index("start_monitoring(){")]
