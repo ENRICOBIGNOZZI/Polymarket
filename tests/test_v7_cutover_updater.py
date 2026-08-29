@@ -176,6 +176,15 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         ):
             self.assertIn(required, text)
 
+    def test_monitoring_cutover_cannot_reuse_stale_sha_listener(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        self.assertIn("stop_stale_monitoring_listener exporter 9108", text)
+        self.assertIn("stop_stale_monitoring_listener prometheus 9090", text)
+        self.assertIn("stop_stale_monitoring_listener grafana 3000", text)
+        self.assertIn("refusing to replace unknown listener", text)
+        self.assertIn("polymarket_external_fair_present 1", text)
+        self.assertIn("http://127.0.0.1:9108/external-fair.json", text)
+
     def test_updater_requires_exact_approved_main_sha(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         self.assertIn('[[ "$MAIN_SHA" == "$EXPECTED_SHA" ]]', text)

@@ -528,6 +528,31 @@ stop_owned_monitoring(){
   done
 }
 
+stop_stale_monitoring_listener(){
+  local name="$1" port="$2" expected="$3" pid command_line
+  command -v lsof >/dev/null 2>&1 || return 0
+  for pid in $(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | sort -u); do
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
+    command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    [[ "$command_line" == *"$expected"* ]] || \
+      fail "refusing to replace unknown listener name=$name port=$port pid=$pid command=$command_line"
+    log "Stopping stale $name listener pid=$pid port=$port before SHA cutover"
+    kill -TERM "$pid" 2>/dev/null || true
+    for _ in $(seq 1 50); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+      for _ in $(seq 1 20); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.05
+      done
+    fi
+    kill -0 "$pid" 2>/dev/null && fail "stale monitoring listener $name pid=$pid survived shutdown"
+  done
+}
+
 start_monitoring(){
   local run_root="$(production_run_root)" monitoring_root="$APP_DIR/runs/monitoring"
   if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -539,6 +564,13 @@ start_monitoring(){
     fi
   fi
   stop_owned_monitoring
+  # PID files can be lost or replaced across interrupted deployments. A live
+  # listener from an older SHA must never satisfy the new deployment's health
+  # gate, so resolve each port and replace only a positively identified V7
+  # monitoring process. Unknown listeners remain fail-closed.
+  stop_stale_monitoring_listener exporter 9108 "$APP_DIR/monitoring/exporter_v7.py"
+  stop_stale_monitoring_listener prometheus 9090 "prometheus"
+  stop_stale_monitoring_listener grafana 3000 "grafana"
   nohup python3 "$APP_DIR/monitoring/exporter_v7.py" \
     --run-root "$run_root" --repository-root "$APP_DIR" --host 127.0.0.1 --port 9108 \
     >>"$run_root/monitoring-exporter.log" 2>&1 </dev/null &
@@ -612,6 +644,8 @@ PY
   grep -q '^polymarket_v7_research_sleeves_attached 3$' <<<"$metrics"
   grep -q '^polymarket_v7_research_supervisor_alive 1$' <<<"$metrics"
   grep -q '^polymarket_v7_research_manifest_fresh 1$' <<<"$metrics"
+  grep -q '^polymarket_external_fair_present 1$' <<<"$metrics"
+  curl -fsS http://127.0.0.1:9108/external-fair.json >/dev/null
   grep -q '^polymarket_v7_live_model_target_count 12$' <<<"$metrics"
   local operational blocked blocked_config blocked_external target_operational
   operational="$(awk '$1=="polymarket_v7_live_model_operational_count"{print int($2)}' <<<"$metrics")"
