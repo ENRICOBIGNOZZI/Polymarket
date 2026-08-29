@@ -682,37 +682,43 @@ assert economics.get('expected_model_sha')==sha
 with (root/'trade_tape.csv').open(newline='',encoding='utf-8') as handle: rows=list(csv.DictReader(handle))
 assert rows and max(int(float(r.get('received_ms') or 0)) for r in rows)>0
 PY
-  curl -fsS http://127.0.0.1:9108/healthz >/dev/null
-  local metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
-  grep -q '^polymarket_v7_runtime_info 1$' <<<"$metrics"
-  grep -q '^polymarket_v7_execution_alive 1$' <<<"$metrics"
-  grep -q '^polymarket_v7_supervisor_alive 1$' <<<"$metrics"
-  grep -q '^polymarket_v7_single_writer_ok 1$' <<<"$metrics"
-  grep -q '^polymarket_v7_exact_sha_ok 1$' <<<"$metrics"
-  grep -q '^polymarket_v7_paper_only_contract_ok 1$' <<<"$metrics"
-  grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics"
-  grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics"
-  grep -q '^polymarket_v7_strategy_registry_enabled 15$' <<<"$metrics"
-  grep -q '^polymarket_v7_research_sleeves_attached 3$' <<<"$metrics"
-  grep -q '^polymarket_v7_research_supervisor_alive 1$' <<<"$metrics"
-  grep -q '^polymarket_v7_research_manifest_fresh 1$' <<<"$metrics"
-  grep -q '^polymarket_external_fair_present 1$' <<<"$metrics"
-  awk '$1=="polymarket_external_fair_router_book_requests_total"{found=1; if ($2+0>0) ok=1} END{exit !(found&&ok)}' <<<"$metrics"
-  curl -fsS http://127.0.0.1:9108/external-fair.json >/dev/null
-  grep -q '^polymarket_v7_live_model_target_count 12$' <<<"$metrics"
+  [[ "$?" -eq 0 ]] || return 1
+  curl -fsS http://127.0.0.1:9108/healthz >/dev/null || return 1
+  local metrics
+  metrics="$(curl -fsS http://127.0.0.1:9108/metrics)" || return 1
+  grep -q '^polymarket_v7_runtime_info 1$' <<<"$metrics" || return 1
+  grep -q '^polymarket_v7_execution_alive 1$' <<<"$metrics" || return 1
+  grep -q '^polymarket_v7_supervisor_alive 1$' <<<"$metrics" || return 1
+  grep -q '^polymarket_v7_single_writer_ok 1$' <<<"$metrics" || return 1
+  grep -q '^polymarket_v7_exact_sha_ok 1$' <<<"$metrics" || return 1
+  grep -q '^polymarket_v7_paper_only_contract_ok 1$' <<<"$metrics" || return 1
+  grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics" || return 1
+  grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics" || return 1
+  grep -q '^polymarket_v7_strategy_registry_enabled 15$' <<<"$metrics" || return 1
+  grep -q '^polymarket_v7_research_sleeves_attached 3$' <<<"$metrics" || return 1
+  grep -q '^polymarket_v7_research_supervisor_alive 1$' <<<"$metrics" || return 1
+  grep -q '^polymarket_v7_research_manifest_fresh 1$' <<<"$metrics" || return 1
+  grep -q '^polymarket_external_fair_present 1$' <<<"$metrics" || return 1
+  awk '$1=="polymarket_external_fair_router_book_requests_total"{found=1; if ($2+0>0) ok=1} END{exit !(found&&ok)}' <<<"$metrics" || return 1
+  curl -fsS http://127.0.0.1:9108/external-fair.json >/dev/null || return 1
+  grep -q '^polymarket_v7_live_model_target_count 12$' <<<"$metrics" || return 1
   local operational blocked blocked_config blocked_external target_operational
   operational="$(awk '$1=="polymarket_v7_live_model_operational_count"{print int($2)}' <<<"$metrics")"
   blocked="$(awk '$1=="polymarket_v7_live_model_blocked_count"{print int($2)}' <<<"$metrics")"
   blocked_config="$(awk '$1=="polymarket_v7_live_model_blocked_config_count"{print int($2)}' <<<"$metrics")"
   blocked_external="$(awk '$1=="polymarket_v7_live_model_blocked_external_count"{print int($2)}' <<<"$metrics")"
   target_operational="$(awk '$1=="polymarket_v7_live_model_target_operational"{print int($2)}' <<<"$metrics")"
-  test "$((operational + blocked))" -eq 12
-  test "$((blocked_config + blocked_external))" -eq "$blocked"
-  if [[ "$operational" -eq 12 ]]; then test "$target_operational" -eq 1; else test "$target_operational" -eq 0; fi
-  grep -q '^polymarket_v7_live_model_scope_wired 1$' <<<"$metrics"
-  curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
-  curl -fsS http://127.0.0.1:3000/api/health >/dev/null
-  curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$uid" >/dev/null
+  test "$((operational + blocked))" -eq 12 || return 1
+  test "$((blocked_config + blocked_external))" -eq "$blocked" || return 1
+  if [[ "$operational" -eq 12 ]]; then
+    test "$target_operational" -eq 1 || return 1
+  else
+    test "$target_operational" -eq 0 || return 1
+  fi
+  grep -q '^polymarket_v7_live_model_scope_wired 1$' <<<"$metrics" || return 1
+  curl -fsS http://127.0.0.1:9090/-/ready >/dev/null || return 1
+  curl -fsS http://127.0.0.1:3000/api/health >/dev/null || return 1
+  curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$uid" >/dev/null || return 1
 }
 
 http_diagnostic(){

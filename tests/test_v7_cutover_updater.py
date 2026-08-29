@@ -157,6 +157,18 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         ):
             self.assertIn(required, text)
 
+    def test_runtime_health_fails_explicitly_inside_conditional_caller(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        function = text[text.index("runtime_health(){"):text.index("http_diagnostic(){")]
+        self.assertIn('[[ "$?" -eq 0 ]] || return 1', function)
+        self.assertIn('metrics="$(curl -fsS http://127.0.0.1:9108/metrics)" || return 1', function)
+        self.assertIn("last_decision", function)
+        self.assertIn("book_requests", function)
+        for line in function.splitlines():
+            stripped = line.strip()
+            if stripped.startswith(("curl -fsS", "grep -q", "awk '$1==")):
+                self.assertIn("|| return 1", stripped, stripped)
+
     def test_updater_deploys_canonical_v7_loop_recorder_and_health_surfaces(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         for required in (
