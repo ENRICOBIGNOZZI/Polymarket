@@ -66,9 +66,9 @@
     "BLOCKER"
   ],
   "cleanup_status": {
-    "blocker_reason": "Git transport is authenticated by SSH, but no authenticated GitHub API credential is available for rulesets or formal PR closure.",
+    "blocker_reason": "Git transport is authenticated by SSH, but no authenticated GitHub API credential is available to apply the main ruleset.",
     "local_code_convergence": "COMPLETE",
-    "obsolete_open_pr_closure": "BLOCKER",
+    "obsolete_open_pr_closure": "COMPLETE",
     "remote_branch_deletion": "COMPLETE",
     "ruleset_application": "BLOCKER"
   },
@@ -85,14 +85,12 @@
     "active_tracked_workflow_records": 11,
     "disabled_historical_workflow_records": 53,
     "final_canonical_branch": "main",
-    "final_open_pr_numbers": [
-      105,
-      106
-    ],
+    "final_open_pr_numbers": [],
     "final_remote_branch_count": 1,
-    "formal_pr_closure_blocker": "GitHub REST/GraphQL write authentication unavailable; both remaining PR head refs are absent.",
+    "formal_pr_closure": "COMPLETE",
     "merged_to_main": true,
-    "obsolete_prs_auto_closed_by_branch_deletion": 24,
+    "obsolete_prs_closed_by_branch_deletion": 26,
+    "orphan_pr_head_replay_closures": 2,
     "observed_at": "2026-08-29T13:50:59Z",
     "remote_branch_refs_deleted": 146,
     "ruleset_applied": false
