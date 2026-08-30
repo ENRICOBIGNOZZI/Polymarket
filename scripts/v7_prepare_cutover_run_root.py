@@ -257,20 +257,30 @@ def prepare(
         if yes_shares < 0.0 or no_shares < 0.0:
             raise CutoverArchiveError("prior_position_state_invalid")
         maker_open += int(yes_shares > 1e-9) + int(no_shares > 1e-9)
-    durable_open = {
-        "external": sum(1 for row in external_positions.values()
-                        if isinstance(row, dict) and row.get("settled") is not True),
-        "maker": maker_open,
-        "micro_taker": len(micro_positions),
-    }
     try:
+        external_open = int(external_status["open_positions"])
+        counterfactual_open = int(external_status["counterfactual_open_positions"])
         reported_open = {
-            "external": int(external_status["open_positions"]),
+            "external": external_open,
             "maker": len(maker_status["positions"]),
             "micro_taker": int(micro_status["open_positions"]),
         }
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
         raise CutoverArchiveError("prior_open_positions_invalid") from exc
+    durable_counterfactual_open = sum(
+        1 for row in external_positions.values()
+        if isinstance(row, dict) and row.get("settled") is not True
+    )
+    if counterfactual_open != durable_counterfactual_open:
+        raise CutoverArchiveError("prior_counterfactual_positions_state_mismatch")
+    # External state.positions is explicitly the SHADOW counterfactual book.
+    # It is archived as evidence but is not executable inventory and therefore
+    # cannot block an exact-SHA transition.
+    durable_open = {
+        "external": external_open,
+        "maker": maker_open,
+        "micro_taker": len(micro_positions),
+    }
     if any(value < 0 for value in reported_open.values()) or reported_open != durable_open:
         raise CutoverArchiveError("prior_open_positions_state_mismatch")
     open_summary = ",".join(f"{name}={value}" for name, value in sorted(durable_open.items()) if value)

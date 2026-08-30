@@ -37,6 +37,7 @@ def fixture(root: Path) -> bytes:
     })
     write_json(root / "external_fair/paper_router_status.json", {
         "paper_only": True, "authenticated_execution": False, "open_positions": 0,
+        "counterfactual_open_positions": 0,
     })
     write_json(root / "external_fair/paper_router_state.json", {"positions": {}})
     write_json(root / "micro_taker/status.json", {
@@ -254,9 +255,10 @@ class V7PrepareCutoverRunRootTest(unittest.TestCase):
             fixture(run)
             write_json(run / "external_fair/paper_router_status.json", {
                 "paper_only": True, "authenticated_execution": False, "open_positions": 1,
+                "counterfactual_open_positions": 0,
             })
             write_json(run / "external_fair/paper_router_state.json", {
-                "positions": {"position-1": {"settled": False}},
+                "positions": {},
             })
             with self.assertRaisesRegex(cutover.CutoverArchiveError, "prior_open_positions:external=1"):
                 cutover.prepare(
@@ -264,6 +266,24 @@ class V7PrepareCutoverRunRootTest(unittest.TestCase):
                     ancestor_check=lambda *_: True,
                 )
             self.assertTrue((run / "forward-tape.jsonl").is_file())
+
+    def test_counterfactual_shadow_position_is_archived_but_does_not_block_cutover(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            run = tmp_path / "paper_v7_live"
+            fixture(run)
+            write_json(run / "external_fair/paper_router_status.json", {
+                "paper_only": True, "authenticated_execution": False,
+                "open_positions": 0, "counterfactual_open_positions": 1,
+            })
+            write_json(run / "external_fair/paper_router_state.json", {
+                "positions": {"shadow-1": {"settled": False}},
+            })
+            result = cutover.prepare(
+                run, tmp_path / "archives", tmp_path, NEW, now=129,
+                ancestor_check=lambda *_: True,
+            )
+            self.assertEqual(result["prior_open_positions"]["external"], 0)
 
     def test_maker_inventory_blocks_archive_until_flat(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
