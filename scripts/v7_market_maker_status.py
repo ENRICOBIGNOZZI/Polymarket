@@ -268,14 +268,15 @@ def assess(
         # one or both legs are reserved by cancellable PAPER maker orders. Do
         # not require visible CLOB depth to mark this non-directional collateral
         # transformation: doing so creates a false unmarkable state during the
-        # inventory factory's split/quote bootstrap window. During an explicit
-        # cutover drain retain per-token marks because the terminal finalizer
-        # requires a causal exchange route for every still-open token row.
+        # inventory factory's split/quote bootstrap window. This remains true
+        # during cutover: a verified balanced pair has a deterministic CTF
+        # merge route and must never be converted into two zero-recovery
+        # write-offs merely because CLOB depth is unavailable.
         valid_binary_identity = bool(
             conditions.get(str(market_id)) and yes_token and no_token
             and yes_token != no_token
         )
-        balanced = min(yes, no) if valid_binary_identity and not drain_requested else 0.0
+        balanced = min(yes, no) if valid_binary_identity else 0.0
         if balanced > 1e-9:
             complete_sets.append((
                 str(market_id), conditions[str(market_id)], yes_token, no_token, balanced

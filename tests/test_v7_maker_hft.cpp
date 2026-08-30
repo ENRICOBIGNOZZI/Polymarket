@@ -377,7 +377,7 @@ void test_positive_exploration_ev_breaks_robust_cold_start() {
     assert(decision.intents[0].quantity_microunits == 2'000'000);
 }
 
-void test_point_ev_exploration_prefers_fillable_positive_placement() {
+void test_point_ev_exploration_prefers_highest_economic_placement() {
     pm::v7::maker::MakerHotPath hot;
     auto update = normal_update();
     auto model = profitable_model();
@@ -395,13 +395,13 @@ void test_point_ev_exploration_prefers_fillable_positive_placement() {
 
     const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
     assert(decision.reason == pm::v7::maker::DecisionReason::ExplorationQuote);
-    assert(decision.action == pm::v7::maker::Action::Improve1);
+    assert(decision.action == pm::v7::maker::Action::Join);
     assert(decision.intent_count == 1);
     if (decision.intents[0].side == pm::v7::Side::Buy) {
-        assert(decision.intents[0].price_tick == update.best_bid_tick + 1);
+        assert(decision.intents[0].price_tick == update.best_bid_tick);
     } else {
         assert(decision.intents[0].side == pm::v7::Side::Sell);
-        assert(decision.intents[0].price_tick == update.best_ask_tick - 1);
+        assert(decision.intents[0].price_tick == update.best_ask_tick);
     }
     assert(decision.intents[0].expected_ev > model.min_robust_ev_per_share);
 }
@@ -555,7 +555,7 @@ int main() {
     test_partial_inventory_sizes_reducing_quote_to_available_residual();
     test_transient_no_economic_quote_cannot_cancel_before_minimum_lifetime();
     test_positive_exploration_ev_breaks_robust_cold_start();
-    test_point_ev_exploration_prefers_fillable_positive_placement();
+    test_point_ev_exploration_prefers_highest_economic_placement();
     test_exploration_collects_positive_buy_and_inventory_backed_sell_evidence();
     test_exploration_never_emits_uncovered_sell();
     test_persistent_lifetime_arm_is_explicit_and_bounded();

@@ -25,6 +25,7 @@ MODEL_SCHEMA = "polymarket_v7_maker_execution_model_v1"
 STORE_SCHEMA = "polymarket_v7_maker_durable_evidence_v1"
 STRATEGY = "MICRO_MAKER_PRO"
 HORIZONS_SECONDS = (1, 5, 15, 30, 60, 300)
+ADVERSE_HORIZON_PRIORITY = ("45s", "60s", "10s", "1s", "300s")
 
 
 def atomic_json(path: pathlib.Path, value: dict[str, Any]) -> None:
@@ -251,6 +252,78 @@ def hazard_model(
     }
 
 
+def adverse_markout_models(
+    values: list[dict[str, Any]], *, cold_adverse: float = 0.002,
+    prior_filled_shares: float = 20.0,
+) -> dict[str, dict[str, Any]]:
+    """Build a risk-only adverse-selection floor from fill-conditioned marks.
+
+    The horizon priority selects at most one observation per order, avoiding
+    fake sample multiplication from correlated 1/10/45/60/300 second marks.
+    This estimate is allowed to make admission more conservative before OOS
+    maturity; it can never lower the declared cold adverse-cost floor.
+    """
+    orders = {
+        str(row.get("order_id")): row for row in values
+        if row.get("event_type") == "ORDER_SUBMITTED" and row.get("order_id")
+    }
+    filled: defaultdict[str, float] = defaultdict(float)
+    fill_sizes: dict[str, float] = {}
+    marks: defaultdict[str, defaultdict[str, list[float]]] = defaultdict(
+        lambda: defaultdict(lambda: [0.0, 0.0]))
+    for row in values:
+        order_id = str(row.get("order_id") or "")
+        if order_id not in orders:
+            continue
+        if row.get("event_type") == "FILL":
+            size = max(0.0, number(row.get("filled_size")))
+            filled[order_id] += size
+            if row.get("fill_id"):
+                fill_sizes[str(row["fill_id"])] = size
+    for row in values:
+        order_id = str(row.get("order_id") or "")
+        if order_id not in orders:
+            continue
+        if row.get("event_type") == "MARKOUT" and isinstance(row.get("markouts"), dict):
+            marked_shares = fill_sizes.get(str(row.get("fill_id") or ""), filled[order_id])
+            if marked_shares <= 1e-12:
+                continue
+            for horizon, pnl in row["markouts"].items():
+                if str(horizon) in ADVERSE_HORIZON_PRIORITY:
+                    # Maker MARKOUT values are per-share changes. Convert them
+                    # to size-weighted adverse dollars before pooling.
+                    marks[order_id][str(horizon)][0] += (
+                        max(0.0, -number(pnl)) * marked_shares)
+                    marks[order_id][str(horizon)][1] += marked_shares
+    grouped: defaultdict[str, list[tuple[float, float, str]]] = defaultdict(list)
+    for order_id, horizons in marks.items():
+        selected = next((h for h in ADVERSE_HORIZON_PRIORITY if h in horizons), None)
+        if selected is None:
+            continue
+        adverse_dollars, shares = horizons[selected]
+        if shares <= 1e-12:
+            continue
+        grouped[group_key(orders[order_id])].append((adverse_dollars, shares, selected))
+        grouped["GLOBAL"].append((adverse_dollars, shares, selected))
+    output: dict[str, dict[str, Any]] = {}
+    prior = max(1e-9, float(prior_filled_shares))
+    floor = max(0.0, float(cold_adverse))
+    for key, observations in grouped.items():
+        observed_shares = sum(row[1] for row in observations)
+        observed_adverse = sum(row[0] for row in observations)
+        posterior = (floor * prior + observed_adverse) / (prior + observed_shares)
+        output[key] = {
+            "adverse_markout_per_share": max(floor, posterior),
+            "adverse_markout_observations": len(observations),
+            "adverse_markout_filled_shares": observed_shares,
+            "adverse_markout_dollars": observed_adverse,
+            "adverse_markout_prior_filled_shares": prior,
+            "adverse_markout_horizon_priority": list(ADVERSE_HORIZON_PRIORITY),
+            "adverse_markout_role": "RISK_ONLY_UPWARD_FLOOR_NO_PROMOTION_CREDIT",
+        }
+    return output
+
+
 def joint_states(values: list[dict[str, Any]]) -> dict[str, Any]:
     cycles: dict[tuple[str, int], dict[str, Any]] = defaultdict(
         lambda: {"YES": 0.0, "NO": 0.0, "BUY": 0.0, "SELL": 0.0, "pnl": 0.0}
@@ -318,6 +391,22 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
             incompatible[reason] += 1
         else:
             compatible.append(row)
+    # Adverse marks may safely transfer across policy/config hashes when the
+    # execution semantics are identical, but only as a risk-increasing floor.
+    # They receive no fill-probability or promotion credit. MARKOUT rows do not
+    # duplicate order metadata, so select eligible order identities first and
+    # then attach their causally linked FILL/MARKOUT records.
+    risk_order_ids = {
+        str(row.get("order_id")) for row in values
+        if row.get("event_type") == "ORDER_SUBMITTED" and row.get("order_id")
+        and isinstance(row.get("metadata"), dict)
+        and row["metadata"].get("execution_semantics_version")
+            == "maker-paper-v7.2-bilateral-inventory"
+    }
+    risk_values = [
+        row for row in values if str(row.get("order_id") or "") in risk_order_ids
+    ]
+    adverse_models = adverse_markout_models(risk_values)
     examples = order_examples(compatible)
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in examples:
@@ -326,6 +415,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
     groups: dict[str, Any] = {}
     for key, sample in sorted(grouped.items()):
         hazard = hazard_model(sample, cold_fill_prior, fill_prior_strength_orders)
+        adverse = adverse_models.get(key, {})
         groups[key] = {
             **hazard,
             "fill_probability": hazard["expected_filled_fraction_60s"],
@@ -333,7 +423,14 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
                 "beta_shrunk_censored_expected_filled_fraction_per_posted_share"
                 if sample else "explicit_cold_start_prior"
             ),
-            "adverse_markout_per_share": 0.002,
+            "adverse_markout_per_share": max(
+                0.002, number(adverse.get("adverse_markout_per_share"), 0.002)),
+            "adverse_markout_observations": int(
+                adverse.get("adverse_markout_observations") or 0),
+            "adverse_markout_filled_shares": number(
+                adverse.get("adverse_markout_filled_shares")),
+            "adverse_markout_dollars": number(adverse.get("adverse_markout_dollars")),
+            "adverse_markout_role": "RISK_ONLY_UPWARD_FLOOR_NO_PROMOTION_CREDIT",
             "mature": len(sample) >= 50
                 and len({row["event_cluster"] for row in sample}) >= 12
                 and int(hazard["filled_orders"]) >= 20,
@@ -344,11 +441,20 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
             },
         }
     if "GLOBAL" not in groups:
+        global_adverse = adverse_models.get("GLOBAL", {})
         groups["GLOBAL"] = {
             **hazard_model([], cold_fill_prior, fill_prior_strength_orders),
             "fill_probability": cold_fill_prior,
             "fill_probability_semantics": "explicit_cold_start_prior",
-            "adverse_markout_per_share": 0.002,
+            "adverse_markout_per_share": max(
+                0.002, number(global_adverse.get("adverse_markout_per_share"), 0.002)),
+            "adverse_markout_observations": int(
+                global_adverse.get("adverse_markout_observations") or 0),
+            "adverse_markout_filled_shares": number(
+                global_adverse.get("adverse_markout_filled_shares")),
+            "adverse_markout_dollars": number(
+                global_adverse.get("adverse_markout_dollars")),
+            "adverse_markout_role": "RISK_ONLY_UPWARD_FLOOR_NO_PROMOTION_CREDIT",
             "mature": False,
         }
     timestamps = [int(row.get("recorded_ts_ms") or 0) for row in compatible]
@@ -374,6 +480,8 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         "hyperparameters": {
             "cold_fill_prior": cold_fill_prior,
             "fill_prior_strength_orders": fill_prior_strength_orders,
+            "cold_adverse_markout_per_share": 0.002,
+            "adverse_prior_filled_shares": 20.0,
         },
         "feature_schema": {"version": 2, "fill": "censored_hazard", "joint": "direct_cycle_states"},
         "execution_semantics_version": "maker-paper-v7.2-bilateral-inventory",
@@ -397,6 +505,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         "groups": groups,
         "joint_cycle_model": joint_states(compatible),
         "excluded_incompatible_records": dict(incompatible),
+        "risk_only_cross_policy_records": max(0, len(risk_values) - len(compatible)),
     }
 
 

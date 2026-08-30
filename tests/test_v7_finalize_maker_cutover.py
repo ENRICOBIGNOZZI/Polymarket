@@ -129,6 +129,53 @@ class MakerCutoverFinalizerTest(unittest.TestCase):
             self.assertTrue(events[0]["metadata"]["complete_set_merge"])
             self.assertEqual(events[0]["metadata"]["inventory_token_id"], "yes")
 
+    def test_balanced_complete_set_is_merged_at_par_without_exchange_fill(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = 1_788_040_000_000
+            self.fixture(root, now)
+            state_path = root / "micro_maker/state.json"
+            state = json.loads(state_path.read_text())
+            state["cash"] = 90.0
+            row = state["inventory"]["m1"]
+            row.update({
+                "yes_shares": 10.0, "no_shares": 10.0,
+                "yes_cost": 4.2, "no_cost": 5.8,
+            })
+            write(state_path, state)
+            status_path = root / "micro_maker/status.json"
+            status = json.loads(status_path.read_text())
+            status["cash"] = 90.0
+            status["equity"] = 100.0
+            status["positions"] = [{
+                "market_id": "m1", "condition_id": "c1",
+                "token_id": "yes", "complement_token_id": "no",
+                "execution_token_id": "", "execution_side": "MERGE",
+                "liquidation_method": "DETERMINISTIC_COMPLETE_SET_REDEMPTION",
+                "shares": 10.0, "full_depth_vwap": 1.0,
+                "gross_executable_liquidation_value": 10.0,
+                "exit_fee": 0.0, "exit_fee_source": "ctf:binary-complete-set-redemption",
+                "slippage_haircut": 0.0, "net_executable_liquidation_value": 10.0,
+                "valuation_policy": "VERIFIED_BINARY_COMPLETE_SET_PAR",
+                "requires_order_book_liquidity": False,
+            }]
+            write(status_path, status)
+            receipt = cutover.finalize(root, SHA, NONCE, now_ms=now)
+            self.assertEqual(receipt["state"], "MAKER_FLAT")
+            self.assertEqual(receipt["positions_liquidated"], 1)
+            self.assertAlmostEqual(receipt["net_cashflow"], 10.0)
+            self.assertAlmostEqual(receipt["final_pnl"], 0.0)
+            final_state = json.loads(state_path.read_text())
+            self.assertAlmostEqual(final_state["cash"], 100.0)
+            self.assertEqual(final_state["inventory"]["m1"]["yes_shares"], 0.0)
+            self.assertEqual(final_state["inventory"]["m1"]["no_shares"], 0.0)
+            events = [json.loads(line) for line in
+                      (root / "ledger/execution.jsonl").read_text().splitlines()]
+            self.assertEqual([event["event_type"] for event in events], ["FINAL"])
+            self.assertEqual(
+                events[0]["metadata"]["purpose"], "DETERMINISTIC_COMPLETE_SET_MERGE")
+            self.assertTrue(events[0]["metadata"]["no_exchange_order_needed"])
+
     def test_invalid_spool_record_is_preserved_with_hash_before_liquidation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -38,7 +38,7 @@ class V7MakerExplorationPolicyFallbackTest(unittest.TestCase):
         self.assertFalse(exploration["promotion_credit"])
         # Cold-start quotes buy information under strict notional/concurrency
         # caps. Exploit continues to use its independent 1.64-sigma gate.
-        self.assertEqual(exploration["confidence_z"], 0.00)
+        self.assertEqual(exploration["confidence_z"], 1.00)
         self.assertLessEqual(exploration["epsilon"], 0.10)
         self.assertLessEqual(exploration["max_quote_notional_fraction"], 0.002)
         self.assertLessEqual(exploration["max_market_fraction"], 0.004)

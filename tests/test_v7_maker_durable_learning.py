@@ -8,7 +8,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_maker_durable_learning import (  # noqa: E402
-    append_new, fit_model, hazard_model, identity,
+    adverse_markout_models, append_new, fit_model, hazard_model, identity,
 )
 
 SHA = "a" * 40
@@ -124,6 +124,33 @@ class DurableLearningTests(unittest.TestCase):
         self.assertEqual(model["promotion_state"], "PAPER_LEARNING_CHAMPION")
         self.assertFalse(model["economically_mature"])
         self.assertIsNone(model["validation_window"])
+
+    def test_fill_conditioned_markout_raises_risk_floor_without_promotion_credit(self) -> None:
+        order = record(
+            "ORDER_SUBMITTED", "order", order_id="o1", intended_size=5.0,
+            intended_action="IMPROVE1", side="SELL",
+        )
+        fill = record("FILL", "fill", order_id="o1", filled_size=5.0)
+        mark_1 = record("MARKOUT", "mark-1", order_id="o1", markouts={"1s": 0.05})
+        mark_45 = record("MARKOUT", "mark-45", order_id="o1", markouts={"45s": -0.10})
+        risk = adverse_markout_models([order, fill, mark_1, mark_45])
+        expected = (0.002 * 20.0 + 0.10 * 5.0) / 25.0
+        self.assertAlmostEqual(risk["GLOBAL"]["adverse_markout_per_share"], expected)
+        self.assertEqual(risk["GLOBAL"]["adverse_markout_observations"], 1)
+        self.assertEqual(risk["GLOBAL"]["adverse_markout_horizon_priority"][0], "45s")
+
+        # A prior policy cannot improve the new policy's fill estimate, but its
+        # same-semantics adverse mark remains a conservative risk floor.
+        order["metadata"]["policy_hash"] = "old-policy"
+        model = fit_model(
+            [order, fill, mark_1, mark_45], model_sha=SHA,
+            policy_hash="policy", config_hash="config", cold_fill_prior=0.02,
+        )
+        self.assertEqual(model["groups"]["GLOBAL"]["fill_probability"], 0.02)
+        self.assertAlmostEqual(
+            model["groups"]["GLOBAL"]["adverse_markout_per_share"], expected)
+        self.assertFalse(model["groups"]["GLOBAL"]["mature"])
+        self.assertGreater(model["risk_only_cross_policy_records"], 0)
 
 
 if __name__ == "__main__":

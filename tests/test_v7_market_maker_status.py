@@ -183,6 +183,36 @@ class MakerStatusTests(unittest.TestCase):
             self.assertFalse(report["positions"][0]["requires_order_book_liquidity"])
             books.assert_not_called()
 
+    def test_cutover_keeps_balanced_complete_set_mergeable_at_par(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state, cfg, selection, output = self.fixture(root)
+            payload = json.loads(state.read_text())
+            payload["cash"] = 90.0
+            payload["inventory"]["market-1"]["yes_shares"] = 10.0
+            payload["inventory"]["market-1"]["no_shares"] = 10.0
+            state.write_text(json.dumps(payload))
+            control = root / "control/CUTOVER_DRAIN"
+            control.parent.mkdir(parents=True)
+            control.write_text(json.dumps({
+                "schema": "polymarket_v7_cutover_drain_v1", "paper_only": True,
+                "authenticated_execution": False, "real_order_submission": False,
+            }))
+            with patch("v7_market_maker_status.request_json", return_value=[]) as books:
+                report = assess(
+                    state, cfg, output, selection_path=selection,
+                    cutover_zero_recovery=True,
+                )
+            self.assertTrue(report["marking_complete"])
+            self.assertFalse(report["killed"])
+            self.assertEqual(report["zero_recovery_writeoffs"], 0)
+            self.assertAlmostEqual(report["equity"], 100.0)
+            self.assertEqual(
+                report["positions"][0]["liquidation_method"],
+                "DETERMINISTIC_COMPLETE_SET_REDEMPTION",
+            )
+            books.assert_not_called()
+
     def test_only_directional_residual_requires_executable_depth(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state, cfg, selection, output = self.fixture(Path(tmp))

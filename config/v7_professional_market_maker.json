@@ -170,7 +170,7 @@
     "persistent_maximum_rest_ms": 60000,
     "actions": ["JOIN", "FADE1", "IMPROVE1"],
     "epsilon": 0.10,
-    "confidence_z": 0.00,
+    "confidence_z": 1.00,
     "require_fresh_dual_clock_book": true,
     "require_post_only": true,
     "propensity_logging_required": true

@@ -145,9 +145,13 @@ struct ExplorationChoice {
             const double adjusted_ev = exploration_adjusted_ev(economics, model);
             if (!finite(adjusted_ev) || adjusted_ev <= model.min_robust_ev_per_share
                 || economics.price_tick <= 0 || economics.side != wanted_side) continue;
-            if (economics.fill_probability > best_fill_probability + kEps
-                || (std::abs(economics.fill_probability - best_fill_probability) <= kEps
-                    && adjusted_ev > best.adjusted_ev)) {
+            // Exploration still spends real PAPER risk. Rank by conservative
+            // expected dollars first; use fill probability only as a tie-break
+            // for equally economic placements. Maximizing fill probability
+            // selected IMPROVE1 precisely where informed flow was most toxic.
+            if (adjusted_ev > best.adjusted_ev + kEps
+                || (std::abs(adjusted_ev - best.adjusted_ev) <= kEps
+                    && economics.fill_probability > best_fill_probability)) {
                 best.economics = &economics;
                 best.action = candidate.action;
                 best.adjusted_ev = adjusted_ev;

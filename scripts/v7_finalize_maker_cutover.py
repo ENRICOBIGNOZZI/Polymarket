@@ -278,9 +278,6 @@ def finalize(
                 if not token:
                     raise MakerCutoverError("maker_inventory_token_missing")
                 by_identity[(str(market_id), token)] = (row, outcome, str(row.get("condition_id") or ""))
-    if len(by_identity) != len(marks):
-        raise MakerCutoverError("maker_mark_inventory_count_mismatch")
-
     events: list[LedgerEvent] = []
     total_net = 0.0
     total_pnl = 0.0
@@ -293,16 +290,99 @@ def finalize(
             raise MakerCutoverError("maker_mark_row_invalid")
         market_id = str(mark.get("market_id") or "")
         token_id = str(mark.get("token_id") or "")
+        method = str(mark.get("liquidation_method") or "DIRECT_SELL")
+        if method == "DETERMINISTIC_COMPLETE_SET_REDEMPTION":
+            original_row = inventory.get(market_id)
+            current_row = updated_inventory.get(market_id)
+            if not isinstance(original_row, dict) or not isinstance(current_row, dict):
+                raise MakerCutoverError("maker_merge_market_missing")
+            yes_token = str(original_row.get("yes_token") or "")
+            no_token = str(original_row.get("no_token") or "")
+            condition_id = str(original_row.get("condition_id") or "")
+            complement_token = str(mark.get("complement_token_id") or "")
+            if (
+                not condition_id or str(mark.get("condition_id") or "") != condition_id
+                or token_id != yes_token or complement_token != no_token
+                or str(mark.get("execution_side") or "").upper() != "MERGE"
+                or str(mark.get("execution_token_id") or "")
+                or mark.get("requires_order_book_liquidity") is not False
+                or str(mark.get("valuation_policy") or "") != "VERIFIED_BINARY_COMPLETE_SET_PAR"
+            ):
+                raise MakerCutoverError("maker_complete_set_identity_invalid")
+            shares = number("shares", mark.get("shares"), minimum=0.0)
+            yes_shares = number("yes_shares", current_row.get("yes_shares"), minimum=0.0)
+            no_shares = number("no_shares", current_row.get("no_shares"), minimum=0.0)
+            if shares <= 1e-9 or shares > min(yes_shares, no_shares) + 1e-8:
+                raise MakerCutoverError("maker_complete_set_share_mismatch")
+            gross = number(
+                "gross_value", mark.get("gross_executable_liquidation_value"), minimum=0.0)
+            net = number(
+                "net_value", mark.get("net_executable_liquidation_value"), minimum=0.0)
+            if abs(gross - shares) > 1e-8 or abs(net - shares) > 1e-8:
+                raise MakerCutoverError("maker_complete_set_value_invalid")
+            if any(abs(number(name, mark.get(field), minimum=0.0)) > 1e-12 for name, field in (
+                ("exit_fee", "exit_fee"), ("slippage", "slippage_haircut"),
+            )):
+                raise MakerCutoverError("maker_complete_set_cost_invalid")
+            yes_cost = number("yes_cost", current_row.get("yes_cost"), minimum=0.0)
+            no_cost = number("no_cost", current_row.get("no_cost"), minimum=0.0)
+            consumed_yes_cost = yes_cost * shares / yes_shares
+            consumed_no_cost = no_cost * shares / no_shares
+            cost = consumed_yes_cost + consumed_no_cost
+            pnl = net - cost
+            position_id = f"maker-complete-set-{stable_id(model_sha, market_id, yes_token, no_token)}"
+            events.append(LedgerEvent(
+                event_type="FINAL",
+                record_id=stable_id("FINAL_MERGE", nonce, market_id, yes_token, no_token),
+                recorded_ts_ms=current_ms + len(events), strategy=STRATEGY,
+                model_sha=model_sha, model_version="cutover-complete-set-merge-v1",
+                position_id=position_id, market_id=market_id,
+                event_id=condition_id, token_id=yes_token,
+                final_pnl=pnl, realized_cashflow=net, unwind_loss=0.0,
+                capital_cost=0.0, latency_cost=0.0,
+                metadata={
+                    "purpose": "DETERMINISTIC_COMPLETE_SET_MERGE", "cutover": True,
+                    "nonce": nonce, "realized": True, "liquidation_method": method,
+                    "yes_token_id": yes_token, "no_token_id": no_token,
+                    "merged_shares": shares, "no_exchange_order_needed": True,
+                    "valuation_policy": "VERIFIED_BINARY_COMPLETE_SET_PAR",
+                    "cost_vector_complete": True, "unwind_accounted": True,
+                    "pnl_decomposition": {"gross_exit_value": gross,
+                        "entry_cost": cost, "exit_fee": 0.0, "slippage_haircut": 0.0},
+                },
+            ))
+            current_row["yes_shares"] = max(0.0, yes_shares - shares)
+            current_row["no_shares"] = max(0.0, no_shares - shares)
+            current_row["yes_cost"] = max(0.0, yes_cost - consumed_yes_cost)
+            current_row["no_cost"] = max(0.0, no_cost - consumed_no_cost)
+            for identity in ((market_id, yes_token), (market_id, no_token)):
+                if identity not in by_identity:
+                    raise MakerCutoverError("maker_complete_set_inventory_identity_missing")
+                original, outcome, identity_condition = by_identity[identity]
+                remaining = number(
+                    "remaining_shares", current_row.get(f"{outcome}_shares"), minimum=0.0)
+                if remaining <= 1e-9:
+                    by_identity.pop(identity)
+            total_net += net
+            total_pnl += pnl
+            liquidations.append({
+                "market_id": market_id, "token_id": yes_token,
+                "execution_token_id": "", "execution_side": "MERGE",
+                "liquidation_method": method, "shares": shares,
+                "net_cashflow": net, "final_pnl": pnl,
+            })
+            continue
         identity = (market_id, token_id)
         if identity not in by_identity:
             raise MakerCutoverError("maker_mark_inventory_identity_mismatch")
         row, outcome, condition_id = by_identity.pop(identity)
+        current_row = updated_inventory[market_id]
         shares = number("shares", mark.get("shares"), minimum=0.0)
-        durable_shares = number("durable_shares", row.get(f"{outcome}_shares"), minimum=0.0)
+        durable_shares = number(
+            "durable_shares", current_row.get(f"{outcome}_shares"), minimum=0.0)
         if shares <= 1e-9 or abs(shares - durable_shares) > 1e-8:
             raise MakerCutoverError("maker_mark_share_mismatch")
-        cost = number("cost", row.get(f"{outcome}_cost"), minimum=0.0)
-        method = str(mark.get("liquidation_method") or "DIRECT_SELL")
+        cost = number("cost", current_row.get(f"{outcome}_cost"), minimum=0.0)
         execution_token = str(mark.get("execution_token_id") or token_id)
         execution_side = str(mark.get("execution_side") or "SELL").upper()
         vwap = number("full_depth_vwap", mark.get("full_depth_vwap"), minimum=0.0)
@@ -401,8 +481,8 @@ def finalize(
                                           "exit_fee": fee, "slippage_haircut": slippage},
                 }, **common,
             ))
-        updated_inventory[market_id][f"{outcome}_shares"] = 0.0
-        updated_inventory[market_id][f"{outcome}_cost"] = 0.0
+        current_row[f"{outcome}_shares"] = 0.0
+        current_row[f"{outcome}_cost"] = 0.0
         total_net += net
         total_pnl += pnl
         liquidations.append({"market_id": market_id, "token_id": token_id,
