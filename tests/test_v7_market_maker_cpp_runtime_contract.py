@@ -148,6 +148,11 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
             self.source.index("policy_.process(command.plan, capital_)"),
         )
 
+    def test_order_state_telemetry_preserves_cancel_causality(self) -> None:
+        self.assertIn('metadata["decision_reason"] = decision_reason_name', self.source)
+        self.assertIn('metadata["decision_reason_code"]', self.source)
+        self.assertIn('metadata["safety_preemption"] = safety_preemption', self.source)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -253,6 +253,41 @@ void atomic_write(const fs::path& path, std::string_view content) {
     return "UNKNOWN";
 }
 
+[[nodiscard]] const char* decision_reason_name(
+    pm::v7::maker::DecisionReason reason) noexcept {
+    using Reason = pm::v7::maker::DecisionReason;
+    switch (reason) {
+        case Reason::Quote: return "QUOTE";
+        case Reason::NoEconomicQuote: return "NO_ECONOMIC_QUOTE";
+        case Reason::Toxic: return "TOXIC";
+        case Reason::InventoryLimit: return "INVENTORY_LIMIT";
+        case Reason::GlobalKill: return "GLOBAL_KILL";
+        case Reason::StrategyKill: return "STRATEGY_KILL";
+        case Reason::MarketKill: return "MARKET_KILL";
+        case Reason::FeedUnhealthy: return "FEED_UNHEALTHY";
+        case Reason::StaleState: return "STALE_STATE";
+        case Reason::InvalidBook: return "INVALID_BOOK";
+        case Reason::InvalidModel: return "INVALID_MODEL";
+        case Reason::QuoteLifetimeHold: return "QUOTE_LIFETIME_HOLD";
+        case Reason::NoChange: return "NO_CHANGE";
+        case Reason::ExplorationQuote: return "EXPLORATION_QUOTE";
+        case Reason::ExplorationHold: return "EXPLORATION_HOLD";
+        case Reason::ExplorationExpired: return "EXPLORATION_EXPIRED";
+        case Reason::NewRiskFrozen: return "NEW_RISK_FROZEN";
+    }
+    return "UNKNOWN";
+}
+
+[[nodiscard]] bool safety_preemption(
+    pm::v7::maker::DecisionReason reason) noexcept {
+    using Reason = pm::v7::maker::DecisionReason;
+    return reason == Reason::Toxic || reason == Reason::InventoryLimit
+        || reason == Reason::GlobalKill || reason == Reason::StrategyKill
+        || reason == Reason::MarketKill || reason == Reason::FeedUnhealthy
+        || reason == Reason::StaleState || reason == Reason::InvalidBook
+        || reason == Reason::InvalidModel || reason == Reason::NewRiskFrozen;
+}
+
 [[nodiscard]] const char* order_state_name(pm::v7::OrderState state) noexcept {
     using pm::v7::OrderState;
     switch (state) {
@@ -1562,6 +1597,9 @@ private:
         json::object metadata;
         metadata["maker_cpp_hot_path"] = true;
         metadata["oms_state"] = order_state_name(record.paper.order_state);
+        metadata["decision_reason"] = decision_reason_name(record.decision.reason);
+        metadata["decision_reason_code"] = static_cast<std::uint64_t>(record.decision.reason);
+        metadata["safety_preemption"] = safety_preemption(record.decision.reason);
         event["metadata"] = std::move(metadata);
         spool(std::move(event));
     }
