@@ -87,6 +87,9 @@ def test_hard_arb_native_source_has_no_v6_runtime_dependency():
     assert "v7_market_common" in text
     assert "runtime_dependency" not in text
     assert '"aborting_mark": "full_depth_executable_liquidation_net_exit_fee_fail_closed"' in text
+    for event_type in ("OPPORTUNITY", "ORDER_SUBMITTED", "FILL", "FINAL"):
+        assert f'event_type="{event_type}"' in text
+    assert "spool_event" in text
 
 
 def test_configured_shared_bus_never_falls_back_to_rest():
@@ -119,6 +122,33 @@ def test_configured_shared_bus_never_falls_back_to_rest():
         # A missing token is a fail-closed bus rejection, not a REST fetch.
         assert hard.execution_books(args, "https://clob.invalid", ["missing"], stats) == {}
         assert stats.get("rest_execution_book_reads", 0) == 0
+
+
+def test_partial_bundle_unwind_reaches_canonical_ledger_spool():
+    sha = "e" * 40
+    fee = hard.FeeDetails(0.0, 1.0, True, True, "test:verified-free")
+    book = {
+        "bids": [(0.49, 10.0)], "asks": [(0.50, 10.0)],
+        "exchange_ts_ms": int(time.time() * 1000) - 20,
+        "received_ms": int(time.time() * 1000) - 10,
+        "bus_snapshot_id": "atomic-unwind",
+    }
+    legs = [{
+        "token": "yes-a", "shares": 5.0, "capital_used": 2.5,
+        "total_execution_cost": 0.0,
+        "raw_market": {"id": "market-a", "conditionId": "condition-a"},
+    }]
+    with tempfile.TemporaryDirectory() as folder:
+        run_dir = Path(folder) / "hard_arb"
+        residual, _cash, _pnl = hard.unwind_bundle(
+            "https://clob.invalid", "bundle-a", "event-a", legs,
+            {"yes-a": fee}, 0.0, run_dir, {},
+            lambda _tokens: {"yes-a": book}, sha,
+        )
+        assert residual == []
+        events = [json.loads(path.read_text()) for path in (Path(folder) / "ledger" / "spool").glob("*.json")]
+        assert {event["event_type"] for event in events} == {"ORDER_SUBMITTED", "FILL"}
+        assert all(event["strategy"] == "HARD_ARB" for event in events)
 
 
 if __name__ == "__main__":

@@ -449,6 +449,26 @@ print(hot,active,structural,flow)
 PY
 )
 
+# Build only deterministically proven same-event NegRisk relations. The C++
+# runtime never receives text-similarity candidates or unverified mappings.
+VERIFIED_RELATIONS="$RUN_ROOT/graph_rv/verified_relations.csv"
+python3 scripts/v7_relation_builder.py \
+  --universe "$RUN_ROOT/universe/current.json" \
+  --registry "$RUN_ROOT/graph_rv/relation_registry.json" \
+  --runtime-csv "$VERIFIED_RELATIONS" --model-sha "$SHA" \
+  >> "$RUN_ROOT/graph_rv/relation_builder.log" 2>&1
+
+(
+  while [[ ! -e "$KILL" ]]; do
+    python3 scripts/v7_relation_builder.py \
+      --universe "$RUN_ROOT/universe/current.json" \
+      --registry "$RUN_ROOT/graph_rv/relation_registry.json" \
+      --runtime-csv "$VERIFIED_RELATIONS" --model-sha "$SHA" \
+      >> "$RUN_ROOT/graph_rv/relation_builder.log" 2>&1 || true
+    sleep 60
+  done
+) & pids+=("$!")
+
 maker_selection_ready() {
   python3 - "$RUN_ROOT/micro_maker/reward_selection.json" "$SHA" <<'PY' >/dev/null 2>&1
 import json,sys
@@ -509,7 +529,7 @@ pids+=("$!")
 "$FAST_STRUCTURAL_RUNTIME" \
   --config "$ALLOC/fast_structural.json" \
   --policy "$FAST_STRUCTURAL_POLICY" \
-  --relations "$FAST_STRUCTURAL_RELATIONS" \
+  --relations "$VERIFIED_RELATIONS" \
   --run-dir "$RUN_ROOT/fast_structural" --run-root "$RUN_ROOT" --model-sha "$SHA" \
   --markets "$ACTIVE_SCAN_MARKET_BUDGET" --min-liquidity 2 --shard-size 200 \
   >> "$RUN_ROOT/fast_structural/runtime.log" 2>&1 &

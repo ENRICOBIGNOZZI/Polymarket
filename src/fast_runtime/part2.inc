@@ -185,6 +185,25 @@ public:
         }
     }
 
+    void reload_relations() {
+        const auto fresh = load_relations(options_.relations);
+        std::scoped_lock lock(mutex_);
+        relations_ = fresh;
+        active_relations_.clear();
+        relations_by_market_.clear();
+        for (const auto& spec : relations_) {
+            const auto& relation = spec.relation;
+            if (!markets_.count(relation.antecedent_market_id)
+                || !markets_.count(relation.consequent_market_id)) {
+                continue;
+            }
+            active_relations_.push_back(spec);
+            const auto index = active_relations_.size() - 1;
+            relations_by_market_[relation.antecedent_market_id].push_back(index);
+            relations_by_market_[relation.consequent_market_id].push_back(index);
+        }
+    }
+
     void append_feed_error(std::size_t shard, std::string_view message) {
         // Any transport failure/reconnect breaks gap-free WS L2 lineage for the
         // affected subscription shard. An independent REST point-in-time snapshot

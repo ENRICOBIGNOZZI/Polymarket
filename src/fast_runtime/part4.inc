@@ -96,6 +96,7 @@ int main(int argc, char** argv) {
         auto last_resync = started;
         auto last_publish = started - std::chrono::seconds(options.status_interval_seconds);
         auto last_external = started;
+        auto last_relations = started;
         while (!g_stop.load(std::memory_order_relaxed)) {
             const auto current = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
@@ -115,6 +116,10 @@ int main(int argc, char** argv) {
             if (current - last_external >= std::chrono::seconds(1)) {
                 runtime.reload_external();
                 last_external = current;
+            }
+            if (current - last_relations >= std::chrono::seconds(60)) {
+                runtime.reload_relations();
+                last_relations = current;
             }
             if (current - last_publish >=
                 std::chrono::seconds(options.status_interval_seconds)) {

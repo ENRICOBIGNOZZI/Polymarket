@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import os
@@ -17,6 +18,8 @@ from typing import Any, Callable, Iterable, Sequence
 
 from v7_market_common import FeeDetails, finite, parse_array, request_json, resolve_fee_details
 from v7_shared_market_state import SharedStateError, load_snapshot, synchronized_books
+from v7_execution_ledger import LedgerEvent
+from v7_ledger_spool import spool_event
 
 FEE_Q = Decimal("0.00001")
 CANDIDATE_FIELDS = [
@@ -30,6 +33,15 @@ FILL_FIELDS = [
     "shares", "price", "capital_used", "fee", "total_fees", "slippage_cost", "total_execution_cost",
     "net_edge", "net_pnl", "detail",
 ]
+
+
+def stable_id(*parts: Any) -> str:
+    return hashlib.sha256("|".join(str(part) for part in parts).encode()).hexdigest()[:32]
+
+
+def canonical_emit(run_dir: Path, model_sha: str, event: LedgerEvent) -> None:
+    if len(model_sha) == 40 and all(ch in "0123456789abcdef" for ch in model_sha):
+        spool_event(run_dir.parent, event)
 
 
 @dataclass(frozen=True)
@@ -140,6 +152,8 @@ def parse_book(raw: dict[str, Any], received_ms: int) -> dict[str, Any] | None:
         "min_order": max(0.0, finite(raw.get("min_order_size"), 0.0)),
         "received_ms": received_ms,
         "exchange_ts_ms": normalize_timestamp_ms(raw.get("timestamp")),
+        "book_snapshot_id": str(raw.get("hash") or stable_id(
+            token, normalize_timestamp_ms(raw.get("timestamp")), received_ms)),
     }
 
 
@@ -479,10 +493,12 @@ def unwind_bundle(clob: str, bundle_id: str, event_id: str, legs: list[dict[str,
                   fees: dict[str, FeeDetails], slippage_bps: float, run_dir: Path,
                   stats: dict[str, Any],
                   book_source: Callable[[Sequence[str]], dict[str, dict[str, Any]]] | None = None,
+                  model_sha: str = "",
                   ) -> tuple[list[dict[str, Any]], float, float]:
     residual, cash, realized = [], 0.0, 0.0
     for index, leg in enumerate(legs):
         token = str(leg.get("token") or "")
+        raw = leg.get("raw_market") if isinstance(leg.get("raw_market"), dict) else {}
         shares, basis = max(0.0, finite(leg.get("shares"), 0.0)), max(0.0, finite(leg.get("capital_used"), 0.0))
         try:
             book = (book_source([token]) if book_source else fetch_books(clob, [token], stats)).get(token)
@@ -499,6 +515,7 @@ def unwind_bundle(clob: str, bundle_id: str, event_id: str, legs: list[dict[str,
         proceeds, pnl = fill.sell_cash, fill.sell_cash - allocated_basis
         entry_cost = max(0.0, finite(leg.get("total_execution_cost"), 0.0)) * fraction
         row_cost = entry_cost + fill.fee + fill.slippage_cost
+        remaining = max(0.0, shares - fill.filled_shares)
         cash += proceeds
         realized += pnl
         append_csv(run_dir / "fills.csv", FILL_FIELDS, {
@@ -508,7 +525,36 @@ def unwind_bundle(clob: str, bundle_id: str, event_id: str, legs: list[dict[str,
             "fee": fill.fee, "total_fees": fill.fee, "slippage_cost": fill.slippage_cost,
             "total_execution_cost": row_cost, "net_pnl": pnl, "detail": "forced_partial_bundle_unwind",
         })
-        remaining = max(0.0, shares - fill.filled_shares)
+        if model_sha:
+            decision_ms = time.time_ns() // 1_000_000
+            order_id = stable_id(bundle_id, token, "UNWIND", decision_ms)
+            fill_id = stable_id(order_id, "FILL")
+            snapshot_id = str(book.get("bus_snapshot_id") or book.get("book_snapshot_id") or "")
+            common = dict(
+                strategy="HARD_ARB", model_sha=model_sha, bundle_id=bundle_id,
+                position_id=bundle_id, order_id=order_id, market_id=str(raw.get("id") or ""),
+                event_id=event_id, token_id=token,
+                exchange_ts_ms=int(book.get("exchange_ts_ms") or 0),
+                receive_ts_ms=int(book.get("received_ms") or 0), decision_ts_ms=decision_ms,
+                book_snapshot_id=snapshot_id, side="SELL",
+                bid=book.get("bids", [(None, None)])[0][0],
+                ask=book.get("asks", [(None, None)])[0][0],
+                limit_price=fill.stressed_vwap, intended_action="UNWIND",
+                intended_size=fill.filled_shares,
+                metadata={"terminal_path": "PARTIAL_BUNDLE_UNWIND"},
+            )
+            canonical_emit(run_dir, model_sha, LedgerEvent(
+                event_type="ORDER_SUBMITTED", order_state="CROSS", **common))
+            canonical_emit(run_dir, model_sha, LedgerEvent(
+                event_type="FILL", strategy="HARD_ARB", model_sha=model_sha,
+                bundle_id=bundle_id, position_id=bundle_id, order_id=order_id,
+                fill_id=fill_id, market_id=str(raw.get("id") or ""), event_id=event_id,
+                token_id=token, exchange_ts_ms=int(book.get("exchange_ts_ms") or 0),
+                receive_ts_ms=int(book.get("received_ms") or 0), side="SELL",
+                fill_price=fill.stressed_vwap, filled_size=fill.filled_shares,
+                complete=remaining <= 1e-9, fee=fill.fee, fee_rate=d.rate,
+                fee_source=d.source, unwind_loss=max(0.0, -pnl),
+                metadata={"terminal_path": "PARTIAL_BUNDLE_UNWIND"}))
         if remaining > 1e-9:
             left = dict(leg)
             left["shares"] = remaining
@@ -626,6 +672,13 @@ def run(args: argparse.Namespace) -> int:
                     "net_edge": bundle.get("net_edge", 0.0), "net_pnl": pnl,
                     "detail": "neg_risk_complete_set_terminal_payout",
                 })
+                canonical_emit(args.run_dir, args.model_sha, LedgerEvent(
+                    event_type="FINAL", strategy="HARD_ARB", model_sha=args.model_sha,
+                    bundle_id=bid, position_id=bid, event_id=eid,
+                    final_pnl=pnl, realized_cashflow=pnl,
+                    capital_duration_ms=max(0, (now - int(bundle.get("opened_ts") or now)) * 1000),
+                    metadata={"terminal_state": "STRUCTURAL_PAYOUT",
+                              "capital_used": capital, "shares": shares}))
                 del openb[bid]
         except Exception as exc:
             if len(failures) < 20:
@@ -644,14 +697,23 @@ def run(args: argparse.Namespace) -> int:
                     fee_map[token] = d
         residual, received, pnl = unwind_bundle(
             clob, bid, str(bundle.get("event_id") or ""), legs, fee_map, args.slippage_bps,
-            args.run_dir, stats, book_source
+            args.run_dir, stats, book_source, args.model_sha
         )
         cash += received
         realized_tick += pnl
+        cumulative_unwind = finite(bundle.get("realized_unwind_pnl"), 0.0) + pnl
         if residual:
             bundle["legs"] = residual
             bundle["capital_used"] = sum(max(0.0, finite(x.get("capital_used"), 0.0)) for x in residual)
+            bundle["realized_unwind_pnl"] = cumulative_unwind
         else:
+            canonical_emit(args.run_dir, args.model_sha, LedgerEvent(
+                event_type="FINAL", strategy="HARD_ARB", model_sha=args.model_sha,
+                bundle_id=bid, position_id=bid,
+                event_id=str(bundle.get("event_id") or ""), final_pnl=cumulative_unwind,
+                realized_cashflow=cumulative_unwind,
+                capital_duration_ms=max(0, (now - int(bundle.get("opened_ts") or now)) * 1000),
+                metadata={"terminal_state": "PARTIAL_BUNDLE_UNWOUND"}))
             del aborting[bid]
 
     locked = sum(max(0.0, finite(x.get("capital_used"), 0.0)) for x in openb.values())
@@ -701,6 +763,16 @@ def run(args: argparse.Namespace) -> int:
                 max_leg_cash=max(0.0, maxmarket * equity),
             ) if ok else None
             bundle_id = f"HARD-{eid}-{int(time.time() * 1000)}"
+            canonical_emit(args.run_dir, args.model_sha, LedgerEvent(
+                event_type="OPPORTUNITY", strategy="HARD_ARB", model_sha=args.model_sha,
+                bundle_id=bundle_id, event_id=eid,
+                expected_ev=(1.0 - sized[1].capital_used / sized[0]) if sized is not None else None,
+                intended_action="SEQUENTIAL_FOK_COMPLETE_SET" if sized is not None else "NOTHING",
+                metadata={"freshness_reason": reason, "leg_count": len(tokens),
+                          "shared_atomic_snapshot": args.shared_state is not None,
+                          "max_leg_age_ms": age, "cross_leg_skew_ms": skew,
+                          "max_exchange_snapshot_age_ms": xage,
+                          "exchange_snapshot_skew_ms": xskew}))
             if sized is None:
                 candidate_rows += 1
                 _candidate(args.run_dir, timestamp=int(time.time()), bundle_id=bundle_id, strategy="HARD_ARB",
@@ -758,6 +830,10 @@ def run(args: argparse.Namespace) -> int:
                 total_fees += float(current["fee"])
                 total_slippage += float(current["slippage_cost"])
                 leg = {**current, "raw_market": by_token[token]["raw"]}
+                decision_ms = time.time_ns() // 1_000_000
+                order_id = stable_id(bundle_id, token, "ENTRY", i)
+                fill_id = stable_id(order_id, "FILL")
+                leg.update({"entry_order_id": order_id, "entry_fill_id": fill_id})
                 filled.append(leg)
                 append_csv(args.run_dir / "leg_fills.csv", FILL_FIELDS, {
                     "timestamp": int(time.time()), "bundle_id": bundle_id, "strategy": "HARD_ARB", "event_id": eid,
@@ -767,6 +843,36 @@ def run(args: argparse.Namespace) -> int:
                     "total_execution_cost": current["total_execution_cost"], "net_edge": guarantee,
                     "detail": f"leg={i + 1}/{len(order)} sequential_revalidation",
                 })
+                book = refreshed[token]
+                snapshot_id = str(book.get("bus_snapshot_id") or book.get("book_snapshot_id") or "")
+                raw_market = by_token[token]["raw"]
+                market_id = str(raw_market.get("id") or "")
+                common = dict(
+                    strategy="HARD_ARB", model_sha=args.model_sha, bundle_id=bundle_id,
+                    position_id=bundle_id, order_id=order_id, market_id=market_id,
+                    event_id=eid, token_id=token,
+                    exchange_ts_ms=int(book.get("exchange_ts_ms") or 0),
+                    receive_ts_ms=int(book.get("received_ms") or 0),
+                    decision_ts_ms=decision_ms, book_snapshot_id=snapshot_id,
+                    side="BUY", bid=book.get("bids", [(None, None)])[0][0],
+                    ask=book.get("asks", [(None, None)])[0][0],
+                    limit_price=float(current["price"]), intended_action="FOK_BUY_LEG",
+                    intended_size=shares, expected_ev=guarantee,
+                    metadata={"leg_index": i + 1, "leg_count": len(order),
+                              "sequential_revalidation": True},
+                )
+                canonical_emit(args.run_dir, args.model_sha, LedgerEvent(
+                    event_type="ORDER_SUBMITTED", order_state="CROSS", **common))
+                canonical_emit(args.run_dir, args.model_sha, LedgerEvent(
+                    event_type="FILL", strategy="HARD_ARB", model_sha=args.model_sha,
+                    bundle_id=bundle_id, position_id=bundle_id, order_id=order_id,
+                    fill_id=fill_id, market_id=market_id, event_id=eid, token_id=token,
+                    exchange_ts_ms=int(book.get("exchange_ts_ms") or 0),
+                    receive_ts_ms=int(book.get("received_ms") or 0), side="BUY",
+                    fill_price=float(current["price"]), filled_size=shares, complete=True,
+                    fee=float(current["fee"]), fee_rate=fees[token].rate,
+                    fee_source=fees[token].source, slippage=float(current["slippage_cost"]),
+                    metadata={"leg_index": i + 1, "leg_count": len(order)}))
                 if i + 1 < len(order) and args.leg_latency_ms > 0:
                     time.sleep(args.leg_latency_ms / 1000.0)
 
@@ -775,7 +881,7 @@ def run(args: argparse.Namespace) -> int:
                 seq_aborts += 1
                 residual, received, pnl = unwind_bundle(
                     clob, bundle_id, eid, filled, fees, args.slippage_bps,
-                    args.run_dir, stats, book_source
+                    args.run_dir, stats, book_source, args.model_sha
                 )
                 cash += received
                 realized_tick += pnl
@@ -784,7 +890,15 @@ def run(args: argparse.Namespace) -> int:
                         "event_id": eid, "legs": residual,
                         "capital_used": sum(max(0.0, finite(x.get("capital_used"), 0.0)) for x in residual),
                         "reason": fail or "post_execution_edge", "opened_ts": now,
+                        "realized_unwind_pnl": pnl,
                     }
+                else:
+                    canonical_emit(args.run_dir, args.model_sha, LedgerEvent(
+                        event_type="FINAL", strategy="HARD_ARB", model_sha=args.model_sha,
+                        bundle_id=bundle_id, position_id=bundle_id, event_id=eid,
+                        final_pnl=pnl, realized_cashflow=pnl,
+                        metadata={"terminal_state": "SEQUENTIAL_ABORT_UNWOUND",
+                                  "abort_reason": fail or "post_execution_edge"}))
                 continue
 
             openb[bundle_id] = {
