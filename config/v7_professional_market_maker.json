@@ -153,7 +153,7 @@
     "maximum_rest_ms": 15000,
     "actions": ["JOIN", "FADE1", "IMPROVE1"],
     "epsilon": 0.10,
-    "confidence_z": 0.50,
+    "confidence_z": 0.10,
     "require_fresh_dual_clock_book": true,
     "require_post_only": true,
     "propensity_logging_required": true
