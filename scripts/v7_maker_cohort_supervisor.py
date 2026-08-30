@@ -93,12 +93,11 @@ def safe_membership_sha256(value: dict[str, Any]) -> str:
         return ""
 
 
-def flat_state(
+def inventory_flat_state(
     value: dict[str, Any],
     model_sha: str,
     *,
     newer_than_ms: int = 0,
-    require_frozen: bool = False,
 ) -> bool:
     if (
         value.get("schema") != "polymarket_v7_professional_maker_state_v2"
@@ -107,11 +106,7 @@ def flat_state(
         or value.get("real_order_submission") is not False
         or value.get("model_sha") != model_sha
         or int(value.get("timestamp_ms") or 0) < newer_than_ms
-        or int(value.get("active_order_count") or 0) != 0
-        or value.get("flat_restart_safe") is not True
     ):
-        return False
-    if require_frozen and value.get("new_risk_frozen") is not True:
         return False
     inventory = value.get("inventory")
     if not isinstance(inventory, dict):
@@ -126,6 +121,24 @@ def flat_state(
             except (TypeError, ValueError):
                 return False
     return True
+
+
+def flat_state(
+    value: dict[str, Any],
+    model_sha: str,
+    *,
+    newer_than_ms: int = 0,
+    require_frozen: bool = False,
+) -> bool:
+    if not inventory_flat_state(
+        value, model_sha, newer_than_ms=newer_than_ms
+    ):
+        return False
+    return (
+        int(value.get("active_order_count") or 0) == 0
+        and value.get("flat_restart_safe") is True
+        and (not require_frozen or value.get("new_risk_frozen") is True)
+    )
 
 
 class CohortSupervisor:
@@ -263,7 +276,11 @@ class CohortSupervisor:
         return candidate if membership_sha256(runtime) != membership_sha256(candidate) else None
 
     def rotate_if_safe(self, candidate: dict[str, Any]) -> None:
-        if not flat_state(read_json(self.state), self.args.model_sha):
+        now_ms = time.time_ns() // 1_000_000
+        if not inventory_flat_state(
+            read_json(self.state), self.args.model_sha,
+            newer_than_ms=now_ms - 5_000,
+        ):
             self.write_status("PENDING_NONFLAT")
             return
         requested_ms = time.time_ns() // 1_000_000
