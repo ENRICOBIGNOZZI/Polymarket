@@ -32,6 +32,7 @@ def selection(market_id: str = "market-1") -> dict:
         "authenticated_execution": False,
         "real_order_submission": False,
         "model_sha": SHA,
+        "timestamp_ms": 1_000,
         "source": "adaptive_universe_recent_flow",
         "selected_count": 1,
         "resource_capacity_markets": 10,
@@ -69,6 +70,18 @@ def state(**changes: object) -> dict:
 
 
 class MakerCohortSupervisorTests(unittest.TestCase):
+    @staticmethod
+    def supervisor_args(run_root: Path, selection_path: Path, candidate_path: Path) -> SimpleNamespace:
+        return SimpleNamespace(
+            run_root=run_root,
+            selection=selection_path,
+            candidate=candidate_path,
+            model_sha=SHA,
+            drain_timeout_seconds=1.0,
+            candidate_confirmations=2,
+            min_rotation_interval_seconds=300.0,
+        )
+
     def test_selection_validation_is_exact_sha_and_paper_only(self) -> None:
         self.assertEqual(len(validate_selection(selection(), SHA)), 1)
         unsafe = selection()
@@ -106,6 +119,8 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         self.assertIn('root["new_risk_frozen"]', runtime)
         self.assertIn("require_frozen=True", supervisor)
         self.assertIn("atomic_json(self.selection, latest)", supervisor)
+        self.assertIn("--candidate-confirmations 2", loop)
+        self.assertIn("--min-rotation-interval-seconds 300", loop)
         self.assertIn("authenticated_execution\") is not False", supervisor)
         self.assertIn("real_order_submission\") is not False", supervisor)
 
@@ -124,13 +139,7 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             atomic_json(candidate_path, candidate)
             maker_state = state(timestamp_ms=2_000)
             atomic_json(run_root / "micro_maker/state.json", maker_state)
-            args = SimpleNamespace(
-                run_root=run_root,
-                selection=selection_path,
-                candidate=candidate_path,
-                model_sha=SHA,
-                drain_timeout_seconds=1.0,
-            )
+            args = self.supervisor_args(run_root, selection_path, candidate_path)
             supervisor = CohortSupervisor(args)
             calls: list[str] = []
             supervisor.cohort_healthy = lambda: True  # type: ignore[method-assign]
@@ -144,6 +153,37 @@ class MakerCohortSupervisorTests(unittest.TestCase):
                 membership_sha256(read_json(selection_path)), membership_sha256(candidate)
             )
             self.assertFalse(supervisor.drain.exists())
+
+    def test_candidate_confirmation_counts_distinct_generations_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            supervisor = CohortSupervisor(self.supervisor_args(
+                root, root / "selection.json", root / "candidate.json"
+            ))
+            candidate = selection("market-2")
+            self.assertFalse(supervisor.observe_candidate_generation(candidate))
+            self.assertFalse(supervisor.observe_candidate_generation(candidate))
+            self.assertEqual(supervisor.pending_confirmations, 1)
+            candidate["timestamp_ms"] = 2_000
+            self.assertTrue(supervisor.observe_candidate_generation(candidate))
+            self.assertEqual(supervisor.pending_confirmations, 2)
+
+    def test_candidate_oscillation_resets_confirmation_and_cooldown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            supervisor = CohortSupervisor(self.supervisor_args(
+                root, root / "selection.json", root / "candidate.json"
+            ))
+            first = selection("market-2")
+            second = selection("market-3")
+            second["markets"][0].update({
+                "condition_id": "condition-3", "yes_token": "yes-3", "no_token": "no-3",
+            })
+            self.assertFalse(supervisor.observe_candidate_generation(first))
+            self.assertFalse(supervisor.observe_candidate_generation(second))
+            self.assertEqual(supervisor.pending_confirmations, 1)
+            supervisor.last_rotation_ms = 10_000
+            self.assertEqual(supervisor.rotation_cooldown_remaining_seconds(70_000), 240.0)
 
 
 if __name__ == "__main__":

@@ -274,6 +274,7 @@ def runtime_health(run_root: Path, expected_sha: str, *, now: int, stale_seconds
                 unsafe.append("maker_cohort_identity_drift")
             if rotation.get("state") not in {
                 "RUNNING", "DRAINING", "PENDING_NONFLAT", "PENDING_DRAIN_TIMEOUT",
+                "PENDING_CONFIRMATION", "PENDING_COOLDOWN",
             }:
                 recoverable.append("maker_cohort_not_ready")
             try:

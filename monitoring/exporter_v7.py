@@ -866,6 +866,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         and rotation.get("real_order_submission") is False
         and rotation.get("state") in {
             "RUNNING", "DRAINING", "PENDING_NONFLAT", "PENDING_DRAIN_TIMEOUT",
+            "PENDING_CONFIRMATION", "PENDING_COOLDOWN",
         }
         and fresh_milliseconds(rotation)
     )
@@ -934,6 +935,9 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_maker_candidate_selected_markets", selector.get("candidate_selected_count")),
         _metric("polymarket_v7_maker_cohort_supervisor_ready", 1 if rotation_ready else 0),
         _metric("polymarket_v7_maker_cohort_rotations_total", rotation.get("rotation_count")),
+        _metric("polymarket_v7_maker_rotation_candidate_confirmations", rotation.get("candidate_confirmations")),
+        _metric("polymarket_v7_maker_rotation_required_confirmations", rotation.get("candidate_required_confirmations")),
+        _metric("polymarket_v7_maker_rotation_cooldown_remaining_seconds", rotation.get("rotation_cooldown_remaining_seconds")),
         _metric("polymarket_v7_maker_rotation_draining", 1 if rotation.get("state") == "DRAINING" else 0),
         _metric("polymarket_v7_maker_rotation_blocked_nonflat", 1 if rotation.get("state") == "PENDING_NONFLAT" else 0),
         _metric("polymarket_v7_maker_rotation_info", 1 if rotation_ready else 0, {

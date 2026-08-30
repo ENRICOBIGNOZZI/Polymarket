@@ -155,6 +155,43 @@ class CohortSupervisor:
         self.logs: list[Any] = []
         self.stop_requested = False
         self.rotation_count = 0
+        self.last_rotation_ms = 0
+        self.pending_membership_sha256 = ""
+        self.pending_last_generation_ms = 0
+        self.pending_confirmations = 0
+
+    def reset_pending_confirmation(self) -> None:
+        self.pending_membership_sha256 = ""
+        self.pending_last_generation_ms = 0
+        self.pending_confirmations = 0
+
+    def observe_candidate_generation(self, candidate: dict[str, Any]) -> bool:
+        """Require the same membership in distinct selector generations.
+
+        Poll repetitions never count as confirmations. This prevents a noisy
+        one-minute flow ranking from repeatedly cancelling an otherwise healthy
+        maker cohort and forfeiting its queue position.
+        """
+        membership = membership_sha256(candidate)
+        generation_ms = int(candidate.get("timestamp_ms") or 0)
+        if generation_ms <= 0:
+            self.reset_pending_confirmation()
+            return False
+        if membership != self.pending_membership_sha256:
+            self.pending_membership_sha256 = membership
+            self.pending_last_generation_ms = generation_ms
+            self.pending_confirmations = 1
+        elif generation_ms > self.pending_last_generation_ms:
+            self.pending_last_generation_ms = generation_ms
+            self.pending_confirmations += 1
+        return self.pending_confirmations >= self.args.candidate_confirmations
+
+    def rotation_cooldown_remaining_seconds(self, now_ms: int | None = None) -> float:
+        if self.last_rotation_ms <= 0:
+            return 0.0
+        current = time.time_ns() // 1_000_000 if now_ms is None else now_ms
+        elapsed = max(0.0, (current - self.last_rotation_ms) / 1000.0)
+        return max(0.0, self.args.min_rotation_interval_seconds - elapsed)
 
     def write_status(self, state: str, **extra: Any) -> None:
         runtime = read_json(self.selection)
@@ -168,6 +205,10 @@ class CohortSupervisor:
             "model_sha": self.args.model_sha,
             "state": state,
             "rotation_count": self.rotation_count,
+            "last_rotation_ms": self.last_rotation_ms,
+            "candidate_confirmations": self.pending_confirmations,
+            "candidate_required_confirmations": self.args.candidate_confirmations,
+            "rotation_cooldown_remaining_seconds": self.rotation_cooldown_remaining_seconds(),
             "runtime_membership_sha256": (
                 safe_membership_sha256(runtime) if runtime else ""
             ),
@@ -276,6 +317,7 @@ class CohortSupervisor:
         return candidate if membership_sha256(runtime) != membership_sha256(candidate) else None
 
     def rotate_if_safe(self, candidate: dict[str, Any]) -> None:
+        target_membership = membership_sha256(candidate)
         now_ms = time.time_ns() // 1_000_000
         if not inventory_flat_state(
             read_json(self.state), self.args.model_sha,
@@ -291,7 +333,7 @@ class CohortSupervisor:
             "authenticated_execution": False,
             "real_order_submission": False,
             "model_sha": self.args.model_sha,
-            "candidate_membership_sha256": membership_sha256(candidate),
+            "candidate_membership_sha256": target_membership,
         })
         self.write_status("DRAINING")
         deadline = time.monotonic() + self.args.drain_timeout_seconds
@@ -304,6 +346,11 @@ class CohortSupervisor:
             ):
                 latest = read_json(self.candidate)
                 validate_selection(latest, self.args.model_sha)
+                if membership_sha256(latest) != target_membership:
+                    self.drain.unlink(missing_ok=True)
+                    self.reset_pending_confirmation()
+                    self.write_status("PENDING_CONFIRMATION", reason="candidate_changed_during_drain")
+                    return
                 self.stop_cohort()
                 # Re-read after the maker's final state write. A late PAPER fill
                 # must abort promotion and restart the old cohort unchanged.
@@ -316,9 +363,11 @@ class CohortSupervisor:
                     return
                 atomic_json(self.selection, latest)
                 self.rotation_count += 1
+                self.last_rotation_ms = time.time_ns() // 1_000_000
+                self.reset_pending_confirmation()
                 self.drain.unlink(missing_ok=True)
                 self.start_cohort()
-                self.write_status("RUNNING", last_rotation_ms=time.time_ns() // 1_000_000)
+                self.write_status("RUNNING")
                 return
             time.sleep(0.1)
         self.drain.unlink(missing_ok=True)
@@ -336,8 +385,14 @@ class CohortSupervisor:
                     return 2
                 candidate = self.pending_candidate()
                 if candidate is not None:
-                    self.rotate_if_safe(candidate)
+                    if not self.observe_candidate_generation(candidate):
+                        self.write_status("PENDING_CONFIRMATION")
+                    elif self.rotation_cooldown_remaining_seconds() > 0.0:
+                        self.write_status("PENDING_COOLDOWN")
+                    else:
+                        self.rotate_if_safe(candidate)
                 else:
+                    self.reset_pending_confirmation()
                     self.write_status("RUNNING")
                 time.sleep(self.args.poll_seconds)
             return 0
@@ -366,7 +421,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fillability-arena-bytes", type=int, required=True)
     parser.add_argument("--poll-seconds", type=float, default=1.0)
     parser.add_argument("--drain-timeout-seconds", type=float, default=20.0)
-    return parser.parse_args()
+    parser.add_argument("--candidate-confirmations", type=int, default=2)
+    parser.add_argument("--min-rotation-interval-seconds", type=float, default=300.0)
+    args = parser.parse_args()
+    if args.candidate_confirmations < 2:
+        parser.error("--candidate-confirmations must be at least 2")
+    if args.min_rotation_interval_seconds < 0.0:
+        parser.error("--min-rotation-interval-seconds must be non-negative")
+    return args
 
 
 def main() -> int:

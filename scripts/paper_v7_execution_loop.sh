@@ -549,7 +549,9 @@ pids+=("$!")
     --fillability-observer "$FILLABILITY_OBSERVER" \
     --maker-arena-bytes "$WS_JSON_ARENA_MAKER_MAX_BYTES" \
     --observer-arena-bytes "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" \
-    --fillability-arena-bytes "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES"
+    --fillability-arena-bytes "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" \
+    --candidate-confirmations 2 \
+    --min-rotation-interval-seconds 300
 ) >> "$RUN_ROOT/micro_maker/cohort_supervisor.log" 2>&1 &
 pids+=("$!")
 

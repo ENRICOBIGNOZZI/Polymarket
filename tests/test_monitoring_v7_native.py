@@ -217,6 +217,9 @@ class V7NativeMonitoringTest(unittest.TestCase):
             "real_order_submission": False,
             "state": "RUNNING",
             "rotation_count": 3,
+            "candidate_confirmations": 2,
+            "candidate_required_confirmations": 2,
+            "rotation_cooldown_remaining_seconds": 42.5,
             "runtime_membership_sha256": "runtime-membership",
             "candidate_membership_sha256": "candidate-membership",
         })
@@ -291,6 +294,9 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertIn("polymarket_v7_maker_candidate_selected_markets 40", metrics)
             self.assertIn("polymarket_v7_maker_cohort_supervisor_ready 1", metrics)
             self.assertIn("polymarket_v7_maker_cohort_rotations_total 3", metrics)
+            self.assertIn("polymarket_v7_maker_rotation_candidate_confirmations 2", metrics)
+            self.assertIn("polymarket_v7_maker_rotation_required_confirmations 2", metrics)
+            self.assertIn("polymarket_v7_maker_rotation_cooldown_remaining_seconds 42.5", metrics)
             self.assertIn("polymarket_v7_maker_rotation_draining 0", metrics)
             self.assertIn("polymarket_v7_maker_rotation_blocked_nonflat 0", metrics)
             self.assertIn("polymarket_v7_maker_feed_connected_workers 5", metrics)
