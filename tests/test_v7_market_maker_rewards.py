@@ -238,6 +238,74 @@ class MakerRewardSelectorTests(unittest.TestCase):
                     model_sha=SHA, now_ms=now_ms,
                 )
 
+    def test_recent_flow_requires_sustained_sell_flow_and_a_fresh_last_print(self) -> None:
+        from tempfile import TemporaryDirectory
+        now_ms = 1_000_000
+        base = {
+            "question": "Q", "slug": "q", "active": True, "closed": False,
+            "accepting_orders": True, "spread": 0.02, "liquidity": 1_000.0,
+            "volume_24h": 10_000.0, "end_date": "2099-01-01T00:00:00Z",
+            "clob_token_ids": ["yes", "no"], "midpoint": 0.50,
+            "timed_sports": False,
+        }
+        markets = [
+            {**base, "event_ids": ["stale"], "market_id": "stale", "condition_id": "cs"},
+            {**base, "event_ids": ["fresh"], "market_id": "fresh", "condition_id": "cf"},
+        ]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            universe = _universe(root / "current.json", timestamp_ms=now_ms, markets=markets)
+            tape = root / "trade_tape.csv"
+            with tape.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=[
+                    "timestamp", "received_ms", "condition_id", "asset_id", "side",
+                    "price", "size", "transaction_hash",
+                ])
+                writer.writeheader()
+                for condition, ages in (("cs", (70_000, 80_000)), ("cf", (1_000, 50_000))):
+                    for index, age in enumerate(ages):
+                        writer.writerow({
+                            "timestamp": "1000", "received_ms": str(now_ms - age),
+                            "condition_id": condition, "asset_id": "yes", "side": "SELL",
+                            "price": "0.5", "size": "10",
+                            "transaction_hash": f"{condition}-{index}",
+                        })
+            _, selection_cfg, capacity_cfg, capacity = rewards._validated_config(
+                ROOT / "config" / "v7_professional_market_maker.json"
+            )
+            snapshot = rewards._recent_flow_snapshot(
+                universe, tape, selection_cfg, capacity_cfg, capacity,
+                model_sha=SHA, now_ms=now_ms,
+            )
+        self.assertEqual([row["market_id"] for row in snapshot["markets"]], ["fresh"])
+        self.assertEqual(snapshot["minimum_sell_prints_2m"], 2)
+        self.assertEqual(snapshot["maximum_last_sell_age_ms"], 60_000)
+        self.assertEqual(snapshot["markets"][0]["recent_sell_prints_2m"], 2)
+        self.assertEqual(snapshot["markets"][0]["recent_last_sell_age_ms"], 1_000)
+
+    def test_selector_status_suppresses_fallback_rotation_and_exports_flow_quality(self) -> None:
+        runtime = {
+            "model_sha": SHA, "timestamp_ms": 1_000,
+            "source": "adaptive_universe_recent_flow", "degraded": False,
+            "selected_count": 1, "markets": [{
+                "condition_id": "c1", "yes_token": "yes", "no_token": "no",
+            }],
+        }
+        candidate = {
+            "model_sha": SHA, "timestamp_ms": 2_000,
+            "source": "adaptive_universe_fallback", "degraded": True,
+            "selected_count": 1, "markets": [{
+                "condition_id": "c2", "yes_token": "yes2", "no_token": "no2",
+            }],
+        }
+        status = rewards.selector_status(
+            runtime, candidate_snapshot=candidate, runtime_selection_pinned=True
+        )
+        self.assertFalse(status["candidate_rotation_pending"])
+        self.assertTrue(status["candidate_rotation_suppressed_no_fresh_flow"])
+        self.assertFalse(status["candidate_fresh_flow_eligible"])
+        self.assertEqual(status["candidate_max_last_sell_age_seconds"], -1.0)
+
     def test_recent_flow_failure_uses_filtered_universe_not_untyped_reward_catalog(self) -> None:
         from tempfile import TemporaryDirectory
         now_ms = 1_000_000

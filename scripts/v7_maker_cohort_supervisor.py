@@ -93,6 +93,13 @@ def safe_membership_sha256(value: dict[str, Any]) -> str:
         return ""
 
 
+def fresh_flow_eligible(value: dict[str, Any]) -> bool:
+    return (
+        value.get("source") == "adaptive_universe_recent_flow"
+        and value.get("degraded") is not True
+    )
+
+
 def inventory_flat_state(
     value: dict[str, Any],
     model_sha: str,
@@ -159,6 +166,7 @@ class CohortSupervisor:
         self.pending_membership_sha256 = ""
         self.pending_last_generation_ms = 0
         self.pending_confirmations = 0
+        self.flow_pause_latched = False
 
     def reset_pending_confirmation(self) -> None:
         self.pending_membership_sha256 = ""
@@ -215,6 +223,7 @@ class CohortSupervisor:
             "candidate_membership_sha256": (
                 safe_membership_sha256(candidate) if candidate else ""
             ),
+            "fresh_flow_pause_active": self.flow_pause_latched,
             "cohort_pids": {name: process.pid for name, process in self.processes.items()},
         }
         payload.update(extra)
@@ -314,7 +323,62 @@ class CohortSupervisor:
             validate_selection(candidate, self.args.model_sha)
         except ValueError:
             return None
+        # Once the runtime has causal flow evidence, never rotate it back to a
+        # generic fallback merely because the latest tape window is quiet.
+        if fresh_flow_eligible(runtime) and not fresh_flow_eligible(candidate):
+            return None
         return candidate if membership_sha256(runtime) != membership_sha256(candidate) else None
+
+    def write_flow_pause_drain(self) -> None:
+        atomic_json(self.drain, {
+            "schema": "polymarket_v7_maker_rotation_drain_v1",
+            "timestamp_ms": time.time_ns() // 1_000_000,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "model_sha": self.args.model_sha,
+            "reason": "no_fresh_aggressive_flow",
+        })
+
+    def sync_no_fresh_flow_pause(self) -> bool:
+        """Withdraw PAPER quotes while the selector has no causal fresh flow.
+
+        The existing cohort remains the accounting owner.  No selection or
+        inventory state is discarded, and removing this reversible drain lets
+        the same process resume as soon as an eligible candidate returns.
+        """
+        runtime = read_json(self.selection)
+        candidate = read_json(self.candidate)
+        try:
+            validate_selection(runtime, self.args.model_sha)
+            validate_selection(candidate, self.args.model_sha)
+        except ValueError:
+            if self.flow_pause_latched:
+                self.reset_pending_confirmation()
+                self.write_status(
+                    "PAUSED_NO_FRESH_FLOW", reason="candidate_invalid_while_paused"
+                )
+                return True
+            return False
+        should_pause = fresh_flow_eligible(runtime) and not fresh_flow_eligible(candidate)
+        if should_pause:
+            self.flow_pause_latched = True
+            if read_json(self.drain).get("reason") != "no_fresh_aggressive_flow":
+                self.write_flow_pause_drain()
+            self.reset_pending_confirmation()
+            self.write_status("PAUSED_NO_FRESH_FLOW", fresh_flow_pause_active=True)
+            return True
+        if self.flow_pause_latched:
+            # Resume immediately only when fresh evidence covers the current
+            # membership.  For a different fresh cohort, keep quotes withdrawn
+            # through confirmation, cooldown and the atomic handoff.
+            if (
+                not fresh_flow_eligible(runtime)
+                or membership_sha256(runtime) == membership_sha256(candidate)
+            ):
+                self.flow_pause_latched = False
+                self.drain.unlink(missing_ok=True)
+        return False
 
     def rotate_if_safe(self, candidate: dict[str, Any]) -> None:
         target_membership = membership_sha256(candidate)
@@ -347,7 +411,10 @@ class CohortSupervisor:
                 latest = read_json(self.candidate)
                 validate_selection(latest, self.args.model_sha)
                 if membership_sha256(latest) != target_membership:
-                    self.drain.unlink(missing_ok=True)
+                    if self.flow_pause_latched:
+                        self.write_flow_pause_drain()
+                    else:
+                        self.drain.unlink(missing_ok=True)
                     self.reset_pending_confirmation()
                     self.write_status("PENDING_CONFIRMATION", reason="candidate_changed_during_drain")
                     return
@@ -357,11 +424,15 @@ class CohortSupervisor:
                 if not flat_state(
                     read_json(self.state), self.args.model_sha, require_frozen=True
                 ):
-                    self.drain.unlink(missing_ok=True)
+                    if self.flow_pause_latched:
+                        self.write_flow_pause_drain()
+                    else:
+                        self.drain.unlink(missing_ok=True)
                     self.start_cohort()
                     self.write_status("PENDING_NONFLAT")
                     return
                 atomic_json(self.selection, latest)
+                self.flow_pause_latched = False
                 self.rotation_count += 1
                 self.last_rotation_ms = time.time_ns() // 1_000_000
                 self.reset_pending_confirmation()
@@ -370,7 +441,10 @@ class CohortSupervisor:
                 self.write_status("RUNNING")
                 return
             time.sleep(0.1)
-        self.drain.unlink(missing_ok=True)
+        if self.flow_pause_latched:
+            self.write_flow_pause_drain()
+        else:
+            self.drain.unlink(missing_ok=True)
         self.write_status("PENDING_DRAIN_TIMEOUT")
 
     def run(self) -> int:
@@ -383,6 +457,9 @@ class CohortSupervisor:
                 if not self.cohort_healthy():
                     self.write_status("FAILED", reason="cohort_process_exit")
                     return 2
+                if self.sync_no_fresh_flow_pause():
+                    time.sleep(self.args.poll_seconds)
+                    continue
                 candidate = self.pending_candidate()
                 if candidate is not None:
                     if not self.observe_candidate_generation(candidate):

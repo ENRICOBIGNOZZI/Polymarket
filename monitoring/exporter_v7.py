@@ -866,7 +866,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         and rotation.get("real_order_submission") is False
         and rotation.get("state") in {
             "RUNNING", "DRAINING", "PENDING_NONFLAT", "PENDING_DRAIN_TIMEOUT",
-            "PENDING_CONFIRMATION", "PENDING_COOLDOWN",
+            "PENDING_CONFIRMATION", "PENDING_COOLDOWN", "PAUSED_NO_FRESH_FLOW",
         }
         and fresh_milliseconds(rotation)
     )
@@ -876,7 +876,10 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         and maker.get("paper_only") is True
         and maker.get("authenticated_execution") is False
         and maker.get("killed") is not True
-        and maker.get("new_risk_frozen") is not True
+        and (
+            maker.get("new_risk_frozen") is not True
+            or rotation.get("fresh_flow_pause_active") is True
+        )
         and maker.get("source") not in {None, "", "not_started"}
         and fresh_milliseconds(maker)
         and selector_ready
@@ -933,6 +936,11 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_maker_runtime_selection_pinned", 1 if selector.get("runtime_selection_pinned") is True else 0),
         _metric("polymarket_v7_maker_candidate_rotation_pending", 1 if selector.get("candidate_rotation_pending") is True else 0),
         _metric("polymarket_v7_maker_candidate_selected_markets", selector.get("candidate_selected_count")),
+        _metric("polymarket_v7_maker_candidate_fresh_flow_eligible", 1 if selector.get("candidate_fresh_flow_eligible") is True else 0),
+        _metric("polymarket_v7_maker_candidate_rotation_suppressed_no_fresh_flow", 1 if selector.get("candidate_rotation_suppressed_no_fresh_flow") is True else 0),
+        _metric("polymarket_v7_maker_candidate_sell_flow_30s_markets", selector.get("candidate_selected_with_sell_flow_30s")),
+        _metric("polymarket_v7_maker_candidate_sell_flow_2m_markets", selector.get("candidate_selected_with_sell_flow_2m")),
+        _metric("polymarket_v7_maker_candidate_max_last_sell_age_seconds", selector.get("candidate_max_last_sell_age_seconds")),
         _metric("polymarket_v7_maker_cohort_supervisor_ready", 1 if rotation_ready else 0),
         _metric("polymarket_v7_maker_cohort_rotations_total", rotation.get("rotation_count")),
         _metric("polymarket_v7_maker_rotation_candidate_confirmations", rotation.get("candidate_confirmations")),
@@ -940,6 +948,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_maker_rotation_cooldown_remaining_seconds", rotation.get("rotation_cooldown_remaining_seconds")),
         _metric("polymarket_v7_maker_rotation_draining", 1 if rotation.get("state") == "DRAINING" else 0),
         _metric("polymarket_v7_maker_rotation_blocked_nonflat", 1 if rotation.get("state") == "PENDING_NONFLAT" else 0),
+        _metric("polymarket_v7_maker_paused_no_fresh_flow", 1 if rotation.get("fresh_flow_pause_active") is True else 0),
         _metric("polymarket_v7_maker_rotation_info", 1 if rotation_ready else 0, {
             "state": rotation.get("state", "UNKNOWN"),
             "runtime_membership": rotation.get("runtime_membership_sha256", "UNKNOWN"),

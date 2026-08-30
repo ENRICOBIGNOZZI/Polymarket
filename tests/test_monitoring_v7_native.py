@@ -202,6 +202,11 @@ class V7NativeMonitoringTest(unittest.TestCase):
             "state": "OPERATIONAL_RECENT_FLOW",
             "runtime_selection_pinned": True,
             "candidate_rotation_pending": True,
+            "candidate_rotation_suppressed_no_fresh_flow": False,
+            "candidate_fresh_flow_eligible": True,
+            "candidate_selected_with_sell_flow_30s": 12,
+            "candidate_selected_with_sell_flow_2m": 40,
+            "candidate_max_last_sell_age_seconds": 18.5,
             "candidate_selected_count": 40,
             "ready": True,
             "degraded": False,
@@ -220,6 +225,7 @@ class V7NativeMonitoringTest(unittest.TestCase):
             "candidate_confirmations": 2,
             "candidate_required_confirmations": 2,
             "rotation_cooldown_remaining_seconds": 42.5,
+            "fresh_flow_pause_active": False,
             "runtime_membership_sha256": "runtime-membership",
             "candidate_membership_sha256": "candidate-membership",
         })
@@ -297,6 +303,11 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertIn("polymarket_v7_maker_rotation_candidate_confirmations 2", metrics)
             self.assertIn("polymarket_v7_maker_rotation_required_confirmations 2", metrics)
             self.assertIn("polymarket_v7_maker_rotation_cooldown_remaining_seconds 42.5", metrics)
+            self.assertIn("polymarket_v7_maker_candidate_fresh_flow_eligible 1", metrics)
+            self.assertIn("polymarket_v7_maker_candidate_sell_flow_30s_markets 12", metrics)
+            self.assertIn("polymarket_v7_maker_candidate_sell_flow_2m_markets 40", metrics)
+            self.assertIn("polymarket_v7_maker_candidate_max_last_sell_age_seconds 18.5", metrics)
+            self.assertIn("polymarket_v7_maker_paused_no_fresh_flow 0", metrics)
             self.assertIn("polymarket_v7_maker_rotation_draining 0", metrics)
             self.assertIn("polymarket_v7_maker_rotation_blocked_nonflat 0", metrics)
             self.assertIn("polymarket_v7_maker_feed_connected_workers 5", metrics)
