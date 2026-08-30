@@ -232,11 +232,13 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
             self.assertTrue(status["fair"]["valid"])
             self.assertEqual(status["fair"]["model_id"], "external_only_fair")
             self.assertFalse(status["fair"]["uses_polymarket_price_as_feature"])
-            self.assertEqual(status["fair_models"]["comparison_state"], "LIVE_SHADOW_COMPARISON")
+            self.assertEqual(status["fair_models"]["comparison_state"], "AWAITING_LIVE_CLOB_BENCHMARK")
             self.assertEqual(status["fair_models"]["execution_model_id"], "external_only_fair")
             self.assertTrue(status["fair_models"]["hybrid_fair"]["uses_polymarket_price_as_feature"])
+            self.assertFalse(status["fair_models"]["hybrid_fair"]["valid"])
             self.assertEqual(status["blockers"], ["COUNTERFACTUAL_COLLECTOR_NOT_RUNNING"])
 
+            router_receive_ms = time.time_ns() // 1_000_000
             (root / "external" / "paper_router_status.json").write_text(json.dumps({
                 "schema": "polymarket_v7_external_fair_paper_router_v1",
                 "timestamp": int(time.time()), "code_sha": "a" * 40, "state": "RUNNING",
@@ -245,6 +247,11 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
                 "order_submission_enabled": False, "counterfactual_collection_enabled": True,
                 "economic_confidence": "MORE_EVIDENCE_REQUIRED",
                 "killed": False,
+                "live_market": {
+                    "market_id": "m1", "yes": 0.80, "valid": True,
+                    "source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
+                    "receive_ts_ms": router_receive_ms,
+                },
                 "actions": {"TAKE": 0, "NOTHING": 3},
                 "counterfactual_actions": {"TAKE": 2}, "realized_pnl": 0.0, "blocker": "",
             }))
@@ -255,6 +262,10 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
             self.assertEqual(active["blockers"], [])
             self.assertEqual(active["actions"]["TAKE"], 0)
             self.assertEqual(active["counterfactual_actions"]["TAKE"], 2)
+            self.assertEqual(active["fair"]["pm_mid"], 0.80)
+            self.assertEqual(active["fair"]["pm_mid_source"], "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH")
+            self.assertTrue(active["fair_models"]["hybrid_fair"]["valid"])
+            self.assertEqual(active["fair_models"]["comparison_state"], "LIVE_SHADOW_COMPARISON")
 
 
 if __name__ == "__main__":

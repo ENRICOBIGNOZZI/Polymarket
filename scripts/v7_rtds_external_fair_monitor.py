@@ -87,6 +87,31 @@ def load_json(path: Path) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def router_live_market_yes(
+    router: dict[str, Any],
+    *,
+    code_sha: str,
+    market_id: str,
+    now_ms: int,
+) -> float | None:
+    live = router.get("live_market") if isinstance(router.get("live_market"), dict) else {}
+    try:
+        value = float(live.get("yes"))
+        age_ms = now_ms - int(live.get("receive_ts_ms") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if (
+        router.get("code_sha") != code_sha
+        or live.get("valid") is not True
+        or live.get("source") != "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH"
+        or str(live.get("market_id") or "") != market_id
+        or not math.isfinite(value) or not 0.0 <= value <= 1.0
+        or age_ms < -250 or age_ms > 5_000
+    ):
+        return None
+    return value
+
+
 def fetch_market_by_slug(gamma_url: str, slug: str, timeout: int = 4) -> dict[str, Any] | None:
     """Fetch one exact Gamma market without general-universe eligibility filters."""
     query = urllib.parse.urlencode({"slug": slug})
@@ -447,13 +472,18 @@ class Monitor:
         return value
 
     def fair_snapshot(self, now_ns: int, oracle_healthy: bool,
-                      external: dict[str, Any]) -> dict[str, Any]:
+                      external: dict[str, Any], market_yes: float | None = None) -> dict[str, Any]:
         market, contract, reference = self.active_market, self.active_contract, self.reference
         start = int(market.get("contract_start_epoch") or 0)
         tte = max(0.0, start + 300 - now_ns / 1_000_000_000.0) if start else 0.0
-        pm_mid = float(market.get("midpoint") or 0.5)
+        gamma_mid = float(market.get("midpoint") or 0.5)
         base = {"valid": False, "yes": 0.5, "lower": 0.0, "upper": 1.0,
-                "structural": 0.5, "calibrated": 0.5, "pm_mid": pm_mid,
+                "structural": 0.5, "calibrated": 0.5, "pm_mid": market_yes,
+                "pm_mid_source": (
+                    "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH" if market_yes is not None
+                    else "UNAVAILABLE"
+                ),
+                "gamma_discovery_mid_diagnostic": gamma_mid,
                 "tte_seconds": tte, "calculated_monotonic_ns": time.monotonic_ns(),
                 "valid_until_monotonic_ns": 0}
         oracle = self.latest.get(ORACLE_TOPIC, {})
@@ -502,8 +532,16 @@ class Monitor:
         })
         if external_only.get("valid") is not True:
             return output
+        try:
+            market_raw = float(external_only.get("pm_mid"))
+        except (TypeError, ValueError, OverflowError):
+            output.update({"valid": False, "reason": "LIVE_CLOB_BENCHMARK_UNAVAILABLE"})
+            return output
+        if not math.isfinite(market_raw) or not 0.0 <= market_raw <= 1.0:
+            output.update({"valid": False, "reason": "LIVE_CLOB_BENCHMARK_UNAVAILABLE"})
+            return output
         external_yes = min(1.0 - 1e-9, max(1e-9, float(external_only["yes"])))
-        market_yes = min(1.0 - 1e-9, max(1e-9, float(external_only["pm_mid"])))
+        market_yes = min(1.0 - 1e-9, max(1e-9, market_raw))
         weight = 0.35
         external_logit = math.log(external_yes / (1.0 - external_yes))
         market_logit = math.log(market_yes / (1.0 - market_yes))
@@ -534,8 +572,14 @@ class Monitor:
         venue_runtime = self.external_snapshot(now)
         multi_venue_healthy = bool(venue_runtime.get("valid") and int(venue_runtime.get("fresh_venue_count") or 0) >= 2)
         continuity = "LIVE_CONTINUOUS" if oracle_healthy and self.accepted >= 2 else "CONTINUITY_UNKNOWN"
+        router = load_json(self.root / "paper_router_status.json")
+        market_id = str(self.active_market.get("market_id") or "")
+        live_market_yes = router_live_market_yes(
+            router, code_sha=self.code_sha, market_id=market_id,
+            now_ms=now // 1_000_000,
+        )
         fair_started = time.monotonic_ns()
-        fair = self.fair_snapshot(now, oracle_healthy, venue_runtime)
+        fair = self.fair_snapshot(now, oracle_healthy, venue_runtime, live_market_yes)
         fair["model_id"] = "external_only_fair"
         fair["authority"] = "SHADOW"
         fair["uses_polymarket_price_as_feature"] = False
@@ -544,7 +588,6 @@ class Monitor:
             max(0.0, (time.monotonic_ns() - fair_started) / 1_000_000.0)
         )
         common = {"paper_only": True, "authenticated_execution": False, "real_order_submission": False}
-        router = load_json(self.root / "paper_router_status.json")
         shadow_collector_active = bool(
             router.get("schema") == "polymarket_v7_external_fair_paper_router_v1"
             and router.get("code_sha") == self.code_sha
@@ -610,7 +653,10 @@ class Monitor:
                 "external_only_fair": fair,
                 "hybrid_fair": hybrid_fair,
                 "execution_model_id": "external_only_fair",
-                "comparison_state": "LIVE_SHADOW_COMPARISON",
+                "comparison_state": (
+                    "LIVE_SHADOW_COMPARISON" if hybrid_fair.get("valid") is True
+                    else "AWAITING_LIVE_CLOB_BENCHMARK"
+                ),
             },
             "model": {"mature": False, "coverage": 0.0,
                       "economic_confidence": router.get("economic_confidence", "MORE_EVIDENCE_REQUIRED")},

@@ -13,7 +13,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import v7_external_fair_paper_router as router  # noqa: E402
 from v7_external_fair_paper_router import (  # noqa: E402
     Book, entry_tte_allowed, executable_sell_value, fee_per_share,
-    model_market_disagreement_allowed, robust_candidates,
+    hybrid_probability, live_market_yes, model_market_disagreement_allowed,
+    robust_candidates,
 )
 
 
@@ -27,6 +28,7 @@ def snapshot() -> dict:
         "oracle": {"healthy": True, "continuity": "LIVE_CONTINUOUS"},
         "external": {"healthy": True},
         "fair": {"valid": True, "yes": 0.77, "pm_mid": 0.72,
+                 "gamma_discovery_mid_diagnostic": 0.485,
                  "lower": 0.75, "upper": 0.80, "tte_seconds": 45.0,
                  "calculated_monotonic_ns": current - 1, "valid_until_monotonic_ns": current + 1_000_000_000},
         "market": {"yes_token": "yes", "no_token": "no",
@@ -34,8 +36,8 @@ def snapshot() -> dict:
     }
 
 
-def book(token: str, ask: float) -> Book:
-    return Book(token, ((ask - 0.01, 100.0),), ((ask, 100.0),), 0.01, 5.0,
+def book(token: str, ask: float, bid: float | None = None) -> Book:
+    return Book(token, ((ask - 0.01 if bid is None else bid, 100.0),), ((ask, 100.0),), 0.01, 5.0,
                 1_000, 1_001, f"book-{token}")
 
 
@@ -70,19 +72,37 @@ def main() -> None:
         "maximum_model_market_disagreement": 0.20,
         "minimum_robust_ev_per_share": 0.001, "base_execution_risk_per_share": 0.0005,
     }
-    rows = robust_candidates(snapshot(), {"yes": book("yes", 0.50), "no": book("no", 0.81)}, policy)
+    live_books = {"yes": book("yes", 0.58, 0.57), "no": book("no", 0.43, 0.42)}
+    assert abs(live_market_yes(live_books, snapshot()["market"]) - 0.575) < 1e-12
+    assert 0.575 < hybrid_probability(0.77, 0.575, 0.35) < 0.77
+    rows = robust_candidates(snapshot(), live_books, policy)
     assert len(rows) == 1 and rows[0]["outcome"] == "YES"
-    assert rows[0]["robust_ev"] > 0.20
+    assert rows[0]["robust_ev"] > 0.14
     assert rows[0]["tte_seconds"] == 45.0
     extreme = snapshot(); extreme["fair"]["pm_mid"] = 0.01
     assert not model_market_disagreement_allowed(extreme["fair"], policy)
-    assert robust_candidates(extreme, {"yes": book("yes", 0.01), "no": book("no", 1.0)}, policy) == []
+    # The static Gamma discovery midpoint is diagnostic only. Live coherent
+    # books remain authoritative for the executable disagreement gate.
+    assert robust_candidates(extreme, live_books, policy)
+    extreme_books = {"yes": book("yes", 0.02, 0.01), "no": book("no", 0.99, 0.98)}
+    assert robust_candidates(extreme, extreme_books, policy) == []
+    # Regression for the observed failure: Gamma remained near 0.485 while
+    # the executable CLOB had moved to roughly 0.865 YES. A 0.595 model must
+    # be rejected against the live market, irrespective of the discovery mid.
+    stale_gamma = snapshot()
+    stale_gamma["fair"].update({"yes": 0.595, "pm_mid": 0.485, "lower": 0.534, "upper": 0.654})
+    moved_books = {"yes": book("yes", 0.87, 0.86), "no": book("no", 0.14, 0.13)}
+    assert abs(live_market_yes(moved_books, stale_gamma["market"]) - 0.865) < 1e-12
+    assert robust_candidates(stale_gamma, moved_books, policy) == []
+    incoherent = {"yes": book("yes", 0.50), "no": book("no", 0.81)}
+    assert live_market_yes(incoherent, snapshot()["market"]) is None
+    assert robust_candidates(snapshot(), incoherent, policy) == []
     early = snapshot(); early["fair"]["tte_seconds"] = 60.001
     assert not entry_tte_allowed(early["fair"], policy)
     assert robust_candidates(early, {"yes": book("yes", 0.50)}, policy) == []
     boundary = snapshot(); boundary["fair"]["tte_seconds"] = 60.0
     assert entry_tte_allowed(boundary["fair"], policy)
-    assert robust_candidates(boundary, {"yes": book("yes", 0.50)}, policy)
+    assert robust_candidates(boundary, live_books, policy)
     expired = snapshot(); expired["fair"]["tte_seconds"] = 4.999
     assert not entry_tte_allowed(expired["fair"], policy)
     assert robust_candidates(expired, {"yes": book("yes", 0.50)}, policy) == []
@@ -115,8 +135,9 @@ def main() -> None:
             return [{
                 "asset_id": item["token_id"], "timestamp": str(stamp),
                 "hash": f"hash-{item['token_id']}", "tick_size": "0.01",
-                "min_order_size": "5", "bids": [{"price": "0.49", "size": "100"}],
-                "asks": [{"price": "0.50" if item["token_id"] == "yes" else "0.81", "size": "100"}],
+                "min_order_size": "5",
+                "bids": [{"price": "0.57" if item["token_id"] == "yes" else "0.42", "size": "100"}],
+                "asks": [{"price": "0.58" if item["token_id"] == "yes" else "0.43", "size": "100"}],
             } for item in payload]
 
         paper = router.PaperRouter(
@@ -124,7 +145,7 @@ def main() -> None:
             "https://clob.invalid", "https://gamma.invalid",
         )
         exploration_row = robust_candidates(
-            live, {"yes": book("yes", 0.50), "no": book("no", 0.81)}, paper.policy,
+            live, live_books, paper.policy,
         )[0]
         exploration_size = paper.order_size(exploration_row)
         assert paper.model_mature is False
@@ -161,19 +182,34 @@ def main() -> None:
         assert status["book_requests"] == 2
         assert status["book_request_failures"] == 0
         assert status["book_parse_failures"] == 0
+        assert abs(status["live_market"]["yes"] - 0.575) < 1e-12
+        assert status["live_market"]["valid"] is True
         assert status["last_decision"]["outcome"] == "VIRTUAL_FILL"
         fill = next(event for event in events if event["event_type"] == "VIRTUAL_FILL")
         assert fill["metadata"]["tte_seconds"] == 45.0
         assert fill["metadata"]["arrival_tte_seconds"] == 45.0
         assert fill["metadata"]["robust_probability"] == 0.75
-        assert fill["metadata"]["robust_ev_per_share"] > 0.20
-        assert fill["metadata"]["arrival_robust_ev_per_share"] > 0.20
+        assert fill["metadata"]["pm_mid"] == 0.575
+        assert fill["metadata"]["gamma_discovery_mid_diagnostic"] == 0.485
+        assert fill["metadata"]["robust_ev_per_share"] > 0.14
+        assert fill["metadata"]["arrival_robust_ev_per_share"] > 0.14
 
         extreme_live = snapshot()
-        extreme_live["fair"]["pm_mid"] = 0.01
         extreme_live["market"].update({"market_id": "m-disagreement", "event_id": "e-disagreement"})
         (external / "status.json").write_text(json.dumps(extreme_live))
-        with mock.patch.object(router, "request_json", side_effect=public_request):
+
+        def public_request_extreme(url: str, payload=None, timeout=20):
+            del url, timeout
+            assert isinstance(payload, list)
+            return [{
+                "asset_id": item["token_id"], "timestamp": str(stamp),
+                "hash": f"extreme-{item['token_id']}", "tick_size": "0.01",
+                "min_order_size": "5",
+                "bids": [{"price": "0.01" if item["token_id"] == "yes" else "0.98", "size": "100"}],
+                "asks": [{"price": "0.02" if item["token_id"] == "yes" else "0.99", "size": "100"}],
+            } for item in payload]
+
+        with mock.patch.object(router, "request_json", side_effect=public_request_extreme):
             paper.step()
         status = json.loads((external / "paper_router_status.json").read_text())
         assert status["fills"] == 0
@@ -250,16 +286,19 @@ def main() -> None:
         )
         observation = snapshot()
         observation["code_sha"] = "d" * 40
-        observation["fair"].update({"yes": 0.60, "pm_mid": 0.80})
+        observation["fair"].update({"yes": 0.60, "pm_mid": 0.20})
         observation["fair_models"] = {
             "hybrid_fair": {"yes": 0.70},
             "external_only_fair": observation["fair"],
         }
         observation["market"].update({"market_id": "forecast-market", "event_id": "forecast-event"})
-        books = {"yes": book("yes", 0.50), "no": book("no", 0.51)}
+        books = {"yes": book("yes", 0.81, 0.79), "no": book("no", 0.21, 0.19)}
         assert collector.record_forecast(observation, books)
         assert not collector.record_forecast(observation, books)
         pending = next(iter(collector.state["pending_forecasts"].values()))
+        assert abs(pending["market_yes"] - 0.80) < 1e-12
+        assert 0.60 < pending["hybrid_yes"] < 0.80
+        assert pending["market_mid_source"] == "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH"
         pending["resolution_due_ms"] = router.now_ms() - 10_000
         resolution = {
             "closed": True, "clobTokenIds": '["yes", "no"]',

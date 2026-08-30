@@ -105,7 +105,11 @@ def tte_policy(fair: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def model_market_disagreement_allowed(fair: dict[str, Any], policy: dict[str, Any]) -> bool:
+def model_market_disagreement_allowed(
+    fair: dict[str, Any],
+    policy: dict[str, Any],
+    market_yes: float | None = None,
+) -> bool:
     """Reject uncalibrated model forecasts that radically contradict the market.
 
     The market is the benchmark the external model must beat, not an input that
@@ -113,7 +117,7 @@ def model_market_disagreement_allowed(fair: dict[str, Any], policy: dict[str, An
     evidence of model/semantic risk rather than executable alpha.
     """
     model_yes = finite(fair.get("yes"))
-    market_yes = finite(fair.get("pm_mid"))
+    market_yes = finite(fair.get("pm_mid")) if market_yes is None else market_yes
     maximum = finite(policy.get("maximum_model_market_disagreement"))
     return (
         math.isfinite(model_yes)
@@ -124,6 +128,39 @@ def model_market_disagreement_allowed(fair: dict[str, Any], policy: dict[str, An
         and 0.0 <= maximum <= 1.0
         and abs(model_yes - market_yes) <= maximum
     )
+
+
+def live_market_yes(books: dict[str, "Book"], market: dict[str, Any]) -> float | None:
+    """Return a complement-consistent YES midpoint from one live book batch.
+
+    Gamma's market midpoint is an opening/discovery snapshot and can remain
+    unchanged while a five-minute CLOB moves from 50c to 99c. Execution and
+    forecast benchmarks must therefore use the same arrival books that a PAPER
+    FAK would face. The intersection of direct YES and complement-implied NO
+    bounds also rejects crossed or semantically mismatched token books.
+    """
+    yes = books.get(str(market.get("yes_token") or ""))
+    no = books.get(str(market.get("no_token") or ""))
+    if yes is None or no is None or not (yes.bids and yes.asks and no.bids and no.asks):
+        return None
+    lower = max(yes.bids[0][0], 1.0 - no.asks[0][0])
+    upper = min(yes.asks[0][0], 1.0 - no.bids[0][0])
+    tolerance = max(yes.tick_size, no.tick_size, 1e-6)
+    if lower > upper + tolerance:
+        return None
+    lower = max(0.0, min(1.0, lower))
+    upper = max(lower, min(1.0, upper))
+    return 0.5 * (lower + upper)
+
+
+def hybrid_probability(external_yes: float, market_yes: float, weight: float) -> float:
+    external = min(1.0 - 1e-9, max(1e-9, external_yes))
+    market = min(1.0 - 1e-9, max(1e-9, market_yes))
+    bounded_weight = min(1.0, max(0.0, weight))
+    external_logit = math.log(external / (1.0 - external))
+    market_logit = math.log(market / (1.0 - market))
+    value = external_logit + bounded_weight * (market_logit - external_logit)
+    return 1.0 / (1.0 + math.exp(-value)) if value >= 0.0 else math.exp(value) / (1.0 + math.exp(value))
 
 
 @dataclass(frozen=True)
@@ -185,7 +222,10 @@ def robust_candidates(status: dict[str, Any], books: dict[str, Book], policy: di
         return []
     if not entry_tte_allowed(fair, policy):
         return []
-    if not model_market_disagreement_allowed(fair, policy):
+    market_yes = live_market_yes(books, market)
+    if market_yes is None or not model_market_disagreement_allowed(
+        fair, policy, market_yes
+    ):
         return []
     calculated = int(fair.get("calculated_monotonic_ns") or 0)
     valid_until = int(fair.get("valid_until_monotonic_ns") or 0)
@@ -214,6 +254,7 @@ def robust_candidates(status: dict[str, Any], books: dict[str, Book], policy: di
                 "outcome": outcome, "token_id": token, "book": book, "ask": ask,
                 "fee_per_share": fee, "execution_risk": execution_risk,
                 "robust_probability": robust_value, "robust_ev": robust_ev,
+                "market_yes": market_yes,
                 "tte_seconds": float(fair["tte_seconds"]),
                 "tte_bucket_id": str(bucket.get("id") or "legacy_entry_window"),
             })
@@ -254,6 +295,14 @@ class PaperRouter:
         ).hexdigest()
         fair_policy = self.config.get("fair_value") if isinstance(self.config.get("fair_value"), dict) else {}
         self.model_mature = fair_policy.get("default_model_mature") is True
+        cohorts = fair_policy.get("live_shadow_cohorts") if isinstance(
+            fair_policy.get("live_shadow_cohorts"), list
+        ) else []
+        hybrid = next((row for row in cohorts if isinstance(row, dict)
+                       and row.get("id") == "hybrid_fair"), {})
+        self.hybrid_market_weight = min(1.0, max(
+            0.0, finite(hybrid.get("market_prior_logit_weight"), 0.35)
+        ))
         self.clob_url = clob_url.rstrip("/")
         self.gamma_url = gamma_url.rstrip("/")
         self.source = self.directory / "status.json"
@@ -283,6 +332,7 @@ class PaperRouter:
             self.state.update(prior)
         self.last_book_error = ""
         self.last_attempt_reason = ""
+        self.last_live_market: dict[str, Any] = {}
 
     def reject(self, reason: str) -> None:
         reasons = self.state.setdefault("rejection_reasons", {})
@@ -383,10 +433,11 @@ class PaperRouter:
         external = status.get("external") if isinstance(status.get("external"), dict) else {}
         tte = finite(fair.get("tte_seconds"))
         model_yes = finite(fair.get("yes"))
-        fair_models = status.get("fair_models") if isinstance(status.get("fair_models"), dict) else {}
-        hybrid = fair_models.get("hybrid_fair") if isinstance(fair_models.get("hybrid_fair"), dict) else {}
-        hybrid_yes = finite(hybrid.get("yes"))
-        market_yes = finite(fair.get("pm_mid"))
+        market_yes = live_market_yes(books, market)
+        hybrid_yes = (
+            hybrid_probability(model_yes, market_yes, self.hybrid_market_weight)
+            if math.isfinite(model_yes) and market_yes is not None else math.nan
+        )
         market_id = str(market.get("market_id") or "")
         if not (
             fair.get("valid") is True and reference.get("valid") is True
@@ -426,6 +477,7 @@ class PaperRouter:
             "yes_best_ask": yes_book.asks[0][0] if yes_book and yes_book.asks else None,
             "no_best_bid": no_book.bids[0][0] if no_book and no_book.bids else None,
             "no_best_ask": no_book.asks[0][0] if no_book and no_book.asks else None,
+            "market_mid_source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
             "decision": "SHADOW_FORECAST_ONLY",
         }
         self.emit_counterfactual("FORECAST", **values)
@@ -557,9 +609,13 @@ class PaperRouter:
                 "authority": "SHADOW_ZERO_AUTHORITY", "virtual_tif": "FAK",
                 "outcome": row["outcome"], "execution_side": "BUY",
                 "fair_yes": fair.get("yes"), "fair_lower": fair.get("lower"),
-                "fair_upper": fair.get("upper"), "pm_mid": fair.get("pm_mid"),
+                "fair_upper": fair.get("upper"), "pm_mid": row["market_yes"],
+                "pm_mid_source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
+                "gamma_discovery_mid_diagnostic": fair.get(
+                    "gamma_discovery_mid_diagnostic"
+                ),
                 "model_market_disagreement": abs(
-                    float(fair.get("yes")) - float(fair.get("pm_mid"))
+                    float(fair.get("yes")) - float(row["market_yes"])
                 ),
                 "maximum_model_market_disagreement": self.policy.get(
                     "maximum_model_market_disagreement"
@@ -651,6 +707,11 @@ class PaperRouter:
             "arrival_tte_seconds": arrival["tte_seconds"],
             "arrival_robust_probability": arrival["robust_probability"],
             "arrival_robust_ev_per_share": arrival["robust_ev"],
+            "arrival_pm_mid": arrival["market_yes"],
+            "arrival_model_market_disagreement": abs(
+                float((arrival_status.get("fair") or {}).get("yes"))
+                - float(arrival["market_yes"])
+            ),
         }
         self.emit_canonical_shadow(LedgerEvent(
             event_type="ORDER_SUBMITTED", strategy=STRATEGY, model_sha=self.sha,
@@ -692,6 +753,11 @@ class PaperRouter:
                 "arrival_tte_seconds": arrival["tte_seconds"],
                 "arrival_robust_probability": arrival["robust_probability"],
                 "arrival_robust_ev_per_share": arrival["robust_ev"],
+                "arrival_pm_mid": arrival["market_yes"],
+                "arrival_model_market_disagreement": abs(
+                    float((arrival_status.get("fair") or {}).get("yes"))
+                    - float(arrival["market_yes"])
+                ),
             },
         )
         self.state["counterfactual_fills"] = int(self.state.get("counterfactual_fills") or 0) + 1
@@ -705,7 +771,8 @@ class PaperRouter:
             "executable_value": executable_value, "opened_ms": arrival_book.receive_ts_ms,
             "fee_schedule": schedule, "markouts": [], "settled": False,
             "model_yes": finite((arrival_status.get("fair") or {}).get("yes")),
-            "market_yes": finite((arrival_status.get("fair") or {}).get("pm_mid")),
+            "market_yes": float(arrival["market_yes"]),
+            "market_mid_source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
         }
         self.last_attempt_reason = "VIRTUAL_FILL"
         return True
@@ -877,6 +944,7 @@ class PaperRouter:
             "order_submission_enabled": False,
             "drain_requested": drain_requested, "drain_complete": drain_requested,
             "blocker": blocker,
+            "live_market": self.last_live_market,
             "book_requests": int(self.state.get("book_requests") or 0),
             "book_request_failures": int(self.state.get("book_request_failures") or 0),
             "book_parse_failures": int(self.state.get("book_parse_failures") or 0),
@@ -891,6 +959,7 @@ class PaperRouter:
         status = load(self.source)
         blocker = ""
         books: dict[str, Book] = {}
+        market_yes: float | None = None
         if self.drain_path.exists():
             blocker = "CUTOVER_DRAIN"
             rows = []
@@ -899,6 +968,19 @@ class PaperRouter:
             rows: list[dict[str, Any]] = []
         else:
             books = self.books_for(status)
+            market = status.get("market") if isinstance(status.get("market"), dict) else {}
+            market_yes = live_market_yes(books, market)
+            book_values = list(books.values())
+            self.last_live_market = {
+                "market_id": str(market.get("market_id") or ""),
+                "yes": market_yes,
+                "valid": market_yes is not None,
+                "source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
+                "receive_ts_ms": max((book.receive_ts_ms for book in book_values), default=0),
+                "exchange_ts_ms": max((book.exchange_ts_ms for book in book_values), default=0),
+                "snapshot_id": stable_id(*(book.snapshot_id for book in book_values)),
+                "reason": "" if market_yes is not None else "CLOB_COMPLEMENT_INCOHERENT",
+            }
             self.record_forecast(status, books)
             rows = robust_candidates(status, books, self.policy)
         filled = False
@@ -914,9 +996,11 @@ class PaperRouter:
                 reason = self.last_book_error
             elif len(books) < 2:
                 reason = "CLOB_BOOKS_UNAVAILABLE"
+            elif market_yes is None:
+                reason = "CLOB_COMPLEMENT_INCOHERENT"
             elif (status.get("fair") or {}).get("valid") and entry_tte_allowed(
                     status.get("fair") or {}, self.policy) and not model_market_disagreement_allowed(
-                        status.get("fair") or {}, self.policy):
+                        status.get("fair") or {}, self.policy, market_yes):
                 reason = "MODEL_MARKET_DISAGREEMENT_LIMIT"
             elif rows and self.last_attempt_reason:
                 reason = self.last_attempt_reason
@@ -934,6 +1018,13 @@ class PaperRouter:
             "timestamp_ms": now_ms(),
             "market_id": str((status.get("market") or {}).get("market_id") or ""),
             "books": len(books), "robust_candidates": len(rows), "outcome": reason,
+            "live_market_yes": market_yes,
+            "gamma_discovery_mid_diagnostic": (status.get("fair") or {}).get(
+                "gamma_discovery_mid_diagnostic"
+            ),
+            "market_mid_source": (
+                "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH" if market_yes is not None else "UNAVAILABLE"
+            ),
             "best_robust_ev_per_share": max((float(row["robust_ev"]) for row in rows), default=None),
         }
         self.observe_positions()
