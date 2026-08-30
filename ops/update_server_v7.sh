@@ -715,6 +715,25 @@ stop_owned_monitoring(){
   done
 }
 
+preflight_legacy_macos_services(){
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  local label system_plist privileged_required=0
+  for label in \
+    com.polymarket.paper \
+    com.polymarket.exporter \
+    com.polymarket.prometheus \
+    com.polymarket.grafana; do
+    system_plist="/Library/LaunchDaemons/$label.plist"
+    if [[ -e "$system_plist" ]] || launchctl print "system/$label" >/dev/null 2>&1; then
+      privileged_required=1
+    fi
+  done
+  if [[ "$privileged_required" == 1 && "$(id -u)" != 0 ]]; then
+    sudo -n true >/dev/null 2>&1 || fail \
+      "legacy system LaunchDaemons require administrator authorization before PAPER drain; run sudo -v and retry"
+  fi
+}
+
 retire_legacy_macos_services(){
   [[ "$(uname -s)" == "Darwin" ]] || return 0
   local domain="gui/$(id -u)" label user_plist system_plist
@@ -726,13 +745,28 @@ retire_legacy_macos_services(){
     com.polymarket.prometheus \
     com.polymarket.grafana; do
     launchctl bootout "$domain/$label" >/dev/null 2>&1 || true
-    launchctl bootout "system/$label" >/dev/null 2>&1 || true
+    if launchctl print "system/$label" >/dev/null 2>&1; then
+      if [[ "$(id -u)" == 0 ]]; then
+        launchctl bootout "system/$label" >/dev/null 2>&1 ||
+          fail "cannot unload retired launchd service: system/$label"
+      else
+        sudo -n launchctl bootout "system/$label" >/dev/null 2>&1 ||
+          fail "cannot unload retired launchd service: system/$label"
+      fi
+    fi
     user_plist="$HOME/Library/LaunchAgents/$label.plist"
     [[ ! -e "$user_plist" ]] || rm -f "$user_plist"
     system_plist="/Library/LaunchDaemons/$label.plist"
     if [[ -e "$system_plist" ]]; then
-      sudo -n rm -f "$system_plist" || fail "cannot remove retired launchd service: $system_plist"
+      if [[ "$(id -u)" == 0 ]]; then
+        rm -f "$system_plist" || fail "cannot remove retired launchd service: $system_plist"
+      else
+        sudo -n rm -f "$system_plist" || fail "cannot remove retired launchd service: $system_plist"
+      fi
     fi
+    launchctl print "system/$label" >/dev/null 2>&1 &&
+      fail "retired launchd service remains loaded: system/$label"
+    [[ ! -e "$system_plist" ]] || fail "retired launchd service remains installed: $system_plist"
   done
 }
 
@@ -1009,6 +1043,7 @@ git fetch --no-tags origin "$DEPLOY_REF"
 MAIN_SHA="$(git rev-parse "origin/$DEPLOY_REF")"
 [[ "$MAIN_SHA" == "$EXPECTED_SHA" ]] || fail "origin/main $MAIN_SHA != exact approved SHA $EXPECTED_SHA"
 prevalidate_candidate
+preflight_legacy_macos_services
 OLD_SHA="$(resolve_incumbent_sha)"
 [[ "$OLD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "cannot resolve exact deployed incumbent SHA"
 git merge-base --is-ancestor "$OLD_SHA" "$EXPECTED_SHA" >/dev/null 2>&1 || \

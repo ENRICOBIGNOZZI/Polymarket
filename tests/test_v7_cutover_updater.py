@@ -336,15 +336,29 @@ class V7CutoverUpdaterTest(unittest.TestCase):
 
     def test_updater_erases_only_exact_allowlisted_legacy_launchd_services(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
-        function = text[text.index("retire_legacy_macos_services(){"):text.index("start_monitoring(){")]
+        function = text[text.index("preflight_legacy_macos_services(){"):text.index("start_monitoring(){")]
         for label in (
             "com.polymarket.paper", "com.polymarket.exporter",
             "com.polymarket.prometheus", "com.polymarket.grafana",
         ):
             self.assertIn(label, function)
+        self.assertIn('sudo -n true', function)
+        self.assertIn('sudo -n launchctl bootout "system/$label"', function)
         self.assertIn('sudo -n rm -f "$system_plist"', function)
+        self.assertIn('retired launchd service remains loaded', function)
+        self.assertIn('retired launchd service remains installed', function)
         self.assertNotIn("find ", function)
         self.assertNotIn("pkill", function)
+
+    def test_legacy_admin_preflight_happens_before_paper_drain(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        preflight = text.rindex("preflight_legacy_macos_services\n")
+        resolve = text.rindex('OLD_SHA="$(resolve_incumbent_sha)"')
+        drain = text.rindex('request_cutover_drain "$OLD_SHA"')
+        stop = text.rindex("stop_production_runtime\n")
+        self.assertLess(preflight, resolve)
+        self.assertLess(preflight, drain)
+        self.assertLess(preflight, stop)
 
     def test_updater_requires_exact_approved_main_sha(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
