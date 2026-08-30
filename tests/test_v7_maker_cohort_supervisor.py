@@ -145,6 +145,9 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         loop = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
         runtime = (ROOT / "src" / "v7_market_maker_runtime.cpp").read_text(encoding="utf-8")
         supervisor = (ROOT / "scripts" / "v7_maker_cohort_supervisor.py").read_text(encoding="utf-8")
+        policy = json.loads((
+            ROOT / "config" / "v7_professional_market_maker.json"
+        ).read_text(encoding="utf-8"))
         self.assertIn("v7_maker_cohort_supervisor.py", loop)
         self.assertIn('"MAKER_ROTATION_DRAIN"', runtime)
         self.assertIn('root["active_order_count"]', runtime)
@@ -156,6 +159,13 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         self.assertIn('--rotation-min-projected-fill-probability "$MAKER_ROTATION_MIN_FILL"', loop)
         self.assertIn('--rotation-min-absolute-fill-improvement "$MAKER_ROTATION_MIN_ABSOLUTE_IMPROVEMENT"', loop)
         self.assertIn('--rotation-min-relative-fill-multiplier "$MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER"', loop)
+        self.assertGreaterEqual(
+            policy["market_selection"]["recent_flow"]["rotation_min_interval_seconds"],
+            300,
+        )
+        self.assertIn(
+            'recent.get("rotation_min_interval_seconds") or 300', loop
+        )
         self.assertIn("authenticated_execution\") is not False", supervisor)
         self.assertIn("real_order_submission\") is not False", supervisor)
 

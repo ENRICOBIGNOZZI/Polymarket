@@ -45,7 +45,9 @@ class V7MakerExplorationPolicyFallbackTest(unittest.TestCase):
         self.assertLessEqual(exploration["max_market_fraction"], 0.004)
         self.assertLessEqual(exploration["max_capital_fraction"], 0.02)
         self.assertTrue({"JOIN", "IMPROVE1"}.issubset(set(exploration["actions"])))
-        self.assertGreaterEqual(exploration["minimum_rest_ms"], 3000)
+        self.assertEqual(
+            exploration["minimum_rest_ms"], exploration["maximum_rest_ms"]
+        )
         self.assertLessEqual(exploration["maximum_rest_ms"], 15000)
         self.assertGreater(exploration["persistent_quote_fraction"], 0.0)
         self.assertLessEqual(exploration["persistent_quote_fraction"], 0.50)
