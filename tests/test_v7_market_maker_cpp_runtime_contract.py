@@ -157,6 +157,8 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
         self.assertIn("polymarket_v7_maker_runtime_diagnostics_v1", self.source)
         self.assertIn("runtime_diagnostics.json", self.source)
         self.assertIn("rejected_nonpositive_robust_ev", self.source)
+        self.assertIn("rejected_positive_point_ev", self.source)
+        self.assertIn("best_rejected_robust_ev_per_share", self.source)
         self.assertIn("reason_counts", self.source)
         self.assertIn("feed_connected_workers", self.source)
 

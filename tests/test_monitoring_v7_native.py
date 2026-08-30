@@ -187,6 +187,9 @@ class V7NativeMonitoringTest(unittest.TestCase):
             "decisions": 4321,
             "quote_intents": 7,
             "rejected_nonpositive_robust_ev": 4000,
+            "rejected_positive_point_ev": 3500,
+            "best_rejected_robust_ev_per_share": -0.0001,
+            "best_rejected_point_ev_per_share": 0.00072,
             "reason_counts": {"NO_ECONOMIC_QUOTE": 4000, "QUOTE": 7},
         })
         self._write(root / "micro_maker" / "selector_status.json", {
@@ -278,6 +281,8 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertIn("polymarket_v7_maker_feed_messages_total 1234", metrics)
             self.assertIn("polymarket_v7_maker_decisions_total 4321", metrics)
             self.assertIn("polymarket_v7_maker_quote_intents_total 7", metrics)
+            self.assertIn("polymarket_v7_maker_rejected_positive_point_ev_total 3500", metrics)
+            self.assertIn("polymarket_v7_maker_best_rejected_point_ev_per_share 0.00072", metrics)
             self.assertIn('polymarket_v7_maker_decision_reason_total{reason="NO_ECONOMIC_QUOTE"} 4000', metrics)
             self.assertIn("polymarket_v7_live_model_target_count 12", metrics)
             self.assertIn("polymarket_v7_live_model_operational_count 8", metrics)

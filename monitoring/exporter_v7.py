@@ -911,6 +911,9 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_maker_decisions_total", maker_diagnostics.get("decisions")),
         _metric("polymarket_v7_maker_quote_intents_total", maker_diagnostics.get("quote_intents")),
         _metric("polymarket_v7_maker_rejected_nonpositive_robust_ev_total", maker_diagnostics.get("rejected_nonpositive_robust_ev")),
+        _metric("polymarket_v7_maker_rejected_positive_point_ev_total", maker_diagnostics.get("rejected_positive_point_ev")),
+        _metric("polymarket_v7_maker_best_rejected_robust_ev_per_share", maker_diagnostics.get("best_rejected_robust_ev_per_share")),
+        _metric("polymarket_v7_maker_best_rejected_point_ev_per_share", maker_diagnostics.get("best_rejected_point_ev_per_share")),
         _metric("polymarket_v7_maker_selector_info", 1 if selector_ready else 0, {
             "state": selector.get("state", "UNKNOWN"),
             "source": selector.get("source", "UNKNOWN"),

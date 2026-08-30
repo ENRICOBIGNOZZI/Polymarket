@@ -668,6 +668,9 @@ struct ShardDiagnostics {
     std::uint64_t decisions = 0;
     std::uint64_t quote_intents = 0;
     std::uint64_t rejected_nonpositive_robust_ev = 0;
+    std::uint64_t rejected_positive_point_ev = 0;
+    std::int64_t best_rejected_robust_ev_nano = std::numeric_limits<std::int64_t>::min();
+    std::int64_t best_rejected_point_ev_nano = std::numeric_limits<std::int64_t>::min();
     std::array<std::uint64_t, kDecisionReasonCount> reasons{};
 };
 
@@ -749,6 +752,9 @@ public:
         out.quote_intents = quote_intents_.load(std::memory_order_relaxed);
         out.rejected_nonpositive_robust_ev =
             rejected_nonpositive_robust_ev_.load(std::memory_order_relaxed);
+        out.rejected_positive_point_ev = rejected_positive_point_ev_.load(std::memory_order_relaxed);
+        out.best_rejected_robust_ev_nano = best_rejected_robust_ev_nano_.load(std::memory_order_relaxed);
+        out.best_rejected_point_ev_nano = best_rejected_point_ev_nano_.load(std::memory_order_relaxed);
         for (std::size_t i = 0; i < out.reasons.size(); ++i) {
             out.reasons[i] = decision_reasons_[i].load(std::memory_order_relaxed);
         }
@@ -916,6 +922,13 @@ private:
         if (decision.reason == pm::v7::maker::DecisionReason::NoEconomicQuote
             && decision.robust_ev <= model.min_robust_ev_per_share) {
             rejected_nonpositive_robust_ev_.fetch_add(1, std::memory_order_relaxed);
+            const double point_ev = decision.robust_ev
+                + std::max(0.0, model.robust_ev_z) * decision.ev_uncertainty;
+            if (point_ev > model.min_robust_ev_per_share) {
+                rejected_positive_point_ev_.fetch_add(1, std::memory_order_relaxed);
+            }
+            update_atomic_max(best_rejected_robust_ev_nano_, ev_nano(decision.robust_ev));
+            update_atomic_max(best_rejected_point_ev_nano_, ev_nano(point_ev));
         }
         for (std::size_t i = 0; i < decision.intent_count; ++i) {
             StrategyIntent intent = decision.intents[i];
@@ -1048,6 +1061,22 @@ public:
     }
 
 private:
+    [[nodiscard]] static std::int64_t ev_nano(double value) noexcept {
+        if (!std::isfinite(value)) return std::numeric_limits<std::int64_t>::min();
+        constexpr double scale = 1'000'000'000.0;
+        const double bounded = std::clamp(
+            value, static_cast<double>(std::numeric_limits<std::int64_t>::min() + 1) / scale,
+            static_cast<double>(std::numeric_limits<std::int64_t>::max()) / scale);
+        return static_cast<std::int64_t>(std::llround(bounded * scale));
+    }
+
+    static void update_atomic_max(std::atomic<std::int64_t>& target,
+                                  std::int64_t value) noexcept {
+        auto current = target.load(std::memory_order_relaxed);
+        while (value > current && !target.compare_exchange_weak(
+                   current, value, std::memory_order_relaxed, std::memory_order_relaxed)) {}
+    }
+
     std::vector<MarketContext*> markets_;
     std::shared_ptr<MakerModelStore> models_;
     std::atomic<bool>* global_kill_ = nullptr;
@@ -1067,6 +1096,11 @@ private:
     std::atomic<std::uint64_t> decisions_{0};
     std::atomic<std::uint64_t> quote_intents_{0};
     std::atomic<std::uint64_t> rejected_nonpositive_robust_ev_{0};
+    std::atomic<std::uint64_t> rejected_positive_point_ev_{0};
+    std::atomic<std::int64_t> best_rejected_robust_ev_nano_{
+        std::numeric_limits<std::int64_t>::min()};
+    std::atomic<std::int64_t> best_rejected_point_ev_nano_{
+        std::numeric_limits<std::int64_t>::min()};
     double starting_capital_fraction_ = 5.0;
 };
 
@@ -1084,6 +1118,11 @@ void write_runtime_diagnostics(
         total.decisions += value.decisions;
         total.quote_intents += value.quote_intents;
         total.rejected_nonpositive_robust_ev += value.rejected_nonpositive_robust_ev;
+        total.rejected_positive_point_ev += value.rejected_positive_point_ev;
+        total.best_rejected_robust_ev_nano = std::max(
+            total.best_rejected_robust_ev_nano, value.best_rejected_robust_ev_nano);
+        total.best_rejected_point_ev_nano = std::max(
+            total.best_rejected_point_ev_nano, value.best_rejected_point_ev_nano);
         for (std::size_t i = 0; i < total.reasons.size(); ++i) {
             total.reasons[i] += value.reasons[i];
         }
@@ -1108,6 +1147,15 @@ void write_runtime_diagnostics(
     root["decisions"] = total.decisions;
     root["quote_intents"] = total.quote_intents;
     root["rejected_nonpositive_robust_ev"] = total.rejected_nonpositive_robust_ev;
+    root["rejected_positive_point_ev"] = total.rejected_positive_point_ev;
+    if (total.best_rejected_robust_ev_nano != std::numeric_limits<std::int64_t>::min()) {
+        root["best_rejected_robust_ev_per_share"] =
+            static_cast<double>(total.best_rejected_robust_ev_nano) / 1'000'000'000.0;
+    }
+    if (total.best_rejected_point_ev_nano != std::numeric_limits<std::int64_t>::min()) {
+        root["best_rejected_point_ev_per_share"] =
+            static_cast<double>(total.best_rejected_point_ev_nano) / 1'000'000'000.0;
+    }
     root["reason_counts"] = std::move(reasons);
     atomic_write(run_root / "micro_maker" / "runtime_diagnostics.json",
                  json::serialize(root) + "\n");
