@@ -30,3 +30,9 @@ def test_current_workflow_inventory_is_v7_only_and_cleanup_has_actions_scope():
     workflow = (ROOT / ".github/workflows/v7-merged-branch-hygiene.yml").read_text()
     assert "actions: write" in workflow
     assert "scripts/v7_prune_workflow_metadata.py" in workflow
+
+
+def test_paper_deploy_health_window_covers_exhaustive_universe_startup():
+    workflow = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text()
+    assert "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=390" in workflow
+    assert "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=60" not in workflow

@@ -220,7 +220,7 @@ jobs:
             POLYMARKET_CUTOVER_ARCHIVER="$archiver" \
             EXPECTED_DEPLOY_SHA="$main_sha" \
             POLYMARKET_DEPLOY_REF=main \
-            POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=60 \
+            POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=390 \
             bash "$updater"
           printf 'deploy_result=success\ndeployed_sha=%s\norigin_main=%s\n' \
             "$main_sha" "$main_sha"

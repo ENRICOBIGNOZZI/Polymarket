@@ -6,20 +6,17 @@ import json
 import math
 import re
 from pathlib import Path
+import sys
 from typing import Any
 
+SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+from v7_execution_ledger import EVENT_TYPES
+
+
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
-EVENT_TYPES = {
-    "OPPORTUNITY",
-    "CANDIDATE",
-    "ORDER_SUBMITTED",
-    "ORDER_STATE",
-    "FILL",
-    "MARKOUT",
-    "POSITION_MARK",
-    "EXIT",
-    "FINAL",
-}
 
 
 def _finite(value: Any) -> float | None:

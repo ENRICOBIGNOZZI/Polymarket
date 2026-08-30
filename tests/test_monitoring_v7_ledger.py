@@ -13,6 +13,7 @@ if str(MONITORING) not in sys.path:
     sys.path.insert(0, str(MONITORING))
 
 import v7_ledger_metrics
+from v7_execution_ledger import EVENT_TYPES as CANONICAL_EVENT_TYPES
 
 SPEC = importlib.util.spec_from_file_location("exporter_v7_ledger_test", MONITORING / "exporter_v7.py")
 assert SPEC and SPEC.loader
@@ -79,6 +80,19 @@ class V7LedgerMonitoringTest(unittest.TestCase):
             self.assertFalse(summary["valid"])
             self.assertEqual(summary["invalid_rows"], 1)
             self.assertEqual(set(summary["model_shas"]), {"a" * 40, "b" * 40})
+
+    def test_monitoring_accepts_every_canonical_ledger_event_type(self) -> None:
+        self.assertEqual(set(v7_ledger_metrics.EVENT_TYPES), set(CANONICAL_EVENT_TYPES))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "execution.jsonl"
+            path.write_text(
+                "".join(json.dumps(self._event(event_type)) + "\n"
+                        for event_type in sorted(CANONICAL_EVENT_TYPES)),
+                encoding="utf-8",
+            )
+            summary = v7_ledger_metrics.summarize_ledger(path)
+            self.assertTrue(summary["valid"])
+            self.assertEqual(summary["invalid_rows"], 0)
 
     def test_exporter_surface_contains_canonical_ledger_economics(self) -> None:
         snapshot = {
