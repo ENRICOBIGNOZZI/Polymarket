@@ -39,6 +39,14 @@ ADVERSE_HORIZON_PRIORITY = ("45s", "60s", "10s", "1s", "300s")
 _EPS = 1e-12
 
 
+def fnv1a64(path: Path) -> str:
+    value = 1469598103934665603
+    for byte in path.read_bytes():
+        value ^= byte
+        value = (value * 1099511628211) & ((1 << 64) - 1)
+    return f"{value:016x}"
+
+
 def finite(value: Any, default: float = 0.0) -> float:
     try:
         out = float(value)
@@ -277,6 +285,8 @@ def main() -> int:
     parser.add_argument("--ledger", type=Path, required=True)
     parser.add_argument("--model-sha", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--policy", type=Path, required=True)
+    parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--cold-fill-prior", type=float, default=0.02)
     parser.add_argument("--prior-strength", type=float, default=20.0)
     parser.add_argument("--policy-version", type=int, default=1)
@@ -293,6 +303,11 @@ def main() -> int:
     result["model_sha"] = args.model_sha
     result["code_sha"] = args.model_sha
     result["policy_version"] = max(1, int(args.policy_version))
+    result["policy_hash"] = fnv1a64(args.policy)
+    result["config_hash"] = fnv1a64(args.config)
+    result["execution_semantics_version"] = "maker-paper-v7.2-bilateral-inventory"
+    result["queue_model_version"] = "pessimistic-public-print-v1"
+    result["model_state"] = "CHALLENGER" if args.artifact_role == "challenger" else "MATURE"
     result["artifact_role"] = args.artifact_role
     result["promotion_state"] = (
         "CHALLENGER_PENDING_OOS" if args.artifact_role == "challenger" else "CHAMPION"

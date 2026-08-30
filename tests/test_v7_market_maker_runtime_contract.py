@@ -146,6 +146,22 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertNotIn("filesystem", kernel)
         self.assertNotIn("boost/json", kernel)
 
+    def test_champion_reload_requires_full_economic_identity_and_is_audited(self) -> None:
+        runtime = (ROOT / "src" / "v7_market_maker_runtime.cpp").read_text(encoding="utf-8")
+        loop = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+        for contract in (
+            'policy_hash == hex64(fnv1a(policy_content))',
+            'config_hash == hex64(fnv1a(config_content))',
+            'role == "champion"',
+            'eligible_for_live_reload',
+            'maker-paper-v7.2-bilateral-inventory',
+            'common("MODEL_RELOAD")',
+            'immutable_snapshot_atomic_publish',
+        ):
+            self.assertIn(contract, runtime)
+        self.assertIn("v7_maker_durable_learning.py", loop)
+        self.assertIn("PM_V7_DURABLE_ROOT", loop)
+
     def test_markout_observer_is_evidence_only_and_full_depth(self) -> None:
         observer = (ROOT / "src" / "v7_maker_markout_observer.cpp").read_text(encoding="utf-8")
         markout = (ROOT / "src" / "v7_markout.cpp").read_text(encoding="utf-8")

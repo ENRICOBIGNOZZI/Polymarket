@@ -30,6 +30,9 @@ SHA="$(git rev-parse HEAD)"
 MAKER_CHAMPION_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
 MAKER_CHALLENGER_MODEL="$RUN_ROOT/micro_maker/execution_model_challenger.json"
 MAKER_MODEL_REGISTRY="$RUN_ROOT/micro_maker/model_registry.json"
+DURABLE_ROOT="${PM_V7_DURABLE_ROOT:-runs/paper_v7_durable}"
+MAKER_DURABLE_STORE="$DURABLE_ROOT/micro_maker/evidence.jsonl"
+MAKER_DURABLE_STATUS="$DURABLE_ROOT/micro_maker/status.json"
 PUBLIC_PROXY_PORT="${PM_V7_PUBLIC_PROXY_PORT:-19109}"
 PUBLIC_PROXY="http://127.0.0.1:$PUBLIC_PROXY_PORT"
 WS_PUBLIC_HOST="ws-subscriptions-clob.polymarket.com"
@@ -176,6 +179,16 @@ echo $$ > "$LOCK/pid"
 rm -f "$KILL" "$MAKER_FREEZE"
 
 python3 scripts/v7_capital_allocator.py --config "$CONFIG" --output-dir "$ALLOC" >/dev/null
+# Materialize an exact-SHA PAPER champion before the C++ cohort starts. The
+# append-only store lives outside the ephemeral live run root and therefore
+# survives archive rotation and code cutovers. Incompatible policy/config
+# generations remain auditable but cannot train the active snapshot.
+python3 scripts/v7_maker_durable_learning.py \
+  --source-root runs/paper_v7_archives --source-root "$RUN_ROOT" \
+  --store "$MAKER_DURABLE_STORE" --store-status "$MAKER_DURABLE_STATUS" \
+  --champion "$MAKER_CHAMPION_MODEL" --policy "$MAKER_POLICY" \
+  --config "$ALLOC/micro_maker.json" --model-sha "$SHA" \
+  >> "$RUN_ROOT/micro_maker/durable_learning.log" 2>&1
 pids=()
 
 if [[ ! -f scripts/v7_public_https_proxy.py ]]; then
@@ -507,10 +520,18 @@ pids+=("$!")
 # This loop NEVER overwrites the runtime champion and NEVER auto-promotes.
 (
   while [[ ! -e "$KILL" ]]; do
+    python3 scripts/v7_maker_durable_learning.py \
+      --source-root runs/paper_v7_archives --source-root "$RUN_ROOT" \
+      --store "$MAKER_DURABLE_STORE" --store-status "$MAKER_DURABLE_STATUS" \
+      --champion "$MAKER_CHAMPION_MODEL" --policy "$MAKER_POLICY" \
+      --config "$ALLOC/micro_maker.json" --model-sha "$SHA" \
+      >> "$RUN_ROOT/micro_maker/durable_learning.log" 2>&1 || true
     if [[ -s "$RUN_ROOT/ledger/execution.jsonl" ]]; then
       if python3 scripts/v7_market_maker_model.py \
         --ledger "$RUN_ROOT/ledger/execution.jsonl" \
         --model-sha "$SHA" \
+        --policy "$MAKER_POLICY" \
+        --config "$ALLOC/micro_maker.json" \
         --artifact-role challenger \
         --output "$MAKER_CHALLENGER_MODEL" \
         >> "$RUN_ROOT/micro_maker/model.log" 2>&1; then

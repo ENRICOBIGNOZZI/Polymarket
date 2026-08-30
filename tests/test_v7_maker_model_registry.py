@@ -15,6 +15,7 @@ from v7_maker_model_registry import (
     _sha256,
     promote_challenger,
     register_challenger,
+    rollback_champion,
 )
 
 SHA = "b" * 40
@@ -36,6 +37,7 @@ class MakerModelRegistryTests(unittest.TestCase):
             "artifact_role": "challenger",
             "promotion_state": "CHALLENGER_PENDING_OOS",
             "eligible_for_live_reload": False,
+            "model_state": "CHALLENGER",
             "feature_schema": {"version": 1},
             "training_window": {
                 "start_ts_ms": 100,
@@ -180,6 +182,41 @@ class MakerModelRegistryTests(unittest.TestCase):
             self.assertFalse(promoted["real_order_submission"])
             self.assertEqual(state["champion"]["status"], "CHAMPION")
             self.assertEqual(state["history"][-1]["action"], "PROMOTE_CHALLENGER")
+
+    def test_promotion_preserves_previous_and_explicit_rollback_restores_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            challenger = root / "challenger.json"
+            champion = root / "champion.json"
+            registry = root / "registry.json"
+            validation = root / "validation.json"
+            incumbent = self.challenger_model()
+            incumbent.update({
+                "artifact_role": "champion", "promotion_state": "CHAMPION",
+                "eligible_for_live_reload": True, "version": 99,
+            })
+            self.write_json(champion, incumbent)
+            self.write_json(challenger, self.challenger_model())
+            register_challenger(
+                challenger=challenger, registry_path=registry,
+                model_sha=SHA, champion=champion,
+            )
+            self.write_json(validation, self.validation(_sha256(challenger)))
+            promote_challenger(
+                challenger=challenger, champion=champion, registry_path=registry,
+                validation_report=validation, model_sha=SHA,
+                operator_approval="paper-promote",
+            )
+            self.assertEqual(json.loads(champion.read_text())["version"], 123)
+            previous = champion.with_suffix(".previous.json")
+            self.assertEqual(json.loads(previous.read_text())["version"], 99)
+
+            state = rollback_champion(
+                champion=champion, registry_path=registry, model_sha=SHA,
+                operator_approval="paper-rollback",
+            )
+            self.assertEqual(json.loads(champion.read_text())["version"], 99)
+            self.assertEqual(state["history"][-1]["action"], "ROLLBACK_CHAMPION")
 
 
 if __name__ == "__main__":

@@ -463,10 +463,15 @@ InventoryFactoryPolicy load_inventory_factory_policy(const fs::path& policy_path
 }
 
 MakerModelSnapshot load_model_snapshot(const fs::path& policy_path,
+                                       const fs::path& config_path,
                                        const fs::path& model_path,
                                        std::string_view expected_sha) {
     MakerModelSnapshot model;
-    const auto policy_root = read_json(policy_path);
+    const std::string policy_content = read_file(policy_path);
+    const std::string config_content = read_file(config_path);
+    boost::system::error_code policy_error;
+    const auto policy_root = json::parse(policy_content, policy_error);
+    if (policy_error) throw std::runtime_error("invalid maker policy json");
     if (!policy_root.is_object()) throw std::runtime_error("maker policy must be object");
     const auto& policy = policy_root.as_object();
     if (!boolean(find_value(policy, "paper_only"), false)
@@ -571,10 +576,25 @@ MakerModelSnapshot load_model_snapshot(const fs::path& policy_path,
             if (fitted_root.is_object()) {
                 const auto& fitted = fitted_root.as_object();
                 const std::string sha = text(find_value(fitted, "model_sha"));
+                const std::string code_sha = text(find_value(fitted, "code_sha"));
+                const std::string policy_hash = text(find_value(fitted, "policy_hash"));
+                const std::string config_hash = text(find_value(fitted, "config_hash"));
+                const std::string role = text(find_value(fitted, "artifact_role"));
+                const std::string state = text(find_value(fitted, "model_state"));
                 const bool safe = boolean(find_value(fitted, "paper_only"), false)
-                    && !boolean(find_value(fitted, "authenticated_execution"), true);
+                    && !boolean(find_value(fitted, "authenticated_execution"), true)
+                    && !boolean(find_value(fitted, "real_order_submission"), true);
+                const bool compatible = safe && sha == expected_sha && code_sha == expected_sha
+                    && policy_hash == hex64(fnv1a(policy_content))
+                    && config_hash == hex64(fnv1a(config_content))
+                    && role == "champion"
+                    && boolean(find_value(fitted, "eligible_for_live_reload"), false)
+                    && (state == "COLD_START" || state == "EVIDENCE_ACCUMULATING"
+                        || state == "MATURE")
+                    && text(find_value(fitted, "execution_semantics_version"))
+                        == "maker-paper-v7.2-bilateral-inventory";
                 const auto* groups_value = find_value(fitted, "groups");
-                if (safe && sha == expected_sha && groups_value != nullptr && groups_value->is_object()) {
+                if (compatible && groups_value != nullptr && groups_value->is_object()) {
                     const auto& groups = groups_value->as_object();
                     const auto it = groups.find("GLOBAL");
                     if (it != groups.end() && it->value().is_object()) {
@@ -1738,6 +1758,21 @@ public:
         else write_paper(record);
     }
 
+    void write_model_reload(std::uint64_t old_version, std::uint64_t new_version,
+                            std::string_view model_hash) {
+        auto event = common("MODEL_RELOAD");
+        event["model_version"] = std::to_string(new_version);
+        event["intended_action"] = "ATOMIC_CHAMPION_RELOAD";
+        json::object metadata;
+        attach_economic_identity(metadata);
+        metadata["old_model_version"] = old_version;
+        metadata["new_model_version"] = new_version;
+        metadata["champion_hash"] = model_hash;
+        metadata["reload_semantics"] = "immutable_snapshot_atomic_publish";
+        event["metadata"] = std::move(metadata);
+        spool(std::move(event));
+    }
+
     void write_state(bool new_risk_frozen = false) {
         json::object root;
         root["schema"] = "polymarket_v7_professional_maker_state_v2";
@@ -2281,7 +2316,8 @@ int main(int argc, char** argv) {
         const InventoryFactoryPolicy inventory_factory =
             load_inventory_factory_policy(options.maker_policy);
         auto initial = std::make_shared<MakerModelSnapshot>(
-            load_model_snapshot(options.maker_policy, options.model, options.model_sha));
+            load_model_snapshot(options.maker_policy, options.config,
+                                options.model, options.model_sha));
         auto model_store = std::make_shared<MakerModelStore>(initial);
         auto markets = build_markets(options, config);
 
@@ -2449,8 +2485,12 @@ int main(int argc, char** argv) {
                 if (now - last_model_check_ms >= 2000) {
                     try {
                         auto next = std::make_shared<MakerModelSnapshot>(
-                            load_model_snapshot(options.maker_policy, options.model, options.model_sha));
+                            load_model_snapshot(options.maker_policy, options.config,
+                                                options.model, options.model_sha));
                         if (next->model_version != current_model_version && model_store->publish(next)) {
+                            writer.write_model_reload(
+                                current_model_version, next->model_version,
+                                hex64(fnv1a(read_file(options.model))));
                             current_model_version = next->model_version;
                         }
                     } catch (...) {

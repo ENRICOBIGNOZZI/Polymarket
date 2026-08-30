@@ -88,6 +88,7 @@ def _empty_registry(model_sha: str) -> dict[str, Any]:
         "real_order_submission": False,
         "model_sha": model_sha,
         "champion": None,
+        "previous_champion": None,
         "challenger": None,
         "history": [],
     }
@@ -227,10 +228,19 @@ def promote_challenger(*, challenger: Path, champion: Path, registry_path: Path,
     promoted = dict(challenger_model)
     promoted["artifact_role"] = "champion"
     promoted["promotion_state"] = "CHAMPION"
+    promoted["model_state"] = "MATURE"
     promoted["eligible_for_live_reload"] = True
     promoted["promoted_ts_ms"] = time.time_ns() // 1_000_000
     promoted["promotion_validation_sha256"] = _sha256(validation_report)
     promoted["promotion_operator_approval"] = operator_approval.strip()
+    if champion.exists():
+        incumbent = _read_json(champion)
+        _validate_model(incumbent, model_sha, role="champion")
+        previous = champion.with_suffix(".previous.json")
+        _atomic_json(previous, incumbent)
+        registry["previous_champion"] = _model_entry(
+            previous, incumbent, "ROLLBACK_READY"
+        )
     _atomic_json(champion, promoted)
 
     registry["champion"] = _model_entry(champion, promoted, "CHAMPION")
@@ -251,21 +261,71 @@ def promote_challenger(*, challenger: Path, champion: Path, registry_path: Path,
     return registry
 
 
+def rollback_champion(*, champion: Path, registry_path: Path, model_sha: str,
+                      operator_approval: str,
+                      previous: Path | None = None) -> dict[str, Any]:
+    """Atomically restore the last exact-SHA PAPER champion."""
+    model_sha = _exact_sha(model_sha)
+    if not operator_approval.strip():
+        raise RegistryError("rollback:operator_approval_required")
+    previous = previous or champion.with_suffix(".previous.json")
+    if not champion.exists() or not previous.exists():
+        raise RegistryError("rollback:champion_or_previous_missing")
+    current_model = _read_json(champion)
+    previous_model = _read_json(previous)
+    _validate_model(current_model, model_sha, role="champion")
+    _validate_model(previous_model, model_sha, role="champion")
+    registry = _load_registry(registry_path, model_sha)
+
+    displaced = champion.with_suffix(".rollback-displaced.json")
+    _atomic_json(displaced, current_model)
+    _atomic_json(champion, previous_model)
+    registry["champion"] = _model_entry(champion, previous_model, "CHAMPION_ROLLBACK")
+    registry["previous_champion"] = _model_entry(
+        displaced, current_model, "ROLLBACK_DISPLACED"
+    )
+    history = registry["history"]
+    history.append({
+        "ts_ms": time.time_ns() // 1_000_000,
+        "action": "ROLLBACK_CHAMPION",
+        "restored_sha256": _sha256(champion),
+        "displaced_sha256": _sha256(displaced),
+        "operator_approval": operator_approval.strip(),
+    })
+    registry["history"] = history[-200:]
+    _atomic_json(registry_path, registry)
+    return registry
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registry", type=Path, required=True)
     parser.add_argument("--model-sha", required=True)
-    parser.add_argument("--challenger", type=Path, required=True)
+    parser.add_argument("--challenger", type=Path)
     parser.add_argument("--champion", type=Path)
     parser.add_argument("--validation-report", type=Path)
     parser.add_argument("--operator-approval", default="")
     parser.add_argument("--min-event-clusters", type=int, default=12)
     parser.add_argument("--promote", action="store_true")
+    parser.add_argument("--rollback", action="store_true")
+    parser.add_argument("--previous", type=Path)
     args = parser.parse_args()
 
-    if args.promote:
-        if args.champion is None or args.validation_report is None:
-            raise SystemExit("--promote requires --champion and --validation-report")
+    if args.promote and args.rollback:
+        raise SystemExit("choose only one of --promote or --rollback")
+    if args.rollback:
+        if args.champion is None:
+            raise SystemExit("--rollback requires --champion")
+        registry = rollback_champion(
+            champion=args.champion,
+            previous=args.previous,
+            registry_path=args.registry,
+            model_sha=args.model_sha,
+            operator_approval=args.operator_approval,
+        )
+    elif args.promote:
+        if args.challenger is None or args.champion is None or args.validation_report is None:
+            raise SystemExit("--promote requires --challenger, --champion and --validation-report")
         registry = promote_challenger(
             challenger=args.challenger,
             champion=args.champion,
@@ -276,6 +336,8 @@ def main() -> int:
             min_event_clusters=args.min_event_clusters,
         )
     else:
+        if args.challenger is None:
+            raise SystemExit("registration requires --challenger")
         registry = register_challenger(
             challenger=args.challenger,
             registry_path=args.registry,
