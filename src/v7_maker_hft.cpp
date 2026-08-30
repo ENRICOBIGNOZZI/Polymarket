@@ -551,11 +551,10 @@ MakerDecision MakerHotPath::on_market_update(
                 ? std::max<std::int64_t>(0, end_ns - update.socket_receive_monotonic_ns) : 0;
             return decision;
         }
-        // PAPER-only exploration is intentionally BUY-only. A fresh account owns
-        // no outcome tokens, so exploratory asks would merely exercise the
-        // inventory rejection path. Quoting bids on both complementary tokens
-        // instead collects queue/fill/markout evidence while keeping total
-        // notional bounded by the same sleeve-capital envelope as normal Maker.
+        // PAPER-only exploration is intentionally BUY-only. It may broaden the
+        // sampled state space, but it is not allowed to purchase observations
+        // with negative robust EV. Negative candidates remain visible in the
+        // decision/observer tape without receiving execution authority.
         const double exploration_scale = clamp(
             model.exploration_quote_notional_fraction / kNormalQuoteCapitalFraction,
             0.0, 1.0);
@@ -587,17 +586,33 @@ MakerDecision MakerHotPath::on_market_update(
                 const auto exploratory = evaluate_side(
                     Action::Join, Side::Buy, update.best_bid_tick, update, inventory, risk,
                     model, decision.features, reservation_value, exploration_shares);
-                decision.action = Action::Join;
-                decision.reason = DecisionReason::ExplorationHold;
-                decision.robust_ev = finite(exploratory.robust_ev) ? exploratory.robust_ev : 0.0;
-                decision.ev_uncertainty = exploratory.uncertainty;
-                const std::int64_t required_rest = std::max(
-                    model.min_quote_lifetime_ns, model.exploration_min_rest_ns);
-                if (quotes.bid_tick != exploratory.price_tick && elapsed >= required_rest
-                    && !quotes.cancel_pending) {
-                    append_intent(decision, make_intent(++intent_sequence_, update, model,
-                                                        IntentType::CancelQuote, Side::Buy,
-                                                        quotes.bid_tick, 0.0, nullptr, now));
+                const bool exploration_economic = finite(exploratory.robust_ev)
+                    && exploratory.robust_ev > model.min_robust_ev_per_share;
+                if (!exploration_economic) {
+                    decision.action = Action::Withdraw;
+                    decision.reason = DecisionReason::NoEconomicQuote;
+                    decision.robust_ev = finite(exploratory.robust_ev)
+                        ? exploratory.robust_ev : 0.0;
+                    decision.ev_uncertainty = exploratory.uncertainty;
+                    if (!quotes.cancel_pending) {
+                        append_intent(decision, make_intent(++intent_sequence_, update, model,
+                                                            IntentType::CancelQuote, Side::Buy,
+                                                            quotes.bid_tick, 0.0, nullptr, now));
+                    }
+                    exploration_active_ = 0;
+                } else {
+                    decision.action = Action::Join;
+                    decision.reason = DecisionReason::ExplorationHold;
+                    decision.robust_ev = exploratory.robust_ev;
+                    decision.ev_uncertainty = exploratory.uncertainty;
+                    const std::int64_t required_rest = std::max(
+                        model.min_quote_lifetime_ns, model.exploration_min_rest_ns);
+                    if (quotes.bid_tick != exploratory.price_tick && elapsed >= required_rest
+                        && !quotes.cancel_pending) {
+                        append_intent(decision, make_intent(++intent_sequence_, update, model,
+                                                            IntentType::CancelQuote, Side::Buy,
+                                                            quotes.bid_tick, 0.0, nullptr, now));
+                    }
                 }
             } else {
                 exploration_active_ = 0;
@@ -621,7 +636,9 @@ MakerDecision MakerHotPath::on_market_update(
             const auto exploratory = evaluate_side(
                 Action::Join, Side::Buy, update.best_bid_tick, update, inventory, risk,
                 model, decision.features, reservation_value, exploration_shares);
-            if (finite(exploratory.robust_ev) && exploratory.price_tick > 0) {
+            if (finite(exploratory.robust_ev)
+                && exploratory.robust_ev > model.min_robust_ev_per_share
+                && exploratory.price_tick > 0) {
                 decision.action = Action::Join;
                 decision.reason = DecisionReason::ExplorationQuote;
                 decision.robust_ev = exploratory.robust_ev;
