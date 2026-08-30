@@ -95,7 +95,26 @@ def test_normalization_preserves_public_price_and_spread_signals():
     assert normalized["spread"] == 0.02
     assert normalized["last_trade_price"] == 0.45
     assert normalized["event_start_time"] == "2026-08-29T16:30:00Z"
+    assert normalized["timed_sports"] is False
+    assert normalized["sports_market_type"] == ""
+    assert normalized["game_start_time"] == ""
+    assert normalized["seconds_delay"] == 0
     assert normalized["fee_schedule"]["rate"] == 0.07
+
+
+def test_normalization_preserves_nested_timed_sports_authority_facts():
+    normalized = universe.normalize_market(market(
+        2,
+        events=[{
+            "id": "e1", "sportsMarketType": "moneyline",
+            "gameStartTime": "2026-08-30T00:15:00Z", "secondsDelay": 3,
+        }],
+    ))
+    assert normalized is not None
+    assert normalized["timed_sports"] is True
+    assert normalized["sports_market_type"] == "moneyline"
+    assert normalized["game_start_time"] == "2026-08-30T00:15:00Z"
+    assert normalized["seconds_delay"] == 3
 
 
 def test_tiers_are_resource_derived_and_cover_every_eligible_market():
@@ -177,6 +196,7 @@ if __name__ == "__main__":
     test_discovery_does_not_treat_a_venue_page_cap_as_exhaustion()
     test_discovery_fails_closed_on_repeated_keyset_cursor()
     test_normalization_preserves_public_price_and_spread_signals()
+    test_normalization_preserves_nested_timed_sports_authority_facts()
     test_tiers_are_resource_derived_and_cover_every_eligible_market()
     test_skip_reasons_are_explicit_and_safety_is_fail_closed()
     test_prior_tier_hysteresis_is_deterministic()

@@ -57,6 +57,16 @@ def _universe(path: Path, *, timestamp_ms: int, model_sha: str = SHA, markets=No
 
 
 class MakerRewardSelectorTests(unittest.TestCase):
+    def test_config_requires_fail_closed_timed_sports_exclusion(self) -> None:
+        from tempfile import TemporaryDirectory
+        config = json.loads((ROOT / "config" / "v7_professional_market_maker.json").read_text())
+        config["market_selection"]["exclude_timed_sports_without_verified_mapping"] = False
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "maker.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "timed_sports_exclusion_not_fail_closed"):
+                rewards._validated_config(path)
+
     def test_recent_flow_is_preferred_over_quiet_reward_catalog(self) -> None:
         flow_snapshot = {
             "schema": "polymarket_v7_maker_reward_selection_v1",
@@ -140,6 +150,87 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertEqual(snapshot["markets"][0]["recent_prints"], 5)
         self.assertEqual(snapshot["selection_mode"], "RECENT_AGGRESSIVE_FLOW")
         self.assertFalse(snapshot["reward_data_available"])
+
+    def test_generic_maker_excludes_timed_sports_without_verified_mapping(self) -> None:
+        from tempfile import TemporaryDirectory
+        now_ms = 1_000_000
+        base = {
+            "question": "Q", "slug": "q", "active": True, "closed": False,
+            "accepting_orders": True, "spread": 0.02, "liquidity": 1_000.0,
+            "volume_24h": 10_000.0, "end_date": "2099-01-01T00:00:00Z",
+            "clob_token_ids": ["yes", "no"], "midpoint": 0.50,
+        }
+        markets = [
+            {**base, "event_ids": ["sports"], "market_id": "sports", "condition_id": "cs",
+             "timed_sports": True},
+            {**base, "event_ids": ["generic"], "market_id": "generic", "condition_id": "cg",
+             "timed_sports": False},
+        ]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            universe_path = _universe(root / "current.json", timestamp_ms=now_ms, markets=markets)
+            tape = root / "trade_tape.csv"
+            with tape.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=[
+                    "timestamp", "received_ms", "condition_id", "asset_id", "side",
+                    "price", "size", "transaction_hash",
+                ])
+                writer.writeheader()
+                for condition in ("cs", "cg"):
+                    for index in range(3):
+                        writer.writerow({
+                            "timestamp": "1000", "received_ms": str(now_ms - index),
+                            "condition_id": condition, "asset_id": "token", "side": "BUY",
+                            "price": "0.5", "size": "10",
+                            "transaction_hash": f"{condition}-{index}",
+                        })
+            _, selection_cfg, capacity_cfg, capacity = rewards._validated_config(
+                ROOT / "config" / "v7_professional_market_maker.json"
+            )
+            selection_cfg = json.loads(json.dumps(selection_cfg))
+            selection_cfg["recent_flow"]["minimum_markets"] = 1
+            snapshot = rewards._recent_flow_snapshot(
+                universe_path, tape, selection_cfg, capacity_cfg, capacity,
+                model_sha=SHA, now_ms=now_ms,
+            )
+            fallback = rewards._fallback_snapshot(
+                universe_path, selection_cfg, capacity_cfg, capacity,
+                model_sha=SHA, primary_error="test", now_ms=now_ms,
+            )
+        self.assertEqual([row["market_id"] for row in snapshot["markets"]], ["generic"])
+        self.assertEqual([row["market_id"] for row in fallback["markets"]], ["generic"])
+
+    def test_recent_flow_failure_uses_filtered_universe_not_untyped_reward_catalog(self) -> None:
+        from tempfile import TemporaryDirectory
+        now_ms = 1_000_000
+        generic = {
+            "event_ids": ["generic"], "market_id": "generic", "condition_id": "cg",
+            "question": "Q", "slug": "q", "active": True, "closed": False,
+            "accepting_orders": True, "spread": 0.02, "liquidity": 1_000.0,
+            "volume_24h": 10_000.0, "clob_token_ids": ["yes", "no"],
+            "midpoint": 0.50, "timed_sports": False,
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = json.loads((ROOT / "config" / "v7_professional_market_maker.json").read_text())
+            config["market_selection"]["recent_flow"]["initial_wait_seconds"] = 0
+            config_path = root / "maker.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            universe_path = _universe(root / "current.json", timestamp_ms=now_ms, markets=[generic])
+            tape = root / "trade_tape.csv"
+            tape.write_text("timestamp,received_ms,condition_id,asset_id,side,price,size,transaction_hash\n", encoding="utf-8")
+            with mock.patch.object(rewards, "_primary_snapshot") as primary:
+                snapshot = rewards.build_snapshot(
+                    config_path,
+                    fallback_universe_path=universe_path,
+                    trade_tape_path=tape,
+                    model_sha=SHA,
+                    now_ms=now_ms,
+                    deadline_seconds=0.01,
+                )
+        primary.assert_not_called()
+        self.assertEqual(snapshot["source"], "adaptive_universe_fallback")
+        self.assertEqual([row["market_id"] for row in snapshot["markets"]], ["generic"])
 
     def test_reward_failure_publishes_safe_fresh_universe_fallback(self) -> None:
         with self.subTest("fresh exact-SHA universe"):

@@ -44,6 +44,8 @@
   },
   "market_selection": {
     "max_active_markets": 40,
+    "exclude_timed_sports_without_verified_mapping": true,
+    "timed_sports_reenable_gate": "verified causal sports feed plus independently attested game-to-contract mapping",
     "resource_capacity": {
       "shard_count_budget": 5,
       "markets_per_shard": 8,

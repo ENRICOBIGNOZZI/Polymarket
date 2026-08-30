@@ -379,6 +379,18 @@ def _iso_timestamp_ms(value: Any) -> int:
         return 0
 
 
+def _generic_maker_market_allowed(raw: dict[str, Any], selection_cfg: dict[str, Any]) -> bool:
+    """Keep unmodelled live-event information risk outside generic Maker.
+
+    Timed sports require a verified game-to-contract mapping and a causal sports
+    feed.  Until that sleeve is promoted, recent public CLOB flow is evidence of
+    pick-off risk rather than a fair-value signal for the generic maker.
+    """
+    if selection_cfg.get("exclude_timed_sports_without_verified_mapping") is not True:
+        raise ValueError("maker_timed_sports_exclusion_not_fail_closed")
+    return raw.get("timed_sports") is not True
+
+
 def _recent_flow_snapshot(
     universe_path: Path,
     trade_tape_path: Path,
@@ -485,6 +497,7 @@ def _recent_flow_snapshot(
         if (
             flow is None
             or int(flow["prints"]) < minimum_prints
+            or not _generic_maker_market_allowed(raw, selection_cfg)
             or raw.get("active") is not True
             or raw.get("closed") is True
             or raw.get("accepting_orders") is not True
@@ -586,6 +599,8 @@ def _validated_config(config_path: Path) -> tuple[dict[str, Any], dict[str, Any]
     if cfg.get("paper_only") is not True or cfg.get("authenticated_execution") is not False or cfg.get("real_order_submission") is not False:
         raise ValueError("maker_selector_requires_paper_auth_disabled")
     selection_cfg = cfg.get("market_selection") or {}
+    if selection_cfg.get("exclude_timed_sports_without_verified_mapping") is not True:
+        raise ValueError("maker_timed_sports_exclusion_not_fail_closed")
     capacity_cfg = selection_cfg.get("resource_capacity") if isinstance(selection_cfg.get("resource_capacity"), dict) else {}
     resource_capacity = int(capacity_cfg.get("shard_count_budget", 0)) * int(capacity_cfg.get("markets_per_shard", 0))
     configured_capacity = int(selection_cfg.get("max_active_markets", 0))
@@ -718,7 +733,8 @@ def _fallback_snapshot(
         midpoint = finite(raw.get("midpoint"), -1.0)
         spread = max(0.0, finite(raw.get("spread")))
         if (
-            raw.get("active") is not True
+            not _generic_maker_market_allowed(raw, selection_cfg)
+            or raw.get("active") is not True
             or raw.get("closed") is True
             or raw.get("accepting_orders") is not True
             or len(tokens) < 2
@@ -849,6 +865,7 @@ def build_snapshot(
     ):
         flow_wait_seconds = max(0.0, float(flow_cfg.get("initial_wait_seconds", 0.0)))
         flow_deadline = time.monotonic() + flow_wait_seconds
+        flow_error = "maker_recent_flow_unavailable"
         while True:
             try:
                 return _recent_flow_snapshot(
@@ -856,10 +873,20 @@ def build_snapshot(
                     resource_capacity, model_sha=model_sha,
                     now_ms=time.time_ns() // 1_000_000 if now_ms is None else int(now_ms),
                 )
-            except Exception:
+            except Exception as error:
+                flow_error = f"{type(error).__name__}:{error}"[:500]
                 if time.monotonic() >= flow_deadline:
                     break
                 time.sleep(min(1.0, max(0.0, flow_deadline - time.monotonic())))
+        # The reward catalog does not carry Gamma's timed-sports authority
+        # fields.  Falling through to it here would silently reintroduce live
+        # sports pick-off risk, so use the same fresh, exact-SHA universe with
+        # the fail-closed generic-maker filter instead.
+        return _fallback_snapshot(
+            fallback_universe_path, selection_cfg, capacity_cfg, resource_capacity,
+            model_sha=model_sha, primary_error=flow_error,
+            now_ms=time.time_ns() // 1_000_000 if now_ms is None else int(now_ms),
+        )
     try:
         return _primary_snapshot(
             cfg, selection_cfg, capacity_cfg, resource_capacity,

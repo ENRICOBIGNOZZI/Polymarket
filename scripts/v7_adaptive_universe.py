@@ -105,6 +105,21 @@ def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
     if not market_id:
         return None
     events = raw.get("events") if isinstance(raw.get("events"), list) else []
+    first_event = next((row for row in events if isinstance(row, dict)), {})
+    sports_market_type = str(
+        raw.get("sportsMarketType") or first_event.get("sportsMarketType") or ""
+    ).strip()
+    game_start_time = str(
+        raw.get("gameStartTime") or first_event.get("gameStartTime") or ""
+    ).strip()
+    seconds_delay = max(
+        0, int(_finite(raw.get("secondsDelay"), _finite(first_event.get("secondsDelay"))))
+    )
+    # Gamma explicitly identifies timed sports through sportsMarketType and/or
+    # gameStartTime. Preserve that venue fact in the canonical universe so a
+    # generic CLOB-flow selector cannot accidentally make markets whose fair
+    # value is driven by an unauthorised live score feed.
+    timed_sports = bool(sports_market_type or game_start_time)
     event_ids = sorted({str(row.get("id")).strip() for row in events if isinstance(row, dict) and str(row.get("id") or "").strip()})
     outcome_prices = [min(1.0, max(0.0, _finite(value))) for value in _array(raw.get("outcomePrices"))]
     best_bid = min(1.0, max(0.0, _finite(raw.get("bestBid"))))
@@ -131,6 +146,10 @@ def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
         "last_trade_price": min(1.0, max(0.0, _finite(raw.get("lastTradePrice")))),
         "resolution_source": str(raw.get("resolutionSource") or ""),
         "event_start_time": str(raw.get("eventStartTime") or ""),
+        "game_start_time": game_start_time,
+        "sports_market_type": sports_market_type,
+        "seconds_delay": seconds_delay,
+        "timed_sports": timed_sports,
         "fee_schedule": raw.get("feeSchedule") if isinstance(raw.get("feeSchedule"), dict) else {},
         "fees_enabled": bool(raw.get("feesEnabled", False)),
         "liquidity": max(0.0, _finite(raw.get("liquidityNum"), _finite(raw.get("liquidity")))),
