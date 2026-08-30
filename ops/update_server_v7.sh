@@ -811,11 +811,27 @@ PY
       plutil -lint "$destination" >/dev/null
       launchctl bootstrap "$domain" "$destination"
     done
-    sleep 1
-    for label in exporter prometheus grafana; do
-      launchctl print "$domain/com.polymarket.v7.$label" 2>/dev/null | grep -q 'state = running' || \
-        fail "launchd monitoring service failed to start: $label"
+    local monitoring_services_ready=0 service_ready
+    for _ in $(seq 1 100); do
+      service_ready=1
+      for label in exporter prometheus grafana; do
+        if ! launchctl print "$domain/com.polymarket.v7.$label" 2>/dev/null | grep -q 'state = running'; then
+          service_ready=0
+          break
+        fi
+      done
+      if [[ "$service_ready" == 1 ]]; then
+        monitoring_services_ready=1
+        break
+      fi
+      sleep 0.1
     done
+    if [[ "$monitoring_services_ready" != 1 ]]; then
+      for label in exporter prometheus grafana; do
+        launchctl print "$domain/com.polymarket.v7.$label" >&2 2>/dev/null || true
+      done
+      fail "launchd monitoring services did not converge within 10 seconds"
+    fi
     for _ in $(seq 1 50); do
       [[ -f "$run_root/control/retention_status.json" ]] && break
       sleep 0.1

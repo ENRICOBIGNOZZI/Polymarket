@@ -247,7 +247,7 @@ class V7NativeMonitoringTest(unittest.TestCase):
             "paper_only": True,
             "authenticated_execution": False,
             "real_order_submission": False,
-            "state": "OPERATIONAL_RECENT_FLOW",
+            "state": "OPERATIONAL_BILATERAL_FLOW",
             "runtime_selection_pinned": True,
             "candidate_rotation_pending": True,
             "candidate_rotation_suppressed_no_fresh_flow": False,

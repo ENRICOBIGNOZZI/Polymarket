@@ -142,7 +142,7 @@ class V7RuntimeChaosContractTest(unittest.TestCase):
             self.assertEqual(result.classification, UNSAFE)
             self.assertIn("runtime_clock_in_future", result.reasons)
 
-    def test_recent_flow_maker_selector_is_operational(self) -> None:
+    def test_bilateral_flow_maker_selector_is_operational(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write(
@@ -168,7 +168,7 @@ class V7RuntimeChaosContractTest(unittest.TestCase):
                     "authenticated_execution": False,
                     "real_order_submission": False,
                     "ready": True,
-                    "state": "OPERATIONAL_RECENT_FLOW",
+                    "state": "OPERATIONAL_BILATERAL_FLOW",
                 },
             )
             self._write(

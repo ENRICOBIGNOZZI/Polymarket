@@ -79,6 +79,10 @@ class V7LedgerMonitoringTest(unittest.TestCase):
             summary = v7_ledger_metrics.summarize_ledger(path)
             self.assertFalse(summary["valid"])
             self.assertEqual(summary["invalid_rows"], 1)
+            self.assertEqual(
+                summary["invalid_reason_counts"],
+                {"AUTHENTICATED_EXECUTION_NOT_DISABLED": 1},
+            )
             self.assertEqual(set(summary["model_shas"]), {"a" * 40, "b" * 40})
 
     def test_monitoring_accepts_every_canonical_ledger_event_type(self) -> None:
@@ -121,6 +125,7 @@ class V7LedgerMonitoringTest(unittest.TestCase):
                 "valid": True,
                 "rows": 6,
                 "invalid_rows": 0,
+                "invalid_reason_counts": {"UNSUPPORTED_EVENT_TYPE": 2},
                 "model_shas": ["a" * 40],
                 "total": {
                     "opportunities": 2,
@@ -157,6 +162,10 @@ class V7LedgerMonitoringTest(unittest.TestCase):
         self.assertIn("polymarket_execution_final_pnl_usd -0.5", metrics)
         self.assertIn("polymarket_execution_capital_hours 1", metrics)
         self.assertIn('polymarket_execution_mean_markout{horizon="10s"} -0.02', metrics)
+        self.assertIn(
+            'polymarket_v7_ledger_invalid_reason_rows{reason="UNSUPPORTED_EVENT_TYPE"} 2',
+            metrics,
+        )
         self.assertNotIn("execution_supervisor", metrics)
         self.assertNotIn("market_proxy", metrics)
 

@@ -57,6 +57,7 @@ def summarize_ledger(path: Path) -> dict[str, Any]:
         "valid": False,
         "rows": 0,
         "invalid_rows": 0,
+        "invalid_reason_counts": {},
         "model_shas": [],
         "strategies": {},
         "total": _blank(),
@@ -82,21 +83,30 @@ def summarize_ledger(path: Path) -> dict[str, Any]:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 result["invalid_rows"] += 1
+                result["invalid_reason_counts"]["JSON_DECODE"] = result["invalid_reason_counts"].get("JSON_DECODE", 0) + 1
                 continue
             if not isinstance(row, dict):
                 result["invalid_rows"] += 1
+                result["invalid_reason_counts"]["NON_OBJECT"] = result["invalid_reason_counts"].get("NON_OBJECT", 0) + 1
                 continue
             event_type = str(row.get("event_type") or "")
             strategy = str(row.get("strategy") or "").strip()
             model_sha = str(row.get("model_sha") or "").strip()
-            if (
-                event_type not in EVENT_TYPES
-                or not strategy
-                or not SHA40.fullmatch(model_sha)
-                or row.get("paper_only") is not True
-                or row.get("authenticated_execution") is not False
-            ):
+            reasons = []
+            if event_type not in EVENT_TYPES:
+                reasons.append("UNSUPPORTED_EVENT_TYPE")
+            if not strategy:
+                reasons.append("MISSING_STRATEGY")
+            if not SHA40.fullmatch(model_sha):
+                reasons.append("INVALID_MODEL_SHA")
+            if row.get("paper_only") is not True:
+                reasons.append("NON_PAPER_ROW")
+            if row.get("authenticated_execution") is not False:
+                reasons.append("AUTHENTICATED_EXECUTION_NOT_DISABLED")
+            if reasons:
                 result["invalid_rows"] += 1
+                for reason in reasons:
+                    result["invalid_reason_counts"][reason] = result["invalid_reason_counts"].get(reason, 0) + 1
                 continue
             shas.add(model_sha)
             target = strategies.setdefault(strategy, _blank())

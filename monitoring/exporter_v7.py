@@ -31,17 +31,11 @@ from v7_external_fair import summarize_external_fair
 from v7_maker_fillability_exact import summarize_best_available_fillability
 from v7_maker_microstructure import summarize_maker_microstructure
 from v7_portfolio_reconciliation import reconcile as reconcile_portfolio
+from v7_runtime_contract import MAKER_SELECTOR_OPERATIONAL_STATES as _MAKER_SELECTOR_OPERATIONAL_STATES
 
 _FILLABILITY_CACHE_KEY: tuple[str, str, int] | None = None
 _FILLABILITY_CACHE_VALUE: dict[str, Any] | None = None
 _FILLABILITY_REFRESH_SECONDS = 30
-_MAKER_SELECTOR_OPERATIONAL_STATES = {
-    "OPERATIONAL_REWARDED",
-    "OPERATIONAL_FALLBACK",
-    "OPERATIONAL_RECENT_FLOW",
-}
-
-
 def _fillability_report(run_root: Path, repository_root: Path, runtime_sha: str, now: int) -> dict[str, Any]:
     global _FILLABILITY_CACHE_KEY, _FILLABILITY_CACHE_VALUE
     key = (str(run_root.resolve()), runtime_sha, now // _FILLABILITY_REFRESH_SECONDS)
@@ -1129,6 +1123,10 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_ledger_rows", _integer(ledger.get("rows"))),
         _metric("polymarket_v7_ledger_invalid_rows", _integer(ledger.get("invalid_rows"))),
         _metric("polymarket_v7_ledger_model_sha_count", len(ledger.get("model_shas") or [])),
+        *[
+            _metric("polymarket_v7_ledger_invalid_reason_rows", count, {"reason": reason})
+            for reason, count in sorted((ledger.get("invalid_reason_counts") or {}).items())
+        ],
         _metric("polymarket_v7_latency_samples_present", 1 if maker_latency.get("present") else 0),
         _metric("polymarket_v7_latency_rows", maker_latency.get("rows")),
         _metric("polymarket_v7_osint_enabled_sources", osint.get("enabled_sources")),
