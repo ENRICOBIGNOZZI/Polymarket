@@ -746,17 +746,32 @@ MakerDecision MakerHotPath::on_market_update(
                 const bool exploration_economic = finite(adjusted_ev)
                     && adjusted_ev > model.min_robust_ev_per_share;
                 if (!exploration_economic) {
-                    decision.action = Action::Withdraw;
-                    decision.reason = DecisionReason::NoEconomicQuote;
                     decision.robust_ev = finite(adjusted_ev) ? adjusted_ev : 0.0;
                     decision.ev_uncertainty = exploratory != nullptr ? exploratory->uncertainty : 0.0;
-                    if (!quotes.cancel_pending) {
-                        append_intent(decision, make_intent(++intent_sequence_, update, model,
-                                                            IntentType::CancelQuote, exploration_side_,
-                                                            exploration_quote_tick, 0.0, nullptr, now));
+                    // minimum_rest_ms is an execution contract, not merely a
+                    // delay before repricing.  Without this guard a small
+                    // feature oscillation could turn a freshly accepted
+                    // exploratory quote into LIVE -> CANCEL_PENDING after the
+                    // ordinary quote lifetime (1s in production), even though
+                    // the configured exploration arm promised at least 3s of
+                    // causal exposure.  Safety exits are evaluated above and
+                    // remain immediate; only an economic re-evaluation is held.
+                    if (elapsed < model.exploration_min_rest_ns) {
+                        decision.action = exploration_action_;
+                        decision.reason = DecisionReason::ExplorationHold;
+                    } else {
+                        decision.action = Action::Withdraw;
+                        decision.reason = DecisionReason::NoEconomicQuote;
+                        if (!quotes.cancel_pending) {
+                            append_intent(decision, make_intent(++intent_sequence_, update, model,
+                                                                IntentType::CancelQuote,
+                                                                exploration_side_,
+                                                                exploration_quote_tick, 0.0,
+                                                                nullptr, now));
+                        }
+                        exploration_active_ = 0;
+                        exploration_side_ = Side::None;
                     }
-                    exploration_active_ = 0;
-                    exploration_side_ = Side::None;
                 } else {
                     decision.action = exploration_action_;
                     decision.reason = DecisionReason::ExplorationHold;

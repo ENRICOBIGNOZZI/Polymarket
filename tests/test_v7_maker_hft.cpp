@@ -519,6 +519,51 @@ void test_persistent_lifetime_arm_is_explicit_and_bounded() {
     assert(decision.intent_count == 1);
 }
 
+void test_exploration_minimum_rest_survives_transient_negative_ev() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    auto model = profitable_model();
+    model.base_ev_se_per_share = 0.025;
+    model.robust_ev_z = 100.0;
+    model.min_robust_ev_per_share = 0.00001;
+    model.min_quote_lifetime_ns = 0;
+    configure_exploration(model);
+    model.exploration_confidence_z = 0.0;
+    pm::v7::maker::InventorySnapshot inventory;
+    inventory.yes_shares = 10.0;
+    inventory.no_shares = 10.0;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 20.0;
+    risk.exploration_max_quote_shares = 2.0;
+    risk.max_abs_residual_shares = 200.0;
+
+    const auto opened = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(opened.reason == pm::v7::maker::DecisionReason::ExplorationQuote);
+    assert(opened.intent_count == 1);
+    const auto& quote = opened.intents[0];
+    quotes.last_quote_monotonic_ns = monotonic_ns();
+    if (quote.side == pm::v7::Side::Buy) {
+        quotes.bid_active = 1;
+        quotes.bid_tick = quote.price_tick;
+    } else {
+        quotes.ask_active = 1;
+        quotes.ask_tick = quote.price_tick;
+    }
+
+    // Make all placements economically negative immediately after the quote
+    // becomes LIVE.  The exploration minimum-rest contract must win over this
+    // non-safety re-evaluation and preserve queue exposure without an intent.
+    auto negative = model;
+    negative.markout_coefficients.fill(1.0);
+    update.state_version += 1;
+    update.socket_receive_monotonic_ns = monotonic_ns();
+    const auto held = hot.on_market_update(update, inventory, quotes, risk, negative);
+    assert(held.reason == pm::v7::maker::DecisionReason::ExplorationHold);
+    assert(held.intent_count == 0);
+    assert(held.exploration_max_rest_ns == model.exploration_max_rest_ns);
+}
+
 void test_negative_exploration_adjusted_ev_has_no_execution_authority() {
     pm::v7::maker::MakerHotPath hot;
     auto update = normal_update();
@@ -591,6 +636,7 @@ int main() {
     test_exploration_collects_positive_buy_and_inventory_backed_sell_evidence();
     test_exploration_never_emits_uncovered_sell();
     test_persistent_lifetime_arm_is_explicit_and_bounded();
+    test_exploration_minimum_rest_survives_transient_negative_ev();
     test_negative_exploration_adjusted_ev_has_no_execution_authority();
     test_global_kill_preempts_quote();
     test_new_risk_freeze_withdraws_without_irreversible_kill();
