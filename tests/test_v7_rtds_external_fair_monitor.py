@@ -72,6 +72,23 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
         self.assertFalse(module.rtds_stream_silent(100.0, 100.0 + threshold - 0.001))
         self.assertTrue(module.rtds_stream_silent(100.0, 100.0 + threshold))
 
+    def test_latency_quantiles_and_live_ingress_measurements_are_published(self) -> None:
+        self.assertEqual(module.latency_quantiles([]), {})
+        quantiles = module.latency_quantiles([1.0, 2.0, 3.0, 4.0])
+        self.assertEqual(quantiles["p50"], 2.5)
+        self.assertEqual(quantiles["max"], 4.0)
+        with tempfile.TemporaryDirectory() as directory:
+            monitor = module.Monitor(Path(directory), "a" * 40)
+            source_ms = time.time_ns() // 1_000_000 - 5
+            monitor.ingest({
+                "topic": module.ORACLE_TOPIC, "symbol": "btc/usd",
+                "price": 77_000.0, "price_decimal": "77000",
+                "timestamp_ms": source_ms, "window_seconds": 60,
+            })
+            values = monitor.latency_samples["chainlink_source_to_receive"]
+            self.assertEqual(len(values), 1)
+            self.assertGreaterEqual(values[0], 0.0)
+
     def test_live_binding_survives_general_universe_eligibility_churn(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

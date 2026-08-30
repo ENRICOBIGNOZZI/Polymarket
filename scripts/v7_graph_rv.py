@@ -355,7 +355,7 @@ class Broker:
         elif any_fill and bundle["status"] != "ABORTING": bundle["status"] = "PARTIAL"
 
     def unwind(self, bundle: dict[str, Any], reason: str) -> None:
-        exit_cash = exit_fee = unwind_loss = 0.0
+        exit_cash = exit_fee = 0.0
         books = self.books([x["token_id"] for x in bundle["legs"].values() if x["filled"] > 0])
         for leg in bundle["legs"].values():
             if leg["filled"] <= 0: continue
@@ -365,10 +365,36 @@ class Broker:
             walked = walk(book.bids, leg["filled"], buy=False, slippage_bps=float(self.cfg.get("slippage_bps", 5.0)))
             if not fee.verified or not walked: return
             cash = leg["filled"] * walked[1]; f = leg["filled"] * fee_per_share(walked[1], fee, taker=True)
+            order_id = stable_id(self.sha, bundle["bundle_id"], leg["leg_id"], "UNWIND")
+            fill_id = stable_id(order_id, "FILL", book.exchange_ts_ms, book.receive_ts_ms)
+            common = dict(
+                strategy=STRATEGY, model_sha=self.sha, bundle_id=bundle["bundle_id"],
+                order_id=order_id, leg_id=leg["leg_id"], market_id=leg["market_id"],
+                event_id=leg["event_id"], token_id=leg["token_id"],
+                exchange_ts_ms=book.exchange_ts_ms, receive_ts_ms=book.receive_ts_ms,
+                decision_ts_ms=now_ms(), book_snapshot_id=book.snapshot_id,
+                side="SELL", bid=book.bid, ask=book.ask,
+                bid_depth=book.bid_depth, ask_depth=book.ask_depth,
+                limit_price=walked[1], intended_action="TAKER_UNWIND",
+                intended_size=leg["filled"],
+                metadata={"outcome_side": leg["outcome"], "execution_side": "SELL",
+                          "unwind_reason": reason},
+            )
+            self.emit(LedgerEvent(event_type="ORDER_SUBMITTED", order_state="CROSS", **common))
+            self.emit(LedgerEvent(
+                event_type="FILL", strategy=STRATEGY, model_sha=self.sha,
+                bundle_id=bundle["bundle_id"], order_id=order_id, fill_id=fill_id,
+                leg_id=leg["leg_id"], market_id=leg["market_id"],
+                event_id=leg["event_id"], token_id=leg["token_id"],
+                exchange_ts_ms=book.exchange_ts_ms, receive_ts_ms=book.receive_ts_ms,
+                side="SELL", fill_price=walked[1], filled_size=leg["filled"],
+                complete=True, fee=f, fee_rate=fee.rate, fee_source=fee.source,
+                slippage=max(0.0, leg["filled"] * (book.bid - walked[1])),
+                metadata={"outcome_side": leg["outcome"], "execution_side": "SELL",
+                          "unwind_reason": reason},
+            ))
             exit_cash += cash; exit_fee += f; self.state["cash"] += cash - f
-        entry = sum(sum(f["shares"] * f["price"] for f in leg["fills"]) for leg in bundle["legs"].values()); entry_fee = sum(sum(f["fee"] for f in leg["fills"]) for leg in bundle["legs"].values())
-        unwind_loss = max(0.0, entry + entry_fee - exit_cash + exit_fee)
-        self.finalize(bundle, reason, exit_cash, exit_fee, unwind_loss, True)
+        self.finalize(bundle, reason, exit_cash, exit_fee, 0.0, True)
         bundle["status"] = "UNWOUND"
 
     def finalize(self, bundle: dict[str, Any], reason: str, cashflow: float, fee: float, unwind_loss: float, unwind_accounted: bool) -> None:
@@ -376,7 +402,7 @@ class Broker:
         entry = sum(sum(f["shares"] * f["price"] + f["fee"] for f in leg["fills"]) for leg in bundle["legs"].values()); first = min((f["receive"] for leg in bundle["legs"].values() for f in leg["fills"]), default=now_ms())
         duration = max(0, now_ms() - first); annual = float((self.cfg.get("v7") or {}).get("capital_cost_rate_annual", .05)); capital_cost = entry * max(0.0, annual) * duration / (365 * 86400 * 1000)
         pnl = cashflow - entry - fee - capital_cost
-        self.emit(LedgerEvent(event_type="FINAL", strategy=STRATEGY, model_sha=self.sha, bundle_id=bundle["bundle_id"], event_id=bundle["event_id"], fee=fee, slippage=0.0, unwind_loss=unwind_loss, capital_cost=capital_cost, latency_cost=0.0, realized_cashflow=cashflow, final_pnl=pnl, capital_duration_ms=duration, metadata={"realized": True, "unwind_accounted": unwind_accounted, "reason": reason, "terminal_id": f"graph:{bundle['bundle_id']}:final"}))
+        self.emit(LedgerEvent(event_type="FINAL", strategy=STRATEGY, model_sha=self.sha, bundle_id=bundle["bundle_id"], event_id=bundle["event_id"], fee=0.0, slippage=0.0, unwind_loss=unwind_loss, capital_cost=capital_cost, latency_cost=0.0, realized_cashflow=cashflow - fee, final_pnl=pnl, capital_duration_ms=duration, metadata={"realized": True, "unwind_accounted": unwind_accounted, "cost_vector_complete": True, "reason": reason, "terminal_id": f"graph:{bundle['bundle_id']}:final", "pnl_decomposition": {"trading_pnl": pnl, "spread_capture": 0.0, "adverse_markout": 0.0, "inventory_pnl": 0.0, "maker_rebates": 0.0, "liquidity_rewards": 0.0, "own_reward_share_verified": False}}))
         bundle["final"] = True
 
     def manage(self) -> None:
@@ -406,7 +432,7 @@ class Broker:
                 if not book: continue
                 for fill in leg["fills"]:
                     done = set(fill.get("markouts", []))
-                    for horizon in (1,10,45,60,300):
+                    for horizon in (1,5,10,15,30,45,60,300):
                         if horizon in done or current < fill["receive"] + horizon*1000: continue
                         walked = walk(book.bids, fill["shares"], buy=False, slippage_bps=float(self.cfg.get("slippage_bps", 5.0)))
                         if not walked: continue

@@ -462,13 +462,24 @@ def main() -> int:
                 market_id=market.id, event_id=market.event, token_id=token, side="SELL",
                 fill_price=exit_price, filled_size=shares, complete=True, fee=fee,
                 fee_rate=market.fee.rate, fee_source=market.fee.source,
+                slippage=shares * abs(exit_price - bid_vwap),
                 metadata={"outcome": side, "execution_side": "SELL"}))
             emit(run_root, LedgerEvent(
                 event_type="FINAL", strategy="MICRO_TAKER", model_sha=args.model_sha,
                 position_id=position_id, market_id=market.id, event_id=market.event,
                 token_id=token, final_pnl=pnl, realized_cashflow=pnl,
+                fee=0.0, slippage=0.0, unwind_loss=0.0,
+                capital_cost=0.0, latency_cost=0.0,
                 capital_duration_ms=max(0, (now - int(position["entry_ts"])) * 1000),
                 metadata={"terminal_state": "ROUND_TRIP_CLOSED", "outcome": side,
+                          "realized": True, "unwind_accounted": True,
+                          "cost_vector_complete": True,
+                          "terminal_id": f"micro_taker:{position_id}:final",
+                          "pnl_decomposition": {"trading_pnl": pnl,
+                              "spread_capture": 0.0, "adverse_markout": 0.0,
+                              "inventory_pnl": 0.0, "maker_rebates": 0.0,
+                              "liquidity_rewards": 0.0,
+                              "own_reward_share_verified": False},
                           "entry_cost": float(position["cost"]), "exit_proceeds": proceeds,
                           "entry_fill_id": position.get("entry_fill_id"),
                           "exit_fill_id": exit_fill_id}))
@@ -607,6 +618,8 @@ def main() -> int:
                 side="BUY", fill_price=candidate.entry_price, filled_size=shares,
                 complete=True, fee=fee, fee_rate=market.fee.rate,
                 fee_source=market.fee.source,
+                slippage=shares * abs(candidate.entry_price - (
+                    full_depth_vwap(list(book.asks), shares, buy=True) or candidate.entry_price)),
                 metadata={"outcome": side, "execution_side": "BUY"}))
             positions[market.id].update({
                 "position_id": position_id, "entry_order_id": order_id,

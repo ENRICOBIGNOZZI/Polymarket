@@ -2101,11 +2101,26 @@ private:
                                    std::to_string(++merge_sequence_);
             event["final_pnl"] = paper.realized_pnl;
             event["realized_cashflow"] = paper.realized_pnl;
+            event["fee"] = 0.0;
+            event["slippage"] = 0.0;
+            event["unwind_loss"] = 0.0;
+            event["capital_cost"] = 0.0;
+            event["latency_cost"] = 0.0;
             json::object metadata;
             attach_economic_identity(metadata);
             metadata["complete_set_merge"] = true;
             metadata["merged_shares"] = micro_shares(paper.operational_fill_microunits);
             metadata["maker_cpp_hot_path"] = true;
+            metadata["realized"] = true;
+            metadata["unwind_accounted"] = true;
+            metadata["cost_vector_complete"] = true;
+            metadata["terminal_id"] = "maker-merge-" + telemetry_epoch_ + "-" +
+                                      std::to_string(merge_sequence_);
+            metadata["pnl_decomposition"] = json::object{
+                {"trading_pnl", paper.realized_pnl},
+                {"spread_capture", 0.0}, {"adverse_markout", 0.0},
+                {"inventory_pnl", 0.0}, {"maker_rebates", 0.0},
+                {"liquidity_rewards", 0.0}, {"own_reward_share_verified", false}};
             event["metadata"] = std::move(metadata);
             spool(std::move(event));
         }

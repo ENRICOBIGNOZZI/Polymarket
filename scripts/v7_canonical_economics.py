@@ -42,7 +42,7 @@ PNL_COMPONENTS = (
     "maker_rebates", "liquidity_rewards",
 )
 STRESS_MULTIPLIERS = (1.0, 1.5, 2.0)
-MARKOUT_HORIZONS_SECONDS = (1, 10, 45, 60, 300)
+MARKOUT_HORIZONS_SECONDS = (1, 5, 10, 15, 30, 45, 60, 300)
 MIN_EVENT_CLUSTERS_FOR_PROMOTION = 12
 CHRONOLOGICAL_EVENT_FOLDS = 4
 MIN_POSITIVE_EVENT_FOLD_FRACTION = 0.60
@@ -493,7 +493,7 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
             unit.reasons.add("realized_terminal_pnl_missing")
         if pnl is not None and not unit.cost_vector_verifiable():
             unit.reasons.add("full_cost_vector_unverifiable")
-        if pnl is not None and unit.cost_vector_verifiable():
+        if pnl is not None and unit.cost_vector_verifiable() and state in {"COMPLETE", "PARTIAL"}:
             identity_reason = unit.event_identity_reason()
             if identity_reason:
                 unit.reasons.add(identity_reason)

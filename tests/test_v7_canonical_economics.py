@@ -44,12 +44,12 @@ def order(*, strategy: str, order_id: str, leg_id: str, bundle_id: str | None = 
     )
 
 
-def fill(*, strategy: str, order_id: str, fill_id: str, leg_id: str, bundle_id: str | None = None, family: str = "maker_complete_set", horizon: int = 45, size: float = 1.0, fee: float = 0.0, event_id: str = "event-1"):
+def fill(*, strategy: str, order_id: str, fill_id: str, leg_id: str, bundle_id: str | None = None, family: str = "maker_complete_set", horizon: int = 45, size: float = 1.0, fee: float = 0.0, price: float = 0.49, event_id: str = "event-1"):
     now = clock()
     return ledger.LedgerEvent(
         event_type="FILL", strategy=strategy, model_sha=SHA, bundle_id=bundle_id,
         order_id=order_id, fill_id=fill_id, leg_id=leg_id, token_id=leg_id, event_id=event_id,
-        exchange_ts_ms=now, receive_ts_ms=now + 1, side="BUY", fill_price=0.49,
+        exchange_ts_ms=now, receive_ts_ms=now + 1, side="BUY", fill_price=price,
         filled_size=size, fee=fee, fee_source="market:fee_schedule", metadata=metadata(family, horizon),
     )
 
@@ -71,6 +71,92 @@ def write_events(path: Path, events) -> None:
 
 
 class CanonicalEconomicsTest(unittest.TestCase):
+    def test_micro_taker_round_trip_is_one_mature_cost_complete_unit(self) -> None:
+        now = clock()
+        position_id = "micro-position"
+        events = []
+        for suffix, side, price, fee_value in (
+            ("entry", "BUY", 0.40, 0.01),
+            ("exit", "SELL", 0.46, 0.01),
+        ):
+            order_id = f"micro-{suffix}"
+            events.extend([
+                ledger.LedgerEvent(
+                    event_type="ORDER_SUBMITTED", strategy="MICRO_TAKER",
+                    model_sha=SHA, position_id=position_id, order_id=order_id,
+                    event_id="event-micro", token_id="YES", side=side,
+                    intended_size=10.0, intended_action=f"TAKER_{suffix.upper()}",
+                    limit_price=price, exchange_ts_ms=now, receive_ts_ms=now + 1,
+                    decision_ts_ms=now + 2, book_snapshot_id=f"book-{suffix}",
+                ),
+                ledger.LedgerEvent(
+                    event_type="FILL", strategy="MICRO_TAKER", model_sha=SHA,
+                    position_id=position_id, order_id=order_id,
+                    fill_id=f"fill-{suffix}", event_id="event-micro",
+                    token_id="YES", side=side, fill_price=price,
+                    filled_size=10.0, fee=fee_value, slippage=0.005,
+                    fee_source="market:fee_schedule", exchange_ts_ms=now + 3,
+                    receive_ts_ms=now + 4,
+                ),
+            ])
+        events.append(ledger.LedgerEvent(
+            event_type="FINAL", strategy="MICRO_TAKER", model_sha=SHA,
+            position_id=position_id, event_id="event-micro", token_id="YES",
+            final_pnl=0.58, realized_cashflow=0.58, fee=0.0, slippage=0.0,
+            unwind_loss=0.0, capital_cost=0.0, latency_cost=0.0,
+            capital_duration_ms=30_000,
+            metadata={"realized": True, "unwind_accounted": True,
+                      "cost_vector_complete": True,
+                      "terminal_id": "micro_taker:micro-position:final"},
+        ))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "execution.jsonl"
+            write_events(path, events)
+            report = econ.assess(path, expected_model_sha=SHA)
+        self.assertEqual(report["economic_units"], 1)
+        self.assertEqual(report["complete_units"], 1)
+        self.assertEqual(report["mature_terminal_units"], 1)
+        self.assertAlmostEqual(report["net_pnl"], 0.58)
+        self.assertAlmostEqual(report["costs"]["baseline_total"], 0.03)
+
+    def test_hard_arb_explicit_multileg_target_is_mature_after_terminal(self) -> None:
+        required = {"YES": 10.0, "NO": 10.0}
+        now = clock()
+        events = [ledger.LedgerEvent(
+            event_type="OPPORTUNITY", strategy="HARD_ARB", model_sha=SHA,
+            bundle_id="hard-bundle", event_id="event-hard", expected_ev=0.02,
+            intended_action="SEQUENTIAL_FOK_COMPLETE_SET",
+            metadata={"target_quantities": required},
+        )]
+        for leg, price in (("YES", 0.48), ("NO", 0.49)):
+            events.extend([
+                order(strategy="HARD_ARB", order_id=f"hard-{leg}", leg_id=leg,
+                      bundle_id="hard-bundle", family="HARD_ARB", required=required,
+                      size=10.0, event_id="event-hard"),
+                fill(strategy="HARD_ARB", order_id=f"hard-{leg}",
+                     fill_id=f"hard-fill-{leg}", leg_id=leg,
+                     bundle_id="hard-bundle", family="HARD_ARB", size=10.0,
+                     fee=0.01, price=price, event_id="event-hard"),
+            ])
+        events.append(ledger.LedgerEvent(
+            event_type="FINAL", strategy="HARD_ARB", model_sha=SHA,
+            bundle_id="hard-bundle", position_id="hard-bundle",
+            event_id="event-hard", final_pnl=0.28, realized_cashflow=0.28,
+            fee=0.0, slippage=0.0, unwind_loss=0.0, capital_cost=0.0,
+            latency_cost=0.0, capital_duration_ms=300_000,
+            metadata={"realized": True, "unwind_accounted": True,
+                      "cost_vector_complete": True,
+                      "terminal_id": "hard:hard-bundle:final"},
+        ))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "execution.jsonl"
+            write_events(path, events)
+            report = econ.assess(path, expected_model_sha=SHA)
+        self.assertEqual(report["submitted_units"], 1)
+        self.assertEqual(report["complete_units"], 1)
+        self.assertEqual(report["mature_terminal_units"], 1)
+        self.assertAlmostEqual(report["net_pnl"], 0.28)
+
     def test_order_to_position_identity_is_one_mature_economic_unit(self) -> None:
         now = clock()
         order_id = "external-order-1"
@@ -228,6 +314,21 @@ class CanonicalEconomicsTest(unittest.TestCase):
         self.assertIn("no_mature_full_cost_terminal_observations", report["reason_codes"])
         reasons = next(iter(report["unit_reason_codes"].values()))
         self.assertIn("full_cost_vector_unverifiable", reasons)
+
+    def test_no_fill_final_does_not_become_mature_economic_evidence(self) -> None:
+        events = [
+            order(strategy="graph_rv", order_id="never-filled", leg_id="YES",
+                  family="graph_rv", horizon=45),
+            final(strategy="graph_rv", order_id="never-filled", family="graph_rv",
+                  horizon=45, pnl=0.0),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "execution.jsonl"
+            write_events(path, events)
+            report = econ.assess(path, expected_model_sha=SHA)
+        self.assertEqual(report["complete_units"], 0)
+        self.assertEqual(report["mature_terminal_units"], 0)
+        self.assertIn("no_mature_full_cost_terminal_observations", report["reason_codes"])
 
     def test_dynamic_family_and_horizon_are_not_silently_pooled(self) -> None:
         events = []

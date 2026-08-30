@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from collections import deque
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
@@ -38,6 +39,30 @@ RTDS_SILENCE_RECONNECT_SECONDS = 10.0
 REFERENCE_MAX_GAP_MS = 2_000
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 FRESH_NS = 3_000_000_000
+LATENCY_SAMPLE_LIMIT = 2_048
+
+
+def latency_quantiles(samples: deque[float] | list[float]) -> dict[str, float]:
+    """Return bounded empirical latency quantiles without external dependencies."""
+    ordered = sorted(value for value in samples if math.isfinite(value) and value >= 0.0)
+    if not ordered:
+        return {}
+
+    def percentile(probability: float) -> float:
+        index = probability * (len(ordered) - 1)
+        lower = int(math.floor(index))
+        upper = int(math.ceil(index))
+        if lower == upper:
+            return ordered[lower]
+        weight = index - lower
+        return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+    return {
+        "p50": percentile(0.50),
+        "p90": percentile(0.90),
+        "p99": percentile(0.99),
+        "max": ordered[-1],
+    }
 
 
 def atomic_json(path: Path, payload: dict[str, Any]) -> None:
@@ -271,6 +296,11 @@ class Monitor:
         self.external_venues_path = external_venues_path
         self.gamma_url = gamma_url.rstrip("/")
         self.latest: dict[str, dict[str, Any]] = {}
+        self.latency_samples: dict[str, deque[float]] = {
+            "chainlink_source_to_receive": deque(maxlen=LATENCY_SAMPLE_LIMIT),
+            "binance_source_to_receive": deque(maxlen=LATENCY_SAMPLE_LIMIT),
+            "fair_compute": deque(maxlen=LATENCY_SAMPLE_LIMIT),
+        }
         self.oracle_history: dict[int, dict[str, Any]] = {}
         self.accepted = self.written = self.dropped = 0
         self.connection_epoch = self.reconnects = self.gaps = 0
@@ -294,16 +324,25 @@ class Monitor:
         if topic == ORACLE_TOPIC and sequence in self.oracle_history:
             self.dropped += 1
             return
+        receive_wall_ns = time.time_ns()
         enriched = dict(row)
         enriched.update({
             "schema": "polymarket_v7_rtds_price_event_v1",
             "connection_epoch": self.connection_epoch,
-            "receive_wall_ns": time.time_ns(),
+            "receive_wall_ns": receive_wall_ns,
             "receive_monotonic_ns": time.monotonic_ns(),
             "paper_only": True,
             "authenticated_execution": False,
             "real_order_submission": False,
         })
+        stage = (
+            "chainlink_source_to_receive"
+            if topic == ORACLE_TOPIC
+            else "binance_source_to_receive"
+        )
+        self.latency_samples[stage].append(
+            max(0.0, receive_wall_ns / 1_000_000.0 - sequence)
+        )
         if topic == ORACLE_TOPIC:
             self.oracle_history[sequence] = enriched
             floor = sequence - 20 * 60 * 1000
@@ -460,7 +499,11 @@ class Monitor:
         venue_runtime = self.external_snapshot(now)
         multi_venue_healthy = bool(venue_runtime.get("valid") and int(venue_runtime.get("fresh_venue_count") or 0) >= 2)
         continuity = "LIVE_CONTINUOUS" if oracle_healthy and self.accepted >= 2 else "CONTINUITY_UNKNOWN"
+        fair_started = time.monotonic_ns()
         fair = self.fair_snapshot(now, oracle_healthy, venue_runtime)
+        self.latency_samples["fair_compute"].append(
+            max(0.0, (time.monotonic_ns() - fair_started) / 1_000_000.0)
+        )
         common = {"paper_only": True, "authenticated_execution": False, "real_order_submission": False}
         router = load_json(self.root / "paper_router_status.json")
         shadow_collector_active = bool(
@@ -526,6 +569,11 @@ class Monitor:
             "fair": fair,
             "model": {"mature": False, "coverage": 0.0,
                       "economic_confidence": router.get("economic_confidence", "MORE_EVIDENCE_REQUIRED")},
+            "latency": {
+                stage: latency_quantiles(samples)
+                for stage, samples in self.latency_samples.items()
+                if samples
+            },
             "actions": router.get("actions") if shadow_collector_active else {},
             "counterfactual_actions": (
                 router.get("counterfactual_actions") if shadow_collector_active else {}

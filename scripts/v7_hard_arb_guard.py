@@ -44,6 +44,19 @@ def canonical_emit(run_dir: Path, model_sha: str, event: LedgerEvent) -> None:
         spool_event(run_dir.parent, event)
 
 
+def terminal_metadata(state: str, pnl: float, **extra: Any) -> dict[str, Any]:
+    return {
+        "terminal_state": state, "realized": True, "unwind_accounted": True,
+        "cost_vector_complete": True,
+        "pnl_decomposition": {
+            "trading_pnl": pnl, "spread_capture": 0.0, "adverse_markout": 0.0,
+            "inventory_pnl": 0.0, "maker_rebates": 0.0,
+            "liquidity_rewards": 0.0, "own_reward_share_verified": False,
+        },
+        **extra,
+    }
+
+
 @dataclass(frozen=True)
 class BookFill:
     requested_shares: float
@@ -676,9 +689,12 @@ def run(args: argparse.Namespace) -> int:
                     event_type="FINAL", strategy="HARD_ARB", model_sha=args.model_sha,
                     bundle_id=bid, position_id=bid, event_id=eid,
                     final_pnl=pnl, realized_cashflow=pnl,
+                    fee=0.0, slippage=0.0, unwind_loss=0.0,
+                    capital_cost=0.0, latency_cost=0.0,
                     capital_duration_ms=max(0, (now - int(bundle.get("opened_ts") or now)) * 1000),
-                    metadata={"terminal_state": "STRUCTURAL_PAYOUT",
-                              "capital_used": capital, "shares": shares}))
+                    metadata=terminal_metadata(
+                        "STRUCTURAL_PAYOUT", pnl, terminal_id=f"hard:{bid}:final",
+                        capital_used=capital, shares=shares)))
                 del openb[bid]
         except Exception as exc:
             if len(failures) < 20:
@@ -712,8 +728,12 @@ def run(args: argparse.Namespace) -> int:
                 bundle_id=bid, position_id=bid,
                 event_id=str(bundle.get("event_id") or ""), final_pnl=cumulative_unwind,
                 realized_cashflow=cumulative_unwind,
+                fee=0.0, slippage=0.0, unwind_loss=0.0,
+                capital_cost=0.0, latency_cost=0.0,
                 capital_duration_ms=max(0, (now - int(bundle.get("opened_ts") or now)) * 1000),
-                metadata={"terminal_state": "PARTIAL_BUNDLE_UNWOUND"}))
+                metadata=terminal_metadata(
+                    "PARTIAL_BUNDLE_UNWOUND", cumulative_unwind,
+                    terminal_id=f"hard:{bid}:final")))
             del aborting[bid]
 
     locked = sum(max(0.0, finite(x.get("capital_used"), 0.0)) for x in openb.values())
@@ -769,6 +789,8 @@ def run(args: argparse.Namespace) -> int:
                 expected_ev=(1.0 - sized[1].capital_used / sized[0]) if sized is not None else None,
                 intended_action="SEQUENTIAL_FOK_COMPLETE_SET" if sized is not None else "NOTHING",
                 metadata={"freshness_reason": reason, "leg_count": len(tokens),
+                          "target_quantities": {
+                              token: sized[0] for token in tokens} if sized is not None else {},
                           "shared_atomic_snapshot": args.shared_state is not None,
                           "max_leg_age_ms": age, "cross_leg_skew_ms": skew,
                           "max_exchange_snapshot_age_ms": xage,
@@ -897,8 +919,12 @@ def run(args: argparse.Namespace) -> int:
                         event_type="FINAL", strategy="HARD_ARB", model_sha=args.model_sha,
                         bundle_id=bundle_id, position_id=bundle_id, event_id=eid,
                         final_pnl=pnl, realized_cashflow=pnl,
-                        metadata={"terminal_state": "SEQUENTIAL_ABORT_UNWOUND",
-                                  "abort_reason": fail or "post_execution_edge"}))
+                        fee=0.0, slippage=0.0, unwind_loss=0.0,
+                        capital_cost=0.0, latency_cost=0.0,
+                        metadata=terminal_metadata(
+                            "SEQUENTIAL_ABORT_UNWOUND", pnl,
+                            terminal_id=f"hard:{bundle_id}:final",
+                            abort_reason=fail or "post_execution_edge")))
                 continue
 
             openb[bundle_id] = {
