@@ -179,13 +179,13 @@ class V7NativeMonitoringTest(unittest.TestCase):
             "paper_only": True,
             "authenticated_execution": False,
             "real_order_submission": False,
-            "state": "OPERATIONAL_REWARDED",
+            "state": "OPERATIONAL_RECENT_FLOW",
             "runtime_selection_pinned": True,
             "candidate_rotation_pending": True,
             "candidate_selected_count": 40,
             "ready": True,
             "degraded": False,
-            "source": "public_clob_rewards",
+            "source": "adaptive_universe_recent_flow",
             "selected_count": 40,
         })
         self._write(root / "external" / "status.json", {"timestamp": now - 5, "paper_only": True, "authenticated_execution": False})

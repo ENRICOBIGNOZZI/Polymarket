@@ -10,7 +10,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "monitoring"))
 
-from v7_runtime_contract import RECOVERABLE, SAFE, UNSAFE, assess_reconciliation, failure_action
+from v7_runtime_contract import (
+    RECOVERABLE,
+    SAFE,
+    UNSAFE,
+    assess_reconciliation,
+    failure_action,
+    runtime_health,
+)
 
 SHA = "a" * 40
 
@@ -134,6 +141,50 @@ class V7RuntimeChaosContractTest(unittest.TestCase):
             result = assess_reconciliation(root, SHA, now=1000)
             self.assertEqual(result.classification, UNSAFE)
             self.assertIn("runtime_clock_in_future", result.reasons)
+
+    def test_recent_flow_maker_selector_is_operational(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write(
+                root / "control/runtime_status.json",
+                {
+                    "version": 7,
+                    "timestamp": 1000,
+                    "paper_only": True,
+                    "authenticated_execution": False,
+                    "real_order_submission": False,
+                    "model_sha": SHA,
+                    "pid": os.getpid(),
+                    "killed": False,
+                    "state": "running",
+                },
+            )
+            self._write(
+                root / "micro_maker/selector_status.json",
+                {
+                    "timestamp_ms": 1_000_000,
+                    "model_sha": SHA,
+                    "paper_only": True,
+                    "authenticated_execution": False,
+                    "real_order_submission": False,
+                    "ready": True,
+                    "state": "OPERATIONAL_RECENT_FLOW",
+                },
+            )
+            self._write(
+                root / "micro_maker/status.json",
+                {
+                    "timestamp_ms": 1_000_000,
+                    "model_sha": SHA,
+                    "paper_only": True,
+                    "authenticated_execution": False,
+                    "killed": False,
+                    "source": "full_visible_bid_depth_net_verified_fee_and_slippage",
+                },
+            )
+            result = runtime_health(root, SHA, now=1000, stale_seconds=30)
+            self.assertEqual(result.classification, SAFE)
+            self.assertNotIn("maker_selector_not_ready", result.reasons)
 
     def test_failure_isolation_matrix_covers_deterministic_chaos_scenarios(self) -> None:
         policy = json.loads((ROOT / "config/v7_runtime_supervision.json").read_text())

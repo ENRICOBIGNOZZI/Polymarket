@@ -20,6 +20,11 @@ SHA40 = re.compile(r"^[0-9a-f]{40}$")
 SAFE = "SAFE"
 RECOVERABLE = "RECOVERABLE"
 UNSAFE = "UNSAFE_OPERATOR_REQUIRED"
+MAKER_SELECTOR_OPERATIONAL_STATES = {
+    "OPERATIONAL_REWARDED",
+    "OPERATIONAL_FALLBACK",
+    "OPERATIONAL_RECENT_FLOW",
+}
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -239,9 +244,10 @@ def runtime_health(run_root: Path, expected_sha: str, *, now: int, stale_seconds
                 unsafe.append("maker_selector_execution_authority_unsafe")
             if selector.get("model_sha") != expected_sha:
                 unsafe.append("maker_selector_identity_drift")
-            if selector.get("ready") is not True or selector.get("state") not in {
-                "OPERATIONAL_REWARDED", "OPERATIONAL_FALLBACK",
-            }:
+            if (
+                selector.get("ready") is not True
+                or selector.get("state") not in MAKER_SELECTOR_OPERATIONAL_STATES
+            ):
                 recoverable.append("maker_selector_not_ready")
             try:
                 selector_age = now * 1000 - int(selector.get("timestamp_ms") or 0)

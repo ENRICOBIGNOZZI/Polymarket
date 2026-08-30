@@ -34,6 +34,11 @@ from v7_maker_microstructure import summarize_maker_microstructure
 _FILLABILITY_CACHE_KEY: tuple[str, str, int] | None = None
 _FILLABILITY_CACHE_VALUE: dict[str, Any] | None = None
 _FILLABILITY_REFRESH_SECONDS = 30
+_MAKER_SELECTOR_OPERATIONAL_STATES = {
+    "OPERATIONAL_REWARDED",
+    "OPERATIONAL_FALLBACK",
+    "OPERATIONAL_RECENT_FLOW",
+}
 
 
 def _fillability_report(run_root: Path, repository_root: Path, runtime_sha: str, now: int) -> dict[str, Any]:
@@ -439,7 +444,7 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
         or selector.get("authenticated_execution") is not False
         or selector.get("real_order_submission") is not False
         or selector.get("ready") is not True
-        or selector.get("state") not in {"OPERATIONAL_REWARDED", "OPERATIONAL_FALLBACK"}
+        or selector.get("state") not in _MAKER_SELECTOR_OPERATIONAL_STATES
         or selector_age_ms < -5_000
         or selector_age_ms > max_runtime_age * 1000
     ): reasons.append("maker_selector_missing_stale_or_unsafe")
@@ -827,7 +832,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         and selector.get("authenticated_execution") is False
         and selector.get("real_order_submission") is False
         and selector.get("ready") is True
-        and selector.get("state") in {"OPERATIONAL_REWARDED", "OPERATIONAL_FALLBACK"}
+        and selector.get("state") in _MAKER_SELECTOR_OPERATIONAL_STATES
         and fresh_milliseconds(selector)
     )
     maker_operational = (
