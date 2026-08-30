@@ -85,7 +85,7 @@
       "lookback_seconds": 180,
       "maximum_tape_age_seconds": 30,
       "initial_wait_seconds": 30,
-      "minimum_markets": 10,
+      "minimum_markets": 1,
       "minimum_prints": 2,
       "minimum_time_to_end_seconds": 900,
       "minimum_mid": 0.05,

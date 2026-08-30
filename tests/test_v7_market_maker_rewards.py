@@ -188,7 +188,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
                 ROOT / "config" / "v7_professional_market_maker.json"
             )
             selection_cfg = json.loads(json.dumps(selection_cfg))
-            selection_cfg["recent_flow"]["minimum_markets"] = 1
+            self.assertEqual(selection_cfg["recent_flow"]["minimum_markets"], 1)
             snapshot = rewards._recent_flow_snapshot(
                 universe_path, tape, selection_cfg, capacity_cfg, capacity,
                 model_sha=SHA, now_ms=now_ms,
