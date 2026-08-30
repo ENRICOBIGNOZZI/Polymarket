@@ -311,6 +311,20 @@ void atomic_write(const fs::path& path, std::string_view content) {
     return "UNKNOWN";
 }
 
+[[nodiscard]] const char* execution_outcome_name(
+    pm::v7::maker::PaperExecutionOutcome outcome) noexcept {
+    using Outcome = pm::v7::maker::PaperExecutionOutcome;
+    switch (outcome) {
+        case Outcome::Pending: return "PENDING";
+        case Outcome::Filled: return "FILLED";
+        case Outcome::PartialFill: return "PARTIAL_FILL";
+        case Outcome::NoOppositeFlow: return "NO_OPPOSITE_FLOW";
+        case Outcome::PriceNotReached: return "PRICE_NOT_REACHED";
+        case Outcome::QueueNotDepleted: return "QUEUE_NOT_DEPLETED";
+    }
+    return "UNKNOWN";
+}
+
 struct Options {
     std::string config = "config/paper_v7.json";
     std::string maker_policy = "config/v7_professional_market_maker.json";
@@ -352,6 +366,11 @@ struct SelectedMarket {
     std::string no_token;
     double reward_intensity = 0.0;
     double rewards_min_size = 0.0;
+    double yes_aggressive_buy_shares_per_second = 0.0;
+    double yes_aggressive_sell_shares_per_second = 0.0;
+    double no_aggressive_buy_shares_per_second = 0.0;
+    double no_aggressive_sell_shares_per_second = 0.0;
+    bool flow_priors_present = false;
 };
 
 struct InventoryFactoryPolicy {
@@ -391,6 +410,7 @@ struct ExternalMakerFairPolicy {
     bool enabled = false;
     bool require_model_mature = true;
     bool require_verified_contract = true;
+    bool require_positive_2x_cost_stress = true;
     std::string status_path = "runs/paper_v7_live/external_fair/status.json";
     std::int64_t maximum_snapshot_age_ns = 250'000'000LL;
     double maximum_interval_width = 0.20;
@@ -419,6 +439,8 @@ ExternalMakerFairPolicy load_external_maker_fair_policy(const fs::path& policy_p
         find_value(*external, "require_model_mature"), true);
     out.require_verified_contract = boolean(
         find_value(*external, "require_verified_contract_binding"), true);
+    out.require_positive_2x_cost_stress = boolean(
+        find_value(*external, "require_positive_2x_cost_stress"), true);
     const std::string configured_path = text(find_value(*external, "status_path"));
     if (!configured_path.empty()) out.status_path = configured_path;
     out.maximum_snapshot_age_ns = std::max<std::int64_t>(1, object_integer(
@@ -497,6 +519,47 @@ InventoryFactoryPolicy load_inventory_factory_policy(const fs::path& policy_path
         market.no_token = text(find_value(row, "no_token"));
         market.reward_intensity = std::max(0.0, number(find_value(row, "reward_intensity"), 0.0));
         market.rewards_min_size = std::max(0.0, number(find_value(row, "rewards_min_size"), 0.0));
+        const auto* opportunities = find_value(row, "quote_opportunities");
+        if (opportunities != nullptr && opportunities->is_array()) {
+            market.flow_priors_present = true;
+            for (const auto& opportunity_value : opportunities->as_array()) {
+                if (!opportunity_value.is_object()) continue;
+                const auto& opportunity = opportunity_value.as_object();
+                const std::string token = text(find_value(opportunity, "token_id"));
+                const std::string aggressor = text(find_value(
+                    opportunity, "required_aggressor_side"));
+                const double shares_10m = std::max(0.0, number(
+                    find_value(opportunity, "opposite_shares_10m"), 0.0));
+                const double prints_10m = std::max(0.0, number(
+                    find_value(opportunity, "opposite_prints_10m"), 0.0));
+                const double prints_30s = std::max(0.0, number(
+                    find_value(opportunity, "opposite_prints_30s"), 0.0));
+                const double age_ms = number(
+                    find_value(opportunity, "last_opposite_flow_age_ms"), -1.0);
+                double rate = 0.0;
+                if (age_ms >= 0.0 && shares_10m > 0.0 && prints_10m > 0.0) {
+                    const double long_rate = shares_10m / 600.0;
+                    const double recent_rate = (shares_10m / prints_10m)
+                                             * prints_30s / 30.0;
+                    // The short-window burst estimate earns selection, but an
+                    // old last print must not retain quote authority forever.
+                    const double freshness = std::exp(
+                        -std::log(2.0) * age_ms / 30'000.0);
+                    rate = std::max(long_rate, recent_rate) * freshness;
+                }
+                double* destination = nullptr;
+                if (token == market.yes_token && aggressor == "BUY") {
+                    destination = &market.yes_aggressive_buy_shares_per_second;
+                } else if (token == market.yes_token && aggressor == "SELL") {
+                    destination = &market.yes_aggressive_sell_shares_per_second;
+                } else if (token == market.no_token && aggressor == "BUY") {
+                    destination = &market.no_aggressive_buy_shares_per_second;
+                } else if (token == market.no_token && aggressor == "SELL") {
+                    destination = &market.no_aggressive_sell_shares_per_second;
+                }
+                if (destination != nullptr) *destination = std::max(*destination, rate);
+            }
+        }
         if (market.market_id.empty() || market.condition_id.empty() || market.yes_token.empty()
             || market.no_token.empty() || market.yes_token == market.no_token) {
             continue;
@@ -545,6 +608,8 @@ MakerModelSnapshot load_model_snapshot(const fs::path& policy_path,
         quoting, "minimum_exploit_ev_per_dollar", model.min_robust_ev_per_share);
     model.min_quote_lifetime_ns = object_integer(
         quoting, "min_quote_lifetime_ms", model.min_quote_lifetime_ns / 1'000'000LL) * 1'000'000LL;
+    model.fill_prediction_horizon_seconds = static_cast<double>(std::max<std::int64_t>(
+        1, object_integer(quoting, "max_quote_lifetime_ms", 5'000))) / 1'000.0;
     const auto* inventory = child_object(policy, "inventory");
     model.one_sided_inventory_fraction = std::max(0.0, object_number(
         inventory, "soft_directional_inventory_fraction", model.one_sided_inventory_fraction));
@@ -1117,6 +1182,14 @@ private:
         MakerLaneContext context;
         context.inventory = state.inventory;
         context.quotes = instrument.yes ? state.yes_quotes : state.no_quotes;
+        context.flow_prior_valid = static_cast<std::uint8_t>(
+            market.cold.flow_priors_present);
+        context.prior_aggressive_buy_shares_per_second = instrument.yes
+            ? market.cold.yes_aggressive_buy_shares_per_second
+            : market.cold.no_aggressive_buy_shares_per_second;
+        context.prior_aggressive_sell_shares_per_second = instrument.yes
+            ? market.cold.yes_aggressive_sell_shares_per_second
+            : market.cold.no_aggressive_sell_shares_per_second;
         const auto decision_now_ns = monotonic_ns();
         const auto external = std::atomic_load_explicit(
             &market.external_fair, std::memory_order_acquire);
@@ -1507,6 +1580,8 @@ public:
         exploration_market_active_.assign(max_market + 1, 0);
         inventory_targets_.assign(max_market + 1, 0);
         inventory_last_replenish_ns_.assign(max_market + 1, 0);
+        latest_yes_books_.assign(max_market + 1, {});
+        latest_no_books_.assign(max_market + 1, {});
         inventory_factory_ = inventory_factory;
         new_risk_frozen_ = new_risk_frozen;
         fill_funnel_ = fill_funnel;
@@ -1623,6 +1698,8 @@ public:
             || markets_[command.context.market_handle] == nullptr) {
             return false;
         }
+
+        cache_latest_book(command.context);
 
         if (!sync_inventory_drain_mode()) return false;
         const std::int64_t execution_start_ns = monotonic_ns();
@@ -1756,6 +1833,53 @@ public:
             if (result.capital_invariant_violation || result.paper.invariant_violation) {
                 return false;
             }
+            const auto yes_quotes = policy_.quote_snapshot(
+                handle, market->yes_instrument_handle);
+            const auto no_quotes = policy_.quote_snapshot(
+                handle, market->no_instrument_handle);
+            const bool orders_terminal = yes_quotes.bid_active == 0
+                && yes_quotes.ask_active == 0 && yes_quotes.cancel_pending == 0
+                && no_quotes.bid_active == 0 && no_quotes.ask_active == 0
+                && no_quotes.cancel_pending == 0;
+            const auto* inventory = policy_.inventory(handle);
+            if (orders_terminal && inventory != nullptr
+                && inventory->directional_microunits != 0) {
+                const auto& yes_book = latest_yes_books_[handle];
+                const auto& no_book = latest_no_books_[handle];
+                const bool liquidate_yes = inventory->directional_microunits > 0;
+                const auto& relevant_book = liquidate_yes ? yes_book : no_book;
+                constexpr std::int64_t kMaximumDrainBookAgeNs = 5'000'000'000LL;
+                const auto relevant_receive_ns = relevant_book.receive_monotonic_ns;
+                const bool books_executable = relevant_book.valid != 0
+                    && relevant_book.lineage_continuous != 0
+                    && relevant_book.tick_size_e4 == (liquidate_yes
+                        ? market->yes_tick_e4 : market->no_tick_e4)
+                    && relevant_receive_ns > 0 && now_ns >= relevant_receive_ns
+                    && now_ns - relevant_receive_ns <= kMaximumDrainBookAgeNs;
+                if (books_executable) {
+                    auto liquidation = policy_.liquidate_directional_inventory(
+                        handle,
+                        yes_book.best_bid_e4 / market->yes_tick_e4,
+                        yes_book.best_bid_microunits,
+                        no_book.best_bid_e4 / market->no_tick_e4,
+                        no_book.best_bid_microunits,
+                        now_ns, capital_);
+                    if (liquidation.accepted && liquidation.paper.event_count > 0) {
+                        ExecutionContext liquidation_context = context;
+                        liquidation_context.instrument_handle = liquidate_yes
+                            ? market->yes_instrument_handle
+                            : market->no_instrument_handle;
+                        liquidation_context.outcome_yes = static_cast<std::uint8_t>(
+                            liquidate_yes);
+                        liquidation_context.book = relevant_book;
+                        emit(liquidation_context, liquidation.paper);
+                    }
+                    if (liquidation.capital_invariant_violation
+                        || liquidation.paper.invariant_violation) {
+                        return false;
+                    }
+                }
+            }
         }
         ++execution_version_;
         return true;
@@ -1766,6 +1890,21 @@ private:
         std::int64_t bid_ns = 0;
         std::int64_t ask_ns = 0;
     };
+
+    void cache_latest_book(const ExecutionContext& context) noexcept {
+        if (context.market_handle == 0
+            || context.market_handle >= latest_yes_books_.size()
+            || context.book.valid == 0 || context.book.lineage_continuous == 0) {
+            return;
+        }
+        const auto* market = markets_[context.market_handle];
+        if (market == nullptr) return;
+        if (context.instrument_handle == market->yes_instrument_handle) {
+            latest_yes_books_[context.market_handle] = context.book;
+        } else if (context.instrument_handle == market->no_instrument_handle) {
+            latest_no_books_[context.market_handle] = context.book;
+        }
+    }
 
     [[nodiscard]] bool sync_inventory_drain_mode() noexcept {
         const bool requested = new_risk_frozen_ != nullptr
@@ -1959,6 +2098,8 @@ private:
     std::vector<std::uint8_t> exploration_market_active_;
     std::vector<std::int64_t> inventory_targets_;
     std::vector<std::int64_t> inventory_last_replenish_ns_;
+    std::vector<BookHotSnapshot> latest_yes_books_;
+    std::vector<BookHotSnapshot> latest_no_books_;
     InventoryFactoryPolicy inventory_factory_{};
     std::atomic<bool>* new_risk_frozen_ = nullptr;
     MakerFillFunnelCounters* fill_funnel_ = nullptr;
@@ -1991,6 +2132,7 @@ public:
         markets_.resize(max_market + 1, nullptr);
         instruments_.resize(max_instrument + 1);
         inventory_.resize(max_market + 1);
+        market_cycles_.resize(max_market + 1);
         for (const auto& market : markets) {
             markets_[market->market_handle] = market.get();
             instruments_[market->yes_instrument_handle] = {market.get(), true};
@@ -2096,12 +2238,12 @@ public:
 
 private:
     struct InstrumentCold { MarketContext* market = nullptr; bool yes = false; };
-    struct OrderEconomics {
-        bool sell = false;
-        double filled_shares = 0.0;
+    struct MarketCycleEconomics {
         double realized_pnl = 0.0;
+        double executed_shares = 0.0;
         std::int64_t opened_ms = 0;
-        bool terminal_emitted = false;
+        std::uint64_t sequence = 0;
+        bool active = false;
     };
 
     [[nodiscard]] std::string active_order_key(const TelemetryRecord& record) const {
@@ -2241,12 +2383,31 @@ private:
         metadata["fair_upper"] = record.decision.fair_upper;
         metadata["external_fair_authority"] =
             record.decision.external_fair_authority != 0;
+        const bool bid_side = record.intent.side == Side::Buy;
+        metadata["execution_funnel_prediction"] = json::object{
+            {"opposite_aggressive_flow_shares_per_second", bid_side
+                ? record.decision.bid_opposite_flow_shares_per_second
+                : record.decision.ask_opposite_flow_shares_per_second},
+            {"flow_reach_probability", bid_side
+                ? record.decision.bid_flow_reach_probability
+                : record.decision.ask_flow_reach_probability},
+            {"queue_depletion_probability_given_reach", bid_side
+                ? record.decision.bid_queue_depletion_probability
+                : record.decision.ask_queue_depletion_probability},
+            {"fill_probability", bid_side
+                ? record.decision.bid_fill_probability
+                : record.decision.ask_fill_probability},
+        };
         metadata["placement_features"] = json::object{
             {"spread_ticks", record.decision.features.spread_ticks},
             {"imbalance", record.decision.features.imbalance},
             {"ofi", record.decision.features.ofi},
             {"ew_vol_ticks", record.decision.features.ew_vol_ticks},
             {"trade_intensity", record.decision.features.trade_intensity},
+            {"aggressive_buy_shares_per_second",
+                record.decision.features.aggressive_buy_shares_per_second},
+            {"aggressive_sell_shares_per_second",
+                record.decision.features.aggressive_sell_shares_per_second},
             {"cancel_intensity", record.decision.features.cancel_intensity},
             {"short_return_ticks", record.decision.features.short_return_ticks},
             {"inventory_fraction", record.decision.features.inventory_fraction},
@@ -2333,8 +2494,6 @@ private:
             event["expected_ev"] = record.intent.expected_ev;
             attach_metadata(event, record);
             spool(std::move(event));
-            order_economics_[active_order_key(record)] = OrderEconomics{
-                paper.side == pm::v7::Side::Sell, 0.0, 0.0, wall_ms(), false};
             write_order_state(record, "LIVE");
             return;
         }
@@ -2345,21 +2504,19 @@ private:
         }
         if (paper.kind == PaperMakerEventKind::Cancelled) {
             write_order_state(record, "CANCELLED");
-            write_order_final(record, "CANCELLED_AFTER_PARTIAL");
             return;
         }
         if (paper.kind == PaperMakerEventKind::Fill && paper.operational_fill_microunits > 0) {
             write_fill(record);
-            auto& economics = order_economics_[active_order_key(record)];
-            economics.sell = paper.side == pm::v7::Side::Sell;
-            economics.filled_shares += micro_shares(paper.operational_fill_microunits);
-            economics.realized_pnl += paper.realized_pnl;
-            if (economics.opened_ms <= 0) economics.opened_ms = wall_ms();
+            track_market_cycle(record, paper.realized_pnl,
+                               micro_shares(paper.operational_fill_microunits));
             if (paper.order_state == pm::v7::OrderState::Filled) {
                 write_order_state(record, "FILLED");
-                write_order_final(record, "FILLED");
             }
             else if (paper.order_state == pm::v7::OrderState::Partial) write_order_state(record, "PARTIAL");
+            if (paper.realized_pnl != 0.0) {
+                maybe_write_market_cycle_final(record, "ORDER_FILL_FLAT");
+            }
             return;
         }
         if (paper.kind == PaperMakerEventKind::InventorySplitRequested) {
@@ -2371,41 +2528,22 @@ private:
             return;
         }
         if (paper.kind == PaperMakerEventKind::InventorySplit) {
+            track_market_cycle(record, 0.0, 0.0);
             write_inventory_event(record, "INVENTORY_SPLIT");
             return;
         }
         if (paper.kind == PaperMakerEventKind::InventoryMerge) {
-            const auto position_id = write_inventory_event(record, "INVENTORY_MERGE");
-            auto event = common("FINAL");
-            const auto* market = markets_[record.market_handle];
-            if (market != nullptr) {
-                event["market_id"] = market->cold.market_id;
-                if (!market->cold.event_id.empty()) event["event_id"] = market->cold.event_id;
-            }
-            event["position_id"] = position_id;
-            event["final_pnl"] = paper.realized_pnl;
-            event["realized_cashflow"] = paper.realized_pnl;
-            event["fee"] = 0.0;
-            event["slippage"] = 0.0;
-            event["unwind_loss"] = 0.0;
-            event["capital_cost"] = 0.0;
-            event["latency_cost"] = 0.0;
-            json::object metadata;
-            attach_economic_identity(metadata);
-            metadata["complete_set_merge"] = true;
-            metadata["merged_shares"] = micro_shares(paper.operational_fill_microunits);
-            metadata["maker_cpp_hot_path"] = true;
-            metadata["realized"] = true;
-            metadata["unwind_accounted"] = true;
-            metadata["cost_vector_complete"] = true;
-            metadata["terminal_id"] = position_id + ":final";
-            metadata["pnl_decomposition"] = json::object{
-                {"trading_pnl", paper.realized_pnl},
-                {"spread_capture", 0.0}, {"adverse_markout", 0.0},
-                {"inventory_pnl", 0.0}, {"maker_rebates", 0.0},
-                {"liquidity_rewards", 0.0}, {"own_reward_share_verified", false}};
-            event["metadata"] = std::move(metadata);
-            spool(std::move(event));
+            track_market_cycle(record, paper.realized_pnl, 0.0);
+            write_inventory_event(record, "INVENTORY_MERGE");
+            maybe_write_market_cycle_final(record, "COMPLETE_SET_MERGE_FLAT");
+            return;
+        }
+        if (paper.kind == PaperMakerEventKind::InventoryLiquidation) {
+            track_market_cycle(record, paper.realized_pnl,
+                               micro_shares(paper.operational_fill_microunits));
+            write_inventory_event(record, "INVENTORY_LIQUIDATION");
+            maybe_write_market_cycle_final(record, "DRAIN_LIQUIDATION_FLAT");
+            return;
         }
     }
 
@@ -2454,47 +2592,78 @@ private:
         return position_id;
     }
 
-    void write_order_final(const TelemetryRecord& record, const char* terminal_state) {
-        if (record.paper.order_id == 0) return;
-        const auto key = active_order_key(record);
-        const auto found = order_economics_.find(key);
-        if (found == order_economics_.end() || found->second.terminal_emitted
-            || !found->second.sell || found->second.filled_shares <= 0.0) return;
-        auto& economics = found->second;
+    void track_market_cycle(const TelemetryRecord& record, double realized_pnl,
+                            double executed_shares) {
+        if (record.market_handle == 0 || record.market_handle >= market_cycles_.size()) return;
+        auto& cycle = market_cycles_[record.market_handle];
+        if (!cycle.active) {
+            cycle = MarketCycleEconomics{};
+            cycle.active = true;
+            cycle.opened_ms = wall_ms();
+            cycle.sequence = ++market_cycle_sequence_;
+        }
+        cycle.realized_pnl += realized_pnl;
+        cycle.executed_shares += std::max(0.0, executed_shares);
+    }
+
+    [[nodiscard]] bool market_has_active_orders(std::uint64_t market_handle) const {
+        const std::string prefix = std::to_string(market_handle) + ":";
+        for (const auto& key : active_orders_) {
+            if (key.rfind(prefix, 0) == 0) return true;
+        }
+        return false;
+    }
+
+    void maybe_write_market_cycle_final(
+        const TelemetryRecord& record, const char* terminal_state) {
+        if (record.market_handle == 0 || record.market_handle >= market_cycles_.size()
+            || market_has_active_orders(record.market_handle)) return;
+        auto& cycle = market_cycles_[record.market_handle];
+        const auto& inventory = record.inventory;
+        const bool economically_flat = inventory.yes_microunits == 0
+            && inventory.no_microunits == 0
+            && inventory.pending_split_microunits == 0
+            && inventory.pending_merge_microunits == 0
+            && std::abs(inventory.yes_cost) <= 1e-12
+            && std::abs(inventory.no_cost) <= 1e-12;
+        if (!cycle.active || !economically_flat) return;
+
         auto event = common("FINAL");
         attach_market(event, record);
-        const std::string canonical_order_id = order_id(
-            record.market_handle, record.paper.order_id);
-        event["order_id"] = canonical_order_id;
-        event["side"] = "SELL";
-        event["final_pnl"] = economics.realized_pnl;
-        event["realized_cashflow"] = economics.realized_pnl;
+        const std::string position_id = "mm-cycle-" +
+            std::to_string(record.market_handle) + "-" + telemetry_epoch_ + "-" +
+            std::to_string(cycle.sequence);
+        event["position_id"] = position_id;
+        event["final_pnl"] = cycle.realized_pnl;
+        event["realized_cashflow"] = cycle.realized_pnl;
         event["fee"] = 0.0;
         event["slippage"] = 0.0;
         event["unwind_loss"] = 0.0;
         event["capital_cost"] = 0.0;
         event["latency_cost"] = 0.0;
         event["capital_duration_ms"] = std::max<std::int64_t>(
-            0, wall_ms() - economics.opened_ms);
+            0, wall_ms() - cycle.opened_ms);
         json::object metadata;
         attach_economic_identity(metadata);
         metadata["maker_cpp_hot_path"] = true;
         metadata["realized"] = true;
         metadata["unwind_accounted"] = true;
+        metadata["economic_cycle_flat"] = true;
         metadata["cost_vector_complete"] = true;
         metadata["terminal_state"] = terminal_state;
-        metadata["terminal_id"] = canonical_order_id + ":final";
-        metadata["filled_shares"] = economics.filled_shares;
-        metadata["inventory_cost_basis_method"] = "market_local_weighted_average_cost";
+        metadata["terminal_id"] = position_id + ":final";
+        metadata["executed_shares"] = cycle.executed_shares;
+        metadata["inventory_cost_basis_method"] =
+            "market_local_weighted_average_cost_full_cycle";
         metadata["inventory_lineage_complete"] = true;
         metadata["pnl_decomposition"] = json::object{
-            {"trading_pnl", economics.realized_pnl},
-            {"spread_capture", economics.realized_pnl}, {"adverse_markout", 0.0},
-            {"inventory_pnl", 0.0}, {"maker_rebates", 0.0},
+            {"trading_pnl", cycle.realized_pnl},
+            {"spread_capture", 0.0}, {"adverse_markout", 0.0},
+            {"inventory_pnl", cycle.realized_pnl}, {"maker_rebates", 0.0},
             {"liquidity_rewards", 0.0}, {"own_reward_share_verified", false}};
         event["metadata"] = std::move(metadata);
         spool(std::move(event));
-        economics.terminal_emitted = true;
+        cycle = MarketCycleEconomics{};
     }
 
     void write_order_state(const TelemetryRecord& record, const char* state) {
@@ -2511,6 +2680,16 @@ private:
         metadata["decision_reason"] = decision_reason_name(record.decision.reason);
         metadata["decision_reason_code"] = static_cast<std::uint64_t>(record.decision.reason);
         metadata["safety_preemption"] = safety_preemption(record.decision.reason);
+        metadata["execution_outcome"] = execution_outcome_name(
+            record.paper.execution_outcome);
+        metadata["opposite_flow_prints_seen"] =
+            record.paper.opposite_flow_prints_seen;
+        metadata["price_reach_prints_seen"] =
+            record.paper.price_reach_prints_seen;
+        metadata["opposite_flow_shares_seen"] = micro_shares(
+            record.paper.opposite_flow_microunits_seen);
+        metadata["price_reach_shares_seen"] = micro_shares(
+            record.paper.price_reach_microunits_seen);
         event["metadata"] = std::move(metadata);
         spool(std::move(event));
     }
@@ -2543,6 +2722,14 @@ private:
         metadata["pessimistic_fill"] = micro_shares(paper.pessimistic_fill_microunits);
         metadata["expected_fill"] = micro_shares(paper.expected_fill_microunits);
         metadata["optimistic_fill"] = micro_shares(paper.optimistic_fill_microunits);
+        metadata["execution_outcome"] = execution_outcome_name(
+            paper.execution_outcome);
+        metadata["opposite_flow_prints_seen"] = paper.opposite_flow_prints_seen;
+        metadata["price_reach_prints_seen"] = paper.price_reach_prints_seen;
+        metadata["opposite_flow_shares_seen"] = micro_shares(
+            paper.opposite_flow_microunits_seen);
+        metadata["price_reach_shares_seen"] = micro_shares(
+            paper.price_reach_microunits_seen);
         event["metadata"] = std::move(metadata);
         spool(std::move(event));
     }
@@ -2556,7 +2743,7 @@ private:
     std::vector<InstrumentCold> instruments_;
     std::vector<PaperMakerInventory> inventory_;
     std::unordered_set<std::string> active_orders_;
-    std::unordered_map<std::string, OrderEconomics> order_economics_;
+    std::vector<MarketCycleEconomics> market_cycles_;
     double realized_pnl_before_boot_ = 0.0;
     // The supervisor can restart the C++ process without rotating the exact-SHA
     // ledger.  Sequence counters restart at one, so every process boot needs a
@@ -2565,6 +2752,7 @@ private:
     std::string telemetry_epoch_;
     std::uint64_t record_sequence_ = 0;
     std::uint64_t inventory_event_sequence_ = 0;
+    std::uint64_t market_cycle_sequence_ = 0;
 };
 
 std::vector<std::unique_ptr<MarketContext>> build_markets(
@@ -2673,11 +2861,20 @@ std::vector<std::unique_ptr<MarketContext>> build_markets(
     const auto* model = child_object(root, "model");
     const auto* fair = child_object(root, "fair");
     const auto* market_status = child_object(root, "market");
+    const auto* router = child_object(root, "paper_router");
+    const auto* maturity = router == nullptr ? nullptr
+        : child_object(*router, "maturity");
     if (contract == nullptr || model == nullptr || fair == nullptr || market_status == nullptr
         || (policy.require_verified_contract
             && !boolean(find_value(*contract, "verified"), false))
         || (policy.require_model_mature
             && !boolean(find_value(*model, "mature"), false))
+        || (policy.require_positive_2x_cost_stress
+            && (maturity == nullptr
+                || !boolean(find_value(*maturity,
+                    "eligible_for_manual_paper_promotion"), false)
+                || number(find_value(*maturity,
+                    "virtual_2x_cost_stress_pnl"), 0.0) <= 0.0))
         || !boolean(find_value(*fair, "valid"), false)) {
         invalidate_all();
         return false;

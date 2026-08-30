@@ -129,7 +129,9 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         self.assertFalse(inventory_drainable_state(seeded, SHA))
         seeded["inventory"]["market-1"]["pending_merge_shares"] = 0.0
         seeded["inventory"]["market-1"]["yes_shares"] = 9.0
-        self.assertFalse(inventory_drainable_state(seeded, SHA))
+        # Directional inventory may enter drain; the C++ PAPER owner still
+        # requires fresh, full L1 bid depth before it can prove flat.
+        self.assertTrue(inventory_drainable_state(seeded, SHA))
 
     def test_runtime_contract_uses_one_flat_handoff_cohort(self) -> None:
         loop = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")

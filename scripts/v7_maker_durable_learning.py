@@ -191,6 +191,11 @@ def order_examples(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
         first_fill_ts = 0
         filled = 0.0
         terminal_state = "OPEN_CENSORED_AT_OBSERVATION_END"
+        execution_outcome = "OPEN_CENSORED"
+        opposite_flow_prints_seen = 0
+        price_reach_prints_seen = 0
+        opposite_flow_shares_seen = 0.0
+        price_reach_shares_seen = 0.0
         for row in sorted(later.get(order_id, []), key=lambda item: int(item.get("recorded_ts_ms") or 0)):
             timestamp = int(row.get("recorded_ts_ms") or 0)
             if row.get("event_type") == "FILL":
@@ -201,6 +206,22 @@ def order_examples(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if state in {"FILLED", "CANCELLED", "REJECTED", "EXPIRED", "LOST"}:
                 terminal_ts = max(terminal_ts, timestamp)
                 terminal_state = state
+                metadata = row.get("metadata") if isinstance(
+                    row.get("metadata"), dict) else {}
+                execution_outcome = str(
+                    metadata.get("execution_outcome") or execution_outcome).upper()
+                opposite_flow_prints_seen = max(
+                    opposite_flow_prints_seen,
+                    int(number(metadata.get("opposite_flow_prints_seen"))))
+                price_reach_prints_seen = max(
+                    price_reach_prints_seen,
+                    int(number(metadata.get("price_reach_prints_seen"))))
+                opposite_flow_shares_seen = max(
+                    opposite_flow_shares_seen,
+                    number(metadata.get("opposite_flow_shares_seen")))
+                price_reach_shares_seen = max(
+                    price_reach_shares_seen,
+                    number(metadata.get("price_reach_shares_seen")))
         observation_end = terminal_ts or max(
             (int(row.get("recorded_ts_ms") or 0) for row in values), default=start
         )
@@ -214,6 +235,11 @@ def order_examples(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "first_fill_ms": max(0, first_fill_ts - start) if first_fill_ts else None,
             "filled_fraction": min(1.0, filled / intended),
             "terminal_state": terminal_state,
+            "execution_outcome": execution_outcome,
+            "opposite_flow_prints_seen": opposite_flow_prints_seen,
+            "price_reach_prints_seen": price_reach_prints_seen,
+            "opposite_flow_shares_seen": opposite_flow_shares_seen,
+            "price_reach_shares_seen": price_reach_shares_seen,
             "censored": terminal_ts <= 0 or (first_fill_ts <= 0 and terminal_state not in {"FILLED"}),
             "queue_ahead": max(0.0, number(order.get("queue_ahead"))),
             "spread": max(0.0, number(order.get("ask")) - number(order.get("bid"))),
@@ -667,9 +693,13 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
             and len({row["event_cluster"] for row in sample}) >= 12 \
             and int(hazard["filled_orders"]) >= 20
         empirical_fill = hazard["expected_filled_fraction_60s"]
-        execution_fill = (
-            cold_fill_prior if key == "GLOBAL" and not mature else empirical_fill
-        )
+        # The prior is already present in ``empirical_fill`` through explicit
+        # Beta shrinkage. Replacing thousands of observed no-fills with the raw
+        # 2% prior until twenty fills arrive makes the decision-facing model
+        # permanently optimistic and discards the very evidence exploration
+        # was created to collect. Empty cells keep the prior; every observed
+        # cell, including GLOBAL, consumes its own shrunk posterior.
+        execution_fill = empirical_fill if sample else cold_fill_prior
         adverse = (
             compatible_adverse_models.get("GLOBAL", {})
             if key == "GLOBAL" else adverse_models.get(key, {})
@@ -680,8 +710,6 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
             "empirical_fill_probability": empirical_fill,
             "fill_probability_semantics": (
                 "explicit_cold_start_prior" if not sample else
-                "cold_prior_until_global_maturity_cell_evidence_remains_local"
-                if key == "GLOBAL" and not mature else
                 "beta_shrunk_censored_expected_filled_fraction_per_posted_share"
             ),
             "adverse_markout_per_share": max(
@@ -714,6 +742,16 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
     # chronological OOS window, so it must never confer economic maturity or
     # silently perform the governed challenger -> champion promotion.
     has_evidence = bool(examples)
+    funnel_counts = Counter(row["execution_outcome"] for row in examples)
+    terminal_funnel_examples = [
+        row for row in examples if row["execution_outcome"] != "OPEN_CENSORED"
+    ]
+    reached = sum(row["price_reach_prints_seen"] > 0
+                  for row in terminal_funnel_examples)
+    opposite = sum(row["opposite_flow_prints_seen"] > 0
+                   for row in terminal_funnel_examples)
+    filled = sum(row["filled_fraction"] > 0.0
+                 for row in terminal_funnel_examples)
     return {
         "schema": MODEL_SCHEMA,
         "strategy": STRATEGY,
@@ -760,6 +798,19 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         "chronological_oos_required_for_mature_promotion": True,
         "groups": groups,
         "learned_placement_policy": placement_policy,
+        "execution_funnel_labels": {
+            "terminal_orders": len(terminal_funnel_examples),
+            "outcome_counts": dict(funnel_counts),
+            "opposite_flow_reach_rate": (
+                opposite / len(terminal_funnel_examples)
+                if terminal_funnel_examples else None),
+            "price_reach_rate": (
+                reached / len(terminal_funnel_examples)
+                if terminal_funnel_examples else None),
+            "queue_depletion_rate_given_price_reach": (
+                filled / reached if reached else None),
+            "semantics": "NO_OPPOSITE_FLOW->PRICE_NOT_REACHED->QUEUE_NOT_DEPLETED->FILL",
+        },
         "cross_policy_global_adverse_diagnostic": adverse_models.get("GLOBAL", {}),
         "joint_cycle_model": joint_states(compatible),
         "excluded_incompatible_records": dict(incompatible),

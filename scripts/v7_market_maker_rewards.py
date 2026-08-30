@@ -825,18 +825,25 @@ def _recent_flow_snapshot(
         selected.append(row)
         if len(selected) >= resource_capacity:
             break
-    # A flow-only cohort can collapse from forty markets to one just as the
-    # triggering prints age out during the drain/restart. Preserve the ranked
-    # flow leaders, then use economically eligible, event-deduplicated markets
-    # as a bounded exploration reserve. This keeps the full declared resource
-    # envelope working while the next live-flow generation accumulates.
+    # ``resource_capacity`` is a ceiling, not a market-count objective.  A
+    # zero-flow fallback consumes inventory seed, WebSocket/decision capacity
+    # and exploration budget without providing a realistic label.  Keep an
+    # optional explicitly bounded reserve for controlled experiments, but the
+    # production policy sets it to zero and leaves unused capacity available to
+    # the next fresh-flow generation.
     operational_floor = min(
         resource_capacity,
         max(minimum_markets, int(flow_cfg.get(
-            "minimum_operational_markets", resource_capacity))),
+            "minimum_operational_markets", minimum_markets))),
+    )
+    maximum_zero_flow_reserve = min(
+        resource_capacity,
+        max(0, int(flow_cfg.get("maximum_zero_flow_reserve_markets", 0))),
     )
     stable_reserve_added = 0
-    if len(selected) < operational_floor:
+    reserve_target = min(
+        operational_floor, len(selected) + maximum_zero_flow_reserve)
+    if len(selected) < reserve_target:
         reserve = _fallback_snapshot(
             universe_path, selection_cfg, capacity_cfg, resource_capacity,
             model_sha=model_sha, primary_error="recent_flow_reserve",
@@ -877,7 +884,7 @@ def _recent_flow_snapshot(
             selected_events.add(event_key)
             selected.append(row)
             stable_reserve_added += 1
-            if len(selected) >= operational_floor:
+            if len(selected) >= reserve_target:
                 break
     if len(selected) < minimum_markets:
         raise ValueError(f"maker_recent_flow_insufficient_markets:{len(selected)}")
@@ -902,11 +909,13 @@ def _recent_flow_snapshot(
         "recent_flow_latest_receive_ms": latest_receive_ms,
         "recent_flow_source": flow_source,
         "minimum_operational_markets": operational_floor,
+        "maximum_zero_flow_reserve_markets": maximum_zero_flow_reserve,
         "stable_reserve_added": stable_reserve_added,
+        "unused_resource_capacity_markets": max(0, resource_capacity - len(selected)),
         "minimum_side_prints_2m": minimum_side_prints_2m,
         "maximum_last_side_age_ms": maximum_last_side_age_ms,
         "markets": selected,
-        "note": "PAPER maker ranks bid and inventory-backed ask opportunity separately from causal BUY/SELL aggressor flow, then fills unused cohort capacity with bounded stable-spread exploration; rewards remain zero unless verified.",
+        "note": "PAPER maker ranks market-side cells from causal BUY/SELL aggressor flow. Resource capacity is a ceiling; zero-flow reserve is explicitly bounded and disabled in production. Rewards remain zero unless verified.",
     }
 
 

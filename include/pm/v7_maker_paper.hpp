@@ -25,6 +25,16 @@ enum class PaperMakerEventKind : std::uint8_t {
     InventorySplit = 7,
     InventorySplitRequested = 8,
     InventorySplitRejected = 9,
+    InventoryLiquidation = 10,
+};
+
+enum class PaperExecutionOutcome : std::uint8_t {
+    Pending = 0,
+    Filled = 1,
+    PartialFill = 2,
+    NoOppositeFlow = 3,
+    PriceNotReached = 4,
+    QueueNotDepleted = 5,
 };
 
 struct PaperMakerPolicy {
@@ -70,6 +80,14 @@ struct PaperMakerEvent {
     // collateral. This prevents an arbitrary 50/50 bookkeeping convention
     // from being reported as trading P&L when one leg is sold.
     double split_yes_reference_price = 0.0;
+    // Per-order causal execution funnel.  These counters survive until the
+    // terminal order event so cancellation is a labelled observation rather
+    // than an undifferentiated zero.
+    std::uint64_t opposite_flow_prints_seen = 0;
+    std::uint64_t price_reach_prints_seen = 0;
+    std::int64_t opposite_flow_microunits_seen = 0;
+    std::int64_t price_reach_microunits_seen = 0;
+    PaperExecutionOutcome execution_outcome = PaperExecutionOutcome::Pending;
 };
 
 struct PaperMakerResult {
@@ -151,6 +169,17 @@ public:
     [[nodiscard]] PaperMakerResult cancel_all(
         std::int64_t monotonic_ns) noexcept;
 
+    // PAPER-only bounded drain unwind.  It is executable only after all
+    // resting orders are terminal and only when fresh L1 bid depth covers the
+    // entire directional residual; partial or synthetic liquidity is refused.
+    [[nodiscard]] PaperMakerResult liquidate_directional_inventory(
+        std::int64_t yes_best_bid_tick,
+        std::int64_t yes_bid_depth_microunits,
+        std::int64_t no_best_bid_tick,
+        std::int64_t no_bid_depth_microunits,
+        std::int32_t tick_size_e4,
+        std::int64_t timestamp_ns) noexcept;
+
     [[nodiscard]] PaperMakerResult advance_time(
         std::int64_t monotonic_ns) noexcept;
 
@@ -167,6 +196,10 @@ private:
         PaperRestingOrder paper{};
         std::uint64_t intent_id = 0;
         std::int32_t tick_size_e4 = 0;
+        std::uint64_t opposite_flow_prints_seen = 0;
+        std::uint64_t price_reach_prints_seen = 0;
+        std::int64_t opposite_flow_microunits_seen = 0;
+        std::int64_t price_reach_microunits_seen = 0;
         std::uint8_t occupied = 0;
     };
 
@@ -182,6 +215,8 @@ private:
     [[nodiscard]] QueueEnvelope make_queue(std::int64_t visible) const noexcept;
     void emit(PaperMakerResult& result, PaperMakerEvent event) const noexcept;
     void request_cancel(Slot& slot, std::int64_t now, PaperMakerResult& result) noexcept;
+    void attach_execution_funnel(const Slot& slot, PaperMakerEvent& event,
+                                 bool terminal_event) const noexcept;
     void apply_operational_fill(Slot& slot, std::int64_t fill_microunits,
                                 std::int64_t timestamp_ns, PaperMakerEvent& event) noexcept;
     void maybe_merge(std::int64_t timestamp_ns, PaperMakerResult& result) noexcept;

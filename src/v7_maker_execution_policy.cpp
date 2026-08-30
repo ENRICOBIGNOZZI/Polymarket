@@ -385,6 +385,38 @@ MakerExecutionResult MakerPaperExecutionPolicy::cancel_all(
     return out;
 }
 
+MakerExecutionResult MakerPaperExecutionPolicy::liquidate_directional_inventory(
+    std::uint64_t market_handle,
+    std::int64_t yes_best_bid_tick,
+    std::int64_t yes_bid_depth_microunits,
+    std::int64_t no_best_bid_tick,
+    std::int64_t no_bid_depth_microunits,
+    std::int64_t timestamp_ns,
+    SleeveCapitalAccount& capital) noexcept {
+    MakerExecutionResult out;
+    auto* slot = market(market_handle);
+    if (slot == nullptr) {
+        out.reason = MakerExecutionReason::UnknownMarket;
+        return out;
+    }
+    out.paper = slot->engine->liquidate_directional_inventory(
+        yes_best_bid_tick, yes_bid_depth_microunits,
+        no_best_bid_tick, no_bid_depth_microunits,
+        slot->tick_size_e4, timestamp_ns);
+    if (out.paper.rejected || out.paper.invariant_violation) {
+        out.reason = MakerExecutionReason::PaperRejected;
+        return out;
+    }
+    if (!sync_inventory_capital(market_handle, capital)) {
+        out.reason = MakerExecutionReason::CapitalInvariant;
+        out.capital_invariant_violation = 1;
+        return out;
+    }
+    out.reason = MakerExecutionReason::Applied;
+    out.accepted = 1;
+    return out;
+}
+
 MakerExecutionResult MakerPaperExecutionPolicy::split_complete_sets(
     std::uint64_t market_handle,
     std::int64_t microunits,

@@ -136,14 +136,15 @@ def inventory_drainable_state(
     *,
     newer_than_ms: int = 0,
 ) -> bool:
-    """Accept only inventory that the frozen PAPER engine can merge to cash.
+    """Accept inventory the frozen PAPER engine can merge or unwind to cash.
 
     The maker intentionally seeds balanced YES/NO complete sets. Requiring zero
     inventory before requesting a drain therefore makes every cohort rotation
-    impossible. Balanced complete sets are safe to admit to the drain; live
-    reservations are cancelled there, while in-flight split/merge accounting
-    still fails closed. The post-drain handoff requires ``flat_state`` and
-    proves that the merge completed before any process is stopped.
+    impossible. Balanced complete sets are merged; a directional residual is
+    crossed only by the canonical PAPER execution owner when a fresh L1 bid
+    covers the entire quantity. In-flight split/merge accounting still fails
+    closed. The post-drain handoff requires ``flat_state`` and proves that all
+    merge/unwind work completed before any process is stopped.
     """
     if (
         value.get("schema") != "polymarket_v7_professional_maker_state_v2"
@@ -173,7 +174,6 @@ def inventory_drainable_state(
         if (
             yes < -1e-9 or no < -1e-9
             or yes_cost < -1e-12 or no_cost < -1e-12
-            or abs(yes - no) > 1e-9
             or pending > 1e-9
         ):
             return False

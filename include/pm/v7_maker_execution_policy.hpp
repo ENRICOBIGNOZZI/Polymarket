@@ -64,6 +64,15 @@ public:
         std::int64_t monotonic_ns,
         SleeveCapitalAccount& capital) noexcept;
 
+    [[nodiscard]] MakerExecutionResult liquidate_directional_inventory(
+        std::uint64_t market_handle,
+        std::int64_t yes_best_bid_tick,
+        std::int64_t yes_bid_depth_microunits,
+        std::int64_t no_best_bid_tick,
+        std::int64_t no_bid_depth_microunits,
+        std::int64_t timestamp_ns,
+        SleeveCapitalAccount& capital) noexcept;
+
     [[nodiscard]] MakerExecutionResult split_complete_sets(
         std::uint64_t market_handle,
         std::int64_t microunits,

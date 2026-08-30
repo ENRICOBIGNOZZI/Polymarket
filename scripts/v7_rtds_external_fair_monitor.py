@@ -602,6 +602,13 @@ class Monitor:
             and not router.get("blocker")
             and int(time.time()) - int(router.get("timestamp") or 0) <= 5
         )
+        router_maturity = router.get("maturity") if isinstance(
+            router.get("maturity"), dict) else {}
+        maker_quote_authority_eligible = bool(
+            router.get("model_mature") is True
+            and router_maturity.get("eligible_for_manual_paper_promotion") is True
+            and float(router_maturity.get("virtual_2x_cost_stress_pnl") or 0.0) > 0.0
+        )
         atomic_json(self.root / "oracle_status.json", {
             "schema": "polymarket_v7_same_oracle_status_v1", "state": continuity,
             "reason": "" if oracle_healthy else self.last_error, "timestamp_ns": now,
@@ -658,8 +665,16 @@ class Monitor:
                     else "AWAITING_LIVE_CLOB_BENCHMARK"
                 ),
             },
-            "model": {"mature": False, "coverage": 0.0,
-                      "economic_confidence": router.get("economic_confidence", "MORE_EVIDENCE_REQUIRED")},
+            "model": {
+                "mature": maker_quote_authority_eligible,
+                "maker_quote_authority_eligible": maker_quote_authority_eligible,
+                "manual_model_maturity_flag": router.get("model_mature") is True,
+                "positive_2x_cost_stress": float(
+                    router_maturity.get("virtual_2x_cost_stress_pnl") or 0.0) > 0.0,
+                "coverage": float(router_maturity.get("interval_coverage") or 0.0),
+                "economic_confidence": router.get(
+                    "economic_confidence", "MORE_EVIDENCE_REQUIRED"),
+            },
             "latency": {
                 stage: latency_quantiles(samples)
                 for stage, samples in self.latency_samples.items()

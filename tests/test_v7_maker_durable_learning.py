@@ -85,12 +85,13 @@ class DurableLearningTests(unittest.TestCase):
             cold_fill_prior=0.02, fill_prior_strength_orders=20.0,
         )
         self.assertEqual(fitted["family"], "censored_survival_hazard_joint_cycle_v3")
-        self.assertAlmostEqual(fitted["groups"]["GLOBAL"]["fill_probability"], 0.02)
+        self.assertAlmostEqual(
+            fitted["groups"]["GLOBAL"]["fill_probability"], 0.4 / 28.0)
         self.assertAlmostEqual(
             fitted["groups"]["GLOBAL"]["empirical_fill_probability"], 0.4 / 28.0)
         self.assertEqual(
             fitted["groups"]["GLOBAL"]["fill_probability_semantics"],
-            "cold_prior_until_global_maturity_cell_evidence_remains_local",
+            "beta_shrunk_censored_expected_filled_fraction_per_posted_share",
         )
         self.assertEqual(fitted["hyperparameters"]["fill_prior_strength_orders"], 20.0)
         self.assertFalse(fitted["groups"]["GLOBAL"]["mature"])
@@ -110,6 +111,33 @@ class DurableLearningTests(unittest.TestCase):
         self.assertFalse(model["learned_placement_policy"]["valid"])
         self.assertEqual(
             model["learned_placement_policy"]["state"], "EVIDENCE_ACCUMULATING")
+
+    def test_terminal_execution_funnel_labels_no_fill_stage(self) -> None:
+        submitted = record(
+            "ORDER_SUBMITTED", "submitted", order_id="o1", event_id="event-1",
+            intended_size=5.0, recorded_ts_ms=1_000,
+        )
+        terminal = record(
+            "ORDER_STATE", "terminal", order_id="o1", event_id="event-1",
+            order_state="CANCELLED", recorded_ts_ms=6_000,
+        )
+        terminal["metadata"].update({
+            "execution_outcome": "PRICE_NOT_REACHED",
+            "opposite_flow_prints_seen": 3,
+            "price_reach_prints_seen": 0,
+            "opposite_flow_shares_seen": 12.5,
+            "price_reach_shares_seen": 0.0,
+        })
+        fitted = fit_model(
+            [submitted, terminal], model_sha=SHA, policy_hash="policy",
+            config_hash="config", cold_fill_prior=0.02,
+        )
+        funnel = fitted["execution_funnel_labels"]
+        self.assertEqual(funnel["terminal_orders"], 1)
+        self.assertEqual(funnel["outcome_counts"]["PRICE_NOT_REACHED"], 1)
+        self.assertEqual(funnel["opposite_flow_reach_rate"], 1.0)
+        self.assertEqual(funnel["price_reach_rate"], 0.0)
+        self.assertIsNone(funnel["queue_depletion_rate_given_price_reach"])
 
     def test_placement_features_are_side_oriented_and_complete(self) -> None:
         row = record("ORDER_SUBMITTED", "r", side="SELL")

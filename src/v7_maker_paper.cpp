@@ -196,6 +196,27 @@ void MakerPaperMarketEngine::emit(PaperMakerResult& result, PaperMakerEvent even
     result.events[result.event_count++] = event;
 }
 
+void MakerPaperMarketEngine::attach_execution_funnel(
+    const Slot& slot, PaperMakerEvent& event, bool terminal_event) const noexcept {
+    event.opposite_flow_prints_seen = slot.opposite_flow_prints_seen;
+    event.price_reach_prints_seen = slot.price_reach_prints_seen;
+    event.opposite_flow_microunits_seen = slot.opposite_flow_microunits_seen;
+    event.price_reach_microunits_seen = slot.price_reach_microunits_seen;
+    const auto filled = std::max<std::int64_t>(0, slot.oms.record().filled_microunits);
+    if (filled >= slot.oms.record().original_microunits
+        && slot.oms.record().original_microunits > 0) {
+        event.execution_outcome = PaperExecutionOutcome::Filled;
+    } else if (filled > 0) {
+        event.execution_outcome = PaperExecutionOutcome::PartialFill;
+    } else if (terminal_event && slot.opposite_flow_prints_seen == 0) {
+        event.execution_outcome = PaperExecutionOutcome::NoOppositeFlow;
+    } else if (terminal_event && slot.price_reach_prints_seen == 0) {
+        event.execution_outcome = PaperExecutionOutcome::PriceNotReached;
+    } else if (terminal_event) {
+        event.execution_outcome = PaperExecutionOutcome::QueueNotDepleted;
+    }
+}
+
 OmsEvent MakerPaperMarketEngine::oms_event(OmsEventType type,
                                             std::int64_t timestamp_ns) noexcept {
     OmsEvent event;
@@ -242,6 +263,7 @@ void MakerPaperMarketEngine::request_cancel(
     event.tick_size_e4 = slot.tick_size_e4;
     event.original_microunits = slot.oms.record().original_microunits;
     event.queue = slot.paper.queue;
+    attach_execution_funnel(slot, event, false);
     emit(result, event);
     result.applied = 1;
 }
@@ -485,7 +507,7 @@ PaperMakerResult MakerPaperMarketEngine::on_public_trade(
     std::array<std::size_t, kMaxPaperOrdersPerMarket> slot_indices{};
     std::size_t count = 0;
     for (std::size_t i = 0; i < slots_.size(); ++i) {
-        const auto& slot = slots_[i];
+        auto& slot = slots_[i];
         if (!slot.occupied || !queue_active(slot.oms.record().state)
             || slot.oms.record().instrument_handle != trade.instrument_handle) {
             continue;
@@ -504,9 +526,31 @@ PaperMakerResult MakerPaperMarketEngine::on_public_trade(
             const bool price_crossing = slot.oms.record().side == Side::Buy
                 ? trade.price_tick <= slot.oms.record().price_tick
                 : trade.price_tick >= slot.oms.record().price_tick;
-            if (!correct_side) ++result.wrong_aggressor_side;
-            else if (!price_crossing) ++result.price_not_crossing;
-            else ++result.eligible_orders;
+            if (!correct_side) {
+                ++result.wrong_aggressor_side;
+            } else {
+                ++slot.opposite_flow_prints_seen;
+                if (slot.opposite_flow_microunits_seen
+                    <= std::numeric_limits<std::int64_t>::max() - trade.quantity_microunits) {
+                    slot.opposite_flow_microunits_seen += trade.quantity_microunits;
+                } else {
+                    slot.opposite_flow_microunits_seen =
+                        std::numeric_limits<std::int64_t>::max();
+                }
+                if (!price_crossing) {
+                    ++result.price_not_crossing;
+                } else {
+                    ++slot.price_reach_prints_seen;
+                    if (slot.price_reach_microunits_seen
+                        <= std::numeric_limits<std::int64_t>::max() - trade.quantity_microunits) {
+                        slot.price_reach_microunits_seen += trade.quantity_microunits;
+                    } else {
+                        slot.price_reach_microunits_seen =
+                            std::numeric_limits<std::int64_t>::max();
+                    }
+                    ++result.eligible_orders;
+                }
+            }
         }
         fifo[count] = slot.paper;
         slot_indices[count] = i;
@@ -605,6 +649,8 @@ PaperMakerResult MakerPaperMarketEngine::on_public_trade(
         } else {
             event.order_state = slot->oms.record().state;
         }
+        attach_execution_funnel(*slot, event,
+                                event.order_state == OrderState::Filled);
         // Canonical evidence must observe the causal fill before any accounting
         // terminal event generated from that fill.
         emit(result, event);
@@ -650,6 +696,7 @@ PaperMakerResult MakerPaperMarketEngine::advance_time(
             event.tick_size_e4 = slot.tick_size_e4;
             event.original_microunits = slot.oms.record().original_microunits;
             event.queue = slot.paper.queue;
+            attach_execution_funnel(slot, event, true);
             emit(result, event);
         }
         result.applied = 1;
@@ -672,6 +719,91 @@ PaperMakerResult MakerPaperMarketEngine::cancel_all(
         if (result.invariant_violation) break;
     }
     refresh_inventory_derived();
+    return result;
+}
+
+PaperMakerResult MakerPaperMarketEngine::liquidate_directional_inventory(
+    std::int64_t yes_best_bid_tick,
+    std::int64_t yes_bid_depth_microunits,
+    std::int64_t no_best_bid_tick,
+    std::int64_t no_bid_depth_microunits,
+    std::int32_t tick_size_e4,
+    std::int64_t timestamp_ns) noexcept {
+    PaperMakerResult result;
+    if (!policy_.valid() || timestamp_ns <= 0 || tick_size_e4 <= 0
+        || tick_size_e4 > 10'000 || 10'000 % tick_size_e4 != 0
+        || active_order_count() != 0 || inventory_.pending_split_microunits != 0
+        || inventory_.pending_merge_microunits != 0) {
+        result.rejected = 1;
+        return result;
+    }
+
+    // Release every balanced complete set before crossing a directional leg.
+    maybe_merge(timestamp_ns, result);
+    refresh_inventory_derived();
+    const auto directional = inventory_.directional_microunits;
+    if (directional == 0) {
+        result.applied = 1;
+        return result;
+    }
+
+    const bool liquidate_yes = directional > 0;
+    const std::int64_t quantity_microunits = liquidate_yes
+        ? directional : -directional;
+    const std::int64_t bid_tick = liquidate_yes
+        ? yes_best_bid_tick : no_best_bid_tick;
+    const std::int64_t bid_depth = liquidate_yes
+        ? yes_bid_depth_microunits : no_bid_depth_microunits;
+    const double bid_price = price(bid_tick, tick_size_e4);
+    std::int64_t& quantity = liquidate_yes
+        ? inventory_.yes_microunits : inventory_.no_microunits;
+    double& cost = liquidate_yes ? inventory_.yes_cost : inventory_.no_cost;
+    if (quantity_microunits <= 0 || quantity_microunits > quantity
+        || bid_depth < quantity_microunits
+        || !(bid_price > 0.0 && bid_price < 1.0)) {
+        result.rejected = 1;
+        return result;
+    }
+
+    const double held_shares = shares(quantity);
+    const double sold_shares = shares(quantity_microunits);
+    if (held_shares <= 0.0 || sold_shares <= 0.0) {
+        result.rejected = 1;
+        return result;
+    }
+    const double average_cost = cost / held_shares;
+    const double realized = sold_shares * (bid_price - average_cost);
+
+    PaperMakerEvent event;
+    event.kind = PaperMakerEventKind::InventoryLiquidation;
+    event.instrument_handle = liquidate_yes
+        ? yes_instrument_handle_ : no_instrument_handle_;
+    event.side = Side::Sell;
+    event.order_state = OrderState::Filled;
+    event.timestamp_ns = timestamp_ns;
+    event.price_tick = bid_tick;
+    event.tick_size_e4 = tick_size_e4;
+    event.original_microunits = quantity_microunits;
+    event.operational_fill_microunits = quantity_microunits;
+    event.realized_pnl = realized;
+    event.yes_before_microunits = inventory_.yes_microunits;
+    event.no_before_microunits = inventory_.no_microunits;
+    event.yes_cost_before = inventory_.yes_cost;
+    event.no_cost_before = inventory_.no_cost;
+    event.collateral_before_microdollars = collateral_microdollars(
+        inventory_.yes_cost, inventory_.no_cost);
+
+    quantity -= quantity_microunits;
+    cost = std::max(0.0, cost - sold_shares * average_cost);
+    inventory_.realized_trading_pnl += realized;
+    refresh_inventory_derived();
+    event.yes_after_microunits = inventory_.yes_microunits;
+    event.no_after_microunits = inventory_.no_microunits;
+    event.yes_cost_after = inventory_.yes_cost;
+    event.no_cost_after = inventory_.no_cost;
+    event.collateral_after_microdollars = inventory_.collateral_committed_microdollars;
+    emit(result, event);
+    result.applied = 1;
     return result;
 }
 

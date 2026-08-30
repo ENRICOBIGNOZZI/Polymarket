@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import csv
 import hashlib
 import json
 import math
 import statistics
 import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -18,11 +20,95 @@ from v7_ledger_spool import spool_event
 from v7_shared_market_state import SharedStateError
 
 FLOW_FEATURE_DIM = 8
+MODEL_FEATURE_DIM = 14
+MODEL_TRAINING_WINDOW_SECONDS = 300
+MODEL_RIDGE = 1_000.0
+MODEL_PREDICTION_SHRINKAGE = 0.50
+MODEL_ACTIVE_QUANTILE = 0.90
+MODEL_SPEC_VERSION = "lagged_sparse_ridge_v3"
 DATASET_VERSION = 2
 DATASET_LINEAGE = "EVENT_NOVEL_SHARED_STATE_V2"
 COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT = "complete_round_trip_executable_ev"
 CONSERVATIVE_MARKING_CONTRACT = "full_depth_executable_bid_net_fee_or_zero_fail_closed"
 LIVE_FLOW_SCHEMA = "polymarket_v7_live_trade_flow_v1"
+
+
+def _model_feature_vector(
+    raw_x: list[float], mid: float, spread: float,
+    history: list[tuple[int, float]], ts: int,
+) -> list[float]:
+    """Build causal regime/lag features using only observations before ``ts``."""
+    def lag_mid(seconds: int) -> float:
+        index = bisect.bisect_right(history, (ts - seconds, math.inf)) - 1
+        return history[index][1] if index >= 0 else mid
+
+    return list(raw_x) + [
+        mid - 0.5,
+        max(0.0, spread),
+        mid - lag_mid(1),
+        mid - lag_mid(5),
+        mid - lag_mid(15),
+        mid - lag_mid(30),
+    ]
+
+
+def causal_model_rows(samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Enrich stored raw states without borrowing same/future timestamp data."""
+    rows: list[dict[str, Any]] = []
+    for row in samples:
+        try:
+            raw_x = [float(value) for value in row["x"]]
+            ts = int(row["ts"])
+            mid = float(row.get("mid", 0.5))
+            spread = float(row.get("spread", 0.0))
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        if (len(raw_x) != FLOW_FEATURE_DIM or ts <= 0
+                or not all(math.isfinite(value)
+                           for value in raw_x + [mid, spread])):
+            continue
+        rows.append({**row, "raw_x": raw_x, "ts": ts,
+                     "mid": mid, "spread": spread})
+    rows.sort(key=lambda row: (int(row["ts"]), str(row.get("sample_key") or "")))
+    histories: dict[str, list[tuple[int, float]]] = defaultdict(list)
+    index = 0
+    while index < len(rows):
+        end = index + 1
+        timestamp = int(rows[index]["ts"])
+        while end < len(rows) and int(rows[end]["ts"]) == timestamp:
+            end += 1
+        # Same-second state publications are correlated and have no reliable
+        # total ordering here.  Every row in the group sees only older seconds.
+        for row in rows[index:end]:
+            market_id = str(row.get("market_id") or "")
+            row["x"] = _model_feature_vector(
+                row["raw_x"], float(row["mid"]), float(row["spread"]),
+                histories[market_id], timestamp,
+            )
+        for row in rows[index:end]:
+            histories[str(row.get("market_id") or "")].append(
+                (timestamp, float(row["mid"])))
+        index = end
+    return rows
+
+
+def market_mid_histories(samples: list[dict[str, Any]]) -> dict[str, list[tuple[int, float]]]:
+    histories: dict[str, list[tuple[int, float]]] = defaultdict(list)
+    seen: set[tuple[str, int, float]] = set()
+    for row in samples:
+        market_id = str(row.get("market_id") or "")
+        try:
+            ts = int(row.get("ts") or 0)
+            mid = float(row.get("mid"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        identity = (market_id, ts, mid)
+        if market_id and ts > 0 and math.isfinite(mid) and identity not in seen:
+            histories[market_id].append((ts, mid))
+            seen.add(identity)
+    for history in histories.values():
+        history.sort()
+    return histories
 
 
 def _finite(value: Any, default: float = math.nan) -> float:
@@ -125,6 +211,29 @@ def model_validity(
     return not reasons, reasons
 
 
+def prediction_activity_threshold(
+    samples: list[dict[str, Any]], beta: list[float],
+    quantile: float = MODEL_ACTIVE_QUANTILE,
+) -> float:
+    magnitudes = sorted(
+        abs(sum(a * b for a, b in zip(beta, row["x"])))
+        for row in samples if isinstance(row.get("x"), list)
+        and len(row["x"]) == len(beta)
+    )
+    if not magnitudes:
+        return math.inf
+    index = min(len(magnitudes) - 1, max(0, int(
+        min(1.0, max(0.0, quantile)) * (len(magnitudes) - 1))))
+    return magnitudes[index]
+
+
+def model_prediction(x: list[float], beta: list[float], threshold: float) -> float:
+    raw = sum(a * b for a, b in zip(beta, x))
+    if not math.isfinite(raw) or abs(raw) < max(0.0, threshold):
+        return 0.0
+    return MODEL_PREDICTION_SHRINKAGE * raw
+
+
 def chronological_oos_diagnostics(
     samples: list[dict[str, Any]], *, horizon_seconds: int,
     minimum_train_samples: int = 120, minimum_oos_samples: int = 40,
@@ -136,24 +245,23 @@ def chronological_oos_diagnostics(
     horizon overlaps the holdout boundary. Risk remains closed unless the model
     beats a no-change forecast and has positive directional/correlation skill.
     """
-    rows: list[dict[str, Any]] = []
-    for row in samples:
+    rows = []
+    for row in causal_model_rows(samples):
         try:
-            x = [float(value) for value in row["x"]]
             y = float(row["y"])
-            ts = int(row["ts"])
         except (KeyError, TypeError, ValueError, OverflowError):
             continue
-        if len(x) != FLOW_FEATURE_DIM or not all(math.isfinite(value) for value in x + [y]) or ts <= 0:
-            continue
-        rows.append({**row, "x": x, "y": y, "ts": ts})
-    rows.sort(key=lambda row: (int(row["ts"]), str(row.get("sample_key") or "")))
+        if len(row["x"]) == MODEL_FEATURE_DIM and math.isfinite(y):
+            rows.append({**row, "y": y})
     result: dict[str, Any] = {
         "valid": False, "reasons": [], "train_samples": 0, "oos_samples": 0,
         "purge_seconds": max(1, int(horizon_seconds)), "baseline_mse": None,
         "model_mse": None, "mse_improvement_fraction": None,
         "prediction_target_correlation": None, "directional_accuracy": None,
-        "oos_residual_sigma": None,
+        "oos_residual_sigma": None, "folds": [],
+        "positive_fold_fraction": 0.0,
+        "minimum_positive_fold_fraction": 0.60,
+        "training_window_seconds": MODEL_TRAINING_WINDOW_SECONDS,
     }
     if len(rows) < minimum_train_samples + minimum_oos_samples:
         result["reasons"] = ["INSUFFICIENT_CHRONOLOGICAL_OOS_SAMPLES"]
@@ -165,6 +273,7 @@ def chronological_oos_diagnostics(
     train = [
         row for row in rows[:split]
         if int(row["ts"]) + max(1, int(horizon_seconds)) < holdout_start
+        and int(row["ts"]) >= holdout_start - MODEL_TRAINING_WINDOW_SECONDS
     ]
     result["train_samples"] = len(train)
     result["oos_samples"] = len(holdout)
@@ -176,8 +285,11 @@ def chronological_oos_diagnostics(
     if reasons:
         result["reasons"] = reasons
         return result
-    beta = solve_ridge(train, 1e-2, FLOW_FEATURE_DIM)
-    predictions = [sum(a * b for a, b in zip(beta, row["x"])) for row in holdout]
+    beta = solve_ridge(train, MODEL_RIDGE, MODEL_FEATURE_DIM)
+    activity_threshold = prediction_activity_threshold(train, beta)
+    predictions = [
+        model_prediction(row["x"], beta, activity_threshold) for row in holdout
+    ]
     targets = [float(row["y"]) for row in holdout]
     residuals = [target - prediction for target, prediction in zip(targets, predictions)]
     baseline_mse = statistics.fmean(target * target for target in targets)
@@ -206,6 +318,65 @@ def chronological_oos_diagnostics(
         reasons.append("OOS_NONPOSITIVE_PREDICTIVE_CORRELATION")
     if len(active) < minimum_oos_samples // 2 or directional_accuracy < 0.52:
         reasons.append("OOS_DIRECTIONAL_SKILL_NOT_ESTABLISHED")
+    folds: list[dict[str, Any]] = []
+    fold_width = max(minimum_oos_samples, len(rows) // 10)
+    for fraction in (0.50, 0.60, 0.70, 0.80, 0.90):
+        fold_split = int(len(rows) * fraction)
+        fold_end = min(len(rows), fold_split + fold_width)
+        if fold_split <= 0 or fold_end - fold_split < minimum_oos_samples:
+            continue
+        fold_holdout = rows[fold_split:fold_end]
+        fold_start = int(fold_holdout[0]["ts"])
+        fold_train = [
+            row for row in rows[:fold_split]
+            if int(row["ts"]) + max(1, int(horizon_seconds)) < fold_start
+            and int(row["ts"]) >= fold_start - MODEL_TRAINING_WINDOW_SECONDS
+        ]
+        if len(fold_train) < minimum_train_samples:
+            continue
+        fold_beta = solve_ridge(fold_train, MODEL_RIDGE, MODEL_FEATURE_DIM)
+        fold_threshold = prediction_activity_threshold(fold_train, fold_beta)
+        fold_predictions = [
+            model_prediction(row["x"], fold_beta, fold_threshold)
+            for row in fold_holdout
+        ]
+        fold_targets = [float(row["y"]) for row in fold_holdout]
+        fold_baseline = statistics.fmean(value * value for value in fold_targets)
+        fold_model = statistics.fmean(
+            (target - prediction) ** 2
+            for target, prediction in zip(fold_targets, fold_predictions)
+        )
+        fold_improvement = (
+            (fold_baseline - fold_model) / fold_baseline
+            if fold_baseline > 1e-15 else -math.inf
+        )
+        fold_prediction_mean = statistics.fmean(fold_predictions)
+        fold_target_mean = statistics.fmean(fold_targets)
+        fold_covariance = statistics.fmean(
+            (prediction - fold_prediction_mean) * (target - fold_target_mean)
+            for prediction, target in zip(fold_predictions, fold_targets)
+        )
+        fold_prediction_var = statistics.fmean(
+            (prediction - fold_prediction_mean) ** 2 for prediction in fold_predictions)
+        fold_target_var = statistics.fmean(
+            (target - fold_target_mean) ** 2 for target in fold_targets)
+        fold_correlation = (
+            fold_covariance / math.sqrt(fold_prediction_var * fold_target_var)
+            if fold_prediction_var > 1e-18 and fold_target_var > 1e-18 else 0.0
+        )
+        folds.append({
+            "train_samples": len(fold_train),
+            "oos_samples": len(fold_holdout),
+            "mse_improvement_fraction": fold_improvement,
+            "prediction_target_correlation": fold_correlation,
+            "prediction_activity_threshold": fold_threshold,
+            "positive": fold_improvement >= 0.02 and fold_correlation >= 0.05,
+        })
+    positive_fold_fraction = (
+        sum(row["positive"] for row in folds) / len(folds) if folds else 0.0
+    )
+    if positive_fold_fraction < 0.60:
+        reasons.append("OOS_FOLD_STABILITY_NOT_ESTABLISHED")
     result.update({
         "valid": not reasons, "reasons": reasons,
         "baseline_mse": baseline_mse, "model_mse": model_mse,
@@ -214,8 +385,196 @@ def chronological_oos_diagnostics(
         "directional_accuracy": directional_accuracy,
         "directional_samples": len(active),
         "oos_residual_sigma": max(1e-4, sigma) if math.isfinite(sigma) else None,
+        "folds": folds,
+        "positive_fold_fraction": positive_fold_fraction,
+        "prediction_activity_threshold": (
+            activity_threshold if math.isfinite(activity_threshold) else None),
+        "prediction_shrinkage": MODEL_PREDICTION_SHRINKAGE,
+        "active_quantile": MODEL_ACTIVE_QUANTILE,
     })
     return result
+
+
+def fixed_forward_oos_diagnostics(
+    rows: list[dict[str, Any]], *, beta: list[float], threshold: float,
+    validation_start_ts: int, horizon_seconds: int,
+    minimum_oos_samples: int = 40,
+) -> dict[str, Any]:
+    """Evaluate a frozen challenger only on origins created after selection."""
+    challenger_valid = (
+        len(beta) == MODEL_FEATURE_DIM
+        and all(math.isfinite(value) for value in beta)
+        and math.isfinite(threshold)
+        and threshold >= 0.0
+        and validation_start_ts > 0
+    )
+    holdout = [
+        row for row in rows
+        if row.get("y") is not None and int(row.get("ts") or 0) > validation_start_ts
+    ]
+    result: dict[str, Any] = {
+        "valid": False,
+        "reasons": [],
+        "validation_start_ts": validation_start_ts,
+        "oos_samples": len(holdout),
+        "independent_time_buckets": len({
+            int(row["ts"]) // max(1, int(horizon_seconds)) for row in holdout
+        }),
+        "unique_events": len({
+            str(row.get("event_id") or row.get("market_id") or "")
+            for row in holdout
+        } - {""}),
+        "baseline_mse": None,
+        "model_mse": None,
+        "mse_improvement_fraction": None,
+        "prediction_target_correlation": None,
+        "directional_accuracy": None,
+        "directional_samples": 0,
+        "oos_residual_sigma": None,
+        "model_spec_version": MODEL_SPEC_VERSION,
+        "frozen_challenger": True,
+    }
+    reasons: list[str] = []
+    if not challenger_valid:
+        result["reasons"] = ["INVALID_FROZEN_CHALLENGER"]
+        return result
+    if len(holdout) < minimum_oos_samples:
+        reasons.append("INSUFFICIENT_FORWARD_OOS_SAMPLES")
+    if result["independent_time_buckets"] < 12:
+        reasons.append("INSUFFICIENT_FORWARD_TIME_BUCKETS")
+    if result["unique_events"] < 12:
+        reasons.append("INSUFFICIENT_FORWARD_EVENT_CLUSTERS")
+    if reasons:
+        result["reasons"] = reasons
+        return result
+
+    predictions = [model_prediction(row["x"], beta, threshold) for row in holdout]
+    targets = [float(row["y"]) for row in holdout]
+    residuals = [target - prediction for target, prediction in zip(targets, predictions)]
+    baseline_mse = statistics.fmean(target * target for target in targets)
+    model_mse = statistics.fmean(value * value for value in residuals)
+    improvement = (
+        (baseline_mse - model_mse) / baseline_mse
+        if baseline_mse > 1e-15 else -math.inf
+    )
+    prediction_mean = statistics.fmean(predictions)
+    target_mean = statistics.fmean(targets)
+    covariance = statistics.fmean(
+        (prediction - prediction_mean) * (target - target_mean)
+        for prediction, target in zip(predictions, targets)
+    )
+    prediction_var = statistics.fmean(
+        (prediction - prediction_mean) ** 2 for prediction in predictions)
+    target_var = statistics.fmean(
+        (target - target_mean) ** 2 for target in targets)
+    correlation = covariance / math.sqrt(prediction_var * target_var) \
+        if prediction_var > 1e-18 and target_var > 1e-18 else 0.0
+    active = [
+        (prediction, target) for prediction, target in zip(predictions, targets)
+        if abs(prediction) > 1e-8 and abs(target) > 1e-12
+    ]
+    directional_accuracy = (
+        sum((prediction > 0.0) == (target > 0.0)
+            for prediction, target in active) / len(active)
+        if active else 0.0
+    )
+    if improvement < 0.02:
+        reasons.append("FORWARD_OOS_DOES_NOT_BEAT_NO_CHANGE_BASELINE")
+    if correlation < 0.05:
+        reasons.append("FORWARD_OOS_NONPOSITIVE_PREDICTIVE_CORRELATION")
+    if len(active) < minimum_oos_samples // 2 or directional_accuracy < 0.52:
+        reasons.append("FORWARD_OOS_DIRECTIONAL_SKILL_NOT_ESTABLISHED")
+    sigma = statistics.stdev(residuals) if len(residuals) >= 2 else math.inf
+    result.update({
+        "valid": not reasons,
+        "reasons": reasons,
+        "baseline_mse": baseline_mse,
+        "model_mse": model_mse,
+        "mse_improvement_fraction": improvement,
+        "prediction_target_correlation": correlation,
+        "directional_accuracy": directional_accuracy,
+        "directional_samples": len(active),
+        "oos_residual_sigma": max(1e-4, sigma) if math.isfinite(sigma) else None,
+    })
+    return result
+
+
+def load_or_freeze_model_challenger(
+    state: dict[str, Any], rows: list[dict[str, Any]], *,
+    horizon_seconds: int, selected_at_ts: int,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Load one immutable model specification or freeze it before future OOS.
+
+    A spec/version change deliberately starts a new forward-validation epoch.
+    We never refit a frozen challenger as its holdout arrives: doing so would
+    quietly turn the claimed forward test back into adaptive in-sample fit.
+    """
+    prior = state.get("model_challenger")
+    if isinstance(prior, dict):
+        try:
+            prior_beta = [float(value) for value in prior["beta"]]
+            prior_threshold = float(prior["prediction_activity_threshold"])
+            prior_boundary = int(prior["validation_start_ts"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            prior_beta, prior_threshold, prior_boundary = [], math.nan, 0
+        if (
+            prior.get("model_spec_version") == MODEL_SPEC_VERSION
+            and len(prior_beta) == MODEL_FEATURE_DIM
+            and all(math.isfinite(value) for value in prior_beta)
+            and math.isfinite(prior_threshold) and prior_threshold >= 0.0
+            and prior_boundary > 0
+        ):
+            loaded = dict(prior)
+            loaded["beta"] = prior_beta
+            loaded["prediction_activity_threshold"] = prior_threshold
+            loaded["validation_start_ts"] = prior_boundary
+            return loaded, {
+                "ready": True,
+                "reason": "FROZEN_CHALLENGER_LOADED",
+                "training_samples": int(loaded.get("training_samples") or 0),
+            }
+
+    boundary = max((int(row.get("ts") or 0) for row in rows), default=0)
+    purge = max(1, int(horizon_seconds))
+    train = [
+        row for row in rows
+        if row.get("y") is not None
+        and int(row.get("ts") or 0) + purge < boundary
+        and int(row.get("ts") or 0) >= boundary - MODEL_TRAINING_WINDOW_SECONDS
+    ]
+    readiness = {
+        "ready": False,
+        "reason": "INSUFFICIENT_PURGED_CHALLENGER_TRAINING_SAMPLES",
+        "training_samples": len(train),
+        "minimum_training_samples": 40,
+        "candidate_validation_start_ts": boundary,
+    }
+    if boundary <= 0 or len(train) < 40:
+        return None, readiness
+    beta = solve_ridge(train, MODEL_RIDGE, MODEL_FEATURE_DIM)
+    threshold = prediction_activity_threshold(train, beta)
+    if (len(beta) != MODEL_FEATURE_DIM
+            or not all(math.isfinite(value) for value in beta)
+            or not math.isfinite(threshold)):
+        readiness["reason"] = "INVALID_CHALLENGER_FIT"
+        return None, readiness
+    challenger = {
+        "model_spec_version": MODEL_SPEC_VERSION,
+        "frozen": True,
+        "selected_at_ts": int(selected_at_ts),
+        "validation_start_ts": boundary,
+        "training_window_seconds": MODEL_TRAINING_WINDOW_SECONDS,
+        "purge_seconds": purge,
+        "training_samples": len(train),
+        "feature_dimension": MODEL_FEATURE_DIM,
+        "ridge": MODEL_RIDGE,
+        "prediction_shrinkage": MODEL_PREDICTION_SHRINKAGE,
+        "active_quantile": MODEL_ACTIVE_QUANTILE,
+        "prediction_activity_threshold": threshold,
+        "beta": beta,
+    }
+    readiness.update({"ready": True, "reason": "CHALLENGER_FROZEN"})
+    return challenger, readiness
 
 
 def solve_ridge(samples: list[dict[str, Any]], ridge: float, feature_dim: int) -> list[float]:
@@ -233,10 +592,22 @@ def solve_ridge(samples: list[dict[str, Any]], ridge: float, feature_dim: int) -
     if len(labeled) < 40:
         return [0.0] * feature_dim
     p = feature_dim
+    means = [0.0] * p
+    scales = [1.0] * p
+    training = labeled[-10000:]
+    for index in range(1, p):
+        means[index] = statistics.fmean(float(row["x"][index]) for row in training)
+        variance = statistics.fmean(
+            (float(row["x"][index]) - means[index]) ** 2 for row in training)
+        scales[index] = max(1e-8, math.sqrt(variance))
     matrix = [[0.0] * p for _ in range(p)]
     rhs = [0.0] * p
-    for row in labeled[-10000:]:
-        x = [float(v) for v in row["x"]]
+    for row in training:
+        raw_x = [float(v) for v in row["x"]]
+        x = [1.0] + [
+            (raw_x[index] - means[index]) / scales[index]
+            for index in range(1, p)
+        ]
         target = float(row["y"])
         for i in range(p):
             rhs[i] += x[i] * target
@@ -261,7 +632,11 @@ def solve_ridge(samples: list[dict[str, Any]], ridge: float, feature_dim: int) -
                 continue
             matrix[r] = [matrix[r][c] - q * matrix[i][c] for c in range(p)]
             rhs[r] -= q * rhs[i]
-    return rhs
+    raw = list(rhs)
+    for index in range(1, p):
+        raw[index] = rhs[index] / scales[index]
+        raw[0] -= rhs[index] * means[index] / scales[index]
+    return raw
 
 
 def causal_flow_features(
@@ -649,6 +1024,7 @@ def main() -> int:
             "migrated_at": int(time.time()),
         }
         state["samples"] = []
+        state.pop("model_challenger", None)
     cash = base.finite(state.get("cash"), start_capital)
     peak = max(start_capital, base.finite(state.get("peak"), start_capital))
     positions = state.get("positions") if isinstance(state.get("positions"), dict) else {}
@@ -712,7 +1088,11 @@ def main() -> int:
             "matched_prints": int(sum(row["prints"] for row in flow.values())),
         }
     flow_valid = flow_diagnostics.get("valid") is True
-    current: dict[str, tuple[base.Market, base.Book, base.Book, tuple[list[float], float, float]]] = {}
+    histories = market_mid_histories(samples)
+    current: dict[
+        str, tuple[base.Market, base.Book, base.Book,
+                   tuple[list[float], float, float, list[float]]]
+    ] = {}
     for market in markets:
         yes, no = books.get(market.yes), books.get(market.no)
         if yes and no:
@@ -721,16 +1101,56 @@ def main() -> int:
                 continue
             feature = base.features(yes, no)
             if feature:
-                current[market.id] = (market, yes, no, augment_features(feature, flow.get(market.yes, {}), flow.get(market.no, {})))
+                raw_feature = augment_features(
+                    feature, flow.get(market.yes, {}), flow.get(market.no, {}))
+                observed_ts = max(yes.source_received_ts, no.source_received_ts)
+                model_x = _model_feature_vector(
+                    raw_feature[0], raw_feature[1], raw_feature[2],
+                    histories.get(market.id, []), observed_ts,
+                )
+                current[market.id] = (
+                    market, yes, no,
+                    (model_x, raw_feature[1], raw_feature[2], raw_feature[0]),
+                )
 
     label_stats = base.label_matured_samples(samples, now=now, horizon_seconds=args.horizon_seconds, max_target_staleness_seconds=args.max_target_staleness_seconds)
-    beta = solve_ridge(samples, 1e-2, FLOW_FEATURE_DIM)
+    model_rows = causal_model_rows(samples)
+    challenger, challenger_readiness = load_or_freeze_model_challenger(
+        state, model_rows, horizon_seconds=args.horizon_seconds,
+        selected_at_ts=now,
+    )
+    if challenger is None:
+        beta = [0.0] * MODEL_FEATURE_DIM
+        activity_threshold = math.inf
+    else:
+        beta = list(challenger["beta"])
+        activity_threshold = float(
+            challenger["prediction_activity_threshold"])
     model_labeled = sum(row.get("y") is not None and isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM for row in samples)
     training_diagnostics = sample_diagnostics(
         samples, horizon_seconds=args.horizon_seconds)
     model_valid, model_invalid_reasons = model_validity(training_diagnostics)
-    validation_diagnostics = chronological_oos_diagnostics(
+    retrospective_diagnostics = chronological_oos_diagnostics(
         samples, horizon_seconds=args.horizon_seconds)
+    if challenger is None:
+        validation_diagnostics = {
+            "valid": False,
+            "reasons": [str(challenger_readiness["reason"])],
+            "frozen_challenger": False,
+            "oos_samples": 0,
+            "oos_residual_sigma": None,
+            "retrospective_diagnostic": retrospective_diagnostics,
+        }
+    else:
+        validation_diagnostics = fixed_forward_oos_diagnostics(
+            model_rows,
+            beta=beta,
+            threshold=activity_threshold,
+            validation_start_ts=int(challenger["validation_start_ts"]),
+            horizon_seconds=args.horizon_seconds,
+        )
+        validation_diagnostics["retrospective_diagnostic"] = (
+            retrospective_diagnostics)
     if validation_diagnostics.get("valid") is not True:
         model_invalid_reasons.extend(
             str(reason) for reason in validation_diagnostics.get("reasons", []))
@@ -754,7 +1174,7 @@ def main() -> int:
             if len(failures) < 30:
                 failures.append(f"exit_depth:{market_id}")
             continue
-        prediction = sum(a * b for a, b in zip(beta, feature[0]))
+        prediction = model_prediction(feature[0], beta, activity_threshold)
         prediction = max(-2 * feature[2], min(2 * feature[2], prediction))
         predicted_yes_mid = max(0.001, min(0.999, feature[1] + prediction))
         flip = (side == "YES" and predicted_yes_mid <= feature[1]) or (side == "NO" and predicted_yes_mid >= feature[1])
@@ -854,7 +1274,7 @@ def main() -> int:
                     rejection_funnel["missing_fee"] += 1
                 continue
             rejection_funnel["prediction_evaluated"] += 1
-            prediction = sum(a * b for a, b in zip(beta, feature[0]))
+            prediction = model_prediction(feature[0], beta, activity_threshold)
             prediction = max(-2 * feature[2], min(2 * feature[2], prediction))
             predicted_yes_mid = max(0.001, min(0.999, feature[1] + prediction))
             snapshot = book_snapshot(yes, no, market.liq, now=now, max_age_seconds=args.max_book_age_seconds)
@@ -908,8 +1328,8 @@ def main() -> int:
                 "uncertainty_penalty_per_share": adjusted.uncertainty_penalty_per_share,
                 "adverse_markout_penalty_per_share": adjusted.adverse_markout_penalty_per_share,
                 "capital_time_cost_per_share": adjusted.capital_time_cost_per_share,
-                "yes_flow_imbalance": feature[0][-2],
-                "no_flow_imbalance": feature[0][-1],
+                "yes_flow_imbalance": feature[3][-2],
+                "no_flow_imbalance": feature[3][-1],
                 "depth_contract": "full_visible_depth_entry_and_forecast_shifted_exit_vwap",
             })
         ranked.sort(reverse=True, key=lambda row: row[0])
@@ -1056,7 +1476,7 @@ def main() -> int:
             "no_state_version": no.state_version,
             "yes_lineage_epoch": yes.lineage_epoch,
             "no_lineage_epoch": no.lineage_epoch,
-            "mid": feature[1], "spread": feature[2], "x": feature[0], "y": None,
+            "mid": feature[1], "spread": feature[2], "x": feature[3], "y": None,
         })
         known_sample_keys.add(key)
         novel_samples += 1
@@ -1100,6 +1520,16 @@ def main() -> int:
         "novel_samples_last_tick": novel_samples,
         "duplicate_snapshots_rejected_last_tick": duplicate_snapshots_rejected,
         "beta": beta,
+        "model_feature_dimension": MODEL_FEATURE_DIM,
+        "model_training_window_seconds": MODEL_TRAINING_WINDOW_SECONDS,
+        "model_ridge": MODEL_RIDGE,
+        "model_spec_version": MODEL_SPEC_VERSION,
+        "model_challenger": challenger,
+        "model_challenger_readiness": challenger_readiness,
+        "prediction_activity_threshold": (
+            activity_threshold if math.isfinite(activity_threshold) else None),
+        "prediction_shrinkage": MODEL_PREDICTION_SHRINKAGE,
+        "model_active_quantile": MODEL_ACTIVE_QUANTILE,
         "prediction_sigma_probability": sigma,
         "model_valid": model_valid,
         "model_invalid_reasons": model_invalid_reasons,
@@ -1125,7 +1555,7 @@ def main() -> int:
         "realized_pnl_total": realized_total,
         "admission_contract": "causal_flow_depth_complete_round_trip_ev",
         "execution_contract": COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT,
-        "feature_contract": "book_microprice_depth_parity_plus_receive_causal_event_decayed_yes_no_taker_flow",
+        "feature_contract": "book_microprice_depth_parity_plus_receive_causal_flow_plus_strictly_prior_1_5_15_30s_market_regime_lags",
         "exit_liquidity_contract": "shares_specific_full_visible_bid_depth_vwap_fail_closed",
         "failures": failures,
     }
@@ -1136,7 +1566,7 @@ def main() -> int:
         "new_risk_frozen", "drain_requested", "drain_complete", "marking_complete", "market_capital_ceiling",
         "unmarkable_positions", "marking_contract",
         "prediction_sigma_probability", "model_valid", "model_invalid_reasons",
-        "validation_diagnostics",
+        "validation_diagnostics", "model_challenger", "model_challenger_readiness",
         "flow_valid", "flow_diagnostics",
         "rejection_funnel",
         "dataset_version", "dataset_lineage", "dataset_diagnostics",

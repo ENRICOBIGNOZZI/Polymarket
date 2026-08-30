@@ -212,6 +212,54 @@ void test_control_plane_cancel_all_drains_quiet_market_without_book_update() {
     assert(engine.active_order_count() == 0);
 }
 
+void test_terminal_no_fill_reason_is_order_specific() {
+    using Outcome = pm::v7::maker::PaperExecutionOutcome;
+    pm::v7::maker::PaperMakerPolicy policy;
+    policy.cancel_latency_ns = 10;
+
+    pm::v7::maker::MakerPaperMarketEngine quiet(kMarket, kYes, kNo, policy);
+    assert(quiet.apply_intent(quote(
+        1, kYes, pm::v7::Side::Buy, 48, 1'000'000,
+        1'000'000'000LL, 10'000'000'000LL), 2'000'000, 100).applied);
+    assert(quiet.cancel_all(1'200'000'000LL).applied);
+    const auto quiet_terminal = quiet.advance_time(1'200'000'020LL);
+    const auto* quiet_cancel = find_event(
+        quiet_terminal, pm::v7::maker::PaperMakerEventKind::Cancelled);
+    assert(quiet_cancel != nullptr);
+    assert(quiet_cancel->execution_outcome == Outcome::NoOppositeFlow);
+
+    pm::v7::maker::MakerPaperMarketEngine far(kMarket, kYes, kNo, policy);
+    assert(far.apply_intent(quote(
+        2, kYes, pm::v7::Side::Buy, 48, 1'000'000,
+        1'000'000'000LL, 10'000'000'000LL), 2'000'000, 100).applied);
+    assert(far.on_public_trade(trade(
+        501, kYes, pm::v7::Side::Sell, 49, 1'000'000,
+        10'100'000'000LL, 1'100'000'000LL)).applied);
+    assert(far.cancel_all(1'200'000'000LL).applied);
+    const auto far_terminal = far.advance_time(1'200'000'020LL);
+    const auto* far_cancel = find_event(
+        far_terminal, pm::v7::maker::PaperMakerEventKind::Cancelled);
+    assert(far_cancel != nullptr);
+    assert(far_cancel->opposite_flow_prints_seen == 1);
+    assert(far_cancel->price_reach_prints_seen == 0);
+    assert(far_cancel->execution_outcome == Outcome::PriceNotReached);
+
+    pm::v7::maker::MakerPaperMarketEngine queued(kMarket, kYes, kNo, policy);
+    assert(queued.apply_intent(quote(
+        3, kYes, pm::v7::Side::Buy, 48, 1'000'000,
+        1'000'000'000LL, 10'000'000'000LL), 2'000'000, 100).applied);
+    assert(queued.on_public_trade(trade(
+        502, kYes, pm::v7::Side::Sell, 48, 1'000'000,
+        10'100'000'000LL, 1'100'000'000LL)).applied);
+    assert(queued.cancel_all(1'200'000'000LL).applied);
+    const auto queued_terminal = queued.advance_time(1'200'000'020LL);
+    const auto* queued_cancel = find_event(
+        queued_terminal, pm::v7::maker::PaperMakerEventKind::Cancelled);
+    assert(queued_cancel != nullptr);
+    assert(queued_cancel->price_reach_prints_seen == 1);
+    assert(queued_cancel->execution_outcome == Outcome::QueueNotDepleted);
+}
+
 void test_yes_no_buys_merge_complete_set_and_realize_trading_pnl() {
     pm::v7::maker::MakerPaperMarketEngine engine(kMarket, kYes, kNo);
     assert(engine.apply_intent(
@@ -347,6 +395,34 @@ void test_inventory_factory_floor_survives_cycle_and_drain_releases_it() {
     assert(engine.inventory().no_microunits == 0);
 }
 
+void test_directional_drain_requires_full_visible_bid_and_realizes_cycle() {
+    pm::v7::maker::MakerPaperMarketEngine engine(kMarket, kYes, kNo);
+    assert(engine.apply_intent(
+        quote(1, kYes, pm::v7::Side::Buy, 48, 1'000'000,
+              1'000'000'000LL, 10'000'000'000LL), 0, 100).applied);
+    assert(engine.on_public_trade(trade(
+        601, kYes, pm::v7::Side::Sell, 48, 1'000'000,
+        10'100'000'000LL, 1'100'000'000LL)).applied);
+    assert(engine.inventory().directional_microunits == 1'000'000);
+
+    const auto shallow = engine.liquidate_directional_inventory(
+        47, 999'999, 51, 1'000'000, 100, 1'200'000'000LL);
+    assert(shallow.rejected);
+    assert(engine.inventory().directional_microunits == 1'000'000);
+
+    const auto liquidated = engine.liquidate_directional_inventory(
+        47, 1'000'000, 51, 1'000'000, 100, 1'300'000'000LL);
+    const auto* event = find_event(
+        liquidated, pm::v7::maker::PaperMakerEventKind::InventoryLiquidation);
+    assert(liquidated.applied && event != nullptr);
+    assert(event->instrument_handle == kYes);
+    assert(event->operational_fill_microunits == 1'000'000);
+    assert(std::abs(event->realized_pnl + 0.01) < 1e-12);
+    assert(engine.inventory().directional_microunits == 0);
+    assert(engine.inventory().yes_microunits == 0);
+    assert(std::abs(engine.inventory().realized_trading_pnl + 0.01) < 1e-12);
+}
+
 } // namespace
 
 int main() {
@@ -355,11 +431,13 @@ int main() {
     test_public_trade_rejection_funnel_is_explicit();
     test_cancel_pending_can_fill_until_effective_but_not_after();
     test_control_plane_cancel_all_drains_quiet_market_without_book_update();
+    test_terminal_no_fill_reason_is_order_specific();
     test_yes_no_buys_merge_complete_set_and_realize_trading_pnl();
     test_merge_does_not_consume_inventory_reserved_by_live_sell();
     test_market_kill_cancels_both_yes_and_no_quotes();
     test_uncovered_sell_is_rejected();
     test_inventory_snapshot_reservations_have_global_yes_minus_no_sign();
     test_inventory_factory_floor_survives_cycle_and_drain_releases_it();
+    test_directional_drain_requires_full_visible_bid_and_realizes_cycle();
     return 0;
 }

@@ -196,6 +196,72 @@ void test_profitable_two_sided_post_only_quote() {
     assert(decision.latency.receive_to_intent_ns >= 0);
 }
 
+void test_authoritative_zero_flow_blocks_passive_quote() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    update.flow_prior_valid = 1;
+    const auto model = profitable_model();
+    pm::v7::maker::InventorySnapshot inventory;
+    inventory.yes_shares = 3.0;
+    inventory.no_shares = 3.0;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 3.0;
+    risk.max_abs_residual_shares = 20.0;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(decision.reason == pm::v7::maker::DecisionReason::NoEconomicQuote);
+    assert(decision.bid_fill_probability == 0.0);
+    assert(decision.ask_fill_probability == 0.0);
+}
+
+void test_side_specific_opposite_flow_authorizes_only_reachable_side() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    update.flow_prior_valid = 1;
+    // Aggressive SELLs can reach our BUY.  No aggressive BUY flow means our
+    // inventory-backed SELL is not an executable opportunity.
+    update.prior_aggressive_sell_shares_per_second = 100.0;
+    const auto model = profitable_model();
+    pm::v7::maker::InventorySnapshot inventory;
+    inventory.yes_shares = 3.0;
+    inventory.no_shares = 3.0;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 3.0;
+    risk.max_abs_residual_shares = 20.0;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(decision.reason == pm::v7::maker::DecisionReason::Quote);
+    assert(decision.action == pm::v7::maker::Action::OneSided);
+    assert(decision.intent_count == 1);
+    assert(decision.intents[0].side == pm::v7::Side::Buy);
+    assert(decision.bid_flow_reach_probability > 0.90);
+    assert(decision.ask_flow_reach_probability == 0.0);
+}
+
+void test_trade_rate_uses_elapsed_time_not_book_message_count() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    update.flow_prior_valid = 1;
+    update.prior_aggressive_sell_shares_per_second = 10.0;
+    const auto model = profitable_model();
+    pm::v7::maker::InventorySnapshot inventory;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 3.0;
+    risk.max_abs_residual_shares = 20.0;
+
+    const auto first = hot.on_market_update(update, inventory, quotes, risk, model);
+    const double seeded_rate = first.features.aggressive_sell_shares_per_second;
+    assert(std::abs(seeded_rate - 10.0) < 1e-12);
+    for (std::uint64_t version = 8; version < 108; ++version) {
+        update.state_version = version;
+        const auto next = hot.on_market_update(update, inventory, quotes, risk, model);
+        assert(std::abs(next.features.aggressive_sell_shares_per_second - seeded_rate) < 1e-12);
+    }
+}
+
 void test_specific_improve_cell_changes_candidate_ranking() {
     pm::v7::maker::MakerHotPath hot;
     auto update = normal_update();
@@ -689,6 +755,9 @@ int main() {
     test_bounded_spsc_and_cancel_priority();
     test_atomic_model_snapshot();
     test_profitable_two_sided_post_only_quote();
+    test_authoritative_zero_flow_blocks_passive_quote();
+    test_side_specific_opposite_flow_authorizes_only_reachable_side();
+    test_trade_rate_uses_elapsed_time_not_book_message_count();
     test_specific_improve_cell_changes_candidate_ranking();
     test_settlement_fair_uses_lower_for_bid_and_upper_for_ask();
     test_outcome_cell_orientation_is_respected();

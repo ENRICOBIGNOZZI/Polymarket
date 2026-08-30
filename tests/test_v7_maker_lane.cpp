@@ -25,6 +25,7 @@ pm::v7::maker::MakerModelSnapshot profitable_model() {
     model.min_quote_lifetime_ns = 0;
     model.toxicity_withdraw_threshold = 0.99;
     model.one_sided_inventory_fraction = 0.50;
+    model.exploration_enabled = 0;
     return model;
 }
 

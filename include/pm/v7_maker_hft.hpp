@@ -64,6 +64,11 @@ struct MarketUpdate {
     double ask_depth_l10 = 0.0;
     double trade_buy_qty_delta = 0.0;
     double trade_sell_qty_delta = 0.0;
+    // Cold-control-plane priors are token- and aggressor-side-specific.  They
+    // seed the live leaky arrival-rate estimator exactly once; live public
+    // prints then update it without book-message-count dilution.
+    double prior_aggressive_buy_shares_per_second = 0.0;
+    double prior_aggressive_sell_shares_per_second = 0.0;
     double cancel_bid_qty_delta = 0.0;
     double cancel_ask_qty_delta = 0.0;
     double conservative_rebate_ev_per_share = 0.0;
@@ -80,7 +85,7 @@ struct MarketUpdate {
     std::int8_t instrument_inventory_sign = 1;
     std::uint8_t feed_healthy = 1;
     std::uint8_t related_state_valid = 0;
-    std::uint8_t reserved0 = 0;
+    std::uint8_t flow_prior_valid = 0;
 };
 
 struct InventorySnapshot {
@@ -165,6 +170,9 @@ struct MakerModelSnapshot {
     double one_sided_inventory_fraction = 0.50;
     double min_robust_ev_per_share = 0.0;
     double base_quote_shares = 1.0;
+    // Fill economics and reach/depletion predictions must refer to the same
+    // executable exposure window.  This is loaded from max quote lifetime.
+    double fill_prediction_horizon_seconds = 5.0;
     double feature_decay = 0.90;
     double min_requote_ev_delta = 0.00001;
     // Exploration is PAPER-only and exists specifically to break the cold-start
@@ -248,9 +256,12 @@ struct Features {
     double ew_vol_ticks = 0.0;
     double short_return_ticks = 0.0;
     double trade_intensity = 0.0;
+    double aggressive_buy_shares_per_second = 0.0;
+    double aggressive_sell_shares_per_second = 0.0;
     double cancel_intensity = 0.0;
     double inventory_fraction = 0.0;
     double local_latency_ms = 0.0;
+    std::uint8_t flow_evidence_valid = 0;
 };
 
 struct LatencyTrace {
@@ -276,6 +287,14 @@ struct MakerDecision {
     double ev_uncertainty = 0.0;
     double fair_lower = 0.0;
     double fair_upper = 0.0;
+    double bid_fill_probability = 0.0;
+    double ask_fill_probability = 0.0;
+    double bid_flow_reach_probability = 0.0;
+    double ask_flow_reach_probability = 0.0;
+    double bid_queue_depletion_probability = 0.0;
+    double ask_queue_depletion_probability = 0.0;
+    double bid_opposite_flow_shares_per_second = 0.0;
+    double ask_opposite_flow_shares_per_second = 0.0;
     std::int64_t exploration_max_rest_ns = 0;
     std::array<StrategyIntent, 4> intents{};
     std::uint8_t intent_count = 0;
@@ -303,13 +322,17 @@ private:
     double previous_ask_depth_ = 0.0;
     double ew_var_ticks2_ = 0.0;
     double ew_trade_intensity_ = 0.0;
+    double ew_aggressive_buy_shares_per_second_ = 0.0;
+    double ew_aggressive_sell_shares_per_second_ = 0.0;
     double ew_cancel_intensity_ = 0.0;
+    std::int64_t previous_feature_monotonic_ns_ = 0;
     std::uint64_t intent_sequence_ = 0;
     std::int64_t last_exploration_quote_ns_ = 0;
     std::int64_t exploration_max_rest_ns_ = 0;
     Action exploration_action_ = Action::Join;
     Side exploration_side_ = Side::None;
     std::uint8_t initialized_ = 0;
+    std::uint8_t flow_evidence_valid_ = 0;
     std::uint8_t exploration_active_ = 0;
     std::uint8_t exploration_persistent_ = 0;
 };

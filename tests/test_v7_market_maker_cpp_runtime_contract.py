@@ -176,8 +176,9 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
     def test_settlement_fair_authority_is_exact_contract_bounded_and_cold_plane_only(self) -> None:
         external = self.policy["settlement_aware_external_fair"]
         self.assertTrue(external["implemented"])
-        self.assertFalse(external["enabled_for_paper_quotes"])
+        self.assertTrue(external["enabled_for_paper_quotes"])
         self.assertTrue(external["require_model_mature"])
+        self.assertTrue(external["require_positive_2x_cost_stress"])
         self.assertFalse(external["automatic_promotion"])
         self.assertFalse(external["real_money_authority"])
         for token in (
@@ -185,6 +186,7 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
             'market->cold.market_id != market_id',
             'contract, "verified"',
             'model, "mature"',
+            '"virtual_2x_cost_stress_pnl"',
             "upper - lower > policy.maximum_interval_width",
             "context.related_fair_lower",
             "context.related_fair_upper",

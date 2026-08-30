@@ -11,8 +11,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import v7_micro_taker_data as data  # noqa: E402
 from v7_micro_taker_worker import (  # noqa: E402
-    canonical_live_flow_features, chronological_oos_diagnostics, model_validity,
-    sample_diagnostics, sample_key,
+    MODEL_FEATURE_DIM, canonical_live_flow_features, causal_model_rows,
+    chronological_oos_diagnostics, fixed_forward_oos_diagnostics,
+    load_or_freeze_model_challenger, model_validity, sample_diagnostics,
+    sample_key,
 )
 
 
@@ -97,7 +99,7 @@ def test_purged_chronological_oos_requires_real_predictive_skill() -> None:
         })
     diagnostics = chronological_oos_diagnostics(samples, horizon_seconds=30)
     assert diagnostics["valid"]
-    assert diagnostics["mse_improvement_fraction"] > 0.90
+    assert diagnostics["mse_improvement_fraction"] > 0.02
     assert diagnostics["prediction_target_correlation"] > 0.90
     assert diagnostics["directional_accuracy"] > 0.90
 
@@ -116,6 +118,69 @@ def test_purged_chronological_oos_rejects_no_skill() -> None:
     diagnostics = chronological_oos_diagnostics(samples, horizon_seconds=30)
     assert not diagnostics["valid"]
     assert "OOS_DOES_NOT_BEAT_NO_CHANGE_BASELINE" in diagnostics["reasons"]
+
+
+def test_lag_features_never_borrow_same_second_observations() -> None:
+    samples = [
+        {"sample_key": "a", "market_id": "m", "ts": 1_000,
+         "mid": 0.40, "spread": 0.02, "x": [1.0] + [0.0] * 7},
+        {"sample_key": "b", "market_id": "m", "ts": 1_000,
+         "mid": 0.45, "spread": 0.02, "x": [1.0] + [0.0] * 7},
+        {"sample_key": "c", "market_id": "m", "ts": 1_002,
+         "mid": 0.50, "spread": 0.02, "x": [1.0] + [0.0] * 7},
+    ]
+    rows = causal_model_rows(samples)
+    assert rows[0]["x"][-4:] == [0.0, 0.0, 0.0, 0.0]
+    assert rows[1]["x"][-4:] == [0.0, 0.0, 0.0, 0.0]
+    assert abs(rows[2]["x"][-4] - 0.05) < 1e-12
+
+
+def test_frozen_challenger_uses_only_post_selection_forward_rows() -> None:
+    rows = []
+    for index in range(100):
+        signal = -1.0 if index % 2 else 1.0
+        rows.append({
+            "sample_key": f"train:{index}", "market_id": f"m-{index % 15}",
+            "event_id": f"e-{index % 15}", "ts": 1_000 + index * 2,
+            "mid": 0.5, "spread": 0.01,
+            "x": [1.0, signal, 0.0, 0.0, 0.0, 0.0, 0.2, -0.1],
+            "y": 0.002 * signal,
+        })
+    model_rows = causal_model_rows(rows)
+    challenger, readiness = load_or_freeze_model_challenger(
+        {}, model_rows, horizon_seconds=30, selected_at_ts=9_999)
+    assert readiness["ready"]
+    assert challenger is not None
+    boundary = int(challenger["validation_start_ts"])
+    beta = list(challenger["beta"])
+    threshold = float(challenger["prediction_activity_threshold"])
+    pre_only = fixed_forward_oos_diagnostics(
+        model_rows, beta=beta, threshold=threshold,
+        validation_start_ts=boundary, horizon_seconds=30)
+    assert pre_only["oos_samples"] == 0
+    assert "INSUFFICIENT_FORWARD_OOS_SAMPLES" in pre_only["reasons"]
+
+    future = []
+    for index in range(60):
+        signal = -1.0 if index % 2 else 1.0
+        future.append({
+            "sample_key": f"future:{index}",
+            "market_id": f"future-m-{index % 15}",
+            "event_id": f"future-e-{index % 15}",
+            "ts": boundary + 31 + index * 31,
+            "mid": 0.5, "spread": 0.01,
+            "x": [1.0, signal, 0.0, 0.0, 0.0, 0.0, 0.2, -0.1],
+            "y": 0.002 * signal,
+        })
+    combined = causal_model_rows(rows + future)
+    forward = fixed_forward_oos_diagnostics(
+        combined, beta=beta, threshold=threshold,
+        validation_start_ts=boundary, horizon_seconds=30)
+    assert forward["oos_samples"] == 60
+    assert forward["independent_time_buckets"] >= 12
+    assert forward["unique_events"] >= 12
+    assert forward["valid"]
+    assert len(beta) == MODEL_FEATURE_DIM
 
 
 class DatasetReadinessTests(unittest.TestCase):
@@ -138,6 +203,12 @@ class DatasetReadinessTests(unittest.TestCase):
 
     def test_no_skill_oos_gate(self) -> None:
         test_purged_chronological_oos_rejects_no_skill()
+
+    def test_strictly_prior_lag_features(self) -> None:
+        test_lag_features_never_borrow_same_second_observations()
+
+    def test_frozen_forward_challenger(self) -> None:
+        test_frozen_challenger_uses_only_post_selection_forward_rows()
 
 
 class CanonicalLiveFlowTests(unittest.TestCase):

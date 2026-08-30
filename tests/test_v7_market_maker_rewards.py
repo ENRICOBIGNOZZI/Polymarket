@@ -281,7 +281,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertEqual(row["recent_buy_prints_2m"], 3)
         self.assertEqual(row["recent_sell_prints_2m"], 0)
 
-    def test_recent_flow_keeps_full_stable_exploration_reserve(self) -> None:
+    def test_recent_flow_reserve_is_explicitly_bounded(self) -> None:
         from tempfile import TemporaryDirectory
         now_ms = 1_000_000
         base = {
@@ -316,6 +316,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             )
             selection_cfg = json.loads(json.dumps(selection_cfg))
             selection_cfg["recent_flow"]["minimum_operational_markets"] = 3
+            selection_cfg["recent_flow"]["maximum_zero_flow_reserve_markets"] = 2
             snapshot = rewards._recent_flow_snapshot(
                 universe, tape, selection_cfg, capacity_cfg, capacity,
                 model_sha=SHA, now_ms=now_ms,
@@ -327,6 +328,48 @@ class MakerRewardSelectorTests(unittest.TestCase):
             {row["side_mode"] for row in snapshot["markets"][1:]},
             {"STABLE_SPREAD_EXPLORATION"},
         )
+
+    def test_resource_capacity_does_not_force_zero_flow_markets(self) -> None:
+        from tempfile import TemporaryDirectory
+        now_ms = 1_000_000
+        base = {
+            "question": "Q", "slug": "q", "active": True, "closed": False,
+            "accepting_orders": True, "spread": 0.02, "liquidity": 1_000.0,
+            "volume_24h": 10_000.0, "midpoint": 0.50,
+            "timed_sports": False, "end_date": "2099-01-01T00:00:00Z",
+        }
+        markets = [
+            {**base, "event_ids": [f"e{i}"], "market_id": f"m{i}",
+             "condition_id": f"c{i}", "clob_token_ids": [f"y{i}", f"n{i}"]}
+            for i in range(3)
+        ]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            universe = _universe(root / "current.json", timestamp_ms=now_ms, markets=markets)
+            tape = root / "trade_tape.csv"
+            with tape.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=[
+                    "timestamp", "received_ms", "condition_id", "asset_id", "side",
+                    "price", "size", "transaction_hash",
+                ])
+                writer.writeheader()
+                for index in range(3):
+                    writer.writerow({
+                        "timestamp": "1000", "received_ms": str(now_ms - index),
+                        "condition_id": "c0", "asset_id": "y0", "side": "BUY",
+                        "price": "0.5", "size": "10", "transaction_hash": f"tx-{index}",
+                    })
+            _, selection_cfg, capacity_cfg, capacity = rewards._validated_config(
+                ROOT / "config" / "v7_professional_market_maker.json"
+            )
+            snapshot = rewards._recent_flow_snapshot(
+                universe, tape, selection_cfg, capacity_cfg, capacity,
+                model_sha=SHA, now_ms=now_ms,
+            )
+        self.assertEqual(snapshot["selected_count"], 1)
+        self.assertEqual(snapshot["stable_reserve_added"], 0)
+        self.assertEqual(snapshot["unused_resource_capacity_markets"], capacity - 1)
+        self.assertEqual(snapshot["resource_capacity_markets"], capacity)
 
     def test_recent_flow_requires_sustained_sell_flow_and_a_fresh_last_print(self) -> None:
         from tempfile import TemporaryDirectory

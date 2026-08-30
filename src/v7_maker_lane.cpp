@@ -44,6 +44,11 @@ MakerDecision MakerInstrumentLane::on_market_event(
     update.socket_receive_monotonic_ns = event.receive_monotonic_ns > 0
         ? event.receive_monotonic_ns : event.book.receive_monotonic_ns;
     update.instrument_inventory_sign = inventory_sign_;
+    update.prior_aggressive_buy_shares_per_second =
+        std::max(0.0, context.prior_aggressive_buy_shares_per_second);
+    update.prior_aggressive_sell_shares_per_second =
+        std::max(0.0, context.prior_aggressive_sell_shares_per_second);
+    update.flow_prior_valid = context.flow_prior_valid;
 
     const bool sign_valid = inventory_sign_ == 1 || inventory_sign_ == -1;
     const bool book_valid = event.book.valid != 0 && event.book.lineage_continuous != 0
