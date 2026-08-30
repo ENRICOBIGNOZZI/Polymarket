@@ -94,6 +94,15 @@ class V7CutoverUpdaterTest(unittest.TestCase):
             function.index('launchctl bootstrap "$domain" "$destination"'),
         )
 
+    def test_launchd_runtime_start_waits_through_bounded_throttle_window(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        function = text[text.index("start_production_runtime(){"):text.index("stop_owned_monitoring(){")]
+        self.assertIn("launchd_running=0", function)
+        self.assertIn("for _ in $(seq 1 1200); do", function)
+        self.assertIn("launchd_running=1", function)
+        self.assertIn("did not enter running state within 120 seconds", function)
+        self.assertNotIn("launchd production V7 exited during startup", function)
+
     def test_updater_stops_only_registered_v7_runtime_owner(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         self.assertIn("control/runtime_status.json", text)

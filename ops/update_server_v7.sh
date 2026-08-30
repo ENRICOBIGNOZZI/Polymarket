@@ -661,13 +661,25 @@ PY
     pid=$!
     log "Started production V7 pid=$pid"
   fi
-  sleep 2
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    launchctl print "gui/$(id -u)/com.polymarket.v7.paper" 2>/dev/null | grep -q 'state = running' || {
+    local launchd_running=0
+    # launchd may keep a freshly bootstrapped KeepAlive job in its throttled
+    # scheduled state after a controlled drain. That is not a process crash.
+    # Wait bounded for the actual running state before judging startup.
+    for _ in $(seq 1 1200); do
+      if launchctl print "gui/$(id -u)/com.polymarket.v7.paper" 2>/dev/null | grep -q 'state = running'; then
+        launchd_running=1
+        break
+      fi
+      sleep 0.1
+    done
+    [[ "$launchd_running" == 1 ]] || {
       tail -n 80 "$run_root/supervisor-launchd.log" >&2 || true
-      fail "launchd production V7 exited during startup"
+      launchctl print "gui/$(id -u)/com.polymarket.v7.paper" >&2 2>/dev/null || true
+      fail "launchd production V7 did not enter running state within 120 seconds"
     }
   else
+    sleep 2
     kill -0 "$pid" 2>/dev/null || {
       tail -n "+$log_epoch_line" "$runtime_log" >&2 || true
       fail "production V7 exited during startup"
