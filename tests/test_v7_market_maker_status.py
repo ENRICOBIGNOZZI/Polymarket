@@ -159,6 +159,48 @@ class MakerStatusTests(unittest.TestCase):
             self.assertEqual(mark["execution_side"], "BUY")
             self.assertAlmostEqual(mark["net_executable_liquidation_value"], gross - expected_fee - expected_slippage)
 
+    def test_balanced_complete_set_is_par_value_without_book_depth(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state, cfg, selection, output = self.fixture(Path(tmp))
+            payload = json.loads(state.read_text())
+            payload["cash"] = 90.0
+            payload["inventory"]["market-1"]["yes_shares"] = 10.0
+            payload["inventory"]["market-1"]["no_shares"] = 10.0
+            state.write_text(json.dumps(payload))
+            with patch("v7_market_maker_status.request_json", return_value=[]) as books:
+                report = assess(state, cfg, output, selection_path=selection)
+            self.assertTrue(report["marking_complete"])
+            self.assertFalse(report["new_risk_frozen"])
+            self.assertFalse(report["killed"])
+            self.assertAlmostEqual(report["deterministic_complete_set_value"], 10.0)
+            self.assertAlmostEqual(report["executable_inventory_value"], 10.0)
+            self.assertAlmostEqual(report["equity"], 100.0)
+            self.assertEqual(report["source"], "deterministic_complete_set_redemption")
+            self.assertEqual(
+                report["positions"][0]["liquidation_method"],
+                "DETERMINISTIC_COMPLETE_SET_REDEMPTION",
+            )
+            self.assertFalse(report["positions"][0]["requires_order_book_liquidity"])
+            books.assert_not_called()
+
+    def test_only_directional_residual_requires_executable_depth(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state, cfg, selection, output = self.fixture(Path(tmp))
+            payload = json.loads(state.read_text())
+            payload["cash"] = 87.5
+            payload["inventory"]["market-1"]["yes_shares"] = 15.0
+            payload["inventory"]["market-1"]["no_shares"] = 10.0
+            state.write_text(json.dumps(payload))
+            with patch("v7_market_maker_status.request_json", return_value=[]):
+                report = assess(state, cfg, output, selection_path=selection)
+            self.assertFalse(report["marking_complete"])
+            self.assertTrue(report["new_risk_frozen"])
+            self.assertAlmostEqual(report["deterministic_complete_set_value"], 10.0)
+            self.assertAlmostEqual(report["equity"], 97.5)
+            self.assertEqual(len(report["unmarkable_tokens"]), 1)
+            self.assertEqual(report["unmarkable_tokens"][0]["token_id"], "yes-1")
+            self.assertAlmostEqual(report["unmarkable_tokens"][0]["shares"], 5.0)
+
     def test_held_inventory_survives_reward_selection_rotation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state, cfg, selection, output = self.fixture(Path(tmp))

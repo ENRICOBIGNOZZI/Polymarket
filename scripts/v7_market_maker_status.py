@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Conservative executable equity mark for the V7 professional maker sleeve.
 
-Residual maker inventory is valued only at full visible bid depth, net of the
-verified taker fee schedule and an explicit liquidation slippage haircut.  If
-market identity, fee provenance, or executable depth is missing, that inventory
-is valued at zero and new maker risk is frozen. Cash and other verified marks
-remain valid; only a real conservative drawdown triggers the global kill path.
+Balanced binary complete sets are valued at their deterministic $1 redemption
+value: they are collateral transformations, not directional inventory that
+needs order-book liquidity. Residual maker inventory is valued only at full
+visible bid depth, net of the verified taker fee schedule and an explicit
+liquidation slippage haircut. If market identity, fee provenance, or executable
+depth is missing, only that residual inventory is valued at zero and new maker
+risk is frozen. Cash and other verified marks remain valid; only a real
+conservative drawdown triggers the global kill path.
 """
 from __future__ import annotations
 
@@ -246,6 +249,7 @@ def assess(
     inventory = state.get("inventory") if isinstance(state.get("inventory"), dict) else {}
     conditions = selection_conditions(selection_path)
     positions: list[tuple[str, str, str, float]] = []
+    complete_sets: list[tuple[str, str, str, str, float]] = []
     for market_id, row in inventory.items():
         if not isinstance(row, dict):
             continue
@@ -259,10 +263,29 @@ def assess(
         no = max(0.0, finite(row.get("no_shares"), 0.0))
         yes_token = str(row.get("yes_token") or "")
         no_token = str(row.get("no_token") or "")
-        if yes > 1e-9:
-            positions.append((str(market_id), yes_token, no_token, yes))
-        if no > 1e-9:
-            positions.append((str(market_id), no_token, yes_token, no))
+        # A YES+NO pair from the same verified binary condition redeems for
+        # exactly $1. During ordinary operation it remains mergeable even when
+        # one or both legs are reserved by cancellable PAPER maker orders. Do
+        # not require visible CLOB depth to mark this non-directional collateral
+        # transformation: doing so creates a false unmarkable state during the
+        # inventory factory's split/quote bootstrap window. During an explicit
+        # cutover drain retain per-token marks because the terminal finalizer
+        # requires a causal exchange route for every still-open token row.
+        valid_binary_identity = bool(
+            conditions.get(str(market_id)) and yes_token and no_token
+            and yes_token != no_token
+        )
+        balanced = min(yes, no) if valid_binary_identity and not drain_requested else 0.0
+        if balanced > 1e-9:
+            complete_sets.append((
+                str(market_id), conditions[str(market_id)], yes_token, no_token, balanced
+            ))
+        yes_residual = max(0.0, yes - balanced)
+        no_residual = max(0.0, no - balanced)
+        if yes_residual > 1e-9:
+            positions.append((str(market_id), yes_token, no_token, yes_residual))
+        if no_residual > 1e-9:
+            positions.append((str(market_id), no_token, yes_token, no_residual))
 
     tokens = list(dict.fromkeys(
         token for _, held_token, complement_token, _ in positions
@@ -291,11 +314,29 @@ def assess(
                 book_clocks[token] = (exchange_ms, receive_ms, snapshot_id)
 
     slippage_bps = max(0.0, finite(cfg.get("slippage_bps"), 0.0))
-    liquidation = 0.0
+    complete_set_value = sum(row[4] for row in complete_sets)
+    liquidation = complete_set_value
     total_exit_fees = 0.0
     total_slippage_haircut = 0.0
     unmarkable: list[dict[str, Any]] = []
-    position_marks: list[dict[str, Any]] = []
+    position_marks: list[dict[str, Any]] = [{
+        "market_id": market_id,
+        "condition_id": condition_id,
+        "token_id": yes_token,
+        "complement_token_id": no_token,
+        "execution_token_id": "",
+        "execution_side": "MERGE",
+        "liquidation_method": "DETERMINISTIC_COMPLETE_SET_REDEMPTION",
+        "shares": shares,
+        "full_depth_vwap": 1.0,
+        "gross_executable_liquidation_value": shares,
+        "exit_fee": 0.0,
+        "exit_fee_source": "ctf:binary-complete-set-redemption",
+        "slippage_haircut": 0.0,
+        "net_executable_liquidation_value": shares,
+        "valuation_policy": "VERIFIED_BINARY_COMPLETE_SET_PAR",
+        "requires_order_book_liquidity": False,
+    } for market_id, condition_id, yes_token, no_token, shares in complete_sets]
     for market_id, token, complement_token, shares in positions:
         condition_id = conditions.get(market_id, "")
         if not condition_id:
@@ -452,6 +493,8 @@ def assess(
         "cash": cash,
         "gross_exit_fees": total_exit_fees,
         "liquidation_slippage_haircut": total_slippage_haircut,
+        "deterministic_complete_set_value": complete_set_value,
+        "deterministic_complete_set_count": len(complete_sets),
         "executable_inventory_value": liquidation,
         "equity": equity,
         "peak_equity": peak,
@@ -466,6 +509,10 @@ def assess(
         "source": (
             "paper_cutover_conservative_zero_recovery"
             if zero_recovery_writeoffs
+            else "deterministic_complete_set_par_plus_full_depth_residual"
+            if complete_sets and positions and not unmarkable
+            else "deterministic_complete_set_redemption"
+            if complete_sets and not positions and not unmarkable
             else "full_visible_bid_depth_net_verified_fee_and_slippage"
             if not unmarkable else "fail_closed_unmarkable"
         ),
