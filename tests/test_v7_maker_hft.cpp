@@ -564,6 +564,61 @@ void test_exploration_minimum_rest_survives_transient_negative_ev() {
     assert(held.exploration_max_rest_ns == model.exploration_max_rest_ns);
 }
 
+void test_exploration_minimum_rest_survives_transient_exploit_promotion() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    auto exploratory = profitable_model();
+    exploratory.base_ev_se_per_share = 0.025;
+    exploratory.robust_ev_z = 100.0;
+    exploratory.min_robust_ev_per_share = 0.00001;
+    exploratory.min_quote_lifetime_ns = 0;
+    configure_exploration(exploratory);
+    exploratory.exploration_confidence_z = 0.0;
+    pm::v7::maker::InventorySnapshot inventory;
+    inventory.yes_shares = 10.0;
+    inventory.no_shares = 10.0;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 20.0;
+    risk.exploration_max_quote_shares = 2.0;
+    risk.max_abs_residual_shares = 200.0;
+
+    const auto opened = hot.on_market_update(update, inventory, quotes, risk, exploratory);
+    assert(opened.reason == pm::v7::maker::DecisionReason::ExplorationQuote);
+    assert(opened.intent_count == 1);
+    const auto& quote = opened.intents[0];
+    quotes.last_quote_monotonic_ns = monotonic_ns();
+    if (quote.side == pm::v7::Side::Buy) {
+        quotes.bid_active = 1;
+        quotes.bid_tick = quote.price_tick;
+    } else {
+        quotes.ask_active = 1;
+        quotes.ask_tick = quote.price_tick;
+    }
+
+    // A normal exploit candidate can become robustly positive for one update.
+    // It must not erase the still-live order's exploration lifetime contract.
+    auto exploit = profitable_model();
+    exploit.min_quote_lifetime_ns = 0;
+    configure_exploration(exploit);
+    exploit.exploration_confidence_z = 0.0;
+    update.state_version += 1;
+    update.socket_receive_monotonic_ns = monotonic_ns();
+    const auto promoted = hot.on_market_update(update, inventory, quotes, risk, exploit);
+    assert(promoted.reason == pm::v7::maker::DecisionReason::ExplorationHold);
+    assert(promoted.intent_count == 0);
+
+    // Returning below the exploit threshold before minimum_rest_ms must still
+    // preserve the same quote. This is the exact live oscillation regression.
+    auto negative = exploratory;
+    negative.markout_coefficients.fill(1.0);
+    update.state_version += 1;
+    update.socket_receive_monotonic_ns = monotonic_ns();
+    const auto held = hot.on_market_update(update, inventory, quotes, risk, negative);
+    assert(held.reason == pm::v7::maker::DecisionReason::ExplorationHold);
+    assert(held.intent_count == 0);
+}
+
 void test_negative_exploration_adjusted_ev_has_no_execution_authority() {
     pm::v7::maker::MakerHotPath hot;
     auto update = normal_update();
@@ -637,6 +692,7 @@ int main() {
     test_exploration_never_emits_uncovered_sell();
     test_persistent_lifetime_arm_is_explicit_and_bounded();
     test_exploration_minimum_rest_survives_transient_negative_ev();
+    test_exploration_minimum_rest_survives_transient_exploit_promotion();
     test_negative_exploration_adjusted_ev_has_no_execution_authority();
     test_global_kill_preempts_quote();
     test_new_risk_freeze_withdraws_without_irreversible_kill();

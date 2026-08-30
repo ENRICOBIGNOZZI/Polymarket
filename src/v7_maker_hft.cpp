@@ -663,6 +663,44 @@ MakerDecision MakerHotPath::on_market_update(
     const std::int64_t now = monotonic_ns();
     const bool lifetime_hold = quotes.last_quote_monotonic_ns > 0
         && now - quotes.last_quote_monotonic_ns < model.min_quote_lifetime_ns;
+    const std::int64_t exploration_elapsed = last_exploration_quote_ns_ > 0
+        ? std::max<std::int64_t>(0, now - last_exploration_quote_ns_)
+        : std::numeric_limits<std::int64_t>::max();
+    const bool exploration_quote_active = exploration_side_ == Side::Sell
+        ? quotes.ask_active != 0 : quotes.bid_active != 0;
+    const std::int64_t exploration_quote_tick = exploration_side_ == Side::Sell
+        ? quotes.ask_tick : quotes.bid_tick;
+
+    if (exploration_active_ && !exploration_quote_active) {
+        exploration_active_ = 0;
+        exploration_side_ = Side::None;
+    }
+
+    // The minimum exposure belongs to the accepted order, not to the decision
+    // branch that happens to be selected on a later book update.  In
+    // particular, a transient move above the normal robust-EV threshold must
+    // not "promote" the order, clear its exploration state, and let the next
+    // negative-EV tick cancel it under the shorter ordinary quote lifetime.
+    // All safety exits are evaluated before candidate selection, so holding
+    // here protects only non-safety economic/repricing changes.
+    if (exploration_active_ && exploration_quote_active
+        && exploration_elapsed < model.exploration_min_rest_ns) {
+        decision.action = exploration_action_;
+        decision.reason = DecisionReason::ExplorationHold;
+        decision.exploration_max_rest_ns = exploration_max_rest_ns_;
+        decision.exploration_persistent = exploration_persistent_;
+        if (economic_quote) {
+            decision.robust_ev = best->score;
+        } else if (finite(best_observed_robust_ev)) {
+            decision.robust_ev = best_observed_robust_ev;
+            decision.ev_uncertainty = best_observed_uncertainty;
+        }
+        const std::int64_t end_ns = monotonic_ns();
+        decision.latency.decision_ns = end_ns - decision_start_ns;
+        decision.latency.receive_to_intent_ns = update.socket_receive_monotonic_ns > 0
+            ? std::max<std::int64_t>(0, end_ns - update.socket_receive_monotonic_ns) : 0;
+        return decision;
+    }
 
     if (!economic_quote) {
         // Preserve the best rejected economics for aggregate diagnostics. This
@@ -717,18 +755,11 @@ MakerDecision MakerHotPath::on_market_update(
             && update.market_handle <= model.exploration_max_active_markets
             && exploration_shares > 0.0
             && !inventory_one_sided;
-        const std::int64_t elapsed = last_exploration_quote_ns_ > 0
-            ? std::max<std::int64_t>(0, now - last_exploration_quote_ns_)
-            : std::numeric_limits<std::int64_t>::max();
-
-        const bool exploration_quote_active = exploration_side_ == Side::Sell
-            ? quotes.ask_active != 0 : quotes.bid_active != 0;
-        const std::int64_t exploration_quote_tick = exploration_side_ == Side::Sell
-            ? quotes.ask_tick : quotes.bid_tick;
         if (exploration_active_ && exploration_quote_active) {
             decision.exploration_max_rest_ns = exploration_max_rest_ns_;
             decision.exploration_persistent = exploration_persistent_;
-            if (exploration_max_rest_ns_ > 0 && elapsed >= exploration_max_rest_ns_) {
+            if (exploration_max_rest_ns_ > 0
+                && exploration_elapsed >= exploration_max_rest_ns_) {
                 decision.action = Action::Withdraw;
                 decision.reason = DecisionReason::ExplorationExpired;
                 append_intent(decision, make_intent(++intent_sequence_, update, model,
@@ -756,7 +787,7 @@ MakerDecision MakerHotPath::on_market_update(
                     // the configured exploration arm promised at least 3s of
                     // causal exposure.  Safety exits are evaluated above and
                     // remain immediate; only an economic re-evaluation is held.
-                    if (elapsed < model.exploration_min_rest_ns) {
+                    if (exploration_elapsed < model.exploration_min_rest_ns) {
                         decision.action = exploration_action_;
                         decision.reason = DecisionReason::ExplorationHold;
                     } else {
@@ -779,7 +810,8 @@ MakerDecision MakerHotPath::on_market_update(
                     decision.ev_uncertainty = exploratory->uncertainty;
                     const std::int64_t required_rest = std::max(
                         model.min_quote_lifetime_ns, model.exploration_min_rest_ns);
-                    if (exploration_quote_tick != exploratory->price_tick && elapsed >= required_rest
+                    if (exploration_quote_tick != exploratory->price_tick
+                        && exploration_elapsed >= required_rest
                         && !quotes.cancel_pending) {
                         append_intent(decision, make_intent(++intent_sequence_, update, model,
                                                             IntentType::CancelQuote, exploration_side_,
@@ -800,10 +832,6 @@ MakerDecision MakerHotPath::on_market_update(
             return decision;
         }
 
-        if (exploration_active_ && !exploration_quote_active) {
-            exploration_active_ = 0;
-            exploration_side_ = Side::None;
-        }
         const bool sampled = last_exploration_quote_ns_ == 0
             || exploration_sample(update, model.exploration_epsilon);
         if (exploration_configured
