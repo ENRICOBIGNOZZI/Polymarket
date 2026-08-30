@@ -348,7 +348,10 @@ void test_positive_exploration_ev_breaks_robust_cold_start() {
     pm::v7::maker::MakerHotPath hot;
     auto update = normal_update();
     auto model = profitable_model();
-    model.base_ev_se_per_share = 0.02;
+    // Keep every normal JOIN/IMPROVE/FADE candidate below the 1.64-sigma
+    // exploit gate while leaving the touch JOIN above the 0.5-sigma PAPER
+    // exploration gate.
+    model.base_ev_se_per_share = 0.025;
     model.robust_ev_z = 1.64;
     model.min_robust_ev_per_share = 0.00001;
     configure_exploration(model);
