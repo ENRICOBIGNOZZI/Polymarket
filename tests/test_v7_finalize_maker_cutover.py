@@ -159,6 +159,44 @@ class MakerCutoverFinalizerTest(unittest.TestCase):
             with self.assertRaisesRegex(cutover.MakerCutoverError, "maker_not_safely_marked"):
                 cutover.finalize(root, SHA, NONCE, now_ms=now)
 
+    def test_unmarkable_paper_inventory_is_written_off_without_fabricated_fill(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = 1_788_040_000_000
+            self.fixture(root, now)
+            status_path = root / "micro_maker/status.json"
+            status = json.loads(status_path.read_text())
+            status["source"] = "paper_cutover_conservative_zero_recovery"
+            status["zero_recovery_writeoffs"] = 1
+            status["positions"][0] = {
+                "market_id": "m1", "condition_id": "c1", "token_id": "yes",
+                "execution_token_id": "yes", "execution_side": "WRITE_OFF",
+                "shares": 10.0,
+                "liquidation_method": "CONSERVATIVE_ZERO_RECOVERY_WRITE_OFF",
+                "full_depth_vwap": 0.0,
+                "gross_executable_liquidation_value": 0.0,
+                "exit_fee": 0.0, "exit_fee_source": "paper-cutover-zero-recovery-v1",
+                "slippage_haircut": 0.0, "net_executable_liquidation_value": 0.0,
+                "valuation_policy": "PAPER_CUTOVER_ZERO_RECOVERY",
+                "unmarkable_reason": "insufficient_direct_and_complement_depth",
+            }
+            write(status_path, status)
+            receipt = cutover.finalize(root, SHA, NONCE, now_ms=now)
+            self.assertEqual(receipt["state"], "MAKER_FLAT")
+            self.assertEqual(receipt["zero_recovery_writeoffs"], 1)
+            self.assertAlmostEqual(receipt["final_pnl"], -5.0)
+            self.assertAlmostEqual(receipt["net_cashflow"], 0.0)
+            events = [json.loads(line) for line in
+                      (root / "ledger/execution.jsonl").read_text().splitlines()]
+            self.assertEqual([row["event_type"] for row in events], ["FINAL"])
+            self.assertEqual(events[0]["metadata"]["purpose"], "PAPER_CUTOVER_WRITE_OFF")
+            self.assertTrue(events[0]["metadata"]["no_exchange_fill_fabricated"])
+            self.assertEqual(events[0]["metadata"]["valuation_policy"],
+                             "PAPER_CUTOVER_ZERO_RECOVERY")
+            state = json.loads((root / "micro_maker/state.json").read_text())
+            self.assertEqual(state["inventory"]["m1"]["yes_shares"], 0.0)
+            self.assertAlmostEqual(state["cash"], 95.0)
+
 
 if __name__ == "__main__":
     unittest.main()

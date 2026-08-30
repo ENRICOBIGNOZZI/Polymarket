@@ -132,11 +132,11 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("external_open=int(external_status.get('open_positions',-1))", function)
         self.assertIn("counterfactual_open_positions',-1)) == counterfactual_open", function)
         self.assertIn("is the counterfactual SHADOW book", function)
-        self.assertIn("maker_status.get('marking_complete') is True", function)
         self.assertIn("order_submission_enabled') is False", function)
         self.assertIn("new_risk_frozen') is True", function)
         self.assertIn("drain_complete') is (maker_open == 0)", function)
-        self.assertIn("not maker_status.get('unmarkable_tokens')", function)
+        self.assertIn("len(maker_positions) + len(maker_unmarkable) == maker_open", function)
+        self.assertIn("zero-recovery PAPER loss", function)
         self.assertIn("archiver repeats the durable-state check", function)
         self.assertIn("clear_cutover_drain", text[text.index("cleanup(){"):text.index("write_status(){")])
         finalizer = text.index('python3 "$MAKER_CUTOVER_FINALIZER"', stop)
@@ -145,6 +145,9 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("POLYMARKET_MAKER_CUTOVER_FINALIZER", text)
         self.assertIn("POLYMARKET_MAKER_STATUS_REFRESHER", text)
         self.assertIn("control/maker_cutover_mark.json", text)
+        self.assertIn("--cutover-zero-recovery", text)
+        self.assertIn("$candidate/scripts/v7_market_maker_status.py", text)
+        self.assertIn("$candidate/scripts/v7_finalize_maker_cutover.py", text)
 
     def test_cutover_identity_comes_from_deployed_runtime_not_checkout_head(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")

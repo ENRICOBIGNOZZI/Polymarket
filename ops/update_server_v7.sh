@@ -272,8 +272,10 @@ assert micro_status.get('paper_only') is True and micro_status.get('authenticate
 assert maker_status.get('paper_only') is True and maker_status.get('authenticated_execution') is False
 external_positions=external_state.get('positions'); micro_positions=micro_state.get('positions')
 maker_inventory=maker_state.get('inventory'); maker_positions=maker_status.get('positions')
+maker_unmarkable=maker_status.get('unmarkable_tokens')
 assert isinstance(external_positions,dict) and isinstance(micro_positions,dict)
 assert isinstance(maker_inventory,dict) and isinstance(maker_positions,list)
+assert isinstance(maker_unmarkable,list)
 # paper_router_state.positions is the counterfactual SHADOW book. It is not
 # execution inventory and must never hold an exact-SHA cutover hostage. The
 # router status owns the zero-authority execution-position contract; durable
@@ -293,9 +295,9 @@ for row in maker_inventory.values():
 assert external_open >= 0
 assert int(external_status.get('counterfactual_open_positions',-1)) == counterfactual_open
 assert int(micro_status.get('open_positions',-1)) == micro_open
-assert len(maker_positions) == maker_open
+assert len(maker_positions) + len(maker_unmarkable) == maker_open
 assert external_open == 0 and micro_open == 0
-assert maker_status.get('marking_complete') is True and maker_status.get('killed') is not True
+assert maker_status.get('killed') is not True
 # Drain-aware runtimes must prove that entry is disabled.  A pre-contract
 # incumbent may be bootstrapped only while already flat; the post-stop
 # archiver repeats the durable-state check and catches any race fail-closed.
@@ -311,13 +313,10 @@ if 'drain_requested' in micro_status:
 if 'drain_requested' in maker_status:
     assert maker_status.get('drain_requested') is True
     assert maker_status.get('new_risk_frozen') is True
-    # The Maker finalizer runs after the process tree is stopped and converts a
-    # fresh executable full-depth mark into terminal PAPER liquidation records.
-    # Therefore open, markable Maker inventory is expected here; requiring
-    # drain_complete before invoking that finalizer creates a cutover deadlock.
+    # Open Maker inventory is finalized after the process tree stops. It may be
+    # currently unmarkable: the target-SHA finalizer will either use a fresh
+    # executable mark or realize a clearly labelled zero-recovery PAPER loss.
     assert maker_status.get('drain_complete') is (maker_open == 0)
-    assert maker_status.get('marking_complete') is True
-    assert not maker_status.get('unmarkable_tokens')
 PY
 }
 
@@ -326,7 +325,7 @@ wait_for_cutover_drain(){
   [[ "$current_sha" != "$EXPECTED_SHA" ]] || return 0
   for _ in $(seq 1 "$POSITION_DRAIN_ATTEMPTS"); do
     if cutover_positions_drained >/dev/null 2>&1; then
-      log "PAPER position drain complete; all durable positions are terminal"
+      log "PAPER entry drain complete; durable Maker inventory is frozen for target-SHA finalization"
       return 0
     fi
     sleep 1
@@ -589,8 +588,8 @@ prevalidate_candidate(){
     python3 -m json.tool config/v7_external_inputs.json >/dev/null
     python3 -m json.tool config/v7_external_mappings.json >/dev/null
   )
-  git -C "$APP_DIR" worktree remove --force "$candidate" >/dev/null
-  candidate=""
+  # Keep the exact target worktree until cleanup. Cutover marking/finalization
+  # must use candidate code, not the older incumbent checkout.
 }
 
 build_current_checkout(){
@@ -928,7 +927,7 @@ git merge-base --is-ancestor "$OLD_SHA" "$EXPECTED_SHA" >/dev/null 2>&1 || \
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || fail "tracked server checkout is dirty"
 request_cutover_drain "$OLD_SHA"
 wait_for_cutover_drain "$OLD_SHA"
-MAKER_STATUS_REFRESHER="${POLYMARKET_MAKER_STATUS_REFRESHER:-$APP_DIR/scripts/v7_market_maker_status.py}"
+MAKER_STATUS_REFRESHER="${POLYMARKET_MAKER_STATUS_REFRESHER:-$candidate/scripts/v7_market_maker_status.py}"
 [[ -f "$MAKER_STATUS_REFRESHER" ]] || fail "maker status refresher missing: $MAKER_STATUS_REFRESHER"
 if [[ "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
   env https_proxy=http://127.0.0.1:19109 http_proxy=http://127.0.0.1:19109 \
@@ -939,11 +938,12 @@ if [[ "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
       --config "$(production_run_root)/control/allocations/micro_maker.json" \
       --selection "$(production_run_root)/micro_maker/reward_selection.json" \
       --output "$(production_run_root)/control/maker_cutover_mark.json" \
+      --cutover-zero-recovery \
       >/dev/null
 fi
 stop_production_runtime
 stop_owned_monitoring
-MAKER_CUTOVER_FINALIZER="${POLYMARKET_MAKER_CUTOVER_FINALIZER:-$APP_DIR/scripts/v7_finalize_maker_cutover.py}"
+MAKER_CUTOVER_FINALIZER="${POLYMARKET_MAKER_CUTOVER_FINALIZER:-$candidate/scripts/v7_finalize_maker_cutover.py}"
 [[ -f "$MAKER_CUTOVER_FINALIZER" ]] || fail "maker cutover finalizer missing: $MAKER_CUTOVER_FINALIZER"
 if [[ "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
   python3 "$MAKER_CUTOVER_FINALIZER" \

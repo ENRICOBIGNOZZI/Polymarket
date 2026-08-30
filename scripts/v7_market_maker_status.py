@@ -125,9 +125,12 @@ def assess(
     output: Path,
     *,
     selection_path: Path | None = None,
+    cutover_zero_recovery: bool = False,
 ) -> dict[str, Any]:
     state = read_json(state_path)
-    drain_requested = (state_path.parent.parent / "control" / "CUTOVER_DRAIN").exists()
+    drain_path = state_path.parent.parent / "control" / "CUTOVER_DRAIN"
+    drain = read_json(drain_path)
+    drain_requested = drain_path.exists()
     cfg = read_json(sleeve_config)
     selection = read_json(selection_path) if selection_path is not None else {}
     v7 = cfg.get("v7") if isinstance(cfg.get("v7"), dict) else {}
@@ -311,6 +314,38 @@ def assess(
             "book_snapshot_id": snapshot_id,
         })
 
+    zero_recovery_writeoffs = 0
+    if cutover_zero_recovery and drain_requested and unmarkable:
+        if drain.get("schema") != "polymarket_v7_cutover_drain_v1" \
+                or drain.get("paper_only") is not True \
+                or drain.get("authenticated_execution") is not False \
+                or drain.get("real_order_submission") is not False:
+            raise ValueError("unsafe_cutover_zero_recovery_authority")
+        # This is not an invented executable mark. A PAPER-only exact-SHA
+        # cutover may terminally write off an otherwise unmarkable position at
+        # zero recovery, realizing the entire durable entry cost as a loss.
+        # The original reason remains attached for audit and model evaluation.
+        for row in unmarkable:
+            position_marks.append({
+                "market_id": str(row.get("market_id") or ""),
+                "condition_id": str(row.get("condition_id") or ""),
+                "token_id": str(row.get("token_id") or ""),
+                "execution_token_id": str(row.get("token_id") or ""),
+                "execution_side": "WRITE_OFF",
+                "liquidation_method": "CONSERVATIVE_ZERO_RECOVERY_WRITE_OFF",
+                "shares": max(0.0, finite(row.get("shares"), 0.0)),
+                "full_depth_vwap": 0.0,
+                "gross_executable_liquidation_value": 0.0,
+                "exit_fee": 0.0,
+                "exit_fee_source": "paper-cutover-zero-recovery-v1",
+                "slippage_haircut": 0.0,
+                "net_executable_liquidation_value": 0.0,
+                "valuation_policy": "PAPER_CUTOVER_ZERO_RECOVERY",
+                "unmarkable_reason": str(row.get("reason") or "unknown"),
+            })
+        zero_recovery_writeoffs = len(unmarkable)
+        unmarkable = []
+
     cash = finite(state.get("cash"), 0.0)
     # Unmarkable positions contribute zero, but never erase valid cash or
     # independently verified executable inventory marks.
@@ -343,7 +378,13 @@ def assess(
         "drain_complete": drain_requested and not positions,
         "degraded": new_risk_frozen,
         "killed": killed,
-        "source": "full_visible_bid_depth_net_verified_fee_and_slippage" if not unmarkable else "fail_closed_unmarkable",
+        "source": (
+            "paper_cutover_conservative_zero_recovery"
+            if zero_recovery_writeoffs
+            else "full_visible_bid_depth_net_verified_fee_and_slippage"
+            if not unmarkable else "fail_closed_unmarkable"
+        ),
+        "zero_recovery_writeoffs": zero_recovery_writeoffs,
         "positions": position_marks,
         "unmarkable_tokens": unmarkable,
         "realized_trading_pnl": finite(state.get("realized_trading_pnl"), 0.0),
@@ -361,8 +402,15 @@ def main() -> int:
     parser.add_argument("--selection", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--freeze-path", type=Path)
+    parser.add_argument("--cutover-zero-recovery", action="store_true")
     args = parser.parse_args()
-    report = assess(args.state, args.config, args.output, selection_path=args.selection)
+    report = assess(
+        args.state,
+        args.config,
+        args.output,
+        selection_path=args.selection,
+        cutover_zero_recovery=args.cutover_zero_recovery,
+    )
     sync_freeze(args.freeze_path, report)
     print(json.dumps(report, sort_keys=True))
     return 2 if report.get("killed") else 0

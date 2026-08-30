@@ -26,10 +26,11 @@ class MakerStatusTests(unittest.TestCase):
         self.assertIsNone(executable_sell_mark([(0.50, 2.0)], 5.0))
 
     def fixture(self, root: Path) -> tuple[Path, Path, Path, Path]:
-        state = root / "state.json"
+        state = root / "micro_maker/state.json"
         cfg = root / "config.json"
         selection = root / "selection.json"
-        output = root / "status.json"
+        output = root / "micro_maker/status.json"
+        state.parent.mkdir(parents=True, exist_ok=True)
         state.write_text(json.dumps({
             "paper_only": True,
             "authenticated_execution": False,
@@ -170,6 +171,36 @@ class MakerStatusTests(unittest.TestCase):
             report["new_risk_frozen"] = False
             sync_freeze(freeze, report)
             self.assertFalse(freeze.exists())
+
+    def test_explicit_paper_cutover_can_terminally_write_off_unmarkable_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state, cfg, selection, output = self.fixture(root)
+            writeoff_control = root / "control/CUTOVER_DRAIN"
+            writeoff_control.parent.mkdir(parents=True)
+            writeoff_control.write_text(json.dumps({
+                "schema": "polymarket_v7_cutover_drain_v1",
+                "paper_only": True,
+                "authenticated_execution": False,
+                "real_order_submission": False,
+            }))
+            fee = FeeDetails(rate=0.0, exponent=1.0, taker_only=True,
+                             verified=False, source="unknown")
+            with patch("v7_market_maker_status.request_json", return_value=[]), patch(
+                "v7_market_maker_status.resolve_fee_details", return_value=fee
+            ):
+                report = assess(
+                    state, cfg, output, selection_path=selection,
+                    cutover_zero_recovery=True,
+                )
+            self.assertTrue(report["marking_complete"])
+            self.assertEqual(report["source"], "paper_cutover_conservative_zero_recovery")
+            self.assertEqual(report["zero_recovery_writeoffs"], 1)
+            self.assertEqual(report["unmarkable_tokens"], [])
+            mark = report["positions"][0]
+            self.assertEqual(mark["liquidation_method"], "CONSERVATIVE_ZERO_RECOVERY_WRITE_OFF")
+            self.assertEqual(mark["net_executable_liquidation_value"], 0.0)
+            self.assertEqual(mark["valuation_policy"], "PAPER_CUTOVER_ZERO_RECOVERY")
 
     def test_conservative_cash_drawdown_still_kills(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

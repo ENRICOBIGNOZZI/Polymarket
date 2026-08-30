@@ -209,7 +209,10 @@ def prepare(
                 and maker_state.get("paper_only") is True
                 and maker_state.get("authenticated_execution") is False
                 and maker_flat
-                and maker_status.get("source") == "verified_cutover_full_depth_liquidation"
+                and maker_status.get("source") in {
+                    "verified_cutover_full_depth_liquidation",
+                    "paper_cutover_conservative_zero_recovery",
+                }
                 and maker_status.get("marking_complete") is True
                 and maker_status.get("killed") is False
                 and maker_status.get("positions") == []
@@ -223,7 +226,8 @@ def prepare(
     # A SHA cutover must never turn live PAPER inventory into an orphaned
     # archive.  Status and durable worker state are cross-checked after the
     # process tree has stopped; any open position blocks the transition until
-    # its real PAPER exit/settlement has emitted terminal evidence.
+    # its real PAPER exit/settlement or an explicit conservative zero-recovery
+    # write-off has emitted terminal evidence.
     external_status = read_json(run_root / "external_fair/paper_router_status.json")
     external_state = read_json(run_root / "external_fair/paper_router_state.json")
     micro_status = read_json(run_root / "micro_taker/status.json")

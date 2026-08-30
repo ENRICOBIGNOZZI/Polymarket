@@ -284,6 +284,7 @@ def finalize(
     events: list[LedgerEvent] = []
     total_net = 0.0
     total_pnl = 0.0
+    zero_recovery_writeoffs = 0
     liquidations: list[dict[str, Any]] = []
     updated = copy.deepcopy(state)
     updated_inventory = updated["inventory"]
@@ -309,64 +310,97 @@ def finalize(
         fee = number("exit_fee", mark.get("exit_fee"), minimum=0.0)
         slippage = number("slippage_haircut", mark.get("slippage_haircut"), minimum=0.0)
         net = number("net_value", mark.get("net_executable_liquidation_value"), minimum=0.0)
-        if not 0.0 < vwap < 1.0:
-            raise MakerCutoverError("maker_mark_price_invalid")
-        expected_gross = shares * vwap
-        if method == "COMPLEMENT_BUY_AND_MERGE":
-            if execution_side != "BUY" or not execution_token or execution_token == token_id:
-                raise MakerCutoverError("maker_complement_execution_identity_invalid")
-            expected_gross = shares * (1.0 - vwap)
-        elif method == "DIRECT_SELL":
-            if execution_side != "SELL" or execution_token != token_id:
-                raise MakerCutoverError("maker_direct_execution_identity_invalid")
-        else:
-            raise MakerCutoverError("maker_liquidation_method_invalid")
-        if abs(gross - expected_gross) > 1e-7:
-            raise MakerCutoverError("maker_mark_gross_mismatch")
-        if abs(net - max(0.0, gross - fee - slippage)) > 1e-7:
-            raise MakerCutoverError("maker_mark_net_mismatch")
-        exchange_ms = int(number("exchange_ts_ms", mark.get("exchange_ts_ms"), minimum=1.0))
-        receive_ms = int(number("receive_ts_ms", mark.get("receive_ts_ms"), minimum=1.0))
-        snapshot_id = str(mark.get("book_snapshot_id") or "")
-        fee_source = str(mark.get("exit_fee_source") or "")
-        if exchange_ms > receive_ms or receive_ms > status_ms or not snapshot_id or not fee_source:
-            raise MakerCutoverError("maker_mark_causality_invalid")
-        order_id = f"maker-cutover-order-{stable_id(nonce, market_id, token_id)}"
-        fill_id = f"maker-cutover-fill-{stable_id(order_id, execution_token, snapshot_id)}"
         position_id = f"maker-position-{stable_id(model_sha, market_id, token_id)}"
         pnl = net - cost
-        common = dict(
-            strategy=STRATEGY, model_sha=model_sha, model_version="cutover-liquidation-v1",
-            order_id=order_id, fill_id=fill_id, position_id=position_id,
-            market_id=market_id, event_id=condition_id or None, token_id=execution_token,
-            side=execution_side,
-        )
-        events.append(LedgerEvent(
-            event_type="FILL", record_id=stable_id("FILL", nonce, market_id, token_id),
-            recorded_ts_ms=current_ms,
-            exchange_ts_ms=exchange_ms, receive_ts_ms=receive_ms, book_snapshot_id=snapshot_id,
-            fill_price=vwap, filled_size=shares, complete=True, fee=fee,
-            fee_source=fee_source, slippage=slippage,
-            executable_liquidation_value=net,
-            metadata={"purpose": "LIQUIDATION", "cutover": True, "nonce": nonce,
-                      "full_visible_depth": True, "paper_tif": "FAK",
-                      "liquidation_method": method, "inventory_token_id": token_id,
-                      "complete_set_merge": method == "COMPLEMENT_BUY_AND_MERGE"}, **common,
-        ))
-        events.append(LedgerEvent(
-            event_type="FINAL", record_id=stable_id("FINAL", nonce, market_id, token_id),
-            recorded_ts_ms=current_ms + 1,
-            final_pnl=pnl, realized_cashflow=net, unwind_loss=slippage,
-            capital_cost=0.0, latency_cost=0.0,
-            metadata={
-                "purpose": "LIQUIDATION", "cutover": True, "nonce": nonce, "realized": True,
-                "liquidation_method": method, "inventory_token_id": token_id,
-                "complete_set_merge": method == "COMPLEMENT_BUY_AND_MERGE",
-                "cost_vector_complete": True, "unwind_accounted": True,
-                "pnl_decomposition": {"gross_exit_value": gross, "entry_cost": cost,
-                                      "exit_fee": fee, "slippage_haircut": slippage},
-            }, **common,
-        ))
+        if method == "CONSERVATIVE_ZERO_RECOVERY_WRITE_OFF":
+            if execution_side != "WRITE_OFF" or execution_token != token_id:
+                raise MakerCutoverError("maker_writeoff_identity_invalid")
+            if any(abs(value) > 1e-12 for value in (vwap, gross, fee, slippage, net)):
+                raise MakerCutoverError("maker_writeoff_must_be_zero_recovery")
+            if mark.get("valuation_policy") != "PAPER_CUTOVER_ZERO_RECOVERY" \
+                    or not str(mark.get("unmarkable_reason") or ""):
+                raise MakerCutoverError("maker_writeoff_policy_missing")
+            zero_recovery_writeoffs += 1
+            # A write-off is deliberately not represented as a fabricated
+            # exchange fill. The terminal FINAL realizes the full durable cost
+            # as a PAPER loss and preserves why no causal exit mark existed.
+            events.append(LedgerEvent(
+                event_type="FINAL", record_id=stable_id("FINAL", nonce, market_id, token_id),
+                recorded_ts_ms=current_ms + len(events),
+                strategy=STRATEGY, model_sha=model_sha,
+                model_version="cutover-zero-recovery-v1", position_id=position_id,
+                market_id=market_id, event_id=condition_id or None, token_id=token_id,
+                final_pnl=pnl, realized_cashflow=0.0, unwind_loss=cost,
+                capital_cost=0.0, latency_cost=0.0,
+                metadata={
+                    "purpose": "PAPER_CUTOVER_WRITE_OFF", "cutover": True,
+                    "nonce": nonce, "realized": True, "liquidation_method": method,
+                    "inventory_token_id": token_id,
+                    "valuation_policy": "PAPER_CUTOVER_ZERO_RECOVERY",
+                    "unmarkable_reason": str(mark["unmarkable_reason"]),
+                    "no_exchange_fill_fabricated": True,
+                    "cost_vector_complete": True, "unwind_accounted": True,
+                    "pnl_decomposition": {"gross_exit_value": 0.0, "entry_cost": cost,
+                                          "exit_fee": 0.0, "slippage_haircut": 0.0},
+                },
+            ))
+        else:
+            if not 0.0 < vwap < 1.0:
+                raise MakerCutoverError("maker_mark_price_invalid")
+            expected_gross = shares * vwap
+            if method == "COMPLEMENT_BUY_AND_MERGE":
+                if execution_side != "BUY" or not execution_token or execution_token == token_id:
+                    raise MakerCutoverError("maker_complement_execution_identity_invalid")
+                expected_gross = shares * (1.0 - vwap)
+            elif method == "DIRECT_SELL":
+                if execution_side != "SELL" or execution_token != token_id:
+                    raise MakerCutoverError("maker_direct_execution_identity_invalid")
+            else:
+                raise MakerCutoverError("maker_liquidation_method_invalid")
+            if abs(gross - expected_gross) > 1e-7:
+                raise MakerCutoverError("maker_mark_gross_mismatch")
+            if abs(net - max(0.0, gross - fee - slippage)) > 1e-7:
+                raise MakerCutoverError("maker_mark_net_mismatch")
+            exchange_ms = int(number("exchange_ts_ms", mark.get("exchange_ts_ms"), minimum=1.0))
+            receive_ms = int(number("receive_ts_ms", mark.get("receive_ts_ms"), minimum=1.0))
+            snapshot_id = str(mark.get("book_snapshot_id") or "")
+            fee_source = str(mark.get("exit_fee_source") or "")
+            if exchange_ms > receive_ms or receive_ms > status_ms or not snapshot_id or not fee_source:
+                raise MakerCutoverError("maker_mark_causality_invalid")
+            order_id = f"maker-cutover-order-{stable_id(nonce, market_id, token_id)}"
+            fill_id = f"maker-cutover-fill-{stable_id(order_id, execution_token, snapshot_id)}"
+            common = dict(
+                strategy=STRATEGY, model_sha=model_sha, model_version="cutover-liquidation-v1",
+                order_id=order_id, fill_id=fill_id, position_id=position_id,
+                market_id=market_id, event_id=condition_id or None, token_id=execution_token,
+                side=execution_side,
+            )
+            events.append(LedgerEvent(
+                event_type="FILL", record_id=stable_id("FILL", nonce, market_id, token_id),
+                recorded_ts_ms=current_ms + len(events),
+                exchange_ts_ms=exchange_ms, receive_ts_ms=receive_ms, book_snapshot_id=snapshot_id,
+                fill_price=vwap, filled_size=shares, complete=True, fee=fee,
+                fee_source=fee_source, slippage=slippage,
+                executable_liquidation_value=net,
+                metadata={"purpose": "LIQUIDATION", "cutover": True, "nonce": nonce,
+                          "full_visible_depth": True, "paper_tif": "FAK",
+                          "liquidation_method": method, "inventory_token_id": token_id,
+                          "complete_set_merge": method == "COMPLEMENT_BUY_AND_MERGE"}, **common,
+            ))
+            events.append(LedgerEvent(
+                event_type="FINAL", record_id=stable_id("FINAL", nonce, market_id, token_id),
+                recorded_ts_ms=current_ms + len(events),
+                final_pnl=pnl, realized_cashflow=net, unwind_loss=slippage,
+                capital_cost=0.0, latency_cost=0.0,
+                metadata={
+                    "purpose": "LIQUIDATION", "cutover": True, "nonce": nonce, "realized": True,
+                    "liquidation_method": method, "inventory_token_id": token_id,
+                    "complete_set_merge": method == "COMPLEMENT_BUY_AND_MERGE",
+                    "cost_vector_complete": True, "unwind_accounted": True,
+                    "pnl_decomposition": {"gross_exit_value": gross, "entry_cost": cost,
+                                          "exit_fee": fee, "slippage_haircut": slippage},
+                }, **common,
+            ))
         updated_inventory[market_id][f"{outcome}_shares"] = 0.0
         updated_inventory[market_id][f"{outcome}_cost"] = 0.0
         total_net += net
@@ -399,7 +433,9 @@ def finalize(
         "marking_complete": True, "new_risk_frozen": True, "drain_requested": True,
         "drain_complete": True, "degraded": False,
         "realized_trading_pnl": updated["realized_trading_pnl"],
-        "source": "verified_cutover_full_depth_liquidation",
+        "source": "paper_cutover_conservative_zero_recovery" if zero_recovery_writeoffs
+                  else "verified_cutover_full_depth_liquidation",
+        "zero_recovery_writeoffs": zero_recovery_writeoffs,
     })
     journal = {
         "schema": "polymarket_v7_maker_cutover_liquidation_v1", "state": "LIQUIDATION_PENDING",
@@ -407,6 +443,7 @@ def finalize(
         "real_order_submission": False, "model_sha": model_sha, "nonce": nonce,
         "positions_liquidated": len(liquidations), "net_cashflow": total_net,
         "final_pnl": total_pnl, "liquidations": liquidations,
+        "zero_recovery_writeoffs": zero_recovery_writeoffs,
         "rejected_spool_records": reconciliation["rejected_count"],
         "ledger_record_ids": [event.record_id for event in events],
         "original_state_digest": object_digest(state),
