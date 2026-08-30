@@ -97,6 +97,49 @@ class FastStructuralPaperExecutorTests(unittest.TestCase):
         self.assertTrue(status["paper_only"])
         self.assertFalse(status["real_order_submission"])
 
+    def test_joint_arrival_cost_is_rejected_before_first_leg(self) -> None:
+        shared = json.loads(self.shared.read_text())
+        yes = shared["books"][0]
+        yes["asks"] = [{"price": 0.55, "size": 20.0}]
+        no = {
+            **yes,
+            "token_id": "no",
+            "outcome": "NO",
+            "bids": [{"price": 0.49, "size": 20.0}],
+            "asks": [{"price": 0.50, "size": 20.0}],
+        }
+        shared["books"] = [yes, no]
+        self.shared.write_text(json.dumps(shared))
+
+        ledger = self.root / "ledger" / "execution.jsonl"
+        current = json.loads(ledger.read_text().splitlines()[0])
+        current["metadata"]["capital_required"] = 10.5
+        current["metadata"]["structured_legs"] = [
+            {
+                "leg_id": "leg-1-yes", "market_id": "m1", "token_id": "yes",
+                "outcome": "YES", "side": "BUY", "target_quantity": 10.0,
+            },
+            {
+                "leg_id": "leg-2-no", "market_id": "m1", "token_id": "no",
+                "outcome": "NO", "side": "BUY", "target_quantity": 10.0,
+            },
+        ]
+        current["metadata"]["target_quantities"] = {
+            "leg-1-yes": 10.0, "leg-2-no": 10.0,
+        }
+        ledger.write_text(json.dumps(current) + "\n")
+
+        executor = Executor(self.args)
+        executor.step()
+        spool_dir = self.root / "ledger" / "spool"
+        self.assertFalse(spool_dir.exists())
+        self.assertEqual(executor.state["open_bundles"], {})
+        self.assertEqual(executor.state["aborting_bundles"], {})
+        self.assertEqual(executor.state["cash"], 100.0)
+        self.assertEqual(
+            executor.state["rejections"].get("ARRIVAL_BUNDLE_NET_EDGE_NONPOSITIVE"), 1
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

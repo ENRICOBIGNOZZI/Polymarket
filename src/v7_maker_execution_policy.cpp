@@ -364,6 +364,7 @@ MakerExecutionResult MakerPaperExecutionPolicy::split_complete_sets(
     std::uint64_t market_handle,
     std::int64_t microunits,
     std::int64_t timestamp_ns,
+    double yes_reference_price,
     SleeveCapitalAccount& capital) noexcept {
     MakerExecutionResult out;
     auto* slot = market(market_handle);
@@ -371,7 +372,8 @@ MakerExecutionResult MakerPaperExecutionPolicy::split_complete_sets(
         out.reason = MakerExecutionReason::UnknownMarket;
         return out;
     }
-    out.paper = slot->engine->split_complete_sets(capital, microunits, timestamp_ns);
+    out.paper = slot->engine->split_complete_sets(
+        capital, microunits, timestamp_ns, yes_reference_price);
     if (out.paper.rejected || out.paper.invariant_violation) {
         out.reason = MakerExecutionReason::PaperRejected;
         return out;

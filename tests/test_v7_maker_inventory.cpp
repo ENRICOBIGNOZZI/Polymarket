@@ -39,7 +39,8 @@ pm::v7::StrategyIntent sell_yes(std::uint64_t id, std::int64_t quantity) {
 void test_split_is_explicit_balanced_and_auditable() {
     pm::v7::maker::MakerPaperMarketEngine engine(kMarket, kYes, kNo);
     pm::v7::SleeveCapitalAccount capital(capital_limits());
-    const auto split = engine.split_complete_sets(capital, 2'000'000, 1'000'000'000LL);
+    const auto split = engine.split_complete_sets(
+        capital, 2'000'000, 1'000'000'000LL, 0.40);
     assert(split.applied);
     assert(!split.rejected);
     assert(split.event_count == 2);
@@ -58,8 +59,9 @@ void test_split_is_explicit_balanced_and_auditable() {
     assert(inventory.yes_free_microunits == 2'000'000);
     assert(inventory.no_free_microunits == 2'000'000);
     assert(inventory.balanced_complete_set_microunits == 2'000'000);
-    assert(std::abs(inventory.yes_cost - 1.0) < 1e-12);
-    assert(std::abs(inventory.no_cost - 1.0) < 1e-12);
+    assert(std::abs(inventory.yes_cost - 0.8) < 1e-12);
+    assert(std::abs(inventory.no_cost - 1.2) < 1e-12);
+    assert(std::abs(split.events[1].split_yes_reference_price - 0.40) < 1e-12);
     assert(capital.inventory_committed_for_market(kMarket) == 2'000'000);
     assert(capital.snapshot().order_reserved_microdollars == 0);
 }
@@ -67,7 +69,8 @@ void test_split_is_explicit_balanced_and_auditable() {
 void test_split_inventory_can_back_post_only_ask() {
     pm::v7::maker::MakerPaperMarketEngine engine(kMarket, kYes, kNo);
     pm::v7::SleeveCapitalAccount capital(capital_limits());
-    assert(engine.split_complete_sets(capital, 1'000'000, 1'000'000'000LL).applied);
+    assert(engine.split_complete_sets(
+        capital, 1'000'000, 1'000'000'000LL, 0.50).applied);
     const auto result = engine.apply_intent(sell_yes(1, 1'000'000), 2'000'000, 100);
     assert(result.applied);
     assert(!result.rejected);
@@ -79,7 +82,8 @@ void test_split_inventory_can_back_post_only_ask() {
 void test_split_rejects_invalid_quantity_without_mutating_inventory() {
     pm::v7::maker::MakerPaperMarketEngine engine(kMarket, kYes, kNo);
     pm::v7::SleeveCapitalAccount capital(capital_limits());
-    const auto result = engine.split_complete_sets(capital, 0, 1'000'000'000LL);
+    const auto result = engine.split_complete_sets(
+        capital, 0, 1'000'000'000LL, 0.50);
     assert(result.rejected);
     assert(engine.inventory().yes_microunits == 0);
     assert(engine.inventory().no_microunits == 0);
@@ -94,13 +98,24 @@ void test_split_rejects_invalid_quantity_without_mutating_inventory() {
 void test_split_fails_closed_when_common_capital_denies() {
     pm::v7::maker::MakerPaperMarketEngine engine(kMarket, kYes, kNo);
     pm::v7::SleeveCapitalAccount capital(capital_limits(500'000));
-    const auto result = engine.split_complete_sets(capital, 1'000'000, 1'000'000'000LL);
+    const auto result = engine.split_complete_sets(
+        capital, 1'000'000, 1'000'000'000LL, 0.50);
     assert(result.rejected);
     assert(!result.applied);
     assert(engine.inventory().yes_microunits == 0);
     assert(engine.inventory().no_microunits == 0);
     assert(engine.inventory().yes_cost == 0.0);
     assert(engine.inventory().no_cost == 0.0);
+    assert(capital.snapshot().total_exposure_microdollars == 0);
+}
+
+void test_split_rejects_missing_causal_cost_reference() {
+    pm::v7::maker::MakerPaperMarketEngine engine(kMarket, kYes, kNo);
+    pm::v7::SleeveCapitalAccount capital(capital_limits());
+    const auto result = engine.split_complete_sets(
+        capital, 1'000'000, 1'000'000'000LL, 0.0);
+    assert(result.rejected);
+    assert(engine.inventory().yes_microunits == 0);
     assert(capital.snapshot().total_exposure_microdollars == 0);
 }
 
@@ -111,5 +126,6 @@ int main() {
     test_split_inventory_can_back_post_only_ask();
     test_split_rejects_invalid_quantity_without_mutating_inventory();
     test_split_fails_closed_when_common_capital_denies();
+    test_split_rejects_missing_causal_cost_reference();
     return 0;
 }

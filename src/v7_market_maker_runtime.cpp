@@ -692,6 +692,7 @@ struct MarketContext {
     double cold_visible_depth_shares = 0.0;
     double cold_spread = 1.0;
     double cold_volatility_proxy = 1.0;
+    double cold_yes_reference_price = 0.5;
     MakerInstrumentLane yes_lane{+1};
     MakerInstrumentLane no_lane{-1};
 
@@ -699,14 +700,16 @@ struct MarketContext {
                   std::uint64_t event, std::uint64_t yes_instrument,
                   std::uint64_t no_instrument, std::int32_t yes_tick,
                   std::int32_t no_tick, double yes_min, double no_min,
-                  double visible_depth, double spread, double volatility_proxy)
+                  double visible_depth, double spread, double volatility_proxy,
+                  double yes_reference_price)
         : cold(std::move(selected)), market_handle(market), event_handle(event),
           yes_instrument_handle(yes_instrument), no_instrument_handle(no_instrument),
           yes_tick_e4(yes_tick), no_tick_e4(no_tick),
           yes_min_order(std::max(1e-6, yes_min)), no_min_order(std::max(1e-6, no_min)),
           cold_visible_depth_shares(std::max(0.0, visible_depth)),
           cold_spread(std::clamp(spread, 0.0, 1.0)),
-          cold_volatility_proxy(std::clamp(volatility_proxy, 0.0, 1.0)) {}
+          cold_volatility_proxy(std::clamp(volatility_proxy, 0.0, 1.0)),
+          cold_yes_reference_price(std::clamp(yes_reference_price, 1e-6, 1.0 - 1e-6)) {}
 };
 
 struct InstrumentRef {
@@ -1469,7 +1472,8 @@ public:
                 context.outcome_yes = 1;
                 auto split = policy_.split_complete_sets(
                     market->market_handle, target,
-                    context.receive_monotonic_ns, capital_);
+                    context.receive_monotonic_ns,
+                    market->cold_yes_reference_price, capital_);
                 if (!split.accepted || split.capital_invariant_violation
                     || split.paper.invariant_violation) {
                     emit(context, split.paper);
@@ -1663,8 +1667,20 @@ private:
         inventory_last_replenish_ns_[context.market_handle] = now;
         const auto delta = target - inventory->balanced_complete_set_microunits;
         if (delta <= 0) return true;
+        const auto* market = markets_[context.market_handle];
+        double yes_reference_price = market != nullptr
+            ? market->cold_yes_reference_price : 0.5;
+        if (context.book.valid && context.book.best_bid_e4 > 0
+            && context.book.best_ask_e4 > context.book.best_bid_e4) {
+            const double observed_mid = static_cast<double>(
+                context.book.best_bid_e4 + context.book.best_ask_e4)
+                / (2.0 * pm::v7::kCanonicalPriceScale);
+            yes_reference_price = context.outcome_yes
+                ? observed_mid : 1.0 - observed_mid;
+        }
+        yes_reference_price = std::clamp(yes_reference_price, 1e-6, 1.0 - 1e-6);
         auto split = policy_.split_complete_sets(
-            context.market_handle, delta, now, capital_);
+            context.market_handle, delta, now, yes_reference_price, capital_);
         ExecutionContext replenishment = context;
         replenishment.receive_wall_ms = wall_ms();
         replenishment.receive_monotonic_ns = now;
@@ -2281,6 +2297,8 @@ private:
         metadata["no_cost_before"] = paper.no_cost_before;
         metadata["yes_cost_after"] = paper.yes_cost_after;
         metadata["no_cost_after"] = paper.no_cost_after;
+        metadata["split_yes_reference_price"] = paper.split_yes_reference_price;
+        metadata["split_cost_allocation"] = "causal_yes_mid_and_complement";
         metadata["pnl_created_by_split"] = false;
         metadata["inventory_lineage"] = "market_local_average_cost_before_after";
         metadata["consumed_inventory_provenance_complete"] = true;
@@ -2468,7 +2486,9 @@ std::vector<std::unique_ptr<MarketContext>> build_markets(
             std::move(selected_market), market, event, yes_instrument, no_instrument,
             yes_tick, no_tick, std::max(yes->second.min_order_size, 1e-6),
             std::max(no->second.min_order_size, 1e-6), visible_depth, spread,
-            volatility_proxy));
+            volatility_proxy,
+            std::isfinite(yes_mid) && yes_mid > 0.0 && yes_mid < 1.0
+                ? yes_mid : 0.5));
     }
     if (output.empty()) throw std::runtime_error("no selected maker market has valid cold-start books");
     return output;

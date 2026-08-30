@@ -66,6 +66,10 @@ struct PaperMakerEvent {
     double no_cost_before = 0.0;
     double yes_cost_after = 0.0;
     double no_cost_after = 0.0;
+    // Causal market allocation of the otherwise indivisible $1 complete-set
+    // collateral. This prevents an arbitrary 50/50 bookkeeping convention
+    // from being reported as trading P&L when one leg is sold.
+    double split_yes_reference_price = 0.0;
 };
 
 struct PaperMakerResult {
@@ -124,7 +128,8 @@ public:
     [[nodiscard]] PaperMakerResult split_complete_sets(
         SleeveCapitalAccount& capital,
         std::int64_t microunits,
-        std::int64_t timestamp_ns) noexcept;
+        std::int64_t timestamp_ns,
+        double yes_reference_price) noexcept;
 
     // Preserve this much balanced inventory for inventory-backed asks. Only
     // complete sets acquired above the floor may be auto-merged after fills.

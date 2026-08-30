@@ -63,6 +63,7 @@ public:
         std::uint64_t market_handle,
         std::int64_t microunits,
         std::int64_t timestamp_ns,
+        double yes_reference_price,
         SleeveCapitalAccount& capital) noexcept;
 
     [[nodiscard]] bool set_complete_set_reserve_floor(

@@ -11,7 +11,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import v7_micro_taker_data as data  # noqa: E402
 from v7_micro_taker_worker import (  # noqa: E402
-    canonical_live_flow_features, model_validity, sample_diagnostics, sample_key,
+    canonical_live_flow_features, chronological_oos_diagnostics, model_validity,
+    sample_diagnostics, sample_key,
 )
 
 
@@ -58,14 +59,85 @@ def test_novel_nonzero_flow_and_targets_can_make_dataset_valid() -> None:
     samples = [
         {
             "sample_key": f"m:{index}", "market_id": f"m-{index % 5}",
+            "event_id": f"e-{index % 5}", "ts": 1_000 + index * 30,
             "y": 0.001 if index % 2 else -0.001,
             "x": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2, -0.1],
         }
-        for index in range(50)
+        for index in range(240)
     ]
     valid, reasons = model_validity(sample_diagnostics(samples))
     assert valid
     assert reasons == []
+
+
+def test_correlated_burst_cannot_unlock_capital_from_raw_row_count() -> None:
+    samples = [
+        {
+            "sample_key": f"m:{index}", "market_id": f"m-{index % 20}",
+            "event_id": f"e-{index % 20}", "ts": 1_000,
+            "y": 0.001 if index % 2 else -0.001,
+            "x": [1.0, 0.1, 0.0, 0.0, 0.0, 0.0, 0.2, -0.1],
+        }
+        for index in range(500)
+    ]
+    valid, reasons = model_validity(sample_diagnostics(samples))
+    assert not valid
+    assert "INSUFFICIENT_INDEPENDENT_TIME_BUCKETS" in reasons
+
+
+def test_purged_chronological_oos_requires_real_predictive_skill() -> None:
+    samples = []
+    for index in range(400):
+        signal = -1.0 if index % 2 else 1.0
+        samples.append({
+            "sample_key": f"m:{index}", "market_id": f"m-{index % 8}",
+            "event_id": f"e-{index % 8}", "ts": 1_000 + index * 2,
+            "y": 0.002 * signal,
+            "x": [1.0, signal, 0.0, 0.0, 0.0, 0.0, 0.2, -0.1],
+        })
+    diagnostics = chronological_oos_diagnostics(samples, horizon_seconds=30)
+    assert diagnostics["valid"]
+    assert diagnostics["mse_improvement_fraction"] > 0.90
+    assert diagnostics["prediction_target_correlation"] > 0.90
+    assert diagnostics["directional_accuracy"] > 0.90
+
+
+def test_purged_chronological_oos_rejects_no_skill() -> None:
+    samples = []
+    for index in range(400):
+        signal = -1.0 if index % 2 else 1.0
+        target = 0.002 if (index // 2) % 2 else -0.002
+        samples.append({
+            "sample_key": f"m:{index}", "market_id": f"m-{index % 8}",
+            "event_id": f"e-{index % 8}", "ts": 1_000 + index * 2,
+            "y": target,
+            "x": [1.0, signal, 0.0, 0.0, 0.0, 0.0, 0.2, -0.1],
+        })
+    diagnostics = chronological_oos_diagnostics(samples, horizon_seconds=30)
+    assert not diagnostics["valid"]
+    assert "OOS_DOES_NOT_BEAT_NO_CHANGE_BASELINE" in diagnostics["reasons"]
+
+
+class DatasetReadinessTests(unittest.TestCase):
+    # Keep the plain functions convenient for lightweight direct invocation,
+    # while making them part of the repository's canonical unittest discovery.
+    def test_sample_key_novelty(self) -> None:
+        test_sample_key_ignores_snapshot_republication()
+
+    def test_degenerate_model_gate(self) -> None:
+        test_degenerate_samples_invalidate_model_instead_of_false_low_sigma()
+
+    def test_dataset_validity(self) -> None:
+        test_novel_nonzero_flow_and_targets_can_make_dataset_valid()
+
+    def test_correlated_burst_gate(self) -> None:
+        test_correlated_burst_cannot_unlock_capital_from_raw_row_count()
+
+    def test_predictive_oos_gate(self) -> None:
+        test_purged_chronological_oos_requires_real_predictive_skill()
+
+    def test_no_skill_oos_gate(self) -> None:
+        test_purged_chronological_oos_rejects_no_skill()
 
 
 class CanonicalLiveFlowTests(unittest.TestCase):

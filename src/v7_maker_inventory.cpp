@@ -8,7 +8,8 @@ namespace pm::v7::maker {
 PaperMakerResult MakerPaperMarketEngine::split_complete_sets(
     SleeveCapitalAccount& capital,
     std::int64_t microunits,
-    std::int64_t timestamp_ns) noexcept {
+    std::int64_t timestamp_ns,
+    double yes_reference_price) noexcept {
 
     PaperMakerResult result;
     const auto before = inventory_;
@@ -27,6 +28,7 @@ PaperMakerResult MakerPaperMarketEngine::split_complete_sets(
     requested.no_cost_after = before.no_cost;
     requested.collateral_before_microdollars = capital_before;
     requested.collateral_after_microdollars = capital_before;
+    requested.split_yes_reference_price = yes_reference_price;
     emit(result, requested);
 
     auto reject = [&]() noexcept {
@@ -46,11 +48,14 @@ PaperMakerResult MakerPaperMarketEngine::split_complete_sets(
         event.collateral_before_microdollars = capital_before;
         event.collateral_after_microdollars =
             capital.inventory_committed_for_market(market_handle_);
+        event.split_yes_reference_price = yes_reference_price;
         emit(result, event);
         return result;
     };
 
-    if (!policy_.valid() || microunits <= 0 || timestamp_ns <= 0) return reject();
+    if (!policy_.valid() || microunits <= 0 || timestamp_ns <= 0
+        || !std::isfinite(yes_reference_price)
+        || yes_reference_price <= 0.0 || yes_reference_price >= 1.0) return reject();
     if (inventory_.yes_microunits > std::numeric_limits<std::int64_t>::max() - microunits
         || inventory_.no_microunits > std::numeric_limits<std::int64_t>::max() - microunits) {
         result.invariant_violation = 1;
@@ -59,11 +64,12 @@ PaperMakerResult MakerPaperMarketEngine::split_complete_sets(
 
     constexpr double kMicrounitsPerShare = 1'000'000.0;
     const double split_shares = static_cast<double>(microunits) / kMicrounitsPerShare;
-    const double leg_cost = 0.5 * split_shares;
+    const double yes_leg_cost = yes_reference_price * split_shares;
+    const double no_leg_cost = (1.0 - yes_reference_price) * split_shares;
     if (!std::isfinite(split_shares) || split_shares <= 0.0
-        || !std::isfinite(leg_cost)
-        || !std::isfinite(inventory_.yes_cost + leg_cost)
-        || !std::isfinite(inventory_.no_cost + leg_cost)) {
+        || !std::isfinite(yes_leg_cost) || !std::isfinite(no_leg_cost)
+        || !std::isfinite(inventory_.yes_cost + yes_leg_cost)
+        || !std::isfinite(inventory_.no_cost + no_leg_cost)) {
         result.invariant_violation = 1;
         return reject();
     }
@@ -77,8 +83,8 @@ PaperMakerResult MakerPaperMarketEngine::split_complete_sets(
     inventory_.pending_split_microunits = microunits;
     inventory_.yes_microunits += microunits;
     inventory_.no_microunits += microunits;
-    inventory_.yes_cost += leg_cost;
-    inventory_.no_cost += leg_cost;
+    inventory_.yes_cost += yes_leg_cost;
+    inventory_.no_cost += no_leg_cost;
     inventory_.pending_split_microunits = 0;
     refresh_inventory_derived();
 
@@ -99,6 +105,7 @@ PaperMakerResult MakerPaperMarketEngine::split_complete_sets(
     event.collateral_before_microdollars = capital_before;
     event.collateral_after_microdollars =
         capital.inventory_committed_for_market(market_handle_);
+    event.split_yes_reference_price = yes_reference_price;
     emit(result, event);
     result.applied = 1;
     return result;

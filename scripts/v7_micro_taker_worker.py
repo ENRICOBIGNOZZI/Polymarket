@@ -66,7 +66,7 @@ def sample_key(market_id: str, yes: base.Book, no: base.Book) -> str:
     ))
 
 
-def sample_diagnostics(samples: list[dict[str, Any]]) -> dict[str, Any]:
+def sample_diagnostics(samples: list[dict[str, Any]], *, horizon_seconds: int = 30) -> dict[str, Any]:
     labeled = [row for row in samples if row.get("y") is not None]
     targets = [_finite(row.get("y")) for row in labeled]
     targets = [value for value in targets if math.isfinite(value)]
@@ -83,6 +83,15 @@ def sample_diagnostics(samples: list[dict[str, Any]]) -> dict[str, Any]:
         if str(row.get("sample_key") or "")
     }
     unique_markets = {str(row.get("market_id") or "") for row in samples}
+    time_bucket_seconds = max(1, int(horizon_seconds))
+    independent_time_buckets = {
+        int(_finite(row.get("ts"), 0.0)) // time_bucket_seconds for row in labeled
+        if int(_finite(row.get("ts"), 0.0)) > 0
+    }
+    unique_events = {
+        str(row.get("event_id") or row.get("market_id") or "") for row in labeled
+        if str(row.get("event_id") or row.get("market_id") or "")
+    }
     return {
         "raw_samples": len(samples),
         "labeled_samples": len(targets),
@@ -93,10 +102,15 @@ def sample_diagnostics(samples: list[dict[str, Any]]) -> dict[str, Any]:
         "flow_nonzero_fraction": flow_nonzero / len(samples) if samples else 0.0,
         "effective_sample_size": len(unique_keys),
         "unique_markets": len(unique_markets - {""}),
+        "independent_time_buckets": len(independent_time_buckets),
+        "unique_events": len(unique_events),
     }
 
 
-def model_validity(diagnostics: dict[str, Any], *, minimum_samples: int = 40) -> tuple[bool, list[str]]:
+def model_validity(
+    diagnostics: dict[str, Any], *, minimum_samples: int = 200,
+    minimum_time_buckets: int = 12,
+) -> tuple[bool, list[str]]:
     reasons: list[str] = []
     if int(diagnostics.get("labeled_samples") or 0) < minimum_samples:
         reasons.append("INSUFFICIENT_LABELED_SAMPLES")
@@ -106,7 +120,102 @@ def model_validity(diagnostics: dict[str, Any], *, minimum_samples: int = 40) ->
         reasons.append("DEGENERATE_ZERO_TARGET_VARIANCE")
     if int(diagnostics.get("flow_nonzero_samples") or 0) <= 0:
         reasons.append("NO_CAUSAL_FLOW_COVERAGE")
+    if int(diagnostics.get("independent_time_buckets") or 0) < minimum_time_buckets:
+        reasons.append("INSUFFICIENT_INDEPENDENT_TIME_BUCKETS")
     return not reasons, reasons
+
+
+def chronological_oos_diagnostics(
+    samples: list[dict[str, Any]], *, horizon_seconds: int,
+    minimum_train_samples: int = 120, minimum_oos_samples: int = 40,
+) -> dict[str, Any]:
+    """Purged chronological holdout proving that alpha exists beyond fit data.
+
+    Many markets update in the same second, so raw row count is not treated as
+    independent evidence. The purge removes training labels whose forecast
+    horizon overlaps the holdout boundary. Risk remains closed unless the model
+    beats a no-change forecast and has positive directional/correlation skill.
+    """
+    rows: list[dict[str, Any]] = []
+    for row in samples:
+        try:
+            x = [float(value) for value in row["x"]]
+            y = float(row["y"])
+            ts = int(row["ts"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        if len(x) != FLOW_FEATURE_DIM or not all(math.isfinite(value) for value in x + [y]) or ts <= 0:
+            continue
+        rows.append({**row, "x": x, "y": y, "ts": ts})
+    rows.sort(key=lambda row: (int(row["ts"]), str(row.get("sample_key") or "")))
+    result: dict[str, Any] = {
+        "valid": False, "reasons": [], "train_samples": 0, "oos_samples": 0,
+        "purge_seconds": max(1, int(horizon_seconds)), "baseline_mse": None,
+        "model_mse": None, "mse_improvement_fraction": None,
+        "prediction_target_correlation": None, "directional_accuracy": None,
+        "oos_residual_sigma": None,
+    }
+    if len(rows) < minimum_train_samples + minimum_oos_samples:
+        result["reasons"] = ["INSUFFICIENT_CHRONOLOGICAL_OOS_SAMPLES"]
+        return result
+    split = max(minimum_train_samples, int(len(rows) * 0.80))
+    split = min(split, len(rows) - minimum_oos_samples)
+    holdout = rows[split:]
+    holdout_start = int(holdout[0]["ts"])
+    train = [
+        row for row in rows[:split]
+        if int(row["ts"]) + max(1, int(horizon_seconds)) < holdout_start
+    ]
+    result["train_samples"] = len(train)
+    result["oos_samples"] = len(holdout)
+    reasons: list[str] = []
+    if len(train) < minimum_train_samples:
+        reasons.append("INSUFFICIENT_PURGED_TRAIN_SAMPLES")
+    if len(holdout) < minimum_oos_samples:
+        reasons.append("INSUFFICIENT_CHRONOLOGICAL_OOS_SAMPLES")
+    if reasons:
+        result["reasons"] = reasons
+        return result
+    beta = solve_ridge(train, 1e-2, FLOW_FEATURE_DIM)
+    predictions = [sum(a * b for a, b in zip(beta, row["x"])) for row in holdout]
+    targets = [float(row["y"]) for row in holdout]
+    residuals = [target - prediction for target, prediction in zip(targets, predictions)]
+    baseline_mse = statistics.fmean(target * target for target in targets)
+    model_mse = statistics.fmean(value * value for value in residuals)
+    improvement = (baseline_mse - model_mse) / baseline_mse if baseline_mse > 1e-15 else -math.inf
+    pred_mean, target_mean = statistics.fmean(predictions), statistics.fmean(targets)
+    covariance = statistics.fmean(
+        (prediction - pred_mean) * (target - target_mean)
+        for prediction, target in zip(predictions, targets)
+    )
+    pred_var = statistics.fmean((prediction - pred_mean) ** 2 for prediction in predictions)
+    target_var = statistics.fmean((target - target_mean) ** 2 for target in targets)
+    correlation = covariance / math.sqrt(pred_var * target_var) if pred_var > 1e-18 and target_var > 1e-18 else 0.0
+    active = [
+        (prediction, target) for prediction, target in zip(predictions, targets)
+        if abs(prediction) > 1e-8 and abs(target) > 1e-12
+    ]
+    directional_accuracy = (
+        sum((prediction > 0.0) == (target > 0.0) for prediction, target in active) / len(active)
+        if active else 0.0
+    )
+    sigma = statistics.stdev(residuals) if len(residuals) >= 2 else math.inf
+    if improvement < 0.02:
+        reasons.append("OOS_DOES_NOT_BEAT_NO_CHANGE_BASELINE")
+    if correlation < 0.05:
+        reasons.append("OOS_NONPOSITIVE_PREDICTIVE_CORRELATION")
+    if len(active) < minimum_oos_samples // 2 or directional_accuracy < 0.52:
+        reasons.append("OOS_DIRECTIONAL_SKILL_NOT_ESTABLISHED")
+    result.update({
+        "valid": not reasons, "reasons": reasons,
+        "baseline_mse": baseline_mse, "model_mse": model_mse,
+        "mse_improvement_fraction": improvement,
+        "prediction_target_correlation": correlation,
+        "directional_accuracy": directional_accuracy,
+        "directional_samples": len(active),
+        "oos_residual_sigma": max(1e-4, sigma) if math.isfinite(sigma) else None,
+    })
+    return result
 
 
 def solve_ridge(samples: list[dict[str, Any]], ridge: float, feature_dim: int) -> list[float]:
@@ -617,9 +726,18 @@ def main() -> int:
     label_stats = base.label_matured_samples(samples, now=now, horizon_seconds=args.horizon_seconds, max_target_staleness_seconds=args.max_target_staleness_seconds)
     beta = solve_ridge(samples, 1e-2, FLOW_FEATURE_DIM)
     model_labeled = sum(row.get("y") is not None and isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM for row in samples)
-    training_diagnostics = sample_diagnostics(samples)
+    training_diagnostics = sample_diagnostics(
+        samples, horizon_seconds=args.horizon_seconds)
     model_valid, model_invalid_reasons = model_validity(training_diagnostics)
-    sigma = residual_sigma(samples, beta) if model_valid else None
+    validation_diagnostics = chronological_oos_diagnostics(
+        samples, horizon_seconds=args.horizon_seconds)
+    if validation_diagnostics.get("valid") is not True:
+        model_invalid_reasons.extend(
+            str(reason) for reason in validation_diagnostics.get("reasons", []))
+        model_valid = False
+    # Entry uncertainty must come from untouched future observations, never
+    # from residuals of the same rows used to fit beta.
+    sigma = validation_diagnostics.get("oos_residual_sigma") if model_valid else None
     slip = max(0.0, args.slippage_bps) / 10000.0
 
     realized_last_tick = 0.0
@@ -951,7 +1069,8 @@ def main() -> int:
     killed = killed or (marking_complete and drawdown >= max_drawdown)
     labeled = sum(row.get("y") is not None for row in samples)
     model_labeled = sum(row.get("y") is not None and isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM for row in samples)
-    dataset_diagnostics = sample_diagnostics(samples)
+    dataset_diagnostics = sample_diagnostics(
+        samples, horizon_seconds=args.horizon_seconds)
 
     new_state = {
         "schema": "polymarket_v7_micro_taker_status_v1",
@@ -984,6 +1103,7 @@ def main() -> int:
         "prediction_sigma_probability": sigma,
         "model_valid": model_valid,
         "model_invalid_reasons": model_invalid_reasons,
+        "validation_diagnostics": validation_diagnostics,
         "flow_valid": flow_valid,
         "flow_diagnostics": flow_diagnostics,
         "rejection_funnel": rejection_funnel,
@@ -1016,6 +1136,7 @@ def main() -> int:
         "new_risk_frozen", "drain_requested", "drain_complete", "marking_complete", "market_capital_ceiling",
         "unmarkable_positions", "marking_contract",
         "prediction_sigma_probability", "model_valid", "model_invalid_reasons",
+        "validation_diagnostics",
         "flow_valid", "flow_diagnostics",
         "rejection_funnel",
         "dataset_version", "dataset_lineage", "dataset_diagnostics",

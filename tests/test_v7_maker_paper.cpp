@@ -298,7 +298,8 @@ void test_inventory_factory_floor_survives_cycle_and_drain_releases_it() {
     limits.max_single_order_microdollars = 10'000'000;
     pm::v7::SleeveCapitalAccount capital(limits);
     assert(engine.set_complete_set_reserve_floor(2'000'000));
-    assert(engine.split_complete_sets(capital, 2'000'000, 900'000'000LL).applied);
+    assert(engine.split_complete_sets(
+        capital, 2'000'000, 900'000'000LL, 0.50).applied);
 
     assert(engine.apply_intent(
         quote(20, kYes, pm::v7::Side::Buy, 48, 1'000'000,

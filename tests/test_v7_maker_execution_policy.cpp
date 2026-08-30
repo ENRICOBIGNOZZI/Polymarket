@@ -172,7 +172,7 @@ void test_split_then_sell_releases_sold_leg_cost_basis() {
     auto execution = policy();
     pm::v7::SleeveCapitalAccount capital(capital_limits());
     const auto split = execution.split_complete_sets(
-        kMarket, 1'000'000, 900'000'000LL, capital);
+        kMarket, 1'000'000, 900'000'000LL, 0.48, capital);
     assert(split.accepted);
     assert(capital.snapshot().inventory_committed_microdollars == 1'000'000);
 
@@ -184,9 +184,10 @@ void test_split_then_sell_releases_sold_leg_cost_basis() {
               10'100'000'000LL, 1'100'000'000LL), capital).accepted);
     const auto snap = capital.snapshot();
     assert(snap.order_reserved_microdollars == 0);
-    assert(snap.inventory_committed_microdollars == 500'000);
+    assert(snap.inventory_committed_microdollars == 520'000);
     assert(execution.inventory(kMarket)->yes_microunits == 0);
     assert(execution.inventory(kMarket)->no_microunits == 1'000'000);
+    assert(std::abs(execution.inventory(kMarket)->realized_trading_pnl - 0.04) < 1e-12);
 }
 
 void test_unobservable_queue_fails_before_capital_or_paper_mutation() {

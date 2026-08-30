@@ -225,23 +225,60 @@ class Executor:
             "required": required, "opened_ms": 0, "basis": 0.0,
             "realized_unwind_pnl": 0.0,
         }
-        self.state.setdefault("aborting_bundles", {})[bundle_id] = bundle
-        self.save()
+        redemption_quantity = min(required.values())
+        payout_floor = redemption_quantity * float(bundle["payoff_floor"])
         for index, leg in enumerate(legs):
             if index:
                 time.sleep(max(0.0, self.args.leg_latency_ms / 1000.0))
-            token = str(leg["token_id"])
+            # Reprice *every remaining leg* from one atomic shared-state
+            # generation before exposing the first dollar, and repeat after
+            # each inter-leg delay. Per-leg FOK sufficiency is not enough: a
+            # complete-set basket can have two individually fillable legs whose
+            # combined arrival cost already exceeds its deterministic payout.
+            # The previous implementation discovered that only after buying
+            # every leg and then paid the bid/ask spread again to unwind.
+            remaining_legs = legs[index:]
+            remaining_tokens = [str(item["token_id"]) for item in remaining_legs]
             try:
-                book = self.snapshot_books([token])[token]
+                books = self.snapshot_books(remaining_tokens)
             except SharedStateError:
                 self.reject("STALE_OR_INCOHERENT_SHARED_STATE")
                 break
-            target = float(leg["target_quantity"])
-            planned = walk(book["asks"], target, book, buy=True,
-                           slippage_bps=self.args.slippage_bps, require_full=True)
-            if planned is None or planned["net_cash"] > float(self.state["cash"]) + 1e-9:
+
+            remaining_plans: list[tuple[dict[str, Any], dict[str, Any], dict[str, float]]] = []
+            for remaining_leg in remaining_legs:
+                remaining_token = str(remaining_leg["token_id"])
+                book = books[remaining_token]
+                plan = walk(
+                    book["asks"], float(remaining_leg["target_quantity"]), book,
+                    buy=True, slippage_bps=self.args.slippage_bps, require_full=True,
+                )
+                if plan is None:
+                    remaining_plans = []
+                    break
+                remaining_plans.append((remaining_leg, book, plan))
+            if not remaining_plans:
                 self.reject("LEG_FOK_REVALIDATION_FAILED")
                 break
+            remaining_cost = sum(float(item[2]["net_cash"]) for item in remaining_plans)
+            projected_basis = float(bundle["basis"]) + remaining_cost
+            if payout_floor <= projected_basis + 1e-12:
+                self.reject("ARRIVAL_BUNDLE_NET_EDGE_NONPOSITIVE")
+                break
+            if remaining_cost > float(self.state["cash"]) + 1e-9:
+                self.reject("INSUFFICIENT_SLEEVE_CAPITAL_AT_ARRIVAL")
+                break
+
+            _, book, planned = remaining_plans[0]
+            token = str(leg["token_id"])
+            target = float(leg["target_quantity"])
+            # Once a first fill is about to be journaled, persist ownership in
+            # the aborting lane so any later reprice failure must unwind rather
+            # than disappear. A candidate rejected before this point never
+            # manufactures an empty bundle or a terminal unit.
+            if bundle_id not in self.state.get("aborting_bundles", {}):
+                self.state.setdefault("aborting_bundles", {})[bundle_id] = bundle
+                self.save()
             decision_ms = time.time_ns() // 1_000_000
             order_id = f"fast-order-{stable_id(bundle_id, leg['leg_id'], decision_ms)}"
             fill_id = f"fast-fill-{stable_id(order_id, book['bus_snapshot_id'])}"
@@ -284,8 +321,6 @@ class Executor:
             self.state["cash"] = float(self.state["cash"]) - float(planned["net_cash"])
             self.save()
         if len(bundle["legs"]) == len(legs):
-            redemption_quantity = min(float(leg["shares"]) for leg in bundle["legs"])
-            payout_floor = redemption_quantity * float(bundle["payoff_floor"])
             if payout_floor <= float(bundle["basis"]) + 1e-12:
                 self.reject("ARRIVAL_NET_EDGE_NONPOSITIVE")
             else:
