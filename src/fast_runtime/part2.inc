@@ -160,6 +160,7 @@ public:
             const bool fresh_ws = ws_snapshot_ready_.count(token) > 0;
             if (fresh_ws) continue;
             books_[token] = snapshot.book;
+            ++token_state_versions_[token];
             ws_snapshot_ready_.erase(token);
             if (snapshot.exchange_ms > 0 && snapshot.received_ms > 0 &&
                 !snapshot.hash.empty()) {
@@ -195,6 +196,7 @@ public:
             for (std::size_t i = begin; i < end; ++i) {
                 const auto& token = tokens_[i];
                 ws_snapshot_ready_.erase(token);
+                ++lineage_epochs_[token];
                 if (!rest_snapshot_ready_.count(token)) {
                     book_exchange_ts_ms_.erase(token);
                     book_received_ts_ms_.erase(token);
@@ -221,6 +223,7 @@ public:
         std::size_t rest_snapshot_tokens = 0;
         std::size_t freshness_ready_tokens = 0;
         std::vector<pm::fast::Opportunity> pending_candidates;
+        json::array shared_books;
         std::int64_t last_message = 0;
         const auto snapshot_ms = now_ms();
         {
@@ -255,6 +258,55 @@ public:
             freshness_ready_tokens = ws_snapshot_tokens + rest_snapshot_tokens;
             pending_candidates.swap(pending_candidates_);
             last_message = last_message_ms_;
+            shared_books.reserve(books_.size());
+            for (const auto& [token, book] : books_) {
+                const auto market_id = token_to_market_.find(token);
+                if (market_id == token_to_market_.end()) continue;
+                const auto market = markets_.find(market_id->second);
+                const auto exchange = book_exchange_ts_ms_.find(token);
+                const auto received = book_received_ts_ms_.find(token);
+                if (market == markets_.end() || exchange == book_exchange_ts_ms_.end()
+                    || received == book_received_ts_ms_.end() || book.bids.empty()
+                    || book.asks.empty()) continue;
+                auto levels = [](const std::vector<pm::Level>& raw, bool bids) {
+                    auto sorted = raw;
+                    std::sort(sorted.begin(), sorted.end(), [bids](const auto& a, const auto& b) {
+                        return bids ? a.price > b.price : a.price < b.price;
+                    });
+                    json::array output;
+                    output.reserve(sorted.size());
+                    for (const auto& level : sorted) {
+                        if (level.price > 0.0 && level.price < 1.0 && level.size > 0.0) {
+                            output.emplace_back(json::object{
+                                {"price", level.price}, {"size", level.size}});
+                        }
+                    }
+                    return output;
+                };
+                const auto fee = fees_.find(market->second.condition_id);
+                json::object row{
+                    {"token_id", token},
+                    {"market_id", market->second.id},
+                    {"condition_id", market->second.condition_id},
+                    {"event_id", market->second.event_id},
+                    {"outcome", token == market->second.yes_token ? "YES" : "NO"},
+                    {"exchange_ts_ms", exchange->second},
+                    {"receive_ts_ms", received->second},
+                    {"state_version", static_cast<std::int64_t>(token_state_versions_[token])},
+                    {"lineage_epoch", static_cast<std::int64_t>(lineage_epochs_[token])},
+                    {"lineage_continuous", ws_snapshot_ready_.count(token) > 0},
+                    {"provenance", ws_snapshot_ready_.count(token) > 0 ? "WEBSOCKET" : "REST_BOOTSTRAP"},
+                    {"tick_size", book.tick_size},
+                    {"min_order_size", book.min_order_size},
+                    {"bids", levels(book.bids, true)},
+                    {"asks", levels(book.asks, false)},
+                    {"fee_verified", fee != fees_.end()},
+                    {"fee_rate", fee != fees_.end() ? fee->second.rate : 0.0},
+                    {"fee_exponent", fee != fees_.end() ? fee->second.exponent : 1.0},
+                    {"fee_taker_only", fee != fees_.end() ? fee->second.taker_only : true},
+                };
+                shared_books.emplace_back(std::move(row));
+            }
             opportunity_log_.flush();
             latency_log_.flush();
             error_log_.flush();
@@ -272,6 +324,24 @@ public:
         for (const auto& opportunity : latest) write_opportunity(csv, snapshot_ms, opportunity);
         atomic_write(run_dir_ / "fast_arb_latest.csv", csv.str());
         for (const auto& opportunity : pending_candidates) spool_candidate(opportunity);
+
+        const std::string shared_snapshot_id = options_.model_sha + ":" +
+            std::to_string(updates) + ":" + std::to_string(snapshot_ms);
+        json::object shared_state{
+            {"schema", "polymarket_v7_shared_market_state_v1"},
+            {"timestamp_ms", snapshot_ms},
+            {"snapshot_id", shared_snapshot_id},
+            {"generation", static_cast<std::int64_t>(updates)},
+            {"producer", "FAST_STRUCTURAL_CPP_WEBSOCKET"},
+            {"model_sha", options_.model_sha},
+            {"paper_only", true},
+            {"authenticated_execution", false},
+            {"real_order_submission", false},
+            {"single_source_of_truth_for_freshness", true},
+            {"books", std::move(shared_books)},
+        };
+        atomic_write(fs::path(options_.run_root) / "market_data" / "shared_state.json",
+                     json::serialize(shared_state) + "\n");
 
         std::size_t current_executable = 0;
         std::size_t current_hard = 0;

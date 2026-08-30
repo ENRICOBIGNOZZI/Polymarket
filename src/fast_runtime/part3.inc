@@ -21,6 +21,8 @@ private:
     std::unordered_map<std::string, std::int64_t> last_log_ms_;
     std::unordered_map<std::string, std::int64_t> book_exchange_ts_ms_;
     std::unordered_map<std::string, std::int64_t> book_received_ts_ms_;
+    std::unordered_map<std::string, std::uint64_t> token_state_versions_;
+    std::unordered_map<std::string, std::uint64_t> lineage_epochs_;
     std::unordered_set<std::string> ws_snapshot_ready_;
     std::unordered_set<std::string> rest_snapshot_ready_;
     std::vector<pm::fast::Opportunity> pending_candidates_;
@@ -439,6 +441,7 @@ private:
             book.min_order_size = get_number(event, "min_order_size", book.min_order_size);
             book.last_trade = get_number(event, "last_trade_price", book.last_trade);
             books_[token] = std::move(book);
+            ++token_state_versions_[token];
             rest_snapshot_ready_.erase(token);
             ws_snapshot_ready_.insert(token);
             mark_l2_clock_locked(token, timestamp, received_ms);
@@ -468,6 +471,7 @@ private:
                 const auto side = get_text(change, "side");
                 pm::fast::apply_level(book, side == "BUY", get_number(change, "price", -1.0),
                                       get_number(change, "size", 0.0));
+                ++token_state_versions_[token];
                 mark_l2_clock_locked(token, timestamp, received_ms);
                 affected.insert(token_to_market_.at(token));
             }
@@ -479,6 +483,7 @@ private:
             if (token.empty() || !token_to_market_.count(token)) return;
             books_[token].tick_size = get_number(event, "new_tick_size",
                                                    books_[token].tick_size);
+            ++token_state_versions_[token];
             affected.insert(token_to_market_.at(token));
             return;
         }
@@ -487,6 +492,7 @@ private:
             const auto token = get_text(event, "asset_id");
             if (token.empty() || !token_to_market_.count(token)) return;
             books_[token].last_trade = get_number(event, "price", books_[token].last_trade);
+            ++token_state_versions_[token];
             affected.insert(token_to_market_.at(token));
         }
     }

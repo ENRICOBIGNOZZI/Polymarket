@@ -511,7 +511,7 @@ pids+=("$!")
   --policy "$FAST_STRUCTURAL_POLICY" \
   --relations "$FAST_STRUCTURAL_RELATIONS" \
   --run-dir "$RUN_ROOT/fast_structural" --run-root "$RUN_ROOT" --model-sha "$SHA" \
-  --markets "$HOT_MARKET_BUDGET" --min-liquidity 2 --shard-size 200 \
+  --markets "$ACTIVE_SCAN_MARKET_BUDGET" --min-liquidity 2 --shard-size 200 \
   >> "$RUN_ROOT/fast_structural/runtime.log" 2>&1 &
 pids+=("$!")
 
@@ -600,6 +600,7 @@ pids+=("$!")
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_graph_rv_executable_intents.py \
       --config "$ALLOC/graph_rv.json" \
+      --shared-state "$RUN_ROOT/market_data/shared_state.json" --model-sha "$SHA" \
       --output "$RUN_ROOT/graph_rv/intents.csv" \
       --status "$RUN_ROOT/graph_rv/scan_status.json" \
       >> "$RUN_ROOT/graph_rv/scan.log" 2>&1 || true
@@ -617,6 +618,7 @@ pids+=("$!")
         --intents "$RUN_ROOT/graph_rv/intents.csv" \
         --trade-tape "$RUN_ROOT/trade_tape.csv" \
         --joint-model "$joint_policy" \
+        --shared-state "$RUN_ROOT/market_data/shared_state.json" \
         >> "$RUN_ROOT/graph_rv/execution.log" 2>&1 || true
     else
       python3 scripts/v7_graph_rv.py \
@@ -624,6 +626,7 @@ pids+=("$!")
         --run-root "$RUN_ROOT" \
         --intents "$RUN_ROOT/graph_rv/intents.csv" \
         --trade-tape "$RUN_ROOT/trade_tape.csv" \
+        --shared-state "$RUN_ROOT/market_data/shared_state.json" \
         >> "$RUN_ROOT/graph_rv/execution.log" 2>&1 || true
     fi
     sleep 1
@@ -650,6 +653,7 @@ pids+=("$!")
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_hard_arb_guard.py \
       --config "$ALLOC/hard_arb.json" --run-dir "$RUN_ROOT/hard_arb" \
+      --shared-state "$RUN_ROOT/market_data/shared_state.json" --model-sha "$SHA" \
       --markets 0 --min-liquidity 2 --max-events "$STRUCTURAL_SCAN_EVENT_BUDGET" --min-edge 0.00005 \
       --max-trade-usd 1e100 --slippage-bps 5 --leg-latency-ms 100 \
       >> "$RUN_ROOT/hard_arb/runtime.log" 2>&1 || true
@@ -661,6 +665,7 @@ pids+=("$!")
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_micro_taker_worker.py \
       --config "$ALLOC/micro_taker.json" --run-dir "$RUN_ROOT/micro_taker" \
+      --shared-state "$RUN_ROOT/market_data/shared_state.json" --model-sha "$SHA" \
       --trade-tape "$RUN_ROOT/trade_tape.csv" --markets "$ACTIVE_SCAN_MARKET_BUDGET" --min-liquidity 2 \
       --horizon-seconds 30 --max-trade-usd 1e100 --min-edge 0.00005 --slippage-bps 5 \
       >> "$RUN_ROOT/micro_taker/runtime.log" 2>&1 || true

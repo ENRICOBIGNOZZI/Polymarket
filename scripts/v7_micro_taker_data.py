@@ -14,6 +14,7 @@ from typing import Any
 
 from polymarket_fees import FeeDetails, fee_per_share, parse_fee_details, resolve_fee_details
 from v7_micro_target import label_matured_samples
+from v7_shared_market_state import SharedStateError, load_snapshot, synchronized_books
 
 
 def finite(value: Any, default: float = math.nan) -> float:
@@ -110,6 +111,10 @@ class Book:
         self.exchange_ts = epoch_seconds(raw.get("timestamp"))
         local_received = time.time() if received_ts is None else finite(received_ts)
         self.received_ts = int(local_received) if math.isfinite(local_received) and local_received > 0.0 else 0
+        self.exchange_ts_ms = self.exchange_ts * 1000
+        self.received_ts_ms = self.received_ts * 1000
+        self.snapshot_id = str(raw.get("hash") or "")
+        self.lineage_continuous = False
         self.tick = max(1e-6, finite(raw.get("tick_size"), 0.01))
         self.min_order = max(1.0, finite(raw.get("min_order_size"), 1.0))
         self.bids: list[tuple[float, float]] = []
@@ -208,6 +213,32 @@ def fetch_books(clob: str, markets: list[Market]) -> dict[str, Book]:
             if book.token and book.bids and book.asks:
                 out[book.token] = book
     return out
+
+
+def fetch_shared_books(path: Path, markets: list[Market], *, model_sha: str,
+                       max_publish_age_ms: int = 2500) -> dict[str, Book]:
+    tokens = [token for market in markets for token in (market.yes, market.no)]
+    snapshot = load_snapshot(
+        path, expected_sha=model_sha, max_publish_age_ms=max_publish_age_ms,
+    )
+    selected = synchronized_books(snapshot, tokens, require_continuous=True)
+    output: dict[str, Book] = {}
+    for token, raw in selected.items():
+        book = Book({
+            "asset_id": token,
+            "timestamp": int(raw["exchange_ts_ms"]),
+            "tick_size": raw["tick_size"],
+            "min_order_size": raw["min_order"],
+            "bids": [{"price": price, "size": size} for price, size in raw["bids"]],
+            "asks": [{"price": price, "size": size} for price, size in raw["asks"]],
+            "hash": raw["bus_snapshot_id"],
+        }, received_ts=int(raw["received_ms"]) / 1000.0)
+        book.exchange_ts_ms = int(raw["exchange_ts_ms"])
+        book.received_ts_ms = int(raw["received_ms"])
+        book.snapshot_id = str(raw["bus_snapshot_id"])
+        book.lineage_continuous = True
+        output[token] = book
+    return output
 
 
 def features(yes: Book, no: Book) -> tuple[list[float], float, float] | None:

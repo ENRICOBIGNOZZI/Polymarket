@@ -10,13 +10,31 @@ from typing import Any
 
 from v7_graph_rv_intents import FIELDS, atomic_csv, books, discover, parse_market, rotating_events, structural_scan_budget
 from v7_market_common import fee_per_share, request_json, resolve_fee_details
+from v7_graph_rv import Book
+from v7_shared_market_state import load_snapshot
 
 
-def scan(cfg: dict[str, Any], now: int) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def scan(cfg: dict[str, Any], now: int, *, shared_state: Path | None = None,
+         model_sha: str = "") -> tuple[list[dict[str, Any]], dict[str, int]]:
     gamma = str(cfg["gamma_url"]).rstrip("/")
     clob = str(cfg["clob_url"]).rstrip("/")
     markets = discover(gamma, 0, float(cfg.get("min_liquidity", 2.0)))
-    current = books(clob, [market.yes_token for market in markets])
+    if shared_state is not None:
+        snapshot = load_snapshot(shared_state, expected_sha=model_sha)
+        current = {
+            token: Book(
+                token=token, bids=list(raw["bids"]), asks=list(raw["asks"]),
+                tick=max(1e-6, float(raw["tick_size"])),
+                min_order=max(1.0, float(raw["min_order"])),
+                exchange_ts_ms=int(raw["exchange_ts_ms"]),
+                receive_ts_ms=int(raw["received_ms"]),
+                snapshot_id=str(raw["bus_snapshot_id"]),
+            )
+            for token, raw in snapshot["books"].items()
+            if raw.get("lineage_continuous") is True
+        }
+    else:
+        current = books(clob, [market.yes_token for market in markets])
     event_ids = list(dict.fromkeys(market.event_id for market in markets if market.neg_risk and market.event_id))
     v7 = cfg.get("v7") or {}
     min_edge = float(cfg.get("min_net_edge", 0.00005))
@@ -44,7 +62,7 @@ def scan(cfg: dict[str, Any], now: int) -> tuple[list[dict[str, Any]], dict[str,
             continue
         event_markets = [market for market in parsed if market is not None]
         missing = [market.yes_token for market in event_markets if market.yes_token not in current]
-        if missing:
+        if missing and shared_state is None:
             try:
                 current.update(books(clob, missing))
             except Exception:
@@ -95,6 +113,8 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=Path("config/paper_v7.json"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--status", type=Path, required=True)
+    parser.add_argument("--shared-state", type=Path)
+    parser.add_argument("--model-sha", default="")
     args = parser.parse_args()
     cfg = json.loads(args.config.read_text(encoding="utf-8"))
     v7 = cfg.get("v7") or {}
@@ -103,7 +123,8 @@ def main() -> int:
     now = int(time.time())
     failures: list[str] = []
     try:
-        rows, stats = scan(cfg, now)
+        rows, stats = scan(
+            cfg, now, shared_state=args.shared_state, model_sha=args.model_sha)
     except Exception as exc:
         rows, stats = [], {"events_considered": 0, "events_complete": 0, "bundles": 0, "taker_edge_rejects": 0}
         failures.append(f"{type(exc).__name__}:{exc}")
@@ -119,6 +140,7 @@ def main() -> int:
         "admission": "all_taker_executable_post_authoritative_fee_edge",
         "maker_or_mixed_requires_direct_joint_model": True,
         "product_of_marginals_forbidden": True,
+        "market_state_source": "SHARED_CPP_WEBSOCKET" if args.shared_state else "REST_COMPATIBILITY",
         "failures": failures,
     }
     args.status.parent.mkdir(parents=True, exist_ok=True)

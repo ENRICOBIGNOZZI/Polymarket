@@ -51,7 +51,7 @@ def test_maker_uses_canonical_cpp_runtime_and_fill_conditioned_research_core():
     assert "instrument_inventory_sign" in lane
     assert "allocate_public_print" in paper
     assert "CancelPending" in paper
-    assert "FinalMerge" in paper
+    assert "PaperMakerEventKind::InventoryMerge" in paper
     assert 'fs::exists(maker_freeze_path) || fs::exists(cutover_drain_path)' in runtime
 
 
@@ -63,6 +63,13 @@ def test_taker_uses_complete_round_trip_contract():
     assert "adverse_markout_bps" in text
     assert "capital_cost_bps_per_hour" in text
     assert "full_visible_depth_entry_and_forecast_shifted_exit_vwap" in text
+    assert "v7_shared_market_state" in text
+    assert 'event_type="CANDIDATE"' in text
+    assert 'event_type="ORDER_SUBMITTED"' in text
+    assert 'event_type="FILL"' in text
+    assert 'event_type="MARKOUT"' in text
+    assert 'event_type="FINAL"' in text
+    assert "spool_event" in text
 
 
 def test_taker_freezes_new_risk_when_open_positions_are_unmarkable():

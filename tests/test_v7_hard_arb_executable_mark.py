@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import sys
+import json
+import tempfile
+import time
+from argparse import Namespace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,6 +87,38 @@ def test_hard_arb_native_source_has_no_v6_runtime_dependency():
     assert "v7_market_common" in text
     assert "runtime_dependency" not in text
     assert '"aborting_mark": "full_depth_executable_liquidation_net_exit_fee_fail_closed"' in text
+
+
+def test_configured_shared_bus_never_falls_back_to_rest():
+    sha = "d" * 40
+    now = int(time.time() * 1000)
+    raw = {
+        "schema": "polymarket_v7_shared_market_state_v1", "timestamp_ms": now,
+        "snapshot_id": "atomic-1", "generation": 1, "model_sha": sha,
+        "paper_only": True, "authenticated_execution": False,
+        "real_order_submission": False,
+        "books": [{
+            "token_id": "yes-a", "market_id": "m", "condition_id": "c",
+            "event_id": "e", "outcome": "YES", "exchange_ts_ms": now - 20,
+            "receive_ts_ms": now - 10, "state_version": 1, "lineage_epoch": 1,
+            "lineage_continuous": True, "provenance": "WEBSOCKET",
+            "tick_size": .01, "min_order_size": 1,
+            "bids": [{"price": .49, "size": 10}],
+            "asks": [{"price": .50, "size": 10}], "fee_verified": True,
+            "fee_rate": 0, "fee_exponent": 1, "fee_taker_only": True,
+        }],
+    }
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "shared.json"
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        args = Namespace(shared_state=path, model_sha=sha, max_shared_publish_age_ms=2500)
+        stats: dict[str, object] = {}
+        selected = hard.execution_books(args, "https://clob.invalid", ["yes-a"], stats)
+        assert selected["yes-a"]["bus_snapshot_id"] == "atomic-1"
+        assert stats["shared_state_reads"] == 1
+        # A missing token is a fail-closed bus rejection, not a REST fetch.
+        assert hard.execution_books(args, "https://clob.invalid", ["missing"], stats) == {}
+        assert stats.get("rest_execution_book_reads", 0) == 0
 
 
 if __name__ == "__main__":

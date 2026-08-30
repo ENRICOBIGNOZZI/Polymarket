@@ -189,6 +189,18 @@ class MicroTakerBookFreshnessTest(unittest.TestCase):
         no = data.Book(raw_book("no", str((NOW - 1) * 1000)), received_ts=NOW)
         self.assertIsNone(worker.book_snapshot(yes, no, liquidity=1000.0, now=NOW, max_age_seconds=5))
 
+    def test_atomic_continuous_ws_lineage_keeps_quiet_books_current(self) -> None:
+        yes = data.Book(raw_book("yes", str((NOW - 30) * 1000)), received_ts=NOW)
+        no = data.Book(raw_book("no", str((NOW - 20) * 1000)), received_ts=NOW)
+        for book in (yes, no):
+            book.lineage_continuous = True
+            book.snapshot_id = "atomic-bus-1"
+        snapshot = worker.book_snapshot(
+            yes, no, liquidity=1000.0, now=NOW, max_age_seconds=5)
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(snapshot.received_ts, NOW)
+
     def test_missing_exchange_timestamp_fails_closed(self) -> None:
         yes = data.Book(raw_book("yes", ""), received_ts=NOW)
         no = data.Book(raw_book("no", str(NOW * 1000)), received_ts=NOW)

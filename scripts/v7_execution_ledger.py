@@ -34,7 +34,7 @@ EVENT_TYPES = frozenset(
         "CAPITAL_RELEASE",
     }
 )
-MARKOUT_HORIZONS = frozenset({"1s", "10s", "45s", "60s", "300s"})
+MARKOUT_HORIZONS = frozenset({"1s", "5s", "10s", "15s", "30s", "45s", "60s", "300s"})
 SIDES = frozenset({"BUY", "SELL"})
 
 

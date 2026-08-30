@@ -17,6 +17,7 @@ from typing import Any
 from v7_execution_ledger import LedgerEvent
 from v7_ledger_spool import spool_event
 from v7_market_common import fee_per_share, finite, parse_array, request_json, resolve_fee_details
+from v7_shared_market_state import SharedStateError, load_snapshot, synchronized_books
 
 ROOT = Path(__file__).resolve().parents[1]
 STRATEGY = "GRAPH_RV"
@@ -197,7 +198,8 @@ def choose_style(prepared: list[dict[str, Any]], model: dict[str, Any]) -> tuple
 
 
 class Broker:
-    def __init__(self, config: Path, run_root: Path, intents: Path, tape: Path, joint_model: Path | None):
+    def __init__(self, config: Path, run_root: Path, intents: Path, tape: Path,
+                 joint_model: Path | None, shared_state: Path | None = None):
         self.cfg = json.loads(config.read_text())
         v7 = self.cfg.get("v7") or {}
         if self.cfg.get("paper_only") is not True or v7.get("authenticated_execution") is not False or v7.get("real_order_submission") is not False:
@@ -206,6 +208,7 @@ class Broker:
         self.root, self.dir, self.intents, self.tape = run_root, run_root / "graph_rv", intents, tape
         self.dir.mkdir(parents=True, exist_ok=True)
         self.sha, self.model = exact_sha(), load_joint_model(joint_model)
+        self.shared_state = shared_state
         self.state_path = self.dir / "state.json"
         self.state = {"model_sha": self.sha, "cash": float(self.cfg.get("starting_capital", 10000)), "peak": float(self.cfg.get("starting_capital", 10000)), "killed": False, "tape_cursor": 0, "bundles": {}}
         try:
@@ -220,6 +223,25 @@ class Broker:
             return raw if isinstance(raw, dict) else None
         except Exception: return None
     def books(self, tokens: list[str]) -> dict[str, Book]:
+        if self.shared_state is not None:
+            try:
+                snapshot = load_snapshot(self.shared_state, expected_sha=self.sha)
+                selected = synchronized_books(snapshot, tokens, require_continuous=True)
+                return {
+                    token: Book(
+                        token=token, bids=list(raw["bids"]), asks=list(raw["asks"]),
+                        tick=max(1e-6, float(raw["tick_size"])),
+                        min_order=max(1.0, float(raw["min_order"])),
+                        exchange_ts_ms=int(raw["exchange_ts_ms"]),
+                        receive_ts_ms=int(raw["received_ms"]),
+                        snapshot_id=str(raw["bus_snapshot_id"]),
+                    )
+                    for token, raw in selected.items()
+                }
+            except SharedStateError:
+                # Configured bus lineage is authoritative; never replace a bad
+                # atomic image with sequential REST execution books.
+                return {}
         out = {}
         for start in range(0, len(tokens), 80):
             try: rows = request_json(f"{self.clob}/books", [{"token_id": t} for t in tokens[start:start+80]])
@@ -401,7 +423,7 @@ class Broker:
                 if walked: equity += leg["filled"] * walked[1]
         self.state["peak"] = max(float(self.state.get("peak", equity)), equity); dd = max(0.0, 1 - equity/self.state["peak"]) if self.state["peak"] > 0 else 0.0
         if dd >= float(self.cfg.get("max_drawdown", .15)): self.state["killed"] = True
-        atomic_json(self.dir / "status.json", {"schema":"polymarket_v7_graph_rv_status_v1","timestamp":int(time.time()),"paper_only":True,"authenticated_execution":False,"model_sha":self.sha,"cash":self.state["cash"],"equity":equity,"drawdown":dd,"killed":self.state["killed"],"bundle_states":{k:v["status"] for k,v in self.state["bundles"].items()},"contracts":["queue_never_grants_size","unwind_depth_bounds_size","receive_time_causal_fills","shared_trade_capacity","direct_joint_distribution_not_product_of_marginals","partial_unwind_fail_closed","canonical_ledger_spool_only"]})
+        atomic_json(self.dir / "status.json", {"schema":"polymarket_v7_graph_rv_status_v1","timestamp":int(time.time()),"paper_only":True,"authenticated_execution":False,"model_sha":self.sha,"cash":self.state["cash"],"equity":equity,"drawdown":dd,"killed":self.state["killed"],"market_state_source":"SHARED_CPP_WEBSOCKET" if self.shared_state is not None else "REST_COMPATIBILITY","bundle_states":{k:v["status"] for k,v in self.state["bundles"].items()},"contracts":["queue_never_grants_size","unwind_depth_bounds_size","receive_time_causal_fills","shared_trade_capacity","direct_joint_distribution_not_product_of_marginals","partial_unwind_fail_closed","canonical_ledger_spool_only"]})
 
     def tick(self) -> None:
         self.risk(); self.admit(); self.apply_trades(); self.manage(); self.markouts(); self.risk(); self.state["model_sha"] = self.sha; atomic_json(self.state_path, self.state)
@@ -409,8 +431,8 @@ class Broker:
 
 def main() -> int:
     p=argparse.ArgumentParser(description="Native V7 Graph/RV PAPER execution")
-    p.add_argument("--config",type=Path,required=True); p.add_argument("--run-root",type=Path,required=True); p.add_argument("--intents",type=Path,required=True); p.add_argument("--trade-tape",type=Path,required=True); p.add_argument("--joint-model",type=Path); p.add_argument("--loop",action="store_true"); p.add_argument("--interval",type=float,default=1.0)
-    a=p.parse_args(); broker=Broker(a.config,a.run_root,a.intents,a.trade_tape,a.joint_model)
+    p.add_argument("--config",type=Path,required=True); p.add_argument("--run-root",type=Path,required=True); p.add_argument("--intents",type=Path,required=True); p.add_argument("--trade-tape",type=Path,required=True); p.add_argument("--joint-model",type=Path); p.add_argument("--shared-state",type=Path); p.add_argument("--loop",action="store_true"); p.add_argument("--interval",type=float,default=1.0)
+    a=p.parse_args(); broker=Broker(a.config,a.run_root,a.intents,a.trade_tape,a.joint_model,a.shared_state)
     while True:
         broker.tick()
         if not a.loop: break

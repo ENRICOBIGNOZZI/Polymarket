@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import statistics
@@ -12,6 +13,9 @@ from typing import Any
 
 import v7_micro_taker_data as base
 import v7_micro_taker_core as economics
+from v7_execution_ledger import LedgerEvent
+from v7_ledger_spool import spool_event
+from v7_shared_market_state import SharedStateError
 
 FLOW_FEATURE_DIM = 8
 COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT = "complete_round_trip_executable_ev"
@@ -195,7 +199,11 @@ def book_snapshot(
     source_times = (yes.exchange_ts, no.exchange_ts, yes.received_ts, no.received_ts)
     if any(ts <= 0 or ts > int(now) for ts in source_times):
         return None
-    freshness_ts = min(source_times)
+    atomic_ws = (
+        yes.lineage_continuous and no.lineage_continuous
+        and bool(yes.snapshot_id) and yes.snapshot_id == no.snapshot_id
+    )
+    freshness_ts = min(yes.received_ts, no.received_ts) if atomic_ws else min(source_times)
     snapshot = economics.BookSnapshot(
         yes_bid=yes.bid(), yes_ask=yes.ask(), no_bid=no.bid(), no_ask=no.ask(),
         liquidity=float(liquidity), received_ts=int(freshness_ts),
@@ -295,6 +303,14 @@ def append_fill(run_dir: Path, **row: Any) -> None:
     )
 
 
+def stable_id(*parts: Any) -> str:
+    return hashlib.sha256("|".join(str(part) for part in parts).encode()).hexdigest()[:32]
+
+
+def emit(run_root: Path, event: LedgerEvent) -> None:
+    spool_event(run_root, event)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="V7 fixed-horizon Micro Taker with causal flow and depth-aware round-trip admission")
     parser.add_argument("--config", type=Path, required=True)
@@ -314,9 +330,16 @@ def main() -> int:
     parser.add_argument("--capital-cost-bps-per-hour", type=float, default=0.25)
     parser.add_argument("--max-book-age-seconds", type=int, default=5)
     parser.add_argument("--max-positions", type=int, default=20)
+    parser.add_argument("--shared-state", type=Path)
+    parser.add_argument("--model-sha", required=True)
+    parser.add_argument("--max-shared-publish-age-ms", type=int, default=2500)
     args = parser.parse_args()
 
     cfg = json.loads(args.config.read_text(encoding="utf-8"))
+    if len(args.model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in args.model_sha):
+        raise SystemExit("exact 40-hex model SHA required")
+    if cfg.get("paper_only") is not True or cfg.get("authenticated_execution", False) is not False:
+        raise SystemExit("PAPER-only authenticated-disabled config required")
     gamma, clob = str(cfg["gamma_url"]), str(cfg["clob_url"])
     start_capital = float(cfg["starting_capital"])
     max_drawdown = float(cfg.get("max_drawdown", 0.15))
@@ -328,6 +351,7 @@ def main() -> int:
         max(0.0, float(v7.get("micro_taker_immature_max_market_fraction", 0.005))),
     )
     args.run_dir.mkdir(parents=True, exist_ok=True)
+    run_root = args.run_dir.parent
     drain_requested = (args.run_dir.parent / "control" / "CUTOVER_DRAIN").exists()
     trade_tape = args.trade_tape or (args.run_dir.parent / "trade_tape.csv")
     state_path = args.run_dir / "state.json"
@@ -350,7 +374,16 @@ def main() -> int:
                 if len(failures) < 30:
                     failures.append(f"fee:{market.id}:{type(exc).__name__}")
         markets = fee_ready
-        books = base.fetch_books(clob, markets)
+        books = (
+            base.fetch_shared_books(
+                args.shared_state, markets, model_sha=args.model_sha,
+                max_publish_age_ms=args.max_shared_publish_age_ms,
+            )
+            if args.shared_state is not None else base.fetch_books(clob, markets)
+        )
+    except SharedStateError as exc:
+        markets, books = [], {}
+        failures.append(f"shared_market_state:{exc}")
     except Exception as exc:
         markets, books = [], {}
         failures.append(f"market_data:{type(exc).__name__}:{exc}")
@@ -401,6 +434,44 @@ def main() -> int:
             cash += proceeds
             realized_last_tick += pnl
             append_fill(args.run_dir, timestamp=now, market_id=market_id, slug=market.slug, action="SELL_TAKER", side=side, shares=shares, price=exit_price, fee=fee, pnl=pnl, net_edge=position.get("entry_net_edge", ""), expected_exit_price=position.get("expected_exit_price", ""))
+            decision_ms = time.time_ns() // 1_000_000
+            token = market.yes if side == "YES" else market.no
+            position_id = str(position.get("position_id") or stable_id(
+                args.model_sha, "MICRO_TAKER", market_id, position.get("entry_ts")))
+            exit_order_id = stable_id(position_id, "EXIT", decision_ms)
+            exit_fill_id = stable_id(exit_order_id, "FILL")
+            exit_common = dict(
+                strategy="MICRO_TAKER", model_sha=args.model_sha,
+                position_id=position_id, order_id=exit_order_id,
+                market_id=market.id, event_id=market.event, token_id=token,
+                exchange_ts_ms=book.exchange_ts_ms,
+                receive_ts_ms=book.received_ts_ms, decision_ts_ms=decision_ms,
+                book_snapshot_id=book.snapshot_id, side="SELL", bid=book.bid(),
+                ask=book.ask(), bid_depth=sum(size for _, size in book.bids),
+                ask_depth=sum(size for _, size in book.asks), limit_price=exit_price,
+                intended_action="TAKER_EXIT", intended_size=shares,
+                metadata={"outcome": side, "execution_side": "SELL",
+                          "economic_cycle": "MICRO_TAKER_ROUND_TRIP"},
+            )
+            emit(run_root, LedgerEvent(
+                event_type="ORDER_SUBMITTED", order_state="CROSS", **exit_common))
+            emit(run_root, LedgerEvent(
+                event_type="FILL", fill_id=exit_fill_id, exchange_ts_ms=book.exchange_ts_ms,
+                receive_ts_ms=book.received_ts_ms, strategy="MICRO_TAKER",
+                model_sha=args.model_sha, position_id=position_id, order_id=exit_order_id,
+                market_id=market.id, event_id=market.event, token_id=token, side="SELL",
+                fill_price=exit_price, filled_size=shares, complete=True, fee=fee,
+                fee_rate=market.fee.rate, fee_source=market.fee.source,
+                metadata={"outcome": side, "execution_side": "SELL"}))
+            emit(run_root, LedgerEvent(
+                event_type="FINAL", strategy="MICRO_TAKER", model_sha=args.model_sha,
+                position_id=position_id, market_id=market.id, event_id=market.event,
+                token_id=token, final_pnl=pnl, realized_cashflow=pnl,
+                capital_duration_ms=max(0, (now - int(position["entry_ts"])) * 1000),
+                metadata={"terminal_state": "ROUND_TRIP_CLOSED", "outcome": side,
+                          "entry_cost": float(position["cost"]), "exit_proceeds": proceeds,
+                          "entry_fill_id": position.get("entry_fill_id"),
+                          "exit_fill_id": exit_fill_id}))
             del positions[market_id]
     realized_total += realized_last_tick
 
@@ -504,6 +575,74 @@ def main() -> int:
             cash -= cost
             opened += 1
             append_fill(args.run_dir, timestamp=now, market_id=market.id, slug=market.slug, action="BUY_TAKER", side=side, shares=shares, price=candidate.entry_price, fee=fee, pnl=0.0, net_edge=candidate.net_edge, expected_exit_price=candidate.expected_exit_price)
+            decision_ms = time.time_ns() // 1_000_000
+            position_id = stable_id(args.model_sha, "MICRO_TAKER", market.id, decision_ms)
+            candidate_id = stable_id(position_id, "CANDIDATE")
+            order_id = stable_id(position_id, "ENTRY_ORDER")
+            fill_id = stable_id(order_id, "FILL")
+            common = dict(
+                strategy="MICRO_TAKER", model_sha=args.model_sha,
+                position_id=position_id, market_id=market.id, event_id=market.event,
+                token_id=book.token, exchange_ts_ms=book.exchange_ts_ms,
+                receive_ts_ms=book.received_ts_ms, decision_ts_ms=decision_ms,
+                book_snapshot_id=book.snapshot_id, side="BUY", bid=book.bid(), ask=book.ask(),
+                bid_depth=sum(size for _, size in book.bids),
+                ask_depth=sum(size for _, size in book.asks),
+                limit_price=candidate.entry_price, predicted_alpha=candidate.gross_markout_per_share,
+                expected_ev=candidate.net_pnl_per_share, intended_action="TAKER_ENTRY",
+                intended_size=shares, metadata={"outcome": side, "execution_side": "BUY",
+                    "horizon_seconds": candidate.horizon_seconds,
+                    "uncertainty_penalty_per_share": candidate.uncertainty_penalty_per_share,
+                    "market_state_source": "SHARED_CPP_WEBSOCKET" if args.shared_state else "REST_COMPATIBILITY"},
+            )
+            emit(run_root, LedgerEvent(event_type="CANDIDATE", candidate_id=candidate_id, **common))
+            emit(run_root, LedgerEvent(
+                event_type="ORDER_SUBMITTED", candidate_id=candidate_id,
+                order_id=order_id, order_state="CROSS", **common))
+            emit(run_root, LedgerEvent(
+                event_type="FILL", strategy="MICRO_TAKER", model_sha=args.model_sha,
+                position_id=position_id, order_id=order_id, fill_id=fill_id,
+                market_id=market.id, event_id=market.event, token_id=book.token,
+                exchange_ts_ms=book.exchange_ts_ms, receive_ts_ms=book.received_ts_ms,
+                side="BUY", fill_price=candidate.entry_price, filled_size=shares,
+                complete=True, fee=fee, fee_rate=market.fee.rate,
+                fee_source=market.fee.source,
+                metadata={"outcome": side, "execution_side": "BUY"}))
+            positions[market.id].update({
+                "position_id": position_id, "entry_order_id": order_id,
+                "entry_fill_id": fill_id, "markout_horizons": [],
+            })
+
+    # Append one size-aware executable mark per configured economic horizon.
+    for market_id, position in positions.items():
+        current_row = current.get(market_id)
+        if not current_row or not position.get("entry_fill_id"):
+            continue
+        market, yes, no, _feature = current_row
+        side, shares = str(position["side"]), float(position["shares"])
+        book = yes if side == "YES" else no
+        bid_vwap = full_depth_vwap(list(book.bids), shares, buy=False)
+        if bid_vwap is None:
+            continue
+        emitted = set(int(value) for value in position.get("markout_horizons", []))
+        age = max(0, now - int(position["entry_ts"]))
+        for horizon in (5, 15, 30, 60, 300):
+            if horizon in emitted or age < horizon:
+                continue
+            fee = base.fee_per_share(bid_vwap, market.fee) * shares if market.fee else 0.0
+            liquidation = max(0.0, shares * bid_vwap - fee)
+            emit(run_root, LedgerEvent(
+                event_type="MARKOUT", strategy="MICRO_TAKER", model_sha=args.model_sha,
+                position_id=str(position["position_id"]), order_id=str(position["entry_order_id"]),
+                fill_id=str(position["entry_fill_id"]), market_id=market.id,
+                event_id=market.event, token_id=book.token,
+                exchange_ts_ms=book.exchange_ts_ms, receive_ts_ms=book.received_ts_ms,
+                book_snapshot_id=book.snapshot_id,
+                executable_liquidation_value=liquidation,
+                markouts={f"{horizon}s": liquidation - float(position["cost"])},
+                metadata={"outcome": side, "full_depth": True, "fee_net": True}))
+            emitted.add(horizon)
+        position["markout_horizons"] = sorted(emitted)
 
     for market_id, (_market, _yes, _no, feature) in current.items():
         samples.append({"ts": now, "market_id": market_id, "mid": feature[1], "spread": feature[2], "x": feature[0], "y": None})

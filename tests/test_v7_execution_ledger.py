@@ -135,7 +135,7 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
         with self.assertRaisesRegex(ledger.LedgerContractError, "requires_single_horizon"):
             markout(markouts={"1s": -0.01, "10s": 0.0}).validate()
         with self.assertRaisesRegex(ledger.LedgerContractError, "unsupported_horizon"):
-            markout(markouts={"30s": 0.01}).validate()
+            markout(markouts={"20s": 0.01}).validate()
 
     def test_position_mark_requires_causal_executable_liquidation_value(self) -> None:
         position_mark = ledger.LedgerEvent(

@@ -13,9 +13,10 @@ from collections import Counter
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from v7_market_common import FeeDetails, finite, parse_array, request_json, resolve_fee_details
+from v7_shared_market_state import SharedStateError, load_snapshot, synchronized_books
 
 FEE_Q = Decimal("0.00001")
 CANDIDATE_FIELDS = [
@@ -99,6 +100,10 @@ def exchange_book_freshness(
     if not tokens or any(ts <= 0 for ts in stamps):
         return False, "missing_exchange_timestamp", 0, 0
     age, skew = max(0, now_ms - min(stamps)), max(stamps) - min(stamps)
+    snapshot_ids = {str(live.get(t, {}).get("bus_snapshot_id") or "") for t in tokens}
+    continuous = all(live.get(t, {}).get("lineage_continuous") is True for t in tokens)
+    if continuous and len(snapshot_ids) == 1 and "" not in snapshot_ids:
+        return True, "ok_shared_ws_lineage", age, skew
     if age > max_snapshot_age_ms:
         return False, "max_exchange_snapshot_age", age, skew
     if skew > max_snapshot_skew_ms:
@@ -159,6 +164,27 @@ def fetch_books(clob: str, tokens: Sequence[str], stats: dict[str, Any] | None =
                 int(stats.get("max_observed_batch_receive_span_ms", 0)), max(receipts) - min(receipts)
             )
     return output
+
+
+def execution_books(args: argparse.Namespace, clob: str, tokens: Sequence[str],
+                    stats: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    if args.shared_state is None:
+        stats["rest_execution_book_reads"] = int(stats.get("rest_execution_book_reads", 0)) + 1
+        return fetch_books(clob, tokens, stats)
+    try:
+        snapshot = load_snapshot(
+            args.shared_state, expected_sha=args.model_sha,
+            max_publish_age_ms=args.max_shared_publish_age_ms,
+        )
+        selected = synchronized_books(snapshot, tokens, require_continuous=True)
+        stats["shared_state_reads"] = int(stats.get("shared_state_reads", 0)) + 1
+        stats["shared_state_generation"] = int(snapshot["generation"])
+        stats["shared_state_snapshot_id"] = str(snapshot["snapshot_id"])
+        return selected
+    except SharedStateError as exc:
+        stats["shared_state_rejections"] = int(stats.get("shared_state_rejections", 0)) + 1
+        stats["last_shared_state_rejection"] = str(exc)
+        return {}
 
 
 def round_fee_usdc(value: float) -> float:
@@ -424,7 +450,8 @@ def normalize_state(state: dict[str, Any], start: float) -> dict[str, Any]:
 
 
 def executable_abort_mark(clob: str, aborting: dict[str, Any], slippage_bps: float,
-                          stats: dict[str, Any]) -> float:
+                          stats: dict[str, Any],
+                          book_source: Callable[[Sequence[str]], dict[str, dict[str, Any]]] | None = None) -> float:
     """Full-depth, fee-net mark; unmarkable residual legs are worth zero."""
     value = 0.0
     for bundle in aborting.values():
@@ -438,7 +465,7 @@ def executable_abort_mark(clob: str, aborting: dict[str, Any], slippage_bps: flo
                 stats["unverified_fee_rejections"] = int(stats.get("unverified_fee_rejections", 0)) + 1
                 continue
             try:
-                book = fetch_books(clob, [token], stats).get(token)
+                book = (book_source([token]) if book_source else fetch_books(clob, [token], stats)).get(token)
             except Exception:
                 book = None
             fill = walk_book_for_shares(book.get("bids", []), shares, d, buy=False,
@@ -450,13 +477,15 @@ def executable_abort_mark(clob: str, aborting: dict[str, Any], slippage_bps: flo
 
 def unwind_bundle(clob: str, bundle_id: str, event_id: str, legs: list[dict[str, Any]],
                   fees: dict[str, FeeDetails], slippage_bps: float, run_dir: Path,
-                  stats: dict[str, Any]) -> tuple[list[dict[str, Any]], float, float]:
+                  stats: dict[str, Any],
+                  book_source: Callable[[Sequence[str]], dict[str, dict[str, Any]]] | None = None,
+                  ) -> tuple[list[dict[str, Any]], float, float]:
     residual, cash, realized = [], 0.0, 0.0
     for index, leg in enumerate(legs):
         token = str(leg.get("token") or "")
         shares, basis = max(0.0, finite(leg.get("shares"), 0.0)), max(0.0, finite(leg.get("capital_used"), 0.0))
         try:
-            book = fetch_books(clob, [token], stats).get(token)
+            book = (book_source([token]) if book_source else fetch_books(clob, [token], stats)).get(token)
         except Exception:
             book = None
         d = fees.get(token)
@@ -494,7 +523,8 @@ def _stats() -> dict[str, Any]:
         "book_calls", "book_batches", "freshness_checks", "receive_rejections", "exchange_rejections",
         "unverified_fee_rejections", "max_observed_leg_age_ms", "max_observed_cross_leg_skew_ms",
         "max_observed_exchange_snapshot_age_ms", "max_observed_exchange_snapshot_skew_ms",
-        "max_observed_batch_receive_span_ms",
+        "max_observed_batch_receive_span_ms", "shared_state_reads",
+        "shared_state_rejections", "rest_execution_book_reads",
     )}
 
 
@@ -537,6 +567,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p.add_argument("--max-cross-leg-skew-ms", type=int, default=1000)
     p.add_argument("--max-exchange-snapshot-age-ms", type=int, default=5000)
     p.add_argument("--max-exchange-snapshot-skew-ms", type=int, default=1000)
+    p.add_argument("--shared-state", type=Path)
+    p.add_argument("--model-sha", default="")
+    p.add_argument("--max-shared-publish-age-ms", type=int, default=2500)
     return p.parse_args(argv)
 
 
@@ -568,6 +601,11 @@ def run(args: argparse.Namespace) -> int:
     scan_cursor = state["scan_cursor"]
     failures, stats, sources = [], _stats(), Counter()
     now = int(time.time())
+    if args.shared_state is not None and (
+        len(args.model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in args.model_sha)
+    ):
+        raise RuntimeError("shared_state_requires_exact_model_sha")
+    book_source = lambda tokens: execution_books(args, clob, tokens, stats)
 
     for bid, bundle in list(openb.items()):
         try:
@@ -605,7 +643,8 @@ def run(args: argparse.Namespace) -> int:
                 if d.verified:
                     fee_map[token] = d
         residual, received, pnl = unwind_bundle(
-            clob, bid, str(bundle.get("event_id") or ""), legs, fee_map, args.slippage_bps, args.run_dir, stats
+            clob, bid, str(bundle.get("event_id") or ""), legs, fee_map, args.slippage_bps,
+            args.run_dir, stats, book_source
         )
         cash += received
         realized_tick += pnl
@@ -616,7 +655,8 @@ def run(args: argparse.Namespace) -> int:
             del aborting[bid]
 
     locked = sum(max(0.0, finite(x.get("capital_used"), 0.0)) for x in openb.values())
-    abort_value = executable_abort_mark(clob, aborting, args.slippage_bps, stats) if aborting else 0.0
+    abort_value = executable_abort_mark(
+        clob, aborting, args.slippage_bps, stats, book_source) if aborting else 0.0
     equity = cash + locked + abort_value
     peak = max(peak, equity)
     drawdown = max(0.0, 1.0 - equity / peak) if peak else 0.0
@@ -643,13 +683,14 @@ def run(args: argparse.Namespace) -> int:
             fees = resolve_fees(legs, clob, stats, sources)
             if fees is None:
                 continue
-            live = fetch_books(clob, tokens, stats)
+            live = execution_books(args, clob, tokens, stats)
             scanned += 1
             fresh = record_freshness(live, tokens, args, stats)
             ok, reason, age, skew, xage, xskew = fresh
             minimum = max([max(0.0, finite(live.get(t, {}).get("min_order"), 0.0)) for t in tokens] + [1.0])
             locked = sum(max(0.0, finite(x.get("capital_used"), 0.0)) for x in openb.values())
-            equity = cash + locked + (executable_abort_mark(clob, aborting, args.slippage_bps, stats) if aborting else 0.0)
+            equity = cash + locked + (executable_abort_mark(
+                clob, aborting, args.slippage_bps, stats, book_source) if aborting else 0.0)
             cap = min(
                 max(0.0, args.max_trade_usd), cash,
                 max(0.0, maxtrade * equity), max(0.0, maxevent * equity),
@@ -693,7 +734,7 @@ def run(args: argparse.Namespace) -> int:
             fail = ""
             for i, token in enumerate(order):
                 remaining = order[i:]
-                refreshed = fetch_books(clob, remaining, stats)
+                refreshed = execution_books(args, clob, remaining, stats)
                 rfresh = record_freshness(refreshed, remaining, args, stats)
                 if not rfresh[0]:
                     fail = f"freshness:{rfresh[1]}"
@@ -733,7 +774,8 @@ def run(args: argparse.Namespace) -> int:
             if fail or final_edge <= args.min_edge:
                 seq_aborts += 1
                 residual, received, pnl = unwind_bundle(
-                    clob, bundle_id, eid, filled, fees, args.slippage_bps, args.run_dir, stats
+                    clob, bundle_id, eid, filled, fees, args.slippage_bps,
+                    args.run_dir, stats, book_source
                 )
                 cash += received
                 realized_tick += pnl
@@ -764,7 +806,8 @@ def run(args: argparse.Namespace) -> int:
 
     realized_total += realized_tick
     locked = sum(max(0.0, finite(x.get("capital_used"), 0.0)) for x in openb.values())
-    abort_value = executable_abort_mark(clob, aborting, args.slippage_bps, stats) if aborting else 0.0
+    abort_value = executable_abort_mark(
+        clob, aborting, args.slippage_bps, stats, book_source) if aborting else 0.0
     equity = cash + locked + abort_value
     peak = max(peak, equity)
     drawdown = max(0.0, 1.0 - equity / peak) if peak else 0.0
@@ -782,7 +825,9 @@ def run(args: argparse.Namespace) -> int:
         "full_cycle_fraction": (len(event_ids) / len(discovered_event_ids)) if discovered_event_ids else 0.0,
         "discovery_exhaustive": args.markets <= 0,
         "entered": entered, "sequential_aborts": seq_aborts, "best_edge": best_edge,
-        "fee_sources_last_tick": dict(sources), "failures": failures, "atomic_snapshot_assumption": False,
+        "fee_sources_last_tick": dict(sources), "failures": failures,
+        "atomic_snapshot_assumption": args.shared_state is not None,
+        "market_state_source": "SHARED_CPP_WEBSOCKET" if args.shared_state is not None else "REST_COMPATIBILITY",
         "per_token_receive_timestamps": True, "exchange_snapshot_timestamps": True, "multi_level_depth": True,
         "verified_fees_required": True, "sequential_leg_revalidation": True, "unwind_on_leg_failure": True,
         "aborting_mark": "full_depth_executable_liquidation_net_exit_fee_fail_closed",
