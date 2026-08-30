@@ -28,7 +28,7 @@ def emit(path: Path, **row):
         out.write(json.dumps(base) + "\n")
 
 
-def candidate(path: Path, cid: str, market: str, token: str, outcome: str, side: str, action: str, bid: float, ask: float, bd: float, ad: float, tox: float, ts: int):
+def candidate(path: Path, cid: str, market: str, token: str, outcome: str, side: str, action: str, bid: float, ask: float, bd: float, ad: float, tox: float, ts: int, lifetime_arm: str | None = None):
     emit(
         path,
         event_type="CANDIDATE",
@@ -45,7 +45,11 @@ def candidate(path: Path, cid: str, market: str, token: str, outcome: str, side:
         ask_depth=ad,
         receive_ts_ms=ts,
         decision_ts_ms=ts,
-        metadata={"outcome": outcome, "toxicity": tox},
+        metadata={
+            "outcome": outcome,
+            "toxicity": tox,
+            **({"exploration_lifetime_arm": lifetime_arm} if lifetime_arm else {}),
+        },
     )
 
 
@@ -149,6 +153,30 @@ class MakerMicrostructureTests(unittest.TestCase):
 
             reward_rows = [x for x in out["segments"] if x["dimension"] == "reward"]
             assert reward_rows and all(x["bucket"] == "REWARDED" for x in reward_rows)
+
+    def test_lifetime_experiment_arm_is_preserved_through_fill_and_markout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "execution.jsonl"
+            candidate(
+                ledger, "c1", "M1", "YES", "YES", "BUY", "IMPROVE1",
+                .39, .42, 10, 10, .1, 1000, lifetime_arm="PERSISTENT",
+            )
+            order(
+                ledger, "c1", "o1", "M1", "YES", "YES", "BUY", "IMPROVE1",
+                .40, 2, 0, .39, .42, 10, 10, .1, 1000,
+            )
+            fill(ledger, "f1", "o1", "M1", "YES", "BUY", .40, 2, 1100)
+            markout(ledger, "f1", "o1", "M1", "YES", "BUY", "10s", .01, 11100)
+
+            out = summarize_maker_microstructure(ledger, use_cache=False)
+            arm = next(
+                row for row in out["segments"]
+                if row["dimension"] == "lifetime_arm" and row["bucket"] == "PERSISTENT"
+            )
+            assert arm["orders"] == 1
+            assert arm["filled_orders"] == 1
+            assert arm["markout_count"]["10s"] == 1
+            assert out["quality"]["lifetime_arm_known_orders"] == 1
 
     def test_sell_average_cost_realized_pnl(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

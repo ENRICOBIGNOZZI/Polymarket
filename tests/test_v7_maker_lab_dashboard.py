@@ -17,9 +17,13 @@ class DashboardContractTests(unittest.TestCase):
             "polymarket_maker_lab_segment_markout_pnl_usd",
             "polymarket_maker_lab_conditional_markout_pnl_usd",
             "polymarket_maker_lab_market_realized_pnl_usd",
+            'dimension=\\"lifetime_arm\\"',
         ):
             self.assertIn(metric, raw)
-        for word in ("toxicity", "queue", "ofi", "inventory", "spread", "imbalance", "latency", "reward"):
+        for word in (
+            "toxicity", "queue", "ofi", "inventory", "spread", "imbalance", "latency",
+            "reward", "15s control", "60s persistent",
+        ):
             self.assertIn(word, raw.lower())
 
 

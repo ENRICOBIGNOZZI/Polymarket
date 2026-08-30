@@ -19,7 +19,10 @@ from typing import Any
 
 STRATEGY = "MICRO_MAKER_PRO"
 HORIZONS = ("1s", "10s", "45s", "60s", "300s")
-DIMENSIONS = ("spread", "imbalance", "ofi", "toxicity", "queue", "inventory", "latency", "reward")
+DIMENSIONS = (
+    "spread", "imbalance", "ofi", "toxicity", "queue", "inventory", "latency",
+    "reward", "lifetime_arm",
+)
 _EPS = 1e-12
 _CACHE_LOCK = threading.Lock()
 _CACHE_KEY: tuple[Any, ...] | None = None
@@ -259,6 +262,7 @@ def _context_key(context: dict[str, str]) -> tuple[str, ...]:
     return tuple(context.get(key, "UNKNOWN") for key in (
         "action", "variant", "market", "spread", "imbalance", "ofi", "toxicity",
         "queue", "inventory", "latency", "reward",
+        "lifetime_arm",
     ))
 
 
@@ -284,6 +288,7 @@ def _blank_result() -> dict[str, Any]:
             "ofi_exact_orders": 0,
             "ofi_proxy_orders": 0,
             "reward_known_orders": 0,
+            "lifetime_arm_known_orders": 0,
             "unattributed_sell_fills": 0,
             "unattributed_merge_pnl": 0.0,
             "ofi_source": "exact_metadata_or_quote_to_quote_l5_proxy",
@@ -418,6 +423,12 @@ def _candidate_context(
     if rewarded is not None:
         quality["reward_known_orders"] += 1
 
+    lifetime_arm = str(meta.get("exploration_lifetime_arm") or "UNKNOWN").upper()
+    if lifetime_arm not in {"CONTROL", "PERSISTENT"}:
+        lifetime_arm = "UNKNOWN"
+    else:
+        quality["lifetime_arm_known_orders"] += 1
+
     return {
         "action": action,
         "variant": variant,
@@ -430,6 +441,7 @@ def _candidate_context(
         "inventory": _inventory_bucket(inventory_value),
         "latency": _latency_bucket(latency_ms),
         "reward": _reward_bucket(rewarded),
+        "lifetime_arm": lifetime_arm,
         "outcome": outcome,
     }
 

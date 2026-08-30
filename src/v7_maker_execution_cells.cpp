@@ -193,6 +193,10 @@ void populate_exploration_policy(MakerModelSnapshot& model) noexcept {
         }
         const double min_rest_ms = std::max(0.0, number(find_value(*exploration, "minimum_rest_ms"), 250.0));
         const double max_rest_ms = std::max(min_rest_ms, number(find_value(*exploration, "maximum_rest_ms"), 3000.0));
+        const double persistent_fraction = std::clamp(number(
+            find_value(*exploration, "persistent_quote_fraction"), 0.0), 0.0, 1.0);
+        const double persistent_max_rest_ms = std::max(max_rest_ms, number(
+            find_value(*exploration, "persistent_maximum_rest_ms"), max_rest_ms));
 
         if (epsilon <= 0.0 || !std::isfinite(confidence_z) || confidence_z < 0.0
             || confidence_z > std::max(0.0, model.robust_ev_z)
@@ -205,6 +209,9 @@ void populate_exploration_policy(MakerModelSnapshot& model) noexcept {
         model.exploration_concurrent_market_cap = max_markets;
         model.exploration_min_rest_ns = static_cast<std::int64_t>(std::llround(min_rest_ms * 1'000'000.0));
         model.exploration_max_rest_ns = static_cast<std::int64_t>(std::llround(max_rest_ms * 1'000'000.0));
+        model.exploration_persistent_fraction = persistent_fraction;
+        model.exploration_persistent_max_rest_ns = static_cast<std::int64_t>(
+            std::llround(persistent_max_rest_ms * 1'000'000.0));
         model.exploration_enabled = 1;
     } catch (...) {
         // Exploration is opt-in and PAPER-only. Any malformed policy disables it
@@ -213,6 +220,7 @@ void populate_exploration_policy(MakerModelSnapshot& model) noexcept {
         model.exploration_confidence_z = 0.0;
         model.exploration_epsilon = 0.0;
         model.exploration_quote_notional_fraction = 0.0;
+        model.exploration_persistent_fraction = 0.0;
         model.exploration_max_active_markets = 0;
         model.exploration_concurrent_market_cap = 0;
     }

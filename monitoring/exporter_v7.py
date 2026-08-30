@@ -603,6 +603,7 @@ def _append_maker_lab_metrics(lines: list[str], lab: dict[str, Any]) -> None:
         _metric("polymarket_maker_lab_ofi_exact_orders", quality.get("ofi_exact_orders")),
         _metric("polymarket_maker_lab_ofi_proxy_orders", quality.get("ofi_proxy_orders")),
         _metric("polymarket_maker_lab_reward_known_orders", quality.get("reward_known_orders")),
+        _metric("polymarket_maker_lab_lifetime_arm_known_orders", quality.get("lifetime_arm_known_orders")),
         _metric("polymarket_maker_lab_unattributed_sell_fills", quality.get("unattributed_sell_fills")),
         _metric("polymarket_maker_lab_unattributed_merge_pnl_usd", quality.get("unattributed_merge_pnl")),
         _metric("polymarket_maker_lab_measurement_info", 1, {

@@ -473,6 +473,13 @@ MakerModelSnapshot load_model_snapshot(const fs::path& policy_path,
     model.exploration_max_rest_ns = std::max<std::int64_t>(model.exploration_min_rest_ns,
         std::max<std::int64_t>(0, object_integer(exploration, "maximum_rest_ms", 0))
             * std::int64_t{1'000'000});
+    model.exploration_persistent_fraction = std::clamp(object_number(
+        exploration, "persistent_quote_fraction", 0.0), 0.0, 1.0);
+    model.exploration_persistent_max_rest_ns = std::max<std::int64_t>(
+        model.exploration_max_rest_ns,
+        std::max<std::int64_t>(0, object_integer(
+            exploration, "persistent_maximum_rest_ms",
+            model.exploration_max_rest_ns / 1'000'000LL)) * std::int64_t{1'000'000});
     model.exploration_enabled = static_cast<std::uint8_t>(exploration != nullptr
         && boolean(find_value(*exploration, "enabled"), false)
         && model.exploration_epsilon > 0.0
@@ -1616,6 +1623,12 @@ private:
         metadata["toxicity"] = record.decision.toxicity;
         metadata["robust_ev"] = record.decision.robust_ev;
         metadata["ev_uncertainty"] = record.decision.ev_uncertainty;
+        if (record.decision.exploration_max_rest_ns > 0) {
+            metadata["exploration_lifetime_arm"] =
+                record.decision.exploration_persistent != 0 ? "PERSISTENT" : "CONTROL";
+            metadata["exploration_max_rest_ms"] =
+                record.decision.exploration_max_rest_ns / 1'000'000LL;
+        }
         event["metadata"] = std::move(metadata);
     }
 

@@ -342,6 +342,7 @@ void configure_exploration(pm::v7::maker::MakerModelSnapshot& model) {
     model.exploration_concurrent_market_cap = 5;
     model.exploration_min_rest_ns = 3'000'000'000LL;
     model.exploration_max_rest_ns = 15'000'000'000LL;
+    model.exploration_persistent_max_rest_ns = model.exploration_max_rest_ns;
 }
 
 void test_positive_exploration_ev_breaks_robust_cold_start() {
@@ -392,6 +393,31 @@ void test_point_ev_exploration_prefers_fillable_positive_placement() {
     assert(decision.intent_count == 1);
     assert(decision.intents[0].price_tick == update.best_bid_tick + 1);
     assert(decision.intents[0].expected_ev > model.min_robust_ev_per_share);
+}
+
+void test_persistent_lifetime_arm_is_explicit_and_bounded() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    auto model = profitable_model();
+    model.base_ev_se_per_share = 0.025;
+    model.robust_ev_z = 100.0;
+    model.min_robust_ev_per_share = 0.00001;
+    configure_exploration(model);
+    model.exploration_confidence_z = 0.0;
+    model.exploration_persistent_fraction = 1.0;
+    model.exploration_persistent_max_rest_ns = 60'000'000'000LL;
+    pm::v7::maker::InventorySnapshot inventory;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 20.0;
+    risk.exploration_max_quote_shares = 2.0;
+    risk.max_abs_residual_shares = 200.0;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(decision.reason == pm::v7::maker::DecisionReason::ExplorationQuote);
+    assert(decision.exploration_max_rest_ns == 60'000'000'000LL);
+    assert(decision.exploration_persistent == 1);
+    assert(decision.intent_count == 1);
 }
 
 void test_negative_exploration_adjusted_ev_has_no_execution_authority() {
@@ -462,6 +488,7 @@ int main() {
     test_transient_no_economic_quote_cannot_cancel_before_minimum_lifetime();
     test_positive_exploration_ev_breaks_robust_cold_start();
     test_point_ev_exploration_prefers_fillable_positive_placement();
+    test_persistent_lifetime_arm_is_explicit_and_bounded();
     test_negative_exploration_adjusted_ev_has_no_execution_authority();
     test_global_kill_preempts_quote();
     test_new_risk_freeze_withdraws_without_irreversible_kill();

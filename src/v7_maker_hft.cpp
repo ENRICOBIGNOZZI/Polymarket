@@ -51,6 +51,20 @@ constexpr double kNormalQuoteCapitalFraction = 0.01;
     return mix64(seed) % kBuckets < threshold;
 }
 
+[[nodiscard]] bool persistent_lifetime_sample(
+    const MarketUpdate& update, std::uint64_t quote_sequence, double fraction) noexcept {
+    if (fraction >= 1.0) return true;
+    if (!(fraction > 0.0)) return false;
+    constexpr std::uint64_t kBuckets = 1'000'000ULL;
+    const auto threshold = static_cast<std::uint64_t>(
+        std::floor(clamp(fraction, 0.0, 1.0) * static_cast<double>(kBuckets)));
+    const std::uint64_t seed = update.state_version
+        ^ (update.instrument_handle * 0x94d049bb133111ebULL)
+        ^ (update.market_handle * 0xbf58476d1ce4e5b9ULL)
+        ^ (quote_sequence * 0x9e3779b97f4a7c15ULL);
+    return mix64(seed) % kBuckets < threshold;
+}
+
 [[nodiscard]] double logistic(double value) noexcept {
     if (value >= 0.0) {
         const double e = std::exp(-value);
@@ -352,12 +366,15 @@ bool MakerModelSnapshot::valid() const noexcept {
         || exploration_confidence_z > std::max(0.0, robust_ev_z)) return false;
     if (!finite(exploration_quote_notional_fraction) || exploration_quote_notional_fraction < 0.0
         || exploration_quote_notional_fraction > kNormalQuoteCapitalFraction) return false;
+    if (!finite(exploration_persistent_fraction) || exploration_persistent_fraction < 0.0
+        || exploration_persistent_fraction > 1.0) return false;
     if (exploration_enabled != 0
         && (exploration_epsilon <= 0.0 || exploration_quote_notional_fraction <= 0.0
             || exploration_max_active_markets == 0
             || exploration_concurrent_market_cap == 0
             || exploration_concurrent_market_cap > exploration_max_active_markets)) return false;
     if (exploration_min_rest_ns < 0 || exploration_max_rest_ns < exploration_min_rest_ns) return false;
+    if (exploration_persistent_max_rest_ns < exploration_max_rest_ns) return false;
     if (min_quote_lifetime_ns < 0 || max_related_snapshot_age_ns < 0) return false;
     for (double value : fill_coefficients) if (!finite(value)) return false;
     for (double value : markout_coefficients) if (!finite(value)) return false;
@@ -658,7 +675,9 @@ MakerDecision MakerHotPath::on_market_update(
             : std::numeric_limits<std::int64_t>::max();
 
         if (exploration_active_ && quotes.bid_active != 0) {
-            if (model.exploration_max_rest_ns > 0 && elapsed >= model.exploration_max_rest_ns) {
+            decision.exploration_max_rest_ns = exploration_max_rest_ns_;
+            decision.exploration_persistent = exploration_persistent_;
+            if (exploration_max_rest_ns_ > 0 && elapsed >= exploration_max_rest_ns_) {
                 decision.action = Action::Withdraw;
                 decision.reason = DecisionReason::ExplorationExpired;
                 append_intent(decision, make_intent(++intent_sequence_, update, model,
@@ -727,6 +746,14 @@ MakerDecision MakerHotPath::on_market_update(
                 decision.reason = DecisionReason::ExplorationQuote;
                 decision.robust_ev = choice.adjusted_ev;
                 decision.ev_uncertainty = choice.economics->uncertainty;
+                const bool persistent = persistent_lifetime_sample(
+                    update, intent_sequence_ + 1, model.exploration_persistent_fraction);
+                exploration_max_rest_ns_ = persistent
+                    ? model.exploration_persistent_max_rest_ns
+                    : model.exploration_max_rest_ns;
+                exploration_persistent_ = static_cast<std::uint8_t>(persistent);
+                decision.exploration_max_rest_ns = exploration_max_rest_ns_;
+                decision.exploration_persistent = exploration_persistent_;
                 append_intent(decision, make_intent(++intent_sequence_, update, model,
                                                     IntentType::Quote, Side::Buy,
                                                     choice.economics->price_tick, exploration_shares,

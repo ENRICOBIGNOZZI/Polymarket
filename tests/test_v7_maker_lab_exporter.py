@@ -52,7 +52,7 @@ class MakerLabExporterTests(unittest.TestCase):
                 "realized_pnl": .3,
                 "attributed_realized_pnl": .3,
                 "markouts": {"10s": 2},
-                "quality": {"linked_fills": 2, "unlinked_fills": 0, "linked_markouts": 2, "unlinked_markouts": 0, "ofi_exact_orders": 0, "ofi_proxy_orders": 10, "reward_known_orders": 10, "unattributed_sell_fills": 0, "unattributed_merge_pnl": 0, "ofi_source": "proxy", "reward_source": "selection", "merge_pnl_attribution": "pro_rata"},
+                "quality": {"linked_fills": 2, "unlinked_fills": 0, "linked_markouts": 2, "unlinked_markouts": 0, "ofi_exact_orders": 0, "ofi_proxy_orders": 10, "reward_known_orders": 10, "lifetime_arm_known_orders": 5, "unattributed_sell_fills": 0, "unattributed_merge_pnl": 0, "ofi_source": "proxy", "reward_source": "selection", "merge_pnl_attribution": "pro_rata"},
                 "segments": [{"action": "JOIN", "variant": "JOIN", "dimension": "toxicity", "bucket": "LOW", "orders": 5, "filled_orders": 2, "fills": 2, "filled_shares": 4, "realized_pnl": .2, "markout_pnl": {"10s": .04}, "markout_shares": {"10s": 4}, "markout_count": {"10s": 2}}],
                 "conditionals": [{"action": "JOIN", "toxicity": "LOW", "queue": "<=1x", "orders": 5, "filled_orders": 2, "realized_pnl": .2, "markout_pnl": {"10s": .04}, "markout_shares": {"10s": 4}, "markout_count": {"10s": 2}}],
                 "markets": [{"market": "M1", "action": "JOIN", "orders": 5, "filled_orders": 2, "realized_pnl": .2, "markout_pnl": {"10s": .04}, "markout_shares": {"10s": 4}}],
@@ -62,6 +62,7 @@ class MakerLabExporterTests(unittest.TestCase):
         self.assertIn('polymarket_maker_lab_segment_orders{action="JOIN",variant="JOIN",dimension="toxicity",bucket="LOW"} 5', text)
         self.assertIn('polymarket_maker_lab_conditional_orders{action="JOIN",toxicity="LOW",queue="<=1x"} 5', text)
         self.assertIn('polymarket_maker_lab_market_realized_pnl_usd{market="M1",action="JOIN"} 0.2', text)
+        self.assertIn("polymarket_maker_lab_lifetime_arm_known_orders 5", text)
 
 
 if __name__ == "__main__":

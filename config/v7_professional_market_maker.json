@@ -151,6 +151,8 @@
     "max_quote_notional_fraction": 0.002,
     "minimum_rest_ms": 3000,
     "maximum_rest_ms": 15000,
+    "persistent_quote_fraction": 0.50,
+    "persistent_maximum_rest_ms": 60000,
     "actions": ["JOIN", "FADE1", "IMPROVE1"],
     "epsilon": 0.10,
     "confidence_z": 0.00,

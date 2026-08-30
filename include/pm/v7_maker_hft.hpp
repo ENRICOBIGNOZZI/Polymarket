@@ -174,6 +174,10 @@ struct MakerModelSnapshot {
     double exploration_confidence_z = 0.0;
     double exploration_epsilon = 0.0;
     double exploration_quote_notional_fraction = 0.0;
+    // A randomized PAPER-only lifetime arm measures whether longer time at
+    // risk raises fills enough to compensate for adverse selection. The
+    // control arm keeps exploration_max_rest_ns unchanged.
+    double exploration_persistent_fraction = 0.0;
     // Every selected market may collect PAPER evidence, while the authoritative
     // execution owner separately caps how many markets can carry exploratory
     // orders at the same time.
@@ -183,6 +187,7 @@ struct MakerModelSnapshot {
     std::array<std::uint8_t, 3> exploration_reserved{};
     std::int64_t exploration_min_rest_ns = 250'000'000LL;
     std::int64_t exploration_max_rest_ns = 3'000'000'000LL;
+    std::int64_t exploration_persistent_max_rest_ns = 3'000'000'000LL;
     std::int64_t min_quote_lifetime_ns = 100'000'000LL;
     std::int64_t max_related_snapshot_age_ns = 1'500'000'000LL;
     std::array<double, kFeatureCount> fill_coefficients{
@@ -267,9 +272,10 @@ struct MakerDecision {
     double toxicity = 0.0;
     double robust_ev = 0.0;
     double ev_uncertainty = 0.0;
+    std::int64_t exploration_max_rest_ns = 0;
     std::array<StrategyIntent, 4> intents{};
     std::uint8_t intent_count = 0;
-    std::uint8_t reserved0 = 0;
+    std::uint8_t exploration_persistent = 0;
     std::uint16_t reserved1 = 0;
 };
 
@@ -295,9 +301,11 @@ private:
     double ew_cancel_intensity_ = 0.0;
     std::uint64_t intent_sequence_ = 0;
     std::int64_t last_exploration_quote_ns_ = 0;
+    std::int64_t exploration_max_rest_ns_ = 0;
     Action exploration_action_ = Action::Join;
     std::uint8_t initialized_ = 0;
     std::uint8_t exploration_active_ = 0;
+    std::uint8_t exploration_persistent_ = 0;
 };
 
 } // namespace pm::v7::maker
