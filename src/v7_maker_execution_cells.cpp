@@ -291,8 +291,16 @@ void populate_execution_cells(MakerModelSnapshot& model) noexcept {
             const auto& group = item.value().as_object();
             const std::uint32_t orders = count(find_value(group, "orders"));
             const std::uint32_t fills = count(find_value(group, "filled_orders"));
-            const std::uint32_t clusters = count(find_value(group, "event_clusters"));
-            const std::uint32_t markouts = count(find_value(group, "adverse_markout_n"));
+            const std::uint32_t order_clusters = count(find_value(group, "event_clusters"));
+            const std::uint32_t markout_clusters = count(
+                find_value(group, "adverse_markout_event_clusters"));
+            const std::uint32_t clusters = std::max(order_clusters, markout_clusters);
+            const auto* markout_observations = find_value(
+                group, "adverse_markout_observations");
+            // Read the canonical durable-learning field while retaining the
+            // legacy name for old test/replay artifacts.
+            const std::uint32_t markouts = count(markout_observations != nullptr
+                ? markout_observations : find_value(group, "adverse_markout_n"));
 
             const double raw_fill = std::clamp(
                 number(find_value(group, "fill_probability"), global_fill), 1e-6, 1.0 - 1e-6);
@@ -306,8 +314,12 @@ void populate_execution_cells(MakerModelSnapshot& model) noexcept {
 
             auto& cell = model.execution_cells[index];
             cell.fill_probability = global_fill + fill_weight * (raw_fill - global_fill);
-            cell.adverse_markout_per_share = global_adverse
-                + markout_weight * (raw_adverse - global_adverse);
+            // The durable fitter already applies filled-share Bayesian
+            // shrinkage to adverse markout. Applying another observation and
+            // cluster shrinkage here erased the very risk signal the cell was
+            // meant to carry. Keep markout_weight as an uncertainty diagnostic,
+            // but consume the fitted posterior directly when it exists.
+            cell.adverse_markout_per_share = markouts > 0 ? raw_adverse : global_adverse;
             cell.fill_weight = fill_weight;
             cell.markout_weight = markout_weight;
             cell.orders = orders;

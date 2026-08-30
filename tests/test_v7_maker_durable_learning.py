@@ -137,18 +137,27 @@ class DurableLearningTests(unittest.TestCase):
         expected = (0.002 * 20.0 + 0.10 * 5.0) / 25.0
         self.assertAlmostEqual(risk["GLOBAL"]["adverse_markout_per_share"], expected)
         self.assertEqual(risk["GLOBAL"]["adverse_markout_observations"], 1)
+        self.assertEqual(risk["GLOBAL"]["adverse_markout_event_clusters"], 1)
         self.assertEqual(risk["GLOBAL"]["adverse_markout_horizon_priority"][0], "45s")
 
         # A prior policy cannot improve the new policy's fill estimate, but its
-        # same-semantics adverse mark remains a conservative risk floor.
+        # same-semantics adverse mark remains a conservative risk floor in its
+        # homologous execution cell. Sparse cross-policy losses must not become
+        # a universal GLOBAL floor that disables every unexplored cell.
         order["metadata"]["policy_hash"] = "old-policy"
         model = fit_model(
             [order, fill, mark_1, mark_45], model_sha=SHA,
             policy_hash="policy", config_hash="config", cold_fill_prior=0.02,
         )
         self.assertEqual(model["groups"]["GLOBAL"]["fill_probability"], 0.02)
+        self.assertEqual(model["groups"]["GLOBAL"]["adverse_markout_per_share"], 0.002)
         self.assertAlmostEqual(
-            model["groups"]["GLOBAL"]["adverse_markout_per_share"], expected)
+            model["groups"]["IMPROVE1|YES|SELL"]["adverse_markout_per_share"], expected)
+        self.assertEqual(
+            model["groups"]["IMPROVE1|YES|SELL"]["adverse_markout_observations"], 1)
+        self.assertAlmostEqual(
+            model["cross_policy_global_adverse_diagnostic"]["adverse_markout_per_share"],
+            expected)
         self.assertFalse(model["groups"]["GLOBAL"]["mature"])
         self.assertGreater(model["risk_only_cross_policy_records"], 0)
 

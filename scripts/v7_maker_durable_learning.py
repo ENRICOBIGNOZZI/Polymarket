@@ -295,7 +295,7 @@ def adverse_markout_models(
                     marks[order_id][str(horizon)][0] += (
                         max(0.0, -number(pnl)) * marked_shares)
                     marks[order_id][str(horizon)][1] += marked_shares
-    grouped: defaultdict[str, list[tuple[float, float, str]]] = defaultdict(list)
+    grouped: defaultdict[str, list[tuple[float, float, str, str]]] = defaultdict(list)
     for order_id, horizons in marks.items():
         selected = next((h for h in ADVERSE_HORIZON_PRIORITY if h in horizons), None)
         if selected is None:
@@ -303,8 +303,14 @@ def adverse_markout_models(
         adverse_dollars, shares = horizons[selected]
         if shares <= 1e-12:
             continue
-        grouped[group_key(orders[order_id])].append((adverse_dollars, shares, selected))
-        grouped["GLOBAL"].append((adverse_dollars, shares, selected))
+        cluster = str(
+            orders[order_id].get("event_id")
+            or orders[order_id].get("market_id")
+            or "UNKNOWN"
+        )
+        observation = (adverse_dollars, shares, selected, cluster)
+        grouped[group_key(orders[order_id])].append(observation)
+        grouped["GLOBAL"].append(observation)
     output: dict[str, dict[str, Any]] = {}
     prior = max(1e-9, float(prior_filled_shares))
     floor = max(0.0, float(cold_adverse))
@@ -315,6 +321,7 @@ def adverse_markout_models(
         output[key] = {
             "adverse_markout_per_share": max(floor, posterior),
             "adverse_markout_observations": len(observations),
+            "adverse_markout_event_clusters": len({row[3] for row in observations}),
             "adverse_markout_filled_shares": observed_shares,
             "adverse_markout_dollars": observed_adverse,
             "adverse_markout_prior_filled_shares": prior,
@@ -407,15 +414,38 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         row for row in values if str(row.get("order_id") or "") in risk_order_ids
     ]
     adverse_models = adverse_markout_models(risk_values)
+    # Policy/config changes invalidate fill and promotion credit, but linked
+    # same-semantics markouts remain useful in their exact action/outcome/side
+    # cell.  Do not promote three sparse toxic fills into a universal GLOBAL
+    # cost: doing so creates another absorbing state in which every cell stops
+    # quoting and no counter-evidence can ever be collected.  GLOBAL execution
+    # risk therefore uses only current-identity orders; cross-policy evidence is
+    # transferred to its homologous execution cell and is still surfaced as a
+    # global diagnostic below.
+    compatible_order_ids = {
+        str(row.get("order_id")) for row in compatible
+        if row.get("event_type") == "ORDER_SUBMITTED" and row.get("order_id")
+    }
+    compatible_risk_values = [
+        row for row in values
+        if str(row.get("order_id") or "") in compatible_order_ids
+    ]
+    compatible_adverse_models = adverse_markout_models(compatible_risk_values)
     examples = order_examples(compatible)
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in examples:
         grouped[row["group"]].append(row)
     grouped["GLOBAL"] = examples
     groups: dict[str, Any] = {}
-    for key, sample in sorted(grouped.items()):
+    group_keys = set(grouped) | {key for key in adverse_models if key != "GLOBAL"}
+    group_keys.add("GLOBAL")
+    for key in sorted(group_keys):
+        sample = grouped.get(key, [])
         hazard = hazard_model(sample, cold_fill_prior, fill_prior_strength_orders)
-        adverse = adverse_models.get(key, {})
+        adverse = (
+            compatible_adverse_models.get("GLOBAL", {})
+            if key == "GLOBAL" else adverse_models.get(key, {})
+        )
         groups[key] = {
             **hazard,
             "fill_probability": hazard["expected_filled_fraction_60s"],
@@ -427,6 +457,8 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
                 0.002, number(adverse.get("adverse_markout_per_share"), 0.002)),
             "adverse_markout_observations": int(
                 adverse.get("adverse_markout_observations") or 0),
+            "adverse_markout_event_clusters": int(
+                adverse.get("adverse_markout_event_clusters") or 0),
             "adverse_markout_filled_shares": number(
                 adverse.get("adverse_markout_filled_shares")),
             "adverse_markout_dollars": number(adverse.get("adverse_markout_dollars")),
@@ -439,23 +471,6 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
                 "minimum_event_clusters": 12,
                 "minimum_filled_orders": 20,
             },
-        }
-    if "GLOBAL" not in groups:
-        global_adverse = adverse_models.get("GLOBAL", {})
-        groups["GLOBAL"] = {
-            **hazard_model([], cold_fill_prior, fill_prior_strength_orders),
-            "fill_probability": cold_fill_prior,
-            "fill_probability_semantics": "explicit_cold_start_prior",
-            "adverse_markout_per_share": max(
-                0.002, number(global_adverse.get("adverse_markout_per_share"), 0.002)),
-            "adverse_markout_observations": int(
-                global_adverse.get("adverse_markout_observations") or 0),
-            "adverse_markout_filled_shares": number(
-                global_adverse.get("adverse_markout_filled_shares")),
-            "adverse_markout_dollars": number(
-                global_adverse.get("adverse_markout_dollars")),
-            "adverse_markout_role": "RISK_ONLY_UPWARD_FLOOR_NO_PROMOTION_CREDIT",
-            "mature": False,
         }
     timestamps = [int(row.get("recorded_ts_ms") or 0) for row in compatible]
     generated = time.time_ns() // 1_000_000
@@ -503,6 +518,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         "economically_mature": False,
         "chronological_oos_required_for_mature_promotion": True,
         "groups": groups,
+        "cross_policy_global_adverse_diagnostic": adverse_models.get("GLOBAL", {}),
         "joint_cycle_model": joint_states(compatible),
         "excluded_incompatible_records": dict(incompatible),
         "risk_only_cross_policy_records": max(0, len(risk_values) - len(compatible)),

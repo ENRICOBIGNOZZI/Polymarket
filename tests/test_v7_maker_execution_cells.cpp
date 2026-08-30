@@ -32,7 +32,8 @@ void write_model(const std::filesystem::path& path, const std::string& sha) {
       "event_clusters": 10,
       "fill_probability": 0.70,
       "adverse_markout_per_share": 0.03,
-      "adverse_markout_n": 20
+      "adverse_markout_observations": 20,
+      "adverse_markout_event_clusters": 10
     },
     "FADE1|NO|SELL": {
       "orders": 20,
@@ -64,7 +65,9 @@ void test_exact_sha_loader_shrinks_to_global() {
     assert(close(cell.fill_probability, 0.10 + (2.0 / 3.0) * 0.60));
     // markouts: 20/(20+20)=1/2, below the cluster weight.
     assert(close(cell.markout_weight, 0.5));
-    assert(close(cell.adverse_markout_per_share, 0.02));
+    // Durable learning already shrinks the posterior; the loader must not
+    // shrink it a second time toward GLOBAL.
+    assert(close(cell.adverse_markout_per_share, 0.03));
     assert(cell.orders == 80);
     assert(cell.filled_orders == 40);
     assert(cell.adverse_markouts == 20);
