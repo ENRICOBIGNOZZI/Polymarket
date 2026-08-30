@@ -162,6 +162,8 @@ void test_profitable_two_sided_post_only_quote() {
     auto update = normal_update();
     const auto model = profitable_model();
     pm::v7::maker::InventorySnapshot inventory;
+    inventory.yes_shares = 3.0;
+    inventory.no_shares = 3.0;
     pm::v7::maker::QuoteSnapshot quotes;
     pm::v7::maker::RiskSnapshot risk;
     risk.max_quote_shares = 3.0;
@@ -203,6 +205,8 @@ void test_specific_improve_cell_changes_candidate_ranking() {
     assert(model.valid());
 
     pm::v7::maker::InventorySnapshot inventory;
+    inventory.yes_shares = 1.0;
+    inventory.no_shares = 1.0;
     pm::v7::maker::QuoteSnapshot quotes;
     pm::v7::maker::RiskSnapshot risk;
     risk.max_quote_shares = 1.0;
@@ -228,6 +232,8 @@ void test_outcome_cell_orientation_is_respected() {
     make_cell_good(model, pm::v7::maker::Action::Improve1, -1, pm::v7::Side::Buy);
     make_cell_good(model, pm::v7::maker::Action::Improve1, -1, pm::v7::Side::Sell);
     pm::v7::maker::InventorySnapshot inventory;
+    inventory.yes_shares = 1.0;
+    inventory.no_shares = 1.0;
     pm::v7::maker::QuoteSnapshot quotes;
     pm::v7::maker::RiskSnapshot risk;
     risk.max_quote_shares = 1.0;
@@ -391,8 +397,70 @@ void test_point_ev_exploration_prefers_fillable_positive_placement() {
     assert(decision.reason == pm::v7::maker::DecisionReason::ExplorationQuote);
     assert(decision.action == pm::v7::maker::Action::Improve1);
     assert(decision.intent_count == 1);
-    assert(decision.intents[0].price_tick == update.best_bid_tick + 1);
+    if (decision.intents[0].side == pm::v7::Side::Buy) {
+        assert(decision.intents[0].price_tick == update.best_bid_tick + 1);
+    } else {
+        assert(decision.intents[0].side == pm::v7::Side::Sell);
+        assert(decision.intents[0].price_tick == update.best_ask_tick - 1);
+    }
     assert(decision.intents[0].expected_ev > model.min_robust_ev_per_share);
+}
+
+void test_exploration_collects_positive_buy_and_inventory_backed_sell_evidence() {
+    auto model = profitable_model();
+    model.base_ev_se_per_share = 0.025;
+    model.robust_ev_z = 100.0;
+    model.min_robust_ev_per_share = 0.00001;
+    configure_exploration(model);
+    model.exploration_confidence_z = 0.0;
+    pm::v7::maker::InventorySnapshot inventory;
+    inventory.yes_shares = 10.0;
+    inventory.no_shares = 10.0;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 20.0;
+    risk.exploration_max_quote_shares = 2.0;
+    risk.max_abs_residual_shares = 200.0;
+
+    bool saw_buy = false;
+    bool saw_sell = false;
+    for (std::uint64_t version = 1; version <= 128 && !(saw_buy && saw_sell); ++version) {
+        pm::v7::maker::MakerHotPath hot;
+        auto update = normal_update();
+        update.state_version = version;
+        const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+        assert(decision.reason == pm::v7::maker::DecisionReason::ExplorationQuote);
+        assert(decision.intent_count == 1);
+        assert(decision.intents[0].expected_ev > model.min_robust_ev_per_share);
+        saw_buy = saw_buy || decision.intents[0].side == pm::v7::Side::Buy;
+        saw_sell = saw_sell || decision.intents[0].side == pm::v7::Side::Sell;
+    }
+    assert(saw_buy && saw_sell);
+}
+
+void test_exploration_never_emits_uncovered_sell() {
+    auto model = profitable_model();
+    model.base_ev_se_per_share = 0.025;
+    model.robust_ev_z = 100.0;
+    model.min_robust_ev_per_share = 0.00001;
+    configure_exploration(model);
+    model.exploration_confidence_z = 0.0;
+    pm::v7::maker::InventorySnapshot inventory;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 20.0;
+    risk.exploration_max_quote_shares = 2.0;
+    risk.max_abs_residual_shares = 200.0;
+
+    for (std::uint64_t version = 1; version <= 128; ++version) {
+        pm::v7::maker::MakerHotPath hot;
+        auto update = normal_update();
+        update.state_version = version;
+        const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+        assert(decision.reason == pm::v7::maker::DecisionReason::ExplorationQuote);
+        assert(decision.intent_count == 1);
+        assert(decision.intents[0].side == pm::v7::Side::Buy);
+    }
 }
 
 void test_persistent_lifetime_arm_is_explicit_and_bounded() {
@@ -488,6 +556,8 @@ int main() {
     test_transient_no_economic_quote_cannot_cancel_before_minimum_lifetime();
     test_positive_exploration_ev_breaks_robust_cold_start();
     test_point_ev_exploration_prefers_fillable_positive_placement();
+    test_exploration_collects_positive_buy_and_inventory_backed_sell_evidence();
+    test_exploration_never_emits_uncovered_sell();
     test_persistent_lifetime_arm_is_explicit_and_bounded();
     test_negative_exploration_adjusted_ev_has_no_execution_authority();
     test_global_kill_preempts_quote();

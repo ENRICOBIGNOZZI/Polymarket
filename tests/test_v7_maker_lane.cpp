@@ -100,7 +100,10 @@ void test_lane_uses_venue_tick_size_not_stale_model_tick() {
     auto model = profitable_model();
     model.tick_size = 0.01; // deliberately stale relative to event tick.
     auto event = book_event(10); // venue tick 0.001 => 480 / 520 tick indexes.
-    const auto decision = lane.on_market_event(event, default_context(), model);
+    auto context = default_context();
+    context.inventory.yes_shares = 1.0;
+    context.inventory.no_shares = 1.0;
+    const auto decision = lane.on_market_event(event, context, model);
     assert(decision.reason == pm::v7::maker::DecisionReason::Quote);
     assert(decision.intent_count == 2);
     for (std::size_t i = 0; i < decision.intent_count; ++i) {

@@ -303,6 +303,7 @@ private:
     std::int64_t last_exploration_quote_ns_ = 0;
     std::int64_t exploration_max_rest_ns_ = 0;
     Action exploration_action_ = Action::Join;
+    Side exploration_side_ = Side::None;
     std::uint8_t initialized_ = 0;
     std::uint8_t exploration_active_ = 0;
     std::uint8_t exploration_persistent_ = 0;
