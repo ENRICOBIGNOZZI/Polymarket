@@ -67,6 +67,11 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
         exact = {10_000: {"timestamp_ms": 10_000, "price": 100.0}, **history}
         self.assertEqual(module.boundary_reference(exact, 10_000)["timestamp_ms"], 10_000)
 
+    def test_silent_rtds_stream_forces_bounded_reconnect(self) -> None:
+        threshold = module.RTDS_SILENCE_RECONNECT_SECONDS
+        self.assertFalse(module.rtds_stream_silent(100.0, 100.0 + threshold - 0.001))
+        self.assertTrue(module.rtds_stream_silent(100.0, 100.0 + threshold))
+
     def test_live_binding_survives_general_universe_eligibility_churn(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

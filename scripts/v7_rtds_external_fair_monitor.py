@@ -34,6 +34,7 @@ ORACLE_TOPIC = "crypto_prices_twap_sixty"
 EXTERNAL_TOPIC = "crypto_prices"
 ORACLE_WINDOW_SECONDS = 60
 APPLICATION_HEARTBEAT_SECONDS = 5.0
+RTDS_SILENCE_RECONNECT_SECONDS = 10.0
 REFERENCE_MAX_GAP_MS = 2_000
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 FRESH_NS = 3_000_000_000
@@ -219,6 +220,10 @@ def boundary_reference(
     if boundary_ms - timestamp > max_gap_ms:
         return None
     return history[timestamp]
+
+
+def rtds_stream_silent(last_observation_monotonic: float, now_monotonic: float) -> bool:
+    return now_monotonic - last_observation_monotonic >= RTDS_SILENCE_RECONNECT_SECONDS
 
 
 def observations(value: Any, inherited_topic: str = "") -> Iterator[dict[str, Any]]:
@@ -560,10 +565,13 @@ class Monitor:
                 ]})
                 fragments, fragment_opcode = bytearray(), 0
                 last_application_heartbeat = time.monotonic()
+                last_observation_monotonic = last_application_heartbeat
                 self.last_error = "awaiting_public_rtds_observation"
                 self.publish()
                 while True:
                     now_monotonic = time.monotonic()
+                    if rtds_stream_silent(last_observation_monotonic, now_monotonic):
+                        raise TimeoutError("RTDS price observation silence exceeded reconnect threshold")
                     if now_monotonic - last_application_heartbeat >= APPLICATION_HEARTBEAT_SECONDS:
                         send_frame(stream, 0x1, b"PING")
                         last_application_heartbeat = now_monotonic
@@ -595,8 +603,12 @@ class Monitor:
                         except (UnicodeDecodeError, json.JSONDecodeError):
                             self.dropped += 1
                         else:
+                            observed = False
                             for row in observations(decoded):
                                 self.ingest(row)
+                                observed = True
+                            if observed:
+                                last_observation_monotonic = time.monotonic()
                     fragments, fragment_opcode = bytearray(), 0
                     self.last_error = ""
                     self.publish()
