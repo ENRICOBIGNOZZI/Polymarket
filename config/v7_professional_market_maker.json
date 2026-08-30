@@ -82,7 +82,7 @@
     "fallback_universe_max_age_seconds": 180,
     "recent_flow": {
       "enabled": true,
-      "lookback_seconds": 180,
+      "lookback_seconds": 1800,
       "maximum_tape_age_seconds": 30,
       "initial_wait_seconds": 30,
       "minimum_markets": 1,

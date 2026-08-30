@@ -423,14 +423,16 @@ if [[ "$universe_ready" != 1 ]]; then
   echo "adaptive V7 universe did not complete exhaustive discovery" >&2
   exit 77
 fi
-read -r HOT_MARKET_BUDGET ACTIVE_SCAN_MARKET_BUDGET STRUCTURAL_SCAN_EVENT_BUDGET < <(python3 - "$RUN_ROOT/universe/status.json" <<'PY'
+read -r HOT_MARKET_BUDGET ACTIVE_SCAN_MARKET_BUDGET STRUCTURAL_SCAN_EVENT_BUDGET MAKER_FLOW_LOOKBACK_SECONDS < <(python3 - "$RUN_ROOT/universe/status.json" "$MAKER_POLICY" <<'PY'
 import json,sys
 value=json.load(open(sys.argv[1]))
+maker=json.load(open(sys.argv[2]))
 tiers=value.get("tier_counts") or {}
 hot=max(1,int(tiers.get("HOT") or 0))
 active=max(hot,hot+int(tiers.get("WARM") or 0))
 structural=max(1,int((value.get("resource_capacities") or {}).get("structural_scan_budget_events") or 0))
-print(hot,active,structural)
+flow=max(180,int(((maker.get("market_selection") or {}).get("recent_flow") or {}).get("lookback_seconds") or 0))
+print(hot,active,structural,flow)
 PY
 )
 
@@ -456,7 +458,7 @@ PY
   --run-dir "$RUN_ROOT" \
   --data-url "https://data-api.polymarket.com" \
   --markets "$ACTIVE_SCAN_MARKET_BUDGET" --batch 40 --min-liquidity 2 \
-  --lookback-seconds 180 --interval 5 --loop \
+  --lookback-seconds "$MAKER_FLOW_LOOKBACK_SECONDS" --interval 5 --loop \
   >> "$RUN_ROOT/trade_recorder.log" 2>&1 &
 pids+=("$!")
 

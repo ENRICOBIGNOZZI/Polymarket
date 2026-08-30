@@ -348,6 +348,7 @@ public:
     }
 
     void write_status(bool stopped = false) {
+        const auto feed = feed_ ? feed_->snapshot() : pm::fast::FeedSnapshot{};
         json::object root;
         root["schema"] = "polymarket_v7_maker_fillability_ws_status_v1";
         root["timestamp_ms"] = wall_ms();
@@ -361,6 +362,11 @@ public:
         root["decoder_failures"] = decoder_failures_.load(std::memory_order_relaxed);
         root["reconnects"] = reconnects_.load(std::memory_order_relaxed);
         root["connection_epoch"] = connection_epoch_.load(std::memory_order_relaxed);
+        root["feed_workers"] = feed.workers;
+        root["feed_connected_workers"] = feed.connected_workers;
+        root["feed_messages"] = feed.messages;
+        root["feed_reconnects"] = feed.reconnects;
+        root["feed_errors"] = feed.errors;
         root["last_exchange_event_ns"] = last_exchange_ns_;
         root["last_receive_wall_ms"] = last_receive_wall_ms_;
         root["evidence_complete"] = dropped_.load(std::memory_order_relaxed) == 0
