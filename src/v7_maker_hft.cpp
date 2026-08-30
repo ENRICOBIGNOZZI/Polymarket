@@ -671,20 +671,17 @@ MakerDecision MakerHotPath::on_market_update(
     const std::int64_t exploration_quote_tick = exploration_side_ == Side::Sell
         ? quotes.ask_tick : quotes.bid_tick;
 
-    if (exploration_active_ && !exploration_quote_active) {
-        exploration_active_ = 0;
-        exploration_side_ = Side::None;
-    }
-
     // The minimum exposure belongs to the accepted order, not to the decision
     // branch that happens to be selected on a later book update.  In
     // particular, a transient move above the normal robust-EV threshold must
     // not "promote" the order, clear its exploration state, and let the next
     // negative-EV tick cancel it under the shorter ordinary quote lifetime.
+    // This also covers the asynchronous decision -> OMS LIVE acknowledgement
+    // gap: an intervening market update sees no active quote yet, but must not
+    // clear the order's lifetime ownership or enqueue a competing placement.
     // All safety exits are evaluated before candidate selection, so holding
     // here protects only non-safety economic/repricing changes.
-    if (exploration_active_ && exploration_quote_active
-        && exploration_elapsed < model.exploration_min_rest_ns) {
+    if (exploration_active_ && exploration_elapsed < model.exploration_min_rest_ns) {
         decision.action = exploration_action_;
         decision.reason = DecisionReason::ExplorationHold;
         decision.exploration_max_rest_ns = exploration_max_rest_ns_;
@@ -700,6 +697,11 @@ MakerDecision MakerHotPath::on_market_update(
         decision.latency.receive_to_intent_ns = update.socket_receive_monotonic_ns > 0
             ? std::max<std::int64_t>(0, end_ns - update.socket_receive_monotonic_ns) : 0;
         return decision;
+    }
+
+    if (exploration_active_ && !exploration_quote_active) {
+        exploration_active_ = 0;
+        exploration_side_ = Side::None;
     }
 
     if (!economic_quote) {

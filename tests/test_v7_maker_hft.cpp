@@ -587,17 +587,11 @@ void test_exploration_minimum_rest_survives_transient_exploit_promotion() {
     assert(opened.reason == pm::v7::maker::DecisionReason::ExplorationQuote);
     assert(opened.intent_count == 1);
     const auto& quote = opened.intents[0];
-    quotes.last_quote_monotonic_ns = monotonic_ns();
-    if (quote.side == pm::v7::Side::Buy) {
-        quotes.bid_active = 1;
-        quotes.bid_tick = quote.price_tick;
-    } else {
-        quotes.ask_active = 1;
-        quotes.ask_tick = quote.price_tick;
-    }
 
-    // A normal exploit candidate can become robustly positive for one update.
-    // It must not erase the still-live order's exploration lifetime contract.
+    // A normal exploit candidate can become robustly positive while the quote
+    // is still crossing the asynchronous decision -> OMS acknowledgement gap.
+    // It must not erase the pending order's exploration lifetime contract or
+    // enqueue a competing placement.
     auto exploit = profitable_model();
     exploit.min_quote_lifetime_ns = 0;
     configure_exploration(exploit);
@@ -607,6 +601,22 @@ void test_exploration_minimum_rest_survives_transient_exploit_promotion() {
     const auto promoted = hot.on_market_update(update, inventory, quotes, risk, exploit);
     assert(promoted.reason == pm::v7::maker::DecisionReason::ExplorationHold);
     assert(promoted.intent_count == 0);
+
+    // Once the OMS reports LIVE, the same transient exploit regime must still
+    // retain lifetime ownership on the original exploratory order.
+    quotes.last_quote_monotonic_ns = monotonic_ns();
+    if (quote.side == pm::v7::Side::Buy) {
+        quotes.bid_active = 1;
+        quotes.bid_tick = quote.price_tick;
+    } else {
+        quotes.ask_active = 1;
+        quotes.ask_tick = quote.price_tick;
+    }
+    update.state_version += 1;
+    update.socket_receive_monotonic_ns = monotonic_ns();
+    const auto live_promoted = hot.on_market_update(update, inventory, quotes, risk, exploit);
+    assert(live_promoted.reason == pm::v7::maker::DecisionReason::ExplorationHold);
+    assert(live_promoted.intent_count == 0);
 
     // Returning below the exploit threshold before minimum_rest_ms must still
     // preserve the same quote. This is the exact live oscillation regression.
