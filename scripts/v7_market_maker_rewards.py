@@ -490,7 +490,12 @@ def _recent_flow_snapshot(
         raise ValueError(f"maker_recent_flow_tape_stale:{now_ms - latest_receive_ms}")
 
     minimum_prints = max(1, int(flow_cfg.get("minimum_prints", 2)))
+    minimum_sell_prints_2m = max(1, int(flow_cfg.get("minimum_sell_prints_2m", 1)))
     minimum_sell_prints_10m = max(1, int(flow_cfg.get("minimum_sell_prints_10m", 1)))
+    maximum_last_sell_age_ms = max(
+        1_000,
+        int(float(flow_cfg.get("maximum_last_sell_age_seconds", 120.0)) * 1_000.0),
+    )
     minimum_markets = max(1, int(flow_cfg.get("minimum_markets", 5)))
     minimum_tte_ms = max(
         0, int(float(flow_cfg.get("minimum_time_to_end_seconds", 900.0)) * 1000.0)
@@ -517,7 +522,9 @@ def _recent_flow_snapshot(
         if (
             flow is None
             or int(flow["prints"]) < minimum_prints
+            or int(flow["sell_prints_2m"]) < minimum_sell_prints_2m
             or int(flow["sell_prints_10m"]) < minimum_sell_prints_10m
+            or now_ms - int(flow["last_sell_receive_ms"]) > maximum_last_sell_age_ms
             or not _generic_maker_market_allowed(raw, selection_cfg)
             or raw.get("active") is not True
             or raw.get("closed") is True
@@ -624,8 +631,10 @@ def _recent_flow_snapshot(
         "universe_membership_sha256": str(universe.get("membership_sha256") or ""),
         "recent_flow_lookback_ms": lookback_ms,
         "recent_flow_latest_receive_ms": latest_receive_ms,
+        "minimum_sell_prints_2m": minimum_sell_prints_2m,
+        "maximum_last_sell_age_ms": maximum_last_sell_age_ms,
         "markets": selected,
-        "note": "PAPER BUY-maker selection requires causal aggressive SELL flow that can reach resting bids; reward assumptions are zero.",
+        "note": "PAPER BUY-maker selection requires fresh causal aggressive SELL flow that can reach resting bids; reward assumptions are zero.",
     }
 
 
@@ -1003,6 +1012,21 @@ def selector_status(
     candidate = snapshot if candidate_snapshot is None else candidate_snapshot
     runtime_membership = selection_membership_sha256(snapshot)
     candidate_membership = selection_membership_sha256(candidate)
+    candidate_markets = candidate.get("markets") if isinstance(candidate.get("markets"), list) else []
+    candidate_flow_eligible = (
+        candidate.get("source") == "adaptive_universe_recent_flow"
+        and candidate.get("degraded") is not True
+    )
+    candidate_rotation_suppressed = (
+        snapshot.get("source") == "adaptive_universe_recent_flow"
+        and snapshot.get("degraded") is not True
+        and not candidate_flow_eligible
+    )
+    candidate_last_sell_ages = [
+        max(0.0, finite(row.get("recent_last_sell_age_ms")) / 1_000.0)
+        for row in candidate_markets
+        if isinstance(row, dict) and finite(row.get("recent_last_sell_age_ms"), -1.0) >= 0.0
+    ]
     return {
         "schema": SELECTOR_STATUS_SCHEMA,
         "timestamp_ms": candidate.get("timestamp_ms"),
@@ -1026,10 +1050,26 @@ def selector_status(
         "runtime_selection_pinned": runtime_selection_pinned,
         "runtime_membership_sha256": runtime_membership,
         "candidate_membership_sha256": candidate_membership,
-        "candidate_rotation_pending": runtime_membership != candidate_membership,
+        "candidate_rotation_pending": (
+            not candidate_rotation_suppressed
+            and runtime_membership != candidate_membership
+        ),
+        "candidate_rotation_suppressed_no_fresh_flow": candidate_rotation_suppressed,
         "candidate_source": candidate.get("source"),
         "candidate_degraded": candidate.get("degraded") is True,
         "candidate_selected_count": candidate.get("selected_count", 0),
+        "candidate_fresh_flow_eligible": candidate_flow_eligible,
+        "candidate_selected_with_sell_flow_30s": sum(
+            1 for row in candidate_markets
+            if isinstance(row, dict) and int(row.get("recent_sell_prints_30s") or 0) > 0
+        ),
+        "candidate_selected_with_sell_flow_2m": sum(
+            1 for row in candidate_markets
+            if isinstance(row, dict) and int(row.get("recent_sell_prints_2m") or 0) > 0
+        ),
+        "candidate_max_last_sell_age_seconds": (
+            max(candidate_last_sell_ages) if candidate_last_sell_ages else -1.0
+        ),
     }
 
 

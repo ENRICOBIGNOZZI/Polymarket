@@ -23,6 +23,10 @@ class DashboardContractTests(unittest.TestCase):
             "polymarket_v7_maker_rotation_candidate_confirmations",
             "polymarket_v7_maker_rotation_required_confirmations",
             "polymarket_v7_maker_rotation_cooldown_remaining_seconds",
+            "polymarket_v7_maker_candidate_fresh_flow_eligible",
+            "polymarket_v7_maker_paused_no_fresh_flow",
+            "polymarket_v7_maker_candidate_sell_flow_2m_markets",
+            "polymarket_v7_maker_candidate_max_last_sell_age_seconds",
             'dimension=\\"lifetime_arm\\"',
         ):
             self.assertIn(metric, raw)
