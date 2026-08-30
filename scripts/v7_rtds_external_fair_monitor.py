@@ -488,6 +488,41 @@ class Monitor:
                 "calculated_monotonic_ns": time.monotonic_ns(),
                 "valid_until_monotonic_ns": valid_until}
 
+    def hybrid_fair_snapshot(self, external_only: dict[str, Any]) -> dict[str, Any]:
+        """Build the separate market-prior cohort without changing the external benchmark.
+
+        This cohort is deliberately shadow-only and immature.  The bounded logit blend is
+        a declared baseline for measuring whether Polymarket state adds incremental value;
+        it is not silently substituted for the external-only execution benchmark.
+        """
+        output = dict(external_only)
+        output.update({
+            "model_id": "hybrid_fair", "authority": "SHADOW",
+            "uses_polymarket_price_as_feature": True,
+        })
+        if external_only.get("valid") is not True:
+            return output
+        external_yes = min(1.0 - 1e-9, max(1e-9, float(external_only["yes"])))
+        market_yes = min(1.0 - 1e-9, max(1e-9, float(external_only["pm_mid"])))
+        weight = 0.35
+        external_logit = math.log(external_yes / (1.0 - external_yes))
+        market_logit = math.log(market_yes / (1.0 - market_yes))
+        hybrid_logit = external_logit + weight * (market_logit - external_logit)
+        hybrid_yes = 1.0 / (1.0 + math.exp(-hybrid_logit))
+        half_width = max(
+            hybrid_yes - float(external_only["lower"]),
+            float(external_only["upper"]) - hybrid_yes,
+        )
+        output.update({
+            "yes": hybrid_yes,
+            "calibrated": hybrid_yes,
+            "lower": max(0.0, hybrid_yes - half_width),
+            "upper": min(1.0, hybrid_yes + half_width),
+            "market_prior_logit_weight": weight,
+            "external_only_yes": external_yes,
+        })
+        return output
+
     def publish(self) -> None:
         now = time.time_ns()
         self.refresh_contract(now)
@@ -501,6 +536,10 @@ class Monitor:
         continuity = "LIVE_CONTINUOUS" if oracle_healthy and self.accepted >= 2 else "CONTINUITY_UNKNOWN"
         fair_started = time.monotonic_ns()
         fair = self.fair_snapshot(now, oracle_healthy, venue_runtime)
+        fair["model_id"] = "external_only_fair"
+        fair["authority"] = "SHADOW"
+        fair["uses_polymarket_price_as_feature"] = False
+        hybrid_fair = self.hybrid_fair_snapshot(fair)
         self.latency_samples["fair_compute"].append(
             max(0.0, (time.monotonic_ns() - fair_started) / 1_000_000.0)
         )
@@ -567,6 +606,12 @@ class Monitor:
                 "spread_bps": 0.0, "weight": 1.0, "basis_bps": 0.0,
                 "disabled": not (multi_venue_healthy or external_fresh)}]},
             "fair": fair,
+            "fair_models": {
+                "external_only_fair": fair,
+                "hybrid_fair": hybrid_fair,
+                "execution_model_id": "external_only_fair",
+                "comparison_state": "LIVE_SHADOW_COMPARISON",
+            },
             "model": {"mature": False, "coverage": 0.0,
                       "economic_confidence": router.get("economic_confidence", "MORE_EVIDENCE_REQUIRED")},
             "latency": {

@@ -4,7 +4,8 @@
 Only public CLOB data is used.  Every decision is revalidated on a fresh L2
 arrival snapshot, fees are taken from the contract-bound schedule, and virtual
 FAK fills are limited by visible depth. Evidence is written to an append-only
-counterfactual tape and never reaches the execution ledger or portfolio cash.
+counterfactual tape and the canonical ledger with explicit SHADOW authority.
+It never reaches portfolio cash or authoritative PAPER PnL.
 """
 from __future__ import annotations
 
@@ -20,6 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from v7_market_common import finite, parse_array, request_json
+from v7_execution_ledger import LedgerEvent
+from v7_ledger_spool import spool_event
 
 STRATEGY = "CRYPTO_INFORMED_TAKER"
 MODEL_VERSION = "external-fair-structural-v7-paper"
@@ -72,13 +75,34 @@ def entry_tte_allowed(fair: dict[str, Any], policy: dict[str, Any]) -> bool:
     tte = finite(fair.get("tte_seconds"))
     minimum = finite(policy.get("minimum_entry_tte_seconds"))
     maximum = finite(policy.get("maximum_entry_tte_seconds"))
-    return (
+    legacy_allowed = (
         math.isfinite(tte)
         and math.isfinite(minimum)
         and math.isfinite(maximum)
         and 0.0 <= minimum <= maximum
         and minimum <= tte <= maximum
     )
+    buckets = policy.get("tte_bucket_policy")
+    if not isinstance(buckets, list) or not buckets:
+        return legacy_allowed
+    return any(
+        isinstance(bucket, dict)
+        and finite(bucket.get("minimum_seconds"), math.nan) <= tte
+        <= finite(bucket.get("maximum_seconds"), math.nan)
+        for bucket in buckets
+    )
+
+
+def tte_policy(fair: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
+    tte = finite(fair.get("tte_seconds"), math.nan)
+    for bucket in policy.get("tte_bucket_policy") if isinstance(policy.get("tte_bucket_policy"), list) else []:
+        if not isinstance(bucket, dict):
+            continue
+        minimum = finite(bucket.get("minimum_seconds"), math.nan)
+        maximum = finite(bucket.get("maximum_seconds"), math.nan)
+        if math.isfinite(tte) and minimum <= tte <= maximum:
+            return bucket
+    return {}
 
 
 def model_market_disagreement_allowed(fair: dict[str, Any], policy: dict[str, Any]) -> bool:
@@ -169,8 +193,11 @@ def robust_candidates(status: dict[str, Any], books: dict[str, Book], policy: di
     if calculated <= 0 or calculated > current or valid_until < current:
         return []
     schedule = market.get("fee_schedule") if isinstance(market.get("fee_schedule"), dict) else {}
-    minimum_ev = float(policy.get("minimum_robust_ev_per_share", 0.001))
-    execution_risk = float(policy.get("base_execution_risk_per_share", 0.0005))
+    bucket = tte_policy(fair, policy)
+    if bucket and bucket.get("action") != "TAKER_SHADOW":
+        return []
+    minimum_ev = float(bucket.get("minimum_robust_ev_per_share", policy.get("minimum_robust_ev_per_share", 0.001)))
+    execution_risk = float(bucket.get("execution_risk_per_share", policy.get("base_execution_risk_per_share", 0.0005)))
     rows: list[dict[str, Any]] = []
     for outcome, token, robust_value in (
         ("YES", str(market.get("yes_token") or ""), float(fair.get("lower") or 0.0)),
@@ -188,6 +215,7 @@ def robust_candidates(status: dict[str, Any], books: dict[str, Book], policy: di
                 "fee_per_share": fee, "execution_risk": execution_risk,
                 "robust_probability": robust_value, "robust_ev": robust_ev,
                 "tte_seconds": float(fair["tte_seconds"]),
+                "tte_bucket_id": str(bucket.get("id") or "legacy_entry_window"),
             })
     return sorted(rows, key=lambda row: (-row["robust_ev"], row["outcome"]))
 
@@ -298,6 +326,18 @@ class PaperRouter:
         finally:
             os.close(descriptor)
 
+    def emit_canonical_shadow(self, event: LedgerEvent) -> None:
+        """Route shadow evidence through the sole canonical writer transport."""
+        metadata = dict(event.metadata)
+        metadata.update({
+            "counterfactual": True,
+            "economic_authority": "SHADOW_COUNTERFACTUAL",
+            "excluded_from_portfolio_equity": True,
+        })
+        spool_event(self.root, LedgerEvent(**{
+            **event.to_dict(), "metadata": metadata,
+        }))
+
     def fetch_book(self, token_id: str) -> Book | None:
         try:
             raw = request_json(
@@ -343,6 +383,9 @@ class PaperRouter:
         external = status.get("external") if isinstance(status.get("external"), dict) else {}
         tte = finite(fair.get("tte_seconds"))
         model_yes = finite(fair.get("yes"))
+        fair_models = status.get("fair_models") if isinstance(status.get("fair_models"), dict) else {}
+        hybrid = fair_models.get("hybrid_fair") if isinstance(fair_models.get("hybrid_fair"), dict) else {}
+        hybrid_yes = finite(hybrid.get("yes"))
         market_yes = finite(fair.get("pm_mid"))
         market_id = str(market.get("market_id") or "")
         if not (
@@ -370,6 +413,10 @@ class PaperRouter:
             "reference_version": int(reference.get("version") or 0),
             "tte_bucket_seconds": bucket, "observed_tte_seconds": tte,
             "model_yes": model_yes, "market_yes": market_yes,
+            "external_only_yes": model_yes,
+            "hybrid_yes": hybrid_yes if math.isfinite(hybrid_yes) else None,
+            "external_only_model_id": "external_only_fair",
+            "hybrid_model_id": "hybrid_fair",
             "lower": finite(fair.get("lower")), "upper": finite(fair.get("upper")),
             "oracle_value": finite(oracle.get("value")),
             "external_venue_count": int(external.get("fresh_venue_count") or 0),
@@ -435,6 +482,11 @@ class PaperRouter:
                     continue
                 actual_yes = 1.0 if winning_token == str(forecast.get("yes_token") or "") else 0.0
                 model_brier, model_log_loss = self.forecast_scores(float(forecast["model_yes"]), actual_yes)
+                hybrid_yes = finite(forecast.get("hybrid_yes"))
+                if math.isfinite(hybrid_yes):
+                    hybrid_brier, hybrid_log_loss = self.forecast_scores(hybrid_yes, actual_yes)
+                else:
+                    hybrid_brier = hybrid_log_loss = None
                 market_brier, market_log_loss = self.forecast_scores(float(forecast["market_yes"]), actual_yes)
                 self.emit_counterfactual(
                     "FORECAST_FINAL", counterfactual_id=forecast_id, forecast_id=forecast_id,
@@ -443,6 +495,10 @@ class PaperRouter:
                     actual_yes=actual_yes, winning_token_id=winning_token,
                     model_brier=model_brier, market_brier=market_brier,
                     model_log_loss=model_log_loss, market_log_loss=market_log_loss,
+                    external_only_brier=model_brier,
+                    external_only_log_loss=model_log_loss,
+                    hybrid_yes=hybrid_yes if math.isfinite(hybrid_yes) else None,
+                    hybrid_brier=hybrid_brier, hybrid_log_loss=hybrid_log_loss,
                 )
                 pending.pop(forecast_id, None)
                 self.state["resolved_forecasts"] = int(self.state.get("resolved_forecasts") or 0) + 1
@@ -513,6 +569,7 @@ class PaperRouter:
                 "expected_execution_risk": row["execution_risk"], "economic_maturity": "MORE_EVIDENCE_REQUIRED",
                 "tte_seconds": row["tte_seconds"], "robust_probability": row["robust_probability"],
                 "robust_ev_per_share": row["robust_ev"],
+                "tte_bucket_id": row.get("tte_bucket_id", "legacy_entry_window"),
                 "model_family": STRATEGY, "horizon_seconds": 300,
             },
         )
@@ -543,6 +600,9 @@ class PaperRouter:
         counterfactual_id = f"external-shadow-{stable_id(self.sha, market_id, row['outcome'], current_ms)}"
         common = self.common(status, row, counterfactual_id, size)
         self.emit_counterfactual("CANDIDATE", counterfactual_id=counterfactual_id, **common)
+        self.emit_canonical_shadow(LedgerEvent(
+            event_type="CANDIDATE", **common,
+        ))
         self.state["candidates"] = int(self.state.get("candidates") or 0) + 1
         time.sleep(0.1)
 
@@ -583,6 +643,40 @@ class PaperRouter:
             return False
         fill_id = f"external-shadow-fill-{stable_id(counterfactual_id, arrival_book.exchange_ts_ms, arrival_book.receive_ts_ms)}"
         position_id = str(common["position_id"])
+        order_id = str(common["order_id"])
+        arrival_decision_ms = max(now_ms(), arrival_book.receive_ts_ms)
+        arrival_metadata = {
+            **common["metadata"], "robust_net_ev": robust_ev,
+            "arrival_snapshot_id": arrival_book.snapshot_id,
+            "arrival_tte_seconds": arrival["tte_seconds"],
+            "arrival_robust_probability": arrival["robust_probability"],
+            "arrival_robust_ev_per_share": arrival["robust_ev"],
+        }
+        self.emit_canonical_shadow(LedgerEvent(
+            event_type="ORDER_SUBMITTED", strategy=STRATEGY, model_sha=self.sha,
+            model_version=MODEL_VERSION, candidate_id=counterfactual_id,
+            order_id=order_id, position_id=position_id, market_id=market_id,
+            event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY",
+            exchange_ts_ms=arrival_book.exchange_ts_ms,
+            receive_ts_ms=arrival_book.receive_ts_ms, decision_ts_ms=arrival_decision_ms,
+            book_snapshot_id=arrival_book.snapshot_id, limit_price=float(common["limit_price"]),
+            intended_action="VIRTUAL_FAK", intended_size=size, order_state="SUBMITTED_SHADOW",
+            predicted_alpha=arrival["robust_ev"], expected_ev=robust_ev,
+            metadata=arrival_metadata,
+        ))
+        self.emit_canonical_shadow(LedgerEvent(
+            event_type="FILL", strategy=STRATEGY, model_sha=self.sha,
+            model_version=MODEL_VERSION, candidate_id=counterfactual_id,
+            order_id=order_id, position_id=position_id, fill_id=fill_id,
+            market_id=market_id, event_id=str(market.get("event_id") or ""),
+            token_id=row["token_id"], side="BUY",
+            exchange_ts_ms=arrival_book.exchange_ts_ms,
+            receive_ts_ms=arrival_book.receive_ts_ms, fill_price=ask, filled_size=size,
+            complete=True, fee=total_fee, fee_rate=float(schedule.get("rate") or 0.0),
+            fee_source="GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
+            slippage=max(0.0, ask - float(common["ask"])) * size,
+            metadata=arrival_metadata,
+        ))
         self.emit_counterfactual(
             "VIRTUAL_FILL", counterfactual_id=counterfactual_id,
             strategy=STRATEGY, model_version=MODEL_VERSION,
@@ -604,6 +698,7 @@ class PaperRouter:
         self.state.setdefault("traded_markets", []).append(market_id)
         self.state.setdefault("positions", {})[position_id] = {
             "position_id": position_id, "counterfactual_id": counterfactual_id, "fill_id": fill_id,
+            "order_id": order_id,
             "market_id": market_id, "event_id": str(market.get("event_id") or ""),
             "token_id": row["token_id"], "outcome": row["outcome"], "shares": size,
             "entry_price": ask, "entry_fee": total_fee, "entry_cost": cost,
@@ -640,6 +735,19 @@ class PaperRouter:
                             executable_liquidation_value=liquidation, markouts={f"{horizon}s": per_share},
                             metadata={"full_visible_depth": True, "fill_conditioned": True},
                         )
+                        self.emit_canonical_shadow(LedgerEvent(
+                            event_type="MARKOUT", strategy=STRATEGY, model_sha=self.sha,
+                            model_version=MODEL_VERSION,
+                            order_id=str(position["order_id"]), fill_id=str(position["fill_id"]),
+                            position_id=str(position["position_id"]), market_id=str(position["market_id"]),
+                            event_id=str(position["event_id"]), token_id=str(position["token_id"]),
+                            side="BUY", exchange_ts_ms=book.exchange_ts_ms,
+                            receive_ts_ms=book.receive_ts_ms, book_snapshot_id=book.snapshot_id,
+                            executable_liquidation_value=liquidation,
+                            markouts={f"{horizon}s": per_share},
+                            metadata={"model_family": STRATEGY, "horizon_seconds": 300,
+                                      "full_visible_depth": True, "fill_conditioned": True},
+                        ))
                         position.setdefault("markouts", []).append(horizon)
             if age_seconds < 300:
                 continue
@@ -682,6 +790,27 @@ class PaperRouter:
                     "model_family": STRATEGY, "horizon_seconds": 300,
                 },
             )
+            self.emit_canonical_shadow(LedgerEvent(
+                event_type="FINAL", strategy=STRATEGY, model_sha=self.sha,
+                model_version=MODEL_VERSION, order_id=str(position["order_id"]),
+                position_id=str(position["position_id"]), market_id=str(position["market_id"]),
+                event_id=str(position["event_id"]), token_id=str(position["token_id"]), side="BUY",
+                final_pnl=pnl, realized_cashflow=pnl, fee=0.0, slippage=0.0,
+                unwind_loss=0.0, capital_cost=0.0, latency_cost=0.0,
+                capital_duration_ms=current_ms - int(position["opened_ms"]),
+                metadata={
+                    "model_family": STRATEGY, "horizon_seconds": 300,
+                    "realized": True, "unwind_accounted": True,
+                    "cost_vector_complete": True,
+                    "terminal_id": f"external-shadow:{position['position_id']}:final",
+                    "pnl_decomposition": {
+                        "trading_pnl": pnl, "spread_capture": 0.0,
+                        "adverse_markout": 0.0, "inventory_pnl": 0.0,
+                        "maker_rebates": 0.0, "liquidity_rewards": 0.0,
+                        "own_reward_share_verified": False,
+                    },
+                },
+            ))
 
     def publish(self, active_candidates: int, blocker: str = "") -> None:
         positions = self.state.get("positions") if isinstance(self.state.get("positions"), dict) else {}

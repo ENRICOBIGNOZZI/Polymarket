@@ -230,6 +230,11 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
             self.assertEqual(status["settlement_reference"]["observation_timestamp_ms"], start * 1000 - 1000)
             self.assertTrue(status["external"]["healthy"])
             self.assertTrue(status["fair"]["valid"])
+            self.assertEqual(status["fair"]["model_id"], "external_only_fair")
+            self.assertFalse(status["fair"]["uses_polymarket_price_as_feature"])
+            self.assertEqual(status["fair_models"]["comparison_state"], "LIVE_SHADOW_COMPARISON")
+            self.assertEqual(status["fair_models"]["execution_model_id"], "external_only_fair")
+            self.assertTrue(status["fair_models"]["hybrid_fair"]["uses_polymarket_price_as_feature"])
             self.assertEqual(status["blockers"], ["COUNTERFACTUAL_COLLECTOR_NOT_RUNNING"])
 
             (root / "external" / "paper_router_status.json").write_text(json.dumps({

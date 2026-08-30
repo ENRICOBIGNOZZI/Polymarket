@@ -526,6 +526,7 @@ for rel in (
     'ops/v7_service_entrypoint.sh',
     'scripts/v7_rtds_external_fair_monitor.py',
     'scripts/v7_external_fair_paper_router.py',
+    'scripts/v7_fast_structural_paper_executor.py',
     'scripts/v7_research_shadow_supervisor.py',
     'scripts/v7_semantic_mapping.py',
     'scripts/v7_sports_collector.py',
@@ -572,6 +573,7 @@ prevalidate_candidate(){
       scripts/v7_osint_mapping_collector.py \
       scripts/v7_rtds_external_fair_monitor.py \
       scripts/v7_external_fair_paper_router.py \
+      scripts/v7_fast_structural_paper_executor.py \
       monitoring/exporter_v7.py \
       monitoring/v7_ledger_metrics.py \
       monitoring/v7_runtime_contract.py \

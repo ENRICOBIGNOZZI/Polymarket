@@ -93,8 +93,9 @@ def main() -> None:
     unsafe = snapshot(); unsafe["real_order_submission"] = True
     assert robust_candidates(unsafe, {"yes": book("yes", 0.50)}, policy) == []
     source = (ROOT / "scripts" / "v7_external_fair_paper_router.py").read_text()
-    assert 'event_type="ORDER_SUBMITTED"' not in source
-    assert 'event_type="FILL"' not in source
+    assert 'event_type="ORDER_SUBMITTED"' in source
+    assert 'event_type="FILL"' in source
+    assert '"economic_authority": "SHADOW_COUNTERFACTUAL"' in source
     assert '"VIRTUAL_FILL"' in source
     assert "api_key" not in source.lower()
     assert "signature" not in source.lower()
@@ -133,7 +134,15 @@ def main() -> None:
         ) <= 10.0 + 1e-9
         with mock.patch.object(router, "request_json", side_effect=public_request):
             paper.step()
-        assert not (run_root / "ledger" / "spool").exists()
+        canonical = [
+            json.loads(path.read_text())
+            for path in (run_root / "ledger" / "spool").glob("*.json")
+        ]
+        assert {event["event_type"] for event in canonical} == {
+            "CANDIDATE", "ORDER_SUBMITTED", "FILL",
+        }
+        assert all(event["metadata"]["counterfactual"] is True for event in canonical)
+        assert all(event["metadata"]["excluded_from_portfolio_equity"] is True for event in canonical)
         events = [json.loads(line) for line in (external / "counterfactuals.jsonl").read_text().splitlines()]
         event_types = {event["event_type"] for event in events}
         assert {"FORECAST", "CANDIDATE", "VIRTUAL_FILL"} <= event_types
@@ -148,7 +157,7 @@ def main() -> None:
         assert status["model_mature"] is False
         assert status["sizing_regime"] == "IMMATURE_SHADOW_FIXED_NOTIONAL"
         assert status["market_capital_ceiling"] == 10.0
-        assert status["entry_tte_window_seconds"] == {"minimum": 5.0, "maximum": 60.0}
+        assert status["entry_tte_window_seconds"] == {"minimum": 5.0, "maximum": 300.0}
         assert status["book_requests"] == 2
         assert status["book_request_failures"] == 0
         assert status["book_parse_failures"] == 0
@@ -209,6 +218,7 @@ def main() -> None:
         opened_ms = router.now_ms() - 301_000
         settling.state["positions"] = {"position-up": {
             "position_id": "position-up", "counterfactual_id": "shadow-up", "fill_id": "fill-up",
+            "order_id": "order-up",
             "market_id": "market-up-down", "event_id": "event-up-down", "token_id": "up-token",
             "outcome": "YES", "shares": 10.0, "entry_price": 0.4, "entry_cost": 4.0,
             "entry_fee": 0.2, "executable_value": 0.0, "opened_ms": opened_ms,
@@ -241,6 +251,10 @@ def main() -> None:
         observation = snapshot()
         observation["code_sha"] = "d" * 40
         observation["fair"].update({"yes": 0.60, "pm_mid": 0.80})
+        observation["fair_models"] = {
+            "hybrid_fair": {"yes": 0.70},
+            "external_only_fair": observation["fair"],
+        }
         observation["market"].update({"market_id": "forecast-market", "event_id": "forecast-event"})
         books = {"yes": book("yes", 0.50), "no": book("no", 0.51)}
         assert collector.record_forecast(observation, books)
@@ -263,6 +277,7 @@ def main() -> None:
         final = next(event for event in events if event["event_type"] == "FORECAST_FINAL")
         assert final["actual_yes"] == 1.0
         assert final["model_brier"] > final["market_brier"]
+        assert final["external_only_brier"] > final["hybrid_brier"]
 
 
 if __name__ == "__main__":

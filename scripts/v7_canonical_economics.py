@@ -183,8 +183,17 @@ class UnitState:
     cost_vector_complete_flag: bool = False
     capital_duration_ms: int = 0
     reasons: set[str] = field(default_factory=set)
+    economic_authorities: set[str] = field(default_factory=set)
+    counterfactual: bool = False
+    internal_inventory_transform: bool = False
 
     def observe_identity(self, event: Any) -> None:
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        authority = _text(metadata.get("economic_authority")) or "PAPER"
+        self.economic_authorities.add(authority)
+        self.counterfactual = self.counterfactual or metadata.get("counterfactual") is True
+        if metadata.get("excluded_from_portfolio_equity") is True:
+            self.counterfactual = True
         fam = _family(event)
         if fam and self.family and fam != self.family:
             self.reasons.add("model_family_mismatch")
@@ -237,6 +246,24 @@ class UnitState:
             self.reasons.add(f"submission_target_size_conflict:{leg}")
         else:
             self.submitted_legs[leg] = qty
+
+    def observe_inventory_transform(self, event: Any) -> None:
+        """Treat a proven internal merge as a complete non-market economic leg."""
+        if event.event_type != "INVENTORY_MERGE":
+            return
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        quantity = _finite(event.intended_size)
+        if (quantity is None or quantity <= 0
+                or metadata.get("consumed_inventory_provenance_complete") is not True):
+            self.reasons.add("inventory_merge_provenance_incomplete")
+            return
+        leg = "INVENTORY_MERGE"
+        self.internal_inventory_transform = True
+        self.required_contract_explicit = True
+        self.required_legs[leg] = quantity
+        self.submitted_legs[leg] = quantity
+        self.fill_qty[leg] += quantity
+        self.fill_ids.add(_text(event.record_id))
 
     def observe_fill(self, event: Any) -> None:
         fill_id = _text(event.fill_id)
@@ -417,6 +444,8 @@ def _load_units(path: Path, expected_model_sha: str) -> tuple[dict[str, UnitStat
         state.observe_contract(event)
         if event.event_type == "ORDER_SUBMITTED":
             state.observe_submission(event)
+        if event.event_type == "INVENTORY_MERGE":
+            state.observe_inventory_transform(event)
         if event.event_type == "FILL":
             state.observe_fill(event)
         state.observe_costs(event)
@@ -468,18 +497,34 @@ def _event_cluster_economics(mature: list[tuple[UnitState, float]]) -> tuple[dic
 
 def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = None, horizon_seconds: int | None = None) -> dict[str, Any]:
     units, global_reasons = _load_units(ledger_path, expected_model_sha)
-    selected: list[UnitState] = []
+    eligible: list[UnitState] = []
     for unit in units.values():
         if family and unit.family != family:
             continue
         if horizon_seconds is not None and unit.horizon_seconds != horizon_seconds:
             continue
-        selected.append(unit)
+        eligible.append(unit)
+
+    # Shadow counterfactual evidence belongs in the same append-only ledger for
+    # lineage and replay, but it must never inflate authoritative PAPER equity,
+    # PnL or promotion statistics.
+    selected = [unit for unit in eligible if not unit.counterfactual]
+    shadow_selected = [unit for unit in eligible if unit.counterfactual]
 
     submitted = [u for u in selected if u.submitted_legs]
     complete = [u for u in submitted if u.completion_state() == "COMPLETE"]
     partial = [u for u in submitted if u.completion_state() == "PARTIAL"]
     unverifiable_completion = [u for u in submitted if u.completion_state() == "UNVERIFIABLE"]
+
+    shadow_submitted = [u for u in shadow_selected if u.submitted_legs]
+    shadow_complete = [u for u in shadow_submitted if u.completion_state() == "COMPLETE"]
+    shadow_mature: list[tuple[UnitState, float]] = []
+    for unit in shadow_submitted:
+        pnl = unit.realized_terminal_pnl()
+        if (pnl is not None and unit.cost_vector_verifiable()
+                and unit.completion_state() in {"COMPLETE", "PARTIAL"}
+                and unit.economic_event_id() is not None):
+            shadow_mature.append((unit, pnl))
 
     mature: list[tuple[UnitState, float]] = []
     for unit in submitted:
@@ -575,6 +620,18 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         "state": state,
         "promotion_ready": state == "ECONOMIC_EVIDENCE_READY",
         "economic_units": len(selected),
+        "shadow_counterfactual": {
+            "economic_units": len(shadow_selected),
+            "submitted_units": len(shadow_submitted),
+            "complete_units": len(shadow_complete),
+            "mature_terminal_units": len(shadow_mature),
+            "net_pnl": sum(pnl for _, pnl in shadow_mature) if shadow_mature else None,
+            "excluded_from_portfolio_equity": True,
+            "authorities": sorted({
+                authority for unit in shadow_selected
+                for authority in unit.economic_authorities
+            }),
+        },
         "submitted_units": len(submitted),
         "complete_units": len(complete),
         "partial_units": len(partial),

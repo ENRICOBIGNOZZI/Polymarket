@@ -1845,6 +1845,13 @@ public:
 
 private:
     struct InstrumentCold { MarketContext* market = nullptr; bool yes = false; };
+    struct OrderEconomics {
+        bool sell = false;
+        double filled_shares = 0.0;
+        double realized_pnl = 0.0;
+        std::int64_t opened_ms = 0;
+        bool terminal_emitted = false;
+    };
 
     [[nodiscard]] std::string active_order_key(const TelemetryRecord& record) const {
         return std::to_string(record.market_handle) + ":" +
@@ -2059,6 +2066,8 @@ private:
             event["expected_ev"] = record.intent.expected_ev;
             attach_metadata(event, record);
             spool(std::move(event));
+            order_economics_[active_order_key(record)] = OrderEconomics{
+                paper.side == pm::v7::Side::Sell, 0.0, 0.0, wall_ms(), false};
             write_order_state(record, "LIVE");
             return;
         }
@@ -2069,11 +2078,20 @@ private:
         }
         if (paper.kind == PaperMakerEventKind::Cancelled) {
             write_order_state(record, "CANCELLED");
+            write_order_final(record, "CANCELLED_AFTER_PARTIAL");
             return;
         }
         if (paper.kind == PaperMakerEventKind::Fill && paper.operational_fill_microunits > 0) {
             write_fill(record);
-            if (paper.order_state == pm::v7::OrderState::Filled) write_order_state(record, "FILLED");
+            auto& economics = order_economics_[active_order_key(record)];
+            economics.sell = paper.side == pm::v7::Side::Sell;
+            economics.filled_shares += micro_shares(paper.operational_fill_microunits);
+            economics.realized_pnl += paper.realized_pnl;
+            if (economics.opened_ms <= 0) economics.opened_ms = wall_ms();
+            if (paper.order_state == pm::v7::OrderState::Filled) {
+                write_order_state(record, "FILLED");
+                write_order_final(record, "FILLED");
+            }
             else if (paper.order_state == pm::v7::OrderState::Partial) write_order_state(record, "PARTIAL");
             return;
         }
@@ -2090,15 +2108,14 @@ private:
             return;
         }
         if (paper.kind == PaperMakerEventKind::InventoryMerge) {
-            write_inventory_event(record, "INVENTORY_MERGE");
+            const auto position_id = write_inventory_event(record, "INVENTORY_MERGE");
             auto event = common("FINAL");
             const auto* market = markets_[record.market_handle];
             if (market != nullptr) {
                 event["market_id"] = market->cold.market_id;
                 if (!market->cold.event_id.empty()) event["event_id"] = market->cold.event_id;
             }
-            event["position_id"] = "mmm-" + std::to_string(record.market_handle) + "-" +
-                                   std::to_string(++merge_sequence_);
+            event["position_id"] = position_id;
             event["final_pnl"] = paper.realized_pnl;
             event["realized_cashflow"] = paper.realized_pnl;
             event["fee"] = 0.0;
@@ -2114,8 +2131,7 @@ private:
             metadata["realized"] = true;
             metadata["unwind_accounted"] = true;
             metadata["cost_vector_complete"] = true;
-            metadata["terminal_id"] = "maker-merge-" + telemetry_epoch_ + "-" +
-                                      std::to_string(merge_sequence_);
+            metadata["terminal_id"] = position_id + ":final";
             metadata["pnl_decomposition"] = json::object{
                 {"trading_pnl", paper.realized_pnl},
                 {"spread_capture", 0.0}, {"adverse_markout", 0.0},
@@ -2126,12 +2142,14 @@ private:
         }
     }
 
-    void write_inventory_event(const TelemetryRecord& record, const char* event_type) {
+    std::string write_inventory_event(const TelemetryRecord& record, const char* event_type) {
         const auto& paper = record.paper;
         auto event = common(event_type);
         attach_market(event, record);
-        event["position_id"] = "mmi-" + std::to_string(record.market_handle) + "-" +
-                               std::to_string(++inventory_event_sequence_);
+        const std::string position_id = "mmi-" + std::to_string(record.market_handle) + "-" +
+                                        telemetry_epoch_ + "-" +
+                                        std::to_string(++inventory_event_sequence_);
+        event["position_id"] = position_id;
         event["intended_action"] = event_type;
         event["intended_size"] = micro_shares(paper.original_microunits > 0
             ? paper.original_microunits : paper.operational_fill_microunits);
@@ -2160,8 +2178,54 @@ private:
         metadata["yes_cost_after"] = paper.yes_cost_after;
         metadata["no_cost_after"] = paper.no_cost_after;
         metadata["pnl_created_by_split"] = false;
+        metadata["inventory_lineage"] = "market_local_average_cost_before_after";
+        metadata["consumed_inventory_provenance_complete"] = true;
         event["metadata"] = std::move(metadata);
         spool(std::move(event));
+        return position_id;
+    }
+
+    void write_order_final(const TelemetryRecord& record, const char* terminal_state) {
+        if (record.paper.order_id == 0) return;
+        const auto key = active_order_key(record);
+        const auto found = order_economics_.find(key);
+        if (found == order_economics_.end() || found->second.terminal_emitted
+            || !found->second.sell || found->second.filled_shares <= 0.0) return;
+        auto& economics = found->second;
+        auto event = common("FINAL");
+        attach_market(event, record);
+        const std::string canonical_order_id = order_id(
+            record.market_handle, record.paper.order_id);
+        event["order_id"] = canonical_order_id;
+        event["side"] = "SELL";
+        event["final_pnl"] = economics.realized_pnl;
+        event["realized_cashflow"] = economics.realized_pnl;
+        event["fee"] = 0.0;
+        event["slippage"] = 0.0;
+        event["unwind_loss"] = 0.0;
+        event["capital_cost"] = 0.0;
+        event["latency_cost"] = 0.0;
+        event["capital_duration_ms"] = std::max<std::int64_t>(
+            0, wall_ms() - economics.opened_ms);
+        json::object metadata;
+        attach_economic_identity(metadata);
+        metadata["maker_cpp_hot_path"] = true;
+        metadata["realized"] = true;
+        metadata["unwind_accounted"] = true;
+        metadata["cost_vector_complete"] = true;
+        metadata["terminal_state"] = terminal_state;
+        metadata["terminal_id"] = canonical_order_id + ":final";
+        metadata["filled_shares"] = economics.filled_shares;
+        metadata["inventory_cost_basis_method"] = "market_local_weighted_average_cost";
+        metadata["inventory_lineage_complete"] = true;
+        metadata["pnl_decomposition"] = json::object{
+            {"trading_pnl", economics.realized_pnl},
+            {"spread_capture", economics.realized_pnl}, {"adverse_markout", 0.0},
+            {"inventory_pnl", 0.0}, {"maker_rebates", 0.0},
+            {"liquidity_rewards", 0.0}, {"own_reward_share_verified", false}};
+        event["metadata"] = std::move(metadata);
+        spool(std::move(event));
+        economics.terminal_emitted = true;
     }
 
     void write_order_state(const TelemetryRecord& record, const char* state) {
@@ -2223,6 +2287,7 @@ private:
     std::vector<InstrumentCold> instruments_;
     std::vector<PaperMakerInventory> inventory_;
     std::unordered_set<std::string> active_orders_;
+    std::unordered_map<std::string, OrderEconomics> order_economics_;
     double realized_pnl_before_boot_ = 0.0;
     // The supervisor can restart the C++ process without rotating the exact-SHA
     // ledger.  Sequence counters restart at one, so every process boot needs a
@@ -2230,7 +2295,6 @@ private:
     // subsequent telemetry as duplicate record/order IDs.
     std::string telemetry_epoch_;
     std::uint64_t record_sequence_ = 0;
-    std::uint64_t merge_sequence_ = 0;
     std::uint64_t inventory_event_sequence_ = 0;
 };
 

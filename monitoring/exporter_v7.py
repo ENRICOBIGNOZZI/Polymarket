@@ -262,6 +262,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     portfolio = _json(run_root / "control" / "portfolio_state.json")
     allocations = _json(run_root / "control" / "allocations" / "manifest.json")
     graph = _json(run_root / "graph_rv" / "status.json")
+    fast = _json(run_root / "fast_structural" / "paper_executor_status.json")
     graph_scan = _json(run_root / "graph_rv" / "scan_status.json")
     hard = _json(run_root / "hard_arb" / "status.json")
     micro = _json(run_root / "micro_taker" / "status.json")
@@ -303,6 +304,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         portfolio=portfolio,
         allocations=allocations,
         state_realized_pnl={
+            "FAST_STRUCTURAL": fast.get("realized_pnl_total") if fast else None,
             "GRAPH_RV": graph.get("realized_pnl_total") if graph else None,
             "HARD_ARB": hard.get("realized_pnl_total") if hard else None,
             "MICRO_TAKER": micro.get("realized_pnl_total") if micro else None,
@@ -321,6 +323,15 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         strategies[str(name)] = {"equity": equity, "pnl": equity - budget, "killed": bool(row.get("killed", False))}
     if graph:
         strategies.setdefault("graph_rv", {}).update({"equity": _number(graph.get("equity")), "pnl": _number(graph.get("equity")) - _number(budgets.get("graph_rv")), "net_pnl": _number(graph.get("realized_pnl_total")), "killed": bool(graph.get("killed", False)), "signals": _integer(graph_scan.get("bundles"))})
+    if fast:
+        strategies.setdefault("fast_structural", {}).update({
+            "equity": _number(fast.get("equity")),
+            "pnl": _number(fast.get("equity")) - _number(budgets.get("fast_structural")),
+            "net_pnl": _number(fast.get("realized_pnl_total")),
+            "killed": bool(fast.get("killed", False)),
+            "signals": _integer(fast.get("candidates_seen")),
+            "live_units": _integer(fast.get("open_bundles")) + _integer(fast.get("aborting_bundles")),
+        })
     if hard:
         strategies.setdefault("hard_arb", {}).update({"equity": _number(hard.get("equity_cost_basis"), _number(hard.get("cash"))), "pnl": _number(hard.get("realized_pnl_total")), "killed": bool(hard.get("killed", False)), "signals": _integer(hard.get("candidates"))})
     if micro:
@@ -380,6 +391,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "portfolio": portfolio,
         "allocations": allocations,
         "graph": graph,
+        "fast": fast,
         "graph_scan": graph_scan,
         "hard": hard,
         "micro": micro,
@@ -430,6 +442,7 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     live_scope = snapshot.get("live_model_scope") if isinstance(snapshot.get("live_model_scope"), dict) else {}
     portfolio = snapshot["portfolio"]
     graph = snapshot["graph"]
+    fast = snapshot.get("fast") if isinstance(snapshot.get("fast"), dict) else {}
     canonical = snapshot["canonical_economics"]
     reconciliation = snapshot.get("reconciliation") if isinstance(snapshot.get("reconciliation"), dict) else {}
     ledger = snapshot["ledger"]
@@ -445,6 +458,17 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     if runtime.get("paper_only") is not True: reasons.append("runtime_not_paper_only")
     if runtime.get("authenticated_execution") is not False or runtime.get("real_order_submission") is not False: reasons.append("authenticated_execution_not_disabled")
     if runtime.get("model_sha") != snapshot.get("sha"): reasons.append("runtime_sha_mismatch")
+    try: fast_age = int(snapshot.get("timestamp") or 0) - int(fast.get("timestamp") or 0)
+    except (TypeError, ValueError, OverflowError): fast_age = max_runtime_age + 1
+    if (
+        fast.get("schema") != "polymarket_v7_fast_structural_paper_executor_v1"
+        or fast.get("model_sha") != snapshot.get("sha")
+        or fast.get("paper_only") is not True
+        or fast.get("authenticated_execution") is not False
+        or fast.get("real_order_submission") is not False
+        or fast.get("state") != "RUNNING"
+        or fast_age < -5 or fast_age > max_runtime_age
+    ): reasons.append("fast_structural_executor_missing_stale_or_unsafe")
     try: maker_age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(maker.get("timestamp_ms") or 0)
     except (TypeError, ValueError, OverflowError): maker_age_ms = (max_runtime_age + 1) * 1000
     if (

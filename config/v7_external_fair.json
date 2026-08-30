@@ -91,6 +91,19 @@
     "clock_anomaly_behavior": "QUARANTINE"
   },
   "fair_value": {
+    "live_shadow_cohorts": [
+      {
+        "id": "external_only_fair",
+        "uses_polymarket_price_as_feature": false,
+        "authority": "SHADOW"
+      },
+      {
+        "id": "hybrid_fair",
+        "uses_polymarket_price_as_feature": true,
+        "market_prior_logit_weight": 0.35,
+        "authority": "SHADOW"
+      }
+    ],
     "benchmark_ladder": [
       "PM_MID_DIAGNOSTIC_ONLY",
       "ORACLE_ONLY",
@@ -176,7 +189,49 @@
     "authoritative_fee_required": true,
     "unknown_fee_behavior": "NO_TAKE",
     "minimum_entry_tte_seconds": 5.0,
-    "maximum_entry_tte_seconds": 60.0,
+    "maximum_entry_tte_seconds": 300.0,
+    "tte_bucket_policy": [
+      {
+        "id": "300_180",
+        "minimum_seconds": 180.0,
+        "maximum_seconds": 300.0,
+        "action": "FORECAST_ONLY",
+        "minimum_robust_ev_per_share": 0.002,
+        "execution_risk_per_share": 0.0015
+      },
+      {
+        "id": "180_60",
+        "minimum_seconds": 60.0,
+        "maximum_seconds": 180.0,
+        "action": "TAKER_SHADOW",
+        "minimum_robust_ev_per_share": 0.002,
+        "execution_risk_per_share": 0.001
+      },
+      {
+        "id": "60_15",
+        "minimum_seconds": 15.0,
+        "maximum_seconds": 60.0,
+        "action": "TAKER_SHADOW",
+        "minimum_robust_ev_per_share": 0.001,
+        "execution_risk_per_share": 0.0005
+      },
+      {
+        "id": "15_5",
+        "minimum_seconds": 5.0,
+        "maximum_seconds": 15.0,
+        "action": "TAKER_SHADOW",
+        "minimum_robust_ev_per_share": 0.0025,
+        "execution_risk_per_share": 0.002
+      },
+      {
+        "id": "under_5",
+        "minimum_seconds": 0.0,
+        "maximum_seconds": 5.0,
+        "action": "FORECAST_ONLY",
+        "minimum_robust_ev_per_share": 0.01,
+        "execution_risk_per_share": 0.01
+      }
+    ],
     "maximum_model_market_disagreement": 0.20,
     "minimum_robust_ev_per_share": 0.001,
     "max_depth_fraction": 0.5,

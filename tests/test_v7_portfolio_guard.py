@@ -14,6 +14,25 @@ from v7_portfolio_guard import assess
 
 
 class PortfolioGuardTests(unittest.TestCase):
+    def test_fast_structural_executor_equity_is_not_reserved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            alloc = root / "manifest.json"
+            alloc.write_text(json.dumps({
+                "account_starting_capital": 100.0,
+                "budgets": {"fast_structural": 60.0, "reserve": 40.0},
+            }))
+            status = root / "fast_structural" / "paper_executor_status.json"
+            status.parent.mkdir(parents=True)
+            status.write_text(json.dumps({
+                "paper_only": True, "authenticated_execution": False,
+                "equity": 55.0, "killed": False,
+            }))
+            report = assess(root, alloc, max_drawdown=.15)
+            self.assertFalse(report["killed"])
+            self.assertEqual(report["sleeves"]["fast_structural"]["source"], "reported")
+            self.assertAlmostEqual(report["equity"], 95.0)
+
     def test_account_drawdown_triggers_global_kill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

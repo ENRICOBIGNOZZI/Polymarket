@@ -71,6 +71,13 @@ class V7FastAuthoritySentinelContractTest(unittest.TestCase):
         self.assertIn('"event_type", "CANDIDATE"', runtime)
         self.assertIn('"ledger" / "spool"', runtime)
         self.assertIn('"paper_candidate_only", true', runtime)
+        self.assertIn('"structured_legs"', runtime)
+        self.assertIn("v7_fast_structural_paper_executor.py", loop)
+        executor = (ROOT / "scripts" / "v7_fast_structural_paper_executor.py").read_text(encoding="utf-8")
+        self.assertIn('event_type="ORDER_SUBMITTED"', executor)
+        self.assertIn('event_type="FILL"', executor)
+        self.assertIn('event_type="FINAL"', executor)
+        self.assertIn("synchronized_books", executor)
 
 
 if __name__ == "__main__":

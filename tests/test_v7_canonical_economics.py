@@ -71,6 +71,83 @@ def write_events(path: Path, events) -> None:
 
 
 class CanonicalEconomicsTest(unittest.TestCase):
+    def test_inventory_merge_with_exact_lineage_is_a_mature_internal_unit(self) -> None:
+        events = [
+            ledger.LedgerEvent(
+                event_type="INVENTORY_MERGE", strategy="MICRO_MAKER_PRO",
+                model_sha=SHA, position_id="merge-position", market_id="market-1",
+                event_id="event-merge", intended_size=3.0,
+                intended_action="INVENTORY_MERGE", realized_cashflow=0.6,
+                final_pnl=0.6,
+                metadata={"transformation": "INVENTORY_MERGE",
+                          "consumed_inventory_provenance_complete": True},
+            ),
+            ledger.LedgerEvent(
+                event_type="FINAL", strategy="MICRO_MAKER_PRO", model_sha=SHA,
+                position_id="merge-position", market_id="market-1", event_id="event-merge",
+                final_pnl=0.6, realized_cashflow=0.6, fee=0.0, slippage=0.0,
+                unwind_loss=0.0, capital_cost=0.0, latency_cost=0.0,
+                metadata={"realized": True, "unwind_accounted": True,
+                          "cost_vector_complete": True, "terminal_id": "merge-position:final"},
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "execution.jsonl"
+            write_events(path, events)
+            report = econ.assess(path, expected_model_sha=SHA)
+        self.assertEqual(report["submitted_units"], 1)
+        self.assertEqual(report["complete_units"], 1)
+        self.assertEqual(report["mature_terminal_units"], 1)
+        self.assertAlmostEqual(report["net_pnl"], 0.6)
+
+    def test_shadow_counterfactual_is_in_ledger_but_excluded_from_paper_pnl(self) -> None:
+        now = clock()
+        shadow = {
+            "model_family": "CRYPTO_INFORMED_TAKER",
+            "horizon_seconds": 300,
+            "counterfactual": True,
+            "economic_authority": "SHADOW_COUNTERFACTUAL",
+            "excluded_from_portfolio_equity": True,
+        }
+        events = [
+            ledger.LedgerEvent(
+                event_type="ORDER_SUBMITTED", strategy="CRYPTO_INFORMED_TAKER",
+                model_sha=SHA, order_id="shadow-order", position_id="shadow-position",
+                event_id="shadow-event", token_id="YES", side="BUY",
+                intended_size=2.0, intended_action="VIRTUAL_FAK", limit_price=0.4,
+                exchange_ts_ms=now, receive_ts_ms=now + 1,
+                decision_ts_ms=now + 2, book_snapshot_id="shadow-book",
+                metadata=shadow,
+            ),
+            ledger.LedgerEvent(
+                event_type="FILL", strategy="CRYPTO_INFORMED_TAKER",
+                model_sha=SHA, order_id="shadow-order", position_id="shadow-position",
+                fill_id="shadow-fill", event_id="shadow-event", token_id="YES",
+                side="BUY", fill_price=0.4, filled_size=2.0, fee=0.01,
+                slippage=0.0, fee_source="GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
+                exchange_ts_ms=now + 3, receive_ts_ms=now + 4,
+                metadata=shadow,
+            ),
+            ledger.LedgerEvent(
+                event_type="FINAL", strategy="CRYPTO_INFORMED_TAKER",
+                model_sha=SHA, order_id="shadow-order", position_id="shadow-position",
+                event_id="shadow-event", token_id="YES", side="BUY", final_pnl=1.19,
+                realized_cashflow=1.19, fee=0.0, slippage=0.0, unwind_loss=0.0,
+                capital_cost=0.0, latency_cost=0.0, capital_duration_ms=300_000,
+                metadata={**shadow, "realized": True, "unwind_accounted": True,
+                          "cost_vector_complete": True, "terminal_id": "shadow-final"},
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "execution.jsonl"
+            write_events(path, events)
+            report = econ.assess(path, expected_model_sha=SHA)
+        self.assertEqual(report["economic_units"], 0)
+        self.assertIsNone(report["net_pnl"])
+        self.assertEqual(report["shadow_counterfactual"]["mature_terminal_units"], 1)
+        self.assertAlmostEqual(report["shadow_counterfactual"]["net_pnl"], 1.19)
+        self.assertTrue(report["shadow_counterfactual"]["excluded_from_portfolio_equity"])
+
     def test_micro_taker_round_trip_is_one_mature_cost_complete_unit(self) -> None:
         now = clock()
         position_id = "micro-position"

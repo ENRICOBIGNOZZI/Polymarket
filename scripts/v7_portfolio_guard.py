@@ -25,7 +25,10 @@ def read_json(path: Path) -> dict[str, Any]:
 
 
 def sleeve_equity(run_root: Path, sleeve: str, budget: float) -> tuple[float, bool, str, bool]:
-    if sleeve == "graph_rv":
+    if sleeve == "fast_structural":
+        state = read_json(run_root / "fast_structural" / "paper_executor_status.json")
+        key = "equity"
+    elif sleeve == "graph_rv":
         state = read_json(run_root / "graph_rv" / "status.json")
         key = "equity"
     elif sleeve == "hard_arb":

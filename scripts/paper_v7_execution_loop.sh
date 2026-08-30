@@ -535,6 +535,17 @@ pids+=("$!")
   >> "$RUN_ROOT/fast_structural/runtime.log" 2>&1 &
 pids+=("$!")
 
+# The detector never owns an account writer.  Its PAPER executor consumes only
+# canonical FAST_STRUCTURAL candidates, revalidates each sequential leg on the
+# shared WebSocket state bus, and routes every order/fill/unwind through the
+# same single-writer ledger spool used by the other sleeves.
+python3 scripts/v7_fast_structural_paper_executor.py \
+  --run-root "$RUN_ROOT" --config "$ALLOC/fast_structural.json" \
+  --shared-state "$RUN_ROOT/market_data/shared_state.json" --model-sha "$SHA" \
+  --slippage-bps 5 --leg-latency-ms 100 --interval 0.1 \
+  >> "$RUN_ROOT/fast_structural/paper_executor.log" 2>&1 &
+pids+=("$!")
+
 # Slow-plane exact-SHA fill/markout fit. A refit is a CHALLENGER only. It is
 # written to a separate artifact and registered for OOS/shadow-PAPER review.
 # This loop NEVER overwrites the runtime champion and NEVER auto-promotes.

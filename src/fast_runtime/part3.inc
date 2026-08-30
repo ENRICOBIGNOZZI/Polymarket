@@ -117,6 +117,22 @@ private:
         const auto identity = std::to_string(std::hash<std::string>{}(opportunity.id));
         const std::string record_id = "cpp-fast-" + std::to_string(recorded) + "-" +
                                       std::to_string(sequence);
+        json::array structured_legs;
+        json::object target_quantities;
+        structured_legs.reserve(opportunity.legs.size());
+        for (std::size_t index = 0; index < opportunity.legs.size(); ++index) {
+            const auto& leg = opportunity.legs[index];
+            const std::string leg_id = "leg-" + std::to_string(index + 1) + "-" + leg.token_id;
+            structured_legs.emplace_back(json::object{
+                {"leg_id", leg_id}, {"market_id", leg.market_id},
+                {"token_id", leg.token_id}, {"outcome", leg.outcome},
+                {"side", "BUY"}, {"target_quantity", leg.shares},
+                {"detector_average_price", leg.average_price},
+                {"detector_fee_and_slippage_per_share", leg.fee_per_share},
+                {"detector_all_in_cost", leg.all_in_cost},
+            });
+            target_quantities[leg_id] = leg.shares;
+        }
         json::object metadata{
             {"opportunity_kind", pm::fast::to_string(opportunity.kind)},
             {"hard_arbitrage", opportunity.hard_arbitrage},
@@ -125,6 +141,9 @@ private:
             {"payoff_floor", opportunity.payoff_floor},
             {"raw_edge_per_share", opportunity.raw_edge_per_share},
             {"legs", leg_string(opportunity)},
+            {"structured_legs", std::move(structured_legs)},
+            {"target_quantities", std::move(target_quantities)},
+            {"execution_owner", "FAST_STRUCTURAL_PAPER_EXECUTOR"},
             {"paper_candidate_only", true},
         };
         json::object event{
@@ -139,7 +158,8 @@ private:
             {"opportunity_id", opportunity.id},
             {"candidate_id", "fast-candidate-" + identity + "-" +
                              std::to_string(opportunity.decision_ts_ms)},
-            {"bundle_id", "fast-bundle-" + identity},
+            {"bundle_id", "fast-bundle-" + identity + "-" +
+                              std::to_string(opportunity.decision_ts_ms)},
             {"exchange_ts_ms", opportunity.exchange_ts_ms},
             {"receive_ts_ms", opportunity.received_ts_ms},
             {"decision_ts_ms", opportunity.decision_ts_ms},

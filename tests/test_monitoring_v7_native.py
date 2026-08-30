@@ -165,6 +165,14 @@ class V7NativeMonitoringTest(unittest.TestCase):
         )
         self._write(root / "graph_rv" / "scan_status.json", {"timestamp": now - 7, "paper_only": True, "bundles": 2})
         self._write(root / "graph_rv" / "state.json", {"model_sha": sha, "bundles": {}})
+        self._write(root / "fast_structural" / "paper_executor_status.json", {
+            "schema": "polymarket_v7_fast_structural_paper_executor_v1",
+            "timestamp": now - 5, "model_sha": sha, "state": "RUNNING",
+            "paper_only": True, "authenticated_execution": False,
+            "real_order_submission": False, "equity": 0.0,
+            "realized_pnl_total": 0.0, "open_bundles": 0,
+            "aborting_bundles": 0, "candidates_seen": 0, "killed": False,
+        })
         self._write(
             root / "hard_arb" / "status.json",
             {"timestamp": now - 5, "paper_only": True, "authenticated_execution": False, "cash": 2210.0, "equity_cost_basis": 2210.0, "realized_pnl_total": 10.0, "candidates": 1, "killed": False},
