@@ -439,7 +439,7 @@ if [[ "$universe_ready" != 1 ]]; then
   echo "adaptive V7 universe did not complete exhaustive discovery" >&2
   exit 77
 fi
-read -r HOT_MARKET_BUDGET ACTIVE_SCAN_MARKET_BUDGET STRUCTURAL_SCAN_EVENT_BUDGET MAKER_FLOW_LOOKBACK_SECONDS < <(python3 - "$RUN_ROOT/universe/status.json" "$MAKER_POLICY" <<'PY'
+read -r HOT_MARKET_BUDGET ACTIVE_SCAN_MARKET_BUDGET STRUCTURAL_SCAN_EVENT_BUDGET MAKER_FLOW_LOOKBACK_SECONDS MAKER_SELECTOR_REFRESH_SECONDS MAKER_ROTATION_INTERVAL_SECONDS MAKER_CANDIDATE_CONFIRMATIONS < <(python3 - "$RUN_ROOT/universe/status.json" "$MAKER_POLICY" <<'PY'
 import json,sys
 value=json.load(open(sys.argv[1]))
 maker=json.load(open(sys.argv[2]))
@@ -448,7 +448,11 @@ hot=max(1,int(tiers.get("HOT") or 0))
 active=max(hot,hot+int(tiers.get("WARM") or 0))
 structural=max(1,int((value.get("resource_capacities") or {}).get("structural_scan_budget_events") or 0))
 flow=max(180,int(((maker.get("market_selection") or {}).get("recent_flow") or {}).get("lookback_seconds") or 0))
-print(hot,active,structural,flow)
+recent=((maker.get("market_selection") or {}).get("recent_flow") or {})
+refresh=max(1,int(recent.get("selector_refresh_seconds") or 5))
+rotation=max(0,int(recent.get("rotation_min_interval_seconds") or 30))
+confirmations=max(2,int(recent.get("candidate_confirmations") or 2))
+print(hot,active,structural,flow,refresh,rotation,confirmations)
 PY
 )
 
@@ -552,7 +556,7 @@ pids+=("$!")
       --allocation "$ALLOC/micro_maker.json" \
       --model-sha "$SHA" \
       >> "$RUN_ROOT/micro_maker/reward_selection.log" 2>&1 || true
-    sleep 60
+    sleep "$MAKER_SELECTOR_REFRESH_SECONDS"
   done
 ) & pids+=("$!")
 
@@ -647,8 +651,8 @@ pids+=("$!")
     --maker-arena-bytes "$WS_JSON_ARENA_MAKER_MAX_BYTES" \
     --observer-arena-bytes "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" \
     --fillability-arena-bytes "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" \
-    --candidate-confirmations 2 \
-    --min-rotation-interval-seconds 300
+    --candidate-confirmations "$MAKER_CANDIDATE_CONFIRMATIONS" \
+    --min-rotation-interval-seconds "$MAKER_ROTATION_INTERVAL_SECONDS"
 ) >> "$RUN_ROOT/micro_maker/cohort_supervisor.log" 2>&1 &
 pids+=("$!")
 

@@ -143,8 +143,8 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         self.assertIn('root["new_risk_frozen"]', runtime)
         self.assertIn("require_frozen=True", supervisor)
         self.assertIn("atomic_json(self.selection, latest)", supervisor)
-        self.assertIn("--candidate-confirmations 2", loop)
-        self.assertIn("--min-rotation-interval-seconds 300", loop)
+        self.assertIn('--candidate-confirmations "$MAKER_CANDIDATE_CONFIRMATIONS"', loop)
+        self.assertIn('--min-rotation-interval-seconds "$MAKER_ROTATION_INTERVAL_SECONDS"', loop)
         self.assertIn("authenticated_execution\") is not False", supervisor)
         self.assertIn("real_order_submission\") is not False", supervisor)
 

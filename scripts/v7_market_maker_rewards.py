@@ -435,11 +435,13 @@ def _canonical_live_flow_aggregates(
             "prints": 0, "shares": 0.0, "notional": 0.0,
             "buy_prints_5s": 0, "buy_prints_30s": 0,
             "buy_prints_2m": 0, "buy_prints_10m": 0,
-            "buy_shares_10m": 0.0, "buy_notional_10m": 0.0,
+            "buy_shares_2m": 0.0, "buy_shares_10m": 0.0,
+            "buy_notional_10m": 0.0,
             "last_buy_receive_ms": 0,
             "sell_prints_5s": 0, "sell_prints_30s": 0,
             "sell_prints_2m": 0, "sell_prints_10m": 0,
-            "sell_shares_10m": 0.0, "sell_notional_10m": 0.0,
+            "sell_shares_2m": 0.0, "sell_shares_10m": 0.0,
+            "sell_notional_10m": 0.0,
             "last_receive_ms": 0, "last_sell_receive_ms": 0,
             "transactions": set(),
             "token_flow": {},
@@ -448,13 +450,36 @@ def _canonical_live_flow_aggregates(
         token_flow = item["token_flow"].setdefault(token_id, {
             "buy_prints_5s": 0, "buy_prints_30s": 0,
             "buy_prints_2m": 0, "buy_prints_10m": 0,
-            "buy_shares_10m": 0.0, "buy_notional_10m": 0.0,
+            "buy_shares_2m": 0.0, "buy_shares_10m": 0.0,
+            "buy_notional_10m": 0.0,
             "last_buy_receive_ms": 0,
             "sell_prints_5s": 0, "sell_prints_30s": 0,
             "sell_prints_2m": 0, "sell_prints_10m": 0,
-            "sell_shares_10m": 0.0, "sell_notional_10m": 0.0,
+            "sell_shares_2m": 0.0, "sell_shares_10m": 0.0,
+            "sell_notional_10m": 0.0,
             "last_sell_receive_ms": 0,
+            "tick_size": 0.0, "best_bid": 0.0, "best_ask": 0.0,
+            "best_bid_depth": 0.0, "best_ask_depth": 0.0,
+            "book_evidence_valid": False,
         })
+        tick_size = max(0.0, finite(raw.get("tick_size"), 0.0))
+        best_bid = max(0.0, finite(raw.get("best_bid"), 0.0))
+        best_ask = min(1.0, finite(raw.get("best_ask"), 1.0))
+        best_bid_depth = max(0.0, finite(raw.get("best_bid_depth"), 0.0))
+        best_ask_depth = max(0.0, finite(raw.get("best_ask_depth"), 0.0))
+        book_valid = (
+            tick_size > 0.0 and 0.0 < best_bid < best_ask < 1.0
+            and best_bid_depth > 0.0 and best_ask_depth > 0.0
+        )
+        if book_valid:
+            token_flow.update({
+                "tick_size": tick_size,
+                "best_bid": best_bid,
+                "best_ask": best_ask,
+                "best_bid_depth": best_bid_depth,
+                "best_ask_depth": best_ask_depth,
+                "book_evidence_valid": True,
+            })
         for side in ("buy", "sell"):
             for source_suffix, target_suffix in (("5s", "5s"), ("30s", "30s"),
                                                   ("120s", "2m"), ("600s", "10m")):
@@ -463,10 +488,13 @@ def _canonical_live_flow_aggregates(
                 item[key] += count
                 token_flow[key] += count
             shares = max(0.0, finite(raw.get(f"{side}_shares_600s"), 0.0))
+            shares_2m = max(0.0, finite(raw.get(f"{side}_shares_120s"), 0.0))
             notional = max(0.0, finite(raw.get(f"{side}_notional_600s"), 0.0))
             item[f"{side}_shares_10m"] += shares
+            item[f"{side}_shares_2m"] += shares_2m
             item[f"{side}_notional_10m"] += notional
             token_flow[f"{side}_shares_10m"] += shares
+            token_flow[f"{side}_shares_2m"] += shares_2m
             token_flow[f"{side}_notional_10m"] += notional
             side_receive_ms = int(finite(
                 raw.get(f"last_{side}_receive_ts_ms_600s"), 0.0))
@@ -629,6 +657,10 @@ def _recent_flow_snapshot(
     minimum_mid = float(flow_cfg.get("minimum_mid", selection_cfg.get("min_mid", 0.02)))
     maximum_mid = float(flow_cfg.get("maximum_mid", selection_cfg.get("max_mid", 0.98)))
     maximum_spread = max(0.0, float(flow_cfg.get("maximum_spread", 0.10)))
+    selection_quote_horizon_seconds = max(
+        0.1, float(flow_cfg.get("selection_quote_horizon_seconds", 5.0)))
+    selection_quote_shares = max(
+        1e-6, float(flow_cfg.get("selection_quote_shares", 5.0)))
     weights = flow_cfg.get("score_weights") if isinstance(flow_cfg.get("score_weights"), dict) else {}
     candidates: list[dict[str, Any]] = []
     for raw in universe.get("markets") if isinstance(universe.get("markets"), list) else []:
@@ -728,6 +760,35 @@ def _recent_flow_snapshot(
                 ("BUY", "sell", bid_opportunity_score),
                 ("SELL", "buy", ask_opportunity_score),
             ):
+                opposite_shares_2m = float(token_stats.get(
+                    f"{aggressor_prefix}_shares_2m", 0.0))
+                expected_opposite_shares = (
+                    opposite_shares_2m / 120.0 * selection_quote_horizon_seconds)
+                flow_reach_probability = (
+                    1.0 - math.exp(-expected_opposite_shares / selection_quote_shares)
+                    if expected_opposite_shares > 0.0 else 0.0)
+                queue_ahead = float(token_stats.get(
+                    "best_bid_depth" if quote_side == "BUY" else "best_ask_depth", 0.0))
+                join_queue_depletion_probability = (
+                    min(1.0, expected_opposite_shares
+                        / max(1e-9, queue_ahead + selection_quote_shares))
+                    if token_stats.get("book_evidence_valid") is True else 0.0)
+                projected_join_fill_probability = (
+                    flow_reach_probability * join_queue_depletion_probability)
+                tick_size = float(token_stats.get("tick_size", 0.0))
+                token_spread = max(
+                    0.0, float(token_stats.get("best_ask", 0.0))
+                    - float(token_stats.get("best_bid", 0.0)))
+                inside_ticks = max(
+                    0, int(math.floor(token_spread / tick_size + 1e-9)) - 1
+                ) if tick_size > 0.0 else 0
+                improve1_available = inside_ticks >= 1
+                projected_improve1_fill_probability = (
+                    flow_reach_probability if improve1_available else 0.0)
+                projected_best_fill_probability = max(
+                    projected_join_fill_probability,
+                    projected_improve1_fill_probability,
+                )
                 quote_opportunities.append({
                     "outcome": outcome,
                     "token_id": token,
@@ -741,6 +802,7 @@ def _recent_flow_snapshot(
                         f"{aggressor_prefix}_prints_10m", 0)),
                     "opposite_shares_10m": float(token_stats.get(
                         f"{aggressor_prefix}_shares_10m", 0.0)),
+                    "opposite_shares_2m": opposite_shares_2m,
                     "last_opposite_flow_age_ms": (
                         now_ms - int(token_stats.get(
                             f"last_{aggressor_prefix}_receive_ms", 0))
@@ -748,13 +810,33 @@ def _recent_flow_snapshot(
                             f"last_{aggressor_prefix}_receive_ms", 0)) > 0 else -1
                     ),
                     "market_side_score": side_score,
+                    "book_evidence_valid": token_stats.get("book_evidence_valid") is True,
+                    "tick_size": tick_size,
+                    "best_bid": float(token_stats.get("best_bid", 0.0)),
+                    "best_ask": float(token_stats.get("best_ask", 0.0)),
+                    "queue_ahead_shares": queue_ahead,
+                    "inside_ticks": inside_ticks,
+                    "improve1_available": improve1_available,
+                    "projected_flow_reach_probability": flow_reach_probability,
+                    "projected_join_queue_depletion_probability": (
+                        join_queue_depletion_probability),
+                    "projected_join_fill_probability": projected_join_fill_probability,
+                    "projected_improve1_fill_probability": (
+                        projected_improve1_fill_probability),
+                    "projected_best_fill_probability": projected_best_fill_probability,
                 })
         quote_opportunities.sort(key=lambda row: (
+            -float(row["projected_best_fill_probability"]),
             -int(row["opposite_prints_30s"]),
             -int(row["opposite_prints_2m"]),
             -float(row["opposite_shares_10m"]),
             str(row["token_id"]), str(row["quote_side"]),
         ))
+        best_projected_fill_probability = max(
+            (float(row["projected_best_fill_probability"])
+             for row in quote_opportunities), default=0.0)
+        score += finite(weights.get("log_projected_fillability"), 8.0) * math.log1p(
+            1_000.0 * best_projected_fill_probability)
         candidates.append({
             "condition_id": condition_id,
             "market_id": market_id,
@@ -775,6 +857,7 @@ def _recent_flow_snapshot(
             "total_daily_rate": 0.0,
             "reward_intensity": 0.0,
             "selection_score": score,
+            "best_projected_fill_probability": best_projected_fill_probability,
             "bid_opportunity_score": bid_opportunity_score,
             "ask_opportunity_score": ask_opportunity_score,
             "bilateral_market_making_score": bilateral_score,
@@ -847,7 +930,7 @@ def _recent_flow_snapshot(
         reserve = _fallback_snapshot(
             universe_path, selection_cfg, capacity_cfg, resource_capacity,
             model_sha=model_sha, primary_error="recent_flow_reserve",
-            now_ms=now_ms,
+            now_ms=now_ms, maximum_markets=resource_capacity,
         )
         for fallback_row in reserve["markets"]:
             event_key = str(
@@ -1025,6 +1108,7 @@ def _fallback_snapshot(
     model_sha: str,
     primary_error: str,
     now_ms: int,
+    maximum_markets: int | None = None,
 ) -> dict[str, Any]:
     universe = json.loads(universe_path.read_text(encoding="utf-8"))
     if (
@@ -1113,6 +1197,19 @@ def _fallback_snapshot(
         finite(row.get("liquidity")),
         str(row.get("market_id") or ""),
     ))
+    # This path has no causal aggressor-flow authority.  It exists only so a
+    # fresh process can collect one tightly-budgeted positive-point-EV
+    # exploration cell while the canonical WS flow plane warms up.  Treating
+    # the shard capacity as a target here used to seed and quote 40 unrelated
+    # markets, reproducing the exact no-fill dilution that the flow selector is
+    # meant to remove.
+    cold_start_maximum = min(
+        resource_capacity,
+        max(1, int(
+            selection_cfg.get("cold_start_maximum_markets", 1)
+            if maximum_markets is None else maximum_markets
+        )),
+    )
     selected: list[dict[str, Any]] = []
     selected_events: set[str] = set()
     for row in candidates:
@@ -1120,8 +1217,32 @@ def _fallback_snapshot(
         if event_key in selected_events:
             continue
         selected_events.add(event_key)
-        selected.append(row)
-        if len(selected) >= resource_capacity:
+        selected.append({
+            **row,
+            "side_mode": "STABLE_SPREAD_EXPLORATION",
+            "recent_prints": 0,
+            "recent_unique_transactions": 0,
+            "recent_share_volume": 0.0,
+            "recent_notional_usd": 0.0,
+            "recent_flow_to_liquidity": 0.0,
+            "recent_last_trade_age_ms": -1,
+            "recent_buy_prints_5s": 0,
+            "recent_buy_prints_30s": 0,
+            "recent_buy_prints_2m": 0,
+            "recent_buy_prints_10m": 0,
+            "recent_buy_share_volume_10m": 0.0,
+            "recent_buy_notional_usd_10m": 0.0,
+            "recent_last_buy_age_ms": -1,
+            "recent_sell_prints_5s": 0,
+            "recent_sell_prints_30s": 0,
+            "recent_sell_prints_2m": 0,
+            "recent_sell_prints_10m": 0,
+            "recent_sell_share_volume_10m": 0.0,
+            "recent_sell_notional_usd_10m": 0.0,
+            "recent_last_sell_age_ms": -1,
+            "quote_opportunities": [],
+        })
+        if len(selected) >= cold_start_maximum:
             break
     if not selected:
         raise ValueError("maker_fallback_universe_has_no_eligible_markets")
@@ -1141,10 +1262,12 @@ def _fallback_snapshot(
         "reward_market_count": 0,
         "selected_count": len(selected),
         "resource_capacity_markets": resource_capacity,
+        "cold_start_maximum_markets": cold_start_maximum,
+        "unused_resource_capacity_markets": max(0, resource_capacity - len(selected)),
         "resource_capacity": capacity_cfg,
         "universe_membership_sha256": str(universe.get("membership_sha256") or ""),
         "markets": selected,
-        "note": "Reward REST was unavailable; PAPER maker uses the fresh exhaustive universe ranked by public flow-to-depth fillability signals, with reward assumptions forced to zero.",
+        "note": "Causal aggressor flow is unavailable; PAPER maker cold-start is bounded to explicit positive-point-EV exploration cells with reward assumptions forced to zero.",
     }
 
 

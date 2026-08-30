@@ -80,11 +80,17 @@
     "reward_sleeve_capital_usd": 2000,
     "reward_max_quote_shares": 100,
     "fallback_universe_max_age_seconds": 180,
+    "cold_start_maximum_markets": 1,
     "recent_flow": {
       "enabled": true,
       "lookback_seconds": 1800,
       "maximum_tape_age_seconds": 30,
-      "initial_wait_seconds": 30,
+      "initial_wait_seconds": 5,
+      "selector_refresh_seconds": 5,
+      "rotation_min_interval_seconds": 30,
+      "candidate_confirmations": 2,
+      "selection_quote_horizon_seconds": 5,
+      "selection_quote_shares": 5,
       "minimum_markets": 1,
       "minimum_operational_markets": 1,
       "maximum_zero_flow_reserve_markets": 0,
@@ -97,8 +103,8 @@
       "minimum_sell_prints_10m": 1,
       "maximum_last_sell_age_seconds": 60,
       "minimum_time_to_end_seconds": 900,
-      "minimum_mid": 0.05,
-      "maximum_mid": 0.95,
+      "minimum_mid": 0.02,
+      "maximum_mid": 0.98,
       "maximum_spread": 0.1,
       "score_weights": {
         "log_prints": 3.0,
@@ -112,6 +118,7 @@
         "log_buy_notional_10m": 1.0,
         "log_notional": 1.0,
         "log_flow_to_liquidity": 2.0,
+        "log_projected_fillability": 8.0,
         "mid_balance": 0.25,
         "log_spread_cents": 0.1
       }

@@ -389,6 +389,16 @@ public:
                     for (const auto& level : levels) depth += std::max(0.0, level.size);
                     return depth;
                 };
+                const auto best_level_depth = [](const std::vector<pm::Level>& levels,
+                                                 double best) {
+                    double depth = 0.0;
+                    for (const auto& level : levels) {
+                        if (level.size > 0.0 && std::abs(level.price - best) <= 1e-12) {
+                            depth += level.size;
+                        }
+                    }
+                    return depth;
+                };
                 const double best_bid = book_it != books_.end()
                     ? best_price(book_it->second.bids, true) : 0.0;
                 const double best_ask = book_it != books_.end()
@@ -403,7 +413,14 @@ public:
                     {"last_receive_ts_ms", prints.back().receive_ms},
                     {"state_version", static_cast<std::int64_t>(token_state_versions_[token])},
                     {"lineage_epoch", static_cast<std::int64_t>(lineage_epochs_[token])},
+                    {"tick_size", book_it != books_.end() ? book_it->second.tick_size : 0.0},
+                    {"best_bid", best_bid},
+                    {"best_ask", best_ask},
                     {"spread", best_ask > best_bid ? best_ask - best_bid : 0.0},
+                    {"best_bid_depth", book_it != books_.end()
+                        ? best_level_depth(book_it->second.bids, best_bid) : 0.0},
+                    {"best_ask_depth", book_it != books_.end()
+                        ? best_level_depth(book_it->second.asks, best_ask) : 0.0},
                     {"visible_bid_depth", book_it != books_.end()
                         ? visible_depth(book_it->second.bids) : 0.0},
                     {"visible_ask_depth", book_it != books_.end()
