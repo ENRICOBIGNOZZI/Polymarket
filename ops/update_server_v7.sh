@@ -920,7 +920,11 @@ request_cutover_drain "$OLD_SHA"
 wait_for_cutover_drain "$OLD_SHA"
 MAKER_STATUS_REFRESHER="${POLYMARKET_MAKER_STATUS_REFRESHER:-$candidate/scripts/v7_market_maker_status.py}"
 [[ -f "$MAKER_STATUS_REFRESHER" ]] || fail "maker status refresher missing: $MAKER_STATUS_REFRESHER"
+stop_production_runtime
 if [[ "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
+  # Refresh from immutable state only after BLUE is stopped. This removes any
+  # race with late fills and keeps the finalizer's 15-second mark freshness
+  # contract independent of process-shutdown latency.
   env https_proxy=http://127.0.0.1:19109 http_proxy=http://127.0.0.1:19109 \
     HTTPS_PROXY=http://127.0.0.1:19109 HTTP_PROXY=http://127.0.0.1:19109 \
     no_proxy=127.0.0.1,localhost NO_PROXY=127.0.0.1,localhost \
@@ -932,8 +936,6 @@ if [[ "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
       --cutover-zero-recovery \
       >/dev/null
 fi
-stop_production_runtime
-stop_owned_monitoring
 MAKER_CUTOVER_FINALIZER="${POLYMARKET_MAKER_CUTOVER_FINALIZER:-$candidate/scripts/v7_finalize_maker_cutover.py}"
 [[ -f "$MAKER_CUTOVER_FINALIZER" ]] || fail "maker cutover finalizer missing: $MAKER_CUTOVER_FINALIZER"
 if [[ "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
@@ -943,6 +945,7 @@ if [[ "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
     --nonce "$LOCK_NONCE" \
     --mark "$(production_run_root)/control/maker_cutover_mark.json" | tee -a deploy-evidence.txt
 fi
+stop_owned_monitoring
 CUTOVER_ARCHIVER="${POLYMARKET_CUTOVER_ARCHIVER:-$APP_DIR/scripts/v7_prepare_cutover_run_root.py}"
 [[ -f "$CUTOVER_ARCHIVER" ]] || fail "cutover archiver missing: $CUTOVER_ARCHIVER"
 python3 "$CUTOVER_ARCHIVER" \
