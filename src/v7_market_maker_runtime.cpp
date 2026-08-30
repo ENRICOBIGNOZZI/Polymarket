@@ -458,6 +458,13 @@ MakerModelSnapshot load_model_snapshot(const fs::path& policy_path,
     }
     model.exploration_epsilon = std::clamp(object_number(
         exploration, "epsilon", 0.0), 0.0, 1.0);
+    const double configured_exploration_confidence_z = object_number(
+        exploration, "confidence_z", -1.0);
+    const bool valid_exploration_confidence = std::isfinite(configured_exploration_confidence_z)
+        && configured_exploration_confidence_z >= 0.0
+        && configured_exploration_confidence_z <= std::max(0.0, model.robust_ev_z);
+    model.exploration_confidence_z = valid_exploration_confidence
+        ? configured_exploration_confidence_z : 0.0;
     model.exploration_quote_notional_fraction = exploration_quote_fraction;
     model.exploration_max_active_markets = configured_market_capacity;
     model.exploration_concurrent_market_cap = exploration_market_cap;
@@ -469,6 +476,7 @@ MakerModelSnapshot load_model_snapshot(const fs::path& policy_path,
     model.exploration_enabled = static_cast<std::uint8_t>(exploration != nullptr
         && boolean(find_value(*exploration, "enabled"), false)
         && model.exploration_epsilon > 0.0
+        && valid_exploration_confidence
         && exploration_quote_fraction > 0.0
         && exploration_market_cap > 0);
 

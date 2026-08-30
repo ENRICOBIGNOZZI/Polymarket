@@ -82,8 +82,16 @@ struct SideEconomics {
     double expected_cost = 0.0;
     double expected_risk = 0.0;
     double uncertainty = 0.0;
+    double point_ev = -std::numeric_limits<double>::infinity();
     double robust_ev = -std::numeric_limits<double>::infinity();
 };
+
+[[nodiscard]] double exploration_adjusted_ev(
+    const SideEconomics& economics,
+    const MakerModelSnapshot& model) noexcept {
+    return economics.point_ev
+        - std::max(0.0, model.exploration_confidence_z) * economics.uncertainty;
+}
 
 struct Candidate {
     Action action = Action::Withdraw;
@@ -196,6 +204,7 @@ struct Candidate {
     out.expected_cost = expected_cost;
     out.expected_risk = adverse_markout + inventory_cost;
     out.uncertainty = uncertainty;
+    out.point_ev = expected_ev;
     out.robust_ev = robust_ev;
     return out;
 }
@@ -295,6 +304,8 @@ bool MakerModelSnapshot::valid() const noexcept {
     if (!finite(toxicity_withdraw_threshold) || toxicity_withdraw_threshold < 0.0 || toxicity_withdraw_threshold > 1.0) return false;
     if (!finite(one_sided_inventory_fraction) || one_sided_inventory_fraction < 0.0) return false;
     if (!finite(exploration_epsilon) || exploration_epsilon < 0.0 || exploration_epsilon > 1.0) return false;
+    if (!finite(exploration_confidence_z) || exploration_confidence_z < 0.0
+        || exploration_confidence_z > std::max(0.0, robust_ev_z)) return false;
     if (!finite(exploration_quote_notional_fraction) || exploration_quote_notional_fraction < 0.0
         || exploration_quote_notional_fraction > kNormalQuoteCapitalFraction) return false;
     if (exploration_enabled != 0
@@ -567,10 +578,10 @@ MakerDecision MakerHotPath::on_market_update(
                 ? std::max<std::int64_t>(0, end_ns - update.socket_receive_monotonic_ns) : 0;
             return decision;
         }
-        // PAPER-only exploration is intentionally BUY-only. It may broaden the
-        // sampled state space, but it is not allowed to purchase observations
-        // with negative robust EV. Negative candidates remain visible in the
-        // decision/observer tape without receiving execution authority.
+        // PAPER-only exploration is intentionally BUY-only. It may use a lower,
+        // explicit confidence penalty than exploit to break the evidence
+        // cold-start, but adjusted EV must remain positive. Negative candidates
+        // stay visible in the observer tape without execution authority.
         const double exploration_scale = clamp(
             model.exploration_quote_notional_fraction / kNormalQuoteCapitalFraction,
             0.0, 1.0);
@@ -602,13 +613,13 @@ MakerDecision MakerHotPath::on_market_update(
                 const auto exploratory = evaluate_side(
                     Action::Join, Side::Buy, update.best_bid_tick, update, inventory, risk,
                     model, decision.features, reservation_value, exploration_shares);
-                const bool exploration_economic = finite(exploratory.robust_ev)
-                    && exploratory.robust_ev > model.min_robust_ev_per_share;
+                const double adjusted_ev = exploration_adjusted_ev(exploratory, model);
+                const bool exploration_economic = finite(adjusted_ev)
+                    && adjusted_ev > model.min_robust_ev_per_share;
                 if (!exploration_economic) {
                     decision.action = Action::Withdraw;
                     decision.reason = DecisionReason::NoEconomicQuote;
-                    decision.robust_ev = finite(exploratory.robust_ev)
-                        ? exploratory.robust_ev : 0.0;
+                    decision.robust_ev = finite(adjusted_ev) ? adjusted_ev : 0.0;
                     decision.ev_uncertainty = exploratory.uncertainty;
                     if (!quotes.cancel_pending) {
                         append_intent(decision, make_intent(++intent_sequence_, update, model,
@@ -619,7 +630,7 @@ MakerDecision MakerHotPath::on_market_update(
                 } else {
                     decision.action = Action::Join;
                     decision.reason = DecisionReason::ExplorationHold;
-                    decision.robust_ev = exploratory.robust_ev;
+                    decision.robust_ev = adjusted_ev;
                     decision.ev_uncertainty = exploratory.uncertainty;
                     const std::int64_t required_rest = std::max(
                         model.min_quote_lifetime_ns, model.exploration_min_rest_ns);
@@ -652,17 +663,20 @@ MakerDecision MakerHotPath::on_market_update(
             const auto exploratory = evaluate_side(
                 Action::Join, Side::Buy, update.best_bid_tick, update, inventory, risk,
                 model, decision.features, reservation_value, exploration_shares);
-            if (finite(exploratory.robust_ev)
-                && exploratory.robust_ev > model.min_robust_ev_per_share
+            const double adjusted_ev = exploration_adjusted_ev(exploratory, model);
+            if (finite(adjusted_ev)
+                && adjusted_ev > model.min_robust_ev_per_share
                 && exploratory.price_tick > 0) {
+                auto authorized_exploration = exploratory;
+                authorized_exploration.robust_ev = adjusted_ev;
                 decision.action = Action::Join;
                 decision.reason = DecisionReason::ExplorationQuote;
-                decision.robust_ev = exploratory.robust_ev;
+                decision.robust_ev = adjusted_ev;
                 decision.ev_uncertainty = exploratory.uncertainty;
                 append_intent(decision, make_intent(++intent_sequence_, update, model,
                                                     IntentType::Quote, Side::Buy,
                                                     exploratory.price_tick, exploration_shares,
-                                                    &exploratory, now));
+                                                    &authorized_exploration, now));
                 exploration_active_ = 1;
                 last_exploration_quote_ns_ = now;
                 const std::int64_t end_ns = monotonic_ns();

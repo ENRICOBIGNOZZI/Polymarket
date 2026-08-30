@@ -21,6 +21,8 @@ class V7MakerExplorationPolicyFallbackTest(unittest.TestCase):
         self.assertIn('"authenticated_execution"', function)
         self.assertIn('"real_order_submission"', function)
         self.assertIn('"explore_then_exploit"', function)
+        self.assertIn('"confidence_z"', function)
+        self.assertIn("confidence_z > std::max(0.0, model.robust_ev_z)", function)
         self.assertIn("model.exploration_enabled = 0", function)
 
 

@@ -27,6 +27,7 @@ pm::v7::maker::MakerModelSnapshot profitable_model() {
     model.markout_coefficients.fill(0.0);
     model.base_ev_se_per_share = 0.0;
     model.robust_ev_z = 0.0;
+    model.exploration_confidence_z = 0.0;
     model.inventory_cost_per_share = 0.0;
     model.latency_cost_per_second = 0.0;
     model.base_quote_shares = 2.0;
@@ -332,11 +333,8 @@ void test_transient_no_economic_quote_cannot_cancel_before_minimum_lifetime() {
     assert(cancelled.intents[0].type == pm::v7::IntentType::Withdraw);
 }
 
-void test_negative_robust_ev_exploration_has_no_execution_authority() {
-    pm::v7::maker::MakerHotPath hot;
-    auto update = normal_update();
-    auto model = profitable_model();
-    model.markout_coefficients.fill(1.0);
+void configure_exploration(pm::v7::maker::MakerModelSnapshot& model) {
+    model.exploration_confidence_z = 0.5;
     model.exploration_enabled = 1;
     model.exploration_epsilon = 1.0;
     model.exploration_quote_notional_fraction = 0.002;
@@ -344,6 +342,38 @@ void test_negative_robust_ev_exploration_has_no_execution_authority() {
     model.exploration_concurrent_market_cap = 5;
     model.exploration_min_rest_ns = 3'000'000'000LL;
     model.exploration_max_rest_ns = 15'000'000'000LL;
+}
+
+void test_positive_exploration_ev_breaks_robust_cold_start() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    auto model = profitable_model();
+    model.base_ev_se_per_share = 0.02;
+    model.robust_ev_z = 1.64;
+    model.min_robust_ev_per_share = 0.00001;
+    configure_exploration(model);
+    pm::v7::maker::InventorySnapshot inventory;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 20.0;
+    risk.exploration_max_quote_shares = 2.0;
+    risk.max_abs_residual_shares = 200.0;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(decision.reason == pm::v7::maker::DecisionReason::ExplorationQuote);
+    assert(decision.intent_count == 1);
+    assert(decision.intents[0].type == pm::v7::IntentType::Quote);
+    assert(decision.intents[0].expected_ev > model.min_robust_ev_per_share);
+    assert(decision.intents[0].quantity_microunits == 2'000'000);
+}
+
+void test_negative_exploration_adjusted_ev_has_no_execution_authority() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    auto model = profitable_model();
+    model.robust_ev_z = 1.64;
+    model.markout_coefficients.fill(1.0);
+    configure_exploration(model);
     pm::v7::maker::InventorySnapshot inventory;
     pm::v7::maker::QuoteSnapshot quotes;
     pm::v7::maker::RiskSnapshot risk;
@@ -403,7 +433,8 @@ int main() {
     test_inventory_forces_reducing_side();
     test_partial_inventory_sizes_reducing_quote_to_available_residual();
     test_transient_no_economic_quote_cannot_cancel_before_minimum_lifetime();
-    test_negative_robust_ev_exploration_has_no_execution_authority();
+    test_positive_exploration_ev_breaks_robust_cold_start();
+    test_negative_exploration_adjusted_ev_has_no_execution_authority();
     test_global_kill_preempts_quote();
     test_new_risk_freeze_withdraws_without_irreversible_kill();
     return 0;

@@ -169,6 +169,9 @@ struct MakerModelSnapshot {
     // deadlock where a pessimistic fill prior cannot earn enough evidence to fit
     // a better execution model. It never bypasses feed, toxicity, inventory,
     // capital, post-only, queue or kill checks.
+    // Exploit keeps robust_ev_z. PAPER exploration may use a smaller explicit
+    // confidence penalty, but must still have positive adjusted EV.
+    double exploration_confidence_z = 0.0;
     double exploration_epsilon = 0.0;
     double exploration_quote_notional_fraction = 0.0;
     // Every selected market may collect PAPER evidence, while the authoritative

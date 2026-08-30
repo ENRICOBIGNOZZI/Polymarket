@@ -168,6 +168,7 @@ void populate_exploration_policy(MakerModelSnapshot& model) noexcept {
         }
 
         const double epsilon = std::clamp(number(find_value(*exploration, "epsilon"), 0.0), 0.0, 1.0);
+        const double confidence_z = number(find_value(*exploration, "confidence_z"), -1.0);
         const double configured_quote_fraction = std::clamp(
             number(find_value(*exploration, "max_quote_notional_fraction"), 0.0), 0.0, 1.0);
         const double market_fraction = std::clamp(
@@ -193,8 +194,11 @@ void populate_exploration_policy(MakerModelSnapshot& model) noexcept {
         const double min_rest_ms = std::max(0.0, number(find_value(*exploration, "minimum_rest_ms"), 250.0));
         const double max_rest_ms = std::max(min_rest_ms, number(find_value(*exploration, "maximum_rest_ms"), 3000.0));
 
-        if (epsilon <= 0.0 || quote_fraction <= 0.0 || max_markets == 0
+        if (epsilon <= 0.0 || !std::isfinite(confidence_z) || confidence_z < 0.0
+            || confidence_z > std::max(0.0, model.robust_ev_z)
+            || quote_fraction <= 0.0 || max_markets == 0
             || selected_market_capacity == 0) return;
+        model.exploration_confidence_z = confidence_z;
         model.exploration_epsilon = epsilon;
         model.exploration_quote_notional_fraction = quote_fraction;
         model.exploration_max_active_markets = selected_market_capacity;
@@ -206,6 +210,7 @@ void populate_exploration_policy(MakerModelSnapshot& model) noexcept {
         // Exploration is opt-in and PAPER-only. Any malformed policy disables it
         // rather than changing normal exploit behavior.
         model.exploration_enabled = 0;
+        model.exploration_confidence_z = 0.0;
         model.exploration_epsilon = 0.0;
         model.exploration_quote_notional_fraction = 0.0;
         model.exploration_max_active_markets = 0;
