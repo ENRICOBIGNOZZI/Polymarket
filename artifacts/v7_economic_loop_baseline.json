@@ -1,0 +1,400 @@
+{
+  "audit_kind": "baseline",
+  "authenticated_execution": false,
+  "capability_runtime_proof": {
+    "graph_relation_data_rows": 0,
+    "inventory_merge_ledger_writer": false,
+    "inventory_split_ledger_writer": false,
+    "inventory_split_primitive_implemented": true,
+    "inventory_split_runtime_call_count": 0,
+    "micro_taker_canonical_spool_argument": false,
+    "micro_taker_worker_started": true,
+    "model_reload_ledger_event": false,
+    "runtime_champion_path": "runs/paper_v7_live/micro_maker/execution_model.json",
+    "runtime_champion_reload_loop": true,
+    "source": "repository_call_site_analysis"
+  },
+  "generated_at_unix_ms": 1788080033411,
+  "historical_reference": {
+    "challenger": "reported_regenerated_but_not_loaded",
+    "champion_file": "reported_absent",
+    "evidence_status": "owner_supplied_reference_claims_not_recomputed_from_local_archive",
+    "maker": {
+      "buy_fills_approx": 81,
+      "buy_orders_approx": 85967,
+      "global_fill_rate_approx": 0.0022,
+      "inventory_split_events": 0,
+      "markouts_1_to_60s": "predominantly_negative",
+      "sell_fills_approx": 28,
+      "sell_orders_approx": 3010
+    },
+    "operational_target_families": {
+      "operational": 8,
+      "target": 12
+    },
+    "profitability_proven": false,
+    "rewards": {
+      "reward_market_count": 0,
+      "reward_pool_count": 0
+    },
+    "starting_paper_capital_usd": 14000.0
+  },
+  "interpretation": {
+    "profitability_proven": false,
+    "telemetry_is_not_independent_evidence": true,
+    "zero_local_rows_means_archive_unavailable_not_zero_historical_activity": true
+  },
+  "ledger": {
+    "dedup_identity": [
+      "model_sha",
+      "policy_hash_or_unknown",
+      "config_hash_or_unknown",
+      "record_id_or_canonical_hash"
+    ],
+    "deduplicated_rows": 0,
+    "duplicate_rows_removed": 0,
+    "families": {},
+    "files": [],
+    "raw_rows": 0,
+    "source": "local_canonical_jsonl_recomputed"
+  },
+  "live_prometheus": {
+    "available": true,
+    "captured_at_unix_ms": 1788080033582,
+    "errors": {},
+    "metrics": {
+      "polymarket_execution_fills": [
+        {
+          "metric": {
+            "__name__": "polymarket_execution_fills",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.506,
+            "0"
+          ]
+        }
+      ],
+      "polymarket_execution_final_pnl_usd": [
+        {
+          "metric": {
+            "__name__": "polymarket_execution_final_pnl_usd",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.513,
+            "0"
+          ]
+        }
+      ],
+      "polymarket_execution_orders_submitted": [
+        {
+          "metric": {
+            "__name__": "polymarket_execution_orders_submitted",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.498,
+            "25"
+          ]
+        }
+      ],
+      "polymarket_maker_lab_filled_orders": [
+        {
+          "metric": {
+            "__name__": "polymarket_maker_lab_filled_orders",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.488,
+            "0"
+          ]
+        }
+      ],
+      "polymarket_maker_lab_fills": [
+        {
+          "metric": {
+            "__name__": "polymarket_maker_lab_fills",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.48,
+            "0"
+          ]
+        }
+      ],
+      "polymarket_maker_lab_orders": [
+        {
+          "metric": {
+            "__name__": "polymarket_maker_lab_orders",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.472,
+            "25"
+          ]
+        }
+      ],
+      "polymarket_maker_lab_realized_pnl_usd": [
+        {
+          "metric": {
+            "__name__": "polymarket_maker_lab_realized_pnl_usd",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.493,
+            "0"
+          ]
+        }
+      ],
+      "polymarket_runtime_pnl_usd": [
+        {
+          "metric": {
+            "__name__": "polymarket_runtime_pnl_usd",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.554,
+            "1.81898940355e-12"
+          ]
+        }
+      ],
+      "polymarket_runtime_realized_pnl_usd": [
+        {
+          "metric": {
+            "__name__": "polymarket_runtime_realized_pnl_usd",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.547,
+            "0"
+          ]
+        }
+      ],
+      "polymarket_strategy_final_pnl_usd": [
+        {
+          "metric": {
+            "__name__": "polymarket_strategy_final_pnl_usd",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7",
+            "strategy": "fast_structural"
+          },
+          "value": [
+            1788080033.539,
+            "0"
+          ]
+        },
+        {
+          "metric": {
+            "__name__": "polymarket_strategy_final_pnl_usd",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7",
+            "strategy": "micro_maker_pro"
+          },
+          "value": [
+            1788080033.539,
+            "0"
+          ]
+        }
+      ],
+      "polymarket_strategy_ledger_fills": [
+        {
+          "metric": {
+            "__name__": "polymarket_strategy_ledger_fills",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7",
+            "strategy": "fast_structural"
+          },
+          "value": [
+            1788080033.531,
+            "0"
+          ]
+        },
+        {
+          "metric": {
+            "__name__": "polymarket_strategy_ledger_fills",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7",
+            "strategy": "micro_maker_pro"
+          },
+          "value": [
+            1788080033.531,
+            "0"
+          ]
+        }
+      ],
+      "polymarket_strategy_ledger_orders_submitted": [
+        {
+          "metric": {
+            "__name__": "polymarket_strategy_ledger_orders_submitted",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7",
+            "strategy": "fast_structural"
+          },
+          "value": [
+            1788080033.522,
+            "0"
+          ]
+        },
+        {
+          "metric": {
+            "__name__": "polymarket_strategy_ledger_orders_submitted",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7",
+            "strategy": "micro_maker_pro"
+          },
+          "value": [
+            1788080033.522,
+            "25"
+          ]
+        }
+      ],
+      "polymarket_v7_authenticated_execution_disabled": [
+        {
+          "metric": {
+            "__name__": "polymarket_v7_authenticated_execution_disabled",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.452,
+            "1"
+          ]
+        }
+      ],
+      "polymarket_v7_deployed_sha_info": [
+        {
+          "metric": {
+            "__name__": "polymarket_v7_deployed_sha_info",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7",
+            "sha": "405096993e75d6230d32a9c025dd3a2d9bfa6e12"
+          },
+          "value": [
+            1788080033.428,
+            "1"
+          ]
+        }
+      ],
+      "polymarket_v7_live_model_operational_count": [
+        {
+          "metric": {
+            "__name__": "polymarket_v7_live_model_operational_count",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.458,
+            "8"
+          ]
+        }
+      ],
+      "polymarket_v7_live_model_target_count": [
+        {
+          "metric": {
+            "__name__": "polymarket_v7_live_model_target_count",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.466,
+            "12"
+          ]
+        }
+      ],
+      "polymarket_v7_maker_decisions_total": [
+        {
+          "metric": {
+            "__name__": "polymarket_v7_maker_decisions_total",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.568,
+            "2252"
+          ]
+        }
+      ],
+      "polymarket_v7_maker_paused_no_fresh_flow": [
+        {
+          "metric": {
+            "__name__": "polymarket_v7_maker_paused_no_fresh_flow",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.574,
+            "1"
+          ]
+        }
+      ],
+      "polymarket_v7_maker_quote_intents_total": [
+        {
+          "metric": {
+            "__name__": "polymarket_v7_maker_quote_intents_total",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.561,
+            "49"
+          ]
+        }
+      ],
+      "polymarket_v7_maker_selector_fallback_active": [
+        {
+          "metric": {
+            "__name__": "polymarket_v7_maker_selector_fallback_active",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.581,
+            "0"
+          ]
+        }
+      ],
+      "polymarket_v7_paper_only_contract_ok": [
+        {
+          "metric": {
+            "__name__": "polymarket_v7_paper_only_contract_ok",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.444,
+            "1"
+          ]
+        }
+      ],
+      "polymarket_v7_runtime_uptime_seconds": [
+        {
+          "metric": {
+            "__name__": "polymarket_v7_runtime_uptime_seconds",
+            "instance": "127.0.0.1:9108",
+            "job": "polymarket-v7"
+          },
+          "value": [
+            1788080033.437,
+            "275"
+          ]
+        }
+      ]
+    },
+    "source": "http://mamma-portfolio.tail1bae85.ts.net/api/datasources/proxy/uid/prometheus-v7/api/v1"
+  },
+  "paper_only": true,
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "repository_head": "405096993e75d6230d32a9c025dd3a2d9bfa6e12",
+  "schema": "polymarket_v7_economic_loop_audit_v1"
+}

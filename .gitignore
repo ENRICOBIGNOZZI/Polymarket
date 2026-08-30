@@ -26,6 +26,11 @@ artifacts/
 artifacts/*
 !artifacts/github_main_ruleset.json
 !artifacts/v7_repository_convergence_audit.json
+!artifacts/v7_economic_loop_baseline.json
+!artifacts/v7_economic_loop_postchange.json
+!artifacts/v7_replay_comparison.json
+!artifacts/v7_profitability_audit.json
+!artifacts/v7_capability_runtime_proof.json
 *.log
 *.pid
 *.sqlite
