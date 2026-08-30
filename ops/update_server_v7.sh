@@ -271,11 +271,9 @@ assert external_status.get('paper_only') is True and external_status.get('authen
 assert micro_status.get('paper_only') is True and micro_status.get('authenticated_execution') is False
 assert maker_status.get('paper_only') is True and maker_status.get('authenticated_execution') is False
 external_positions=external_state.get('positions'); micro_positions=micro_state.get('positions')
-maker_inventory=maker_state.get('inventory'); maker_positions=maker_status.get('positions')
-maker_unmarkable=maker_status.get('unmarkable_tokens')
+maker_inventory=maker_state.get('inventory')
 assert isinstance(external_positions,dict) and isinstance(micro_positions,dict)
-assert isinstance(maker_inventory,dict) and isinstance(maker_positions,list)
-assert isinstance(maker_unmarkable,list)
+assert isinstance(maker_inventory,dict)
 # paper_router_state.positions is the counterfactual SHADOW book. It is not
 # execution inventory and must never hold an exact-SHA cutover hostage. The
 # router status owns the zero-authority execution-position contract; durable
@@ -295,28 +293,21 @@ for row in maker_inventory.values():
 assert external_open >= 0
 assert int(external_status.get('counterfactual_open_positions',-1)) == counterfactual_open
 assert int(micro_status.get('open_positions',-1)) == micro_open
-assert len(maker_positions) + len(maker_unmarkable) == maker_open
 assert external_open == 0 and micro_open == 0
 assert maker_status.get('killed') is not True
-# Drain-aware runtimes must prove that entry is disabled.  A pre-contract
-# incumbent may be bootstrapped only while already flat; the post-stop
-# archiver repeats the durable-state check and catches any race fail-closed.
-if 'drain_requested' in external_status:
-    assert external_status.get('drain_requested') is True
-    assert external_status.get('drain_complete') is True
-    assert external_status.get('order_submission_enabled') is False
-    assert external_status.get('blocker') == 'CUTOVER_DRAIN'
-if 'drain_requested' in micro_status:
-    assert micro_status.get('drain_requested') is True
-    assert micro_status.get('drain_complete') is True
-    assert micro_status.get('new_risk_frozen') is True
-if 'drain_requested' in maker_status:
-    assert maker_status.get('drain_requested') is True
-    assert maker_status.get('new_risk_frozen') is True
-    # Open Maker inventory is finalized after the process tree stops. It may be
-    # currently unmarkable: the target-SHA finalizer will either use a fresh
-    # executable mark or realize a clearly labelled zero-recovery PAPER loss.
-    assert maker_status.get('drain_complete') is (maker_open == 0)
+# Every supported incumbent is drain-aware. External and micro must already be
+# flat; Maker only needs to prove entry is frozen because its durable inventory
+# is terminalized immediately afterward by target-SHA code.
+assert external_status.get('drain_requested') is True
+assert external_status.get('drain_complete') is True
+assert external_status.get('order_submission_enabled') is False
+assert external_status.get('blocker') == 'CUTOVER_DRAIN'
+assert micro_status.get('drain_requested') is True
+assert micro_status.get('drain_complete') is True
+assert micro_status.get('new_risk_frozen') is True
+assert maker_status.get('drain_requested') is True
+assert maker_status.get('new_risk_frozen') is True
+assert maker_status.get('drain_complete') is (maker_open == 0)
 PY
 }
 
