@@ -33,6 +33,16 @@ from v7_maker_microstructure import summarize_maker_microstructure
 from v7_portfolio_reconciliation import reconcile as reconcile_portfolio
 from v7_runtime_contract import MAKER_SELECTOR_OPERATIONAL_STATES as _MAKER_SELECTOR_OPERATIONAL_STATES
 
+_MAKER_ROTATION_OPERATIONAL_STATES = frozenset({
+    "RUNNING",
+    "DRAINING",
+    "PENDING_NONFLAT",
+    "PENDING_DRAIN_TIMEOUT",
+    "PENDING_CONFIRMATION",
+    "PENDING_COOLDOWN",
+    "PAUSED_NO_FRESH_FLOW",
+})
+
 _FILLABILITY_CACHE_KEY: tuple[str, str, int] | None = None
 _FILLABILITY_CACHE_VALUE: dict[str, Any] | None = None
 _FILLABILITY_REFRESH_SECONDS = 30
@@ -522,9 +532,7 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
         or rotation.get("paper_only") is not True
         or rotation.get("authenticated_execution") is not False
         or rotation.get("real_order_submission") is not False
-        or rotation.get("state") not in {
-            "RUNNING", "DRAINING", "PENDING_NONFLAT", "PENDING_DRAIN_TIMEOUT",
-        }
+        or rotation.get("state") not in _MAKER_ROTATION_OPERATIONAL_STATES
         or rotation_age_ms < -5_000
         or rotation_age_ms > max_runtime_age * 1000
     ): reasons.append("maker_cohort_supervisor_missing_stale_or_unsafe")
@@ -955,10 +963,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         and rotation.get("paper_only") is True
         and rotation.get("authenticated_execution") is False
         and rotation.get("real_order_submission") is False
-        and rotation.get("state") in {
-            "RUNNING", "DRAINING", "PENDING_NONFLAT", "PENDING_DRAIN_TIMEOUT",
-            "PENDING_CONFIRMATION", "PENDING_COOLDOWN", "PAUSED_NO_FRESH_FLOW",
-        }
+        and rotation.get("state") in _MAKER_ROTATION_OPERATIONAL_STATES
         and fresh_milliseconds(rotation)
     )
     maker_operational = (

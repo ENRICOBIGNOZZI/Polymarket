@@ -397,6 +397,44 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertNotIn("polymarket_v7_shadow_alive", metrics)
             self.assertNotIn("polymarket_v7_market_proxy_markets", metrics)
 
+    def test_all_safe_maker_rotation_states_keep_health_and_metric_consistent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_root = Path(directory) / "paper_v7_live"
+            self._fixture(run_root)
+            path = run_root / "micro_maker" / "rotation_status.json"
+            for state in sorted(exporter._MAKER_ROTATION_OPERATIONAL_STATES):
+                with self.subTest(state=state):
+                    value = json.loads(path.read_text(encoding="utf-8"))
+                    value["state"] = state
+                    self._write(path, value)
+                    snapshot = exporter.collect_snapshot(run_root, ROOT, now=1_000)
+                    self.assertNotIn(
+                        "maker_cohort_supervisor_missing_stale_or_unsafe",
+                        exporter.health_reasons(snapshot),
+                    )
+                    self.assertIn(
+                        "polymarket_v7_maker_cohort_supervisor_ready 1",
+                        exporter.render_prometheus(snapshot),
+                    )
+
+    def test_failed_maker_rotation_state_fails_health_and_metric_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_root = Path(directory) / "paper_v7_live"
+            self._fixture(run_root)
+            path = run_root / "micro_maker" / "rotation_status.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value["state"] = "FAILED"
+            self._write(path, value)
+            snapshot = exporter.collect_snapshot(run_root, ROOT, now=1_000)
+            self.assertIn(
+                "maker_cohort_supervisor_missing_stale_or_unsafe",
+                exporter.health_reasons(snapshot),
+            )
+            self.assertIn(
+                "polymarket_v7_maker_cohort_supervisor_ready 0",
+                exporter.render_prometheus(snapshot),
+            )
+
     def test_stale_trade_tape_fails_health_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_root = Path(directory) / "paper_v7_live"
