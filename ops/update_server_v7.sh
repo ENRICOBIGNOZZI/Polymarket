@@ -755,6 +755,7 @@ stop_stale_monitoring_listener(){
 
 start_monitoring(){
   local run_root="$(production_run_root)" monitoring_root="$APP_DIR/runs/monitoring"
+  local monitoring_state="$APP_DIR/runs/monitoring/config"
   if [[ "$(uname -s)" == "Darwin" ]]; then
     local domain="gui/$(id -u)" label template destination
     retire_legacy_macos_services
@@ -764,7 +765,8 @@ start_monitoring(){
     # Keep config installation deterministic during cutover. Listener ownership
     # is reconciled immediately below, and runtime_health verifies the existing
     # private HTTPS route after the exact-SHA services are serving.
-    POLYMARKET_APP_DIR="$APP_DIR" POLYMARKET_STATE_DIR="$STATE_DIR" \
+    mkdir -p "$monitoring_state"
+    POLYMARKET_APP_DIR="$APP_DIR" POLYMARKET_STATE_DIR="$monitoring_state" \
       POLYMARKET_MONITORING_STOP_GRAFANA_LISTENER=0 \
       POLYMARKET_MONITORING_CONFIGURE_TAILNET=0 \
       bash "$APP_DIR/ops/apply_v7_monitoring_config_macos.sh" >/dev/null
@@ -789,7 +791,7 @@ start_monitoring(){
     mkdir -p "$monitoring_root/prometheus"
     mkdir -p "$monitoring_root/grafana/data" "$monitoring_root/grafana/logs" \
       "$monitoring_root/grafana/plugins"
-    python3 - "$APP_DIR" "$run_root" "$STATE_DIR" "$prometheus_bin" "$grafana_bin" "$grafana_home" "$EXPECTED_SHA" <<'PY'
+    python3 - "$APP_DIR" "$run_root" "$monitoring_state" "$prometheus_bin" "$grafana_bin" "$grafana_home" "$EXPECTED_SHA" <<'PY'
 import os, sys
 from pathlib import Path
 app,run,state,prometheus,grafana,grafana_home,expected_sha=map(str,sys.argv[1:])
