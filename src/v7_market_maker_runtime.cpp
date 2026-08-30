@@ -1179,6 +1179,7 @@ private:
         using Reason = pm::v7::maker::DecisionReason;
         const auto reason = command.context.decision.reason;
         if (reason != Reason::Quote && reason != Reason::NoEconomicQuote
+            && reason != Reason::QuoteLifetimeHold
             && reason != Reason::ExplorationHold
             && reason != Reason::ExplorationExpired) {
             return false;

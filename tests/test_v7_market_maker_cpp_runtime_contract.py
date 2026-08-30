@@ -139,6 +139,7 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
         self.assertIn("record_control_watermark(intent", self.source)
         self.assertIn("quote_is_superseded(intent)", self.source)
         self.assertIn("economic_control_preempts_fresh_quote(command)", self.source)
+        self.assertIn("reason != Reason::QuoteLifetimeHold", self.source)
         self.assertIn("minimum_quote_lifetime_ns_", self.source)
         self.assertIn("exploration_concurrent_market_cap_", self.source)
         self.assertIn("refresh_exploration_market", self.source)
