@@ -78,6 +78,8 @@ def status(authority: str = "SHADOW_ZERO_AUTHORITY") -> dict:
             "counterfactual_collection_enabled": True,
             "counterfactual_candidates": 8, "counterfactual_fills": 7,
             "counterfactual_open_positions": 2,
+            "counterfactual_forecasts": 11, "counterfactual_resolved_forecasts": 6,
+            "counterfactual_pending_forecasts": 5,
             "book_requests": 9, "book_request_failures": 2, "book_parse_failures": 1,
             "rejection_reasons": {"NO_ROBUST_EV": 4},
             "last_decision": {"outcome": "NO_ROBUST_EV"},
@@ -130,6 +132,8 @@ def main() -> None:
         assert 'polymarket_external_fair_counterfactual_actions_total{action="TAKE"} 7' in text
         assert "polymarket_external_fair_counterfactual_collection_enabled 1" in text
         assert "polymarket_external_fair_counterfactual_fills_total 7" in text
+        assert "polymarket_external_fair_counterfactual_forecasts_total 11" in text
+        assert "polymarket_external_fair_counterfactual_resolved_forecasts_total 6" in text
         assert "polymarket_external_fair_counterfactual_realized_pnl -1.2" in text
         assert 'polymarket_external_fair_oracle_continuity_info{continuity="LIVE_CONTINUOUS"} 1' in text
         assert 'polymarket_external_fair_venue_healthy{venue="BINANCE_SPOT"} 1' in text

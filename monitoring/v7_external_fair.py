@@ -272,6 +272,15 @@ def summarize_external_fair(
             "counterfactual_fills": max(
                 0, _integer(paper_router.get("counterfactual_fills"), 0)
             ),
+            "counterfactual_forecasts": max(
+                0, _integer(paper_router.get("counterfactual_forecasts"), 0)
+            ),
+            "counterfactual_resolved_forecasts": max(
+                0, _integer(paper_router.get("counterfactual_resolved_forecasts"), 0)
+            ),
+            "counterfactual_pending_forecasts": max(
+                0, _integer(paper_router.get("counterfactual_pending_forecasts"), 0)
+            ),
             "counterfactual_open_positions": max(
                 0, _integer(paper_router.get("counterfactual_open_positions"), 0)
             ),

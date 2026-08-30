@@ -211,6 +211,9 @@
         {"expr": "polymarket_external_fair_tape_accepted", "legendFormat": "accepted", "refId": "A"},
         {"expr": "polymarket_external_fair_tape_written", "legendFormat": "written", "refId": "B"},
         {"expr": "polymarket_external_fair_tape_dropped", "legendFormat": "dropped", "refId": "C"}
+        ,{"expr": "polymarket_external_fair_counterfactual_forecasts_total", "legendFormat": "shadow forecasts", "refId": "D"}
+        ,{"expr": "polymarket_external_fair_counterfactual_resolved_forecasts_total", "legendFormat": "resolved forecasts", "refId": "E"}
+        ,{"expr": "polymarket_external_fair_counterfactual_pending_forecasts", "legendFormat": "pending forecasts", "refId": "F"}
       ],
       "title": "Causal Evidence Tape",
       "type": "timeseries"

@@ -41,6 +41,19 @@ def ledger_paths(inputs: Iterable[Path]) -> list[Path]:
     return sorted(paths)
 
 
+def counterfactual_paths(inputs: Iterable[Path]) -> list[Path]:
+    paths: set[Path] = set()
+    for source in inputs:
+        if source.is_file() and source.name == "counterfactuals.jsonl":
+            paths.add(source.resolve())
+        elif source.is_dir():
+            paths.update(
+                path.resolve() for path in source.glob("**/external_fair/counterfactuals.jsonl")
+                if path.is_file()
+            )
+    return sorted(paths)
+
+
 def rows(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8") as stream:
@@ -232,8 +245,57 @@ def maker_metrics(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def counterfactual_metrics(inputs: Iterable[Path]) -> dict[str, Any]:
+    unique: dict[tuple[str, str], dict[str, Any]] = {}
+    malformed = conflicts = duplicates = raw = 0
+    paths = counterfactual_paths(inputs)
+    for path in paths:
+        for _line_number, value in rows(path):
+            raw += 1
+            if value.get("__malformed__") or not value.get("record_id"):
+                malformed += 1
+                continue
+            key = (str(value.get("model_sha") or ""), str(value["record_id"]))
+            prior = unique.get(key)
+            if prior is None:
+                unique[key] = value
+            else:
+                duplicates += 1
+                conflicts += int(prior != value)
+    counts = Counter(str(value.get("event_type") or "UNKNOWN") for value in unique.values())
+    model_scores: list[tuple[float, float]] = []
+    market_scores: list[tuple[float, float]] = []
+    virtual_pnl: list[float] = []
+    for value in unique.values():
+        if value.get("event_type") == "FORECAST_FINAL":
+            model, market, actual = (
+                finite(value.get("model_yes")), finite(value.get("market_yes")),
+                finite(value.get("actual_yes")),
+            )
+            if model is not None and actual is not None:
+                model_scores.append((model, actual))
+            if market is not None and actual is not None:
+                market_scores.append((market, actual))
+        if value.get("event_type") == "VIRTUAL_FINAL":
+            pnl = finite(value.get("counterfactual_pnl"))
+            if pnl is not None:
+                virtual_pnl.append(pnl)
+    return {
+        "tape_files": len(paths), "raw_records": raw, "unique_records": len(unique),
+        "duplicates_removed": duplicates, "conflicts": conflicts, "malformed": malformed,
+        "events": dict(sorted(counts.items())),
+        "forecast_model_score": score(model_scores),
+        "forecast_market_benchmark_score": score(market_scores),
+        "virtual_realized_pnl": sum(virtual_pnl),
+        "fail_closed": malformed > 0 or conflicts > 0,
+    }
+
+
 def audit(inputs: Iterable[Path]) -> dict[str, Any]:
+    inputs = list(inputs)
     events, quality = load_unique(inputs)
+    counterfactual = counterfactual_metrics(inputs)
+    quality["fail_closed"] = bool(quality["fail_closed"] or counterfactual["fail_closed"])
     strategies = Counter(str(event.get("strategy") or "UNKNOWN") for event in events)
     external = external_metrics(events)
     maker = maker_metrics(events)
@@ -244,6 +306,7 @@ def audit(inputs: Iterable[Path]) -> dict[str, Any]:
         "data_quality": quality,
         "strategy_record_counts": dict(sorted(strategies.items())),
         "external_fair": external, "professional_maker": maker,
+        "external_fair_counterfactual": counterfactual,
         "selected_sleeves_realized_pnl": total_realized,
         "profitability_proven": bool(
             not quality["fail_closed"] and total_realized > 0.0

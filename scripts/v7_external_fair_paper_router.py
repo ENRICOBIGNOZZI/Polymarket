@@ -24,6 +24,8 @@ from v7_market_common import finite, parse_array, request_json
 STRATEGY = "CRYPTO_INFORMED_TAKER"
 MODEL_VERSION = "external-fair-structural-v7-paper"
 HORIZONS = (1, 10, 45, 60, 300)
+FORECAST_TTE_BUCKETS = (240, 180, 120, 90, 60, 45, 30, 20, 15, 10, 5)
+FORECAST_BUCKET_TOLERANCE_SECONDS = 1.25
 MAX_CLOB_CLOCK_SKEW_MS = 250
 
 
@@ -219,6 +221,9 @@ class PaperRouter:
                 or self.policy.get("authority") != "SHADOW"
                 or self.policy.get("counterfactual_enabled") is not True):
             raise RuntimeError("external_fair_taker_not_shadow_authorized")
+        self.policy_sha256 = hashlib.sha256(
+            json.dumps(self.config, separators=(",", ":"), sort_keys=True).encode()
+        ).hexdigest()
         fair_policy = self.config.get("fair_value") if isinstance(self.config.get("fair_value"), dict) else {}
         self.model_mature = fair_policy.get("default_model_mature") is True
         self.clob_url = clob_url.rstrip("/")
@@ -240,6 +245,9 @@ class PaperRouter:
             "attempted_at": {}, "traded_markets": [], "positions": {},
             "book_requests": 0, "book_request_failures": 0,
             "book_parse_failures": 0, "rejection_reasons": {},
+            "forecasts": 0, "resolved_forecasts": 0,
+            "forecasted_keys": [], "pending_forecasts": {},
+            "forecast_settlement_attempted_at": {},
             "last_decision": {},
         }
         prior = load(self.state_path)
@@ -254,15 +262,23 @@ class PaperRouter:
 
     def emit_counterfactual(self, event_type: str, **values: Any) -> None:
         timestamp_ms = now_ms()
+        markout_keys = sorted(
+            str(key) for key in (
+                values.get("markouts") if isinstance(values.get("markouts"), dict) else {}
+            )
+        )
         record = {
             "schema": "polymarket_v7_external_fair_counterfactual_v1",
             "record_id": stable_id(
-                self.sha, event_type, values.get("counterfactual_id"), timestamp_ms,
-                json.dumps(values, separators=(",", ":"), sort_keys=True),
+                self.sha, event_type, values.get("counterfactual_id"),
+                values.get("forecast_id"), values.get("position_id"),
+                values.get("reason"), markout_keys,
             ),
             "event_type": event_type,
             "timestamp_ms": timestamp_ms,
             "model_sha": self.sha,
+            "model_version": MODEL_VERSION,
+            "policy_sha256": self.policy_sha256,
             "execution_authority": "SHADOW_ZERO_AUTHORITY",
             "paper_only": True,
             "authenticated_execution": False,
@@ -316,6 +332,120 @@ class PaperRouter:
             self.state["book_parse_failures"] = int(self.state.get("book_parse_failures") or 0) + 1
             self.last_book_error = "CLOB_BOOK_SNAPSHOT_INCOMPLETE"
         return output
+
+    def record_forecast(self, status: dict[str, Any], books: dict[str, Book]) -> bool:
+        """Persist one trade-independent forecast near each canonical TTE bucket."""
+        fair = status.get("fair") if isinstance(status.get("fair"), dict) else {}
+        market = status.get("market") if isinstance(status.get("market"), dict) else {}
+        contract = status.get("contract") if isinstance(status.get("contract"), dict) else {}
+        reference = status.get("settlement_reference") if isinstance(status.get("settlement_reference"), dict) else {}
+        oracle = status.get("oracle") if isinstance(status.get("oracle"), dict) else {}
+        external = status.get("external") if isinstance(status.get("external"), dict) else {}
+        tte = finite(fair.get("tte_seconds"))
+        model_yes = finite(fair.get("yes"))
+        market_yes = finite(fair.get("pm_mid"))
+        market_id = str(market.get("market_id") or "")
+        if not (
+            fair.get("valid") is True and reference.get("valid") is True
+            and market_id and tte is not None and tte >= 0.0
+            and model_yes is not None and 0.0 <= model_yes <= 1.0
+            and market_yes is not None and 0.0 <= market_yes <= 1.0
+        ):
+            return False
+        bucket = min(FORECAST_TTE_BUCKETS, key=lambda value: (abs(value - tte), -value))
+        if abs(bucket - tte) > FORECAST_BUCKET_TOLERANCE_SECONDS:
+            return False
+        key = f"{market_id}:{bucket}"
+        seen = self.state.get("forecasted_keys") if isinstance(self.state.get("forecasted_keys"), list) else []
+        if key in set(str(value) for value in seen):
+            return False
+        forecast_id = f"external-forecast-{stable_id(self.sha, market_id, bucket)}"
+        yes_token, no_token = str(market.get("yes_token") or ""), str(market.get("no_token") or "")
+        yes_book, no_book = books.get(yes_token), books.get(no_token)
+        observed_ms = now_ms()
+        values = {
+            "counterfactual_id": forecast_id, "forecast_id": forecast_id,
+            "market_id": market_id, "event_id": str(market.get("event_id") or ""),
+            "rules_hash": str(contract.get("rules_hash") or ""),
+            "reference_version": int(reference.get("version") or 0),
+            "tte_bucket_seconds": bucket, "observed_tte_seconds": tte,
+            "model_yes": model_yes, "market_yes": market_yes,
+            "lower": finite(fair.get("lower")), "upper": finite(fair.get("upper")),
+            "oracle_value": finite(oracle.get("value")),
+            "external_venue_count": int(external.get("fresh_venue_count") or 0),
+            "fair_calculated_monotonic_ns": int(fair.get("calculated_monotonic_ns") or 0),
+            "fair_valid_until_monotonic_ns": int(fair.get("valid_until_monotonic_ns") or 0),
+            "yes_best_bid": yes_book.bids[0][0] if yes_book and yes_book.bids else None,
+            "yes_best_ask": yes_book.asks[0][0] if yes_book and yes_book.asks else None,
+            "no_best_bid": no_book.bids[0][0] if no_book and no_book.bids else None,
+            "no_best_ask": no_book.asks[0][0] if no_book and no_book.asks else None,
+            "decision": "SHADOW_FORECAST_ONLY",
+        }
+        self.emit_counterfactual("FORECAST", **values)
+        seen.append(key)
+        self.state["forecasted_keys"] = seen[-10_000:]
+        self.state["forecasts"] = int(self.state.get("forecasts") or 0) + 1
+        self.state.setdefault("pending_forecasts", {})[forecast_id] = {
+            **values, "yes_token": yes_token, "no_token": no_token,
+            "observed_ms": observed_ms,
+            "resolution_due_ms": observed_ms + int(tte * 1000.0),
+        }
+        return True
+
+    @staticmethod
+    def forecast_scores(probability: float, actual: float) -> tuple[float, float]:
+        clipped = min(1.0 - 1e-12, max(1e-12, probability))
+        brier = (clipped - actual) ** 2
+        log_loss = -(actual * math.log(clipped) + (1.0 - actual) * math.log(1.0 - clipped))
+        return brier, log_loss
+
+    def observe_forecasts(self) -> None:
+        current_ms = now_ms()
+        pending = self.state.get("pending_forecasts") if isinstance(self.state.get("pending_forecasts"), dict) else {}
+        by_market: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        for forecast_id, forecast in pending.items():
+            if current_ms < int(forecast.get("resolution_due_ms") or 0) + 5000:
+                continue
+            by_market.setdefault(str(forecast.get("market_id") or ""), []).append((forecast_id, forecast))
+        attempted = self.state.setdefault("forecast_settlement_attempted_at", {})
+        for market_id, forecasts in by_market.items():
+            if not market_id or current_ms - int(attempted.get(market_id) or 0) < 10_000:
+                continue
+            attempted[market_id] = current_ms
+            try:
+                raw = request_json(
+                    f"{self.gamma_url}/markets/{urllib.parse.quote(market_id)}", timeout=4
+                )
+            except Exception:
+                continue
+            if not isinstance(raw, dict) or raw.get("closed") is not True:
+                continue
+            tokens = [str(value) for value in parse_array(raw.get("clobTokenIds"))]
+            prices = [finite(value) for value in parse_array(raw.get("outcomePrices"))]
+            winning_index = next((index for index, price in enumerate(prices)
+                                  if math.isfinite(price) and price >= 1.0 - 1e-9), -1)
+            if winning_index < 0 or winning_index >= len(tokens):
+                continue
+            winning_token = tokens[winning_index]
+            for forecast_id, forecast in forecasts:
+                if winning_token not in {
+                    str(forecast.get("yes_token") or ""),
+                    str(forecast.get("no_token") or ""),
+                }:
+                    continue
+                actual_yes = 1.0 if winning_token == str(forecast.get("yes_token") or "") else 0.0
+                model_brier, model_log_loss = self.forecast_scores(float(forecast["model_yes"]), actual_yes)
+                market_brier, market_log_loss = self.forecast_scores(float(forecast["market_yes"]), actual_yes)
+                self.emit_counterfactual(
+                    "FORECAST_FINAL", counterfactual_id=forecast_id, forecast_id=forecast_id,
+                    market_id=market_id, tte_bucket_seconds=forecast["tte_bucket_seconds"],
+                    model_yes=forecast["model_yes"], market_yes=forecast["market_yes"],
+                    actual_yes=actual_yes, winning_token_id=winning_token,
+                    model_brier=model_brier, market_brier=market_brier,
+                    model_log_loss=model_log_loss, market_log_loss=market_log_loss,
+                )
+                pending.pop(forecast_id, None)
+                self.state["resolved_forecasts"] = int(self.state.get("resolved_forecasts") or 0) + 1
 
     def order_size(self, row: dict[str, Any]) -> float:
         book: Book = row["book"]
@@ -578,6 +708,7 @@ class PaperRouter:
             "code_sha": self.sha, "state": "KILLED" if killed else "DRAINING" if drain_requested else "RUNNING", "paper_only": True,
             "authenticated_execution": False, "real_order_submission": False,
             "execution_mode": "SHADOW_COUNTERFACTUAL",
+            "policy_sha256": self.policy_sha256,
             "execution_authority": "SHADOW_ZERO_AUTHORITY", "model_mature": self.model_mature,
             "economic_confidence": "MORE_EVIDENCE_REQUIRED", "active_candidates": active_candidates,
             "entry_tte_window_seconds": {
@@ -601,6 +732,12 @@ class PaperRouter:
             "candidates_spooled": 0,
             "orders_submitted": int(self.state.get("orders") or 0), "fills": int(self.state.get("fills") or 0),
             "counterfactual_fills": int(self.state.get("counterfactual_fills") or 0),
+            "counterfactual_forecasts": int(self.state.get("forecasts") or 0),
+            "counterfactual_resolved_forecasts": int(self.state.get("resolved_forecasts") or 0),
+            "counterfactual_pending_forecasts": len(
+                self.state.get("pending_forecasts")
+                if isinstance(self.state.get("pending_forecasts"), dict) else {}
+            ),
             "counterfactual_open_positions": open_positions,
             "counterfactual_realized_pnl": float(self.state.get("counterfactual_realized_pnl") or 0.0),
             "counterfactual_equity": virtual_equity,
@@ -633,6 +770,7 @@ class PaperRouter:
             rows: list[dict[str, Any]] = []
         else:
             books = self.books_for(status)
+            self.record_forecast(status, books)
             rows = robust_candidates(status, books, self.policy)
         filled = False
         for row in rows:
@@ -670,6 +808,7 @@ class PaperRouter:
             "best_robust_ev_per_share": max((float(row["robust_ev"]) for row in rows), default=None),
         }
         self.observe_positions()
+        self.observe_forecasts()
         self.publish(len(rows), blocker)
 
     def run(self, interval: float) -> None:

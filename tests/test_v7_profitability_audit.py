@@ -35,6 +35,13 @@ def main() -> None:
         ]
         (archive / "execution.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
         (live / "execution.jsonl").write_text(json.dumps(rows[0]) + "\n")
+        tape = root / "live" / "external_fair" / "counterfactuals.jsonl"
+        tape.parent.mkdir(parents=True)
+        tape.write_text(json.dumps({
+            "record_id": "cf-final", "model_sha": "a" * 40,
+            "event_type": "FORECAST_FINAL", "model_yes": 0.9,
+            "market_yes": 0.7, "actual_yes": 0.0,
+        }) + "\n")
         report = audit([root])
         assert report["data_quality"]["raw_records"] == 7
         assert report["data_quality"]["unique_records"] == 6
@@ -46,6 +53,8 @@ def main() -> None:
         assert report["external_fair"]["realized_pnl"] == -7.0
         assert report["external_fair"]["predicted_robust_net_ev"] == 2.0
         assert report["external_fair"]["model_brier_minus_market"] > 0.0
+        assert report["external_fair_counterfactual"]["events"]["FORECAST_FINAL"] == 1
+        assert report["external_fair_counterfactual"]["forecast_model_score"]["brier"] > report["external_fair_counterfactual"]["forecast_market_benchmark_score"]["brier"]
         assert report["selected_sleeves_realized_pnl"] == -7.5
         assert report["profitability_proven"] is False
 

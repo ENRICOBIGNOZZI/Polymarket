@@ -136,13 +136,15 @@ def main() -> None:
         assert not (run_root / "ledger" / "spool").exists()
         events = [json.loads(line) for line in (external / "counterfactuals.jsonl").read_text().splitlines()]
         event_types = {event["event_type"] for event in events}
-        assert {"CANDIDATE", "VIRTUAL_FILL"} <= event_types
+        assert {"FORECAST", "CANDIDATE", "VIRTUAL_FILL"} <= event_types
         status = json.loads((external / "paper_router_status.json").read_text())
         assert status["execution_authority"] == "SHADOW_ZERO_AUTHORITY"
         assert status["order_submission_enabled"] is False
         assert status["counterfactual_collection_enabled"] is True
         assert status["fills"] == 0
         assert status["counterfactual_fills"] == 1
+        assert status["counterfactual_forecasts"] == 1
+        assert status["counterfactual_pending_forecasts"] == 1
         assert status["model_mature"] is False
         assert status["sizing_regime"] == "IMMATURE_SHADOW_FIXED_NOTIONAL"
         assert status["market_capital_ceiling"] == 10.0
@@ -229,6 +231,38 @@ def main() -> None:
         assert final["virtual_cashflow"] == 10.0
         assert final["metadata"]["counterfactual"] is True
         assert final["metadata"]["winning_token_id"] == "up-token"
+
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        collector = router.PaperRouter(
+            run_root, "d" * 40, ROOT / "config" / "v7_external_fair.json",
+            "https://clob.invalid", "https://gamma.invalid",
+        )
+        observation = snapshot()
+        observation["code_sha"] = "d" * 40
+        observation["fair"].update({"yes": 0.60, "pm_mid": 0.80})
+        observation["market"].update({"market_id": "forecast-market", "event_id": "forecast-event"})
+        books = {"yes": book("yes", 0.50), "no": book("no", 0.51)}
+        assert collector.record_forecast(observation, books)
+        assert not collector.record_forecast(observation, books)
+        pending = next(iter(collector.state["pending_forecasts"].values()))
+        pending["resolution_due_ms"] = router.now_ms() - 10_000
+        resolution = {
+            "closed": True, "clobTokenIds": '["yes", "no"]',
+            "outcomePrices": '["1", "0"]',
+        }
+        with mock.patch.object(router, "request_json", return_value=resolution):
+            collector.observe_forecasts()
+        assert collector.state["forecasts"] == 1
+        assert collector.state["resolved_forecasts"] == 1
+        assert collector.state["pending_forecasts"] == {}
+        events = [
+            json.loads(line) for line in
+            (run_root / "external_fair" / "counterfactuals.jsonl").read_text().splitlines()
+        ]
+        final = next(event for event in events if event["event_type"] == "FORECAST_FINAL")
+        assert final["actual_yes"] == 1.0
+        assert final["model_brier"] > final["market_brier"]
 
 
 if __name__ == "__main__":
