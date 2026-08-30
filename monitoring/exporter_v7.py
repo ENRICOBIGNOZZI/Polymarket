@@ -30,6 +30,7 @@ from v7_ledger_metrics import summarize_ledger
 from v7_external_fair import summarize_external_fair
 from v7_maker_fillability_exact import summarize_best_available_fillability
 from v7_maker_microstructure import summarize_maker_microstructure
+from v7_portfolio_reconciliation import reconcile as reconcile_portfolio
 
 _FILLABILITY_CACHE_KEY: tuple[str, str, int] | None = None
 _FILLABILITY_CACHE_VALUE: dict[str, Any] | None = None
@@ -140,6 +141,7 @@ def _runtime_operations(run_root: Path, runtime: dict[str, Any], now: int) -> di
         ledger_writable = ledger_writable and os.access(ledger_path, os.W_OK)
     return {
         "supervisor": supervisor,
+        "retention": retention,
         "supervisor_alive": _pid_alive(supervisor_pid),
         "single_writer": runtime_pid > 0 and runtime_pid == lock_pid and _pid_alive(lock_pid) and (child_pid in {0, runtime_pid}),
         "runtime_uptime": max(0, now - started_at) if started_at > 0 else 0,
@@ -295,6 +297,18 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     external_fair = summarize_external_fair(
         run_root, repository_root, runtime_sha=runtime_sha, now_s=now,
     )
+    reconciliation = reconcile_portfolio(
+        canonical=canonical,
+        ledger=ledger,
+        portfolio=portfolio,
+        allocations=allocations,
+        state_realized_pnl={
+            "GRAPH_RV": graph.get("realized_pnl_total") if graph else None,
+            "HARD_ARB": hard.get("realized_pnl_total") if hard else None,
+            "MICRO_TAKER": micro.get("realized_pnl_total") if micro else None,
+            "MICRO_MAKER_PRO": maker.get("realized_trading_pnl") if maker else None,
+        },
+    )
 
     budgets = allocations.get("budgets") if isinstance(allocations.get("budgets"), dict) else {}
     sleeves = portfolio.get("sleeves") if isinstance(portfolio.get("sleeves"), dict) else {}
@@ -306,7 +320,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         equity = _number(row.get("equity"), budget)
         strategies[str(name)] = {"equity": equity, "pnl": equity - budget, "killed": bool(row.get("killed", False))}
     if graph:
-        strategies.setdefault("graph_rv", {}).update({"equity": _number(graph.get("equity")), "pnl": _number(graph.get("equity")) - _number(budgets.get("graph_rv")), "killed": bool(graph.get("killed", False)), "signals": _integer(graph_scan.get("bundles"))})
+        strategies.setdefault("graph_rv", {}).update({"equity": _number(graph.get("equity")), "pnl": _number(graph.get("equity")) - _number(budgets.get("graph_rv")), "net_pnl": _number(graph.get("realized_pnl_total")), "killed": bool(graph.get("killed", False)), "signals": _integer(graph_scan.get("bundles"))})
     if hard:
         strategies.setdefault("hard_arb", {}).update({"equity": _number(hard.get("equity_cost_basis"), _number(hard.get("cash"))), "pnl": _number(hard.get("realized_pnl_total")), "killed": bool(hard.get("killed", False)), "signals": _integer(hard.get("candidates"))})
     if micro:
@@ -384,6 +398,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "maker_lab": maker_lab,
         "maker_fillability": maker_fillability,
         "external_fair": external_fair,
+        "reconciliation": reconciliation,
         "maker_latency": maker_latency,
         "trade_tape": tape,
         "authority": {"valid": authority_valid, "max_drawdown": authority_max_drawdown},
@@ -416,6 +431,7 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     portfolio = snapshot["portfolio"]
     graph = snapshot["graph"]
     canonical = snapshot["canonical_economics"]
+    reconciliation = snapshot.get("reconciliation") if isinstance(snapshot.get("reconciliation"), dict) else {}
     ledger = snapshot["ledger"]
     ages = snapshot["ages"]
     authority = snapshot["authority"]
@@ -597,6 +613,18 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
         if not math.isfinite(float(ages[key])) or float(ages[key]) > max_runtime_age: reasons.append(f"{key}_stale")
     if not math.isfinite(float(ages["portfolio"])) or float(ages["portfolio"]) > max_supervisor_age: reasons.append("portfolio_guard_stale")
     if snapshot["economics"]["killed"]: reasons.append("runtime_killed")
+    retention_age = _number((snapshot.get("operations") or {}).get("retention_age"), math.inf)
+    retention = (snapshot.get("operations") or {}).get("retention")
+    if (
+        not isinstance(retention, dict)
+        or retention.get("schema") != "polymarket_v7_retention_status_v1"
+        or retention.get("paper_only") is not True
+        or retention.get("authenticated_execution") is not False
+        or retention.get("expected_sha") != snapshot.get("sha")
+        or not math.isfinite(retention_age)
+        or retention_age > 7200
+    ):
+        reasons.append("retention_service_missing_or_stale")
     max_drawdown = _number(authority.get("max_drawdown"), 0.0)
     if max_drawdown > 0.0 and snapshot["economics"]["drawdown"] >= max_drawdown - 1e-12: reasons.append("drawdown_limit_breached")
     if external_fair.get("external_fair_required_markets", 0) and not external_fair.get("shadow_zero_authority", True):
@@ -807,6 +835,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     economics = snapshot["economics"]
     authority = snapshot["authority"]
     canonical = snapshot["canonical_economics"]
+    reconciliation = snapshot.get("reconciliation") if isinstance(snapshot.get("reconciliation"), dict) else {}
     maker_lab = snapshot.get("maker_lab") if isinstance(snapshot.get("maker_lab"), dict) else {}
     maker_latency = snapshot.get("maker_latency") if isinstance(snapshot.get("maker_latency"), dict) else {}
     operations = snapshot.get("operations") if isinstance(snapshot.get("operations"), dict) else {}
@@ -994,6 +1023,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_disk_free_bytes", disk.get("free_bytes")),
         _metric("polymarket_v7_disk_free_ratio", disk.get("free_ratio")),
         _metric("polymarket_v7_retention_status_age_seconds", 0 if not math.isfinite(float(operations.get("retention_age", math.inf))) else operations.get("retention_age")),
+        _metric("polymarket_v7_retention_status_present", 1 if math.isfinite(float(operations.get("retention_age", math.inf))) else 0),
         _metric("polymarket_runtime_equity_usd", economics["equity"]),
         _metric("polymarket_runtime_pnl_usd", economics["pnl"]),
         _metric("polymarket_runtime_realized_pnl_usd", economics["realized_pnl"]),
@@ -1006,6 +1036,10 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_canonical_economics_promotion_ready", 1 if canonical.get("promotion_ready") else 0),
         _metric("polymarket_v7_canonical_submitted_units", canonical.get("submitted_units")),
         _metric("polymarket_v7_canonical_complete_units", canonical.get("complete_units")),
+        _metric("polymarket_v7_portfolio_reconciled", 1 if reconciliation.get("reconciled") else 0),
+        _metric("polymarket_v7_reconciliation_divergences", len(reconciliation.get("reason_codes") or [])),
+        _metric("polymarket_v7_reconciliation_portfolio_equity_difference_usd", _number(reconciliation.get("portfolio_equity")) - _number(reconciliation.get("sleeve_equity_sum"))),
+        _metric("polymarket_v7_reconciliation_terminal_pnl_difference_usd", _number(reconciliation.get("ledger_terminal_pnl")) - _number(reconciliation.get("canonical_realized_pnl"))),
         _metric("polymarket_v7_ledger_present", 1 if ledger.get("present") else 0),
         _metric("polymarket_v7_ledger_valid", 1 if ledger.get("valid") else 0),
         _metric("polymarket_v7_ledger_rows", _integer(ledger.get("rows"))),
@@ -1075,6 +1109,17 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
             if key in row and row[key] is not None: lines.append(_metric(metric_name,row[key],labels_s))
         if "killed" in row: lines.append(_metric("polymarket_strategy_killed",1 if row["killed"] else 0,labels_s))
         if "paper_eligible" in row: lines.append(_metric("polymarket_strategy_paper_eligible",1 if row["paper_eligible"] else 0,labels_s))
+    for strategy, row in sorted((reconciliation.get("strategies") or {}).items()):
+        if not isinstance(row, dict):
+            continue
+        labels_s = {"strategy": strategy}
+        lines.append(_metric("polymarket_v7_reconciliation_strategy_canonical_pnl_usd", row.get("canonical_realized_pnl"), labels_s))
+        if row.get("state_realized_pnl") is not None:
+            lines.append(_metric("polymarket_v7_reconciliation_strategy_state_pnl_usd", row.get("state_realized_pnl"), labels_s))
+            lines.append(_metric("polymarket_v7_reconciliation_strategy_difference_usd", row.get("difference"), labels_s))
+            lines.append(_metric("polymarket_v7_reconciliation_strategy_matched", 1 if row.get("matched") else 0, labels_s))
+    for reason in reconciliation.get("reason_codes") or []:
+        lines.append(_metric("polymarket_v7_reconciliation_reason", 1, {"reason": reason}))
     for family, row in sorted(research_rows.items()):
         if not isinstance(row, dict):
             continue

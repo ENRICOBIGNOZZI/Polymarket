@@ -217,6 +217,14 @@ groups:
           summary: V7 receive-time public trade tape is empty
           description: Causal PAPER fill replay cannot be trusted without public trade observations carrying local receive time.
 
+      - alert: PolymarketV7RetentionStale
+        expr: (polymarket_v7_retention_status_present < 1) or (polymarket_v7_retention_status_age_seconds > 7200)
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: V7 immutable retention/checkpoint service is stale
+          description: The hourly append-only ledger checkpoint and bounded telemetry retention service has not reported within two hours.
+
       - alert: PolymarketV7CanonicalLedgerInvalid
         expr: (polymarket_v7_ledger_present > 0) and (polymarket_v7_ledger_valid < 1)
         for: 0s
@@ -224,6 +232,14 @@ groups:
         annotations:
           summary: Canonical V7 execution ledger is invalid
           description: The canonical ledger is present but invalid or mixed-SHA; fill and PnL evidence must not be trusted.
+
+      - alert: PolymarketV7AccountingDivergence
+        expr: polymarket_v7_portfolio_reconciled < 1
+        for: 15s
+        labels: {severity: critical}
+        annotations:
+          summary: V7 ledger, sleeve state and portfolio accounting diverged
+          description: Economic promotion is fail-closed until canonical terminal PnL, sleeve realized PnL, allocation and portfolio equity reconcile.
 
       - alert: PolymarketV7SettlementOracleStale
         expr: (polymarket_external_fair_present > 0) and (polymarket_external_fair_oracle_healthy < 1)

@@ -34,6 +34,8 @@ class V7OperatorHomeTest(unittest.TestCase):
             "polymarket_v7_universe_discovery_exhaustive",
             "polymarket_v7_universe_tier_markets",
             "polymarket_v7_universe_resource_limit",
+            "polymarket_v7_portfolio_reconciled",
+            "polymarket_v7_reconciliation_strategy_difference_usd",
             "ALERTS",
         ):
             self.assertIn(metric, serialized)
@@ -54,6 +56,8 @@ class V7OperatorHomeTest(unittest.TestCase):
             "PolymarketV7DiskPressure",
             "PolymarketV7RestartStorm",
             "PolymarketV7ExactShaDrift",
+            "PolymarketV7AccountingDivergence",
+            "PolymarketV7RetentionStale",
         ):
             self.assertIn(alert, alerts)
         self.assertNotIn("ZeroTrades", alerts)

@@ -132,6 +132,35 @@ def expire_rotated_streams(run_root: Path, streams: list[Any], *, now: int, dry_
     return sorted(set(removed))
 
 
+def rotate_append_reopen_streams(
+    run_root: Path, active_policy: dict[str, Any], *, now: int, dry_run: bool
+) -> list[str]:
+    """Rotate only explicitly declared streams whose writers reopen on each append."""
+    root = run_root.resolve()
+    maximum = max(1, int(active_policy.get("append_reopen_max_bytes") or 1))
+    protected = {str(value) for value in active_policy.get("never_copytruncate", [])}
+    rotated: list[str] = []
+    for raw in active_policy.get("append_reopen_streams", []):
+        relative = Path(str(raw))
+        if relative.is_absolute() or ".." in relative.parts or str(relative) in protected:
+            raise ValueError(f"unsafe append-reopen rotation target:{raw}")
+        active = (root / relative).resolve()
+        try:
+            active.relative_to(root)
+            size = active.stat().st_size
+        except (OSError, ValueError):
+            continue
+        if not active.is_file() or size < maximum:
+            continue
+        target = active.with_name(f"{active.name}.{now}")
+        if target.exists():
+            raise ValueError(f"rotation target already exists:{target}")
+        rotated.append(str(target.relative_to(root)))
+        if not dry_run:
+            os.replace(active, target)
+    return rotated
+
+
 def prune_checkpoints(run_root: Path, policy: dict[str, Any], *, durable_archive_confirmed: bool, dry_run: bool) -> list[str]:
     if not durable_archive_confirmed:
         return []
@@ -161,6 +190,9 @@ def run_retention(
         raise ValueError("invalid V7 PAPER retention policy")
     disk = disk_state(run_root, config["disk"])
     checkpoint = checkpoint_ledger(run_root, config["canonical_ledger"], expected_sha) if not dry_run else {"created": False, "reason": "dry_run"}
+    rotated = rotate_append_reopen_streams(
+        run_root, config.get("active_files", {}), now=now, dry_run=dry_run
+    )
     expired = expire_rotated_streams(run_root, config.get("streams", []), now=now, dry_run=dry_run)
     pruned = prune_checkpoints(
         run_root,
@@ -176,6 +208,7 @@ def run_retention(
         "expected_sha": expected_sha,
         "disk": disk,
         "ledger_checkpoint": checkpoint,
+        "rotated_append_reopen_streams": rotated,
         "expired_rotated_segments": expired,
         "pruned_ledger_checkpoints": pruned,
         "durable_archive_confirmed": durable_archive_confirmed,

@@ -80,6 +80,7 @@
     "control/portfolio_state.json",
     "control/allocations/manifest.json",
     "control/research_sleeves_manifest.json",
+    "control/retention_status.json",
     "micro_maker/rotation_status.json",
     "universe/status.json",
     "osint/status.json",

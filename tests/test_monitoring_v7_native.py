@@ -139,6 +139,16 @@ class V7NativeMonitoringTest(unittest.TestCase):
             },
         )
         self._write(
+            root / "control" / "retention_status.json",
+            {
+                "schema": "polymarket_v7_retention_status_v1",
+                "timestamp": now - 10,
+                "paper_only": True,
+                "authenticated_execution": False,
+                "expected_sha": sha,
+            },
+        )
+        self._write(
             root / "graph_rv" / "status.json",
             {
                 "schema": "polymarket_v7_graph_rv_status_v1",

@@ -11,12 +11,31 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "monitoring"))
 
-from v7_retention import run_retention
+from v7_retention import rotate_append_reopen_streams, run_retention
 
 SHA = "c" * 40
 
 
 class V7RuntimeRetentionTest(unittest.TestCase):
+    def test_only_explicit_append_reopen_streams_rotate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tape = root / "external_fair/rtds_events.jsonl"
+            tape.parent.mkdir(parents=True)
+            tape.write_text("x" * 20)
+            protected = root / "ledger/execution.jsonl"
+            protected.parent.mkdir(parents=True)
+            protected.write_text("protected")
+            result = rotate_append_reopen_streams(root, {
+                "append_reopen_max_bytes": 10,
+                "append_reopen_streams": ["external_fair/rtds_events.jsonl"],
+                "never_copytruncate": ["ledger/execution.jsonl"],
+            }, now=123, dry_run=False)
+            self.assertEqual(result, ["external_fair/rtds_events.jsonl.123"])
+            self.assertFalse(tape.exists())
+            self.assertTrue((root / result[0]).exists())
+            self.assertEqual(protected.read_text(), "protected")
+
     def test_ledger_checkpoint_is_immutable_verified_and_source_is_never_rotated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_root = Path(directory)

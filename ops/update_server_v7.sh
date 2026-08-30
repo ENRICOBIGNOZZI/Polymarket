@@ -519,6 +519,7 @@ for rel in (
     'monitoring/v7_alerts.yml',
     'monitoring/v7_runtime_contract.py',
     'monitoring/v7_retention.py',
+    'monitoring/v7_portfolio_reconciliation.py',
     'monitoring/grafana/dashboards/polymarket-v7.json',
     'monitoring/grafana/dashboards/polymarket-v7-external-fair.json',
     'ops/v7_runtime_supervisor.py',
@@ -575,6 +576,7 @@ prevalidate_candidate(){
       monitoring/v7_ledger_metrics.py \
       monitoring/v7_runtime_contract.py \
       monitoring/v7_retention.py \
+      monitoring/v7_portfolio_reconciliation.py \
       ops/v7_runtime_supervisor.py
     bash -n scripts/paper_v7_execution_loop.sh ops/update_server_v7.sh ops/v7_service_entrypoint.sh
     python3 -m json.tool config/live_champion.json >/dev/null
@@ -689,6 +691,27 @@ stop_owned_monitoring(){
   done
 }
 
+retire_legacy_macos_services(){
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  local domain="gui/$(id -u)" label user_plist system_plist
+  # Exact retired labels only. Canonical com.polymarket.v7.* services are never
+  # matched by this list, and unknown launchd jobs remain untouched.
+  for label in \
+    com.polymarket.paper \
+    com.polymarket.exporter \
+    com.polymarket.prometheus \
+    com.polymarket.grafana; do
+    launchctl bootout "$domain/$label" >/dev/null 2>&1 || true
+    launchctl bootout "system/$label" >/dev/null 2>&1 || true
+    user_plist="$HOME/Library/LaunchAgents/$label.plist"
+    [[ ! -e "$user_plist" ]] || rm -f "$user_plist"
+    system_plist="/Library/LaunchDaemons/$label.plist"
+    if [[ -e "$system_plist" ]]; then
+      sudo -n rm -f "$system_plist" || fail "cannot remove retired launchd service: $system_plist"
+    fi
+  done
+}
+
 stop_stale_monitoring_listener(){
   local name="$1" port="$2" expected="$3" pid command_line pids
   command -v lsof >/dev/null 2>&1 || return 0
@@ -722,7 +745,8 @@ start_monitoring(){
   local run_root="$(production_run_root)" monitoring_root="$APP_DIR/runs/monitoring"
   if [[ "$(uname -s)" == "Darwin" ]]; then
     local domain="gui/$(id -u)" label template destination
-    for label in exporter prometheus grafana; do
+    retire_legacy_macos_services
+    for label in exporter prometheus grafana retention; do
       launchctl bootout "$domain/com.polymarket.v7.$label" >/dev/null 2>&1 || true
     done
     POLYMARKET_APP_DIR="$APP_DIR" POLYMARKET_STATE_DIR="$STATE_DIR" \
@@ -748,16 +772,17 @@ start_monitoring(){
     mkdir -p "$monitoring_root/prometheus"
     mkdir -p "$monitoring_root/grafana/data" "$monitoring_root/grafana/logs" \
       "$monitoring_root/grafana/plugins"
-    python3 - "$APP_DIR" "$run_root" "$STATE_DIR" "$prometheus_bin" "$grafana_bin" "$grafana_home" <<'PY'
+    python3 - "$APP_DIR" "$run_root" "$STATE_DIR" "$prometheus_bin" "$grafana_bin" "$grafana_home" "$EXPECTED_SHA" <<'PY'
 import os, sys
 from pathlib import Path
-app,run,state,prometheus,grafana,grafana_home=map(str,sys.argv[1:])
+app,run,state,prometheus,grafana,grafana_home,expected_sha=map(str,sys.argv[1:])
 launch_agents=Path.home()/'Library'/'LaunchAgents'
 launch_agents.mkdir(parents=True,exist_ok=True)
 contracts={
  'exporter': {'@APP_DIR@':app,'@RUN_ROOT@':run},
  'prometheus': {'@APP_DIR@':app,'@RUN_ROOT@':run,'@STATE_DIR@':state,'@PROMETHEUS_BIN@':prometheus},
  'grafana': {'@APP_DIR@':app,'@RUN_ROOT@':run,'@STATE_DIR@':state,'@GRAFANA_BIN@':grafana,'@GRAFANA_HOME@':grafana_home},
+ 'retention': {'@APP_DIR@':app,'@RUN_ROOT@':run,'@EXPECTED_SHA@':expected_sha},
 }
 for name,replacements in contracts.items():
     source=Path(app)/'ops'/'launchd'/f'com.polymarket.v7.{name}.plist.in'
@@ -771,7 +796,7 @@ for name,replacements in contracts.items():
     temporary.write_text(payload,encoding='utf-8')
     os.chmod(temporary,0o644); os.replace(temporary,destination)
 PY
-    for label in exporter prometheus grafana; do
+    for label in exporter prometheus grafana retention; do
       destination="$HOME/Library/LaunchAgents/com.polymarket.v7.$label.plist"
       plutil -lint "$destination" >/dev/null
       launchctl bootstrap "$domain" "$destination"
@@ -781,6 +806,12 @@ PY
       launchctl print "$domain/com.polymarket.v7.$label" 2>/dev/null | grep -q 'state = running' || \
         fail "launchd monitoring service failed to start: $label"
     done
+    for _ in $(seq 1 50); do
+      [[ -f "$run_root/control/retention_status.json" ]] && break
+      sleep 0.1
+    done
+    [[ -f "$run_root/control/retention_status.json" ]] || \
+      fail "canonical retention service did not publish status"
     return 0
   fi
   stop_owned_monitoring
@@ -816,7 +847,7 @@ runtime_health(){
 import csv,json,os,sys,time
 from pathlib import Path
 root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
-required=[root/'control/runtime_status.json',root/'control/portfolio_state.json',root/'control/allocations/manifest.json',root/'control/research_sleeves_manifest.json',root/'osint/status.json',root/'osint/mapping_status.json',root/'shadow/sports_latency/component_status.json',root/'shadow/cross_platform/component_status.json',root/'market_open/status.json',root/'graph_rv/status.json',root/'external_fair/paper_router_status.json',root/'canonical_economics.json',root/'ledger/execution.jsonl',root/'trade_tape.csv']
+required=[root/'control/runtime_status.json',root/'control/portfolio_state.json',root/'control/allocations/manifest.json',root/'control/research_sleeves_manifest.json',root/'control/retention_status.json',root/'osint/status.json',root/'osint/mapping_status.json',root/'shadow/sports_latency/component_status.json',root/'shadow/cross_platform/component_status.json',root/'market_open/status.json',root/'graph_rv/status.json',root/'external_fair/paper_router_status.json',root/'canonical_economics.json',root/'ledger/execution.jsonl',root/'trade_tape.csv']
 assert all(p.exists() for p in required), [str(p) for p in required if not p.exists()]
 runtime=json.loads((root/'control/runtime_status.json').read_text())
 portfolio=json.loads((root/'control/portfolio_state.json').read_text())

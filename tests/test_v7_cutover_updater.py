@@ -284,9 +284,22 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("'exporter': {'@APP_DIR@':app", text)
         self.assertIn("'prometheus': {'@APP_DIR@':app", text)
         self.assertIn("'grafana': {'@APP_DIR@':app", text)
+        self.assertIn("'retention': {'@APP_DIR@':app", text)
         self.assertIn("f'com.polymarket.v7.{name}.plist.in'", text)
         self.assertIn('launchctl bootout "$domain/com.polymarket.v7.$label"', text)
         self.assertIn('launchctl bootstrap "$domain" "$destination"', text)
+
+    def test_updater_erases_only_exact_allowlisted_legacy_launchd_services(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        function = text[text.index("retire_legacy_macos_services(){"):text.index("start_monitoring(){")]
+        for label in (
+            "com.polymarket.paper", "com.polymarket.exporter",
+            "com.polymarket.prometheus", "com.polymarket.grafana",
+        ):
+            self.assertIn(label, function)
+        self.assertIn('sudo -n rm -f "$system_plist"', function)
+        self.assertNotIn("find ", function)
+        self.assertNotIn("pkill", function)
 
     def test_updater_requires_exact_approved_main_sha(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")

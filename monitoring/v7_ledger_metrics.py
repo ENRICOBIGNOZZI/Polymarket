@@ -49,8 +49,8 @@ def _blank() -> dict[str, Any]:
         "unwinds": 0,
         "final_pnl": 0.0,
         "capital_duration_ms": 0.0,
-        "markout_sum": {h: 0.0 for h in ("1s", "10s", "45s", "60s", "300s")},
-        "markout_count": {h: 0 for h in ("1s", "10s", "45s", "60s", "300s")},
+        "markout_sum": {h: 0.0 for h in ("1s", "5s", "10s", "15s", "30s", "45s", "60s", "300s")},
+        "markout_count": {h: 0 for h in ("1s", "5s", "10s", "15s", "30s", "45s", "60s", "300s")},
     }
 
 

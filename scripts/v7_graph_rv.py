@@ -210,7 +210,7 @@ class Broker:
         self.sha, self.model = exact_sha(), load_joint_model(joint_model)
         self.shared_state = shared_state
         self.state_path = self.dir / "state.json"
-        self.state = {"model_sha": self.sha, "cash": float(self.cfg.get("starting_capital", 10000)), "peak": float(self.cfg.get("starting_capital", 10000)), "killed": False, "tape_cursor": 0, "bundles": {}}
+        self.state = {"model_sha": self.sha, "cash": float(self.cfg.get("starting_capital", 10000)), "peak": float(self.cfg.get("starting_capital", 10000)), "killed": False, "realized_pnl_total": 0.0, "tape_cursor": 0, "bundles": {}}
         try:
             old = json.loads(self.state_path.read_text())
             if old.get("model_sha") == self.sha: self.state.update(old)
@@ -402,6 +402,7 @@ class Broker:
         entry = sum(sum(f["shares"] * f["price"] + f["fee"] for f in leg["fills"]) for leg in bundle["legs"].values()); first = min((f["receive"] for leg in bundle["legs"].values() for f in leg["fills"]), default=now_ms())
         duration = max(0, now_ms() - first); annual = float((self.cfg.get("v7") or {}).get("capital_cost_rate_annual", .05)); capital_cost = entry * max(0.0, annual) * duration / (365 * 86400 * 1000)
         pnl = cashflow - entry - fee - capital_cost
+        self.state["realized_pnl_total"] = float(self.state.get("realized_pnl_total", 0.0)) + pnl
         self.emit(LedgerEvent(event_type="FINAL", strategy=STRATEGY, model_sha=self.sha, bundle_id=bundle["bundle_id"], event_id=bundle["event_id"], fee=0.0, slippage=0.0, unwind_loss=unwind_loss, capital_cost=capital_cost, latency_cost=0.0, realized_cashflow=cashflow - fee, final_pnl=pnl, capital_duration_ms=duration, metadata={"realized": True, "unwind_accounted": unwind_accounted, "cost_vector_complete": True, "reason": reason, "terminal_id": f"graph:{bundle['bundle_id']}:final", "pnl_decomposition": {"trading_pnl": pnl, "spread_capture": 0.0, "adverse_markout": 0.0, "inventory_pnl": 0.0, "maker_rebates": 0.0, "liquidity_rewards": 0.0, "own_reward_share_verified": False}}))
         bundle["final"] = True
 
@@ -449,7 +450,7 @@ class Broker:
                 if walked: equity += leg["filled"] * walked[1]
         self.state["peak"] = max(float(self.state.get("peak", equity)), equity); dd = max(0.0, 1 - equity/self.state["peak"]) if self.state["peak"] > 0 else 0.0
         if dd >= float(self.cfg.get("max_drawdown", .15)): self.state["killed"] = True
-        atomic_json(self.dir / "status.json", {"schema":"polymarket_v7_graph_rv_status_v1","timestamp":int(time.time()),"paper_only":True,"authenticated_execution":False,"model_sha":self.sha,"cash":self.state["cash"],"equity":equity,"drawdown":dd,"killed":self.state["killed"],"market_state_source":"SHARED_CPP_WEBSOCKET" if self.shared_state is not None else "REST_COMPATIBILITY","bundle_states":{k:v["status"] for k,v in self.state["bundles"].items()},"contracts":["queue_never_grants_size","unwind_depth_bounds_size","receive_time_causal_fills","shared_trade_capacity","direct_joint_distribution_not_product_of_marginals","partial_unwind_fail_closed","canonical_ledger_spool_only"]})
+        atomic_json(self.dir / "status.json", {"schema":"polymarket_v7_graph_rv_status_v1","timestamp":int(time.time()),"paper_only":True,"authenticated_execution":False,"model_sha":self.sha,"cash":self.state["cash"],"equity":equity,"realized_pnl_total":float(self.state.get("realized_pnl_total",0.0)),"drawdown":dd,"killed":self.state["killed"],"market_state_source":"SHARED_CPP_WEBSOCKET" if self.shared_state is not None else "REST_COMPATIBILITY","bundle_states":{k:v["status"] for k,v in self.state["bundles"].items()},"contracts":["queue_never_grants_size","unwind_depth_bounds_size","receive_time_causal_fills","shared_trade_capacity","direct_joint_distribution_not_product_of_marginals","partial_unwind_fail_closed","canonical_ledger_spool_only"]})
 
     def tick(self) -> None:
         self.risk(); self.admit(); self.apply_trades(); self.manage(); self.markouts(); self.risk(); self.state["model_sha"] = self.sha; atomic_json(self.state_path, self.state)

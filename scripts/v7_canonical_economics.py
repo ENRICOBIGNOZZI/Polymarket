@@ -512,6 +512,11 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         stress_totals[key] = sum(_stress_pnl(pnl, unit.baseline_cost(), multiplier) for unit, pnl in event_mature) if event_mature else None
 
     costs_by_component = {component: sum(unit.cost_totals[component] for unit, _ in event_mature) for component in COST_COMPONENTS}
+    strategy_net_pnl: dict[str, float] = defaultdict(float)
+    strategy_mature_terminal_units: dict[str, int] = defaultdict(int)
+    for unit, pnl in event_mature:
+        strategy_net_pnl[unit.strategy] += pnl
+        strategy_mature_terminal_units[unit.strategy] += 1
     pnl_decomposition = {
         component: (
             sum(unit.pnl_components[component] for unit, _ in event_mature)
@@ -585,6 +590,8 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         "minimum_positive_event_fold_fraction": MIN_POSITIVE_EVENT_FOLD_FRACTION,
         "positive_chronological_event_fold_fraction_2x": positive_fold_fraction,
         "net_pnl": stress_1x,
+        "strategy_net_pnl": dict(sorted(strategy_net_pnl.items())),
+        "strategy_mature_terminal_units": dict(sorted(strategy_mature_terminal_units.items())),
         "pnl_decomposition": {
             **pnl_decomposition,
             "fees": costs_by_component["fee"],

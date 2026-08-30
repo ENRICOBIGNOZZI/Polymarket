@@ -19,7 +19,7 @@
     {"name": "ws_tape", "patterns": ["market_data/*.csv.*", "market_data/*.jsonl.*"], "retention_days": 7},
     {"name": "trade_tape", "patterns": ["trade_tape.csv.*"], "retention_days": 30},
     {"name": "latency_telemetry", "patterns": ["micro_maker/latency.csv.*"], "retention_days": 14},
-    {"name": "external_events", "patterns": ["external/*.csv.*", "external/*.jsonl.*"], "retention_days": 30},
+    {"name": "external_events", "patterns": ["external/*.csv.*", "external/*.jsonl.*", "external_fair/*.jsonl.*"], "retention_days": 30},
     {"name": "sports_events", "patterns": ["sports/*.csv.*", "sports/*.jsonl.*"], "retention_days": 30},
     {"name": "wallet_tape", "patterns": ["wallet/*.csv.*", "wallet/*.jsonl.*"], "retention_days": 30},
     {"name": "runtime_logs", "patterns": ["**/*.log.*", "**/*.log.gz"], "retention_days": 14}
@@ -27,6 +27,11 @@
   "active_files": {
     "diagnostic_log_max_bytes": 104857600,
     "diagnostic_log_generations": 10,
+    "append_reopen_max_bytes": 104857600,
+    "append_reopen_streams": [
+      "external_fair/rtds_events.jsonl",
+      "external_fair/counterfactuals.jsonl"
+    ],
     "never_copytruncate": ["ledger/execution.jsonl", "trade_tape.csv", "micro_maker/latency.csv"]
   }
 }
