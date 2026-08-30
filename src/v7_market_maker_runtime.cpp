@@ -470,9 +470,9 @@ MakerModelSnapshot load_model_snapshot(const fs::path& policy_path,
     model.exploration_concurrent_market_cap = exploration_market_cap;
     model.exploration_min_rest_ns = std::max<std::int64_t>(0, object_integer(
         exploration, "minimum_rest_ms", 0)) * 1'000'000LL;
-    model.exploration_max_rest_ns = std::max(model.exploration_min_rest_ns,
+    model.exploration_max_rest_ns = std::max<std::int64_t>(model.exploration_min_rest_ns,
         std::max<std::int64_t>(0, object_integer(exploration, "maximum_rest_ms", 0))
-            * 1'000'000LL);
+            * std::int64_t{1'000'000});
     model.exploration_enabled = static_cast<std::uint8_t>(exploration != nullptr
         && boolean(find_value(*exploration, "enabled"), false)
         && model.exploration_epsilon > 0.0
