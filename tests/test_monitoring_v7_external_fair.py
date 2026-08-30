@@ -72,15 +72,21 @@ def status(authority: str = "SHADOW_ZERO_AUTHORITY") -> dict:
             "valid_until_monotonic_ns": 200,
         },
         "actions": {"MAKE": 1, "TAKE": 2, "CANCEL": 3, "WITHDRAW": 4, "NOTHING": 5},
+        "counterfactual_actions": {"TAKE": 7},
         "paper_router": {
             "active_candidates": 1, "orders_submitted": 2, "fills": 1,
+            "counterfactual_collection_enabled": True,
+            "counterfactual_candidates": 8, "counterfactual_fills": 7,
+            "counterfactual_open_positions": 2,
             "book_requests": 9, "book_request_failures": 2, "book_parse_failures": 1,
             "rejection_reasons": {"NO_ROBUST_EV": 4},
             "last_decision": {"outcome": "NO_ROBUST_EV"},
         },
         "purposes": {"ALPHA": 3, "INVENTORY_REDUCTION": 1, "RISK": 5, "LIQUIDATION": 0},
         "cancel": {"fair_shock": 3, "latency_p50_ms": 1.0, "latency_p99_ms": 5.0},
-        "economics": {"maker_robust_ev": 0.01, "taker_robust_ev": 0.02, "realized_pnl": 0.1},
+        "economics": {"maker_robust_ev": 0.01, "taker_robust_ev": 0.02,
+                      "realized_pnl": 0.1, "counterfactual_realized_pnl": -1.2,
+                      "counterfactual_equity": 3998.8},
         "model": {"mature": False, "log_loss": 0.6, "brier": 0.2, "ece": 0.04,
                   "coverage": 0.9, "drift_score": 0.5},
         "latency": {"source_to_state": {"p50": 0.1, "p99": 0.5}},
@@ -121,6 +127,10 @@ def main() -> None:
         text = "\n".join(lines)
         assert "polymarket_external_fair_yes 0.7" in text
         assert 'polymarket_external_fair_actions_total{action="TAKE"} 2' in text
+        assert 'polymarket_external_fair_counterfactual_actions_total{action="TAKE"} 7' in text
+        assert "polymarket_external_fair_counterfactual_collection_enabled 1" in text
+        assert "polymarket_external_fair_counterfactual_fills_total 7" in text
+        assert "polymarket_external_fair_counterfactual_realized_pnl -1.2" in text
         assert 'polymarket_external_fair_oracle_continuity_info{continuity="LIVE_CONTINUOUS"} 1' in text
         assert 'polymarket_external_fair_venue_healthy{venue="BINANCE_SPOT"} 1' in text
         assert "polymarket_external_fair_router_book_requests_total 9" in text

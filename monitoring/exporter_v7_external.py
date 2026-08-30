@@ -106,11 +106,21 @@ def _append_external_fair_metrics(lines: list[str], report: dict[str, Any]) -> N
     actions = report.get("actions") if isinstance(report.get("actions"), dict) else {}
     for action in ("MAKE", "TAKE", "CANCEL", "WITHDRAW", "NOTHING"):
         lines.append(metric("polymarket_external_fair_actions_total", actions.get(action), {"action": action}))
+    counterfactual_actions = report.get("counterfactual_actions") if isinstance(report.get("counterfactual_actions"), dict) else {}
+    for action in ("MAKE", "TAKE", "CANCEL", "WITHDRAW", "NOTHING"):
+        lines.append(metric(
+            "polymarket_external_fair_counterfactual_actions_total",
+            counterfactual_actions.get(action), {"action": action},
+        ))
     router = report.get("paper_router") if isinstance(report.get("paper_router"), dict) else {}
     lines.extend([
         metric("polymarket_external_fair_router_active_candidates", router.get("active_candidates")),
         metric("polymarket_external_fair_router_orders_submitted_total", router.get("orders_submitted")),
         metric("polymarket_external_fair_router_fills_total", router.get("fills")),
+        metric("polymarket_external_fair_counterfactual_collection_enabled", 1 if router.get("counterfactual_collection_enabled") else 0),
+        metric("polymarket_external_fair_counterfactual_candidates_total", router.get("counterfactual_candidates")),
+        metric("polymarket_external_fair_counterfactual_fills_total", router.get("counterfactual_fills")),
+        metric("polymarket_external_fair_counterfactual_open_positions", router.get("counterfactual_open_positions")),
         metric("polymarket_external_fair_router_book_requests_total", router.get("book_requests")),
         metric("polymarket_external_fair_router_book_request_failures_total", router.get("book_request_failures")),
         metric("polymarket_external_fair_router_book_parse_failures_total", router.get("book_parse_failures")),
@@ -146,6 +156,8 @@ def _append_external_fair_metrics(lines: list[str], report: dict[str, Any]) -> N
         ("maker_robust_ev", "polymarket_external_fair_maker_robust_ev"),
         ("taker_robust_ev", "polymarket_external_fair_taker_robust_ev"),
         ("realized_pnl", "polymarket_external_fair_realized_pnl"),
+        ("counterfactual_realized_pnl", "polymarket_external_fair_counterfactual_realized_pnl"),
+        ("counterfactual_equity", "polymarket_external_fair_counterfactual_equity"),
         ("terminal_pnl", "polymarket_external_fair_terminal_pnl"),
         ("taker_fees", "polymarket_external_fair_taker_fees"),
         ("maker_fees", "polymarket_external_fair_maker_fees"),

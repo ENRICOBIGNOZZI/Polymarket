@@ -3,7 +3,7 @@
   "architecture": "V7",
   "component": "settlement_aware_external_fair",
   "enabled": true,
-  "execution_authority": "PAPER_EXECUTION_OWNER",
+  "execution_authority": "SHADOW_ZERO_AUTHORITY",
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
@@ -152,7 +152,7 @@
   "maker": {
     "external_fair_repricing_implemented": true,
     "authority": "PAPER",
-    "external_fair_enabled_for_live_quotes": true,
+    "external_fair_enabled_for_live_quotes": false,
     "pm_state_role": [
       "BOOK",
       "QUEUE",
@@ -165,12 +165,13 @@
     "execution_model_separate_from_fair_value": true,
     "execution_evidence_maturity": "COLD_START",
     "economic_validation_requires_fill_conditioned_evidence": true,
-    "economic_maturity_may_block_paper": false
+    "economic_maturity_may_block_paper": true
   },
   "taker": {
     "native_v7_implemented": true,
-    "authority": "PAPER",
-    "enabled_for_execution": true,
+    "authority": "SHADOW",
+    "enabled_for_execution": false,
+    "counterfactual_enabled": true,
     "economic_model": "HOLD_TO_SETTLEMENT",
     "authoritative_fee_required": true,
     "unknown_fee_behavior": "NO_TAKE",
@@ -252,7 +253,7 @@
       "examples": ["INVALID_CONTRACT", "WRONG_OUTCOME_MAPPING", "FUTURE_DATA", "INVALID_L2", "SELF_CROSS", "RISK", "KILL", "ORACLE_UNKNOWN", "FEE_UNKNOWN"]
     },
     "B_ECONOMIC_MATURITY": {
-      "may_block_paper": false,
+      "may_block_paper": true,
       "reported_as": "ECONOMIC_CONFIDENCE",
       "examples": ["INSUFFICIENT_FILLS", "INSUFFICIENT_EVENTS", "WEAK_SIGNIFICANCE", "NEGATIVE_2X_STRESS", "SHORT_FORWARD_HISTORY"]
     },

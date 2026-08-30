@@ -93,8 +93,9 @@ def main() -> None:
     unsafe = snapshot(); unsafe["real_order_submission"] = True
     assert robust_candidates(unsafe, {"yes": book("yes", 0.50)}, policy) == []
     source = (ROOT / "scripts" / "v7_external_fair_paper_router.py").read_text()
-    assert 'event_type="ORDER_SUBMITTED"' in source
-    assert 'event_type="FILL"' in source
+    assert 'event_type="ORDER_SUBMITTED"' not in source
+    assert 'event_type="FILL"' not in source
+    assert '"VIRTUAL_FILL"' in source
     assert "api_key" not in source.lower()
     assert "signature" not in source.lower()
 
@@ -132,22 +133,25 @@ def main() -> None:
         ) <= 10.0 + 1e-9
         with mock.patch.object(router, "request_json", side_effect=public_request):
             paper.step()
-        events = [json.loads(path.read_text()) for path in (run_root / "ledger" / "spool").glob("*.json")]
+        assert not (run_root / "ledger" / "spool").exists()
+        events = [json.loads(line) for line in (external / "counterfactuals.jsonl").read_text().splitlines()]
         event_types = {event["event_type"] for event in events}
-        assert {"CANDIDATE", "ORDER_SUBMITTED", "ORDER_STATE", "FILL"} <= event_types
+        assert {"CANDIDATE", "VIRTUAL_FILL"} <= event_types
         status = json.loads((external / "paper_router_status.json").read_text())
-        assert status["execution_authority"] == "PAPER_EXECUTION_OWNER"
-        assert status["order_submission_enabled"] is True
-        assert status["fills"] == 1
+        assert status["execution_authority"] == "SHADOW_ZERO_AUTHORITY"
+        assert status["order_submission_enabled"] is False
+        assert status["counterfactual_collection_enabled"] is True
+        assert status["fills"] == 0
+        assert status["counterfactual_fills"] == 1
         assert status["model_mature"] is False
-        assert status["sizing_regime"] == "IMMATURE_FIXED_EXPLORATION"
+        assert status["sizing_regime"] == "IMMATURE_SHADOW_FIXED_NOTIONAL"
         assert status["market_capital_ceiling"] == 10.0
         assert status["entry_tte_window_seconds"] == {"minimum": 5.0, "maximum": 60.0}
         assert status["book_requests"] == 2
         assert status["book_request_failures"] == 0
         assert status["book_parse_failures"] == 0
-        assert status["last_decision"]["outcome"] == "FILLED"
-        fill = next(event for event in events if event["event_type"] == "FILL")
+        assert status["last_decision"]["outcome"] == "VIRTUAL_FILL"
+        fill = next(event for event in events if event["event_type"] == "VIRTUAL_FILL")
         assert fill["metadata"]["tte_seconds"] == 45.0
         assert fill["metadata"]["arrival_tte_seconds"] == 45.0
         assert fill["metadata"]["robust_probability"] == 0.75
@@ -161,7 +165,8 @@ def main() -> None:
         with mock.patch.object(router, "request_json", side_effect=public_request):
             paper.step()
         status = json.loads((external / "paper_router_status.json").read_text())
-        assert status["fills"] == 1
+        assert status["fills"] == 0
+        assert status["counterfactual_fills"] == 1
         assert status["last_decision"]["outcome"] == "MODEL_MARKET_DISAGREEMENT_LIMIT"
         assert status["rejection_reasons"]["MODEL_MARKET_DISAGREEMENT_LIMIT"] == 1
 
@@ -171,10 +176,10 @@ def main() -> None:
         status = json.loads((external / "paper_router_status.json").read_text())
         assert status["state"] == "DRAINING"
         assert status["drain_requested"] is True
-        assert status["drain_complete"] is False
+        assert status["drain_complete"] is True
         assert status["order_submission_enabled"] is False
         assert status["blocker"] == "CUTOVER_DRAIN"
-        assert status["fills"] == 1
+        assert status["fills"] == 0
         (run_root / "control" / "CUTOVER_DRAIN").unlink()
 
         failing = router.PaperRouter(
@@ -200,9 +205,8 @@ def main() -> None:
             "https://clob.invalid", "https://gamma.invalid",
         )
         opened_ms = router.now_ms() - 301_000
-        settling.state["cash"] = 90.0
         settling.state["positions"] = {"position-up": {
-            "position_id": "position-up", "order_id": "order-up", "fill_id": "fill-up",
+            "position_id": "position-up", "counterfactual_id": "shadow-up", "fill_id": "fill-up",
             "market_id": "market-up-down", "event_id": "event-up-down", "token_id": "up-token",
             "outcome": "YES", "shares": 10.0, "entry_price": 0.4, "entry_cost": 4.0,
             "entry_fee": 0.2, "executable_value": 0.0, "opened_ms": opened_ms,
@@ -217,17 +221,13 @@ def main() -> None:
             settling.observe_positions()
         position = settling.state["positions"]["position-up"]
         assert position["settled"] is True and position["resolved_outcome"] == "Up"
-        assert abs(settling.state["realized_pnl"] - 5.8) < 1e-12
-        events = [json.loads(path.read_text()) for path in (run_root / "ledger" / "spool").glob("*.json")]
-        final = next(event for event in events if event["event_type"] == "FINAL")
-        assert final["final_pnl"] == 5.8
-        assert final["realized_cashflow"] == 10.0
-        assert final["unwind_loss"] == 0.0
-        assert final["capital_cost"] == 0.0
-        assert final["latency_cost"] == 0.0
-        assert final["metadata"]["realized"] is True
-        assert final["metadata"]["cost_vector_complete"] is True
-        assert final["metadata"]["unwind_accounted"] is True
+        assert abs(settling.state["counterfactual_realized_pnl"] - 5.8) < 1e-12
+        assert settling.state["realized_pnl"] == 0.0
+        events = [json.loads(line) for line in (run_root / "external_fair" / "counterfactuals.jsonl").read_text().splitlines()]
+        final = next(event for event in events if event["event_type"] == "VIRTUAL_FINAL")
+        assert final["counterfactual_pnl"] == 5.8
+        assert final["virtual_cashflow"] == 10.0
+        assert final["metadata"]["counterfactual"] is True
         assert final["metadata"]["winning_token_id"] == "up-token"
 
 

@@ -20,17 +20,20 @@ def main() -> None:
     external = load("config/v7_external_fair.json")
     paper = load("config/paper_v7.json")
 
-    # The core P0 stack has PAPER authority, with contract-local fail-closed
-    # safety. Static config proves architecture; live ownership is attested at
-    # cutover by the runtime status.
+    # The immature external model has zero execution authority. It remains a
+    # continuous counterfactual collector until its economic gates pass.
     failures = check_external_fair_invariants(external, paper)
     assert failures == [], failures
-    assert external["execution_authority"] == "PAPER_EXECUTION_OWNER"
-    assert external["taker"]["enabled_for_execution"] is True
-    assert external["maker"]["external_fair_enabled_for_live_quotes"] is True
+    assert external["execution_authority"] == "SHADOW_ZERO_AUTHORITY"
+    assert external["taker"]["enabled_for_execution"] is False
+    assert external["taker"]["counterfactual_enabled"] is True
+    assert external["maker"]["external_fair_enabled_for_live_quotes"] is False
 
     active = copy.deepcopy(external)
     active["execution_authority"] = "PAPER_EXECUTION_OWNER"
+    active["fair_value"]["default_model_mature"] = True
+    active["maker"]["external_fair_enabled_for_live_quotes"] = True
+    active["taker"].update({"authority": "PAPER", "enabled_for_execution": True})
     active["oracle"]["transport_binding"] = "UNBOUND"
     active["old_micro_taker_migration"] = {}
     failures = check_external_fair_invariants(active, paper, {
@@ -62,6 +65,7 @@ def main() -> None:
     cancel_only["execution_authority"] = "PAPER_CANCEL_ONLY_OWNER"
     cancel_only["maker"]["external_fair_enabled_for_live_quotes"] = True
     cancel_only["taker"]["enabled_for_execution"] = True
+    cancel_only["taker"]["authority"] = "PAPER"
     cancel_runtime = dict(clean_runtime)
     cancel_runtime["execution_authority"] = "PAPER_CANCEL_ONLY_OWNER"
     cancel_failures = check_external_fair_invariants(cancel_only, paper, cancel_runtime)

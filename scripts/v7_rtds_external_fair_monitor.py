@@ -458,15 +458,16 @@ class Monitor:
         fair = self.fair_snapshot(now, oracle_healthy, venue_runtime)
         common = {"paper_only": True, "authenticated_execution": False, "real_order_submission": False}
         router = load_json(self.root / "paper_router_status.json")
-        router_active = bool(
+        shadow_collector_active = bool(
             router.get("schema") == "polymarket_v7_external_fair_paper_router_v1"
             and router.get("code_sha") == self.code_sha
             and router.get("state") == "RUNNING"
             and router.get("paper_only") is True
             and router.get("authenticated_execution") is False
             and router.get("real_order_submission") is False
-            and router.get("execution_authority") == "PAPER_EXECUTION_OWNER"
-            and router.get("order_submission_enabled") is True
+            and router.get("execution_authority") == "SHADOW_ZERO_AUTHORITY"
+            and router.get("order_submission_enabled") is False
+            and router.get("counterfactual_collection_enabled") is True
             and router.get("killed") is False
             and not router.get("blocker")
             and int(time.time()) - int(router.get("timestamp") or 0) <= 5
@@ -481,11 +482,11 @@ class Monitor:
         })
         status = {
             "schema": "polymarket_v7_external_fair_status_v1",
-            "state": ("FULL_FAIR_PAPER_OPERATIONAL" if fair.get("valid") and router_active else
-                      "FULL_FAIR_SHADOW_OPERATIONAL" if fair.get("valid") else
+            "state": ("FULL_FAIR_SHADOW_OPERATIONAL" if fair.get("valid") and shadow_collector_active else
+                      "FAIR_WITHOUT_COLLECTOR" if fair.get("valid") else
                       "DATA_PLANE_OPERATIONAL" if oracle_healthy else "DATA_PLANE_DEGRADED"),
             "code_sha": self.code_sha, "execution_authority": (
-                "PAPER_EXECUTION_OWNER" if router_active else "SHADOW_ZERO_AUTHORITY"
+                "SHADOW_ZERO_AUTHORITY"
             ),
             "external_fair_required_markets": 1 if self.active_contract else 0, **common,
             "market": {
@@ -520,8 +521,17 @@ class Monitor:
             "fair": fair,
             "model": {"mature": False, "coverage": 0.0,
                       "economic_confidence": router.get("economic_confidence", "MORE_EVIDENCE_REQUIRED")},
-            "actions": router.get("actions") if router_active else {},
-            "economics": {"realized_pnl": float(router.get("realized_pnl") or 0.0)},
+            "actions": router.get("actions") if shadow_collector_active else {},
+            "counterfactual_actions": (
+                router.get("counterfactual_actions") if shadow_collector_active else {}
+            ),
+            "economics": {
+                "realized_pnl": float(router.get("realized_pnl") or 0.0),
+                "counterfactual_realized_pnl": float(
+                    router.get("counterfactual_realized_pnl") or 0.0
+                ),
+                "counterfactual_equity": float(router.get("counterfactual_equity") or 0.0),
+            },
             "paper_router": router,
             "tape": {"evidence_valid": True, "accepted": self.accepted,
                      "written": self.written, "dropped": self.dropped},
@@ -530,7 +540,7 @@ class Monitor:
                         + (["SETTLEMENT_REFERENCE_NOT_CAPTURED"] if not self.reference.get("valid") else [])
                         + (["MULTI_VENUE_EXTERNAL_COMPOSITE_NOT_RUNNING"] if not multi_venue_healthy else [])
                         + (["FAIR_VALUE_INVALID"] if not fair.get("valid") else [])
-                        + ([] if router_active else ["OMS_EXTERNAL_FAIR_ROUTING_NOT_RUNNING"])
+                        + ([] if shadow_collector_active else ["COUNTERFACTUAL_COLLECTOR_NOT_RUNNING"])
                         + ([str(router.get("blocker"))] if router.get("blocker") else []),
         }
         atomic_json(self.root / "status.json", status)

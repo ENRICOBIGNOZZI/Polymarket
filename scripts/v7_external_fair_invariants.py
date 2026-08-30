@@ -131,8 +131,8 @@ def check_external_fair_invariants(
     real_money = gates.get("C_FUTURE_REAL_MONEY") if isinstance(gates.get("C_FUTURE_REAL_MONEY"), dict) else {}
     if hard.get("may_block_paper") is not True:
         failures.append("HARD_SAFETY_MUST_BLOCK_PAPER")
-    if economic.get("may_block_paper") is not False:
-        failures.append("ECONOMIC_MATURITY_MAY_NOT_BLOCK_PAPER")
+    if economic.get("may_block_paper") is not True:
+        failures.append("ECONOMIC_MATURITY_MUST_BLOCK_PAPER")
     if real_money.get("in_scope") is not False:
         failures.append("REAL_MONEY_MUST_REMAIN_OUT_OF_SCOPE")
 
@@ -141,6 +141,20 @@ def check_external_fair_invariants(
     cancel = external.get("cancel_overlay") if isinstance(external.get("cancel_overlay"), dict) else {}
     maker = external.get("maker") if isinstance(external.get("maker"), dict) else {}
     taker = external.get("taker") if isinstance(external.get("taker"), dict) else {}
+    fair = external.get("fair_value") if isinstance(external.get("fair_value"), dict) else {}
+    model_mature = fair.get("default_model_mature") is True
+    taker_executes = taker.get("enabled_for_execution") is True
+    if not model_mature and maker.get("external_fair_enabled_for_live_quotes") is not False:
+        failures.append("IMMATURE_EXTERNAL_FAIR_MAY_NOT_REPRICE_MAKER")
+    if not model_mature and taker_executes:
+        failures.append("IMMATURE_TAKER_MAY_NOT_EXECUTE")
+    if not taker_executes:
+        if str(taker.get("authority") or "").upper() != "SHADOW":
+            failures.append("DISABLED_TAKER_MUST_BE_SHADOW")
+        if taker.get("counterfactual_enabled") is not True:
+            failures.append("SHADOW_TAKER_REQUIRES_COUNTERFACTUAL_COLLECTION")
+    elif str(taker.get("authority") or "").upper() != "PAPER":
+        failures.append("EXECUTING_TAKER_REQUIRES_PAPER_AUTHORITY")
     if authority == "PAPER_CANCEL_ONLY_OWNER":
         if cancel.get("enabled") is not True:
             failures.append("CANCEL_ONLY_OWNER_REQUIRES_CANCEL_OVERLAY")

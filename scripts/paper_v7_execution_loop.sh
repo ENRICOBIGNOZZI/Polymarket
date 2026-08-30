@@ -145,14 +145,18 @@ assert max_shards > 0 and markets_per_shard == 8
 assert int(maker.get("market_selection",{}).get("max_active_markets",0)) == max_shards*markets_per_shard
 expected_maker_capital=float(cfg.get("starting_capital",0))*float(v7.get("micro_maker_capital_fraction",0))
 assert abs(float(maker.get("market_selection",{}).get("reward_sleeve_capital_usd",0))-expected_maker_capital) <= 1e-9
-assert external.get("execution_authority") == "PAPER_EXECUTION_OWNER"
+assert external.get("execution_authority") == "SHADOW_ZERO_AUTHORITY"
 assert external.get("paper_only") is True
 assert external.get("authenticated_execution") is False
 assert external.get("real_order_submission") is False
-assert external.get("taker",{}).get("enabled_for_execution") is True
-assert external.get("maker",{}).get("external_fair_enabled_for_live_quotes") is True
+assert external.get("taker",{}).get("authority") == "SHADOW"
+assert external.get("taker",{}).get("enabled_for_execution") is False
+assert external.get("taker",{}).get("counterfactual_enabled") is True
+assert external.get("fair_value",{}).get("default_model_mature") is False
+assert external.get("maker",{}).get("external_fair_enabled_for_live_quotes") is False
+assert external.get("maker",{}).get("economic_maturity_may_block_paper") is True
 assert external.get("gate_classes",{}).get("A_HARD_CORRECTNESS_SAFETY",{}).get("may_block_paper") is True
-assert external.get("gate_classes",{}).get("B_ECONOMIC_MATURITY",{}).get("may_block_paper") is False
+assert external.get("gate_classes",{}).get("B_ECONOMIC_MATURITY",{}).get("may_block_paper") is True
 assert maker_arena >= 16*1024*1024
 assert observer_arena >= 16*1024*1024
 assert fillability_arena >= 16*1024*1024
@@ -274,7 +278,7 @@ external=status.get("external") if isinstance(status.get("external"),dict) else 
 decision=value.get("last_decision") if isinstance(value.get("last_decision"),dict) else {}
 ok=(status.get("schema")=="polymarket_v7_external_fair_status_v1"
     and status.get("code_sha")==sys.argv[3]
-    and status.get("state")=="FULL_FAIR_PAPER_OPERATIONAL"
+    and status.get("state")=="FULL_FAIR_SHADOW_OPERATIONAL"
     and status.get("paper_only") is True
     and status.get("authenticated_execution") is False
     and status.get("real_order_submission") is False
@@ -292,8 +296,9 @@ ok=(status.get("schema")=="polymarket_v7_external_fair_status_v1"
     and value.get("paper_only") is True
     and value.get("authenticated_execution") is False
     and value.get("real_order_submission") is False
-    and value.get("execution_authority")=="PAPER_EXECUTION_OWNER"
-    and value.get("order_submission_enabled") is True
+    and value.get("execution_authority")=="SHADOW_ZERO_AUTHORITY"
+    and value.get("order_submission_enabled") is False
+    and value.get("counterfactual_collection_enabled") is True
     and value.get("killed") is False
     and not value.get("blocker")
     and int(value.get("book_requests") or 0)>0

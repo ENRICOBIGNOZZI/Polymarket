@@ -34,7 +34,7 @@ class V7PaperLoopBash3PortabilityTest(unittest.TestCase):
         text = LOOP.read_text(encoding="utf-8")
         ready = text[text.index("paper_router_ready()") : text.index("write_runtime_status()")]
         for required in (
-            'FULL_FAIR_PAPER_OPERATIONAL',
+            'FULL_FAIR_SHADOW_OPERATIONAL',
             'external_fair_required_markets',
             'rules_hash_recognized',
             'settlement_reference',

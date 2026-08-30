@@ -59,12 +59,12 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []},
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"text": "STOPPED"}, "1": {"text": "COLLECTING"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
       "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
       "id": 6,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
-      "targets": [{"expr": "polymarket_external_fair_model_coverage", "refId": "A"}],
-      "title": "Interval Coverage",
+      "targets": [{"expr": "polymarket_external_fair_counterfactual_collection_enabled", "refId": "A"}],
+      "title": "Shadow Collector",
       "type": "stat"
     },
     {
@@ -113,8 +113,11 @@
       "gridPos": {"h": 7, "w": 8, "x": 8, "y": 12},
       "id": 10,
       "options": {"legend": {"calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
-      "targets": [{"expr": "polymarket_external_fair_actions_total", "legendFormat": "{{action}}", "refId": "A"}],
-      "title": "MAKE / TAKE / CANCEL / WITHDRAW / NOTHING",
+      "targets": [
+        {"expr": "polymarket_external_fair_actions_total", "legendFormat": "execution {{action}}", "refId": "A"},
+        {"expr": "polymarket_external_fair_counterfactual_actions_total", "legendFormat": "shadow {{action}}", "refId": "B"}
+      ],
+      "title": "Execution (zero by design) / Shadow Actions",
       "type": "timeseries"
     },
     {
@@ -137,7 +140,9 @@
         {"expr": "polymarket_external_fair_maker_robust_ev", "legendFormat": "maker robust EV", "refId": "A"},
         {"expr": "polymarket_external_fair_taker_robust_ev", "legendFormat": "taker robust EV", "refId": "B"},
         {"expr": "polymarket_external_fair_realized_pnl", "legendFormat": "realized PnL", "refId": "C"},
-        {"expr": "polymarket_external_fair_terminal_pnl", "legendFormat": "terminal PnL", "refId": "D"}
+        {"expr": "polymarket_external_fair_terminal_pnl", "legendFormat": "terminal PnL", "refId": "D"},
+        {"expr": "polymarket_external_fair_counterfactual_realized_pnl", "legendFormat": "shadow realized PnL", "refId": "E"},
+        {"expr": "polymarket_external_fair_counterfactual_equity", "legendFormat": "shadow equity", "refId": "F"}
       ],
       "title": "Economics",
       "type": "timeseries"
@@ -223,9 +228,12 @@
         {"expr": "polymarket_external_fair_router_active_candidates", "legendFormat": "active robust candidates", "refId": "D"},
         {"expr": "polymarket_external_fair_router_orders_submitted_total", "legendFormat": "orders", "refId": "E"},
         {"expr": "polymarket_external_fair_router_fills_total", "legendFormat": "fills", "refId": "F"},
-        {"expr": "polymarket_external_fair_router_rejections_total", "legendFormat": "reject {{reason}}", "refId": "G"}
+        {"expr": "polymarket_external_fair_router_rejections_total", "legendFormat": "reject {{reason}}", "refId": "G"},
+        {"expr": "polymarket_external_fair_counterfactual_candidates_total", "legendFormat": "shadow candidates", "refId": "H"},
+        {"expr": "polymarket_external_fair_counterfactual_fills_total", "legendFormat": "shadow fills", "refId": "I"},
+        {"expr": "polymarket_external_fair_counterfactual_open_positions", "legendFormat": "shadow open positions", "refId": "J"}
       ],
-      "title": "CLOB Router Decisions / Rejections",
+      "title": "CLOB Validation / Shadow Decisions / Rejections",
       "type": "timeseries"
     }
   ],

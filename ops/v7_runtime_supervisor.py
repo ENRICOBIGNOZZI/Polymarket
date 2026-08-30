@@ -49,7 +49,7 @@ def external_fair_ready(run_root: Path, expected_sha: str, *, now: int | None = 
     return bool(
         status.get("schema") == "polymarket_v7_external_fair_status_v1"
         and status.get("code_sha") == expected_sha
-        and status.get("state") == "FULL_FAIR_PAPER_OPERATIONAL"
+        and status.get("state") == "FULL_FAIR_SHADOW_OPERATIONAL"
         and status.get("paper_only") is True
         and status.get("authenticated_execution") is False
         and status.get("real_order_submission") is False
@@ -67,8 +67,9 @@ def external_fair_ready(run_root: Path, expected_sha: str, *, now: int | None = 
         and router.get("paper_only") is True
         and router.get("authenticated_execution") is False
         and router.get("real_order_submission") is False
-        and router.get("execution_authority") == "PAPER_EXECUTION_OWNER"
-        and router.get("order_submission_enabled") is True
+        and router.get("execution_authority") == "SHADOW_ZERO_AUTHORITY"
+        and router.get("order_submission_enabled") is False
+        and router.get("counterfactual_collection_enabled") is True
         and router.get("killed") is False
         and not router.get("blocker")
         and int(router.get("book_requests") or 0) > 0

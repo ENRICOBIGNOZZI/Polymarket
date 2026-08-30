@@ -116,6 +116,7 @@ def summarize_external_fair(
     external = _dict(status.get("external"))
     fair = _dict(status.get("fair"))
     actions_raw = _dict(status.get("actions"))
+    counterfactual_actions_raw = _dict(status.get("counterfactual_actions"))
     purposes_raw = _dict(status.get("purposes"))
     cancel = _dict(status.get("cancel"))
     economics = _dict(status.get("economics"))
@@ -254,10 +255,26 @@ def summarize_external_fair(
             "valid_until_monotonic_ns": valid_until_ns,
         },
         "actions": actions,
+        "counterfactual_actions": {
+            action: max(0, _integer(counterfactual_actions_raw.get(action), 0))
+            for action in _ACTIONS
+        },
         "paper_router": {
             "active_candidates": max(0, _integer(paper_router.get("active_candidates"), 0)),
             "orders_submitted": max(0, _integer(paper_router.get("orders_submitted"), 0)),
             "fills": max(0, _integer(paper_router.get("fills"), 0)),
+            "counterfactual_collection_enabled": bool(
+                paper_router.get("counterfactual_collection_enabled", False)
+            ),
+            "counterfactual_candidates": max(
+                0, _integer(paper_router.get("counterfactual_candidates"), 0)
+            ),
+            "counterfactual_fills": max(
+                0, _integer(paper_router.get("counterfactual_fills"), 0)
+            ),
+            "counterfactual_open_positions": max(
+                0, _integer(paper_router.get("counterfactual_open_positions"), 0)
+            ),
             "book_requests": max(0, _integer(paper_router.get("book_requests"), 0)),
             "book_request_failures": max(0, _integer(paper_router.get("book_request_failures"), 0)),
             "book_parse_failures": max(0, _integer(paper_router.get("book_parse_failures"), 0)),
@@ -283,6 +300,10 @@ def summarize_external_fair(
             "maker_robust_ev": _number(economics.get("maker_robust_ev"), 0.0),
             "taker_robust_ev": _number(economics.get("taker_robust_ev"), 0.0),
             "realized_pnl": _number(economics.get("realized_pnl"), 0.0),
+            "counterfactual_realized_pnl": _number(
+                economics.get("counterfactual_realized_pnl"), 0.0
+            ),
+            "counterfactual_equity": _number(economics.get("counterfactual_equity"), 0.0),
             "terminal_pnl": _number(economics.get("terminal_pnl"), 0.0),
             "taker_fees": max(0.0, _number(economics.get("taker_fees"), 0.0)),
             "maker_fees": max(0.0, _number(economics.get("maker_fees"), 0.0)),

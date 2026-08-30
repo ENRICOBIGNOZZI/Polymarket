@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Route settlement-aware External Fair signals through the canonical PAPER OMS.
+"""Collect settlement-aware External Fair counterfactuals without execution.
 
 Only public CLOB data is used.  Every decision is revalidated on a fresh L2
-arrival snapshot, fees are taken from the contract-bound schedule, FAK fills
-are limited by visible depth, and all evidence reaches the single ledger writer
-through the V7 spool.  This process has no authenticated or real-order path.
+arrival snapshot, fees are taken from the contract-bound schedule, and virtual
+FAK fills are limited by visible depth. Evidence is written to an append-only
+counterfactual tape and never reaches the execution ledger or portfolio cash.
 """
 from __future__ import annotations
 
@@ -19,8 +19,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from v7_execution_ledger import LedgerEvent
-from v7_ledger_spool import spool_event
 from v7_market_common import finite, parse_array, request_json
 
 STRATEGY = "CRYPTO_INFORMED_TAKER"
@@ -211,14 +209,16 @@ class PaperRouter:
         self.directory = run_root / "external_fair"
         self.sha = model_sha
         self.config = load(config_path)
-        if (self.config.get("execution_authority") != "PAPER_EXECUTION_OWNER"
+        if (self.config.get("execution_authority") != "SHADOW_ZERO_AUTHORITY"
                 or self.config.get("paper_only") is not True
                 or self.config.get("authenticated_execution") is not False
                 or self.config.get("real_order_submission") is not False):
-            raise RuntimeError("external_fair_paper_contract_invalid")
+            raise RuntimeError("external_fair_shadow_contract_invalid")
         self.policy = self.config.get("taker") if isinstance(self.config.get("taker"), dict) else {}
-        if self.policy.get("enabled_for_execution") is not True or self.policy.get("authority") != "PAPER":
-            raise RuntimeError("external_fair_taker_not_paper_authorized")
+        if (self.policy.get("enabled_for_execution") is not False
+                or self.policy.get("authority") != "SHADOW"
+                or self.policy.get("counterfactual_enabled") is not True):
+            raise RuntimeError("external_fair_taker_not_shadow_authorized")
         fair_policy = self.config.get("fair_value") if isinstance(self.config.get("fair_value"), dict) else {}
         self.model_mature = fair_policy.get("default_model_mature") is True
         self.clob_url = clob_url.rstrip("/")
@@ -226,6 +226,7 @@ class PaperRouter:
         self.source = self.directory / "status.json"
         self.status_path = self.directory / "paper_router_status.json"
         self.state_path = self.directory / "paper_router_state.json"
+        self.counterfactual_path = self.directory / "counterfactuals.jsonl"
         self.drain_path = run_root / "control" / "CUTOVER_DRAIN"
         allocation = load(run_root / "control" / "allocations" / "manifest.json")
         budgets = allocation.get("budgets") if isinstance(allocation.get("budgets"), dict) else {}
@@ -233,7 +234,8 @@ class PaperRouter:
         self.state: dict[str, Any] = {
             "model_sha": model_sha, "starting_capital": starting_capital,
             "cash": starting_capital, "orders": 0, "fills": 0,
-            "candidates": 0, "nothing": 0, "realized_pnl": 0.0,
+            "candidates": 0, "counterfactual_fills": 0, "nothing": 0,
+            "realized_pnl": 0.0, "counterfactual_realized_pnl": 0.0,
             "peak_equity": starting_capital, "killed": False,
             "attempted_at": {}, "traded_markets": [], "positions": {},
             "book_requests": 0, "book_request_failures": 0,
@@ -250,8 +252,35 @@ class PaperRouter:
         reasons = self.state.setdefault("rejection_reasons", {})
         reasons[reason] = int(reasons.get(reason) or 0) + 1
 
-    def emit(self, event: LedgerEvent) -> None:
-        spool_event(self.root, event)
+    def emit_counterfactual(self, event_type: str, **values: Any) -> None:
+        timestamp_ms = now_ms()
+        record = {
+            "schema": "polymarket_v7_external_fair_counterfactual_v1",
+            "record_id": stable_id(
+                self.sha, event_type, values.get("counterfactual_id"), timestamp_ms,
+                json.dumps(values, separators=(",", ":"), sort_keys=True),
+            ),
+            "event_type": event_type,
+            "timestamp_ms": timestamp_ms,
+            "model_sha": self.sha,
+            "execution_authority": "SHADOW_ZERO_AUTHORITY",
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            **values,
+        }
+        self.counterfactual_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = (json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n").encode()
+        descriptor = os.open(
+            self.counterfactual_path,
+            os.O_APPEND | os.O_CREAT | os.O_WRONLY,
+            0o600,
+        )
+        try:
+            os.write(descriptor, payload)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
     def fetch_book(self, token_id: str) -> Book | None:
         try:
@@ -307,8 +336,8 @@ class PaperRouter:
             available_notional = min(capital_ceiling, kelly_notional, cash)
         else:
             # Kelly sizing is not mathematically defensible before probability
-            # calibration is mature. Keep PAPER exploration statistically useful
-            # but bound every contract by a fixed fraction of initial capital.
+            # calibration is mature. Shadow observations use a fixed virtual
+            # notional so their economics stay comparable across contracts.
             capital_ceiling = starting_capital * float(
                 self.policy.get("immature_exploration_capital_fraction", 0.0025)
             )
@@ -339,7 +368,7 @@ class PaperRouter:
             predicted_fill_probability=1.0, expected_ev=row["robust_ev"] * size,
             intended_action="TAKE", intended_size=size,
             metadata={
-                "authority": "PAPER_EXECUTION_OWNER", "paper_tif": "FAK",
+                "authority": "SHADOW_ZERO_AUTHORITY", "virtual_tif": "FAK",
                 "outcome": row["outcome"], "execution_side": "BUY",
                 "fair_yes": fair.get("yes"), "fair_lower": fair.get("lower"),
                 "fair_upper": fair.get("upper"), "pm_mid": fair.get("pm_mid"),
@@ -381,12 +410,10 @@ class PaperRouter:
         if size <= 0.0:
             self.last_attempt_reason = "BELOW_MINIMUM_EXECUTABLE_SIZE"
             return False
-        order_id = f"external-paper-{stable_id(self.sha, market_id, row['outcome'], current_ms)}"
-        common = self.common(status, row, order_id, size)
-        self.emit(LedgerEvent(event_type="CANDIDATE", **common))
+        counterfactual_id = f"external-shadow-{stable_id(self.sha, market_id, row['outcome'], current_ms)}"
+        common = self.common(status, row, counterfactual_id, size)
+        self.emit_counterfactual("CANDIDATE", counterfactual_id=counterfactual_id, **common)
         self.state["candidates"] = int(self.state.get("candidates") or 0) + 1
-        self.emit(LedgerEvent(event_type="ORDER_SUBMITTED", order_state="CROSS", **common))
-        self.state["orders"] = int(self.state.get("orders") or 0) + 1
         time.sleep(0.1)
 
         arrival_status = load(self.source)
@@ -394,19 +421,21 @@ class PaperRouter:
         rows = robust_candidates(arrival_status, arrival_books, self.policy)
         arrival = next((candidate for candidate in rows if candidate["token_id"] == row["token_id"]), None)
         if arrival is None:
-            self.emit(LedgerEvent(event_type="ORDER_STATE", strategy=STRATEGY, model_sha=self.sha,
-                                  model_version=MODEL_VERSION, order_id=order_id, order_state="CANCELLED",
-                                  cancel_reason="ARRIVAL_REVALIDATION_FAILED", market_id=market_id,
-                                  event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY"))
+            self.emit_counterfactual(
+                "REJECTED", counterfactual_id=counterfactual_id,
+                reason="ARRIVAL_REVALIDATION_FAILED", market_id=market_id,
+                event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY",
+            )
             self.last_attempt_reason = "ARRIVAL_REVALIDATION_FAILED"
             return False
         arrival_book: Book = arrival["book"]
         ask, visible = arrival_book.asks[0]
         if visible + 1e-9 < size or ask > float(common["limit_price"]) + 1e-12:
-            self.emit(LedgerEvent(event_type="ORDER_STATE", strategy=STRATEGY, model_sha=self.sha,
-                                  model_version=MODEL_VERSION, order_id=order_id, order_state="CANCELLED",
-                                  cancel_reason="FAK_VISIBLE_DEPTH_OR_LIMIT", market_id=market_id,
-                                  event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY"))
+            self.emit_counterfactual(
+                "REJECTED", counterfactual_id=counterfactual_id,
+                reason="FAK_VISIBLE_DEPTH_OR_LIMIT", market_id=market_id,
+                event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY",
+            )
             self.last_attempt_reason = "FAK_VISIBLE_DEPTH_OR_LIMIT"
             return False
         schedule = (arrival_status.get("market") or {}).get("fee_schedule") or {}
@@ -414,21 +443,23 @@ class PaperRouter:
         total_fee, cost = size * fee_share, size * ask
         executable_value = executable_sell_value(arrival_book, size, schedule)
         robust_ev = float(arrival["robust_probability"]) * size - cost - total_fee - size * float(arrival["execution_risk"])
-        if robust_ev <= 0.0 or cost + total_fee > float(self.state.get("cash") or 0.0):
-            self.emit(LedgerEvent(event_type="ORDER_STATE", strategy=STRATEGY, model_sha=self.sha,
-                                  model_version=MODEL_VERSION, order_id=order_id, order_state="REJECTED",
-                                  cancel_reason="ARRIVAL_EV_OR_CAPITAL", market_id=market_id,
-                                  event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY"))
+        if robust_ev <= 0.0 or cost + total_fee > float(self.state.get("starting_capital") or 0.0):
+            self.emit_counterfactual(
+                "REJECTED", counterfactual_id=counterfactual_id,
+                reason="ARRIVAL_EV_OR_VIRTUAL_CAPITAL", market_id=market_id,
+                event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY",
+            )
             self.last_attempt_reason = "ARRIVAL_EV_OR_CAPITAL"
             return False
-        fill_id = f"external-fill-{stable_id(order_id, arrival_book.exchange_ts_ms, arrival_book.receive_ts_ms)}"
+        fill_id = f"external-shadow-fill-{stable_id(counterfactual_id, arrival_book.exchange_ts_ms, arrival_book.receive_ts_ms)}"
         position_id = str(common["position_id"])
-        self.emit(LedgerEvent(
-            event_type="FILL", strategy=STRATEGY, model_sha=self.sha, model_version=MODEL_VERSION,
-            order_id=order_id, fill_id=fill_id, position_id=position_id, market_id=market_id,
+        self.emit_counterfactual(
+            "VIRTUAL_FILL", counterfactual_id=counterfactual_id,
+            strategy=STRATEGY, model_version=MODEL_VERSION,
+            fill_id=fill_id, position_id=position_id, market_id=market_id,
             event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY",
             exchange_ts_ms=arrival_book.exchange_ts_ms, receive_ts_ms=arrival_book.receive_ts_ms,
-            fill_price=ask, filled_size=size, complete=True, fee=total_fee,
+            fill_price=ask, filled_size=size, fee=total_fee,
             fee_rate=float(schedule.get("rate") or 0.0), fee_source="GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
             slippage=max(0.0, ask - float(common["ask"])) * size,
             metadata={
@@ -438,23 +469,20 @@ class PaperRouter:
                 "arrival_robust_probability": arrival["robust_probability"],
                 "arrival_robust_ev_per_share": arrival["robust_ev"],
             },
-        ))
-        self.emit(LedgerEvent(event_type="ORDER_STATE", strategy=STRATEGY, model_sha=self.sha,
-                              model_version=MODEL_VERSION, order_id=order_id, order_state="FILLED",
-                              market_id=market_id, event_id=str(market.get("event_id") or ""),
-                              token_id=row["token_id"], side="BUY"))
-        self.state["cash"] = float(self.state.get("cash") or 0.0) - cost - total_fee
-        self.state["fills"] = int(self.state.get("fills") or 0) + 1
+        )
+        self.state["counterfactual_fills"] = int(self.state.get("counterfactual_fills") or 0) + 1
         self.state.setdefault("traded_markets", []).append(market_id)
         self.state.setdefault("positions", {})[position_id] = {
-            "position_id": position_id, "order_id": order_id, "fill_id": fill_id,
+            "position_id": position_id, "counterfactual_id": counterfactual_id, "fill_id": fill_id,
             "market_id": market_id, "event_id": str(market.get("event_id") or ""),
             "token_id": row["token_id"], "outcome": row["outcome"], "shares": size,
             "entry_price": ask, "entry_fee": total_fee, "entry_cost": cost,
             "executable_value": executable_value, "opened_ms": arrival_book.receive_ts_ms,
             "fee_schedule": schedule, "markouts": [], "settled": False,
+            "model_yes": finite((arrival_status.get("fair") or {}).get("yes")),
+            "market_yes": finite((arrival_status.get("fair") or {}).get("pm_mid")),
         }
-        self.last_attempt_reason = "FILLED"
+        self.last_attempt_reason = "VIRTUAL_FILL"
         return True
 
     def observe_positions(self) -> None:
@@ -472,16 +500,16 @@ class PaperRouter:
                     position["executable_value"] = liquidation
                     per_share = (liquidation - float(position["entry_cost"]) - float(position["entry_fee"])) / float(position["shares"])
                     for horizon in due:
-                        self.emit(LedgerEvent(
-                            event_type="MARKOUT", strategy=STRATEGY, model_sha=self.sha,
-                            model_version=MODEL_VERSION, order_id=str(position["order_id"]),
+                        self.emit_counterfactual(
+                            "VIRTUAL_MARKOUT", strategy=STRATEGY, model_version=MODEL_VERSION,
+                            counterfactual_id=str(position["counterfactual_id"]),
                             fill_id=str(position["fill_id"]), position_id=str(position["position_id"]),
                             market_id=str(position["market_id"]), event_id=str(position["event_id"]),
                             token_id=str(position["token_id"]), side="BUY", exchange_ts_ms=book.exchange_ts_ms,
                             receive_ts_ms=book.receive_ts_ms, book_snapshot_id=book.snapshot_id,
                             executable_liquidation_value=liquidation, markouts={f"{horizon}s": per_share},
                             metadata={"full_visible_depth": True, "fill_conditioned": True},
-                        ))
+                        )
                         position.setdefault("markouts", []).append(horizon)
             if age_seconds < 300:
                 continue
@@ -502,53 +530,43 @@ class PaperRouter:
             resolved = outcomes[winning_index] if winning_index < len(outcomes) else ""
             payout = float(position["shares"]) if winning_token == str(position["token_id"]) else 0.0
             pnl = payout - float(position["entry_cost"]) - float(position["entry_fee"])
-            self.state["cash"] = float(self.state.get("cash") or 0.0) + payout
-            self.state["realized_pnl"] = float(self.state.get("realized_pnl") or 0.0) + pnl
+            self.state["counterfactual_realized_pnl"] = float(
+                self.state.get("counterfactual_realized_pnl") or 0.0
+            ) + pnl
             position["settled"] = True
             position["resolved_outcome"] = resolved
-            self.emit(LedgerEvent(
-                event_type="FINAL", strategy=STRATEGY, model_sha=self.sha, model_version=MODEL_VERSION,
-                position_id=str(position["position_id"]), order_id=str(position["order_id"]),
+            won = winning_token == str(position["token_id"])
+            self.emit_counterfactual(
+                "VIRTUAL_FINAL", strategy=STRATEGY, model_version=MODEL_VERSION,
+                counterfactual_id=str(position["counterfactual_id"]),
+                position_id=str(position["position_id"]),
                 fill_id=str(position["fill_id"]), market_id=str(position["market_id"]),
                 event_id=str(position["event_id"]), token_id=str(position["token_id"]), side="BUY",
-                final_pnl=pnl, realized_cashflow=payout,
-                # Hold-to-settlement has no unwind transaction. PAPER incurs
-                # no separately charged funding or latency cash cost; entry
-                # fee and execution slippage were already recorded on FILL.
-                unwind_loss=0.0, capital_cost=0.0, latency_cost=0.0,
+                counterfactual_pnl=pnl, virtual_cashflow=payout,
                 capital_duration_ms=current_ms - int(position["opened_ms"]),
                 metadata={
                     "settlement_outcome": resolved, "winning_token_id": winning_token,
-                    "hold_to_settlement": True, "realized": True,
-                    "unwind_accounted": True, "cost_vector_complete": True,
+                    "won": won, "hold_to_settlement": True, "counterfactual": True,
+                    "model_yes": position.get("model_yes"),
+                    "market_yes": position.get("market_yes"),
                     "model_family": STRATEGY, "horizon_seconds": 300,
-                    "cost_provenance": {
-                        "fee": "FILL_GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
-                        "slippage": "FILL_ARRIVAL_REVALIDATION",
-                        "unwind_loss": "ZERO_HOLD_TO_SETTLEMENT",
-                        "capital_cost": "ZERO_PAPER_CASH_CHARGE",
-                        "latency_cost": "ZERO_SEPARATE_REALIZED_CASH_CHARGE",
-                    },
-                    "pnl_decomposition": {
-                        "trading_pnl": payout - float(position["entry_cost"]),
-                        "spread_capture": 0.0, "adverse_markout": 0.0,
-                        "inventory_pnl": 0.0, "maker_rebates": 0.0,
-                        "liquidity_rewards": 0.0, "own_reward_share_verified": True,
-                    },
                 },
-            ))
+            )
 
     def publish(self, active_candidates: int, blocker: str = "") -> None:
         positions = self.state.get("positions") if isinstance(self.state.get("positions"), dict) else {}
         open_positions = sum(1 for position in positions.values() if not position.get("settled"))
-        equity = float(self.state.get("cash") or 0.0) + sum(
+        virtual_equity = starting_capital = float(self.state.get("starting_capital") or 0.0)
+        virtual_equity += float(self.state.get("counterfactual_realized_pnl") or 0.0)
+        virtual_equity += sum(
             float(position.get("executable_value") or 0.0)
+            - float(position.get("entry_cost") or 0.0)
+            - float(position.get("entry_fee") or 0.0)
             for position in positions.values() if not position.get("settled")
         )
-        starting_capital = float(self.state.get("starting_capital") or 0.0)
-        peak = max(starting_capital, float(self.state.get("peak_equity") or starting_capital), equity)
-        drawdown = max(0.0, 1.0 - equity / peak) if peak > 0.0 else 1.0
-        killed = bool(self.state.get("killed")) or drawdown >= 0.15 or (self.root / "control" / "KILL").exists()
+        peak = max(starting_capital, float(self.state.get("peak_equity") or starting_capital), virtual_equity)
+        drawdown = max(0.0, 1.0 - virtual_equity / peak) if peak > 0.0 else 1.0
+        killed = bool(self.state.get("killed")) or (self.root / "control" / "KILL").exists()
         drain_requested = self.drain_path.exists()
         if drain_requested:
             blocker = "CUTOVER_DRAIN"
@@ -559,15 +577,16 @@ class PaperRouter:
             "schema": "polymarket_v7_external_fair_paper_router_v1", "timestamp": int(time.time()),
             "code_sha": self.sha, "state": "KILLED" if killed else "DRAINING" if drain_requested else "RUNNING", "paper_only": True,
             "authenticated_execution": False, "real_order_submission": False,
-            "execution_authority": "PAPER_EXECUTION_OWNER", "model_mature": self.model_mature,
+            "execution_mode": "SHADOW_COUNTERFACTUAL",
+            "execution_authority": "SHADOW_ZERO_AUTHORITY", "model_mature": self.model_mature,
             "economic_confidence": "MORE_EVIDENCE_REQUIRED", "active_candidates": active_candidates,
             "entry_tte_window_seconds": {
                 "minimum": self.policy.get("minimum_entry_tte_seconds"),
                 "maximum": self.policy.get("maximum_entry_tte_seconds"),
             },
             "sizing_regime": (
-                "MATURE_FRACTIONAL_KELLY" if self.model_mature
-                else "IMMATURE_FIXED_EXPLORATION"
+                "MATURE_SHADOW_FRACTIONAL_KELLY" if self.model_mature
+                else "IMMATURE_SHADOW_FIXED_NOTIONAL"
             ),
             "market_capital_ceiling": float(self.state.get("starting_capital") or 0.0) * float(
                 self.policy.get(
@@ -576,21 +595,30 @@ class PaperRouter:
                     0.02 if self.model_mature else 0.0025,
                 )
             ),
-            "candidates_spooled": int(self.state.get("candidates") or 0),
+            "counterfactual_collection_enabled": not killed and not drain_requested,
+            "counterfactual_tape": str(self.counterfactual_path),
+            "counterfactual_candidates": int(self.state.get("candidates") or 0),
+            "candidates_spooled": 0,
             "orders_submitted": int(self.state.get("orders") or 0), "fills": int(self.state.get("fills") or 0),
-            "open_positions": open_positions, "realized_pnl": float(self.state.get("realized_pnl") or 0.0),
-            "cash": float(self.state.get("cash") or 0.0), "equity": equity,
-            "peak_equity": peak, "drawdown": drawdown, "killed": killed,
-            "order_submission_enabled": not killed and not blocker,
-            "drain_requested": drain_requested, "drain_complete": drain_requested and open_positions == 0,
+            "counterfactual_fills": int(self.state.get("counterfactual_fills") or 0),
+            "counterfactual_open_positions": open_positions,
+            "counterfactual_realized_pnl": float(self.state.get("counterfactual_realized_pnl") or 0.0),
+            "counterfactual_equity": virtual_equity,
+            "open_positions": 0, "realized_pnl": 0.0,
+            "cash": starting_capital, "equity": starting_capital,
+            "counterfactual_peak_equity": peak, "counterfactual_drawdown": drawdown,
+            "peak_equity": starting_capital, "drawdown": 0.0, "killed": killed,
+            "order_submission_enabled": False,
+            "drain_requested": drain_requested, "drain_complete": drain_requested,
             "blocker": blocker,
             "book_requests": int(self.state.get("book_requests") or 0),
             "book_request_failures": int(self.state.get("book_request_failures") or 0),
             "book_parse_failures": int(self.state.get("book_parse_failures") or 0),
             "rejection_reasons": self.state.get("rejection_reasons") or {},
             "last_decision": self.state.get("last_decision") or {},
-            "actions": {"MAKE": 0, "TAKE": int(self.state.get("orders") or 0), "CANCEL": 0,
+            "actions": {"MAKE": 0, "TAKE": 0, "CANCEL": 0,
                         "WITHDRAW": 0, "NOTHING": int(self.state.get("nothing") or 0)},
+            "counterfactual_actions": {"TAKE": int(self.state.get("counterfactual_fills") or 0)},
         })
 
     def step(self) -> None:
@@ -634,7 +662,7 @@ class PaperRouter:
                 reason = "NO_ROBUST_EV"
             self.reject(reason)
         else:
-            reason = "FILLED"
+            reason = "VIRTUAL_FILL"
         self.state["last_decision"] = {
             "timestamp_ms": now_ms(),
             "market_id": str((status.get("market") or {}).get("market_id") or ""),
