@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import v7_external_fair_paper_router as router  # noqa: E402
 from v7_external_fair_paper_router import (  # noqa: E402
-    Book, entry_tte_allowed, executable_sell_value, fee_per_share, robust_candidates,
+    Book, entry_tte_allowed, executable_sell_value, fee_per_share,
+    model_market_disagreement_allowed, robust_candidates,
 )
 
 
@@ -25,7 +26,8 @@ def snapshot() -> dict:
         "settlement_reference": {"valid": True},
         "oracle": {"healthy": True, "continuity": "LIVE_CONTINUOUS"},
         "external": {"healthy": True},
-        "fair": {"valid": True, "lower": 0.75, "upper": 0.80, "tte_seconds": 45.0,
+        "fair": {"valid": True, "yes": 0.77, "pm_mid": 0.72,
+                 "lower": 0.75, "upper": 0.80, "tte_seconds": 45.0,
                  "calculated_monotonic_ns": current - 1, "valid_until_monotonic_ns": current + 1_000_000_000},
         "market": {"yes_token": "yes", "no_token": "no",
                    "fee_schedule": {"rate": 0.07, "exponent": 1, "takerOnly": True}},
@@ -65,12 +67,16 @@ def main() -> None:
     assert router.parse_book(raw_book, receive_ms) is None
     policy = {
         "minimum_entry_tte_seconds": 5.0, "maximum_entry_tte_seconds": 60.0,
+        "maximum_model_market_disagreement": 0.20,
         "minimum_robust_ev_per_share": 0.001, "base_execution_risk_per_share": 0.0005,
     }
     rows = robust_candidates(snapshot(), {"yes": book("yes", 0.50), "no": book("no", 0.81)}, policy)
     assert len(rows) == 1 and rows[0]["outcome"] == "YES"
     assert rows[0]["robust_ev"] > 0.20
     assert rows[0]["tte_seconds"] == 45.0
+    extreme = snapshot(); extreme["fair"]["pm_mid"] = 0.01
+    assert not model_market_disagreement_allowed(extreme["fair"], policy)
+    assert robust_candidates(extreme, {"yes": book("yes", 0.01), "no": book("no", 1.0)}, policy) == []
     early = snapshot(); early["fair"]["tte_seconds"] = 60.001
     assert not entry_tte_allowed(early["fair"], policy)
     assert robust_candidates(early, {"yes": book("yes", 0.50)}, policy) == []
@@ -147,6 +153,17 @@ def main() -> None:
         assert fill["metadata"]["robust_probability"] == 0.75
         assert fill["metadata"]["robust_ev_per_share"] > 0.20
         assert fill["metadata"]["arrival_robust_ev_per_share"] > 0.20
+
+        extreme_live = snapshot()
+        extreme_live["fair"]["pm_mid"] = 0.01
+        extreme_live["market"].update({"market_id": "m-disagreement", "event_id": "e-disagreement"})
+        (external / "status.json").write_text(json.dumps(extreme_live))
+        with mock.patch.object(router, "request_json", side_effect=public_request):
+            paper.step()
+        status = json.loads((external / "paper_router_status.json").read_text())
+        assert status["fills"] == 1
+        assert status["last_decision"]["outcome"] == "MODEL_MARKET_DISAGREEMENT_LIMIT"
+        assert status["rejection_reasons"]["MODEL_MARKET_DISAGREEMENT_LIMIT"] == 1
 
         (run_root / "control").mkdir(exist_ok=True)
         (run_root / "control" / "CUTOVER_DRAIN").write_text("{}\n")

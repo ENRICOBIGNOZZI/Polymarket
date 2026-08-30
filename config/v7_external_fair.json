@@ -176,6 +176,7 @@
     "unknown_fee_behavior": "NO_TAKE",
     "minimum_entry_tte_seconds": 5.0,
     "maximum_entry_tte_seconds": 60.0,
+    "maximum_model_market_disagreement": 0.20,
     "minimum_robust_ev_per_share": 0.001,
     "max_depth_fraction": 0.5,
     "depth_survival_fraction": 0.75,

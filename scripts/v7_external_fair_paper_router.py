@@ -81,6 +81,27 @@ def entry_tte_allowed(fair: dict[str, Any], policy: dict[str, Any]) -> bool:
     )
 
 
+def model_market_disagreement_allowed(fair: dict[str, Any], policy: dict[str, Any]) -> bool:
+    """Reject uncalibrated model forecasts that radically contradict the market.
+
+    The market is the benchmark the external model must beat, not an input that
+    can be ignored.  Until forward calibration proves otherwise, a large gap is
+    evidence of model/semantic risk rather than executable alpha.
+    """
+    model_yes = finite(fair.get("yes"))
+    market_yes = finite(fair.get("pm_mid"))
+    maximum = finite(policy.get("maximum_model_market_disagreement"))
+    return (
+        math.isfinite(model_yes)
+        and math.isfinite(market_yes)
+        and math.isfinite(maximum)
+        and 0.0 <= model_yes <= 1.0
+        and 0.0 <= market_yes <= 1.0
+        and 0.0 <= maximum <= 1.0
+        and abs(model_yes - market_yes) <= maximum
+    )
+
+
 @dataclass(frozen=True)
 class Book:
     token_id: str
@@ -139,6 +160,8 @@ def robust_candidates(status: dict[str, Any], books: dict[str, Book], policy: di
             and external.get("healthy") and fair.get("valid")):
         return []
     if not entry_tte_allowed(fair, policy):
+        return []
+    if not model_market_disagreement_allowed(fair, policy):
         return []
     calculated = int(fair.get("calculated_monotonic_ns") or 0)
     valid_until = int(fair.get("valid_until_monotonic_ns") or 0)
@@ -319,7 +342,14 @@ class PaperRouter:
                 "authority": "PAPER_EXECUTION_OWNER", "paper_tif": "FAK",
                 "outcome": row["outcome"], "execution_side": "BUY",
                 "fair_yes": fair.get("yes"), "fair_lower": fair.get("lower"),
-                "fair_upper": fair.get("upper"), "contract_rules_hash": contract.get("rules_hash"),
+                "fair_upper": fair.get("upper"), "pm_mid": fair.get("pm_mid"),
+                "model_market_disagreement": abs(
+                    float(fair.get("yes")) - float(fair.get("pm_mid"))
+                ),
+                "maximum_model_market_disagreement": self.policy.get(
+                    "maximum_model_market_disagreement"
+                ),
+                "contract_rules_hash": contract.get("rules_hash"),
                 "reference_version": reference.get("version"), "expected_fee_per_share": row["fee_per_share"],
                 "expected_execution_risk": row["execution_risk"], "economic_maturity": "MORE_EVIDENCE_REQUIRED",
                 "tte_seconds": row["tte_seconds"], "robust_probability": row["robust_probability"],
@@ -589,6 +619,10 @@ class PaperRouter:
                 reason = self.last_book_error
             elif len(books) < 2:
                 reason = "CLOB_BOOKS_UNAVAILABLE"
+            elif (status.get("fair") or {}).get("valid") and entry_tte_allowed(
+                    status.get("fair") or {}, self.policy) and not model_market_disagreement_allowed(
+                        status.get("fair") or {}, self.policy):
+                reason = "MODEL_MARKET_DISAGREEMENT_LIMIT"
             elif rows and self.last_attempt_reason:
                 reason = self.last_attempt_reason
             elif rows:
