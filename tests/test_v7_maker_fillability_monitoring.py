@@ -84,6 +84,11 @@ class V7MakerFillabilityMonitoringTest(unittest.TestCase):
             "polymarket_maker_fillability_action_fill_opportunities",
             "polymarket_maker_fillability_market_near_miss_ratio",
             "polymarket_maker_fillability_priority_resets",
+            "polymarket_maker_fillability_exact_ws_present",
+            "polymarket_maker_fillability_exact_ws_complete",
+            "polymarket_maker_fillability_exact_ws_orders",
+            "polymarket_maker_fillability_exact_ws_trade_reachable",
+            "polymarket_maker_fillability_exact_ws_root_cause_info",
         ):
             self.assertIn(metric, serialized)
 

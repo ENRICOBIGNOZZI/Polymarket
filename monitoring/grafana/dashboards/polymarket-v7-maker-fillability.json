@@ -165,6 +165,74 @@
       "targets": [{"expr": "polymarket_maker_fillability_cancelled_before_flow", "legendFormat": "cancelled before flow", "refId": "A"}],
       "title": "Cancellation censoring",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 27},
+      "id": 20,
+      "panels": [],
+      "title": "Independent exact-WS evidence",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"min": 0, "max": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 0, "y": 28},
+      "id": 21,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "polymarket_maker_fillability_exact_ws_present", "refId": "A"}],
+      "title": "Exact WS present",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"min": 0, "max": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 4, "y": 28},
+      "id": 22,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "polymarket_maker_fillability_exact_ws_complete", "refId": "A"}],
+      "title": "Exact WS complete",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 8, "y": 28},
+      "id": 23,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "polymarket_maker_fillability_exact_ws_orders", "refId": "A"}],
+      "title": "Exact WS covered orders",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 12, "y": 28},
+      "id": 24,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "polymarket_maker_fillability_exact_ws_trade_reachable", "refId": "A"}],
+      "title": "Exact WS trade reachable",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 16, "y": 28},
+      "id": 25,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "polymarket_maker_fillability_exact_ws_cancelled_before_future_flow", "refId": "A"}],
+      "title": "Cancelled before future WS flow",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
+      "fieldConfig": {"defaults": {"min": 0, "max": 1}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 20, "y": 28},
+      "id": 26,
+      "options": {"displayMode": "basic", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showUnfilled": true},
+      "targets": [{"expr": "polymarket_maker_fillability_exact_ws_root_cause_info", "instant": true, "legendFormat": "{{root_cause}} / {{next_experiment}}", "range": false, "refId": "A"}],
+      "title": "Exact WS root cause",
+      "type": "bargauge"
     }
   ],
   "refresh": "10s",
@@ -176,6 +244,6 @@
   "timezone": "browser",
   "title": "Polymarket V7 Maker Fillability",
   "uid": "polymarket-v7-maker-fillability",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

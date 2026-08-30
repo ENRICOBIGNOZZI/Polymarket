@@ -20,6 +20,9 @@ class DashboardContractTests(unittest.TestCase):
             "polymarket_v7_maker_cohort_supervisor_ready",
             "polymarket_v7_maker_cohort_rotations_total",
             "polymarket_v7_maker_rotation_blocked_nonflat",
+            "polymarket_v7_maker_rotation_candidate_confirmations",
+            "polymarket_v7_maker_rotation_required_confirmations",
+            "polymarket_v7_maker_rotation_cooldown_remaining_seconds",
             'dimension=\\"lifetime_arm\\"',
         ):
             self.assertIn(metric, raw)
