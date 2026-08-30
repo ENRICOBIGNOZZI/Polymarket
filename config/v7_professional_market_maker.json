@@ -77,6 +77,23 @@
     "reward_sleeve_capital_usd": 2000,
     "reward_max_quote_shares": 100,
     "fallback_universe_max_age_seconds": 180,
+    "recent_flow": {
+      "enabled": true,
+      "lookback_seconds": 180,
+      "maximum_tape_age_seconds": 30,
+      "initial_wait_seconds": 30,
+      "minimum_markets": 10,
+      "minimum_prints": 2,
+      "minimum_time_to_end_seconds": 900,
+      "maximum_spread": 0.1,
+      "score_weights": {
+        "log_prints": 3.0,
+        "log_notional": 1.0,
+        "log_flow_to_liquidity": 2.0,
+        "mid_balance": 0.25,
+        "log_spread_cents": 0.1
+      }
+    },
     "reward_settings_endpoint": "/rewards/markets/current",
     "reward_markets_endpoint": "/rewards/markets/multi"
   },

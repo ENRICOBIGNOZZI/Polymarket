@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import csv
 import json
 from pathlib import Path
 import sys
@@ -56,6 +57,90 @@ def _universe(path: Path, *, timestamp_ms: int, model_sha: str = SHA, markets=No
 
 
 class MakerRewardSelectorTests(unittest.TestCase):
+    def test_recent_flow_is_preferred_over_quiet_reward_catalog(self) -> None:
+        flow_snapshot = {
+            "schema": "polymarket_v7_maker_reward_selection_v1",
+            "timestamp_ms": 1_000_000,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "model_sha": SHA,
+            "source": "adaptive_universe_recent_flow",
+            "selection_mode": "RECENT_AGGRESSIVE_FLOW",
+            "degraded": False,
+            "selected_count": 1,
+            "resource_capacity_markets": 40,
+            "markets": [{
+                "condition_id": "c1", "market_id": "m1",
+                "yes_token": "yes", "no_token": "no",
+            }],
+        }
+        with mock.patch.object(rewards, "_recent_flow_snapshot", return_value=flow_snapshot), \
+             mock.patch.object(rewards, "_primary_snapshot") as primary:
+            snapshot = rewards.build_snapshot(
+                ROOT / "config" / "v7_professional_market_maker.json",
+                fallback_universe_path=Path("universe.json"),
+                trade_tape_path=Path("trades.csv"),
+                model_sha=SHA,
+                now_ms=1_000_000,
+            )
+        primary.assert_not_called()
+        self.assertEqual(snapshot["source"], "adaptive_universe_recent_flow")
+        self.assertEqual(rewards.selector_status(snapshot)["state"], "OPERATIONAL_RECENT_FLOW")
+
+    def test_recent_flow_filters_expiry_extremes_and_duplicate_events(self) -> None:
+        from tempfile import TemporaryDirectory
+        base = {
+            "question": "Q", "slug": "q", "active": True, "closed": False,
+            "accepting_orders": True, "spread": 0.02, "liquidity": 1_000.0,
+            "volume_24h": 10_000.0, "end_date": "2099-01-01T00:00:00Z",
+        }
+        markets = [
+            {**base, "event_ids": ["e1"], "market_id": "active", "condition_id": "ca",
+             "clob_token_ids": ["ya", "na"], "midpoint": 0.50},
+            {**base, "event_ids": ["e1"], "market_id": "same-event", "condition_id": "cb",
+             "clob_token_ids": ["yb", "nb"], "midpoint": 0.45},
+            {**base, "event_ids": ["e2"], "market_id": "second", "condition_id": "cc",
+             "clob_token_ids": ["yc", "nc"], "midpoint": 0.40},
+            {**base, "event_ids": ["e3"], "market_id": "extreme", "condition_id": "cd",
+             "clob_token_ids": ["yd", "nd"], "midpoint": 0.001},
+            {**base, "event_ids": ["e4"], "market_id": "expired", "condition_id": "ce",
+             "clob_token_ids": ["ye", "ne"], "midpoint": 0.50,
+             "end_date": "1970-01-01T00:00:00Z"},
+        ]
+        now_ms = 1_000_000
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            universe = _universe(root / "current.json", timestamp_ms=now_ms, markets=markets)
+            tape = root / "trade_tape.csv"
+            with tape.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=[
+                    "timestamp", "received_ms", "condition_id", "asset_id", "side",
+                    "price", "size", "transaction_hash",
+                ])
+                writer.writeheader()
+                for condition, count in (("ca", 5), ("cb", 4), ("cc", 3), ("cd", 8), ("ce", 8)):
+                    for index in range(count):
+                        writer.writerow({
+                            "timestamp": "1000", "received_ms": str(now_ms - index),
+                            "condition_id": condition, "asset_id": "token", "side": "BUY",
+                            "price": "0.5", "size": "10",
+                            "transaction_hash": f"{condition}-{index}",
+                        })
+            _, selection_cfg, capacity_cfg, capacity = rewards._validated_config(
+                ROOT / "config" / "v7_professional_market_maker.json"
+            )
+            selection_cfg = json.loads(json.dumps(selection_cfg))
+            selection_cfg["recent_flow"]["minimum_markets"] = 2
+            snapshot = rewards._recent_flow_snapshot(
+                universe, tape, selection_cfg, capacity_cfg, capacity,
+                model_sha=SHA, now_ms=now_ms,
+            )
+        self.assertEqual([row["market_id"] for row in snapshot["markets"]], ["active", "second"])
+        self.assertEqual(snapshot["markets"][0]["recent_prints"], 5)
+        self.assertEqual(snapshot["selection_mode"], "RECENT_AGGRESSIVE_FLOW")
+        self.assertFalse(snapshot["reward_data_available"])
+
     def test_reward_failure_publishes_safe_fresh_universe_fallback(self) -> None:
         with self.subTest("fresh exact-SHA universe"):
             from tempfile import TemporaryDirectory

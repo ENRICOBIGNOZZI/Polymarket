@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+import csv
 import hashlib
 import json
 import math
@@ -364,6 +366,221 @@ def rank_markets(
     return rows[: max(1, int(max_active))]
 
 
+def _iso_timestamp_ms(value: Any) -> int:
+    raw = str(value or "").strip()
+    if not raw:
+        return 0
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp() * 1000.0)
+    except (ValueError, OverflowError):
+        return 0
+
+
+def _recent_flow_snapshot(
+    universe_path: Path,
+    trade_tape_path: Path,
+    selection_cfg: dict[str, Any],
+    capacity_cfg: dict[str, Any],
+    resource_capacity: int,
+    *,
+    model_sha: str,
+    now_ms: int,
+) -> dict[str, Any]:
+    """Rank PAPER markets by causal recent public prints, not reward-pool size."""
+    flow_cfg = selection_cfg.get("recent_flow")
+    if not isinstance(flow_cfg, dict) or flow_cfg.get("enabled") is not True:
+        raise ValueError("maker_recent_flow_disabled")
+    if not trade_tape_path.is_file():
+        raise ValueError("maker_recent_flow_tape_missing")
+    universe = json.loads(universe_path.read_text(encoding="utf-8"))
+    if (
+        universe.get("schema") != UNIVERSE_SCHEMA
+        or universe.get("paper_only") is not True
+        or universe.get("authenticated_execution") is not False
+        or universe.get("real_order_submission") is not False
+        or universe.get("execution_authority") is not False
+        or universe.get("discovery_exhaustive") is not True
+        or universe.get("pagination_loop_guard_hit") is not False
+        or universe.get("model_sha") != model_sha
+    ):
+        raise ValueError("maker_recent_flow_universe_contract_invalid")
+    maximum_universe_age_ms = int(
+        float(selection_cfg.get("fallback_universe_max_age_seconds", 180.0)) * 1000.0
+    )
+    universe_age_ms = now_ms - int(universe.get("timestamp_ms") or 0)
+    if universe_age_ms < -5_000 or universe_age_ms > maximum_universe_age_ms:
+        raise ValueError(f"maker_recent_flow_universe_stale:{universe_age_ms}")
+
+    lookback_ms = max(1_000, int(float(flow_cfg.get("lookback_seconds", 180.0)) * 1000.0))
+    maximum_tape_age_ms = max(
+        1_000, int(float(flow_cfg.get("maximum_tape_age_seconds", 30.0)) * 1000.0)
+    )
+    aggregates: dict[str, dict[str, Any]] = {}
+    seen_prints: set[tuple[str, str, str, str, str, str]] = set()
+    latest_receive_ms = 0
+    with trade_tape_path.open(newline="", encoding="utf-8") as handle:
+        for raw in csv.DictReader(handle):
+            condition_id = str(raw.get("condition_id") or "")
+            receive_ms = int(finite(raw.get("received_ms"), 0.0))
+            latest_receive_ms = max(latest_receive_ms, receive_ms)
+            if not condition_id or receive_ms < now_ms - lookback_ms or receive_ms > now_ms + 5_000:
+                continue
+            identity = (
+                condition_id,
+                str(raw.get("transaction_hash") or ""),
+                str(raw.get("asset_id") or ""),
+                str(raw.get("timestamp") or ""),
+                str(raw.get("price") or ""),
+                str(raw.get("size") or ""),
+            )
+            if identity in seen_prints:
+                continue
+            seen_prints.add(identity)
+            size = max(0.0, finite(raw.get("size")))
+            price = min(1.0, max(0.0, finite(raw.get("price"))))
+            item = aggregates.setdefault(condition_id, {
+                "prints": 0,
+                "shares": 0.0,
+                "notional": 0.0,
+                "last_receive_ms": 0,
+                "transactions": set(),
+            })
+            item["prints"] += 1
+            item["shares"] += size
+            item["notional"] += size * price
+            item["last_receive_ms"] = max(int(item["last_receive_ms"]), receive_ms)
+            tx_hash = str(raw.get("transaction_hash") or "")
+            if tx_hash:
+                item["transactions"].add(tx_hash)
+    if latest_receive_ms <= 0 or now_ms - latest_receive_ms > maximum_tape_age_ms:
+        raise ValueError(f"maker_recent_flow_tape_stale:{now_ms - latest_receive_ms}")
+
+    minimum_prints = max(1, int(flow_cfg.get("minimum_prints", 2)))
+    minimum_markets = max(1, int(flow_cfg.get("minimum_markets", 5)))
+    minimum_tte_ms = max(
+        0, int(float(flow_cfg.get("minimum_time_to_end_seconds", 900.0)) * 1000.0)
+    )
+    minimum_volume = float(selection_cfg.get("min_volume_24h", 100.0))
+    minimum_liquidity = float(selection_cfg.get("min_liquidity", 25.0))
+    minimum_mid = float(selection_cfg.get("min_mid", 0.02))
+    maximum_mid = float(selection_cfg.get("max_mid", 0.98))
+    maximum_spread = max(0.0, float(flow_cfg.get("maximum_spread", 0.10)))
+    weights = flow_cfg.get("score_weights") if isinstance(flow_cfg.get("score_weights"), dict) else {}
+    candidates: list[dict[str, Any]] = []
+    for raw in universe.get("markets") if isinstance(universe.get("markets"), list) else []:
+        if not isinstance(raw, dict):
+            continue
+        condition_id = str(raw.get("condition_id") or "")
+        flow = aggregates.get(condition_id)
+        tokens = raw.get("clob_token_ids") if isinstance(raw.get("clob_token_ids"), list) else []
+        events = raw.get("event_ids") if isinstance(raw.get("event_ids"), list) else []
+        liquidity = max(0.0, finite(raw.get("liquidity")))
+        volume_24h = max(0.0, finite(raw.get("volume_24h")))
+        midpoint = finite(raw.get("midpoint"), -1.0)
+        spread = max(0.0, finite(raw.get("spread")))
+        end_ms = _iso_timestamp_ms(raw.get("end_date"))
+        if (
+            flow is None
+            or int(flow["prints"]) < minimum_prints
+            or raw.get("active") is not True
+            or raw.get("closed") is True
+            or raw.get("accepting_orders") is not True
+            or len(tokens) != 2
+            or liquidity < minimum_liquidity
+            or volume_24h < minimum_volume
+            or midpoint < minimum_mid
+            or midpoint > maximum_mid
+            or spread <= 0.0
+            or spread > maximum_spread
+            or (minimum_tte_ms > 0 and (end_ms <= 0 or end_ms - now_ms < minimum_tte_ms))
+        ):
+            continue
+        market_id = str(raw.get("market_id") or "")
+        yes_token, no_token = str(tokens[0] or ""), str(tokens[1] or "")
+        if not condition_id or not market_id or not yes_token or not no_token or yes_token == no_token:
+            continue
+        recent_flow_to_liquidity = float(flow["shares"]) / max(liquidity, minimum_liquidity)
+        mid_balance = max(0.0, 1.0 - abs(midpoint - 0.5) / 0.5)
+        score = (
+            finite(weights.get("log_prints"), 3.0) * math.log1p(int(flow["prints"]))
+            + finite(weights.get("log_notional"), 1.0) * math.log1p(float(flow["notional"]))
+            + finite(weights.get("log_flow_to_liquidity"), 2.0)
+              * math.log1p(recent_flow_to_liquidity * 1_000.0)
+            + finite(weights.get("mid_balance"), 0.25) * mid_balance
+            + finite(weights.get("log_spread_cents"), 0.10) * math.log1p(spread * 100.0)
+        )
+        candidates.append({
+            "condition_id": condition_id,
+            "market_id": market_id,
+            "event_id": str(events[0] if events else ""),
+            "slug": str(raw.get("slug") or ""),
+            "question": str(raw.get("question") or ""),
+            "yes_token": yes_token,
+            "no_token": no_token,
+            "volume_24h": volume_24h,
+            "liquidity": liquidity,
+            "midpoint": midpoint,
+            "spread": spread,
+            "market_competitiveness": 0.0,
+            "rewards_max_spread_cents": 0.0,
+            "rewards_min_size": 0.0,
+            "native_daily_rate": 0.0,
+            "sponsored_daily_rate": 0.0,
+            "total_daily_rate": 0.0,
+            "reward_intensity": 0.0,
+            "selection_score": score,
+            "recent_prints": int(flow["prints"]),
+            "recent_unique_transactions": len(flow["transactions"]),
+            "recent_share_volume": float(flow["shares"]),
+            "recent_notional_usd": float(flow["notional"]),
+            "recent_flow_to_liquidity": recent_flow_to_liquidity,
+            "recent_last_trade_age_ms": now_ms - int(flow["last_receive_ms"]),
+        })
+    candidates.sort(key=lambda row: (
+        -finite(row.get("selection_score")),
+        -int(row.get("recent_prints") or 0),
+        -finite(row.get("recent_notional_usd")),
+        str(row.get("market_id") or ""),
+    ))
+    selected: list[dict[str, Any]] = []
+    selected_events: set[str] = set()
+    for row in candidates:
+        event_key = str(row.get("event_id") or f"market:{row.get('market_id')}")
+        if event_key in selected_events:
+            continue
+        selected_events.add(event_key)
+        selected.append(row)
+        if len(selected) >= resource_capacity:
+            break
+    if len(selected) < minimum_markets:
+        raise ValueError(f"maker_recent_flow_insufficient_markets:{len(selected)}")
+    return {
+        "schema": "polymarket_v7_maker_reward_selection_v1",
+        "timestamp_ms": now_ms,
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "model_sha": model_sha,
+        "source": "adaptive_universe_recent_flow",
+        "selection_mode": "RECENT_AGGRESSIVE_FLOW",
+        "degraded": False,
+        "reward_data_available": False,
+        "reward_pool_count": 0,
+        "reward_market_count": 0,
+        "selected_count": len(selected),
+        "resource_capacity_markets": resource_capacity,
+        "resource_capacity": capacity_cfg,
+        "universe_membership_sha256": str(universe.get("membership_sha256") or ""),
+        "recent_flow_lookback_ms": lookback_ms,
+        "recent_flow_latest_receive_ms": latest_receive_ms,
+        "markets": selected,
+        "note": "PAPER maker selection is ranked by causal recent public prints; reward assumptions are zero.",
+    }
+
+
 def _validated_config(config_path: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], int]:
     cfg = json.loads(config_path.read_text(encoding="utf-8"))
     if cfg.get("paper_only") is not True or cfg.get("authenticated_execution") is not False or cfg.get("real_order_submission") is not False:
@@ -591,6 +808,7 @@ def build_snapshot(
     config_path: Path,
     *,
     fallback_universe_path: Path | None = None,
+    trade_tape_path: Path | None = None,
     model_sha: str = "",
     deadline_seconds: float | None = None,
     request_timeout_seconds: float | None = None,
@@ -623,6 +841,25 @@ def build_snapshot(
     max_quote_shares = max(0.0, float(selection_cfg.get("reward_max_quote_shares", 100.0)))
     if max_order_notional_usd <= 0.0 or max_quote_shares <= 0.0:
         raise ValueError("maker_reward_qualification_budget_invalid")
+    flow_cfg = selection_cfg.get("recent_flow") if isinstance(selection_cfg.get("recent_flow"), dict) else {}
+    if (
+        flow_cfg.get("enabled") is True
+        and fallback_universe_path is not None
+        and trade_tape_path is not None
+    ):
+        flow_wait_seconds = max(0.0, float(flow_cfg.get("initial_wait_seconds", 0.0)))
+        flow_deadline = time.monotonic() + flow_wait_seconds
+        while True:
+            try:
+                return _recent_flow_snapshot(
+                    fallback_universe_path, trade_tape_path, selection_cfg, capacity_cfg,
+                    resource_capacity, model_sha=model_sha,
+                    now_ms=time.time_ns() // 1_000_000 if now_ms is None else int(now_ms),
+                )
+            except Exception:
+                if time.monotonic() >= flow_deadline:
+                    break
+                time.sleep(min(1.0, max(0.0, flow_deadline - time.monotonic())))
     try:
         return _primary_snapshot(
             cfg, selection_cfg, capacity_cfg, resource_capacity,
@@ -652,7 +889,9 @@ def _validated_pinned_selection(path: Path, *, model_sha: str) -> dict[str, Any]
         or snapshot.get("authenticated_execution") is not False
         or snapshot.get("real_order_submission") is not False
         or snapshot.get("model_sha") != model_sha
-        or snapshot.get("source") not in {"public_clob_rewards", "adaptive_universe_fallback"}
+        or snapshot.get("source") not in {
+            "public_clob_rewards", "adaptive_universe_fallback", "adaptive_universe_recent_flow",
+        }
         or not markets
         or int(snapshot.get("selected_count") or 0) != len(markets)
         or len(markets) > int(snapshot.get("resource_capacity_markets") or 0)
@@ -706,7 +945,12 @@ def selector_status(
         "authenticated_execution": False,
         "real_order_submission": False,
         "model_sha": snapshot.get("model_sha"),
-        "state": "OPERATIONAL_FALLBACK" if candidate.get("degraded") else "OPERATIONAL_REWARDED",
+        "state": (
+            "OPERATIONAL_FALLBACK" if candidate.get("degraded")
+            else "OPERATIONAL_RECENT_FLOW"
+            if candidate.get("source") == "adaptive_universe_recent_flow"
+            else "OPERATIONAL_REWARDED"
+        ),
         "ready": True,
         "degraded": candidate.get("degraded") is True,
         "source": candidate.get("source"),
@@ -732,6 +976,7 @@ def main() -> int:
     parser.add_argument("--pin-runtime-selection", action="store_true")
     parser.add_argument("--status", type=Path)
     parser.add_argument("--fallback-universe", type=Path)
+    parser.add_argument("--trade-tape", type=Path)
     parser.add_argument("--allocation", type=Path)
     parser.add_argument("--model-sha", default="")
     parser.add_argument("--deadline-seconds", type=float)
@@ -740,6 +985,7 @@ def main() -> int:
     snapshot = build_snapshot(
         args.config,
         fallback_universe_path=args.fallback_universe,
+        trade_tape_path=args.trade_tape,
         allocation_path=args.allocation,
         model_sha=args.model_sha,
         deadline_seconds=args.deadline_seconds,

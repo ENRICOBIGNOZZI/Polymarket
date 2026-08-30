@@ -440,7 +440,7 @@ except Exception: raise SystemExit(1)
 markets=obj.get("markets")
 ok=(obj.get("paper_only") is True and obj.get("authenticated_execution") is False
     and obj.get("real_order_submission") is False and obj.get("model_sha")==sys.argv[2]
-    and obj.get("source") in {"public_clob_rewards","adaptive_universe_fallback"}
+    and obj.get("source") in {"public_clob_rewards","adaptive_universe_fallback","adaptive_universe_recent_flow"}
     and isinstance(markets,list) and len(markets)>0)
 raise SystemExit(0 if ok else 1)
 PY
@@ -474,6 +474,7 @@ pids+=("$!")
       --pin-runtime-selection \
       --status "$RUN_ROOT/micro_maker/selector_status.json" \
       --fallback-universe "$RUN_ROOT/universe/current.json" \
+      --trade-tape "$RUN_ROOT/trade_tape.csv" \
       --allocation "$ALLOC/micro_maker.json" \
       --model-sha "$SHA" \
       >> "$RUN_ROOT/micro_maker/reward_selection.log" 2>&1 || true
