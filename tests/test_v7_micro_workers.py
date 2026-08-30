@@ -70,6 +70,12 @@ def test_taker_uses_complete_round_trip_contract():
     assert 'event_type="MARKOUT"' in text
     assert 'event_type="FINAL"' in text
     assert "spool_event" in text
+    assert '"schema": "polymarket_v7_micro_taker_status_v1"' in text
+    assert '"model_sha": args.model_sha' in text
+    assert '"real_order_submission": False' in text
+    assert '"atomic_book_pairs": book_pair_count' in text
+    assert '"missing_book_pairs": missing_book_pair_count' in text
+    assert '"feature_ready_markets": len(current)' in text
 
 
 def test_taker_freezes_new_risk_when_open_positions_are_unmarkable():

@@ -176,6 +176,31 @@ class MicroTakerBookFreshnessTest(unittest.TestCase):
         self.assertEqual(books["no-token"].exchange_ts, NOW - 1)
         self.assertEqual(books["no-token"].received_ts, NOW)
 
+    def test_shared_bus_skips_uncovered_market_without_discarding_complete_pair(self) -> None:
+        def shared_book(token: str) -> dict[str, object]:
+            return {
+                "token": token, "bids": [(0.49, 100.0)], "asks": [(0.51, 100.0)],
+                "exchange_ts_ms": NOW * 1000, "received_ms": NOW * 1000,
+                "tick_size": 0.01, "min_order": 1.0,
+                "bus_snapshot_id": "atomic-bus", "lineage_continuous": True,
+            }
+
+        snapshot = {
+            "books": {
+                "yes-covered": shared_book("yes-covered"),
+                "no-covered": shared_book("no-covered"),
+                "yes-partial": shared_book("yes-partial"),
+            }
+        }
+        covered = SimpleNamespace(yes="yes-covered", no="no-covered")
+        partial = SimpleNamespace(yes="yes-partial", no="no-missing")
+        with mock.patch.object(data, "load_snapshot", return_value=snapshot):
+            books = data.fetch_shared_books(
+                Path("unused.json"), [covered, partial], model_sha="a" * 40,
+            )
+        self.assertEqual(set(books), {"yes-covered", "no-covered"})
+        self.assertTrue(all(book.lineage_continuous for book in books.values()))
+
     def test_fresh_pair_uses_oldest_causal_timestamp(self) -> None:
         yes = data.Book(raw_book("yes", str((NOW - 2) * 1000)), received_ts=NOW)
         no = data.Book(raw_book("no", str((NOW - 1) * 1000)), received_ts=NOW)

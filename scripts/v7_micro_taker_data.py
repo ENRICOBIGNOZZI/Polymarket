@@ -217,11 +217,25 @@ def fetch_books(clob: str, markets: list[Market]) -> dict[str, Book]:
 
 def fetch_shared_books(path: Path, markets: list[Market], *, model_sha: str,
                        max_publish_age_ms: int = 2500) -> dict[str, Book]:
-    tokens = [token for market in markets for token in (market.yes, market.no)]
     snapshot = load_snapshot(
         path, expected_sha=model_sha, max_publish_age_ms=max_publish_age_ms,
     )
-    selected = synchronized_books(snapshot, tokens, require_continuous=True)
+    # Coverage is market-local. The shared bus can legitimately contain a
+    # bounded subset of the larger Gamma discovery universe; one uncovered
+    # token must not discard every otherwise atomic YES/NO pair. Each pair is
+    # still validated together against the same bus snapshot and continuous
+    # lineage before it becomes visible to the strategy.
+    selected: dict[str, dict[str, Any]] = {}
+    for market in markets:
+        try:
+            pair = synchronized_books(
+                snapshot, (market.yes, market.no), require_continuous=True,
+            )
+        except SharedStateError:
+            continue
+        selected.update(pair)
+    if markets and not selected:
+        raise SharedStateError("bundle:no_complete_markets")
     output: dict[str, Book] = {}
     for token, raw in selected.items():
         book = Book({

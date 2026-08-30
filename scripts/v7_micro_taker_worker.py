@@ -338,7 +338,11 @@ def main() -> int:
     cfg = json.loads(args.config.read_text(encoding="utf-8"))
     if len(args.model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in args.model_sha):
         raise SystemExit("exact 40-hex model SHA required")
-    if cfg.get("paper_only") is not True or cfg.get("authenticated_execution", False) is not False:
+    if (
+        cfg.get("paper_only") is not True
+        or cfg.get("authenticated_execution", False) is not False
+        or cfg.get("real_order_submission", False) is not False
+    ):
         raise SystemExit("PAPER-only authenticated-disabled config required")
     gamma, clob = str(cfg["gamma_url"]), str(cfg["clob_url"])
     start_capital = float(cfg["starting_capital"])
@@ -362,9 +366,12 @@ def main() -> int:
     samples = state.get("samples") if isinstance(state.get("samples"), list) else []
     realized_total = base.finite(state.get("realized_pnl_total"), 0.0)
     failures: list[str] = []
+    discovered_market_count = 0
+    fee_ready_market_count = 0
 
     try:
         markets = base.discover(gamma, args.markets, args.min_liquidity)
+        discovered_market_count = len(markets)
         fee_ready = []
         for market in markets:
             try:
@@ -374,6 +381,7 @@ def main() -> int:
                 if len(failures) < 30:
                     failures.append(f"fee:{market.id}:{type(exc).__name__}")
         markets = fee_ready
+        fee_ready_market_count = len(markets)
         books = (
             base.fetch_shared_books(
                 args.shared_state, markets, model_sha=args.model_sha,
@@ -389,6 +397,10 @@ def main() -> int:
         failures.append(f"market_data:{type(exc).__name__}:{exc}")
 
     now = int(time.time())
+    book_pair_count = sum(
+        market.yes in books and market.no in books for market in markets
+    )
+    missing_book_pair_count = max(0, len(markets) - book_pair_count)
     token_ids = {token for market in markets for token in (market.yes, market.no) if token}
     flow = causal_flow_features(trade_tape, token_ids, now=now, lookback_seconds=args.flow_lookback_seconds, half_life_seconds=args.flow_half_life_seconds)
     current: dict[str, tuple[base.Market, base.Book, base.Book, tuple[list[float], float, float]]] = {}
@@ -670,9 +682,12 @@ def main() -> int:
     model_labeled = sum(row.get("y") is not None and isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM for row in samples)
 
     new_state = {
+        "schema": "polymarket_v7_micro_taker_status_v1",
         "timestamp": now,
+        "model_sha": args.model_sha,
         "paper_only": True,
         "authenticated_execution": False,
+        "real_order_submission": False,
         "cash": cash,
         "equity": equity,
         "peak": peak,
@@ -691,6 +706,14 @@ def main() -> int:
         "prediction_sigma_probability": sigma,
         "labeled_samples": labeled,
         "model_labeled_samples": model_labeled,
+        "market_state_source": (
+            "SHARED_CPP_WEBSOCKET" if args.shared_state else "REST_COMPATIBILITY"
+        ),
+        "discovered_markets": discovered_market_count,
+        "fee_ready_markets": fee_ready_market_count,
+        "atomic_book_pairs": book_pair_count,
+        "missing_book_pairs": missing_book_pair_count,
+        "feature_ready_markets": len(current),
         "label_stats_last_tick": label_stats,
         "signals": signals,
         "opened": opened,
@@ -705,10 +728,14 @@ def main() -> int:
     }
     base.atomic_json(state_path, new_state)
     base.atomic_json(args.run_dir / "status.json", {k: new_state[k] for k in (
-        "timestamp", "paper_only", "authenticated_execution", "cash", "equity", "peak", "drawdown", "killed",
+        "schema", "timestamp", "model_sha", "paper_only", "authenticated_execution", "real_order_submission",
+        "cash", "equity", "peak", "drawdown", "killed",
         "new_risk_frozen", "drain_requested", "drain_complete", "marking_complete", "market_capital_ceiling",
         "unmarkable_positions", "marking_contract",
-        "prediction_sigma_probability", "labeled_samples", "model_labeled_samples", "signals", "opened", "best_edge",
+        "prediction_sigma_probability", "labeled_samples", "model_labeled_samples",
+        "market_state_source", "discovered_markets", "fee_ready_markets",
+        "atomic_book_pairs", "missing_book_pairs", "feature_ready_markets",
+        "signals", "opened", "best_edge",
         "realized_pnl_last_tick", "realized_pnl_total", "admission_contract", "execution_contract", "feature_contract", "exit_liquidity_contract", "failures"
     )} | {"open_positions": len(positions)})
     base.atomic_json(args.run_dir / "admission_latest.json", {
@@ -731,7 +758,8 @@ def main() -> int:
         },
     )
     print(json.dumps({
-        "markets": len(markets), "labeled": labeled, "model_labeled": model_labeled,
+        "markets": len(markets), "atomic_book_pairs": book_pair_count,
+        "feature_ready_markets": len(current), "labeled": labeled, "model_labeled": model_labeled,
         "signals": signals, "opened": opened, "positions": len(positions), "equity": equity,
         "realized_pnl_total": realized_total, "best_edge": best_edge,
         "prediction_sigma_probability": sigma, "killed": killed,
