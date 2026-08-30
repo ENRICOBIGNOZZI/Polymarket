@@ -100,6 +100,8 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
             'exploration, "max_market_fraction"',
             'exploration, "max_capital_fraction"',
             "exploration_market_cap",
+            "model.exploration_max_active_markets = configured_market_capacity",
+            "model.exploration_concurrent_market_cap = exploration_market_cap",
             "context.risk.exploration_max_quote_shares",
         ):
             with self.subTest(token=token):
@@ -138,6 +140,8 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
         self.assertIn("quote_is_superseded(intent)", self.source)
         self.assertIn("economic_control_preempts_fresh_quote(command)", self.source)
         self.assertIn("minimum_quote_lifetime_ns_", self.source)
+        self.assertIn("exploration_concurrent_market_cap_", self.source)
+        self.assertIn("refresh_exploration_market", self.source)
         self.assertLess(
             self.source.index("quote_is_superseded(intent)"),
             self.source.index("policy_.process(command.plan, capital_)"),

@@ -171,7 +171,11 @@ struct MakerModelSnapshot {
     // capital, post-only, queue or kill checks.
     double exploration_epsilon = 0.0;
     double exploration_quote_notional_fraction = 0.0;
+    // Every selected market may collect PAPER evidence, while the authoritative
+    // execution owner separately caps how many markets can carry exploratory
+    // orders at the same time.
     std::uint32_t exploration_max_active_markets = 0;
+    std::uint32_t exploration_concurrent_market_cap = 0;
     std::uint8_t exploration_enabled = 0;
     std::array<std::uint8_t, 3> exploration_reserved{};
     std::int64_t exploration_min_rest_ns = 250'000'000LL;

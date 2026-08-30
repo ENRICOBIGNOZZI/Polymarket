@@ -341,6 +341,7 @@ void test_bounded_exploration_breaks_cold_start_with_a_real_quote() {
     model.exploration_epsilon = 1.0;
     model.exploration_quote_notional_fraction = 0.002;
     model.exploration_max_active_markets = 20;
+    model.exploration_concurrent_market_cap = 5;
     model.exploration_min_rest_ns = 3'000'000'000LL;
     model.exploration_max_rest_ns = 15'000'000'000LL;
     pm::v7::maker::InventorySnapshot inventory;

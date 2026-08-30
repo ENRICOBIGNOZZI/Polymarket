@@ -174,6 +174,10 @@ void populate_exploration_policy(MakerModelSnapshot& model) noexcept {
             number(find_value(*exploration, "max_market_fraction"), 0.0), 0.0, 1.0);
         const double capital_fraction = std::clamp(
             number(find_value(*exploration, "max_capital_fraction"), 0.0), 0.0, 1.0);
+        const auto* selection = object_child(policy, "market_selection");
+        const std::uint32_t selected_market_capacity = static_cast<std::uint32_t>(std::max(
+            0.0, number(selection == nullptr ? nullptr
+                : find_value(*selection, "max_active_markets"), 0.0)));
         // One eligible binary market can have at most two exploratory BUY quotes
         // (YES and NO). Shrink the per-quote cap so both together remain within
         // the configured per-market bound, then derive a hard market-count cap
@@ -183,15 +187,18 @@ void populate_exploration_policy(MakerModelSnapshot& model) noexcept {
         std::uint32_t max_markets = 0;
         if (quote_fraction > 0.0 && capital_fraction > 0.0) {
             max_markets = static_cast<std::uint32_t>(std::min<double>(
-                40.0, std::floor(capital_fraction / (2.0 * quote_fraction) + 1e-12)));
+                selected_market_capacity,
+                std::floor(capital_fraction / (2.0 * quote_fraction) + 1e-12)));
         }
         const double min_rest_ms = std::max(0.0, number(find_value(*exploration, "minimum_rest_ms"), 250.0));
         const double max_rest_ms = std::max(min_rest_ms, number(find_value(*exploration, "maximum_rest_ms"), 3000.0));
 
-        if (epsilon <= 0.0 || quote_fraction <= 0.0 || max_markets == 0) return;
+        if (epsilon <= 0.0 || quote_fraction <= 0.0 || max_markets == 0
+            || selected_market_capacity == 0) return;
         model.exploration_epsilon = epsilon;
         model.exploration_quote_notional_fraction = quote_fraction;
-        model.exploration_max_active_markets = max_markets;
+        model.exploration_max_active_markets = selected_market_capacity;
+        model.exploration_concurrent_market_cap = max_markets;
         model.exploration_min_rest_ns = static_cast<std::int64_t>(std::llround(min_rest_ms * 1'000'000.0));
         model.exploration_max_rest_ns = static_cast<std::int64_t>(std::llround(max_rest_ms * 1'000'000.0));
         model.exploration_enabled = 1;
@@ -202,6 +209,7 @@ void populate_exploration_policy(MakerModelSnapshot& model) noexcept {
         model.exploration_epsilon = 0.0;
         model.exploration_quote_notional_fraction = 0.0;
         model.exploration_max_active_markets = 0;
+        model.exploration_concurrent_market_cap = 0;
     }
 }
 

@@ -423,7 +423,8 @@ MakerModelSnapshot load_model_snapshot(const fs::path& policy_path,
     model.exploration_epsilon = std::clamp(object_number(
         exploration, "epsilon", 0.0), 0.0, 1.0);
     model.exploration_quote_notional_fraction = exploration_quote_fraction;
-    model.exploration_max_active_markets = exploration_market_cap;
+    model.exploration_max_active_markets = configured_market_capacity;
+    model.exploration_concurrent_market_cap = exploration_market_cap;
     model.exploration_min_rest_ns = std::max<std::int64_t>(0, object_integer(
         exploration, "minimum_rest_ms", 0)) * 1'000'000LL;
     model.exploration_max_rest_ns = std::max(model.exploration_min_rest_ns,
@@ -1004,7 +1005,8 @@ public:
         const std::vector<std::unique_ptr<MarketContext>>& markets,
         PaperMakerPolicy paper_policy,
         double starting_capital,
-        std::int64_t minimum_quote_lifetime_ns) {
+        std::int64_t minimum_quote_lifetime_ns,
+        std::uint32_t exploration_concurrent_market_cap) {
         const std::int64_t budget = microdollars(starting_capital);
         if (budget < 100) return false;
         CapitalLimits limits;
@@ -1026,7 +1028,9 @@ public:
         }
         markets_.assign(max_market + 1, nullptr);
         control_watermarks_.assign(max_instrument + 1, {});
+        exploration_market_active_.assign(max_market + 1, 0);
         minimum_quote_lifetime_ns_ = std::max<std::int64_t>(0, minimum_quote_lifetime_ns);
+        exploration_concurrent_market_cap_ = exploration_concurrent_market_cap;
         for (const auto& market : markets) {
             if (market->yes_tick_e4 != market->no_tick_e4) return false;
             if (!policy_.register_market(
@@ -1070,8 +1074,21 @@ public:
                     ++execution_version_;
                     return true;
                 }
+                const bool exploratory_placement = intent.type == IntentType::Quote
+                    && command.context.decision.reason
+                        == pm::v7::maker::DecisionReason::ExplorationQuote;
+                if (exploratory_placement
+                    && !exploration_market_active(command.context.market_handle)
+                    && exploration_active_market_count_
+                        >= exploration_concurrent_market_cap_) {
+                    ++execution_version_;
+                    return true;
+                }
                 record_control_watermark(intent, *markets_[command.context.market_handle]);
                 result = policy_.process(command.plan, capital_);
+                if (exploratory_placement && result.accepted) {
+                    set_exploration_market_active(command.context.market_handle, true);
+                }
                 break;
             }
             case ExecutionCommandKind::PublicTrade:
@@ -1083,6 +1100,8 @@ public:
                     command.context.market_handle, command.advance_monotonic_ns, capital_);
                 break;
         }
+
+        refresh_exploration_market(command.context.market_handle);
 
         const std::int64_t execution_end_ns = monotonic_ns();
         measured_context.decision.latency.execution_ns = std::max<std::int64_t>(
@@ -1122,6 +1141,32 @@ private:
         std::int64_t bid_ns = 0;
         std::int64_t ask_ns = 0;
     };
+
+    [[nodiscard]] bool exploration_market_active(std::uint64_t market_handle) const noexcept {
+        return market_handle < exploration_market_active_.size()
+            && exploration_market_active_[market_handle] != 0;
+    }
+
+    void set_exploration_market_active(std::uint64_t market_handle, bool active) noexcept {
+        if (market_handle >= exploration_market_active_.size()) return;
+        const bool current = exploration_market_active_[market_handle] != 0;
+        if (current == active) return;
+        exploration_market_active_[market_handle] = static_cast<std::uint8_t>(active);
+        if (active) ++exploration_active_market_count_;
+        else if (exploration_active_market_count_ > 0) --exploration_active_market_count_;
+    }
+
+    void refresh_exploration_market(std::uint64_t market_handle) noexcept {
+        if (!exploration_market_active(market_handle)) return;
+        const auto* market = market_handle < markets_.size() ? markets_[market_handle] : nullptr;
+        if (market == nullptr) return;
+        const auto yes = policy_.quote_snapshot(market_handle, market->yes_instrument_handle);
+        const auto no = policy_.quote_snapshot(market_handle, market->no_instrument_handle);
+        const bool order_or_cancel_pending = yes.bid_active != 0 || yes.ask_active != 0
+            || yes.cancel_pending != 0 || no.bid_active != 0 || no.ask_active != 0
+            || no.cancel_pending != 0;
+        if (!order_or_cancel_pending) set_exploration_market_active(market_handle, false);
+    }
 
     [[nodiscard]] bool economic_control_preempts_fresh_quote(
         const ExecutionCommand& command) const noexcept {
@@ -1232,7 +1277,10 @@ private:
     SleeveCapitalAccount capital_{};
     std::vector<MarketContext*> markets_;
     std::vector<SideControlWatermark> control_watermarks_;
+    std::vector<std::uint8_t> exploration_market_active_;
     std::int64_t minimum_quote_lifetime_ns_ = 0;
+    std::uint32_t exploration_concurrent_market_cap_ = 0;
+    std::uint32_t exploration_active_market_count_ = 0;
     pm::v7::SpscRing<TelemetryRecord, kExecutionTelemetryCapacity> telemetry_{};
     std::atomic<bool> telemetry_overflow_{false};
     std::uint64_t execution_version_ = 1;
@@ -1644,7 +1692,8 @@ int main(int argc, char** argv) {
         std::atomic<bool> fatal{false};
         auto execution = std::make_unique<ExecutionCore>();
         if (!execution->initialize(markets, paper_policy, config.starting_capital,
-                                   initial->min_quote_lifetime_ns)) {
+                                   initial->min_quote_lifetime_ns,
+                                   initial->exploration_concurrent_market_cap)) {
             throw std::runtime_error("cannot initialize single V7 Maker execution owner");
         }
 

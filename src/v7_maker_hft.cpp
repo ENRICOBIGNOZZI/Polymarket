@@ -299,7 +299,9 @@ bool MakerModelSnapshot::valid() const noexcept {
         || exploration_quote_notional_fraction > kNormalQuoteCapitalFraction) return false;
     if (exploration_enabled != 0
         && (exploration_epsilon <= 0.0 || exploration_quote_notional_fraction <= 0.0
-            || exploration_max_active_markets == 0)) return false;
+            || exploration_max_active_markets == 0
+            || exploration_concurrent_market_cap == 0
+            || exploration_concurrent_market_cap > exploration_max_active_markets)) return false;
     if (exploration_min_rest_ns < 0 || exploration_max_rest_ns < exploration_min_rest_ns) return false;
     if (min_quote_lifetime_ns < 0 || max_related_snapshot_age_ns < 0) return false;
     for (double value : fill_coefficients) if (!finite(value)) return false;
