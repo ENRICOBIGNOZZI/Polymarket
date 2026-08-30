@@ -825,6 +825,60 @@ def _recent_flow_snapshot(
         selected.append(row)
         if len(selected) >= resource_capacity:
             break
+    # A flow-only cohort can collapse from forty markets to one just as the
+    # triggering prints age out during the drain/restart. Preserve the ranked
+    # flow leaders, then use economically eligible, event-deduplicated markets
+    # as a bounded exploration reserve. This keeps the full declared resource
+    # envelope working while the next live-flow generation accumulates.
+    operational_floor = min(
+        resource_capacity,
+        max(minimum_markets, int(flow_cfg.get(
+            "minimum_operational_markets", resource_capacity))),
+    )
+    stable_reserve_added = 0
+    if len(selected) < operational_floor:
+        reserve = _fallback_snapshot(
+            universe_path, selection_cfg, capacity_cfg, resource_capacity,
+            model_sha=model_sha, primary_error="recent_flow_reserve",
+            now_ms=now_ms,
+        )
+        for fallback_row in reserve["markets"]:
+            event_key = str(
+                fallback_row.get("event_id")
+                or f"market:{fallback_row.get('market_id')}"
+            )
+            if event_key in selected_events:
+                continue
+            row = dict(fallback_row)
+            row.update({
+                "side_mode": "STABLE_SPREAD_EXPLORATION",
+                "recent_prints": 0,
+                "recent_unique_transactions": 0,
+                "recent_share_volume": 0.0,
+                "recent_notional_usd": 0.0,
+                "recent_flow_to_liquidity": 0.0,
+                "recent_last_trade_age_ms": -1,
+                "recent_buy_prints_5s": 0,
+                "recent_buy_prints_30s": 0,
+                "recent_buy_prints_2m": 0,
+                "recent_buy_prints_10m": 0,
+                "recent_buy_share_volume_10m": 0.0,
+                "recent_buy_notional_usd_10m": 0.0,
+                "recent_last_buy_age_ms": -1,
+                "recent_sell_prints_5s": 0,
+                "recent_sell_prints_30s": 0,
+                "recent_sell_prints_2m": 0,
+                "recent_sell_prints_10m": 0,
+                "recent_sell_share_volume_10m": 0.0,
+                "recent_sell_notional_usd_10m": 0.0,
+                "recent_last_sell_age_ms": -1,
+                "quote_opportunities": [],
+            })
+            selected_events.add(event_key)
+            selected.append(row)
+            stable_reserve_added += 1
+            if len(selected) >= operational_floor:
+                break
     if len(selected) < minimum_markets:
         raise ValueError(f"maker_recent_flow_insufficient_markets:{len(selected)}")
     return {
@@ -847,10 +901,12 @@ def _recent_flow_snapshot(
         "recent_flow_lookback_ms": lookback_ms,
         "recent_flow_latest_receive_ms": latest_receive_ms,
         "recent_flow_source": flow_source,
+        "minimum_operational_markets": operational_floor,
+        "stable_reserve_added": stable_reserve_added,
         "minimum_side_prints_2m": minimum_side_prints_2m,
         "maximum_last_side_age_ms": maximum_last_side_age_ms,
         "markets": selected,
-        "note": "PAPER maker ranks bid and inventory-backed ask opportunity separately from causal BUY/SELL aggressor flow; quiet flow falls back to bounded spread exploration and rewards remain zero unless verified.",
+        "note": "PAPER maker ranks bid and inventory-backed ask opportunity separately from causal BUY/SELL aggressor flow, then fills unused cohort capacity with bounded stable-spread exploration; rewards remain zero unless verified.",
     }
 
 

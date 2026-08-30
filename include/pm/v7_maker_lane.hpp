@@ -14,6 +14,8 @@ struct MakerLaneContext {
     double conservative_rebate_ev_per_share = 0.0;
     double conservative_reward_ev_per_share = 0.0;
     double related_fair_value = 0.0;
+    double related_fair_lower = 0.0;
+    double related_fair_upper = 0.0;
     std::int64_t related_snapshot_age_ns = 0;
     std::uint8_t related_state_valid = 0;
 };

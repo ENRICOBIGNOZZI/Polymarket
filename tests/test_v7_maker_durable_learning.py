@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_maker_durable_learning import (  # noqa: E402
     adverse_markout_models, append_new, fit_model, hazard_model, identity,
+    placement_features,
 )
 
 SHA = "a" * 40
@@ -84,7 +85,13 @@ class DurableLearningTests(unittest.TestCase):
             cold_fill_prior=0.02, fill_prior_strength_orders=20.0,
         )
         self.assertEqual(fitted["family"], "censored_survival_hazard_joint_cycle_v3")
-        self.assertAlmostEqual(fitted["groups"]["GLOBAL"]["fill_probability"], 0.4 / 28.0)
+        self.assertAlmostEqual(fitted["groups"]["GLOBAL"]["fill_probability"], 0.02)
+        self.assertAlmostEqual(
+            fitted["groups"]["GLOBAL"]["empirical_fill_probability"], 0.4 / 28.0)
+        self.assertEqual(
+            fitted["groups"]["GLOBAL"]["fill_probability_semantics"],
+            "cold_prior_until_global_maturity_cell_evidence_remains_local",
+        )
         self.assertEqual(fitted["hyperparameters"]["fill_prior_strength_orders"], 20.0)
         self.assertFalse(fitted["groups"]["GLOBAL"]["mature"])
         self.assertEqual(fitted["groups"]["GLOBAL"]["filled_orders"], 0)
@@ -100,6 +107,30 @@ class DurableLearningTests(unittest.TestCase):
             model["groups"]["GLOBAL"]["fill_probability_semantics"],
             "explicit_cold_start_prior",
         )
+        self.assertFalse(model["learned_placement_policy"]["valid"])
+        self.assertEqual(
+            model["learned_placement_policy"]["state"], "EVIDENCE_ACCUMULATING")
+
+    def test_placement_features_are_side_oriented_and_complete(self) -> None:
+        row = record("ORDER_SUBMITTED", "r", side="SELL")
+        row["metadata"]["placement_features"] = {
+            "spread_ticks": 2.0,
+            "imbalance": 0.3,
+            "ofi": -0.2,
+            "ew_vol_ticks": 0.4,
+            "trade_intensity": 0.5,
+            "cancel_intensity": 0.6,
+            "short_return_ticks": 0.7,
+            "inventory_fraction": -0.8,
+            "local_latency_ms": 0.9,
+        }
+        features = placement_features(row)
+        self.assertIsNotNone(features)
+        assert features is not None
+        self.assertEqual(len(features), 10)
+        self.assertEqual(features[:4], [1.0, 2.0, -0.3, 0.2])
+        self.assertEqual(features[7], -0.7)
+        self.assertEqual(features[8], 0.8)
 
     def test_incompatible_policy_is_stored_but_not_trained(self) -> None:
         row = record("ORDER_SUBMITTED", "r1", order_id="o1", intended_size=5.0)

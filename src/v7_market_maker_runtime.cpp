@@ -387,6 +387,58 @@ struct InventoryFactoryPolicy {
     }
 };
 
+struct ExternalMakerFairPolicy {
+    bool enabled = false;
+    bool require_model_mature = true;
+    bool require_verified_contract = true;
+    std::string status_path = "runs/paper_v7_live/external_fair/status.json";
+    std::int64_t maximum_snapshot_age_ns = 250'000'000LL;
+    double maximum_interval_width = 0.20;
+    double external_directional_weight = 1.0;
+    double local_directional_weight = 0.0;
+
+    [[nodiscard]] bool valid() const noexcept {
+        return maximum_snapshot_age_ns > 0
+            && std::isfinite(maximum_interval_width)
+            && maximum_interval_width > 0.0 && maximum_interval_width < 1.0
+            && std::isfinite(external_directional_weight)
+            && external_directional_weight > 0.0
+            && std::isfinite(local_directional_weight)
+            && local_directional_weight >= 0.0;
+    }
+};
+
+ExternalMakerFairPolicy load_external_maker_fair_policy(const fs::path& policy_path) {
+    ExternalMakerFairPolicy out;
+    const auto root = read_json(policy_path);
+    if (!root.is_object()) throw std::runtime_error("maker policy must be object");
+    const auto* external = child_object(root.as_object(), "settlement_aware_external_fair");
+    if (external == nullptr) return out;
+    out.enabled = boolean(find_value(*external, "enabled_for_paper_quotes"), false);
+    out.require_model_mature = boolean(
+        find_value(*external, "require_model_mature"), true);
+    out.require_verified_contract = boolean(
+        find_value(*external, "require_verified_contract_binding"), true);
+    const std::string configured_path = text(find_value(*external, "status_path"));
+    if (!configured_path.empty()) out.status_path = configured_path;
+    out.maximum_snapshot_age_ns = std::max<std::int64_t>(1, object_integer(
+        external, "maximum_snapshot_age_ms", 250)) * 1'000'000LL;
+    out.maximum_interval_width = object_number(
+        external, "maximum_interval_width", out.maximum_interval_width);
+    out.external_directional_weight = object_number(
+        external, "external_directional_weight", out.external_directional_weight);
+    out.local_directional_weight = object_number(
+        external, "local_directional_weight", out.local_directional_weight);
+    if (boolean(find_value(*external, "automatic_promotion"), true)
+        || boolean(find_value(*external, "real_money_authority"), true)
+        || !boolean(find_value(*external, "bid_uses_lower_bound"), false)
+        || !boolean(find_value(*external, "ask_uses_upper_bound"), false)
+        || !out.valid()) {
+        throw std::runtime_error("unsafe settlement-aware external maker policy");
+    }
+    return out;
+}
+
 InventoryFactoryPolicy load_inventory_factory_policy(const fs::path& policy_path) {
     InventoryFactoryPolicy out;
     const auto root = read_json(policy_path);
@@ -607,6 +659,37 @@ MakerModelSnapshot load_model_snapshot(const fs::path& policy_path,
                         model.model_version = static_cast<std::uint64_t>(std::max<std::int64_t>(
                             1, integer(find_value(fitted, "generated_ts_ms"), 1)));
                     }
+                    const auto baseline_fill_coefficients = model.fill_coefficients;
+                    const auto baseline_markout_coefficients = model.markout_coefficients;
+                    const auto* placement = child_object(fitted, "learned_placement_policy");
+                    const auto* fill_coefficients = placement == nullptr ? nullptr
+                        : find_value(*placement, "fill_coefficients");
+                    const auto* markout_coefficients = placement == nullptr ? nullptr
+                        : find_value(*placement, "markout_coefficients");
+                    if (placement != nullptr
+                        && boolean(find_value(*placement, "valid"), false)
+                        && text(find_value(*placement, "state")) == "OOS_VALID"
+                        && fill_coefficients != nullptr && fill_coefficients->is_array()
+                        && markout_coefficients != nullptr && markout_coefficients->is_array()
+                        && fill_coefficients->as_array().size() == model.fill_coefficients.size()
+                        && markout_coefficients->as_array().size() == model.markout_coefficients.size()) {
+                        bool coefficients_valid = true;
+                        for (std::size_t index = 0; index < model.fill_coefficients.size(); ++index) {
+                            const double fill_value = number(
+                                &fill_coefficients->as_array()[index], std::numeric_limits<double>::quiet_NaN());
+                            const double markout_value = number(
+                                &markout_coefficients->as_array()[index], std::numeric_limits<double>::quiet_NaN());
+                            coefficients_valid = coefficients_valid
+                                && std::isfinite(fill_value) && std::abs(fill_value) <= 20.0
+                                && std::isfinite(markout_value) && std::abs(markout_value) <= 1.0;
+                            model.fill_coefficients[index] = fill_value;
+                            model.markout_coefficients[index] = markout_value;
+                        }
+                        if (!coefficients_valid) {
+                            model.fill_coefficients = baseline_fill_coefficients;
+                            model.markout_coefficients = baseline_markout_coefficients;
+                        }
+                    }
                 }
             }
         } catch (...) {
@@ -679,6 +762,15 @@ struct ExecutionSnapshotUpdate {
     PaperMakerInventory paper_inventory{};
 };
 
+struct ExternalMakerSnapshot {
+    double yes = 0.5;
+    double lower = 0.0;
+    double upper = 1.0;
+    std::int64_t calculated_ns = 0;
+    std::int64_t valid_until_ns = 0;
+    bool valid = false;
+};
+
 struct MarketContext {
     SelectedMarket cold;
     std::uint64_t market_handle = 0;
@@ -693,6 +785,10 @@ struct MarketContext {
     double cold_spread = 1.0;
     double cold_volatility_proxy = 1.0;
     double cold_yes_reference_price = 0.5;
+    // Written only by the cold control plane and atomically published as one
+    // immutable snapshot. Filesystem/JSON work never enters the event callback.
+    std::shared_ptr<const ExternalMakerSnapshot> external_fair =
+        std::make_shared<const ExternalMakerSnapshot>();
     MakerInstrumentLane yes_lane{+1};
     MakerInstrumentLane no_lane{-1};
 
@@ -1021,6 +1117,27 @@ private:
         MakerLaneContext context;
         context.inventory = state.inventory;
         context.quotes = instrument.yes ? state.yes_quotes : state.no_quotes;
+        const auto decision_now_ns = monotonic_ns();
+        const auto external = std::atomic_load_explicit(
+            &market.external_fair, std::memory_order_acquire);
+        const bool external_valid = external && external->valid
+            && external->valid_until_ns >= decision_now_ns;
+        if (external_valid) {
+            context.related_fair_value = instrument.yes != 0
+                ? external->yes : 1.0 - external->yes;
+            context.related_fair_lower = instrument.yes != 0
+                ? external->lower : 1.0 - external->upper;
+            context.related_fair_upper = instrument.yes != 0
+                ? external->upper : 1.0 - external->lower;
+            context.related_snapshot_age_ns = std::max<std::int64_t>(
+                0, decision_now_ns - external->calculated_ns);
+            context.related_state_valid = 1;
+            const double local_weight = std::max(0.0, market_external_local_weight_);
+            model.mid_weight *= local_weight;
+            model.microprice_weight *= local_weight;
+            model.flow_weight *= local_weight;
+            model.related_weight = market_external_fair_weight_;
+        }
         // The runtime does not yet receive authoritative per-order rebate or
         // reward accruals. Keep both decision credits explicitly at zero until
         // that attribution exists; eligibility metadata alone is not economic
@@ -1101,6 +1218,12 @@ private:
                 || (source_event.book.valid && source_event.book.tick_size_e4 > 0));
             if (!enqueue_execution(command)) return;
         }
+    }
+
+public:
+    void set_external_fair_weights(double external_weight, double local_weight) noexcept {
+        market_external_fair_weight_ = std::max(0.0, external_weight);
+        market_external_local_weight_ = std::max(0.0, local_weight);
     }
 
     void advance_market(MarketContext& market, const BookHotSnapshot& book,
@@ -1227,6 +1350,8 @@ private:
     std::atomic<bool>* new_risk_frozen_ = nullptr;
     std::atomic<bool>* fatal_ = nullptr;
     std::string ws_url_;
+    double market_external_fair_weight_ = 1.0;
+    double market_external_local_weight_ = 0.0;
     std::vector<std::string> tokens_;
     std::vector<InstrumentRef> refs_;
     std::vector<ExecutionSnapshotUpdate> execution_state_;
@@ -2105,6 +2230,22 @@ private:
         metadata["toxicity"] = record.decision.toxicity;
         metadata["robust_ev"] = record.decision.robust_ev;
         metadata["ev_uncertainty"] = record.decision.ev_uncertainty;
+        metadata["fair_value"] = record.decision.fair_value;
+        metadata["fair_lower"] = record.decision.fair_lower;
+        metadata["fair_upper"] = record.decision.fair_upper;
+        metadata["external_fair_authority"] =
+            record.decision.external_fair_authority != 0;
+        metadata["placement_features"] = json::object{
+            {"spread_ticks", record.decision.features.spread_ticks},
+            {"imbalance", record.decision.features.imbalance},
+            {"ofi", record.decision.features.ofi},
+            {"ew_vol_ticks", record.decision.features.ew_vol_ticks},
+            {"trade_intensity", record.decision.features.trade_intensity},
+            {"cancel_intensity", record.decision.features.cancel_intensity},
+            {"short_return_ticks", record.decision.features.short_return_ticks},
+            {"inventory_fraction", record.decision.features.inventory_fraction},
+            {"local_latency_ms", record.decision.features.local_latency_ms},
+        };
         if (record.decision.exploration_max_rest_ns > 0) {
             metadata["exploration_lifetime_arm"] =
                 record.decision.exploration_persistent != 0 ? "PERSISTENT" : "CONTROL";
@@ -2494,6 +2635,87 @@ std::vector<std::unique_ptr<MarketContext>> build_markets(
     return output;
 }
 
+[[nodiscard]] bool refresh_external_maker_fair(
+    const ExternalMakerFairPolicy& policy,
+    const std::vector<std::unique_ptr<MarketContext>>& markets,
+    std::string_view model_sha,
+    std::int64_t now_ns) {
+    static const auto invalid = std::make_shared<const ExternalMakerSnapshot>();
+    const auto invalidate_all = [&]() {
+        for (const auto& market : markets) {
+            std::atomic_store_explicit(
+                &market->external_fair, invalid, std::memory_order_release);
+        }
+    };
+    if (!policy.enabled) return false;
+
+    const auto root_value = read_json(policy.status_path);
+    if (!root_value.is_object()) {
+        invalidate_all();
+        return false;
+    }
+    const auto& root = root_value.as_object();
+    if (text(find_value(root, "schema")) != "polymarket_v7_external_fair_status_v1"
+        || text(find_value(root, "code_sha")) != model_sha
+        || !boolean(find_value(root, "paper_only"), false)
+        || boolean(find_value(root, "authenticated_execution"), true)
+        || boolean(find_value(root, "real_order_submission"), true)) {
+        invalidate_all();
+        return false;
+    }
+    const auto* contract = child_object(root, "contract");
+    const auto* model = child_object(root, "model");
+    const auto* fair = child_object(root, "fair");
+    const auto* market_status = child_object(root, "market");
+    if (contract == nullptr || model == nullptr || fair == nullptr || market_status == nullptr
+        || (policy.require_verified_contract
+            && !boolean(find_value(*contract, "verified"), false))
+        || (policy.require_model_mature
+            && !boolean(find_value(*model, "mature"), false))
+        || !boolean(find_value(*fair, "valid"), false)) {
+        invalidate_all();
+        return false;
+    }
+
+    const std::string market_id = text(find_value(*market_status, "market_id"));
+    const double yes = number(find_value(*fair, "yes"), -1.0);
+    const double lower = number(find_value(*fair, "lower"), -1.0);
+    const double upper = number(find_value(*fair, "upper"), -1.0);
+    const auto calculated_ns = integer(find_value(*fair, "calculated_monotonic_ns"), 0);
+    const auto valid_until_ns = integer(find_value(*fair, "valid_until_monotonic_ns"), 0);
+    if (market_id.empty() || !std::isfinite(yes) || !std::isfinite(lower)
+        || !std::isfinite(upper) || lower <= 0.0 || lower > yes || yes > upper
+        || upper >= 1.0 || upper - lower > policy.maximum_interval_width
+        || calculated_ns <= 0 || calculated_ns > now_ns || valid_until_ns < now_ns
+        || now_ns - calculated_ns > policy.maximum_snapshot_age_ns) {
+        invalidate_all();
+        return false;
+    }
+    for (const auto& market : markets) {
+        if (market->cold.market_id != market_id) continue;
+        auto mutable_snapshot = std::make_shared<ExternalMakerSnapshot>();
+        mutable_snapshot->yes = yes;
+        mutable_snapshot->lower = lower;
+        mutable_snapshot->upper = upper;
+        mutable_snapshot->calculated_ns = calculated_ns;
+        mutable_snapshot->valid_until_ns = valid_until_ns;
+        mutable_snapshot->valid = true;
+        std::shared_ptr<const ExternalMakerSnapshot> snapshot =
+            std::move(mutable_snapshot);
+        std::atomic_store_explicit(
+            &market->external_fair, snapshot, std::memory_order_release);
+        for (const auto& other : markets) {
+            if (other.get() != market.get()) {
+                std::atomic_store_explicit(
+                    &other->external_fair, invalid, std::memory_order_release);
+            }
+        }
+        return true;
+    }
+    invalidate_all();
+    return false;
+}
+
 void write_kill(const fs::path& run_root, std::string_view model_sha,
                 std::string_view reason) {
     json::object event;
@@ -2518,6 +2740,12 @@ int main(int argc, char** argv) {
         const PaperMakerPolicy paper_policy = load_paper_policy(options.maker_policy);
         const InventoryFactoryPolicy inventory_factory =
             load_inventory_factory_policy(options.maker_policy);
+        ExternalMakerFairPolicy external_maker_fair =
+            load_external_maker_fair_policy(options.maker_policy);
+        if (fs::path(external_maker_fair.status_path).is_relative()) {
+            external_maker_fair.status_path = (
+                fs::path(options.run_root) / external_maker_fair.status_path).string();
+        }
         auto initial = std::make_shared<MakerModelSnapshot>(
             load_model_snapshot(options.maker_policy, options.config,
                                 options.model, options.model_sha));
@@ -2546,6 +2774,9 @@ int main(int argc, char** argv) {
             auto shard = std::make_unique<ShardRuntime>(
                 std::move(group), model_store, &global_kill, &new_risk_frozen,
                 &fatal, options.ws_url);
+            shard->set_external_fair_weights(
+                external_maker_fair.external_directional_weight,
+                external_maker_fair.local_directional_weight);
             // Max quote dollars before per-event price conversion. The allocation
             // child config is already sleeve-bounded by v7_capital_allocator.py.
             shard->set_starting_capital_fraction(config.starting_capital * 0.01);
@@ -2652,6 +2883,7 @@ int main(int argc, char** argv) {
         const fs::path maker_rotation_drain_path =
             fs::path(options.run_root) / "control" / "MAKER_ROTATION_DRAIN";
         std::int64_t last_control_check_ms = 0;
+        std::int64_t last_external_fair_check_ms = 0;
         while (!g_stop.load(std::memory_order_relaxed)) {
             if (fs::exists(kill_path)) {
                 global_kill.store(true, std::memory_order_release);
@@ -2679,6 +2911,19 @@ int main(int argc, char** argv) {
                             || fs::exists(maker_rotation_drain_path),
                         std::memory_order_release);
                     last_control_check_ms = now;
+                }
+                if (now - last_external_fair_check_ms >= 50) {
+                    try {
+                        (void)refresh_external_maker_fair(
+                            external_maker_fair, markets, options.model_sha, monotonic_ns());
+                    } catch (...) {
+                        const auto invalid = std::make_shared<const ExternalMakerSnapshot>();
+                        for (const auto& market : markets) {
+                            std::atomic_store_explicit(
+                                &market->external_fair, invalid, std::memory_order_release);
+                        }
+                    }
+                    last_external_fair_check_ms = now;
                 }
                 if (now - last_state_ms >= 1000) {
                     writer.write_state(

@@ -26,6 +26,12 @@ STORE_SCHEMA = "polymarket_v7_maker_durable_evidence_v1"
 STRATEGY = "MICRO_MAKER_PRO"
 HORIZONS_SECONDS = (1, 5, 15, 30, 60, 300)
 ADVERSE_HORIZON_PRIORITY = ("45s", "60s", "10s", "1s", "300s")
+PLACEMENT_FEATURE_NAMES = (
+    "intercept", "spread_ticks", "signed_imbalance", "signed_ofi",
+    "ew_vol_ticks", "trade_intensity", "cancel_intensity",
+    "signed_short_return_ticks", "signed_inventory_fraction",
+    "local_latency_ms",
+)
 
 
 def atomic_json(path: pathlib.Path, value: dict[str, Any]) -> None:
@@ -141,6 +147,30 @@ def group_key(order: dict[str, Any]) -> str:
     return f"{action}|{outcome}|{side}"
 
 
+def placement_features(order: dict[str, Any]) -> list[float] | None:
+    metadata = order.get("metadata") if isinstance(order.get("metadata"), dict) else {}
+    raw = metadata.get("placement_features")
+    if not isinstance(raw, dict):
+        return None
+    side = str(order.get("side") or metadata.get("execution_side") or "").upper()
+    if side not in {"BUY", "SELL"}:
+        return None
+    direction = 1.0 if side == "BUY" else -1.0
+    values = [
+        1.0,
+        number(raw.get("spread_ticks"), math.nan),
+        direction * number(raw.get("imbalance"), math.nan),
+        direction * number(raw.get("ofi"), math.nan),
+        number(raw.get("ew_vol_ticks"), math.nan),
+        number(raw.get("trade_intensity"), math.nan),
+        number(raw.get("cancel_intensity"), math.nan),
+        direction * number(raw.get("short_return_ticks"), math.nan),
+        direction * number(raw.get("inventory_fraction"), math.nan),
+        number(raw.get("local_latency_ms"), math.nan),
+    ]
+    return values if all(math.isfinite(value) for value in values) else None
+
+
 def order_examples(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
     orders = {
         str(row["order_id"]): row for row in values
@@ -188,7 +218,196 @@ def order_examples(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "queue_ahead": max(0.0, number(order.get("queue_ahead"))),
             "spread": max(0.0, number(order.get("ask")) - number(order.get("bid"))),
             "side": str(order.get("side") or "UNKNOWN"),
+            "features": placement_features(order),
         })
+    return output
+
+
+def _standardize(rows: list[list[float]]) -> tuple[list[list[float]], list[float], list[float]]:
+    width = len(PLACEMENT_FEATURE_NAMES)
+    means = [0.0] * width
+    scales = [1.0] * width
+    for index in range(1, width):
+        means[index] = sum(row[index] for row in rows) / len(rows)
+        variance = sum((row[index] - means[index]) ** 2 for row in rows) / len(rows)
+        scales[index] = max(1e-6, math.sqrt(variance))
+    return [
+        [1.0] + [(row[index] - means[index]) / scales[index]
+                 for index in range(1, width)]
+        for row in rows
+    ], means, scales
+
+
+def _to_raw_coefficients(coefficients: list[float], means: list[float],
+                         scales: list[float]) -> list[float]:
+    raw = list(coefficients)
+    for index in range(1, len(raw)):
+        raw[index] = coefficients[index] / scales[index]
+        raw[0] -= coefficients[index] * means[index] / scales[index]
+    return raw
+
+
+def _dot(left: list[float], right: list[float]) -> float:
+    return sum(a * b for a, b in zip(left, right))
+
+
+def _sigmoid(value: float) -> float:
+    if value >= 0.0:
+        exp = math.exp(-min(value, 50.0))
+        return 1.0 / (1.0 + exp)
+    exp = math.exp(max(value, -50.0))
+    return exp / (1.0 + exp)
+
+
+def _fit_logistic(rows: list[list[float]], labels: list[float],
+                  l2: float = 2.0) -> list[float]:
+    standardized, means, scales = _standardize(rows)
+    prior = min(1.0 - 1e-6, max(1e-6, sum(labels) / len(labels)))
+    coefficients = [math.log(prior / (1.0 - prior))] + [0.0] * (len(rows[0]) - 1)
+    for iteration in range(600):
+        gradient = [0.0] * len(coefficients)
+        for row, label in zip(standardized, labels):
+            error = _sigmoid(_dot(coefficients, row)) - label
+            for index, value in enumerate(row):
+                gradient[index] += error * value
+        rate = 0.10 / math.sqrt(1.0 + iteration / 50.0)
+        for index in range(len(coefficients)):
+            penalty = 0.0 if index == 0 else l2 * coefficients[index]
+            coefficients[index] -= rate * (gradient[index] + penalty) / len(rows)
+    return _to_raw_coefficients(coefficients, means, scales)
+
+
+def _fit_linear(rows: list[list[float]], labels: list[float],
+                l2: float = 5.0) -> list[float]:
+    standardized, means, scales = _standardize(rows)
+    coefficients = [sum(labels) / len(labels)] + [0.0] * (len(rows[0]) - 1)
+    for iteration in range(800):
+        gradient = [0.0] * len(coefficients)
+        for row, label in zip(standardized, labels):
+            error = _dot(coefficients, row) - label
+            for index, value in enumerate(row):
+                gradient[index] += 2.0 * error * value
+        rate = 0.05 / math.sqrt(1.0 + iteration / 50.0)
+        for index in range(len(coefficients)):
+            penalty = 0.0 if index == 0 else 2.0 * l2 * coefficients[index]
+            coefficients[index] -= rate * (gradient[index] + penalty) / len(rows)
+    return _to_raw_coefficients(coefficients, means, scales)
+
+
+def adverse_placement_examples(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    orders = {
+        str(row.get("order_id")): row for row in values
+        if row.get("event_type") == "ORDER_SUBMITTED" and row.get("order_id")
+    }
+    filled: defaultdict[str, float] = defaultdict(float)
+    marks: defaultdict[str, defaultdict[str, list[float]]] = defaultdict(
+        lambda: defaultdict(lambda: [0.0, 0.0]))
+    for row in values:
+        order_id = str(row.get("order_id") or "")
+        if order_id in orders and row.get("event_type") == "FILL":
+            filled[order_id] += max(0.0, number(row.get("filled_size")))
+    for row in values:
+        order_id = str(row.get("order_id") or "")
+        if order_id not in orders or row.get("event_type") != "MARKOUT" \
+                or not isinstance(row.get("markouts"), dict):
+            continue
+        shares = filled[order_id]
+        if shares <= 1e-12:
+            continue
+        for horizon, pnl in row["markouts"].items():
+            if str(horizon) in ADVERSE_HORIZON_PRIORITY:
+                marks[order_id][str(horizon)][0] += max(0.0, -number(pnl)) * shares
+                marks[order_id][str(horizon)][1] += shares
+    output = []
+    for order_id, horizons in marks.items():
+        horizon = next((item for item in ADVERSE_HORIZON_PRIORITY if item in horizons), None)
+        features = placement_features(orders[order_id])
+        if horizon is None or features is None or horizons[horizon][1] <= 1e-12:
+            continue
+        output.append({
+            "timestamp_ms": int(orders[order_id].get("recorded_ts_ms") or 0),
+            "event_cluster": str(orders[order_id].get("event_id")
+                                 or orders[order_id].get("market_id") or "UNKNOWN"),
+            "features": features,
+            "label": horizons[horizon][0] / horizons[horizon][1],
+        })
+    return output
+
+
+def learned_placement_policy(order_rows: list[dict[str, Any]],
+                             markout_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    fill_rows = [row for row in order_rows if row.get("features") is not None]
+    cluster_first_ts: dict[str, int] = {}
+    for row in fill_rows:
+        cluster = str(row["event_cluster"])
+        timestamp = int(row["start_ts_ms"])
+        cluster_first_ts[cluster] = min(timestamp, cluster_first_ts.get(cluster, timestamp))
+    clusters = sorted(cluster_first_ts.items(), key=lambda item: (item[1], item[0]))
+    output: dict[str, Any] = {
+        "family": "cluster_purged_oos_fill_and_fill_conditioned_markout_v1",
+        "feature_names": list(PLACEMENT_FEATURE_NAMES),
+        "valid": False,
+        "fill_examples": len(fill_rows),
+        "markout_examples": len(markout_rows),
+        "event_clusters": len(clusters),
+        "activation_requirements": {
+            "minimum_orders": 200,
+            "minimum_filled_orders": 20,
+            "minimum_event_clusters": 16,
+            "minimum_markout_examples": 50,
+            "minimum_oos_improvement_fraction": 0.02,
+        },
+    }
+    if len(fill_rows) < 200 or sum(row["filled_fraction"] > 0.0 for row in fill_rows) < 20 \
+            or len(clusters) < 16 or len(markout_rows) < 50:
+        output["state"] = "EVIDENCE_ACCUMULATING"
+        return output
+    test_clusters = {name for name, _ in clusters[-max(4, len(clusters) // 5):]}
+    fill_train = [row for row in fill_rows if str(row["event_cluster"]) not in test_clusters]
+    fill_test = [row for row in fill_rows if str(row["event_cluster"]) in test_clusters]
+    mark_train = [row for row in markout_rows if str(row["event_cluster"]) not in test_clusters]
+    mark_test = [row for row in markout_rows if str(row["event_cluster"]) in test_clusters]
+    if len(fill_train) < 120 or len(fill_test) < 40 or len(mark_train) < 30 or len(mark_test) < 10:
+        output["state"] = "INSUFFICIENT_CLUSTER_PURGED_OOS"
+        return output
+    fill_coefficients = _fit_logistic(
+        [row["features"] for row in fill_train],
+        [row["filled_fraction"] for row in fill_train],
+    )
+    fill_prior = sum(row["filled_fraction"] for row in fill_train) / len(fill_train)
+    fill_mse = sum((_sigmoid(_dot(fill_coefficients, row["features"]))
+                    - row["filled_fraction"]) ** 2 for row in fill_test) / len(fill_test)
+    fill_baseline_mse = sum((fill_prior - row["filled_fraction"]) ** 2
+                            for row in fill_test) / len(fill_test)
+    markout_coefficients = _fit_linear(
+        [row["features"] for row in mark_train], [row["label"] for row in mark_train])
+    markout_prior = sum(row["label"] for row in mark_train) / len(mark_train)
+    markout_mse = sum((max(0.0, _dot(markout_coefficients, row["features"]))
+                       - row["label"]) ** 2 for row in mark_test) / len(mark_test)
+    markout_baseline_mse = sum((markout_prior - row["label"]) ** 2
+                               for row in mark_test) / len(mark_test)
+    fill_improvement = 1.0 - fill_mse / max(1e-12, fill_baseline_mse)
+    markout_improvement = 1.0 - markout_mse / max(1e-12, markout_baseline_mse)
+    valid = fill_improvement >= 0.02 and markout_improvement >= 0.02 \
+        and all(math.isfinite(value) and abs(value) <= 20.0 for value in fill_coefficients) \
+        and all(math.isfinite(value) and abs(value) <= 1.0 for value in markout_coefficients)
+    output.update({
+        "state": "OOS_VALID" if valid else "OOS_REJECTED",
+        "valid": valid,
+        "test_event_clusters": sorted(test_clusters),
+        "fill_train_examples": len(fill_train),
+        "fill_oos_examples": len(fill_test),
+        "fill_oos_mse": fill_mse,
+        "fill_oos_baseline_mse": fill_baseline_mse,
+        "fill_oos_improvement_fraction": fill_improvement,
+        "markout_train_examples": len(mark_train),
+        "markout_oos_examples": len(mark_test),
+        "markout_oos_mse": markout_mse,
+        "markout_oos_baseline_mse": markout_baseline_mse,
+        "markout_oos_improvement_fraction": markout_improvement,
+        "fill_coefficients": fill_coefficients,
+        "markout_coefficients": markout_coefficients,
+    })
     return output
 
 
@@ -442,16 +661,26 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
     for key in sorted(group_keys):
         sample = grouped.get(key, [])
         hazard = hazard_model(sample, cold_fill_prior, fill_prior_strength_orders)
+        mature = len(sample) >= 50 \
+            and len({row["event_cluster"] for row in sample}) >= 12 \
+            and int(hazard["filled_orders"]) >= 20
+        empirical_fill = hazard["expected_filled_fraction_60s"]
+        execution_fill = (
+            cold_fill_prior if key == "GLOBAL" and not mature else empirical_fill
+        )
         adverse = (
             compatible_adverse_models.get("GLOBAL", {})
             if key == "GLOBAL" else adverse_models.get(key, {})
         )
         groups[key] = {
             **hazard,
-            "fill_probability": hazard["expected_filled_fraction_60s"],
+            "fill_probability": execution_fill,
+            "empirical_fill_probability": empirical_fill,
             "fill_probability_semantics": (
+                "explicit_cold_start_prior" if not sample else
+                "cold_prior_until_global_maturity_cell_evidence_remains_local"
+                if key == "GLOBAL" and not mature else
                 "beta_shrunk_censored_expected_filled_fraction_per_posted_share"
-                if sample else "explicit_cold_start_prior"
             ),
             "adverse_markout_per_share": max(
                 0.002, number(adverse.get("adverse_markout_per_share"), 0.002)),
@@ -463,9 +692,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
                 adverse.get("adverse_markout_filled_shares")),
             "adverse_markout_dollars": number(adverse.get("adverse_markout_dollars")),
             "adverse_markout_role": "RISK_ONLY_UPWARD_FLOOR_NO_PROMOTION_CREDIT",
-            "mature": len(sample) >= 50
-                and len({row["event_cluster"] for row in sample}) >= 12
-                and int(hazard["filled_orders"]) >= 20,
+            "mature": mature,
             "maturity_requirements": {
                 "minimum_orders": 50,
                 "minimum_event_clusters": 12,
@@ -474,6 +701,8 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         }
     timestamps = [int(row.get("recorded_ts_ms") or 0) for row in compatible]
     generated = time.time_ns() // 1_000_000
+    placement_policy = learned_placement_policy(
+        examples, adverse_placement_examples(compatible))
     # Sample size is diagnostic only.  This live accumulator has no untouched
     # chronological OOS window, so it must never confer economic maturity or
     # silently perform the governed challenger -> champion promotion.
@@ -498,7 +727,12 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
             "cold_adverse_markout_per_share": 0.002,
             "adverse_prior_filled_shares": 20.0,
         },
-        "feature_schema": {"version": 2, "fill": "censored_hazard", "joint": "direct_cycle_states"},
+        "feature_schema": {
+            "version": 3,
+            "fill": "censored_hazard_plus_cluster_purged_oos_features",
+            "markout": "fill_conditioned_cluster_purged_oos_features",
+            "joint": "direct_cycle_states",
+        },
         "execution_semantics_version": "maker-paper-v7.2-bilateral-inventory",
         "queue_model_version": "pessimistic-public-print-v1",
         "inventory_regime": "seeded_complete_set_bilateral_v1",
@@ -518,6 +752,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         "economically_mature": False,
         "chronological_oos_required_for_mature_promotion": True,
         "groups": groups,
+        "learned_placement_policy": placement_policy,
         "cross_policy_global_adverse_diagnostic": adverse_models.get("GLOBAL", {}),
         "joint_cycle_model": joint_states(compatible),
         "excluded_incompatible_records": dict(incompatible),

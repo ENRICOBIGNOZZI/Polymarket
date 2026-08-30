@@ -108,6 +108,8 @@ MakerDecision MakerInstrumentLane::on_market_event(
     update.conservative_reward_ev_per_share =
         std::max(0.0, context.conservative_reward_ev_per_share);
     update.related_fair_value = context.related_fair_value;
+    update.related_fair_lower = context.related_fair_lower;
+    update.related_fair_upper = context.related_fair_upper;
     update.related_snapshot_age_ns = context.related_snapshot_age_ns;
     update.related_state_valid = context.related_state_valid;
 

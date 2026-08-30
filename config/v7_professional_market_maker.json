@@ -86,6 +86,7 @@
       "maximum_tape_age_seconds": 30,
       "initial_wait_seconds": 30,
       "minimum_markets": 1,
+      "minimum_operational_markets": 40,
       "minimum_prints": 2,
       "minimum_side_prints_2m": 2,
       "minimum_side_prints_10m": 1,
@@ -141,6 +142,21 @@
     "directional_alpha_required": false,
     "prospective_feature_ablation_required": true
   },
+  "settlement_aware_external_fair": {
+    "implemented": true,
+    "enabled_for_paper_quotes": false,
+    "require_model_mature": true,
+    "require_verified_contract_binding": true,
+    "status_path": "external_fair/status.json",
+    "maximum_snapshot_age_ms": 250,
+    "maximum_interval_width": 0.20,
+    "external_directional_weight": 1.0,
+    "local_directional_weight": 0.0,
+    "bid_uses_lower_bound": true,
+    "ask_uses_upper_bound": true,
+    "automatic_promotion": false,
+    "real_money_authority": false
+  },
   "quoting": {
     "actions": ["JOIN", "IMPROVE1", "FADE1", "FADE2", "ONE_SIDED", "WITHDRAW"],
     "post_only": true,
@@ -170,7 +186,8 @@
     "persistent_maximum_rest_ms": 60000,
     "actions": ["JOIN", "FADE1", "IMPROVE1"],
     "epsilon": 0.10,
-    "confidence_z": 1.00,
+    "confidence_z": 0.00,
+    "requires_positive_point_ev": true,
     "require_fresh_dual_clock_book": true,
     "require_post_only": true,
     "propensity_logging_required": true

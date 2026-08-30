@@ -173,6 +173,28 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
         self.assertIn("reason_counts", self.source)
         self.assertIn("feed_connected_workers", self.source)
 
+    def test_settlement_fair_authority_is_exact_contract_bounded_and_cold_plane_only(self) -> None:
+        external = self.policy["settlement_aware_external_fair"]
+        self.assertTrue(external["implemented"])
+        self.assertFalse(external["enabled_for_paper_quotes"])
+        self.assertTrue(external["require_model_mature"])
+        self.assertFalse(external["automatic_promotion"])
+        self.assertFalse(external["real_money_authority"])
+        for token in (
+            "refresh_external_maker_fair",
+            'market->cold.market_id != market_id',
+            'contract, "verified"',
+            'model, "mature"',
+            "upper - lower > policy.maximum_interval_width",
+            "context.related_fair_lower",
+            "context.related_fair_upper",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.source)
+        start = self.source.index("void on_payload(std::string_view payload")
+        end = self.source.index("void on_transport_error()", start)
+        self.assertNotIn("refresh_external_maker_fair", self.source[start:end])
+
 
 if __name__ == "__main__":
     unittest.main()

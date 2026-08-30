@@ -69,6 +69,8 @@ struct MarketUpdate {
     double conservative_rebate_ev_per_share = 0.0;
     double conservative_reward_ev_per_share = 0.0;
     double related_fair_value = 0.0;
+    double related_fair_lower = 0.0;
+    double related_fair_upper = 0.0;
     std::int64_t exchange_event_ns = 0;
     std::int64_t socket_receive_monotonic_ns = 0;
     std::int64_t related_snapshot_age_ns = 0;
@@ -272,11 +274,14 @@ struct MakerDecision {
     double toxicity = 0.0;
     double robust_ev = 0.0;
     double ev_uncertainty = 0.0;
+    double fair_lower = 0.0;
+    double fair_upper = 0.0;
     std::int64_t exploration_max_rest_ns = 0;
     std::array<StrategyIntent, 4> intents{};
     std::uint8_t intent_count = 0;
     std::uint8_t exploration_persistent = 0;
-    std::uint16_t reserved1 = 0;
+    std::uint8_t external_fair_authority = 0;
+    std::uint8_t reserved1 = 0;
 };
 
 class MakerHotPath final {

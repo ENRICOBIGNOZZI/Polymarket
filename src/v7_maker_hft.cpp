@@ -293,16 +293,17 @@ struct ExplorationChoice {
     const RiskSnapshot& risk,
     const MakerModelSnapshot& model,
     const Features& features,
-    double fair_value,
+    double bid_fair_value,
+    double ask_fair_value,
     double bid_quote_shares,
     double ask_quote_shares) noexcept {
 
     Candidate candidate;
     candidate.action = action;
     candidate.bid = evaluate_side(action, Side::Buy, bid_tick, update, inventory, risk, model,
-                                  features, fair_value, bid_quote_shares);
+                                  features, bid_fair_value, bid_quote_shares);
     candidate.ask = evaluate_side(action, Side::Sell, ask_tick, update, inventory, risk, model,
-                                  features, fair_value, ask_quote_shares);
+                                  features, ask_fair_value, ask_quote_shares);
     candidate.score = 0.0;
     if (candidate.bid.admissible) candidate.score += candidate.bid.robust_ev;
     if (candidate.ask.admissible) candidate.score += candidate.ask.robust_ev;
@@ -522,6 +523,11 @@ MakerDecision MakerHotPath::on_market_update(
     const bool related_ok = update.related_state_valid != 0
         && finite(update.related_fair_value)
         && update.related_fair_value > 0.0 && update.related_fair_value < 1.0
+        && finite(update.related_fair_lower) && finite(update.related_fair_upper)
+        && update.related_fair_lower > 0.0
+        && update.related_fair_lower <= update.related_fair_value
+        && update.related_fair_value <= update.related_fair_upper
+        && update.related_fair_upper < 1.0
         && update.related_snapshot_age_ns >= 0
         && update.related_snapshot_age_ns <= model.max_related_snapshot_age_ns;
     double total_weight = model.mid_weight + model.microprice_weight + model.flow_weight;
@@ -537,8 +543,27 @@ MakerDecision MakerHotPath::on_market_update(
     const double reservation_value = clamp(
         fair_value - model.inventory_skew_ticks * model.tick_size * decision.features.inventory_fraction,
         model.tick_size, 1.0 - model.tick_size);
+    const double inventory_skew =
+        model.inventory_skew_ticks * model.tick_size * decision.features.inventory_fraction;
+    const double robust_bid_fair = related_ok && model.related_weight > 0.0
+        ? clamp((weighted_value
+                 + model.related_weight * (update.related_fair_lower
+                                            - update.related_fair_value))
+                    / std::max(kEps, total_weight) - inventory_skew,
+                model.tick_size, 1.0 - model.tick_size)
+        : reservation_value;
+    const double robust_ask_fair = related_ok && model.related_weight > 0.0
+        ? clamp((weighted_value
+                 + model.related_weight * (update.related_fair_upper
+                                            - update.related_fair_value))
+                    / std::max(kEps, total_weight) - inventory_skew,
+                model.tick_size, 1.0 - model.tick_size)
+        : reservation_value;
     decision.fair_value = fair_value;
     decision.reservation_value = reservation_value;
+    decision.fair_lower = robust_bid_fair;
+    decision.fair_upper = robust_ask_fair;
+    decision.external_fair_authority = static_cast<std::uint8_t>(related_ok);
 
     const double ret_component = std::abs(decision.features.short_return_ticks) /
                                  (1.0 + std::abs(decision.features.short_return_ticks));
@@ -592,21 +617,21 @@ MakerDecision MakerHotPath::on_market_update(
     std::size_t candidate_count = 0;
     candidates[candidate_count++] = evaluate_candidate(
         Action::Join, update.best_bid_tick, update.best_ask_tick,
-        update, inventory, risk, model, decision.features, reservation_value,
+        update, inventory, risk, model, decision.features, robust_bid_fair, robust_ask_fair,
         bid_quote_shares, ask_quote_shares);
     if (update.best_ask_tick - update.best_bid_tick >= 3) {
         candidates[candidate_count++] = evaluate_candidate(
             Action::Improve1, update.best_bid_tick + 1, update.best_ask_tick - 1,
-            update, inventory, risk, model, decision.features, reservation_value,
+            update, inventory, risk, model, decision.features, robust_bid_fair, robust_ask_fair,
             bid_quote_shares, ask_quote_shares);
     }
     candidates[candidate_count++] = evaluate_candidate(
         Action::Fade1, update.best_bid_tick - 1, update.best_ask_tick + 1,
-        update, inventory, risk, model, decision.features, reservation_value,
+        update, inventory, risk, model, decision.features, robust_bid_fair, robust_ask_fair,
         bid_quote_shares, ask_quote_shares);
     candidates[candidate_count++] = evaluate_candidate(
         Action::Fade2, update.best_bid_tick - 2, update.best_ask_tick + 2,
-        update, inventory, risk, model, decision.features, reservation_value,
+        update, inventory, risk, model, decision.features, robust_bid_fair, robust_ask_fair,
         bid_quote_shares, ask_quote_shares);
 
     Candidate* best = nullptr;
@@ -677,12 +702,12 @@ MakerDecision MakerHotPath::on_market_update(
         std::size_t exploration_candidate_count = 0;
         exploration_candidates[exploration_candidate_count++] = evaluate_candidate(
             Action::Join, update.best_bid_tick, update.best_ask_tick,
-            update, inventory, risk, model, decision.features, reservation_value,
+            update, inventory, risk, model, decision.features, robust_bid_fair, robust_ask_fair,
             exploration_shares, std::min(exploration_shares, token_inventory_shares));
         if (update.best_ask_tick - update.best_bid_tick >= 3) {
             exploration_candidates[exploration_candidate_count++] = evaluate_candidate(
                 Action::Improve1, update.best_bid_tick + 1, update.best_ask_tick - 1,
-                update, inventory, risk, model, decision.features, reservation_value,
+                update, inventory, risk, model, decision.features, robust_bid_fair, robust_ask_fair,
                 exploration_shares, std::min(exploration_shares, token_inventory_shares));
         }
         const bool exploration_configured = model.exploration_enabled != 0

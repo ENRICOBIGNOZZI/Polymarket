@@ -227,6 +227,37 @@ void test_specific_improve_cell_changes_candidate_ranking() {
     assert(saw_49 && saw_51);
 }
 
+void test_settlement_fair_uses_lower_for_bid_and_upper_for_ask() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    update.related_state_valid = 1;
+    update.related_fair_value = 0.52;
+    update.related_fair_lower = 0.51;
+    update.related_fair_upper = 0.56;
+    update.related_snapshot_age_ns = 1'000'000;
+    auto model = profitable_model();
+    model.mid_weight = 0.0;
+    model.microprice_weight = 0.0;
+    model.flow_weight = 0.0;
+    model.related_weight = 1.0;
+    pm::v7::maker::InventorySnapshot inventory;
+    inventory.yes_shares = 3.0;
+    inventory.no_shares = 3.0;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 2.0;
+    risk.max_abs_residual_shares = 20.0;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(decision.external_fair_authority == 1);
+    assert(std::abs(decision.fair_value - 0.52) < 1e-12);
+    assert(std::abs(decision.fair_lower - 0.51) < 1e-12);
+    assert(std::abs(decision.fair_upper - 0.56) < 1e-12);
+    assert(decision.reason == pm::v7::maker::DecisionReason::Quote);
+    assert(decision.intent_count == 1);
+    assert(decision.intents[0].side == pm::v7::Side::Buy);
+}
+
 void test_outcome_cell_orientation_is_respected() {
     auto model = cell_model();
     make_cell_good(model, pm::v7::maker::Action::Improve1, -1, pm::v7::Side::Buy);
@@ -549,6 +580,7 @@ int main() {
     test_atomic_model_snapshot();
     test_profitable_two_sided_post_only_quote();
     test_specific_improve_cell_changes_candidate_ranking();
+    test_settlement_fair_uses_lower_for_bid_and_upper_for_ask();
     test_outcome_cell_orientation_is_respected();
     test_sell_cell_controls_one_sided_inventory_reduction();
     test_inventory_forces_reducing_side();
