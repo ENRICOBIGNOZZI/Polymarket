@@ -100,6 +100,93 @@ def fresh_flow_eligible(value: dict[str, Any]) -> bool:
     )
 
 
+def projected_cells(
+    value: dict[str, Any], *, market_ids: set[str] | None = None,
+    exclude_market_ids: set[str] | None = None,
+) -> list[tuple[float, str]]:
+    """Return selector fill projections keyed by a stable execution cell.
+
+    Rotation is about a market x token x quote-side cell, not about incidental
+    changes to the bottom of a ranked market list.  Invalid/missing projections
+    are deliberately zero-authority.
+    """
+    output: list[tuple[float, str]] = []
+    markets = value.get("markets")
+    if not isinstance(markets, list):
+        return output
+    for market in markets:
+        if not isinstance(market, dict):
+            continue
+        market_id = str(market.get("market_id") or "")
+        if market_ids is not None and market_id not in market_ids:
+            continue
+        if exclude_market_ids is not None and market_id in exclude_market_ids:
+            continue
+        opportunities = market.get("quote_opportunities")
+        if not isinstance(opportunities, list):
+            continue
+        for opportunity in opportunities:
+            if not isinstance(opportunity, dict):
+                continue
+            try:
+                probability = float(
+                    opportunity.get("projected_best_fill_probability") or 0.0
+                )
+            except (TypeError, ValueError):
+                probability = 0.0
+            if not (0.0 <= probability <= 1.0):
+                continue
+            token_id = str(opportunity.get("token_id") or "")
+            quote_side = str(opportunity.get("quote_side") or "").upper()
+            cell = "|".join((market_id, token_id, quote_side))
+            if market_id and token_id and quote_side in {"BUY", "SELL"}:
+                output.append((probability, cell))
+    return sorted(output, key=lambda item: (-item[0], item[1]))
+
+
+def rotation_gate(
+    runtime: dict[str, Any], candidate: dict[str, Any], *,
+    minimum_projected_fill_probability: float,
+    minimum_absolute_improvement: float,
+    minimum_relative_multiplier: float,
+) -> tuple[bool, dict[str, Any]]:
+    """Require a material new fill cell before destroying incumbent queues."""
+    runtime_ids = {
+        str(row.get("market_id") or "")
+        for row in runtime.get("markets", []) if isinstance(row, dict)
+    }
+    incumbent = projected_cells(candidate, market_ids=runtime_ids)
+    challenger = projected_cells(candidate, exclude_market_ids=runtime_ids)
+    incumbent_probability = incumbent[0][0] if incumbent else 0.0
+    challenger_probability = challenger[0][0] if challenger else 0.0
+    challenger_cell = challenger[0][1] if challenger else ""
+    cold_start = not fresh_flow_eligible(runtime)
+    threshold = max(
+        max(0.0, minimum_projected_fill_probability),
+        incumbent_probability + max(0.0, minimum_absolute_improvement),
+        incumbent_probability * max(1.0, minimum_relative_multiplier),
+    )
+    allowed = bool(challenger_cell) and (
+        (cold_start and challenger_probability >= minimum_projected_fill_probability)
+        or (not cold_start and challenger_probability >= threshold)
+    )
+    reason = (
+        "COLD_START_TO_FILLABLE_CELL" if allowed and cold_start
+        else "MATERIAL_NEW_FILL_CELL" if allowed
+        else "NO_NEW_PROJECTED_FILL_CELL" if not challenger_cell
+        else "CHALLENGER_FILL_NOT_MATERIALLY_SUPERIOR"
+    )
+    return allowed, {
+        "rotation_gate_reason": reason,
+        "rotation_target_cell": challenger_cell,
+        "incumbent_projected_fill_probability": incumbent_probability,
+        "challenger_projected_fill_probability": challenger_probability,
+        "required_challenger_projected_fill_probability": (
+            max(0.0, minimum_projected_fill_probability) if cold_start else threshold
+        ),
+    }
+
+
 def inventory_flat_state(
     value: dict[str, Any],
     model_sha: str,
@@ -214,31 +301,39 @@ class CohortSupervisor:
         self.rotation_count = 0
         self.last_rotation_ms = 0
         self.pending_membership_sha256 = ""
+        self.pending_rotation_key = ""
         self.pending_last_generation_ms = 0
         self.pending_confirmations = 0
         self.flow_pause_latched = False
+        self.rotation_gate_metrics: dict[str, Any] = {
+            "rotation_gate_reason": "NOT_EVALUATED",
+        }
 
     def reset_pending_confirmation(self) -> None:
         self.pending_membership_sha256 = ""
+        self.pending_rotation_key = ""
         self.pending_last_generation_ms = 0
         self.pending_confirmations = 0
 
     def observe_candidate_generation(self, candidate: dict[str, Any]) -> bool:
         """Confirm persistent rotation demand in distinct selector generations.
 
-        Exact membership cannot be stable for a recent-flow ranker: a single
-        print can replace the last selected market every minute. Poll
-        repetitions still do not count, and a return to runtime membership
-        resets confirmation in the caller. Cooldown plus drain-time
-        revalidation bound queue churn.
+        Membership can change at the bottom of a recent-flow rank without
+        changing the proposed execution cell. Confirm the same material new
+        market x token x side target across generations; a different target
+        starts again at one rather than inheriting confirmation credit.
         """
         membership = membership_sha256(candidate)
+        rotation_key = str(self.rotation_gate_metrics.get("rotation_target_cell") or "")
         generation_ms = int(candidate.get("timestamp_ms") or 0)
-        if generation_ms <= 0:
+        if generation_ms <= 0 or not rotation_key:
             self.reset_pending_confirmation()
             return False
         if generation_ms > self.pending_last_generation_ms:
+            if self.pending_rotation_key and rotation_key != self.pending_rotation_key:
+                self.pending_confirmations = 0
             self.pending_membership_sha256 = membership
+            self.pending_rotation_key = rotation_key
             self.pending_last_generation_ms = generation_ms
             self.pending_confirmations = max(1, self.pending_confirmations + 1)
         return self.pending_confirmations >= self.args.candidate_confirmations
@@ -275,6 +370,7 @@ class CohortSupervisor:
             "fresh_flow_pause_active": self.flow_pause_latched,
             "cohort_pids": {name: process.pid for name, process in self.processes.items()},
         }
+        payload.update(self.rotation_gate_metrics)
         payload.update(extra)
         atomic_json(self.status, payload)
 
@@ -371,8 +467,14 @@ class CohortSupervisor:
             validate_selection(runtime, self.args.model_sha)
             validate_selection(candidate, self.args.model_sha)
         except ValueError:
+            self.rotation_gate_metrics = {
+                "rotation_gate_reason": "INVALID_SELECTION_REJECTED",
+            }
             return None
         if membership_sha256(runtime) == membership_sha256(candidate):
+            self.rotation_gate_metrics = {
+                "rotation_gate_reason": "MEMBERSHIP_UNCHANGED",
+            }
             return None
         # A degraded fallback is useful only to cold-start a runtime that has no
         # selection.  Once a valid cohort is live, a stale/failed flow source
@@ -380,6 +482,21 @@ class CohortSupervisor:
         # whole-cohort restart.  Keep the last-known-good membership quoting and
         # wait for a non-degraded generation.
         if candidate.get("degraded") is True:
+            self.rotation_gate_metrics = {
+                "rotation_gate_reason": "DEGRADED_CANDIDATE_REJECTED",
+            }
+            return None
+        allowed, metrics = rotation_gate(
+            runtime, candidate,
+            minimum_projected_fill_probability=(
+                self.args.rotation_min_projected_fill_probability),
+            minimum_absolute_improvement=(
+                self.args.rotation_min_absolute_fill_improvement),
+            minimum_relative_multiplier=(
+                self.args.rotation_min_relative_fill_multiplier),
+        )
+        self.rotation_gate_metrics = metrics
+        if not allowed:
             return None
         return candidate
 
@@ -410,6 +527,22 @@ class CohortSupervisor:
 
     def rotate_if_safe(self, candidate: dict[str, Any]) -> None:
         target_membership = membership_sha256(candidate)
+        target_cell = str(self.rotation_gate_metrics.get("rotation_target_cell") or "")
+        if not target_cell:
+            allowed, metrics = rotation_gate(
+                read_json(self.selection), candidate,
+                minimum_projected_fill_probability=(
+                    self.args.rotation_min_projected_fill_probability),
+                minimum_absolute_improvement=(
+                    self.args.rotation_min_absolute_fill_improvement),
+                minimum_relative_multiplier=(
+                    self.args.rotation_min_relative_fill_multiplier),
+            )
+            self.rotation_gate_metrics = metrics
+            if not allowed:
+                self.write_status("PENDING_CONFIRMATION")
+                return
+            target_cell = str(metrics.get("rotation_target_cell") or "")
         now_ms = time.time_ns() // 1_000_000
         if not inventory_drainable_state(
             read_json(self.state), self.args.model_sha,
@@ -456,6 +589,28 @@ class CohortSupervisor:
                     self.drain.unlink(missing_ok=True)
                     self.reset_pending_confirmation()
                     self.write_status("PENDING_CONFIRMATION", reason="candidate_degraded_during_drain")
+                    return
+                runtime = read_json(self.selection)
+                still_allowed, latest_metrics = rotation_gate(
+                    runtime, latest,
+                    minimum_projected_fill_probability=(
+                        self.args.rotation_min_projected_fill_probability),
+                    minimum_absolute_improvement=(
+                        self.args.rotation_min_absolute_fill_improvement),
+                    minimum_relative_multiplier=(
+                        self.args.rotation_min_relative_fill_multiplier),
+                )
+                self.rotation_gate_metrics = latest_metrics
+                if (
+                    not still_allowed
+                    or latest_metrics.get("rotation_target_cell") != target_cell
+                ):
+                    self.drain.unlink(missing_ok=True)
+                    self.reset_pending_confirmation()
+                    self.write_status(
+                        "PENDING_CONFIRMATION",
+                        reason="material_rotation_target_changed_during_drain",
+                    )
                     return
                 self.stop_cohort()
                 # Re-read after the maker's final state write. A late PAPER fill
@@ -539,11 +694,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--drain-timeout-seconds", type=float, default=20.0)
     parser.add_argument("--candidate-confirmations", type=int, default=2)
     parser.add_argument("--min-rotation-interval-seconds", type=float, default=300.0)
+    parser.add_argument("--rotation-min-projected-fill-probability", type=float, default=0.05)
+    parser.add_argument("--rotation-min-absolute-fill-improvement", type=float, default=0.05)
+    parser.add_argument("--rotation-min-relative-fill-multiplier", type=float, default=1.5)
     args = parser.parse_args()
     if args.candidate_confirmations < 2:
         parser.error("--candidate-confirmations must be at least 2")
     if args.min_rotation_interval_seconds < 0.0:
         parser.error("--min-rotation-interval-seconds must be non-negative")
+    if not 0.0 <= args.rotation_min_projected_fill_probability <= 1.0:
+        parser.error("--rotation-min-projected-fill-probability must be in [0,1]")
+    if not 0.0 <= args.rotation_min_absolute_fill_improvement <= 1.0:
+        parser.error("--rotation-min-absolute-fill-improvement must be in [0,1]")
+    if args.rotation_min_relative_fill_multiplier < 1.0:
+        parser.error("--rotation-min-relative-fill-multiplier must be at least 1")
     return args
 
 

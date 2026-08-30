@@ -20,6 +20,7 @@ from v7_maker_cohort_supervisor import (  # noqa: E402
     inventory_flat_state,
     membership_sha256,
     read_json,
+    rotation_gate,
     validate_selection,
 )
 
@@ -43,6 +44,10 @@ def selection(market_id: str = "market-1") -> dict:
             "market_id": market_id,
             "yes_token": "yes-1",
             "no_token": "no-1",
+            "quote_opportunities": [{
+                "token_id": "yes-1", "quote_side": "BUY",
+                "projected_best_fill_probability": 0.40,
+            }],
         }],
     }
 
@@ -82,6 +87,9 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             drain_timeout_seconds=1.0,
             candidate_confirmations=2,
             min_rotation_interval_seconds=300.0,
+            rotation_min_projected_fill_probability=0.05,
+            rotation_min_absolute_fill_improvement=0.05,
+            rotation_min_relative_fill_multiplier=1.5,
         )
 
     def test_selection_validation_is_exact_sha_and_paper_only(self) -> None:
@@ -145,6 +153,9 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         self.assertIn("atomic_json(self.selection, latest)", supervisor)
         self.assertIn('--candidate-confirmations "$MAKER_CANDIDATE_CONFIRMATIONS"', loop)
         self.assertIn('--min-rotation-interval-seconds "$MAKER_ROTATION_INTERVAL_SECONDS"', loop)
+        self.assertIn('--rotation-min-projected-fill-probability "$MAKER_ROTATION_MIN_FILL"', loop)
+        self.assertIn('--rotation-min-absolute-fill-improvement "$MAKER_ROTATION_MIN_ABSOLUTE_IMPROVEMENT"', loop)
+        self.assertIn('--rotation-min-relative-fill-multiplier "$MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER"', loop)
         self.assertIn("authenticated_execution\") is not False", supervisor)
         self.assertIn("real_order_submission\") is not False", supervisor)
 
@@ -178,7 +189,7 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             )
             self.assertFalse(supervisor.drain.exists())
 
-    def test_flat_handoff_uses_latest_valid_candidate_during_flow_churn(self) -> None:
+    def test_flat_handoff_aborts_when_material_target_changes_during_drain(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_root = root / "run"
@@ -206,10 +217,10 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             supervisor.start_cohort = lambda: calls.append("start")  # type: ignore[method-assign]
             with patch("v7_maker_cohort_supervisor.time.time_ns", return_value=1_000_000_000):
                 supervisor.rotate_if_safe(requested)
-            self.assertEqual(calls, ["stop", "start"])
-            self.assertEqual(supervisor.rotation_count, 1)
+            self.assertEqual(calls, [])
+            self.assertEqual(supervisor.rotation_count, 0)
             self.assertEqual(
-                membership_sha256(read_json(selection_path)), membership_sha256(latest)
+                membership_sha256(read_json(selection_path)), membership_sha256(current)
             )
             self.assertFalse(supervisor.drain.exists())
 
@@ -220,6 +231,9 @@ class MakerCohortSupervisorTests(unittest.TestCase):
                 root, root / "selection.json", root / "candidate.json"
             ))
             candidate = selection("market-2")
+            supervisor.rotation_gate_metrics = {
+                "rotation_target_cell": "market-2|yes-1|BUY",
+            }
             self.assertFalse(supervisor.observe_candidate_generation(candidate))
             self.assertFalse(supervisor.observe_candidate_generation(candidate))
             self.assertEqual(supervisor.pending_confirmations, 1)
@@ -227,7 +241,7 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             self.assertTrue(supervisor.observe_candidate_generation(candidate))
             self.assertEqual(supervisor.pending_confirmations, 2)
 
-    def test_distinct_noisy_candidate_generations_confirm_rotation_demand(self) -> None:
+    def test_distinct_target_cells_do_not_share_confirmation_credit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             supervisor = CohortSupervisor(self.supervisor_args(
@@ -239,11 +253,51 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             second["markets"][0].update({
                 "condition_id": "condition-3", "yes_token": "yes-3", "no_token": "no-3",
             })
+            supervisor.rotation_gate_metrics = {"rotation_target_cell": "market-2|yes-1|BUY"}
             self.assertFalse(supervisor.observe_candidate_generation(first))
-            self.assertTrue(supervisor.observe_candidate_generation(second))
-            self.assertEqual(supervisor.pending_confirmations, 2)
+            supervisor.rotation_gate_metrics = {"rotation_target_cell": "market-3|yes-3|BUY"}
+            self.assertFalse(supervisor.observe_candidate_generation(second))
+            self.assertEqual(supervisor.pending_confirmations, 1)
             supervisor.last_rotation_ms = 10_000
             self.assertEqual(supervisor.rotation_cooldown_remaining_seconds(70_000), 240.0)
+
+    def test_rotation_requires_materially_superior_new_fill_cell(self) -> None:
+        current = selection("incumbent")
+        candidate = selection("incumbent")
+        candidate["markets"][0]["quote_opportunities"][0][
+            "projected_best_fill_probability"
+        ] = 0.60
+        candidate["markets"].append({
+            "condition_id": "condition-2", "market_id": "challenger",
+            "yes_token": "yes-2", "no_token": "no-2",
+            "quote_opportunities": [{
+                "token_id": "yes-2", "quote_side": "BUY",
+                "projected_best_fill_probability": 0.70,
+            }],
+        })
+        candidate["selected_count"] = 2
+        allowed, metrics = rotation_gate(
+            current, candidate,
+            minimum_projected_fill_probability=0.05,
+            minimum_absolute_improvement=0.05,
+            minimum_relative_multiplier=1.5,
+        )
+        self.assertFalse(allowed)
+        self.assertEqual(
+            metrics["rotation_gate_reason"],
+            "CHALLENGER_FILL_NOT_MATERIALLY_SUPERIOR",
+        )
+        candidate["markets"][0]["quote_opportunities"][0][
+            "projected_best_fill_probability"
+        ] = 0.0
+        allowed, metrics = rotation_gate(
+            current, candidate,
+            minimum_projected_fill_probability=0.05,
+            minimum_absolute_improvement=0.05,
+            minimum_relative_multiplier=1.5,
+        )
+        self.assertTrue(allowed)
+        self.assertEqual(metrics["rotation_target_cell"], "challenger|yes-2|BUY")
 
     def test_quiet_flow_fallback_keeps_last_known_good_without_global_pause(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

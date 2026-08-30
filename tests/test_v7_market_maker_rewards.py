@@ -57,6 +57,20 @@ def _universe(path: Path, *, timestamp_ms: int, model_sha: str = SHA, markets=No
 
 
 class MakerRewardSelectorTests(unittest.TestCase):
+    def test_fill_projection_decays_old_burst_in_event_time(self) -> None:
+        fresh_rate, fresh_weight = rewards._decayed_opposite_flow_rate(
+            shares_10m=120.0, prints_10m=2, prints_30s=2,
+            age_ms=100, half_life_seconds=30.0,
+        )
+        old_rate, old_weight = rewards._decayed_opposite_flow_rate(
+            shares_10m=120.0, prints_10m=2, prints_30s=0,
+            age_ms=60_000, half_life_seconds=30.0,
+        )
+        self.assertGreater(fresh_rate, 3.9)
+        self.assertGreater(fresh_weight, 0.99)
+        self.assertAlmostEqual(old_rate, 0.05, places=6)
+        self.assertAlmostEqual(old_weight, 0.25, places=6)
+
     def test_canonical_live_flow_is_exact_sha_and_event_time_grounded(self) -> None:
         from tempfile import TemporaryDirectory
         now_ms = 1_000_000

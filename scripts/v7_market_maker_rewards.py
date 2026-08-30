@@ -38,6 +38,20 @@ def finite(value: Any, default: float = 0.0) -> float:
     return out if math.isfinite(out) else default
 
 
+def _decayed_opposite_flow_rate(
+    *, shares_10m: float, prints_10m: int, prints_30s: int,
+    age_ms: int, half_life_seconds: float,
+) -> tuple[float, float]:
+    if shares_10m <= 0.0 or prints_10m <= 0 or age_ms < 0:
+        return 0.0, 0.0
+    long_rate = shares_10m / 600.0
+    recent_rate = shares_10m / prints_10m * max(0, prints_30s) / 30.0
+    freshness = math.exp(
+        -math.log(2.0) * age_ms / (max(0.1, half_life_seconds) * 1_000.0)
+    )
+    return max(long_rate, recent_rate) * freshness, freshness
+
+
 def request_json(url: str, *, timeout: float = 20.0) -> Any:
     req = urllib.request.Request(url, headers={"User-Agent": "polymarket-v7-maker/1"})
     with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -661,6 +675,8 @@ def _recent_flow_snapshot(
         0.1, float(flow_cfg.get("selection_quote_horizon_seconds", 5.0)))
     selection_quote_shares = max(
         1e-6, float(flow_cfg.get("selection_quote_shares", 5.0)))
+    selection_flow_half_life_seconds = max(
+        0.1, float(flow_cfg.get("selection_flow_half_life_seconds", 30.0)))
     weights = flow_cfg.get("score_weights") if isinstance(flow_cfg.get("score_weights"), dict) else {}
     candidates: list[dict[str, Any]] = []
     for raw in universe.get("markets") if isinstance(universe.get("markets"), list) else []:
@@ -762,8 +778,36 @@ def _recent_flow_snapshot(
             ):
                 opposite_shares_2m = float(token_stats.get(
                     f"{aggressor_prefix}_shares_2m", 0.0))
+                opposite_shares_10m = float(token_stats.get(
+                    f"{aggressor_prefix}_shares_10m", 0.0))
+                opposite_prints_10m = int(token_stats.get(
+                    f"{aggressor_prefix}_prints_10m", 0))
+                opposite_prints_30s = int(token_stats.get(
+                    f"{aggressor_prefix}_prints_30s", 0))
+                last_opposite_receive_ms = int(token_stats.get(
+                    f"last_{aggressor_prefix}_receive_ms", 0))
+                opposite_flow_age_ms = (
+                    now_ms - last_opposite_receive_ms
+                    if last_opposite_receive_ms > 0 else -1
+                )
+                # Use the same causal rate contract consumed by the C++ maker:
+                # a long-window floor, a 30-second burst term, and exponential
+                # event-time decay.  Raw 120-second volume made an old burst
+                # look 20-50x more fillable than the quote that was eventually
+                # posted, causing queue-destroying cohort rotations.
+                opposite_flow_shares_per_second, flow_freshness = (
+                    _decayed_opposite_flow_rate(
+                        shares_10m=opposite_shares_10m,
+                        prints_10m=opposite_prints_10m,
+                        prints_30s=opposite_prints_30s,
+                        age_ms=opposite_flow_age_ms,
+                        half_life_seconds=selection_flow_half_life_seconds,
+                    )
+                )
                 expected_opposite_shares = (
-                    opposite_shares_2m / 120.0 * selection_quote_horizon_seconds)
+                    opposite_flow_shares_per_second
+                    * selection_quote_horizon_seconds
+                )
                 flow_reach_probability = (
                     1.0 - math.exp(-expected_opposite_shares / selection_quote_shares)
                     if expected_opposite_shares > 0.0 else 0.0)
@@ -794,21 +838,17 @@ def _recent_flow_snapshot(
                     "token_id": token,
                     "quote_side": quote_side,
                     "required_aggressor_side": aggressor_prefix.upper(),
-                    "opposite_prints_30s": int(token_stats.get(
-                        f"{aggressor_prefix}_prints_30s", 0)),
+                    "opposite_prints_30s": opposite_prints_30s,
                     "opposite_prints_2m": int(token_stats.get(
                         f"{aggressor_prefix}_prints_2m", 0)),
-                    "opposite_prints_10m": int(token_stats.get(
-                        f"{aggressor_prefix}_prints_10m", 0)),
-                    "opposite_shares_10m": float(token_stats.get(
-                        f"{aggressor_prefix}_shares_10m", 0.0)),
+                    "opposite_prints_10m": opposite_prints_10m,
+                    "opposite_shares_10m": opposite_shares_10m,
                     "opposite_shares_2m": opposite_shares_2m,
-                    "last_opposite_flow_age_ms": (
-                        now_ms - int(token_stats.get(
-                            f"last_{aggressor_prefix}_receive_ms", 0))
-                        if int(token_stats.get(
-                            f"last_{aggressor_prefix}_receive_ms", 0)) > 0 else -1
-                    ),
+                    "last_opposite_flow_age_ms": opposite_flow_age_ms,
+                    "opposite_flow_freshness": flow_freshness,
+                    "opposite_flow_shares_per_second": (
+                        opposite_flow_shares_per_second),
+                    "expected_opposite_shares_at_horizon": expected_opposite_shares,
                     "market_side_score": side_score,
                     "book_evidence_valid": token_stats.get("book_evidence_valid") is True,
                     "tick_size": tick_size,

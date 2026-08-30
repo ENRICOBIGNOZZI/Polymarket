@@ -32,6 +32,9 @@ PLACEMENT_FEATURE_NAMES = (
     "signed_short_return_ticks", "signed_inventory_fraction",
     "local_latency_ms",
 )
+EXECUTION_SEMANTICS = "maker-paper-v7.2-bilateral-inventory"
+RISK_TRANSFER_EVENTS = {"ORDER_SUBMITTED", "FILL", "MARKOUT"}
+STANDALONE_ECONOMIC_EVENTS = {"FINAL", "INVENTORY_MERGE"}
 
 
 def atomic_json(path: pathlib.Path, value: dict[str, Any]) -> None:
@@ -129,6 +132,100 @@ def append_new(path: pathlib.Path, values: Iterable[dict[str, Any]]) -> tuple[in
         except Exception:
             raise
     return len(additions), len(existing)
+
+
+def _metadata_identity_matches(
+    row: dict[str, Any], policy_hash: str, config_hash: str,
+) -> bool:
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    return (
+        str(metadata.get("policy_hash") or "unknown") == policy_hash
+        and str(metadata.get("config_hash") or "unknown") == config_hash
+        and str(metadata.get("execution_semantics_version") or "")
+            == EXECUTION_SEMANTICS
+    )
+
+
+def _same_execution_semantics(row: dict[str, Any]) -> bool:
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    return str(metadata.get("execution_semantics_version") or "") == EXECUTION_SEMANTICS
+
+
+def _write_jsonl_atomic(path: pathlib.Path, values: Iterable[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=path.name + ".tmp.", dir=str(path.parent))
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            for row in values:
+                handle.write(json.dumps(
+                    row, sort_keys=True, separators=(",", ":")
+                ) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def compact_evidence(
+    paths: list[pathlib.Path], *, store_path: pathlib.Path,
+    policy_hash: str, config_hash: str,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Keep trainable lifecycle rows and labeled cross-policy risk only.
+
+    CANDIDATE/OPPORTUNITY telemetry made the durable store exceed two GB even
+    though it never enters a fill or markout fit.  Two streaming passes retain
+    the exact current policy's order lifecycle plus same-semantics historical
+    orders that actually have a MARKOUT.  The source archives remain the
+    recoverable canonical record; this file is a compact training projection.
+    """
+    exact_order_ids: set[str] = set()
+    same_semantics_order_ids: set[str] = set()
+    marked_order_ids: set[str] = set()
+    scanned_rows = 0
+    for row in rows(paths):
+        scanned_rows += 1
+        order_id = str(row.get("order_id") or "")
+        if row.get("event_type") == "ORDER_SUBMITTED" and order_id:
+            if _same_execution_semantics(row):
+                same_semantics_order_ids.add(order_id)
+            if _metadata_identity_matches(row, policy_hash, config_hash):
+                exact_order_ids.add(order_id)
+        elif row.get("event_type") == "MARKOUT" and order_id:
+            marked_order_ids.add(order_id)
+    risk_order_ids = same_semantics_order_ids & marked_order_ids
+
+    retained: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    existing_keys: set[tuple[str, str, str, str]] = set()
+    store_resolved = store_path.resolve()
+    for path in paths:
+        from_existing_store = path.resolve() == store_resolved
+        for row in rows([path]):
+            event_type = str(row.get("event_type") or "")
+            order_id = str(row.get("order_id") or "")
+            keep = (
+                (bool(order_id) and order_id in exact_order_ids)
+                or (order_id in risk_order_ids and event_type in RISK_TRANSFER_EVENTS)
+                or (event_type in STANDALONE_ECONOMIC_EVENTS
+                    and _metadata_identity_matches(row, policy_hash, config_hash))
+            )
+            if not keep:
+                continue
+            key = identity(row)
+            retained.setdefault(key, row)
+            if from_existing_store:
+                existing_keys.add(key)
+    values = list(retained.values())
+    _write_jsonl_atomic(store_path, values)
+    return values, {
+        "scanned_strategy_rows": scanned_rows,
+        "retained_records": len(values),
+        "new_records": sum(key not in existing_keys for key in retained),
+        "exact_policy_orders": len(exact_order_ids),
+        "risk_labeled_cross_policy_orders": len(risk_order_ids - exact_order_ids),
+    }
 
 
 def number(value: Any, default: float = 0.0) -> float:
@@ -637,7 +734,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
             reason = "policy_hash"
         elif str(metadata.get("config_hash") or "unknown") != config_hash:
             reason = "config_hash"
-        elif str(metadata.get("execution_semantics_version") or "") != "maker-paper-v7.2-bilateral-inventory":
+        elif str(metadata.get("execution_semantics_version") or "") != EXECUTION_SEMANTICS:
             reason = "execution_semantics_version"
         if reason:
             incompatible[reason] += 1
@@ -653,7 +750,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         if row.get("event_type") == "ORDER_SUBMITTED" and row.get("order_id")
         and isinstance(row.get("metadata"), dict)
         and row["metadata"].get("execution_semantics_version")
-            == "maker-paper-v7.2-bilateral-inventory"
+            == EXECUTION_SEMANTICS
     }
     risk_values = [
         row for row in values if str(row.get("order_id") or "") in risk_order_ids
@@ -778,7 +875,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
             "markout": "fill_conditioned_cluster_purged_oos_features",
             "joint": "direct_cycle_states",
         },
-        "execution_semantics_version": "maker-paper-v7.2-bilateral-inventory",
+        "execution_semantics_version": EXECUTION_SEMANTICS,
         "queue_model_version": "pessimistic-public-print-v1",
         "inventory_regime": "seeded_complete_set_bilateral_v1",
         "selection_generation": "bilateral_aggressor_flow_v1",
@@ -832,10 +929,19 @@ def main() -> int:
     if len(args.model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in args.model_sha):
         raise SystemExit("exact 40-hex model SHA required")
     sources = args.source_root or [pathlib.Path("runs/paper_v7_archives"), pathlib.Path("runs/paper_v7_live")]
-    source_files = [path for path in jsonl_files(sources) if path.resolve() != args.store.resolve()]
-    added, stored = append_new(args.store, rows(source_files))
-    evidence = list(load_store(args.store).values())
     policy_hash, config_hash = fnv1a64(args.policy), fnv1a64(args.config)
+    # Maker evidence is canonically spooled into execution.jsonl. Avoid parsing
+    # unrelated RTDS, universe and raw WebSocket tapes that can never satisfy
+    # the MICRO_MAKER_PRO ledger contract.
+    source_files = [
+        path for path in jsonl_files(sources)
+        if path.resolve() != args.store.resolve() and path.name == "execution.jsonl"
+    ]
+    evidence_paths = ([args.store] if args.store.exists() else []) + source_files
+    evidence, compaction = compact_evidence(
+        evidence_paths, store_path=args.store,
+        policy_hash=policy_hash, config_hash=config_hash,
+    )
     policy = json.loads(args.policy.read_text(encoding="utf-8"))
     execution = policy.get("execution_model") if isinstance(
         policy.get("execution_model"), dict
@@ -859,8 +965,13 @@ def main() -> int:
         "policy_hash": policy_hash,
         "config_hash": config_hash,
         "source_files": [str(path) for path in source_files],
-        "new_records": added,
-        "stored_records": stored,
+        "new_records": compaction["new_records"],
+        "stored_records": compaction["retained_records"],
+        "scanned_strategy_rows": compaction["scanned_strategy_rows"],
+        "exact_policy_orders": compaction["exact_policy_orders"],
+        "risk_labeled_cross_policy_orders": (
+            compaction["risk_labeled_cross_policy_orders"]),
+        "store_projection": "TRAINABLE_LIFECYCLE_PLUS_LABELED_RISK_V1",
         "compatible_training_records": model["training_window"]["records"],
         "model_state": model["model_state"],
         "fill_prior_strength_orders": fill_prior_strength_orders,

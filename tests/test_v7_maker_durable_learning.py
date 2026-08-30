@@ -8,7 +8,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_maker_durable_learning import (  # noqa: E402
-    adverse_markout_models, append_new, fit_model, hazard_model, identity,
+    adverse_markout_models, append_new, compact_evidence, fit_model, hazard_model, identity,
     placement_features,
 )
 
@@ -32,6 +32,58 @@ def record(event_type: str, record_id: str, **extra):
 
 
 class DurableLearningTests(unittest.TestCase):
+    def test_compaction_drops_non_training_telemetry_but_keeps_labeled_risk(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            source = root / "execution.jsonl"
+            store = root / "evidence.jsonl"
+            current_order = record(
+                "ORDER_SUBMITTED", "current-order", order_id="current",
+                intended_size=5.0,
+            )
+            current_state = record(
+                "ORDER_STATE", "current-state", order_id="current",
+                order_state="CANCELLED",
+            )
+            candidate = record("CANDIDATE", "candidate")
+            old_order = record(
+                "ORDER_SUBMITTED", "old-order", order_id="old-marked",
+                intended_size=5.0,
+            )
+            old_order["metadata"]["policy_hash"] = "old-policy"
+            old_fill = record("FILL", "old-fill", order_id="old-marked", filled_size=5.0)
+            old_fill["metadata"] = {}
+            old_mark = record(
+                "MARKOUT", "old-mark", order_id="old-marked",
+                markouts={"45s": -0.01},
+            )
+            old_mark["metadata"] = {}
+            old_unlabeled = record(
+                "ORDER_SUBMITTED", "old-unlabeled", order_id="old-unlabeled",
+                intended_size=5.0,
+            )
+            old_unlabeled["metadata"]["policy_hash"] = "old-policy"
+            source.write_text("".join(
+                json.dumps(row) + "\n" for row in (
+                    current_order, current_state, candidate, old_order,
+                    old_fill, old_mark, old_unlabeled,
+                )
+            ), encoding="utf-8")
+
+            values, status = compact_evidence(
+                [source], store_path=store,
+                policy_hash="policy", config_hash="config",
+            )
+
+            self.assertEqual(
+                {row["record_id"] for row in values},
+                {"current-order", "current-state", "old-order", "old-fill", "old-mark"},
+            )
+            self.assertEqual(status["exact_policy_orders"], 1)
+            self.assertEqual(status["risk_labeled_cross_policy_orders"], 1)
+            self.assertEqual(status["retained_records"], 5)
+            self.assertEqual(len(store.read_text(encoding="utf-8").splitlines()), 5)
+
     def test_append_store_deduplicates_across_cutover_sources(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             store = pathlib.Path(folder) / "evidence.jsonl"

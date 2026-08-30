@@ -439,7 +439,7 @@ if [[ "$universe_ready" != 1 ]]; then
   echo "adaptive V7 universe did not complete exhaustive discovery" >&2
   exit 77
 fi
-read -r HOT_MARKET_BUDGET ACTIVE_SCAN_MARKET_BUDGET STRUCTURAL_SCAN_EVENT_BUDGET MAKER_FLOW_LOOKBACK_SECONDS MAKER_SELECTOR_REFRESH_SECONDS MAKER_ROTATION_INTERVAL_SECONDS MAKER_CANDIDATE_CONFIRMATIONS < <(python3 - "$RUN_ROOT/universe/status.json" "$MAKER_POLICY" <<'PY'
+read -r HOT_MARKET_BUDGET ACTIVE_SCAN_MARKET_BUDGET STRUCTURAL_SCAN_EVENT_BUDGET MAKER_FLOW_LOOKBACK_SECONDS MAKER_SELECTOR_REFRESH_SECONDS MAKER_ROTATION_INTERVAL_SECONDS MAKER_CANDIDATE_CONFIRMATIONS MAKER_ROTATION_MIN_FILL MAKER_ROTATION_MIN_ABSOLUTE_IMPROVEMENT MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER < <(python3 - "$RUN_ROOT/universe/status.json" "$MAKER_POLICY" <<'PY'
 import json,sys
 value=json.load(open(sys.argv[1]))
 maker=json.load(open(sys.argv[2]))
@@ -452,7 +452,11 @@ recent=((maker.get("market_selection") or {}).get("recent_flow") or {})
 refresh=max(1,int(recent.get("selector_refresh_seconds") or 5))
 rotation=max(0,int(recent.get("rotation_min_interval_seconds") or 30))
 confirmations=max(2,int(recent.get("candidate_confirmations") or 2))
-print(hot,active,structural,flow,refresh,rotation,confirmations)
+minimum_fill=max(0.0,min(1.0,float(recent.get("rotation_min_projected_fill_probability") or 0.05)))
+absolute_improvement=max(0.0,min(1.0,float(recent.get("rotation_min_absolute_fill_improvement") or 0.05)))
+relative_multiplier=max(1.0,float(recent.get("rotation_min_relative_fill_multiplier") or 1.5))
+print(hot,active,structural,flow,refresh,rotation,confirmations,
+      minimum_fill,absolute_improvement,relative_multiplier)
 PY
 )
 
@@ -652,7 +656,10 @@ pids+=("$!")
     --observer-arena-bytes "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" \
     --fillability-arena-bytes "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" \
     --candidate-confirmations "$MAKER_CANDIDATE_CONFIRMATIONS" \
-    --min-rotation-interval-seconds "$MAKER_ROTATION_INTERVAL_SECONDS"
+    --min-rotation-interval-seconds "$MAKER_ROTATION_INTERVAL_SECONDS" \
+    --rotation-min-projected-fill-probability "$MAKER_ROTATION_MIN_FILL" \
+    --rotation-min-absolute-fill-improvement "$MAKER_ROTATION_MIN_ABSOLUTE_IMPROVEMENT" \
+    --rotation-min-relative-fill-multiplier "$MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER"
 ) >> "$RUN_ROOT/micro_maker/cohort_supervisor.log" 2>&1 &
 pids+=("$!")
 
