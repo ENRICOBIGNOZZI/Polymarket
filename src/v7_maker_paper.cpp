@@ -38,6 +38,17 @@ constexpr double kPriceScaleE4 = 10'000.0;
     return static_cast<std::int64_t>(std::ceil(raw));
 }
 
+[[nodiscard]] std::int64_t collateral_microdollars(
+    double yes_cost, double no_cost) noexcept {
+    const long double raw = static_cast<long double>(std::max(0.0, yes_cost)
+        + std::max(0.0, no_cost)) * kMicrounitsPerShare;
+    if (!std::isfinite(raw) || raw <= 0.0L) return 0;
+    if (raw >= static_cast<long double>(std::numeric_limits<std::int64_t>::max())) {
+        return std::numeric_limits<std::int64_t>::max();
+    }
+    return static_cast<std::int64_t>(std::ceil(raw));
+}
+
 } // namespace
 
 bool PaperMakerPolicy::valid() const noexcept {
@@ -60,6 +71,14 @@ MakerPaperMarketEngine::MakerPaperMarketEngine(
       yes_instrument_handle_(yes_instrument_handle),
       no_instrument_handle_(no_instrument_handle),
       policy_(policy) {}
+
+bool MakerPaperMarketEngine::set_complete_set_reserve_floor(
+    std::int64_t microunits) noexcept {
+    if (microunits < 0) return false;
+    inventory_.complete_set_reserve_floor_microunits = microunits;
+    refresh_inventory_derived();
+    return true;
+}
 
 bool MakerPaperMarketEngine::instrument_known(std::uint64_t instrument_handle) const noexcept {
     return instrument_handle != 0
@@ -122,6 +141,37 @@ std::int64_t MakerPaperMarketEngine::available_to_sell(
         available -= std::max<std::int64_t>(0, slot.oms.record().remaining_microunits);
     }
     return std::max<std::int64_t>(0, available);
+}
+
+void MakerPaperMarketEngine::refresh_inventory_derived() noexcept {
+    std::int64_t yes_reserved = 0;
+    std::int64_t no_reserved = 0;
+    for (const auto& slot : slots_) {
+        if (!slot.occupied || slot.oms.record().side != Side::Sell
+            || !queue_active(slot.oms.record().state)) {
+            continue;
+        }
+        auto& reserved = is_yes(slot.oms.record().instrument_handle)
+            ? yes_reserved : no_reserved;
+        const auto remaining = std::max<std::int64_t>(0, slot.oms.record().remaining_microunits);
+        if (reserved <= std::numeric_limits<std::int64_t>::max() - remaining) {
+            reserved += remaining;
+        } else {
+            reserved = std::numeric_limits<std::int64_t>::max();
+        }
+    }
+    inventory_.yes_reserved_sell_microunits = yes_reserved;
+    inventory_.no_reserved_sell_microunits = no_reserved;
+    inventory_.yes_free_microunits = std::max<std::int64_t>(
+        0, inventory_.yes_microunits - yes_reserved);
+    inventory_.no_free_microunits = std::max<std::int64_t>(
+        0, inventory_.no_microunits - no_reserved);
+    inventory_.balanced_complete_set_microunits = std::min(
+        inventory_.yes_microunits, inventory_.no_microunits);
+    inventory_.directional_microunits =
+        inventory_.yes_microunits - inventory_.no_microunits;
+    inventory_.collateral_committed_microdollars = collateral_microdollars(
+        inventory_.yes_cost, inventory_.no_cost);
 }
 
 QueueEnvelope MakerPaperMarketEngine::make_queue(std::int64_t visible) const noexcept {
@@ -232,9 +282,11 @@ void MakerPaperMarketEngine::maybe_merge(
     // Do not consume shares reserved by live SELL quotes. Automatic PAPER merge
     // is accounting convenience only; it must never manufacture uncovered sell
     // inventory after a merge.
-    const std::int64_t merge_microunits = std::min(
+    const std::int64_t free_complete_sets = std::min(
         available_to_sell(yes_instrument_handle_),
         available_to_sell(no_instrument_handle_));
+    const std::int64_t merge_microunits = std::max<std::int64_t>(
+        0, free_complete_sets - inventory_.complete_set_reserve_floor_microunits);
     if (merge_microunits <= 0) return;
     const double yes_shares = shares(inventory_.yes_microunits);
     const double no_shares = shares(inventory_.no_microunits);
@@ -244,17 +296,31 @@ void MakerPaperMarketEngine::maybe_merge(
     const double merged_shares = shares(merge_microunits);
     const double pnl = merged_shares * (1.0 - avg_yes - avg_no);
 
+    PaperMakerEvent event;
+    event.kind = PaperMakerEventKind::InventoryMerge;
+    event.timestamp_ns = timestamp_ns;
+    event.operational_fill_microunits = merge_microunits;
+    event.realized_pnl = pnl;
+    event.yes_before_microunits = inventory_.yes_microunits;
+    event.no_before_microunits = inventory_.no_microunits;
+    event.yes_cost_before = inventory_.yes_cost;
+    event.no_cost_before = inventory_.no_cost;
+    event.collateral_before_microdollars = collateral_microdollars(
+        inventory_.yes_cost, inventory_.no_cost);
+
+    inventory_.pending_merge_microunits = merge_microunits;
     inventory_.yes_microunits -= merge_microunits;
     inventory_.no_microunits -= merge_microunits;
     inventory_.yes_cost = std::max(0.0, inventory_.yes_cost - merged_shares * avg_yes);
     inventory_.no_cost = std::max(0.0, inventory_.no_cost - merged_shares * avg_no);
     inventory_.realized_trading_pnl += pnl;
-
-    PaperMakerEvent event;
-    event.kind = PaperMakerEventKind::FinalMerge;
-    event.timestamp_ns = timestamp_ns;
-    event.operational_fill_microunits = merge_microunits;
-    event.realized_pnl = pnl;
+    inventory_.pending_merge_microunits = 0;
+    refresh_inventory_derived();
+    event.yes_after_microunits = inventory_.yes_microunits;
+    event.no_after_microunits = inventory_.no_microunits;
+    event.yes_cost_after = inventory_.yes_cost;
+    event.no_cost_after = inventory_.no_cost;
+    event.collateral_after_microdollars = inventory_.collateral_committed_microdollars;
     emit(result, event);
 }
 
@@ -397,6 +463,7 @@ PaperMakerResult MakerPaperMarketEngine::apply_intent(
     event.original_microunits = intent.quantity_microunits;
     event.queue = slot->paper.queue;
     emit(result, event);
+    refresh_inventory_derived();
     result.applied = 1;
     return result;
 }
@@ -516,6 +583,7 @@ PaperMakerResult MakerPaperMarketEngine::on_public_trade(
         if (event.operational_fill_microunits > 0) {
             maybe_merge(trade.receive_monotonic_ns, result);
         }
+        refresh_inventory_derived();
     }
     result.applied = 1;
     return result;
@@ -558,6 +626,8 @@ PaperMakerResult MakerPaperMarketEngine::advance_time(
         }
         result.applied = 1;
     }
+    maybe_merge(monotonic_ns, result);
+    refresh_inventory_derived();
     return result;
 }
 

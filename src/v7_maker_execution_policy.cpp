@@ -386,6 +386,14 @@ MakerExecutionResult MakerPaperExecutionPolicy::split_complete_sets(
     return out;
 }
 
+bool MakerPaperExecutionPolicy::set_complete_set_reserve_floor(
+    std::uint64_t market_handle,
+    std::int64_t microunits) noexcept {
+    auto* slot = market(market_handle);
+    return slot != nullptr
+        && slot->engine->set_complete_set_reserve_floor(microunits);
+}
+
 QuoteSnapshot MakerPaperExecutionPolicy::quote_snapshot(
     std::uint64_t market_handle,
     std::uint64_t instrument_handle) const noexcept {

@@ -237,6 +237,23 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
                 recorded_ts_ms=5_000,
             ).validate()
 
+    def test_inventory_split_is_explicit_and_cannot_create_pnl(self) -> None:
+        event = ledger.LedgerEvent(
+            event_type="INVENTORY_SPLIT",
+            strategy="micro_maker_pro",
+            model_sha=SHA_A,
+            recorded_ts_ms=5_000,
+            market_id="market-1",
+            position_id="split-1",
+            intended_size=10.0,
+            realized_cashflow=0.0,
+            metadata={"collateral_usd": 10.0, "yes_after_shares": 10.0,
+                      "no_after_shares": 10.0},
+        )
+        event.validate()
+        with self.assertRaisesRegex(ledger.LedgerContractError, "cannot_create_pnl"):
+            ledger.LedgerEvent(**{**event.to_dict(), "realized_cashflow": 0.01}).validate()
+
 
 if __name__ == "__main__":
     unittest.main()

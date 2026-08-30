@@ -323,10 +323,6 @@ class CohortSupervisor:
             validate_selection(candidate, self.args.model_sha)
         except ValueError:
             return None
-        # Once the runtime has causal flow evidence, never rotate it back to a
-        # generic fallback merely because the latest tape window is quiet.
-        if fresh_flow_eligible(runtime) and not fresh_flow_eligible(candidate):
-            return None
         return candidate if membership_sha256(runtime) != membership_sha256(candidate) else None
 
     def write_flow_pause_drain(self) -> None:
@@ -341,43 +337,17 @@ class CohortSupervisor:
         })
 
     def sync_no_fresh_flow_pause(self) -> bool:
-        """Withdraw PAPER quotes while the selector has no causal fresh flow.
+        """Remove the retired flow-only pause; book staleness remains in C++.
 
-        The existing cohort remains the accounting owner.  No selection or
-        inventory state is discarded, and removing this reversible drain lets
-        the same process resume as soon as an eligible candidate returns.
+        Quiet aggressor flow is an economic feature, not a feed-integrity
+        failure. The bilateral selector can route to inventory-backed asks,
+        collateral-backed bids or bounded exploration. Only the canonical
+        WebSocket lineage/freshness controls may withdraw for a genuinely stale
+        book.
         """
-        runtime = read_json(self.selection)
-        candidate = read_json(self.candidate)
-        try:
-            validate_selection(runtime, self.args.model_sha)
-            validate_selection(candidate, self.args.model_sha)
-        except ValueError:
-            if self.flow_pause_latched:
-                self.reset_pending_confirmation()
-                self.write_status(
-                    "PAUSED_NO_FRESH_FLOW", reason="candidate_invalid_while_paused"
-                )
-                return True
-            return False
-        should_pause = fresh_flow_eligible(runtime) and not fresh_flow_eligible(candidate)
-        if should_pause:
-            self.flow_pause_latched = True
-            if read_json(self.drain).get("reason") != "no_fresh_aggressive_flow":
-                self.write_flow_pause_drain()
-            self.reset_pending_confirmation()
-            self.write_status("PAUSED_NO_FRESH_FLOW", fresh_flow_pause_active=True)
-            return True
-        if self.flow_pause_latched:
-            # Resume immediately only when fresh evidence covers the current
-            # membership.  For a different fresh cohort, keep quotes withdrawn
-            # through confirmation, cooldown and the atomic handoff.
-            if (
-                not fresh_flow_eligible(runtime)
-                or membership_sha256(runtime) == membership_sha256(candidate)
-            ):
-                self.flow_pause_latched = False
-                self.drain.unlink(missing_ok=True)
+        if read_json(self.drain).get("reason") == "no_fresh_aggressive_flow":
+            self.drain.unlink(missing_ok=True)
+        self.flow_pause_latched = False
         return False
 
     def rotate_if_safe(self, candidate: dict[str, Any]) -> None:

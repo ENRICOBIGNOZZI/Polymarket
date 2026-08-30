@@ -354,6 +354,66 @@ struct SelectedMarket {
     double rewards_min_size = 0.0;
 };
 
+struct InventoryFactoryPolicy {
+    std::uint8_t enabled = 0;
+    double bootstrap_complete_set_fraction = 0.10;
+    double seed_min_quote_multiples = 2.0;
+    double seed_visible_depth_fraction = 0.10;
+    double replenish_trigger_fraction = 0.50;
+    double max_market_gross_fraction = 0.05;
+    double max_maker_gross_fraction = 0.30;
+    std::int64_t replenish_cooldown_ns = 60'000'000'000LL;
+
+    [[nodiscard]] bool valid() const noexcept {
+        return enabled <= 1
+            && std::isfinite(bootstrap_complete_set_fraction)
+            && bootstrap_complete_set_fraction > 0.0
+            && bootstrap_complete_set_fraction <= max_maker_gross_fraction
+            && std::isfinite(seed_min_quote_multiples)
+            && seed_min_quote_multiples >= 1.0
+            && std::isfinite(seed_visible_depth_fraction)
+            && seed_visible_depth_fraction > 0.0
+            && seed_visible_depth_fraction <= 1.0
+            && std::isfinite(replenish_trigger_fraction)
+            && replenish_trigger_fraction > 0.0
+            && replenish_trigger_fraction < 1.0
+            && std::isfinite(max_market_gross_fraction)
+            && max_market_gross_fraction > 0.0
+            && max_market_gross_fraction <= 1.0
+            && std::isfinite(max_maker_gross_fraction)
+            && max_maker_gross_fraction > 0.0
+            && max_maker_gross_fraction <= 1.0
+            && replenish_cooldown_ns >= 0;
+    }
+};
+
+InventoryFactoryPolicy load_inventory_factory_policy(const fs::path& policy_path) {
+    InventoryFactoryPolicy out;
+    const auto root = read_json(policy_path);
+    if (!root.is_object()) throw std::runtime_error("maker policy must be object");
+    const auto* inventory = child_object(root.as_object(), "inventory");
+    if (inventory == nullptr) throw std::runtime_error("maker inventory policy missing");
+    out.enabled = static_cast<std::uint8_t>(
+        boolean(find_value(*inventory, "auto_split_merge_accounting"), false)
+        && boolean(find_value(*inventory, "inventory_factory_enabled"), false));
+    out.bootstrap_complete_set_fraction = object_number(
+        inventory, "bootstrap_complete_set_fraction", out.bootstrap_complete_set_fraction);
+    out.seed_min_quote_multiples = object_number(
+        inventory, "seed_min_quote_multiples", out.seed_min_quote_multiples);
+    out.seed_visible_depth_fraction = object_number(
+        inventory, "seed_visible_depth_fraction", out.seed_visible_depth_fraction);
+    out.replenish_trigger_fraction = object_number(
+        inventory, "replenish_trigger_fraction", out.replenish_trigger_fraction);
+    out.max_market_gross_fraction = object_number(
+        inventory, "max_market_gross_fraction", out.max_market_gross_fraction);
+    out.max_maker_gross_fraction = object_number(
+        inventory, "max_maker_gross_fraction", out.max_maker_gross_fraction);
+    out.replenish_cooldown_ns = object_integer(
+        inventory, "replenish_cooldown_seconds", 60) * 1'000'000'000LL;
+    if (!out.valid()) throw std::runtime_error("invalid maker inventory factory policy");
+    return out;
+}
+
 [[nodiscard]] std::vector<SelectedMarket> load_selection(const fs::path& path) {
     const auto root = read_json(path);
     if (!root.is_object()) throw std::runtime_error("maker selection must be object");
@@ -609,17 +669,24 @@ struct MarketContext {
     std::int32_t no_tick_e4 = 0;
     double yes_min_order = 1.0;
     double no_min_order = 1.0;
+    double cold_visible_depth_shares = 0.0;
+    double cold_spread = 1.0;
+    double cold_volatility_proxy = 1.0;
     MakerInstrumentLane yes_lane{+1};
     MakerInstrumentLane no_lane{-1};
 
     MarketContext(SelectedMarket selected, std::uint64_t market,
                   std::uint64_t event, std::uint64_t yes_instrument,
                   std::uint64_t no_instrument, std::int32_t yes_tick,
-                  std::int32_t no_tick, double yes_min, double no_min)
+                  std::int32_t no_tick, double yes_min, double no_min,
+                  double visible_depth, double spread, double volatility_proxy)
         : cold(std::move(selected)), market_handle(market), event_handle(event),
           yes_instrument_handle(yes_instrument), no_instrument_handle(no_instrument),
           yes_tick_e4(yes_tick), no_tick_e4(no_tick),
-          yes_min_order(std::max(1e-6, yes_min)), no_min_order(std::max(1e-6, no_min)) {}
+          yes_min_order(std::max(1e-6, yes_min)), no_min_order(std::max(1e-6, no_min)),
+          cold_visible_depth_shares(std::max(0.0, visible_depth)),
+          cold_spread(std::clamp(spread, 0.0, 1.0)),
+          cold_volatility_proxy(std::clamp(volatility_proxy, 0.0, 1.0)) {}
 };
 
 struct InstrumentRef {
@@ -1182,7 +1249,10 @@ public:
     [[nodiscard]] bool initialize(
         const std::vector<std::unique_ptr<MarketContext>>& markets,
         PaperMakerPolicy paper_policy,
+        InventoryFactoryPolicy inventory_factory,
+        std::atomic<bool>* new_risk_frozen,
         double starting_capital,
+        double base_quote_shares,
         std::int64_t minimum_quote_lifetime_ns,
         std::uint32_t exploration_concurrent_market_cap) {
         const std::int64_t budget = microdollars(starting_capital);
@@ -1190,7 +1260,8 @@ public:
         CapitalLimits limits;
         limits.sleeve_budget_microdollars = budget;
         limits.max_total_exposure_microdollars = budget;
-        limits.max_market_exposure_microdollars = std::max<std::int64_t>(1, budget / 20);
+        limits.max_market_exposure_microdollars = std::max<std::int64_t>(
+            1, microdollars(starting_capital * inventory_factory.max_market_gross_fraction));
         limits.max_single_order_microdollars = std::max<std::int64_t>(1, budget / 100);
         limits.max_single_order_microdollars = std::min(
             limits.max_single_order_microdollars, limits.max_market_exposure_microdollars);
@@ -1207,6 +1278,11 @@ public:
         markets_.assign(max_market + 1, nullptr);
         control_watermarks_.assign(max_instrument + 1, {});
         exploration_market_active_.assign(max_market + 1, 0);
+        inventory_targets_.assign(max_market + 1, 0);
+        inventory_last_replenish_ns_.assign(max_market + 1, 0);
+        inventory_factory_ = inventory_factory;
+        new_risk_frozen_ = new_risk_frozen;
+        if (new_risk_frozen_ == nullptr) return false;
         minimum_quote_lifetime_ns_ = std::max<std::int64_t>(0, minimum_quote_lifetime_ns);
         exploration_concurrent_market_cap_ = exploration_concurrent_market_cap;
         for (const auto& market : markets) {
@@ -1221,6 +1297,93 @@ public:
             }
             markets_[market->market_handle] = market.get();
         }
+
+        if (inventory_factory_.enabled) {
+            std::vector<std::int64_t> minimums(max_market + 1, 0);
+            std::int64_t minimum_total = 0;
+            std::size_t eligible = 0;
+            for (const auto& market : markets) {
+                const double minimum_shares = std::ceil(std::max({
+                    base_quote_shares,
+                    market->yes_min_order * inventory_factory_.seed_min_quote_multiples,
+                    market->no_min_order * inventory_factory_.seed_min_quote_multiples}));
+                const auto minimum = microdollars(minimum_shares);
+                if (minimum <= 0 || minimum > limits.max_market_exposure_microdollars) continue;
+                minimums[market->market_handle] = minimum;
+                if (minimum_total > std::numeric_limits<std::int64_t>::max() - minimum) return false;
+                minimum_total += minimum;
+                ++eligible;
+            }
+            const auto desired_pool = microdollars(
+                starting_capital * inventory_factory_.bootstrap_complete_set_fraction);
+            const auto hard_pool = microdollars(
+                starting_capital * inventory_factory_.max_maker_gross_fraction);
+            const std::int64_t pool = std::min(
+                hard_pool, std::max(desired_pool, minimum_total));
+            if (eligible > 0 && pool < minimum_total) return false;
+
+            std::int64_t remaining = pool;
+            std::int64_t remaining_minimum = minimum_total;
+            std::size_t seeded = 0;
+            for (const auto& market : markets) {
+                const auto minimum = minimums[market->market_handle];
+                if (minimum <= 0) continue;
+                const auto markets_left = std::max<std::size_t>(1, eligible - seeded);
+                const double base_dollars = static_cast<double>(remaining) /
+                    1'000'000.0 / static_cast<double>(markets_left);
+                const double tick = static_cast<double>(market->yes_tick_e4) / kPriceScaleE4;
+                const double spread_factor = std::clamp(
+                    market->cold_spread / std::max(2.0 * tick, 1e-6), 0.75, 1.25);
+                const double minimum_shares = static_cast<double>(minimum) / 1'000'000.0;
+                const double depth_factor = std::clamp(
+                    market->cold_visible_depth_shares /
+                        std::max(20.0 * minimum_shares, 1e-6),
+                    0.50, 1.50);
+                const double volatility_haircut = std::clamp(
+                    1.0 / (1.0 + 5.0 * market->cold_volatility_proxy), 0.50, 1.0);
+                const double depth_cap_shares = std::max(
+                    minimum_shares,
+                    market->cold_visible_depth_shares
+                        * inventory_factory_.seed_visible_depth_fraction);
+                const double risk_adjusted = base_dollars * spread_factor
+                    * depth_factor * volatility_haircut;
+                auto target = microdollars(std::max(
+                    minimum_shares, std::min(risk_adjusted, depth_cap_shares)));
+                target = std::clamp(target, minimum,
+                    limits.max_market_exposure_microdollars);
+                remaining_minimum -= minimum;
+                target = std::min(target, remaining - remaining_minimum);
+                if (target < minimum
+                    || !policy_.set_complete_set_reserve_floor(
+                        market->market_handle, target)) {
+                    return false;
+                }
+
+                ExecutionContext context;
+                context.market_handle = market->market_handle;
+                context.event_handle = market->event_handle;
+                context.instrument_handle = market->yes_instrument_handle;
+                context.receive_wall_ms = wall_ms();
+                context.receive_monotonic_ns = monotonic_ns();
+                context.tick_size_e4 = market->yes_tick_e4;
+                context.outcome_yes = 1;
+                auto split = policy_.split_complete_sets(
+                    market->market_handle, target,
+                    context.receive_monotonic_ns, capital_);
+                if (!split.accepted || split.capital_invariant_violation
+                    || split.paper.invariant_violation) {
+                    emit(context, split.paper);
+                    return false;
+                }
+                inventory_targets_[market->market_handle] = target;
+                inventory_last_replenish_ns_[market->market_handle] =
+                    context.receive_monotonic_ns;
+                emit(context, split.paper);
+                remaining -= target;
+                ++seeded;
+            }
+            if (eligible > 0 && seeded != eligible) return false;
+        }
         execution_version_ = 1;
         return true;
     }
@@ -1232,6 +1395,7 @@ public:
             return false;
         }
 
+        if (!sync_inventory_drain_mode()) return false;
         const std::int64_t execution_start_ns = monotonic_ns();
         ExecutionContext measured_context = command.context;
         measured_context.decision.latency.tx_queue_ns = command.enqueue_monotonic_ns > 0
@@ -1291,6 +1455,7 @@ public:
             || result.reason == MakerExecutionReason::UnknownMarket) {
             return false;
         }
+        if (!maybe_replenish(measured_context)) return false;
         return true;
     }
 
@@ -1314,11 +1479,76 @@ public:
         return telemetry_.try_pop(record);
     }
 
+    [[nodiscard]] bool maintenance_tick(std::int64_t now_ns) noexcept {
+        if (!sync_inventory_drain_mode()) return false;
+        if (!inventory_drain_active_) return true;
+        for (std::size_t handle = 1; handle < markets_.size(); ++handle) {
+            const auto* market = markets_[handle];
+            if (market == nullptr) continue;
+            auto result = policy_.advance_time(handle, now_ns, capital_);
+            ExecutionContext context;
+            context.market_handle = handle;
+            context.event_handle = market->event_handle;
+            context.instrument_handle = market->yes_instrument_handle;
+            context.receive_wall_ms = wall_ms();
+            context.receive_monotonic_ns = now_ns;
+            context.tick_size_e4 = market->yes_tick_e4;
+            context.outcome_yes = 1;
+            if (result.paper.event_count > 0) emit(context, result.paper);
+            if (result.capital_invariant_violation || result.paper.invariant_violation) {
+                return false;
+            }
+        }
+        ++execution_version_;
+        return true;
+    }
+
 private:
     struct SideControlWatermark {
         std::int64_t bid_ns = 0;
         std::int64_t ask_ns = 0;
     };
+
+    [[nodiscard]] bool sync_inventory_drain_mode() noexcept {
+        const bool requested = new_risk_frozen_ != nullptr
+            && new_risk_frozen_->load(std::memory_order_acquire);
+        if (requested == inventory_drain_active_) return true;
+        for (std::size_t handle = 1; handle < inventory_targets_.size(); ++handle) {
+            if (markets_[handle] == nullptr || inventory_targets_[handle] <= 0) continue;
+            if (!policy_.set_complete_set_reserve_floor(
+                    handle, requested ? 0 : inventory_targets_[handle])) {
+                return false;
+            }
+        }
+        inventory_drain_active_ = requested;
+        return true;
+    }
+
+    [[nodiscard]] bool maybe_replenish(const ExecutionContext& context) noexcept {
+        if (!inventory_factory_.enabled || inventory_drain_active_
+            || context.market_handle >= inventory_targets_.size()) return true;
+        const auto target = inventory_targets_[context.market_handle];
+        const auto* inventory = policy_.inventory(context.market_handle);
+        if (target <= 0 || inventory == nullptr) return true;
+        const auto trigger = static_cast<std::int64_t>(std::floor(
+            static_cast<long double>(target)
+                * inventory_factory_.replenish_trigger_fraction));
+        if (inventory->balanced_complete_set_microunits > trigger) return true;
+        const auto now = std::max<std::int64_t>(1, monotonic_ns());
+        const auto last = inventory_last_replenish_ns_[context.market_handle];
+        if (last > 0 && now - last < inventory_factory_.replenish_cooldown_ns) return true;
+        inventory_last_replenish_ns_[context.market_handle] = now;
+        const auto delta = target - inventory->balanced_complete_set_microunits;
+        if (delta <= 0) return true;
+        auto split = policy_.split_complete_sets(
+            context.market_handle, delta, now, capital_);
+        ExecutionContext replenishment = context;
+        replenishment.receive_wall_ms = wall_ms();
+        replenishment.receive_monotonic_ns = now;
+        emit(replenishment, split.paper);
+        ++execution_version_;
+        return !split.capital_invariant_violation && !split.paper.invariant_violation;
+    }
 
     [[nodiscard]] bool exploration_market_active(std::uint64_t market_handle) const noexcept {
         return market_handle < exploration_market_active_.size()
@@ -1457,6 +1687,11 @@ private:
     std::vector<MarketContext*> markets_;
     std::vector<SideControlWatermark> control_watermarks_;
     std::vector<std::uint8_t> exploration_market_active_;
+    std::vector<std::int64_t> inventory_targets_;
+    std::vector<std::int64_t> inventory_last_replenish_ns_;
+    InventoryFactoryPolicy inventory_factory_{};
+    std::atomic<bool>* new_risk_frozen_ = nullptr;
+    bool inventory_drain_active_ = false;
     std::int64_t minimum_quote_lifetime_ns_ = 0;
     std::uint32_t exploration_concurrent_market_cap_ = 0;
     std::uint32_t exploration_active_market_count_ = 0;
@@ -1468,9 +1703,11 @@ private:
 class TelemetryWriter final {
 public:
     TelemetryWriter(fs::path run_root, std::string model_sha,
+                    std::string policy_hash, std::string config_hash,
                     double starting_capital,
                     const std::vector<std::unique_ptr<MarketContext>>& markets)
         : run_root_(std::move(run_root)), model_sha_(std::move(model_sha)),
+          policy_hash_(std::move(policy_hash)), config_hash_(std::move(config_hash)),
           starting_capital_(starting_capital),
           telemetry_epoch_(std::to_string(wall_ms()) + "-" +
                            hex64(static_cast<std::uint64_t>(monotonic_ns()))) {
@@ -1535,6 +1772,20 @@ public:
             row["no_token"] = market->cold.no_token;
             row["yes_shares"] = micro_shares(state.yes_microunits);
             row["no_shares"] = micro_shares(state.no_microunits);
+            row["yes_reserved_sell_shares"] = micro_shares(state.yes_reserved_sell_microunits);
+            row["no_reserved_sell_shares"] = micro_shares(state.no_reserved_sell_microunits);
+            row["yes_free_shares"] = micro_shares(state.yes_free_microunits);
+            row["no_free_shares"] = micro_shares(state.no_free_microunits);
+            row["balanced_complete_set_shares"] = micro_shares(
+                state.balanced_complete_set_microunits);
+            row["directional_shares"] = static_cast<double>(
+                state.directional_microunits) / kMicrounitsPerShare;
+            row["complete_set_reserve_floor_shares"] = micro_shares(
+                state.complete_set_reserve_floor_microunits);
+            row["collateral_committed"] = static_cast<double>(
+                state.collateral_committed_microdollars) / 1'000'000.0;
+            row["pending_split_shares"] = micro_shares(state.pending_split_microunits);
+            row["pending_merge_shares"] = micro_shares(state.pending_merge_microunits);
             row["yes_cost"] = state.yes_cost;
             row["no_cost"] = state.no_cost;
             inventory[market->cold.market_id] = std::move(row);
@@ -1681,6 +1932,7 @@ private:
 
     void attach_metadata(json::object& event, const TelemetryRecord& record) const {
         json::object metadata;
+        attach_economic_identity(metadata);
         metadata["outcome"] = record.outcome_yes ? "YES" : "NO";
         metadata["action"] = action_name(record.action);
         metadata["execution_side"] = side_name(record.intent.side);
@@ -1698,6 +1950,13 @@ private:
                 record.decision.exploration_max_rest_ns / 1'000'000LL;
         }
         event["metadata"] = std::move(metadata);
+    }
+
+    void attach_economic_identity(json::object& metadata) const {
+        metadata["policy_hash"] = policy_hash_;
+        metadata["config_hash"] = config_hash_;
+        metadata["execution_semantics_version"] = "maker-paper-v7.2-bilateral-inventory";
+        metadata["queue_model_version"] = "pessimistic-public-print-v1";
     }
 
     void spool(json::object event) {
@@ -1783,7 +2042,20 @@ private:
             else if (paper.order_state == pm::v7::OrderState::Partial) write_order_state(record, "PARTIAL");
             return;
         }
-        if (paper.kind == PaperMakerEventKind::FinalMerge) {
+        if (paper.kind == PaperMakerEventKind::InventorySplitRequested) {
+            write_inventory_event(record, "INVENTORY_SPLIT_REQUESTED");
+            return;
+        }
+        if (paper.kind == PaperMakerEventKind::InventorySplitRejected) {
+            write_inventory_event(record, "INVENTORY_SPLIT_REJECTED");
+            return;
+        }
+        if (paper.kind == PaperMakerEventKind::InventorySplit) {
+            write_inventory_event(record, "INVENTORY_SPLIT");
+            return;
+        }
+        if (paper.kind == PaperMakerEventKind::InventoryMerge) {
+            write_inventory_event(record, "INVENTORY_MERGE");
             auto event = common("FINAL");
             const auto* market = markets_[record.market_handle];
             if (market != nullptr) {
@@ -1795,12 +2067,51 @@ private:
             event["final_pnl"] = paper.realized_pnl;
             event["realized_cashflow"] = paper.realized_pnl;
             json::object metadata;
+            attach_economic_identity(metadata);
             metadata["complete_set_merge"] = true;
             metadata["merged_shares"] = micro_shares(paper.operational_fill_microunits);
             metadata["maker_cpp_hot_path"] = true;
             event["metadata"] = std::move(metadata);
             spool(std::move(event));
         }
+    }
+
+    void write_inventory_event(const TelemetryRecord& record, const char* event_type) {
+        const auto& paper = record.paper;
+        auto event = common(event_type);
+        attach_market(event, record);
+        event["position_id"] = "mmi-" + std::to_string(record.market_handle) + "-" +
+                               std::to_string(++inventory_event_sequence_);
+        event["intended_action"] = event_type;
+        event["intended_size"] = micro_shares(paper.original_microunits > 0
+            ? paper.original_microunits : paper.operational_fill_microunits);
+        event["realized_cashflow"] = paper.realized_pnl;
+        if (paper.kind == PaperMakerEventKind::InventoryMerge) {
+            event["final_pnl"] = paper.realized_pnl;
+        }
+        json::object metadata;
+        attach_economic_identity(metadata);
+        metadata["maker_cpp_hot_path"] = true;
+        metadata["transformation"] = event_type;
+        metadata["collateral_usd"] = static_cast<double>(
+            paper.original_microunits > 0
+                ? paper.original_microunits : paper.operational_fill_microunits)
+            / kMicrounitsPerShare;
+        metadata["collateral_before_usd"] = static_cast<double>(
+            paper.collateral_before_microdollars) / 1'000'000.0;
+        metadata["collateral_after_usd"] = static_cast<double>(
+            paper.collateral_after_microdollars) / 1'000'000.0;
+        metadata["yes_before_shares"] = micro_shares(paper.yes_before_microunits);
+        metadata["no_before_shares"] = micro_shares(paper.no_before_microunits);
+        metadata["yes_after_shares"] = micro_shares(paper.yes_after_microunits);
+        metadata["no_after_shares"] = micro_shares(paper.no_after_microunits);
+        metadata["yes_cost_before"] = paper.yes_cost_before;
+        metadata["no_cost_before"] = paper.no_cost_before;
+        metadata["yes_cost_after"] = paper.yes_cost_after;
+        metadata["no_cost_after"] = paper.no_cost_after;
+        metadata["pnl_created_by_split"] = false;
+        event["metadata"] = std::move(metadata);
+        spool(std::move(event));
     }
 
     void write_order_state(const TelemetryRecord& record, const char* state) {
@@ -1811,6 +2122,7 @@ private:
         event["order_state"] = state;
         event["side"] = side_name(record.paper.side);
         json::object metadata;
+        attach_economic_identity(metadata);
         metadata["maker_cpp_hot_path"] = true;
         metadata["oms_state"] = order_state_name(record.paper.order_state);
         metadata["decision_reason"] = decision_reason_name(record.decision.reason);
@@ -1838,6 +2150,7 @@ private:
         event["fee_rate"] = 0.0;
         event["fee_source"] = "polymarket:maker_fee_zero";
         json::object metadata;
+        attach_economic_identity(metadata);
         metadata["maker_cpp_hot_path"] = true;
         metadata["public_trade_id"] = std::to_string(paper.trade_id);
         metadata["queue_ahead_lower"] = micro_shares(paper.queue.ahead_lower_microunits);
@@ -1853,6 +2166,8 @@ private:
 
     fs::path run_root_;
     std::string model_sha_;
+    std::string policy_hash_;
+    std::string config_hash_;
     double starting_capital_ = 0.0;
     std::vector<MarketContext*> markets_;
     std::vector<InstrumentCold> instruments_;
@@ -1866,6 +2181,7 @@ private:
     std::string telemetry_epoch_;
     std::uint64_t record_sequence_ = 0;
     std::uint64_t merge_sequence_ = 0;
+    std::uint64_t inventory_event_sequence_ = 0;
 };
 
 std::vector<std::unique_ptr<MarketContext>> build_markets(
@@ -1918,10 +2234,23 @@ std::vector<std::unique_ptr<MarketContext>> build_markets(
         const auto event = market;
         const auto yes_instrument = ++instrument_handle;
         const auto no_instrument = ++instrument_handle;
+        const double visible_depth = std::min({
+            yes->second.top_depth(true, 5), yes->second.top_depth(false, 5),
+            no->second.top_depth(true, 5), no->second.top_depth(false, 5)});
+        const double spread = std::max(yes->second.spread(), no->second.spread());
+        const double yes_mid = yes->second.midpoint();
+        const double no_mid = no->second.midpoint();
+        const double complement_gap = std::isfinite(yes_mid) && std::isfinite(no_mid)
+            ? std::abs(yes_mid + no_mid - 1.0) : 1.0;
+        // Cold start has no causal return history yet. Spread plus complement
+        // dislocation is a conservative observable volatility/risk proxy; live
+        // decisions replace it with the shared WebSocket state immediately.
+        const double volatility_proxy = std::clamp(spread + complement_gap, 0.0, 1.0);
         output.push_back(std::make_unique<MarketContext>(
             std::move(selected_market), market, event, yes_instrument, no_instrument,
             yes_tick, no_tick, std::max(yes->second.min_order_size, 1e-6),
-            std::max(no->second.min_order_size, 1e-6)));
+            std::max(no->second.min_order_size, 1e-6), visible_depth, spread,
+            volatility_proxy));
     }
     if (output.empty()) throw std::runtime_error("no selected maker market has valid cold-start books");
     return output;
@@ -1949,6 +2278,8 @@ int main(int argc, char** argv) {
         const pm::Config config = pm::load_config(options.config);
         if (config.starting_capital <= 0.0) throw std::runtime_error("maker sleeve starting capital must be positive");
         const PaperMakerPolicy paper_policy = load_paper_policy(options.maker_policy);
+        const InventoryFactoryPolicy inventory_factory =
+            load_inventory_factory_policy(options.maker_policy);
         auto initial = std::make_shared<MakerModelSnapshot>(
             load_model_snapshot(options.maker_policy, options.model, options.model_sha));
         auto model_store = std::make_shared<MakerModelStore>(initial);
@@ -1958,7 +2289,9 @@ int main(int argc, char** argv) {
         std::atomic<bool> new_risk_frozen{false};
         std::atomic<bool> fatal{false};
         auto execution = std::make_unique<ExecutionCore>();
-        if (!execution->initialize(markets, paper_policy, config.starting_capital,
+        if (!execution->initialize(markets, paper_policy, inventory_factory,
+                                   &new_risk_frozen,
+                                   config.starting_capital, initial->base_quote_shares,
                                    initial->min_quote_lifetime_ns,
                                    initial->exploration_concurrent_market_cap)) {
             throw std::runtime_error("cannot initialize single V7 Maker execution owner");
@@ -1993,6 +2326,7 @@ int main(int argc, char** argv) {
                 return false;
             };
             std::uint32_t idle_iterations = 0;
+            std::int64_t last_maintenance_ns = monotonic_ns();
             while (!execution_stop.load(std::memory_order_acquire) || pending()) {
                 ExecutionCommand command;
                 std::size_t source_shard = 0;
@@ -2021,6 +2355,13 @@ int main(int argc, char** argv) {
                     }
                 }
                 if (!have) {
+                    const auto now_ns = monotonic_ns();
+                    if (now_ns - last_maintenance_ns >= 100'000'000LL) {
+                        if (!execution->maintenance_tick(now_ns)) {
+                            fatal.store(true, std::memory_order_release);
+                        }
+                        last_maintenance_ns = now_ns;
+                    }
                     // Avoid a fixed 50 us tax on a newly enqueued cancel/order.
                     // The isolated order-TX owner spins briefly, then yields,
                     // and only sleeps after a prolonged idle period.
@@ -2052,8 +2393,11 @@ int main(int argc, char** argv) {
             }
         });
 
-        TelemetryWriter writer(options.run_root, options.model_sha,
-                               config.starting_capital, markets);
+        TelemetryWriter writer(
+            options.run_root, options.model_sha,
+            hex64(fnv1a(read_file(options.maker_policy))),
+            hex64(fnv1a(read_file(options.config))),
+            config.starting_capital, markets);
         writer.write_state(false);
         for (auto& shard : shards) shard->start();
 

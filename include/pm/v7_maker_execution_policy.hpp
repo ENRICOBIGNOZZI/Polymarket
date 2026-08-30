@@ -65,6 +65,10 @@ public:
         std::int64_t timestamp_ns,
         SleeveCapitalAccount& capital) noexcept;
 
+    [[nodiscard]] bool set_complete_set_reserve_floor(
+        std::uint64_t market_handle,
+        std::int64_t microunits) noexcept;
+
     [[nodiscard]] QuoteSnapshot quote_snapshot(std::uint64_t market_handle,
                                                std::uint64_t instrument_handle) const noexcept;
     [[nodiscard]] InventorySnapshot inventory_snapshot(

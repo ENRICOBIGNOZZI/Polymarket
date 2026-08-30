@@ -457,6 +457,14 @@ def _recent_flow_snapshot(
                 "prints": 0,
                 "shares": 0.0,
                 "notional": 0.0,
+                "buy_prints_5s": 0,
+                "buy_prints_30s": 0,
+                "buy_prints_2m": 0,
+                "buy_prints_10m": 0,
+                "buy_shares_10m": 0.0,
+                "buy_notional_10m": 0.0,
+                "last_buy_receive_ms": 0,
+                "sell_prints_5s": 0,
                 "sell_prints_30s": 0,
                 "sell_prints_2m": 0,
                 "sell_prints_10m": 0,
@@ -470,19 +478,22 @@ def _recent_flow_snapshot(
             item["shares"] += size
             item["notional"] += size * price
             item["last_receive_ms"] = max(int(item["last_receive_ms"]), receive_ms)
-            if str(raw.get("side") or "").upper() == "SELL":
+            trade_side = str(raw.get("side") or "").upper()
+            if trade_side in {"BUY", "SELL"}:
                 age_ms = max(0, now_ms - receive_ms)
+                prefix = "buy" if trade_side == "BUY" else "sell"
+                if age_ms <= 5_000:
+                    item[f"{prefix}_prints_5s"] += 1
                 if age_ms <= 30_000:
-                    item["sell_prints_30s"] += 1
+                    item[f"{prefix}_prints_30s"] += 1
                 if age_ms <= 120_000:
-                    item["sell_prints_2m"] += 1
+                    item[f"{prefix}_prints_2m"] += 1
                 if age_ms <= 600_000:
-                    item["sell_prints_10m"] += 1
-                    item["sell_shares_10m"] += size
-                    item["sell_notional_10m"] += size * price
-                    item["last_sell_receive_ms"] = max(
-                        int(item["last_sell_receive_ms"]), receive_ms
-                    )
+                    item[f"{prefix}_prints_10m"] += 1
+                    item[f"{prefix}_shares_10m"] += size
+                    item[f"{prefix}_notional_10m"] += size * price
+                    key = f"last_{prefix}_receive_ms"
+                    item[key] = max(int(item[key]), receive_ms)
             tx_hash = str(raw.get("transaction_hash") or "")
             if tx_hash:
                 item["transactions"].add(tx_hash)
@@ -490,11 +501,15 @@ def _recent_flow_snapshot(
         raise ValueError(f"maker_recent_flow_tape_stale:{now_ms - latest_receive_ms}")
 
     minimum_prints = max(1, int(flow_cfg.get("minimum_prints", 2)))
-    minimum_sell_prints_2m = max(1, int(flow_cfg.get("minimum_sell_prints_2m", 1)))
-    minimum_sell_prints_10m = max(1, int(flow_cfg.get("minimum_sell_prints_10m", 1)))
-    maximum_last_sell_age_ms = max(
+    minimum_side_prints_2m = max(1, int(flow_cfg.get(
+        "minimum_side_prints_2m", flow_cfg.get("minimum_sell_prints_2m", 1))))
+    minimum_side_prints_10m = max(1, int(flow_cfg.get(
+        "minimum_side_prints_10m", flow_cfg.get("minimum_sell_prints_10m", 1))))
+    maximum_last_side_age_ms = max(
         1_000,
-        int(float(flow_cfg.get("maximum_last_sell_age_seconds", 120.0)) * 1_000.0),
+        int(float(flow_cfg.get(
+            "maximum_last_side_age_seconds",
+            flow_cfg.get("maximum_last_sell_age_seconds", 120.0))) * 1_000.0),
     )
     minimum_markets = max(1, int(flow_cfg.get("minimum_markets", 5)))
     minimum_tte_ms = max(
@@ -522,9 +537,6 @@ def _recent_flow_snapshot(
         if (
             flow is None
             or int(flow["prints"]) < minimum_prints
-            or int(flow["sell_prints_2m"]) < minimum_sell_prints_2m
-            or int(flow["sell_prints_10m"]) < minimum_sell_prints_10m
-            or now_ms - int(flow["last_sell_receive_ms"]) > maximum_last_sell_age_ms
             or not _generic_maker_market_allowed(raw, selection_cfg)
             or raw.get("active") is not True
             or raw.get("closed") is True
@@ -545,9 +557,26 @@ def _recent_flow_snapshot(
             continue
         recent_flow_to_liquidity = float(flow["shares"]) / max(liquidity, minimum_liquidity)
         mid_balance = max(0.0, 1.0 - abs(midpoint - 0.5) / 0.5)
-        score = (
+        buy_fresh = (
+            int(flow["buy_prints_2m"]) >= minimum_side_prints_2m
+            and int(flow["buy_prints_10m"]) >= minimum_side_prints_10m
+            and now_ms - int(flow["last_buy_receive_ms"]) <= maximum_last_side_age_ms
+        )
+        sell_fresh = (
+            int(flow["sell_prints_2m"]) >= minimum_side_prints_2m
+            and int(flow["sell_prints_10m"]) >= minimum_side_prints_10m
+            and now_ms - int(flow["last_sell_receive_ms"]) <= maximum_last_side_age_ms
+        )
+        common_score = (
             finite(weights.get("log_prints"), 3.0) * math.log1p(int(flow["prints"]))
-            + finite(weights.get("log_sell_prints_30s"), 4.0)
+            + finite(weights.get("log_notional"), 1.0) * math.log1p(float(flow["notional"]))
+            + finite(weights.get("log_flow_to_liquidity"), 2.0)
+              * math.log1p(recent_flow_to_liquidity * 1_000.0)
+            + finite(weights.get("mid_balance"), 0.25) * mid_balance
+            + finite(weights.get("log_spread_cents"), 0.10) * math.log1p(spread * 100.0)
+        )
+        bid_opportunity_score = common_score + (
+            finite(weights.get("log_sell_prints_30s"), 4.0)
               * math.log1p(int(flow["sell_prints_30s"]))
             + finite(weights.get("log_sell_prints_2m"), 3.0)
               * math.log1p(int(flow["sell_prints_2m"]))
@@ -555,11 +584,30 @@ def _recent_flow_snapshot(
               * math.log1p(int(flow["sell_prints_10m"]))
             + finite(weights.get("log_sell_notional_10m"), 1.0)
               * math.log1p(float(flow["sell_notional_10m"]))
-            + finite(weights.get("log_notional"), 1.0) * math.log1p(float(flow["notional"]))
-            + finite(weights.get("log_flow_to_liquidity"), 2.0)
-              * math.log1p(recent_flow_to_liquidity * 1_000.0)
-            + finite(weights.get("mid_balance"), 0.25) * mid_balance
-            + finite(weights.get("log_spread_cents"), 0.10) * math.log1p(spread * 100.0)
+        )
+        ask_opportunity_score = common_score + (
+            finite(weights.get("log_buy_prints_30s"), 4.0)
+              * math.log1p(int(flow["buy_prints_30s"]))
+            + finite(weights.get("log_buy_prints_2m"), 3.0)
+              * math.log1p(int(flow["buy_prints_2m"]))
+            + finite(weights.get("log_buy_prints_10m"), 2.0)
+              * math.log1p(int(flow["buy_prints_10m"]))
+            + finite(weights.get("log_buy_notional_10m"), 1.0)
+              * math.log1p(float(flow["buy_notional_10m"]))
+        )
+        bilateral_score = (
+            0.5 * (bid_opportunity_score + ask_opportunity_score)
+            + (2.0 if buy_fresh and sell_fresh else 0.0)
+        )
+        complete_set_cycle_score = bilateral_score + math.log1p(spread * 100.0)
+        reward_capture_score = 0.0
+        score = max(bid_opportunity_score, ask_opportunity_score, bilateral_score,
+                    complete_set_cycle_score)
+        side_mode = (
+            "BILATERAL" if buy_fresh and sell_fresh
+            else "INVENTORY_BACKED_ASK" if buy_fresh
+            else "COLLATERAL_BACKED_BID" if sell_fresh
+            else "STABLE_SPREAD_EXPLORATION"
         )
         candidates.append({
             "condition_id": condition_id,
@@ -581,18 +629,38 @@ def _recent_flow_snapshot(
             "total_daily_rate": 0.0,
             "reward_intensity": 0.0,
             "selection_score": score,
+            "bid_opportunity_score": bid_opportunity_score,
+            "ask_opportunity_score": ask_opportunity_score,
+            "bilateral_market_making_score": bilateral_score,
+            "complete_set_cycle_score": complete_set_cycle_score,
+            "reward_capture_score": reward_capture_score,
+            "side_mode": side_mode,
             "recent_prints": int(flow["prints"]),
             "recent_unique_transactions": len(flow["transactions"]),
             "recent_share_volume": float(flow["shares"]),
             "recent_notional_usd": float(flow["notional"]),
             "recent_flow_to_liquidity": recent_flow_to_liquidity,
             "recent_last_trade_age_ms": now_ms - int(flow["last_receive_ms"]),
+            "recent_buy_prints_5s": int(flow["buy_prints_5s"]),
+            "recent_buy_prints_30s": int(flow["buy_prints_30s"]),
+            "recent_buy_prints_2m": int(flow["buy_prints_2m"]),
+            "recent_buy_prints_10m": int(flow["buy_prints_10m"]),
+            "recent_buy_share_volume_10m": float(flow["buy_shares_10m"]),
+            "recent_buy_notional_usd_10m": float(flow["buy_notional_10m"]),
+            "recent_last_buy_age_ms": (
+                now_ms - int(flow["last_buy_receive_ms"])
+                if int(flow["last_buy_receive_ms"]) > 0 else -1
+            ),
+            "recent_sell_prints_5s": int(flow["sell_prints_5s"]),
             "recent_sell_prints_30s": int(flow["sell_prints_30s"]),
             "recent_sell_prints_2m": int(flow["sell_prints_2m"]),
             "recent_sell_prints_10m": int(flow["sell_prints_10m"]),
             "recent_sell_share_volume_10m": float(flow["sell_shares_10m"]),
             "recent_sell_notional_usd_10m": float(flow["sell_notional_10m"]),
-            "recent_last_sell_age_ms": now_ms - int(flow["last_sell_receive_ms"]),
+            "recent_last_sell_age_ms": (
+                now_ms - int(flow["last_sell_receive_ms"])
+                if int(flow["last_sell_receive_ms"]) > 0 else -1
+            ),
         })
     candidates.sort(key=lambda row: (
         -finite(row.get("selection_score")),
@@ -620,7 +688,7 @@ def _recent_flow_snapshot(
         "real_order_submission": False,
         "model_sha": model_sha,
         "source": "adaptive_universe_recent_flow",
-        "selection_mode": "RECENT_EXECUTABLE_SELL_FLOW",
+        "selection_mode": "BILATERAL_AGGRESSOR_FLOW",
         "degraded": False,
         "reward_data_available": False,
         "reward_pool_count": 0,
@@ -631,10 +699,10 @@ def _recent_flow_snapshot(
         "universe_membership_sha256": str(universe.get("membership_sha256") or ""),
         "recent_flow_lookback_ms": lookback_ms,
         "recent_flow_latest_receive_ms": latest_receive_ms,
-        "minimum_sell_prints_2m": minimum_sell_prints_2m,
-        "maximum_last_sell_age_ms": maximum_last_sell_age_ms,
+        "minimum_side_prints_2m": minimum_side_prints_2m,
+        "maximum_last_side_age_ms": maximum_last_side_age_ms,
         "markets": selected,
-        "note": "PAPER BUY-maker selection requires fresh causal aggressive SELL flow that can reach resting bids; reward assumptions are zero.",
+        "note": "PAPER maker ranks bid and inventory-backed ask opportunity separately from causal BUY/SELL aggressor flow; quiet flow falls back to bounded spread exploration and rewards remain zero unless verified.",
     }
 
 
@@ -1017,11 +1085,7 @@ def selector_status(
         candidate.get("source") == "adaptive_universe_recent_flow"
         and candidate.get("degraded") is not True
     )
-    candidate_rotation_suppressed = (
-        snapshot.get("source") == "adaptive_universe_recent_flow"
-        and snapshot.get("degraded") is not True
-        and not candidate_flow_eligible
-    )
+    candidate_rotation_suppressed = False
     candidate_last_sell_ages = [
         max(0.0, finite(row.get("recent_last_sell_age_ms")) / 1_000.0)
         for row in candidate_markets
@@ -1036,7 +1100,7 @@ def selector_status(
         "model_sha": snapshot.get("model_sha"),
         "state": (
             "OPERATIONAL_FALLBACK" if candidate.get("degraded")
-            else "OPERATIONAL_RECENT_FLOW"
+            else "OPERATIONAL_BILATERAL_FLOW"
             if candidate.get("source") == "adaptive_universe_recent_flow"
             else "OPERATIONAL_REWARDED"
         ),
@@ -1059,6 +1123,30 @@ def selector_status(
         "candidate_degraded": candidate.get("degraded") is True,
         "candidate_selected_count": candidate.get("selected_count", 0),
         "candidate_fresh_flow_eligible": candidate_flow_eligible,
+        "candidate_selected_bilateral": sum(
+            1 for row in candidate_markets
+            if isinstance(row, dict) and row.get("side_mode") == "BILATERAL"
+        ),
+        "candidate_selected_inventory_backed_ask": sum(
+            1 for row in candidate_markets
+            if isinstance(row, dict) and row.get("side_mode") == "INVENTORY_BACKED_ASK"
+        ),
+        "candidate_selected_collateral_backed_bid": sum(
+            1 for row in candidate_markets
+            if isinstance(row, dict) and row.get("side_mode") == "COLLATERAL_BACKED_BID"
+        ),
+        "candidate_selected_stable_spread_exploration": sum(
+            1 for row in candidate_markets
+            if isinstance(row, dict) and row.get("side_mode") == "STABLE_SPREAD_EXPLORATION"
+        ),
+        "candidate_selected_with_buy_flow_30s": sum(
+            1 for row in candidate_markets
+            if isinstance(row, dict) and int(row.get("recent_buy_prints_30s") or 0) > 0
+        ),
+        "candidate_selected_with_buy_flow_2m": sum(
+            1 for row in candidate_markets
+            if isinstance(row, dict) and int(row.get("recent_buy_prints_2m") or 0) > 0
+        ),
         "candidate_selected_with_sell_flow_30s": sum(
             1 for row in candidate_markets
             if isinstance(row, dict) and int(row.get("recent_sell_prints_30s") or 0) > 0

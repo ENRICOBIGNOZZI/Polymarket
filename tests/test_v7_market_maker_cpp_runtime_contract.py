@@ -107,6 +107,17 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, self.source)
 
+    def test_declared_inventory_factory_has_runtime_callsite_and_canonical_evidence(self) -> None:
+        inventory = self.policy["inventory"]
+        self.assertTrue(inventory["auto_split_merge_accounting"])
+        self.assertTrue(inventory["inventory_factory_enabled"])
+        self.assertIn("policy_.split_complete_sets(", self.source)
+        self.assertIn("policy_.set_complete_set_reserve_floor", self.source)
+        self.assertIn('write_inventory_event(record, "INVENTORY_SPLIT")', self.source)
+        self.assertIn('write_inventory_event(record, "INVENTORY_MERGE")', self.source)
+        self.assertIn("balanced_complete_set_microunits", self.source)
+        self.assertIn("yes_reserved_sell_microunits", self.source)
+
     def test_spool_remains_transport_and_python_stays_canonical_writer(self) -> None:
         self.assertIn('run_root_ / "ledger" / "spool"', self.source)
         self.assertNotIn('run_root_ / "ledger" / "execution.jsonl"', self.source)

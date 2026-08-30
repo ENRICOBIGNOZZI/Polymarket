@@ -96,7 +96,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             )
         primary.assert_not_called()
         self.assertEqual(snapshot["source"], "adaptive_universe_recent_flow")
-        self.assertEqual(rewards.selector_status(snapshot)["state"], "OPERATIONAL_RECENT_FLOW")
+        self.assertEqual(rewards.selector_status(snapshot)["state"], "OPERATIONAL_BILATERAL_FLOW")
 
     def test_recent_flow_filters_expiry_extremes_and_duplicate_events(self) -> None:
         from tempfile import TemporaryDirectory
@@ -148,7 +148,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             )
         self.assertEqual([row["market_id"] for row in snapshot["markets"]], ["active", "second"])
         self.assertEqual(snapshot["markets"][0]["recent_prints"], 5)
-        self.assertEqual(snapshot["selection_mode"], "RECENT_EXECUTABLE_SELL_FLOW")
+        self.assertEqual(snapshot["selection_mode"], "BILATERAL_AGGRESSOR_FLOW")
         self.assertEqual(snapshot["markets"][0]["recent_sell_prints_10m"], 5)
         self.assertFalse(snapshot["reward_data_available"])
 
@@ -202,7 +202,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertEqual([row["market_id"] for row in snapshot["markets"]], ["generic"])
         self.assertEqual([row["market_id"] for row in fallback["markets"]], ["generic"])
 
-    def test_buy_only_prints_cannot_qualify_buy_maker_fillability(self) -> None:
+    def test_buy_only_prints_select_inventory_backed_ask_opportunity(self) -> None:
         from tempfile import TemporaryDirectory
         now_ms = 1_000_000
         market = {
@@ -232,11 +232,15 @@ class MakerRewardSelectorTests(unittest.TestCase):
             _, selection_cfg, capacity_cfg, capacity = rewards._validated_config(
                 ROOT / "config" / "v7_professional_market_maker.json"
             )
-            with self.assertRaisesRegex(ValueError, "maker_recent_flow_insufficient_markets:0"):
-                rewards._recent_flow_snapshot(
-                    universe, tape, selection_cfg, capacity_cfg, capacity,
-                    model_sha=SHA, now_ms=now_ms,
-                )
+            snapshot = rewards._recent_flow_snapshot(
+                universe, tape, selection_cfg, capacity_cfg, capacity,
+                model_sha=SHA, now_ms=now_ms,
+            )
+        row = snapshot["markets"][0]
+        self.assertEqual(row["side_mode"], "INVENTORY_BACKED_ASK")
+        self.assertGreater(row["ask_opportunity_score"], row["bid_opportunity_score"])
+        self.assertEqual(row["recent_buy_prints_2m"], 3)
+        self.assertEqual(row["recent_sell_prints_2m"], 0)
 
     def test_recent_flow_requires_sustained_sell_flow_and_a_fresh_last_print(self) -> None:
         from tempfile import TemporaryDirectory
@@ -277,13 +281,15 @@ class MakerRewardSelectorTests(unittest.TestCase):
                 universe, tape, selection_cfg, capacity_cfg, capacity,
                 model_sha=SHA, now_ms=now_ms,
             )
-        self.assertEqual([row["market_id"] for row in snapshot["markets"]], ["fresh"])
-        self.assertEqual(snapshot["minimum_sell_prints_2m"], 2)
-        self.assertEqual(snapshot["maximum_last_sell_age_ms"], 60_000)
+        self.assertEqual([row["market_id"] for row in snapshot["markets"]], ["fresh", "stale"])
+        self.assertEqual(snapshot["minimum_side_prints_2m"], 2)
+        self.assertEqual(snapshot["maximum_last_side_age_ms"], 60_000)
         self.assertEqual(snapshot["markets"][0]["recent_sell_prints_2m"], 2)
         self.assertEqual(snapshot["markets"][0]["recent_last_sell_age_ms"], 1_000)
+        self.assertEqual(snapshot["markets"][0]["side_mode"], "COLLATERAL_BACKED_BID")
+        self.assertEqual(snapshot["markets"][1]["side_mode"], "STABLE_SPREAD_EXPLORATION")
 
-    def test_selector_status_suppresses_fallback_rotation_and_exports_flow_quality(self) -> None:
+    def test_selector_status_allows_operational_fallback_rotation(self) -> None:
         runtime = {
             "model_sha": SHA, "timestamp_ms": 1_000,
             "source": "adaptive_universe_recent_flow", "degraded": False,
@@ -301,8 +307,8 @@ class MakerRewardSelectorTests(unittest.TestCase):
         status = rewards.selector_status(
             runtime, candidate_snapshot=candidate, runtime_selection_pinned=True
         )
-        self.assertFalse(status["candidate_rotation_pending"])
-        self.assertTrue(status["candidate_rotation_suppressed_no_fresh_flow"])
+        self.assertTrue(status["candidate_rotation_pending"])
+        self.assertFalse(status["candidate_rotation_suppressed_no_fresh_flow"])
         self.assertFalse(status["candidate_fresh_flow_eligible"])
         self.assertEqual(status["candidate_max_last_sell_age_seconds"], -1.0)
 

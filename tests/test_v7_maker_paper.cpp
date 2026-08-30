@@ -251,6 +251,45 @@ void test_inventory_snapshot_reservations_have_global_yes_minus_no_sign() {
     assert(inventory.residual_shares() < -0.99);
 }
 
+void test_inventory_factory_floor_survives_cycle_and_drain_releases_it() {
+    pm::v7::maker::MakerPaperMarketEngine engine(kMarket, kYes, kNo);
+    pm::v7::CapitalLimits limits;
+    limits.sleeve_budget_microdollars = 10'000'000;
+    limits.max_total_exposure_microdollars = 10'000'000;
+    limits.max_market_exposure_microdollars = 10'000'000;
+    limits.max_single_order_microdollars = 10'000'000;
+    pm::v7::SleeveCapitalAccount capital(limits);
+    assert(engine.set_complete_set_reserve_floor(2'000'000));
+    assert(engine.split_complete_sets(capital, 2'000'000, 900'000'000LL).applied);
+
+    assert(engine.apply_intent(
+        quote(20, kYes, pm::v7::Side::Buy, 48, 1'000'000,
+              1'000'000'000LL, 10'000'000'000LL), 0, 100).applied);
+    assert(engine.on_public_trade(trade(
+        301, kYes, pm::v7::Side::Sell, 48, 1'000'000,
+        10'100'000'000LL, 1'100'000'000LL)).applied);
+    assert(engine.apply_intent(
+        quote(21, kNo, pm::v7::Side::Buy, 49, 1'000'000,
+              1'200'000'000LL, 10'200'000'000LL), 0, 100).applied);
+    const auto cycle = engine.on_public_trade(trade(
+        302, kNo, pm::v7::Side::Sell, 49, 1'000'000,
+        10'300'000'000LL, 1'300'000'000LL));
+    const auto* merged = find_event(
+        cycle, pm::v7::maker::PaperMakerEventKind::InventoryMerge);
+    assert(merged != nullptr && merged->operational_fill_microunits == 1'000'000);
+    assert(engine.inventory().yes_microunits == 2'000'000);
+    assert(engine.inventory().no_microunits == 2'000'000);
+
+    assert(engine.set_complete_set_reserve_floor(0));
+    const auto drained = engine.advance_time(1'400'000'000LL);
+    const auto* drain_merge = find_event(
+        drained, pm::v7::maker::PaperMakerEventKind::InventoryMerge);
+    assert(drain_merge != nullptr
+           && drain_merge->operational_fill_microunits == 2'000'000);
+    assert(engine.inventory().yes_microunits == 0);
+    assert(engine.inventory().no_microunits == 0);
+}
+
 } // namespace
 
 int main() {
@@ -262,5 +301,6 @@ int main() {
     test_market_kill_cancels_both_yes_and_no_quotes();
     test_uncovered_sell_is_rejected();
     test_inventory_snapshot_reservations_have_global_yes_minus_no_sign();
+    test_inventory_factory_floor_survives_cycle_and_drain_releases_it();
     return 0;
 }

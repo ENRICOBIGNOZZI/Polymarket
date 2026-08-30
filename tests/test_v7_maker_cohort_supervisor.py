@@ -186,7 +186,7 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             supervisor.last_rotation_ms = 10_000
             self.assertEqual(supervisor.rotation_cooldown_remaining_seconds(70_000), 240.0)
 
-    def test_no_fresh_flow_pauses_quotes_without_rotating_or_losing_owner(self) -> None:
+    def test_quiet_flow_fallback_rotates_without_global_pause(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             selection_path = root / "micro_maker/reward_selection.json"
@@ -205,11 +205,9 @@ class MakerCohortSupervisorTests(unittest.TestCase):
 
             self.assertTrue(fresh_flow_eligible(current))
             self.assertFalse(fresh_flow_eligible(fallback))
-            self.assertIsNone(supervisor.pending_candidate())
-            self.assertTrue(supervisor.sync_no_fresh_flow_pause())
-            self.assertEqual(read_json(supervisor.drain)["reason"], "no_fresh_aggressive_flow")
-            self.assertEqual(read_json(supervisor.status)["state"], "PAUSED_NO_FRESH_FLOW")
-            self.assertTrue(read_json(supervisor.status)["fresh_flow_pause_active"])
+            self.assertIsNotNone(supervisor.pending_candidate())
+            self.assertFalse(supervisor.sync_no_fresh_flow_pause())
+            self.assertFalse(supervisor.drain.exists())
             self.assertEqual(
                 membership_sha256(read_json(selection_path)), membership_sha256(current)
             )
@@ -221,7 +219,7 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             })
             atomic_json(candidate_path, different_fresh)
             self.assertFalse(supervisor.sync_no_fresh_flow_pause())
-            self.assertTrue(supervisor.drain.exists())
+            self.assertFalse(supervisor.drain.exists())
 
             resumed = json.loads(json.dumps(current))
             resumed["timestamp_ms"] = 3_000

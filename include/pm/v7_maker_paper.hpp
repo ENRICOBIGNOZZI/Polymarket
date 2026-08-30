@@ -19,9 +19,12 @@ enum class PaperMakerEventKind : std::uint8_t {
     CancelRequested = 2,
     Cancelled = 3,
     Fill = 4,
-    FinalMerge = 5,
+    InventoryMerge = 5,
+    FinalMerge = InventoryMerge,
     Rejected = 6,
     InventorySplit = 7,
+    InventorySplitRequested = 8,
+    InventorySplitRejected = 9,
 };
 
 struct PaperMakerPolicy {
@@ -53,10 +56,20 @@ struct PaperMakerEvent {
     std::int64_t optimistic_fill_microunits = 0;
     QueueEnvelope queue{};
     double realized_pnl = 0.0;
+    std::int64_t yes_before_microunits = 0;
+    std::int64_t no_before_microunits = 0;
+    std::int64_t yes_after_microunits = 0;
+    std::int64_t no_after_microunits = 0;
+    std::int64_t collateral_before_microdollars = 0;
+    std::int64_t collateral_after_microdollars = 0;
+    double yes_cost_before = 0.0;
+    double no_cost_before = 0.0;
+    double yes_cost_after = 0.0;
+    double no_cost_after = 0.0;
 };
 
 struct PaperMakerResult {
-    std::array<PaperMakerEvent, kMaxPaperOrdersPerMarket + 2> events{};
+    std::array<PaperMakerEvent, kMaxPaperOrdersPerMarket + 4> events{};
     std::size_t event_count = 0;
     std::uint8_t applied = 0;
     std::uint8_t duplicate_trade = 0;
@@ -67,6 +80,16 @@ struct PaperMakerResult {
 struct PaperMakerInventory {
     std::int64_t yes_microunits = 0;
     std::int64_t no_microunits = 0;
+    std::int64_t yes_reserved_sell_microunits = 0;
+    std::int64_t no_reserved_sell_microunits = 0;
+    std::int64_t yes_free_microunits = 0;
+    std::int64_t no_free_microunits = 0;
+    std::int64_t balanced_complete_set_microunits = 0;
+    std::int64_t directional_microunits = 0;
+    std::int64_t complete_set_reserve_floor_microunits = 0;
+    std::int64_t collateral_committed_microdollars = 0;
+    std::int64_t pending_split_microunits = 0;
+    std::int64_t pending_merge_microunits = 0;
     double yes_cost = 0.0;
     double no_cost = 0.0;
     double realized_trading_pnl = 0.0;
@@ -93,6 +116,11 @@ public:
         SleeveCapitalAccount& capital,
         std::int64_t microunits,
         std::int64_t timestamp_ns) noexcept;
+
+    // Preserve this much balanced inventory for inventory-backed asks. Only
+    // complete sets acquired above the floor may be auto-merged after fills.
+    [[nodiscard]] bool set_complete_set_reserve_floor(
+        std::int64_t microunits) noexcept;
 
     [[nodiscard]] PaperMakerResult apply_intent(
         const StrategyIntent& intent,
@@ -129,6 +157,7 @@ private:
     [[nodiscard]] Slot* active_slot(std::uint64_t instrument_handle, Side side) noexcept;
     [[nodiscard]] const Slot* active_slot(std::uint64_t instrument_handle, Side side) const noexcept;
     [[nodiscard]] std::int64_t available_to_sell(std::uint64_t instrument_handle) const noexcept;
+    void refresh_inventory_derived() noexcept;
     [[nodiscard]] QueueEnvelope make_queue(std::int64_t visible) const noexcept;
     void emit(PaperMakerResult& result, PaperMakerEvent event) const noexcept;
     void request_cancel(Slot& slot, std::int64_t now, PaperMakerResult& result) noexcept;

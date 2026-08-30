@@ -25,6 +25,13 @@ EVENT_TYPES = frozenset(
         "POSITION_MARK",
         "EXIT",
         "FINAL",
+        "INVENTORY_SPLIT_REQUESTED",
+        "INVENTORY_SPLIT",
+        "INVENTORY_SPLIT_REJECTED",
+        "INVENTORY_MERGE",
+        "MODEL_RELOAD",
+        "CAPITAL_RESERVE",
+        "CAPITAL_RELEASE",
     }
 )
 MARKOUT_HORIZONS = frozenset({"1s", "10s", "45s", "60s", "300s"})
@@ -295,6 +302,16 @@ class LedgerEvent:
                 raise LedgerContractError("position_mark:missing_causal_book")
         if self.event_type == "FINAL" and self.final_pnl is None:
             raise LedgerContractError("final:missing_pnl")
+        if self.event_type in {
+            "INVENTORY_SPLIT_REQUESTED", "INVENTORY_SPLIT",
+            "INVENTORY_SPLIT_REJECTED", "INVENTORY_MERGE",
+        }:
+            if not self.market_id or not self.position_id:
+                raise LedgerContractError("inventory_transform:missing_market_or_position")
+            if self.intended_size is None or self.intended_size <= 0:
+                raise LedgerContractError("inventory_transform:missing_positive_size")
+        if self.event_type == "INVENTORY_SPLIT" and abs(self.realized_cashflow or 0.0) > 1e-12:
+            raise LedgerContractError("inventory_split:cannot_create_pnl")
 
         if not isinstance(self.markouts, dict):
             raise LedgerContractError("markouts:not_object")

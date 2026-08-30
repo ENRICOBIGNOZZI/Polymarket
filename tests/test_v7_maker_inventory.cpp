@@ -42,13 +42,22 @@ void test_split_is_explicit_balanced_and_auditable() {
     const auto split = engine.split_complete_sets(capital, 2'000'000, 1'000'000'000LL);
     assert(split.applied);
     assert(!split.rejected);
-    assert(split.event_count == 1);
-    assert(split.events[0].kind == pm::v7::maker::PaperMakerEventKind::InventorySplit);
-    assert(split.events[0].operational_fill_microunits == 2'000'000);
+    assert(split.event_count == 2);
+    assert(split.events[0].kind
+           == pm::v7::maker::PaperMakerEventKind::InventorySplitRequested);
+    assert(split.events[1].kind == pm::v7::maker::PaperMakerEventKind::InventorySplit);
+    assert(split.events[1].operational_fill_microunits == 2'000'000);
+    assert(split.events[1].yes_before_microunits == 0);
+    assert(split.events[1].yes_after_microunits == 2'000'000);
+    assert(split.events[1].collateral_before_microdollars == 0);
+    assert(split.events[1].collateral_after_microdollars == 2'000'000);
 
     const auto& inventory = engine.inventory();
     assert(inventory.yes_microunits == 2'000'000);
     assert(inventory.no_microunits == 2'000'000);
+    assert(inventory.yes_free_microunits == 2'000'000);
+    assert(inventory.no_free_microunits == 2'000'000);
+    assert(inventory.balanced_complete_set_microunits == 2'000'000);
     assert(std::abs(inventory.yes_cost - 1.0) < 1e-12);
     assert(std::abs(inventory.no_cost - 1.0) < 1e-12);
     assert(capital.inventory_committed_for_market(kMarket) == 2'000'000);
@@ -63,6 +72,8 @@ void test_split_inventory_can_back_post_only_ask() {
     assert(result.applied);
     assert(!result.rejected);
     assert(engine.active_order_count() == 1);
+    assert(engine.inventory().yes_reserved_sell_microunits == 1'000'000);
+    assert(engine.inventory().yes_free_microunits == 0);
 }
 
 void test_split_rejects_invalid_quantity_without_mutating_inventory() {
@@ -75,6 +86,9 @@ void test_split_rejects_invalid_quantity_without_mutating_inventory() {
     assert(engine.inventory().yes_cost == 0.0);
     assert(engine.inventory().no_cost == 0.0);
     assert(capital.snapshot().total_exposure_microdollars == 0);
+    assert(result.event_count == 2);
+    assert(result.events[1].kind
+           == pm::v7::maker::PaperMakerEventKind::InventorySplitRejected);
 }
 
 void test_split_fails_closed_when_common_capital_denies() {
