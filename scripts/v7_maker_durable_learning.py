@@ -650,7 +650,9 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         if str(row.get("order_id") or "") in compatible_order_ids
     ]
     compatible_adverse_models = adverse_markout_models(compatible_risk_values)
-    examples = order_examples(compatible)
+    # Order compatibility is established at ORDER_SUBMITTED. Lifecycle child
+    # rows inherit that identity through order_id and need not repeat hashes.
+    examples = order_examples(compatible_risk_values)
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in examples:
         grouped[row["group"]].append(row)
@@ -701,8 +703,13 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         }
     timestamps = [int(row.get("recorded_ts_ms") or 0) for row in compatible]
     generated = time.time_ns() // 1_000_000
+    # Lifecycle children (most importantly MARKOUT) intentionally do not have
+    # to duplicate policy/config metadata.  Compatibility belongs to the
+    # submitted order: after selecting current-identity order ids, join their
+    # causally linked rows back in.  Filtering MARKOUT row-by-row here silently
+    # discarded every placement label emitted without duplicated hashes.
     placement_policy = learned_placement_policy(
-        examples, adverse_placement_examples(compatible))
+        examples, adverse_placement_examples(compatible_risk_values))
     # Sample size is diagnostic only.  This live accumulator has no untouched
     # chronological OOS window, so it must never confer economic maturity or
     # silently perform the governed challenger -> champion promotion.

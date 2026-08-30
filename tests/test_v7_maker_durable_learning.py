@@ -192,6 +192,40 @@ class DurableLearningTests(unittest.TestCase):
         self.assertFalse(model["groups"]["GLOBAL"]["mature"])
         self.assertGreater(model["risk_only_cross_policy_records"], 0)
 
+    def test_placement_markout_inherits_compatibility_from_submitted_order(self) -> None:
+        order = record(
+            "ORDER_SUBMITTED", "order", order_id="o1", event_id="event-1",
+            intended_size=5.0, intended_action="JOIN", side="SELL",
+        )
+        order["metadata"]["placement_features"] = {
+            "spread_ticks": 2.0,
+            "imbalance": 0.3,
+            "ofi": -0.2,
+            "ew_vol_ticks": 0.4,
+            "trade_intensity": 0.5,
+            "cancel_intensity": 0.6,
+            "short_return_ticks": 0.7,
+            "inventory_fraction": -0.8,
+            "local_latency_ms": 0.9,
+        }
+        fill = record("FILL", "fill", order_id="o1", filled_size=5.0)
+        markout = record(
+            "MARKOUT", "markout", order_id="o1", markouts={"45s": -0.10})
+        # Runtime lifecycle rows may omit the policy/config metadata.  Their
+        # identity is inherited exclusively through the submitted order id.
+        fill["metadata"] = {}
+        markout["metadata"] = {}
+
+        model = fit_model(
+            [order, fill, markout], model_sha=SHA, policy_hash="policy",
+            config_hash="config", cold_fill_prior=0.02,
+        )
+
+        self.assertEqual(model["groups"]["GLOBAL"]["filled_orders"], 1)
+        self.assertEqual(model["learned_placement_policy"]["markout_examples"], 1)
+        self.assertEqual(
+            model["learned_placement_policy"]["state"], "EVIDENCE_ACCUMULATING")
+
 
 if __name__ == "__main__":
     unittest.main()
