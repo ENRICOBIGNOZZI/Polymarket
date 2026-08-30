@@ -489,6 +489,36 @@ raise SystemExit(0 if ok else 1)
 PY
 }
 
+fee_registry_ready() {
+  python3 - "$CONTROL/fee_reward_registry.json" "$SHA" <<'PY' >/dev/null 2>&1
+import json,sys,time
+from pathlib import Path
+path=Path(sys.argv[1])
+if not path.is_file(): raise SystemExit(1)
+try: obj=json.loads(path.read_text(encoding="utf-8"))
+except Exception: raise SystemExit(1)
+now=int(time.time()*1000)
+markets=obj.get("markets")
+rows=markets if isinstance(markets,list) else []
+fresh_verified=any(
+    isinstance(row,dict) and isinstance(row.get("fee"),dict)
+    and row["fee"].get("verified") is True
+    and int(row["fee"].get("observed_at_ms") or 0) <= now <= int(row["fee"].get("expires_at_ms") or 0)
+    for row in rows
+)
+ok=(obj.get("schema")=="polymarket_v7_fee_reward_registry_v1"
+    and obj.get("paper_only") is True and obj.get("authenticated_execution") is False
+    and obj.get("real_order_submission") is False and obj.get("execution_authority") is False
+    and obj.get("model_sha")==sys.argv[2]
+    and obj.get("unknown_fee_policy")=="NON_EXECUTABLE"
+    and obj.get("unknown_reward_policy")=="ZERO_EXPECTED_VALUE"
+    and obj.get("automatic_promotion") is False
+    and len(rows)>0
+    and int(obj.get("executable_market_count") or 0)>0 and fresh_verified)
+raise SystemExit(0 if ok else 1)
+PY
+}
+
 "$RECORDER" \
   --config "$CONFIG" \
   --run-dir "$RUN_ROOT" \
@@ -599,7 +629,7 @@ pids+=("$!")
 # then restart all three consumers together. No inventory or PnL state is ever
 # discarded merely to chase a changing public-flow universe.
 (
-  while [[ ! -e "$KILL" ]] && ! maker_selection_ready; do sleep 1; done
+  while [[ ! -e "$KILL" ]] && { ! maker_selection_ready || ! fee_registry_ready; }; do sleep 1; done
   [[ ! -e "$KILL" ]] || exit 0
   exec python3 scripts/v7_maker_cohort_supervisor.py \
     --repository-root "$ROOT" \
@@ -623,7 +653,7 @@ pids+=("$!")
 
 (
   while [[ ! -e "$KILL" ]]; do
-    if ! maker_selection_ready; then
+    if ! maker_selection_ready || ! fee_registry_ready; then
       sleep 1
       continue
     fi
@@ -631,6 +661,7 @@ pids+=("$!")
       --state "$RUN_ROOT/micro_maker/state.json" \
       --config "$ALLOC/micro_maker.json" \
       --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
+      --fee-registry "$CONTROL/fee_reward_registry.json" \
       --output "$RUN_ROOT/micro_maker/status.json" \
       --freeze-path "$MAKER_FREEZE" \
       >> "$RUN_ROOT/micro_maker/status.log" 2>&1; then

@@ -152,6 +152,7 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("POLYMARKET_MAKER_CUTOVER_FINALIZER", text)
         self.assertIn("POLYMARKET_MAKER_STATUS_REFRESHER", text)
         self.assertIn("control/maker_cutover_mark.json", text)
+        self.assertIn('--fee-registry "$(production_run_root)/control/fee_reward_registry.json"', text)
         self.assertIn("--cutover-zero-recovery", text)
         self.assertIn("$candidate/scripts/v7_market_maker_status.py", text)
         self.assertIn("$candidate/scripts/v7_finalize_maker_cutover.py", text)

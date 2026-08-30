@@ -68,6 +68,8 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertIn('--lookback-seconds "$MAKER_FLOW_LOOKBACK_SECONDS"', source)
         self.assertIn("v7_market_maker_model.py", source)
         self.assertIn("v7_market_maker_status.py", source)
+        self.assertIn('--fee-registry "$CONTROL/fee_reward_registry.json"', source)
+        self.assertIn("fee_registry_ready", source)
         self.assertIn("v7_ledger_spool.py", source)
         self.assertIn("--loop --interval 0.1", source)
         self.assertIn('export PM_V7_MODEL_SHA="$SHA"', source)

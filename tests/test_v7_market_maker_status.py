@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_market_common import FeeDetails
-from v7_market_maker_status import assess, executable_sell_mark, sync_freeze
+from v7_market_maker_status import assess, executable_sell_mark, registry_fees, sync_freeze
 
 
 class MakerStatusTests(unittest.TestCase):
@@ -63,6 +63,38 @@ class MakerStatusTests(unittest.TestCase):
             "markets": [{"market_id": "market-1", "condition_id": "cond-1"}]
         }))
         return state, cfg, selection, output
+
+    def fee_registry(self, root: Path, *, model_sha: str = "a" * 40,
+                     expires_delta_ms: int = 60_000) -> Path:
+        now_ms = time.time_ns() // 1_000_000
+        path = root / "control/fee_reward_registry.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "schema": "polymarket_v7_fee_reward_registry_v1",
+            "model_sha": model_sha,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "execution_authority": False,
+            "unknown_fee_policy": "NON_EXECUTABLE",
+            "unknown_reward_policy": "ZERO_EXPECTED_VALUE",
+            "automatic_promotion": False,
+            "markets": [{
+                "condition_id": "cond-1",
+                "token_ids": ["yes-1", "no-1"],
+                "fee": {
+                    "verified": True,
+                    "enabled": False,
+                    "rate": 0.0,
+                    "exponent": 1.0,
+                    "taker_only": True,
+                    "source": "gamma:fees_disabled",
+                    "observed_at_ms": now_ms - 1_000,
+                    "expires_at_ms": now_ms + expires_delta_ms,
+                },
+            }],
+        }))
+        return path
 
     def test_bootstrap_status_inherits_exact_identity_from_pinned_selection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -171,6 +203,51 @@ class MakerStatusTests(unittest.TestCase):
             report["new_risk_frozen"] = False
             sync_freeze(freeze, report)
             self.assertFalse(freeze.exists())
+
+    def test_exact_sha_registry_marks_verified_fee_disabled_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state, cfg, selection, output = self.fixture(root)
+            fee_registry = self.fee_registry(root)
+            book = [{
+                "asset_id": "yes-1",
+                "timestamp": str(time.time_ns() // 1_000_000),
+                "bids": [{"price": "0.50", "size": "10"}],
+            }]
+            unavailable = FeeDetails(0.0, 1.0, True, False, "unverified_fee_schedule")
+            with patch("v7_market_maker_status.request_json", return_value=book), patch(
+                "v7_market_maker_status.resolve_fee_details", return_value=unavailable
+            ) as fallback:
+                report = assess(
+                    state, cfg, output, selection_path=selection,
+                    fee_registry_path=fee_registry,
+                )
+            self.assertTrue(report["marking_complete"])
+            self.assertFalse(report["new_risk_frozen"])
+            self.assertEqual(report["positions"][0]["exit_fee_source"], "gamma:fees_disabled")
+            self.assertEqual(report["positions"][0]["exit_fee"], 0.0)
+            fallback.assert_not_called()
+
+    def test_stale_mismatched_or_unsafe_registry_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = self.fee_registry(root)
+            now_ms = time.time_ns() // 1_000_000
+            self.assertIn("cond-1", registry_fees(path, "a" * 40, now_ms=now_ms))
+
+            payload = json.loads(path.read_text())
+            payload["markets"][0]["fee"]["expires_at_ms"] = now_ms - 1
+            path.write_text(json.dumps(payload))
+            self.assertEqual(registry_fees(path, "a" * 40, now_ms=now_ms), {})
+
+            path = self.fee_registry(root, model_sha="b" * 40)
+            self.assertEqual(registry_fees(path, "a" * 40, now_ms=now_ms), {})
+
+            path = self.fee_registry(root)
+            payload = json.loads(path.read_text())
+            payload["real_order_submission"] = True
+            path.write_text(json.dumps(payload))
+            self.assertEqual(registry_fees(path, "a" * 40, now_ms=now_ms), {})
 
     def test_explicit_paper_cutover_can_terminally_write_off_unmarkable_inventory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

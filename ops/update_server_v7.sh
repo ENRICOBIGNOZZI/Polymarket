@@ -986,6 +986,7 @@ if [[ "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
       --state "$(production_run_root)/micro_maker/state.json" \
       --config "$(production_run_root)/control/allocations/micro_maker.json" \
       --selection "$(production_run_root)/micro_maker/reward_selection.json" \
+      --fee-registry "$(production_run_root)/control/fee_reward_registry.json" \
       --output "$(production_run_root)/control/maker_cutover_mark.json" \
       --cutover-zero-recovery \
       >/dev/null

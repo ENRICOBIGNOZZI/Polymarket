@@ -18,7 +18,15 @@ from pathlib import Path
 import time
 from typing import Any
 
-from v7_market_common import finite, request_json, resolve_fee_details, fee_per_share
+from v7_market_common import FeeDetails, finite, request_json, resolve_fee_details, fee_per_share
+
+
+TRUSTED_REGISTRY_FEE_SOURCES = {
+    "gamma:feeSchedule",
+    "gamma:fees_disabled",
+    "clob:fd",
+    "clob:fees_disabled",
+}
 
 
 def atomic_json(path: Path, value: Any) -> None:
@@ -73,6 +81,75 @@ def selection_conditions(path: Path | None) -> dict[str, str]:
     return out
 
 
+def registry_fees(
+    path: Path | None,
+    expected_model_sha: str,
+    *,
+    now_ms: int | None = None,
+) -> dict[str, tuple[FeeDetails, frozenset[str]]]:
+    """Return only fresh, exact-SHA and explicitly verified fee evidence.
+
+    A malformed, stale, unsafe or ambiguous registry is equivalent to no
+    registry.  The caller may still query the authoritative CLOB descriptor,
+    but never invents a zero-fee schedule.
+    """
+    if path is None or not expected_model_sha:
+        return {}
+    root = read_json(path)
+    if (
+        root.get("schema") != "polymarket_v7_fee_reward_registry_v1"
+        or root.get("model_sha") != expected_model_sha
+        or root.get("paper_only") is not True
+        or root.get("authenticated_execution") is not False
+        or root.get("real_order_submission") is not False
+        or root.get("execution_authority") is not False
+        or root.get("unknown_fee_policy") != "NON_EXECUTABLE"
+        or root.get("unknown_reward_policy") != "ZERO_EXPECTED_VALUE"
+        or root.get("automatic_promotion") is not False
+    ):
+        return {}
+    now = time.time_ns() // 1_000_000 if now_ms is None else int(now_ms)
+    result: dict[str, tuple[FeeDetails, frozenset[str]]] = {}
+    ambiguous: set[str] = set()
+    rows = root.get("markets") if isinstance(root.get("markets"), list) else []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        condition_id = str(row.get("condition_id") or "")
+        fee = row.get("fee") if isinstance(row.get("fee"), dict) else {}
+        source = str(fee.get("source") or "")
+        rate = finite(fee.get("rate"), math.nan)
+        exponent = finite(fee.get("exponent"), math.nan)
+        observed_at_ms = int(finite(fee.get("observed_at_ms"), 0.0))
+        expires_at_ms = int(finite(fee.get("expires_at_ms"), 0.0))
+        enabled = fee.get("enabled")
+        taker_only = fee.get("taker_only")
+        valid = (
+            bool(condition_id)
+            and fee.get("verified") is True
+            and source in TRUSTED_REGISTRY_FEE_SOURCES
+            and math.isfinite(rate) and rate >= 0.0
+            and math.isfinite(exponent) and exponent >= 0.0
+            and isinstance(taker_only, bool)
+            and isinstance(enabled, bool)
+            and ((enabled and rate > 0.0) or (not enabled and rate == 0.0))
+            and 0 < observed_at_ms <= now <= expires_at_ms
+        )
+        if not valid:
+            continue
+        if condition_id in result:
+            ambiguous.add(condition_id)
+            continue
+        tokens = row.get("token_ids") if isinstance(row.get("token_ids"), list) else []
+        result[condition_id] = (
+            FeeDetails(rate, exponent, taker_only, True, source),
+            frozenset(str(token) for token in tokens if str(token)),
+        )
+    for condition_id in ambiguous:
+        result.pop(condition_id, None)
+    return result
+
+
 def parse_bids(raw: dict[str, Any]) -> list[tuple[float, float]]:
     out = []
     for row in raw.get("bids", []) if isinstance(raw.get("bids"), list) else []:
@@ -125,6 +202,7 @@ def assess(
     output: Path,
     *,
     selection_path: Path | None = None,
+    fee_registry_path: Path | None = None,
     cutover_zero_recovery: bool = False,
 ) -> dict[str, Any]:
     state = read_json(state_path)
@@ -161,6 +239,9 @@ def assess(
         return report
     if state.get("paper_only") is not True or state.get("authenticated_execution") is not False:
         raise ValueError("unsafe_maker_state_contract")
+
+    expected_model_sha = str(state.get("model_sha") or selection.get("model_sha") or "")
+    registered_fees = registry_fees(fee_registry_path, expected_model_sha)
 
     inventory = state.get("inventory") if isinstance(state.get("inventory"), dict) else {}
     conditions = selection_conditions(selection_path)
@@ -255,7 +336,11 @@ def assess(
                 route_failures.append("nonpositive_liquidation_value")
                 continue
             execution_token = route["execution_token"]
-            fees = resolve_fee_details({}, clob, condition_id, execution_token)
+            registered = registered_fees.get(condition_id)
+            if registered is not None and execution_token in registered[1]:
+                fees = registered[0]
+            else:
+                fees = resolve_fee_details({}, clob, condition_id, execution_token)
             if not fees.verified:
                 route_failures.append("unverified_exit_fee_schedule")
                 continue
@@ -400,6 +485,7 @@ def main() -> int:
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--selection", type=Path)
+    parser.add_argument("--fee-registry", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--freeze-path", type=Path)
     parser.add_argument("--cutover-zero-recovery", action="store_true")
@@ -409,6 +495,7 @@ def main() -> int:
         args.config,
         args.output,
         selection_path=args.selection,
+        fee_registry_path=args.fee_registry,
         cutover_zero_recovery=args.cutover_zero_recovery,
     )
     sync_freeze(args.freeze_path, report)
