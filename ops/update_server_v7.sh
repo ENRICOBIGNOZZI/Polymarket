@@ -248,11 +248,15 @@ PY
 }
 
 cutover_positions_drained(){
-  local run_root="$(production_run_root)"
-  python3 - "$run_root" "$LOCK_NONCE" <<'PY'
+  local run_root="$(production_run_root)" runtime_pid="" runtime_alive=0
+  runtime_pid="$(production_pid)"
+  if [[ "$runtime_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$runtime_pid" 2>/dev/null; then
+    runtime_alive=1
+  fi
+  python3 - "$run_root" "$LOCK_NONCE" "$runtime_alive" <<'PY'
 import json, sys
 from pathlib import Path
-root=Path(sys.argv[1]); nonce=sys.argv[2]
+root=Path(sys.argv[1]); nonce=sys.argv[2]; runtime_alive=sys.argv[3] == '1'
 def read(rel):
     try:
         value=json.loads((root/rel).read_text(encoding='utf-8'))
@@ -298,16 +302,20 @@ assert maker_status.get('killed') is not True
 # Every supported incumbent is drain-aware. External and micro must already be
 # flat; Maker only needs to prove entry is frozen because its durable inventory
 # is terminalized immediately afterward by target-SHA code.
-assert external_status.get('drain_requested') is True
-assert external_status.get('drain_complete') is True
-assert external_status.get('order_submission_enabled') is False
-assert external_status.get('blocker') == 'CUTOVER_DRAIN'
-assert micro_status.get('drain_requested') is True
-assert micro_status.get('drain_complete') is True
-assert micro_status.get('new_risk_frozen') is True
-assert maker_status.get('drain_requested') is True
-assert maker_status.get('new_risk_frozen') is True
-assert maker_status.get('drain_complete') is (maker_open == 0)
+if runtime_alive:
+    assert external_status.get('drain_requested') is True
+    assert external_status.get('drain_complete') is True
+    assert external_status.get('order_submission_enabled') is False
+    assert external_status.get('blocker') == 'CUTOVER_DRAIN'
+    assert micro_status.get('drain_requested') is True
+    assert micro_status.get('drain_complete') is True
+    assert micro_status.get('new_risk_frozen') is True
+    assert maker_status.get('drain_requested') is True
+    assert maker_status.get('new_risk_frozen') is True
+    assert maker_status.get('drain_complete') is (maker_open == 0)
+# A previously stopped incumbent cannot acknowledge a fresh sentinel nonce.
+# Its absence is itself a stronger entry freeze; immutable executable state
+# must still be flat and Maker inventory is finalized by target-SHA code.
 PY
 }
 
