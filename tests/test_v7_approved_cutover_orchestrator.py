@@ -12,6 +12,15 @@ def test_orchestrator_requires_explicit_owner_merged_pr_approval():
     assert "github.event.pull_request.merge_commit_sha" in text
 
 
+def test_orchestrator_accepts_only_owner_exact_sha_cutover_tag():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "v7-paper-cutover-*" in text
+    assert "github.actor == github.repository_owner" in text
+    assert "github.ref_name == format('v7-paper-cutover-{0}', github.sha)" in text
+    assert 'test "$TRIGGER_REF" = "v7-paper-cutover-$TARGET_SHA"' in text
+    assert 'test "$TRIGGER_ACTOR" = "$REPOSITORY_OWNER"' in text
+
+
 def test_orchestrator_uses_canonical_workflows_without_direct_deploy_or_ref_patch():
     text = WORKFLOW.read_text(encoding="utf-8")
     for workflow in (

@@ -3,6 +3,9 @@ name: V7 approved PAPER cutover orchestrator
 on:
   pull_request:
     types: [closed]
+  push:
+    tags:
+      - 'v7-paper-cutover-*'
 
 permissions:
   actions: write
@@ -15,19 +18,31 @@ concurrency:
 jobs:
   exact-sha-cutover:
     if: >-
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.user.login == github.repository_owner &&
-      startsWith(github.event.pull_request.title, 'V7 PAPER CUTOVER APPROVED:')
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.merged == true &&
+       github.event.pull_request.user.login == github.repository_owner &&
+       startsWith(github.event.pull_request.title, 'V7 PAPER CUTOVER APPROVED:')) ||
+      (github.event_name == 'push' &&
+       github.actor == github.repository_owner &&
+       github.ref_name == format('v7-paper-cutover-{0}', github.sha))
     runs-on: ubuntu-24.04
     timeout-minutes: 80
     env:
       GH_TOKEN: ${{ github.token }}
-      TARGET_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      TARGET_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      TRIGGER_EVENT: ${{ github.event_name }}
+      TRIGGER_REF: ${{ github.ref_name }}
+      TRIGGER_ACTOR: ${{ github.actor }}
+      REPOSITORY_OWNER: ${{ github.repository_owner }}
     steps:
       - name: Validate explicit owner approval and exact main SHA
         run: |
           set -euo pipefail
           [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$TRIGGER_EVENT" == "push" ]]; then
+            test "$TRIGGER_ACTOR" = "$REPOSITORY_OWNER"
+            test "$TRIGGER_REF" = "v7-paper-cutover-$TARGET_SHA"
+          fi
           main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
           test "$main_sha" = "$TARGET_SHA"
 
