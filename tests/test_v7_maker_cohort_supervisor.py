@@ -15,6 +15,7 @@ from v7_maker_cohort_supervisor import (  # noqa: E402
     CohortSupervisor,
     atomic_json,
     flat_state,
+    inventory_flat_state,
     membership_sha256,
     read_json,
     validate_selection,
@@ -89,6 +90,7 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         self.assertFalse(flat_state(state(timestamp_ms=1_000), SHA, newer_than_ms=1_999))
         self.assertFalse(flat_state(state(new_risk_frozen=False), SHA, require_frozen=True))
         self.assertFalse(flat_state(state(active_order_count=1), SHA))
+        self.assertTrue(inventory_flat_state(state(active_order_count=1), SHA))
 
         held = state()
         held["inventory"]["market-1"]["yes_shares"] = 1.0
