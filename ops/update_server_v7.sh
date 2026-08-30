@@ -761,7 +761,12 @@ start_monitoring(){
     for label in exporter prometheus grafana retention; do
       launchctl bootout "$domain/com.polymarket.v7.$label" >/dev/null 2>&1 || true
     done
+    # Keep config installation deterministic during cutover. Listener ownership
+    # is reconciled immediately below, and runtime_health verifies the existing
+    # private HTTPS route after the exact-SHA services are serving.
     POLYMARKET_APP_DIR="$APP_DIR" POLYMARKET_STATE_DIR="$STATE_DIR" \
+      POLYMARKET_MONITORING_STOP_GRAFANA_LISTENER=0 \
+      POLYMARKET_MONITORING_CONFIGURE_TAILNET=0 \
       bash "$APP_DIR/ops/apply_v7_monitoring_config_macos.sh" >/dev/null
     if command -v brew >/dev/null 2>&1; then
       brew services stop prometheus >/dev/null 2>&1 || true
@@ -814,7 +819,7 @@ PY
       launchctl bootstrap "$domain" "$destination"
     done
     local monitoring_services_ready=0 service_ready
-    for _ in $(seq 1 100); do
+    for _ in $(seq 1 600); do
       service_ready=1
       for label in exporter prometheus grafana; do
         if ! launchctl print "$domain/com.polymarket.v7.$label" 2>/dev/null | grep -q 'state = running'; then
@@ -822,7 +827,10 @@ PY
           break
         fi
       done
-      if [[ "$service_ready" == 1 ]]; then
+      if [[ "$service_ready" == 1 ]] &&
+         curl -fsS --max-time 1 http://127.0.0.1:9108/metrics >/dev/null 2>&1 &&
+         curl -fsS --max-time 1 http://127.0.0.1:9090/-/ready >/dev/null 2>&1 &&
+         curl -fsS --max-time 1 http://127.0.0.1:3000/api/health >/dev/null 2>&1; then
         monitoring_services_ready=1
         break
       fi
@@ -832,7 +840,7 @@ PY
       for label in exporter prometheus grafana; do
         launchctl print "$domain/com.polymarket.v7.$label" >&2 2>/dev/null || true
       done
-      fail "launchd monitoring services did not converge within 10 seconds"
+      fail "launchd monitoring services did not converge within 60 seconds"
     fi
     for _ in $(seq 1 50); do
       [[ -f "$run_root/control/retention_status.json" ]] && break

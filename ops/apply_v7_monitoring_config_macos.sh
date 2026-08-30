@@ -9,9 +9,13 @@ TAILSCALE_HOSTNAME="${POLYMARKET_TAILSCALE_HOSTNAME:-mamma-portfolio}"
 TAILSCALE_FQDN="${POLYMARKET_TAILSCALE_FQDN:-mamma-portfolio.tail1bae85.ts.net}"
 GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-https://${TAILSCALE_FQDN}}"
 COMMAND_TIMEOUT_SECONDS="${POLYMARKET_MONITORING_COMMAND_TIMEOUT_SECONDS:-15}"
+STOP_GRAFANA_LISTENER="${POLYMARKET_MONITORING_STOP_GRAFANA_LISTENER:-1}"
+CONFIGURE_TAILNET="${POLYMARKET_MONITORING_CONFIGURE_TAILNET:-1}"
 
 [[ "$(uname -s)" == "Darwin" ]] || { echo "fatal: macOS monitoring installer requires Darwin" >&2; exit 78; }
 [[ -f "$MANIFEST" ]] || { echo "fatal: missing V7 monitoring manifest" >&2; exit 78; }
+[[ "$STOP_GRAFANA_LISTENER" =~ ^[01]$ ]] || { echo "fatal: POLYMARKET_MONITORING_STOP_GRAFANA_LISTENER must be 0 or 1" >&2; exit 78; }
+[[ "$CONFIGURE_TAILNET" =~ ^[01]$ ]] || { echo "fatal: POLYMARKET_MONITORING_CONFIGURE_TAILNET must be 0 or 1" >&2; exit 78; }
 
 run_bounded() {
   python3 - "$COMMAND_TIMEOUT_SECONDS" "$@" <<'PY'
@@ -150,7 +154,9 @@ configure_tailnet_grafana() {
   fi
 }
 
-stop_stale_grafana_listener
+if [[ "$STOP_GRAFANA_LISTENER" == 1 ]]; then
+  stop_stale_grafana_listener
+fi
 
 read -r DASHBOARD_FILE DATASOURCE_FILE PROVIDER_FILE PROMETHEUS_FILE ALERT_RULES_FILE DASHBOARD_UID < <(
   python3 - "$MANIFEST" <<'PY'
@@ -265,8 +271,10 @@ assert source.count(marker) == 1
 Path(sys.argv[2]).write_text(source.replace(marker, sys.argv[3]), encoding='utf-8')
 PY
 
-if ! configure_tailnet_grafana; then
-  echo "warning: Tailscale Serve mutation did not converge; preserving its existing route for the post-start public health gate" >&2
+if [[ "$CONFIGURE_TAILNET" == 1 ]]; then
+  if ! configure_tailnet_grafana; then
+    echo "warning: Tailscale Serve mutation did not converge; preserving its existing route for the post-start public health gate" >&2
+  fi
 fi
 
 printf 'v7_monitoring_configured=true\n'

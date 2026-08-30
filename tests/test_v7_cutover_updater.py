@@ -201,9 +201,14 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         start = text[text.index("start_monitoring(){"):text.index("runtime_health(){")]
         self.assertIn("monitoring_services_ready=0", start)
-        self.assertIn("for _ in $(seq 1 100); do", start)
+        self.assertIn("POLYMARKET_MONITORING_STOP_GRAFANA_LISTENER=0", start)
+        self.assertIn("POLYMARKET_MONITORING_CONFIGURE_TAILNET=0", start)
+        self.assertIn("for _ in $(seq 1 600); do", start)
         self.assertIn('if [[ "$service_ready" == 1 ]]', start)
-        self.assertIn("did not converge within 10 seconds", start)
+        self.assertIn("http://127.0.0.1:9108/metrics", start)
+        self.assertIn("http://127.0.0.1:9090/-/ready", start)
+        self.assertIn("http://127.0.0.1:3000/api/health", start)
+        self.assertIn("did not converge within 60 seconds", start)
 
     def test_exact_deploy_receipt_is_written_before_monitoring_health_gate(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")

@@ -84,6 +84,14 @@ class V7MacosMonitoringOwnerTest(unittest.TestCase):
         )
         self.assertIn("canonical Grafana port 3000 is owned by non-Grafana", text)
 
+    def test_cutover_can_request_deterministic_config_only_install(self) -> None:
+        text = (ROOT / "ops/apply_v7_monitoring_config_macos.sh").read_text(encoding="utf-8")
+        self.assertIn('STOP_GRAFANA_LISTENER="${POLYMARKET_MONITORING_STOP_GRAFANA_LISTENER:-1}"', text)
+        self.assertIn('CONFIGURE_TAILNET="${POLYMARKET_MONITORING_CONFIGURE_TAILNET:-1}"', text)
+        self.assertIn('if [[ "$STOP_GRAFANA_LISTENER" == 1 ]]; then', text)
+        self.assertIn('if [[ "$CONFIGURE_TAILNET" == 1 ]]; then', text)
+        self.assertIn("must be 0 or 1", text)
+
     def test_external_macos_monitoring_commands_are_bounded(self) -> None:
         text = (ROOT / "ops/apply_v7_monitoring_config_macos.sh").read_text(encoding="utf-8")
         self.assertIn('POLYMARKET_MONITORING_COMMAND_TIMEOUT_SECONDS:-15', text)
