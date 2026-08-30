@@ -85,6 +85,8 @@
       "minimum_markets": 10,
       "minimum_prints": 2,
       "minimum_time_to_end_seconds": 900,
+      "minimum_mid": 0.05,
+      "maximum_mid": 0.95,
       "maximum_spread": 0.1,
       "score_weights": {
         "log_prints": 3.0,

@@ -121,8 +121,10 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
 
     def test_maker_ledger_ids_are_globally_unique_across_market_engines(self) -> None:
         runtime = (ROOT / "src" / "v7_market_maker_runtime.cpp").read_text(encoding="utf-8")
-        self.assertIn('return "mmo-" + std::to_string(market) + "-" + std::to_string(order);', runtime)
-        self.assertIn('"mmf-" + std::to_string(record.market_handle) + "-" +', runtime)
+        self.assertIn('return "mmo-" + std::to_string(market) + "-" + telemetry_epoch_', runtime)
+        self.assertIn('event["record_id"] = "cpp-mm-" + telemetry_epoch_', runtime)
+        self.assertIn('"mmf-" + std::to_string(record.market_handle) + "-"', runtime)
+        self.assertIn('telemetry_epoch_ + "-" + std::to_string(paper.order_id)', runtime)
         self.assertNotIn("struct OrderMeta", runtime)
         self.assertNotIn("orders_[paper.order_id]", runtime)
 

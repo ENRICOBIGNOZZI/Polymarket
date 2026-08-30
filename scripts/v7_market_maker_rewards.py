@@ -465,8 +465,8 @@ def _recent_flow_snapshot(
     )
     minimum_volume = float(selection_cfg.get("min_volume_24h", 100.0))
     minimum_liquidity = float(selection_cfg.get("min_liquidity", 25.0))
-    minimum_mid = float(selection_cfg.get("min_mid", 0.02))
-    maximum_mid = float(selection_cfg.get("max_mid", 0.98))
+    minimum_mid = float(flow_cfg.get("minimum_mid", selection_cfg.get("min_mid", 0.02)))
+    maximum_mid = float(flow_cfg.get("maximum_mid", selection_cfg.get("max_mid", 0.98)))
     maximum_spread = max(0.0, float(flow_cfg.get("maximum_spread", 0.10)))
     weights = flow_cfg.get("score_weights") if isinstance(flow_cfg.get("score_weights"), dict) else {}
     candidates: list[dict[str, Any]] = []

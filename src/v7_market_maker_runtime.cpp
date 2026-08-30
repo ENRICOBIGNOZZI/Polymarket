@@ -1292,7 +1292,9 @@ public:
                     double starting_capital,
                     const std::vector<std::unique_ptr<MarketContext>>& markets)
         : run_root_(std::move(run_root)), model_sha_(std::move(model_sha)),
-          starting_capital_(starting_capital) {
+          starting_capital_(starting_capital),
+          telemetry_epoch_(std::to_string(wall_ms()) + "-" +
+                           hex64(static_cast<std::uint64_t>(monotonic_ns()))) {
         std::size_t max_market = 0;
         std::size_t max_instrument = 0;
         for (const auto& market : markets) {
@@ -1392,11 +1394,12 @@ private:
     }
 
     [[nodiscard]] std::string candidate_id(std::uint64_t intent) const {
-        return "mmc-" + hex64(intent);
+        return "mmc-" + telemetry_epoch_ + "-" + hex64(intent);
     }
 
     [[nodiscard]] std::string order_id(std::uint64_t market, std::uint64_t order) const {
-        return "mmo-" + std::to_string(market) + "-" + std::to_string(order);
+        return "mmo-" + std::to_string(market) + "-" + telemetry_epoch_ + "-" +
+               std::to_string(order);
     }
 
     [[nodiscard]] json::object common(const char* event_type) {
@@ -1407,7 +1410,8 @@ private:
         event["model_sha"] = model_sha_;
         event["paper_only"] = true;
         event["authenticated_execution"] = false;
-        event["record_id"] = "cpp-mm-" + std::to_string(++record_sequence_);
+        event["record_id"] = "cpp-mm-" + telemetry_epoch_ + "-" +
+                             std::to_string(++record_sequence_);
         event["recorded_ts_ms"] = wall_ms();
         return event;
     }
@@ -1567,7 +1571,8 @@ private:
         attach_market(event, record);
         event["order_id"] = order_id(record.market_handle, paper.order_id);
         event["fill_id"] = "mmf-" + std::to_string(record.market_handle) + "-" +
-                           std::to_string(paper.order_id) + "-" + hex64(paper.trade_id);
+                           telemetry_epoch_ + "-" + std::to_string(paper.order_id) + "-" +
+                           hex64(paper.trade_id);
         event["exchange_ts_ms"] = exchange_ms(record);
         event["receive_ts_ms"] = record.receive_wall_ms;
         event["side"] = side_name(paper.side);
@@ -1597,6 +1602,11 @@ private:
     std::vector<MarketContext*> markets_;
     std::vector<InstrumentCold> instruments_;
     std::vector<PaperMakerInventory> inventory_;
+    // The supervisor can restart the C++ process without rotating the exact-SHA
+    // ledger.  Sequence counters restart at one, so every process boot needs a
+    // distinct causal namespace or the canonical spool correctly rejects all
+    // subsequent telemetry as duplicate record/order IDs.
+    std::string telemetry_epoch_;
     std::uint64_t record_sequence_ = 0;
     std::uint64_t merge_sequence_ = 0;
 };
