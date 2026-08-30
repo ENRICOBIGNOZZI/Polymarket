@@ -52,6 +52,41 @@ class DurableLearningTests(unittest.TestCase):
         self.assertGreater(model["p_any_fill_by_seconds"]["30"], 0.0)
         self.assertEqual(model["censoring_semantics"], "cancel_or_observation_end_is_right_censored")
 
+    def test_sparse_zero_fills_shrink_without_absorbing_exploration(self) -> None:
+        sample = [
+            {"exposure_ms": 60_000, "first_fill_ms": None,
+             "filled_fraction": 0.0, "censored": True,
+             "event_cluster": f"event-{index}"}
+            for index in range(8)
+        ]
+        model = hazard_model(sample, 0.02, 20.0)
+        self.assertEqual(model["raw_expected_filled_fraction_60s"], 0.0)
+        self.assertAlmostEqual(model["expected_filled_fraction_60s"], 0.4 / 28.0)
+        self.assertGreater(model["expected_filled_fraction_60s"], 0.0)
+        self.assertLess(model["expected_filled_fraction_60s"], 0.02)
+        self.assertEqual(model["fill_prior_strength_orders"], 20.0)
+
+        values = []
+        for index in range(8):
+            order_id = f"zero-fill-{index}"
+            values.append(record(
+                "ORDER_SUBMITTED", f"submitted-{index}", order_id=order_id,
+                event_id=f"event-{index}", intended_size=2.0,
+                recorded_ts_ms=1_000 + index * 1_000,
+            ))
+            values.append(record(
+                "ORDER_CANCELLED", f"cancelled-{index}", order_id=order_id,
+                event_id=f"event-{index}", order_state="CANCELLED",
+                recorded_ts_ms=1_500 + index * 1_000,
+            ))
+        fitted = fit_model(
+            values, model_sha=SHA, policy_hash="policy", config_hash="config",
+            cold_fill_prior=0.02, fill_prior_strength_orders=20.0,
+        )
+        self.assertEqual(fitted["family"], "censored_survival_hazard_joint_cycle_v3")
+        self.assertAlmostEqual(fitted["groups"]["GLOBAL"]["fill_probability"], 0.4 / 28.0)
+        self.assertEqual(fitted["hyperparameters"]["fill_prior_strength_orders"], 20.0)
+
     def test_joint_model_is_direct_and_cold_start_is_explicit(self) -> None:
         model = fit_model([], model_sha=SHA, policy_hash="policy",
                           config_hash="config", cold_fill_prior=0.02)
@@ -59,6 +94,10 @@ class DurableLearningTests(unittest.TestCase):
         self.assertEqual(model["promotion_state"], "COLD_START_CHAMPION")
         self.assertFalse(model["joint_cycle_model"]["uses_product_of_marginals"])
         self.assertEqual(model["groups"]["GLOBAL"]["fill_probability"], 0.02)
+        self.assertEqual(
+            model["groups"]["GLOBAL"]["fill_probability_semantics"],
+            "explicit_cold_start_prior",
+        )
 
     def test_incompatible_policy_is_stored_but_not_trained(self) -> None:
         row = record("ORDER_SUBMITTED", "r1", order_id="o1", intended_size=5.0)

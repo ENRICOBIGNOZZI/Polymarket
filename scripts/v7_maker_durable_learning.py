@@ -191,7 +191,11 @@ def order_examples(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
-def hazard_model(sample: list[dict[str, Any]], cold_fill_prior: float) -> dict[str, Any]:
+def hazard_model(
+    sample: list[dict[str, Any]],
+    cold_fill_prior: float,
+    fill_prior_strength_orders: float = 20.0,
+) -> dict[str, Any]:
     survival = 1.0
     previous = 0
     cumulative: dict[str, float] = {}
@@ -213,16 +217,30 @@ def hazard_model(sample: list[dict[str, Any]], cold_fill_prior: float) -> dict[s
         cumulative[str(horizon)] = 1.0 - survival
         previous = horizon
     filled = [row["filled_fraction"] for row in sample if row["filled_fraction"] > 0.0]
+    observed_filled_fraction_mass = sum(row["filled_fraction"] for row in sample)
+    prior_strength = max(1e-6, float(fill_prior_strength_orders))
+    # A raw zero after a handful of right-censored PAPER orders creates an
+    # absorbing state: admission estimates P(fill)=0, exploration stops, and
+    # the runtime can never collect the fills needed to revise the estimate.
+    # Shrink the expected filled fraction toward the declared cold prior. This
+    # affects quote admission only; the pessimistic queue simulator still
+    # decides whether a PAPER fill actually occurs from causal public flow.
+    posterior_filled_fraction = (
+        observed_filled_fraction_mass + cold_fill_prior * prior_strength
+    ) / (len(sample) + prior_strength)
     return {
         "orders": len(sample),
         "censored_orders": sum(bool(row["censored"]) for row in sample),
         "event_clusters": len({row["event_cluster"] for row in sample}),
         "hazard_by_interval_end_seconds": hazards,
         "p_any_fill_by_seconds": cumulative,
-        "expected_filled_fraction_60s": (
-            sum(row["filled_fraction"] for row in sample) / len(sample)
-            if sample else cold_fill_prior
+        "observed_filled_fraction_mass": observed_filled_fraction_mass,
+        "raw_expected_filled_fraction_60s": (
+            observed_filled_fraction_mass / len(sample) if sample else None
         ),
+        "expected_filled_fraction_60s": posterior_filled_fraction,
+        "fill_prior_mean": cold_fill_prior,
+        "fill_prior_strength_orders": prior_strength,
         "expected_filled_fraction_given_fill": sum(filled) / len(filled) if filled else 0.0,
         "expected_time_to_first_fill_seconds": (
             sum(int(row["first_fill_ms"]) for row in sample if row["first_fill_ms"] is not None)
@@ -282,7 +300,8 @@ def joint_states(values: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
-              config_hash: str, cold_fill_prior: float) -> dict[str, Any]:
+              config_hash: str, cold_fill_prior: float,
+              fill_prior_strength_orders: float = 20.0) -> dict[str, Any]:
     compatible = []
     incompatible = Counter()
     for row in values:
@@ -305,18 +324,21 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
     grouped["GLOBAL"] = examples
     groups: dict[str, Any] = {}
     for key, sample in sorted(grouped.items()):
-        hazard = hazard_model(sample, cold_fill_prior)
+        hazard = hazard_model(sample, cold_fill_prior, fill_prior_strength_orders)
         groups[key] = {
             **hazard,
             "fill_probability": hazard["expected_filled_fraction_60s"],
-            "fill_probability_semantics": "censored_survival_expected_filled_fraction_60s",
+            "fill_probability_semantics": (
+                "beta_shrunk_censored_expected_filled_fraction_per_posted_share"
+                if sample else "explicit_cold_start_prior"
+            ),
             "adverse_markout_per_share": 0.002,
             "mature": len(sample) >= 50
                 and len({row["event_cluster"] for row in sample}) >= 12,
         }
     if "GLOBAL" not in groups:
         groups["GLOBAL"] = {
-            **hazard_model([], cold_fill_prior),
+            **hazard_model([], cold_fill_prior, fill_prior_strength_orders),
             "fill_probability": cold_fill_prior,
             "fill_probability_semantics": "explicit_cold_start_prior",
             "adverse_markout_per_share": 0.002,
@@ -331,7 +353,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
     return {
         "schema": MODEL_SCHEMA,
         "strategy": STRATEGY,
-        "family": "censored_survival_hazard_joint_cycle_v2",
+        "family": "censored_survival_hazard_joint_cycle_v3",
         "version": generated,
         "generated_ts_ms": generated,
         "paper_only": True,
@@ -341,7 +363,11 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         "code_sha": model_sha,
         "policy_hash": policy_hash,
         "config_hash": config_hash,
-        "policy_version": 2,
+        "policy_version": 3,
+        "hyperparameters": {
+            "cold_fill_prior": cold_fill_prior,
+            "fill_prior_strength_orders": fill_prior_strength_orders,
+        },
         "feature_schema": {"version": 2, "fill": "censored_hazard", "joint": "direct_cycle_states"},
         "execution_semantics_version": "maker-paper-v7.2-bilateral-inventory",
         "queue_model_version": "pessimistic-public-print-v1",
@@ -385,9 +411,17 @@ def main() -> int:
     added, stored = append_new(args.store, rows(source_files))
     evidence = list(load_store(args.store).values())
     policy_hash, config_hash = fnv1a64(args.policy), fnv1a64(args.config)
+    policy = json.loads(args.policy.read_text(encoding="utf-8"))
+    execution = policy.get("execution_model") if isinstance(
+        policy.get("execution_model"), dict
+    ) else {}
+    fill_prior_strength_orders = max(
+        1e-6, number(execution.get("fill_prior_strength_orders"), 20.0)
+    )
     model = fit_model(
         evidence, model_sha=args.model_sha, policy_hash=policy_hash,
         config_hash=config_hash, cold_fill_prior=max(1e-6, min(0.5, args.cold_fill_prior)),
+        fill_prior_strength_orders=fill_prior_strength_orders,
     )
     atomic_json(args.champion, model)
     status = {
@@ -404,6 +438,7 @@ def main() -> int:
         "stored_records": stored,
         "compatible_training_records": model["training_window"]["records"],
         "model_state": model["model_state"],
+        "fill_prior_strength_orders": fill_prior_strength_orders,
         "champion_path": str(args.champion),
         "champion_sha256": hashlib.sha256(args.champion.read_bytes()).hexdigest(),
     }

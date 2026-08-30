@@ -207,6 +207,7 @@
     "minimum_positive_fold_fraction": 0.60,
     "embargo_seconds": 60,
     "cold_start_fill_prior": 0.02,
+    "fill_prior_strength_orders": 20.0,
     "cold_start_adverse_markout_per_share": 0.002,
     "hierarchical_partial_pooling_challenger": true,
     "chronological_oos_only": true,
