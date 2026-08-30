@@ -43,6 +43,9 @@ def book(token: str, ask: float, bid: float | None = None) -> Book:
 
 def main() -> None:
     assert abs(fee_per_share(0.5, {"rate": 0.07, "exponent": 1}) - 0.0175) < 1e-12
+    assert abs(router.expected_calibration_error(
+        [0.1, 0.2, 0.8, 0.9], [0.0, 1.0, 0.0, 1.0], bins=2,
+    ) - 0.35) < 1e-12
     depth_book = Book("yes", ((0.50, 2.0), (0.49, 3.0)), ((0.51, 10.0),), 0.01, 1.0, 1, 2, "depth")
     expected = 2.0 * (0.50 - 0.0175) + 3.0 * (0.49 - 0.07 * 0.49 * 0.51)
     assert abs(executable_sell_value(depth_book, 5.0, {"rate": 0.07, "exponent": 1}) - expected) < 1e-12

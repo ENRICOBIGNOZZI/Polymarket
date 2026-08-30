@@ -71,7 +71,7 @@ def write_events(path: Path, events) -> None:
 
 
 class CanonicalEconomicsTest(unittest.TestCase):
-    def test_inventory_merge_with_exact_lineage_is_a_mature_internal_unit(self) -> None:
+    def test_inventory_merge_does_not_manufacture_a_market_fill(self) -> None:
         events = [
             ledger.LedgerEvent(
                 event_type="INVENTORY_MERGE", strategy="MICRO_MAKER_PRO",
@@ -95,10 +95,14 @@ class CanonicalEconomicsTest(unittest.TestCase):
             path = Path(tmp) / "execution.jsonl"
             write_events(path, events)
             report = econ.assess(path, expected_model_sha=SHA)
-        self.assertEqual(report["submitted_units"], 1)
-        self.assertEqual(report["complete_units"], 1)
-        self.assertEqual(report["mature_terminal_units"], 1)
-        self.assertAlmostEqual(report["net_pnl"], 0.6)
+        self.assertEqual(report["submitted_units"], 0)
+        self.assertEqual(report["complete_units"], 0)
+        self.assertEqual(report["mature_terminal_units"], 0)
+        self.assertIsNone(report["net_pnl"])
+        self.assertIn(
+            "inventory_transform_not_market_execution",
+            report["unit_reason_codes"]["position:merge-position"],
+        )
 
     def test_shadow_counterfactual_is_in_ledger_but_excluded_from_paper_pnl(self) -> None:
         now = clock()

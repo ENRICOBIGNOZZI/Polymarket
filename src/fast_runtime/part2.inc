@@ -243,6 +243,16 @@ public:
         std::size_t freshness_ready_tokens = 0;
         std::vector<pm::fast::Opportunity> pending_candidates;
         json::array shared_books;
+        json::array live_flow_rows;
+        std::uint64_t raw_last_trade_events = 0;
+        std::uint64_t valid_trade_prints = 0;
+        std::uint64_t trade_unknown_asset = 0;
+        std::uint64_t trade_missing_side = 0;
+        std::uint64_t trade_missing_size = 0;
+        std::uint64_t trade_invalid_quantity = 0;
+        std::uint64_t trade_invalid_price = 0;
+        std::uint64_t trade_invalid_timestamp = 0;
+        std::uint64_t duplicate_trade_events = 0;
         std::int64_t last_message = 0;
         const auto snapshot_ms = now_ms();
         {
@@ -277,6 +287,15 @@ public:
             freshness_ready_tokens = ws_snapshot_tokens + rest_snapshot_tokens;
             pending_candidates.swap(pending_candidates_);
             last_message = last_message_ms_;
+            raw_last_trade_events = raw_last_trade_events_;
+            valid_trade_prints = valid_trade_prints_;
+            trade_unknown_asset = trade_unknown_asset_;
+            trade_missing_side = trade_missing_side_;
+            trade_missing_size = trade_missing_size_;
+            trade_invalid_quantity = trade_invalid_quantity_;
+            trade_invalid_price = trade_invalid_price_;
+            trade_invalid_timestamp = trade_invalid_timestamp_;
+            duplicate_trade_events = duplicate_trade_events_;
             shared_books.reserve(books_.size());
             for (const auto& [token, book] : books_) {
                 const auto market_id = token_to_market_.find(token);
@@ -303,6 +322,12 @@ public:
                     return output;
                 };
                 const auto fee = fees_.find(market->second.condition_id);
+                const auto economic_state = std::make_pair(
+                    lineage_epochs_[token], token_state_versions_[token]);
+                const bool economic_novelty =
+                    last_published_economic_state_[token] != economic_state;
+                last_published_economic_state_[token] = economic_state;
+                const auto trades = live_trades_.find(token);
                 json::object row{
                     {"token_id", token},
                     {"market_id", market->second.id},
@@ -311,9 +336,17 @@ public:
                     {"outcome", token == market->second.yes_token ? "YES" : "NO"},
                     {"exchange_ts_ms", exchange->second},
                     {"receive_ts_ms", received->second},
+                    {"source_receive_ts_ms", received->second},
+                    {"snapshot_published_ms", snapshot_ms},
                     {"state_version", static_cast<std::int64_t>(token_state_versions_[token])},
                     {"lineage_epoch", static_cast<std::int64_t>(lineage_epochs_[token])},
                     {"lineage_continuous", ws_snapshot_ready_.count(token) > 0},
+                    {"economic_novelty", economic_novelty},
+                    {"last_book_change_receive_ms", last_book_change_receive_ms_[token]},
+                    {"last_trade_receive_ms", trades != live_trades_.end() && !trades->second.empty()
+                        ? trades->second.back().receive_ms : 0},
+                    {"last_trade_exchange_ms", trades != live_trades_.end() && !trades->second.empty()
+                        ? trades->second.back().exchange_ms : 0},
                     {"provenance", ws_snapshot_ready_.count(token) > 0 ? "WEBSOCKET" : "REST_BOOTSTRAP"},
                     {"tick_size", book.tick_size},
                     {"min_order_size", book.min_order_size},
@@ -325,6 +358,134 @@ public:
                     {"fee_taker_only", fee != fees_.end() ? fee->second.taker_only : true},
                 };
                 shared_books.emplace_back(std::move(row));
+            }
+            live_flow_rows.reserve(live_trades_.size());
+            const auto cutoff = snapshot_ms - 600'000;
+            for (auto& [token, prints] : live_trades_) {
+                while (!prints.empty() && prints.front().receive_ms < cutoff) prints.pop_front();
+                if (prints.empty()) continue;
+                const auto market_id = token_to_market_.find(token);
+                if (market_id == token_to_market_.end()) continue;
+                const auto market = markets_.find(market_id->second);
+                if (market == markets_.end()) continue;
+                auto activity_it = book_activity_.find(token);
+                if (activity_it != book_activity_.end()) {
+                    while (!activity_it->second.empty()
+                           && activity_it->second.front().receive_ms < cutoff) {
+                        activity_it->second.pop_front();
+                    }
+                }
+                const auto book_it = books_.find(token);
+                const auto best_price = [](const std::vector<pm::Level>& levels, bool bid) {
+                    double best = bid ? 0.0 : 1.0;
+                    for (const auto& level : levels) {
+                        if (level.size <= 0.0) continue;
+                        best = bid ? std::max(best, level.price) : std::min(best, level.price);
+                    }
+                    return best;
+                };
+                const auto visible_depth = [](const std::vector<pm::Level>& levels) {
+                    double depth = 0.0;
+                    for (const auto& level : levels) depth += std::max(0.0, level.size);
+                    return depth;
+                };
+                const double best_bid = book_it != books_.end()
+                    ? best_price(book_it->second.bids, true) : 0.0;
+                const double best_ask = book_it != books_.end()
+                    ? best_price(book_it->second.asks, false) : 1.0;
+                json::object row{
+                    {"token_id", token},
+                    {"market_id", market->second.id},
+                    {"condition_id", market->second.condition_id},
+                    {"event_id", market->second.event_id},
+                    {"outcome", token == market->second.yes_token ? "YES" : "NO"},
+                    {"last_exchange_ts_ms", prints.back().exchange_ms},
+                    {"last_receive_ts_ms", prints.back().receive_ms},
+                    {"state_version", static_cast<std::int64_t>(token_state_versions_[token])},
+                    {"lineage_epoch", static_cast<std::int64_t>(lineage_epochs_[token])},
+                    {"spread", best_ask > best_bid ? best_ask - best_bid : 0.0},
+                    {"visible_bid_depth", book_it != books_.end()
+                        ? visible_depth(book_it->second.bids) : 0.0},
+                    {"visible_ask_depth", book_it != books_.end()
+                        ? visible_depth(book_it->second.asks) : 0.0},
+                };
+                json::array trade_prints;
+                trade_prints.reserve(prints.size());
+                for (const auto& print : prints) {
+                    trade_prints.emplace_back(json::object{
+                        {"exchange_ts_ms", print.exchange_ms},
+                        {"receive_ts_ms", print.receive_ms},
+                        {"side", print.side},
+                        {"price", print.price},
+                        {"size", print.size},
+                    });
+                }
+                row["trade_prints"] = std::move(trade_prints);
+                for (const auto window_ms : {5'000LL, 15'000LL, 30'000LL,
+                                             120'000LL, 600'000LL}) {
+                    std::int64_t buy_prints = 0;
+                    std::int64_t sell_prints = 0;
+                    double buy_shares = 0.0;
+                    double sell_shares = 0.0;
+                    double buy_notional = 0.0;
+                    double sell_notional = 0.0;
+                    std::int64_t last_buy_receive = 0;
+                    std::int64_t last_sell_receive = 0;
+                    std::int64_t trade_through_count = 0;
+                    std::vector<double> sizes;
+                    for (const auto& print : prints) {
+                        if (snapshot_ms - print.receive_ms > window_ms) continue;
+                        sizes.push_back(print.size);
+                        if (print.trade_through) ++trade_through_count;
+                        if (print.side == "BUY") {
+                            ++buy_prints;
+                            buy_shares += print.size;
+                            buy_notional += print.size * print.price;
+                            last_buy_receive = std::max(last_buy_receive, print.receive_ms);
+                        } else {
+                            ++sell_prints;
+                            sell_shares += print.size;
+                            sell_notional += print.size * print.price;
+                            last_sell_receive = std::max(last_sell_receive, print.receive_ms);
+                        }
+                    }
+                    const auto suffix = std::to_string(window_ms / 1000) + "s";
+                    row["buy_prints_" + suffix] = buy_prints;
+                    row["sell_prints_" + suffix] = sell_prints;
+                    row["buy_shares_" + suffix] = buy_shares;
+                    row["sell_shares_" + suffix] = sell_shares;
+                    row["buy_notional_" + suffix] = buy_notional;
+                    row["sell_notional_" + suffix] = sell_notional;
+                    row["last_buy_receive_ts_ms_" + suffix] = last_buy_receive;
+                    row["last_sell_receive_ts_ms_" + suffix] = last_sell_receive;
+                    std::sort(sizes.begin(), sizes.end());
+                    const auto size_quantile = [&sizes](double q) {
+                        if (sizes.empty()) return 0.0;
+                        const auto index = static_cast<std::size_t>(std::floor(
+                            q * static_cast<double>(sizes.size() - 1)));
+                        return sizes[std::min(index, sizes.size() - 1)];
+                    };
+                    row["size_p50_" + suffix] = size_quantile(0.50);
+                    row["size_p90_" + suffix] = size_quantile(0.90);
+                    row["trade_through_count_" + suffix] = trade_through_count;
+                    std::int64_t book_updates = 0;
+                    std::int64_t l2_reductions = 0;
+                    double l2_removed_size = 0.0;
+                    if (activity_it != book_activity_.end()) {
+                        for (const auto& activity : activity_it->second) {
+                            if (snapshot_ms - activity.receive_ms > window_ms) continue;
+                            ++book_updates;
+                            if (activity.removed_size > 0.0) {
+                                ++l2_reductions;
+                                l2_removed_size += activity.removed_size;
+                            }
+                        }
+                    }
+                    row["book_updates_" + suffix] = book_updates;
+                    row["l2_reductions_" + suffix] = l2_reductions;
+                    row["l2_removed_size_" + suffix] = l2_removed_size;
+                }
+                live_flow_rows.emplace_back(std::move(row));
             }
             opportunity_log_.flush();
             latency_log_.flush();
@@ -361,6 +522,28 @@ public:
         };
         atomic_write(fs::path(options_.run_root) / "market_data" / "shared_state.json",
                      json::serialize(shared_state) + "\n");
+        json::object live_flow{
+            {"schema", "polymarket_v7_live_trade_flow_v1"},
+            {"timestamp_ms", snapshot_ms},
+            {"producer", "FAST_STRUCTURAL_CPP_WEBSOCKET"},
+            {"model_sha", options_.model_sha},
+            {"paper_only", true},
+            {"authenticated_execution", false},
+            {"real_order_submission", false},
+            {"window_clock", "local_receive_ts_ms"},
+            {"raw_last_trade_events", static_cast<std::int64_t>(raw_last_trade_events)},
+            {"valid_trade_prints", static_cast<std::int64_t>(valid_trade_prints)},
+            {"unknown_asset", static_cast<std::int64_t>(trade_unknown_asset)},
+            {"missing_side", static_cast<std::int64_t>(trade_missing_side)},
+            {"missing_size", static_cast<std::int64_t>(trade_missing_size)},
+            {"invalid_quantity", static_cast<std::int64_t>(trade_invalid_quantity)},
+            {"invalid_price", static_cast<std::int64_t>(trade_invalid_price)},
+            {"invalid_timestamp", static_cast<std::int64_t>(trade_invalid_timestamp)},
+            {"duplicate_trade", static_cast<std::int64_t>(duplicate_trade_events)},
+            {"rows", std::move(live_flow_rows)},
+        };
+        atomic_write(fs::path(options_.run_root) / "market_data" / "live_trade_flow.json",
+                     json::serialize(live_flow) + "\n");
 
         std::size_t current_executable = 0;
         std::size_t current_hard = 0;
@@ -399,6 +582,15 @@ public:
             {"ws_reconnects", static_cast<std::int64_t>(feed.reconnects)},
             {"ws_errors", static_cast<std::int64_t>(feed.errors)},
             {"book_updates", static_cast<std::int64_t>(updates)},
+            {"raw_last_trade_events", static_cast<std::int64_t>(raw_last_trade_events)},
+            {"valid_trade_prints", static_cast<std::int64_t>(valid_trade_prints)},
+            {"trade_unknown_asset", static_cast<std::int64_t>(trade_unknown_asset)},
+            {"trade_missing_side", static_cast<std::int64_t>(trade_missing_side)},
+            {"trade_missing_size", static_cast<std::int64_t>(trade_missing_size)},
+            {"trade_invalid_quantity", static_cast<std::int64_t>(trade_invalid_quantity)},
+            {"trade_invalid_price", static_cast<std::int64_t>(trade_invalid_price)},
+            {"trade_invalid_timestamp", static_cast<std::int64_t>(trade_invalid_timestamp)},
+            {"duplicate_trade_events", static_cast<std::int64_t>(duplicate_trade_events)},
             {"rest_resyncs", static_cast<std::int64_t>(rest_resyncs)},
             {"ws_snapshot_ready_tokens", static_cast<std::int64_t>(ws_snapshot_tokens)},
             {"rest_point_in_time_ready_tokens", static_cast<std::int64_t>(rest_snapshot_tokens)},
@@ -413,6 +605,8 @@ public:
             {"hard_executable_observations", static_cast<std::int64_t>(hard_executable)},
             {"canonical_candidates_spooled", static_cast<std::int64_t>(candidates_spooled_)},
             {"canonical_candidates_dropped", static_cast<std::int64_t>(candidates_dropped_)},
+            {"execution_incompatible_observations", static_cast<std::int64_t>(execution_incompatible_observations_)},
+            {"passive_maker_observations", static_cast<std::int64_t>(passive_maker_observations_)},
             {"current_opportunities", static_cast<std::int64_t>(latest.size())},
             {"current_executable", static_cast<std::int64_t>(current_executable)},
             {"current_hard_executable", static_cast<std::int64_t>(current_hard)},

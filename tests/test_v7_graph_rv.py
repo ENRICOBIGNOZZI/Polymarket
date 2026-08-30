@@ -35,6 +35,20 @@ class GraphRVContractTests(unittest.TestCase):
         self.assertEqual(graph.direct_joint_state({}, 2, ("MAKER", "MAKER")), (None, 0.0))
         self.assertEqual(graph.direct_joint_state({}, 2, ("TAKER", "TAKER")), (1.0, 0.0))
 
+    def test_missing_joint_maker_model_is_not_positive_execution_evidence(self) -> None:
+        prepared = [
+            {"book": type("B", (), {"bid": .40, "ask": .60})(),
+             "fee": type("F", (), {"rate": 0.0, "exponent": 1.0,
+                                      "taker_only": True})(), "weight": 1.0},
+            {"book": type("B", (), {"bid": .40, "ask": .60})(),
+             "fee": type("F", (), {"rate": 0.0, "exponent": 1.0,
+                                      "taker_only": True})(), "weight": 1.0},
+        ]
+        style, probability, expected_ev = graph.choose_style(prepared, {})
+        self.assertEqual(style, ("MAKER", "MAKER"))
+        self.assertIsNone(probability)
+        self.assertIsNone(expected_ev)
+
     def test_book_fails_closed_without_causal_exchange_clock(self) -> None:
         receive_ms = 1_800_000_000_000
         raw = {"asset_id":"t", "bids":[{"price":"0.49","size":"10"}], "asks":[{"price":"0.51","size":"10"}], "hash":"h"}

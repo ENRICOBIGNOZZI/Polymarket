@@ -490,6 +490,24 @@ PaperMakerResult MakerPaperMarketEngine::on_public_trade(
             || slot.oms.record().instrument_handle != trade.instrument_handle) {
             continue;
         }
+        ++result.active_orders_seen;
+        const bool causal = trade.exchange_event_ns > slot.paper.arrival_exchange_event_ns
+            && trade.receive_monotonic_ns > slot.paper.arrival_receive_monotonic_ns;
+        if (!causal) {
+            ++result.causally_pre_arrival;
+        } else if (slot.paper.cancel_effective_before(trade.receive_monotonic_ns)) {
+            ++result.cancel_effective_before_trade;
+        } else {
+            const bool correct_side = slot.oms.record().side == Side::Buy
+                ? trade.aggressor_side == Side::Sell
+                : trade.aggressor_side == Side::Buy;
+            const bool price_crossing = slot.oms.record().side == Side::Buy
+                ? trade.price_tick <= slot.oms.record().price_tick
+                : trade.price_tick >= slot.oms.record().price_tick;
+            if (!correct_side) ++result.wrong_aggressor_side;
+            else if (!price_crossing) ++result.price_not_crossing;
+            else ++result.eligible_orders;
+        }
         fifo[count] = slot.paper;
         slot_indices[count] = i;
         ++count;
@@ -527,6 +545,16 @@ PaperMakerResult MakerPaperMarketEngine::on_public_trade(
         result.invariant_violation = 1;
         return result;
     }
+    if (result.eligible_orders > 0) {
+        result.eligible_fill_microunits = trade.quantity_microunits;
+    }
+    result.operational_fill_microunits = allocation.pessimistic_own_fill_microunits;
+    std::uint32_t operationally_filled_orders = 0;
+    for (std::size_t i = 0; i < allocation.output_count; ++i) {
+        if (fills[i].pessimistic_fill_microunits > 0) ++operationally_filled_orders;
+    }
+    result.queue_not_depleted = result.eligible_orders > operationally_filled_orders
+        ? result.eligible_orders - operationally_filled_orders : 0;
 
     for (std::size_t i = 0; i < count; ++i) {
         slots_[slot_indices[i]].paper = fifo[i];

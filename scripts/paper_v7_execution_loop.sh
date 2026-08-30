@@ -547,6 +547,7 @@ pids+=("$!")
       --pin-runtime-selection \
       --status "$RUN_ROOT/micro_maker/selector_status.json" \
       --fallback-universe "$RUN_ROOT/universe/current.json" \
+      --live-flow "$RUN_ROOT/market_data/live_trade_flow.json" \
       --trade-tape "$RUN_ROOT/trade_tape.csv" \
       --allocation "$ALLOC/micro_maker.json" \
       --model-sha "$SHA" \
@@ -759,6 +760,7 @@ pids+=("$!")
     python3 scripts/v7_micro_taker_worker.py \
       --config "$ALLOC/micro_taker.json" --run-dir "$RUN_ROOT/micro_taker" \
       --shared-state "$RUN_ROOT/market_data/shared_state.json" --model-sha "$SHA" \
+      --live-flow "$RUN_ROOT/market_data/live_trade_flow.json" \
       --trade-tape "$RUN_ROOT/trade_tape.csv" --markets "$ACTIVE_SCAN_MARKET_BUDGET" --min-liquidity 2 \
       --horizon-seconds 30 --max-trade-usd 1e100 --min-edge 0.00005 --slippage-bps 5 \
       >> "$RUN_ROOT/micro_taker/runtime.log" 2>&1 || true

@@ -248,7 +248,15 @@ class UnitState:
             self.submitted_legs[leg] = qty
 
     def observe_inventory_transform(self, event: Any) -> None:
-        """Treat a proven internal merge as a complete non-market economic leg."""
+        """Record an internal transform without manufacturing market execution.
+
+        A merge can realize cash from inventory accumulated by earlier fills, but
+        the merge event is not itself an order submission or a public-market
+        fill.  Only canonical ORDER_SUBMITTED/FILL lineage may establish a
+        submitted or completed economic unit.  This deliberately under-counts
+        legacy merge-only records whose source fills cannot be joined to the
+        position instead of promoting synthetic execution evidence.
+        """
         if event.event_type != "INVENTORY_MERGE":
             return
         metadata = event.metadata if isinstance(event.metadata, dict) else {}
@@ -257,13 +265,8 @@ class UnitState:
                 or metadata.get("consumed_inventory_provenance_complete") is not True):
             self.reasons.add("inventory_merge_provenance_incomplete")
             return
-        leg = "INVENTORY_MERGE"
         self.internal_inventory_transform = True
-        self.required_contract_explicit = True
-        self.required_legs[leg] = quantity
-        self.submitted_legs[leg] = quantity
-        self.fill_qty[leg] += quantity
-        self.fill_ids.add(_text(event.record_id))
+        self.reasons.add("inventory_transform_not_market_execution")
 
     def observe_fill(self, event: Any) -> None:
         fill_id = _text(event.fill_id)
@@ -544,7 +547,7 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
                 unit.reasons.add(identity_reason)
             mature.append((unit, pnl))
 
-    unit_reasons = {unit.unit_id: sorted(unit.reasons) for unit in submitted if unit.reasons}
+    unit_reasons = {unit.unit_id: sorted(unit.reasons) for unit in selected if unit.reasons}
     event_mature = [(unit, pnl) for unit, pnl in mature if unit.economic_event_id() is not None]
 
     completion_rate = len(complete) / len(submitted) if submitted else None

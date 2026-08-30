@@ -93,6 +93,7 @@ void test_snapshot_delta_trade_and_reconnect_lineage() {
     result = shard.process_frame(trade, stamp(2'200'000'000LL, 1'700'000'000'200LL), output);
     assert(!result.invalid_frame);
     assert(result.trade_events == 1);
+    assert(result.raw_last_trade_events == 1);
     assert(result.output_count == 1);
     assert(output[0].kind == pm::v7::MarketWsEventKind::Trade);
     assert(output[0].side == pm::v7::Side::Buy);
@@ -113,6 +114,25 @@ void test_snapshot_delta_trade_and_reconnect_lineage() {
     assert(!result.invalid_frame);
     assert(result.applied_state_events == 1);
     assert(shard.snapshot(301).valid);
+}
+
+void test_price_only_trade_is_diagnosed_but_never_depletes_queue() {
+    auto shard = make_shard();
+    std::array<pm::v7::MarketWsEvent, 8> output{};
+    constexpr std::string_view price_only = R"JSON({
+      "event_type":"last_trade_price",
+      "asset_id":"asset-yes",
+      "timestamp":1700000000200,
+      "price":"0.52"
+    })JSON";
+    const auto result = shard.process_frame(
+        price_only, stamp(2'200'000'000LL, 1'700'000'000'200LL), output);
+    assert(!result.invalid_frame);
+    assert(result.raw_last_trade_events == 1);
+    assert(result.trade_events == 0);
+    assert(result.trade_missing_side == 1);
+    assert(result.trade_missing_size == 1);
+    assert(result.output_count == 0);
 }
 
 void test_large_live_snapshot_frame_fits_bounded_arena() {
@@ -196,6 +216,7 @@ void test_malformed_or_unconsumable_frame_invalidates_continuity() {
 
 int main() {
     test_snapshot_delta_trade_and_reconnect_lineage();
+    test_price_only_trade_is_diagnosed_but_never_depletes_queue();
     test_large_live_snapshot_frame_fits_bounded_arena();
     test_unknown_asset_is_ignored_without_poisoning_known_lineage();
     test_malformed_or_unconsumable_frame_invalidates_continuity();

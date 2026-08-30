@@ -298,6 +298,18 @@ public:
             [this](std::string_view payload, const pm::fast::FeedReceiveStamp& receive, std::size_t) {
                 std::array<MarketWsEvent, kWsOutputCapacity> events{};
                 const auto result = decoder_->process_frame(payload, receive, events);
+                raw_last_trade_events_.fetch_add(
+                    result.raw_last_trade_events, std::memory_order_relaxed);
+                valid_trade_prints_.fetch_add(result.trade_events, std::memory_order_relaxed);
+                missing_side_.fetch_add(result.trade_missing_side, std::memory_order_relaxed);
+                missing_size_.fetch_add(result.trade_missing_size, std::memory_order_relaxed);
+                invalid_quantity_.fetch_add(
+                    result.trade_invalid_quantity, std::memory_order_relaxed);
+                invalid_price_.fetch_add(result.trade_invalid_price, std::memory_order_relaxed);
+                invalid_timestamp_.fetch_add(
+                    result.trade_invalid_timestamp, std::memory_order_relaxed);
+                unknown_asset_.fetch_add(
+                    result.ignored_unknown_assets, std::memory_order_relaxed);
                 if (result.output_overflow || result.arena_exhausted) {
                     decoder_failures_.fetch_add(1, std::memory_order_relaxed);
                 }
@@ -360,6 +372,14 @@ public:
         root["events_written"] = events_written_;
         root["dropped_events"] = dropped_.load(std::memory_order_relaxed);
         root["decoder_failures"] = decoder_failures_.load(std::memory_order_relaxed);
+        root["raw_last_trade_events"] = raw_last_trade_events_.load(std::memory_order_relaxed);
+        root["valid_trade_prints"] = valid_trade_prints_.load(std::memory_order_relaxed);
+        root["missing_side"] = missing_side_.load(std::memory_order_relaxed);
+        root["missing_size"] = missing_size_.load(std::memory_order_relaxed);
+        root["invalid_quantity"] = invalid_quantity_.load(std::memory_order_relaxed);
+        root["invalid_price"] = invalid_price_.load(std::memory_order_relaxed);
+        root["invalid_timestamp"] = invalid_timestamp_.load(std::memory_order_relaxed);
+        root["unknown_asset"] = unknown_asset_.load(std::memory_order_relaxed);
         root["reconnects"] = reconnects_.load(std::memory_order_relaxed);
         root["connection_epoch"] = connection_epoch_.load(std::memory_order_relaxed);
         root["feed_workers"] = feed.workers;
@@ -420,6 +440,14 @@ private:
     std::atomic<std::uint64_t> connection_epoch_{1};
     std::atomic<std::uint64_t> dropped_{0};
     std::atomic<std::uint64_t> decoder_failures_{0};
+    std::atomic<std::uint64_t> raw_last_trade_events_{0};
+    std::atomic<std::uint64_t> valid_trade_prints_{0};
+    std::atomic<std::uint64_t> missing_side_{0};
+    std::atomic<std::uint64_t> missing_size_{0};
+    std::atomic<std::uint64_t> invalid_quantity_{0};
+    std::atomic<std::uint64_t> invalid_price_{0};
+    std::atomic<std::uint64_t> invalid_timestamp_{0};
+    std::atomic<std::uint64_t> unknown_asset_{0};
     std::atomic<std::uint64_t> reconnects_{0};
     std::uint64_t sequence_ = 0;
     std::uint64_t events_written_ = 0;

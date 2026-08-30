@@ -20,6 +20,9 @@ def payload(timestamp: int = 10_000, generation: int = 2) -> dict:
             "token_id": token, "market_id": "m", "condition_id": "c",
             "event_id": "e", "outcome": "YES", "exchange_ts_ms": 9_900,
             "receive_ts_ms": 9_950, "state_version": version,
+            "source_receive_ts_ms": 9_950, "snapshot_published_ms": timestamp,
+            "economic_novelty": True, "last_book_change_receive_ms": 9_950,
+            "last_trade_receive_ms": 9_940, "last_trade_exchange_ms": 9_930,
             "lineage_epoch": 1, "lineage_continuous": True,
             "provenance": "WEBSOCKET", "tick_size": .01,
             "min_order_size": 1, "bids": [{"price": .4, "size": 10}],
@@ -50,6 +53,11 @@ class SharedMarketStateTests(unittest.TestCase):
         self.assertEqual({row["bus_snapshot_id"] for row in books.values()}, {"s-2"})
         self.assertEqual(books["a"]["received_ms"], 10_000)
         self.assertEqual(books["a"]["source_receive_ts_ms"], 9_950)
+        self.assertEqual(books["a"]["snapshot_published_ms"], 10_000)
+        self.assertEqual(books["a"]["state_version"], 2)
+        self.assertTrue(books["a"]["economic_novelty"])
+        self.assertEqual(books["a"]["last_book_change_receive_ms"], 9_950)
+        self.assertEqual(books["a"]["last_trade_receive_ms"], 9_940)
 
     def test_stale_publish_and_broken_lineage_fail_closed(self) -> None:
         with self.assertRaises(SharedStateError):

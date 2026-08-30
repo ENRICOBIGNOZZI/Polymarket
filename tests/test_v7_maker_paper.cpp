@@ -127,6 +127,44 @@ void test_public_print_is_idempotent() {
     assert(engine.inventory().yes_microunits == after_first);
 }
 
+void test_public_trade_rejection_funnel_is_explicit() {
+    pm::v7::maker::MakerPaperMarketEngine engine(kMarket, kYes, kNo);
+    assert(engine.apply_intent(
+        quote(1, kYes, pm::v7::Side::Buy, 48, 1'000'000,
+              1'000'000'000LL, 10'000'000'000LL), 2'000'000, 100).applied);
+
+    const auto pre_arrival = engine.on_public_trade(trade(
+        401, kYes, pm::v7::Side::Sell, 48, 1'000'000,
+        9'999'000'000LL, 1'000'500'000LL));
+    assert(pre_arrival.causally_pre_arrival == 1);
+    assert(pre_arrival.eligible_orders == 0);
+
+    const auto wrong_side = engine.on_public_trade(trade(
+        402, kYes, pm::v7::Side::Buy, 48, 1'000'000,
+        10'100'000'000LL, 1'100'000'000LL));
+    assert(wrong_side.wrong_aggressor_side == 1);
+
+    const auto wrong_price = engine.on_public_trade(trade(
+        403, kYes, pm::v7::Side::Sell, 49, 1'000'000,
+        10'200'000'000LL, 1'200'000'000LL));
+    assert(wrong_price.price_not_crossing == 1);
+
+    const auto queue_only = engine.on_public_trade(trade(
+        404, kYes, pm::v7::Side::Sell, 48, 2'000'000,
+        10'300'000'000LL, 1'300'000'000LL));
+    assert(queue_only.eligible_orders == 1);
+    assert(queue_only.eligible_fill_microunits == 2'000'000);
+    assert(queue_only.operational_fill_microunits == 0);
+    assert(queue_only.queue_not_depleted == 1);
+
+    const auto filled = engine.on_public_trade(trade(
+        405, kYes, pm::v7::Side::Sell, 48, 2'000'000,
+        10'400'000'000LL, 1'400'000'000LL));
+    assert(filled.eligible_orders == 1);
+    assert(filled.operational_fill_microunits == 1'000'000);
+    assert(filled.queue_not_depleted == 0);
+}
+
 void test_cancel_pending_can_fill_until_effective_but_not_after() {
     pm::v7::maker::PaperMakerPolicy policy;
     policy.cancel_latency_ns = 100'000'000LL;
@@ -295,6 +333,7 @@ void test_inventory_factory_floor_survives_cycle_and_drain_releases_it() {
 int main() {
     test_queue_envelope_and_pessimistic_operational_fill();
     test_public_print_is_idempotent();
+    test_public_trade_rejection_funnel_is_explicit();
     test_cancel_pending_can_fill_until_effective_but_not_after();
     test_yes_no_buys_merge_complete_set_and_realize_trading_pnl();
     test_merge_does_not_consume_inventory_reserved_by_live_sell();

@@ -75,6 +75,15 @@ struct PaperMakerResult {
     std::uint8_t duplicate_trade = 0;
     std::uint8_t rejected = 0;
     std::uint8_t invariant_violation = 0;
+    std::uint32_t active_orders_seen = 0;
+    std::uint32_t causally_pre_arrival = 0;
+    std::uint32_t wrong_aggressor_side = 0;
+    std::uint32_t price_not_crossing = 0;
+    std::uint32_t cancel_effective_before_trade = 0;
+    std::uint32_t eligible_orders = 0;
+    std::uint32_t queue_not_depleted = 0;
+    std::int64_t eligible_fill_microunits = 0;
+    std::int64_t operational_fill_microunits = 0;
 };
 
 struct PaperMakerInventory {

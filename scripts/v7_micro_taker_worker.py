@@ -18,8 +18,11 @@ from v7_ledger_spool import spool_event
 from v7_shared_market_state import SharedStateError
 
 FLOW_FEATURE_DIM = 8
+DATASET_VERSION = 2
+DATASET_LINEAGE = "EVENT_NOVEL_SHARED_STATE_V2"
 COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT = "complete_round_trip_executable_ev"
 CONSERVATIVE_MARKING_CONTRACT = "full_depth_executable_bid_net_fee_or_zero_fail_closed"
+LIVE_FLOW_SCHEMA = "polymarket_v7_live_trade_flow_v1"
 
 
 def _finite(value: Any, default: float = math.nan) -> float:
@@ -48,6 +51,62 @@ def residual_sigma(samples: list[dict[str, Any]], beta: list[float]) -> float:
     if len(residuals) < 20:
         return 0.02
     return max(1e-4, statistics.stdev(residuals))
+
+
+def sample_key(market_id: str, yes: base.Book, no: base.Book) -> str:
+    """Identify one economically observable atomic YES/NO state.
+
+    Snapshot publication is deliberately absent: republishing an unchanged
+    atomic cut cannot manufacture an independent training observation.
+    """
+    return ":".join((
+        str(market_id),
+        str(yes.lineage_epoch), str(yes.state_version),
+        str(no.lineage_epoch), str(no.state_version),
+    ))
+
+
+def sample_diagnostics(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    labeled = [row for row in samples if row.get("y") is not None]
+    targets = [_finite(row.get("y")) for row in labeled]
+    targets = [value for value in targets if math.isfinite(value)]
+    nonzero = sum(abs(value) > 1e-12 for value in targets)
+    target_variance = statistics.pvariance(targets) if len(targets) >= 2 else 0.0
+    flow_nonzero = sum(
+        isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM
+        and (abs(_finite(row["x"][-2], 0.0)) > 1e-12
+             or abs(_finite(row["x"][-1], 0.0)) > 1e-12)
+        for row in samples
+    )
+    unique_keys = {
+        str(row.get("sample_key") or "") for row in samples
+        if str(row.get("sample_key") or "")
+    }
+    unique_markets = {str(row.get("market_id") or "") for row in samples}
+    return {
+        "raw_samples": len(samples),
+        "labeled_samples": len(targets),
+        "nonzero_labeled_samples": nonzero,
+        "nonzero_label_fraction": nonzero / len(targets) if targets else 0.0,
+        "target_variance": target_variance,
+        "flow_nonzero_samples": flow_nonzero,
+        "flow_nonzero_fraction": flow_nonzero / len(samples) if samples else 0.0,
+        "effective_sample_size": len(unique_keys),
+        "unique_markets": len(unique_markets - {""}),
+    }
+
+
+def model_validity(diagnostics: dict[str, Any], *, minimum_samples: int = 40) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    if int(diagnostics.get("labeled_samples") or 0) < minimum_samples:
+        reasons.append("INSUFFICIENT_LABELED_SAMPLES")
+    if int(diagnostics.get("effective_sample_size") or 0) < minimum_samples:
+        reasons.append("INSUFFICIENT_EFFECTIVE_SAMPLE_SIZE")
+    if float(diagnostics.get("target_variance") or 0.0) <= 1e-12:
+        reasons.append("DEGENERATE_ZERO_TARGET_VARIANCE")
+    if int(diagnostics.get("flow_nonzero_samples") or 0) <= 0:
+        reasons.append("NO_CAUSAL_FLOW_COVERAGE")
+    return not reasons, reasons
 
 
 def solve_ridge(samples: list[dict[str, Any]], ridge: float, feature_dim: int) -> list[float]:
@@ -144,6 +203,107 @@ def causal_flow_features(
             "prints": float(prints[token]),
         }
     return out
+
+
+def canonical_live_flow_features(
+    live_flow_path: Path,
+    token_ids: set[str],
+    *,
+    model_sha: str,
+    now_ms: int,
+    lookback_seconds: int,
+    half_life_seconds: float,
+    max_publish_age_ms: int,
+) -> tuple[dict[str, dict[str, float]], dict[str, Any]]:
+    """Consume causally timestamped prints from the full-universe WS owner."""
+    out = {
+        token: {"signed_imbalance": 0.0, "weighted_gross": 0.0, "prints": 0.0}
+        for token in token_ids
+    }
+    diagnostics: dict[str, Any] = {
+        "source": "FULL_UNIVERSE_CPP_WEBSOCKET",
+        "valid": False,
+        "reason": "UNREAD",
+        "publisher_age_ms": None,
+        "latest_trade_age_ms": None,
+        "matched_prints": 0,
+    }
+    try:
+        payload = json.loads(live_flow_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        diagnostics["reason"] = f"READ_ERROR:{type(exc).__name__}"
+        return out, diagnostics
+    if (
+        payload.get("schema") != LIVE_FLOW_SCHEMA
+        or payload.get("producer") != "FAST_STRUCTURAL_CPP_WEBSOCKET"
+        or payload.get("model_sha") != model_sha
+        or payload.get("paper_only") is not True
+        or payload.get("authenticated_execution") is not False
+        or payload.get("real_order_submission") is not False
+    ):
+        diagnostics["reason"] = "CONTRACT_INVALID"
+        return out, diagnostics
+    published_ms = int(_finite(payload.get("timestamp_ms"), 0.0))
+    publish_age_ms = now_ms - published_ms
+    diagnostics["publisher_age_ms"] = publish_age_ms
+    if publish_age_ms < -5_000 or publish_age_ms > max(1, int(max_publish_age_ms)):
+        diagnostics["reason"] = "PUBLISH_STALE"
+        return out, diagnostics
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        diagnostics["reason"] = "ROWS_INVALID"
+        return out, diagnostics
+    signed = {token: 0.0 for token in token_ids}
+    gross = {token: 0.0 for token in token_ids}
+    prints = {token: 0 for token in token_ids}
+    latest_receive_ms = 0
+    cutoff_ms = now_ms - max(1, int(lookback_seconds)) * 1000
+    decay_scale = math.log(2.0) / max(1e-6, float(half_life_seconds))
+    seen: set[tuple[str, int, int, str, float, float]] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        token = str(row.get("token_id") or "")
+        if token not in token_ids or not isinstance(row.get("trade_prints"), list):
+            continue
+        for trade in row["trade_prints"]:
+            if not isinstance(trade, dict):
+                continue
+            exchange_ms = int(_finite(trade.get("exchange_ts_ms"), 0.0))
+            receive_ms = int(_finite(trade.get("receive_ts_ms"), 0.0))
+            side = str(trade.get("side") or "").upper()
+            price = _finite(trade.get("price"), -1.0)
+            size = _finite(trade.get("size"), -1.0)
+            identity = (token, exchange_ms, receive_ms, side, price, size)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            if (
+                exchange_ms <= 0 or receive_ms < cutoff_ms or receive_ms > now_ms
+                or side not in {"BUY", "SELL"} or not 0.0 < price < 1.0 or size <= 0.0
+            ):
+                continue
+            age_seconds = (now_ms - receive_ms) / 1000.0
+            weight = math.exp(-decay_scale * age_seconds)
+            signed[token] += weight * size * (1.0 if side == "BUY" else -1.0)
+            gross[token] += weight * size
+            prints[token] += 1
+            latest_receive_ms = max(latest_receive_ms, receive_ms)
+    for token in token_ids:
+        out[token] = {
+            "signed_imbalance": signed[token] / gross[token] if gross[token] > 1e-12 else 0.0,
+            "weighted_gross": gross[token],
+            "prints": float(prints[token]),
+        }
+    diagnostics.update({
+        "valid": True,
+        "reason": "OK",
+        "latest_trade_age_ms": now_ms - latest_receive_ms if latest_receive_ms else None,
+        "matched_prints": sum(prints.values()),
+        "producer_raw_last_trade_events": int(_finite(payload.get("raw_last_trade_events"), 0.0)),
+        "producer_valid_trade_prints": int(_finite(payload.get("valid_trade_prints"), 0.0)),
+    })
+    return out, diagnostics
 
 
 def augment_features(
@@ -316,6 +476,7 @@ def main() -> int:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--trade-tape", type=Path)
+    parser.add_argument("--live-flow", type=Path)
     parser.add_argument("--flow-lookback-seconds", type=int, default=60)
     parser.add_argument("--flow-half-life-seconds", type=float, default=15.0)
     parser.add_argument("--markets", type=int, default=250)
@@ -360,6 +521,25 @@ def main() -> int:
     trade_tape = args.trade_tape or (args.run_dir.parent / "trade_tape.csv")
     state_path = args.run_dir / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {"cash": start_capital, "peak": start_capital, "killed": False, "positions": {}, "samples": []}
+    prior_dataset_version = int(_finite(state.get("dataset_version"), 1.0))
+    legacy_samples = state.get("samples") if isinstance(state.get("samples"), list) else []
+    dataset_migration: dict[str, Any] = state.get("dataset_migration") if isinstance(state.get("dataset_migration"), dict) else {}
+    if prior_dataset_version < DATASET_VERSION and legacy_samples:
+        archive_path = args.run_dir / "state_dataset_v1_degenerate_repeated_snapshot.json"
+        if not archive_path.exists():
+            archived = dict(state)
+            archived["dataset_archive_reason"] = "DEGENERATE_REPEATED_SNAPSHOT"
+            archived["superseded_by_dataset_version"] = DATASET_VERSION
+            base.atomic_json(archive_path, archived)
+        dataset_migration = {
+            "from_version": prior_dataset_version,
+            "to_version": DATASET_VERSION,
+            "reason": "DEGENERATE_REPEATED_SNAPSHOT",
+            "archived_samples": len(legacy_samples),
+            "archive_path": str(archive_path),
+            "migrated_at": int(time.time()),
+        }
+        state["samples"] = []
     cash = base.finite(state.get("cash"), start_capital)
     peak = max(start_capital, base.finite(state.get("peak"), start_capital))
     positions = state.get("positions") if isinstance(state.get("positions"), dict) else {}
@@ -402,7 +582,27 @@ def main() -> int:
     )
     missing_book_pair_count = max(0, len(markets) - book_pair_count)
     token_ids = {token for market in markets for token in (market.yes, market.no) if token}
-    flow = causal_flow_features(trade_tape, token_ids, now=now, lookback_seconds=args.flow_lookback_seconds, half_life_seconds=args.flow_half_life_seconds)
+    if args.live_flow is not None:
+        flow, flow_diagnostics = canonical_live_flow_features(
+            args.live_flow, token_ids, model_sha=args.model_sha,
+            now_ms=time.time_ns() // 1_000_000,
+            lookback_seconds=args.flow_lookback_seconds,
+            half_life_seconds=args.flow_half_life_seconds,
+            max_publish_age_ms=args.max_shared_publish_age_ms,
+        )
+    else:
+        flow = causal_flow_features(
+            trade_tape, token_ids, now=now,
+            lookback_seconds=args.flow_lookback_seconds,
+            half_life_seconds=args.flow_half_life_seconds,
+        )
+        flow_diagnostics = {
+            "source": "REST_TRADE_TAPE_COMPATIBILITY",
+            "valid": False,
+            "reason": "NON_CANONICAL_COMPATIBILITY_ONLY",
+            "matched_prints": int(sum(row["prints"] for row in flow.values())),
+        }
+    flow_valid = flow_diagnostics.get("valid") is True
     current: dict[str, tuple[base.Market, base.Book, base.Book, tuple[list[float], float, float]]] = {}
     for market in markets:
         yes, no = books.get(market.yes), books.get(market.no)
@@ -417,7 +617,9 @@ def main() -> int:
     label_stats = base.label_matured_samples(samples, now=now, horizon_seconds=args.horizon_seconds, max_target_staleness_seconds=args.max_target_staleness_seconds)
     beta = solve_ridge(samples, 1e-2, FLOW_FEATURE_DIM)
     model_labeled = sum(row.get("y") is not None and isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM for row in samples)
-    sigma = residual_sigma(samples, beta)
+    training_diagnostics = sample_diagnostics(samples)
+    model_valid, model_invalid_reasons = model_validity(training_diagnostics)
+    sigma = residual_sigma(samples, beta) if model_valid else None
     slip = max(0.0, args.slippage_bps) / 10000.0
 
     realized_last_tick = 0.0
@@ -509,11 +711,31 @@ def main() -> int:
     opened = 0
     best_edge = 0.0
     admission_rows: list[dict[str, Any]] = []
-    if not killed and not new_risk_frozen and model_labeled >= 40:
+    rejection_funnel: dict[str, int] = {
+        "feature_ready_markets": len(current),
+        "model_or_flow_gate_closed": 0,
+        "already_positioned": 0,
+        "missing_fee": 0,
+        "prediction_evaluated": 0,
+        "no_complete_round_trip_ev": 0,
+        "zero_capital_room": 0,
+        "entry_or_exit_depth_rejected": 0,
+        "nonpositive_net_edge": 0,
+        "ranked_signals": 0,
+        "below_minimum_order": 0,
+        "cash_rejected": 0,
+        "opened": 0,
+    }
+    if not killed and not new_risk_frozen and model_valid and flow_valid:
         ranked: list[tuple[float, Any, str, base.Book, economics.RoundTripEconomics, float]] = []
         for market_id, (market, yes, no, feature) in current.items():
             if market_id in positions or market.fee is None:
+                if market_id in positions:
+                    rejection_funnel["already_positioned"] += 1
+                else:
+                    rejection_funnel["missing_fee"] += 1
                 continue
+            rejection_funnel["prediction_evaluated"] += 1
             prediction = sum(a * b for a, b in zip(beta, feature[0]))
             prediction = max(-2 * feature[2], min(2 * feature[2], prediction))
             predicted_yes_mid = max(0.001, min(0.999, feature[1] + prediction))
@@ -523,7 +745,7 @@ def main() -> int:
             candidate = economics.choose_side(
                 book=snapshot,
                 predicted_yes_mid=predicted_yes_mid,
-                prediction_sigma_probability=sigma,
+                prediction_sigma_probability=float(sigma),
                 fee=fee_spec(market.fee),
                 horizon_seconds=args.horizon_seconds,
                 now=now,
@@ -535,16 +757,25 @@ def main() -> int:
                 minimum_net_edge=args.min_edge,
             )
             if candidate is None:
+                rejection_funnel["no_complete_round_trip_ev"] += 1
                 continue
             book = yes if candidate.side == "YES" else no
             room_probe = max(0.0, min(args.max_trade_usd, max_market_fraction * equity, cash))
+            if room_probe <= 0.0:
+                rejection_funnel["zero_capital_room"] += 1
+                continue
             shares_probe = room_probe / max(candidate.capital_per_share, 1e-9)
             adjusted = depth_adjusted_economics(candidate, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares_probe, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour)
             if adjusted is None:
+                rejection_funnel["entry_or_exit_depth_rejected"] += 1
                 continue
             shares_probe = room_probe / max(adjusted.capital_per_share, 1e-9)
             adjusted = depth_adjusted_economics(adjusted, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares_probe, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour)
             if adjusted is None or adjusted.net_edge < args.min_edge or adjusted.net_pnl_per_share <= 0.0:
+                if adjusted is None:
+                    rejection_funnel["entry_or_exit_depth_rejected"] += 1
+                else:
+                    rejection_funnel["nonpositive_net_edge"] += 1
                 continue
             ranked.append((adjusted.economic_score, market, adjusted.side, book, adjusted, predicted_yes_mid))
             admission_rows.append({
@@ -565,6 +796,7 @@ def main() -> int:
             })
         ranked.sort(reverse=True, key=lambda row: row[0])
         signals = len(ranked)
+        rejection_funnel["ranked_signals"] = signals
         best_edge = max((row[4].net_edge for row in ranked), default=0.0)
         for _score, market, side, book, candidate, predicted_yes_mid in ranked:
             if len(positions) >= args.max_positions:
@@ -578,13 +810,19 @@ def main() -> int:
                 continue
             shares = room / max(candidate.capital_per_share, 1e-9)
             if shares < book.min_order:
+                rejection_funnel["below_minimum_order"] += 1
                 continue
             candidate = depth_adjusted_economics(candidate, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour)
             if candidate is None or candidate.net_edge < args.min_edge or candidate.net_pnl_per_share <= 0.0:
+                if candidate is None:
+                    rejection_funnel["entry_or_exit_depth_rejected"] += 1
+                else:
+                    rejection_funnel["nonpositive_net_edge"] += 1
                 continue
             fee = candidate.entry_fee_per_share * shares
             cost = candidate.entry_price * shares + fee
             if cost > cash + 1e-9:
+                rejection_funnel["cash_rejected"] += 1
                 continue
             positions[market.id] = {
                 "side": side,
@@ -597,6 +835,7 @@ def main() -> int:
             }
             cash -= cost
             opened += 1
+            rejection_funnel["opened"] += 1
             append_fill(args.run_dir, timestamp=now, market_id=market.id, slug=market.slug, action="BUY_TAKER", side=side, shares=shares, price=candidate.entry_price, fee=fee, pnl=0.0, net_edge=candidate.net_edge, expected_exit_price=candidate.expected_exit_price)
             decision_ms = time.time_ns() // 1_000_000
             position_id = stable_id(args.model_sha, "MICRO_TAKER", market.id, decision_ms)
@@ -637,6 +876,8 @@ def main() -> int:
                 "position_id": position_id, "entry_order_id": order_id,
                 "entry_fill_id": fill_id, "markout_horizons": [],
             })
+    else:
+        rejection_funnel["model_or_flow_gate_closed"] = len(current)
 
     # Append one size-aware executable mark per configured economic horizon.
     for market_id, position in positions.items():
@@ -669,8 +910,38 @@ def main() -> int:
             emitted.add(horizon)
         position["markout_horizons"] = sorted(emitted)
 
-    for market_id, (_market, _yes, _no, feature) in current.items():
-        samples.append({"ts": now, "market_id": market_id, "mid": feature[1], "spread": feature[2], "x": feature[0], "y": None})
+    known_sample_keys = {
+        str(row.get("sample_key") or "") for row in samples
+        if str(row.get("sample_key") or "")
+    }
+    novel_samples = 0
+    duplicate_snapshots_rejected = 0
+    for market_id, (market, yes, no, feature) in current.items():
+        if not flow_valid:
+            break
+        key = sample_key(market_id, yes, no)
+        if key in known_sample_keys:
+            duplicate_snapshots_rejected += 1
+            continue
+        observed_ts = max(yes.source_received_ts, no.source_received_ts)
+        samples.append({
+            "dataset_version": DATASET_VERSION,
+            "dataset_lineage": DATASET_LINEAGE,
+            "sample_key": key,
+            "ts": observed_ts,
+            "snapshot_published_ts": max(yes.snapshot_published_ts, no.snapshot_published_ts),
+            "market_id": market_id,
+            "event_id": market.event,
+            "yes_token": market.yes,
+            "no_token": market.no,
+            "yes_state_version": yes.state_version,
+            "no_state_version": no.state_version,
+            "yes_lineage_epoch": yes.lineage_epoch,
+            "no_lineage_epoch": no.lineage_epoch,
+            "mid": feature[1], "spread": feature[2], "x": feature[0], "y": None,
+        })
+        known_sample_keys.add(key)
+        novel_samples += 1
     samples = samples[-50000:]
     equity, unmarkable_positions = conservative_marked_equity(cash, positions, current)
     new_risk_frozen = bool(unmarkable_positions) or drain_requested
@@ -680,6 +951,7 @@ def main() -> int:
     killed = killed or (marking_complete and drawdown >= max_drawdown)
     labeled = sum(row.get("y") is not None for row in samples)
     model_labeled = sum(row.get("y") is not None and isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM for row in samples)
+    dataset_diagnostics = sample_diagnostics(samples)
 
     new_state = {
         "schema": "polymarket_v7_micro_taker_status_v1",
@@ -702,8 +974,19 @@ def main() -> int:
         "marking_contract": CONSERVATIVE_MARKING_CONTRACT,
         "positions": positions,
         "samples": samples,
+        "dataset_version": DATASET_VERSION,
+        "dataset_lineage": DATASET_LINEAGE,
+        "dataset_migration": dataset_migration,
+        "dataset_diagnostics": dataset_diagnostics,
+        "novel_samples_last_tick": novel_samples,
+        "duplicate_snapshots_rejected_last_tick": duplicate_snapshots_rejected,
         "beta": beta,
         "prediction_sigma_probability": sigma,
+        "model_valid": model_valid,
+        "model_invalid_reasons": model_invalid_reasons,
+        "flow_valid": flow_valid,
+        "flow_diagnostics": flow_diagnostics,
+        "rejection_funnel": rejection_funnel,
         "labeled_samples": labeled,
         "model_labeled_samples": model_labeled,
         "market_state_source": (
@@ -732,7 +1015,12 @@ def main() -> int:
         "cash", "equity", "peak", "drawdown", "killed",
         "new_risk_frozen", "drain_requested", "drain_complete", "marking_complete", "market_capital_ceiling",
         "unmarkable_positions", "marking_contract",
-        "prediction_sigma_probability", "labeled_samples", "model_labeled_samples",
+        "prediction_sigma_probability", "model_valid", "model_invalid_reasons",
+        "flow_valid", "flow_diagnostics",
+        "rejection_funnel",
+        "dataset_version", "dataset_lineage", "dataset_diagnostics",
+        "novel_samples_last_tick", "duplicate_snapshots_rejected_last_tick",
+        "labeled_samples", "model_labeled_samples",
         "market_state_source", "discovered_markets", "fee_ready_markets",
         "atomic_book_pairs", "missing_book_pairs", "feature_ready_markets",
         "signals", "opened", "best_edge",
@@ -762,7 +1050,11 @@ def main() -> int:
         "feature_ready_markets": len(current), "labeled": labeled, "model_labeled": model_labeled,
         "signals": signals, "opened": opened, "positions": len(positions), "equity": equity,
         "realized_pnl_total": realized_total, "best_edge": best_edge,
-        "prediction_sigma_probability": sigma, "killed": killed,
+        "prediction_sigma_probability": sigma, "model_valid": model_valid,
+        "model_invalid_reasons": model_invalid_reasons,
+        "novel_samples": novel_samples,
+        "duplicate_snapshots_rejected": duplicate_snapshots_rejected,
+        "killed": killed,
         "new_risk_frozen": new_risk_frozen, "unmarkable_positions": len(unmarkable_positions),
         "marking_contract": CONSERVATIVE_MARKING_CONTRACT,
         "admission_contract": "causal_flow_depth_complete_round_trip_ev",

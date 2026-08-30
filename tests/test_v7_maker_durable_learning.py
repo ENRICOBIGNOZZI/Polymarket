@@ -86,6 +86,8 @@ class DurableLearningTests(unittest.TestCase):
         self.assertEqual(fitted["family"], "censored_survival_hazard_joint_cycle_v3")
         self.assertAlmostEqual(fitted["groups"]["GLOBAL"]["fill_probability"], 0.4 / 28.0)
         self.assertEqual(fitted["hyperparameters"]["fill_prior_strength_orders"], 20.0)
+        self.assertFalse(fitted["groups"]["GLOBAL"]["mature"])
+        self.assertEqual(fitted["groups"]["GLOBAL"]["filled_orders"], 0)
 
     def test_joint_model_is_direct_and_cold_start_is_explicit(self) -> None:
         model = fit_model([], model_sha=SHA, policy_hash="policy",

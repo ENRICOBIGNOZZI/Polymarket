@@ -391,6 +391,100 @@ def _generic_maker_market_allowed(raw: dict[str, Any], selection_cfg: dict[str, 
     return raw.get("timed_sports") is not True
 
 
+LIVE_FLOW_SCHEMA = "polymarket_v7_live_trade_flow_v1"
+
+
+def _canonical_live_flow_aggregates(
+    live_flow_path: Path,
+    *,
+    model_sha: str,
+    now_ms: int,
+    maximum_age_ms: int,
+) -> tuple[dict[str, dict[str, Any]], int]:
+    """Load full-universe causal prints published by the C++ WS owner."""
+    if not live_flow_path.is_file():
+        raise ValueError("maker_live_flow_missing")
+    payload = json.loads(live_flow_path.read_text(encoding="utf-8"))
+    if (
+        payload.get("schema") != LIVE_FLOW_SCHEMA
+        or payload.get("producer") != "FAST_STRUCTURAL_CPP_WEBSOCKET"
+        or payload.get("paper_only") is not True
+        or payload.get("authenticated_execution") is not False
+        or payload.get("real_order_submission") is not False
+        or payload.get("model_sha") != model_sha
+    ):
+        raise ValueError("maker_live_flow_contract_invalid")
+    published_ms = int(payload.get("timestamp_ms") or 0)
+    publish_age_ms = now_ms - published_ms
+    if publish_age_ms < -5_000 or publish_age_ms > maximum_age_ms:
+        raise ValueError(f"maker_live_flow_publish_stale:{publish_age_ms}")
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        raise ValueError("maker_live_flow_rows_invalid")
+    aggregates: dict[str, dict[str, Any]] = {}
+    latest_receive_ms = 0
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        condition_id = str(raw.get("condition_id") or "")
+        receive_ms = int(finite(raw.get("last_receive_ts_ms"), 0.0))
+        if not condition_id or receive_ms <= 0 or receive_ms > now_ms + 5_000:
+            continue
+        latest_receive_ms = max(latest_receive_ms, receive_ms)
+        item = aggregates.setdefault(condition_id, {
+            "prints": 0, "shares": 0.0, "notional": 0.0,
+            "buy_prints_5s": 0, "buy_prints_30s": 0,
+            "buy_prints_2m": 0, "buy_prints_10m": 0,
+            "buy_shares_10m": 0.0, "buy_notional_10m": 0.0,
+            "last_buy_receive_ms": 0,
+            "sell_prints_5s": 0, "sell_prints_30s": 0,
+            "sell_prints_2m": 0, "sell_prints_10m": 0,
+            "sell_shares_10m": 0.0, "sell_notional_10m": 0.0,
+            "last_receive_ms": 0, "last_sell_receive_ms": 0,
+            "transactions": set(),
+            "token_flow": {},
+        })
+        token_id = str(raw.get("token_id") or "")
+        token_flow = item["token_flow"].setdefault(token_id, {
+            "buy_prints_5s": 0, "buy_prints_30s": 0,
+            "buy_prints_2m": 0, "buy_prints_10m": 0,
+            "buy_shares_10m": 0.0, "buy_notional_10m": 0.0,
+            "last_buy_receive_ms": 0,
+            "sell_prints_5s": 0, "sell_prints_30s": 0,
+            "sell_prints_2m": 0, "sell_prints_10m": 0,
+            "sell_shares_10m": 0.0, "sell_notional_10m": 0.0,
+            "last_sell_receive_ms": 0,
+        })
+        for side in ("buy", "sell"):
+            for source_suffix, target_suffix in (("5s", "5s"), ("30s", "30s"),
+                                                  ("120s", "2m"), ("600s", "10m")):
+                key = f"{side}_prints_{target_suffix}"
+                count = int(finite(raw.get(f"{side}_prints_{source_suffix}"), 0.0))
+                item[key] += count
+                token_flow[key] += count
+            shares = max(0.0, finite(raw.get(f"{side}_shares_600s"), 0.0))
+            notional = max(0.0, finite(raw.get(f"{side}_notional_600s"), 0.0))
+            item[f"{side}_shares_10m"] += shares
+            item[f"{side}_notional_10m"] += notional
+            token_flow[f"{side}_shares_10m"] += shares
+            token_flow[f"{side}_notional_10m"] += notional
+            side_receive_ms = int(finite(
+                raw.get(f"last_{side}_receive_ts_ms_600s"), 0.0))
+            item[f"last_{side}_receive_ms"] = max(
+                int(item[f"last_{side}_receive_ms"]),
+                side_receive_ms,
+            )
+            token_flow[f"last_{side}_receive_ms"] = max(
+                int(token_flow[f"last_{side}_receive_ms"]), side_receive_ms)
+        item["prints"] = int(item["buy_prints_10m"]) + int(item["sell_prints_10m"])
+        item["shares"] = float(item["buy_shares_10m"]) + float(item["sell_shares_10m"])
+        item["notional"] = float(item["buy_notional_10m"]) + float(item["sell_notional_10m"])
+        item["last_receive_ms"] = max(int(item["last_receive_ms"]), receive_ms)
+    if latest_receive_ms <= 0 or now_ms - latest_receive_ms > maximum_age_ms:
+        raise ValueError(f"maker_live_flow_trade_stale:{now_ms - latest_receive_ms}")
+    return aggregates, latest_receive_ms
+
+
 def _recent_flow_snapshot(
     universe_path: Path,
     trade_tape_path: Path,
@@ -400,12 +494,13 @@ def _recent_flow_snapshot(
     *,
     model_sha: str,
     now_ms: int,
+    live_flow_path: Path | None = None,
 ) -> dict[str, Any]:
     """Rank PAPER markets by causal recent public prints, not reward-pool size."""
     flow_cfg = selection_cfg.get("recent_flow")
     if not isinstance(flow_cfg, dict) or flow_cfg.get("enabled") is not True:
         raise ValueError("maker_recent_flow_disabled")
-    if not trade_tape_path.is_file():
+    if live_flow_path is None and not trade_tape_path.is_file():
         raise ValueError("maker_recent_flow_tape_missing")
     universe = json.loads(universe_path.read_text(encoding="utf-8"))
     if (
@@ -431,10 +526,20 @@ def _recent_flow_snapshot(
         1_000, int(float(flow_cfg.get("maximum_tape_age_seconds", 30.0)) * 1000.0)
     )
     aggregates: dict[str, dict[str, Any]] = {}
-    seen_prints: set[tuple[str, str, str, str, str, str]] = set()
     latest_receive_ms = 0
-    with trade_tape_path.open(newline="", encoding="utf-8") as handle:
-        for raw in csv.DictReader(handle):
+    flow_source = "REST_TRADE_TAPE_COMPATIBILITY"
+    if live_flow_path is not None:
+        aggregates, latest_receive_ms = _canonical_live_flow_aggregates(
+            live_flow_path, model_sha=model_sha, now_ms=now_ms,
+            maximum_age_ms=maximum_tape_age_ms,
+        )
+        flow_source = "FULL_UNIVERSE_CPP_WEBSOCKET"
+        raw_rows: list[dict[str, Any]] = []
+    else:
+        seen_prints: set[tuple[str, str, str, str, str, str]] = set()
+        with trade_tape_path.open(newline="", encoding="utf-8") as handle:
+            raw_rows = list(csv.DictReader(handle))
+    for raw in raw_rows:
             condition_id = str(raw.get("condition_id") or "")
             receive_ms = int(finite(raw.get("received_ms"), 0.0))
             latest_receive_ms = max(latest_receive_ms, receive_ms)
@@ -511,6 +616,10 @@ def _recent_flow_snapshot(
             "maximum_last_side_age_seconds",
             flow_cfg.get("maximum_last_sell_age_seconds", 120.0))) * 1_000.0),
     )
+    maximum_market_flow_age_ms = max(
+        1_000,
+        int(float(flow_cfg.get("maximum_market_flow_age_seconds", 120.0)) * 1_000.0),
+    )
     minimum_markets = max(1, int(flow_cfg.get("minimum_markets", 5)))
     minimum_tte_ms = max(
         0, int(float(flow_cfg.get("minimum_time_to_end_seconds", 900.0)) * 1000.0)
@@ -537,6 +646,8 @@ def _recent_flow_snapshot(
         if (
             flow is None
             or int(flow["prints"]) < minimum_prints
+            or (flow_source == "FULL_UNIVERSE_CPP_WEBSOCKET"
+                and now_ms - int(flow["last_receive_ms"]) > maximum_market_flow_age_ms)
             or not _generic_maker_market_allowed(raw, selection_cfg)
             or raw.get("active") is not True
             or raw.get("closed") is True
@@ -609,6 +720,41 @@ def _recent_flow_snapshot(
             else "COLLATERAL_BACKED_BID" if sell_fresh
             else "STABLE_SPREAD_EXPLORATION"
         )
+        token_flow = flow.get("token_flow") if isinstance(flow.get("token_flow"), dict) else {}
+        quote_opportunities = []
+        for outcome, token in (("YES", yes_token), ("NO", no_token)):
+            token_stats = token_flow.get(token) if isinstance(token_flow.get(token), dict) else {}
+            for quote_side, aggressor_prefix, side_score in (
+                ("BUY", "sell", bid_opportunity_score),
+                ("SELL", "buy", ask_opportunity_score),
+            ):
+                quote_opportunities.append({
+                    "outcome": outcome,
+                    "token_id": token,
+                    "quote_side": quote_side,
+                    "required_aggressor_side": aggressor_prefix.upper(),
+                    "opposite_prints_30s": int(token_stats.get(
+                        f"{aggressor_prefix}_prints_30s", 0)),
+                    "opposite_prints_2m": int(token_stats.get(
+                        f"{aggressor_prefix}_prints_2m", 0)),
+                    "opposite_prints_10m": int(token_stats.get(
+                        f"{aggressor_prefix}_prints_10m", 0)),
+                    "opposite_shares_10m": float(token_stats.get(
+                        f"{aggressor_prefix}_shares_10m", 0.0)),
+                    "last_opposite_flow_age_ms": (
+                        now_ms - int(token_stats.get(
+                            f"last_{aggressor_prefix}_receive_ms", 0))
+                        if int(token_stats.get(
+                            f"last_{aggressor_prefix}_receive_ms", 0)) > 0 else -1
+                    ),
+                    "market_side_score": side_score,
+                })
+        quote_opportunities.sort(key=lambda row: (
+            -int(row["opposite_prints_30s"]),
+            -int(row["opposite_prints_2m"]),
+            -float(row["opposite_shares_10m"]),
+            str(row["token_id"]), str(row["quote_side"]),
+        ))
         candidates.append({
             "condition_id": condition_id,
             "market_id": market_id,
@@ -635,6 +781,7 @@ def _recent_flow_snapshot(
             "complete_set_cycle_score": complete_set_cycle_score,
             "reward_capture_score": reward_capture_score,
             "side_mode": side_mode,
+            "quote_opportunities": quote_opportunities,
             "recent_prints": int(flow["prints"]),
             "recent_unique_transactions": len(flow["transactions"]),
             "recent_share_volume": float(flow["shares"]),
@@ -699,6 +846,7 @@ def _recent_flow_snapshot(
         "universe_membership_sha256": str(universe.get("membership_sha256") or ""),
         "recent_flow_lookback_ms": lookback_ms,
         "recent_flow_latest_receive_ms": latest_receive_ms,
+        "recent_flow_source": flow_source,
         "minimum_side_prints_2m": minimum_side_prints_2m,
         "maximum_last_side_age_ms": maximum_last_side_age_ms,
         "markets": selected,
@@ -940,6 +1088,7 @@ def build_snapshot(
     *,
     fallback_universe_path: Path | None = None,
     trade_tape_path: Path | None = None,
+    live_flow_path: Path | None = None,
     model_sha: str = "",
     deadline_seconds: float | None = None,
     request_timeout_seconds: float | None = None,
@@ -976,7 +1125,7 @@ def build_snapshot(
     if (
         flow_cfg.get("enabled") is True
         and fallback_universe_path is not None
-        and trade_tape_path is not None
+        and (live_flow_path is not None or trade_tape_path is not None)
     ):
         flow_wait_seconds = max(0.0, float(flow_cfg.get("initial_wait_seconds", 0.0)))
         flow_deadline = time.monotonic() + flow_wait_seconds
@@ -987,6 +1136,7 @@ def build_snapshot(
                     fallback_universe_path, trade_tape_path, selection_cfg, capacity_cfg,
                     resource_capacity, model_sha=model_sha,
                     now_ms=time.time_ns() // 1_000_000 if now_ms is None else int(now_ms),
+                    live_flow_path=live_flow_path,
                 )
             except Exception as error:
                 flow_error = f"{type(error).__name__}:{error}"[:500]
@@ -1085,7 +1235,11 @@ def selector_status(
         candidate.get("source") == "adaptive_universe_recent_flow"
         and candidate.get("degraded") is not True
     )
-    candidate_rotation_suppressed = False
+    candidate_rotation_suppressed = bool(
+        runtime_selection_pinned
+        and candidate.get("degraded") is True
+        and runtime_membership != candidate_membership
+    )
     candidate_last_sell_ages = [
         max(0.0, finite(row.get("recent_last_sell_age_ms")) / 1_000.0)
         for row in candidate_markets
@@ -1170,6 +1324,7 @@ def main() -> int:
     parser.add_argument("--status", type=Path)
     parser.add_argument("--fallback-universe", type=Path)
     parser.add_argument("--trade-tape", type=Path)
+    parser.add_argument("--live-flow", type=Path)
     parser.add_argument("--allocation", type=Path)
     parser.add_argument("--model-sha", default="")
     parser.add_argument("--deadline-seconds", type=float)
@@ -1179,6 +1334,7 @@ def main() -> int:
         args.config,
         fallback_universe_path=args.fallback_universe,
         trade_tape_path=args.trade_tape,
+        live_flow_path=args.live_flow,
         allocation_path=args.allocation,
         model_sha=args.model_sha,
         deadline_seconds=args.deadline_seconds,

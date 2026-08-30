@@ -372,7 +372,16 @@ class CohortSupervisor:
             validate_selection(candidate, self.args.model_sha)
         except ValueError:
             return None
-        return candidate if membership_sha256(runtime) != membership_sha256(candidate) else None
+        if membership_sha256(runtime) == membership_sha256(candidate):
+            return None
+        # A degraded fallback is useful only to cold-start a runtime that has no
+        # selection.  Once a valid cohort is live, a stale/failed flow source
+        # must not turn an unrelated 24h-liquidity fallback into a drain and
+        # whole-cohort restart.  Keep the last-known-good membership quoting and
+        # wait for a non-degraded generation.
+        if candidate.get("degraded") is True:
+            return None
+        return candidate
 
     def write_flow_pause_drain(self) -> None:
         atomic_json(self.drain, {

@@ -50,6 +50,12 @@ struct MarketWsFrameResult {
     std::size_t recognized_events = 0;
     std::size_t applied_state_events = 0;
     std::size_t trade_events = 0;
+    std::size_t raw_last_trade_events = 0;
+    std::size_t trade_missing_side = 0;
+    std::size_t trade_missing_size = 0;
+    std::size_t trade_invalid_quantity = 0;
+    std::size_t trade_invalid_price = 0;
+    std::size_t trade_invalid_timestamp = 0;
     std::size_t ignored_unknown_assets = 0;
     std::int64_t parse_ns = 0;
     std::int64_t book_apply_ns = 0;

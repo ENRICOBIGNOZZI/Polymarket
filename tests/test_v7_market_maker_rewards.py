@@ -57,6 +57,44 @@ def _universe(path: Path, *, timestamp_ms: int, model_sha: str = SHA, markets=No
 
 
 class MakerRewardSelectorTests(unittest.TestCase):
+    def test_canonical_live_flow_is_exact_sha_and_event_time_grounded(self) -> None:
+        from tempfile import TemporaryDirectory
+        now_ms = 1_000_000
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "live_trade_flow.json"
+            path.write_text(json.dumps({
+                "schema": rewards.LIVE_FLOW_SCHEMA,
+                "timestamp_ms": now_ms - 100,
+                "producer": "FAST_STRUCTURAL_CPP_WEBSOCKET",
+                "model_sha": SHA,
+                "paper_only": True,
+                "authenticated_execution": False,
+                "real_order_submission": False,
+                "rows": [{
+                    "condition_id": "c1", "token_id": "yes",
+                    "last_receive_ts_ms": now_ms - 200,
+                    "buy_prints_5s": 2, "buy_prints_30s": 3,
+                    "buy_prints_120s": 4, "buy_prints_600s": 5,
+                    "buy_shares_600s": 12.0, "buy_notional_600s": 6.0,
+                    "last_buy_receive_ts_ms_600s": now_ms - 200,
+                    "sell_prints_5s": 1, "sell_prints_30s": 1,
+                    "sell_prints_120s": 2, "sell_prints_600s": 2,
+                    "sell_shares_600s": 3.0, "sell_notional_600s": 1.2,
+                    "last_sell_receive_ts_ms_600s": now_ms - 300,
+                }],
+            }), encoding="utf-8")
+            aggregates, latest = rewards._canonical_live_flow_aggregates(
+                path, model_sha=SHA, now_ms=now_ms, maximum_age_ms=30_000,
+            )
+            self.assertEqual(latest, now_ms - 200)
+            self.assertEqual(aggregates["c1"]["prints"], 7)
+            self.assertEqual(aggregates["c1"]["buy_prints_2m"], 4)
+            with self.assertRaisesRegex(ValueError, "contract_invalid"):
+                rewards._canonical_live_flow_aggregates(
+                    path, model_sha="b" * 40, now_ms=now_ms,
+                    maximum_age_ms=30_000,
+                )
+
     def test_config_requires_fail_closed_timed_sports_exclusion(self) -> None:
         from tempfile import TemporaryDirectory
         config = json.loads((ROOT / "config" / "v7_professional_market_maker.json").read_text())
@@ -289,7 +327,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertEqual(snapshot["markets"][0]["side_mode"], "COLLATERAL_BACKED_BID")
         self.assertEqual(snapshot["markets"][1]["side_mode"], "STABLE_SPREAD_EXPLORATION")
 
-    def test_selector_status_allows_operational_fallback_rotation(self) -> None:
+    def test_selector_status_suppresses_degraded_fallback_rotation(self) -> None:
         runtime = {
             "model_sha": SHA, "timestamp_ms": 1_000,
             "source": "adaptive_universe_recent_flow", "degraded": False,
@@ -307,8 +345,8 @@ class MakerRewardSelectorTests(unittest.TestCase):
         status = rewards.selector_status(
             runtime, candidate_snapshot=candidate, runtime_selection_pinned=True
         )
-        self.assertTrue(status["candidate_rotation_pending"])
-        self.assertFalse(status["candidate_rotation_suppressed_no_fresh_flow"])
+        self.assertFalse(status["candidate_rotation_pending"])
+        self.assertTrue(status["candidate_rotation_suppressed_no_fresh_flow"])
         self.assertFalse(status["candidate_fresh_flow_eligible"])
         self.assertEqual(status["candidate_max_last_sell_age_seconds"], -1.0)
 

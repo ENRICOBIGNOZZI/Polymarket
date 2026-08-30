@@ -14,6 +14,7 @@ import hashlib
 import json
 import math
 import os
+import statistics
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -53,6 +54,32 @@ def now_ms() -> int:
 
 def stable_id(*parts: Any) -> str:
     return hashlib.sha256("|".join(str(part) for part in parts).encode()).hexdigest()[:32]
+
+
+def expected_calibration_error(
+    predictions: list[float], actuals: list[float], *, bins: int = 10,
+) -> float | None:
+    """Fixed-bin ECE over independent settlement-cluster observations."""
+    pairs = [
+        (float(prediction), float(actual))
+        for prediction, actual in zip(predictions, actuals)
+        if math.isfinite(prediction) and math.isfinite(actual)
+        and 0.0 <= prediction <= 1.0 and 0.0 <= actual <= 1.0
+    ]
+    if not pairs:
+        return None
+    groups: list[list[tuple[float, float]]] = [
+        [] for _ in range(max(1, int(bins)))
+    ]
+    for prediction, actual in pairs:
+        index = min(len(groups) - 1, int(prediction * len(groups)))
+        groups[index].append((prediction, actual))
+    return sum(
+        len(group) / len(pairs)
+        * abs(statistics.fmean(p for p, _ in group)
+              - statistics.fmean(y for _, y in group))
+        for group in groups if group
+    )
 
 
 def fee_per_share(price: float, schedule: dict[str, Any], *, taker: bool = True) -> float:
@@ -322,6 +349,7 @@ class PaperRouter:
             "attempted_at": {}, "traded_markets": [], "positions": {},
             "book_requests": 0, "book_request_failures": 0,
             "book_parse_failures": 0, "rejection_reasons": {},
+            "wait_reasons": {},
             "forecasts": 0, "resolved_forecasts": 0,
             "forecasted_keys": [], "pending_forecasts": {},
             "forecast_settlement_attempted_at": {},
@@ -337,6 +365,132 @@ class PaperRouter:
     def reject(self, reason: str) -> None:
         reasons = self.state.setdefault("rejection_reasons", {})
         reasons[reason] = int(reasons.get(reason) or 0) + 1
+
+    def wait(self, reason: str) -> None:
+        reasons = self.state.setdefault("wait_reasons", {})
+        reasons[reason] = int(reasons.get(reason) or 0) + 1
+
+    def maturity_diagnostics(self) -> dict[str, Any]:
+        """Fail-closed settlement-cluster gate; never grants authority automatically."""
+        records: dict[str, dict[str, Any]] = {}
+        try:
+            with self.counterfactual_path.open(encoding="utf-8") as handle:
+                for line in handle:
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(row, dict) and row.get("record_id"):
+                        records[str(row["record_id"])] = row
+        except OSError:
+            pass
+        forecasts = [row for row in records.values() if row.get("event_type") == "FORECAST_FINAL"]
+        by_market: dict[str, list[dict[str, Any]]] = {}
+        for row in forecasts:
+            by_market.setdefault(str(row.get("market_id") or "UNKNOWN"), []).append(row)
+        cluster_model_brier: list[float] = []
+        cluster_market_brier: list[float] = []
+        cluster_delta: list[float] = []
+        cluster_predictions: list[float] = []
+        cluster_actuals: list[float] = []
+        covered = coverage_n = 0
+        for rows in by_market.values():
+            model_losses = [finite(row.get("model_brier"), math.nan) for row in rows]
+            market_losses = [finite(row.get("market_brier"), math.nan) for row in rows]
+            pairs = [(left, right) for left, right in zip(model_losses, market_losses)
+                     if math.isfinite(left) and math.isfinite(right)]
+            if pairs:
+                model_loss = sum(left for left, _ in pairs) / len(pairs)
+                market_loss = sum(right for _, right in pairs) / len(pairs)
+                cluster_model_brier.append(model_loss)
+                cluster_market_brier.append(market_loss)
+                cluster_delta.append(model_loss - market_loss)
+            probabilities = [finite(row.get("model_yes"), math.nan) for row in rows]
+            actual = finite(rows[0].get("actual_yes"), math.nan)
+            probabilities = [value for value in probabilities if math.isfinite(value)]
+            if probabilities and math.isfinite(actual):
+                cluster_predictions.append(sum(probabilities) / len(probabilities))
+                cluster_actuals.append(actual)
+            for row in rows:
+                lower, upper, actual_row = (
+                    finite(row.get("lower"), math.nan), finite(row.get("upper"), math.nan),
+                    finite(row.get("actual_yes"), math.nan),
+                )
+                if all(math.isfinite(value) for value in (lower, upper, actual_row)):
+                    coverage_n += 1
+                    covered += int(lower <= actual_row <= upper)
+        delta_mean = sum(cluster_delta) / len(cluster_delta) if cluster_delta else None
+        delta_upper = None
+        if len(cluster_delta) >= 2 and delta_mean is not None:
+            delta_upper = delta_mean + 1.96 * statistics.stdev(cluster_delta) / math.sqrt(
+                len(cluster_delta))
+        calibration_error = expected_calibration_error(
+            cluster_predictions, cluster_actuals)
+        slope = None
+        if len(cluster_predictions) >= 2:
+            mean_p = sum(cluster_predictions) / len(cluster_predictions)
+            mean_y = sum(cluster_actuals) / len(cluster_actuals)
+            variance = sum((value - mean_p) ** 2 for value in cluster_predictions)
+            if variance > 1e-12:
+                slope = sum((p - mean_p) * (y - mean_y)
+                            for p, y in zip(cluster_predictions, cluster_actuals)) / variance
+        fills = {
+            str(row.get("fill_id")): row for row in records.values()
+            if row.get("event_type") == "VIRTUAL_FILL" and row.get("fill_id")
+        }
+        finals = [row for row in records.values() if row.get("event_type") == "VIRTUAL_FINAL"]
+        stressed_2x = 0.0
+        matched_finals = 0
+        for final in finals:
+            pnl = finite(final.get("counterfactual_pnl"), math.nan)
+            fill = fills.get(str(final.get("fill_id") or ""))
+            if fill is None or not math.isfinite(pnl):
+                continue
+            stressed_2x += pnl - max(0.0, finite(fill.get("fee"), 0.0)) \
+                - max(0.0, finite(fill.get("slippage"), 0.0))
+            matched_finals += 1
+        promotion = self.config.get("promotion") if isinstance(
+            self.config.get("promotion"), dict) else {}
+        minimum = int(promotion.get("minimum_forward_shadow_contracts") or 50)
+        slope_range = promotion.get("calibration_slope_range") or [0.75, 1.25]
+        coverage_range = promotion.get("interval_coverage_range") or [0.85, 0.99]
+        interval_coverage = covered / coverage_n if coverage_n else None
+        reasons: list[str] = []
+        if len(by_market) < minimum:
+            reasons.append("INSUFFICIENT_INDEPENDENT_SETTLEMENT_MARKETS")
+        if delta_upper is None or delta_upper >= 0.0:
+            reasons.append("MODEL_NOT_CLUSTER_ROBUST_BETTER_THAN_PM")
+        if calibration_error is None or calibration_error > float(promotion.get("maximum_ece", 0.05)):
+            reasons.append("CALIBRATION_ERROR_GATE")
+        if slope is None or not float(slope_range[0]) <= slope <= float(slope_range[1]):
+            reasons.append("CALIBRATION_SLOPE_GATE")
+        if interval_coverage is None or not float(coverage_range[0]) <= interval_coverage <= float(coverage_range[1]):
+            reasons.append("INTERVAL_COVERAGE_GATE")
+        if matched_finals < minimum or stressed_2x <= 0.0:
+            reasons.append("POSITIVE_2X_COST_STRESS_GATE")
+        return {
+            "eligible_for_manual_paper_promotion": not reasons,
+            "automatic_promotion": False,
+            "independent_settlement_markets": len(by_market),
+            "minimum_independent_settlement_markets": minimum,
+            "forecast_rows": len(forecasts),
+            "model_brier_cluster_equal_weighted": (
+                sum(cluster_model_brier) / len(cluster_model_brier)
+                if cluster_model_brier else None),
+            "market_brier_cluster_equal_weighted": (
+                sum(cluster_market_brier) / len(cluster_market_brier)
+                if cluster_market_brier else None),
+            "model_minus_market_brier_mean": delta_mean,
+            "model_minus_market_brier_ci95_upper": delta_upper,
+            "calibration_error": calibration_error,
+            "calibration_error_definition": "10-bin ECE, settlement clusters equal weighted",
+            "calibration_slope": slope,
+            "interval_coverage": interval_coverage,
+            "interval_coverage_n": coverage_n,
+            "virtual_final_markets": len({str(row.get("market_id") or "") for row in finals}),
+            "virtual_2x_cost_stress_pnl": stressed_2x,
+            "blocking_reasons": reasons,
+        }
 
     def emit_counterfactual(self, event_type: str, **values: Any) -> None:
         timestamp_ms = now_ms()
@@ -551,6 +705,10 @@ class PaperRouter:
                     external_only_log_loss=model_log_loss,
                     hybrid_yes=hybrid_yes if math.isfinite(hybrid_yes) else None,
                     hybrid_brier=hybrid_brier, hybrid_log_loss=hybrid_log_loss,
+                    lower=forecast.get("lower"), upper=forecast.get("upper"),
+                    observed_tte_seconds=forecast.get("observed_tte_seconds"),
+                    external_only_model_id=forecast.get("external_only_model_id"),
+                    hybrid_model_id=forecast.get("hybrid_model_id"),
                 )
                 pending.pop(forecast_id, None)
                 self.state["resolved_forecasts"] = int(self.state.get("resolved_forecasts") or 0) + 1
@@ -640,8 +798,11 @@ class PaperRouter:
             return False
         market = status.get("market") if isinstance(status.get("market"), dict) else {}
         market_id = str(market.get("market_id") or "")
-        if not market_id or market_id in set(self.state.get("traded_markets") or []):
-            self.last_attempt_reason = "MARKET_ALREADY_TRADED_OR_MISSING"
+        if not market_id:
+            self.last_attempt_reason = "MARKET_ID_MISSING"
+            return False
+        if market_id in set(self.state.get("traded_markets") or []):
+            self.last_attempt_reason = "WAITING_FOR_NEXT_CONTRACT_HANDOFF"
             return False
         key = f"{market_id}:{row['outcome']}"
         current_ms = now_ms()
@@ -899,6 +1060,7 @@ class PaperRouter:
         self.state["peak_equity"] = peak
         self.state["killed"] = killed
         atomic_json(self.state_path, self.state)
+        maturity = self.maturity_diagnostics()
         atomic_json(self.status_path, {
             "schema": "polymarket_v7_external_fair_paper_router_v1", "timestamp": int(time.time()),
             "code_sha": self.sha, "state": "KILLED" if killed else "DRAINING" if drain_requested else "RUNNING", "paper_only": True,
@@ -906,7 +1068,12 @@ class PaperRouter:
             "execution_mode": "SHADOW_COUNTERFACTUAL",
             "policy_sha256": self.policy_sha256,
             "execution_authority": "SHADOW_ZERO_AUTHORITY", "model_mature": self.model_mature,
-            "economic_confidence": "MORE_EVIDENCE_REQUIRED", "active_candidates": active_candidates,
+            "economic_confidence": (
+                "PAPER_PROMOTION_ELIGIBLE_MANUAL_REVIEW"
+                if maturity["eligible_for_manual_paper_promotion"]
+                else "MORE_EVIDENCE_REQUIRED"),
+            "maturity": maturity,
+            "active_candidates": active_candidates,
             "entry_tte_window_seconds": {
                 "minimum": self.policy.get("minimum_entry_tte_seconds"),
                 "maximum": self.policy.get("maximum_entry_tte_seconds"),
@@ -949,6 +1116,7 @@ class PaperRouter:
             "book_request_failures": int(self.state.get("book_request_failures") or 0),
             "book_parse_failures": int(self.state.get("book_parse_failures") or 0),
             "rejection_reasons": self.state.get("rejection_reasons") or {},
+            "wait_reasons": self.state.get("wait_reasons") or {},
             "last_decision": self.state.get("last_decision") or {},
             "actions": {"MAKE": 0, "TAKE": 0, "CANCEL": 0,
                         "WITHDRAW": 0, "NOTHING": int(self.state.get("nothing") or 0)},
@@ -1011,7 +1179,10 @@ class PaperRouter:
                 reason = "ENTRY_TTE_OUTSIDE_WINDOW"
             else:
                 reason = "NO_ROBUST_EV"
-            self.reject(reason)
+            if reason == "WAITING_FOR_NEXT_CONTRACT_HANDOFF":
+                self.wait(reason)
+            else:
+                self.reject(reason)
         else:
             reason = "VIRTUAL_FILL"
         self.state["last_decision"] = {

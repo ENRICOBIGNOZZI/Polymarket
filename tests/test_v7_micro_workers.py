@@ -85,7 +85,9 @@ def test_taker_freezes_new_risk_when_open_positions_are_unmarkable():
     assert '"reason": "insufficient_exit_depth"' in text
     assert '"reason": "missing_authoritative_fee"' in text
     assert "new_risk_frozen = bool(unmarkable_positions)" in text
-    assert "if not killed and not new_risk_frozen and model_labeled >= 40:" in text
+    assert "if not killed and not new_risk_frozen and model_valid and flow_valid:" in text
+    assert '"DEGENERATE_ZERO_TARGET_VARIANCE"' in text
+    assert '"duplicate_snapshots_rejected_last_tick"' in text
     assert '"new_risk_frozen": new_risk_frozen' in text
     assert '"unmarkable_positions": unmarkable_positions' in text
     assert "marking_complete = not unmarkable_positions" in text

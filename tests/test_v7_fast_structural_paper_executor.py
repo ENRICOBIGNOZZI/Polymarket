@@ -59,6 +59,7 @@ class FastStructuralPaperExecutorTests(unittest.TestCase):
             intended_action="ARB", intended_size=10.0, expected_ev=6.0,
             metadata={
                 "hard_arbitrage": True, "payoff_floor": 1.0,
+                "execution_compatibility": "SEQUENTIAL_FOK_HARD_ARB",
                 "capital_required": 4.0, "opportunity_kind": "BINARY_COMPLETE_SET",
                 "structured_legs": [{
                     "leg_id": "leg-1-yes", "market_id": "m1", "token_id": "yes",

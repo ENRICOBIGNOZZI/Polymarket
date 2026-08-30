@@ -455,6 +455,7 @@ struct MarketWsShard::Impl {
 
         if (ascii_ieq(type, "last_trade_price")) {
             ++result.recognized_events;
+            ++result.raw_last_trade_events;
             const auto asset = string_view_of(find_value(event, "asset_id"));
             TokenState* state = find_asset(asset);
             if (state == nullptr) {
@@ -464,11 +465,18 @@ struct MarketWsShard::Impl {
             std::int32_t price_e4 = 0;
             std::int64_t quantity = 0;
             const Side aggressor = parse_side(find_value(event, "side"));
-            if (exchange_ns <= 0 || receive.monotonic_ns <= 0
-                || aggressor == Side::None
-                || !parse_price_e4(find_value(event, "price"), price_e4)
-                || !parse_quantity(find_value(event, "size"), quantity)
-                || quantity <= 0) {
+            const bool valid_timestamp = exchange_ns > 0 && receive.monotonic_ns > 0;
+            const bool valid_price = parse_price_e4(find_value(event, "price"), price_e4);
+            const auto* size = find_value(event, "size");
+            const bool has_size = size != nullptr;
+            const bool valid_quantity = has_size && parse_quantity(size, quantity);
+            if (!valid_timestamp) ++result.trade_invalid_timestamp;
+            if (aggressor == Side::None) ++result.trade_missing_side;
+            if (!has_size) ++result.trade_missing_size;
+            else if (!valid_quantity || quantity <= 0) ++result.trade_invalid_quantity;
+            if (!valid_price) ++result.trade_invalid_price;
+            if (!valid_timestamp || aggressor == Side::None || !valid_price
+                || !valid_quantity || quantity <= 0) {
                 // Some venue messages report only last price. Those are not
                 // execution prints and must not feed queue depletion.
                 return;

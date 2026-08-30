@@ -775,6 +775,28 @@ struct ShardDiagnostics {
     std::int64_t best_rejected_robust_ev_nano = std::numeric_limits<std::int64_t>::min();
     std::int64_t best_rejected_point_ev_nano = std::numeric_limits<std::int64_t>::min();
     std::array<std::uint64_t, kDecisionReasonCount> reasons{};
+    std::uint64_t raw_last_trade_events = 0;
+    std::uint64_t valid_trade_prints = 0;
+    std::uint64_t trade_missing_side = 0;
+    std::uint64_t trade_missing_size = 0;
+    std::uint64_t trade_invalid_quantity = 0;
+    std::uint64_t trade_invalid_price = 0;
+    std::uint64_t trade_invalid_timestamp = 0;
+    std::uint64_t unknown_asset = 0;
+};
+
+struct MakerFillFunnelCounters {
+    std::atomic<std::uint64_t> public_trades{0};
+    std::atomic<std::uint64_t> duplicate_trade{0};
+    std::atomic<std::uint64_t> active_orders_seen{0};
+    std::atomic<std::uint64_t> causally_pre_arrival{0};
+    std::atomic<std::uint64_t> wrong_aggressor_side{0};
+    std::atomic<std::uint64_t> price_not_crossing{0};
+    std::atomic<std::uint64_t> cancel_effective_before_trade{0};
+    std::atomic<std::uint64_t> eligible_orders{0};
+    std::atomic<std::uint64_t> queue_not_depleted{0};
+    std::atomic<std::uint64_t> eligible_fill_microunits{0};
+    std::atomic<std::uint64_t> operational_fill_microunits{0};
 };
 
 static_assert(std::is_trivially_copyable_v<TelemetryRecord>);
@@ -861,6 +883,14 @@ public:
         for (std::size_t i = 0; i < out.reasons.size(); ++i) {
             out.reasons[i] = decision_reasons_[i].load(std::memory_order_relaxed);
         }
+        out.raw_last_trade_events = raw_last_trade_events_.load(std::memory_order_relaxed);
+        out.valid_trade_prints = valid_trade_prints_.load(std::memory_order_relaxed);
+        out.trade_missing_side = trade_missing_side_.load(std::memory_order_relaxed);
+        out.trade_missing_size = trade_missing_size_.load(std::memory_order_relaxed);
+        out.trade_invalid_quantity = trade_invalid_quantity_.load(std::memory_order_relaxed);
+        out.trade_invalid_price = trade_invalid_price_.load(std::memory_order_relaxed);
+        out.trade_invalid_timestamp = trade_invalid_timestamp_.load(std::memory_order_relaxed);
+        out.unknown_asset = unknown_asset_.load(std::memory_order_relaxed);
         return out;
     }
 
@@ -1139,6 +1169,14 @@ private:
         drain_execution_snapshots();
         std::array<MarketWsEvent, kWsOutputCapacity> events{};
         const auto result = decoder_->process_frame(payload, receive, events);
+        raw_last_trade_events_.fetch_add(result.raw_last_trade_events, std::memory_order_relaxed);
+        valid_trade_prints_.fetch_add(result.trade_events, std::memory_order_relaxed);
+        trade_missing_side_.fetch_add(result.trade_missing_side, std::memory_order_relaxed);
+        trade_missing_size_.fetch_add(result.trade_missing_size, std::memory_order_relaxed);
+        trade_invalid_quantity_.fetch_add(result.trade_invalid_quantity, std::memory_order_relaxed);
+        trade_invalid_price_.fetch_add(result.trade_invalid_price, std::memory_order_relaxed);
+        trade_invalid_timestamp_.fetch_add(result.trade_invalid_timestamp, std::memory_order_relaxed);
+        unknown_asset_.fetch_add(result.ignored_unknown_assets, std::memory_order_relaxed);
         const std::uint64_t frame_hash = fnv1a(payload);
         for (std::size_t i = 0; i < result.output_count; ++i) {
             const std::uint64_t trade_id = mix64(frame_hash ^ (static_cast<std::uint64_t>(i + 1) << 32U)
@@ -1200,6 +1238,14 @@ private:
     std::atomic<std::uint64_t> quote_intents_{0};
     std::atomic<std::uint64_t> rejected_nonpositive_robust_ev_{0};
     std::atomic<std::uint64_t> rejected_positive_point_ev_{0};
+    std::atomic<std::uint64_t> raw_last_trade_events_{0};
+    std::atomic<std::uint64_t> valid_trade_prints_{0};
+    std::atomic<std::uint64_t> trade_missing_side_{0};
+    std::atomic<std::uint64_t> trade_missing_size_{0};
+    std::atomic<std::uint64_t> trade_invalid_quantity_{0};
+    std::atomic<std::uint64_t> trade_invalid_price_{0};
+    std::atomic<std::uint64_t> trade_invalid_timestamp_{0};
+    std::atomic<std::uint64_t> unknown_asset_{0};
     std::atomic<std::int64_t> best_rejected_robust_ev_nano_{
         std::numeric_limits<std::int64_t>::min()};
     std::atomic<std::int64_t> best_rejected_point_ev_nano_{
@@ -1209,7 +1255,8 @@ private:
 
 void write_runtime_diagnostics(
     const fs::path& run_root, std::string_view model_sha,
-    const std::vector<std::unique_ptr<ShardRuntime>>& shards) {
+    const std::vector<std::unique_ptr<ShardRuntime>>& shards,
+    const MakerFillFunnelCounters& fill_funnel) {
     ShardDiagnostics total;
     for (const auto& shard : shards) {
         const auto value = shard->diagnostics();
@@ -1222,6 +1269,14 @@ void write_runtime_diagnostics(
         total.quote_intents += value.quote_intents;
         total.rejected_nonpositive_robust_ev += value.rejected_nonpositive_robust_ev;
         total.rejected_positive_point_ev += value.rejected_positive_point_ev;
+        total.raw_last_trade_events += value.raw_last_trade_events;
+        total.valid_trade_prints += value.valid_trade_prints;
+        total.trade_missing_side += value.trade_missing_side;
+        total.trade_missing_size += value.trade_missing_size;
+        total.trade_invalid_quantity += value.trade_invalid_quantity;
+        total.trade_invalid_price += value.trade_invalid_price;
+        total.trade_invalid_timestamp += value.trade_invalid_timestamp;
+        total.unknown_asset += value.unknown_asset;
         total.best_rejected_robust_ev_nano = std::max(
             total.best_rejected_robust_ev_nano, value.best_rejected_robust_ev_nano);
         total.best_rejected_point_ev_nano = std::max(
@@ -1249,6 +1304,29 @@ void write_runtime_diagnostics(
     root["feed_errors"] = total.feed.errors;
     root["decisions"] = total.decisions;
     root["quote_intents"] = total.quote_intents;
+    root["raw_last_trade_events"] = total.raw_last_trade_events;
+    root["valid_trade_prints"] = total.valid_trade_prints;
+    root["trade_missing_side"] = total.trade_missing_side;
+    root["trade_missing_size"] = total.trade_missing_size;
+    root["trade_invalid_quantity"] = total.trade_invalid_quantity;
+    root["trade_invalid_price"] = total.trade_invalid_price;
+    root["trade_invalid_timestamp"] = total.trade_invalid_timestamp;
+    root["trade_unknown_asset"] = total.unknown_asset;
+    json::object fill;
+    fill["public_trades"] = fill_funnel.public_trades.load(std::memory_order_relaxed);
+    fill["duplicate_trade"] = fill_funnel.duplicate_trade.load(std::memory_order_relaxed);
+    fill["active_orders_seen"] = fill_funnel.active_orders_seen.load(std::memory_order_relaxed);
+    fill["causally_pre_arrival"] = fill_funnel.causally_pre_arrival.load(std::memory_order_relaxed);
+    fill["wrong_aggressor_side"] = fill_funnel.wrong_aggressor_side.load(std::memory_order_relaxed);
+    fill["price_not_crossing"] = fill_funnel.price_not_crossing.load(std::memory_order_relaxed);
+    fill["cancel_effective_before_trade"] = fill_funnel.cancel_effective_before_trade.load(std::memory_order_relaxed);
+    fill["eligible_orders"] = fill_funnel.eligible_orders.load(std::memory_order_relaxed);
+    fill["queue_not_depleted"] = fill_funnel.queue_not_depleted.load(std::memory_order_relaxed);
+    fill["eligible_fill_volume"] = static_cast<double>(
+        fill_funnel.eligible_fill_microunits.load(std::memory_order_relaxed)) / 1'000'000.0;
+    fill["operational_fill_volume"] = static_cast<double>(
+        fill_funnel.operational_fill_microunits.load(std::memory_order_relaxed)) / 1'000'000.0;
+    root["fill_funnel"] = std::move(fill);
     root["rejected_nonpositive_robust_ev"] = total.rejected_nonpositive_robust_ev;
     root["rejected_positive_point_ev"] = total.rejected_positive_point_ev;
     if (total.best_rejected_robust_ev_nano != std::numeric_limits<std::int64_t>::min()) {
@@ -1271,6 +1349,7 @@ public:
         PaperMakerPolicy paper_policy,
         InventoryFactoryPolicy inventory_factory,
         std::atomic<bool>* new_risk_frozen,
+        MakerFillFunnelCounters* fill_funnel,
         double starting_capital,
         double base_quote_shares,
         std::int64_t minimum_quote_lifetime_ns,
@@ -1302,7 +1381,8 @@ public:
         inventory_last_replenish_ns_.assign(max_market + 1, 0);
         inventory_factory_ = inventory_factory;
         new_risk_frozen_ = new_risk_frozen;
-        if (new_risk_frozen_ == nullptr) return false;
+        fill_funnel_ = fill_funnel;
+        if (new_risk_frozen_ == nullptr || fill_funnel_ == nullptr) return false;
         minimum_quote_lifetime_ns_ = std::max<std::int64_t>(0, minimum_quote_lifetime_ns);
         exploration_concurrent_market_cap_ = exploration_concurrent_market_cap;
         for (const auto& market : markets) {
@@ -1456,6 +1536,29 @@ public:
             case ExecutionCommandKind::PublicTrade:
                 result = policy_.on_public_trade(
                     command.context.market_handle, command.trade, capital_);
+                fill_funnel_->public_trades.fetch_add(1, std::memory_order_relaxed);
+                fill_funnel_->duplicate_trade.fetch_add(
+                    result.paper.duplicate_trade, std::memory_order_relaxed);
+                fill_funnel_->active_orders_seen.fetch_add(
+                    result.paper.active_orders_seen, std::memory_order_relaxed);
+                fill_funnel_->causally_pre_arrival.fetch_add(
+                    result.paper.causally_pre_arrival, std::memory_order_relaxed);
+                fill_funnel_->wrong_aggressor_side.fetch_add(
+                    result.paper.wrong_aggressor_side, std::memory_order_relaxed);
+                fill_funnel_->price_not_crossing.fetch_add(
+                    result.paper.price_not_crossing, std::memory_order_relaxed);
+                fill_funnel_->cancel_effective_before_trade.fetch_add(
+                    result.paper.cancel_effective_before_trade, std::memory_order_relaxed);
+                fill_funnel_->eligible_orders.fetch_add(
+                    result.paper.eligible_orders, std::memory_order_relaxed);
+                fill_funnel_->queue_not_depleted.fetch_add(
+                    result.paper.queue_not_depleted, std::memory_order_relaxed);
+                fill_funnel_->eligible_fill_microunits.fetch_add(
+                    std::max<std::int64_t>(0, result.paper.eligible_fill_microunits),
+                    std::memory_order_relaxed);
+                fill_funnel_->operational_fill_microunits.fetch_add(
+                    std::max<std::int64_t>(0, result.paper.operational_fill_microunits),
+                    std::memory_order_relaxed);
                 break;
             case ExecutionCommandKind::AdvanceTime:
                 result = policy_.advance_time(
@@ -1711,6 +1814,7 @@ private:
     std::vector<std::int64_t> inventory_last_replenish_ns_;
     InventoryFactoryPolicy inventory_factory_{};
     std::atomic<bool>* new_risk_frozen_ = nullptr;
+    MakerFillFunnelCounters* fill_funnel_ = nullptr;
     bool inventory_drain_active_ = false;
     std::int64_t minimum_quote_lifetime_ns_ = 0;
     std::uint32_t exploration_concurrent_market_cap_ = 0;
@@ -2403,9 +2507,10 @@ int main(int argc, char** argv) {
         std::atomic<bool> global_kill{false};
         std::atomic<bool> new_risk_frozen{false};
         std::atomic<bool> fatal{false};
+        MakerFillFunnelCounters fill_funnel;
         auto execution = std::make_unique<ExecutionCore>();
         if (!execution->initialize(markets, paper_policy, inventory_factory,
-                                   &new_risk_frozen,
+                                   &new_risk_frozen, &fill_funnel,
                                    config.starting_capital, initial->base_quote_shares,
                                    initial->min_quote_lifetime_ns,
                                    initial->exploration_concurrent_market_cap)) {
@@ -2558,7 +2663,8 @@ int main(int argc, char** argv) {
                 if (now - last_state_ms >= 1000) {
                     writer.write_state(
                         new_risk_frozen.load(std::memory_order_acquire));
-                    write_runtime_diagnostics(options.run_root, options.model_sha, shards);
+                    write_runtime_diagnostics(
+                        options.run_root, options.model_sha, shards, fill_funnel);
                     last_state_ms = now;
                 }
                 if (now - last_model_check_ms >= 2000) {

@@ -11,6 +11,7 @@ import argparse
 import gzip
 import json
 import math
+import statistics
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -117,6 +118,82 @@ def score(probabilities: list[tuple[float, float]]) -> dict[str, Any]:
         "n": len(clipped),
         "brier": mean([(p - y) ** 2 for p, y in clipped]),
         "log_loss": mean([-(y * math.log(p) + (1.0 - y) * math.log(1.0 - p)) for p, y in clipped]),
+    }
+
+
+def _mean_ci95(values: list[float]) -> dict[str, float | None]:
+    if not values:
+        return {"mean": None, "lower": None, "upper": None}
+    center = mean(values)
+    if len(values) < 2 or center is None:
+        return {"mean": center, "lower": None, "upper": None}
+    half = 1.96 * statistics.stdev(values) / math.sqrt(len(values))
+    return {"mean": center, "lower": center - half, "upper": center + half}
+
+
+def clustered_score(observations: list[tuple[float, float, str]]) -> dict[str, Any]:
+    """Equal-weight settlement clusters; multiple TTEs are not independent n."""
+    if not observations:
+        return {
+            "n": 0, "independent_contracts": 0, "brier": None,
+            "log_loss": None, "brier_cluster_ci95": _mean_ci95([]),
+            "log_loss_cluster_ci95": _mean_ci95([]),
+            "calibration_error": None, "sharpness": None,
+        }
+    clusters: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for probability, actual, cluster in observations:
+        p = min(1.0 - 1e-12, max(1e-12, probability))
+        clusters[cluster or "UNKNOWN"].append((p, actual))
+    brier_clusters = [
+        sum((p - y) ** 2 for p, y in rows) / len(rows)
+        for rows in clusters.values()
+    ]
+    log_clusters = [
+        sum(-(y * math.log(p) + (1.0 - y) * math.log(1.0 - p)) for p, y in rows)
+        / len(rows) for rows in clusters.values()
+    ]
+    cluster_forecasts = [sum(p for p, _ in rows) / len(rows) for rows in clusters.values()]
+    cluster_actuals = [rows[0][1] for rows in clusters.values()]
+    center = mean(cluster_forecasts)
+    sharpness = (
+        sum((value - center) ** 2 for value in cluster_forecasts) / len(cluster_forecasts)
+        if center is not None else None
+    )
+    return {
+        "n": len(observations),
+        "independent_contracts": len(clusters),
+        "scoring_unit": "SETTLEMENT_MARKET_CLUSTER_EQUAL_WEIGHTED",
+        "brier": mean(brier_clusters),
+        "log_loss": mean(log_clusters),
+        "brier_cluster_ci95": _mean_ci95(brier_clusters),
+        "log_loss_cluster_ci95": _mean_ci95(log_clusters),
+        "calibration_error": (
+            abs(mean(cluster_forecasts) - mean(cluster_actuals))
+            if cluster_forecasts else None
+        ),
+        "sharpness": sharpness,
+    }
+
+
+def paired_cluster_delta(
+    rows: list[tuple[float, float, float, str]],
+) -> dict[str, Any]:
+    clusters: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for model_probability, market_probability, actual, cluster in rows:
+        model_p = min(1.0 - 1e-12, max(1e-12, model_probability))
+        market_p = min(1.0 - 1e-12, max(1e-12, market_probability))
+        clusters[cluster or "UNKNOWN"].append((
+            (model_p - actual) ** 2 - (market_p - actual) ** 2,
+            -(actual * math.log(model_p) + (1.0 - actual) * math.log(1.0 - model_p))
+            + (actual * math.log(market_p) + (1.0 - actual) * math.log(1.0 - market_p)),
+        ))
+    brier = [sum(value[0] for value in values) / len(values) for values in clusters.values()]
+    log_loss = [sum(value[1] for value in values) / len(values) for values in clusters.values()]
+    return {
+        "independent_contracts": len(clusters),
+        "brier_model_minus_market": _mean_ci95(brier),
+        "log_loss_model_minus_market": _mean_ci95(log_loss),
+        "negative_favors_model": True,
     }
 
 
@@ -263,10 +340,14 @@ def counterfactual_metrics(inputs: Iterable[Path]) -> dict[str, Any]:
                 duplicates += 1
                 conflicts += int(prior != value)
     counts = Counter(str(value.get("event_type") or "UNKNOWN") for value in unique.values())
-    model_scores: list[tuple[float, float]] = []
-    hybrid_scores: list[tuple[float, float]] = []
-    market_scores: list[tuple[float, float]] = []
+    model_scores: list[tuple[float, float, str]] = []
+    hybrid_scores: list[tuple[float, float, str]] = []
+    market_scores: list[tuple[float, float, str]] = []
+    paired_scores: list[tuple[float, float, float, str]] = []
+    tte_scores: dict[str, dict[str, list[tuple[float, float, str]]]] = defaultdict(
+        lambda: {"model": [], "hybrid": [], "market": []})
     virtual_pnl: list[float] = []
+    virtual_fills: dict[str, dict[str, Any]] = {}
     for value in unique.values():
         if value.get("event_type") == "FORECAST_FINAL":
             model, market, actual = (
@@ -274,24 +355,66 @@ def counterfactual_metrics(inputs: Iterable[Path]) -> dict[str, Any]:
                 finite(value.get("actual_yes")),
             )
             hybrid = finite(value.get("hybrid_yes"))
+            cluster = str(value.get("market_id") or value.get("contract_id") or "UNKNOWN")
+            tte = str(int(finite(value.get("tte_bucket_seconds")) or 0))
             if model is not None and actual is not None:
-                model_scores.append((model, actual))
+                model_scores.append((model, actual, cluster))
+                tte_scores[tte]["model"].append((model, actual, cluster))
             if market is not None and actual is not None:
-                market_scores.append((market, actual))
+                market_scores.append((market, actual, cluster))
+                tte_scores[tte]["market"].append((market, actual, cluster))
             if hybrid is not None and actual is not None:
-                hybrid_scores.append((hybrid, actual))
+                hybrid_scores.append((hybrid, actual, cluster))
+                tte_scores[tte]["hybrid"].append((hybrid, actual, cluster))
+            if model is not None and market is not None and actual is not None:
+                paired_scores.append((model, market, actual, cluster))
+        if value.get("event_type") == "VIRTUAL_FILL" and value.get("fill_id"):
+            virtual_fills[str(value["fill_id"])] = value
         if value.get("event_type") == "VIRTUAL_FINAL":
             pnl = finite(value.get("counterfactual_pnl"))
             if pnl is not None:
                 virtual_pnl.append(pnl)
+    cost_stress = {"1.0x": 0.0, "1.5x": 0.0, "2.0x": 0.0}
+    matched_cost_finals = 0
+    for value in unique.values():
+        if value.get("event_type") != "VIRTUAL_FINAL":
+            continue
+        pnl = finite(value.get("counterfactual_pnl"))
+        fill = virtual_fills.get(str(value.get("fill_id") or ""))
+        if pnl is None or fill is None:
+            continue
+        base_cost = max(0.0, finite(fill.get("fee")) or 0.0) + max(
+            0.0, finite(fill.get("slippage")) or 0.0)
+        for multiplier in (1.0, 1.5, 2.0):
+            cost_stress[f"{multiplier:.1f}x"] += pnl - (multiplier - 1.0) * base_cost
+        matched_cost_finals += 1
     return {
         "tape_files": len(paths), "raw_records": raw, "unique_records": len(unique),
         "duplicates_removed": duplicates, "conflicts": conflicts, "malformed": malformed,
         "events": dict(sorted(counts.items())),
-        "forecast_model_score": score(model_scores),
-        "forecast_hybrid_score": score(hybrid_scores),
-        "forecast_market_benchmark_score": score(market_scores),
+        "forecast_model_score": clustered_score(model_scores),
+        "forecast_hybrid_score": clustered_score(hybrid_scores),
+        "forecast_market_benchmark_score": clustered_score(market_scores),
+        "model_minus_market_cluster_robust": paired_cluster_delta(paired_scores),
+        "scores_by_tte_bucket_seconds": {
+            bucket: {
+                name: clustered_score(values)
+                for name, values in groups.items()
+            }
+            for bucket, groups in sorted(tte_scores.items(), key=lambda item: int(item[0]))
+        },
         "virtual_realized_pnl": sum(virtual_pnl),
+        "virtual_cost_stress_pnl": cost_stress,
+        "virtual_cost_stress_matched_finals": matched_cost_finals,
+        "virtual_fill_capacity": {
+            "fills": len(virtual_fills),
+            "filled_shares": sum(max(0.0, finite(row.get("filled_size")) or 0.0)
+                                 for row in virtual_fills.values()),
+            "filled_notional": sum(
+                max(0.0, finite(row.get("filled_size")) or 0.0)
+                * max(0.0, finite(row.get("fill_price")) or 0.0)
+                for row in virtual_fills.values()),
+        },
         "fail_closed": malformed > 0 or conflicts > 0,
     }
 

@@ -230,6 +230,7 @@ def hazard_model(
     ) / (len(sample) + prior_strength)
     return {
         "orders": len(sample),
+        "filled_orders": len(filled),
         "censored_orders": sum(bool(row["censored"]) for row in sample),
         "event_clusters": len({row["event_cluster"] for row in sample}),
         "hazard_by_interval_end_seconds": hazards,
@@ -334,7 +335,13 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
             ),
             "adverse_markout_per_share": 0.002,
             "mature": len(sample) >= 50
-                and len({row["event_cluster"] for row in sample}) >= 12,
+                and len({row["event_cluster"] for row in sample}) >= 12
+                and int(hazard["filled_orders"]) >= 20,
+            "maturity_requirements": {
+                "minimum_orders": 50,
+                "minimum_event_clusters": 12,
+                "minimum_filled_orders": 20,
+            },
         }
     if "GLOBAL" not in groups:
         groups["GLOBAL"] = {

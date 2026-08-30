@@ -90,6 +90,7 @@
       "minimum_side_prints_2m": 2,
       "minimum_side_prints_10m": 1,
       "maximum_last_side_age_seconds": 60,
+      "maximum_market_flow_age_seconds": 120,
       "minimum_sell_prints_2m": 2,
       "minimum_sell_prints_10m": 1,
       "maximum_last_sell_age_seconds": 60,

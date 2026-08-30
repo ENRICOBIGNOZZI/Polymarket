@@ -113,6 +113,16 @@ class Book:
         self.received_ts = int(local_received) if math.isfinite(local_received) and local_received > 0.0 else 0
         self.exchange_ts_ms = self.exchange_ts * 1000
         self.received_ts_ms = self.received_ts * 1000
+        self.source_received_ts = self.received_ts
+        self.source_received_ts_ms = self.received_ts_ms
+        self.snapshot_published_ts = self.received_ts
+        self.snapshot_published_ts_ms = self.received_ts_ms
+        self.state_version = 0
+        self.lineage_epoch = 0
+        self.economic_novelty = False
+        self.last_book_change_receive_ms = self.received_ts_ms
+        self.last_trade_receive_ms = 0
+        self.last_trade_exchange_ms = 0
         self.snapshot_id = str(raw.get("hash") or "")
         self.lineage_continuous = False
         self.tick = max(1e-6, finite(raw.get("tick_size"), 0.01))
@@ -249,6 +259,17 @@ def fetch_shared_books(path: Path, markets: list[Market], *, model_sha: str,
         }, received_ts=int(raw["received_ms"]) / 1000.0)
         book.exchange_ts_ms = int(raw["exchange_ts_ms"])
         book.received_ts_ms = int(raw["received_ms"])
+        book.snapshot_published_ts_ms = int(raw.get("snapshot_published_ms") or raw["received_ms"])
+        book.snapshot_published_ts = book.snapshot_published_ts_ms // 1000
+        book.source_received_ts_ms = int(raw.get("source_receive_ts_ms") or raw["received_ms"])
+        book.source_received_ts = book.source_received_ts_ms // 1000
+        book.state_version = int(raw.get("state_version") or 0)
+        book.lineage_epoch = int(raw.get("lineage_epoch") or 0)
+        book.economic_novelty = raw.get("economic_novelty") is True
+        book.last_book_change_receive_ms = int(
+            raw.get("last_book_change_receive_ms") or book.source_received_ts_ms)
+        book.last_trade_receive_ms = int(raw.get("last_trade_receive_ms") or 0)
+        book.last_trade_exchange_ms = int(raw.get("last_trade_exchange_ms") or 0)
         book.snapshot_id = str(raw["bus_snapshot_id"])
         book.lineage_continuous = True
         output[token] = book

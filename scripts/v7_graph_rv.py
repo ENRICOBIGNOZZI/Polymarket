@@ -10,6 +10,7 @@ import math
 import os
 import subprocess
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -254,39 +255,92 @@ class Broker:
         return out
 
     def admit(self) -> None:
-        if self.state["killed"]: return
+        funnel: Counter[str] = Counter()
+        if self.state["killed"]:
+            funnel["killed"] = 1
+            self.state["last_admission_funnel"] = dict(funnel)
+            return
         grouped: dict[str, list[dict[str, str]]] = {}
-        for row in read_csv(self.intents):
+        intent_rows = read_csv(self.intents)
+        funnel["intent_rows"] = len(intent_rows)
+        funnel["registry_market_ids"] = len({str(row.get("market_id") or "") for row in intent_rows if row.get("market_id")})
+        funnel["registry_event_ids"] = len({str(row.get("event_id") or "") for row in intent_rows if row.get("event_id")})
+        for row in intent_rows:
             if row.get("bundle_id"): grouped.setdefault(row["bundle_id"], []).append(row)
+        funnel["bundle_groups"] = len(grouped)
+        funnel["complete_intent_bundles"] = sum(len(rows) >= 2 for rows in grouped.values())
+        funnel["incomplete_intent_bundles"] = sum(len(rows) < 2 for rows in grouped.values())
         for bundle_id, rows in grouped.items():
-            if bundle_id in self.state["bundles"] or len(rows) < 2: continue
+            if bundle_id in self.state["bundles"]:
+                funnel["already_owned"] += 1
+                continue
+            if len(rows) < 2:
+                continue
             try:
                 edge, max_notional = float(rows[0]["expected_edge"]), float(rows[0]["max_notional"])
                 deadline, hold = int(rows[0]["execution_deadline_ts"]), int(rows[0]["hold_deadline_ts"])
-            except (KeyError, ValueError): continue
-            if edge <= float(self.cfg.get("min_net_edge", .00005)) or deadline <= time.time(): continue
+            except (KeyError, ValueError):
+                funnel["intent_contract_invalid"] += 1
+                continue
+            if edge <= float(self.cfg.get("min_net_edge", .00005)):
+                funnel["source_edge_rejected"] += 1
+                continue
+            if deadline <= time.time():
+                funnel["deadline_expired"] += 1
+                continue
             prepared = []
+            prepare_failure = ""
             for row in rows:
                 raw = self.market(str(row.get("market_id") or ""))
-                if not raw or raw.get("closed") or not raw.get("active", True): prepared = []; break
+                if not raw:
+                    prepare_failure = "active_market_missing"
+                    break
+                if raw.get("closed") or not raw.get("active", True):
+                    prepare_failure = "market_inactive_or_closed"
+                    break
                 event = market_event_id(raw); outcome = str(row.get("outcome") or "").upper(); token = outcome_token(raw, outcome)
-                if not event or not token: prepared = []; break
+                if not event or not token:
+                    prepare_failure = "semantic_mapping_incomplete"
+                    break
                 book = self.books([token]).get(token)
                 fee = resolve_fee_details(raw, self.clob, str(raw.get("conditionId") or ""), token)
                 weight = max(0.0, finite(row.get("weight"), 0.0))
-                if not book or not fee.verified or weight <= 0: prepared = []; break
+                if not book:
+                    prepare_failure = "causal_book_missing"
+                    break
+                if not fee.verified:
+                    prepare_failure = "authoritative_fee_missing"
+                    break
+                if weight <= 0:
+                    prepare_failure = "invalid_relation_weight"
+                    break
                 prepared.append({"row": row, "raw": raw, "event": event, "outcome": outcome, "token": token, "book": book, "fee": fee, "weight": weight})
-            if len(prepared) != len(rows): continue
+            if len(prepared) != len(rows):
+                funnel[prepare_failure or "preparation_incomplete"] += 1
+                continue
+            funnel["active_complete_events"] += 1
             style, p_complete, expected_ev = choose_style(prepared, self.model)
+            if (p_complete is None or expected_ev is None
+                    or not math.isfinite(expected_ev) or expected_ev <= 0.0):
+                funnel["joint_execution_model_or_ev_rejected"] += 1
+                continue
+            funnel["joint_execution_positive"] += 1
             eq = max(1.0, float(self.state["cash"])); room = min(max_notional, eq * float(self.cfg.get("max_trade_fraction", 1.0)))
             cost_per_unit = sum(x["weight"] * (x["book"].bid if a == "MAKER" else x["book"].ask) for x, a in zip(prepared, style))
-            if room <= 0 or cost_per_unit <= 0: continue
+            if room <= 0 or cost_per_unit <= 0:
+                funnel["capital_or_cost_rejected"] += 1
+                continue
             units = room / cost_per_unit
             unwind_fraction = float((self.cfg.get("v7") or {}).get("graph_unwind_depth_fraction", .25))
             for x, action in zip(prepared, style):
                 units = min(units, queue_decoupled_units(risk_units=units, weight=x["weight"], unwind_depth=x["book"].bid_depth, unwind_fraction=unwind_fraction))
                 if action == "TAKER": units = min(units, x["book"].ask_depth / x["weight"])
-            if units <= 0 or any(units * x["weight"] + 1e-9 < x["book"].min_order for x in prepared): continue
+            if units <= 0:
+                funnel["unwind_depth_rejected"] += 1
+                continue
+            if any(units * x["weight"] + 1e-9 < x["book"].min_order for x in prepared):
+                funnel["minimum_order_rejected"] += 1
+                continue
             decision = now_ms(); legs = {}; target = {}
             for i, (x, action) in enumerate(zip(prepared, style)):
                 book = x["book"]; leg_id = f"leg-{i}"; shares = units * x["weight"]
@@ -298,11 +352,13 @@ class Broker:
                 legs[leg_id] = {"leg_id": leg_id, "order_id": order_id, "market_id": common["market_id"], "event_id": x["event"], "token_id": x["token"], "side": common["side"], "outcome": x["outcome"], "weight": x["weight"], "target": shares, "filled": 0.0, "entry_action": action, "limit": limit, "queue": queue, "arrival_ms": decision + int((self.cfg.get("v7") or {}).get("graph_submit_latency_ms", 100)), "cancel_ms": deadline * 1000, "fills": [], "book": {"snapshot_id": book.snapshot_id}}
             bundle = {"bundle_id": bundle_id, "event_id": str(rows[0]["event_id"]), "status": "RESTING", "expected_edge": edge, "execution_deadline_ts": deadline, "hold_deadline_ts": hold, "legs": legs, "final": False}
             self.state["bundles"][bundle_id] = bundle
+            funnel["admitted_bundles"] += 1
             # Sequential taker execution is revalidated leg-by-leg.
             for leg in legs.values():
                 if leg["entry_action"] == "TAKER" and not self.fill_taker(bundle, leg):
                     bundle["status"] = "ABORTING"; bundle["abort_reason"] = "taker_revalidation_failed"; break
             self.refresh(bundle)
+        self.state["last_admission_funnel"] = dict(sorted(funnel.items()))
 
     def record_fill(self, bundle: dict[str, Any], leg: dict[str, Any], shares: float, price: float, exchange: int, receive: int, *, taker: bool, snapshot: str) -> bool:
         raw = self.market(leg["market_id"])
@@ -450,7 +506,7 @@ class Broker:
                 if walked: equity += leg["filled"] * walked[1]
         self.state["peak"] = max(float(self.state.get("peak", equity)), equity); dd = max(0.0, 1 - equity/self.state["peak"]) if self.state["peak"] > 0 else 0.0
         if dd >= float(self.cfg.get("max_drawdown", .15)): self.state["killed"] = True
-        atomic_json(self.dir / "status.json", {"schema":"polymarket_v7_graph_rv_status_v1","timestamp":int(time.time()),"paper_only":True,"authenticated_execution":False,"model_sha":self.sha,"cash":self.state["cash"],"equity":equity,"realized_pnl_total":float(self.state.get("realized_pnl_total",0.0)),"drawdown":dd,"killed":self.state["killed"],"market_state_source":"SHARED_CPP_WEBSOCKET" if self.shared_state is not None else "REST_COMPATIBILITY","bundle_states":{k:v["status"] for k,v in self.state["bundles"].items()},"contracts":["queue_never_grants_size","unwind_depth_bounds_size","receive_time_causal_fills","shared_trade_capacity","direct_joint_distribution_not_product_of_marginals","partial_unwind_fail_closed","canonical_ledger_spool_only"]})
+        atomic_json(self.dir / "status.json", {"schema":"polymarket_v7_graph_rv_status_v1","timestamp":int(time.time()),"paper_only":True,"authenticated_execution":False,"model_sha":self.sha,"cash":self.state["cash"],"equity":equity,"realized_pnl_total":float(self.state.get("realized_pnl_total",0.0)),"drawdown":dd,"killed":self.state["killed"],"market_state_source":"SHARED_CPP_WEBSOCKET" if self.shared_state is not None else "REST_COMPATIBILITY","admission_funnel":self.state.get("last_admission_funnel") or {},"bundle_states":{k:v["status"] for k,v in self.state["bundles"].items()},"contracts":["queue_never_grants_size","unwind_depth_bounds_size","receive_time_causal_fills","shared_trade_capacity","direct_joint_distribution_not_product_of_marginals","partial_unwind_fail_closed","canonical_ledger_spool_only"]})
 
     def tick(self) -> None:
         self.risk(); self.admit(); self.apply_trades(); self.manage(); self.markouts(); self.risk(); self.state["model_sha"] = self.sha; atomic_json(self.state_path, self.state)

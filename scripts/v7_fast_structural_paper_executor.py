@@ -201,7 +201,8 @@ class Executor:
         metadata = event.metadata if isinstance(event.metadata, dict) else {}
         legs = self.candidate_legs(event)
         bundle_id = str(event.bundle_id or f"fast-paper-{identity}")
-        if (metadata.get("hard_arbitrage") is not True or not legs
+        if (metadata.get("hard_arbitrage") is not True
+                or metadata.get("execution_compatibility") != "SEQUENTIAL_FOK_HARD_ARB" or not legs
                 or finite(metadata.get("payoff_floor"), 0.0) <= 0.0):
             self.reject("UNSUPPORTED_OR_UNSTRUCTURED_CANDIDATE")
             self.save()

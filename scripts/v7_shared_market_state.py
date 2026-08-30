@@ -75,13 +75,24 @@ def validate_payload(raw: dict[str, Any], *, expected_sha: str,
             raise SharedStateError("book:not_object")
         token = str(item.get("token_id") or "")
         exchange = int(item.get("exchange_ts_ms") or 0)
-        received = int(item.get("receive_ts_ms") or 0)
+        received = int(item.get("source_receive_ts_ms") or item.get("receive_ts_ms") or 0)
+        published = int(item.get("snapshot_published_ms") or timestamp)
         version = int(item.get("state_version") or 0)
         epoch = int(item.get("lineage_epoch") or 0)
         if not token or token in books or exchange <= 0 or received <= 0 or version <= 0 or epoch < 0:
             raise SharedStateError("book:identity_or_clock")
-        if exchange > received + 1_500 or received > timestamp + 1_500:
+        if (exchange > received + 1_500 or received > published + 1_500
+                or published != timestamp):
             raise SharedStateError("book:causality")
+        last_book_change = int(item.get("last_book_change_receive_ms") or received)
+        last_trade_receive = int(item.get("last_trade_receive_ms") or 0)
+        last_trade_exchange = int(item.get("last_trade_exchange_ms") or 0)
+        if (last_book_change < 0 or last_book_change > published + 1_500
+                or last_trade_receive < 0 or last_trade_receive > published + 1_500
+                or last_trade_exchange < 0
+                or (last_trade_exchange > 0 and last_trade_receive <= 0)
+                or last_trade_exchange > last_trade_receive + 1_500):
+            raise SharedStateError("book:event_clock")
         books[token] = {
             "token": token,
             "market_id": str(item.get("market_id") or ""),
@@ -93,13 +104,20 @@ def validate_payload(raw: dict[str, Any], *, expected_sha: str,
             "min_order": max(0.0, _finite(item.get("min_order_size", 0.0))),
             "tick_size": max(0.0, _finite(item.get("tick_size", 0.0))),
             "exchange_ts_ms": exchange,
-            # Consumer receipt is the atomic snapshot publish time. The per-book
-            # receive clock remains separately available for latency evidence.
+            # Transport freshness and economic event time are intentionally
+            # separate.  A continuously connected quiet book remains usable at
+            # the newly published atomic cut, but publishing that cut is not a
+            # new market observation.
             "received_ms": timestamp,
             "source_receive_ts_ms": received,
+            "snapshot_published_ms": timestamp,
             "state_version": version,
             "lineage_epoch": epoch,
             "lineage_continuous": item.get("lineage_continuous") is True,
+            "economic_novelty": item.get("economic_novelty") is True,
+            "last_book_change_receive_ms": last_book_change,
+            "last_trade_receive_ms": last_trade_receive,
+            "last_trade_exchange_ms": last_trade_exchange,
             "provenance": str(item.get("provenance") or ""),
             "fee_verified": item.get("fee_verified") is True,
             "fee_rate": max(0.0, _finite(item.get("fee_rate", 0.0))),
@@ -107,7 +125,6 @@ def validate_payload(raw: dict[str, Any], *, expected_sha: str,
             "fee_taker_only": item.get("fee_taker_only") is True,
             "bus_snapshot_id": snapshot_id,
             "bus_generation": generation,
-            "snapshot_published_ms": timestamp,
         }
     if not books:
         raise SharedStateError("snapshot:no_books")
