@@ -370,6 +370,30 @@ void test_positive_exploration_ev_breaks_robust_cold_start() {
     assert(decision.intents[0].quantity_microunits == 2'000'000);
 }
 
+void test_point_ev_exploration_prefers_fillable_positive_placement() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    auto model = profitable_model();
+    model.base_ev_se_per_share = 0.025;
+    model.robust_ev_z = 100.0;
+    model.min_robust_ev_per_share = 0.00001;
+    configure_exploration(model);
+    model.exploration_confidence_z = 0.0;
+    pm::v7::maker::InventorySnapshot inventory;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 20.0;
+    risk.exploration_max_quote_shares = 2.0;
+    risk.max_abs_residual_shares = 200.0;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(decision.reason == pm::v7::maker::DecisionReason::ExplorationQuote);
+    assert(decision.action == pm::v7::maker::Action::Improve1);
+    assert(decision.intent_count == 1);
+    assert(decision.intents[0].price_tick == update.best_bid_tick + 1);
+    assert(decision.intents[0].expected_ev > model.min_robust_ev_per_share);
+}
+
 void test_negative_exploration_adjusted_ev_has_no_execution_authority() {
     pm::v7::maker::MakerHotPath hot;
     auto update = normal_update();
@@ -437,6 +461,7 @@ int main() {
     test_partial_inventory_sizes_reducing_quote_to_available_residual();
     test_transient_no_economic_quote_cannot_cancel_before_minimum_lifetime();
     test_positive_exploration_ev_breaks_robust_cold_start();
+    test_point_ev_exploration_prefers_fillable_positive_placement();
     test_negative_exploration_adjusted_ev_has_no_execution_authority();
     test_global_kill_preempts_quote();
     test_new_risk_freeze_withdraws_without_irreversible_kill();

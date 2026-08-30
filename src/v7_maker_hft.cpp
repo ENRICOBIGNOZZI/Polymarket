@@ -100,6 +100,50 @@ struct Candidate {
     double score = -std::numeric_limits<double>::infinity();
 };
 
+struct ExplorationChoice {
+    const SideEconomics* economics = nullptr;
+    Action action = Action::Join;
+    double adjusted_ev = -std::numeric_limits<double>::infinity();
+};
+
+[[nodiscard]] ExplorationChoice choose_exploration(
+    const Candidate* candidates,
+    std::size_t candidate_count,
+    const MakerModelSnapshot& model) noexcept {
+    ExplorationChoice best;
+    double best_fill_probability = -1.0;
+    for (std::size_t i = 0; i < candidate_count; ++i) {
+        const auto& candidate = candidates[i];
+        // Exploration buys fill/markout information. JOIN and IMPROVE1 are the
+        // only canonical placement variants that can increase execution
+        // probability without crossing; fading would reduce information rate.
+        if (candidate.action != Action::Join && candidate.action != Action::Improve1) continue;
+        const auto& side = candidate.bid;
+        const double adjusted_ev = exploration_adjusted_ev(side, model);
+        if (!finite(adjusted_ev) || adjusted_ev <= model.min_robust_ev_per_share
+            || side.price_tick <= 0) continue;
+        if (side.fill_probability > best_fill_probability + kEps
+            || (std::abs(side.fill_probability - best_fill_probability) <= kEps
+                && adjusted_ev > best.adjusted_ev)) {
+            best.economics = &side;
+            best.action = candidate.action;
+            best.adjusted_ev = adjusted_ev;
+            best_fill_probability = side.fill_probability;
+        }
+    }
+    return best;
+}
+
+[[nodiscard]] const SideEconomics* exploration_side(
+    const Candidate* candidates,
+    std::size_t candidate_count,
+    Action action) noexcept {
+    for (std::size_t i = 0; i < candidate_count; ++i) {
+        if (candidates[i].action == action) return &candidates[i].bid;
+    }
+    return nullptr;
+}
+
 [[nodiscard]] const ExecutionCellBaseline* execution_cell(
     const MakerModelSnapshot& model,
     Action action,
@@ -590,6 +634,18 @@ MakerDecision MakerHotPath::on_market_update(
             exploration_cap = std::min(exploration_cap, risk.exploration_max_quote_shares);
         }
         const double exploration_shares = std::min(quote_shares, exploration_cap);
+        std::array<Candidate, 2> exploration_candidates{};
+        std::size_t exploration_candidate_count = 0;
+        exploration_candidates[exploration_candidate_count++] = evaluate_candidate(
+            Action::Join, update.best_bid_tick, update.best_ask_tick,
+            update, inventory, risk, model, decision.features, reservation_value,
+            exploration_shares, 0.0);
+        if (update.best_ask_tick - update.best_bid_tick >= 3) {
+            exploration_candidates[exploration_candidate_count++] = evaluate_candidate(
+                Action::Improve1, update.best_bid_tick + 1, update.best_ask_tick - 1,
+                update, inventory, risk, model, decision.features, reservation_value,
+                exploration_shares, 0.0);
+        }
         const bool exploration_configured = model.exploration_enabled != 0
             && model.exploration_epsilon > 0.0
             && model.exploration_quote_notional_fraction > 0.0
@@ -610,17 +666,19 @@ MakerDecision MakerHotPath::on_market_update(
                                                     quotes.bid_tick, 0.0, nullptr, now));
                 exploration_active_ = 0;
             } else if (exploration_configured) {
-                const auto exploratory = evaluate_side(
-                    Action::Join, Side::Buy, update.best_bid_tick, update, inventory, risk,
-                    model, decision.features, reservation_value, exploration_shares);
-                const double adjusted_ev = exploration_adjusted_ev(exploratory, model);
+                const auto* exploratory = exploration_side(
+                    exploration_candidates.data(), exploration_candidate_count,
+                    exploration_action_);
+                const double adjusted_ev = exploratory != nullptr
+                    ? exploration_adjusted_ev(*exploratory, model)
+                    : -std::numeric_limits<double>::infinity();
                 const bool exploration_economic = finite(adjusted_ev)
                     && adjusted_ev > model.min_robust_ev_per_share;
                 if (!exploration_economic) {
                     decision.action = Action::Withdraw;
                     decision.reason = DecisionReason::NoEconomicQuote;
                     decision.robust_ev = finite(adjusted_ev) ? adjusted_ev : 0.0;
-                    decision.ev_uncertainty = exploratory.uncertainty;
+                    decision.ev_uncertainty = exploratory != nullptr ? exploratory->uncertainty : 0.0;
                     if (!quotes.cancel_pending) {
                         append_intent(decision, make_intent(++intent_sequence_, update, model,
                                                             IntentType::CancelQuote, Side::Buy,
@@ -628,13 +686,13 @@ MakerDecision MakerHotPath::on_market_update(
                     }
                     exploration_active_ = 0;
                 } else {
-                    decision.action = Action::Join;
+                    decision.action = exploration_action_;
                     decision.reason = DecisionReason::ExplorationHold;
                     decision.robust_ev = adjusted_ev;
-                    decision.ev_uncertainty = exploratory.uncertainty;
+                    decision.ev_uncertainty = exploratory->uncertainty;
                     const std::int64_t required_rest = std::max(
                         model.min_quote_lifetime_ns, model.exploration_min_rest_ns);
-                    if (quotes.bid_tick != exploratory.price_tick && elapsed >= required_rest
+                    if (quotes.bid_tick != exploratory->price_tick && elapsed >= required_rest
                         && !quotes.cancel_pending) {
                         append_intent(decision, make_intent(++intent_sequence_, update, model,
                                                             IntentType::CancelQuote, Side::Buy,
@@ -660,24 +718,21 @@ MakerDecision MakerHotPath::on_market_update(
         if (exploration_configured
             && quotes.bid_active == 0 && quotes.ask_active == 0
             && !quotes.cancel_pending && sampled) {
-            const auto exploratory = evaluate_side(
-                Action::Join, Side::Buy, update.best_bid_tick, update, inventory, risk,
-                model, decision.features, reservation_value, exploration_shares);
-            const double adjusted_ev = exploration_adjusted_ev(exploratory, model);
-            if (finite(adjusted_ev)
-                && adjusted_ev > model.min_robust_ev_per_share
-                && exploratory.price_tick > 0) {
-                auto authorized_exploration = exploratory;
-                authorized_exploration.robust_ev = adjusted_ev;
-                decision.action = Action::Join;
+            const auto choice = choose_exploration(
+                exploration_candidates.data(), exploration_candidate_count, model);
+            if (choice.economics != nullptr) {
+                auto authorized_exploration = *choice.economics;
+                authorized_exploration.robust_ev = choice.adjusted_ev;
+                decision.action = choice.action;
                 decision.reason = DecisionReason::ExplorationQuote;
-                decision.robust_ev = adjusted_ev;
-                decision.ev_uncertainty = exploratory.uncertainty;
+                decision.robust_ev = choice.adjusted_ev;
+                decision.ev_uncertainty = choice.economics->uncertainty;
                 append_intent(decision, make_intent(++intent_sequence_, update, model,
                                                     IntentType::Quote, Side::Buy,
-                                                    exploratory.price_tick, exploration_shares,
+                                                    choice.economics->price_tick, exploration_shares,
                                                     &authorized_exploration, now));
                 exploration_active_ = 1;
+                exploration_action_ = choice.action;
                 last_exploration_quote_ns_ = now;
                 const std::int64_t end_ns = monotonic_ns();
                 decision.latency.decision_ns = end_ns - decision_start_ns;

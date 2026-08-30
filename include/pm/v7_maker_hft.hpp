@@ -295,6 +295,7 @@ private:
     double ew_cancel_intensity_ = 0.0;
     std::uint64_t intent_sequence_ = 0;
     std::int64_t last_exploration_quote_ns_ = 0;
+    Action exploration_action_ = Action::Join;
     std::uint8_t initialized_ = 0;
     std::uint8_t exploration_active_ = 0;
 };
