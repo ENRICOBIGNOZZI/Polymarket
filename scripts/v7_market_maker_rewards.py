@@ -457,13 +457,32 @@ def _recent_flow_snapshot(
                 "prints": 0,
                 "shares": 0.0,
                 "notional": 0.0,
+                "sell_prints_30s": 0,
+                "sell_prints_2m": 0,
+                "sell_prints_10m": 0,
+                "sell_shares_10m": 0.0,
+                "sell_notional_10m": 0.0,
                 "last_receive_ms": 0,
+                "last_sell_receive_ms": 0,
                 "transactions": set(),
             })
             item["prints"] += 1
             item["shares"] += size
             item["notional"] += size * price
             item["last_receive_ms"] = max(int(item["last_receive_ms"]), receive_ms)
+            if str(raw.get("side") or "").upper() == "SELL":
+                age_ms = max(0, now_ms - receive_ms)
+                if age_ms <= 30_000:
+                    item["sell_prints_30s"] += 1
+                if age_ms <= 120_000:
+                    item["sell_prints_2m"] += 1
+                if age_ms <= 600_000:
+                    item["sell_prints_10m"] += 1
+                    item["sell_shares_10m"] += size
+                    item["sell_notional_10m"] += size * price
+                    item["last_sell_receive_ms"] = max(
+                        int(item["last_sell_receive_ms"]), receive_ms
+                    )
             tx_hash = str(raw.get("transaction_hash") or "")
             if tx_hash:
                 item["transactions"].add(tx_hash)
@@ -471,6 +490,7 @@ def _recent_flow_snapshot(
         raise ValueError(f"maker_recent_flow_tape_stale:{now_ms - latest_receive_ms}")
 
     minimum_prints = max(1, int(flow_cfg.get("minimum_prints", 2)))
+    minimum_sell_prints_10m = max(1, int(flow_cfg.get("minimum_sell_prints_10m", 1)))
     minimum_markets = max(1, int(flow_cfg.get("minimum_markets", 5)))
     minimum_tte_ms = max(
         0, int(float(flow_cfg.get("minimum_time_to_end_seconds", 900.0)) * 1000.0)
@@ -497,6 +517,7 @@ def _recent_flow_snapshot(
         if (
             flow is None
             or int(flow["prints"]) < minimum_prints
+            or int(flow["sell_prints_10m"]) < minimum_sell_prints_10m
             or not _generic_maker_market_allowed(raw, selection_cfg)
             or raw.get("active") is not True
             or raw.get("closed") is True
@@ -519,6 +540,14 @@ def _recent_flow_snapshot(
         mid_balance = max(0.0, 1.0 - abs(midpoint - 0.5) / 0.5)
         score = (
             finite(weights.get("log_prints"), 3.0) * math.log1p(int(flow["prints"]))
+            + finite(weights.get("log_sell_prints_30s"), 4.0)
+              * math.log1p(int(flow["sell_prints_30s"]))
+            + finite(weights.get("log_sell_prints_2m"), 3.0)
+              * math.log1p(int(flow["sell_prints_2m"]))
+            + finite(weights.get("log_sell_prints_10m"), 2.0)
+              * math.log1p(int(flow["sell_prints_10m"]))
+            + finite(weights.get("log_sell_notional_10m"), 1.0)
+              * math.log1p(float(flow["sell_notional_10m"]))
             + finite(weights.get("log_notional"), 1.0) * math.log1p(float(flow["notional"]))
             + finite(weights.get("log_flow_to_liquidity"), 2.0)
               * math.log1p(recent_flow_to_liquidity * 1_000.0)
@@ -551,6 +580,12 @@ def _recent_flow_snapshot(
             "recent_notional_usd": float(flow["notional"]),
             "recent_flow_to_liquidity": recent_flow_to_liquidity,
             "recent_last_trade_age_ms": now_ms - int(flow["last_receive_ms"]),
+            "recent_sell_prints_30s": int(flow["sell_prints_30s"]),
+            "recent_sell_prints_2m": int(flow["sell_prints_2m"]),
+            "recent_sell_prints_10m": int(flow["sell_prints_10m"]),
+            "recent_sell_share_volume_10m": float(flow["sell_shares_10m"]),
+            "recent_sell_notional_usd_10m": float(flow["sell_notional_10m"]),
+            "recent_last_sell_age_ms": now_ms - int(flow["last_sell_receive_ms"]),
         })
     candidates.sort(key=lambda row: (
         -finite(row.get("selection_score")),
@@ -578,7 +613,7 @@ def _recent_flow_snapshot(
         "real_order_submission": False,
         "model_sha": model_sha,
         "source": "adaptive_universe_recent_flow",
-        "selection_mode": "RECENT_AGGRESSIVE_FLOW",
+        "selection_mode": "RECENT_EXECUTABLE_SELL_FLOW",
         "degraded": False,
         "reward_data_available": False,
         "reward_pool_count": 0,
@@ -590,7 +625,7 @@ def _recent_flow_snapshot(
         "recent_flow_lookback_ms": lookback_ms,
         "recent_flow_latest_receive_ms": latest_receive_ms,
         "markets": selected,
-        "note": "PAPER maker selection is ranked by causal recent public prints; reward assumptions are zero.",
+        "note": "PAPER BUY-maker selection requires causal aggressive SELL flow that can reach resting bids; reward assumptions are zero.",
     }
 
 
