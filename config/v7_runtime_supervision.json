@@ -7,7 +7,7 @@
   "real_capital_at_risk": false,
   "service": {
     "command": ["bash", "scripts/paper_v7_execution_loop.sh"],
-    "startup_grace_seconds": 180,
+    "startup_grace_seconds": 420,
     "health_interval_seconds": 5,
     "runtime_stale_seconds": 30,
     "termination_grace_seconds": 15,
