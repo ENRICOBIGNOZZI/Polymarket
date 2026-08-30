@@ -274,7 +274,15 @@ external_positions=external_state.get('positions'); micro_positions=micro_state.
 maker_inventory=maker_state.get('inventory'); maker_positions=maker_status.get('positions')
 assert isinstance(external_positions,dict) and isinstance(micro_positions,dict)
 assert isinstance(maker_inventory,dict) and isinstance(maker_positions,list)
-external_open=sum(1 for row in external_positions.values() if isinstance(row,dict) and row.get('settled') is not True)
+# paper_router_state.positions is the counterfactual SHADOW book. It is not
+# execution inventory and must never hold an exact-SHA cutover hostage. The
+# router status owns the zero-authority execution-position contract; durable
+# state is reconciled separately only as counterfactual evidence.
+external_open=int(external_status.get('open_positions',-1))
+counterfactual_open=sum(
+    1 for row in external_positions.values()
+    if isinstance(row,dict) and row.get('settled') is not True
+)
 micro_open=len(micro_positions)
 maker_open=0
 for row in maker_inventory.values():
@@ -282,7 +290,8 @@ for row in maker_inventory.values():
     yes=float(row.get('yes_shares') or 0.0); no=float(row.get('no_shares') or 0.0)
     assert yes >= 0.0 and no >= 0.0
     maker_open += int(yes > 1e-9) + int(no > 1e-9)
-assert int(external_status.get('open_positions',-1)) == external_open
+assert external_open >= 0
+assert int(external_status.get('counterfactual_open_positions',-1)) == counterfactual_open
 assert int(micro_status.get('open_positions',-1)) == micro_open
 assert len(maker_positions) == maker_open
 assert external_open == 0 and micro_open == 0
@@ -622,6 +631,10 @@ temporary.write_text(payload,encoding='utf-8'); os.chmod(temporary,0o644); os.re
 PY
     plutil -lint "$destination" >/dev/null
     launchctl bootout "$domain/$label" >/dev/null 2>&1 || true
+    # Recovery tooling uses this same loopback proxy. A verified stale owner
+    # must be gone before launchd starts the canonical child, otherwise the
+    # address collision kills the whole fail-closed runtime tree.
+    stop_stale_monitoring_listener public_https_proxy 19109 "scripts/v7_public_https_proxy.py"
     launchctl bootstrap "$domain" "$destination"
     log "Started production V7 under launchd label=$label"
   else

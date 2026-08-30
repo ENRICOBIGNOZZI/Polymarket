@@ -55,6 +55,7 @@
     "min_volume_24h": 100.0,
     "min_mid": 0.02,
     "max_mid": 0.98,
+    "fallback_maximum_spread": 0.10,
     "fallback_score_weights": {
       "log_volume_24h": 1.0,
       "log_flow_to_depth": 2.0,

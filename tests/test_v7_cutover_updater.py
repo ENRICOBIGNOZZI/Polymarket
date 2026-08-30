@@ -82,6 +82,18 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertNotIn('-B "$APP_DIR/build.next"', function)
         self.assertNotIn('mv "$APP_DIR/build.next"', function)
 
+    def test_runtime_start_removes_only_verified_stale_public_proxy_owner(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        function = text[text.index("start_production_runtime(){"):text.index("stop_owned_monitoring(){")]
+        self.assertIn(
+            'stop_stale_monitoring_listener public_https_proxy 19109 "scripts/v7_public_https_proxy.py"',
+            function,
+        )
+        self.assertLess(
+            function.index("stop_stale_monitoring_listener public_https_proxy"),
+            function.index('launchctl bootstrap "$domain" "$destination"'),
+        )
+
     def test_updater_stops_only_registered_v7_runtime_owner(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         self.assertIn("control/runtime_status.json", text)
@@ -117,6 +129,9 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertLess(stop, archive)
         function = text[text.index("cutover_positions_drained(){"):text.index("wait_for_cutover_drain(){")]
         self.assertIn("external_open == 0 and micro_open == 0", function)
+        self.assertIn("external_open=int(external_status.get('open_positions',-1))", function)
+        self.assertIn("counterfactual_open_positions',-1)) == counterfactual_open", function)
+        self.assertIn("is the counterfactual SHADOW book", function)
         self.assertIn("maker_status.get('marking_complete') is True", function)
         self.assertIn("order_submission_enabled') is False", function)
         self.assertIn("new_risk_frozen') is True", function)

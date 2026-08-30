@@ -721,6 +721,7 @@ def _fallback_snapshot(
     minimum_liquidity = float(selection_cfg.get("min_liquidity", 25.0))
     minimum_mid = float(selection_cfg.get("min_mid", 0.02))
     maximum_mid = float(selection_cfg.get("max_mid", 0.98))
+    maximum_spread = max(0.0, float(selection_cfg.get("fallback_maximum_spread", 0.10)))
     weights = selection_cfg.get("fallback_score_weights") if isinstance(selection_cfg.get("fallback_score_weights"), dict) else {}
     candidates: list[dict[str, Any]] = []
     for raw in universe.get("markets") if isinstance(universe.get("markets"), list) else []:
@@ -742,6 +743,8 @@ def _fallback_snapshot(
             or volume_24h < minimum_volume
             or midpoint < minimum_mid
             or midpoint > maximum_mid
+            or spread <= 0.0
+            or spread > maximum_spread
         ):
             continue
         condition_id = str(raw.get("condition_id") or "")

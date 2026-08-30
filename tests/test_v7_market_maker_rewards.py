@@ -299,6 +299,30 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertEqual([row["market_id"] for row in snapshot["markets"]], ["flow", "huge"])
         self.assertGreater(snapshot["markets"][0]["flow_to_depth_24h"], snapshot["markets"][1]["flow_to_depth_24h"])
 
+    def test_fallback_excludes_wide_books_that_recent_flow_would_reject(self) -> None:
+        from tempfile import TemporaryDirectory
+        base = {
+            "question": "Q", "slug": "q", "active": True, "closed": False,
+            "accepting_orders": True, "liquidity": 1_000.0,
+            "volume_24h": 10_000.0, "midpoint": 0.50,
+        }
+        rows = [
+            {**base, "event_ids": ["wide"], "market_id": "wide", "condition_id": "cw",
+             "clob_token_ids": ["yw", "nw"], "spread": 0.44},
+            {**base, "event_ids": ["tight"], "market_id": "tight", "condition_id": "ct",
+             "clob_token_ids": ["yt", "nt"], "spread": 0.02},
+        ]
+        with TemporaryDirectory() as directory:
+            universe = _universe(Path(directory) / "current.json", timestamp_ms=1_000_000, markets=rows)
+            _, selection_cfg, capacity_cfg, capacity = rewards._validated_config(
+                ROOT / "config" / "v7_professional_market_maker.json"
+            )
+            snapshot = rewards._fallback_snapshot(
+                universe, selection_cfg, capacity_cfg, capacity,
+                model_sha=SHA, primary_error="test", now_ms=1_000_000,
+            )
+        self.assertEqual([row["market_id"] for row in snapshot["markets"]], ["tight"])
+
     def test_request_budget_caps_each_network_call(self) -> None:
         seen: list[float] = []
 
