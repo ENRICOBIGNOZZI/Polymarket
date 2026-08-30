@@ -17,7 +17,7 @@ from typing import Any, Iterable, Iterator
 
 EXTERNAL = "CRYPTO_INFORMED_TAKER"
 MAKER = "MICRO_MAKER_PRO"
-MARKOUT_HORIZONS = ("1s", "10s", "45s", "60s", "300s")
+MARKOUT_HORIZONS = ("1s", "5s", "10s", "15s", "30s", "45s", "60s", "300s")
 
 
 def finite(value: Any) -> float | None:
@@ -264,6 +264,7 @@ def counterfactual_metrics(inputs: Iterable[Path]) -> dict[str, Any]:
                 conflicts += int(prior != value)
     counts = Counter(str(value.get("event_type") or "UNKNOWN") for value in unique.values())
     model_scores: list[tuple[float, float]] = []
+    hybrid_scores: list[tuple[float, float]] = []
     market_scores: list[tuple[float, float]] = []
     virtual_pnl: list[float] = []
     for value in unique.values():
@@ -272,10 +273,13 @@ def counterfactual_metrics(inputs: Iterable[Path]) -> dict[str, Any]:
                 finite(value.get("model_yes")), finite(value.get("market_yes")),
                 finite(value.get("actual_yes")),
             )
+            hybrid = finite(value.get("hybrid_yes"))
             if model is not None and actual is not None:
                 model_scores.append((model, actual))
             if market is not None and actual is not None:
                 market_scores.append((market, actual))
+            if hybrid is not None and actual is not None:
+                hybrid_scores.append((hybrid, actual))
         if value.get("event_type") == "VIRTUAL_FINAL":
             pnl = finite(value.get("counterfactual_pnl"))
             if pnl is not None:
@@ -285,10 +289,61 @@ def counterfactual_metrics(inputs: Iterable[Path]) -> dict[str, Any]:
         "duplicates_removed": duplicates, "conflicts": conflicts, "malformed": malformed,
         "events": dict(sorted(counts.items())),
         "forecast_model_score": score(model_scores),
+        "forecast_hybrid_score": score(hybrid_scores),
         "forecast_market_benchmark_score": score(market_scores),
         "virtual_realized_pnl": sum(virtual_pnl),
         "fail_closed": malformed > 0 or conflicts > 0,
     }
+
+
+def strategy_economics(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Report every strategy while keeping SHADOW economics out of PAPER PnL."""
+    grouped: dict[str, dict[str, Any]] = defaultdict(lambda: {
+        "events": Counter(), "paper_terminal_units": 0, "shadow_terminal_units": 0,
+        "paper_realized_pnl": 0.0, "shadow_counterfactual_pnl": 0.0,
+        "capital_hours": 0.0, "markouts": defaultdict(list),
+    })
+    for event in events:
+        strategy = str(event.get("strategy") or "UNKNOWN")
+        row = grouped[strategy]
+        kind = str(event.get("event_type") or "UNKNOWN")
+        row["events"][kind] += 1
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        shadow = bool(
+            metadata.get("counterfactual") is True
+            or metadata.get("excluded_from_portfolio_equity") is True
+            or str(metadata.get("economic_authority") or "PAPER").upper() in {"SHADOW", "RESEARCH", "SHADOW_COUNTERFACTUAL"}
+        )
+        row["capital_hours"] += max(0.0, finite(event.get("capital_hours")) or 0.0)
+        if kind == "FINAL":
+            pnl = finite(event.get("final_pnl"))
+            if pnl is not None:
+                if shadow:
+                    row["shadow_terminal_units"] += 1
+                    row["shadow_counterfactual_pnl"] += pnl
+                else:
+                    row["paper_terminal_units"] += 1
+                    row["paper_realized_pnl"] += pnl
+        if kind == "MARKOUT" and isinstance(event.get("markouts"), dict):
+            for horizon in MARKOUT_HORIZONS:
+                value = finite(event["markouts"].get(horizon))
+                if value is not None:
+                    row["markouts"][horizon].append(value)
+    output: dict[str, Any] = {}
+    for strategy, row in sorted(grouped.items()):
+        output[strategy] = {
+            "events": dict(sorted(row["events"].items())),
+            "paper_terminal_units": row["paper_terminal_units"],
+            "shadow_terminal_units": row["shadow_terminal_units"],
+            "paper_realized_pnl": row["paper_realized_pnl"],
+            "shadow_counterfactual_pnl": row["shadow_counterfactual_pnl"],
+            "capital_hours": row["capital_hours"],
+            "markout_per_share": {
+                horizon: {"n": len(row["markouts"][horizon]), "mean": mean(row["markouts"][horizon])}
+                for horizon in MARKOUT_HORIZONS
+            },
+        }
+    return output
 
 
 def audit(inputs: Iterable[Path]) -> dict[str, Any]:
@@ -299,6 +354,7 @@ def audit(inputs: Iterable[Path]) -> dict[str, Any]:
     strategies = Counter(str(event.get("strategy") or "UNKNOWN") for event in events)
     external = external_metrics(events)
     maker = maker_metrics(events)
+    all_strategies = strategy_economics(events)
     total_realized = float(external["realized_pnl"]) + float(maker["realized_pnl"])
     return {
         "schema": "polymarket_v7_profitability_audit_v1",
@@ -307,6 +363,7 @@ def audit(inputs: Iterable[Path]) -> dict[str, Any]:
         "strategy_record_counts": dict(sorted(strategies.items())),
         "external_fair": external, "professional_maker": maker,
         "external_fair_counterfactual": counterfactual,
+        "strategy_economics": all_strategies,
         "selected_sleeves_realized_pnl": total_realized,
         "profitability_proven": bool(
             not quality["fail_closed"] and total_realized > 0.0

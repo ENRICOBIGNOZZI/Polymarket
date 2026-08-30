@@ -137,7 +137,7 @@ jobs:
           import csv,json,os,sys
           from pathlib import Path
           root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(sys.argv[3])
-          runtime=json.loads((root/'control/runtime_status.json').read_text()); identity=json.loads((root/'control/incumbent_identity.json').read_text()); portfolio=json.loads((root/'control/portfolio_state.json').read_text()); graph=json.loads((root/'graph_rv/status.json').read_text()); economics=json.loads((root/'canonical_economics.json').read_text()); research=json.loads((root/'control/research_sleeves_manifest.json').read_text()); osint=json.loads((root/'osint/status.json').read_text()); osint_mapping=json.loads((root/'osint/mapping_status.json').read_text()); market_open=json.loads((root/'market_open/status.json').read_text()); allocation=json.loads((root/'control/allocations/manifest.json').read_text())
+          runtime=json.loads((root/'control/runtime_status.json').read_text()); identity=json.loads((root/'control/incumbent_identity.json').read_text()); portfolio=json.loads((root/'control/portfolio_state.json').read_text()); graph=json.loads((root/'graph_rv/status.json').read_text()); economics=json.loads((root/'canonical_economics.json').read_text()); research=json.loads((root/'control/research_sleeves_manifest.json').read_text()); slow_research=json.loads((root/'control/slow_research_shadow_manifest.json').read_text()); osint=json.loads((root/'osint/status.json').read_text()); osint_mapping=json.loads((root/'osint/mapping_status.json').read_text()); market_open=json.loads((root/'market_open/status.json').read_text()); allocation=json.loads((root/'control/allocations/manifest.json').read_text()); evidence_allocator=json.loads((root/'control/evidence_capital_allocator.json').read_text()); fee_reward=json.loads((root/'control/fee_reward_registry.json').read_text())
           scope=json.loads(Path('config/v7_live_model_scope.json').read_text()); registry=json.loads(Path('config/v7_strategy_registry.json').read_text())
           assert runtime.get('version')==7 and runtime.get('model_sha')==sha and runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False and runtime.get('real_order_submission') is False
           assert identity.get('schema')=='polymarket_v7_incumbent_identity_v1' and identity.get('verified') is True and identity.get('runtime_sha')==sha and identity.get('paper_only') is True
@@ -150,6 +150,9 @@ jobs:
           assert float(allocation.get('account_starting_capital') or 0)==14000.0 and int(allocation.get('execution_strategy_count') or 0)==7 and set(strategy_budgets)==expected_strategy_budgets
           assert all(abs(float(value)-2000.0)<=1e-9 for value in strategy_budgets.values()) and abs(float(allocation.get('strategy_budget_sum') or 0)-14000.0)<=1e-9
           assert allocation.get('research_strategy_budgets')=={} and allocation.get('research_has_capital') is False and abs(float((allocation.get('budgets') or {}).get('reserve') or 0))<=1e-9
+          assert evidence_allocator.get('schema')=='polymarket_v7_evidence_capital_allocator_v1' and evidence_allocator.get('paper_only') is True and evidence_allocator.get('authenticated_execution') is False and evidence_allocator.get('real_order_submission') is False and evidence_allocator.get('automatic_transfer') is False
+          assert fee_reward.get('schema')=='polymarket_v7_fee_reward_registry_v1' and fee_reward.get('model_sha')==sha and fee_reward.get('paper_only') is True and fee_reward.get('authenticated_execution') is False and fee_reward.get('real_order_submission') is False
+          assert fee_reward.get('unknown_fee_policy')=='NON_EXECUTABLE' and fee_reward.get('unknown_reward_policy')=='ZERO_EXPECTED_VALUE' and int(fee_reward.get('executable_market_count') or 0)>0
           assert float(portfolio.get('account_starting_capital') or 0)==14000.0
           assert graph.get('paper_only') is True and graph.get('authenticated_execution') is False and now-int(graph.get('timestamp') or 0)<=180
           assert economics.get('paper_only') is True and economics.get('authenticated_execution') is False and economics.get('expected_model_sha')==sha
@@ -159,10 +162,15 @@ jobs:
           assert scope.get('paper_only') is True and scope.get('authenticated_execution') is False and scope.get('real_order_submission') is False
           assert target|excluded==enabled and not target&excluded and excluded=={'ranking','pca','local_factor'}
           assert shadow=={'sports_latency','cross_platform','wallet_intelligence'}
+          assert set(scope.get('always_on_economic_shadow_families') or [])==excluded
           governance=scope.get('governance') or {}
           assert governance.get('single_execution_owner') is True and governance.get('research_has_capital') is False and governance.get('research_has_oms_authority') is False and governance.get('research_has_ledger_writer_authority') is False and governance.get('automatic_promotion') is False
           assert research.get('schema')=='polymarket_v7_research_sleeves_manifest_v1' and research.get('version')==7 and research.get('model_sha')==sha
           assert research.get('paper_only') is True and research.get('authenticated_execution') is False and research.get('real_order_submission') is False
+          assert slow_research.get('schema')=='polymarket_v7_slow_economic_shadow_manifest_v1' and slow_research.get('model_sha')==sha
+          assert slow_research.get('paper_only') is True and slow_research.get('authenticated_execution') is False and slow_research.get('real_order_submission') is False
+          slow_age=now-int(slow_research.get('timestamp') or 0); assert -5<=slow_age<=180
+          assert set((slow_research.get('families') or {}))==excluded
           research_pid=int(research.get('supervisor_pid') or 0); assert research_pid>0; os.kill(research_pid,0); research_age=now-int(research.get('timestamp') or 0); assert -5<=research_age<=180
           families=research.get('families'); assert isinstance(families,dict) and set(families)==shadow
           for family,row in families.items():

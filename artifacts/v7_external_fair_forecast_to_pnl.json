@@ -1,0 +1,91 @@
+{
+  "authenticated_execution": false,
+  "cohorts": {
+    "external_only_fair": {
+      "brier": 0.18486932328663683,
+      "log_loss": 0.5547317042570449,
+      "n": 87
+    },
+    "hybrid_fair": {
+      "brier": null,
+      "log_loss": null,
+      "n": 0
+    },
+    "pm_mid_benchmark": {
+      "brier": 0.25232270114942557,
+      "log_loss": 0.6820632316206586,
+      "n": 87
+    }
+  },
+  "execution_model_id": "external_only_fair",
+  "generated_at_unix_ms": 1788085462200,
+  "hybrid_authority": "SHADOW",
+  "missing_runtime_data_is_not_zero_economic_activity": true,
+  "paper_execution": {
+    "events": {},
+    "execution_gate": "BLOCK_PAPER_EXECUTION_UNTIL_OOS_BENCHMARKS_PASS",
+    "losses": 0,
+    "market_benchmark_score": {
+      "brier": null,
+      "log_loss": null,
+      "n": 0
+    },
+    "matched_terminal_positions": 0,
+    "missing_market_benchmarks": 0,
+    "missing_model_forecasts": 0,
+    "model_brier_minus_market": null,
+    "model_reliability": [],
+    "model_score": {
+      "brier": null,
+      "log_loss": null,
+      "n": 0
+    },
+    "predicted_robust_net_ev": 0,
+    "realized_pnl": 0,
+    "unique_fills": 0,
+    "unique_finals": 0,
+    "wins": 0
+  },
+  "paper_only": true,
+  "profitability_proven": false,
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "repository_head": "6fc6ac6afeecd0b555652cde53c9f0e73a710e17",
+  "runtime_evidence_available": false,
+  "schema": "polymarket_v7_external_fair_forecast_to_pnl_v1",
+  "shadow_counterfactual": {
+    "conflicts": 0,
+    "duplicates_removed": 0,
+    "events": {
+      "CANDIDATE": 9,
+      "FORECAST": 99,
+      "FORECAST_FINAL": 87,
+      "REJECTED": 2,
+      "VIRTUAL_FILL": 7,
+      "VIRTUAL_FINAL": 6,
+      "VIRTUAL_MARKOUT": 28
+    },
+    "fail_closed": false,
+    "forecast_hybrid_score": {
+      "brier": null,
+      "log_loss": null,
+      "n": 0
+    },
+    "forecast_market_benchmark_score": {
+      "brier": 0.25232270114942557,
+      "log_loss": 0.6820632316206586,
+      "n": 87
+    },
+    "forecast_model_score": {
+      "brier": 0.18486932328663683,
+      "log_loss": 0.5547317042570449,
+      "n": 87
+    },
+    "malformed": 0,
+    "raw_records": 238,
+    "tape_files": 1,
+    "unique_records": 238,
+    "virtual_realized_pnl": -26.7674191614
+  },
+  "version": 7
+}

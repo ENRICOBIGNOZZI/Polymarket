@@ -1,0 +1,64 @@
+{
+  "authenticated_execution": false,
+  "generated_at_unix_ms": 1788085462200,
+  "missing_runtime_data_is_not_zero_economic_activity": true,
+  "no_text_similarity_relations": true,
+  "paper_only": true,
+  "partial_bundle_unwind_required": true,
+  "profitability_proven": false,
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "repository_head": "6fc6ac6afeecd0b555652cde53c9f0e73a710e17",
+  "runtime_evidence_available": false,
+  "schema": "polymarket_v7_arb_coverage_report_v1",
+  "strategies": {
+    "FAST_STRUCTURAL": {
+      "capital_hours": 0.0,
+      "events": {
+        "CANDIDATE": 1104
+      },
+      "markout_per_share": {
+        "10s": {
+          "mean": null,
+          "n": 0
+        },
+        "15s": {
+          "mean": null,
+          "n": 0
+        },
+        "1s": {
+          "mean": null,
+          "n": 0
+        },
+        "300s": {
+          "mean": null,
+          "n": 0
+        },
+        "30s": {
+          "mean": null,
+          "n": 0
+        },
+        "45s": {
+          "mean": null,
+          "n": 0
+        },
+        "5s": {
+          "mean": null,
+          "n": 0
+        },
+        "60s": {
+          "mean": null,
+          "n": 0
+        }
+      },
+      "paper_realized_pnl": 0.0,
+      "paper_terminal_units": 0,
+      "shadow_counterfactual_pnl": 0.0,
+      "shadow_terminal_units": 0
+    },
+    "GRAPH_RV": {},
+    "HARD_ARB": {}
+  },
+  "verified_relation_registry": {},
+  "version": 7
+}

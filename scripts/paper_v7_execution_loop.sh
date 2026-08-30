@@ -55,7 +55,7 @@ ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
 MAKER_FREEZE="$CONTROL/MAKER_FREEZE"
 LOCK="$CONTROL/runtime.lock"
-mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/osint" "$RUN_ROOT/market_open" "$RUN_ROOT/shadow/sports_latency" "$RUN_ROOT/shadow/cross_platform" "$RUN_ROOT/shadow/wallet_intelligence" "$RUN_ROOT/learned_execution"
+mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/osint" "$RUN_ROOT/market_open" "$RUN_ROOT/shadow/sports_latency" "$RUN_ROOT/shadow/cross_platform" "$RUN_ROOT/shadow/wallet_intelligence" "$RUN_ROOT/shadow/ranking" "$RUN_ROOT/shadow/pca" "$RUN_ROOT/shadow/local_factor" "$RUN_ROOT/learned_execution"
 touch "$RUN_ROOT/ledger/execution.jsonl"
 
 python3 - "$CONFIG" "$MAKER_POLICY" "$EXTERNAL_FAIR_POLICY" "$OSINT_SOURCE_REGISTRY" "$LIVE_MODEL_SCOPE" "$EXTERNAL_INPUT_CONFIG" "$EXTERNAL_MAPPING_REGISTRY" "$ADAPTIVE_UNIVERSE_CONFIG" "$WS_JSON_ARENA_MAKER_MAX_BYTES" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
@@ -179,6 +179,9 @@ echo $$ > "$LOCK/pid"
 rm -f "$KILL" "$MAKER_FREEZE"
 
 python3 scripts/v7_capital_allocator.py --config "$CONFIG" --output-dir "$ALLOC" >/dev/null
+python3 scripts/v7_evidence_capital_allocator.py \
+  --allocation "$ALLOC/manifest.json" --economics "$RUN_ROOT/canonical_economics.json" \
+  --output "$CONTROL/evidence_capital_allocator.json" >/dev/null
 # Materialize an exact-SHA PAPER champion before the C++ cohort starts. The
 # append-only store lives outside the ephemeral live run root and therefore
 # survives archive rotation and code cutovers. Incompatible policy/config
@@ -522,6 +525,17 @@ pids+=("$!")
   done
 ) & pids+=("$!")
 
+# Exact-SHA fee/reward evidence registry. Unknown fees are explicitly
+# non-executable and unknown rewards are forced to zero; this process has no
+# OMS, ledger or accounting authority.
+python3 scripts/v7_fee_reward_registry.py \
+  --universe "$RUN_ROOT/universe/current.json" \
+  --rewards "$RUN_ROOT/micro_maker/reward_selection.json" \
+  --output "$CONTROL/fee_reward_registry.json" \
+  --model-sha "$SHA" --interval 30 \
+  >> "$RUN_ROOT/fee_reward_registry.log" 2>&1 &
+pids+=("$!")
+
 # V7 Fast Structural is a PAPER-only detector/execution-planning sleeve. It
 # owns neither authenticated transport nor a second account; its child config
 # is pre-partitioned by the canonical allocator and all outputs remain inside
@@ -627,6 +641,19 @@ pids+=("$!")
   done
 ) & pids+=("$!")
 
+# Hourly exact-SHA evidence pack. Reports are observational only and remain
+# outside the repository checkout, so generating them cannot mutate deployed
+# code or create a second cutover SHA.
+(
+  while [[ ! -e "$KILL" ]]; do
+    python3 scripts/v7_generate_economic_artifacts.py \
+      --repo "$ROOT" --run-root "$RUN_ROOT" --output "$RUN_ROOT/reports" \
+      --baseline "$ROOT/artifacts/v7_economic_loop_baseline.json" \
+      >> "$RUN_ROOT/economic_artifacts.log" 2>&1 || true
+    sleep 3600
+  done
+) & pids+=("$!")
+
 (
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_graph_rv_executable_intents.py \
@@ -676,6 +703,10 @@ pids+=("$!")
       >> "$RUN_ROOT/learned_execution/model.log" 2>&1 || true
     python3 scripts/v7_canonical_economics.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --expected-model-sha "$SHA" \
       --output "$RUN_ROOT/canonical_economics.json" >> "$RUN_ROOT/canonical_economics.log" 2>&1 || true
+    python3 scripts/v7_evidence_capital_allocator.py \
+      --allocation "$ALLOC/manifest.json" --economics "$RUN_ROOT/canonical_economics.json" \
+      --output "$CONTROL/evidence_capital_allocator.json" \
+      >> "$RUN_ROOT/evidence_capital_allocator.log" 2>&1 || true
     sleep 60
   done
 ) & pids+=("$!")
@@ -775,7 +806,6 @@ pids+=("$!")
 # The exact-SHA supervisor aggregates measured sports/cross evidence and the
 # still configuration-blocked wallet sleeve. It owns no OMS, capital, ledger
 # writer, order or promotion authority.
-# Ranking, PCA and Local Factor are intentionally outside the approved live scope.
 python3 scripts/v7_research_shadow_supervisor.py \
   --repository-root "$ROOT" \
   --run-root "$RUN_ROOT" \
@@ -783,6 +813,16 @@ python3 scripts/v7_research_shadow_supervisor.py \
   --model-sha "$SHA" \
   --heartbeat-seconds 5 \
   >> "$RUN_ROOT/research_shadow_supervisor.log" 2>&1 &
+pids+=("$!")
+
+# Ranking, PCA and Local Factor remain outside authoritative live-PAPER, but no
+# longer remain dormant. Their exact-SHA supervisor continuously runs frozen,
+# current-book research evaluations and publishes explicit evidence/blockers.
+python3 scripts/v7_slow_economic_shadow_supervisor.py \
+  --repository-root "$ROOT" --run-root "$RUN_ROOT" \
+  --scope "$LIVE_MODEL_SCOPE" --model-sha "$SHA" \
+  --interval-seconds 7200 --heartbeat-seconds 5 \
+  >> "$RUN_ROOT/slow_economic_shadow_supervisor.log" 2>&1 &
 pids+=("$!")
 
 write_runtime_status running false

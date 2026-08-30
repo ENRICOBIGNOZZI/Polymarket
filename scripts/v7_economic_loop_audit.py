@@ -238,6 +238,10 @@ def capability_map(repo: pathlib.Path) -> dict[str, Any]:
     loop = (repo / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
     relations = (repo / "config/v7_fast_structural_relations.csv").read_text(encoding="utf-8").splitlines()
     split_calls = runtime.count("split_complete_sets(")
+    fast_executor = (repo / "scripts/v7_fast_structural_paper_executor.py").read_text(encoding="utf-8")
+    canonical = (repo / "scripts/v7_canonical_economics.py").read_text(encoding="utf-8")
+    fair = (repo / "scripts/v7_rtds_external_fair_monitor.py").read_text(encoding="utf-8")
+    fee_registry = (repo / "scripts/v7_fee_reward_registry.py").read_text(encoding="utf-8")
     return {
         "source": "repository_call_site_analysis",
         "inventory_split_primitive_implemented": "MakerPaperExecutionPolicy::split_complete_sets" in execution,
@@ -250,6 +254,14 @@ def capability_map(repo: pathlib.Path) -> dict[str, Any]:
         "micro_taker_worker_started": "v7_micro_taker_worker.py" in loop,
         "micro_taker_canonical_spool_argument": "--ledger-spool" in loop or "--spool" in loop,
         "graph_relation_data_rows": max(0, len([line for line in relations if line.strip()]) - 1),
+        "fast_structural_paper_executor_started": "v7_fast_structural_paper_executor.py" in loop,
+        "fast_structural_revalidation_and_unwind": "partial bundle unwind" in fast_executor and "fee_verified" in fast_executor,
+        "canonical_shadow_counterfactual_separation": "shadow_counterfactual" in canonical and "excluded_from_portfolio_equity" in canonical,
+        "external_only_and_hybrid_models": "external_only_fair" in fair and "hybrid_fair" in fair,
+        "slow_economic_shadow_always_on": "v7_slow_economic_shadow_supervisor.py" in loop,
+        "evidence_allocator_advisory_only": "v7_evidence_capital_allocator.py" in loop,
+        "fee_unknown_non_executable": "UNKNOWN_FEE" in fee_registry and "NON_EXECUTABLE" in fee_registry,
+        "reward_unknown_forced_zero": "unknown_reward_forced_zero" in fee_registry,
     }
 
 

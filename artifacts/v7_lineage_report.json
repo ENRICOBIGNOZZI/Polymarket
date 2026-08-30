@@ -1,0 +1,30 @@
+{
+  "authenticated_execution": false,
+  "data_quality": {
+    "conflicting_duplicate_record_ids": 0,
+    "duplicate_records_removed": 0,
+    "fail_closed": false,
+    "ledger_files": 1,
+    "legacy_record_id_collisions_across_sha": 0,
+    "malformed_records": 0,
+    "raw_records": 1394,
+    "records_missing_record_id": 0,
+    "unique_records": 1394
+  },
+  "dedup_identity": [
+    "model_sha",
+    "record_id"
+  ],
+  "durable_maker_learning": true,
+  "exact_sha_required": true,
+  "generated_at_unix_ms": 1788085462200,
+  "missing_runtime_data_is_not_zero_economic_activity": true,
+  "paper_only": true,
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "repository_head": "6fc6ac6afeecd0b555652cde53c9f0e73a710e17",
+  "runtime_evidence_available": false,
+  "schema": "polymarket_v7_lineage_report_v1",
+  "single_canonical_ledger_writer": true,
+  "version": 7
+}

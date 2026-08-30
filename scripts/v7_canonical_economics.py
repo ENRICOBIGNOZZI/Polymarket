@@ -559,9 +559,18 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
     costs_by_component = {component: sum(unit.cost_totals[component] for unit, _ in event_mature) for component in COST_COMPONENTS}
     strategy_net_pnl: dict[str, float] = defaultdict(float)
     strategy_mature_terminal_units: dict[str, int] = defaultdict(int)
+    strategy_stressed_net_pnl: dict[str, dict[str, float]] = defaultdict(
+        lambda: {f"{multiplier:g}x": 0.0 for multiplier in STRESS_MULTIPLIERS}
+    )
+    strategy_capital_hours: dict[str, float] = defaultdict(float)
     for unit, pnl in event_mature:
         strategy_net_pnl[unit.strategy] += pnl
         strategy_mature_terminal_units[unit.strategy] += 1
+        strategy_capital_hours[unit.strategy] += unit.capital_duration_ms / 3_600_000.0
+        for multiplier in STRESS_MULTIPLIERS:
+            strategy_stressed_net_pnl[unit.strategy][f"{multiplier:g}x"] += _stress_pnl(
+                pnl, unit.baseline_cost(), multiplier,
+            )
     pnl_decomposition = {
         component: (
             sum(unit.pnl_components[component] for unit, _ in event_mature)
@@ -649,6 +658,10 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         "net_pnl": stress_1x,
         "strategy_net_pnl": dict(sorted(strategy_net_pnl.items())),
         "strategy_mature_terminal_units": dict(sorted(strategy_mature_terminal_units.items())),
+        "strategy_stressed_net_pnl": {
+            strategy: values for strategy, values in sorted(strategy_stressed_net_pnl.items())
+        },
+        "strategy_capital_hours": dict(sorted(strategy_capital_hours.items())),
         "pnl_decomposition": {
             **pnl_decomposition,
             "fees": costs_by_component["fee"],

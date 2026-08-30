@@ -1,0 +1,93 @@
+{
+  "authenticated_execution": false,
+  "economics": {
+    "events": {
+      "CANDIDATE": 62,
+      "ORDER_STATE": 171,
+      "ORDER_SUBMITTED": 57
+    },
+    "fill_per_unique_order": 0.0,
+    "markout_per_share": {
+      "10s": {
+        "mean": null,
+        "n": 0
+      },
+      "15s": {
+        "mean": null,
+        "n": 0
+      },
+      "1s": {
+        "mean": null,
+        "n": 0
+      },
+      "300s": {
+        "mean": null,
+        "n": 0
+      },
+      "30s": {
+        "mean": null,
+        "n": 0
+      },
+      "45s": {
+        "mean": null,
+        "n": 0
+      },
+      "5s": {
+        "mean": null,
+        "n": 0
+      },
+      "60s": {
+        "mean": null,
+        "n": 0
+      }
+    },
+    "nonpositive_finals": 0,
+    "positive_finals": 0,
+    "promotion_gate": "MORE_EVIDENCE_REQUIRED",
+    "realized_pnl": 0,
+    "unique_fill_ids": 0,
+    "unique_order_ids": 57,
+    "unique_terminal_units": 0
+  },
+  "fillability_status": {},
+  "generated_at_unix_ms": 1788085462200,
+  "missing_runtime_data_is_not_zero_economic_activity": true,
+  "paper_only": true,
+  "profitability_proven": false,
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "repository_head": "6fc6ac6afeecd0b555652cde53c9f0e73a710e17",
+  "runtime_evidence_available": false,
+  "runtime_status": {
+    "authenticated_execution": false,
+    "cash": 2000.0,
+    "degraded": false,
+    "drain_complete": false,
+    "drain_requested": false,
+    "drawdown": 0.0,
+    "equity": 2000.0,
+    "estimated_liquidity_reward_pnl": 0.0,
+    "estimated_maker_rebate_pnl": 0.0,
+    "executable_inventory_value": 0.0,
+    "gross_exit_fees": 0.0,
+    "killed": false,
+    "liquidation_slippage_haircut": 0.0,
+    "maker_hard_drawdown": 0.1,
+    "marking_complete": true,
+    "model_sha": "405096993e75d6230d32a9c025dd3a2d9bfa6e12",
+    "new_risk_frozen": false,
+    "paper_only": true,
+    "peak_equity": 2000.0,
+    "positions": [],
+    "real_order_submission": false,
+    "realized_trading_pnl": 0.0,
+    "schema": "polymarket_v7_professional_maker_status_v1",
+    "source": "full_visible_bid_depth_net_verified_fee_and_slippage",
+    "timestamp_ms": 1788085461475,
+    "unmarkable_tokens": [],
+    "zero_recovery_writeoffs": 0
+  },
+  "schema": "polymarket_v7_maker_bilateral_fillability_report_v1",
+  "terminal_inventory_cost_lineage_required": true,
+  "version": 7
+}

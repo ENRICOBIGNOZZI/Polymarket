@@ -255,12 +255,15 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     repository_root = (repository_root or Path(".")).resolve()
     runtime = _json(run_root / "control" / "runtime_status.json")
     research_sleeves = _json(run_root / "control" / "research_sleeves_manifest.json")
+    slow_research_shadow = _json(run_root / "control" / "slow_research_shadow_manifest.json")
     research_shadow_statuses = {
         family: _json(run_root / "shadow" / family / "status.json")
         for family in ("sports_latency", "cross_platform", "wallet_intelligence")
     }
     portfolio = _json(run_root / "control" / "portfolio_state.json")
     allocations = _json(run_root / "control" / "allocations" / "manifest.json")
+    evidence_allocator = _json(run_root / "control" / "evidence_capital_allocator.json")
+    fee_reward_registry = _json(run_root / "control" / "fee_reward_registry.json")
     graph = _json(run_root / "graph_rv" / "status.json")
     fast = _json(run_root / "fast_structural" / "paper_executor_status.json")
     graph_scan = _json(run_root / "graph_rv" / "scan_status.json")
@@ -384,12 +387,15 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "run_root": run_root.name,
         "runtime": runtime,
         "research_sleeves": research_sleeves,
+        "slow_research_shadow": slow_research_shadow,
         "research_shadow_statuses": research_shadow_statuses,
         "strategy_registry": strategy_registry,
         "live_model_scope": live_model_scope,
         "runtime_alive": runtime_alive,
         "portfolio": portfolio,
         "allocations": allocations,
+        "evidence_allocator": evidence_allocator,
+        "fee_reward_registry": fee_reward_registry,
         "graph": graph,
         "fast": fast,
         "graph_scan": graph_scan,
@@ -437,10 +443,13 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     reasons: list[str] = []
     runtime = snapshot["runtime"]
     research = snapshot.get("research_sleeves") if isinstance(snapshot.get("research_sleeves"), dict) else {}
+    slow_research = snapshot.get("slow_research_shadow") if isinstance(snapshot.get("slow_research_shadow"), dict) else {}
     research_statuses = snapshot.get("research_shadow_statuses") if isinstance(snapshot.get("research_shadow_statuses"), dict) else {}
     registry = snapshot.get("strategy_registry") if isinstance(snapshot.get("strategy_registry"), dict) else {}
     live_scope = snapshot.get("live_model_scope") if isinstance(snapshot.get("live_model_scope"), dict) else {}
     portfolio = snapshot["portfolio"]
+    evidence_allocator = snapshot.get("evidence_allocator") if isinstance(snapshot.get("evidence_allocator"), dict) else {}
+    fee_reward_registry = snapshot.get("fee_reward_registry") if isinstance(snapshot.get("fee_reward_registry"), dict) else {}
     graph = snapshot["graph"]
     fast = snapshot.get("fast") if isinstance(snapshot.get("fast"), dict) else {}
     canonical = snapshot["canonical_economics"]
@@ -458,6 +467,23 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     if runtime.get("paper_only") is not True: reasons.append("runtime_not_paper_only")
     if runtime.get("authenticated_execution") is not False or runtime.get("real_order_submission") is not False: reasons.append("authenticated_execution_not_disabled")
     if runtime.get("model_sha") != snapshot.get("sha"): reasons.append("runtime_sha_mismatch")
+    if (
+        evidence_allocator.get("schema") != "polymarket_v7_evidence_capital_allocator_v1"
+        or evidence_allocator.get("paper_only") is not True
+        or evidence_allocator.get("authenticated_execution") is not False
+        or evidence_allocator.get("real_order_submission") is not False
+        or evidence_allocator.get("automatic_transfer") is not False
+    ): reasons.append("evidence_capital_allocator_missing_or_unsafe")
+    if (
+        fee_reward_registry.get("schema") != "polymarket_v7_fee_reward_registry_v1"
+        or fee_reward_registry.get("model_sha") != snapshot.get("sha")
+        or fee_reward_registry.get("paper_only") is not True
+        or fee_reward_registry.get("authenticated_execution") is not False
+        or fee_reward_registry.get("real_order_submission") is not False
+        or fee_reward_registry.get("unknown_fee_policy") != "NON_EXECUTABLE"
+        or fee_reward_registry.get("unknown_reward_policy") != "ZERO_EXPECTED_VALUE"
+        or _integer(fee_reward_registry.get("executable_market_count")) < 1
+    ): reasons.append("fee_reward_registry_missing_or_no_executable_market")
     try: fast_age = int(snapshot.get("timestamp") or 0) - int(fast.get("timestamp") or 0)
     except (TypeError, ValueError, OverflowError): fast_age = max_runtime_age + 1
     if (
@@ -525,6 +551,7 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
             or live_scope.get("real_order_submission") is not False): reasons.append("live_model_scope_missing_or_invalid")
     if target_live | excluded_live != registered_names or target_live & excluded_live: reasons.append("live_model_scope_not_registry_partition")
     if excluded_live != {"ranking", "pca", "local_factor"}: reasons.append("live_model_scope_exclusions_invalid")
+    if set(live_scope.get("always_on_economic_shadow_families") or []) != excluded_live: reasons.append("live_model_scope_slow_shadow_set_invalid")
     if set(live_scope.get("research_shadow_supervised_families") or []) != expected_research: reasons.append("live_model_scope_shadow_set_invalid")
     governance = live_scope.get("governance") if isinstance(live_scope.get("governance"), dict) else {}
     if (governance.get("single_execution_owner") is not True
@@ -534,6 +561,18 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
             or governance.get("automatic_promotion") is not False): reasons.append("live_model_scope_governance_invalid")
     research_rows = research.get("families") if isinstance(research.get("families"), dict) else {}
     if research.get("schema") != "polymarket_v7_research_sleeves_manifest_v1": reasons.append("research_sleeves_manifest_missing_or_invalid")
+    slow_families = slow_research.get("families") if isinstance(slow_research.get("families"), dict) else {}
+    try: slow_age = int(snapshot.get("timestamp") or 0) - int(slow_research.get("timestamp") or 0)
+    except (TypeError, ValueError, OverflowError): slow_age = max_runtime_age + 1
+    if (
+        slow_research.get("schema") != "polymarket_v7_slow_economic_shadow_manifest_v1"
+        or slow_research.get("model_sha") != snapshot.get("sha")
+        or slow_research.get("paper_only") is not True
+        or slow_research.get("authenticated_execution") is not False
+        or slow_research.get("real_order_submission") is not False
+        or set(slow_families) != {"ranking", "pca", "local_factor"}
+        or slow_age < -5 or slow_age > max_runtime_age
+    ): reasons.append("slow_economic_shadow_missing_stale_or_unsafe")
     if research.get("version") != 7 or research.get("model_sha") != snapshot.get("sha"): reasons.append("research_sleeves_identity_drift")
     if research.get("paper_only") is not True or research.get("authenticated_execution") is not False or research.get("real_order_submission") is not False: reasons.append("research_sleeves_execution_authority_unsafe")
     if set(research_rows) != expected_research: reasons.append("research_sleeves_not_3_exact")
@@ -747,7 +786,11 @@ def _append_maker_lab_metrics(lines: list[str], lab: dict[str, Any]) -> None:
 
 def render_prometheus(snapshot: dict[str, Any]) -> str:
     runtime = snapshot["runtime"]
+    evidence_allocator = snapshot.get("evidence_allocator") if isinstance(snapshot.get("evidence_allocator"), dict) else {}
+    fee_reward_registry = snapshot.get("fee_reward_registry") if isinstance(snapshot.get("fee_reward_registry"), dict) else {}
     research = snapshot.get("research_sleeves") if isinstance(snapshot.get("research_sleeves"), dict) else {}
+    slow_research = snapshot.get("slow_research_shadow") if isinstance(snapshot.get("slow_research_shadow"), dict) else {}
+    slow_research_rows = slow_research.get("families") if isinstance(slow_research.get("families"), dict) else {}
     research_statuses = snapshot.get("research_shadow_statuses") if isinstance(snapshot.get("research_shadow_statuses"), dict) else {}
     registry = snapshot.get("strategy_registry") if isinstance(snapshot.get("strategy_registry"), dict) else {}
     live_scope = snapshot.get("live_model_scope") if isinstance(snapshot.get("live_model_scope"), dict) else {}
@@ -768,6 +811,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         and target_live | excluded_live == enabled_names
         and not target_live & excluded_live
         and excluded_live == {"ranking", "pca", "local_factor"}
+        and set(live_scope.get("always_on_economic_shadow_families") or []) == excluded_live
         and set(live_scope.get("research_shadow_supervised_families") or []) == expected_research
         and governance.get("single_execution_owner") is True
         and governance.get("research_has_capital") is False
@@ -1036,12 +1080,28 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_research_sleeves_attached", len(research_rows)),
         _metric("polymarket_v7_research_supervisor_alive", 1 if _pid_alive(research.get("supervisor_pid")) else 0),
         _metric("polymarket_v7_research_manifest_fresh", 1 if research_manifest_fresh else 0),
+        _metric("polymarket_v7_slow_economic_shadow_attached", len(slow_research_rows)),
+        _metric("polymarket_v7_slow_economic_shadow_manifest_fresh", 1 if (
+            slow_research.get("schema") == "polymarket_v7_slow_economic_shadow_manifest_v1"
+            and slow_research.get("model_sha") == snapshot.get("sha")
+            and -5 <= int(snapshot.get("timestamp") or 0) - int(slow_research.get("timestamp") or 0) <= 180
+        ) else 0),
         _metric("polymarket_v7_live_model_target_count", target_live_count),
         _metric("polymarket_v7_live_model_operational_count", operational_count),
         _metric("polymarket_v7_live_model_blocked_count", blocked_config_count + blocked_external_count),
         _metric("polymarket_v7_live_model_blocked_config_count", blocked_config_count),
         _metric("polymarket_v7_live_model_blocked_external_count", blocked_external_count),
         _metric("polymarket_v7_live_model_scope_wired", 1 if scope_wired else 0),
+        _metric("polymarket_v7_exploration_capital_usd", evidence_allocator.get("exploration_total")),
+        _metric("polymarket_v7_proposed_exploitation_capital_usd", (
+            _number(evidence_allocator.get("proposed_allocated_total"))
+            - _number(evidence_allocator.get("exploration_total"))
+        )),
+        _metric("polymarket_v7_unallocated_exploitation_reserve_usd", evidence_allocator.get("unallocated_exploitation_reserve")),
+        _metric("polymarket_v7_evidence_allocator_automatic_transfer", 1 if evidence_allocator.get("automatic_transfer") is True else 0),
+        _metric("polymarket_v7_fee_registry_verified_markets", fee_reward_registry.get("verified_fee_market_count")),
+        _metric("polymarket_v7_reward_registry_verified_markets", fee_reward_registry.get("verified_reward_market_count")),
+        _metric("polymarket_v7_fee_registry_executable_markets", fee_reward_registry.get("executable_market_count")),
         _metric("polymarket_v7_live_model_target_operational", 1 if operational_count == target_live_count == 12 else 0),
         _metric("polymarket_v7_ledger_writable", 1 if operations.get("ledger_writable") else 0),
         _metric("polymarket_v7_disk_free_bytes", disk.get("free_bytes")),
@@ -1182,6 +1242,20 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         ):
             if row.get(key) is not None:
                 lines.append(_metric(metric_name, row.get(key), {"strategy": family}))
+    for family, row in sorted(slow_research_rows.items()):
+        if not isinstance(row, dict):
+            continue
+        labels = {
+            "strategy": family,
+            "process_state": row.get("process_state", "UNKNOWN"),
+            "blocker": row.get("blocker", "") or "NONE",
+        }
+        lines.append(_metric("polymarket_v7_slow_economic_shadow_family_attached", 1, labels))
+        lines.append(_metric(
+            "polymarket_v7_slow_economic_shadow_report_present",
+            1 if row.get("report_present") is True else 0,
+            {"strategy": family},
+        ))
     _append_maker_lab_metrics(lines, maker_lab)
     for source in osint.get("sources") if isinstance(osint.get("sources"), list) else []:
         if not isinstance(source, dict):

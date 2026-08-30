@@ -104,6 +104,28 @@ class V7NativeMonitoringTest(unittest.TestCase):
                     "timestamp": now - 2,
                 },
             )
+        self._write(
+            root / "control" / "slow_research_shadow_manifest.json",
+            {
+                "schema": "polymarket_v7_slow_economic_shadow_manifest_v1",
+                "version": 7, "timestamp": now - 2, "model_sha": sha,
+                "paper_only": True, "authenticated_execution": False,
+                "real_order_submission": False, "research_only": True,
+                "always_on": True, "family_count": 3,
+                "families": {
+                    family: {
+                        "schema": "polymarket_v7_slow_economic_shadow_status_v1",
+                        "family": family, "timestamp": now - 2, "model_sha": sha,
+                        "paper_only": True, "authenticated_execution": False,
+                        "real_order_submission": False, "research_only": True,
+                        "process_state": "ACTIVE_SHADOW_EVIDENCE",
+                        "report_present": True, "has_capital": False,
+                        "has_oms_authority": False,
+                    }
+                    for family in ("ranking", "pca", "local_factor")
+                },
+            },
+        )
         budgets = {"graph_rv": 3400.0, "hard_arb": 2200.0, "micro_taker": 1200.0, "micro_maker": 2200.0, "external": 800.0, "reserve": 200.0}
         self._write(
             root / "control" / "allocations" / "manifest.json",
@@ -115,6 +137,14 @@ class V7NativeMonitoringTest(unittest.TestCase):
                 "budgets": budgets,
             },
         )
+        self._write(root / "control" / "evidence_capital_allocator.json", {
+            "schema": "polymarket_v7_evidence_capital_allocator_v1",
+            "timestamp": now - 2, "model_sha": sha,
+            "paper_only": True, "authenticated_execution": False,
+            "real_order_submission": False, "automatic_transfer": False,
+            "exploration_total": 1000.0, "proposed_allocated_total": 1000.0,
+            "unallocated_exploitation_reserve": 9000.0,
+        })
         self._write(
             root / "control" / "portfolio_state.json",
             {
@@ -262,6 +292,17 @@ class V7NativeMonitoringTest(unittest.TestCase):
             "tier_counts": {"HOT": 400, "WARM": 1250, "COLD": 150},
             "resource_capacities": {"hot_limiting_dimensions": ["cpu"], "warm_limiting_dimensions": ["scan_time"]},
             "pages": 4, "scan_duration_ms": 125.0,
+        })
+        self._write(root / "control" / "fee_reward_registry.json", {
+            "schema": "polymarket_v7_fee_reward_registry_v1", "version": 7,
+            "timestamp_ms": (now - 5) * 1000, "model_sha": sha,
+            "paper_only": True, "authenticated_execution": False,
+            "real_order_submission": False, "execution_authority": False,
+            "unknown_fee_policy": "NON_EXECUTABLE",
+            "unknown_reward_policy": "ZERO_EXPECTED_VALUE",
+            "market_count": 10, "verified_fee_market_count": 8,
+            "verified_reward_market_count": 2, "executable_market_count": 8,
+            "markets": [],
         })
         self._write(
             root / "canonical_economics.json",

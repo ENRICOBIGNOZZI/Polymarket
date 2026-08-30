@@ -1,0 +1,232 @@
+{
+  "authenticated_execution": false,
+  "data_quality": {
+    "conflicting_duplicate_record_ids": 0,
+    "duplicate_records_removed": 0,
+    "fail_closed": false,
+    "ledger_files": 1,
+    "legacy_record_id_collisions_across_sha": 0,
+    "malformed_records": 0,
+    "raw_records": 1394,
+    "records_missing_record_id": 0,
+    "unique_records": 1394
+  },
+  "exact_sha_runtime_evidence_available": false,
+  "external_fair": {
+    "events": {},
+    "execution_gate": "BLOCK_PAPER_EXECUTION_UNTIL_OOS_BENCHMARKS_PASS",
+    "losses": 0,
+    "market_benchmark_score": {
+      "brier": null,
+      "log_loss": null,
+      "n": 0
+    },
+    "matched_terminal_positions": 0,
+    "missing_market_benchmarks": 0,
+    "missing_model_forecasts": 0,
+    "model_brier_minus_market": null,
+    "model_reliability": [],
+    "model_score": {
+      "brier": null,
+      "log_loss": null,
+      "n": 0
+    },
+    "predicted_robust_net_ev": 0,
+    "realized_pnl": 0,
+    "unique_fills": 0,
+    "unique_finals": 0,
+    "wins": 0
+  },
+  "external_fair_counterfactual": {
+    "conflicts": 0,
+    "duplicates_removed": 0,
+    "events": {
+      "CANDIDATE": 9,
+      "FORECAST": 99,
+      "FORECAST_FINAL": 87,
+      "REJECTED": 2,
+      "VIRTUAL_FILL": 7,
+      "VIRTUAL_FINAL": 6,
+      "VIRTUAL_MARKOUT": 28
+    },
+    "fail_closed": false,
+    "forecast_hybrid_score": {
+      "brier": null,
+      "log_loss": null,
+      "n": 0
+    },
+    "forecast_market_benchmark_score": {
+      "brier": 0.25232270114942557,
+      "log_loss": 0.6820632316206586,
+      "n": 87
+    },
+    "forecast_model_score": {
+      "brier": 0.18486932328663683,
+      "log_loss": 0.5547317042570449,
+      "n": 87
+    },
+    "malformed": 0,
+    "raw_records": 238,
+    "tape_files": 1,
+    "unique_records": 238,
+    "virtual_realized_pnl": -26.7674191614
+  },
+  "input_runtime_model_sha": "405096993e75d6230d32a9c025dd3a2d9bfa6e12",
+  "limitations": [
+    "PAPER fills are not real fills and do not prove deployable profit.",
+    "Historical rows without pm_mid use the executed-side ask as the market benchmark.",
+    "Policy version is unavailable where older ledger rows did not record it."
+  ],
+  "paper_only": true,
+  "professional_maker": {
+    "events": {
+      "CANDIDATE": 62,
+      "ORDER_STATE": 171,
+      "ORDER_SUBMITTED": 57
+    },
+    "fill_per_unique_order": 0.0,
+    "markout_per_share": {
+      "10s": {
+        "mean": null,
+        "n": 0
+      },
+      "15s": {
+        "mean": null,
+        "n": 0
+      },
+      "1s": {
+        "mean": null,
+        "n": 0
+      },
+      "300s": {
+        "mean": null,
+        "n": 0
+      },
+      "30s": {
+        "mean": null,
+        "n": 0
+      },
+      "45s": {
+        "mean": null,
+        "n": 0
+      },
+      "5s": {
+        "mean": null,
+        "n": 0
+      },
+      "60s": {
+        "mean": null,
+        "n": 0
+      }
+    },
+    "nonpositive_finals": 0,
+    "positive_finals": 0,
+    "promotion_gate": "MORE_EVIDENCE_REQUIRED",
+    "realized_pnl": 0,
+    "unique_fill_ids": 0,
+    "unique_order_ids": 57,
+    "unique_terminal_units": 0
+  },
+  "profitability_proven": false,
+  "real_order_submission": false,
+  "repository_head": "6fc6ac6afeecd0b555652cde53c9f0e73a710e17",
+  "schema": "polymarket_v7_profitability_audit_v1",
+  "scope": "PAPER_ONLY_DEDUPLICATED_CROSS_RUN",
+  "selected_sleeves_realized_pnl": 0.0,
+  "strategy_economics": {
+    "FAST_STRUCTURAL": {
+      "capital_hours": 0.0,
+      "events": {
+        "CANDIDATE": 1104
+      },
+      "markout_per_share": {
+        "10s": {
+          "mean": null,
+          "n": 0
+        },
+        "15s": {
+          "mean": null,
+          "n": 0
+        },
+        "1s": {
+          "mean": null,
+          "n": 0
+        },
+        "300s": {
+          "mean": null,
+          "n": 0
+        },
+        "30s": {
+          "mean": null,
+          "n": 0
+        },
+        "45s": {
+          "mean": null,
+          "n": 0
+        },
+        "5s": {
+          "mean": null,
+          "n": 0
+        },
+        "60s": {
+          "mean": null,
+          "n": 0
+        }
+      },
+      "paper_realized_pnl": 0.0,
+      "paper_terminal_units": 0,
+      "shadow_counterfactual_pnl": 0.0,
+      "shadow_terminal_units": 0
+    },
+    "MICRO_MAKER_PRO": {
+      "capital_hours": 0.0,
+      "events": {
+        "CANDIDATE": 62,
+        "ORDER_STATE": 171,
+        "ORDER_SUBMITTED": 57
+      },
+      "markout_per_share": {
+        "10s": {
+          "mean": null,
+          "n": 0
+        },
+        "15s": {
+          "mean": null,
+          "n": 0
+        },
+        "1s": {
+          "mean": null,
+          "n": 0
+        },
+        "300s": {
+          "mean": null,
+          "n": 0
+        },
+        "30s": {
+          "mean": null,
+          "n": 0
+        },
+        "45s": {
+          "mean": null,
+          "n": 0
+        },
+        "5s": {
+          "mean": null,
+          "n": 0
+        },
+        "60s": {
+          "mean": null,
+          "n": 0
+        }
+      },
+      "paper_realized_pnl": 0.0,
+      "paper_terminal_units": 0,
+      "shadow_counterfactual_pnl": 0.0,
+      "shadow_terminal_units": 0
+    }
+  },
+  "strategy_record_counts": {
+    "FAST_STRUCTURAL": 1104,
+    "MICRO_MAKER_PRO": 290
+  }
+}

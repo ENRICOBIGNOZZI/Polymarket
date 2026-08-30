@@ -43,6 +43,11 @@
     "pca",
     "local_factor"
   ],
+  "always_on_economic_shadow_families": [
+    "ranking",
+    "pca",
+    "local_factor"
+  ],
   "governance": {
     "single_execution_owner": true,
     "research_has_capital": false,

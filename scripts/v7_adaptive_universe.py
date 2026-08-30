@@ -152,6 +152,7 @@ def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
         "timed_sports": timed_sports,
         "fee_schedule": raw.get("feeSchedule") if isinstance(raw.get("feeSchedule"), dict) else {},
         "fees_enabled": bool(raw.get("feesEnabled", False)),
+        "fees_enabled_explicit": "feesEnabled" in raw,
         "liquidity": max(0.0, _finite(raw.get("liquidityNum"), _finite(raw.get("liquidity")))),
         "volume_24h": max(0.0, _finite(raw.get("volume24hr"), _finite(raw.get("volume24h")))),
         "created_at": str(raw.get("createdAt") or ""),

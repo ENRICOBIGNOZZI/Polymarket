@@ -225,6 +225,22 @@ groups:
           summary: V7 immutable retention/checkpoint service is stale
           description: The hourly append-only ledger checkpoint and bounded telemetry retention service has not reported within two hours.
 
+      - alert: PolymarketV7SlowEconomicShadowDetached
+        expr: (polymarket_v7_slow_economic_shadow_attached < 3) or (polymarket_v7_slow_economic_shadow_manifest_fresh < 1)
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: V7 slow economic shadow collection is detached
+          description: Ranking, PCA or Local Factor is no longer continuously supervised in zero-capital shadow mode.
+
+      - alert: PolymarketV7FeeRegistryHasNoExecutableMarket
+        expr: polymarket_v7_fee_registry_executable_markets < 1
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: V7 fee registry has no executable market
+          description: Every market is fail-closed because no fresh authoritative fee schedule is available.
+
       - alert: PolymarketV7CanonicalLedgerInvalid
         expr: (polymarket_v7_ledger_present > 0) and (polymarket_v7_ledger_valid < 1)
         for: 0s

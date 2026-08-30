@@ -527,7 +527,11 @@ for rel in (
     'scripts/v7_rtds_external_fair_monitor.py',
     'scripts/v7_external_fair_paper_router.py',
     'scripts/v7_fast_structural_paper_executor.py',
+    'scripts/v7_evidence_capital_allocator.py',
+    'scripts/v7_fee_reward_registry.py',
+    'scripts/v7_generate_economic_artifacts.py',
     'scripts/v7_research_shadow_supervisor.py',
+    'scripts/v7_slow_economic_shadow_supervisor.py',
     'scripts/v7_semantic_mapping.py',
     'scripts/v7_sports_collector.py',
     'scripts/v7_cross_platform_collector.py',
@@ -567,6 +571,7 @@ prevalidate_candidate(){
       scripts/v7_prepare_cutover_run_root.py \
       scripts/v7_finalize_maker_cutover.py \
       scripts/v7_research_shadow_supervisor.py \
+      scripts/v7_slow_economic_shadow_supervisor.py \
       scripts/v7_semantic_mapping.py \
       scripts/v7_sports_collector.py \
       scripts/v7_cross_platform_collector.py \
@@ -574,6 +579,9 @@ prevalidate_candidate(){
       scripts/v7_rtds_external_fair_monitor.py \
       scripts/v7_external_fair_paper_router.py \
       scripts/v7_fast_structural_paper_executor.py \
+      scripts/v7_evidence_capital_allocator.py \
+      scripts/v7_fee_reward_registry.py \
+      scripts/v7_generate_economic_artifacts.py \
       monitoring/exporter_v7.py \
       monitoring/v7_ledger_metrics.py \
       monitoring/v7_runtime_contract.py \
@@ -849,13 +857,14 @@ runtime_health(){
 import csv,json,os,sys,time
 from pathlib import Path
 root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
-required=[root/'control/runtime_status.json',root/'control/portfolio_state.json',root/'control/allocations/manifest.json',root/'control/research_sleeves_manifest.json',root/'control/retention_status.json',root/'osint/status.json',root/'osint/mapping_status.json',root/'shadow/sports_latency/component_status.json',root/'shadow/cross_platform/component_status.json',root/'market_open/status.json',root/'graph_rv/status.json',root/'external_fair/paper_router_status.json',root/'canonical_economics.json',root/'ledger/execution.jsonl',root/'trade_tape.csv']
+required=[root/'control/runtime_status.json',root/'control/portfolio_state.json',root/'control/allocations/manifest.json',root/'control/evidence_capital_allocator.json',root/'control/fee_reward_registry.json',root/'control/research_sleeves_manifest.json',root/'control/slow_research_shadow_manifest.json',root/'control/retention_status.json',root/'osint/status.json',root/'osint/mapping_status.json',root/'shadow/sports_latency/component_status.json',root/'shadow/cross_platform/component_status.json',root/'market_open/status.json',root/'graph_rv/status.json',root/'external_fair/paper_router_status.json',root/'canonical_economics.json',root/'ledger/execution.jsonl',root/'trade_tape.csv']
 assert all(p.exists() for p in required), [str(p) for p in required if not p.exists()]
 runtime=json.loads((root/'control/runtime_status.json').read_text())
 portfolio=json.loads((root/'control/portfolio_state.json').read_text())
 graph=json.loads((root/'graph_rv/status.json').read_text())
 router=json.loads((root/'external_fair/paper_router_status.json').read_text())
 economics=json.loads((root/'canonical_economics.json').read_text())
+fee_reward=json.loads((root/'control/fee_reward_registry.json').read_text())
 assert runtime.get('version')==7 and runtime.get('model_sha')==sha
 assert runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False and runtime.get('real_order_submission') is False
 assert all(str(runtime.get(k) or '') for k in ('config_hash','policy_hash','model_hash','run_id','ledger_id','server_id'))
@@ -873,6 +882,10 @@ assert int((router.get('last_decision') or {}).get('books') or 0)==2
 assert now-int(router.get('timestamp') or 0)<=30
 assert economics.get('paper_only') is True and economics.get('authenticated_execution') is False
 assert economics.get('expected_model_sha')==sha
+assert fee_reward.get('schema')=='polymarket_v7_fee_reward_registry_v1' and fee_reward.get('model_sha')==sha
+assert fee_reward.get('paper_only') is True and fee_reward.get('authenticated_execution') is False and fee_reward.get('real_order_submission') is False
+assert fee_reward.get('unknown_fee_policy')=='NON_EXECUTABLE' and fee_reward.get('unknown_reward_policy')=='ZERO_EXPECTED_VALUE'
+assert int(fee_reward.get('market_count') or 0)>0 and int(fee_reward.get('executable_market_count') or 0)>0
 with (root/'trade_tape.csv').open(newline='',encoding='utf-8') as handle: rows=list(csv.DictReader(handle))
 assert rows and max(int(float(r.get('received_ms') or 0)) for r in rows)>0
 PY

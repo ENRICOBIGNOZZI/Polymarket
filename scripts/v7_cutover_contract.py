@@ -95,9 +95,13 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "scripts/v7_canonical_economics.py",
         "scripts/v7_joint_execution_policy.py",
         "scripts/v7_capital_allocator.py",
+        "scripts/v7_evidence_capital_allocator.py",
+        "scripts/v7_fee_reward_registry.py",
+        "scripts/v7_generate_economic_artifacts.py",
         "scripts/v7_portfolio_guard.py",
         "scripts/v7_fast_structural_paper_executor.py",
         "scripts/v7_research_shadow_supervisor.py",
+        "scripts/v7_slow_economic_shadow_supervisor.py",
         "scripts/v7_semantic_mapping.py",
         "scripts/v7_sports_collector.py",
         "scripts/v7_cross_platform_collector.py",
@@ -141,6 +145,8 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         fail("V7 cutover blocked: live/excluded model scope must exactly partition the 15-family registry")
     if excluded_live != {"ranking", "pca", "local_factor"}:
         fail("V7 cutover blocked: only ranking, pca and local_factor may be excluded from live-PAPER")
+    if set(scope.get("always_on_economic_shadow_families") or []) != excluded_live:
+        fail("V7 cutover blocked: excluded slow families must remain always-on economic shadow")
     if research_shadow != {"sports_latency", "cross_platform", "wallet_intelligence"}:
         fail("V7 cutover blocked: research-shadow supervisor scope is not the exact approved three-family set")
     governance = scope.get("governance") if isinstance(scope.get("governance"), dict) else {}

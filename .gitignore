@@ -31,6 +31,12 @@ artifacts/*
 !artifacts/v7_replay_comparison.json
 !artifacts/v7_profitability_audit.json
 !artifacts/v7_capability_runtime_proof.json
+!artifacts/v7_reconciliation_report.json
+!artifacts/v7_external_fair_forecast_to_pnl.json
+!artifacts/v7_maker_bilateral_fillability_report.json
+!artifacts/v7_arb_coverage_report.json
+!artifacts/v7_research_shadow_report.json
+!artifacts/v7_lineage_report.json
 *.log
 *.pid
 *.sqlite

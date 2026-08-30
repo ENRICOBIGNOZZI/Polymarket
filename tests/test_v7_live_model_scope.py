@@ -21,6 +21,10 @@ class V7LiveModelScopeTest(unittest.TestCase):
         self.assertEqual(scope["target_live_count"], 12)
         self.assertEqual(len(target), 12)
         self.assertEqual(excluded, {"ranking", "pca", "local_factor"})
+        self.assertEqual(
+            set(scope["always_on_economic_shadow_families"]),
+            {"ranking", "pca", "local_factor"},
+        )
         self.assertEqual(target | excluded, enabled)
         self.assertFalse(target & excluded)
         self.assertEqual(
@@ -31,7 +35,7 @@ class V7LiveModelScopeTest(unittest.TestCase):
         self.assertFalse(scope["authenticated_execution"])
         self.assertFalse(scope["real_order_submission"])
 
-    def test_live_loop_attaches_only_the_three_additional_research_shadows(self) -> None:
+    def test_live_loop_attaches_fast_and_slow_research_shadows_without_authority(self) -> None:
         loop = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text()
         self.assertIn("scripts/v7_research_shadow_supervisor.py", loop)
         self.assertIn("scripts/v7_sports_collector.py", loop)
@@ -40,12 +44,8 @@ class V7LiveModelScopeTest(unittest.TestCase):
         self.assertIn('--scope "$LIVE_MODEL_SCOPE"', loop)
         self.assertIn('--model-sha "$SHA"', loop)
         self.assertEqual(loop.count("scripts/v7_research_shadow_supervisor.py"), 1)
-        for excluded_entrypoint in (
-            "v7_cross_sectional_rank.py",
-            "v7_pca_stat_arb_research.py",
-            "v7_local_factor_research.py",
-        ):
-            self.assertNotIn(excluded_entrypoint, loop)
+        self.assertIn("scripts/v7_slow_economic_shadow_supervisor.py", loop)
+        self.assertEqual(loop.count("scripts/v7_slow_economic_shadow_supervisor.py"), 1)
 
     def test_monitoring_and_server_health_require_twelve_model_scope(self) -> None:
         manifest = json.loads((ROOT / "monitoring/v7_monitoring_manifest.json").read_text())

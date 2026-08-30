@@ -1,0 +1,283 @@
+{
+  "authenticated_execution": false,
+  "canonical_economics": {
+    "authenticated_execution": false,
+    "capital_hours": 0.0,
+    "chronological_event_folds_2x": [],
+    "complete_units": 0,
+    "completion_rate": 0.0,
+    "costs": {
+      "baseline_total": 0,
+      "components": {
+        "capital_cost": 0,
+        "fee": 0,
+        "latency_cost": 0,
+        "slippage": 0,
+        "unwind_loss": 0
+      },
+      "multipliers": [
+        1.0,
+        1.5,
+        2.0
+      ],
+      "stress_observations_frozen": true
+    },
+    "distinct_event_clusters": 0,
+    "economic_units": 233,
+    "event_cluster_order_chronological": [],
+    "event_cluster_stress": {},
+    "event_eligible_mature_terminal_units": 0,
+    "expected_model_sha": "405096993e75d6230d32a9c025dd3a2d9bfa6e12",
+    "family_filter": null,
+    "horizon_seconds_filter": null,
+    "markouts": {
+      "10s": {
+        "mean": null,
+        "observations": 0
+      },
+      "1s": {
+        "mean": null,
+        "observations": 0
+      },
+      "300s": {
+        "mean": null,
+        "observations": 0
+      },
+      "45s": {
+        "mean": null,
+        "observations": 0
+      },
+      "60s": {
+        "mean": null,
+        "observations": 0
+      }
+    },
+    "mature_terminal_units": 0,
+    "minimum_event_clusters_for_promotion": 12,
+    "minimum_positive_event_fold_fraction": 0.6,
+    "model_families_observed": [
+      "FAST_STRUCTURAL",
+      "MICRO_MAKER_PRO"
+    ],
+    "model_horizons_seconds_observed": [],
+    "net_pnl": null,
+    "paper_only": true,
+    "partial_units": 0,
+    "pnl_decomposition": {
+      "adverse_markout": null,
+      "capital_cost": 0,
+      "fees": 0,
+      "inventory_pnl": null,
+      "latency_cost": 0,
+      "liquidity_reward_unknown_share_policy": "ZERO",
+      "liquidity_rewards": 0.0,
+      "maker_rebates": null,
+      "slippage": 0,
+      "spread_capture": null,
+      "trading_pnl": null,
+      "unwind_cost": 0
+    },
+    "positive_chronological_event_fold_fraction_2x": null,
+    "positive_under_1x_1_5x_2x": false,
+    "promotion_ready": false,
+    "reason_codes": [
+      "mixed_model_families_require_explicit_filter",
+      "no_completed_economic_units",
+      "no_mature_full_cost_terminal_observations"
+    ],
+    "schema": "polymarket_v7_canonical_economics_v1",
+    "state": "MORE_EVIDENCE_REQUIRED",
+    "stressed_net_pnl": {
+      "1.5x": null,
+      "1x": null,
+      "2x": null
+    },
+    "submitted_units": 57,
+    "unit_reason_codes": {
+      "order:mmo-1-1788079807248-0010cddec2b5002a-1": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788079807248-0010cddec2b5002a-2": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-1": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-10": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-11": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-12": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-13": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-14": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-15": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-16": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-17": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-18": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-19": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-2": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-20": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-21": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-22": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-23": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-24": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-25": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-3": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-4": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-5": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-6": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-7": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-8": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788083995514-0010d1adec19c77d-9": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788084299653-0010d1f4bc41ddee-1": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788084299653-0010d1f4bc41ddee-2": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788085190408-0010d2c4224ca117-1": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788085190408-0010d2c4224ca117-2": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788085190408-0010d2c4224ca117-3": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788085190408-0010d2c4224ca117-4": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-1-1788085190408-0010d2c4224ca117-5": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-10-1788079807248-0010cddec2b5002a-1": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-10-1788079807248-0010cddec2b5002a-2": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-10-1788079807248-0010cddec2b5002a-3": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-10-1788079807248-0010cddec2b5002a-4": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-10-1788079807248-0010cddec2b5002a-5": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-2-1788079807248-0010cddec2b5002a-1": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-2-1788079807248-0010cddec2b5002a-2": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-2-1788079807248-0010cddec2b5002a-3": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-2-1788079807248-0010cddec2b5002a-4": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-3-1788079807248-0010cddec2b5002a-1": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-3-1788079807248-0010cddec2b5002a-2": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-4-1788079807248-0010cddec2b5002a-1": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-4-1788079807248-0010cddec2b5002a-2": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-4-1788079807248-0010cddec2b5002a-3": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-4-1788079807248-0010cddec2b5002a-4": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-4-1788079807248-0010cddec2b5002a-5": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-7-1788079807248-0010cddec2b5002a-1": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-7-1788079807248-0010cddec2b5002a-2": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-7-1788079807248-0010cddec2b5002a-3": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-7-1788079807248-0010cddec2b5002a-4": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-7-1788079807248-0010cddec2b5002a-5": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-8-1788079807248-0010cddec2b5002a-1": [
+        "realized_terminal_pnl_missing"
+      ],
+      "order:mmo-8-1788079807248-0010cddec2b5002a-2": [
+        "realized_terminal_pnl_missing"
+      ]
+    },
+    "unverifiable_completion_units": 0
+  },
+  "generated_at_unix_ms": 1788085462200,
+  "missing_runtime_data_is_not_zero_economic_activity": true,
+  "paper_only": true,
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "repository_head": "6fc6ac6afeecd0b555652cde53c9f0e73a710e17",
+  "runtime_evidence_available": false,
+  "runtime_reconciliation": {},
+  "schema": "polymarket_v7_reconciliation_report_v1",
+  "shadow_excluded_from_authoritative_equity": true,
+  "state": "AVAILABLE",
+  "version": 7
+}

@@ -1,0 +1,156 @@
+{
+  "authenticated_execution": false,
+  "baseline_capabilities": {
+    "graph_relation_data_rows": 0,
+    "inventory_merge_ledger_writer": false,
+    "inventory_split_ledger_writer": false,
+    "inventory_split_primitive_implemented": true,
+    "inventory_split_runtime_call_count": 0,
+    "micro_taker_canonical_spool_argument": false,
+    "micro_taker_worker_started": true,
+    "model_reload_ledger_event": false,
+    "runtime_champion_path": "runs/paper_v7_live/micro_maker/execution_model.json",
+    "runtime_champion_reload_loop": true,
+    "source": "repository_call_site_analysis"
+  },
+  "baseline_ledger": {
+    "dedup_identity": [
+      "model_sha",
+      "policy_hash_or_unknown",
+      "config_hash_or_unknown",
+      "record_id_or_canonical_hash"
+    ],
+    "deduplicated_rows": 0,
+    "duplicate_rows_removed": 0,
+    "families": {},
+    "files": [],
+    "raw_rows": 0,
+    "source": "local_canonical_jsonl_recomputed"
+  },
+  "baseline_repository_head": "405096993e75d6230d32a9c025dd3a2d9bfa6e12",
+  "comparison_scope": "CAPABILITY_AND_AVAILABLE_DEDUPLICATED_PAPER_EVIDENCE",
+  "economic_claim": "NO_PROFITABILITY_CLAIM_WITHOUT_FORWARD_TERMINAL_EVIDENCE",
+  "generated_at_unix_ms": 1788085462199,
+  "missing_runtime_data_is_not_zero_economic_activity": true,
+  "paper_only": true,
+  "postchange_capabilities": {
+    "canonical_shadow_counterfactual_separation": true,
+    "evidence_allocator_advisory_only": true,
+    "external_only_and_hybrid_models": true,
+    "fast_structural_paper_executor_started": true,
+    "fast_structural_revalidation_and_unwind": false,
+    "fee_unknown_non_executable": true,
+    "graph_relation_data_rows": 0,
+    "inventory_merge_ledger_writer": true,
+    "inventory_split_ledger_writer": true,
+    "inventory_split_primitive_implemented": true,
+    "inventory_split_runtime_call_count": 2,
+    "micro_taker_canonical_spool_argument": false,
+    "micro_taker_worker_started": true,
+    "model_reload_ledger_event": true,
+    "reward_unknown_forced_zero": true,
+    "runtime_champion_path": "runs/paper_v7_live/micro_maker/execution_model.json",
+    "runtime_champion_reload_loop": true,
+    "slow_economic_shadow_always_on": true,
+    "source": "repository_call_site_analysis"
+  },
+  "postchange_ledger": {
+    "dedup_identity": [
+      "model_sha",
+      "policy_hash_or_unknown",
+      "config_hash_or_unknown",
+      "record_id_or_canonical_hash"
+    ],
+    "deduplicated_rows": 15404,
+    "duplicate_rows_removed": 0,
+    "families": {
+      "CRYPTO_INFORMED_TAKER": {
+        "capital_hours": 0.0,
+        "events": {
+          "CANDIDATE": 9,
+          "VIRTUAL_FILL": 7,
+          "VIRTUAL_FINAL": 6,
+          "VIRTUAL_MARKOUT": 28
+        },
+        "funnel": {
+          "candidates": 9
+        },
+        "independent_economic_units": 50,
+        "markout_pnl_usd": 0.0,
+        "notional_usd": 66.61636,
+        "quote_exposure_seconds": 0.0,
+        "realized_pnl_usd": 0.0,
+        "reject_reasons": {},
+        "telemetry_rows": 50
+      },
+      "FAST_STRUCTURAL": {
+        "capital_hours": 0.0,
+        "events": {
+          "CANDIDATE": 1104
+        },
+        "funnel": {
+          "candidates": 1104
+        },
+        "independent_economic_units": 1104,
+        "markout_pnl_usd": 0.0,
+        "notional_usd": 0.0,
+        "quote_exposure_seconds": 0.0,
+        "realized_pnl_usd": 0.0,
+        "reject_reasons": {},
+        "telemetry_rows": 1104
+      },
+      "MICRO_MAKER_PRO": {
+        "capital_hours": 0.0,
+        "events": {
+          "CANDIDATE": 62,
+          "ORDER_STATE": 171,
+          "ORDER_SUBMITTED": 57
+        },
+        "funnel": {
+          "candidates": 62,
+          "orders": 57
+        },
+        "independent_economic_units": 290,
+        "markout_pnl_usd": 0.0,
+        "notional_usd": 0.0,
+        "quote_exposure_seconds": 0.0,
+        "realized_pnl_usd": 0.0,
+        "reject_reasons": {},
+        "telemetry_rows": 290
+      },
+      "unknown": {
+        "capital_hours": 0.0,
+        "events": {
+          "FORECAST": 99,
+          "FORECAST_FINAL": 87,
+          "REJECTED": 2,
+          "UNKNOWN": 13772
+        },
+        "funnel": {},
+        "independent_economic_units": 13960,
+        "markout_pnl_usd": 0.0,
+        "notional_usd": 0.0,
+        "quote_exposure_seconds": 0.0,
+        "realized_pnl_usd": 0.0,
+        "reject_reasons": {},
+        "telemetry_rows": 13960
+      }
+    },
+    "files": [
+      "/Users/enrico/polymarket/runs/paper_v7_live/external_fair/counterfactuals.jsonl",
+      "/Users/enrico/polymarket/runs/paper_v7_live/external_fair/rtds_events.jsonl",
+      "/Users/enrico/polymarket/runs/paper_v7_live/ledger/execution.jsonl",
+      "/Users/enrico/polymarket/runs/paper_v7_live/market_open/events.jsonl",
+      "/Users/enrico/polymarket/runs/paper_v7_live/micro_maker/fillability_ws.jsonl",
+      "/Users/enrico/polymarket/runs/paper_v7_live/universe/changes.jsonl"
+    ],
+    "raw_rows": 15404,
+    "source": "local_canonical_jsonl_recomputed"
+  },
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "repository_head": "6fc6ac6afeecd0b555652cde53c9f0e73a710e17",
+  "runtime_evidence_available": false,
+  "schema": "polymarket_v7_replay_comparison_v1",
+  "version": 7
+}
