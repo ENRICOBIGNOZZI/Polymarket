@@ -234,6 +234,7 @@ def runtime_health(run_root: Path, expected_sha: str, *, now: int, stale_seconds
         recoverable.append("runtime_status_stale")
     if runtime.get("state") == "running":
         selector = read_json(run_root / "micro_maker" / "selector_status.json")
+        rotation = read_json(run_root / "micro_maker" / "rotation_status.json")
         maker = read_json(run_root / "micro_maker" / "status.json")
         if selector:
             if (
@@ -262,6 +263,29 @@ def runtime_health(run_root: Path, expected_sha: str, *, now: int, stale_seconds
                 recoverable.append("maker_selector_stale")
         else:
             recoverable.append("maker_selector_status_missing")
+        if rotation:
+            if (
+                rotation.get("paper_only") is not True
+                or rotation.get("authenticated_execution") is not False
+                or rotation.get("real_order_submission") is not False
+            ):
+                unsafe.append("maker_cohort_execution_authority_unsafe")
+            if rotation.get("model_sha") != expected_sha:
+                unsafe.append("maker_cohort_identity_drift")
+            if rotation.get("state") not in {
+                "RUNNING", "DRAINING", "PENDING_NONFLAT", "PENDING_DRAIN_TIMEOUT",
+            }:
+                recoverable.append("maker_cohort_not_ready")
+            try:
+                rotation_age = now * 1000 - int(rotation.get("timestamp_ms") or 0)
+            except (TypeError, ValueError, OverflowError):
+                rotation_age = stale_seconds * 1000 + 1
+            if rotation_age < -5_000:
+                unsafe.append("maker_cohort_clock_in_future")
+            elif rotation_age > stale_seconds * 1000:
+                recoverable.append("maker_cohort_status_stale")
+        else:
+            recoverable.append("maker_cohort_status_missing")
         if maker:
             if maker.get("paper_only") is not True or maker.get("authenticated_execution") is not False:
                 unsafe.append("professional_maker_execution_authority_unsafe")

@@ -208,6 +208,18 @@ class V7NativeMonitoringTest(unittest.TestCase):
             "source": "adaptive_universe_recent_flow",
             "selected_count": 40,
         })
+        self._write(root / "micro_maker" / "rotation_status.json", {
+            "schema": "polymarket_v7_maker_cohort_rotation_status_v1",
+            "timestamp_ms": (now - 5) * 1000,
+            "model_sha": sha,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "state": "RUNNING",
+            "rotation_count": 3,
+            "runtime_membership_sha256": "runtime-membership",
+            "candidate_membership_sha256": "candidate-membership",
+        })
         self._write(root / "external" / "status.json", {"timestamp": now - 5, "paper_only": True, "authenticated_execution": False})
         self._write(root / "osint" / "status.json", {"schema": "polymarket_v7_osint_collector_status_v1", "timestamp_ms": (now - 5) * 1000, "paper_only": True, "authenticated_execution": False, "real_order_submission": False, "enabled_sources": 3, "healthy_sources": 3})
         self._write(root / "osint" / "mapping_status.json", {"schema": "polymarket_v7_osint_mapping_status_v1", "version": 7, "family": "osint", "model_sha": sha, "timestamp_ms": (now - 5) * 1000, "paper_only": True, "research_only": True, "authenticated_execution": False, "real_order_submission": False, "implementation_complete": True, "mapping_pipeline": True, "title_similarity_verification_forbidden": True, "verified_mappings": 0, "candidate_mappings": 2, "forward_collection_active": False})
@@ -277,6 +289,10 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertIn("polymarket_v7_maker_runtime_selection_pinned 1", metrics)
             self.assertIn("polymarket_v7_maker_candidate_rotation_pending 1", metrics)
             self.assertIn("polymarket_v7_maker_candidate_selected_markets 40", metrics)
+            self.assertIn("polymarket_v7_maker_cohort_supervisor_ready 1", metrics)
+            self.assertIn("polymarket_v7_maker_cohort_rotations_total 3", metrics)
+            self.assertIn("polymarket_v7_maker_rotation_draining 0", metrics)
+            self.assertIn("polymarket_v7_maker_rotation_blocked_nonflat 0", metrics)
             self.assertIn("polymarket_v7_maker_feed_connected_workers 5", metrics)
             self.assertIn("polymarket_v7_maker_feed_messages_total 1234", metrics)
             self.assertIn("polymarket_v7_maker_decisions_total 4321", metrics)

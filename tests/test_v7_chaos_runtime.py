@@ -182,6 +182,18 @@ class V7RuntimeChaosContractTest(unittest.TestCase):
                     "source": "full_visible_bid_depth_net_verified_fee_and_slippage",
                 },
             )
+            self._write(
+                root / "micro_maker/rotation_status.json",
+                {
+                    "schema": "polymarket_v7_maker_cohort_rotation_status_v1",
+                    "timestamp_ms": 1_000_000,
+                    "model_sha": SHA,
+                    "paper_only": True,
+                    "authenticated_execution": False,
+                    "real_order_submission": False,
+                    "state": "RUNNING",
+                },
+            )
             result = runtime_health(root, SHA, now=1000, stale_seconds=30)
             self.assertEqual(result.classification, SAFE)
             self.assertNotIn("maker_selector_not_ready", result.reasons)

@@ -73,6 +73,22 @@ groups:
           summary: Maker is using the liquidity-universe fallback
           description: PAPER quoting remains operational with reward assumptions forced to zero, but the public rewards catalog is unavailable.
 
+      - alert: PolymarketV7MakerCohortSupervisorDown
+        expr: polymarket_v7_maker_cohort_supervisor_ready < 1
+        for: 30s
+        labels: {severity: critical}
+        annotations:
+          summary: Maker selection cohort supervisor is unavailable
+          description: The PAPER maker and its two evidence observers can no longer rotate together through the flat-state handoff.
+
+      - alert: PolymarketV7MakerRotationBlockedByInventory
+        expr: polymarket_v7_maker_rotation_blocked_nonflat > 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: Maker universe rotation is waiting for flat inventory
+          description: Runtime safety is intact, but the executable-flow candidate cannot replace the pinned maker universe until PAPER inventory is flat.
+
       - alert: PolymarketV7SupervisorDown
         expr: polymarket_v7_supervisor_alive < 1
         for: 30s

@@ -266,6 +266,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     maker = _json(run_root / "micro_maker" / "status.json")
     maker_diagnostics = _json(run_root / "micro_maker" / "runtime_diagnostics.json")
     maker_selector = _json(run_root / "micro_maker" / "selector_status.json")
+    maker_rotation = _json(run_root / "micro_maker" / "rotation_status.json")
     external = _json(run_root / "external" / "status.json")
     osint = _json(run_root / "osint" / "status.json")
     osint_mapping = _json(run_root / "osint" / "mapping_status.json")
@@ -371,6 +372,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "maker": maker,
         "maker_diagnostics": maker_diagnostics,
         "maker_selector": maker_selector,
+        "maker_rotation": maker_rotation,
         "external": external,
         "osint": osint,
         "osint_mapping": osint_mapping,
@@ -420,6 +422,7 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     maker = snapshot.get("maker") if isinstance(snapshot.get("maker"), dict) else {}
     maker_diagnostics = snapshot.get("maker_diagnostics") if isinstance(snapshot.get("maker_diagnostics"), dict) else {}
     selector = snapshot.get("maker_selector") if isinstance(snapshot.get("maker_selector"), dict) else {}
+    rotation = snapshot.get("maker_rotation") if isinstance(snapshot.get("maker_rotation"), dict) else {}
     external_fair = snapshot.get("external_fair") if isinstance(snapshot.get("external_fair"), dict) else {}
     if authority.get("valid") is not True: reasons.append("operator_authority_missing_or_invalid")
     if runtime.get("version") != 7: reasons.append("runtime_version_not_v7")
@@ -451,6 +454,20 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
         or selector_age_ms < -5_000
         or selector_age_ms > max_runtime_age * 1000
     ): reasons.append("maker_selector_missing_stale_or_unsafe")
+    try: rotation_age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(rotation.get("timestamp_ms") or 0)
+    except (TypeError, ValueError, OverflowError): rotation_age_ms = (max_runtime_age + 1) * 1000
+    if (
+        rotation.get("schema") != "polymarket_v7_maker_cohort_rotation_status_v1"
+        or rotation.get("model_sha") != snapshot.get("sha")
+        or rotation.get("paper_only") is not True
+        or rotation.get("authenticated_execution") is not False
+        or rotation.get("real_order_submission") is not False
+        or rotation.get("state") not in {
+            "RUNNING", "DRAINING", "PENDING_NONFLAT", "PENDING_DRAIN_TIMEOUT",
+        }
+        or rotation_age_ms < -5_000
+        or rotation_age_ms > max_runtime_age * 1000
+    ): reasons.append("maker_cohort_supervisor_missing_stale_or_unsafe")
     expected_research = {
         "sports_latency", "cross_platform", "wallet_intelligence",
     }
@@ -802,6 +819,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     maker = snapshot.get("maker") if isinstance(snapshot.get("maker"), dict) else {}
     maker_diagnostics = snapshot.get("maker_diagnostics") if isinstance(snapshot.get("maker_diagnostics"), dict) else {}
     selector = snapshot.get("maker_selector") if isinstance(snapshot.get("maker_selector"), dict) else {}
+    rotation = snapshot.get("maker_rotation") if isinstance(snapshot.get("maker_rotation"), dict) else {}
     def collector_fresh(status: dict[str, Any]) -> bool:
         try:
             age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(status.get("timestamp_ms") or 0)
@@ -840,6 +858,17 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         and selector.get("state") in _MAKER_SELECTOR_OPERATIONAL_STATES
         and fresh_milliseconds(selector)
     )
+    rotation_ready = (
+        rotation.get("schema") == "polymarket_v7_maker_cohort_rotation_status_v1"
+        and rotation.get("model_sha") == snapshot.get("sha")
+        and rotation.get("paper_only") is True
+        and rotation.get("authenticated_execution") is False
+        and rotation.get("real_order_submission") is False
+        and rotation.get("state") in {
+            "RUNNING", "DRAINING", "PENDING_NONFLAT", "PENDING_DRAIN_TIMEOUT",
+        }
+        and fresh_milliseconds(rotation)
+    )
     maker_operational = (
         maker.get("schema") == "polymarket_v7_professional_maker_status_v1"
         and maker.get("model_sha") == snapshot.get("sha")
@@ -850,6 +879,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         and maker.get("source") not in {None, "", "not_started"}
         and fresh_milliseconds(maker)
         and selector_ready
+        and rotation_ready
     )
     blocked_config_count = sum(
         1 for row in research_rows.values()
@@ -902,6 +932,15 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_maker_runtime_selection_pinned", 1 if selector.get("runtime_selection_pinned") is True else 0),
         _metric("polymarket_v7_maker_candidate_rotation_pending", 1 if selector.get("candidate_rotation_pending") is True else 0),
         _metric("polymarket_v7_maker_candidate_selected_markets", selector.get("candidate_selected_count")),
+        _metric("polymarket_v7_maker_cohort_supervisor_ready", 1 if rotation_ready else 0),
+        _metric("polymarket_v7_maker_cohort_rotations_total", rotation.get("rotation_count")),
+        _metric("polymarket_v7_maker_rotation_draining", 1 if rotation.get("state") == "DRAINING" else 0),
+        _metric("polymarket_v7_maker_rotation_blocked_nonflat", 1 if rotation.get("state") == "PENDING_NONFLAT" else 0),
+        _metric("polymarket_v7_maker_rotation_info", 1 if rotation_ready else 0, {
+            "state": rotation.get("state", "UNKNOWN"),
+            "runtime_membership": rotation.get("runtime_membership_sha256", "UNKNOWN"),
+            "candidate_membership": rotation.get("candidate_membership_sha256", "UNKNOWN"),
+        }),
         _metric("polymarket_v7_maker_new_risk_frozen", 1 if maker.get("new_risk_frozen") is True else 0),
         _metric("polymarket_v7_maker_marking_complete", 1 if maker.get("marking_complete") is True else 0),
         _metric("polymarket_v7_maker_feed_workers", maker_diagnostics.get("feed_workers")),

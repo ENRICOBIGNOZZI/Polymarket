@@ -17,6 +17,9 @@ class DashboardContractTests(unittest.TestCase):
             "polymarket_maker_lab_segment_markout_pnl_usd",
             "polymarket_maker_lab_conditional_markout_pnl_usd",
             "polymarket_maker_lab_market_realized_pnl_usd",
+            "polymarket_v7_maker_cohort_supervisor_ready",
+            "polymarket_v7_maker_cohort_rotations_total",
+            "polymarket_v7_maker_rotation_blocked_nonflat",
             'dimension=\\"lifetime_arm\\"',
         ):
             self.assertIn(metric, raw)
