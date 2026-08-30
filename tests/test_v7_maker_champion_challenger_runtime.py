@@ -24,7 +24,7 @@ class MakerChampionChallengerRuntimeContractTests(unittest.TestCase):
             self.text,
         )
         refit_start = self.text.index("# Slow-plane exact-SHA fill/markout fit.")
-        runtime_start = self.text.index("# Canonical Maker owner:", refit_start)
+        runtime_start = self.text.index("# Canonical Maker cohort:", refit_start)
         refit_block = self.text[refit_start:runtime_start]
         self.assertIn('--artifact-role challenger', refit_block)
         self.assertIn('--output "$MAKER_CHALLENGER_MODEL"', refit_block)

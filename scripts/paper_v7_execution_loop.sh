@@ -526,53 +526,31 @@ pids+=("$!")
   done
 ) & pids+=("$!")
 
-# Canonical Maker owner: public WS -> bounded V7 L2 -> C++ features/decision ->
-# common V7 OMS/queue PAPER engine -> spool. Startup waits for the first valid
-# slow-plane selection instead of turning a transient public-data dependency
-# into a whole-runtime kill. Once started, the maker remains fail-closed.
+# Canonical Maker cohort: one immutable selection generation is consumed by
+# the PAPER execution owner and both evidence observers. The cohort supervisor
+# follows the slow-plane candidate only through a fresh flat handoff: freeze
+# new risk, cancel every PAPER order, prove zero inventory, atomically promote,
+# then restart all three consumers together. No inventory or PnL state is ever
+# discarded merely to chase a changing public-flow universe.
 (
   while [[ ! -e "$KILL" ]] && ! maker_selection_ready; do sleep 1; done
   [[ ! -e "$KILL" ]] || exit 0
-  export PM_V7_WS_JSON_ARENA_MAX_BYTES="$WS_JSON_ARENA_MAKER_MAX_BYTES"
-  exec "$MAKER_RUNTIME" \
+  exec python3 scripts/v7_maker_cohort_supervisor.py \
+    --repository-root "$ROOT" \
+    --run-root "$RUN_ROOT" \
     --config "$ALLOC/micro_maker.json" \
     --maker-policy "$MAKER_POLICY" \
-    --run-root "$RUN_ROOT" \
     --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
+    --candidate "$RUN_ROOT/micro_maker/reward_selection_candidate.json" \
     --model "$MAKER_CHAMPION_MODEL" \
-    --model-sha "$SHA"
-) >> "$RUN_ROOT/micro_maker/runtime.log" 2>&1 &
-pids+=("$!")
-
-# Evidence-only markout observer. It has no order/OMS/risk authority: it tails
-# canonical FILL events, observes bounded public WS/L10 state, and emits only
-# executable MARKOUT records into the common spool.
-(
-  while [[ ! -e "$KILL" ]] && ! maker_selection_ready; do sleep 1; done
-  [[ ! -e "$KILL" ]] || exit 0
-  export PM_V7_WS_JSON_ARENA_MAX_BYTES="$WS_JSON_ARENA_OBSERVER_MAX_BYTES"
-  exec "$MARKOUT_OBSERVER" \
-    --config "$ALLOC/micro_maker.json" \
-    --run-root "$RUN_ROOT" \
-    --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
-    --model-sha "$SHA"
-) >> "$RUN_ROOT/micro_maker/markout_observer.log" 2>&1 &
-pids+=("$!")
-
-# Evidence-only exact-WS fillability observer. It has no OMS, capital, risk or
-# order authority. The WS callback only pushes compact trade observations into
-# a bounded SPSC queue; disk serialization happens on the observer consumer
-# thread. Drops/decoder gaps are explicit in fillability_ws_status.json.
-(
-  while [[ ! -e "$KILL" ]] && ! maker_selection_ready; do sleep 1; done
-  [[ ! -e "$KILL" ]] || exit 0
-  export PM_V7_WS_JSON_ARENA_MAX_BYTES="$WS_JSON_ARENA_FILLABILITY_MAX_BYTES"
-  exec "$FILLABILITY_OBSERVER" \
-    --config "$ALLOC/micro_maker.json" \
-    --run-root "$RUN_ROOT" \
-    --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
-    --model-sha "$SHA"
-) >> "$RUN_ROOT/micro_maker/fillability_observer.log" 2>&1 &
+    --model-sha "$SHA" \
+    --maker-runtime "$MAKER_RUNTIME" \
+    --markout-observer "$MARKOUT_OBSERVER" \
+    --fillability-observer "$FILLABILITY_OBSERVER" \
+    --maker-arena-bytes "$WS_JSON_ARENA_MAKER_MAX_BYTES" \
+    --observer-arena-bytes "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" \
+    --fillability-arena-bytes "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES"
+) >> "$RUN_ROOT/micro_maker/cohort_supervisor.log" 2>&1 &
 pids+=("$!")
 
 (

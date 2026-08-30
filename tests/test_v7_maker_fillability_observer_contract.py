@@ -28,9 +28,11 @@ class V7MakerFillabilityObserverContractTest(unittest.TestCase):
 
     def test_runtime_launches_observer_without_execution_authority(self) -> None:
         loop = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+        supervisor = (ROOT / "scripts" / "v7_maker_cohort_supervisor.py").read_text(encoding="utf-8")
         self.assertIn("polymarket_v7_maker_fillability_observer", loop)
         self.assertIn("PM_V7_WS_JSON_ARENA_FILLABILITY_MAX_BYTES", loop)
-        self.assertIn("fillability_observer.log", loop)
+        self.assertIn("fillability_observer.log", supervisor)
+        self.assertIn('"fillability"', supervisor)
         self.assertIn("fillability_ws_status.json", (ROOT / "src" / "v7_maker_fillability_observer.cpp").read_text(encoding="utf-8"))
 
     def test_build_contains_exact_ws_observer(self) -> None:

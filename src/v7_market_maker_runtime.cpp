@@ -30,6 +30,7 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -1489,16 +1490,18 @@ public:
         }
         fs::create_directories(run_root_ / "ledger" / "spool");
         fs::create_directories(run_root_ / "micro_maker");
+        restore_flat_realized_pnl();
     }
 
     void consume(const TelemetryRecord& record) {
         if (record.market_handle >= markets_.size() || markets_[record.market_handle] == nullptr) return;
         if (record.has_inventory) inventory_[record.market_handle] = record.inventory;
+        update_active_orders(record);
         if (record.kind == TelemetryKind::Candidate) write_candidate(record);
         else write_paper(record);
     }
 
-    void write_state() {
+    void write_state(bool new_risk_frozen = false) {
         json::object root;
         root["schema"] = "polymarket_v7_professional_maker_state_v2";
         root["timestamp_ms"] = wall_ms();
@@ -1509,7 +1512,8 @@ public:
         root["starting_capital"] = starting_capital_;
 
         double remaining_cost = 0.0;
-        double realized = 0.0;
+        double realized = realized_pnl_before_boot_;
+        bool inventory_flat = true;
         json::object inventory;
         for (std::size_t handle = 1; handle < markets_.size(); ++handle) {
             const auto* market = markets_[handle];
@@ -1517,6 +1521,10 @@ public:
             const auto& state = inventory_[handle];
             remaining_cost += state.yes_cost + state.no_cost;
             realized += state.realized_trading_pnl;
+            inventory_flat = inventory_flat
+                && state.yes_microunits == 0 && state.no_microunits == 0
+                && std::abs(state.yes_cost) <= 1e-12
+                && std::abs(state.no_cost) <= 1e-12;
             json::object row;
             // Inventory identity must remain self-contained.  The live reward
             // selection rotates independently of held PAPER inventory, so a
@@ -1535,6 +1543,9 @@ public:
         root["realized_trading_pnl"] = realized;
         root["estimated_maker_rebate_pnl"] = 0.0;
         root["estimated_liquidity_reward_pnl"] = 0.0;
+        root["active_order_count"] = active_orders_.size();
+        root["flat_restart_safe"] = active_orders_.empty() && inventory_flat;
+        root["new_risk_frozen"] = new_risk_frozen;
         root["inventory"] = std::move(inventory);
         atomic_write(run_root_ / "micro_maker" / "state.json", json::serialize(root) + "\n");
     }
@@ -1548,6 +1559,63 @@ public:
 
 private:
     struct InstrumentCold { MarketContext* market = nullptr; bool yes = false; };
+
+    [[nodiscard]] std::string active_order_key(const TelemetryRecord& record) const {
+        return std::to_string(record.market_handle) + ":" +
+               std::to_string(record.paper.order_id);
+    }
+
+    void update_active_orders(const TelemetryRecord& record) {
+        if (record.kind != TelemetryKind::PaperEvent || record.paper.order_id == 0) return;
+        const auto key = active_order_key(record);
+        if (record.paper.kind == PaperMakerEventKind::OrderLive) {
+            active_orders_.insert(key);
+            return;
+        }
+        if (record.paper.kind == PaperMakerEventKind::Cancelled
+            || record.paper.kind == PaperMakerEventKind::Rejected
+            || (record.paper.kind == PaperMakerEventKind::Fill
+                && record.paper.order_state == pm::v7::OrderState::Filled)) {
+            active_orders_.erase(key);
+        }
+    }
+
+    void restore_flat_realized_pnl() {
+        const fs::path path = run_root_ / "micro_maker" / "state.json";
+        if (!fs::exists(path)) return;
+        try {
+            const auto prior = read_json(path);
+            if (!prior.is_object()) return;
+            const auto& root = prior.as_object();
+            if (!boolean(find_value(root, "paper_only"), false)
+                || boolean(find_value(root, "authenticated_execution"), true)
+                || boolean(find_value(root, "real_order_submission"), true)
+                || text(find_value(root, "model_sha")) != model_sha_
+                || std::abs(number(find_value(root, "starting_capital"), -1.0)
+                            - starting_capital_) > 1e-9
+                || integer(find_value(root, "active_order_count"), 1) != 0) {
+                return;
+            }
+            const auto* inventory = find_value(root, "inventory");
+            if (inventory == nullptr || !inventory->is_object()) return;
+            for (const auto& item : inventory->as_object()) {
+                if (!item.value().is_object()) return;
+                const auto& row = item.value().as_object();
+                if (std::abs(number(find_value(row, "yes_shares"), 0.0)) > 1e-9
+                    || std::abs(number(find_value(row, "no_shares"), 0.0)) > 1e-9
+                    || std::abs(number(find_value(row, "yes_cost"), 0.0)) > 1e-9
+                    || std::abs(number(find_value(row, "no_cost"), 0.0)) > 1e-9) {
+                    return;
+                }
+            }
+            const double realized = number(find_value(root, "realized_trading_pnl"), 0.0);
+            if (std::isfinite(realized)) realized_pnl_before_boot_ = realized;
+        } catch (...) {
+            // A missing/corrupt/non-flat prior snapshot cannot seed a restart.
+            // The cohort supervisor only rotates after independently proving
+            // a fresh flat state, so fail closed by refusing the carry-forward.
+        }
+    }
 
     [[nodiscard]] const InstrumentCold* instrument(std::uint64_t handle) const noexcept {
         return handle < instruments_.size() && instruments_[handle].market != nullptr
@@ -1789,6 +1857,8 @@ private:
     std::vector<MarketContext*> markets_;
     std::vector<InstrumentCold> instruments_;
     std::vector<PaperMakerInventory> inventory_;
+    std::unordered_set<std::string> active_orders_;
+    double realized_pnl_before_boot_ = 0.0;
     // The supervisor can restart the C++ process without rotating the exact-SHA
     // ledger.  Sequence counters restart at one, so every process boot needs a
     // distinct causal namespace or the canonical spool correctly rejects all
@@ -1984,7 +2054,7 @@ int main(int argc, char** argv) {
 
         TelemetryWriter writer(options.run_root, options.model_sha,
                                config.starting_capital, markets);
-        writer.write_state();
+        writer.write_state(false);
         for (auto& shard : shards) shard->start();
 
         std::int64_t last_state_ms = 0;
@@ -1995,6 +2065,8 @@ int main(int argc, char** argv) {
             fs::path(options.run_root) / "control" / "MAKER_FREEZE";
         const fs::path cutover_drain_path =
             fs::path(options.run_root) / "control" / "CUTOVER_DRAIN";
+        const fs::path maker_rotation_drain_path =
+            fs::path(options.run_root) / "control" / "MAKER_ROTATION_DRAIN";
         std::int64_t last_control_check_ms = 0;
         while (!g_stop.load(std::memory_order_relaxed)) {
             if (fs::exists(kill_path)) {
@@ -2019,12 +2091,14 @@ int main(int argc, char** argv) {
                     // Filesystem access stays on this cold control thread. The
                     // hot shards only read the resulting atomic flag.
                     new_risk_frozen.store(
-                        fs::exists(maker_freeze_path) || fs::exists(cutover_drain_path),
+                        fs::exists(maker_freeze_path) || fs::exists(cutover_drain_path)
+                            || fs::exists(maker_rotation_drain_path),
                         std::memory_order_release);
                     last_control_check_ms = now;
                 }
                 if (now - last_state_ms >= 1000) {
-                    writer.write_state();
+                    writer.write_state(
+                        new_risk_frozen.load(std::memory_order_acquire));
                     write_runtime_diagnostics(options.run_root, options.model_sha, shards);
                     last_state_ms = now;
                 }
@@ -2057,7 +2131,7 @@ int main(int argc, char** argv) {
             while (shard->pop(record)) writer.consume(record);
         }
         while (execution->pop_telemetry(record)) writer.consume(record);
-        writer.write_state();
+        writer.write_state(true);
         return fatal.load(std::memory_order_relaxed) ? 2 : 0;
     } catch (const std::exception& error) {
         std::cerr << "polymarket_v7_market_maker_runtime: " << error.what() << '\n';
