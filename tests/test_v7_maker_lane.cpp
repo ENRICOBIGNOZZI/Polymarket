@@ -174,6 +174,18 @@ void test_invalid_inventory_orientation_fails_closed() {
     assert(decision.reason == pm::v7::maker::DecisionReason::FeedUnhealthy);
 }
 
+void test_rejected_quote_preserves_best_robust_ev_for_diagnostics() {
+    pm::v7::maker::MakerInstrumentLane lane(+1);
+    auto model = profitable_model();
+    model.fill_coefficients[0] = -4.0;
+    model.base_ev_se_per_share = 0.01;
+    model.robust_ev_z = 2.0;
+    const auto decision = lane.on_market_event(book_event(), default_context(), model);
+    assert(decision.reason == pm::v7::maker::DecisionReason::NoEconomicQuote);
+    assert(decision.robust_ev < 0.0);
+    assert(decision.ev_uncertainty > 0.0);
+}
+
 } // namespace
 
 int main() {
@@ -185,5 +197,6 @@ int main() {
     test_public_print_is_not_double_counted_as_cancel_pressure();
     test_invalid_lineage_forces_feed_withdraw();
     test_invalid_inventory_orientation_fails_closed();
+    test_rejected_quote_preserves_best_robust_ev_for_diagnostics();
     return 0;
 }

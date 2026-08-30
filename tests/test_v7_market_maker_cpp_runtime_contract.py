@@ -153,6 +153,13 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
         self.assertIn('metadata["decision_reason_code"]', self.source)
         self.assertIn('metadata["safety_preemption"] = safety_preemption', self.source)
 
+    def test_runtime_aggregates_decision_and_feed_diagnostics_off_hot_path(self) -> None:
+        self.assertIn("polymarket_v7_maker_runtime_diagnostics_v1", self.source)
+        self.assertIn("runtime_diagnostics.json", self.source)
+        self.assertIn("rejected_nonpositive_robust_ev", self.source)
+        self.assertIn("reason_counts", self.source)
+        self.assertIn("feed_connected_workers", self.source)
+
 
 if __name__ == "__main__":
     unittest.main()

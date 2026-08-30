@@ -172,6 +172,23 @@ class V7NativeMonitoringTest(unittest.TestCase):
             "killed": False,
             "source": "full_visible_bid_depth_net_verified_fee_and_slippage",
         })
+        self._write(root / "micro_maker" / "runtime_diagnostics.json", {
+            "schema": "polymarket_v7_maker_runtime_diagnostics_v1",
+            "timestamp_ms": (now - 5) * 1000,
+            "model_sha": sha,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "feed_workers": 5,
+            "feed_connected_workers": 5,
+            "feed_messages": 1234,
+            "feed_reconnects": 0,
+            "feed_errors": 0,
+            "decisions": 4321,
+            "quote_intents": 7,
+            "rejected_nonpositive_robust_ev": 4000,
+            "reason_counts": {"NO_ECONOMIC_QUOTE": 4000, "QUOTE": 7},
+        })
         self._write(root / "micro_maker" / "selector_status.json", {
             "schema": "polymarket_v7_maker_selector_status_v1",
             "timestamp_ms": (now - 5) * 1000,
@@ -257,6 +274,11 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertIn("polymarket_v7_maker_runtime_selection_pinned 1", metrics)
             self.assertIn("polymarket_v7_maker_candidate_rotation_pending 1", metrics)
             self.assertIn("polymarket_v7_maker_candidate_selected_markets 40", metrics)
+            self.assertIn("polymarket_v7_maker_feed_connected_workers 5", metrics)
+            self.assertIn("polymarket_v7_maker_feed_messages_total 1234", metrics)
+            self.assertIn("polymarket_v7_maker_decisions_total 4321", metrics)
+            self.assertIn("polymarket_v7_maker_quote_intents_total 7", metrics)
+            self.assertIn('polymarket_v7_maker_decision_reason_total{reason="NO_ECONOMIC_QUOTE"} 4000', metrics)
             self.assertIn("polymarket_v7_live_model_target_count 12", metrics)
             self.assertIn("polymarket_v7_live_model_operational_count 8", metrics)
             self.assertIn("polymarket_v7_live_model_blocked_count 4", metrics)

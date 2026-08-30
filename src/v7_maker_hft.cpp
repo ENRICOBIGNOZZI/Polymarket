@@ -515,8 +515,16 @@ MakerDecision MakerHotPath::on_market_update(
         bid_quote_shares, ask_quote_shares);
 
     Candidate* best = nullptr;
+    double best_observed_robust_ev = -std::numeric_limits<double>::infinity();
+    double best_observed_uncertainty = 0.0;
     for (std::size_t i = 0; i < candidate_count; ++i) {
         auto& candidate = candidates[i];
+        for (const auto* side : {&candidate.bid, &candidate.ask}) {
+            if (finite(side->robust_ev) && side->robust_ev > best_observed_robust_ev) {
+                best_observed_robust_ev = side->robust_ev;
+                best_observed_uncertainty = side->uncertainty;
+            }
+        }
         if (inventory_one_sided) {
             if (decision.features.inventory_fraction > 0.0) candidate.bid.admissible = false;
             else if (decision.features.inventory_fraction < 0.0) candidate.ask.admissible = false;
@@ -537,6 +545,14 @@ MakerDecision MakerHotPath::on_market_update(
         && now - quotes.last_quote_monotonic_ns < model.min_quote_lifetime_ns;
 
     if (!economic_quote) {
+        // Preserve the best rejected economics for aggregate diagnostics. This
+        // does not grant execution authority: quote intents below the robust-EV
+        // threshold remain forbidden, but operators can distinguish an
+        // economic rejection from a dead feed or invalid model.
+        if (finite(best_observed_robust_ev)) {
+            decision.robust_ev = best_observed_robust_ev;
+            decision.ev_uncertainty = best_observed_uncertainty;
+        }
         // A transient feature update must not turn a freshly accepted quote into
         // an immediate cancel. The old path bypassed min_quote_lifetime here,
         // producing LIVE -> CANCEL_PENDING in the same millisecond and making

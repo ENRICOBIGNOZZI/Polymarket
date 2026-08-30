@@ -70,6 +70,7 @@ constexpr std::size_t kExecutionNormalCapacity = 1024;
 constexpr std::size_t kExecutionSnapshotCapacity = 1024;
 constexpr std::size_t kExecutionTelemetryCapacity = 16384;
 constexpr std::size_t kExecutionBacklogSoftLimit = 768;
+constexpr std::size_t kDecisionReasonCount = 18;
 constexpr double kMicrounitsPerShare = 1'000'000.0;
 constexpr double kPriceScaleE4 = 10'000.0;
 constexpr std::string_view kStrategy = "MICRO_MAKER_PRO";
@@ -662,6 +663,14 @@ struct ExecutionCommand {
     std::int64_t advance_monotonic_ns = 0;
 };
 
+struct ShardDiagnostics {
+    pm::fast::FeedSnapshot feed{};
+    std::uint64_t decisions = 0;
+    std::uint64_t quote_intents = 0;
+    std::uint64_t rejected_nonpositive_robust_ev = 0;
+    std::array<std::uint64_t, kDecisionReasonCount> reasons{};
+};
+
 static_assert(std::is_trivially_copyable_v<TelemetryRecord>);
 static_assert(std::is_trivially_copyable_v<ExecutionSnapshotUpdate>);
 static_assert(std::is_trivially_copyable_v<ExecutionCommand>);
@@ -731,6 +740,19 @@ public:
 
     [[nodiscard]] std::size_t normal_backlog() const noexcept {
         return execution_normal_.approximate_size();
+    }
+
+    [[nodiscard]] ShardDiagnostics diagnostics() const noexcept {
+        ShardDiagnostics out;
+        if (feed_) out.feed = feed_->snapshot();
+        out.decisions = decisions_.load(std::memory_order_relaxed);
+        out.quote_intents = quote_intents_.load(std::memory_order_relaxed);
+        out.rejected_nonpositive_robust_ev =
+            rejected_nonpositive_robust_ev_.load(std::memory_order_relaxed);
+        for (std::size_t i = 0; i < out.reasons.size(); ++i) {
+            out.reasons[i] = decision_reasons_[i].load(std::memory_order_relaxed);
+        }
+        return out;
     }
 
     void seed_execution_snapshot(const ExecutionSnapshotUpdate& update) noexcept {
@@ -886,6 +908,15 @@ private:
         MakerDecision decision = lane.on_market_event(source_event, context, model);
         decision.latency.parse_ns = source_event.frame_parse_ns;
         decision.latency.book_ns = source_event.book_apply_ns;
+        decisions_.fetch_add(1, std::memory_order_relaxed);
+        const auto reason_index = static_cast<std::size_t>(decision.reason);
+        if (reason_index < decision_reasons_.size()) {
+            decision_reasons_[reason_index].fetch_add(1, std::memory_order_relaxed);
+        }
+        if (decision.reason == pm::v7::maker::DecisionReason::NoEconomicQuote
+            && decision.robust_ev <= model.min_robust_ev_per_share) {
+            rejected_nonpositive_robust_ev_.fetch_add(1, std::memory_order_relaxed);
+        }
         for (std::size_t i = 0; i < decision.intent_count; ++i) {
             StrategyIntent intent = decision.intents[i];
             // Safety controls must remain executable even after canonical lineage
@@ -895,6 +926,7 @@ private:
                 intent.exchange_event_ns = std::max<std::int64_t>(1, instrument.last_exchange_ns);
             }
             if (intent.type == IntentType::Quote) {
+                quote_intents_.fetch_add(1, std::memory_order_relaxed);
                 const double shares_requested = micro_shares(intent.quantity_microunits);
                 if (shares_requested + 1e-12 < min_order(market, instrument.yes != 0)) continue;
                 push_candidate(market, instrument.yes != 0, decision, intent,
@@ -1031,8 +1063,55 @@ private:
     pm::v7::SpscRing<ExecutionCommand, kExecutionCriticalCapacity> execution_critical_{};
     pm::v7::SpscRing<ExecutionCommand, kExecutionNormalCapacity> execution_normal_{};
     pm::v7::SpscRing<ExecutionSnapshotUpdate, kExecutionSnapshotCapacity> execution_snapshots_{};
+    std::array<std::atomic<std::uint64_t>, kDecisionReasonCount> decision_reasons_{};
+    std::atomic<std::uint64_t> decisions_{0};
+    std::atomic<std::uint64_t> quote_intents_{0};
+    std::atomic<std::uint64_t> rejected_nonpositive_robust_ev_{0};
     double starting_capital_fraction_ = 5.0;
 };
+
+void write_runtime_diagnostics(
+    const fs::path& run_root, std::string_view model_sha,
+    const std::vector<std::unique_ptr<ShardRuntime>>& shards) {
+    ShardDiagnostics total;
+    for (const auto& shard : shards) {
+        const auto value = shard->diagnostics();
+        total.feed.workers += value.feed.workers;
+        total.feed.connected_workers += value.feed.connected_workers;
+        total.feed.messages += value.feed.messages;
+        total.feed.reconnects += value.feed.reconnects;
+        total.feed.errors += value.feed.errors;
+        total.decisions += value.decisions;
+        total.quote_intents += value.quote_intents;
+        total.rejected_nonpositive_robust_ev += value.rejected_nonpositive_robust_ev;
+        for (std::size_t i = 0; i < total.reasons.size(); ++i) {
+            total.reasons[i] += value.reasons[i];
+        }
+    }
+    json::object reasons;
+    for (std::size_t i = 1; i < total.reasons.size(); ++i) {
+        reasons[decision_reason_name(static_cast<pm::v7::maker::DecisionReason>(i))] =
+            total.reasons[i];
+    }
+    json::object root;
+    root["schema"] = "polymarket_v7_maker_runtime_diagnostics_v1";
+    root["timestamp_ms"] = wall_ms();
+    root["paper_only"] = true;
+    root["authenticated_execution"] = false;
+    root["real_order_submission"] = false;
+    root["model_sha"] = model_sha;
+    root["feed_workers"] = total.feed.workers;
+    root["feed_connected_workers"] = total.feed.connected_workers;
+    root["feed_messages"] = total.feed.messages;
+    root["feed_reconnects"] = total.feed.reconnects;
+    root["feed_errors"] = total.feed.errors;
+    root["decisions"] = total.decisions;
+    root["quote_intents"] = total.quote_intents;
+    root["rejected_nonpositive_robust_ev"] = total.rejected_nonpositive_robust_ev;
+    root["reason_counts"] = std::move(reasons);
+    atomic_write(run_root / "micro_maker" / "runtime_diagnostics.json",
+                 json::serialize(root) + "\n");
+}
 
 class ExecutionCore final {
 public:
@@ -1877,6 +1956,7 @@ int main(int argc, char** argv) {
                 }
                 if (now - last_state_ms >= 1000) {
                     writer.write_state();
+                    write_runtime_diagnostics(options.run_root, options.model_sha, shards);
                     last_state_ms = now;
                 }
                 if (now - last_model_check_ms >= 2000) {

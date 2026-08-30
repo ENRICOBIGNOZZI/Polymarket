@@ -264,6 +264,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     hard = _json(run_root / "hard_arb" / "status.json")
     micro = _json(run_root / "micro_taker" / "status.json")
     maker = _json(run_root / "micro_maker" / "status.json")
+    maker_diagnostics = _json(run_root / "micro_maker" / "runtime_diagnostics.json")
     maker_selector = _json(run_root / "micro_maker" / "selector_status.json")
     external = _json(run_root / "external" / "status.json")
     osint = _json(run_root / "osint" / "status.json")
@@ -368,6 +369,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "hard": hard,
         "micro": micro,
         "maker": maker,
+        "maker_diagnostics": maker_diagnostics,
         "maker_selector": maker_selector,
         "external": external,
         "osint": osint,
@@ -416,6 +418,7 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     ages = snapshot["ages"]
     authority = snapshot["authority"]
     maker = snapshot.get("maker") if isinstance(snapshot.get("maker"), dict) else {}
+    maker_diagnostics = snapshot.get("maker_diagnostics") if isinstance(snapshot.get("maker_diagnostics"), dict) else {}
     selector = snapshot.get("maker_selector") if isinstance(snapshot.get("maker_selector"), dict) else {}
     external_fair = snapshot.get("external_fair") if isinstance(snapshot.get("external_fair"), dict) else {}
     if authority.get("valid") is not True: reasons.append("operator_authority_missing_or_invalid")
@@ -796,6 +799,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     market_open = snapshot.get("market_open") if isinstance(snapshot.get("market_open"), dict) else {}
     universe = snapshot.get("universe") if isinstance(snapshot.get("universe"), dict) else {}
     maker = snapshot.get("maker") if isinstance(snapshot.get("maker"), dict) else {}
+    maker_diagnostics = snapshot.get("maker_diagnostics") if isinstance(snapshot.get("maker_diagnostics"), dict) else {}
     selector = snapshot.get("maker_selector") if isinstance(snapshot.get("maker_selector"), dict) else {}
     def collector_fresh(status: dict[str, Any]) -> bool:
         try:
@@ -899,6 +903,14 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_maker_candidate_selected_markets", selector.get("candidate_selected_count")),
         _metric("polymarket_v7_maker_new_risk_frozen", 1 if maker.get("new_risk_frozen") is True else 0),
         _metric("polymarket_v7_maker_marking_complete", 1 if maker.get("marking_complete") is True else 0),
+        _metric("polymarket_v7_maker_feed_workers", maker_diagnostics.get("feed_workers")),
+        _metric("polymarket_v7_maker_feed_connected_workers", maker_diagnostics.get("feed_connected_workers")),
+        _metric("polymarket_v7_maker_feed_messages_total", maker_diagnostics.get("feed_messages")),
+        _metric("polymarket_v7_maker_feed_reconnects_total", maker_diagnostics.get("feed_reconnects")),
+        _metric("polymarket_v7_maker_feed_errors_total", maker_diagnostics.get("feed_errors")),
+        _metric("polymarket_v7_maker_decisions_total", maker_diagnostics.get("decisions")),
+        _metric("polymarket_v7_maker_quote_intents_total", maker_diagnostics.get("quote_intents")),
+        _metric("polymarket_v7_maker_rejected_nonpositive_robust_ev_total", maker_diagnostics.get("rejected_nonpositive_robust_ev")),
         _metric("polymarket_v7_maker_selector_info", 1 if selector_ready else 0, {
             "state": selector.get("state", "UNKNOWN"),
             "source": selector.get("source", "UNKNOWN"),
@@ -978,6 +990,8 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_execution_final_pnl_usd", _number(ledger_total.get("final_pnl"))),
         _metric("polymarket_execution_capital_hours", _number(ledger_total.get("capital_duration_ms")) / 3_600_000.0),
     ]
+    for reason, count in sorted((maker_diagnostics.get("reason_counts") or {}).items()):
+        lines.append(_metric("polymarket_v7_maker_decision_reason_total", count, {"reason": reason}))
     for tier, count in sorted((universe.get("tier_counts") or {}).items()):
         lines.append(_metric("polymarket_v7_universe_tier_markets", count, {"tier": tier}))
     for reason, count in sorted((universe.get("skipped_by_reason") or {}).items()):
