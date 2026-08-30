@@ -68,6 +68,22 @@ class V7MacosMonitoringOwnerTest(unittest.TestCase):
         self.assertIn("polymarket-v7-canonical-paper-economics", text)
         self.assertNotIn("funnel", text.lower())
 
+    def test_tailnet_control_plane_failure_defers_to_public_health_gate(self) -> None:
+        text = (ROOT / "ops/apply_v7_monitoring_config_macos.sh").read_text(encoding="utf-8")
+        function = text[
+            text.index("configure_tailnet_grafana() {"):
+            text.index("stop_stale_grafana_listener\n", text.index("configure_tailnet_grafana() {"))
+        ]
+        self.assertNotIn("exit 78", function)
+        self.assertGreaterEqual(function.count("return 78"), 5)
+        self.assertIn("if ! configure_tailnet_grafana; then", text)
+        self.assertIn("post-start public health gate", text)
+        self.assertIn(
+            '[[ -f "$APP_DIR/$rel" ]] || { echo "fatal: missing V7 monitoring asset: $rel" >&2; exit 78; }',
+            text,
+        )
+        self.assertIn("canonical Grafana port 3000 is owned by non-Grafana", text)
+
     def test_external_macos_monitoring_commands_are_bounded(self) -> None:
         text = (ROOT / "ops/apply_v7_monitoring_config_macos.sh").read_text(encoding="utf-8")
         self.assertIn('POLYMARKET_MONITORING_COMMAND_TIMEOUT_SECONDS:-15', text)

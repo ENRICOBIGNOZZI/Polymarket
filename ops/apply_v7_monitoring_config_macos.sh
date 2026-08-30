@@ -95,7 +95,7 @@ tailscale_admin() {
 configure_tailnet_grafana() {
   local ts actual_dns="" serve_status="" serve_log="" https_route="" http_route=""
   ts="$(find_tailscale || true)"
-  [[ -n "$ts" ]] || { echo "fatal: tailscale CLI not found; Grafana would remain loopback-only" >&2; exit 78; }
+  [[ -n "$ts" ]] || { echo "fatal: tailscale CLI not found; Grafana would remain loopback-only" >&2; return 78; }
 
   for _ in $(seq 1 3); do
     actual_dns="$(run_bounded "$ts" status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("Self",{}).get("DNSName", ""))' 2>/dev/null || true)"
@@ -112,7 +112,7 @@ configure_tailnet_grafana() {
   fi
   if [[ "$actual_dns" != "$TAILSCALE_FQDN" && "$actual_dns" != "$TAILSCALE_FQDN." ]]; then
     printf 'fatal: tailscale DNS mismatch expected=%s actual=%s\n' "$TAILSCALE_FQDN" "${actual_dns:-<empty>}" >&2
-    exit 78
+    return 78
   fi
 
   # Canonical browser route: HTTPS with Tailscale-managed TLS. Keep HTTP:80
@@ -130,13 +130,13 @@ configure_tailnet_grafana() {
       cat "$serve_log" >&2 || true
       rm -f "$serve_log"
       echo "fatal: failed to configure Tailscale HTTPS Serve for V7 Grafana" >&2
-      exit 78
+      return 78
     fi
     if ! tailscale_admin "$ts" serve --bg --http=80 localhost:3000 >>"$serve_log" 2>&1; then
       cat "$serve_log" >&2 || true
       rm -f "$serve_log"
       echo "fatal: failed to configure Tailscale HTTP compatibility Serve for V7 Grafana" >&2
-      exit 78
+      return 78
     fi
     rm -f "$serve_log"
     serve_status="$(run_bounded "$ts" serve status 2>&1 || true)"
@@ -146,7 +146,7 @@ configure_tailnet_grafana() {
      ! grep -Fq "$http_route" <<<"$serve_status" ||
      ! grep -Fq "localhost:3000" <<<"$serve_status"; then
     printf 'fatal: Tailscale Serve routes incomplete for FQDN %s\n' "$TAILSCALE_FQDN" >&2
-    exit 78
+    return 78
   fi
 }
 
@@ -265,7 +265,9 @@ assert source.count(marker) == 1
 Path(sys.argv[2]).write_text(source.replace(marker, sys.argv[3]), encoding='utf-8')
 PY
 
-configure_tailnet_grafana
+if ! configure_tailnet_grafana; then
+  echo "warning: Tailscale Serve mutation did not converge; preserving its existing route for the post-start public health gate" >&2
+fi
 
 printf 'v7_monitoring_configured=true\n'
 printf 'dashboard_uid=%s\n' "$DASHBOARD_UID"

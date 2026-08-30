@@ -239,11 +239,30 @@ class V7CutoverUpdaterTest(unittest.TestCase):
             "grafana_health",
             "grafana_search",
             "grafana_dashboard",
+            "grafana_tailnet_health",
+            "grafana_tailnet_dashboard",
             "grafana-v7.log",
             "prometheus-v7.log",
             "monitoring-exporter.log",
         ):
             self.assertIn(required, text)
+
+    def test_runtime_health_requires_canonical_public_grafana_route(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        function = text[text.index("runtime_health(){"):text.index("http_diagnostic(){")]
+        self.assertIn(
+            'GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-https://mamma-portfolio.tail1bae85.ts.net}"',
+            text,
+        )
+        self.assertIn(
+            '[[ "$GRAFANA_URL" =~ ^https://[A-Za-z0-9.-]+$ ]]',
+            text,
+        )
+        self.assertIn('curl -fsS --max-time 5 "$GRAFANA_URL/api/health"', function)
+        self.assertIn(
+            'curl -fsS --max-time 5 "$GRAFANA_URL/api/dashboards/uid/$uid"',
+            function,
+        )
 
     def test_runtime_health_fails_explicitly_inside_conditional_caller(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")

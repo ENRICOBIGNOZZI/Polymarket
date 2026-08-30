@@ -6,6 +6,7 @@ EXPECTED_SHA="${EXPECTED_DEPLOY_SHA:-${POLYMARKET_EXPECTED_SHA:-}}"
 DEPLOY_REF="${POLYMARKET_DEPLOY_REF:-main}"
 CACHE_DIR="${POLYMARKET_DEPLOY_CACHE:-$HOME/.cache/polymarket-v7-deploy}"
 STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
+GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-https://mamma-portfolio.tail1bae85.ts.net}"
 LOCK_DIR="$CACHE_DIR/update-v7.lock"
 STATUS_FILE="$STATE_DIR/v7_deploy_status.env"
 # External Fair must observe an exact 5-minute Chainlink boundary causally.
@@ -28,6 +29,7 @@ fail(){ printf '[v7-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$POSITION_DRAIN_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_POSITION_DRAIN_ATTEMPTS must be positive"
 [[ "$LOCK_STALE_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_LOCK_STALE_SECONDS must be positive"
 [[ "$LOCK_ORPHAN_GRACE_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "POLYMARKET_DEPLOY_ORPHAN_GRACE_SECONDS must be positive"
+[[ "$GRAFANA_URL" =~ ^https://[A-Za-z0-9.-]+$ ]] || fail "POLYMARKET_GRAFANA_URL must be a canonical HTTPS origin"
 [[ -d "$APP_DIR/.git" ]] || fail "$APP_DIR is not a git checkout"
 
 mkdir -p "$CACHE_DIR" "$STATE_DIR"
@@ -942,6 +944,8 @@ PY
   curl -fsS http://127.0.0.1:9090/-/ready >/dev/null || return 1
   curl -fsS http://127.0.0.1:3000/api/health >/dev/null || return 1
   curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$uid" >/dev/null || return 1
+  curl -fsS --max-time 5 "$GRAFANA_URL/api/health" >/dev/null || return 1
+  curl -fsS --max-time 5 "$GRAFANA_URL/api/dashboards/uid/$uid" >/dev/null || return 1
 }
 
 http_diagnostic(){
@@ -964,6 +968,8 @@ runtime_health_diagnostics(){
   http_diagnostic grafana_health http://127.0.0.1:3000/api/health
   http_diagnostic grafana_search http://127.0.0.1:3000/api/search
   http_diagnostic grafana_dashboard "http://127.0.0.1:3000/api/dashboards/uid/$uid"
+  http_diagnostic grafana_tailnet_health "$GRAFANA_URL/api/health"
+  http_diagnostic grafana_tailnet_dashboard "$GRAFANA_URL/api/dashboards/uid/$uid"
   printf '%s\n' '--- grafana-v7.log ---' >&2
   tail -n 160 "$run_root/grafana-v7.log" >&2 2>/dev/null || true
   printf '%s\n' '--- prometheus-v7.log ---' >&2
