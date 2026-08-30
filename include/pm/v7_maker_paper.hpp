@@ -144,6 +144,13 @@ public:
     [[nodiscard]] PaperMakerResult on_public_trade(
         const PublicTradePrint& trade) noexcept;
 
+    // Control-plane drain primitive.  A cohort rotation cannot depend on a
+    // future book update arriving for every quiet market: explicitly request
+    // cancellation of every locally active PAPER order, then let
+    // advance_time() acknowledge those cancels after the configured latency.
+    [[nodiscard]] PaperMakerResult cancel_all(
+        std::int64_t monotonic_ns) noexcept;
+
     [[nodiscard]] PaperMakerResult advance_time(
         std::int64_t monotonic_ns) noexcept;
 

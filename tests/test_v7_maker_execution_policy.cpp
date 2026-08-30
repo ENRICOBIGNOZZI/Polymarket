@@ -140,6 +140,18 @@ void test_partial_fill_preserves_total_capital_until_cancel_effective() {
     assert(snap.total_exposure_microdollars == 240'000);
 }
 
+void test_control_plane_cancel_all_releases_buy_reservations() {
+    auto execution = policy();
+    pm::v7::SleeveCapitalAccount capital(capital_limits());
+    assert(execution.process(
+        quote_plan(205, kYes, pm::v7::Side::Buy, 48, 2'000'000), capital).accepted);
+    assert(capital.snapshot().order_reserved_microdollars == 960'000);
+    assert(execution.cancel_all(kMarket, 1'200'000'000LL, capital).accepted);
+    assert(capital.snapshot().order_reserved_microdollars == 960'000);
+    assert(execution.advance_time(kMarket, 1'400'000'000LL, capital).accepted);
+    assert(capital.snapshot().order_reserved_microdollars == 0);
+}
+
 void test_yes_no_buy_cycle_merge_releases_inventory_capital() {
     auto execution = policy();
     pm::v7::SleeveCapitalAccount capital(capital_limits());
@@ -229,6 +241,7 @@ void test_duplicate_buy_plan_is_noop_not_double_reserved() {
 int main() {
     test_full_buy_fill_moves_reservation_to_inventory();
     test_partial_fill_preserves_total_capital_until_cancel_effective();
+    test_control_plane_cancel_all_releases_buy_reservations();
     test_yes_no_buy_cycle_merge_releases_inventory_capital();
     test_split_then_sell_releases_sold_leg_cost_basis();
     test_unobservable_queue_fails_before_capital_or_paper_mutation();

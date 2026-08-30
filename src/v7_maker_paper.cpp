@@ -659,6 +659,22 @@ PaperMakerResult MakerPaperMarketEngine::advance_time(
     return result;
 }
 
+PaperMakerResult MakerPaperMarketEngine::cancel_all(
+    std::int64_t monotonic_ns) noexcept {
+    PaperMakerResult result;
+    if (monotonic_ns <= 0 || !policy_.valid()) {
+        result.rejected = 1;
+        return result;
+    }
+    for (auto& slot : slots_) {
+        if (!slot.occupied || !queue_active(slot.oms.record().state)) continue;
+        request_cancel(slot, monotonic_ns, result);
+        if (result.invariant_violation) break;
+    }
+    refresh_inventory_derived();
+    return result;
+}
+
 QuoteSnapshot MakerPaperMarketEngine::quote_snapshot(
     std::uint64_t instrument_handle) const noexcept {
     QuoteSnapshot out;

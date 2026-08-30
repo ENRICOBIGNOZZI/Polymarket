@@ -437,14 +437,25 @@ class CohortSupervisor:
                 newer_than_ms=requested_ms, require_frozen=True,
             ):
                 latest = read_json(self.candidate)
-                validate_selection(latest, self.args.model_sha)
-                if membership_sha256(latest) != target_membership:
+                try:
+                    validate_selection(latest, self.args.model_sha)
+                except ValueError:
                     if self.flow_pause_latched:
                         self.write_flow_pause_drain()
                     else:
                         self.drain.unlink(missing_ok=True)
                     self.reset_pending_confirmation()
-                    self.write_status("PENDING_CONFIRMATION", reason="candidate_changed_during_drain")
+                    self.write_status("PENDING_CONFIRMATION", reason="candidate_invalid_during_drain")
+                    return
+                # Recent-flow membership is expected to move while the old
+                # cohort drains.  Once the PAPER engine proves frozen and flat,
+                # atomically hand off to the newest valid non-degraded cohort
+                # instead of releasing the freeze and reseeding the old one.
+                # The 300-second post-handoff cooldown bounds turnover.
+                if latest.get("degraded") is True:
+                    self.drain.unlink(missing_ok=True)
+                    self.reset_pending_confirmation()
+                    self.write_status("PENDING_CONFIRMATION", reason="candidate_degraded_during_drain")
                     return
                 self.stop_cohort()
                 # Re-read after the maker's final state write. A late PAPER fill

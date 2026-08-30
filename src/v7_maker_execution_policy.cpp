@@ -360,6 +360,31 @@ MakerExecutionResult MakerPaperExecutionPolicy::advance_time(
     return out;
 }
 
+MakerExecutionResult MakerPaperExecutionPolicy::cancel_all(
+    std::uint64_t market_handle,
+    std::int64_t monotonic_ns,
+    SleeveCapitalAccount& capital) noexcept {
+    MakerExecutionResult out;
+    auto* slot = market(market_handle);
+    if (slot == nullptr) {
+        out.reason = MakerExecutionReason::UnknownMarket;
+        return out;
+    }
+    out.paper = slot->engine->cancel_all(monotonic_ns);
+    if (out.paper.rejected || out.paper.invariant_violation) {
+        out.reason = MakerExecutionReason::PaperRejected;
+        return out;
+    }
+    if (!process_paper_events(market_handle, out.paper, capital)) {
+        out.reason = MakerExecutionReason::CapitalInvariant;
+        out.capital_invariant_violation = 1;
+        return out;
+    }
+    out.reason = MakerExecutionReason::Applied;
+    out.accepted = 1;
+    return out;
+}
+
 MakerExecutionResult MakerPaperExecutionPolicy::split_complete_sets(
     std::uint64_t market_handle,
     std::int64_t microunits,

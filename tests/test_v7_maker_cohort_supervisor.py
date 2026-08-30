@@ -176,6 +176,41 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             )
             self.assertFalse(supervisor.drain.exists())
 
+    def test_flat_handoff_uses_latest_valid_candidate_during_flow_churn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_root = root / "run"
+            selection_path = run_root / "micro_maker/reward_selection.json"
+            candidate_path = run_root / "micro_maker/reward_selection_candidate.json"
+            current = selection("market-1")
+            requested = selection("market-2")
+            requested["markets"][0].update({
+                "condition_id": "condition-2", "yes_token": "yes-2", "no_token": "no-2",
+            })
+            latest = selection("market-3")
+            latest["timestamp_ms"] = 2_000
+            latest["markets"][0].update({
+                "condition_id": "condition-3", "yes_token": "yes-3", "no_token": "no-3",
+            })
+            atomic_json(selection_path, current)
+            atomic_json(candidate_path, latest)
+            atomic_json(run_root / "micro_maker/state.json", state(timestamp_ms=2_000))
+            supervisor = CohortSupervisor(self.supervisor_args(
+                run_root, selection_path, candidate_path
+            ))
+            calls: list[str] = []
+            supervisor.cohort_healthy = lambda: True  # type: ignore[method-assign]
+            supervisor.stop_cohort = lambda: calls.append("stop")  # type: ignore[method-assign]
+            supervisor.start_cohort = lambda: calls.append("start")  # type: ignore[method-assign]
+            with patch("v7_maker_cohort_supervisor.time.time_ns", return_value=1_000_000_000):
+                supervisor.rotate_if_safe(requested)
+            self.assertEqual(calls, ["stop", "start"])
+            self.assertEqual(supervisor.rotation_count, 1)
+            self.assertEqual(
+                membership_sha256(read_json(selection_path)), membership_sha256(latest)
+            )
+            self.assertFalse(supervisor.drain.exists())
+
     def test_candidate_confirmation_counts_distinct_generations_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -59,6 +59,11 @@ public:
         std::int64_t monotonic_ns,
         SleeveCapitalAccount& capital) noexcept;
 
+    [[nodiscard]] MakerExecutionResult cancel_all(
+        std::uint64_t market_handle,
+        std::int64_t monotonic_ns,
+        SleeveCapitalAccount& capital) noexcept;
+
     [[nodiscard]] MakerExecutionResult split_complete_sets(
         std::uint64_t market_handle,
         std::int64_t microunits,

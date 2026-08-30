@@ -194,6 +194,24 @@ void test_cancel_pending_can_fill_until_effective_but_not_after() {
     assert(engine.active_order_count() == 0);
 }
 
+void test_control_plane_cancel_all_drains_quiet_market_without_book_update() {
+    pm::v7::maker::PaperMakerPolicy policy;
+    policy.cancel_latency_ns = 100'000'000LL;
+    pm::v7::maker::MakerPaperMarketEngine engine(kMarket, kYes, kNo, policy);
+    assert(engine.apply_intent(
+        quote(1, kYes, pm::v7::Side::Buy, 48, 2'000'000,
+              1'000'000'000LL, 10'000'000'000LL), 0, 100).applied);
+    assert(engine.apply_intent(
+        quote(2, kNo, pm::v7::Side::Buy, 49, 2'000'000,
+              1'000'000'001LL, 10'000'000'001LL), 0, 100).applied);
+    const auto requested = engine.cancel_all(1'200'000'000LL);
+    assert(requested.event_count == 2);
+    assert(engine.active_order_count() == 2);
+    const auto advanced = engine.advance_time(1'400'000'000LL);
+    assert(advanced.event_count == 2);
+    assert(engine.active_order_count() == 0);
+}
+
 void test_yes_no_buys_merge_complete_set_and_realize_trading_pnl() {
     pm::v7::maker::MakerPaperMarketEngine engine(kMarket, kYes, kNo);
     assert(engine.apply_intent(
@@ -336,6 +354,7 @@ int main() {
     test_public_print_is_idempotent();
     test_public_trade_rejection_funnel_is_explicit();
     test_cancel_pending_can_fill_until_effective_but_not_after();
+    test_control_plane_cancel_all_drains_quiet_market_without_book_update();
     test_yes_no_buys_merge_complete_set_and_realize_trading_pnl();
     test_merge_does_not_consume_inventory_reserved_by_live_sell();
     test_market_kill_cancels_both_yes_and_no_quotes();

@@ -1737,7 +1737,7 @@ public:
         for (std::size_t handle = 1; handle < markets_.size(); ++handle) {
             const auto* market = markets_[handle];
             if (market == nullptr) continue;
-            auto result = policy_.advance_time(handle, now_ns, capital_);
+            auto cancellation = policy_.cancel_all(handle, now_ns, capital_);
             ExecutionContext context;
             context.market_handle = handle;
             context.event_handle = market->event_handle;
@@ -1746,6 +1746,12 @@ public:
             context.receive_monotonic_ns = now_ns;
             context.tick_size_e4 = market->yes_tick_e4;
             context.outcome_yes = 1;
+            if (cancellation.paper.event_count > 0) emit(context, cancellation.paper);
+            if (cancellation.capital_invariant_violation
+                || cancellation.paper.invariant_violation) {
+                return false;
+            }
+            auto result = policy_.advance_time(handle, now_ns, capital_);
             if (result.paper.event_count > 0) emit(context, result.paper);
             if (result.capital_invariant_violation || result.paper.invariant_violation) {
                 return false;
