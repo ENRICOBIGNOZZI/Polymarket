@@ -16,6 +16,7 @@ from v7_maker_cohort_supervisor import (  # noqa: E402
     atomic_json,
     flat_state,
     fresh_flow_eligible,
+    inventory_drainable_state,
     inventory_flat_state,
     membership_sha256,
     read_json,
@@ -110,6 +111,26 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         held["inventory"]["market-1"]["yes_shares"] = 1.0
         self.assertFalse(flat_state(held, SHA))
 
+        seeded = state(new_risk_frozen=False)
+        seeded["inventory"]["market-1"].update({
+            "yes_shares": 10.0,
+            "no_shares": 10.0,
+            "yes_cost": 5.0,
+            "no_cost": 5.0,
+            "yes_reserved_sell_shares": 0.0,
+            "no_reserved_sell_shares": 0.0,
+            "pending_split_shares": 0.0,
+            "pending_merge_shares": 0.0,
+        })
+        self.assertTrue(inventory_drainable_state(seeded, SHA))
+        seeded["inventory"]["market-1"]["yes_reserved_sell_shares"] = 2.0
+        self.assertTrue(inventory_drainable_state(seeded, SHA))
+        seeded["inventory"]["market-1"]["pending_merge_shares"] = 1.0
+        self.assertFalse(inventory_drainable_state(seeded, SHA))
+        seeded["inventory"]["market-1"]["pending_merge_shares"] = 0.0
+        seeded["inventory"]["market-1"]["yes_shares"] = 9.0
+        self.assertFalse(inventory_drainable_state(seeded, SHA))
+
     def test_runtime_contract_uses_one_flat_handoff_cohort(self) -> None:
         loop = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
         runtime = (ROOT / "src" / "v7_market_maker_runtime.cpp").read_text(encoding="utf-8")
@@ -169,7 +190,7 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             self.assertTrue(supervisor.observe_candidate_generation(candidate))
             self.assertEqual(supervisor.pending_confirmations, 2)
 
-    def test_candidate_oscillation_resets_confirmation_and_cooldown(self) -> None:
+    def test_distinct_noisy_candidate_generations_confirm_rotation_demand(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             supervisor = CohortSupervisor(self.supervisor_args(
@@ -177,12 +198,13 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             ))
             first = selection("market-2")
             second = selection("market-3")
+            second["timestamp_ms"] = 2_000
             second["markets"][0].update({
                 "condition_id": "condition-3", "yes_token": "yes-3", "no_token": "no-3",
             })
             self.assertFalse(supervisor.observe_candidate_generation(first))
-            self.assertFalse(supervisor.observe_candidate_generation(second))
-            self.assertEqual(supervisor.pending_confirmations, 1)
+            self.assertTrue(supervisor.observe_candidate_generation(second))
+            self.assertEqual(supervisor.pending_confirmations, 2)
             supervisor.last_rotation_ms = 10_000
             self.assertEqual(supervisor.rotation_cooldown_remaining_seconds(70_000), 240.0)
 

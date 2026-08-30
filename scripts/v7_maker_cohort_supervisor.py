@@ -130,6 +130,56 @@ def inventory_flat_state(
     return True
 
 
+def inventory_drainable_state(
+    value: dict[str, Any],
+    model_sha: str,
+    *,
+    newer_than_ms: int = 0,
+) -> bool:
+    """Accept only inventory that the frozen PAPER engine can merge to cash.
+
+    The maker intentionally seeds balanced YES/NO complete sets. Requiring zero
+    inventory before requesting a drain therefore makes every cohort rotation
+    impossible. Balanced complete sets are safe to admit to the drain; live
+    reservations are cancelled there, while in-flight split/merge accounting
+    still fails closed. The post-drain handoff requires ``flat_state`` and
+    proves that the merge completed before any process is stopped.
+    """
+    if (
+        value.get("schema") != "polymarket_v7_professional_maker_state_v2"
+        or value.get("paper_only") is not True
+        or value.get("authenticated_execution") is not False
+        or value.get("real_order_submission") is not False
+        or value.get("model_sha") != model_sha
+        or int(value.get("timestamp_ms") or 0) < newer_than_ms
+    ):
+        return False
+    inventory = value.get("inventory")
+    if not isinstance(inventory, dict):
+        return False
+    for row in inventory.values():
+        if not isinstance(row, dict):
+            return False
+        try:
+            yes = float(row.get("yes_shares") or 0.0)
+            no = float(row.get("no_shares") or 0.0)
+            yes_cost = float(row.get("yes_cost") or 0.0)
+            no_cost = float(row.get("no_cost") or 0.0)
+            pending = sum(abs(float(row.get(key) or 0.0)) for key in (
+                "pending_split_shares", "pending_merge_shares",
+            ))
+        except (TypeError, ValueError):
+            return False
+        if (
+            yes < -1e-9 or no < -1e-9
+            or yes_cost < -1e-12 or no_cost < -1e-12
+            or abs(yes - no) > 1e-9
+            or pending > 1e-9
+        ):
+            return False
+    return True
+
+
 def flat_state(
     value: dict[str, Any],
     model_sha: str,
@@ -174,24 +224,23 @@ class CohortSupervisor:
         self.pending_confirmations = 0
 
     def observe_candidate_generation(self, candidate: dict[str, Any]) -> bool:
-        """Require the same membership in distinct selector generations.
+        """Confirm persistent rotation demand in distinct selector generations.
 
-        Poll repetitions never count as confirmations. This prevents a noisy
-        one-minute flow ranking from repeatedly cancelling an otherwise healthy
-        maker cohort and forfeiting its queue position.
+        Exact membership cannot be stable for a recent-flow ranker: a single
+        print can replace the last selected market every minute. Poll
+        repetitions still do not count, and a return to runtime membership
+        resets confirmation in the caller. Cooldown plus drain-time
+        revalidation bound queue churn.
         """
         membership = membership_sha256(candidate)
         generation_ms = int(candidate.get("timestamp_ms") or 0)
         if generation_ms <= 0:
             self.reset_pending_confirmation()
             return False
-        if membership != self.pending_membership_sha256:
+        if generation_ms > self.pending_last_generation_ms:
             self.pending_membership_sha256 = membership
             self.pending_last_generation_ms = generation_ms
-            self.pending_confirmations = 1
-        elif generation_ms > self.pending_last_generation_ms:
-            self.pending_last_generation_ms = generation_ms
-            self.pending_confirmations += 1
+            self.pending_confirmations = max(1, self.pending_confirmations + 1)
         return self.pending_confirmations >= self.args.candidate_confirmations
 
     def rotation_cooldown_remaining_seconds(self, now_ms: int | None = None) -> float:
@@ -353,7 +402,7 @@ class CohortSupervisor:
     def rotate_if_safe(self, candidate: dict[str, Any]) -> None:
         target_membership = membership_sha256(candidate)
         now_ms = time.time_ns() // 1_000_000
-        if not inventory_flat_state(
+        if not inventory_drainable_state(
             read_json(self.state), self.args.model_sha,
             newer_than_ms=now_ms - 5_000,
         ):
