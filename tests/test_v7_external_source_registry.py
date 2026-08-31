@@ -33,6 +33,14 @@ class ExternalSourceRegistryTest(unittest.TestCase):
         copy = json.loads(json.dumps(value))
         self.assertEqual(registry.validate(value)["registry_sha256"], registry.validate(copy)["registry_sha256"])
 
+    def test_launcher_uses_the_registry_and_single_compatibility_boundary(self) -> None:
+        launcher = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+        self.assertIn("v7_external_source_registry.py", launcher)
+        for canonical, aliases in registry.load(ROOT / "config/v7_external_source_registry.json")["environment_compatibility"].items():
+            self.assertIn(canonical, launcher)
+            for alias in aliases:
+                self.assertIn(alias, launcher)
+
 
 if __name__ == "__main__":
     unittest.main()
