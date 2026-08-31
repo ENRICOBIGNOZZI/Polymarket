@@ -127,6 +127,79 @@ def fresh_flow_eligible(value: dict[str, Any]) -> bool:
     )
 
 
+def degraded_fallback_control_refresh_eligible(
+    runtime: dict[str, Any], candidate: dict[str, Any]
+) -> bool:
+    """Allow only an exact, non-escalating cold-start cell handoff.
+
+    A quiet/stale public trade feed makes the selector generation degraded, but
+    it does not make its deterministic no-fill evidence stale.  The fallback
+    selector deliberately keeps the same warm observation cohort and moves one
+    bounded JOIN/YES/BUY control cell to the least-attempted exact cell.  Refuse
+    every other degraded refresh so a fallback can neither replace membership
+    nor acquire normal quote or inventory-seed authority.
+    """
+    if (
+        runtime.get("source") != "adaptive_universe_fallback"
+        or candidate.get("source") != "adaptive_universe_fallback"
+        or runtime.get("degraded") is not True
+        or candidate.get("degraded") is not True
+        or candidate.get("selection_mode") != "FLOW_FILLABILITY_FALLBACK"
+    ):
+        return False
+    try:
+        if membership_sha256(runtime) != membership_sha256(candidate):
+            return False
+    except (KeyError, TypeError, ValueError):
+        return False
+
+    authorized = 0
+    for row in candidate.get("markets", []):
+        if not isinstance(row, dict):
+            return False
+        cells = row.get("authorized_execution_cells")
+        if not isinstance(cells, list):
+            return False
+        if bool(row.get("inventory_seed_authorized")):
+            return False
+        if row.get("quote_opportunities") not in (None, []):
+            return False
+        if int(row.get("authorized_execution_cell_count") or 0) != len(cells):
+            return False
+        if not cells:
+            if bool(row.get("control_exploration_authorized")):
+                return False
+            continue
+        if (
+            len(cells) != 1
+            or row.get("control_exploration_authorized") is not True
+            or row.get("execution_role") != "COLD_START_CONTROL"
+        ):
+            return False
+        cell = cells[0]
+        if (
+            not isinstance(cell, dict)
+            or str(cell.get("token_id") or "") != str(row.get("yes_token") or "")
+            or str(cell.get("outcome") or "").upper() != "YES"
+            or str(cell.get("action") or "").upper() != "JOIN"
+            or str(cell.get("quote_side") or "").upper() != "BUY"
+            or cell.get("authority_basis") != "COLD_START_CONTROL"
+        ):
+            return False
+        try:
+            probabilities = (
+                float(cell.get("projected_flow_reach_probability") or 0.0),
+                float(cell.get("projected_queue_depletion_probability") or 0.0),
+                float(cell.get("projected_fill_probability") or 0.0),
+            )
+        except (TypeError, ValueError):
+            return False
+        if any(abs(probability) > 1e-12 for probability in probabilities):
+            return False
+        authorized += 1
+    return authorized == 1
+
+
 def projected_cells(
     value: dict[str, Any], *, market_ids: set[str] | None = None,
     exclude_market_ids: set[str] | None = None,
@@ -604,10 +677,13 @@ class CohortSupervisor:
             validate_selection(candidate, self.args.model_sha)
         except ValueError:
             return False
+        if int(candidate.get("timestamp_ms") or 0) <= int(
+            runtime.get("timestamp_ms") or 0
+        ):
+            return False
         if (
             candidate.get("degraded") is True
-            or int(candidate.get("timestamp_ms") or 0)
-                <= int(runtime.get("timestamp_ms") or 0)
+            and not degraded_fallback_control_refresh_eligible(runtime, candidate)
         ):
             return False
         runtime_rows = {

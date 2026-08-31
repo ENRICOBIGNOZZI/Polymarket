@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from v7_maker_cohort_supervisor import (  # noqa: E402
     CohortSupervisor,
     atomic_json,
+    degraded_fallback_control_refresh_eligible,
     directional_inventory_markets,
     flat_state,
     fresh_flow_eligible,
@@ -440,6 +441,102 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             self.assertEqual(supervisor.rotation_count, 0)
             self.assertEqual(supervisor.cell_authority_refresh_count, 1)
             self.assertFalse(supervisor.refresh_same_membership_authority())
+
+    def test_degraded_fallback_rotates_one_exact_control_cell_in_place(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selection_path = root / "selection.json"
+            candidate_path = root / "candidate.json"
+            current = selection("first")
+            current.update({
+                "source": "adaptive_universe_fallback",
+                "degraded": True,
+                "selection_mode": "FLOW_FILLABILITY_FALLBACK",
+            })
+            current["markets"][0].update({
+                "execution_role": "COLD_START_CONTROL",
+                "control_exploration_authorized": True,
+                "authorized_execution_cell_count": 1,
+                "quote_opportunities": [],
+            })
+            current["markets"][0]["authorized_execution_cells"][0].update({
+                "outcome": "YES",
+                "authority_basis": "COLD_START_CONTROL",
+                "projected_flow_reach_probability": 0.0,
+                "projected_queue_depletion_probability": 0.0,
+                "projected_fill_probability": 0.0,
+            })
+            reserve = json.loads(json.dumps(current["markets"][0]))
+            reserve.update({
+                "market_id": "second",
+                "condition_id": "condition-2",
+                "yes_token": "yes-2",
+                "no_token": "no-2",
+                "execution_role": "WARM_FALLBACK_OBSERVATION",
+                "control_exploration_authorized": False,
+                "authorized_execution_cells": [],
+                "authorized_execution_cell_count": 0,
+            })
+            current["markets"].append(reserve)
+            current["selected_count"] = 2
+
+            candidate = json.loads(json.dumps(current))
+            candidate["timestamp_ms"] = 2_000
+            candidate["markets"][0].update({
+                "execution_role": "WARM_FALLBACK_OBSERVATION",
+                "control_exploration_authorized": False,
+                "authorized_execution_cells": [],
+                "authorized_execution_cell_count": 0,
+            })
+            candidate["markets"][1].update({
+                "execution_role": "COLD_START_CONTROL",
+                "control_exploration_authorized": True,
+                "authorized_execution_cells": [{
+                    "token_id": "yes-2",
+                    "outcome": "YES",
+                    "action": "JOIN",
+                    "quote_side": "BUY",
+                    "authority_basis": "COLD_START_CONTROL",
+                    "projected_flow_reach_probability": 0.0,
+                    "projected_queue_depletion_probability": 0.0,
+                    "projected_fill_probability": 0.0,
+                }],
+                "authorized_execution_cell_count": 1,
+            })
+            atomic_json(selection_path, current)
+            atomic_json(candidate_path, candidate)
+            supervisor = CohortSupervisor(self.supervisor_args(
+                root, selection_path, candidate_path
+            ))
+
+            self.assertTrue(degraded_fallback_control_refresh_eligible(
+                current, candidate
+            ))
+            self.assertTrue(supervisor.refresh_same_membership_authority())
+            refreshed = read_json(selection_path)
+            rows = {row["market_id"]: row for row in refreshed["markets"]}
+            self.assertEqual(rows["first"]["authorized_execution_cells"], [])
+            self.assertEqual(
+                rows["second"]["authorized_execution_cells"][0]["token_id"],
+                "yes-2",
+            )
+            self.assertEqual(supervisor.cell_authority_refresh_count, 1)
+
+            unsafe = json.loads(json.dumps(candidate))
+            unsafe["markets"][1]["authorized_execution_cells"][0][
+                "projected_fill_probability"
+            ] = 0.01
+            self.assertFalse(degraded_fallback_control_refresh_eligible(
+                current, unsafe
+            ))
+
+            fresh_runtime = json.loads(json.dumps(current))
+            fresh_runtime.update({
+                "source": "adaptive_universe_recent_flow", "degraded": False,
+            })
+            self.assertFalse(degraded_fallback_control_refresh_eligible(
+                fresh_runtime, candidate
+            ))
 
     def test_overlapping_warm_market_refreshes_without_membership_restart(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
