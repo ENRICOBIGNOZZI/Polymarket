@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -205,11 +206,22 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
             connected_.store(false, std::memory_order_release);
             healthy_.store(false, std::memory_order_release);
             if (stop.stop_requested()) return;
+        } catch (const std::exception& error) {
+            connected_.store(false, std::memory_order_release);
+            healthy_.store(false, std::memory_order_release);
+            transport_failures_.fetch_add(1, std::memory_order_relaxed);
+            if (ingress_ != nullptr) ingress_->mark_disconnected(epoch);
+            std::cerr << "v7 external websocket transport failure venue="
+                      << static_cast<unsigned>(spec_.venue) << " reason=" << error.what() << '\n';
+            ++consecutive_failures;
+            bounded_backoff(stop, consecutive_failures);
         } catch (...) {
             connected_.store(false, std::memory_order_release);
             healthy_.store(false, std::memory_order_release);
             transport_failures_.fetch_add(1, std::memory_order_relaxed);
             if (ingress_ != nullptr) ingress_->mark_disconnected(epoch);
+            std::cerr << "v7 external websocket transport failure venue="
+                      << static_cast<unsigned>(spec_.venue) << " reason=non_standard_exception\n";
             ++consecutive_failures;
             bounded_backoff(stop, consecutive_failures);
         }
