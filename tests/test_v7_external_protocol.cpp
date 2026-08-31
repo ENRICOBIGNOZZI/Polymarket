@@ -74,6 +74,25 @@ int main() {
     assert(output[0].event_type == ExternalEventType::Trade);
     assert(output[0].trade_side == -1);
 
+    const auto deribit_ticker = decode_external_venue_frame(
+        VenueId::Deribit, 1, 40, 1'055, 2'055,
+        R"({"jsonrpc":"2.0","method":"subscription","params":{"channel":"ticker.BTC-PERPETUAL.100ms","data":{"timestamp":1770000000300,"best_bid_price":65003.0,"best_bid_amount":20,"best_ask_price":65003.5,"best_ask_amount":30}}})",
+        output);
+    assert(deribit_ticker.invalid_frame == 0);
+    assert(deribit_ticker.output_count == 1);
+    assert(output[0].venue == VenueId::Deribit);
+    assert(output[0].source_sequence == 1770000000300ULL);
+    assert(output[0].exchange_event_ns == 1770000000300000000LL);
+
+    const auto deribit_trade = decode_external_venue_frame(
+        VenueId::Deribit, 1, 40, 1'057, 2'057,
+        R"({"jsonrpc":"2.0","method":"subscription","params":{"channel":"trades.BTC-PERPETUAL.100ms","data":[{"trade_seq":88,"timestamp":1770000000310,"price":65003.2,"amount":10,"direction":"buy"}]}})",
+        output);
+    assert(deribit_trade.invalid_frame == 0);
+    assert(deribit_trade.output_count == 1);
+    assert(output[0].event_type == ExternalEventType::Trade);
+    assert(output[0].trade_side == 1 && output[0].source_sequence == 88);
+
     std::array<ExternalVenueEvent, 0> none{};
     const auto overflow = decode_external_venue_frame(
         VenueId::BinanceSpot, 1, 10, 1'060, 2'060,

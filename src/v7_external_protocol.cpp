@@ -420,6 +420,80 @@ void decode_bybit(const json::object& root, std::uint64_t asset_handle,
     ++result.ignored_events;
 }
 
+void decode_deribit(const json::object& root, std::uint64_t asset_handle,
+                    std::uint64_t epoch, std::int64_t receive_ns,
+                    std::int64_t wall_ns, ExternalDecodeResult& result,
+                    std::span<ExternalVenueEvent> output) noexcept {
+    const auto method = text_of(find_value(root, "method"));
+    const auto* params = find_value(root, "params");
+    if (!ieq(method, "subscription") || params == nullptr || !params->is_object()) {
+        ++result.ignored_events;
+        return;
+    }
+    const auto& parameter = params->as_object();
+    const auto channel = text_of(find_value(parameter, "channel"));
+    const auto* data = find_value(parameter, "data");
+    if (channel.starts_with("ticker.BTC-PERPETUAL.") && data != nullptr && data->is_object()) {
+        ++result.recognized_events;
+        const auto& ticker = data->as_object();
+        ExternalVenueEvent event;
+        event.asset_handle = asset_handle;
+        event.connection_epoch = epoch;
+        event.venue = VenueId::Deribit;
+        event.event_type = ExternalEventType::BookTop;
+        event.local_receive_monotonic_ns = receive_ns;
+        event.local_receive_wall_ns = wall_ns;
+        std::int64_t timestamp_ms = 0;
+        if (parse_i64(find_value(ticker, "timestamp"), timestamp_ms)) {
+            event.exchange_event_ns = milliseconds_to_ns(timestamp_ms);
+            event.source_sequence = static_cast<std::uint64_t>(timestamp_ms > 0 ? timestamp_ms : 0);
+        }
+        if (!parse_double(find_value(ticker, "best_bid_price"), event.bid)
+            || !parse_double(find_value(ticker, "best_ask_price"), event.ask)
+            || !parse_double(find_value(ticker, "best_bid_amount"), event.bid_size)
+            || !parse_double(find_value(ticker, "best_ask_amount"), event.ask_size)
+            || event.bid <= 0.0 || event.ask <= event.bid
+            || event.bid_size < 0.0 || event.ask_size < 0.0) {
+            result.invalid_frame = 1;
+            return;
+        }
+        event.healthy = 1;
+        emit(result, output, event);
+        return;
+    }
+    if (channel.starts_with("trades.BTC-PERPETUAL.") && data != nullptr && data->is_array()) {
+        ++result.recognized_events;
+        for (const auto& raw_trade : data->as_array()) {
+            if (!raw_trade.is_object()) continue;
+            const auto& trade = raw_trade.as_object();
+            ExternalVenueEvent event;
+            event.asset_handle = asset_handle;
+            event.connection_epoch = epoch;
+            event.venue = VenueId::Deribit;
+            event.event_type = ExternalEventType::Trade;
+            event.local_receive_monotonic_ns = receive_ns;
+            event.local_receive_wall_ns = wall_ns;
+            (void)parse_u64(find_value(trade, "trade_seq"), event.source_sequence);
+            std::int64_t timestamp_ms = 0;
+            if (parse_i64(find_value(trade, "timestamp"), timestamp_ms)) event.exchange_event_ns = milliseconds_to_ns(timestamp_ms);
+            if (!parse_double(find_value(trade, "price"), event.trade_price)
+                || !parse_double(find_value(trade, "amount"), event.trade_size)
+                || event.trade_price <= 0.0 || event.trade_size <= 0.0) {
+                result.invalid_frame = 1;
+                continue;
+            }
+            const auto direction = text_of(find_value(trade, "direction"));
+            if (ieq(direction, "buy")) event.trade_side = 1;
+            else if (ieq(direction, "sell")) event.trade_side = -1;
+            else { result.invalid_frame = 1; continue; }
+            event.healthy = 1;
+            emit(result, output, event);
+        }
+        return;
+    }
+    ++result.ignored_events;
+}
+
 } // namespace
 
 ExternalDecodeResult decode_external_venue_frame(
@@ -462,6 +536,11 @@ ExternalDecodeResult decode_external_venue_frame(
                 decode_bybit(root.as_object(), asset_handle, connection_epoch,
                              local_receive_monotonic_ns, local_receive_wall_ns,
                              result, output);
+                break;
+            case VenueId::Deribit:
+                decode_deribit(root.as_object(), asset_handle, connection_epoch,
+                               local_receive_monotonic_ns, local_receive_wall_ns,
+                               result, output);
                 break;
             case VenueId::Unknown:
             default:

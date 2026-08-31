@@ -97,6 +97,14 @@ ExternalVenueConnectionSpec btc_spot_connection_spec(
             spec.subscription_json =
                 R"({"method":"SUBSCRIBE","params":["btcusdt@depth20@100ms","btcusdt@aggTrade","btcusdt@markPrice@1s","btcusdt@forceOrder"],"id":1})";
             break;
+        case VenueId::Deribit:
+            spec.host = "www.deribit.com";
+            spec.port = "443";
+            spec.target = "/ws/api/v2";
+            spec.symbol = "BTC-PERPETUAL";
+            spec.subscription_json =
+                R"({"jsonrpc":"2.0","method":"public/subscribe","id":1,"params":{"channels":["ticker.BTC-PERPETUAL.100ms","trades.BTC-PERPETUAL.100ms"]}})";
+            break;
         case VenueId::Unknown:
         default:
             throw std::invalid_argument("unsupported external venue");

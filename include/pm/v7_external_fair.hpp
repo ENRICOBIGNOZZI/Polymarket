@@ -9,7 +9,7 @@
 
 namespace pm::v7::external_fair {
 
-inline constexpr std::size_t kVenueCount = 3;
+inline constexpr std::size_t kVenueCount = 4;
 inline constexpr std::size_t kMaxAggressiveLevels = 16;
 // Four resting-quote cancels + four maker actions + two informed-taker actions
 // can coexist in one causal cut. Keep the unified selector large enough to
@@ -22,6 +22,7 @@ enum class VenueId : std::uint8_t {
     CoinbaseSpot = 2,
     BybitSpot = 3,
     BinanceUsdM = 4,
+    Deribit = 5,
 };
 
 enum class ExternalEventType : std::uint8_t {

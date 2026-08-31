@@ -94,13 +94,20 @@ int main() {
     assert(three.venue_dispersion_bps >= 0.0);
     assert(std::isfinite(three.aggregate_ofi));
 
+    assert(external.on_venue_event(book(VenueId::Deribit, 1, 218, 100.05, 100.25, 4, 4), policy));
+    auto four = external.snapshot(220, policy);
+    assert(four.valid == 1);
+    assert(four.venue_count_fresh == 3);
+    assert(four.venue_health_mask == 0x7);
+
     external.on_oracle_snapshot(recovered);
     auto with_oracle = external.snapshot(221, policy);
     assert(with_oracle.chainlink_feed_handle == recovered.feed_handle);
     assert(with_oracle.chainlink_continuity == OracleContinuity::RecoveredSameOracleSnapshot);
 
-    // A gap makes one venue unavailable. With min_healthy_venues=3 the state
-    // fails closed rather than silently becoming a one/two-venue composite.
+    // A gap makes one price-contributing venue unavailable. Deribit remains
+    // contextual at its default zero composite weight, so a three-source
+    // requirement fails closed rather than silently using two sources.
     policy.min_healthy_venues = 3;
     auto bad = book(VenueId::BinanceSpot, 2, 230, 99.9, 100.1, 10, 8);
     bad.gap = 1;

@@ -227,6 +227,34 @@ json::object usdm_json(const BinanceUsdMMetrics& value) {
     };
 }
 
+struct DeribitMetrics {
+    std::int64_t receive_ns = 0;
+    double best_bid = 0.0;
+    double best_ask = 0.0;
+    double mark_price = 0.0;
+    double index_price = 0.0;
+    double current_funding = 0.0;
+    double funding_8h = 0.0;
+    double open_interest = 0.0;
+    double signed_trade_flow = 0.0;
+    std::uint64_t ticker_frames = 0;
+    std::uint64_t trade_frames = 0;
+    std::uint64_t parse_failures = 0;
+    std::uint8_t valid = 0;
+};
+
+json::object deribit_json(const DeribitMetrics& value) {
+    return {
+        {"valid", value.valid != 0}, {"receive_monotonic_ns", value.receive_ns},
+        {"best_bid", value.best_bid}, {"best_ask", value.best_ask},
+        {"mark_price", value.mark_price}, {"index_price", value.index_price},
+        {"current_funding", value.current_funding}, {"funding_8h", value.funding_8h},
+        {"open_interest", value.open_interest}, {"signed_trade_flow", value.signed_trade_flow},
+        {"ticker_frames", value.ticker_frames}, {"trade_frames", value.trade_frames},
+        {"parse_failures", value.parse_failures},
+    };
+}
+
 class BinanceUsdMObserver final : public ExternalFrameObserver {
 public:
     void on_connection_epoch(std::uint64_t) noexcept override {}
@@ -314,6 +342,82 @@ private:
 
     mutable std::mutex mutex_{};
     BinanceUsdMMetrics metrics_{};
+};
+
+class DeribitObserver final : public ExternalFrameObserver {
+public:
+    void on_connection_epoch(std::uint64_t) noexcept override {
+        std::lock_guard lock(mutex_);
+        metrics_.valid = 0;
+    }
+
+    void on_frame(std::uint64_t, std::int64_t receive_ns, std::int64_t,
+                  std::string_view payload) noexcept override {
+        try {
+            boost::system::error_code error;
+            const auto raw = json::parse(payload, error);
+            if (error || !raw.is_object()) { fail(); return; }
+            const auto& root = raw.as_object();
+            if (!json_text_equals(json_field(root, "method"), "subscription")) return;
+            const auto* params = json_field(root, "params");
+            if (params == nullptr || !params->is_object()) { fail(); return; }
+            const auto& parameter = params->as_object();
+            const auto* channel = json_field(parameter, "channel");
+            const auto* data = json_field(parameter, "data");
+            if (channel == nullptr || !channel->is_string() || data == nullptr) { fail(); return; }
+            const std::string_view channel_text(channel->as_string().data(), channel->as_string().size());
+            std::lock_guard lock(mutex_);
+            if (channel_text.starts_with("ticker.BTC-PERPETUAL.") && data->is_object()) {
+                update_ticker(data->as_object(), receive_ns);
+            } else if (channel_text.starts_with("trades.BTC-PERPETUAL.") && data->is_array()) {
+                update_trades(data->as_array());
+            }
+        } catch (...) { fail(); }
+    }
+
+    [[nodiscard]] DeribitMetrics metrics() const noexcept {
+        std::lock_guard lock(mutex_);
+        return metrics_;
+    }
+
+private:
+    void fail() noexcept { std::lock_guard lock(mutex_); ++metrics_.parse_failures; metrics_.valid = 0; }
+
+    void update_ticker(const json::object& ticker, std::int64_t receive_ns) noexcept {
+        double bid = 0.0, ask = 0.0, mark = 0.0, index = 0.0, current_funding = 0.0, funding_8h = 0.0, open_interest = 0.0;
+        if (!json_number(json_field(ticker, "best_bid_price"), bid)
+            || !json_number(json_field(ticker, "best_ask_price"), ask)
+            || !json_number(json_field(ticker, "mark_price"), mark)
+            || !json_number(json_field(ticker, "index_price"), index)
+            || !json_number(json_field(ticker, "current_funding"), current_funding)
+            || !json_number(json_field(ticker, "funding_8h"), funding_8h)
+            || !json_number(json_field(ticker, "open_interest"), open_interest)
+            || bid <= 0.0 || ask <= bid || mark <= 0.0 || index <= 0.0 || open_interest < 0.0) {
+            ++metrics_.parse_failures;
+            metrics_.valid = 0;
+            return;
+        }
+        metrics_.best_bid = bid; metrics_.best_ask = ask; metrics_.mark_price = mark;
+        metrics_.index_price = index; metrics_.current_funding = current_funding;
+        metrics_.funding_8h = funding_8h; metrics_.open_interest = open_interest;
+        metrics_.receive_ns = receive_ns; ++metrics_.ticker_frames; metrics_.valid = 1;
+    }
+
+    void update_trades(const json::array& trades) noexcept {
+        ++metrics_.trade_frames;
+        for (const auto& raw_trade : trades) {
+            if (!raw_trade.is_object()) { ++metrics_.parse_failures; continue; }
+            const auto& trade = raw_trade.as_object();
+            double amount = 0.0;
+            if (!json_number(json_field(trade, "amount"), amount) || amount <= 0.0) { ++metrics_.parse_failures; continue; }
+            if (json_text_equals(json_field(trade, "direction"), "buy")) metrics_.signed_trade_flow = .9 * metrics_.signed_trade_flow + .1 * amount;
+            else if (json_text_equals(json_field(trade, "direction"), "sell")) metrics_.signed_trade_flow = .9 * metrics_.signed_trade_flow - .1 * amount;
+            else ++metrics_.parse_failures;
+        }
+    }
+
+    mutable std::mutex mutex_{};
+    DeribitMetrics metrics_{};
 };
 
 class BinanceSpotL2Observer final : public ExternalFrameObserver {
@@ -731,13 +835,16 @@ int main(int argc, char** argv) {
         ExternalVenueIngress binance_ingress(VenueId::BinanceSpot, asset_handle);
         ExternalVenueIngress coinbase_ingress(VenueId::CoinbaseSpot, asset_handle);
         ExternalVenueIngress bybit_ingress(VenueId::BybitSpot, asset_handle);
+        ExternalVenueIngress deribit_ingress(VenueId::Deribit, asset_handle);
         BinanceSpotL2Observer binance_l2;
         CoinbaseL2Observer coinbase_l2(coinbase_ingress, asset_handle);
         BybitL2Observer bybit_l2(bybit_ingress, asset_handle);
         BinanceUsdMObserver binance_usdm_observer;
+        DeribitObserver deribit_observer;
         ExternalVenueWsClient binance(btc_spot_connection_spec(VenueId::BinanceSpot, asset_handle), &binance_ingress, &binance_l2);
         ExternalVenueWsClient coinbase(btc_spot_connection_spec(VenueId::CoinbaseSpot, asset_handle), nullptr, &coinbase_l2);
         ExternalVenueWsClient bybit(btc_spot_connection_spec(VenueId::BybitSpot, asset_handle), &bybit_ingress, &bybit_l2);
+        ExternalVenueWsClient deribit(btc_spot_connection_spec(VenueId::Deribit, asset_handle), &deribit_ingress, &deribit_observer);
         auto binance_usdm_depth_spec = btc_spot_connection_spec(VenueId::BinanceUsdM, asset_handle);
         binance_usdm_depth_spec.subscription_json =
             R"({"method":"SUBSCRIBE","params":["btcusdt@depth20@100ms"],"id":1})";
@@ -751,12 +858,14 @@ int main(int argc, char** argv) {
         std::thread binance_thread([&] { binance.run(ExternalStopToken(stopping)); });
         std::thread coinbase_thread([&] { coinbase.run(ExternalStopToken(stopping)); });
         std::thread bybit_thread([&] { bybit.run(ExternalStopToken(stopping)); });
+        std::thread deribit_thread([&] { deribit.run(ExternalStopToken(stopping)); });
         std::thread binance_usdm_depth_thread([&] { binance_usdm_depth.run(ExternalStopToken(stopping)); });
         std::thread binance_usdm_market_thread([&] { binance_usdm_market.run(ExternalStopToken(stopping)); });
 #else
         std::jthread binance_thread([&](std::stop_token token) { binance.run(token); });
         std::jthread coinbase_thread([&](std::stop_token token) { coinbase.run(token); });
         std::jthread bybit_thread([&](std::stop_token token) { bybit.run(token); });
+        std::jthread deribit_thread([&](std::stop_token token) { deribit.run(token); });
         std::jthread binance_usdm_depth_thread([&](std::stop_token token) { binance_usdm_depth.run(token); });
         std::jthread binance_usdm_market_thread([&](std::stop_token token) { binance_usdm_market.run(token); });
 #endif
@@ -764,18 +873,21 @@ int main(int argc, char** argv) {
         while (!stopping.load(std::memory_order_relaxed)) {
             const auto drained = binance_ingress.drain_into(state, policy)
                 + coinbase_ingress.drain_into(state, policy)
-                + bybit_ingress.drain_into(state, policy);
+                + bybit_ingress.drain_into(state, policy)
+                + deribit_ingress.drain_into(state, policy);
             const auto now_mono = monotonic_now_ns();
             const auto snapshot = state.snapshot(now_mono, policy);
             const auto binance_status = binance.snapshot();
             const auto coinbase_status = coinbase.snapshot();
             const auto bybit_status = bybit.snapshot();
+            const auto deribit_status = deribit.snapshot();
             const auto binance_usdm_depth_status = binance_usdm_depth.snapshot();
             const auto binance_usdm_market_status = binance_usdm_market.snapshot();
             json::array venues;
             venues.emplace_back(transport_json(binance_status, "BINANCE_SPOT"));
             venues.emplace_back(transport_json(coinbase_status, "COINBASE_SPOT"));
             venues.emplace_back(transport_json(bybit_status, "BYBIT_SPOT"));
+            venues.emplace_back(transport_json(deribit_status, "DERIBIT"));
             venues.emplace_back(transport_json(binance_usdm_depth_status, "BINANCE_USDM_DEPTH"));
             venues.emplace_back(transport_json(binance_usdm_market_status, "BINANCE_USDM_MARKET"));
             atomic_write(output, {
@@ -807,6 +919,7 @@ int main(int argc, char** argv) {
                 {"coinbase_spot_l2", l2_json(coinbase_l2.metrics())},
                 {"coinbase_spot_l2_diagnostic", coinbase_l2.diagnostic()},
                 {"bybit_spot_l2", l2_json(bybit_l2.metrics())},
+                {"deribit", deribit_json(deribit_observer.metrics())},
                 {"binance_usdm", usdm_json(binance_usdm_observer.metrics())},
                 {"venues", std::move(venues)},
             });
@@ -817,12 +930,14 @@ int main(int argc, char** argv) {
         binance_thread.request_stop();
         coinbase_thread.request_stop();
         bybit_thread.request_stop();
+        deribit_thread.request_stop();
         binance_usdm_depth_thread.request_stop();
         binance_usdm_market_thread.request_stop();
 #endif
         if (binance_thread.joinable()) binance_thread.join();
         if (coinbase_thread.joinable()) coinbase_thread.join();
         if (bybit_thread.joinable()) bybit_thread.join();
+        if (deribit_thread.joinable()) deribit_thread.join();
         if (binance_usdm_depth_thread.joinable()) binance_usdm_depth_thread.join();
         if (binance_usdm_market_thread.joinable()) binance_usdm_market_thread.join();
         return 0;
