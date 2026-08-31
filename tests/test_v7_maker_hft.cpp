@@ -213,6 +213,53 @@ void test_authoritative_zero_flow_blocks_passive_quote() {
     assert(decision.reason == pm::v7::maker::DecisionReason::NoEconomicQuote);
     assert(decision.bid_fill_probability == 0.0);
     assert(decision.ask_fill_probability == 0.0);
+    assert(decision.features.flow_evidence_source
+           == pm::v7::maker::FlowEvidenceSource::SelectorSnapshot);
+}
+
+void test_unknown_flow_keeps_joint_prior_without_inventing_causal_certainty() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    auto model = profitable_model();
+    pm::v7::maker::InventorySnapshot inventory;
+    inventory.yes_shares = 3.0;
+    inventory.no_shares = 3.0;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 3.0;
+    risk.max_abs_residual_shares = 20.0;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(decision.reason == pm::v7::maker::DecisionReason::Quote);
+    assert(decision.features.flow_evidence_valid == 0);
+    assert(decision.features.flow_evidence_source
+           == pm::v7::maker::FlowEvidenceSource::Unknown);
+    assert(decision.bid_fill_probability > 0.0);
+    assert(decision.bid_statistical_fill_probability
+           == decision.bid_fill_probability);
+    assert(decision.bid_causal_funnel_identified == 0);
+    assert(decision.bid_flow_reach_probability == 0.0);
+    assert(decision.bid_queue_depletion_probability == 0.0);
+}
+
+void test_live_trade_flow_records_live_provenance() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    update.trade_sell_qty_delta = 10.0;
+    const auto model = profitable_model();
+    pm::v7::maker::InventorySnapshot inventory;
+    inventory.yes_shares = 3.0;
+    inventory.no_shares = 3.0;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 3.0;
+    risk.max_abs_residual_shares = 20.0;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(decision.features.flow_evidence_valid == 1);
+    assert(decision.features.flow_evidence_source
+           == pm::v7::maker::FlowEvidenceSource::LiveTrade);
+    assert(decision.bid_causal_funnel_identified == 1);
 }
 
 void test_side_specific_opposite_flow_authorizes_only_reachable_side() {
@@ -1005,6 +1052,8 @@ int main() {
     test_atomic_model_snapshot();
     test_profitable_two_sided_post_only_quote();
     test_authoritative_zero_flow_blocks_passive_quote();
+    test_unknown_flow_keeps_joint_prior_without_inventing_causal_certainty();
+    test_live_trade_flow_records_live_provenance();
     test_side_specific_opposite_flow_authorizes_only_reachable_side();
     test_trade_rate_uses_elapsed_time_not_book_message_count();
     test_whale_size_cannot_impersonate_future_print_arrival();

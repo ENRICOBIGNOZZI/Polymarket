@@ -110,6 +110,7 @@ struct SideEconomics {
     std::int64_t price_tick = 0;
     double quote_shares = 0.0;
     double fill_probability = 0.0;
+    double statistical_fill_probability = 0.0;
     double flow_reach_probability = 0.0;
     double queue_depletion_probability = 0.0;
     double opposite_flow_shares_per_second = 0.0;
@@ -120,6 +121,8 @@ struct SideEconomics {
     double uncertainty = 0.0;
     double point_ev = -std::numeric_limits<double>::infinity();
     double robust_ev = -std::numeric_limits<double>::infinity();
+    bool causal_funnel_identified = false;
+    bool exact_cell_baseline = false;
 };
 
 [[nodiscard]] double exploration_adjusted_ev(
@@ -334,6 +337,7 @@ struct ExplorationChoice {
     const auto x = model_features(
         features, side, queue_ahead, quote_shares, distance_ticks);
     const auto* cell = execution_cell(model, action, update, side);
+    out.exact_cell_baseline = cell != nullptr;
 
     const double global_fill_logit = model.fill_coefficients[0];
     const double baseline_fill_logit = cell != nullptr
@@ -344,6 +348,7 @@ struct ExplorationChoice {
     const double fill_logit = baseline_fill_logit + feature_fill_logit
                             - 0.55 * distance_ticks - queue_penalty;
     const double statistical_fill_probability = clamp(logistic(fill_logit), 0.0, 1.0);
+    out.statistical_fill_probability = statistical_fill_probability;
 
     // A passive order cannot fill unless opposite aggressive flow reaches its
     // price and then consumes the queue ahead.  Keep these as distinct causal
@@ -371,14 +376,21 @@ struct ExplorationChoice {
         ? 1.0
         : clamp(conditional_opposite_shares /
                 std::max(kEps, queue_ahead + quote_shares), 0.0, 1.0);
-    const double flow_reach_probability = features.flow_evidence_valid != 0
-        ? modeled_flow_reach_probability : 1.0;
-    const double queue_depletion_probability = features.flow_evidence_valid != 0
-        ? modeled_queue_depletion_probability : 1.0;
-    const double executable_fill_ceiling = flow_reach_probability
-        * queue_depletion_probability;
-    const double fill_probability = clamp(
-        std::min(statistical_fill_probability, executable_fill_ceiling), 0.0, 1.0);
+    // When flow telemetry is unavailable, the exact-cell (or GLOBAL cold-start)
+    // posterior remains the joint fill prior used for bounded PAPER
+    // exploration. Its unidentifiable causal factors must not be reported as
+    // 1 x 1 certainty. Once selector or live-trade evidence exists, the causal
+    // reach/depletion ceiling becomes authoritative, including an observed
+    // zero which correctly blocks ordinary passive execution.
+    const bool causal_funnel_identified = features.flow_evidence_valid != 0;
+    const double flow_reach_probability = causal_funnel_identified
+        ? modeled_flow_reach_probability : 0.0;
+    const double queue_depletion_probability = causal_funnel_identified
+        ? modeled_queue_depletion_probability : 0.0;
+    const double executable_fill_ceiling = causal_funnel_identified
+        ? flow_reach_probability * queue_depletion_probability : 1.0;
+    const double fill_probability = clamp(std::min(
+        statistical_fill_probability, executable_fill_ceiling), 0.0, 1.0);
 
     const double global_markout = model.markout_coefficients[0];
     const double baseline_markout = cell != nullptr
@@ -412,6 +424,7 @@ struct ExplorationChoice {
     out.fill_probability = fill_probability;
     out.flow_reach_probability = flow_reach_probability;
     out.queue_depletion_probability = queue_depletion_probability;
+    out.causal_funnel_identified = causal_funnel_identified;
     out.opposite_flow_shares_per_second = std::max(0.0, opposite_flow_rate);
     out.opposite_flow_prints_per_second = std::max(0.0, opposite_print_rate);
     out.gross_capture = capture;
@@ -649,6 +662,7 @@ MakerDecision MakerHotPath::on_market_update(
         ew_aggressive_sell_prints_per_second_ = std::max(
             0.0, update.prior_aggressive_sell_prints_per_second);
         flow_evidence_valid_ = 1;
+        flow_evidence_source_ = FlowEvidenceSource::SelectorSnapshot;
         selector_generation_ = update.selector_generation;
     } else {
         ew_aggressive_buy_shares_per_second_ *= time_decay;
@@ -664,7 +678,10 @@ MakerDecision MakerHotPath::on_market_update(
         buy_trade_delta > 0.0 ? 1.0 / tau_seconds : 0.0;
     ew_aggressive_sell_prints_per_second_ +=
         sell_trade_delta > 0.0 ? 1.0 / tau_seconds : 0.0;
-    if (buy_trade_delta > 0.0 || sell_trade_delta > 0.0) flow_evidence_valid_ = 1;
+    if (buy_trade_delta > 0.0 || sell_trade_delta > 0.0) {
+        flow_evidence_valid_ = 1;
+        flow_evidence_source_ = FlowEvidenceSource::LiveTrade;
+    }
     ew_trade_intensity_ = (ew_aggressive_buy_shares_per_second_
                          + ew_aggressive_sell_shares_per_second_) / visible_depth;
 
@@ -703,6 +720,7 @@ MakerDecision MakerHotPath::on_market_update(
         inventory.residual_shares() / std::max(kEps, risk.max_abs_residual_shares), -2.0, 2.0);
     decision.features.local_latency_ms = static_cast<double>(local_age_ns) / 1'000'000.0;
     decision.features.flow_evidence_valid = flow_evidence_valid_;
+    decision.features.flow_evidence_source = flow_evidence_source_;
     decision.latency.feature_ns = feature_end_ns - start_ns;
 
     const std::int64_t risk_start_ns = monotonic_ns();
@@ -1088,6 +1106,8 @@ MakerDecision MakerHotPath::on_market_update(
                 authorized_exploration.robust_ev = choice.adjusted_ev;
                 if (choice.economics->side == Side::Buy) {
                     decision.bid_fill_probability = choice.economics->fill_probability;
+                    decision.bid_statistical_fill_probability =
+                        choice.economics->statistical_fill_probability;
                     decision.bid_flow_reach_probability =
                         choice.economics->flow_reach_probability;
                     decision.bid_queue_depletion_probability =
@@ -1096,8 +1116,14 @@ MakerDecision MakerHotPath::on_market_update(
                         choice.economics->opposite_flow_shares_per_second;
                     decision.bid_opposite_flow_prints_per_second =
                         choice.economics->opposite_flow_prints_per_second;
+                    decision.bid_causal_funnel_identified = static_cast<std::uint8_t>(
+                        choice.economics->causal_funnel_identified);
+                    decision.bid_exact_cell_baseline = static_cast<std::uint8_t>(
+                        choice.economics->exact_cell_baseline);
                 } else {
                     decision.ask_fill_probability = choice.economics->fill_probability;
+                    decision.ask_statistical_fill_probability =
+                        choice.economics->statistical_fill_probability;
                     decision.ask_flow_reach_probability =
                         choice.economics->flow_reach_probability;
                     decision.ask_queue_depletion_probability =
@@ -1106,6 +1132,10 @@ MakerDecision MakerHotPath::on_market_update(
                         choice.economics->opposite_flow_shares_per_second;
                     decision.ask_opposite_flow_prints_per_second =
                         choice.economics->opposite_flow_prints_per_second;
+                    decision.ask_causal_funnel_identified = static_cast<std::uint8_t>(
+                        choice.economics->causal_funnel_identified);
+                    decision.ask_exact_cell_baseline = static_cast<std::uint8_t>(
+                        choice.economics->exact_cell_baseline);
                 }
                 decision.action = choice.action;
                 decision.placement_action = choice.action;
@@ -1207,6 +1237,8 @@ MakerDecision MakerHotPath::on_market_update(
     decision.reason = DecisionReason::Quote;
     decision.bid_fill_probability = best->bid.fill_probability;
     decision.ask_fill_probability = best->ask.fill_probability;
+    decision.bid_statistical_fill_probability = best->bid.statistical_fill_probability;
+    decision.ask_statistical_fill_probability = best->ask.statistical_fill_probability;
     decision.bid_flow_reach_probability = best->bid.flow_reach_probability;
     decision.ask_flow_reach_probability = best->ask.flow_reach_probability;
     decision.bid_queue_depletion_probability = best->bid.queue_depletion_probability;
@@ -1219,6 +1251,14 @@ MakerDecision MakerHotPath::on_market_update(
         best->bid.opposite_flow_prints_per_second;
     decision.ask_opposite_flow_prints_per_second =
         best->ask.opposite_flow_prints_per_second;
+    decision.bid_causal_funnel_identified = static_cast<std::uint8_t>(
+        best->bid.causal_funnel_identified);
+    decision.ask_causal_funnel_identified = static_cast<std::uint8_t>(
+        best->ask.causal_funnel_identified);
+    decision.bid_exact_cell_baseline = static_cast<std::uint8_t>(
+        best->bid.exact_cell_baseline);
+    decision.ask_exact_cell_baseline = static_cast<std::uint8_t>(
+        best->ask.exact_cell_baseline);
     decision.robust_ev = (want_bid ? best->bid.robust_ev : 0.0) + (want_ask ? best->ask.robust_ev : 0.0);
     decision.ev_uncertainty = (want_bid ? best->bid.uncertainty : 0.0)
                             + (want_ask ? best->ask.uncertainty : 0.0);

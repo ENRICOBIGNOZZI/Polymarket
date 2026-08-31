@@ -48,6 +48,15 @@ enum class DecisionReason : std::uint8_t {
     NewRiskFrozen = 17,
 };
 
+// Provenance matters as much as the numeric rate. A zero rate from an
+// authoritative selector snapshot is evidence of quiet flow; a zero rate
+// before any selector or live trade observation is merely unknown.
+enum class FlowEvidenceSource : std::uint8_t {
+    Unknown = 0,
+    SelectorSnapshot = 1,
+    LiveTrade = 2,
+};
+
 // Selector authority is local to one token: four passive placements by two
 // execution sides. A zero bit never grants new-risk authority.
 [[nodiscard]] constexpr std::uint8_t execution_authority_bit(
@@ -318,6 +327,7 @@ struct Features {
     double inventory_fraction = 0.0;
     double local_latency_ms = 0.0;
     std::uint8_t flow_evidence_valid = 0;
+    FlowEvidenceSource flow_evidence_source = FlowEvidenceSource::Unknown;
 };
 
 struct LatencyTrace {
@@ -346,6 +356,8 @@ struct MakerDecision {
     double fair_upper = 0.0;
     double bid_fill_probability = 0.0;
     double ask_fill_probability = 0.0;
+    double bid_statistical_fill_probability = 0.0;
+    double ask_statistical_fill_probability = 0.0;
     double bid_flow_reach_probability = 0.0;
     double ask_flow_reach_probability = 0.0;
     double bid_queue_depletion_probability = 0.0;
@@ -375,6 +387,10 @@ struct MakerDecision {
     std::uint8_t ask_selector_cell_authorized = 0;
     std::uint8_t bid_inventory_reduction_bypass = 0;
     std::uint8_t ask_inventory_reduction_bypass = 0;
+    std::uint8_t bid_causal_funnel_identified = 0;
+    std::uint8_t ask_causal_funnel_identified = 0;
+    std::uint8_t bid_exact_cell_baseline = 0;
+    std::uint8_t ask_exact_cell_baseline = 0;
     std::array<double, kSelectorAuthorityCellCount>
         selector_projected_flow_reach_probability{};
     std::array<double, kSelectorAuthorityCellCount>
@@ -423,6 +439,7 @@ private:
     Side exploration_side_ = Side::None;
     std::uint8_t initialized_ = 0;
     std::uint8_t flow_evidence_valid_ = 0;
+    FlowEvidenceSource flow_evidence_source_ = FlowEvidenceSource::Unknown;
     std::uint8_t exploration_active_ = 0;
     std::uint8_t exploration_persistent_ = 0;
     std::uint8_t exploration_information_arm_ = 0;

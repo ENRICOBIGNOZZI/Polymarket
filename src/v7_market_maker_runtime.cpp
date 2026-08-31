@@ -48,6 +48,7 @@ using pm::v7::Side;
 using pm::v7::SleeveCapitalAccount;
 using pm::v7::StrategyIntent;
 using pm::v7::maker::Action;
+using pm::v7::maker::FlowEvidenceSource;
 using pm::v7::maker::InventorySnapshot;
 using pm::v7::maker::MakerDecision;
 using pm::v7::maker::MakerExecutionReason;
@@ -253,6 +254,16 @@ void atomic_write(const fs::path& path, std::string_view content) {
         case Action::Withdraw: return "WITHDRAW";
     }
     return "UNKNOWN";
+}
+
+[[nodiscard]] const char* flow_evidence_source_name(
+    FlowEvidenceSource source) noexcept {
+    switch (source) {
+        case FlowEvidenceSource::Unknown: return "UNKNOWN_NO_TELEMETRY";
+        case FlowEvidenceSource::SelectorSnapshot: return "SELECTOR_SNAPSHOT";
+        case FlowEvidenceSource::LiveTrade: return "LIVE_TRADE";
+    }
+    return "UNKNOWN_NO_TELEMETRY";
 }
 
 [[nodiscard]] const char* decision_reason_name(
@@ -2800,23 +2811,44 @@ private:
                 ? record.decision.selector_projected_fill_probability[selector_index]
                 : 0.0},
         };
-        metadata["execution_funnel_prediction"] = json::object{
+        const bool causal_funnel_identified = bid_side
+            ? record.decision.bid_causal_funnel_identified != 0
+            : record.decision.ask_causal_funnel_identified != 0;
+        json::object execution_funnel{
             {"opposite_aggressive_flow_shares_per_second", bid_side
                 ? record.decision.bid_opposite_flow_shares_per_second
                 : record.decision.ask_opposite_flow_shares_per_second},
             {"opposite_aggressive_flow_prints_per_second", bid_side
                 ? record.decision.bid_opposite_flow_prints_per_second
                 : record.decision.ask_opposite_flow_prints_per_second},
-            {"flow_reach_probability", bid_side
-                ? record.decision.bid_flow_reach_probability
-                : record.decision.ask_flow_reach_probability},
-            {"queue_depletion_probability_given_reach", bid_side
-                ? record.decision.bid_queue_depletion_probability
-                : record.decision.ask_queue_depletion_probability},
+            {"flow_evidence_source", flow_evidence_source_name(
+                record.decision.features.flow_evidence_source)},
+            {"causal_stage_probabilities_identified", causal_funnel_identified},
+            {"statistical_joint_fill_probability", bid_side
+                ? record.decision.bid_statistical_fill_probability
+                : record.decision.ask_statistical_fill_probability},
             {"fill_probability", bid_side
                 ? record.decision.bid_fill_probability
                 : record.decision.ask_fill_probability},
+            {"fill_probability_source", causal_funnel_identified
+                ? "CAUSAL_CEILINGED_CELL_POSTERIOR"
+                : "CELL_POSTERIOR_COLD_START"},
+            {"exact_cell_baseline_used", bid_side
+                ? record.decision.bid_exact_cell_baseline != 0
+                : record.decision.ask_exact_cell_baseline != 0},
         };
+        execution_funnel["flow_reach_probability"] = causal_funnel_identified
+            ? json::value(bid_side
+                ? record.decision.bid_flow_reach_probability
+                : record.decision.ask_flow_reach_probability)
+            : json::value(nullptr);
+        execution_funnel["queue_depletion_probability_given_reach"] =
+            causal_funnel_identified
+                ? json::value(bid_side
+                    ? record.decision.bid_queue_depletion_probability
+                    : record.decision.ask_queue_depletion_probability)
+                : json::value(nullptr);
+        metadata["execution_funnel_prediction"] = std::move(execution_funnel);
         metadata["placement_features"] = json::object{
             {"spread_ticks", record.decision.features.spread_ticks},
             {"imbalance", record.decision.features.imbalance},

@@ -5,6 +5,7 @@
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/error.hpp>
 #include <boost/asio/ssl/stream.hpp>
+#include <boost/asio/steady_timer.hpp>
 #if __has_include(<boost/asio/ssl/host_name_verification.hpp>)
 #include <boost/asio/ssl/host_name_verification.hpp>
 #define PM_USE_BOOST_HOST_NAME_VERIFICATION 1
@@ -23,6 +24,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <functional>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -53,12 +55,6 @@ using tcp = asio::ip::tcp;
                         std::chrono::system_clock::now().time_since_epoch())
                         .count();
     return stamp;
-}
-
-std::int64_t now_ms() noexcept {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::system_clock::now().time_since_epoch())
-        .count();
 }
 
 struct Endpoint {
@@ -258,7 +254,7 @@ struct MarketWebSocketFeed::Impl {
                 websocket::stream_base::timeout timeouts{
                     std::chrono::seconds(10),
                     std::chrono::seconds(60),
-                    true,
+                    false,
                 };
                 ws.set_option(timeouts);
                 ws.set_option(websocket::stream_base::decorator([](websocket::request_type& request) {
@@ -272,7 +268,6 @@ struct MarketWebSocketFeed::Impl {
                 connected.fetch_add(1, std::memory_order_relaxed);
                 marked_connected = true;
                 backoff_seconds = 1;
-                std::int64_t last_text_ping = now_ms();
 
 #if PM_USE_STD_JTHREAD
                 std::stop_callback cancel_on_stop(stop, [&ws] {
@@ -282,35 +277,76 @@ struct MarketWebSocketFeed::Impl {
                     beast::get_lowest_layer(ws).socket().close(ignored);
                 });
 #endif
-
-                while (!stop.stop_requested()) {
+                // A synchronous read can block for the entire quiet timeout,
+                // which made the old post-read PING unreachable on quiet
+                // markets. Keep one async read and one async text heartbeat
+                // on the same io_context: Beast permits one read and one
+                // write concurrently, while all callbacks stay serialized on
+                // this worker thread.
+                asio::steady_timer heartbeat(io);
+                bool terminal = false;
+                bool remote_closed = false;
+                std::string transport_error;
+                const auto finish = [&](beast::error_code error) {
+                    if (terminal) return;
+                    terminal = true;
+                    if (!stop.stop_requested()) {
+                        if (error == websocket::error::closed) {
+                            remote_closed = true;
+                        } else if (error) {
+                            transport_error = error.message();
+                        }
+                    }
+                    beast::error_code ignored;
+                    heartbeat.cancel();
+                    beast::get_lowest_layer(ws).socket().cancel(ignored);
+                };
+                std::function<void()> begin_read;
+                std::function<void()> schedule_text_ping;
+                begin_read = [&] {
+                    if (terminal || stop.stop_requested()) return;
                     buffer.consume(buffer.size());
-                    beast::error_code error;
-                    ws.read(buffer, error);
-                    const FeedReceiveStamp stamp = receive_stamp();
-                    if (error) {
-                        if (!stop.stop_requested() && error == websocket::error::closed) {
-                            report(shard_index, "websocket closed; reconnecting and invalidating L2 lineage");
+                    ws.async_read(buffer, [&](beast::error_code error, std::size_t) {
+                        const FeedReceiveStamp stamp = receive_stamp();
+                        if (error) {
+                            finish(error);
+                            return;
                         }
-                        if (!stop.stop_requested() && error != websocket::error::closed) {
-                            throw beast::system_error(error);
+                        const auto front = beast::buffers_front(buffer.data());
+                        const std::string_view message{
+                            static_cast<const char*>(front.data()), front.size()};
+                        if (message != "PONG" && !message.empty()) {
+                            messages.fetch_add(1, std::memory_order_relaxed);
+                            on_message(message, stamp, shard_index);
                         }
-                        break;
-                    }
-
-                    const auto front = beast::buffers_front(buffer.data());
-                    const std::string_view message{
-                        static_cast<const char*>(front.data()), front.size()};
-                    if (message != "PONG" && !message.empty()) {
-                        messages.fetch_add(1, std::memory_order_relaxed);
-                        on_message(message, stamp, shard_index);
-                    }
-                    if (stamp.wall_ms - last_text_ping >= 10000) {
+                        begin_read();
+                    });
+                };
+                schedule_text_ping = [&] {
+                    if (terminal || stop.stop_requested()) return;
+                    heartbeat.expires_after(std::chrono::seconds(10));
+                    heartbeat.async_wait([&](beast::error_code error) {
+                        if (error || terminal || stop.stop_requested()) return;
                         ws.text(true);
-                        ws.write(asio::buffer(std::string_view{"PING"}), error);
-                        if (error) throw beast::system_error(error);
-                        last_text_ping = stamp.wall_ms;
-                    }
+                        ws.async_write(asio::buffer(std::string_view{"PING"}),
+                                       [&](beast::error_code write_error, std::size_t) {
+                            if (write_error) {
+                                finish(write_error);
+                                return;
+                            }
+                            schedule_text_ping();
+                        });
+                    });
+                };
+                begin_read();
+                schedule_text_ping();
+                io.run();
+                if (!stop.stop_requested() && remote_closed) {
+                    report(shard_index,
+                           "websocket closed; reconnecting and invalidating L2 lineage");
+                }
+                if (!stop.stop_requested() && !transport_error.empty()) {
+                    throw std::runtime_error(transport_error);
                 }
             } catch (const std::exception& error) {
                 if (!stop.stop_requested()) report(shard_index, error.what());
