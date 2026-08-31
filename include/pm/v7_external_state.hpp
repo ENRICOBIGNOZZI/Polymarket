@@ -111,8 +111,11 @@ private:
                                            const ExternalStatePolicy& policy,
                                            double* microprice,
                                            double* dispersion_bps,
+                                           double* weighted_median_price,
+                                           double* max_residual_bps,
                                            std::uint32_t* health_mask,
-                                           std::uint32_t* fresh_count) const noexcept;
+                                           std::uint32_t* fresh_count,
+                                           std::uint32_t* outlier_mask) const noexcept;
     [[nodiscard]] double lagged_return(std::int64_t now_ns,
                                        std::int64_t horizon_ns,
                                        double current_price) const noexcept;

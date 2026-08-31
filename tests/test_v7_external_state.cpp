@@ -105,6 +105,9 @@ int main() {
     assert(robust_snapshot.valid == 1);
     assert(robust_snapshot.venue_count_fresh == 2);
     assert(robust_snapshot.venue_health_mask == 0x3);
+    assert(robust_snapshot.venue_outlier_mask == 0x4);
+    assert(robust_snapshot.venue_weighted_median_price > 99.9 && robust_snapshot.venue_weighted_median_price < 100.2);
+    assert(robust_snapshot.venue_max_residual_bps > 2'000.0);
     assert(robust_snapshot.venue_composite_price > 99.9 && robust_snapshot.venue_composite_price < 100.2);
     auto outlier_trade = book(VenueId::BybitSpot, 1, 203, 0.0, 0.0, 0.0, 0.0);
     outlier_trade.event_type = ExternalEventType::Trade;

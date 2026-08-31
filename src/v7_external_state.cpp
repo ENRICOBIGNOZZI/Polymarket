@@ -175,11 +175,14 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
 
     double micro = 0.0;
     double dispersion = 0.0;
+    double median = 0.0;
+    double max_residual = 0.0;
     std::uint32_t health_mask = 0;
     std::uint32_t fresh_count = 0;
+    std::uint32_t outlier_mask = 0;
     const double composite = compute_composite(event.local_receive_monotonic_ns, policy,
-                                               &micro, &dispersion,
-                                               &health_mask, &fresh_count);
+                                               &micro, &dispersion, &median, &max_residual,
+                                               &health_mask, &fresh_count, &outlier_mask);
     if (composite > 0.0 && fresh_count >= policy.min_healthy_venues) {
         if (last_composite_ > 0.0) {
             const double r = std::log(composite / last_composite_);
@@ -221,11 +224,14 @@ void ExternalAssetState::on_oracle_snapshot(const OracleSnapshot& oracle) noexce
 
 double ExternalAssetState::compute_composite(
     std::int64_t now_ns,
-    const ExternalStatePolicy& policy,
-    double* microprice,
-    double* dispersion_bps,
-    std::uint32_t* health_mask,
-    std::uint32_t* fresh_count) const noexcept {
+                                           const ExternalStatePolicy& policy,
+                                           double* microprice,
+                                           double* dispersion_bps,
+                                           double* weighted_median_price,
+                                           double* max_residual_bps,
+                                           std::uint32_t* health_mask,
+                                           std::uint32_t* fresh_count,
+                                           std::uint32_t* outlier_mask) const noexcept {
 
     struct Candidate {
         std::size_t index = 0;
@@ -274,9 +280,13 @@ double ExternalAssetState::compute_composite(
     double weight_sum = 0.0;
     std::uint32_t mask = 0;
     std::uint32_t count = 0;
+    std::uint32_t outliers = 0;
     for (std::size_t candidate = 0; candidate < candidate_count; ++candidate) {
         const auto& row = candidates[candidate];
-        if (std::abs(row.log_mid - median_log) > max_deviation_log) continue;
+        if (std::abs(row.log_mid - median_log) > max_deviation_log) {
+            outliers |= (1U << static_cast<unsigned>(row.index));
+            continue;
+        }
         const auto& venue = venues_[row.index];
         log_sum += row.weight * row.log_mid;
         micro_sum += row.weight * (venue.microprice > 0.0 ? venue.microprice : venue.mid);
@@ -297,7 +307,23 @@ double ExternalAssetState::compute_composite(
                 std::abs(std::log(venues_[i].mid / composite)) * 10'000.0);
         }
     }
+    double max_residual = 0.0;
+    if (median_log != 0.0) {
+        for (std::size_t i = 0; i < venues_.size(); ++i) {
+            const auto& venue = venues_[i];
+            const bool fresh = venue.valid != 0 && venue.healthy != 0 && venue.gap == 0
+                && venue.last_receive_ns > 0 && venue.last_receive_ns <= now_ns
+                && now_ns - venue.last_receive_ns <= policy.max_venue_age_ns
+                && finite(venue.mid) && venue.mid > 0.0;
+            if (!fresh) continue;
+            max_residual = std::max(max_residual,
+                std::abs(std::log(venue.mid) - median_log) * 10'000.0);
+        }
+    }
     if (dispersion_bps != nullptr) *dispersion_bps = max_dispersion;
+    if (weighted_median_price != nullptr) *weighted_median_price = median_log != 0.0 ? std::exp(median_log) : 0.0;
+    if (max_residual_bps != nullptr) *max_residual_bps = max_residual;
+    if (outlier_mask != nullptr) *outlier_mask = outliers;
     return composite;
 }
 
@@ -347,15 +373,22 @@ ExternalAssetSnapshot ExternalAssetState::snapshot(
 
     double micro = 0.0;
     double dispersion = 0.0;
+    double median = 0.0;
+    double max_residual = 0.0;
     std::uint32_t mask = 0;
     std::uint32_t count = 0;
-    const double composite = compute_composite(now_ns, policy, &micro, &dispersion, &mask, &count);
+    std::uint32_t outlier_mask = 0;
+    const double composite = compute_composite(now_ns, policy, &micro, &dispersion, &median,
+                                               &max_residual, &mask, &count, &outlier_mask);
     out.venue_composite_price = composite;
     out.venue_composite_log_price = composite > 0.0 ? std::log(composite) : 0.0;
     out.venue_composite_microprice = micro;
     out.venue_dispersion_bps = dispersion;
+    out.venue_weighted_median_price = median;
+    out.venue_max_residual_bps = max_residual;
     out.venue_health_mask = mask;
     out.venue_count_fresh = count;
+    out.venue_outlier_mask = outlier_mask;
     out.aggregate_ofi = aggregate_ofi_;
     out.aggregate_trade_imbalance = aggregate_trade_imbalance_;
     out.realized_vol_fast = std::sqrt(std::max(0.0, ew_var_fast_));

@@ -203,8 +203,15 @@ struct ExternalAssetSnapshot {
     double venue_composite_return_1s = 0.0;
     double venue_composite_return_5s = 0.0;
     double venue_dispersion_bps = 0.0;
+    // Auditable robust-reference diagnostics. `venue_outlier_mask` records
+    // fresh source bits whose mid is outside the state-policy band around the
+    // weighted median; those sources are excluded from price/flow aggregation.
+    double venue_weighted_median_price = 0.0;
+    double venue_max_residual_bps = 0.0;
     std::uint32_t venue_health_mask = 0;
     std::uint32_t venue_count_fresh = 0;
+    std::uint32_t venue_outlier_mask = 0;
+    std::uint32_t reserved_venue = 0;
     double aggregate_ofi = 0.0;
     double aggregate_trade_imbalance = 0.0;
     double realized_vol_fast = 0.0;
