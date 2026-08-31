@@ -1036,6 +1036,7 @@ int main(int argc, char** argv) {
         binance_usdm_depth_spec.subscription_json =
             R"({"method":"SUBSCRIBE","params":["btcusdt@depth20@100ms"],"id":1})";
         auto binance_usdm_market_spec = btc_spot_connection_spec(VenueId::BinanceUsdM, asset_handle);
+        binance_usdm_market_spec.target = "/market/ws";
         binance_usdm_market_spec.subscription_json =
             R"({"method":"SUBSCRIBE","params":["btcusdt@aggTrade","btcusdt@markPrice@1s","btcusdt@forceOrder"],"id":2})";
         ExternalVenueWsClient binance_usdm_depth(std::move(binance_usdm_depth_spec), nullptr, &binance_usdm_observer, binance_usdm_depth_raw_tape.get());

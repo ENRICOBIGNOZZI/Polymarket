@@ -12,6 +12,7 @@ def main() -> None:
     assert "ExternalVenueWsClient binance" in source
     assert "ExternalVenueWsClient coinbase" in source
     assert "ExternalVenueWsClient bybit" in source
+    assert 'binance_usdm_market_spec.target = "/market/ws"' in source
     assert "ExternalAssetState state" in source
     assert '"real_order_submission", false' in source
     assert "polymarket_v7_external_venue_runtime" in cmake
@@ -19,6 +20,7 @@ def main() -> None:
     assert "external_venues.json" in launcher
     assert "std::make_unique<beast::flat_static_buffer" in websocket
     assert "flat_static_buffer<kMaxWsMessageBytes> buffer;" not in websocket
+    assert 'spec.target = "/public/ws"' in websocket
 
 
 if __name__ == "__main__":

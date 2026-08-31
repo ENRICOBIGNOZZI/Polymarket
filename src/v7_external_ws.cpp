@@ -93,7 +93,10 @@ ExternalVenueConnectionSpec btc_spot_connection_spec(
         case VenueId::BinanceUsdM:
             spec.host = "fstream.binance.com";
             spec.port = "443";
-            spec.target = "/public/stream";
+            // Binance Futures separates high-frequency books (/public) from
+            // aggregate trades, marks, and liquidations (/market). The
+            // runtime splits those stream classes onto separate clients.
+            spec.target = "/public/ws";
             spec.symbol = "BTCUSDT";
             spec.subscription_json =
                 R"({"method":"SUBSCRIBE","params":["btcusdt@depth20@100ms","btcusdt@aggTrade","btcusdt@markPrice@1s","btcusdt@forceOrder"],"id":1})";
