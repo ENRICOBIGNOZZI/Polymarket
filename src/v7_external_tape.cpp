@@ -172,6 +172,11 @@ TapeRecorderSnapshot ExternalTapeRecorder::snapshot() const noexcept {
 
 struct ExternalRawTapeRecorder::Impl {
     SpscRing<RawTapeRecord, kExternalRawTapeQueueCapacity> queue{};
+    // These records are deliberately heap-owned with the recorder. A live
+    // Coinbase recovery snapshot is larger than the macOS worker-stack limit.
+    // One producer and one writer own their respective scratch records.
+    RawTapeRecord producer_record{};
+    RawTapeRecord writer_record{};
     std::ofstream output;
     std::thread worker;
     std::atomic<bool> stop_requested{false};
@@ -213,21 +218,20 @@ struct ExternalRawTapeRecorder::Impl {
     }
 
     void writer_loop() noexcept {
-        RawTapeRecord record;
         while (!stop_requested.load(std::memory_order_acquire) || queue.approximate_size() != 0) {
             bool progressed = false;
-            while (queue.try_pop(record)) {
+            while (queue.try_pop(writer_record)) {
                 progressed = true;
                 RawTapeDiskRecordHeader disk;
-                disk.tape_sequence = record.tape_sequence;
-                disk.connection_epoch = record.connection_epoch;
-                disk.receive_monotonic_ns = record.receive_monotonic_ns;
-                disk.receive_wall_ns = record.receive_wall_ns;
-                disk.venue = record.venue;
-                disk.payload_size = record.payload_size;
+                disk.tape_sequence = writer_record.tape_sequence;
+                disk.connection_epoch = writer_record.connection_epoch;
+                disk.receive_monotonic_ns = writer_record.receive_monotonic_ns;
+                disk.receive_wall_ns = writer_record.receive_wall_ns;
+                disk.venue = writer_record.venue;
+                disk.payload_size = writer_record.payload_size;
                 output.write(reinterpret_cast<const char*>(&disk), sizeof(disk));
-                output.write(reinterpret_cast<const char*>(record.payload.data()),
-                             static_cast<std::streamsize>(record.payload_size));
+                output.write(reinterpret_cast<const char*>(writer_record.payload.data()),
+                             static_cast<std::streamsize>(writer_record.payload_size));
                 if (!output) {
                     writer_healthy.store(false, std::memory_order_release);
                     evidence_valid.store(false, std::memory_order_release);
@@ -264,7 +268,9 @@ bool ExternalRawTapeRecorder::try_record_raw(
         if (impl_) impl_->evidence_valid.store(false, std::memory_order_release);
         return false;
     }
-    RawTapeRecord record;
+    // Each recorder has exactly one IO producer, so the recorder-owned scratch
+    // record avoids a multi-megabyte hot-path stack allocation.
+    auto& record = impl_->producer_record;
     record.tape_sequence = impl_->next_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
     record.connection_epoch = connection_epoch;
     record.receive_monotonic_ns = receive_monotonic_ns;

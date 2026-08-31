@@ -22,8 +22,11 @@ inline constexpr std::uint32_t kExternalTapeSchemaVersion = 3;
 inline constexpr std::uint32_t kExternalTapeOldestReplaySchemaVersion = 1;
 inline constexpr std::size_t kExternalTapePayloadBytes = 512;
 inline constexpr std::size_t kExternalTapeQueueCapacity = 4096;
-inline constexpr std::size_t kExternalRawTapePayloadBytes = 32 * 1024;
-inline constexpr std::size_t kExternalRawTapeQueueCapacity = 256;
+// A Coinbase BTC-USD level2 recovery snapshot can be larger than 1 MiB. Keep
+// it intact in the raw causal tape, while retaining the prior 8 MiB per-source
+// queue-and-scratch memory budget through a shallower SPSC queue.
+inline constexpr std::size_t kExternalRawTapePayloadBytes = 2 * 1024 * 1024;
+inline constexpr std::size_t kExternalRawTapeQueueCapacity = 2;
 
 enum class TapeRecordKind : std::uint16_t {
     OracleEvent = 1,

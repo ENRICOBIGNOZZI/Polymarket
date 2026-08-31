@@ -92,10 +92,13 @@ int main() {
     {
         ExternalRawTapeRecorder raw_recorder(raw_path, sha, "run-raw", "session-raw", "binance-spot", 1'000'002);
         assert(raw_recorder.try_record_raw(VenueId::BinanceSpot, 3, 120, 1'020, R"({"e":"depthUpdate"})"));
-        assert(!raw_recorder.try_record_raw(VenueId::BinanceSpot, 3, 121, 1'021,
+        const std::string full_coinbase_l2_snapshot((1U << 20U) + 64U, 'x');
+        assert(raw_recorder.try_record_raw(VenueId::CoinbaseSpot, 3, 121, 1'021,
+                                            full_coinbase_l2_snapshot));
+        assert(!raw_recorder.try_record_raw(VenueId::BinanceSpot, 3, 122, 1'022,
                                              std::string(kExternalRawTapePayloadBytes + 1, 'x')));
         const auto raw_snapshot = raw_recorder.snapshot();
-        assert(raw_snapshot.accepted == 1);
+        assert(raw_snapshot.accepted == 2);
         assert(raw_snapshot.evidence_valid == 0);
     }
     std::ifstream raw_input(raw_path, std::ios::binary);
