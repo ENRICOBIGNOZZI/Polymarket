@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import sys
 import tempfile
@@ -128,6 +129,19 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
             self.assertEqual(monitor.dropped, 0)
             self.assertEqual(monitor.duplicates, 1)
             self.assertEqual(monitor.malformed_frames, 0)
+
+    def test_malformed_frame_is_bounded_raw_evidence_not_tape_loss(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            monitor = module.Monitor(root, "a" * 40)
+            monitor.connection_epoch = 2
+            payload = b"not json"
+            monitor.record_malformed_frame(payload, "invalid_json")
+            self.assertEqual(monitor.dropped, 0)
+            self.assertEqual(monitor.malformed_frames, 1)
+            record = json.loads((root / "rtds_rejected_frames.jsonl").read_text())
+            self.assertEqual(record["payload_sha256"], hashlib.sha256(payload).hexdigest())
+            self.assertEqual(record["captured_payload_base64"], "bm90IGpzb24=")
 
     def test_boundary_reference_is_causal_bounded_and_prefers_latest(self) -> None:
         history = {

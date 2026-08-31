@@ -41,6 +41,7 @@ REFERENCE_MAX_GAP_MS = 2_000
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 FRESH_NS = 3_000_000_000
 LATENCY_SAMPLE_LIMIT = 2_048
+MALFORMED_FRAME_CAPTURE_BYTES = 4 * 1024
 
 
 def load_registered_calibration(
@@ -384,6 +385,7 @@ class Monitor:
         self.oracle_history: dict[int, dict[str, Any]] = {}
         self.accepted = self.written = self.dropped = self.duplicates = 0
         self.malformed_frames = 0
+        self.last_malformed_frame: dict[str, Any] = {}
         self.connection_epoch = self.reconnects = self.gaps = 0
         self.last_error = "starting"
         self.last_contract_refresh_ns = 0
@@ -440,6 +442,30 @@ class Monitor:
         self.accepted += 1
         append_jsonl(self.root / "rtds_events.jsonl", enriched)
         self.written += 1
+
+    def record_malformed_frame(self, payload: bytes, error: str) -> None:
+        """Retain bounded public-wire evidence without treating it as tape loss."""
+        self.malformed_frames += 1
+        captured = payload[:MALFORMED_FRAME_CAPTURE_BYTES]
+        record = {
+            "schema": "polymarket_v7_rtds_rejected_frame_v1",
+            "receive_wall_ns": time.time_ns(),
+            "connection_epoch": self.connection_epoch,
+            "error": error,
+            "payload_bytes": len(payload),
+            "payload_sha256": hashlib.sha256(payload).hexdigest(),
+            "captured_payload_base64": base64.b64encode(captured).decode("ascii"),
+            "payload_truncated": len(captured) != len(payload),
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+        }
+        self.last_malformed_frame = {
+            key: record[key] for key in (
+                "connection_epoch", "error", "payload_bytes", "payload_sha256", "payload_truncated"
+            )
+        }
+        append_jsonl(self.root / "rtds_rejected_frames.jsonl", record)
 
     def refresh_contract(self, now_ns: int) -> None:
         if self.universe_path is None or now_ns - self.last_contract_refresh_ns < 15_000_000_000:
@@ -836,7 +862,8 @@ class Monitor:
             "tape": {"evidence_valid": True, "accepted": self.accepted,
                      "written": self.written, "dropped": self.dropped,
                      "duplicates": self.duplicates,
-                     "malformed_frames": self.malformed_frames},
+                     "malformed_frames": self.malformed_frames,
+                     "last_malformed_frame": self.last_malformed_frame},
             "blockers": (["CONTRACT_BINDING_NOT_RUNNING"] if not self.active_contract else [])
                         + (["CONTRACT_RULES_NOT_AUTHORIZED"] if self.active_contract and not self.active_contract.get("rules_hash_recognized") else [])
                         + (["SETTLEMENT_REFERENCE_NOT_CAPTURED"] if not self.reference.get("valid") else [])
@@ -897,12 +924,15 @@ class Monitor:
                     if fragment_opcode == 0x1:
                         try:
                             decoded = json.loads(fragments.decode("utf-8"))
-                        except (UnicodeDecodeError, json.JSONDecodeError):
+                        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                             # An unparseable wire frame contains no qualified
                             # observation.  Keep it distinct from a dropped
                             # accepted tape event so evidence loss remains
                             # auditable.
-                            self.malformed_frames += 1
+                            self.record_malformed_frame(
+                                bytes(fragments),
+                                "invalid_utf8" if isinstance(exc, UnicodeDecodeError) else "invalid_json",
+                            )
                         else:
                             observed = False
                             for row in observations(decoded):
