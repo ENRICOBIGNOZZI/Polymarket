@@ -94,6 +94,26 @@ int main() {
     assert(three.venue_dispersion_bps >= 0.0);
     assert(std::isfinite(three.aggregate_ofi));
 
+    // One dislocated but syntactically valid feed must not pull a weighted
+    // mean away from the independent venue cluster. Its raw event is still
+    // accepted and taped; only composite membership is excluded.
+    ExternalAssetState robust(500);
+    assert(robust.on_venue_event(book(VenueId::BinanceSpot, 1, 200, 99.9, 100.1, 1, 1), policy));
+    assert(robust.on_venue_event(book(VenueId::CoinbaseSpot, 1, 201, 100.0, 100.2, 1, 1), policy));
+    assert(robust.on_venue_event(book(VenueId::BybitSpot, 1, 202, 129.9, 130.1, 1, 1), policy));
+    const auto robust_snapshot = robust.snapshot(203, policy);
+    assert(robust_snapshot.valid == 1);
+    assert(robust_snapshot.venue_count_fresh == 2);
+    assert(robust_snapshot.venue_health_mask == 0x3);
+    assert(robust_snapshot.venue_composite_price > 99.9 && robust_snapshot.venue_composite_price < 100.2);
+    auto outlier_trade = book(VenueId::BybitSpot, 1, 203, 0.0, 0.0, 0.0, 0.0);
+    outlier_trade.event_type = ExternalEventType::Trade;
+    outlier_trade.trade_price = 130.0;
+    outlier_trade.trade_size = 10'000.0;
+    outlier_trade.trade_side = 1;
+    assert(robust.on_venue_event(outlier_trade, policy));
+    assert(std::abs(robust.snapshot(203, policy).aggregate_trade_imbalance) < 1e-12);
+
     // Binance bookTicker and aggregate-trade IDs are different source
     // sequence domains. A trade must not invalidate a subsequent book update
     // or be rejected merely because its ID is below the latest book ID.

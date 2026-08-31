@@ -16,6 +16,10 @@ struct ExternalStatePolicy {
     std::array<double, kVenueCount> venue_weights{0.34, 0.33, 0.33, 0.0, 0.0};
     std::int64_t max_venue_age_ns = 1'000'000'000LL;
     std::uint32_t min_healthy_venues = 2;
+    // A fresh venue that is this far from the weighted-median log-price is
+    // excluded from the composite for that causal cut. It remains observable
+    // through transport/tape status; exclusion never rewrites its raw event.
+    double max_composite_deviation_bps = 250.0;
     double vol_fast_alpha = 0.20;
     double vol_medium_alpha = 0.05;
     double vol_slow_alpha = 0.01;

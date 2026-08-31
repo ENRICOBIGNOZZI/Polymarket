@@ -197,7 +197,10 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
     double weight_sum = 0.0;
     for (std::size_t i = 0; i < venues_.size(); ++i) {
         const auto& row = venues_[i];
-        if (row.valid == 0) continue;
+        // Flow features use exactly the same robust venue membership as the
+        // price composite. A dislocated feed may remain connected and emit
+        // trades, but must not re-enter through an ancillary feature.
+        if (row.valid == 0 || (health_mask & (1U << static_cast<unsigned>(i))) == 0U) continue;
         const double weight = finite(policy.venue_weights[i])
             ? std::max(0.0, policy.venue_weights[i]) : 0.0;
         ofi_sum += weight * row.ofi;
@@ -224,11 +227,14 @@ double ExternalAssetState::compute_composite(
     std::uint32_t* health_mask,
     std::uint32_t* fresh_count) const noexcept {
 
-    double log_sum = 0.0;
-    double micro_sum = 0.0;
-    double weight_sum = 0.0;
-    std::uint32_t mask = 0;
-    std::uint32_t count = 0;
+    struct Candidate {
+        std::size_t index = 0;
+        double log_mid = 0.0;
+        double weight = 0.0;
+    };
+    std::array<Candidate, kVenueCount> candidates{};
+    std::size_t candidate_count = 0;
+    double candidate_weight_sum = 0.0;
     for (std::size_t i = 0; i < venues_.size(); ++i) {
         const auto& venue = venues_[i];
         const bool fresh = venue.valid != 0 && venue.healthy != 0 && venue.gap == 0
@@ -239,10 +245,43 @@ double ExternalAssetState::compute_composite(
         const double weight = finite(policy.venue_weights[i])
             ? std::max(0.0, policy.venue_weights[i]) : 0.0;
         if (weight <= 0.0) continue;
-        log_sum += weight * std::log(venue.mid);
-        micro_sum += weight * (venue.microprice > 0.0 ? venue.microprice : venue.mid);
-        weight_sum += weight;
-        mask |= (1U << static_cast<unsigned>(i));
+        candidates[candidate_count++] = Candidate{i, std::log(venue.mid), weight};
+        candidate_weight_sum += weight;
+    }
+
+    // A weighted median gives one dislocated feed no leverage over the
+    // reference used to decide composite membership. Sorting at most five
+    // elements is bounded, allocation-free, and deterministic.
+    double median_log = 0.0;
+    if (candidate_count > 0 && candidate_weight_sum > kEps) {
+        std::sort(candidates.begin(), candidates.begin() + static_cast<std::ptrdiff_t>(candidate_count),
+                  [](const Candidate& left, const Candidate& right) { return left.log_mid < right.log_mid; });
+        double accumulated_weight = 0.0;
+        for (std::size_t i = 0; i < candidate_count; ++i) {
+            accumulated_weight += candidates[i].weight;
+            if (accumulated_weight >= 0.5 * candidate_weight_sum) {
+                median_log = candidates[i].log_mid;
+                break;
+            }
+        }
+    }
+
+    const double max_deviation_bps = finite(policy.max_composite_deviation_bps)
+        ? std::max(0.0, policy.max_composite_deviation_bps) : 0.0;
+    const double max_deviation_log = max_deviation_bps / 10'000.0;
+    double log_sum = 0.0;
+    double micro_sum = 0.0;
+    double weight_sum = 0.0;
+    std::uint32_t mask = 0;
+    std::uint32_t count = 0;
+    for (std::size_t candidate = 0; candidate < candidate_count; ++candidate) {
+        const auto& row = candidates[candidate];
+        if (std::abs(row.log_mid - median_log) > max_deviation_log) continue;
+        const auto& venue = venues_[row.index];
+        log_sum += row.weight * row.log_mid;
+        micro_sum += row.weight * (venue.microprice > 0.0 ? venue.microprice : venue.mid);
+        weight_sum += row.weight;
+        mask |= (1U << static_cast<unsigned>(row.index));
         ++count;
     }
     const double composite = weight_sum > kEps ? std::exp(log_sum / weight_sum) : 0.0;
