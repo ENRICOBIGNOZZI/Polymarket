@@ -384,7 +384,7 @@ class Monitor:
         }
         self.oracle_history: dict[int, dict[str, Any]] = {}
         self.accepted = self.written = self.dropped = self.duplicates = 0
-        self.malformed_frames = 0
+        self.empty_frames = self.malformed_frames = 0
         self.last_malformed_frame: dict[str, Any] = {}
         self.connection_epoch = self.reconnects = self.gaps = 0
         self.last_error = "starting"
@@ -466,6 +466,10 @@ class Monitor:
             )
         }
         append_jsonl(self.root / "rtds_rejected_frames.jsonl", record)
+
+    def record_empty_frame(self) -> None:
+        """RTDS emits an empty text-frame keepalive after subscribing."""
+        self.empty_frames += 1
 
     def refresh_contract(self, now_ns: int) -> None:
         if self.universe_path is None or now_ns - self.last_contract_refresh_ns < 15_000_000_000:
@@ -862,6 +866,7 @@ class Monitor:
             "tape": {"evidence_valid": True, "accepted": self.accepted,
                      "written": self.written, "dropped": self.dropped,
                      "duplicates": self.duplicates,
+                     "empty_frames": self.empty_frames,
                      "malformed_frames": self.malformed_frames,
                      "last_malformed_frame": self.last_malformed_frame},
             "blockers": (["CONTRACT_BINDING_NOT_RUNNING"] if not self.active_contract else [])
@@ -922,24 +927,27 @@ class Monitor:
                     if not final:
                         continue
                     if fragment_opcode == 0x1:
-                        try:
-                            decoded = json.loads(fragments.decode("utf-8"))
-                        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                            # An unparseable wire frame contains no qualified
-                            # observation.  Keep it distinct from a dropped
-                            # accepted tape event so evidence loss remains
-                            # auditable.
-                            self.record_malformed_frame(
-                                bytes(fragments),
-                                "invalid_utf8" if isinstance(exc, UnicodeDecodeError) else "invalid_json",
-                            )
+                        if not fragments:
+                            self.record_empty_frame()
                         else:
-                            observed = False
-                            for row in observations(decoded):
-                                self.ingest(row)
-                                observed = True
-                            if observed:
-                                last_observation_monotonic = time.monotonic()
+                            try:
+                                decoded = json.loads(fragments.decode("utf-8"))
+                            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                                # An unparseable wire frame contains no qualified
+                                # observation.  Keep it distinct from a dropped
+                                # accepted tape event so evidence loss remains
+                                # auditable.
+                                self.record_malformed_frame(
+                                    bytes(fragments),
+                                    "invalid_utf8" if isinstance(exc, UnicodeDecodeError) else "invalid_json",
+                                )
+                            else:
+                                observed = False
+                                for row in observations(decoded):
+                                    self.ingest(row)
+                                    observed = True
+                                if observed:
+                                    last_observation_monotonic = time.monotonic()
                     fragments, fragment_opcode = bytearray(), 0
                     self.last_error = ""
                     self.publish()

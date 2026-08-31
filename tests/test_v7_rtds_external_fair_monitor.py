@@ -128,6 +128,7 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
             self.assertEqual(monitor.written, 1)
             self.assertEqual(monitor.dropped, 0)
             self.assertEqual(monitor.duplicates, 1)
+            self.assertEqual(monitor.empty_frames, 0)
             self.assertEqual(monitor.malformed_frames, 0)
 
     def test_malformed_frame_is_bounded_raw_evidence_not_tape_loss(self) -> None:
@@ -142,6 +143,14 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
             record = json.loads((root / "rtds_rejected_frames.jsonl").read_text())
             self.assertEqual(record["payload_sha256"], hashlib.sha256(payload).hexdigest())
             self.assertEqual(record["captured_payload_base64"], "bm90IGpzb24=")
+
+    def test_empty_text_frame_is_a_keepalive_not_a_malformed_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            monitor = module.Monitor(Path(directory), "a" * 40)
+            monitor.record_empty_frame()
+            self.assertEqual(monitor.empty_frames, 1)
+            self.assertEqual(monitor.malformed_frames, 0)
+            self.assertEqual(monitor.dropped, 0)
 
     def test_boundary_reference_is_causal_bounded_and_prefers_latest(self) -> None:
         history = {
