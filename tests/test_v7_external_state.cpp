@@ -48,6 +48,24 @@ ExternalVenueEvent book(VenueId venue, std::uint64_t seq, std::int64_t receive_n
     return event;
 }
 
+ExternalVenueEvent derivative_context(VenueId venue, std::int64_t receive_ns) {
+    ExternalVenueEvent event;
+    event.asset_handle = 500;
+    event.connection_epoch = 1;
+    event.venue = venue;
+    event.event_type = ExternalEventType::DerivativeContext;
+    event.local_receive_monotonic_ns = receive_ns;
+    event.local_receive_wall_ns = receive_ns + 1'000;
+    event.mark_price = 100.1;
+    event.index_price = 100.0;
+    event.funding_rate = -0.0001;
+    event.open_interest = 123.0;
+    event.context_valid_mask = DerivativeContextMarkPrice | DerivativeContextIndexPrice
+        | DerivativeContextFundingRate | DerivativeContextOpenInterest;
+    event.healthy = 1;
+    return event;
+}
+
 } // namespace
 
 int main() {
@@ -139,6 +157,33 @@ int main() {
     const auto contextual_derivative = external.snapshot(220, policy);
     assert(contextual_derivative.venue_count_fresh == 3);
     assert(contextual_derivative.venue_health_mask == 0x7);
+
+    // Derivative observations carry their own freshness and stay zero-weight
+    // contextual inputs; they neither replace nor refresh an executable book.
+    assert(external.on_venue_event(derivative_context(VenueId::Deribit, 220), policy));
+    assert(external.on_venue_event(derivative_context(VenueId::BybitLinear, 221), policy));
+    const auto with_context = external.snapshot(222, policy);
+    assert(with_context.derivative_contexts[0].venue == VenueId::Deribit);
+    assert(with_context.derivative_contexts[0].valid_mask
+        == (DerivativeContextMarkPrice | DerivativeContextIndexPrice
+            | DerivativeContextFundingRate | DerivativeContextOpenInterest));
+    assert(std::abs(with_context.derivative_contexts[0].funding_rate + 0.0001) < 1e-12);
+    assert(with_context.derivative_contexts[1].venue == VenueId::BybitLinear);
+    assert(with_context.derivative_contexts[1].open_interest == 123.0);
+    assert(with_context.venue_composite_price > 99.9 && with_context.venue_composite_price < 100.2);
+
+    ExternalStatePolicy short_age = policy;
+    short_age.max_venue_age_ns = 10;
+    ExternalAssetState book_freshness(500);
+    assert(book_freshness.on_venue_event(book(VenueId::BinanceSpot, 1, 300, 99.9, 100.1, 1, 1), short_age));
+    assert(book_freshness.on_venue_event(book(VenueId::CoinbaseSpot, 1, 301, 100.0, 100.2, 1, 1), short_age));
+    auto late_trade = book(VenueId::BinanceSpot, 1, 320, 0.0, 0.0, 0.0, 0.0);
+    late_trade.event_type = ExternalEventType::Trade;
+    late_trade.trade_price = 100.0;
+    late_trade.trade_size = 1.0;
+    late_trade.trade_side = 1;
+    assert(book_freshness.on_venue_event(late_trade, short_age));
+    assert(book_freshness.snapshot(320, short_age).valid == 0);
 
     external.on_oracle_snapshot(recovered);
     auto with_oracle = external.snapshot(221, policy);

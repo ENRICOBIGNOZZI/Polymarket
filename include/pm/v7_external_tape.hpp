@@ -15,7 +15,10 @@
 
 namespace pm::v7::external_fair {
 
-inline constexpr std::uint32_t kExternalTapeSchemaVersion = 1;
+// V2 extends ExternalVenueEvent with derivative-context fields. Replayers
+// retain an explicit V1 adapter; writers never reuse an old payload ABI.
+inline constexpr std::uint32_t kExternalTapeSchemaVersion = 2;
+inline constexpr std::uint32_t kExternalTapeOldestReplaySchemaVersion = 1;
 inline constexpr std::size_t kExternalTapePayloadBytes = 512;
 inline constexpr std::size_t kExternalTapeQueueCapacity = 4096;
 inline constexpr std::size_t kExternalRawTapePayloadBytes = 32 * 1024;

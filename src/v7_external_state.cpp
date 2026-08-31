@@ -109,6 +109,14 @@ std::size_t ExternalAssetState::venue_index(VenueId venue) noexcept {
     }
 }
 
+std::size_t ExternalAssetState::derivative_context_index(VenueId venue) noexcept {
+    switch (venue) {
+        case VenueId::Deribit: return 0;
+        case VenueId::BybitLinear: return 1;
+        default: return kDerivativeContextVenueCount;
+    }
+}
+
 bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
                                         const ExternalStatePolicy& policy) noexcept {
     const std::size_t index = venue_index(event.venue);
@@ -129,7 +137,6 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
         && venue.connection_epoch != event.connection_epoch;
     if (epoch_changed || event.gap != 0) venue.valid = 0;
     venue.connection_epoch = event.connection_epoch;
-    venue.last_receive_ns = event.local_receive_monotonic_ns;
     venue.healthy = event.healthy;
     venue.gap = event.gap;
 
@@ -150,6 +157,7 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
         venue.bid_size = event.bid_size;
         venue.ask_size = event.ask_size;
         venue.book_source_sequence = event.source_sequence;
+        venue.last_book_receive_ns = event.local_receive_monotonic_ns;
         venue.mid = 0.5 * (event.bid + event.ask);
         const double total_depth = event.bid_size + event.ask_size;
         venue.microprice = total_depth > kEps
@@ -168,6 +176,32 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
         }
     } else if (event.event_type == ExternalEventType::Health) {
         if (event.healthy == 0 || event.gap != 0) venue.valid = 0;
+    } else if (event.event_type == ExternalEventType::DerivativeContext) {
+        const auto derivative_index = derivative_context_index(event.venue);
+        const auto mask = event.context_valid_mask;
+        const bool invalid = derivative_index >= kDerivativeContextVenueCount || mask == 0
+            || (mask & ~static_cast<std::uint8_t>(DerivativeContextMarkPrice
+                | DerivativeContextIndexPrice | DerivativeContextFundingRate
+                | DerivativeContextOpenInterest)) != 0
+            || ((mask & DerivativeContextMarkPrice) != 0
+                && (!finite(event.mark_price) || event.mark_price <= 0.0))
+            || ((mask & DerivativeContextIndexPrice) != 0
+                && (!finite(event.index_price) || event.index_price <= 0.0))
+            || ((mask & DerivativeContextFundingRate) != 0 && !finite(event.funding_rate))
+            || ((mask & DerivativeContextOpenInterest) != 0
+                && (!finite(event.open_interest) || event.open_interest < 0.0));
+        if (invalid) {
+            ++state_version_;
+            return false;
+        }
+        if ((mask & DerivativeContextMarkPrice) != 0) venue.mark_price = event.mark_price;
+        if ((mask & DerivativeContextIndexPrice) != 0) venue.index_price = event.index_price;
+        if ((mask & DerivativeContextFundingRate) != 0) venue.funding_rate = event.funding_rate;
+        if ((mask & DerivativeContextOpenInterest) != 0) venue.open_interest = event.open_interest;
+        venue.context_valid_mask |= mask;
+        venue.context_receive_ns = event.local_receive_monotonic_ns;
+        venue.context_healthy = event.healthy;
+        venue.context_gap = event.gap;
     }
 
     latest_receive_ns_ = std::max(latest_receive_ns_, event.local_receive_monotonic_ns);
@@ -244,8 +278,8 @@ double ExternalAssetState::compute_composite(
     for (std::size_t i = 0; i < venues_.size(); ++i) {
         const auto& venue = venues_[i];
         const bool fresh = venue.valid != 0 && venue.healthy != 0 && venue.gap == 0
-            && venue.last_receive_ns > 0 && venue.last_receive_ns <= now_ns
-            && now_ns - venue.last_receive_ns <= policy.max_venue_age_ns
+            && venue.last_book_receive_ns > 0 && venue.last_book_receive_ns <= now_ns
+            && now_ns - venue.last_book_receive_ns <= policy.max_venue_age_ns
             && finite(venue.mid) && venue.mid > 0.0;
         if (!fresh) continue;
         const double weight = finite(policy.venue_weights[i])
@@ -312,8 +346,8 @@ double ExternalAssetState::compute_composite(
         for (std::size_t i = 0; i < venues_.size(); ++i) {
             const auto& venue = venues_[i];
             const bool fresh = venue.valid != 0 && venue.healthy != 0 && venue.gap == 0
-                && venue.last_receive_ns > 0 && venue.last_receive_ns <= now_ns
-                && now_ns - venue.last_receive_ns <= policy.max_venue_age_ns
+                && venue.last_book_receive_ns > 0 && venue.last_book_receive_ns <= now_ns
+                && now_ns - venue.last_book_receive_ns <= policy.max_venue_age_ns
                 && finite(venue.mid) && venue.mid > 0.0;
             if (!fresh) continue;
             max_residual = std::max(max_residual,
@@ -404,6 +438,27 @@ ExternalAssetSnapshot ExternalAssetState::snapshot(
     out.venue_composite_return_250ms = lagged_return(now_ns, 250'000'000LL, composite);
     out.venue_composite_return_1s = lagged_return(now_ns, 1'000'000'000LL, composite);
     out.venue_composite_return_5s = lagged_return(now_ns, 5'000'000'000LL, composite);
+    constexpr std::array<VenueId, kDerivativeContextVenueCount> derivative_venues{
+        VenueId::Deribit, VenueId::BybitLinear};
+    for (std::size_t i = 0; i < derivative_venues.size(); ++i) {
+        const auto& venue = venues_[venue_index(derivative_venues[i])];
+        auto& context = out.derivative_contexts[i];
+        context.venue = derivative_venues[i];
+        context.mark_price = venue.mark_price;
+        context.index_price = venue.index_price;
+        context.funding_rate = venue.funding_rate;
+        context.open_interest = venue.open_interest;
+        context.receive_monotonic_ns = venue.context_receive_ns;
+        if (now_ns >= venue.context_receive_ns && venue.context_receive_ns > 0) {
+            context.age_ns = now_ns - venue.context_receive_ns;
+        }
+        const bool fresh = venue.context_receive_ns > 0 && venue.context_receive_ns <= now_ns
+            && now_ns - venue.context_receive_ns <= policy.max_venue_age_ns;
+        context.valid_mask = fresh && venue.context_healthy != 0 && venue.context_gap == 0
+            ? venue.context_valid_mask : 0;
+        context.healthy = venue.context_healthy;
+        context.gap = venue.context_gap;
+    }
     out.valid = asset_handle_ > 0 && state_version_ > 0 && composite > 0.0
         && count >= policy.min_healthy_venues && latest_receive_ns_ > 0
         && latest_receive_ns_ <= now_ns ? 1 : 0;

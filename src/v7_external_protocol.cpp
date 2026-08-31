@@ -458,6 +458,26 @@ void decode_deribit(const json::object& root, std::uint64_t asset_handle,
         }
         event.healthy = 1;
         emit(result, output, event);
+        ExternalVenueEvent context = event;
+        context.event_type = ExternalEventType::DerivativeContext;
+        context.context_valid_mask = 0;
+        if (parse_double(find_value(ticker, "mark_price"), context.mark_price)
+            && context.mark_price > 0.0) {
+            context.context_valid_mask |= DerivativeContextMarkPrice;
+        }
+        if (parse_double(find_value(ticker, "index_price"), context.index_price)
+            && context.index_price > 0.0) {
+            context.context_valid_mask |= DerivativeContextIndexPrice;
+        }
+        if (parse_double(find_value(ticker, "current_funding"), context.funding_rate)
+            && std::isfinite(context.funding_rate)) {
+            context.context_valid_mask |= DerivativeContextFundingRate;
+        }
+        if (parse_double(find_value(ticker, "open_interest"), context.open_interest)
+            && context.open_interest >= 0.0) {
+            context.context_valid_mask |= DerivativeContextOpenInterest;
+        }
+        if (context.context_valid_mask != 0) emit(result, output, context);
         return;
     }
     if (channel.starts_with("trades.BTC-PERPETUAL.") && data != nullptr && data->is_array()) {

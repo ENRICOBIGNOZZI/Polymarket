@@ -853,14 +853,34 @@ json::object bybit_linear_json(const BybitLinearMarketMetrics& value) {
     };
 }
 
+json::array derivative_context_json(const ExternalAssetSnapshot& snapshot) {
+    json::array output;
+    for (const auto& value : snapshot.derivative_contexts) {
+        const char* venue = value.venue == VenueId::Deribit ? "DERIBIT"
+            : value.venue == VenueId::BybitLinear ? "BYBIT_LINEAR" : "UNKNOWN";
+        output.emplace_back(json::object{
+            {"venue", venue}, {"valid_mask", value.valid_mask},
+            {"healthy", value.healthy != 0}, {"gap", value.gap != 0},
+            {"mark_price", value.mark_price}, {"index_price", value.index_price},
+            {"funding_rate", value.funding_rate}, {"open_interest_native", value.open_interest},
+            {"receive_monotonic_ns", value.receive_monotonic_ns}, {"age_ns", value.age_ns},
+        });
+    }
+    return output;
+}
+
 class BybitLinearMarketObserver final : public ExternalFrameObserver {
 public:
+    BybitLinearMarketObserver(ExternalVenueIngress& ingress,
+                              std::uint64_t asset_handle) noexcept
+        : ingress_(ingress), asset_handle_(asset_handle) {}
+
     void on_connection_epoch(std::uint64_t) noexcept override {
         std::lock_guard lock(mutex_);
         metrics_.valid = 0;
     }
 
-    void on_frame(std::uint64_t, std::int64_t receive_ns, std::int64_t,
+    void on_frame(std::uint64_t epoch, std::int64_t receive_ns, std::int64_t wall_ns,
                   std::string_view payload) noexcept override {
         try {
             boost::system::error_code error;
@@ -871,10 +891,35 @@ public:
             const auto* data = json_field(root, "data");
             if (topic == nullptr || !topic->is_string() || data == nullptr) return;
             const std::string_view channel(topic->as_string().data(), topic->as_string().size());
-            std::lock_guard lock(mutex_);
-            if (channel == "tickers.BTCUSDT" && data->is_object()) update_ticker(data->as_object(), receive_ns);
-            else if (channel == "publicTrade.BTCUSDT" && data->is_array()) update_trades(data->as_array());
-            else if (channel == "allLiquidation.BTCUSDT" && data->is_object()) update_liquidation(data->as_object());
+            if (channel == "tickers.BTCUSDT" && data->is_object()) {
+                ExternalVenueEvent context;
+                bool publish = false;
+                {
+                    std::lock_guard lock(mutex_);
+                    std::uint8_t update_mask = 0;
+                    if (update_ticker(data->as_object(), receive_ns, update_mask)
+                        && update_mask != 0) {
+                        context.asset_handle = asset_handle_;
+                        context.connection_epoch = epoch;
+                        context.venue = VenueId::BybitLinear;
+                        context.event_type = ExternalEventType::DerivativeContext;
+                        context.local_receive_monotonic_ns = receive_ns;
+                        context.local_receive_wall_ns = wall_ns;
+                        context.mark_price = metrics_.mark_price;
+                        context.index_price = metrics_.index_price;
+                        context.funding_rate = metrics_.funding_rate;
+                        context.open_interest = metrics_.open_interest;
+                        context.context_valid_mask = update_mask;
+                        context.healthy = 1;
+                        publish = true;
+                    }
+                }
+                if (publish) (void)ingress_.on_event(context);
+            } else {
+                std::lock_guard lock(mutex_);
+                if (channel == "publicTrade.BTCUSDT" && data->is_array()) update_trades(data->as_array());
+                else if (channel == "allLiquidation.BTCUSDT" && data->is_object()) update_liquidation(data->as_object());
+            }
         } catch (...) { fail(); }
     }
 
@@ -887,6 +932,7 @@ private:
     void fail() noexcept { std::lock_guard lock(mutex_); ++metrics_.parse_failures; metrics_.valid = 0; }
 
     bool update_optional(const json::object& data, std::string_view key, double& target,
+                         std::uint8_t field, std::uint8_t& update_mask,
                          bool nonnegative = false) noexcept {
         const auto* value = json_field(data, key);
         if (value == nullptr) return true;
@@ -894,19 +940,26 @@ private:
         if (!json_number(value, parsed) || (!nonnegative && !std::isfinite(parsed))
             || (nonnegative && parsed < 0.0)) return false;
         target = parsed;
+        update_mask |= field;
         return true;
     }
 
-    void update_ticker(const json::object& data, std::int64_t receive_ns) noexcept {
-        if (!update_optional(data, "markPrice", metrics_.mark_price)
-            || !update_optional(data, "indexPrice", metrics_.index_price)
-            || !update_optional(data, "fundingRate", metrics_.funding_rate)
-            || !update_optional(data, "openInterest", metrics_.open_interest, true)) {
-            ++metrics_.parse_failures; metrics_.valid = 0; return;
+    bool update_ticker(const json::object& data, std::int64_t receive_ns,
+                       std::uint8_t& update_mask) noexcept {
+        if (!update_optional(data, "markPrice", metrics_.mark_price,
+                             DerivativeContextMarkPrice, update_mask)
+            || !update_optional(data, "indexPrice", metrics_.index_price,
+                                DerivativeContextIndexPrice, update_mask)
+            || !update_optional(data, "fundingRate", metrics_.funding_rate,
+                                DerivativeContextFundingRate, update_mask)
+            || !update_optional(data, "openInterest", metrics_.open_interest,
+                                DerivativeContextOpenInterest, update_mask, true)) {
+            ++metrics_.parse_failures; metrics_.valid = 0; return false;
         }
         ++metrics_.ticker_frames;
         metrics_.ticker_receive_ns = receive_ns;
         metrics_.valid = metrics_.mark_price > 0.0 && metrics_.index_price > 0.0 ? 1 : 0;
+        return true;
     }
 
     void update_trades(const json::array& trades) noexcept {
@@ -932,6 +985,8 @@ private:
         else ++metrics_.parse_failures;
     }
 
+    ExternalVenueIngress& ingress_;
+    std::uint64_t asset_handle_ = 0;
     mutable std::mutex mutex_{};
     BybitLinearMarketMetrics metrics_{};
 };
@@ -1023,7 +1078,7 @@ int main(int argc, char** argv) {
         CoinbaseL2Observer coinbase_l2(coinbase_ingress, asset_handle);
         BybitL2Observer bybit_l2(bybit_ingress, asset_handle);
         BybitL2Observer bybit_linear_l2(bybit_linear_ingress, asset_handle, VenueId::BybitLinear);
-        BybitLinearMarketObserver bybit_linear_market;
+        BybitLinearMarketObserver bybit_linear_market(bybit_linear_ingress, asset_handle);
         FanoutObserver bybit_linear_observer(bybit_linear_l2, bybit_linear_market);
         BinanceUsdMObserver binance_usdm_observer;
         DeribitObserver deribit_observer;
@@ -1119,6 +1174,7 @@ int main(int argc, char** argv) {
                 {"aggregate_ofi", snapshot.aggregate_ofi},
                 {"aggregate_trade_imbalance", snapshot.aggregate_trade_imbalance},
                 {"latest_input_receive_monotonic_ns", snapshot.latest_input_receive_monotonic_ns},
+                {"derivative_contexts", derivative_context_json(snapshot)},
                 {"drained_last_cycle", drained},
                 {"normalized_snapshot_tape", tape_json(tape_status, normalized_tape != nullptr)},
                 {"normalized_event_tapes", {

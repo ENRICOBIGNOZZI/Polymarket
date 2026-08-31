@@ -10,6 +10,9 @@
 namespace pm::v7::external_fair {
 
 inline constexpr std::size_t kVenueCount = 5;
+// Deribit and Bybit linear are retained as distinct, contextual derivative
+// sources. They do not contribute to the default spot-composite weights.
+inline constexpr std::size_t kDerivativeContextVenueCount = 2;
 inline constexpr std::size_t kMaxAggressiveLevels = 16;
 // Four resting-quote cancels + four maker actions + two informed-taker actions
 // can coexist in one causal cut. Keep the unified selector large enough to
@@ -30,6 +33,14 @@ enum class ExternalEventType : std::uint8_t {
     BookTop = 1,
     Trade = 2,
     Health = 3,
+    DerivativeContext = 4,
+};
+
+enum DerivativeContextField : std::uint8_t {
+    DerivativeContextMarkPrice = 1U << 0U,
+    DerivativeContextIndexPrice = 1U << 1U,
+    DerivativeContextFundingRate = 1U << 2U,
+    DerivativeContextOpenInterest = 1U << 3U,
 };
 
 enum class OracleContinuity : std::uint8_t {
@@ -174,10 +185,36 @@ struct ExternalVenueEvent {
     double ask_size = 0.0;
     double trade_price = 0.0;
     double trade_size = 0.0;
+    // A derivative context is source-native and is never implicitly
+    // normalized or included in the spot composite. `context_valid_mask`
+    // specifies which of these values were present in this atomic update.
+    double mark_price = 0.0;
+    double index_price = 0.0;
+    double funding_rate = 0.0;
+    double open_interest = 0.0;
     std::int8_t trade_side = 0; // +1 buyer initiated, -1 seller initiated.
+    std::uint8_t context_valid_mask = 0;
     std::uint8_t gap = 0;
     std::uint8_t stale = 0;
     std::uint8_t healthy = 0;
+};
+
+struct ExternalDerivativeContextSnapshot {
+    // Array order is fixed: Deribit, BybitLinear. `venue` is repeated so a
+    // persisted snapshot remains self-describing if it is inspected alone.
+    VenueId venue = VenueId::Unknown;
+    std::uint8_t valid_mask = 0;
+    std::uint8_t healthy = 0;
+    std::uint8_t gap = 0;
+    std::uint32_t reserved0 = 0;
+    double mark_price = 0.0;
+    double index_price = 0.0;
+    double funding_rate = 0.0;
+    // Open interest retains the venue's native unit; it is not comparable
+    // across venues until an explicit, evidence-backed normalization exists.
+    double open_interest = 0.0;
+    std::int64_t receive_monotonic_ns = 0;
+    std::int64_t age_ns = 0;
 };
 
 struct ExternalAssetSnapshot {
@@ -220,6 +257,8 @@ struct ExternalAssetSnapshot {
     double fast_slow_vol_ratio = 0.0;
     double jump_score = 0.0;
     std::int64_t latest_input_receive_monotonic_ns = 0;
+    std::array<ExternalDerivativeContextSnapshot, kDerivativeContextVenueCount>
+        derivative_contexts{};
     std::uint8_t valid = 0;
     std::array<std::uint8_t, 7> reserved1{};
 };

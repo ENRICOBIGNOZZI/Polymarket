@@ -84,6 +84,20 @@ int main() {
     assert(output[0].source_sequence == 0); // timestamp is diagnostic, not a sequence guarantee.
     assert(output[0].exchange_event_ns == 1770000000300000000LL);
 
+    const auto deribit_ticker_with_context = decode_external_venue_frame(
+        VenueId::Deribit, 1, 40, 1'056, 2'056,
+        R"({"jsonrpc":"2.0","method":"subscription","params":{"channel":"ticker.BTC-PERPETUAL.100ms","data":{"timestamp":1770000000301,"best_bid_price":65003.0,"best_bid_amount":20,"best_ask_price":65003.5,"best_ask_amount":30,"mark_price":65003.1,"index_price":65001.0,"current_funding":-0.0001,"open_interest":12345}}})",
+        output);
+    assert(deribit_ticker_with_context.invalid_frame == 0);
+    assert(deribit_ticker_with_context.output_count == 2);
+    assert(output[0].event_type == ExternalEventType::BookTop);
+    assert(output[1].event_type == ExternalEventType::DerivativeContext);
+    assert(output[1].context_valid_mask == (DerivativeContextMarkPrice
+        | DerivativeContextIndexPrice | DerivativeContextFundingRate
+        | DerivativeContextOpenInterest));
+    assert(std::abs(output[1].mark_price - 65003.1) < 1e-9);
+    assert(std::abs(output[1].funding_rate + 0.0001) < 1e-12);
+
     const auto deribit_trade = decode_external_venue_frame(
         VenueId::Deribit, 1, 40, 1'057, 2'057,
         R"({"jsonrpc":"2.0","method":"subscription","params":{"channel":"trades.BTC-PERPETUAL.100ms","data":[{"trade_seq":88,"timestamp":1770000000310,"price":65003.2,"amount":10,"direction":"buy"}]}})",

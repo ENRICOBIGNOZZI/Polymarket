@@ -84,7 +84,11 @@ private:
         // compared against book IDs merely because they share a venue socket.
         std::uint64_t book_source_sequence = 0;
         std::uint64_t connection_epoch = 0;
-        std::int64_t last_receive_ns = 0;
+        // Only a reconstructed BookTop may refresh price compositing. Trades
+        // and derivative metrics have independent clocks and must not make an
+        // old book appear executable.
+        std::int64_t last_book_receive_ns = 0;
+        std::int64_t context_receive_ns = 0;
         double bid = 0.0;
         double ask = 0.0;
         double bid_size = 0.0;
@@ -95,10 +99,17 @@ private:
         double previous_ask_size = 0.0;
         double signed_trade_flow = 0.0;
         double ofi = 0.0;
+        double mark_price = 0.0;
+        double index_price = 0.0;
+        double funding_rate = 0.0;
+        double open_interest = 0.0;
         std::uint8_t healthy = 0;
         std::uint8_t gap = 0;
         std::uint8_t valid = 0;
-        std::uint8_t reserved = 0;
+        std::uint8_t context_valid_mask = 0;
+        std::uint8_t context_healthy = 0;
+        std::uint8_t context_gap = 0;
+        std::array<std::uint8_t, 2> reserved{};
     };
 
     struct PriceSample {
@@ -107,6 +118,7 @@ private:
     };
 
     [[nodiscard]] static std::size_t venue_index(VenueId venue) noexcept;
+    [[nodiscard]] static std::size_t derivative_context_index(VenueId venue) noexcept;
     [[nodiscard]] double compute_composite(std::int64_t now_ns,
                                            const ExternalStatePolicy& policy,
                                            double* microprice,
