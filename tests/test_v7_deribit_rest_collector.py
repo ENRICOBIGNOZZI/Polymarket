@@ -42,3 +42,23 @@ def test_surface_rejects_missing_usable_points() -> None:
         assert str(exc) == "option_surface_empty"
     else:
         raise AssertionError("empty option surface must be fail-closed")
+
+
+def test_short_dated_surface_features_gate_sparse_quotes_and_derive_valid_metrics() -> None:
+    sparse = [{"expiry_ms": 1_800_086_400_000, "strike": 100, "option_type": "call",
+               "mark_iv": 50, "mark_price": .1, "bid_iv": 49, "ask_iv": 51}]
+    invalid = collector._surface_features(sparse, spot=100, now_wall_ns=1_800_000_000_000_000_000)
+    assert invalid["valid"] is False
+    assert "MINIMUM_SHORT_DATED_QUOTE_COUNT_NOT_MET" in invalid["failure_reasons"]
+    surface = []
+    for expiry_ms, shift in ((1_800_086_400_000, 0), (1_800_172_800_000, 2)):
+        for option_type, sign in (("call", 1), ("put", -1)):
+            for strike, wing in ((90, 4), (100, 0), (110, 3)):
+                surface.append({"expiry_ms": expiry_ms, "strike": strike, "option_type": option_type,
+                                "mark_iv": 50 + shift + wing + (1 if option_type == "put" else 0),
+                                "mark_price": .1 + (110 - strike) / 1000 if option_type == "call" else .1 + (strike - 90) / 1000,
+                                "bid_iv": 49 + shift + wing, "ask_iv": 51 + shift + wing, "greeks": None})
+    valid = collector._surface_features(surface, spot=100, now_wall_ns=1_800_000_000_000_000_000)
+    assert valid["valid"] is True
+    assert valid["atm_iv"] is not None and valid["vol_term_slope_iv_per_day"] is not None
+    assert valid["interpolation_used"] is False and valid["tail_probability_available"] is False

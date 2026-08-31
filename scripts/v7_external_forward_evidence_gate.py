@@ -75,7 +75,7 @@ def evaluate(runtime: dict[str, Any], coinbase_rest: dict[str, Any], deribit_res
             failures.append(f"LIVE_SOURCE_UNHEALTHY:{field}")
     if coinbase_rest.get("state") != "OPERATIONAL_POLLING" or coinbase_rest.get("hft_trigger_eligible") is not False:
         failures.append("COINBASE_POLLING_FALLBACK_UNHEALTHY")
-    if deribit_rest.get("state") != "OPERATIONAL":
+    if deribit_rest.get("state") != "OPERATIONAL" or deribit_rest.get("option_surface_valid") is not True:
         failures.append("DERIBIT_REST_SURFACE_UNHEALTHY")
     engineering_valid = not failures
     state = "ENGINEERING_VALIDATED" if engineering_valid and duration_s >= min_duration_s else "FORWARD_EVIDENCE_INSUFFICIENT"

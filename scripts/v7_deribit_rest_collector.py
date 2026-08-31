@@ -20,6 +20,9 @@ from typing import Any
 
 
 BASE = "https://www.deribit.com/api/v2/public"
+MAX_SHORT_DATED_DAYS = 14.0
+MIN_USABLE_SHORT_DATED_QUOTES = 12
+MAX_QUOTE_WIDTH_IV = 35.0
 
 
 class DeribitRestError(ValueError):
@@ -113,10 +116,117 @@ def _option_surface(instruments: list[dict[str, Any]], summaries: Any) -> list[d
             "bid_iv": summary.get("bid_iv"), "ask_iv": summary.get("ask_iv"),
             "underlying_price": summary.get("underlying_price"),
             "open_interest": summary.get("open_interest"),
+            "greeks": summary.get("greeks"),
         })
     if not surface:
         raise DeribitRestError("option_surface_empty")
     return sorted(surface, key=lambda row: (row["expiry_ms"], row["strike"], row["option_type"]))
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    return ordered[middle] if len(ordered) % 2 else 0.5 * (ordered[middle - 1] + ordered[middle])
+
+
+def _surface_features(surface: list[dict[str, Any]], *, spot: float, now_wall_ns: int) -> dict[str, Any]:
+    """Derive only diagnostics that the currently observed quotes support.
+
+    This intentionally refuses interpolation, tail probabilities, or a
+    probability distribution when the short-dated surface does not contain a
+    sufficiently broad two-sided quote set.
+    """
+    now_ms = now_wall_ns // 1_000_000
+    failures: list[str] = []
+    short: list[dict[str, Any]] = []
+    quote_widths: list[float] = []
+    for row in surface:
+        expiry_ms = int(row["expiry_ms"])
+        days = (expiry_ms - now_ms) / 86_400_000.0
+        moneyness = float(row["strike"]) / spot
+        if not (0.0 < days <= MAX_SHORT_DATED_DAYS and 0.80 <= moneyness <= 1.20):
+            continue
+        point = {**row, "days_to_expiry": days, "moneyness": moneyness}
+        try:
+            bid_iv = _number(row.get("bid_iv"), "bid_iv", positive=True)
+            ask_iv = _number(row.get("ask_iv"), "ask_iv", positive=True)
+        except DeribitRestError:
+            point["quote_width_iv"] = None
+        else:
+            if ask_iv < bid_iv:
+                continue
+            point["quote_width_iv"] = ask_iv - bid_iv
+            quote_widths.append(ask_iv - bid_iv)
+        short.append(point)
+    if len(short) < MIN_USABLE_SHORT_DATED_QUOTES:
+        failures.append("MINIMUM_SHORT_DATED_QUOTE_COUNT_NOT_MET")
+
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for point in short:
+        grouped.setdefault(int(point["expiry_ms"]), []).append(point)
+    expiries = sorted(grouped)
+    atm_by_expiry: dict[int, float] = {}
+    risk_reversal_by_expiry: dict[int, float] = {}
+    butterfly_by_expiry: dict[int, float] = {}
+    monotonicity_violations = 0
+    for expiry in expiries:
+        points = grouped[expiry]
+        calls = [point for point in points if point["option_type"] == "call"]
+        puts = [point for point in points if point["option_type"] == "put"]
+        atm = [float(point["mark_iv"]) for point in points if 0.975 <= float(point["moneyness"]) <= 1.025]
+        value = _median(atm)
+        if value is not None:
+            atm_by_expiry[expiry] = value
+        call_wing = _median([float(point["mark_iv"]) for point in calls if float(point["moneyness"]) >= 1.025])
+        put_wing = _median([float(point["mark_iv"]) for point in puts if float(point["moneyness"]) <= 0.975])
+        if call_wing is not None and put_wing is not None:
+            risk_reversal_by_expiry[expiry] = call_wing - put_wing
+        if value is not None and call_wing is not None and put_wing is not None:
+            butterfly_by_expiry[expiry] = 0.5 * (call_wing + put_wing) - value
+        for side in (calls, puts):
+            ordered = sorted(side, key=lambda point: float(point["strike"]))
+            for left, right in zip(ordered, ordered[1:]):
+                # In BTC option price units, calls should not rise with strike
+                # and puts should not fall. This is a diagnostic only because
+                # sparse/noisy marks can otherwise falsely invalidate a tape.
+                if side is calls and float(right["mark_price"]) > float(left["mark_price"]):
+                    monotonicity_violations += 1
+                if side is puts and float(right["mark_price"]) < float(left["mark_price"]):
+                    monotonicity_violations += 1
+    if not atm_by_expiry:
+        failures.append("ATM_IV_UNAVAILABLE")
+    if quote_widths and max(quote_widths) > MAX_QUOTE_WIDTH_IV:
+        failures.append("OPTION_QUOTE_WIDTH_EXCESSIVE")
+    if len(atm_by_expiry) < 2:
+        failures.append("VOL_TERM_SLOPE_UNAVAILABLE")
+
+    term_slope = None
+    if len(atm_by_expiry) >= 2:
+        first, second = sorted(atm_by_expiry)[:2]
+        elapsed_days = (second - first) / 86_400_000.0
+        if elapsed_days > 0.0:
+            term_slope = (atm_by_expiry[second] - atm_by_expiry[first]) / elapsed_days
+    first_expiry = expiries[0] if expiries else None
+    return {
+        "valid": not failures,
+        "health": "VALID" if not failures else "INVALID",
+        "failure_reasons": failures,
+        "raw_surface_points": len(surface), "short_dated_quote_count": len(short),
+        "short_dated_expiry_count": len(expiries), "max_short_dated_days": MAX_SHORT_DATED_DAYS,
+        "minimum_short_dated_quote_count": MIN_USABLE_SHORT_DATED_QUOTES,
+        "option_surface_width_iv": _median(quote_widths),
+        "option_surface_max_width_iv": max(quote_widths) if quote_widths else None,
+        "atm_iv": atm_by_expiry.get(first_expiry) if first_expiry is not None else None,
+        "atm_iv_by_expiry": {str(key): value for key, value in atm_by_expiry.items()},
+        "vol_term_slope_iv_per_day": term_slope,
+        "put_call_skew_moneyness_proxy": risk_reversal_by_expiry.get(first_expiry) if first_expiry is not None else None,
+        "butterfly_iv_moneyness_proxy": butterfly_by_expiry.get(first_expiry) if first_expiry is not None else None,
+        "monotonicity_violations": monotonicity_violations,
+        "interpolation_used": False, "tail_probability_available": False,
+        "greeks_available": any(point.get("greeks") is not None for point in short),
+    }
 
 
 def collect_once(*, timeout_s: float = 10.0) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -137,6 +247,8 @@ def collect_once(*, timeout_s: float = 10.0) -> tuple[dict[str, Any], dict[str, 
     mark = _number(perpetual.get("mark_price"), "perpetual_mark_price", positive=True)
     index = _number(perpetual.get("index_price"), "perpetual_index_price", positive=True)
     future_mark = _number(future.get("mark_price"), "future_mark_price", positive=True)
+    derived_surface = _surface_features(
+        surface, spot=mark, now_wall_ns=int(instruments_meta["local_receive_wall_ns"]))
     receive_mono = max(int(meta["local_receive_monotonic_ns"]) for meta in
                        (instruments_meta, option_summary_meta, perpetual_meta, future_meta, volatility_meta))
     row = {
@@ -150,6 +262,7 @@ def collect_once(*, timeout_s: float = 10.0) -> tuple[dict[str, Any], dict[str, 
                            "mark_price": future_mark, "open_interest": future.get("open_interest"),
                            "basis_bps_to_perpetual": (future_mark / mark - 1.0) * 10_000.0},
         "option_surface": surface,
+        "option_surface_features": derived_surface,
         "historical_volatility": historical_volatility[-1] if historical_volatility else None,
         "instrument_request": instruments_meta, "option_summary_request": option_summary_meta,
         "perpetual_request": perpetual_meta, "future_request": future_meta, "volatility_request": volatility_meta,
@@ -160,7 +273,10 @@ def collect_once(*, timeout_s: float = 10.0) -> tuple[dict[str, Any], dict[str, 
     }
     status = {"schema": "polymarket_v7_deribit_rest_status_v1", "state": "OPERATIONAL",
               "transport": "PUBLIC_REST_POLLING", "polling_latency_not_event_latency": True,
-              "option_surface_points": len(surface), "nearest_future": future_name, "latest": row, "blocker": None}
+              "option_surface_points": len(surface), "option_surface_valid": derived_surface["valid"],
+              "option_surface_health": derived_surface["health"], "nearest_future": future_name,
+              "latest": row,
+              "blocker": None if derived_surface["valid"] else "OPTION_SURFACE_FEATURES_INVALID"}
     return row, status
 
 

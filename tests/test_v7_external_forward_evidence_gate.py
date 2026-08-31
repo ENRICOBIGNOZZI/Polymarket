@@ -27,7 +27,7 @@ def _runtime(uptime_ns: int) -> dict[str, object]:
 def test_short_clean_run_is_honestly_insufficient() -> None:
     result = gate.evaluate(_runtime(30_000_000_000),
                            {"state": "OPERATIONAL_POLLING", "hft_trigger_eligible": False},
-                           {"state": "OPERATIONAL"}, min_duration_s=60.0)
+                           {"state": "OPERATIONAL", "option_surface_valid": True}, min_duration_s=60.0)
     assert result["engineering_valid"] is True
     assert result["state"] == "FORWARD_EVIDENCE_INSUFFICIENT"
     assert result["forward_evidence_sufficient"] is False
@@ -36,11 +36,11 @@ def test_short_clean_run_is_honestly_insufficient() -> None:
 def test_duration_and_durable_tapes_are_required() -> None:
     result = gate.evaluate(_runtime(61_000_000_000),
                            {"state": "OPERATIONAL_POLLING", "hft_trigger_eligible": False},
-                           {"state": "OPERATIONAL"}, min_duration_s=60.0)
+                           {"state": "OPERATIONAL", "option_surface_valid": True}, min_duration_s=60.0)
     assert result["state"] == "ENGINEERING_VALIDATED"
     broken = _runtime(61_000_000_000)
     broken["raw_frame_tapes"]["bybit_spot"]["dropped"] = 1  # type: ignore[index]
     failed = gate.evaluate(broken, {"state": "OPERATIONAL_POLLING", "hft_trigger_eligible": False},
-                           {"state": "OPERATIONAL"}, min_duration_s=60.0)
+                           {"state": "OPERATIONAL", "option_surface_valid": True}, min_duration_s=60.0)
     assert failed["engineering_valid"] is False
     assert "TAPE_INCOMPLETE:bybit_spot" in failed["failures"]
