@@ -13,9 +13,10 @@ import v7_external_source_registry as registry
 class ExternalSourceRegistryTest(unittest.TestCase):
     def test_canonical_registry_is_v7_paper_only_and_fingerprinted(self) -> None:
         result = registry.validate(registry.load(ROOT / "config/v7_external_source_registry.json"))
-        self.assertEqual(result["source_count"], 15)
+        self.assertEqual(result["source_count"], 16)
         self.assertEqual(len(result["registry_sha256"]), 64)
         self.assertIn("deribit_btc", result["source_ids"])
+        self.assertIn("coinbase_spot_btcusd_rest_snapshot", result["source_ids"])
         self.assertIn("kalshi_public_rest", result["source_ids"])
 
     def test_rejects_private_authority_and_unknown_event(self) -> None:

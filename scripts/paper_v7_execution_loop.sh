@@ -304,6 +304,11 @@ python3 scripts/v7_deribit_rest_collector.py \
   --tape "$RUN_ROOT/external_fair/deribit_rest.jsonl" --interval 15 --loop \
   >> "$RUN_ROOT/external_fair/deribit_rest.log" 2>&1 &
 pids+=("$!")
+python3 scripts/v7_coinbase_l2_rest_collector.py \
+  --status "$RUN_ROOT/external_fair/coinbase_l2_rest_status.json" \
+  --tape "$RUN_ROOT/external_fair/coinbase_l2_rest.jsonl" --interval 5 --loop \
+  >> "$RUN_ROOT/external_fair/coinbase_l2_rest.log" 2>&1 &
+pids+=("$!")
 
 python3 scripts/v7_external_fair_paper_router.py \
   --run-root "$RUN_ROOT" --model-sha "$SHA" --config "$EXTERNAL_FAIR_POLICY" --interval 1 \
