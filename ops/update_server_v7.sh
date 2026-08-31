@@ -890,12 +890,29 @@ PY
       done
       fail "launchd monitoring services did not converge within 60 seconds"
     fi
-    for _ in $(seq 1 50); do
-      [[ -f "$run_root/control/retention_status.json" ]] && break
-      sleep 0.1
+    local retention_wait_seconds="${POLYMARKET_RETENTION_STARTUP_TIMEOUT_SECONDS:-600}"
+    [[ "$retention_wait_seconds" =~ ^[1-9][0-9]*$ ]] || \
+      fail "invalid retention startup timeout: $retention_wait_seconds"
+    local retention_status_ready=0
+    for _ in $(seq 1 "$retention_wait_seconds"); do
+      if python3 - "$run_root/control/retention_status.json" "$EXPECTED_SHA" <<'PY' >/dev/null 2>&1
+import json,sys
+from pathlib import Path
+path=Path(sys.argv[1]); expected_sha=sys.argv[2]
+status=json.loads(path.read_text())
+assert status.get('schema') == 'polymarket_v7_retention_status_v1'
+assert status.get('expected_sha') == expected_sha
+assert status.get('paper_only') is True
+assert status.get('authenticated_execution') is False
+PY
+      then
+        retention_status_ready=1
+        break
+      fi
+      sleep 1
     done
-    [[ -f "$run_root/control/retention_status.json" ]] || \
-      fail "canonical retention service did not publish status"
+    [[ "$retention_status_ready" == 1 ]] || \
+      fail "canonical retention service did not publish exact-SHA status within ${retention_wait_seconds} seconds"
     return 0
   fi
   stop_owned_monitoring
@@ -939,6 +956,7 @@ graph=json.loads((root/'graph_rv/status.json').read_text())
 router=json.loads((root/'external_fair/paper_router_status.json').read_text())
 economics=json.loads((root/'canonical_economics.json').read_text())
 fee_reward=json.loads((root/'control/fee_reward_registry.json').read_text())
+retention=json.loads((root/'control/retention_status.json').read_text())
 assert runtime.get('version')==7 and runtime.get('model_sha')==sha
 assert runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False and runtime.get('real_order_submission') is False
 assert all(str(runtime.get(k) or '') for k in ('config_hash','policy_hash','model_hash','run_id','ledger_id','server_id'))
@@ -960,6 +978,8 @@ assert fee_reward.get('schema')=='polymarket_v7_fee_reward_registry_v1' and fee_
 assert fee_reward.get('paper_only') is True and fee_reward.get('authenticated_execution') is False and fee_reward.get('real_order_submission') is False
 assert fee_reward.get('unknown_fee_policy')=='NON_EXECUTABLE' and fee_reward.get('unknown_reward_policy')=='ZERO_EXPECTED_VALUE'
 assert int(fee_reward.get('market_count') or 0)>0 and int(fee_reward.get('executable_market_count') or 0)>0
+assert retention.get('schema')=='polymarket_v7_retention_status_v1' and retention.get('expected_sha')==sha
+assert retention.get('paper_only') is True and retention.get('authenticated_execution') is False
 with (root/'trade_tape.csv').open(newline='',encoding='utf-8') as handle: rows=list(csv.DictReader(handle))
 assert rows and max(int(float(r.get('received_ms') or 0)) for r in rows)>0
 PY

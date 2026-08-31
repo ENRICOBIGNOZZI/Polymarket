@@ -220,6 +220,16 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("http://127.0.0.1:9108/metrics", start)
         self.assertIn("http://127.0.0.1:9090/-/ready", start)
         self.assertIn("http://127.0.0.1:3000/api/health", start)
+
+    def test_retention_startup_waits_for_exact_sha_after_first_archive_compaction(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        start = text[text.index("start_monitoring(){"):text.index("runtime_health(){")]
+        health = text[text.index("runtime_health(){"):text.index("http_diagnostic(){")]
+        self.assertIn("POLYMARKET_RETENTION_STARTUP_TIMEOUT_SECONDS:-600", start)
+        self.assertIn("status.get('expected_sha') == expected_sha", start)
+        self.assertIn("retention_status_ready", start)
+        self.assertIn("retention.get('expected_sha')==sha", health)
+        self.assertIn("retention.get('paper_only') is True", health)
         self.assertIn("did not converge within 60 seconds", start)
 
     def test_exact_deploy_receipt_is_written_before_monitoring_health_gate(self) -> None:
