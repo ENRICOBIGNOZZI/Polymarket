@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "V7 publicly verifiable real-PnL attestation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "issued_at", "operator_id", "report_sha256", "model_sha", "journal_head_hash", "public_key_sha256", "algorithm", "signature_base64"],
+  "properties": {
+    "schema": {"const": "polymarket_v7_real_pnl_attestation_v3"},
+    "issued_at": {"type": "string", "format": "date-time"},
+    "operator_id": {"type": "string", "minLength": 1},
+    "report_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "model_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "journal_head_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "public_key_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "algorithm": {"const": "RSA-SHA256"},
+    "signature_base64": {"type": "string", "minLength": 1}
+  }
+}

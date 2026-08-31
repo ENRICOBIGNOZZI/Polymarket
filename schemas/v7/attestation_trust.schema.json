@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "V7 time-bounded public attestation trust registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "automatic_promotion", "trusted_attestors", "note"],
+  "properties": {
+    "schema": {"const": "polymarket_v7_attestation_trust_registry_v1"},
+    "automatic_promotion": {"const": false},
+    "trusted_attestors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operator_id", "public_key_sha256", "not_before", "not_after"],
+        "properties": {
+          "operator_id": {"type": "string", "minLength": 1},
+          "public_key_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "not_before": {"type": "string", "format": "date-time"},
+          "not_after": {"type": "string", "format": "date-time"}
+        }
+      }
+    },
+    "note": {"type": "string", "minLength": 1}
+  }
+}

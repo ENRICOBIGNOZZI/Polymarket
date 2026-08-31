@@ -9,11 +9,15 @@ cluster-aware statistics for manual review.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import math
 import re
+import subprocess
+import tempfile
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -23,7 +27,7 @@ SAMPLE_KIND = "REAL_PNL_ECONOMIC_SAMPLE"
 GENESIS_HASH = "0" * 64
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-ATTESTATION_SCHEMA = "polymarket_v7_real_pnl_attestation_v1"
+ATTESTATION_SCHEMA = "polymarket_v7_real_pnl_attestation_v3"
 POLICY = {
     "minimum_event_clusters": 30,
     "minimum_regimes": 3,
@@ -67,13 +71,89 @@ def _text(value: Any, field: str) -> str:
     return value.strip()
 
 
-def validate_verified_report(report: Any) -> dict[str, Any]:
+def _public_attestation_payload(attestation: dict[str, Any]) -> dict[str, Any]:
+    return {key: attestation[key] for key in (
+        "schema", "issued_at", "operator_id", "report_sha256", "model_sha", "journal_head_hash", "public_key_sha256",
+    )}
+
+
+def _timestamp(value: Any, field: str) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise ScorecardError(f"{field}:invalid")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ScorecardError(f"{field}:invalid") from exc
+    if parsed.tzinfo is None:
+        raise ScorecardError(f"{field}:timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def _require_trusted_attestor(attestation: dict[str, Any], registry_path: Path) -> None:
+    try:
+        registry = json.loads(Path(registry_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ScorecardError("verified_report:trust_registry_unreadable") from exc
+    expected = {"schema", "automatic_promotion", "trusted_attestors", "note"}
+    rows = registry.get("trusted_attestors") if isinstance(registry, dict) else None
+    if (not isinstance(registry, dict) or set(registry) != expected
+            or registry.get("schema") != "polymarket_v7_attestation_trust_registry_v1"
+            or registry.get("automatic_promotion") is not False
+            or not isinstance(registry.get("note"), str) or not isinstance(rows, list)):
+        raise ScorecardError("verified_report:trust_registry_shape")
+    issued = _timestamp(attestation.get("issued_at"), "verified_report:attestation_issued_at")
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {"operator_id", "public_key_sha256", "not_before", "not_after"}:
+            raise ScorecardError("verified_report:trust_registry_attestor")
+        identity = (row.get("operator_id"), row.get("public_key_sha256"))
+        if (not isinstance(identity[0], str) or not identity[0].strip()
+                or not isinstance(identity[1], str) or not SHA256_RE.fullmatch(identity[1])
+                or identity in seen):
+            raise ScorecardError("verified_report:trust_registry_attestor")
+        before = _timestamp(row.get("not_before"), "verified_report:trust_not_before")
+        after = _timestamp(row.get("not_after"), "verified_report:trust_not_after")
+        if before > after:
+            raise ScorecardError("verified_report:trust_registry_window")
+        seen.add(identity)
+        if identity == (attestation["operator_id"], attestation["public_key_sha256"]) and before <= issued <= after:
+            return
+    raise ScorecardError("verified_report:untrusted_attestor")
+
+
+def _verify_public_attestation(report: dict[str, Any], public_key: Path, trust_registry: Path) -> None:
+    public_key = Path(public_key)
+    if not public_key.is_file():
+        raise ScorecardError("verified_report:attestation_public_key_missing")
+    attestation = report["attestation"]
+    if hashlib.sha256(public_key.read_bytes()).hexdigest() != attestation["public_key_sha256"]:
+        raise ScorecardError("verified_report:attestation_public_key_identity")
+    _require_trusted_attestor(attestation, trust_registry)
+    try:
+        signature = base64.b64decode(attestation["signature_base64"], validate=True)
+    except (TypeError, ValueError) as exc:
+        raise ScorecardError("verified_report:attestation_signature_encoding") from exc
+    if not signature:
+        raise ScorecardError("verified_report:attestation_signature_encoding")
+    with tempfile.TemporaryDirectory(prefix="v7-pnl-attestation-") as directory:
+        signature_path = Path(directory) / "signature.bin"
+        signature_path.write_bytes(signature)
+        completed = subprocess.run(
+            ["openssl", "dgst", "-sha256", "-verify", str(public_key), "-signature", str(signature_path)],
+            input=canonical_bytes(_public_attestation_payload(attestation)),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+    if completed.returncode != 0:
+        raise ScorecardError("verified_report:attestation_signature_invalid")
+
+
+def validate_verified_report(report: Any, *, attestation_public_key: Path,
+                            attestation_trust_registry: Path) -> dict[str, Any]:
     """Require an attestation bound to the exact unsigned verifier report.
 
-    The HMAC itself is an operator attestation and is deliberately not exposed
-    to this read-only scorecard.  The scorecard can nevertheless independently
-    reject a report whose contents, report hash, or attestation identity were
-    spliced together after verification.
+    The scorecard accepts only a detached RSA signature verified with a public
+    key. Legacy symmetric HMAC attestations are deliberately ineligible because
+    they cannot be independently checked without trusting a signing secret.
     """
     if (not isinstance(report, dict) or report.get("state") != "REAL_PNL_VERIFIED"
             or report.get("real_pnl_verified") is not True
@@ -81,16 +161,19 @@ def validate_verified_report(report: Any) -> dict[str, Any]:
             or not SHA256_RE.fullmatch(str(report.get("report_sha256")))):
         raise ScorecardError("verified_report:real_pnl_verified_required")
     attestation = report.get("attestation")
-    required = {"schema", "operator_id", "report_sha256", "model_sha", "journal_head_hash", "algorithm", "signature"}
+    required = {"schema", "issued_at", "operator_id", "report_sha256", "model_sha", "journal_head_hash", "algorithm",
+                "public_key_sha256", "signature_base64"}
     if not isinstance(attestation, dict) or set(attestation) != required:
         raise ScorecardError("verified_report:attestation_shape")
     if (attestation.get("schema") != ATTESTATION_SCHEMA
+            or _timestamp(attestation.get("issued_at"), "verified_report:attestation_issued_at") is None
             or not _text(attestation.get("operator_id"), "attestation_operator")
             or attestation.get("report_sha256") != report["report_sha256"]
             or attestation.get("model_sha") != report["model_sha"]
             or not SHA256_RE.fullmatch(str(attestation.get("journal_head_hash")))
-            or attestation.get("algorithm") != "HMAC-SHA256"
-            or not SHA256_RE.fullmatch(str(attestation.get("signature")))):
+            or attestation.get("algorithm") != "RSA-SHA256"
+            or not SHA256_RE.fullmatch(str(attestation.get("public_key_sha256")))
+            or not isinstance(attestation.get("signature_base64"), str)):
         raise ScorecardError("verified_report:attestation_identity")
     unsigned = dict(report)
     unsigned.pop("attestation")
@@ -99,6 +182,7 @@ def validate_verified_report(report: Any) -> dict[str, Any]:
     unsigned["real_pnl_verified"] = False
     if digest(unsigned) != report["report_sha256"]:
         raise ScorecardError("verified_report:report_hash_mismatch")
+    _verify_public_attestation(report, attestation_public_key, attestation_trust_registry)
     return report
 
 
@@ -210,8 +294,10 @@ def _drawdown_and_es(values: list[int], capitals: list[int]) -> dict[str, float 
     }
 
 
-def scorecard(verified_report: dict[str, Any], samples_path: Path) -> dict[str, Any]:
-    verified_report = validate_verified_report(verified_report)
+def scorecard(verified_report: dict[str, Any], samples_path: Path, *, attestation_public_key: Path,
+              attestation_trust_registry: Path) -> dict[str, Any]:
+    verified_report = validate_verified_report(verified_report, attestation_public_key=attestation_public_key,
+                                               attestation_trust_registry=attestation_trust_registry)
     model_sha = str(verified_report["model_sha"])
     report_sha = str(verified_report["report_sha256"])
     report_pnl = _integer(verified_report.get("reconstructed_realized_pnl_units"), "report_pnl")
@@ -300,10 +386,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--verified-report", type=Path, required=True)
     parser.add_argument("--samples", type=Path, required=True)
+    parser.add_argument("--attestation-public-key", type=Path, required=True)
+    parser.add_argument("--attestation-trust-registry", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     report = json.loads(args.verified_report.read_text(encoding="utf-8"))
-    result = scorecard(report, args.samples)
+    result = scorecard(report, args.samples, attestation_public_key=args.attestation_public_key,
+                       attestation_trust_registry=args.attestation_trust_registry)
     rendered = json.dumps(result, sort_keys=True, indent=2) + "\n"
     if args.output:
         args.output.write_text(rendered, encoding="utf-8")

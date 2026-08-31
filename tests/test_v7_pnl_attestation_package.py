@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -52,6 +53,27 @@ def report(root: Path) -> dict:
     return unsigned
 
 
+def key_pair(root: Path, name: str) -> tuple[Path, Path]:
+    private_key, public_key = root / f"{name}-private.pem", root / f"{name}-public.pem"
+    subprocess.run(["openssl", "genrsa", "-out", str(private_key), "2048"], check=True,
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(["openssl", "rsa", "-in", str(private_key), "-pubout", "-out", str(public_key)],
+                   check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return private_key, public_key
+
+
+def trust_registry(root: Path, attestation: dict) -> Path:
+    path = root / "attestation-trust.json"
+    path.write_text(json.dumps({
+        "schema": "polymarket_v7_attestation_trust_registry_v1", "automatic_promotion": False,
+        "trusted_attestors": [{"operator_id": attestation["operator_id"],
+                                "public_key_sha256": attestation["public_key_sha256"],
+                                "not_before": "2020-01-01T00:00:00Z", "not_after": "2030-01-01T00:00:00Z"}],
+        "note": "test-only external trust root",
+    }, sort_keys=True), encoding="utf-8")
+    return path
+
+
 class PnlAttestationPackageTests(unittest.TestCase):
     def test_signed_redacted_package_is_independently_verified(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -85,6 +107,39 @@ class PnlAttestationPackageTests(unittest.TestCase):
             value["reason_codes"] = ["unresolved_break"]
             with self.assertRaisesRegex(generator.AttestationPackageError, "reconciled_unsigned_required|report:identity"):
                 generator.build_package(value, root / "package", operator_id="audit-operator", signing_key="test-key")
+
+    def test_legacy_hmac_path_cannot_claim_real_pnl(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(generator.AttestationPackageError, "public_signature_required"):
+                generator.generate(report(Path(directory)), operator_id="audit-operator",
+                                   signing_key_env="V7_TEST_ATTESTATION_KEY")
+
+    def test_public_attestation_is_independently_verified_without_a_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private_key, public_key = key_pair(root, "attestor")
+            unsigned = report(root)
+            attestation = generator.public_attestation(unsigned, operator_id="audit-operator",
+                                                       signing_key=private_key, public_key=public_key)
+            signed = {**unsigned, "state": "REAL_PNL_VERIFIED", "real_pnl_verified": True,
+                      "attestation": attestation}
+            trust = trust_registry(root, attestation)
+            result = package_verifier.verify_public(signed, public_key=public_key, trust_registry=trust)
+            self.assertEqual(result["state"], "PUBLIC_ATTESTATION_VERIFIED")
+            self.assertFalse(result["automatic_promotion"])
+            empty_trust = root / "empty-trust.json"
+            empty_trust.write_text(json.dumps({
+                "schema": "polymarket_v7_attestation_trust_registry_v1", "automatic_promotion": False,
+                "trusted_attestors": [], "note": "no trusted keys",
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(package_verifier.AttestationVerificationError, "untrusted_attestor"):
+                package_verifier.verify_public(signed, public_key=public_key, trust_registry=empty_trust)
+            _, other_public_key = key_pair(root, "other")
+            with self.assertRaisesRegex(package_verifier.AttestationVerificationError, "public_key_identity"):
+                package_verifier.verify_public(signed, public_key=other_public_key, trust_registry=trust)
+            signed["attestation"]["signature_base64"] = "AA=="
+            with self.assertRaisesRegex(package_verifier.AttestationVerificationError, "public_signature_invalid"):
+                package_verifier.verify_public(signed, public_key=public_key, trust_registry=trust)
 
 
 if __name__ == "__main__":

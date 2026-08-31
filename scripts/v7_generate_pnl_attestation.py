@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Attach an HMAC attestation to a reconciled report using an environment key."""
+"""Create a publicly verifiable V7 real-PnL attestation from a reconciled report."""
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import hashlib
 import hmac
 import json
-import os
 import re
-import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from io import StringIO
@@ -19,6 +19,7 @@ import v7_real_pnl_verifier as verifier
 
 SCHEMA = "polymarket_v7_pnl_attestation_package_v1"
 SIGNATURE_SCHEMA = "polymarket_v7_pnl_attestation_package_signature_v1"
+PUBLIC_ATTESTATION_SCHEMA = "polymarket_v7_real_pnl_attestation_v3"
 
 
 class AttestationPackageError(ValueError):
@@ -40,6 +41,63 @@ def _report_identity(report: dict[str, Any]) -> None:
     unsigned = dict(report); unsigned.pop("report_sha256", None)
     if not isinstance(supplied, str) or verifier.digest(unsigned) != supplied:
         raise AttestationPackageError("report:identity")
+
+
+def _public_attestation_identity(report: dict[str, Any]) -> None:
+    """Validate the exact unsigned report that a public signature will bind."""
+    if (not isinstance(report, dict)
+            or report.get("state") != "REAL_PNL_RECONCILED_UNSIGNED"
+            or report.get("real_pnl_verified") is not False
+            or report.get("reason_codes") != []):
+        raise AttestationPackageError("reconciled_unsigned_required")
+    supplied = report.get("report_sha256")
+    unsigned = dict(report)
+    unsigned.pop("report_sha256", None)
+    if (not isinstance(supplied, str) or not re.fullmatch(r"[0-9a-f]{64}", supplied)
+            or verifier.digest(unsigned) != supplied
+            or not isinstance(report.get("model_sha"), str)
+            or not re.fullmatch(r"[0-9a-f]{40}", str(report.get("model_sha")))
+            or not isinstance(report.get("journal_head_hash"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", str(report.get("journal_head_hash")))):
+        raise AttestationPackageError("report:identity")
+
+
+def public_attestation(report: dict[str, Any], *, operator_id: str,
+                       signing_key: Path, public_key: Path,
+                       issued_at: datetime | None = None) -> dict[str, Any]:
+    """Create a detached RSA signature that a read-only scorecard can verify.
+
+    The private key is provided only as a runtime file to OpenSSL and is never
+    copied into the package or repository.  The public-key digest prevents a
+    signature from being re-bound to a different verification identity.
+    """
+    _public_attestation_identity(report)
+    if not isinstance(operator_id, str) or not operator_id.strip():
+        raise AttestationPackageError("operator_or_key_missing")
+    signing_key, public_key = Path(signing_key), Path(public_key)
+    if not signing_key.is_file() or not public_key.is_file():
+        raise AttestationPackageError("public_signing_key_missing")
+    issued_at = issued_at or datetime.now(timezone.utc)
+    if issued_at.tzinfo is None:
+        raise AttestationPackageError("issued_at_timezone")
+    payload = {
+        "schema": PUBLIC_ATTESTATION_SCHEMA,
+        "issued_at": issued_at.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "operator_id": operator_id.strip(),
+        "report_sha256": report["report_sha256"],
+        "model_sha": report["model_sha"],
+        "journal_head_hash": report["journal_head_hash"],
+        "public_key_sha256": _hash(public_key.read_bytes()),
+    }
+    completed = subprocess.run(
+        ["openssl", "dgst", "-sha256", "-sign", str(signing_key)],
+        input=_canonical(payload), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0 or not completed.stdout:
+        raise AttestationPackageError("public_signature_failed")
+    return {**payload, "algorithm": "RSA-SHA256",
+            "signature_base64": base64.b64encode(completed.stdout).decode("ascii")}
 
 
 def _redacted_journal(report: dict[str, Any]) -> bytes:
@@ -90,21 +148,27 @@ def build_package(report: dict[str, Any], output: Path, *, operator_id: str, sig
 
 
 def generate(report: dict, *, operator_id: str, signing_key_env: str) -> dict:
-    key = os.environ.get(signing_key_env, "")
-    attestation = verifier.attest(report, operator_id=operator_id, signing_key=key)
-    return {**report, "attestation": attestation, "real_pnl_verified": True,
-            "state": "REAL_PNL_VERIFIED"}
+    """Retired symmetric-signature entry point; it cannot make a PnL claim."""
+    _ = report, operator_id, signing_key_env
+    raise AttestationPackageError("public_signature_required")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--operator-id", required=True)
-    parser.add_argument("--signing-key-env", default="V7_ATTESTATION_HMAC_KEY")
+    parser.add_argument("--public-signing-key", type=Path, required=True,
+                        help="runtime-only RSA private key for a publicly verifiable V2 attestation")
+    parser.add_argument("--attestation-public-key", type=Path, required=True,
+                        help="RSA public key paired with --public-signing-key")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     report = json.loads(args.report.read_text(encoding="utf-8"))
-    generated = generate(report, operator_id=args.operator_id, signing_key_env=args.signing_key_env)
+    attestation = public_attestation(report, operator_id=args.operator_id,
+                                     signing_key=args.public_signing_key,
+                                     public_key=args.attestation_public_key)
+    generated = {**report, "attestation": attestation, "real_pnl_verified": True,
+                 "state": "REAL_PNL_VERIFIED"}
     args.output.write_text(json.dumps(generated, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     return 0
 

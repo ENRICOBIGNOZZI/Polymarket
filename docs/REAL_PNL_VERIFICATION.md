@@ -19,9 +19,22 @@ reconstructs terminal PnL (pUSD plus any final USDC.e collateral) as:
 `terminal pUSD cash + terminal USDC.e cash + equity:external_funding pUSD`
 
 It returns `REAL_PNL_RECONCILED_UNSIGNED` only after all required independent
-sources are represented. `REAL_PNL_VERIFIED` additionally requires a private
-runtime HMAC attestation. Neither PAPER events, virtual fills, quoted edge, nor
-an empty reconciliation can reach either state.
+sources are represented. A legacy HMAC record may preserve package integrity,
+but cannot unlock any PnL claim: `REAL_PNL_VERIFIED` for the scorecard
+requires the RSA-SHA256 public attestation in
+`schemas/v7/public_pnl_attestation.schema.json`. The scorecard checks the
+detached signature against the supplied public key and its pinned digest, so no
+private key is read by the verifier. Neither PAPER events, virtual fills,
+quoted edge, nor an empty reconciliation can reach either state.
+
+The signed attestation includes an issuance time. Both the standalone verifier
+and scorecard require a matching, time-bounded attestor entry from a supplied
+trust registry. The checked-in registry is intentionally empty, so a repository
+commit alone cannot nominate a key or grant a real-PnL claim.
+
+`scripts/v7_verify_pnl_attestation.py --public-report ... --public-key ...`
+performs the same detached-signature check as a standalone read-only operation;
+it reports verification only and cannot score, promote, sign, or submit.
 
 `scripts/v7_execution_provenance.py` adds a separate immutable chain for
 `DECISION → SIGNED_ORDER → CLOB_ACCEPTED → FILL → SETTLEMENT`. It stores only
@@ -41,7 +54,7 @@ before settlement, so partial fills retain separate raw-evidence links rather
 than being collapsed or silently overwritten.
 
 `scripts/v7_real_pnl_scorecard.py` consumes only a `REAL_PNL_VERIFIED` report
-and a separate hash-chained terminal-unit tape. It computes event-clustered
+whose public signature verifies and a separate hash-chained terminal-unit tape. It computes event-clustered
 lower confidence bounds at 1x/1.5x/2x costs, reward-free PnL, capacity tiers,
 drawdown, and expected shortfall. Missing regimes, capacity, samples, a report
 reconciliation mismatch, or any non-positive 2x lower bound returns

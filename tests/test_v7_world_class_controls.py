@@ -15,7 +15,7 @@ import v7_release_provenance as provenance  # noqa: E402
 
 class WorldClassControlsTests(unittest.TestCase):
     def test_required_schemas_and_docs_exist_as_json_or_text(self) -> None:
-        for path in ("config/v7_risk_tiers.json", "schemas/v7/order_event.schema.json", "schemas/v7/fill_event.schema.json", "schemas/v7/private_state.schema.json", "schemas/v7/journal_entry.schema.json", "schemas/v7/reconciliation.schema.json", "schemas/v7/pnl_attestation.schema.json", "schemas/v7/experiment.schema.json", "schemas/v7/world_class_scorecard.schema.json"):
+        for path in ("config/v7_risk_tiers.json", "config/v7_attestation_trust.json", "schemas/v7/order_event.schema.json", "schemas/v7/fill_event.schema.json", "schemas/v7/private_state.schema.json", "schemas/v7/journal_entry.schema.json", "schemas/v7/reconciliation.schema.json", "schemas/v7/pnl_attestation.schema.json", "schemas/v7/public_pnl_attestation.schema.json", "schemas/v7/attestation_trust.schema.json", "schemas/v7/experiment.schema.json", "schemas/v7/world_class_scorecard.schema.json"):
             value = json.loads((ROOT / path).read_text(encoding="utf-8"))
             self.assertIsInstance(value, dict)
         for path in ("docs/v7_world_class/economic_proof_protocol.md", "docs/v7_world_class/live_canary_runbook.md", "docs/security/v7_signer_threat_model.md"):

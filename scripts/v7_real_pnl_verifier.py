@@ -1064,10 +1064,11 @@ def verify(ledger_path: Path, *, model_sha: str,
 
 
 def attest(report: dict[str, Any], *, operator_id: str, signing_key: str) -> dict[str, Any]:
-    """Add an HMAC-SHA256 attestation using a private runtime secret.
+    """Create a legacy HMAC record that cannot establish a real-PnL claim.
 
-    The secret is supplied at runtime and must never be committed.  An unsigned
-    or non-reconciled report is deliberately not eligible for REAL_PNL_VERIFIED.
+    The record exists only for compatibility with archived redacted packages.
+    A public RSA signature is required before any caller can set
+    ``REAL_PNL_VERIFIED``.
     """
     if report.get("state") != "REAL_PNL_RECONCILED_UNSIGNED" or report.get("reason_codes"):
         raise VerificationError("attestation:report_not_reconciled")
@@ -1099,9 +1100,6 @@ def main() -> int:
     parser.add_argument("--observed-activity-coverage", type=Path, required=True,
                         help="traceable v7_data_api_activity_coverage JSON")
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--attestation-output", type=Path)
-    parser.add_argument("--operator-id")
-    parser.add_argument("--signing-key-env", default="V7_ATTESTATION_HMAC_KEY")
     args = parser.parse_args()
     observed = json.loads(args.observed_balances.read_text(encoding="utf-8"))
     positions = json.loads(args.observed_positions.read_text(encoding="utf-8"))
@@ -1110,19 +1108,11 @@ def main() -> int:
                     observed_positions=positions, observed_activity_coverage=coverage,
                     evidence_path=args.evidence_tape,
                     provenance_path=args.provenance_tape)
-    if args.attestation_output:
-        key = os.environ.get(args.signing_key_env, "")
-        attestation = attest(report, operator_id=args.operator_id or "", signing_key=key)
-        report["attestation"] = attestation
-        report["real_pnl_verified"] = True
-        report["state"] = "REAL_PNL_VERIFIED"
     rendered = json.dumps(report, sort_keys=True, indent=2) + "\n"
     if args.output:
         args.output.write_text(rendered, encoding="utf-8")
     else:
         print(rendered, end="")
-    if args.attestation_output:
-        args.attestation_output.write_text(json.dumps(report["attestation"], sort_keys=True, indent=2) + "\n", encoding="utf-8")
     return 0
 
 

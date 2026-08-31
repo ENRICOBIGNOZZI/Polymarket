@@ -1,0 +1,6 @@
+{
+  "schema": "polymarket_v7_attestation_trust_registry_v1",
+  "automatic_promotion": false,
+  "trusted_attestors": [],
+  "note": "Checked-in trust is intentionally empty. A real-PnL claim requires an externally supplied, time-bounded trust registry."
+}
