@@ -87,7 +87,7 @@ ExternalVenueConnectionSpec btc_spot_connection_spec(
             spec.target = "/v5/public/spot";
             spec.symbol = "BTCUSDT";
             spec.subscription_json =
-                R"({"op":"subscribe","args":["orderbook.1.BTCUSDT","publicTrade.BTCUSDT"]})";
+                R"({"op":"subscribe","args":["orderbook.50.BTCUSDT","publicTrade.BTCUSDT"]})";
             break;
         case VenueId::BinanceUsdM:
             spec.host = "fstream.binance.com";
