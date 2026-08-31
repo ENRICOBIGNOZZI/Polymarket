@@ -26,7 +26,10 @@ namespace beast = boost::beast;
 namespace websocket = beast::websocket;
 using tcp = net::ip::tcp;
 
-constexpr std::size_t kMaxWsMessageBytes = 1U << 20;
+// Coinbase's documented public L2 feed begins with a complete BTC-USD book
+// snapshot. A live snapshot can exceed 1 MiB, so retain a bounded cap while
+// admitting the full recovery frame instead of reconnecting indefinitely.
+constexpr std::size_t kMaxWsMessageBytes = 2U << 20;
 
 [[nodiscard]] std::int64_t monotonic_now_ns() noexcept {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(

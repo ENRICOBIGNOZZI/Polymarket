@@ -22,6 +22,7 @@ def main() -> None:
     assert "external_venues.json" in launcher
     assert "std::make_unique<beast::flat_static_buffer" in websocket
     assert "flat_static_buffer<kMaxWsMessageBytes> buffer;" not in websocket
+    assert "constexpr std::size_t kMaxWsMessageBytes = 2U << 20;" in websocket
     assert 'spec.target = "/public/ws"' in websocket
 
 
