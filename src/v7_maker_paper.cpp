@@ -40,10 +40,14 @@ constexpr double kPriceScaleE4 = 10'000.0;
 
 [[nodiscard]] std::int64_t collateral_microdollars(
     double yes_cost, double no_cost) noexcept {
-    const long double raw = static_cast<long double>(std::max(0.0, yes_cost)
-        + std::max(0.0, no_cost)) * kMicrounitsPerShare;
+    // Costs are persisted as double.  Round at that representation boundary
+    // before applying the conservative integer collateral ceiling; otherwise
+    // promoting a harmless binary tail (for example 0.52) to long double can
+    // reserve an extra microdollar on some platforms.
+    const double raw = (std::max(0.0, yes_cost) + std::max(0.0, no_cost))
+        * kMicrounitsPerShare;
     if (!std::isfinite(raw) || raw <= 0.0L) return 0;
-    if (raw >= static_cast<long double>(std::numeric_limits<std::int64_t>::max())) {
+    if (raw >= static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
         return std::numeric_limits<std::int64_t>::max();
     }
     return static_cast<std::int64_t>(std::ceil(raw));

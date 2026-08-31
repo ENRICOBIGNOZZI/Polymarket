@@ -8,7 +8,6 @@ namespace pm::v7::maker {
 namespace {
 
 constexpr std::int64_t kPriceScale = 10'000;
-constexpr long double kMicrodollarsPerDollar = 1'000'000.0L;
 
 [[nodiscard]] bool terminal_kind(PaperMakerEventKind kind) noexcept {
     return kind == PaperMakerEventKind::Cancelled
@@ -149,14 +148,11 @@ bool MakerPaperExecutionPolicy::sync_inventory_capital(
     const auto* slot = market(market_handle);
     if (slot == nullptr) return false;
     const auto& inv = slot->engine->inventory();
-    const long double cost = static_cast<long double>(std::max(0.0, inv.yes_cost))
-                           + static_cast<long double>(std::max(0.0, inv.no_cost));
-    const long double raw = cost * kMicrodollarsPerDollar;
-    if (!std::isfinite(raw) || raw < 0.0L
-        || raw > static_cast<long double>(std::numeric_limits<std::int64_t>::max())) {
-        return false;
-    }
-    const std::int64_t target = static_cast<std::int64_t>(std::ceil(raw));
+    // The paper engine owns the canonical rounded collateral basis.  Reusing
+    // it prevents this capital-plane mirror from applying a second,
+    // platform-dependent floating-point conversion to the same inventory.
+    const std::int64_t target = inv.collateral_committed_microdollars;
+    if (target < 0) return false;
     const std::int64_t current = capital.inventory_committed_for_market(market_handle);
     if (target > current) return capital.commit_inventory(market_handle, target - current);
     if (target < current) return capital.release_inventory(market_handle, current - target);
