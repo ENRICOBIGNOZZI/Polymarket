@@ -8,9 +8,12 @@ import v7_signer_gateway as gateway  # noqa: E402
 
 
 def valid() -> dict:
-    return {"intent_sequence": 1, "exact_code_sha": "a" * 40, "policy_hash": "b" * 64,
+    return {"intent_sequence": 1, "exact_code_sha": "a" * 40, "build_manifest_hash": "c" * 64,
+            "config_bundle_hash": "d" * 64, "policy_hash": "b" * 64,
             "execution_mode": "MICRO_LIVE", "condition_id": "condition", "token_id": "token",
-            "order_type": "GTC", "post_only": True, "size_base_units": 10}
+            "order_type": "GTC", "post_only": True, "size_base_units": 10,
+            "gross_exposure_base_units": 10, "event_loss_base_units": 0,
+            "daily_loss_base_units": 0, "open_order_count": 1}
 
 
 class SignerGatewayTests(unittest.TestCase):

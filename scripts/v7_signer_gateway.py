@@ -29,11 +29,11 @@ class SignerGateway:
         _ = now or datetime.now(timezone.utc)
         reason = "CHECKED_IN_LIVE_CAPS_ZERO"
         try:
-            required = {"intent_sequence", "exact_code_sha", "policy_hash", "execution_mode", "condition_id", "token_id", "order_type", "post_only", "size_base_units"}
+            required = {"intent_sequence", "exact_code_sha", "build_manifest_hash", "config_bundle_hash", "policy_hash", "execution_mode", "condition_id", "token_id", "order_type", "post_only", "size_base_units", "gross_exposure_base_units", "event_loss_base_units", "daily_loss_base_units", "open_order_count"}
             if not isinstance(intent, dict) or set(intent) != required: raise ValueError("intent_shape")
             sequence = intent["intent_sequence"]
             if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= self.last_sequence: raise ValueError("intent_sequence")
-            if not SHA40.fullmatch(str(intent["exact_code_sha"])) or not SHA256.fullmatch(str(intent["policy_hash"])): raise ValueError("intent_identity")
+            if not SHA40.fullmatch(str(intent["exact_code_sha"])) or any(not SHA256.fullmatch(str(intent[key])) for key in ("build_manifest_hash", "config_bundle_hash", "policy_hash")): raise ValueError("intent_identity")
             if intent["execution_mode"] not in LIVE_MODES: raise ValueError("intent_mode")
             if not all(isinstance(intent[key], str) and intent[key] for key in ("condition_id", "token_id")): raise ValueError("intent_market")
             if intent["order_type"] not in {"GTC", "GTD", "FOK", "FAK"} or intent["post_only"] is not True: raise ValueError("intent_type")
@@ -43,7 +43,6 @@ class SignerGateway:
             reason = str(exc)
         record = {"intent_sequence": intent.get("intent_sequence") if isinstance(intent, dict) else None,
                   "intent_hash": hashlib.sha256(json.dumps(intent, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest() if isinstance(intent, dict) else None,
-                  "decision": "DENY", "reason": reason,
-                  "signed": False, "submitted": False}
+                  "decision": "DENY", "reason": reason, "signed": False, "submitted": False}
         self.audit.append(record)
         return record
