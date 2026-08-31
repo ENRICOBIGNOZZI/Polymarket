@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pathlib
+import copy
 import json
 import sys
 import tempfile
@@ -10,13 +11,14 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import v7_micro_taker_data as data  # noqa: E402
+from v7_micro_target import TARGET_SEMANTICS_VERSION  # noqa: E402
 from v7_micro_taker_worker import (  # noqa: E402
     MODEL_FEATURE_DIM, MODEL_SPEC_VERSION, canonical_live_flow_features,
     causal_model_rows,
     chronological_oos_diagnostics, executable_strategy_oos,
     fixed_forward_oos_diagnostics,
     load_or_freeze_model_challenger, model_prediction, model_validity,
-    sample_diagnostics, sample_key,
+    compact_samples, sample_diagnostics, sample_key,
 )
 
 
@@ -317,6 +319,81 @@ def test_legacy_single_head_challenger_is_never_loaded() -> None:
     assert "beta" not in challenger
 
 
+def _storage_sample(key: str, ts: int, *, labeled: bool = False) -> dict:
+    row = {
+        "sample_key": key,
+        "market_id": "market",
+        "event_id": "event",
+        "ts": ts,
+        "target_semantics_version": TARGET_SEMANTICS_VERSION,
+        "label_horizon_seconds": 30,
+        "label_probe_shares": 5.0,
+        "round_trip_slippage_bps": 5.0,
+        "adverse_markout_bps": 2.0,
+        "capital_cost_bps_per_hour": 0.25,
+        "fee": {"authoritative": True, "rate": 0.0, "exponent": 1.0},
+        "yes_bids": [[0.49, 2.0], [0.48, 3.0], [0.47, 100.0]],
+        "yes_asks": [[0.51, 2.0], [0.52, 3.0], [0.53, 100.0]],
+        "no_bids": [[0.49, 2.0], [0.48, 3.0], [0.47, 100.0]],
+        "no_asks": [[0.51, 2.0], [0.52, 3.0], [0.53, 100.0]],
+        "mid": 0.5,
+        "spread": 0.02,
+        "x": [1.0] + [0.0] * 7,
+        "y": None,
+    }
+    if labeled:
+        row.update(executable_labels(0.001))
+        row["y"] = 0.001
+    return row
+
+
+def test_storage_compaction_drops_only_irrecoverable_origins_and_old_payloads() -> None:
+    samples = [
+        _storage_sample("expired", 900),
+        _storage_sample("old-labeled", 900, labeled=True),
+        _storage_sample("recent", 990),
+    ]
+    compacted, diagnostics = compact_samples(
+        samples, now=1_000, horizon_seconds=30,
+        max_target_staleness_seconds=10,
+    )
+    by_key = {row["sample_key"]: row for row in compacted}
+    assert set(by_key) == {"old-labeled", "recent"}
+    assert all(key not in by_key["old-labeled"] for key in (
+        "yes_bids", "yes_asks", "no_bids", "no_asks"))
+    assert by_key["recent"]["yes_bids"] == [[0.49, 2.0], [0.48, 3.0]]
+    assert by_key["recent"]["yes_asks"] == [[0.51, 2.0], [0.52, 3.0]]
+    assert diagnostics["dropped_irrecoverable_unlabeled_samples"] == 1
+    assert diagnostics["stripped_mature_labeled_book_payloads"] == 1
+    assert diagnostics["book_levels_after"] < diagnostics["book_levels_before"]
+
+
+def test_probe_depth_compaction_preserves_exact_target_economics() -> None:
+    origin = _storage_sample("origin", 100)
+    target = _storage_sample("target", 129)
+    full = [copy.deepcopy(origin), copy.deepcopy(target)]
+    compacted, _ = compact_samples(
+        [copy.deepcopy(origin), copy.deepcopy(target)], now=129,
+        horizon_seconds=30, max_target_staleness_seconds=10,
+    )
+    full_stats = data.label_matured_samples(
+        full, now=130, horizon_seconds=30, max_target_staleness_seconds=10)
+    compacted_stats = data.label_matured_samples(
+        compacted, now=130, horizon_seconds=30,
+        max_target_staleness_seconds=10,
+    )
+    assert full_stats["newly_labeled"] == 1
+    assert compacted_stats["newly_labeled"] == 1
+    full_origin = next(row for row in full if row["sample_key"] == "origin")
+    compact_origin = next(
+        row for row in compacted if row["sample_key"] == "origin")
+    for key in (
+        "yes_executable_net_edge", "no_executable_net_edge",
+        "yes_cost_stress_2x_net_edge", "no_cost_stress_2x_net_edge",
+    ):
+        assert abs(full_origin[key] - compact_origin[key]) < 1e-15
+
+
 class DatasetReadinessTests(unittest.TestCase):
     # Keep the plain functions convenient for lightweight direct invocation,
     # while making them part of the repository's canonical unittest discovery.
@@ -355,6 +432,12 @@ class DatasetReadinessTests(unittest.TestCase):
 
     def test_legacy_challenger_rejected(self) -> None:
         test_legacy_single_head_challenger_is_never_loaded()
+
+    def test_storage_compaction(self) -> None:
+        test_storage_compaction_drops_only_irrecoverable_origins_and_old_payloads()
+
+    def test_storage_target_identity(self) -> None:
+        test_probe_depth_compaction_preserves_exact_target_economics()
 
 
 class CanonicalLiveFlowTests(unittest.TestCase):

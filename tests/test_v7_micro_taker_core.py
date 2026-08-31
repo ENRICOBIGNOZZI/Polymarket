@@ -281,6 +281,61 @@ class MicroTakerBookFreshnessTest(unittest.TestCase):
         self.assertEqual(set(books), {"yes-covered", "no-covered"})
         self.assertTrue(all(book.lineage_continuous for book in books.values()))
 
+    def test_shared_bundle_is_fee_attested_liquidity_ranked_and_network_free(self) -> None:
+        def shared_book(
+            market: str, outcome: str, liquidity: float, *, verified: bool = True,
+            fee_rate: float = 0.04,
+        ) -> dict[str, object]:
+            token = f"{market}-{outcome.lower()}"
+            return {
+                "token": token,
+                "market_id": market,
+                "condition_id": f"condition-{market}",
+                "event_id": f"event-{market}",
+                "outcome": outcome,
+                "bids": [(0.49, liquidity / 4.0)],
+                "asks": [(0.51, liquidity / 4.0)],
+                "exchange_ts_ms": NOW * 1000,
+                "received_ms": NOW * 1000,
+                "source_receive_ts_ms": NOW * 1000,
+                "snapshot_published_ms": NOW * 1000,
+                "tick_size": 0.01,
+                "min_order": 1.0,
+                "bus_snapshot_id": "atomic-bus",
+                "lineage_continuous": True,
+                "fee_verified": verified,
+                "fee_rate": fee_rate,
+                "fee_exponent": 1.0,
+                "fee_taker_only": True,
+            }
+
+        rows = [
+            shared_book("low", "YES", 20.0),
+            shared_book("low", "NO", 20.0),
+            shared_book("high", "YES", 200.0),
+            shared_book("high", "NO", 200.0),
+            shared_book("unverified", "YES", 2_000.0, verified=False),
+            shared_book("unverified", "NO", 2_000.0, verified=False),
+            shared_book("fee-mismatch", "YES", 2_000.0),
+            shared_book("fee-mismatch", "NO", 2_000.0, fee_rate=0.02),
+        ]
+        snapshot = {"books": {str(row["token"]): row for row in rows}}
+        with (
+            mock.patch.object(data, "load_snapshot", return_value=snapshot),
+            mock.patch.object(data, "request_json", side_effect=AssertionError(
+                "shared bundle must not use REST")) as network,
+        ):
+            markets, books = data.fetch_shared_market_bundle(
+                Path("unused.json"), model_sha="a" * 40,
+                market_limit=1, min_visible_liquidity=2.0,
+            )
+        self.assertEqual([market.id for market in markets], ["high"])
+        self.assertEqual(set(books), {"high-yes", "high-no"})
+        self.assertEqual(
+            markets[0].fee.source, "shared_state:verified_fee_registry")
+        self.assertTrue(all(book.lineage_continuous for book in books.values()))
+        network.assert_not_called()
+
     def test_fresh_pair_uses_oldest_causal_timestamp(self) -> None:
         yes = data.Book(raw_book("yes", str((NOW - 2) * 1000)), received_ts=NOW)
         no = data.Book(raw_book("no", str((NOW - 1) * 1000)), received_ts=NOW)

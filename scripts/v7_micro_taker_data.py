@@ -248,32 +248,133 @@ def fetch_shared_books(path: Path, markets: list[Market], *, model_sha: str,
         raise SharedStateError("bundle:no_complete_markets")
     output: dict[str, Book] = {}
     for token, raw in selected.items():
-        book = Book({
-            "asset_id": token,
-            "timestamp": int(raw["exchange_ts_ms"]),
-            "tick_size": raw["tick_size"],
-            "min_order_size": raw["min_order"],
-            "bids": [{"price": price, "size": size} for price, size in raw["bids"]],
-            "asks": [{"price": price, "size": size} for price, size in raw["asks"]],
-            "hash": raw["bus_snapshot_id"],
-        }, received_ts=int(raw["received_ms"]) / 1000.0)
-        book.exchange_ts_ms = int(raw["exchange_ts_ms"])
-        book.received_ts_ms = int(raw["received_ms"])
-        book.snapshot_published_ts_ms = int(raw.get("snapshot_published_ms") or raw["received_ms"])
-        book.snapshot_published_ts = book.snapshot_published_ts_ms // 1000
-        book.source_received_ts_ms = int(raw.get("source_receive_ts_ms") or raw["received_ms"])
-        book.source_received_ts = book.source_received_ts_ms // 1000
-        book.state_version = int(raw.get("state_version") or 0)
-        book.lineage_epoch = int(raw.get("lineage_epoch") or 0)
-        book.economic_novelty = raw.get("economic_novelty") is True
-        book.last_book_change_receive_ms = int(
-            raw.get("last_book_change_receive_ms") or book.source_received_ts_ms)
-        book.last_trade_receive_ms = int(raw.get("last_trade_receive_ms") or 0)
-        book.last_trade_exchange_ms = int(raw.get("last_trade_exchange_ms") or 0)
-        book.snapshot_id = str(raw["bus_snapshot_id"])
-        book.lineage_continuous = True
-        output[token] = book
+        output[token] = _shared_book(token, raw)
     return output
+
+
+def _shared_book(token: str, raw: dict[str, Any]) -> Book:
+    book = Book({
+        "asset_id": token,
+        "timestamp": int(raw["exchange_ts_ms"]),
+        "tick_size": raw["tick_size"],
+        "min_order_size": raw["min_order"],
+        "bids": [{"price": price, "size": size} for price, size in raw["bids"]],
+        "asks": [{"price": price, "size": size} for price, size in raw["asks"]],
+        "hash": raw["bus_snapshot_id"],
+    }, received_ts=int(raw["received_ms"]) / 1000.0)
+    book.exchange_ts_ms = int(raw["exchange_ts_ms"])
+    book.received_ts_ms = int(raw["received_ms"])
+    book.snapshot_published_ts_ms = int(
+        raw.get("snapshot_published_ms") or raw["received_ms"])
+    book.snapshot_published_ts = book.snapshot_published_ts_ms // 1000
+    book.source_received_ts_ms = int(
+        raw.get("source_receive_ts_ms") or raw["received_ms"])
+    book.source_received_ts = book.source_received_ts_ms // 1000
+    book.state_version = int(raw.get("state_version") or 0)
+    book.lineage_epoch = int(raw.get("lineage_epoch") or 0)
+    book.economic_novelty = raw.get("economic_novelty") is True
+    book.last_book_change_receive_ms = int(
+        raw.get("last_book_change_receive_ms") or book.source_received_ts_ms)
+    book.last_trade_receive_ms = int(raw.get("last_trade_receive_ms") or 0)
+    book.last_trade_exchange_ms = int(raw.get("last_trade_exchange_ms") or 0)
+    book.snapshot_id = str(raw["bus_snapshot_id"])
+    book.lineage_continuous = True
+    return book
+
+
+def fetch_shared_market_bundle(
+    path: Path, *, model_sha: str, market_limit: int,
+    min_visible_liquidity: float, max_publish_age_ms: int = 2500,
+) -> tuple[list[Market], dict[str, Book]]:
+    """Build fee-attested market pairs directly from the canonical WS image.
+
+    The shared producer already publishes exact market/event/outcome identity,
+    full books and the authoritative fee registry. Re-querying Gamma and the
+    CLOB for the same metadata made a 30-second target depend on a 20-second
+    network timeout and prevented prospective labels from ever maturing.
+    """
+    snapshot = load_snapshot(
+        path, expected_sha=model_sha, max_publish_age_ms=max_publish_age_ms)
+    grouped: dict[str, dict[str, dict[str, Any]]] = {}
+    for raw in snapshot["books"].values():
+        market_id = str(raw.get("market_id") or "")
+        outcome = str(raw.get("outcome") or "").upper()
+        if market_id and outcome in {"YES", "NO"}:
+            grouped.setdefault(market_id, {})[outcome] = raw
+
+    candidates: list[tuple[float, str, dict[str, Any], dict[str, Any]]] = []
+    for market_id in grouped:
+        sides = grouped[market_id]
+        if set(sides) != {"YES", "NO"}:
+            continue
+        yes, no = sides["YES"], sides["NO"]
+        yes_token, no_token = str(yes.get("token") or ""), str(no.get("token") or "")
+        condition_id = str(yes.get("condition_id") or "")
+        event_id = str(yes.get("event_id") or "")
+        if (
+            yes.get("lineage_continuous") is not True
+            or no.get("lineage_continuous") is not True
+            or yes.get("fee_verified") is not True
+            or no.get("fee_verified") is not True
+            or not yes_token or not no_token or yes_token == no_token
+            or not condition_id or condition_id != str(no.get("condition_id") or "")
+            or not event_id or event_id != str(no.get("event_id") or "")
+            or not str(yes.get("bus_snapshot_id") or "")
+            or str(yes.get("bus_snapshot_id") or "")
+                != str(no.get("bus_snapshot_id") or "")
+        ):
+            continue
+        fee_tuple = (
+            float(yes["fee_rate"]), float(yes["fee_exponent"]),
+            bool(yes["fee_taker_only"]),
+        )
+        no_fee_tuple = (
+            float(no["fee_rate"]), float(no["fee_exponent"]),
+            bool(no["fee_taker_only"]),
+        )
+        if fee_tuple != no_fee_tuple:
+            continue
+        visible_liquidity = sum(
+            size for raw in (yes, no)
+            for side in ("bids", "asks") for _price, size in raw[side]
+        )
+        if visible_liquidity < max(0.0, float(min_visible_liquidity)):
+            continue
+        candidates.append((visible_liquidity, market_id, yes, no))
+
+    # Gamma discovery was liquidity-ranked. Preserve that useful admission
+    # property when the canonical snapshot becomes the sole data source.
+    candidates.sort(key=lambda row: (-row[0], row[1]))
+    markets: list[Market] = []
+    books: dict[str, Book] = {}
+    limit = max(0, int(market_limit))
+    for visible_liquidity, market_id, yes, no in candidates:
+        raw_market = {
+            "id": market_id,
+            "conditionId": str(yes.get("condition_id") or ""),
+            "eventId": str(yes.get("event_id") or ""),
+            "slug": market_id,
+            "clobTokenIds": [yes["token"], no["token"]],
+            "outcomes": ["Yes", "No"],
+            "liquidityNum": visible_liquidity,
+        }
+        try:
+            market = Market(raw_market)
+        except ValueError:
+            continue
+        market.fee = FeeDetails(
+            enabled=fee_tuple[0] > 0.0,
+            rate=fee_tuple[0], exponent=fee_tuple[1],
+            taker_only=fee_tuple[2], source="shared_state:verified_fee_registry",
+        )
+        markets.append(market)
+        books[market.yes] = _shared_book(market.yes, yes)
+        books[market.no] = _shared_book(market.no, no)
+        if limit and len(markets) >= limit:
+            break
+    if not markets:
+        raise SharedStateError("bundle:no_complete_fee_verified_markets")
+    return markets, books
 
 
 def features(yes: Book, no: Book) -> tuple[list[float], float, float] | None:

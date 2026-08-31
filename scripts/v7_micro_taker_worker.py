@@ -29,6 +29,8 @@ MODEL_ACTIVE_QUANTILE = 0.90
 MODEL_SPEC_VERSION = "dual_side_continuous_executable_net_edge_ridge_v5"
 DATASET_VERSION = 3
 DATASET_LINEAGE = "EVENT_NOVEL_EXECUTABLE_ROUND_TRIP_V3"
+DATASET_STORAGE_VERSION = 4
+DATASET_STORAGE_CONTRACT = "labeled_features_plus_probe_depth_recent_origins_v4"
 COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT = "complete_round_trip_executable_ev"
 CONSERVATIVE_MARKING_CONTRACT = "full_depth_executable_bid_net_fee_or_zero_fail_closed"
 LIVE_FLOW_SCHEMA = "polymarket_v7_live_trade_flow_v1"
@@ -218,6 +220,87 @@ def _side_target(row: dict[str, Any], side: str) -> float | None:
 
 def _has_dual_side_target(row: dict[str, Any]) -> bool:
     return _side_target(row, "YES") is not None and _side_target(row, "NO") is not None
+
+
+_SAMPLE_BOOK_KEYS = ("yes_bids", "yes_asks", "no_bids", "no_asks")
+
+
+def _probe_depth_levels(
+    value: Any, shares: float, *, buy: bool,
+) -> list[list[float]]:
+    parsed: list[tuple[float, float]] = []
+    if isinstance(value, list):
+        for level in value:
+            if not isinstance(level, (list, tuple)) or len(level) != 2:
+                continue
+            price = _finite(level[0])
+            size = max(0.0, _finite(level[1], 0.0))
+            if math.isfinite(price) and 0.0 < price < 1.0 and size > 0.0:
+                parsed.append((price, size))
+    parsed.sort(key=lambda item: item[0], reverse=not buy)
+    output: list[list[float]] = []
+    cumulative = 0.0
+    for price, size in parsed:
+        output.append([price, size])
+        cumulative += size
+        if cumulative + 1e-12 >= max(0.0, shares):
+            break
+    return output
+
+
+def compact_samples(
+    samples: list[dict[str, Any]], *, now: int, horizon_seconds: int,
+    max_target_staleness_seconds: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Discard impossible origins and retain only exact probe executable depth."""
+    output: list[dict[str, Any]] = []
+    dropped = 0
+    stripped = 0
+    levels_before = 0
+    levels_after = 0
+    recent_cutoff = int(now) - max(
+        1, int(horizon_seconds) + int(max_target_staleness_seconds) + 5)
+    for row in samples:
+        ts = int(_finite(row.get("ts"), 0.0))
+        labeled = _has_dual_side_target(row)
+        # Once t+h has passed, a missing pre-horizon observation can never be
+        # supplied by a future run. Keeping that origin only bloats the state
+        # file and slows the sampler that would have prevented the gap.
+        if not labeled and (ts <= 0 or ts + int(horizon_seconds) <= int(now)):
+            dropped += 1
+            continue
+        probe = max(0.0, _finite(row.get("label_probe_shares"), 0.0))
+        for key in _SAMPLE_BOOK_KEYS:
+            levels_before += len(row.get(key) or []) if isinstance(
+                row.get(key), list) else 0
+        if labeled and ts < recent_cutoff:
+            for key in _SAMPLE_BOOK_KEYS:
+                row.pop(key, None)
+            stripped += 1
+        else:
+            row["yes_bids"] = _probe_depth_levels(
+                row.get("yes_bids"), probe, buy=False)
+            row["yes_asks"] = _probe_depth_levels(
+                row.get("yes_asks"), probe, buy=True)
+            row["no_bids"] = _probe_depth_levels(
+                row.get("no_bids"), probe, buy=False)
+            row["no_asks"] = _probe_depth_levels(
+                row.get("no_asks"), probe, buy=True)
+        for key in _SAMPLE_BOOK_KEYS:
+            levels_after += len(row.get(key) or []) if isinstance(
+                row.get(key), list) else 0
+        row["dataset_storage_version"] = DATASET_STORAGE_VERSION
+        output.append(row)
+    return output, {
+        "version": DATASET_STORAGE_VERSION,
+        "contract": DATASET_STORAGE_CONTRACT,
+        "input_samples": len(samples),
+        "retained_samples": len(output),
+        "dropped_irrecoverable_unlabeled_samples": dropped,
+        "stripped_mature_labeled_book_payloads": stripped,
+        "book_levels_before": levels_before,
+        "book_levels_after": levels_after,
+    }
 
 
 def sample_diagnostics(samples: list[dict[str, Any]], *, horizon_seconds: int = 30) -> dict[str, Any]:
@@ -1399,25 +1482,30 @@ def main() -> int:
     fee_ready_market_count = 0
 
     try:
-        markets = base.discover(gamma, args.markets, args.min_liquidity)
-        discovered_market_count = len(markets)
-        fee_ready = []
-        for market in markets:
-            try:
-                market.fee = market.fee or base.resolve_fee_details(market.raw, clob, base.request_json)
-                fee_ready.append(market)
-            except Exception as exc:
-                if len(failures) < 30:
-                    failures.append(f"fee:{market.id}:{type(exc).__name__}")
-        markets = fee_ready
-        fee_ready_market_count = len(markets)
-        books = (
-            base.fetch_shared_books(
-                args.shared_state, markets, model_sha=args.model_sha,
+        if args.shared_state is not None:
+            markets, books = base.fetch_shared_market_bundle(
+                args.shared_state, model_sha=args.model_sha,
+                market_limit=args.markets,
+                min_visible_liquidity=args.min_liquidity,
                 max_publish_age_ms=args.max_shared_publish_age_ms,
             )
-            if args.shared_state is not None else base.fetch_books(clob, markets)
-        )
+            discovered_market_count = len(markets)
+            fee_ready_market_count = len(markets)
+        else:
+            markets = base.discover(gamma, args.markets, args.min_liquidity)
+            discovered_market_count = len(markets)
+            fee_ready = []
+            for market in markets:
+                try:
+                    market.fee = market.fee or base.resolve_fee_details(
+                        market.raw, clob, base.request_json)
+                    fee_ready.append(market)
+                except Exception as exc:
+                    if len(failures) < 30:
+                        failures.append(f"fee:{market.id}:{type(exc).__name__}")
+            markets = fee_ready
+            fee_ready_market_count = len(markets)
+            books = base.fetch_books(clob, markets)
     except SharedStateError as exc:
         markets, books = [], {}
         failures.append(f"shared_market_state:{exc}")
@@ -1478,6 +1566,10 @@ def main() -> int:
                 )
 
     label_stats = base.label_matured_samples(samples, now=now, horizon_seconds=args.horizon_seconds, max_target_staleness_seconds=args.max_target_staleness_seconds)
+    samples, dataset_storage = compact_samples(
+        samples, now=now, horizon_seconds=args.horizon_seconds,
+        max_target_staleness_seconds=args.max_target_staleness_seconds,
+    )
     model_rows = causal_model_rows(samples)
     challenger, challenger_readiness = load_or_freeze_model_challenger(
         state, model_rows, horizon_seconds=args.horizon_seconds,
@@ -1851,9 +1943,11 @@ def main() -> int:
             duplicate_snapshots_rejected += 1
             continue
         observed_ts = max(yes.source_received_ts, no.source_received_ts)
+        probe_shares = max(yes.min_order, no.min_order)
         samples.append({
             "dataset_version": DATASET_VERSION,
             "dataset_lineage": DATASET_LINEAGE,
+            "dataset_storage_version": DATASET_STORAGE_VERSION,
             "sample_key": key,
             "ts": observed_ts,
             "snapshot_published_ts": max(yes.snapshot_published_ts, no.snapshot_published_ts),
@@ -1867,7 +1961,7 @@ def main() -> int:
             "no_lineage_epoch": no.lineage_epoch,
             "target_semantics_version": TARGET_SEMANTICS_VERSION,
             "label_horizon_seconds": args.horizon_seconds,
-            "label_probe_shares": max(yes.min_order, no.min_order),
+            "label_probe_shares": probe_shares,
             "round_trip_slippage_bps": args.slippage_bps,
             "adverse_markout_bps": args.adverse_markout_bps,
             "capital_cost_bps_per_hour": args.capital_cost_bps_per_hour,
@@ -1879,15 +1973,17 @@ def main() -> int:
                 "taker_only": bool(market.fee.taker_only) if market.fee else None,
                 "source": str(market.fee.source) if market.fee else "",
             },
-            "yes_bids": [[price, size] for price, size in yes.bids],
-            "yes_asks": [[price, size] for price, size in yes.asks],
-            "no_bids": [[price, size] for price, size in no.bids],
-            "no_asks": [[price, size] for price, size in no.asks],
+            "yes_bids": _probe_depth_levels(yes.bids, probe_shares, buy=False),
+            "yes_asks": _probe_depth_levels(yes.asks, probe_shares, buy=True),
+            "no_bids": _probe_depth_levels(no.bids, probe_shares, buy=False),
+            "no_asks": _probe_depth_levels(no.asks, probe_shares, buy=True),
             "mid": feature[1], "spread": feature[2], "x": feature[3], "y": None,
         })
         known_sample_keys.add(key)
         novel_samples += 1
     samples = samples[-50000:]
+    dataset_storage["retained_samples_after_append"] = len(samples)
+    dataset_storage["novel_samples_appended"] = novel_samples
     equity, unmarkable_positions = conservative_marked_equity(cash, positions, current)
     new_risk_frozen = bool(unmarkable_positions) or drain_requested
     peak = max(peak, equity)
@@ -1924,6 +2020,9 @@ def main() -> int:
         "samples": samples,
         "dataset_version": DATASET_VERSION,
         "dataset_lineage": DATASET_LINEAGE,
+        "dataset_storage_version": DATASET_STORAGE_VERSION,
+        "dataset_storage_contract": DATASET_STORAGE_CONTRACT,
+        "dataset_storage": dataset_storage,
         "dataset_migration": dataset_migration,
         "dataset_restore": dataset_restore,
         "dataset_diagnostics": dataset_diagnostics,
@@ -1981,7 +2080,9 @@ def main() -> int:
         "validation_diagnostics", "model_challenger", "model_challenger_readiness",
         "flow_valid", "flow_diagnostics",
         "rejection_funnel",
-        "dataset_version", "dataset_lineage", "dataset_diagnostics", "target_semantics_version",
+        "dataset_version", "dataset_lineage", "dataset_storage_version",
+        "dataset_storage_contract", "dataset_storage", "dataset_diagnostics",
+        "model_spec_version", "target_semantics_version",
         "novel_samples_last_tick", "duplicate_snapshots_rejected_last_tick",
         "labeled_samples", "model_labeled_samples",
         "market_state_source", "discovered_markets", "fee_ready_markets",
