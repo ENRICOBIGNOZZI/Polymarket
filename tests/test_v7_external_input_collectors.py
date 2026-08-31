@@ -71,6 +71,32 @@ def test_kalshi_metadata_discovery_pages_to_exhaustion_and_polls_books(tmp_path)
     assert status["metadata_changes"] == 2
 
 
+def test_kalshi_metadata_discovery_time_budget_is_explicit_and_never_hangs(tmp_path, monkeypatch):
+    class ManyPagesClient(KalshiClient):
+        def get(self, path):
+            timing = {"request_ms": 2.0, "ttfb_ms": 1.0, "connection_epoch": 1,
+                      "body_sha256": "b" * 64}
+            if path.startswith("/markets?"):
+                return {"markets": [{"ticker": "KX" + str(len(path)), "title": "Slow"}], "cursor": "next"}, timing
+            return {"orderbook_fp": {"yes_dollars": [["0.40", "10"]], "no_dollars": [["0.50", "8"]]}}, timing
+    timestamps = iter((0, 0, 2_000_000, 2_000_000))
+    monkeypatch.setattr(cross.time, "monotonic_ns", lambda: next(timestamps, 2_000_000))
+    config = json.loads((ROOT / "config" / "v7_external_inputs.json").read_text())
+    config["cross_platform"]["metadata_discovery_time_budget_millis"] = 1
+    config_path = tmp_path / "inputs.json"
+    config_path.write_text(json.dumps(config))
+    status = cross.collect_once(
+        repository_root=ROOT, config_path=config_path,
+        mappings_path=ROOT / "config" / "v7_external_mappings.json",
+        tape_path=tmp_path / "books.jsonl", state_path=tmp_path / "state.json",
+        status_path=tmp_path / "status.json", client=ManyPagesClient(), now_ms=1_800_000_000_000,
+    )
+    assert status["feed_status"] == "DEGRADED"
+    assert status["discovery_exhaustive"] is False
+    assert status["discovery_time_budget_exhausted"] is True
+    assert status["blocker"] == "BLOCKED_KALSHI_METADATA_DISCOVERY_TIME_BUDGET_EXHAUSTED"
+
+
 def test_kalshi_malformed_book_degrades_locally(tmp_path):
     status = cross.collect_once(
         repository_root=ROOT, config_path=ROOT / "config" / "v7_external_inputs.json",

@@ -256,15 +256,24 @@ def collect_once(*, repository_root: Path, config_path: Path, mappings_path: Pat
     transport_state = "DISCONNECTED"
     latency_samples: list[float] = []
     discovery_exhaustive = False
+    discovery_time_budget_exhausted = False
     metadata_changes = 0
     poll_budget = 0
     try:
         page_size = max(1, min(1000, int(section.get("metadata_page_size") or 1000)))
         page_guard = max(1, int(section.get("pagination_loop_guard_pages") or 200))
+        discovery_budget_ns = max(1, int(section.get("metadata_discovery_time_budget_millis") or 10_000)) * 1_000_000
+        discovery_started = time.monotonic_ns()
         markets: list[dict[str, Any]] = []
         cursor = ""
         discovery_exhaustive = False
-        for _ in range(page_guard):
+        for page_number in range(page_guard):
+            # A discovery pass may span a large public universe. Bound it by
+            # wall time, retain only completed pages, and report partial state
+            # explicitly instead of allowing a collector interval to hang.
+            if page_number > 0 and time.monotonic_ns() - discovery_started >= discovery_budget_ns:
+                discovery_time_budget_exhausted = True
+                break
             path = f"/markets?limit={page_size}&status=open"
             if cursor:
                 path += "&cursor=" + urllib.parse.quote(cursor, safe="")
@@ -281,7 +290,7 @@ def collect_once(*, repository_root: Path, config_path: Path, mappings_path: Pat
             if next_cursor == cursor:
                 raise CrossCollectorError("venue_market_cursor_not_advancing")
             cursor = next_cursor
-        if not discovery_exhaustive:
+        if not discovery_exhaustive and not discovery_time_budget_exhausted:
             raise CrossCollectorError("venue_market_pagination_guard_hit")
         tickers = []
         metadata_hashes = state.get("metadata_hashes") if isinstance(state.get("metadata_hashes"), dict) else {}
@@ -333,9 +342,11 @@ def collect_once(*, repository_root: Path, config_path: Path, mappings_path: Pat
                 synced += 1
             except Exception:
                 parse_failures += 1
-        transport_state = "OPERATIONAL" if synced > 0 else "DEGRADED"
+        transport_state = "OPERATIONAL" if synced > 0 and discovery_exhaustive else "DEGRADED"
+        if discovery_time_budget_exhausted:
+            blocker = "BLOCKED_KALSHI_METADATA_DISCOVERY_TIME_BUDGET_EXHAUSTED"
         if not verified:
-            blocker = "BLOCKED_NO_VERIFIED_EQUIVALENCE"
+            blocker = blocker or "BLOCKED_NO_VERIFIED_EQUIVALENCE"
     except Exception as exc:
         blocker = f"BLOCKED_SECOND_VENUE_DOWN:{type(exc).__name__}:{exc}"
         transport_state = "DOWN"
@@ -359,6 +370,7 @@ def collect_once(*, repository_root: Path, config_path: Path, mappings_path: Pat
         "transport": "PUBLIC_REST_POLLING", "polling_latency_not_event_latency": True,
         "discovered_markets": discovered, "synchronized_books": synced,
         "discovery_exhaustive": discovery_exhaustive if transport_state != "DOWN" else False,
+        "discovery_time_budget_exhausted": discovery_time_budget_exhausted,
         "metadata_changes": metadata_changes if transport_state != "DOWN" else 0,
         "book_poll_budget": poll_budget if transport_state != "DOWN" else 0,
         "book_poll_cursor": int(state.get("book_cursor") or 0),
