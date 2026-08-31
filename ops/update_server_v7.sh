@@ -7,6 +7,7 @@ DEPLOY_REF="${POLYMARKET_DEPLOY_REF:-main}"
 CACHE_DIR="${POLYMARKET_DEPLOY_CACHE:-$HOME/.cache/polymarket-v7-deploy}"
 STATE_DIR="${POLYMARKET_STATE_DIR:-$HOME/.config/polymarket}"
 GRAFANA_URL="${POLYMARKET_GRAFANA_URL:-https://mamma-portfolio.tail1bae85.ts.net}"
+CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
 LOCK_DIR="$CACHE_DIR/update-v7.lock"
 STATUS_FILE="$STATE_DIR/v7_deploy_status.env"
 # External Fair must observe an exact 5-minute Chainlink boundary causally.
@@ -532,6 +533,7 @@ for rel in (
     'scripts/v7_evidence_capital_allocator.py',
     'scripts/v7_fee_reward_registry.py',
     'scripts/v7_generate_economic_artifacts.py',
+    'scripts/v7_exact_sha_ci_gate.py',
     'scripts/v7_research_shadow_supervisor.py',
     'scripts/v7_slow_economic_shadow_supervisor.py',
     'scripts/v7_semantic_mapping.py',
@@ -565,6 +567,7 @@ prevalidate_candidate(){
     cmake --build build --parallel "${POLYMARKET_BUILD_JOBS:-2}"
     ctest --test-dir build --output-on-failure
     python3 -m py_compile \
+      scripts/v7_exact_sha_ci_gate.py \
       scripts/v7_cutover_contract.py \
       scripts/v7_execution_ledger.py \
       scripts/v7_ledger_spool.py \
@@ -654,7 +657,6 @@ PY
       POLYMARKET_APP_DIR="$APP_DIR" \
       PM_V7_RUN_ROOT="$run_root" \
       POLYMARKET_EXPECTED_SHA="$EXPECTED_SHA" \
-      PM_V7_EXACT_SHA_CI_GREEN=true \
       PM_TRADE_RECORDER="$APP_DIR/build/polymarket_v7_trade_recorder" \
       bash "$APP_DIR/ops/v7_service_entrypoint.sh" \
       >>"$runtime_log" 2>&1 </dev/null &
@@ -1063,6 +1065,10 @@ git fetch --no-tags origin "$DEPLOY_REF"
 MAIN_SHA="$(git rev-parse "origin/$DEPLOY_REF")"
 [[ "$MAIN_SHA" == "$EXPECTED_SHA" ]] || fail "origin/main $MAIN_SHA != exact approved SHA $EXPECTED_SHA"
 prevalidate_candidate
+python3 "$candidate/scripts/v7_exact_sha_ci_gate.py" \
+  --repository "$CI_REPOSITORY" --sha "$EXPECTED_SHA" \
+  --output "$STATE_DIR/exact_sha_ci.$EXPECTED_SHA.json" || \
+  fail "exact SHA lacks successful Release and Debug CI"
 preflight_legacy_macos_services
 OLD_SHA="$(resolve_incumbent_sha)"
 [[ "$OLD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "cannot resolve exact deployed incumbent SHA"

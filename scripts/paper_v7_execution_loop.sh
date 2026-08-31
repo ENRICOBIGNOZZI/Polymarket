@@ -16,17 +16,13 @@ FAST_STRUCTURAL_POLICY="${PM_V7_FAST_STRUCTURAL_POLICY:-config/v7_fast_structura
 FAST_STRUCTURAL_RELATIONS="${PM_V7_FAST_STRUCTURAL_RELATIONS:-config/v7_fast_structural_relations.csv}"
 EXTERNAL_FAIR_POLICY="${PM_V7_EXTERNAL_FAIR_POLICY:-config/v7_external_fair.json}"
 ORACLE_BINDING="${PM_V7_ORACLE_BINDING:-}"
-EXACT_SHA_CI_GREEN="${PM_V7_EXACT_SHA_CI_GREEN:-false}"
+CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
 OSINT_SOURCE_REGISTRY="${PM_V7_OSINT_SOURCE_REGISTRY:-config/v7_osint_sources.json}"
 LIVE_MODEL_SCOPE="${PM_V7_LIVE_MODEL_SCOPE:-config/v7_live_model_scope.json}"
 EXTERNAL_INPUT_CONFIG="${PM_V7_EXTERNAL_INPUT_CONFIG:-config/v7_external_inputs.json}"
 EXTERNAL_MAPPING_REGISTRY="${PM_V7_EXTERNAL_MAPPING_REGISTRY:-config/v7_external_mappings.json}"
 ADAPTIVE_UNIVERSE_CONFIG="${PM_V7_ADAPTIVE_UNIVERSE_CONFIG:-config/v7_adaptive_universe.json}"
 SHA="$(git rev-parse HEAD)"
-[[ "$EXACT_SHA_CI_GREEN" == "true" || "$EXACT_SHA_CI_GREEN" == "false" ]] || {
-  echo "PM_V7_EXACT_SHA_CI_GREEN must be true or false" >&2
-  exit 72
-}
 MAKER_CHAMPION_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
 MAKER_CHALLENGER_MODEL="$RUN_ROOT/micro_maker/execution_model_challenger.json"
 MAKER_MODEL_REGISTRY="$RUN_ROOT/micro_maker/model_registry.json"
@@ -57,6 +53,15 @@ MAKER_FREEZE="$CONTROL/MAKER_FREEZE"
 LOCK="$CONTROL/runtime.lock"
 mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/osint" "$RUN_ROOT/market_open" "$RUN_ROOT/shadow/sports_latency" "$RUN_ROOT/shadow/cross_platform" "$RUN_ROOT/shadow/wallet_intelligence" "$RUN_ROOT/shadow/ranking" "$RUN_ROOT/shadow/pca" "$RUN_ROOT/shadow/local_factor" "$RUN_ROOT/learned_execution"
 touch "$RUN_ROOT/ledger/execution.jsonl"
+
+# The runtime is not allowed to self-assert CI approval through an environment
+# flag. Query the public check-runs for this exact immutable SHA and preserve
+# the resulting receipt beside the canonical control state before any worker
+# can start. Network ambiguity or a missing/failed check is a launch failure.
+python3 scripts/v7_exact_sha_ci_gate.py \
+  --repository "$CI_REPOSITORY" --sha "$SHA" \
+  --output "$CONTROL/exact_sha_ci_receipt.json"
+EXACT_SHA_CI_GREEN=true
 
 python3 - "$CONFIG" "$MAKER_POLICY" "$EXTERNAL_FAIR_POLICY" "$OSINT_SOURCE_REGISTRY" "$LIVE_MODEL_SCOPE" "$EXTERNAL_INPUT_CONFIG" "$EXTERNAL_MAPPING_REGISTRY" "$ADAPTIVE_UNIVERSE_CONFIG" "$WS_JSON_ARENA_MAKER_MAX_BYTES" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
 import json,sys

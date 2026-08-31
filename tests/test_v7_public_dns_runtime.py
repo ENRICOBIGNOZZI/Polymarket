@@ -39,7 +39,8 @@ class V7PublicDnsRuntimeContractTests(unittest.TestCase):
         template = (ROOT / "ops" / "launchd" / "com.polymarket.v7.paper.plist.in").read_text(encoding="utf-8")
         self.assertIn('launchctl bootstrap "$domain" "$destination"', updater)
         self.assertIn('launchctl print "gui/$(id -u)/com.polymarket.v7.paper"', updater)
-        self.assertIn("PM_V7_EXACT_SHA_CI_GREEN", template)
+        self.assertNotIn("PM_V7_EXACT_SHA_CI_GREEN", template)
+        self.assertIn("v7_exact_sha_ci_gate.py", updater)
 
     def test_cpp_http_client_explicitly_uses_v7_proxy_only_for_polymarket_https(self) -> None:
         source = (ROOT / "src" / "http.cpp").read_text(encoding="utf-8")
