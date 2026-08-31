@@ -330,6 +330,7 @@ struct Options {
     std::string maker_policy = "config/v7_professional_market_maker.json";
     std::string selection;
     std::string model;
+    std::string fee_registry;
     std::string run_root = "runs/paper_v7_live";
     std::string model_sha;
     std::string ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
@@ -347,6 +348,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--maker-policy") options.maker_policy = next();
         else if (arg == "--selection") options.selection = next();
         else if (arg == "--model") options.model = next();
+        else if (arg == "--fee-registry") options.fee_registry = next();
         else if (arg == "--run-root") options.run_root = next();
         else if (arg == "--model-sha") options.model_sha = next();
         else if (arg == "--ws-url") options.ws_url = next();
@@ -354,6 +356,9 @@ Options parse_options(int argc, char** argv) {
     }
     if (options.selection.empty()) options.selection = options.run_root + "/micro_maker/reward_selection.json";
     if (options.model.empty()) options.model = options.run_root + "/micro_maker/execution_model.json";
+    if (options.fee_registry.empty()) {
+        options.fee_registry = options.run_root + "/control/fee_reward_registry.json";
+    }
     if (!exact_sha(options.model_sha)) throw std::runtime_error("--model-sha must be exact 40-hex SHA");
     return options;
 }
@@ -949,6 +954,21 @@ struct ExternalMakerSnapshot {
     bool valid = false;
 };
 
+struct MakerTakerFeeSnapshot {
+    double rate = 0.0;
+    double exponent = 1.0;
+    std::int64_t expires_at_ms = 0;
+    bool enabled = false;
+    bool verified = false;
+
+    [[nodiscard]] bool valid(std::int64_t now_ms) const noexcept {
+        return verified && expires_at_ms > now_ms
+            && std::isfinite(rate) && rate >= 0.0 && rate <= 1.0
+            && std::isfinite(exponent) && exponent > 0.0 && exponent <= 10.0
+            && (enabled || rate == 0.0);
+    }
+};
+
 struct MarketContext {
     SelectedMarket cold;
     // Membership and handles are immutable for a process generation, while
@@ -970,6 +990,10 @@ struct MarketContext {
     // immutable snapshot. Filesystem/JSON work never enters the event callback.
     std::shared_ptr<const ExternalMakerSnapshot> external_fair =
         std::make_shared<const ExternalMakerSnapshot>();
+    // Refreshed only by the cold control thread. Explicit taker liquidation
+    // fails closed when this exact-SHA authoritative schedule is absent/stale.
+    std::shared_ptr<const MakerTakerFeeSnapshot> taker_fee =
+        std::make_shared<const MakerTakerFeeSnapshot>();
     MakerInstrumentLane yes_lane{+1};
     MakerInstrumentLane no_lane{-1};
 
@@ -2044,6 +2068,8 @@ public:
                 const auto& no_book = latest_no_books_[handle];
                 const bool liquidate_yes = inventory->directional_microunits > 0;
                 const auto& relevant_book = liquidate_yes ? yes_book : no_book;
+                const auto taker_fee = std::atomic_load_explicit(
+                    &market->taker_fee, std::memory_order_acquire);
                 constexpr std::int64_t kMaximumDrainBookAgeNs = 5'000'000'000LL;
                 const auto relevant_receive_ns = relevant_book.receive_monotonic_ns;
                 const bool books_executable = relevant_book.valid != 0
@@ -2051,7 +2077,8 @@ public:
                     && relevant_book.tick_size_e4 == (liquidate_yes
                         ? market->yes_tick_e4 : market->no_tick_e4)
                     && relevant_receive_ns > 0 && now_ns >= relevant_receive_ns
-                    && now_ns - relevant_receive_ns <= kMaximumDrainBookAgeNs;
+                    && now_ns - relevant_receive_ns <= kMaximumDrainBookAgeNs
+                    && taker_fee != nullptr && taker_fee->valid(wall_ms());
                 if (books_executable) {
                     auto liquidation = policy_.liquidate_directional_inventory(
                         handle,
@@ -2059,6 +2086,8 @@ public:
                         yes_book.best_bid_microunits,
                         no_book.best_bid_e4 / market->no_tick_e4,
                         no_book.best_bid_microunits,
+                        taker_fee->rate,
+                        taker_fee->exponent,
                         now_ns, capital_);
                     if (liquidation.accepted && liquidation.paper.event_count > 0) {
                         ExecutionContext liquidation_context = context;
@@ -2068,6 +2097,9 @@ public:
                         liquidation_context.outcome_yes = static_cast<std::uint8_t>(
                             liquidate_yes);
                         liquidation_context.book = relevant_book;
+                        liquidation_context.state_version = relevant_book.state_version;
+                        liquidation_context.exchange_event_ns =
+                            relevant_book.exchange_event_ns;
                         emit(liquidation_context, liquidation.paper);
                     }
                     if (liquidation.capital_invariant_violation
@@ -2556,6 +2588,7 @@ private:
     struct InstrumentCold { MarketContext* market = nullptr; bool yes = false; };
     struct MarketCycleEconomics {
         double realized_pnl = 0.0;
+        double taker_fees = 0.0;
         double executed_shares = 0.0;
         std::int64_t opened_ms = 0;
         std::uint64_t sequence = 0;
@@ -2860,7 +2893,7 @@ private:
         if (paper.kind == PaperMakerEventKind::Fill && paper.operational_fill_microunits > 0) {
             write_fill(record);
             track_market_cycle(record, paper.realized_pnl,
-                               micro_shares(paper.operational_fill_microunits));
+                               micro_shares(paper.operational_fill_microunits), 0.0);
             if (paper.order_state == pm::v7::OrderState::Filled) {
                 write_order_state(record, "FILLED");
             }
@@ -2879,19 +2912,20 @@ private:
             return;
         }
         if (paper.kind == PaperMakerEventKind::InventorySplit) {
-            track_market_cycle(record, 0.0, 0.0);
+            track_market_cycle(record, 0.0, 0.0, 0.0);
             write_inventory_event(record, "INVENTORY_SPLIT");
             return;
         }
         if (paper.kind == PaperMakerEventKind::InventoryMerge) {
-            track_market_cycle(record, paper.realized_pnl, 0.0);
+            track_market_cycle(record, paper.realized_pnl, 0.0, 0.0);
             write_inventory_event(record, "INVENTORY_MERGE");
             maybe_write_market_cycle_final(record, "COMPLETE_SET_MERGE_FLAT");
             return;
         }
         if (paper.kind == PaperMakerEventKind::InventoryLiquidation) {
             track_market_cycle(record, paper.realized_pnl,
-                               micro_shares(paper.operational_fill_microunits));
+                               micro_shares(paper.operational_fill_microunits),
+                               paper.taker_fee_paid);
             write_inventory_event(record, "INVENTORY_LIQUIDATION");
             maybe_write_market_cycle_final(record, "DRAIN_LIQUIDATION_FLAT");
             return;
@@ -2902,14 +2936,40 @@ private:
         const auto& paper = record.paper;
         auto event = common(event_type);
         attach_market(event, record);
-        const std::string position_id = "mmi-" + std::to_string(record.market_handle) + "-" +
-                                        telemetry_epoch_ + "-" +
-                                        std::to_string(++inventory_event_sequence_);
+        const auto& cycle = market_cycles_[record.market_handle];
+        const std::string position_id =
+            paper.kind == PaperMakerEventKind::InventoryLiquidation && cycle.active
+                ? "mm-cycle-" + std::to_string(record.market_handle) + "-"
+                    + telemetry_epoch_ + "-" + std::to_string(cycle.sequence)
+                : "mmi-" + std::to_string(record.market_handle) + "-"
+                    + telemetry_epoch_ + "-"
+                    + std::to_string(++inventory_event_sequence_);
         event["position_id"] = position_id;
         event["intended_action"] = event_type;
         event["intended_size"] = micro_shares(paper.original_microunits > 0
             ? paper.original_microunits : paper.operational_fill_microunits);
         event["realized_cashflow"] = paper.realized_pnl;
+        if (paper.kind == PaperMakerEventKind::InventoryLiquidation) {
+            attach_book(event, record);
+            event["exchange_ts_ms"] = exchange_ms(record);
+            event["receive_ts_ms"] = record.receive_wall_ms;
+            event["side"] = "SELL";
+            event["fill_id"] = "mml-" + std::to_string(record.market_handle) + "-"
+                + telemetry_epoch_ + "-" + std::to_string(cycle.sequence);
+            event["fill_price"] = tick_price(paper.price_tick, paper.tick_size_e4);
+            event["filled_size"] = micro_shares(paper.operational_fill_microunits);
+            event["complete"] = true;
+            event["fee"] = paper.taker_fee_paid;
+            event["fee_rate"] = paper.taker_fee_rate;
+            event["fee_source"] = "v7_fee_reward_registry:authoritative_gamma";
+            event["slippage"] = 0.0;
+            event["unwind_loss"] = std::max(
+                0.0, -(paper.realized_pnl + paper.taker_fee_paid));
+            event["executable_liquidation_value"] =
+                micro_shares(paper.operational_fill_microunits)
+                    * tick_price(paper.price_tick, paper.tick_size_e4)
+                - paper.taker_fee_paid;
+        }
         if (paper.kind == PaperMakerEventKind::InventoryMerge) {
             event["final_pnl"] = paper.realized_pnl;
         }
@@ -2938,13 +2998,21 @@ private:
         metadata["pnl_created_by_split"] = false;
         metadata["inventory_lineage"] = "market_local_average_cost_before_after";
         metadata["consumed_inventory_provenance_complete"] = true;
+        if (paper.kind == PaperMakerEventKind::InventoryLiquidation) {
+            metadata["taker_fee_exponent"] = paper.taker_fee_exponent;
+            metadata["authoritative_fee_verified"] = true;
+            metadata["full_visible_l1_depth"] = true;
+            metadata["gross_inventory_pnl"] =
+                paper.realized_pnl + paper.taker_fee_paid;
+            metadata["cost_vector_complete"] = true;
+        }
         event["metadata"] = std::move(metadata);
         spool(std::move(event));
         return position_id;
     }
 
     void track_market_cycle(const TelemetryRecord& record, double realized_pnl,
-                            double executed_shares) {
+                            double executed_shares, double taker_fee) {
         if (record.market_handle == 0 || record.market_handle >= market_cycles_.size()) return;
         auto& cycle = market_cycles_[record.market_handle];
         if (!cycle.active) {
@@ -2954,6 +3022,7 @@ private:
             cycle.sequence = ++market_cycle_sequence_;
         }
         cycle.realized_pnl += realized_pnl;
+        cycle.taker_fees += std::max(0.0, taker_fee);
         cycle.executed_shares += std::max(0.0, executed_shares);
     }
 
@@ -2987,6 +3056,8 @@ private:
         event["position_id"] = position_id;
         event["final_pnl"] = cycle.realized_pnl;
         event["realized_cashflow"] = cycle.realized_pnl;
+        // Execution-level events own realized costs. FINAL closes the cycle
+        // without repeating them; the decomposition remains self-contained.
         event["fee"] = 0.0;
         event["slippage"] = 0.0;
         event["unwind_loss"] = 0.0;
@@ -3010,7 +3081,8 @@ private:
         metadata["pnl_decomposition"] = json::object{
             {"trading_pnl", cycle.realized_pnl},
             {"spread_capture", 0.0}, {"adverse_markout", 0.0},
-            {"inventory_pnl", cycle.realized_pnl}, {"maker_rebates", 0.0},
+            {"inventory_pnl", cycle.realized_pnl + cycle.taker_fees},
+            {"taker_fees", cycle.taker_fees}, {"maker_rebates", 0.0},
             {"liquidity_rewards", 0.0}, {"own_reward_share_verified", false}};
         event["metadata"] = std::move(metadata);
         spool(std::move(event));
@@ -3224,6 +3296,87 @@ std::vector<std::unique_ptr<MarketContext>> build_markets(
     return true;
 }
 
+[[nodiscard]] bool refresh_authoritative_taker_fees(
+    const fs::path& path,
+    std::string_view model_sha,
+    const std::vector<std::unique_ptr<MarketContext>>& markets,
+    std::int64_t now_ms) {
+    const auto root = read_json(path);
+    if (!root.is_object()) throw std::runtime_error("maker fee registry must be object");
+    const auto& object = root.as_object();
+    if (text(find_value(object, "schema")) != "polymarket_v7_fee_reward_registry_v1"
+        || text(find_value(object, "model_sha")) != model_sha
+        || !boolean(find_value(object, "paper_only"), false)
+        || boolean(find_value(object, "authenticated_execution"), true)
+        || boolean(find_value(object, "real_order_submission"), true)
+        || boolean(find_value(object, "execution_authority"), true)
+        || boolean(find_value(object, "automatic_promotion"), true)
+        || text(find_value(object, "unknown_fee_policy")) != "NON_EXECUTABLE") {
+        throw std::runtime_error("maker fee registry safety contract invalid");
+    }
+    const auto* rows_value = find_value(object, "markets");
+    if (rows_value == nullptr || !rows_value->is_array()) {
+        throw std::runtime_error("maker fee registry missing markets");
+    }
+
+    std::unordered_map<std::string, const MarketContext*> required;
+    required.reserve(markets.size());
+    for (const auto& market : markets) required.emplace(market->cold.market_id, market.get());
+    std::unordered_map<std::string, std::shared_ptr<const MakerTakerFeeSnapshot>> pending;
+    pending.reserve(markets.size());
+    for (const auto& value : rows_value->as_array()) {
+        if (!value.is_object()) continue;
+        const auto& row = value.as_object();
+        const std::string market_id = text(find_value(row, "market_id"));
+        const auto wanted = required.find(market_id);
+        if (wanted == required.end()) continue;
+        const auto* market = wanted->second;
+        if (text(find_value(row, "condition_id")) != market->cold.condition_id) {
+            throw std::runtime_error("maker fee registry condition identity mismatch");
+        }
+        const auto* tokens_value = find_value(row, "token_ids");
+        if (tokens_value == nullptr || !tokens_value->is_array()) {
+            throw std::runtime_error("maker fee registry missing token identities");
+        }
+        bool saw_yes = false;
+        bool saw_no = false;
+        for (const auto& token_value : tokens_value->as_array()) {
+            const std::string token = text(&token_value);
+            saw_yes = saw_yes || token == market->cold.yes_token;
+            saw_no = saw_no || token == market->cold.no_token;
+        }
+        if (!saw_yes || !saw_no) {
+            throw std::runtime_error("maker fee registry token identity mismatch");
+        }
+        const auto* fee_value = find_value(row, "fee");
+        if (fee_value == nullptr || !fee_value->is_object()) {
+            throw std::runtime_error("maker fee registry missing fee schedule");
+        }
+        const auto& fee = fee_value->as_object();
+        auto snapshot = std::make_shared<MakerTakerFeeSnapshot>();
+        snapshot->enabled = boolean(find_value(fee, "enabled"), false);
+        snapshot->verified = boolean(find_value(fee, "verified"), false)
+            && boolean(find_value(fee, "taker_only"), false)
+            && !text(find_value(fee, "source")).empty();
+        snapshot->rate = number(find_value(fee, "rate"), -1.0);
+        snapshot->exponent = number(find_value(fee, "exponent"), -1.0);
+        snapshot->expires_at_ms = integer(find_value(fee, "expires_at_ms"), 0);
+        if (!snapshot->valid(now_ms)) {
+            throw std::runtime_error("maker fee registry schedule stale or unverified");
+        }
+        pending.emplace(market_id, std::move(snapshot));
+    }
+    if (pending.size() != required.size()) {
+        throw std::runtime_error("maker fee registry lacks a selected market");
+    }
+    for (const auto& market : markets) {
+        std::atomic_store_explicit(
+            &market->taker_fee, pending.at(market->cold.market_id),
+            std::memory_order_release);
+    }
+    return true;
+}
+
 [[nodiscard]] bool refresh_external_maker_fair(
     const ExternalMakerFairPolicy& policy,
     const std::vector<std::unique_ptr<MarketContext>>& markets,
@@ -3349,6 +3502,21 @@ int main(int argc, char** argv) {
                                 options.model, options.model_sha));
         auto model_store = std::make_shared<MakerModelStore>(initial);
         auto markets = build_markets(options, config);
+        while (!g_stop.load(std::memory_order_relaxed)) {
+            try {
+                if (fs::exists(options.fee_registry)
+                    && refresh_authoritative_taker_fees(
+                        options.fee_registry, options.model_sha, markets, wall_ms())) {
+                    break;
+                }
+            } catch (const std::exception& error) {
+                std::cerr << "maker fee registry not ready: " << error.what() << '\n';
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+        if (g_stop.load(std::memory_order_relaxed)) {
+            throw std::runtime_error("maker fee registry unavailable");
+        }
 
         std::atomic<bool> global_kill{false};
         std::atomic<bool> new_risk_frozen{false};
@@ -3473,6 +3641,7 @@ int main(int argc, char** argv) {
         std::int64_t last_state_ms = 0;
         std::int64_t last_model_check_ms = 0;
         std::int64_t last_selection_check_ms = 0;
+        std::int64_t last_fee_registry_check_ms = 0;
         std::uint64_t current_model_version = initial->model_version;
         std::uint64_t current_selector_generation = 0;
         for (const auto& market : markets) {
@@ -3564,6 +3733,16 @@ int main(int argc, char** argv) {
                         // last valid same-membership cell authority in place.
                     }
                     last_selection_check_ms = now;
+                }
+                if (now - last_fee_registry_check_ms >= 5'000) {
+                    try {
+                        (void)refresh_authoritative_taker_fees(
+                            options.fee_registry, options.model_sha, markets, now);
+                    } catch (...) {
+                        // Preserve the last exact-SHA schedule. Its own expiry
+                        // still makes any later taker liquidation fail closed.
+                    }
+                    last_fee_registry_check_ms = now;
                 }
             } catch (...) {
                 fatal.store(true, std::memory_order_release);

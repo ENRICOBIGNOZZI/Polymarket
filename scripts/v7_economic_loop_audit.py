@@ -36,6 +36,7 @@ EVENT_BUCKET = {
     "INVENTORY_SPLIT": "splits",
     "INVENTORY_SPLIT_REJECTED": "split_rejects",
     "INVENTORY_MERGE": "merges",
+    "INVENTORY_LIQUIDATION": "liquidations",
     "MODEL_RELOAD": "model_reloads",
 }
 

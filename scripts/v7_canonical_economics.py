@@ -445,11 +445,11 @@ def _load_units(path: Path, expected_model_sha: str) -> tuple[dict[str, UnitStat
             units[unit_id] = state
         state.observe_identity(event)
         state.observe_contract(event)
-        if event.event_type == "ORDER_SUBMITTED":
+        if event.event_type in {"ORDER_SUBMITTED", "INVENTORY_LIQUIDATION"}:
             state.observe_submission(event)
         if event.event_type == "INVENTORY_MERGE":
             state.observe_inventory_transform(event)
-        if event.event_type == "FILL":
+        if event.event_type in {"FILL", "INVENTORY_LIQUIDATION"}:
             state.observe_fill(event)
         state.observe_costs(event)
         state.observe_markout(event)

@@ -70,6 +70,8 @@ public:
         std::int64_t yes_bid_depth_microunits,
         std::int64_t no_best_bid_tick,
         std::int64_t no_bid_depth_microunits,
+        double taker_fee_rate,
+        double taker_fee_exponent,
         std::int64_t timestamp_ns,
         SleeveCapitalAccount& capital) noexcept;
 

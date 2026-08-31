@@ -254,6 +254,37 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
         with self.assertRaisesRegex(ledger.LedgerContractError, "cannot_create_pnl"):
             ledger.LedgerEvent(**{**event.to_dict(), "realized_cashflow": 0.01}).validate()
 
+    def test_inventory_liquidation_requires_causal_book_and_authoritative_fee(self) -> None:
+        event = ledger.LedgerEvent(
+            event_type="INVENTORY_LIQUIDATION",
+            strategy="MICRO_MAKER_PRO",
+            model_sha=SHA_A,
+            recorded_ts_ms=5_000,
+            exchange_ts_ms=4_990,
+            receive_ts_ms=4_995,
+            market_id="market-1",
+            token_id="yes-1",
+            position_id="liquidation-1",
+            book_snapshot_id="book-1",
+            side="SELL",
+            intended_action="INVENTORY_LIQUIDATION",
+            intended_size=5.0,
+            fill_price=0.20,
+            filled_size=5.0,
+            fee=0.032,
+            fee_rate=0.04,
+            fee_source="v7_fee_reward_registry:authoritative_gamma",
+            executable_liquidation_value=0.968,
+            realized_cashflow=-0.082,
+            metadata={"authoritative_fee_verified": True,
+                      "cost_vector_complete": True},
+        )
+        event.validate()
+        with self.assertRaisesRegex(
+            ledger.LedgerContractError, "missing_authoritative_fee"
+        ):
+            ledger.LedgerEvent(**{**event.to_dict(), "fee_source": None}).validate()
+
 
 if __name__ == "__main__":
     unittest.main()

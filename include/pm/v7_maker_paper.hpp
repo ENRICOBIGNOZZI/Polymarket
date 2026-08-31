@@ -76,6 +76,11 @@ struct PaperMakerEvent {
     double no_cost_before = 0.0;
     double yes_cost_after = 0.0;
     double no_cost_after = 0.0;
+    // Populated only for an explicit PAPER taker liquidation. Passive Maker
+    // fills keep these at zero because Polymarket maker fees are zero.
+    double taker_fee_paid = 0.0;
+    double taker_fee_rate = 0.0;
+    double taker_fee_exponent = 1.0;
     // Causal market allocation of the otherwise indivisible $1 complete-set
     // collateral. This prevents an arbitrary 50/50 bookkeeping convention
     // from being reported as trading P&L when one leg is sold.
@@ -178,6 +183,8 @@ public:
         std::int64_t no_best_bid_tick,
         std::int64_t no_bid_depth_microunits,
         std::int32_t tick_size_e4,
+        double taker_fee_rate,
+        double taker_fee_exponent,
         std::int64_t timestamp_ns) noexcept;
 
     [[nodiscard]] PaperMakerResult advance_time(

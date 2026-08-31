@@ -29,6 +29,7 @@ EVENT_TYPES = frozenset(
         "INVENTORY_SPLIT",
         "INVENTORY_SPLIT_REJECTED",
         "INVENTORY_MERGE",
+        "INVENTORY_LIQUIDATION",
         "MODEL_RELOAD",
         "CAPITAL_RESERVE",
         "CAPITAL_RELEASE",
@@ -305,6 +306,7 @@ class LedgerEvent:
         if self.event_type in {
             "INVENTORY_SPLIT_REQUESTED", "INVENTORY_SPLIT",
             "INVENTORY_SPLIT_REJECTED", "INVENTORY_MERGE",
+            "INVENTORY_LIQUIDATION",
         }:
             if not self.market_id or not self.position_id:
                 raise LedgerContractError("inventory_transform:missing_market_or_position")
@@ -312,6 +314,17 @@ class LedgerEvent:
                 raise LedgerContractError("inventory_transform:missing_positive_size")
         if self.event_type == "INVENTORY_SPLIT" and abs(self.realized_cashflow or 0.0) > 1e-12:
             raise LedgerContractError("inventory_split:cannot_create_pnl")
+        if self.event_type == "INVENTORY_LIQUIDATION":
+            if self.exchange_ts_ms is None or self.receive_ts_ms is None or not self.book_snapshot_id:
+                raise LedgerContractError("inventory_liquidation:missing_causal_book")
+            if not self.token_id or self.side != "SELL":
+                raise LedgerContractError("inventory_liquidation:missing_instrument_sell_side")
+            if self.fill_price is None or self.filled_size is None or self.filled_size <= 0:
+                raise LedgerContractError("inventory_liquidation:missing_execution")
+            if self.fee is None or not self.fee_source:
+                raise LedgerContractError("inventory_liquidation:missing_authoritative_fee")
+            if self.executable_liquidation_value is None:
+                raise LedgerContractError("inventory_liquidation:missing_executable_value")
 
         if not isinstance(self.markouts, dict):
             raise LedgerContractError("markouts:not_object")

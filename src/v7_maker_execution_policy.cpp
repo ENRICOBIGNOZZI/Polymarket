@@ -391,6 +391,8 @@ MakerExecutionResult MakerPaperExecutionPolicy::liquidate_directional_inventory(
     std::int64_t yes_bid_depth_microunits,
     std::int64_t no_best_bid_tick,
     std::int64_t no_bid_depth_microunits,
+    double taker_fee_rate,
+    double taker_fee_exponent,
     std::int64_t timestamp_ns,
     SleeveCapitalAccount& capital) noexcept {
     MakerExecutionResult out;
@@ -402,7 +404,7 @@ MakerExecutionResult MakerPaperExecutionPolicy::liquidate_directional_inventory(
     out.paper = slot->engine->liquidate_directional_inventory(
         yes_best_bid_tick, yes_bid_depth_microunits,
         no_best_bid_tick, no_bid_depth_microunits,
-        slot->tick_size_e4, timestamp_ns);
+        slot->tick_size_e4, taker_fee_rate, taker_fee_exponent, timestamp_ns);
     if (out.paper.rejected || out.paper.invariant_violation) {
         out.reason = MakerExecutionReason::PaperRejected;
         return out;

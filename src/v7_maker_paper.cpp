@@ -728,10 +728,15 @@ PaperMakerResult MakerPaperMarketEngine::liquidate_directional_inventory(
     std::int64_t no_best_bid_tick,
     std::int64_t no_bid_depth_microunits,
     std::int32_t tick_size_e4,
+    double taker_fee_rate,
+    double taker_fee_exponent,
     std::int64_t timestamp_ns) noexcept {
     PaperMakerResult result;
     if (!policy_.valid() || timestamp_ns <= 0 || tick_size_e4 <= 0
         || tick_size_e4 > 10'000 || 10'000 % tick_size_e4 != 0
+        || !std::isfinite(taker_fee_rate) || taker_fee_rate < 0.0
+        || taker_fee_rate > 1.0 || !std::isfinite(taker_fee_exponent)
+        || taker_fee_exponent <= 0.0 || taker_fee_exponent > 10.0
         || active_order_count() != 0 || inventory_.pending_split_microunits != 0
         || inventory_.pending_merge_microunits != 0) {
         result.rejected = 1;
@@ -772,7 +777,11 @@ PaperMakerResult MakerPaperMarketEngine::liquidate_directional_inventory(
         return result;
     }
     const double average_cost = cost / held_shares;
-    const double realized = sold_shares * (bid_price - average_cost);
+    const double fee_per_share = taker_fee_rate * std::pow(
+        std::max(0.0, bid_price * (1.0 - bid_price)), taker_fee_exponent);
+    const double taker_fee_paid = sold_shares * fee_per_share;
+    const double realized = sold_shares * (bid_price - average_cost)
+                          - taker_fee_paid;
 
     PaperMakerEvent event;
     event.kind = PaperMakerEventKind::InventoryLiquidation;
@@ -786,6 +795,9 @@ PaperMakerResult MakerPaperMarketEngine::liquidate_directional_inventory(
     event.original_microunits = quantity_microunits;
     event.operational_fill_microunits = quantity_microunits;
     event.realized_pnl = realized;
+    event.taker_fee_paid = taker_fee_paid;
+    event.taker_fee_rate = taker_fee_rate;
+    event.taker_fee_exponent = taker_fee_exponent;
     event.yes_before_microunits = inventory_.yes_microunits;
     event.no_before_microunits = inventory_.no_microunits;
     event.yes_cost_before = inventory_.yes_cost;

@@ -104,6 +104,46 @@ class CanonicalEconomicsTest(unittest.TestCase):
             report["unit_reason_codes"]["position:merge-position"],
         )
 
+    def test_fee_aware_inventory_liquidation_closes_one_cost_complete_cycle(self) -> None:
+        now = clock()
+        position = "maker-cycle-1"
+        events = [
+            ledger.LedgerEvent(
+                event_type="INVENTORY_LIQUIDATION", strategy="MICRO_MAKER_PRO",
+                model_sha=SHA, position_id=position, market_id="market-1",
+                event_id="event-maker", token_id="yes-token", fill_id="liq-fill-1",
+                side="SELL", intended_action="INVENTORY_LIQUIDATION",
+                intended_size=5.0, fill_price=0.20, filled_size=5.0,
+                exchange_ts_ms=now, receive_ts_ms=now + 1,
+                book_snapshot_id="maker-exit-book", fee=0.032, fee_rate=0.04,
+                fee_source="v7_fee_reward_registry:authoritative_gamma",
+                slippage=0.0, unwind_loss=0.05,
+                executable_liquidation_value=0.968,
+                realized_cashflow=-0.082,
+                metadata={"authoritative_fee_verified": True,
+                          "cost_vector_complete": True},
+            ),
+            ledger.LedgerEvent(
+                event_type="FINAL", strategy="MICRO_MAKER_PRO", model_sha=SHA,
+                position_id=position, market_id="market-1", event_id="event-maker",
+                final_pnl=-0.082, realized_cashflow=-0.082, fee=0.0,
+                slippage=0.0, unwind_loss=0.0, capital_cost=0.0,
+                latency_cost=0.0, capital_duration_ms=60_000,
+                metadata={"realized": True, "unwind_accounted": True,
+                          "cost_vector_complete": True,
+                          "terminal_id": f"{position}:final"},
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "execution.jsonl"
+            write_events(path, events)
+            report = econ.assess(path, expected_model_sha=SHA)
+        self.assertEqual(report["economic_units"], 1)
+        self.assertEqual(report["complete_units"], 1)
+        self.assertEqual(report["mature_terminal_units"], 1)
+        self.assertAlmostEqual(report["net_pnl"], -0.082)
+        self.assertAlmostEqual(report["costs"]["baseline_total"], 0.082)
+
     def test_shadow_counterfactual_is_in_ledger_but_excluded_from_paper_pnl(self) -> None:
         now = clock()
         shadow = {

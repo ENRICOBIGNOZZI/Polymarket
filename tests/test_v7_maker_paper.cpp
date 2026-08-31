@@ -406,21 +406,24 @@ void test_directional_drain_requires_full_visible_bid_and_realizes_cycle() {
     assert(engine.inventory().directional_microunits == 1'000'000);
 
     const auto shallow = engine.liquidate_directional_inventory(
-        47, 999'999, 51, 1'000'000, 100, 1'200'000'000LL);
+        47, 999'999, 51, 1'000'000, 100, 0.04, 1.0, 1'200'000'000LL);
     assert(shallow.rejected);
     assert(engine.inventory().directional_microunits == 1'000'000);
 
     const auto liquidated = engine.liquidate_directional_inventory(
-        47, 1'000'000, 51, 1'000'000, 100, 1'300'000'000LL);
+        47, 1'000'000, 51, 1'000'000, 100, 0.04, 1.0, 1'300'000'000LL);
     const auto* event = find_event(
         liquidated, pm::v7::maker::PaperMakerEventKind::InventoryLiquidation);
     assert(liquidated.applied && event != nullptr);
     assert(event->instrument_handle == kYes);
     assert(event->operational_fill_microunits == 1'000'000);
-    assert(std::abs(event->realized_pnl + 0.01) < 1e-12);
+    const double expected_fee = 0.04 * 0.47 * 0.53;
+    assert(std::abs(event->taker_fee_paid - expected_fee) < 1e-12);
+    assert(std::abs(event->realized_pnl + 0.01 + expected_fee) < 1e-12);
     assert(engine.inventory().directional_microunits == 0);
     assert(engine.inventory().yes_microunits == 0);
-    assert(std::abs(engine.inventory().realized_trading_pnl + 0.01) < 1e-12);
+    assert(std::abs(engine.inventory().realized_trading_pnl
+                    + 0.01 + expected_fee) < 1e-12);
 }
 
 } // namespace
