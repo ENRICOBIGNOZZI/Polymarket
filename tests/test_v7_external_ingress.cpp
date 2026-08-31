@@ -65,6 +65,31 @@ int main() {
     assert(recovered.valid == 1);
     assert(recovered.venue_count_fresh == 1);
 
+    // A stateful L2 reconstructor publishes only a normalized, complete BBO
+    // after it has validated its own source snapshot. That handoff must retain
+    // the same bounded queue and single-writer state semantics as raw frames.
+    ExternalAssetState reconstructed_state(501);
+    ExternalVenueIngress reconstructed(VenueId::CoinbaseSpot, 501);
+    ExternalVenueEvent reconstructed_bbo;
+    reconstructed_bbo.asset_handle = 501;
+    reconstructed_bbo.connection_epoch = 1;
+    reconstructed_bbo.source_sequence = 1;
+    reconstructed_bbo.venue = VenueId::CoinbaseSpot;
+    reconstructed_bbo.event_type = ExternalEventType::BookTop;
+    reconstructed_bbo.local_receive_monotonic_ns = 300;
+    reconstructed_bbo.local_receive_wall_ns = 1'200;
+    reconstructed_bbo.bid = 65010.0;
+    reconstructed_bbo.ask = 65011.0;
+    reconstructed_bbo.bid_size = 2.0;
+    reconstructed_bbo.ask_size = 3.0;
+    reconstructed_bbo.healthy = 1;
+    assert(reconstructed.on_event(reconstructed_bbo));
+    assert(reconstructed.drain_into(reconstructed_state, policy) == 1);
+    assert(reconstructed_state.snapshot(301, policy).valid == 1);
+    reconstructed_bbo.asset_handle = 0;
+    assert(!reconstructed.on_event(reconstructed_bbo));
+    assert(reconstructed.snapshot().invalid_frames == 1);
+
     // Backpressure is bounded and non-blocking. Saturate the queue without a
     // consumer: some events must be dropped and the next accepted event must
     // carry a propagated gap rather than hiding the loss.

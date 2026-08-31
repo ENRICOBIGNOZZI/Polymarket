@@ -1,5 +1,6 @@
 #include "pm/v7_binance_l2.hpp"
 #include "pm/v7_binance_l2_protocol.hpp"
+#include "pm/v7_coinbase_l2.hpp"
 #include "pm/v7_external_state.hpp"
 #include "pm/v7_external_ws.hpp"
 
@@ -96,6 +97,33 @@ json::object l2_json(const BinanceL2Metrics& value) {
     return {
         {"state", l2_state_name(value.state)}, {"valid", value.valid != 0},
         {"last_update_id", value.last_update_id},
+        {"latest_receive_monotonic_ns", value.latest_receive_monotonic_ns},
+        {"best_bid", value.best_bid}, {"best_ask", value.best_ask},
+        {"mid", value.mid}, {"microprice", value.microprice},
+        {"spread_bps", value.spread_bps},
+        {"bid_depth_l1", value.bid_depth_l1}, {"ask_depth_l1", value.ask_depth_l1},
+        {"bid_depth_l5", value.bid_depth_l5}, {"ask_depth_l5", value.ask_depth_l5},
+        {"bid_depth_l10", value.bid_depth_l10}, {"ask_depth_l10", value.ask_depth_l10},
+        {"bid_depth_l20", value.bid_depth_l20}, {"ask_depth_l20", value.ask_depth_l20},
+        {"imbalance_l1", value.imbalance_l1}, {"imbalance_l5", value.imbalance_l5},
+        {"imbalance_l10", value.imbalance_l10},
+        {"bid_levels", value.bid_levels}, {"ask_levels", value.ask_levels},
+    };
+}
+
+const char* l2_state_name(CoinbaseL2State state) noexcept {
+    switch (state) {
+        case CoinbaseL2State::AwaitingSnapshot: return "AWAITING_SNAPSHOT";
+        case CoinbaseL2State::Live: return "LIVE";
+        case CoinbaseL2State::Gapped: return "GAPPED";
+    }
+    return "UNKNOWN";
+}
+
+json::object l2_json(const CoinbaseL2Metrics& value) {
+    return {
+        {"state", l2_state_name(value.state)}, {"valid", value.valid != 0},
+        {"update_count", value.update_count}, {"parse_failures", value.parse_failures},
         {"latest_receive_monotonic_ns", value.latest_receive_monotonic_ns},
         {"best_bid", value.best_bid}, {"best_ask", value.best_ask},
         {"mid", value.mid}, {"microprice", value.microprice},
@@ -363,6 +391,168 @@ private:
     std::uint64_t connection_epoch_ = 0;
     std::uint64_t snapshot_epoch_ = 0;
 };
+
+class CoinbaseL2Observer final : public ExternalFrameObserver {
+public:
+    CoinbaseL2Observer(ExternalVenueIngress& ingress, std::uint64_t asset_handle) noexcept
+        : ingress_(ingress), asset_handle_(asset_handle) {}
+
+    void on_connection_epoch(std::uint64_t epoch) noexcept override {
+        std::lock_guard lock(mutex_);
+        book_.begin_recovery();
+        connection_epoch_ = epoch;
+        sequence_ = 0;
+        ExternalVenueEvent event;
+        event.asset_handle = asset_handle_;
+        event.connection_epoch = epoch;
+        event.source_sequence = ++sequence_;
+        event.venue = VenueId::CoinbaseSpot;
+        event.event_type = ExternalEventType::Health;
+        event.local_receive_monotonic_ns = monotonic_now_ns();
+        event.local_receive_wall_ns = wall_now_ns();
+        event.healthy = 0;
+        (void)ingress_.on_event(event);
+    }
+
+    void on_frame(std::uint64_t epoch, std::int64_t receive_ns, std::int64_t wall_ns,
+                  std::string_view payload) noexcept override {
+        try {
+            boost::system::error_code error;
+            const auto raw = json::parse(payload, error);
+            if (error || !raw.is_object()) { fail("invalid_json"); return; }
+            const auto& root = raw.as_object();
+            const auto* type = json_field(root, "type");
+            if (type != nullptr && type->is_string()) {
+                std::lock_guard lock(mutex_);
+                const auto& text = type->as_string();
+                last_message_type_.assign(text.data(), std::min<std::size_t>(text.size(), 64));
+            }
+            if (json_text_equals(type, "snapshot")) {
+                CoinbaseDepthSnapshot snapshot;
+                snapshot.local_receive_monotonic_ns = receive_ns;
+                if (!parse_levels(json_field(root, "bids"), snapshot.bids)
+                    || !parse_levels(json_field(root, "asks"), snapshot.asks)) { fail("snapshot_shape"); return; }
+                std::lock_guard lock(mutex_);
+                if (epoch != connection_epoch_) reset_epoch(epoch);
+                if (!book_.install_snapshot(snapshot)) { ++parse_failures_; last_protocol_error_ = "snapshot_invalid"; return; }
+                publish(receive_ns, wall_ns);
+                return;
+            }
+            if (json_text_equals(type, "l2update")) {
+                CoinbaseDepthUpdate update;
+                update.local_receive_monotonic_ns = receive_ns;
+                if (!parse_changes(json_field(root, "changes"), update.changes)) { fail("l2update_shape"); return; }
+                std::lock_guard lock(mutex_);
+                if (epoch != connection_epoch_) reset_epoch(epoch);
+                if (!book_.apply_update(update)) { ++parse_failures_; last_protocol_error_ = "l2update_invalid"; return; }
+                publish(receive_ns, wall_ns);
+                return;
+            }
+            if (json_text_equals(type, "error")) {
+                const auto* message = json_field(root, "message");
+                std::string detail = "exchange_error";
+                if (message != nullptr && message->is_string()) {
+                    const auto& text = message->as_string();
+                    detail.append(":").append(text.data(), std::min<std::size_t>(text.size(), 160));
+                }
+                fail(std::move(detail));
+                return;
+            }
+            // Subscription confirmations, heartbeat, and matches carry no
+            // complete book transition and therefore cannot alter L2 state.
+        } catch (...) { fail("exception"); }
+    }
+
+    [[nodiscard]] CoinbaseL2Metrics metrics() const noexcept {
+        std::lock_guard lock(mutex_);
+        auto out = book_.metrics();
+        out.parse_failures = parse_failures_;
+        return out;
+    }
+
+    [[nodiscard]] std::string diagnostic() const {
+        std::lock_guard lock(mutex_);
+        return "last_type=" + last_message_type_ + ";" + last_protocol_error_;
+    }
+
+private:
+    static bool parse_levels(const json::value* raw, std::vector<CoinbaseDepthLevel>& output) noexcept {
+        if (raw == nullptr || !raw->is_array() || raw->as_array().empty()) return false;
+        try {
+            output.reserve(raw->as_array().size());
+            for (const auto& level_raw : raw->as_array()) {
+                if (!level_raw.is_array() || level_raw.as_array().size() != 2) return false;
+                const auto& level = level_raw.as_array();
+                CoinbaseDepthLevel parsed;
+                if (!json_number(&level[0], parsed.price) || !json_number(&level[1], parsed.quantity)
+                    || parsed.price <= 0.0 || parsed.quantity <= 0.0) return false;
+                output.push_back(parsed);
+            }
+        } catch (...) { return false; }
+        return true;
+    }
+
+    static bool parse_changes(const json::value* raw, std::vector<CoinbaseDepthChange>& output) noexcept {
+        if (raw == nullptr || !raw->is_array() || raw->as_array().empty()) return false;
+        try {
+            output.reserve(raw->as_array().size());
+            for (const auto& change_raw : raw->as_array()) {
+                if (!change_raw.is_array() || change_raw.as_array().size() != 3) return false;
+                const auto& change = change_raw.as_array();
+                CoinbaseDepthChange parsed;
+                if (json_text_equals(&change[0], "buy")) parsed.bid = true;
+                else if (json_text_equals(&change[0], "sell")) parsed.bid = false;
+                else return false;
+                if (!json_number(&change[1], parsed.price) || !json_number(&change[2], parsed.quantity)
+                    || parsed.price <= 0.0 || parsed.quantity < 0.0) return false;
+                output.push_back(parsed);
+            }
+        } catch (...) { return false; }
+        return true;
+    }
+
+    void reset_epoch(std::uint64_t epoch) noexcept {
+        book_.begin_recovery();
+        connection_epoch_ = epoch;
+        sequence_ = 0;
+    }
+
+    void publish(std::int64_t receive_ns, std::int64_t wall_ns) noexcept {
+        const auto current = book_.metrics();
+        if (current.valid == 0) return;
+        ExternalVenueEvent event;
+        event.asset_handle = asset_handle_;
+        event.connection_epoch = connection_epoch_;
+        event.source_sequence = ++sequence_;
+        event.venue = VenueId::CoinbaseSpot;
+        event.event_type = ExternalEventType::BookTop;
+        event.local_receive_monotonic_ns = receive_ns;
+        event.local_receive_wall_ns = wall_ns;
+        event.bid = current.best_bid;
+        event.ask = current.best_ask;
+        event.bid_size = current.bid_depth_l1;
+        event.ask_size = current.ask_depth_l1;
+        event.healthy = 1;
+        (void)ingress_.on_event(event);
+    }
+
+    void fail(std::string diagnostic) noexcept {
+        std::lock_guard lock(mutex_);
+        ++parse_failures_;
+        last_protocol_error_ = std::move(diagnostic);
+        book_.begin_recovery();
+    }
+
+    ExternalVenueIngress& ingress_;
+    std::uint64_t asset_handle_ = 0;
+    mutable std::mutex mutex_{};
+    CoinbaseL2Book book_{};
+    std::uint64_t connection_epoch_ = 0;
+    std::uint64_t sequence_ = 0;
+    std::uint64_t parse_failures_ = 0;
+    std::string last_protocol_error_{};
+    std::string last_message_type_{};
+};
 } // namespace
 
 int main(int argc, char** argv) {
@@ -388,9 +578,10 @@ int main(int argc, char** argv) {
         ExternalVenueIngress coinbase_ingress(VenueId::CoinbaseSpot, asset_handle);
         ExternalVenueIngress bybit_ingress(VenueId::BybitSpot, asset_handle);
         BinanceSpotL2Observer binance_l2;
+        CoinbaseL2Observer coinbase_l2(coinbase_ingress, asset_handle);
         BinanceUsdMObserver binance_usdm_observer;
         ExternalVenueWsClient binance(btc_spot_connection_spec(VenueId::BinanceSpot, asset_handle), &binance_ingress, &binance_l2);
-        ExternalVenueWsClient coinbase(btc_spot_connection_spec(VenueId::CoinbaseSpot, asset_handle), &coinbase_ingress);
+        ExternalVenueWsClient coinbase(btc_spot_connection_spec(VenueId::CoinbaseSpot, asset_handle), nullptr, &coinbase_l2);
         ExternalVenueWsClient bybit(btc_spot_connection_spec(VenueId::BybitSpot, asset_handle), &bybit_ingress);
         auto binance_usdm_depth_spec = btc_spot_connection_spec(VenueId::BinanceUsdM, asset_handle);
         binance_usdm_depth_spec.subscription_json =
@@ -458,6 +649,8 @@ int main(int argc, char** argv) {
                 {"latest_input_receive_monotonic_ns", snapshot.latest_input_receive_monotonic_ns},
                 {"drained_last_cycle", drained},
                 {"binance_spot_l2", l2_json(binance_l2.metrics())},
+                {"coinbase_spot_l2", l2_json(coinbase_l2.metrics())},
+                {"coinbase_spot_l2_diagnostic", coinbase_l2.diagnostic()},
                 {"binance_usdm", usdm_json(binance_usdm_observer.metrics())},
                 {"venues", std::move(venues)},
             });

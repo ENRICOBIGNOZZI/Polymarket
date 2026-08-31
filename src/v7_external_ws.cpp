@@ -76,7 +76,10 @@ ExternalVenueConnectionSpec btc_spot_connection_spec(
             spec.target = "/";
             spec.symbol = "BTC-USD";
             spec.subscription_json =
-                R"({"type":"subscribe","product_ids":["BTC-USD"],"channels":["level2","matches","heartbeat"]})";
+                // Coinbase Exchange documents level2_batch as the public,
+                // unauthenticated L2 channel; it has the same snapshot and
+                // absolute-size update semantics as level2.
+                R"({"type":"subscribe","product_ids":["BTC-USD"],"channels":["level2_batch"]})";
             break;
         case VenueId::BybitSpot:
             spec.host = "stream.bybit.com";

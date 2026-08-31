@@ -37,23 +37,42 @@ ExternalDecodeResult ExternalVenueIngress::on_frame(
         gap_pending_.store(true, std::memory_order_release);
     }
 
-    for (std::size_t i = 0; i < result.output_count; ++i) {
-        auto event = decoded[i];
-        if (gap_pending_.exchange(false, std::memory_order_acq_rel)) {
-            event.gap = 1;
-            propagated_gaps_.fetch_add(1, std::memory_order_relaxed);
-        }
-        if (!queue_.try_push(event)) {
-            dropped_events_.fetch_add(1, std::memory_order_relaxed);
-            gap_pending_.store(true, std::memory_order_release);
-            healthy_.store(false, std::memory_order_release);
-            continue;
-        }
-        enqueued_events_.fetch_add(1, std::memory_order_relaxed);
-        healthy_.store(event.healthy != 0 && event.stale == 0,
-                       std::memory_order_release);
-    }
+    for (std::size_t i = 0; i < result.output_count; ++i) (void)enqueue_event(decoded[i]);
     return result;
+}
+
+bool ExternalVenueIngress::on_event(ExternalVenueEvent event) noexcept {
+    if (event.venue != venue_ || event.asset_handle != asset_handle_
+        || event.connection_epoch == 0 || event.local_receive_monotonic_ns <= 0
+        || event.local_receive_wall_ns <= 0) {
+        invalid_frames_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    decoded_events_.fetch_add(1, std::memory_order_relaxed);
+    const auto previous_epoch = connection_epoch_.exchange(
+        event.connection_epoch, std::memory_order_acq_rel);
+    if (previous_epoch != 0 && previous_epoch != event.connection_epoch) {
+        reconnects_.fetch_add(1, std::memory_order_relaxed);
+        gap_pending_.store(true, std::memory_order_release);
+    }
+    return enqueue_event(event);
+}
+
+bool ExternalVenueIngress::enqueue_event(ExternalVenueEvent event) noexcept {
+    if (gap_pending_.exchange(false, std::memory_order_acq_rel)) {
+        event.gap = 1;
+        propagated_gaps_.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (!queue_.try_push(event)) {
+        dropped_events_.fetch_add(1, std::memory_order_relaxed);
+        gap_pending_.store(true, std::memory_order_release);
+        healthy_.store(false, std::memory_order_release);
+        return false;
+    }
+    enqueued_events_.fetch_add(1, std::memory_order_relaxed);
+    healthy_.store(event.healthy != 0 && event.stale == 0,
+                   std::memory_order_release);
+    return true;
 }
 
 std::size_t ExternalVenueIngress::drain_into(

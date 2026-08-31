@@ -45,6 +45,11 @@ public:
         std::int64_t local_receive_wall_ns,
         std::string_view payload) noexcept;
 
+    // Stateful venue observers may publish a normalized event only after they
+    // have reconstructed a complete source book. This uses the same bounded
+    // queue, reconnect, and gap propagation as raw-protocol decoding.
+    [[nodiscard]] bool on_event(ExternalVenueEvent event) noexcept;
+
     [[nodiscard]] std::size_t drain_into(
         ExternalAssetState& state,
         const ExternalStatePolicy& policy,
@@ -69,6 +74,8 @@ private:
     std::atomic<std::uint64_t> connection_epoch_{0};
     std::atomic<bool> healthy_{false};
     std::atomic<bool> gap_pending_{false};
+
+    [[nodiscard]] bool enqueue_event(ExternalVenueEvent event) noexcept;
 };
 
 static_assert(std::is_trivially_copyable_v<ExternalIngressSnapshot>);
