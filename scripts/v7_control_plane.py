@@ -19,8 +19,6 @@ REQUIRED_MODES = {"RESEARCH_ZERO_AUTHORITY", "PAPER_SIMULATED", "SHADOW_LIVE_REA
 CAPABILITY_KEYS = {"public_ingress", "paper_orders", "authenticated_read", "signing", "submit_orders", "cancel_orders", "authoritative_pnl"}
 RISK_TIERS = {"RESEARCH": "RESEARCH_ZERO_AUTHORITY", "PAPER": "PAPER_SIMULATED", "MICRO_LIVE": "MICRO_LIVE", "LIVE_RESTRICTED": "LIVE_RESTRICTED", "LIVE_SCALED": "LIVE_SCALED"}
 RISK_LIMIT_KEYS = {"allowed_mode", "maximum_order_base_units", "maximum_gross_exposure_base_units", "maximum_event_loss_base_units", "maximum_daily_loss_base_units", "maximum_open_order_count"}
-
-
 class ControlPlaneError(ValueError):
     pass
 
@@ -87,6 +85,14 @@ def validate_risk_tiers(value: dict[str, Any]) -> None:
                 raise ControlPlaneError(f"risk_tiers:nonzero:{name}:{key}")
 
 
+def validate_attestation_trust(value: dict[str, Any]) -> None:
+    expected = {"schema", "automatic_promotion", "trusted_attestors", "note"}
+    if (set(value) != expected or value.get("schema") != "polymarket_v7_attestation_trust_registry_v1"
+            or value.get("automatic_promotion") is not False or not isinstance(value.get("note"), str)
+            or value.get("trusted_attestors") != []):
+        raise ControlPlaneError("attestation_trust:not_checked_in_empty")
+
+
 def validate_claim_registry(value: dict[str, Any]) -> None:
     claims = value.get("claims")
     required = {"TECHNICALLY_VALIDATED", "DEPLOYED_READ_ONLY", "DEPLOYED_PAPER", "DEPLOYED_MICRO_LIVE", "RECONCILED", "PROFITABILITY_NOT_TESTABLE", "MORE_EVIDENCE_REQUIRED", "PROFITABILITY_REJECTED", "REAL_PNL_VERIFIED", "WORLD_CLASS_CANDIDATE"}
@@ -119,11 +125,13 @@ def validate_repository(root: Path, manifest: Path | None = None) -> dict[str, s
     modes_path = root / "config/v7_execution_modes.json"
     caps_path = root / "config/v7_live_caps_zero.json"
     risk_tiers_path = root / "config/v7_risk_tiers.json"
+    attestation_trust_path = root / "config/v7_attestation_trust.json"
     claims_path = root / "config/v7_claim_registry.json"
-    modes, caps, risk_tiers, claims = load_json(modes_path), load_json(caps_path), load_json(risk_tiers_path), load_json(claims_path)
+    modes, caps, risk_tiers, attestation_trust, claims = load_json(modes_path), load_json(caps_path), load_json(risk_tiers_path), load_json(attestation_trust_path), load_json(claims_path)
     validate_execution_modes(modes)
     validate_live_caps(caps)
     validate_risk_tiers(risk_tiers)
+    validate_attestation_trust(attestation_trust)
     validate_claim_registry(claims)
     paper = load_json(root / "config/paper_v7.json")
     v7 = paper.get("v7")
@@ -131,7 +139,7 @@ def validate_repository(root: Path, manifest: Path | None = None) -> dict[str, s
         raise ControlPlaneError("paper_config:not_paper_only")
     if manifest is not None:
         validate_control_manifest(load_json(manifest), modes)
-    return {str(path.relative_to(root)): sha256_file(path) for path in (modes_path, caps_path, risk_tiers_path, claims_path)}
+    return {str(path.relative_to(root)): sha256_file(path) for path in (modes_path, caps_path, risk_tiers_path, attestation_trust_path, claims_path)}
 
 
 def main() -> int:

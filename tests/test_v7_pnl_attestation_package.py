@@ -134,6 +134,12 @@ class PnlAttestationPackageTests(unittest.TestCase):
             }), encoding="utf-8")
             with self.assertRaisesRegex(package_verifier.AttestationVerificationError, "untrusted_attestor"):
                 package_verifier.verify_public(signed, public_key=public_key, trust_registry=empty_trust)
+            expired_trust = root / "expired-trust.json"
+            expired = json.loads(trust.read_text(encoding="utf-8"))
+            expired["trusted_attestors"][0]["not_after"] = "2020-01-01T00:00:00Z"
+            expired_trust.write_text(json.dumps(expired, sort_keys=True), encoding="utf-8")
+            with self.assertRaisesRegex(package_verifier.AttestationVerificationError, "untrusted_attestor"):
+                package_verifier.verify_public(signed, public_key=public_key, trust_registry=expired_trust)
             _, other_public_key = key_pair(root, "other")
             with self.assertRaisesRegex(package_verifier.AttestationVerificationError, "public_key_identity"):
                 package_verifier.verify_public(signed, public_key=other_public_key, trust_registry=trust)

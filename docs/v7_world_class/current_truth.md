@@ -1,8 +1,8 @@
 # V7 current-truth audit
 
-Audit timestamp: `2026-08-31T13:15:47Z`
+Audit timestamp: `2026-08-31T13:45:17Z`
 Audit anchor: `3138c84a361533ae9519ecaa4013dff3f6d77c54`
-Current HEAD: `49f98d7aaaee4f229445dacdbdc97a767bb27707`
+Current HEAD: `f8c076197a76e971e2f1785595d7c483daaa6fd7`
 
 This is a redacted evidence record, not a readiness claim.
 
@@ -25,3 +25,7 @@ PROFITABILITY_NOT_TESTABLE = TRUE
 Historical redacting scan findings: `1`.
 Security audit state: `SECURITY_BLOCKED`.
 No secret values are included in this artifact.
+
+## Control integrity
+
+Checked-in attestation trust empty: `True`.

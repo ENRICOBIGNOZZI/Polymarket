@@ -11,7 +11,7 @@ import v7_control_plane as control  # noqa: E402
 class V7ControlPlaneTest(unittest.TestCase):
     def test_checked_in_control_plane_is_fail_closed_and_valid(self) -> None:
         hashes = control.validate_repository(ROOT)
-        self.assertEqual(set(hashes), {"config/v7_execution_modes.json", "config/v7_live_caps_zero.json", "config/v7_risk_tiers.json", "config/v7_claim_registry.json"})
+        self.assertEqual(set(hashes), {"config/v7_execution_modes.json", "config/v7_live_caps_zero.json", "config/v7_risk_tiers.json", "config/v7_attestation_trust.json", "config/v7_claim_registry.json"})
 
     def test_nonlive_modes_cannot_submit(self) -> None:
         modes = control.load_json(ROOT / "config/v7_execution_modes.json")
@@ -31,6 +31,13 @@ class V7ControlPlaneTest(unittest.TestCase):
         tiers["tiers"]["MICRO_LIVE"]["maximum_order_base_units"] = 1
         with self.assertRaisesRegex(control.ControlPlaneError, "risk_tiers:nonzero"):
             control.validate_risk_tiers(tiers)
+
+    def test_checked_in_attestation_trust_must_remain_empty(self) -> None:
+        trust = control.load_json(ROOT / "config/v7_attestation_trust.json")
+        trust["trusted_attestors"] = [{"operator_id": "test", "public_key_sha256": "a" * 64,
+                                        "not_before": "2026-01-01T00:00:00Z", "not_after": "2027-01-01T00:00:00Z"}]
+        with self.assertRaisesRegex(control.ControlPlaneError, "attestation_trust:not_checked_in_empty"):
+            control.validate_attestation_trust(trust)
 
     def test_live_manifest_binds_approval_envelope_hash(self) -> None:
         modes = control.load_json(ROOT / "config/v7_execution_modes.json")

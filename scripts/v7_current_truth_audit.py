@@ -21,12 +21,17 @@ SOURCE_PATHS = (
     "config/paper_v7.json",
     "config/v7_execution_modes.json",
     "config/v7_live_caps_zero.json",
+    "config/v7_attestation_trust.json",
     "config/v7_platform_contract.json",
+    "schemas/v7/attestation_trust.schema.json",
+    "schemas/v7/pnl_attestation.schema.json",
+    "schemas/v7/public_pnl_attestation.schema.json",
+    "scripts/v7_generate_pnl_attestation.py",
     "scripts/v7_real_pnl_verifier.py",
+    "scripts/v7_real_pnl_scorecard.py",
+    "scripts/v7_verify_pnl_attestation.py",
     "scripts/v7_security_audit.py",
 )
-
-
 class CurrentTruthError(ValueError):
     pass
 
@@ -117,6 +122,11 @@ def audit(root: Path, *, now: datetime | None = None, secret_report: dict[str, A
                 (root / "config/v7_live_caps_zero.json").read_text(encoding="utf-8")
             ).items() if str(key).startswith("maximum_")),
         },
+        "control_integrity": {
+            "checked_in_attestation_trust_empty": json.loads(
+                (root / "config/v7_attestation_trust.json").read_text(encoding="utf-8")
+            ).get("trusted_attestors") == [],
+        },
         "claims": {
             "IMPLEMENTATION_COMPLETE": False, "TECHNICAL_VALIDATION_COMPLETE": False,
             "EVIDENCE_COLLECTION_ACTIVE": False, "LIVE_CANARY_COMPLETE": False,
@@ -158,6 +168,8 @@ def markdown(value: dict[str, Any]) -> str:
         f"Historical redacting scan findings: `{value['security']['history_secret_scan_findings']}`.",
         f"Security audit state: `{value['security']['audit_state']}`.",
         "No secret values are included in this artifact.", "",
+        "## Control integrity", "",
+        f"Checked-in attestation trust empty: `{value['control_integrity']['checked_in_attestation_trust_empty']}`.", "",
     ))
 
 
