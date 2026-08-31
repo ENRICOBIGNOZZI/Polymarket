@@ -1576,6 +1576,13 @@ class PaperRouter:
         if self.drain_path.exists():
             blocker = "CUTOVER_DRAIN"
             rows = []
+        elif not status:
+            # The RTDS monitor and router are started together. Before its
+            # first atomic status publication there is no identity to compare,
+            # so this is an auditable bootstrap wait rather than a false SHA
+            # mismatch rejection.
+            blocker = "EXTERNAL_FAIR_STATUS_UNAVAILABLE"
+            rows = []
         elif status.get("code_sha") != self.sha:
             blocker = "EXTERNAL_FAIR_SHA_MISMATCH"
             rows: list[dict[str, Any]] = []
@@ -1624,7 +1631,7 @@ class PaperRouter:
                 reason = "ENTRY_TTE_OUTSIDE_WINDOW"
             else:
                 reason = "NO_ROBUST_EV"
-            if reason == "WAITING_FOR_NEXT_CONTRACT_HANDOFF":
+            if reason in {"WAITING_FOR_NEXT_CONTRACT_HANDOFF", "EXTERNAL_FAIR_STATUS_UNAVAILABLE"}:
                 self.wait(reason)
             else:
                 self.reject(reason)

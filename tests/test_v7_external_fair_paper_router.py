@@ -144,6 +144,19 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as directory:
         run_root = Path(directory)
+        (run_root / "external_fair").mkdir()
+        bootstrap = router.PaperRouter(
+            run_root, "a" * 40, ROOT / "config" / "v7_external_fair.json",
+            "https://clob.invalid", "https://gamma.invalid",
+        )
+        bootstrap.step()
+        status = json.loads((run_root / "external_fair" / "paper_router_status.json").read_text())
+        assert status["last_decision"]["outcome"] == "EXTERNAL_FAIR_STATUS_UNAVAILABLE"
+        assert status["wait_reasons"]["EXTERNAL_FAIR_STATUS_UNAVAILABLE"] == 1
+        assert "EXTERNAL_FAIR_SHA_MISMATCH" not in status["rejection_reasons"]
+
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
         external = run_root / "external_fair"
         external.mkdir(parents=True)
         live = snapshot()
