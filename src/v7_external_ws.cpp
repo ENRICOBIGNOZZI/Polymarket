@@ -80,7 +80,11 @@ ExternalVenueConnectionSpec btc_spot_connection_spec(
             spec.subscription_json =
                 R"({"type":"subscribe","product_ids":["BTC-USD"],"channel":"ticker"})"
                 "\n"
-                R"({"type":"subscribe","product_ids":["BTC-USD"],"channel":"market_trades"})";
+                R"({"type":"subscribe","product_ids":["BTC-USD"],"channel":"market_trades"})"
+                "\n"
+                R"({"type":"subscribe","product_ids":["BTC-USD"],"channel":"level2"})"
+                "\n"
+                R"({"type":"subscribe","channel":"heartbeats"})";
             break;
         case VenueId::BybitSpot:
             spec.host = "stream.bybit.com";
