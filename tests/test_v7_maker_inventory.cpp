@@ -29,6 +29,7 @@ pm::v7::StrategyIntent sell_yes(std::uint64_t id, std::int64_t quantity) {
     intent.side = pm::v7::Side::Sell;
     intent.price_tick = 52;
     intent.quantity_microunits = quantity;
+    intent.horizon_ms = 5'000;
     intent.decision_monotonic_ns = 1'100'000'000LL;
     intent.exchange_event_ns = 10'100'000'000LL;
     intent.passive = 1;

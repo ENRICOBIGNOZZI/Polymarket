@@ -93,6 +93,7 @@ struct PaperMakerEvent {
     std::int64_t opposite_flow_microunits_seen = 0;
     std::int64_t price_reach_microunits_seen = 0;
     PaperExecutionOutcome execution_outcome = PaperExecutionOutcome::Pending;
+    std::uint8_t ttl_expired = 0;
 };
 
 struct PaperMakerResult {
@@ -207,7 +208,9 @@ private:
         std::uint64_t price_reach_prints_seen = 0;
         std::int64_t opposite_flow_microunits_seen = 0;
         std::int64_t price_reach_microunits_seen = 0;
+        std::int64_t quote_expire_monotonic_ns = 0;
         std::uint8_t occupied = 0;
+        std::uint8_t ttl_expired = 0;
     };
 
     [[nodiscard]] bool instrument_known(std::uint64_t instrument_handle) const noexcept;
@@ -221,7 +224,8 @@ private:
     void refresh_inventory_derived() noexcept;
     [[nodiscard]] QueueEnvelope make_queue(std::int64_t visible) const noexcept;
     void emit(PaperMakerResult& result, PaperMakerEvent event) const noexcept;
-    void request_cancel(Slot& slot, std::int64_t now, PaperMakerResult& result) noexcept;
+    void request_cancel(Slot& slot, std::int64_t now, PaperMakerResult& result,
+                        bool ttl_expired = false) noexcept;
     void attach_execution_funnel(const Slot& slot, PaperMakerEvent& event,
                                  bool terminal_event) const noexcept;
     void apply_operational_fill(Slot& slot, std::int64_t fill_microunits,

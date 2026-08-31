@@ -829,6 +829,7 @@ void test_persistent_lifetime_arm_is_explicit_and_bounded() {
     assert(decision.exploration_max_rest_ns == 60'000'000'000LL);
     assert(decision.exploration_persistent == 1);
     assert(decision.intent_count == 1);
+    assert(decision.intents[0].horizon_ms == 60'000);
 }
 
 void test_exploration_minimum_rest_survives_transient_negative_ev() {

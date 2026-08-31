@@ -132,6 +132,19 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertNotIn("struct OrderMeta", runtime)
         self.assertNotIn("orders_[paper.order_id]", runtime)
 
+    def test_single_oms_owner_enforces_quote_ttl_without_market_events(self) -> None:
+        runtime = (ROOT / "src" / "v7_market_maker_runtime.cpp").read_text(encoding="utf-8")
+        paper = (ROOT / "src" / "v7_maker_paper.cpp").read_text(encoding="utf-8")
+        kernel = (ROOT / "src" / "v7_maker_hft.cpp").read_text(encoding="utf-8")
+        self.assertIn("quote_expire_monotonic_ns", paper)
+        self.assertIn("intent.horizon_ms == 0", paper)
+        self.assertIn("request_cancel(slot, monotonic_ns, result, true)", paper)
+        self.assertIn("Quote TTL is an OMS contract", runtime)
+        self.assertIn("pop_maintenance_update", runtime)
+        self.assertIn('event["cancel_reason"] = "QUOTE_TTL_EXPIRED"', runtime)
+        self.assertIn('metadata["quote_ttl_ms"] = record.intent.horizon_ms', runtime)
+        self.assertIn("exploration_max_rest_ns_", kernel)
+
     def test_execution_cells_are_exact_sha_slow_path_and_hot_path_bounded(self) -> None:
         loader = (ROOT / "src" / "v7_maker_execution_cells.cpp").read_text(encoding="utf-8")
         kernel = (ROOT / "src" / "v7_maker_hft.cpp").read_text(encoding="utf-8")

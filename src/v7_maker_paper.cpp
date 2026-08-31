@@ -228,7 +228,8 @@ OmsEvent MakerPaperMarketEngine::oms_event(OmsEventType type,
 }
 
 void MakerPaperMarketEngine::request_cancel(
-    Slot& slot, std::int64_t now, PaperMakerResult& result) noexcept {
+    Slot& slot, std::int64_t now, PaperMakerResult& result,
+    bool ttl_expired) noexcept {
     if (!queue_active(slot.oms.record().state)) return;
     if (slot.oms.record().state == OrderState::CancelRequested
         || slot.oms.record().state == OrderState::CancelPending) {
@@ -251,6 +252,7 @@ void MakerPaperMarketEngine::request_cancel(
         return;
     }
     slot.paper.cancel_effective_monotonic_ns = now + policy_.cancel_latency_ns;
+    slot.ttl_expired = static_cast<std::uint8_t>(ttl_expired);
     PaperMakerEvent event;
     event.kind = PaperMakerEventKind::CancelRequested;
     event.order_id = slot.oms.record().client_order_id;
@@ -263,6 +265,7 @@ void MakerPaperMarketEngine::request_cancel(
     event.tick_size_e4 = slot.tick_size_e4;
     event.original_microunits = slot.oms.record().original_microunits;
     event.queue = slot.paper.queue;
+    event.ttl_expired = slot.ttl_expired;
     attach_execution_funnel(slot, event, false);
     emit(result, event);
     result.applied = 1;
@@ -399,6 +402,7 @@ PaperMakerResult MakerPaperMarketEngine::apply_intent(
 
     if (intent.type != IntentType::Quote || intent.side == Side::None
         || intent.price_tick <= 0 || intent.quantity_microunits <= 0
+        || intent.horizon_ms == 0
         || intent.passive != 1 || intent.post_only != 1
         || tick_size_e4 <= 0 || tick_size_e4 > 10'000 || 10'000 % tick_size_e4 != 0
         || !(price(intent.price_tick, tick_size_e4) > 0.0
@@ -432,6 +436,17 @@ PaperMakerResult MakerPaperMarketEngine::apply_intent(
         slot->occupied = 0;
         return reject();
     }
+    constexpr std::int64_t nanoseconds_per_millisecond = 1'000'000LL;
+    const std::int64_t quote_lifetime_ns =
+        static_cast<std::int64_t>(intent.horizon_ms)
+        * nanoseconds_per_millisecond;
+    if (arrival_receive > std::numeric_limits<std::int64_t>::max()
+            - quote_lifetime_ns) {
+        slot->occupied = 0;
+        result.invariant_violation = 1;
+        return reject();
+    }
+    slot->quote_expire_monotonic_ns = arrival_receive + quote_lifetime_ns;
 
     auto transition = slot->oms.apply(oms_event(OmsEventType::QueueSend,
                                                 intent.decision_monotonic_ns));
@@ -671,6 +686,17 @@ PaperMakerResult MakerPaperMarketEngine::advance_time(
         return result;
     }
     for (auto& slot : slots_) {
+        if (slot.occupied && queue_active(slot.oms.record().state)
+            && slot.quote_expire_monotonic_ns > 0
+            && monotonic_ns >= slot.quote_expire_monotonic_ns
+            && slot.oms.record().state != OrderState::CancelRequested
+            && slot.oms.record().state != OrderState::CancelPending) {
+            request_cancel(slot, monotonic_ns, result, true);
+            // Even a zero-latency PAPER cancel is acknowledged on the next
+            // owner tick, preserving the REQUESTED -> PENDING -> CANCELLED
+            // transition and bounding one result to one event per order.
+            continue;
+        }
         if (!slot.occupied || slot.paper.cancel_effective_monotonic_ns <= 0
             || monotonic_ns < slot.paper.cancel_effective_monotonic_ns
             || (slot.oms.record().state != OrderState::CancelRequested
@@ -696,6 +722,7 @@ PaperMakerResult MakerPaperMarketEngine::advance_time(
             event.tick_size_e4 = slot.tick_size_e4;
             event.original_microunits = slot.oms.record().original_microunits;
             event.queue = slot.paper.queue;
+            event.ttl_expired = slot.ttl_expired;
             attach_execution_funnel(slot, event, true);
             emit(result, event);
         }

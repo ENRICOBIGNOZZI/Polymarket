@@ -461,7 +461,8 @@ struct ExplorationChoice {
     std::int64_t price_tick,
     double quote_shares,
     const SideEconomics* economics,
-    std::int64_t decision_ns) noexcept {
+    std::int64_t decision_ns,
+    std::int64_t quote_lifetime_ns = 0) noexcept {
 
     StrategyIntent intent;
     intent.intent_id = update.instrument_handle * 0x9e3779b97f4a7c15ULL ^ sequence;
@@ -477,7 +478,15 @@ struct ExplorationChoice {
     intent.quantity_microunits = type == IntentType::Quote
         ? static_cast<std::int64_t>(std::llround(std::max(0.0, quote_shares) * 1'000'000.0))
         : 0;
-    intent.horizon_ms = 0;
+    if (type == IntentType::Quote) {
+        const double maximum_horizon_ms = static_cast<double>(
+            std::numeric_limits<std::uint32_t>::max());
+        const double configured_horizon_ms = quote_lifetime_ns > 0
+            ? static_cast<double>(quote_lifetime_ns) / 1'000'000.0
+            : model.fill_prediction_horizon_seconds * 1'000.0;
+        intent.horizon_ms = static_cast<std::uint32_t>(std::llround(std::clamp(
+            configured_horizon_ms, 1.0, maximum_horizon_ms)));
+    }
     intent.strategy_id = StrategyId::ProfessionalMaker;
     intent.type = type;
     intent.side = side;
@@ -1155,7 +1164,8 @@ MakerDecision MakerHotPath::on_market_update(
                                                     IntentType::Quote, choice.economics->side,
                                                     choice.economics->price_tick,
                                                     choice.economics->quote_shares,
-                                                    &authorized_exploration, now));
+                                                    &authorized_exploration, now,
+                                                    exploration_max_rest_ns_));
                 exploration_active_ = 1;
                 exploration_action_ = choice.action;
                 exploration_side_ = choice.economics->side;

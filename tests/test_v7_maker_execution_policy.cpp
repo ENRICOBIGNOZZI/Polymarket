@@ -25,7 +25,8 @@ pm::v7::ExecutionPlan quote_plan(std::uint64_t intent_id,
                                  std::int64_t price_tick,
                                  std::int64_t quantity,
                                  std::int64_t decision_ns = 1'000'000'000LL,
-                                 std::int64_t exchange_ns = 10'000'000'000LL) {
+                                 std::int64_t exchange_ns = 10'000'000'000LL,
+                                 std::uint32_t horizon_ms = 5'000) {
     pm::v7::ExecutionPlan plan;
     plan.intent.intent_id = intent_id;
     plan.intent.market_handle = kMarket;
@@ -36,6 +37,7 @@ pm::v7::ExecutionPlan quote_plan(std::uint64_t intent_id,
     plan.intent.side = side;
     plan.intent.price_tick = price_tick;
     plan.intent.quantity_microunits = quantity;
+    plan.intent.horizon_ms = horizon_ms;
     plan.intent.decision_monotonic_ns = decision_ns;
     plan.intent.exchange_event_ns = exchange_ns;
     plan.intent.passive = 1;
@@ -152,6 +154,31 @@ void test_control_plane_cancel_all_releases_buy_reservations() {
     assert(capital.snapshot().order_reserved_microdollars == 0);
 }
 
+void test_quote_ttl_releases_buy_reservation_on_owner_clock() {
+    auto execution = policy();
+    pm::v7::SleeveCapitalAccount capital(capital_limits());
+    assert(execution.process(
+        quote_plan(206, kYes, pm::v7::Side::Buy, 48, 2'000'000,
+                   1'000'000'000LL, 10'000'000'000LL, 100), capital).accepted);
+    assert(capital.snapshot().order_reserved_microdollars == 960'000);
+
+    const auto requested = execution.advance_time(
+        kMarket, 1'101'000'000LL, capital);
+    assert(requested.accepted && requested.paper.event_count == 1);
+    assert(requested.paper.events[0].kind
+           == pm::v7::maker::PaperMakerEventKind::CancelRequested);
+    assert(requested.paper.events[0].ttl_expired == 1);
+    assert(capital.snapshot().order_reserved_microdollars == 960'000);
+
+    const auto terminal = execution.advance_time(
+        kMarket, 1'201'000'000LL, capital);
+    assert(terminal.accepted && terminal.paper.event_count == 1);
+    assert(terminal.paper.events[0].kind
+           == pm::v7::maker::PaperMakerEventKind::Cancelled);
+    assert(terminal.paper.events[0].ttl_expired == 1);
+    assert(capital.snapshot().order_reserved_microdollars == 0);
+}
+
 void test_yes_no_buy_cycle_merge_releases_inventory_capital() {
     auto execution = policy();
     pm::v7::SleeveCapitalAccount capital(capital_limits());
@@ -242,6 +269,7 @@ int main() {
     test_full_buy_fill_moves_reservation_to_inventory();
     test_partial_fill_preserves_total_capital_until_cancel_effective();
     test_control_plane_cancel_all_releases_buy_reservations();
+    test_quote_ttl_releases_buy_reservation_on_owner_clock();
     test_yes_no_buy_cycle_merge_releases_inventory_capital();
     test_split_then_sell_releases_sold_leg_cost_basis();
     test_unobservable_queue_fails_before_capital_or_paper_mutation();

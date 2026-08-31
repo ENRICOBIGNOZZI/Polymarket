@@ -2031,15 +2031,23 @@ public:
         return telemetry_.try_pop(record);
     }
 
+    [[nodiscard]] bool pop_maintenance_update(
+        std::uint64_t& market_handle) noexcept {
+        if (maintenance_update_cursor_ >= maintenance_update_count_) return false;
+        market_handle = maintenance_updates_[maintenance_update_cursor_++];
+        return true;
+    }
+
     [[nodiscard]] bool maintenance_tick(std::int64_t now_ns) noexcept {
+        maintenance_update_count_ = 0;
+        maintenance_update_cursor_ = 0;
         if (!sync_inventory_drain_mode()) return false;
-        if (!inventory_drain_any_) return true;
+        bool any_state_change = false;
         for (std::size_t handle = 1; handle < markets_.size(); ++handle) {
             const auto* market = markets_[handle];
-            if (market == nullptr
-                || handle >= inventory_drain_active_by_market_.size()
-                || inventory_drain_active_by_market_[handle] == 0) continue;
-            auto cancellation = policy_.cancel_all(handle, now_ns, capital_);
+            if (market == nullptr) continue;
+            const bool draining = handle < inventory_drain_active_by_market_.size()
+                && inventory_drain_active_by_market_[handle] != 0;
             ExecutionContext context;
             context.market_handle = handle;
             context.event_handle = market->event_handle;
@@ -2048,16 +2056,30 @@ public:
             context.receive_monotonic_ns = now_ns;
             context.tick_size_e4 = market->yes_tick_e4;
             context.outcome_yes = 1;
-            if (cancellation.paper.event_count > 0) emit(context, cancellation.paper);
-            if (cancellation.capital_invariant_violation
-                || cancellation.paper.invariant_violation) {
-                return false;
+            bool market_state_changed = false;
+            if (draining) {
+                auto cancellation = policy_.cancel_all(handle, now_ns, capital_);
+                if (cancellation.paper.event_count > 0) {
+                    emit(context, cancellation.paper);
+                    market_state_changed = true;
+                }
+                if (cancellation.capital_invariant_violation
+                    || cancellation.paper.invariant_violation) {
+                    return false;
+                }
             }
+            // Quote TTL is an OMS contract, not a market-data callback. Advance
+            // every registered market on the single execution-owner clock so a
+            // quiet book cannot retain risk or censor a terminal nonfill label.
             auto result = policy_.advance_time(handle, now_ns, capital_);
-            if (result.paper.event_count > 0) emit(context, result.paper);
+            if (result.paper.event_count > 0) {
+                emit(context, result.paper);
+                market_state_changed = true;
+            }
             if (result.capital_invariant_violation || result.paper.invariant_violation) {
                 return false;
             }
+            refresh_exploration_market(handle);
             const auto yes_quotes = policy_.quote_snapshot(
                 handle, market->yes_instrument_handle);
             const auto no_quotes = policy_.quote_snapshot(
@@ -2067,7 +2089,7 @@ public:
                 && no_quotes.bid_active == 0 && no_quotes.ask_active == 0
                 && no_quotes.cancel_pending == 0;
             const auto* inventory = policy_.inventory(handle);
-            if (orders_terminal && inventory != nullptr
+            if (draining && orders_terminal && inventory != nullptr
                 && inventory->directional_microunits != 0) {
                 const auto& yes_book = latest_yes_books_[handle];
                 const auto& no_book = latest_no_books_[handle];
@@ -2106,6 +2128,7 @@ public:
                         liquidation_context.exchange_event_ns =
                             relevant_book.exchange_event_ns;
                         emit(liquidation_context, liquidation.paper);
+                        market_state_changed = true;
                     }
                     if (liquidation.capital_invariant_violation
                         || liquidation.paper.invariant_violation) {
@@ -2116,7 +2139,7 @@ public:
             const auto* final_inventory = policy_.inventory(handle);
             const bool globally_frozen = new_risk_frozen_ != nullptr
                 && new_risk_frozen_->load(std::memory_order_acquire);
-            if (!globally_frozen && final_inventory != nullptr
+            if (draining && !globally_frozen && final_inventory != nullptr
                 && final_inventory->yes_microunits == 0
                 && final_inventory->no_microunits == 0
                 && final_inventory->pending_split_microunits == 0
@@ -2124,12 +2147,19 @@ public:
                 inventory_targets_[handle] = 0;
                 inventory_drain_active_by_market_[handle] = 0;
             }
+            if (market_state_changed) {
+                if (maintenance_update_count_ >= maintenance_updates_.size()) {
+                    return false;
+                }
+                maintenance_updates_[maintenance_update_count_++] = handle;
+                any_state_change = true;
+            }
         }
         inventory_drain_any_ = std::any_of(
             inventory_drain_active_by_market_.begin(),
             inventory_drain_active_by_market_.end(),
             [](std::uint8_t value) { return value != 0; });
-        ++execution_version_;
+        if (any_state_change) ++execution_version_;
         return true;
     }
 
@@ -2460,6 +2490,10 @@ private:
     std::int64_t minimum_quote_lifetime_ns_ = 0;
     std::uint32_t exploration_concurrent_market_cap_ = 0;
     std::uint32_t exploration_active_market_count_ = 0;
+    std::array<std::uint64_t, pm::v7::maker::kMaxMakerExecutionMarkets>
+        maintenance_updates_{};
+    std::size_t maintenance_update_count_ = 0;
+    std::size_t maintenance_update_cursor_ = 0;
     pm::v7::SpscRing<TelemetryRecord, kExecutionTelemetryCapacity> telemetry_{};
     std::atomic<bool> telemetry_overflow_{false};
     std::uint64_t execution_version_ = 1;
@@ -2739,6 +2773,9 @@ private:
         metadata["fair_upper"] = record.decision.fair_upper;
         metadata["external_fair_authority"] =
             record.decision.external_fair_authority != 0;
+        if (record.intent.type == IntentType::Quote) {
+            metadata["quote_ttl_ms"] = record.intent.horizon_ms;
+        }
         const bool bid_side = record.intent.side == Side::Buy;
         const auto selector_index = pm::v7::maker::execution_authority_index(
             record.decision.placement_action, record.intent.side);
@@ -3120,6 +3157,9 @@ private:
         event["order_id"] = order_id(record.market_handle, record.paper.order_id);
         event["order_state"] = state;
         event["side"] = side_name(record.paper.side);
+        if (record.paper.ttl_expired != 0) {
+            event["cancel_reason"] = "QUOTE_TTL_EXPIRED";
+        }
         json::object metadata;
         attach_economic_identity(metadata);
         metadata["maker_cpp_hot_path"] = true;
@@ -3127,6 +3167,8 @@ private:
         metadata["decision_reason"] = decision_reason_name(record.decision.reason);
         metadata["decision_reason_code"] = static_cast<std::uint64_t>(record.decision.reason);
         metadata["safety_preemption"] = safety_preemption(record.decision.reason);
+        metadata["ttl_expired"] = record.paper.ttl_expired != 0;
+        metadata["timer_driven"] = record.paper.ttl_expired != 0;
         metadata["execution_outcome"] = execution_outcome_name(
             record.paper.execution_outcome);
         metadata["opposite_flow_prints_seen"] =
@@ -3555,11 +3597,20 @@ int main(int argc, char** argv) {
             throw std::runtime_error("cannot initialize single V7 Maker execution owner");
         }
 
+        std::size_t maximum_market_handle = 0;
+        for (const auto& market : markets) {
+            maximum_market_handle = std::max<std::size_t>(
+                maximum_market_handle, market->market_handle);
+        }
+        std::vector<std::size_t> market_shard_owner(
+            maximum_market_handle + 1, std::numeric_limits<std::size_t>::max());
         std::vector<std::unique_ptr<ShardRuntime>> shards;
         for (std::size_t start = 0; start < markets.size(); start += kMarketsPerShard) {
+            const std::size_t shard_index = shards.size();
             std::vector<MarketContext*> group;
             for (std::size_t i = start; i < std::min(markets.size(), start + kMarketsPerShard); ++i) {
                 group.push_back(markets[i].get());
+                market_shard_owner[markets[i]->market_handle] = shard_index;
             }
             auto shard = std::make_unique<ShardRuntime>(
                 std::move(group), model_store, &global_kill, &new_risk_frozen,
@@ -3588,6 +3639,30 @@ int main(int argc, char** argv) {
             };
             std::uint32_t idle_iterations = 0;
             std::int64_t last_maintenance_ns = monotonic_ns();
+            auto run_maintenance = [&]() noexcept {
+                const auto now_ns = monotonic_ns();
+                if (now_ns - last_maintenance_ns < 100'000'000LL) return;
+                if (!execution->maintenance_tick(now_ns)) {
+                    fatal.store(true, std::memory_order_release);
+                } else {
+                    std::uint64_t changed_market = 0;
+                    while (execution->pop_maintenance_update(changed_market)) {
+                        if (changed_market >= market_shard_owner.size()
+                            || market_shard_owner[changed_market] >= shards.size()) {
+                            fatal.store(true, std::memory_order_release);
+                            break;
+                        }
+                        const auto update = execution->snapshot(changed_market);
+                        if (update.market_handle == 0
+                            || !shards[market_shard_owner[changed_market]]
+                                    ->push_execution_snapshot(update)) {
+                            fatal.store(true, std::memory_order_release);
+                            break;
+                        }
+                    }
+                }
+                last_maintenance_ns = now_ns;
+            };
             while (!execution_stop.load(std::memory_order_acquire) || pending()) {
                 ExecutionCommand command;
                 std::size_t source_shard = 0;
@@ -3616,13 +3691,7 @@ int main(int argc, char** argv) {
                     }
                 }
                 if (!have) {
-                    const auto now_ns = monotonic_ns();
-                    if (now_ns - last_maintenance_ns >= 100'000'000LL) {
-                        if (!execution->maintenance_tick(now_ns)) {
-                            fatal.store(true, std::memory_order_release);
-                        }
-                        last_maintenance_ns = now_ns;
-                    }
+                    run_maintenance();
                     // Avoid a fixed 50 us tax on a newly enqueued cancel/order.
                     // The isolated order-TX owner spins briefly, then yields,
                     // and only sleeps after a prolonged idle period.
@@ -3651,6 +3720,10 @@ int main(int argc, char** argv) {
                 if (execution->telemetry_overflow()) {
                     fatal.store(true, std::memory_order_release);
                 }
+                // Critical commands were selected first above. Running the
+                // owner clock here keeps TTL bounded even if normal market
+                // traffic prevents the queues from becoming fully idle.
+                run_maintenance();
             }
         });
 
