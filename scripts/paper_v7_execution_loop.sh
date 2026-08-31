@@ -309,6 +309,13 @@ python3 scripts/v7_coinbase_l2_rest_collector.py \
   --tape "$RUN_ROOT/external_fair/coinbase_l2_rest.jsonl" --interval 5 --loop \
   >> "$RUN_ROOT/external_fair/coinbase_l2_rest.log" 2>&1 &
 pids+=("$!")
+python3 scripts/v7_external_forward_evidence_gate.py \
+  --runtime-status "$RUN_ROOT/external_fair/external_venues.json" \
+  --coinbase-rest-status "$RUN_ROOT/external_fair/coinbase_l2_rest_status.json" \
+  --deribit-rest-status "$RUN_ROOT/external_fair/deribit_rest_status.json" \
+  --output "$RUN_ROOT/external_fair/forward_evidence_status.json" --loop \
+  >> "$RUN_ROOT/external_fair/forward_evidence.log" 2>&1 &
+pids+=("$!")
 
 python3 scripts/v7_external_fair_paper_router.py \
   --run-root "$RUN_ROOT" --model-sha "$SHA" --config "$EXTERNAL_FAIR_POLICY" --interval 1 \

@@ -978,6 +978,7 @@ int main(int argc, char** argv) {
         std::signal(SIGTERM, signal_handler);
 
         constexpr std::uint64_t asset_handle = 0x425443555344ULL; // BTCUSD
+        const auto started_monotonic_ns = monotonic_now_ns();
         std::unique_ptr<ExternalTapeRecorder> normalized_tape;
         if (!tape_path.empty()) {
             const auto session = "external-venues-" + std::to_string(::getpid());
@@ -1091,6 +1092,8 @@ int main(int argc, char** argv) {
             atomic_write(output, {
                 {"schema", "polymarket_v7_external_venue_runtime_v1"},
                 {"timestamp_ns", wall_now_ns()},
+                {"started_monotonic_ns", started_monotonic_ns},
+                {"uptime_ns", std::max<std::int64_t>(0, now_mono - started_monotonic_ns)},
                 {"code_sha", model_sha},
                 {"paper_only", true},
                 {"authenticated_execution", false},
