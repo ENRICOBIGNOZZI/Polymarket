@@ -38,7 +38,11 @@ def artifact() -> FairModelArtifact:
         parameters={"calibration_slope": 1.0},
         hyperparameters={"uncertainty_z": 1.64},
         oos_scores={"log_loss": 0.50, "brier": 0.16, "ece": 0.02},
-        interval_coverage={"coverage": 0.90},
+        probability_interval_diagnostics={
+            "eligible_bin_count": 8,
+            "consistency_rate": 0.875,
+            "mean_probability_band_width": 0.12,
+        },
         economic_replay={"net_pnl": 1.0},
         generated_timestamp_ns=200,
     )
@@ -50,7 +54,9 @@ def evidence(**overrides: object) -> dict:
         "forward_shadow_contracts": 60,
         "ece": 0.02,
         "calibration_slope": 1.0,
-        "interval_coverage": 0.90,
+        "probability_interval_bins": 8,
+        "probability_interval_bin_consistency": 0.875,
+        "mean_probability_interval_width": 0.12,
         "net_replay_pnl": 1.0,
         "edge_monotonicity_pass": True,
         "causality_failures": 0,
@@ -105,8 +111,11 @@ def main() -> None:
             "rules_scope_mismatch",
         )
         must_fail(
-            lambda: registry.promote(model, evidence=evidence(interval_coverage=0.50)),
-            "interval_coverage",
+            lambda: registry.promote(
+                model,
+                evidence=evidence(probability_interval_bin_consistency=0.50),
+            ),
+            "probability_interval_calibration",
         )
 
         champion_pointer = registry.promote(

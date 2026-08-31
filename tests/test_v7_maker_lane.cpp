@@ -190,6 +190,23 @@ void test_rejected_quote_preserves_best_robust_ev_for_diagnostics() {
     assert(decision.ev_uncertainty > 0.0);
 }
 
+void test_lane_propagates_selector_execution_authority() {
+    pm::v7::maker::MakerInstrumentLane lane(+1);
+    auto context = default_context();
+    context.selector_authority_required = 1;
+    context.selector_execution_authority_mask =
+        pm::v7::maker::execution_authority_bit(
+            pm::v7::maker::Action::Join, pm::v7::Side::Buy);
+    const auto decision = lane.on_market_event(
+        book_event(), context, profitable_model());
+    assert(decision.intent_count == 1);
+    assert(decision.placement_action == pm::v7::maker::Action::Join);
+    assert(decision.intents[0].side == pm::v7::Side::Buy);
+    assert(decision.selector_authority_required == 1);
+    assert(decision.selector_execution_authority_mask
+           == context.selector_execution_authority_mask);
+}
+
 } // namespace
 
 int main() {
@@ -202,5 +219,6 @@ int main() {
     test_invalid_lineage_forces_feed_withdraw();
     test_invalid_inventory_orientation_fails_closed();
     test_rejected_quote_preserves_best_robust_ev_for_diagnostics();
+    test_lane_propagates_selector_execution_authority();
     return 0;
 }

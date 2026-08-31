@@ -28,6 +28,54 @@ from typing import Any, Callable
 
 SELECTOR_STATUS_SCHEMA = "polymarket_v7_maker_selector_status_v1"
 UNIVERSE_SCHEMA = "polymarket_v7_adaptive_universe_snapshot_v1"
+EXECUTION_AUTHORITY_SEMANTICS = "token_action_side_v2"
+
+
+def _control_exploration_cell(row: dict[str, Any]) -> dict[str, Any]:
+    """Return one deterministic cold-start cell, never a market-wide permit."""
+    return {
+        "outcome": "YES",
+        "token_id": str(row.get("yes_token") or ""),
+        "action": "JOIN",
+        "quote_side": "BUY",
+        "authority_basis": "COLD_START_CONTROL",
+        "projected_flow_reach_probability": 0.0,
+        "projected_queue_depletion_probability": 0.0,
+        "projected_fill_probability": 0.0,
+    }
+
+
+def _authorize_one_control_cell(rows: list[dict[str, Any]]) -> int:
+    """Authorize exactly one research cell when no causal-flow cell exists."""
+    if any(row.get("authorized_execution_cells") for row in rows):
+        return 0
+    for row in rows:
+        cell = _control_exploration_cell(row)
+        if not cell["token_id"]:
+            continue
+        row["control_exploration_authorized"] = True
+        row["execution_role"] = "COLD_START_CONTROL"
+        row["authorized_execution_cells"] = [cell]
+        row["authorized_execution_cell_count"] = 1
+        return 1
+    return 0
+
+
+def _annotate_inventory_seed_authority(rows: list[dict[str, Any]]) -> None:
+    """Seed token inventory only where an authorized ask can consume it.
+
+    Observation lanes and bid-only cells need no complete-set seed. This lets
+    the process subscribe a broad universe without immobilizing capital in
+    zero-flow markets.
+    """
+    for row in rows:
+        cells = row.get("authorized_execution_cells")
+        row["inventory_seed_authorized"] = bool(
+            isinstance(cells, list)
+            and any(isinstance(cell, dict)
+                    and str(cell.get("quote_side") or "").upper() == "SELL"
+                    for cell in cells)
+        )
 
 
 def finite(value: Any, default: float = 0.0) -> float:
@@ -690,6 +738,9 @@ def _recent_flow_snapshot(
         1e-6, float(flow_cfg.get("selection_quote_shares", 5.0)))
     selection_flow_half_life_seconds = max(
         0.1, float(flow_cfg.get("selection_flow_half_life_seconds", 30.0)))
+    minimum_authorized_fill_probability = min(1.0, max(
+        0.0, float(flow_cfg.get(
+            "rotation_min_projected_fill_probability", 0.004))))
     weights = flow_cfg.get("score_weights") if isinstance(flow_cfg.get("score_weights"), dict) else {}
     candidates: list[dict[str, Any]] = []
     for raw in universe.get("markets") if isinstance(universe.get("markets"), list) else []:
@@ -783,6 +834,7 @@ def _recent_flow_snapshot(
         )
         token_flow = flow.get("token_flow") if isinstance(flow.get("token_flow"), dict) else {}
         quote_opportunities = []
+        authorized_execution_cells: list[dict[str, Any]] = []
         for outcome, token in (("YES", yes_token), ("NO", no_token)):
             token_stats = token_flow.get(token) if isinstance(token_flow.get(token), dict) else {}
             for quote_side, aggressor_prefix, side_score in (
@@ -863,6 +915,41 @@ def _recent_flow_snapshot(
                     projected_join_fill_probability,
                     projected_improve1_fill_probability,
                 )
+                opposite_flow_is_fresh = (
+                    int(token_stats.get(f"{aggressor_prefix}_prints_2m", 0))
+                        >= minimum_side_prints_2m
+                    and opposite_prints_10m >= minimum_side_prints_10m
+                    and 0 <= opposite_flow_age_ms <= maximum_last_side_age_ms
+                )
+                book_evidence_valid = token_stats.get("book_evidence_valid") is True
+                authorized_actions: list[dict[str, Any]] = []
+                for action, queue_probability, fill_probability, available in (
+                    ("JOIN", join_queue_depletion_probability,
+                     projected_join_fill_probability, True),
+                    ("IMPROVE1", 1.0, projected_improve1_fill_probability,
+                     improve1_available),
+                ):
+                    if (
+                        opposite_flow_is_fresh
+                        and book_evidence_valid
+                        and available
+                        and fill_probability + 1e-12
+                            >= minimum_authorized_fill_probability
+                    ):
+                        authority = {
+                            "action": action,
+                            "authority_basis": "FRESH_OPPOSITE_FLOW",
+                            "projected_flow_reach_probability": flow_reach_probability,
+                            "projected_queue_depletion_probability": queue_probability,
+                            "projected_fill_probability": fill_probability,
+                        }
+                        authorized_actions.append(authority)
+                        authorized_execution_cells.append({
+                            "outcome": outcome,
+                            "token_id": token,
+                            "quote_side": quote_side,
+                            **authority,
+                        })
                 quote_opportunities.append({
                     "outcome": outcome,
                     "token_id": token,
@@ -885,7 +972,8 @@ def _recent_flow_snapshot(
                     "conditional_opposite_shares_given_reach": (
                         conditional_opposite_shares),
                     "market_side_score": side_score,
-                    "book_evidence_valid": token_stats.get("book_evidence_valid") is True,
+                    "book_evidence_valid": book_evidence_valid,
+                    "opposite_flow_is_fresh": opposite_flow_is_fresh,
                     "tick_size": tick_size,
                     "best_bid": float(token_stats.get("best_bid", 0.0)),
                     "best_ask": float(token_stats.get("best_ask", 0.0)),
@@ -899,6 +987,7 @@ def _recent_flow_snapshot(
                     "projected_improve1_fill_probability": (
                         projected_improve1_fill_probability),
                     "projected_best_fill_probability": projected_best_fill_probability,
+                    "authorized_actions": authorized_actions,
                 })
         quote_opportunities.sort(key=lambda row: (
             -float(row["projected_best_fill_probability"]),
@@ -940,6 +1029,12 @@ def _recent_flow_snapshot(
             "reward_capture_score": reward_capture_score,
             "side_mode": side_mode,
             "quote_opportunities": quote_opportunities,
+            "execution_role": (
+                "FLOW_AUTHORIZED" if authorized_execution_cells
+                else "WARM_FLOW_OBSERVATION"),
+            "control_exploration_authorized": False,
+            "authorized_execution_cells": authorized_execution_cells,
+            "authorized_execution_cell_count": len(authorized_execution_cells),
             "recent_prints": int(flow["prints"]),
             "recent_unique_transactions": len(flow["transactions"]),
             "recent_share_volume": float(flow["shares"]),
@@ -968,6 +1063,7 @@ def _recent_flow_snapshot(
             ),
         })
     candidates.sort(key=lambda row: (
+        -int(bool(row.get("authorized_execution_cell_count"))),
         -finite(row.get("selection_score")),
         -int(row.get("recent_prints") or 0),
         -finite(row.get("recent_notional_usd")),
@@ -983,12 +1079,10 @@ def _recent_flow_snapshot(
         selected.append(row)
         if len(selected) >= resource_capacity:
             break
-    # ``resource_capacity`` is a ceiling, not a market-count objective.  A
-    # zero-flow fallback consumes inventory seed, WebSocket/decision capacity
-    # and exploration budget without providing a realistic label.  Keep an
-    # optional explicitly bounded reserve for controlled experiments, but the
-    # production policy sets it to zero and leaves unused capacity available to
-    # the next fresh-flow generation.
+    # Execution remains limited to explicit cell authority, but membership is a
+    # broad observation universe.  Keeping those identities warm lets authority
+    # follow flow in-place without destroying incumbent queues. Observation
+    # rows carry no inventory seed and cannot emit an order.
     operational_floor = min(
         resource_capacity,
         max(minimum_markets, int(flow_cfg.get(
@@ -998,9 +1092,15 @@ def _recent_flow_snapshot(
         resource_capacity,
         max(0, int(flow_cfg.get("maximum_zero_flow_reserve_markets", 0))),
     )
+    observation_universe_markets = min(
+        resource_capacity,
+        max(operational_floor, int(flow_cfg.get(
+            "observation_universe_markets", operational_floor))),
+    )
     stable_reserve_added = 0
     reserve_target = min(
-        operational_floor, len(selected) + maximum_zero_flow_reserve)
+        observation_universe_markets,
+        len(selected) + maximum_zero_flow_reserve)
     if len(selected) < reserve_target:
         reserve = _fallback_snapshot(
             universe_path, selection_cfg, capacity_cfg, resource_capacity,
@@ -1038,14 +1138,24 @@ def _recent_flow_snapshot(
                 "recent_sell_notional_usd_10m": 0.0,
                 "recent_last_sell_age_ms": -1,
                 "quote_opportunities": [],
+                "execution_role": "WARM_RESERVE",
+                "control_exploration_authorized": False,
+                "authorized_execution_cells": [],
+                "authorized_execution_cell_count": 0,
             })
             selected_events.add(event_key)
             selected.append(row)
             stable_reserve_added += 1
             if len(selected) >= reserve_target:
                 break
+    control_cells_authorized = _authorize_one_control_cell(selected)
+    _annotate_inventory_seed_authority(selected)
     if len(selected) < minimum_markets:
         raise ValueError(f"maker_recent_flow_insufficient_markets:{len(selected)}")
+    flow_authorized_markets = sum(
+        1 for row in selected if row.get("execution_role") == "FLOW_AUTHORIZED")
+    authorized_execution_cell_count = sum(
+        int(row.get("authorized_execution_cell_count") or 0) for row in selected)
     return {
         "schema": "polymarket_v7_maker_reward_selection_v1",
         "timestamp_ms": now_ms,
@@ -1055,6 +1165,8 @@ def _recent_flow_snapshot(
         "model_sha": model_sha,
         "source": "adaptive_universe_recent_flow",
         "selection_mode": "BILATERAL_AGGRESSOR_FLOW",
+        "execution_cell_authority_required": True,
+        "execution_authority_semantics": EXECUTION_AUTHORITY_SEMANTICS,
         "degraded": False,
         "reward_data_available": False,
         "reward_pool_count": 0,
@@ -1067,13 +1179,19 @@ def _recent_flow_snapshot(
         "recent_flow_latest_receive_ms": latest_receive_ms,
         "recent_flow_source": flow_source,
         "minimum_operational_markets": operational_floor,
+        "observation_universe_markets": observation_universe_markets,
         "maximum_zero_flow_reserve_markets": maximum_zero_flow_reserve,
         "stable_reserve_added": stable_reserve_added,
+        "flow_authorized_market_count": flow_authorized_markets,
+        "control_exploration_cell_count": control_cells_authorized,
+        "authorized_execution_cell_count": authorized_execution_cell_count,
+        "minimum_authorized_projected_fill_probability": (
+            minimum_authorized_fill_probability),
         "unused_resource_capacity_markets": max(0, resource_capacity - len(selected)),
         "minimum_side_prints_2m": minimum_side_prints_2m,
         "maximum_last_side_age_ms": maximum_last_side_age_ms,
         "markets": selected,
-        "note": "PAPER maker ranks market-side cells from causal BUY/SELL aggressor flow. Resource capacity is a ceiling; the stable exploration reserve is explicitly bounded by the same five-market, two-percent PAPER capital envelope as the execution owner. Rewards remain zero unless verified.",
+        "note": "PAPER maker observes the configured universe but execution is fail-closed to selector-authorized token/action/side cells. Fresh opposite flow may authorize multiple economic placements; if none exists, exactly one JOIN/YES/BUY control cell may collect cold-start evidence. Rewards remain zero unless verified.",
     }
 
 
@@ -1151,6 +1269,18 @@ def _primary_snapshot(
     )
     if not selected:
         raise RuntimeError("reward selector returned no eligible markets")
+    selected_rows = [asdict(row) for row in selected]
+    for row in selected_rows:
+        row.update({
+            "side_mode": "STABLE_SPREAD_EXPLORATION",
+            "quote_opportunities": [],
+            "execution_role": "WARM_REWARD_OBSERVATION",
+            "control_exploration_authorized": False,
+            "authorized_execution_cells": [],
+            "authorized_execution_cell_count": 0,
+        })
+    control_cells_authorized = _authorize_one_control_cell(selected_rows)
+    _annotate_inventory_seed_authority(selected_rows)
     return {
         "schema": "polymarket_v7_maker_reward_selection_v1",
         "timestamp_ms": time.time_ns() // 1_000_000,
@@ -1160,6 +1290,8 @@ def _primary_snapshot(
         "model_sha": model_sha,
         "source": "public_clob_rewards",
         "selection_mode": "REWARDED",
+        "execution_cell_authority_required": True,
+        "execution_authority_semantics": EXECUTION_AUTHORITY_SEMANTICS,
         "degraded": False,
         "reward_data_available": True,
         "reward_pool_count": len(pools),
@@ -1169,7 +1301,9 @@ def _primary_snapshot(
         "reward_qualification_max_quote_shares": max_quote_shares,
         "resource_capacity_markets": resource_capacity,
         "resource_capacity": capacity_cfg,
-        "markets": [asdict(row) for row in selected],
+        "authorized_execution_cell_count": control_cells_authorized,
+        "control_exploration_cell_count": control_cells_authorized,
+        "markets": selected_rows,
         "note": "Pool dollars are configuration facts; realized reward share remains competition-dependent and is not guaranteed.",
     }
 
@@ -1206,6 +1340,10 @@ def _fallback_snapshot(
     minimum_mid = float(selection_cfg.get("min_mid", 0.02))
     maximum_mid = float(selection_cfg.get("max_mid", 0.98))
     maximum_spread = max(0.0, float(selection_cfg.get("fallback_maximum_spread", 0.10)))
+    recent_flow_cfg = selection_cfg.get("recent_flow") \
+        if isinstance(selection_cfg.get("recent_flow"), dict) else {}
+    minimum_tte_ms = max(0, int(float(
+        recent_flow_cfg.get("minimum_time_to_end_seconds", 900.0)) * 1000.0))
     weights = selection_cfg.get("fallback_score_weights") if isinstance(selection_cfg.get("fallback_score_weights"), dict) else {}
     candidates: list[dict[str, Any]] = []
     for raw in universe.get("markets") if isinstance(universe.get("markets"), list) else []:
@@ -1217,6 +1355,7 @@ def _fallback_snapshot(
         volume_24h = max(0.0, finite(raw.get("volume_24h")))
         midpoint = finite(raw.get("midpoint"), -1.0)
         spread = max(0.0, finite(raw.get("spread")))
+        end_ms = _iso_timestamp_ms(raw.get("end_date"))
         if (
             not _generic_maker_market_allowed(raw, selection_cfg)
             or raw.get("active") is not True
@@ -1229,6 +1368,8 @@ def _fallback_snapshot(
             or midpoint > maximum_mid
             or spread <= 0.0
             or spread > maximum_spread
+            or (minimum_tte_ms > 0
+                and (end_ms <= 0 or end_ms - now_ms < minimum_tte_ms))
         ):
             continue
         condition_id = str(raw.get("condition_id") or "")
@@ -1316,11 +1457,17 @@ def _fallback_snapshot(
             "recent_sell_notional_usd_10m": 0.0,
             "recent_last_sell_age_ms": -1,
             "quote_opportunities": [],
+            "execution_role": "WARM_FALLBACK_OBSERVATION",
+            "control_exploration_authorized": False,
+            "authorized_execution_cells": [],
+            "authorized_execution_cell_count": 0,
         })
         if len(selected) >= cold_start_maximum:
             break
     if not selected:
         raise ValueError("maker_fallback_universe_has_no_eligible_markets")
+    control_cells_authorized = _authorize_one_control_cell(selected)
+    _annotate_inventory_seed_authority(selected)
     return {
         "schema": "polymarket_v7_maker_reward_selection_v1",
         "timestamp_ms": now_ms,
@@ -1330,6 +1477,8 @@ def _fallback_snapshot(
         "model_sha": model_sha,
         "source": "adaptive_universe_fallback",
         "selection_mode": "FLOW_FILLABILITY_FALLBACK",
+        "execution_cell_authority_required": True,
+        "execution_authority_semantics": EXECUTION_AUTHORITY_SEMANTICS,
         "degraded": True,
         "reward_data_available": False,
         "primary_error": primary_error,
@@ -1338,11 +1487,13 @@ def _fallback_snapshot(
         "selected_count": len(selected),
         "resource_capacity_markets": resource_capacity,
         "cold_start_maximum_markets": cold_start_maximum,
+        "authorized_execution_cell_count": control_cells_authorized,
+        "control_exploration_cell_count": control_cells_authorized,
         "unused_resource_capacity_markets": max(0, resource_capacity - len(selected)),
         "resource_capacity": capacity_cfg,
         "universe_membership_sha256": str(universe.get("membership_sha256") or ""),
         "markets": selected,
-        "note": "Causal aggressor flow is unavailable; PAPER maker cold-start is bounded to explicit positive-point-EV exploration cells with reward assumptions forced to zero.",
+        "note": "Causal aggressor flow is unavailable; PAPER maker keeps the warm observation cohort but grants execution to exactly one explicit JOIN/YES/BUY cold-start control cell. Reward assumptions remain zero.",
     }
 
 
@@ -1444,6 +1595,8 @@ def _validated_pinned_selection(path: Path, *, model_sha: str) -> dict[str, Any]
         or snapshot.get("authenticated_execution") is not False
         or snapshot.get("real_order_submission") is not False
         or snapshot.get("model_sha") != model_sha
+        or snapshot.get("execution_cell_authority_required") is not True
+        or snapshot.get("execution_authority_semantics") != EXECUTION_AUTHORITY_SEMANTICS
         or snapshot.get("source") not in {
             "public_clob_rewards", "adaptive_universe_fallback", "adaptive_universe_recent_flow",
         }

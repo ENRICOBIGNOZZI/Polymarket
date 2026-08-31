@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 ROLES = frozenset({"RESEARCH", "CHALLENGER", "CHAMPION", "REJECTED"})
 
@@ -52,7 +52,7 @@ class FairModelArtifact:
     parameters: dict[str, Any]
     hyperparameters: dict[str, Any]
     oos_scores: dict[str, Any]
-    interval_coverage: dict[str, Any]
+    probability_interval_diagnostics: dict[str, Any]
     economic_replay: dict[str, Any]
     generated_timestamp_ns: int
 
@@ -119,8 +119,9 @@ class PromotionPolicy:
     maximum_ece: float = 0.05
     minimum_calibration_slope: float = 0.75
     maximum_calibration_slope: float = 1.25
-    minimum_interval_coverage: float = 0.85
-    maximum_interval_coverage: float = 0.99
+    minimum_probability_interval_bins: int = 5
+    minimum_probability_interval_bin_consistency: float = 0.80
+    maximum_mean_probability_interval_width: float = 0.20
     require_positive_net_replay_pnl: bool = True
     require_edge_monotonicity: bool = True
     require_no_causality_failures: bool = True
@@ -222,13 +223,28 @@ class FairValueRegistry:
 
         ece = float(evidence.get("ece", math.inf))
         slope = float(evidence.get("calibration_slope", math.nan))
-        coverage = float(evidence.get("interval_coverage", math.nan))
+        interval_bins = int(evidence.get("probability_interval_bins", 0))
+        interval_consistency = float(evidence.get(
+            "probability_interval_bin_consistency", math.nan))
+        interval_width = float(evidence.get(
+            "mean_probability_interval_width", math.nan))
         if not math.isfinite(ece) or ece > policy.maximum_ece:
             raise RegistryError("promotion:ece")
         if not math.isfinite(slope) or not policy.minimum_calibration_slope <= slope <= policy.maximum_calibration_slope:
             raise RegistryError("promotion:calibration_slope")
-        if not math.isfinite(coverage) or not policy.minimum_interval_coverage <= coverage <= policy.maximum_interval_coverage:
-            raise RegistryError("promotion:interval_coverage")
+        if interval_bins < policy.minimum_probability_interval_bins:
+            raise RegistryError("promotion:insufficient_probability_interval_bins")
+        if (
+            not math.isfinite(interval_consistency)
+            or interval_consistency
+                < policy.minimum_probability_interval_bin_consistency
+        ):
+            raise RegistryError("promotion:probability_interval_calibration")
+        if (
+            not math.isfinite(interval_width)
+            or interval_width > policy.maximum_mean_probability_interval_width
+        ):
+            raise RegistryError("promotion:probability_interval_not_sharp")
         if policy.require_positive_net_replay_pnl and float(evidence.get("net_replay_pnl", 0.0)) <= 0.0:
             raise RegistryError("promotion:nonpositive_net_replay_pnl")
         if policy.require_edge_monotonicity and evidence.get("edge_monotonicity_pass") is not True:

@@ -374,7 +374,24 @@ struct SelectedMarket {
     double yes_aggressive_sell_prints_per_second = 0.0;
     double no_aggressive_buy_prints_per_second = 0.0;
     double no_aggressive_sell_prints_per_second = 0.0;
+    std::uint8_t yes_execution_authority_mask = 0;
+    std::uint8_t no_execution_authority_mask = 0;
+    std::array<double, pm::v7::maker::kSelectorAuthorityCellCount>
+        yes_projected_flow_reach_probability{};
+    std::array<double, pm::v7::maker::kSelectorAuthorityCellCount>
+        yes_projected_queue_depletion_probability{};
+    std::array<double, pm::v7::maker::kSelectorAuthorityCellCount>
+        yes_projected_fill_probability{};
+    std::array<double, pm::v7::maker::kSelectorAuthorityCellCount>
+        no_projected_flow_reach_probability{};
+    std::array<double, pm::v7::maker::kSelectorAuthorityCellCount>
+        no_projected_queue_depletion_probability{};
+    std::array<double, pm::v7::maker::kSelectorAuthorityCellCount>
+        no_projected_fill_probability{};
     bool flow_priors_present = false;
+    bool selector_authority_required = false;
+    bool inventory_seed_authorized = false;
+    std::uint64_t selector_generation = 0;
 };
 
 struct InventoryFactoryPolicy {
@@ -492,7 +509,8 @@ InventoryFactoryPolicy load_inventory_factory_policy(const fs::path& policy_path
     return out;
 }
 
-[[nodiscard]] std::vector<SelectedMarket> load_selection(const fs::path& path) {
+[[nodiscard]] std::vector<SelectedMarket> load_selection(
+    const fs::path& path, std::string_view expected_model_sha) {
     const auto root = read_json(path);
     if (!root.is_object()) throw std::runtime_error("maker selection must be object");
     const auto& object = root.as_object();
@@ -501,6 +519,14 @@ InventoryFactoryPolicy load_inventory_factory_policy(const fs::path& policy_path
     }
     if (const auto* auth = find_value(object, "authenticated_execution"); auth != nullptr && boolean(auth, true)) {
         throw std::runtime_error("maker selection enables authenticated execution");
+    }
+    if (text(find_value(object, "model_sha")) != expected_model_sha) {
+        throw std::runtime_error("maker selection model SHA mismatch");
+    }
+    if (!boolean(find_value(object, "execution_cell_authority_required"), false)
+        || text(find_value(object, "execution_authority_semantics"))
+            != "token_action_side_v2") {
+        throw std::runtime_error("maker selection lacks exact execution-cell authority");
     }
     const auto* capacity_value = find_value(object, "resource_capacity_markets");
     const auto max_markets = static_cast<std::size_t>(std::max<std::int64_t>(
@@ -511,6 +537,8 @@ InventoryFactoryPolicy load_inventory_factory_policy(const fs::path& policy_path
     const auto* raw = find_value(object, "markets");
     if (raw == nullptr || !raw->is_array()) throw std::runtime_error("maker selection missing markets");
     std::vector<SelectedMarket> output;
+    const auto selector_generation = static_cast<std::uint64_t>(
+        std::max<std::int64_t>(1, integer(find_value(object, "timestamp_ms"), 0)));
     output.reserve(std::min<std::size_t>(max_markets, raw->as_array().size()));
     for (const auto& item : raw->as_array()) {
         if (!item.is_object() || output.size() >= max_markets) break;
@@ -523,9 +551,64 @@ InventoryFactoryPolicy load_inventory_factory_policy(const fs::path& policy_path
         market.no_token = text(find_value(row, "no_token"));
         market.reward_intensity = std::max(0.0, number(find_value(row, "reward_intensity"), 0.0));
         market.rewards_min_size = std::max(0.0, number(find_value(row, "rewards_min_size"), 0.0));
+        market.selector_authority_required = true;
+        market.inventory_seed_authorized = boolean(
+            find_value(row, "inventory_seed_authorized"), false);
+        market.selector_generation = selector_generation;
+        const auto* authority_cells = find_value(row, "authorized_execution_cells");
+        if (authority_cells == nullptr || !authority_cells->is_array()) {
+            throw std::runtime_error("maker market lacks execution-cell authority array");
+        }
+        for (const auto& cell_value : authority_cells->as_array()) {
+            if (!cell_value.is_object()) continue;
+            const auto& cell = cell_value.as_object();
+            const std::string token = text(find_value(cell, "token_id"));
+            const std::string action_name_value = text(find_value(cell, "action"));
+            const std::string quote_side = text(find_value(cell, "quote_side"));
+            Action action = Action::Withdraw;
+            if (action_name_value == "JOIN") action = Action::Join;
+            else if (action_name_value == "IMPROVE1") action = Action::Improve1;
+            else if (action_name_value == "FADE1") action = Action::Fade1;
+            else if (action_name_value == "FADE2") action = Action::Fade2;
+            const Side side = quote_side == "BUY" ? Side::Buy
+                : quote_side == "SELL" ? Side::Sell : Side::None;
+            const auto bit = pm::v7::maker::execution_authority_bit(action, side);
+            if (bit == 0) continue;
+            const auto index = pm::v7::maker::execution_authority_index(action, side);
+            if (index >= pm::v7::maker::kSelectorAuthorityCellCount) continue;
+            const double projected_reach = std::clamp(number(
+                find_value(cell, "projected_flow_reach_probability"), 0.0), 0.0, 1.0);
+            const double projected_queue = std::clamp(number(
+                find_value(cell, "projected_queue_depletion_probability"), 0.0), 0.0, 1.0);
+            const double projected_fill = std::clamp(number(
+                find_value(cell, "projected_fill_probability"), 0.0), 0.0, 1.0);
+            if (token == market.yes_token) {
+                market.yes_execution_authority_mask |= bit;
+                market.yes_projected_flow_reach_probability[index] = projected_reach;
+                market.yes_projected_queue_depletion_probability[index] = projected_queue;
+                market.yes_projected_fill_probability[index] = projected_fill;
+            } else if (token == market.no_token) {
+                market.no_execution_authority_mask |= bit;
+                market.no_projected_flow_reach_probability[index] = projected_reach;
+                market.no_projected_queue_depletion_probability[index] = projected_queue;
+                market.no_projected_fill_probability[index] = projected_fill;
+            }
+        }
+        bool sell_authorized = false;
+        for (const auto action : {Action::Join, Action::Improve1,
+                                  Action::Fade1, Action::Fade2}) {
+            const auto bit = pm::v7::maker::execution_authority_bit(
+                action, Side::Sell);
+            sell_authorized = sell_authorized
+                || (market.yes_execution_authority_mask & bit) != 0
+                || (market.no_execution_authority_mask & bit) != 0;
+        }
+        if (market.inventory_seed_authorized != sell_authorized) {
+            throw std::runtime_error(
+                "maker inventory seed authority does not match SELL cells");
+        }
         const auto* opportunities = find_value(row, "quote_opportunities");
         if (opportunities != nullptr && opportunities->is_array()) {
-            market.flow_priors_present = true;
             for (const auto& opportunity_value : opportunities->as_array()) {
                 if (!opportunity_value.is_object()) continue;
                 const auto& opportunity = opportunity_value.as_object();
@@ -575,6 +658,11 @@ InventoryFactoryPolicy load_inventory_factory_policy(const fs::path& policy_path
                 }
             }
         }
+        market.flow_priors_present =
+            market.yes_aggressive_buy_shares_per_second > 0.0
+            || market.yes_aggressive_sell_shares_per_second > 0.0
+            || market.no_aggressive_buy_shares_per_second > 0.0
+            || market.no_aggressive_sell_shares_per_second > 0.0;
         if (market.market_id.empty() || market.condition_id.empty() || market.yes_token.empty()
             || market.no_token.empty() || market.yes_token == market.no_token) {
             continue;
@@ -853,6 +941,9 @@ struct ExternalMakerSnapshot {
 
 struct MarketContext {
     SelectedMarket cold;
+    // Membership and handles are immutable for a process generation, while
+    // selector priors and token/action/side authority refresh atomically.
+    std::shared_ptr<const SelectedMarket> selection_control;
     std::uint64_t market_handle = 0;
     std::uint64_t event_handle = 0;
     std::uint64_t yes_instrument_handle = 0;
@@ -885,7 +976,9 @@ struct MarketContext {
           cold_visible_depth_shares(std::max(0.0, visible_depth)),
           cold_spread(std::clamp(spread, 0.0, 1.0)),
           cold_volatility_proxy(std::clamp(volatility_proxy, 0.0, 1.0)),
-          cold_yes_reference_price(std::clamp(yes_reference_price, 1e-6, 1.0 - 1e-6)) {}
+          cold_yes_reference_price(std::clamp(yes_reference_price, 1e-6, 1.0 - 1e-6)) {
+        selection_control = std::make_shared<const SelectedMarket>(cold);
+    }
 };
 
 struct InstrumentRef {
@@ -1197,20 +1290,41 @@ private:
         MakerLaneContext context;
         context.inventory = state.inventory;
         context.quotes = instrument.yes ? state.yes_quotes : state.no_quotes;
+        const auto control = std::atomic_load_explicit(
+            &market.selection_control, std::memory_order_acquire);
+        if (!control) {
+            fatal_->store(true, std::memory_order_release);
+            return;
+        }
         context.flow_prior_valid = static_cast<std::uint8_t>(
-            market.cold.flow_priors_present);
+            control->flow_priors_present);
+        context.selector_authority_required = static_cast<std::uint8_t>(
+            control->selector_authority_required);
+        context.selector_generation = control->selector_generation;
+        context.selector_execution_authority_mask = instrument.yes
+            ? control->yes_execution_authority_mask
+            : control->no_execution_authority_mask;
+        context.selector_projected_flow_reach_probability = instrument.yes
+            ? control->yes_projected_flow_reach_probability
+            : control->no_projected_flow_reach_probability;
+        context.selector_projected_queue_depletion_probability = instrument.yes
+            ? control->yes_projected_queue_depletion_probability
+            : control->no_projected_queue_depletion_probability;
+        context.selector_projected_fill_probability = instrument.yes
+            ? control->yes_projected_fill_probability
+            : control->no_projected_fill_probability;
         context.prior_aggressive_buy_shares_per_second = instrument.yes
-            ? market.cold.yes_aggressive_buy_shares_per_second
-            : market.cold.no_aggressive_buy_shares_per_second;
+            ? control->yes_aggressive_buy_shares_per_second
+            : control->no_aggressive_buy_shares_per_second;
         context.prior_aggressive_sell_shares_per_second = instrument.yes
-            ? market.cold.yes_aggressive_sell_shares_per_second
-            : market.cold.no_aggressive_sell_shares_per_second;
+            ? control->yes_aggressive_sell_shares_per_second
+            : control->no_aggressive_sell_shares_per_second;
         context.prior_aggressive_buy_prints_per_second = instrument.yes
-            ? market.cold.yes_aggressive_buy_prints_per_second
-            : market.cold.no_aggressive_buy_prints_per_second;
+            ? control->yes_aggressive_buy_prints_per_second
+            : control->no_aggressive_buy_prints_per_second;
         context.prior_aggressive_sell_prints_per_second = instrument.yes
-            ? market.cold.yes_aggressive_sell_prints_per_second
-            : market.cold.no_aggressive_sell_prints_per_second;
+            ? control->yes_aggressive_sell_prints_per_second
+            : control->no_aggressive_sell_prints_per_second;
         const auto decision_now_ns = monotonic_ns();
         const auto external = std::atomic_load_explicit(
             &market.external_fair, std::memory_order_acquire);
@@ -1600,6 +1714,7 @@ public:
         control_watermarks_.assign(max_instrument + 1, {});
         exploration_market_active_.assign(max_market + 1, 0);
         inventory_targets_.assign(max_market + 1, 0);
+        inventory_drain_active_by_market_.assign(max_market + 1, 0);
         inventory_last_replenish_ns_.assign(max_market + 1, 0);
         latest_yes_books_.assign(max_market + 1, {});
         latest_no_books_.assign(max_market + 1, {});
@@ -1608,6 +1723,7 @@ public:
         fill_funnel_ = fill_funnel;
         if (new_risk_frozen_ == nullptr || fill_funnel_ == nullptr) return false;
         minimum_quote_lifetime_ns_ = std::max<std::int64_t>(0, minimum_quote_lifetime_ns);
+        base_quote_shares_ = std::max(1e-6, base_quote_shares);
         exploration_concurrent_market_cap_ = exploration_concurrent_market_cap;
         for (const auto& market : markets) {
             if (market->yes_tick_e4 != market->no_tick_e4) return false;
@@ -1627,6 +1743,7 @@ public:
             std::int64_t minimum_total = 0;
             std::size_t eligible = 0;
             for (const auto& market : markets) {
+                if (!market->cold.inventory_seed_authorized) continue;
                 const double minimum_shares = std::ceil(std::max({
                     base_quote_shares,
                     market->yes_min_order * inventory_factory_.seed_min_quote_multiples,
@@ -1650,6 +1767,7 @@ public:
             std::int64_t remaining_minimum = minimum_total;
             std::size_t seeded = 0;
             for (const auto& market : markets) {
+                if (!market->cold.inventory_seed_authorized) continue;
                 const auto minimum = minimums[market->market_handle];
                 if (minimum <= 0) continue;
                 const auto markets_left = std::max<std::size_t>(1, eligible - seeded);
@@ -1831,10 +1949,12 @@ public:
 
     [[nodiscard]] bool maintenance_tick(std::int64_t now_ns) noexcept {
         if (!sync_inventory_drain_mode()) return false;
-        if (!inventory_drain_active_) return true;
+        if (!inventory_drain_any_) return true;
         for (std::size_t handle = 1; handle < markets_.size(); ++handle) {
             const auto* market = markets_[handle];
-            if (market == nullptr) continue;
+            if (market == nullptr
+                || handle >= inventory_drain_active_by_market_.size()
+                || inventory_drain_active_by_market_[handle] == 0) continue;
             auto cancellation = policy_.cancel_all(handle, now_ns, capital_);
             ExecutionContext context;
             context.market_handle = handle;
@@ -1901,7 +2021,22 @@ public:
                     }
                 }
             }
+            const auto* final_inventory = policy_.inventory(handle);
+            const bool globally_frozen = new_risk_frozen_ != nullptr
+                && new_risk_frozen_->load(std::memory_order_acquire);
+            if (!globally_frozen && final_inventory != nullptr
+                && final_inventory->yes_microunits == 0
+                && final_inventory->no_microunits == 0
+                && final_inventory->pending_split_microunits == 0
+                && final_inventory->pending_merge_microunits == 0) {
+                inventory_targets_[handle] = 0;
+                inventory_drain_active_by_market_[handle] = 0;
+            }
         }
+        inventory_drain_any_ = std::any_of(
+            inventory_drain_active_by_market_.begin(),
+            inventory_drain_active_by_market_.end(),
+            [](std::uint8_t value) { return value != 0; });
         ++execution_version_;
         return true;
     }
@@ -1927,25 +2062,82 @@ private:
         }
     }
 
-    [[nodiscard]] bool sync_inventory_drain_mode() noexcept {
-        const bool requested = new_risk_frozen_ != nullptr
-            && new_risk_frozen_->load(std::memory_order_acquire);
-        if (requested == inventory_drain_active_) return true;
-        for (std::size_t handle = 1; handle < inventory_targets_.size(); ++handle) {
-            if (markets_[handle] == nullptr || inventory_targets_[handle] <= 0) continue;
-            if (!policy_.set_complete_set_reserve_floor(
-                    handle, requested ? 0 : inventory_targets_[handle])) {
-                return false;
+    [[nodiscard]] bool sell_inventory_authorized(
+        const MarketContext& market) const noexcept {
+        const auto control = std::atomic_load_explicit(
+            &market.selection_control, std::memory_order_acquire);
+        if (!control) return false;
+        for (const auto action : {Action::Join, Action::Improve1,
+                                  Action::Fade1, Action::Fade2}) {
+            const auto bit = pm::v7::maker::execution_authority_bit(
+                action, Side::Sell);
+            if ((control->yes_execution_authority_mask & bit) != 0
+                || (control->no_execution_authority_mask & bit) != 0) {
+                return true;
             }
         }
-        inventory_drain_active_ = requested;
+        return false;
+    }
+
+    [[nodiscard]] bool sync_inventory_drain_mode() noexcept {
+        const bool globally_requested = new_risk_frozen_ != nullptr
+            && new_risk_frozen_->load(std::memory_order_acquire);
+        bool any = false;
+        for (std::size_t handle = 1; handle < inventory_targets_.size(); ++handle) {
+            const auto* market = markets_[handle];
+            if (market == nullptr) continue;
+            const bool authority_retired = inventory_targets_[handle] > 0
+                && !sell_inventory_authorized(*market);
+            const bool requested = globally_requested || authority_retired;
+            const bool active = inventory_drain_active_by_market_[handle] != 0;
+            if (requested != active) {
+                if (!policy_.set_complete_set_reserve_floor(
+                        handle, requested ? 0 : inventory_targets_[handle])) {
+                    return false;
+                }
+                inventory_drain_active_by_market_[handle] =
+                    static_cast<std::uint8_t>(requested);
+            }
+            any = any || requested;
+        }
+        inventory_drain_any_ = any;
         return true;
     }
 
     [[nodiscard]] bool maybe_replenish(const ExecutionContext& context) noexcept {
-        if (!inventory_factory_.enabled || inventory_drain_active_
+        if (!inventory_factory_.enabled
             || context.market_handle >= inventory_targets_.size()) return true;
-        const auto target = inventory_targets_[context.market_handle];
+        const auto handle = static_cast<std::size_t>(context.market_handle);
+        if (inventory_drain_active_by_market_[handle] != 0) return true;
+        auto target = inventory_targets_[handle];
+        if (target <= 0) {
+            const auto* market = markets_[handle];
+            if (market == nullptr || !sell_inventory_authorized(*market)) return true;
+            const double minimum_shares = std::ceil(std::max({
+                base_quote_shares_,
+                market->yes_min_order * inventory_factory_.seed_min_quote_multiples,
+                market->no_min_order * inventory_factory_.seed_min_quote_multiples}));
+            target = microdollars(minimum_shares);
+            if (target <= 0
+                || !policy_.set_complete_set_reserve_floor(handle, target)) {
+                return false;
+            }
+            auto split = policy_.split_complete_sets(
+                handle, target, std::max<std::int64_t>(1, monotonic_ns()),
+                market->cold_yes_reference_price, capital_);
+            emit(context, split.paper);
+            if (split.capital_invariant_violation || split.paper.invariant_violation) {
+                return false;
+            }
+            if (!split.accepted) {
+                (void)policy_.set_complete_set_reserve_floor(handle, 0);
+                return true;
+            }
+            inventory_targets_[handle] = target;
+            inventory_last_replenish_ns_[handle] = monotonic_ns();
+            ++execution_version_;
+            return true;
+        }
         const auto* inventory = policy_.inventory(context.market_handle);
         if (target <= 0 || inventory == nullptr) return true;
         const auto trigger = static_cast<std::int64_t>(std::floor(
@@ -2118,13 +2310,15 @@ private:
     std::vector<SideControlWatermark> control_watermarks_;
     std::vector<std::uint8_t> exploration_market_active_;
     std::vector<std::int64_t> inventory_targets_;
+    std::vector<std::uint8_t> inventory_drain_active_by_market_;
     std::vector<std::int64_t> inventory_last_replenish_ns_;
     std::vector<BookHotSnapshot> latest_yes_books_;
     std::vector<BookHotSnapshot> latest_no_books_;
     InventoryFactoryPolicy inventory_factory_{};
     std::atomic<bool>* new_risk_frozen_ = nullptr;
     MakerFillFunnelCounters* fill_funnel_ = nullptr;
-    bool inventory_drain_active_ = false;
+    bool inventory_drain_any_ = false;
+    double base_quote_shares_ = 1.0;
     std::int64_t minimum_quote_lifetime_ns_ = 0;
     std::uint32_t exploration_concurrent_market_cap_ = 0;
     std::uint32_t exploration_active_market_count_ = 0;
@@ -2391,6 +2585,8 @@ private:
         attach_economic_identity(metadata);
         metadata["outcome"] = record.outcome_yes ? "YES" : "NO";
         metadata["action"] = action_name(record.action);
+        metadata["placement_action"] = action_name(
+            record.decision.placement_action);
         metadata["execution_side"] = side_name(record.intent.side);
         metadata["maker_cpp_hot_path"] = true;
         metadata["queue_operational_scenario"] = "pessimistic";
@@ -2405,6 +2601,32 @@ private:
         metadata["external_fair_authority"] =
             record.decision.external_fair_authority != 0;
         const bool bid_side = record.intent.side == Side::Buy;
+        const auto selector_index = pm::v7::maker::execution_authority_index(
+            record.decision.placement_action, record.intent.side);
+        const bool selector_index_valid =
+            selector_index < pm::v7::maker::kSelectorAuthorityCellCount;
+        metadata["selector_execution_authority"] = json::object{
+            {"required", record.decision.selector_authority_required != 0},
+            {"selector_generation", record.decision.selector_generation},
+            {"token_action_side_mask",
+                static_cast<std::uint64_t>(
+                    record.decision.selector_execution_authority_mask)},
+            {"chosen_cell_authorized", bid_side
+                ? record.decision.bid_selector_cell_authorized != 0
+                : record.decision.ask_selector_cell_authorized != 0},
+            {"inventory_reduction_bypass", bid_side
+                ? record.decision.bid_inventory_reduction_bypass != 0
+                : record.decision.ask_inventory_reduction_bypass != 0},
+            {"selector_projected_flow_reach_probability", selector_index_valid
+                ? record.decision.selector_projected_flow_reach_probability[selector_index]
+                : 0.0},
+            {"selector_projected_queue_depletion_probability", selector_index_valid
+                ? record.decision.selector_projected_queue_depletion_probability[selector_index]
+                : 0.0},
+            {"selector_projected_fill_probability", selector_index_valid
+                ? record.decision.selector_projected_fill_probability[selector_index]
+                : 0.0},
+        };
         metadata["execution_funnel_prediction"] = json::object{
             {"opposite_aggressive_flow_shares_per_second", bid_side
                 ? record.decision.bid_opposite_flow_shares_per_second
@@ -2789,7 +3011,7 @@ std::vector<std::unique_ptr<MarketContext>> build_markets(
     while (!g_stop.load(std::memory_order_relaxed)) {
         try {
             if (fs::exists(options.selection) && fs::file_size(options.selection) > 0) {
-                selected = load_selection(options.selection);
+                selected = load_selection(options.selection, options.model_sha);
                 break;
             }
         } catch (const std::exception& error) {
@@ -2855,6 +3077,50 @@ std::vector<std::unique_ptr<MarketContext>> build_markets(
     }
     if (output.empty()) throw std::runtime_error("no selected maker market has valid cold-start books");
     return output;
+}
+
+[[nodiscard]] bool refresh_selection_control(
+    const fs::path& path,
+    std::string_view model_sha,
+    const std::vector<std::unique_ptr<MarketContext>>& markets,
+    std::uint64_t& current_generation) {
+    auto selected = load_selection(path, model_sha);
+    if (selected.size() != markets.size()) {
+        throw std::runtime_error("maker in-place selection membership size changed");
+    }
+    std::unordered_map<std::string, MarketContext*> current;
+    current.reserve(markets.size());
+    for (const auto& market : markets) {
+        current.emplace(market->cold.market_id, market.get());
+    }
+    std::vector<std::pair<MarketContext*, std::shared_ptr<const SelectedMarket>>> pending;
+    pending.reserve(selected.size());
+    std::uint64_t generation = 0;
+    for (auto& next : selected) {
+        const auto found = current.find(next.market_id);
+        if (found == current.end()) {
+            throw std::runtime_error("maker in-place selection introduced a new market");
+        }
+        const auto& cold = found->second->cold;
+        if (next.condition_id != cold.condition_id
+            || next.event_id != cold.event_id
+            || next.yes_token != cold.yes_token
+            || next.no_token != cold.no_token) {
+            throw std::runtime_error("maker in-place selection changed immutable identity");
+        }
+        generation = std::max(generation, next.selector_generation);
+        pending.emplace_back(
+            found->second,
+            std::make_shared<const SelectedMarket>(std::move(next)));
+    }
+    if (generation <= current_generation) return false;
+    for (auto& [market, control] : pending) {
+        std::atomic_store_explicit(
+            &market->selection_control, std::move(control),
+            std::memory_order_release);
+    }
+    current_generation = generation;
+    return true;
 }
 
 [[nodiscard]] bool refresh_external_maker_fair(
@@ -3105,7 +3371,13 @@ int main(int argc, char** argv) {
 
         std::int64_t last_state_ms = 0;
         std::int64_t last_model_check_ms = 0;
+        std::int64_t last_selection_check_ms = 0;
         std::uint64_t current_model_version = initial->model_version;
+        std::uint64_t current_selector_generation = 0;
+        for (const auto& market : markets) {
+            current_selector_generation = std::max(
+                current_selector_generation, market->cold.selector_generation);
+        }
         const fs::path kill_path = fs::path(options.run_root) / "control" / "KILL";
         const fs::path maker_freeze_path =
             fs::path(options.run_root) / "control" / "MAKER_FREEZE";
@@ -3178,6 +3450,17 @@ int main(int argc, char** argv) {
                         // Preserve the last valid immutable champion snapshot.
                     }
                     last_model_check_ms = now;
+                }
+                if (now - last_selection_check_ms >= 100) {
+                    try {
+                        (void)refresh_selection_control(
+                            options.selection, options.model_sha, markets,
+                            current_selector_generation);
+                    } catch (...) {
+                        // A membership change requires a lane handoff. Keep the
+                        // last valid same-membership cell authority in place.
+                    }
+                    last_selection_check_ms = now;
                 }
             } catch (...) {
                 fatal.store(true, std::memory_order_release);

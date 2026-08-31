@@ -14,7 +14,7 @@ import v7_external_fair_paper_router as router  # noqa: E402
 from v7_external_fair_paper_router import (  # noqa: E402
     Book, entry_tte_allowed, executable_sell_value, fee_per_share,
     hybrid_probability, live_market_yes, model_market_disagreement_allowed,
-    robust_candidates,
+    probability_interval_bin_diagnostics, robust_candidates,
 )
 
 
@@ -46,6 +46,25 @@ def main() -> None:
     assert abs(router.expected_calibration_error(
         [0.1, 0.2, 0.8, 0.9], [0.0, 1.0, 0.0, 1.0], bins=2,
     ) - 0.35) < 1e-12
+    predictions = [0.1] * 10 + [0.9] * 10
+    actuals = [1.0] + [0.0] * 9 + [1.0] * 9 + [0.0]
+    diagnostics = probability_interval_bin_diagnostics(
+        predictions, actuals, [0.05] * 10 + [0.85] * 10,
+        [0.15] * 10 + [0.95] * 10, bins=10, minimum_bin_size=3,
+    )
+    assert diagnostics["eligible_bin_count"] == 2
+    assert diagnostics["consistency_rate"] == 1.0
+    assert abs(diagnostics["mean_probability_band_width"] - 0.1) < 1e-12
+    # Binary outcomes themselves never sit inside these probability bands;
+    # the old per-realization "coverage" gate would therefore call a perfectly
+    # calibrated construction zero-percent covered.
+    assert not any(lower <= actual <= upper for lower, actual, upper in zip(
+        [0.05] * 10 + [0.85] * 10, actuals,
+        [0.15] * 10 + [0.95] * 10,
+    ))
+    intercept, slope = router.logistic_calibration_line(predictions, actuals)
+    assert intercept is not None and abs(intercept) < 1e-5
+    assert slope is not None and abs(slope - 1.0) < 1e-5
     depth_book = Book("yes", ((0.50, 2.0), (0.49, 3.0)), ((0.51, 10.0),), 0.01, 1.0, 1, 2, "depth")
     expected = 2.0 * (0.50 - 0.0175) + 3.0 * (0.49 - 0.07 * 0.49 * 0.51)
     assert abs(executable_sell_value(depth_book, 5.0, {"rate": 0.07, "exponent": 1}) - expected) < 1e-12

@@ -37,6 +37,9 @@ def selection(market_id: str = "market-1") -> dict:
         "model_sha": SHA,
         "timestamp_ms": 1_000,
         "source": "adaptive_universe_recent_flow",
+        "degraded": False,
+        "execution_cell_authority_required": True,
+        "execution_authority_semantics": "token_action_side_v2",
         "selected_count": 1,
         "resource_capacity_markets": 10,
         "markets": [{
@@ -44,6 +47,11 @@ def selection(market_id: str = "market-1") -> dict:
             "market_id": market_id,
             "yes_token": "yes-1",
             "no_token": "no-1",
+            "inventory_seed_authorized": False,
+            "authorized_execution_cells": [{
+                "token_id": "yes-1", "action": "JOIN", "quote_side": "BUY",
+                "projected_fill_probability": 0.40,
+            }],
             "quote_opportunities": [{
                 "token_id": "yes-1", "quote_side": "BUY",
                 "projected_best_fill_probability": 0.40,
@@ -194,6 +202,8 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             candidate["markets"][0]["condition_id"] = "condition-2"
             candidate["markets"][0]["yes_token"] = "yes-2"
             candidate["markets"][0]["no_token"] = "no-2"
+            candidate["markets"][0]["authorized_execution_cells"][0][
+                "token_id"] = "yes-2"
             atomic_json(selection_path, current)
             atomic_json(candidate_path, candidate)
             maker_state = state(timestamp_ms=2_000)
@@ -224,11 +234,15 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             requested["markets"][0].update({
                 "condition_id": "condition-2", "yes_token": "yes-2", "no_token": "no-2",
             })
+            requested["markets"][0]["authorized_execution_cells"][0][
+                "token_id"] = "yes-2"
             latest = selection("market-3")
             latest["timestamp_ms"] = 2_000
             latest["markets"][0].update({
                 "condition_id": "condition-3", "yes_token": "yes-3", "no_token": "no-3",
             })
+            latest["markets"][0]["authorized_execution_cells"][0][
+                "token_id"] = "yes-3"
             atomic_json(selection_path, current)
             atomic_json(candidate_path, latest)
             atomic_json(run_root / "micro_maker/state.json", state(timestamp_ms=2_000))
@@ -277,6 +291,8 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             second["markets"][0].update({
                 "condition_id": "condition-3", "yes_token": "yes-3", "no_token": "no-3",
             })
+            second["markets"][0]["authorized_execution_cells"][0][
+                "token_id"] = "yes-3"
             supervisor.rotation_gate_metrics = {"rotation_target_cell": "market-2|yes-1|BUY"}
             self.assertFalse(supervisor.observe_candidate_generation(first))
             supervisor.rotation_gate_metrics = {"rotation_target_cell": "market-3|yes-3|BUY"}
@@ -288,12 +304,16 @@ class MakerCohortSupervisorTests(unittest.TestCase):
     def test_rotation_requires_materially_superior_new_fill_cell(self) -> None:
         current = selection("incumbent")
         candidate = selection("incumbent")
-        candidate["markets"][0]["quote_opportunities"][0][
-            "projected_best_fill_probability"
-        ] = 0.60
+        candidate["markets"][0]["authorized_execution_cells"][0][
+            "projected_fill_probability"] = 0.60
         candidate["markets"].append({
             "condition_id": "condition-2", "market_id": "challenger",
             "yes_token": "yes-2", "no_token": "no-2",
+            "inventory_seed_authorized": False,
+            "authorized_execution_cells": [{
+                "token_id": "yes-2", "action": "JOIN", "quote_side": "BUY",
+                "projected_fill_probability": 0.70,
+            }],
             "quote_opportunities": [{
                 "token_id": "yes-2", "quote_side": "BUY",
                 "projected_best_fill_probability": 0.70,
@@ -311,9 +331,8 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             metrics["rotation_gate_reason"],
             "CHALLENGER_FILL_NOT_MATERIALLY_SUPERIOR",
         )
-        candidate["markets"][0]["quote_opportunities"][0][
-            "projected_best_fill_probability"
-        ] = 0.0
+        candidate["markets"][0]["authorized_execution_cells"][0][
+            "projected_fill_probability"] = 0.0
         allowed, metrics = rotation_gate(
             current, candidate,
             minimum_projected_fill_probability=0.05,
@@ -321,7 +340,79 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             minimum_relative_multiplier=1.5,
         )
         self.assertTrue(allowed)
-        self.assertEqual(metrics["rotation_target_cell"], "challenger|yes-2|BUY")
+        self.assertEqual(
+            metrics["rotation_target_cell"], "challenger|yes-2|JOIN|BUY")
+
+    def test_same_membership_refreshes_cell_authority_without_cohort_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selection_path = root / "selection.json"
+            candidate_path = root / "candidate.json"
+            current = selection()
+            candidate = json.loads(json.dumps(current))
+            candidate["timestamp_ms"] = 2_000
+            candidate["markets"][0]["authorized_execution_cells"][0][
+                "projected_fill_probability"] = 0.75
+            atomic_json(selection_path, current)
+            atomic_json(candidate_path, candidate)
+            supervisor = CohortSupervisor(self.supervisor_args(
+                root, selection_path, candidate_path
+            ))
+
+            self.assertTrue(supervisor.refresh_same_membership_authority())
+            refreshed = read_json(selection_path)
+            self.assertEqual(refreshed["timestamp_ms"], 2_000)
+            self.assertEqual(supervisor.rotation_count, 0)
+            self.assertEqual(supervisor.cell_authority_refresh_count, 1)
+            self.assertFalse(supervisor.refresh_same_membership_authority())
+
+    def test_overlapping_warm_market_refreshes_without_membership_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selection_path = root / "selection.json"
+            candidate_path = root / "candidate.json"
+            current = selection("warm")
+            reserve = json.loads(json.dumps(current["markets"][0]))
+            reserve.update({
+                "market_id": "reserve", "condition_id": "reserve-condition",
+                "yes_token": "reserve-yes", "no_token": "reserve-no",
+                "authorized_execution_cells": [],
+                "authorized_execution_cell_count": 0,
+            })
+            current["markets"].append(reserve)
+            current["selected_count"] = 2
+            candidate = selection("warm")
+            candidate["timestamp_ms"] = 2_000
+            candidate["markets"][0]["authorized_execution_cells"][0][
+                "projected_fill_probability"] = 0.75
+            challenger = json.loads(json.dumps(reserve))
+            challenger.update({
+                "market_id": "new", "condition_id": "new-condition",
+                "yes_token": "new-yes", "no_token": "new-no",
+            })
+            candidate["markets"].append(challenger)
+            candidate["selected_count"] = 2
+            atomic_json(selection_path, current)
+            atomic_json(candidate_path, candidate)
+            supervisor = CohortSupervisor(self.supervisor_args(
+                root, selection_path, candidate_path
+            ))
+
+            self.assertTrue(supervisor.refresh_same_membership_authority())
+            refreshed = read_json(selection_path)
+            self.assertEqual(
+                {row["market_id"] for row in refreshed["markets"]},
+                {"warm", "reserve"},
+            )
+            rows = {row["market_id"]: row for row in refreshed["markets"]}
+            self.assertEqual(
+                rows["warm"]["authorized_execution_cells"][0][
+                    "projected_fill_probability"],
+                0.75,
+            )
+            self.assertEqual(rows["reserve"]["authorized_execution_cells"], [])
+            self.assertEqual(refreshed["warm_identity_overlap_count"], 1)
+            self.assertEqual(supervisor.rotation_count, 0)
 
     def test_quiet_flow_fallback_keeps_last_known_good_without_global_pause(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -334,6 +425,8 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             fallback["markets"][0].update({
                 "condition_id": "condition-2", "yes_token": "yes-2", "no_token": "no-2",
             })
+            fallback["markets"][0]["authorized_execution_cells"][0][
+                "token_id"] = "yes-2"
             atomic_json(selection_path, current)
             atomic_json(candidate_path, fallback)
             supervisor = CohortSupervisor(self.supervisor_args(
@@ -354,6 +447,8 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             different_fresh["markets"][0].update({
                 "condition_id": "condition-3", "yes_token": "yes-3", "no_token": "no-3",
             })
+            different_fresh["markets"][0]["authorized_execution_cells"][0][
+                "token_id"] = "yes-3"
             atomic_json(candidate_path, different_fresh)
             self.assertFalse(supervisor.sync_no_fresh_flow_pause())
             self.assertFalse(supervisor.drain.exists())

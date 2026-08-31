@@ -16,6 +16,8 @@ inline constexpr std::size_t kExecutionOutcomeCount = 2;
 inline constexpr std::size_t kExecutionSideCount = 2;
 inline constexpr std::size_t kExecutionCellCount =
     kExecutionActionCount * kExecutionOutcomeCount * kExecutionSideCount;
+inline constexpr std::size_t kSelectorAuthorityCellCount =
+    kExecutionActionCount * kExecutionSideCount;
 
 enum class Action : std::uint8_t {
     Join = 1,
@@ -45,6 +47,32 @@ enum class DecisionReason : std::uint8_t {
     ExplorationExpired = 16,
     NewRiskFrozen = 17,
 };
+
+// Selector authority is local to one token: four passive placements by two
+// execution sides. A zero bit never grants new-risk authority.
+[[nodiscard]] constexpr std::uint8_t execution_authority_bit(
+    Action action, Side side) noexcept {
+    const auto raw_action = static_cast<std::uint8_t>(action);
+    if (raw_action < static_cast<std::uint8_t>(Action::Join)
+        || raw_action > static_cast<std::uint8_t>(Action::Fade2)
+        || (side != Side::Buy && side != Side::Sell)) {
+        return 0;
+    }
+    const std::uint8_t index = static_cast<std::uint8_t>(
+        (raw_action - static_cast<std::uint8_t>(Action::Join)) * 2
+        + (side == Side::Sell ? 1 : 0));
+    return static_cast<std::uint8_t>(1U << index);
+}
+
+[[nodiscard]] constexpr std::size_t execution_authority_index(
+    Action action, Side side) noexcept {
+    const auto bit = execution_authority_bit(action, side);
+    if (bit == 0) return kSelectorAuthorityCellCount;
+    for (std::size_t index = 0; index < kSelectorAuthorityCellCount; ++index) {
+        if (bit == static_cast<std::uint8_t>(1U << index)) return index;
+    }
+    return kSelectorAuthorityCellCount;
+}
 
 // One MakerHotPath instance is owned by exactly one market/instrument on one
 // shard. The canonical feed/book owner supplies this compact mutation view;
@@ -88,6 +116,15 @@ struct MarketUpdate {
     std::uint8_t feed_healthy = 1;
     std::uint8_t related_state_valid = 0;
     std::uint8_t flow_prior_valid = 0;
+    std::uint8_t selector_authority_required = 0;
+    std::uint8_t selector_execution_authority_mask = 0;
+    std::uint64_t selector_generation = 0;
+    std::array<double, kSelectorAuthorityCellCount>
+        selector_projected_flow_reach_probability{};
+    std::array<double, kSelectorAuthorityCellCount>
+        selector_projected_queue_depletion_probability{};
+    std::array<double, kSelectorAuthorityCellCount>
+        selector_projected_fill_probability{};
 };
 
 struct InventorySnapshot {
@@ -283,6 +320,7 @@ struct LatencyTrace {
 
 struct MakerDecision {
     Action action = Action::Withdraw;
+    Action placement_action = Action::Withdraw;
     DecisionReason reason = DecisionReason::NoEconomicQuote;
     Features features{};
     LatencyTrace latency{};
@@ -308,7 +346,19 @@ struct MakerDecision {
     std::uint8_t intent_count = 0;
     std::uint8_t exploration_persistent = 0;
     std::uint8_t external_fair_authority = 0;
-    std::uint8_t reserved1 = 0;
+    std::uint8_t selector_authority_required = 0;
+    std::uint8_t selector_execution_authority_mask = 0;
+    std::uint64_t selector_generation = 0;
+    std::uint8_t bid_selector_cell_authorized = 0;
+    std::uint8_t ask_selector_cell_authorized = 0;
+    std::uint8_t bid_inventory_reduction_bypass = 0;
+    std::uint8_t ask_inventory_reduction_bypass = 0;
+    std::array<double, kSelectorAuthorityCellCount>
+        selector_projected_flow_reach_probability{};
+    std::array<double, kSelectorAuthorityCellCount>
+        selector_projected_queue_depletion_probability{};
+    std::array<double, kSelectorAuthorityCellCount>
+        selector_projected_fill_probability{};
 };
 
 class MakerHotPath final {
@@ -345,6 +395,7 @@ private:
     std::uint8_t flow_evidence_valid_ = 0;
     std::uint8_t exploration_active_ = 0;
     std::uint8_t exploration_persistent_ = 0;
+    std::uint64_t selector_generation_ = 0;
 };
 
 } // namespace pm::v7::maker

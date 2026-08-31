@@ -146,6 +146,49 @@ class MicroTakerRoundTripTest(unittest.TestCase):
             (0.49 * 2.0 + 0.48 * 3.0) / 5.0,
         )
 
+    def test_executable_edge_prediction_is_not_treated_as_midpoint_delta(self) -> None:
+        priced = worker.executable_edge_candidate(
+            book=self.book,
+            predicted_net_edge=0.05,
+            prediction_sigma_net_edge=0.0,
+            fee=self.zero_fee,
+            horizon_seconds=60,
+            now=100,
+            slippage_bps_per_leg=0.0,
+            uncertainty_z=0.0,
+            adverse_markout_penalty_bps=0.0,
+            capital_cost_bps_per_hour=0.0,
+            max_book_age_seconds=10,
+        )
+        self.assertIsNotNone(priced)
+        assert priced is not None
+        candidate, predicted_yes_mid = priced
+        self.assertEqual(candidate.side, "YES")
+        self.assertAlmostEqual(candidate.net_edge, 0.05, places=9)
+        # A 5% return on ~51c capital needs about 2.55c PnL, not a blind
+        # 5 percentage-point shift in the market midpoint.
+        self.assertAlmostEqual(
+            predicted_yes_mid - self.book.yes_mid, 0.0455, places=9)
+        self.assertLess(predicted_yes_mid - self.book.yes_mid, 0.05)
+
+        no_priced = worker.executable_edge_candidate(
+            book=self.book,
+            predicted_net_edge=-0.05,
+            prediction_sigma_net_edge=0.0,
+            fee=self.zero_fee,
+            horizon_seconds=60,
+            now=100,
+            slippage_bps_per_leg=0.0,
+            uncertainty_z=0.0,
+            adverse_markout_penalty_bps=0.0,
+            capital_cost_bps_per_hour=0.0,
+            max_book_age_seconds=10,
+        )
+        self.assertIsNotNone(no_priced)
+        assert no_priced is not None
+        self.assertEqual(no_priced[0].side, "NO")
+        self.assertAlmostEqual(no_priced[0].net_edge, 0.05, places=9)
+
     def test_cutover_restores_only_compatible_research_dataset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             runs = Path(directory)

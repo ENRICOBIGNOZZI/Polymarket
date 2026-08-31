@@ -29,6 +29,7 @@ from typing import Any, Iterator
 from v7_adaptive_universe import normalize_market
 from v7_public_https_proxy import DEFAULT_DNS, PublicResolver
 from v7_contract_registry import contract_from_market
+from v7_fair_value_registry import FairModelArtifact, RegistryError, SCHEMA_VERSION
 
 HOST = "ws-live-data.polymarket.com"
 ORACLE_TOPIC = "crypto_prices_twap_sixty"
@@ -40,6 +41,58 @@ REFERENCE_MAX_GAP_MS = 2_000
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 FRESH_NS = 3_000_000_000
 LATENCY_SAMPLE_LIMIT = 2_048
+
+
+def load_registered_calibration(
+    pointer_path: Path | None, *, code_sha: str, expected_role: str,
+) -> tuple[FairModelArtifact | None, str]:
+    """Load one immutable explicit pointer; filenames never grant authority."""
+    if pointer_path is None:
+        return None, "POINTER_NOT_CONFIGURED"
+    pointer = load_json(pointer_path)
+    if not pointer:
+        return None, "POINTER_NOT_PUBLISHED"
+    if (pointer.get("schema_version") != SCHEMA_VERSION
+            or pointer.get("role") != expected_role
+            or not re.fullmatch(r"[0-9a-f]{64}", str(pointer.get("model_hash") or ""))):
+        return None, "POINTER_CONTRACT_INVALID"
+    if expected_role == "CHAMPION" and not re.fullmatch(
+        r"[0-9a-f]{64}", str(pointer.get("promotion_evidence_hash") or "")
+    ):
+        return None, "CHAMPION_PROMOTION_EVIDENCE_MISSING"
+    artifact_raw = str(pointer.get("artifact") or "").strip()
+    if not artifact_raw:
+        return None, "ARTIFACT_PATH_MISSING"
+    artifact_raw_path = Path(artifact_raw)
+    artifact_path = artifact_raw_path if artifact_raw_path.is_absolute() \
+        else (Path.cwd() / artifact_raw_path)
+    raw = load_json(artifact_path.resolve())
+    try:
+        artifact = FairModelArtifact(**raw)
+        artifact.validate()
+        intercept = float(artifact.parameters["calibration_intercept"])
+        slope = float(artifact.parameters["calibration_slope"])
+    except (KeyError, TypeError, ValueError, RegistryError):
+        return None, "ARTIFACT_INVALID"
+    if (artifact.model_hash != pointer["model_hash"]
+            or artifact.model_version != pointer.get("model_version")
+            or artifact.code_sha != code_sha
+            or not math.isfinite(intercept)
+            or not math.isfinite(slope)
+            or not 0.05 <= slope <= 5.0):
+        return None, "ARTIFACT_IDENTITY_OR_PARAMETERS_INVALID"
+    return artifact, "LOADED"
+
+
+def calibrated_probability(probability: float, artifact: FairModelArtifact) -> float:
+    p = min(1.0 - 1e-9, max(1e-9, float(probability)))
+    intercept = float(artifact.parameters["calibration_intercept"])
+    slope = float(artifact.parameters["calibration_slope"])
+    value = intercept + slope * math.log(p / (1.0 - p))
+    if value >= 0.0:
+        return 1.0 / (1.0 + math.exp(-value))
+    exp_value = math.exp(value)
+    return exp_value / (1.0 + exp_value)
 
 
 def latency_quantiles(samples: deque[float] | list[float]) -> dict[str, float]:
@@ -315,6 +368,8 @@ def observations(value: Any, inherited_topic: str = "") -> Iterator[dict[str, An
 class Monitor:
     def __init__(self, root: Path, code_sha: str, *, universe_path: Path | None = None,
                  approvals_path: Path | None = None, external_venues_path: Path | None = None,
+                 champion_pointer: Path | None = None,
+                 challenger_pointer: Path | None = None,
                  gamma_url: str = "https://gamma-api.polymarket.com") -> None:
         self.root, self.code_sha = root, code_sha
         self.universe_path = universe_path
@@ -334,6 +389,10 @@ class Monitor:
         self.active_market: dict[str, Any] = {}
         self.active_contract: dict[str, Any] = {}
         self.reference: dict[str, Any] = {}
+        self.champion, self.champion_load_state = load_registered_calibration(
+            champion_pointer, code_sha=code_sha, expected_role="CHAMPION")
+        self.challenger, self.challenger_load_state = load_registered_calibration(
+            challenger_pointer, code_sha=code_sha, expected_role="CHALLENGER")
         self.approved_rule_hashes: set[str] = set()
         if approvals_path is not None:
             raw = json.loads(approvals_path.read_text(encoding="utf-8"))
@@ -479,6 +538,11 @@ class Monitor:
         gamma_mid = float(market.get("midpoint") or 0.5)
         base = {"valid": False, "yes": 0.5, "lower": 0.0, "upper": 1.0,
                 "structural": 0.5, "calibrated": 0.5, "pm_mid": market_yes,
+                "structural_lower": 0.0, "structural_upper": 1.0,
+                "calibration_state": self.champion_load_state,
+                "probability_model_id": "structural_uncalibrated_v1",
+                "probability_model_hash": "",
+                "explicit_champion_applied": False,
                 "pm_mid_source": (
                     "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH" if market_yes is not None
                     else "UNAVAILABLE"
@@ -512,11 +576,72 @@ class Monitor:
             max(0, FRESH_NS - (now_ns - int(oracle["receive_wall_ns"]))),
             max(0, FRESH_NS - int(external.get("age_ns") or 0)),
         )
-        return {**base, "valid": True, "yes": structural, "lower": lower, "upper": upper,
-                "structural": structural, "calibrated": structural,
+        champion = self.champion
+        rule_hash = str(contract.get("normalized_rules_hash") or "")
+        champion_scope_valid = bool(
+            champion is not None
+            and "BTC" in champion.assets
+            and "BTC_USD_UPDOWN_5M" in champion.contract_templates
+            and rule_hash in champion.rules_hashes
+        )
+        calibrated = calibrated_probability(structural, champion) \
+            if champion_scope_valid and champion is not None else structural
+        calibrated_lower = calibrated_probability(lower, champion) \
+            if champion_scope_valid and champion is not None else lower
+        calibrated_upper = calibrated_probability(upper, champion) \
+            if champion_scope_valid and champion is not None else upper
+        return {**base, "valid": True, "yes": calibrated,
+                "lower": calibrated_lower, "upper": calibrated_upper,
+                "structural_lower": lower, "structural_upper": upper,
+                "structural": structural, "calibrated": calibrated,
+                "calibration_state": (
+                    "EXPLICIT_CHAMPION_APPLIED" if champion_scope_valid
+                    else "EXPLICIT_CHAMPION_SCOPE_MISMATCH" if champion is not None
+                    else self.champion_load_state),
+                "probability_model_id": (
+                    champion.model_version if champion_scope_valid and champion is not None
+                    else "structural_uncalibrated_v1"),
+                "probability_model_hash": (
+                    champion.model_hash if champion_scope_valid and champion is not None else ""),
+                "explicit_champion_applied": champion_scope_valid,
                 "settlement_margin": margin, "settlement_sigma": sigma,
                 "calculated_monotonic_ns": time.monotonic_ns(),
                 "valid_until_monotonic_ns": valid_until}
+
+    def registered_shadow_snapshot(
+        self, external_only: dict[str, Any], artifact: FairModelArtifact | None,
+        load_state: str, role: str,
+    ) -> dict[str, Any]:
+        output = dict(external_only)
+        output.update({
+            "authority": "SHADOW",
+            "registry_role": role,
+            "model_id": f"{role.lower()}_calibration",
+            "registry_load_state": load_state,
+            "explicit_registry_model_applied": False,
+        })
+        if external_only.get("valid") is not True or artifact is None:
+            return output
+        rules_hash = str(self.active_contract.get("normalized_rules_hash") or "")
+        if ("BTC" not in artifact.assets
+                or "BTC_USD_UPDOWN_5M" not in artifact.contract_templates
+                or rules_hash not in artifact.rules_hashes):
+            output["registry_load_state"] = "SCOPE_MISMATCH"
+            return output
+        structural = float(external_only["structural"])
+        lower = calibrated_probability(float(external_only["structural_lower"]), artifact)
+        upper = calibrated_probability(float(external_only["structural_upper"]), artifact)
+        probability = calibrated_probability(structural, artifact)
+        output.update({
+            "yes": probability,
+            "calibrated": probability,
+            "lower": lower,
+            "upper": upper,
+            "probability_model_id": artifact.model_version,
+            "probability_model_hash": artifact.model_hash,
+            "explicit_registry_model_applied": True,
+        })
+        return output
 
     def hybrid_fair_snapshot(self, external_only: dict[str, Any]) -> dict[str, Any]:
         """Build the separate market-prior cohort without changing the external benchmark.
@@ -584,6 +709,8 @@ class Monitor:
         fair["authority"] = "SHADOW"
         fair["uses_polymarket_price_as_feature"] = False
         hybrid_fair = self.hybrid_fair_snapshot(fair)
+        challenger_fair = self.registered_shadow_snapshot(
+            fair, self.challenger, self.challenger_load_state, "CHALLENGER")
         self.latency_samples["fair_compute"].append(
             max(0.0, (time.monotonic_ns() - fair_started) / 1_000_000.0)
         )
@@ -605,7 +732,8 @@ class Monitor:
         router_maturity = router.get("maturity") if isinstance(
             router.get("maturity"), dict) else {}
         maker_quote_authority_eligible = bool(
-            router.get("model_mature") is True
+            fair.get("explicit_champion_applied") is True
+            and router.get("model_mature") is True
             and router_maturity.get("eligible_for_manual_paper_promotion") is True
             and float(router_maturity.get("virtual_2x_cost_stress_pnl") or 0.0) > 0.0
         )
@@ -659,7 +787,8 @@ class Monitor:
             "fair_models": {
                 "external_only_fair": fair,
                 "hybrid_fair": hybrid_fair,
-                "execution_model_id": "external_only_fair",
+                "registered_challenger": challenger_fair,
+                "execution_model_id": fair.get("probability_model_id"),
                 "comparison_state": (
                     "LIVE_SHADOW_COMPARISON" if hybrid_fair.get("valid") is True
                     else "AWAITING_LIVE_CLOB_BENCHMARK"
@@ -667,11 +796,20 @@ class Monitor:
             },
             "model": {
                 "mature": maker_quote_authority_eligible,
+                "champion_load_state": self.champion_load_state,
+                "challenger_load_state": self.challenger_load_state,
+                "explicit_champion_applied": fair.get(
+                    "explicit_champion_applied") is True,
                 "maker_quote_authority_eligible": maker_quote_authority_eligible,
                 "manual_model_maturity_flag": router.get("model_mature") is True,
                 "positive_2x_cost_stress": float(
                     router_maturity.get("virtual_2x_cost_stress_pnl") or 0.0) > 0.0,
-                "coverage": float(router_maturity.get("interval_coverage") or 0.0),
+                "probability_interval_bin_consistency": float(
+                    (router_maturity.get("probability_interval_diagnostics") or {}).get(
+                        "consistency_rate") or 0.0),
+                "probability_interval_eligible_bins": int(
+                    (router_maturity.get("probability_interval_diagnostics") or {}).get(
+                        "eligible_bin_count") or 0),
                 "economic_confidence": router.get(
                     "economic_confidence", "MORE_EVIDENCE_REQUIRED"),
             },
@@ -785,6 +923,8 @@ def main() -> int:
     parser.add_argument("--universe", type=Path)
     parser.add_argument("--approvals", type=Path)
     parser.add_argument("--external-venues", type=Path)
+    parser.add_argument("--champion-pointer", type=Path)
+    parser.add_argument("--challenger-pointer", type=Path)
     parser.add_argument("--gamma-url", default="https://gamma-api.polymarket.com")
     parser.add_argument("--dns", action="append", default=[])
     args = parser.parse_args()
@@ -792,6 +932,8 @@ def main() -> int:
         raise SystemExit("--code-sha must be a lowercase 40-character Git SHA")
     Monitor(args.output_dir.resolve(), args.code_sha, universe_path=args.universe,
             approvals_path=args.approvals, external_venues_path=args.external_venues,
+            champion_pointer=args.champion_pointer,
+            challenger_pointer=args.challenger_pointer,
             gamma_url=args.gamma_url).run(
         PublicResolver(args.dns or list(DEFAULT_DNS)))
     return 0

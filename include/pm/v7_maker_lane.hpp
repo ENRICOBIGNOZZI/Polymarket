@@ -23,6 +23,15 @@ struct MakerLaneContext {
     std::int64_t related_snapshot_age_ns = 0;
     std::uint8_t related_state_valid = 0;
     std::uint8_t flow_prior_valid = 0;
+    std::uint8_t selector_authority_required = 0;
+    std::uint8_t selector_execution_authority_mask = 0;
+    std::uint64_t selector_generation = 0;
+    std::array<double, kSelectorAuthorityCellCount>
+        selector_projected_flow_reach_probability{};
+    std::array<double, kSelectorAuthorityCellCount>
+        selector_projected_queue_depletion_probability{};
+    std::array<double, kSelectorAuthorityCellCount>
+        selector_projected_fill_probability{};
 };
 
 // One lane owns the incremental MakerHotPath state for exactly one token. It

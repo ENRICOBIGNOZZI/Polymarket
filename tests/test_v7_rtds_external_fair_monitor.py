@@ -12,6 +12,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+from v7_fair_value_registry import FairModelArtifact  # noqa: E402
 spec = importlib.util.spec_from_file_location(
     "rtds_monitor", ROOT / "scripts" / "v7_rtds_external_fair_monitor.py"
 )
@@ -21,6 +22,63 @@ spec.loader.exec_module(module)
 
 
 class RtdsExternalFairMonitorTests(unittest.TestCase):
+    def test_only_explicit_exact_sha_champion_calibrates_structural_probability(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rule_hash = "b" * 64
+            artifact = FairModelArtifact.build(
+                family="structural_bridge_platt",
+                model_version="fair-v1",
+                feature_schema_version="settlement-structural-v1",
+                code_sha="a" * 40,
+                policy_version="external-fair-v1",
+                artifact_role="CHAMPION",
+                training_start_ns=1,
+                training_end_ns=2,
+                training_contracts=100,
+                training_days=1,
+                assets=("BTC",),
+                contract_templates=("BTC_USD_UPDOWN_5M",),
+                rules_hashes=(rule_hash,),
+                parameters={"calibration_intercept": 0.5,
+                            "calibration_slope": 0.5},
+                hyperparameters={}, oos_scores={},
+                probability_interval_diagnostics={}, economic_replay={},
+                generated_timestamp_ns=3,
+            )
+            artifact_path = root / "artifact.json"
+            artifact_path.write_text(json.dumps(artifact.__dict__))
+            pointer = root / "champion.json"
+            pointer.write_text(json.dumps({
+                "schema_version": 2,
+                "role": "CHAMPION",
+                "model_hash": artifact.model_hash,
+                "model_version": artifact.model_version,
+                "artifact": str(artifact_path),
+                "promotion_evidence_hash": "c" * 64,
+            }))
+            loaded, state = module.load_registered_calibration(
+                pointer, code_sha="a" * 40, expected_role="CHAMPION")
+            self.assertEqual(state, "LOADED")
+            self.assertIsNotNone(loaded)
+            assert loaded is not None
+            self.assertGreater(module.calibrated_probability(0.5, loaded), 0.5)
+            rejected, rejected_state = module.load_registered_calibration(
+                pointer, code_sha="d" * 40, expected_role="CHAMPION")
+            self.assertIsNone(rejected)
+            self.assertEqual(
+                rejected_state, "ARTIFACT_IDENTITY_OR_PARAMETERS_INVALID")
+
+            monitor = module.Monitor(
+                root / "output", "a" * 40, champion_pointer=pointer)
+            monitor.active_contract = {"normalized_rules_hash": rule_hash}
+            snapshot = monitor.registered_shadow_snapshot({
+                "valid": True, "structural": 0.5,
+                "structural_lower": 0.4, "structural_upper": 0.6,
+            }, monitor.champion, monitor.champion_load_state, "CHAMPION")
+            self.assertTrue(snapshot["explicit_registry_model_applied"])
+            self.assertEqual(snapshot["probability_model_hash"], artifact.model_hash)
+
     def test_observations_decode_history_and_live_envelopes(self) -> None:
         envelope = [
             {"topic": "crypto_prices_twap_sixty", "payload": [
@@ -179,6 +237,8 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
         launcher = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text()
         self.assertIn("v7_rtds_external_fair_monitor.py", launcher)
         self.assertNotIn("binding_not_configured_contracts_quarantined", launcher)
+        self.assertIn("--champion-pointer", launcher)
+        self.assertIn("--challenger-pointer", launcher)
 
     def test_verified_contract_reference_and_multi_venue_produce_valid_fair(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -233,7 +293,10 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
             self.assertEqual(status["fair"]["model_id"], "external_only_fair")
             self.assertFalse(status["fair"]["uses_polymarket_price_as_feature"])
             self.assertEqual(status["fair_models"]["comparison_state"], "AWAITING_LIVE_CLOB_BENCHMARK")
-            self.assertEqual(status["fair_models"]["execution_model_id"], "external_only_fair")
+            self.assertEqual(
+                status["fair_models"]["execution_model_id"],
+                "structural_uncalibrated_v1",
+            )
             self.assertTrue(status["fair_models"]["hybrid_fair"]["uses_polymarket_price_as_feature"])
             self.assertFalse(status["fair_models"]["hybrid_fair"]["valid"])
             self.assertEqual(status["blockers"], ["COUNTERFACTUAL_COLLECTOR_NOT_RUNNING"])

@@ -6,12 +6,86 @@ from collections import defaultdict
 from typing import Any
 
 
+TARGET_SEMANTICS_VERSION = "executable_round_trip_net_edge_v1"
+
+
 def finite(value: Any, default: float = math.nan) -> float:
     try:
         out = float(value)
     except (TypeError, ValueError, OverflowError):
         return default
     return out if math.isfinite(out) else default
+
+
+def _vwap(levels: Any, shares: float, *, buy: bool) -> float | None:
+    if not isinstance(levels, list) or shares <= 0.0:
+        return None
+    parsed: list[tuple[float, float]] = []
+    for level in levels:
+        if not isinstance(level, (list, tuple)) or len(level) != 2:
+            continue
+        price, size = finite(level[0]), finite(level[1], 0.0)
+        if math.isfinite(price) and 0.0 < price < 1.0 and size > 0.0:
+            parsed.append((price, size))
+    parsed.sort(key=lambda row: row[0], reverse=not buy)
+    remaining, notional = shares, 0.0
+    for price, size in parsed:
+        quantity = min(remaining, size)
+        notional += quantity * price
+        remaining -= quantity
+        if remaining <= 1e-12:
+            return notional / shares
+    return None
+
+
+def _fee_per_share(price: float, fee: Any) -> float | None:
+    if not isinstance(fee, dict) or fee.get("authoritative") is not True:
+        return None
+    rate = finite(fee.get("rate"))
+    exponent = finite(fee.get("exponent"))
+    if (
+        not 0.0 < price < 1.0 or not math.isfinite(rate)
+        or not math.isfinite(exponent) or rate < 0.0 or exponent < 0.0
+    ):
+        return None
+    return rate * (price * (1.0 - price)) ** exponent
+
+
+def _side_label(
+    origin: dict[str, Any], target: dict[str, Any], side: str,
+) -> dict[str, float] | None:
+    shares = finite(origin.get("label_probe_shares"), 0.0)
+    entry = _vwap(origin.get(f"{side.lower()}_asks"), shares, buy=True)
+    exit_price = _vwap(target.get(f"{side.lower()}_bids"), shares, buy=False)
+    if entry is None or exit_price is None:
+        return None
+    fee = origin.get("fee")
+    entry_fee, exit_fee = _fee_per_share(entry, fee), _fee_per_share(exit_price, fee)
+    if entry_fee is None or exit_fee is None:
+        return None
+    slip = max(0.0, finite(origin.get("round_trip_slippage_bps"), 0.0)) / 10_000.0
+    adverse = max(0.0, finite(origin.get("adverse_markout_bps"), 0.0)) / 10_000.0
+    capital_bps_hour = max(
+        0.0, finite(origin.get("capital_cost_bps_per_hour"), 0.0)) / 10_000.0
+    horizon = max(0.0, finite(origin.get("label_horizon_seconds"), 0.0))
+    capital = entry + entry_fee
+    modeled_cost = (2.0 * slip + adverse) * capital \
+        + capital_bps_hour * horizon / 3600.0 * capital
+    pnl = exit_price - entry - entry_fee - exit_fee - modeled_cost
+    explicit_cost = entry_fee + exit_fee + modeled_cost
+    stressed_pnl = pnl - explicit_cost
+    return {
+        "entry_vwap": entry,
+        "exit_vwap": exit_price,
+        "entry_fee_per_share": entry_fee,
+        "exit_fee_per_share": exit_fee,
+        "modeled_cost_per_share": modeled_cost,
+        "explicit_cost_per_share": explicit_cost,
+        "net_pnl_per_share": pnl,
+        "net_edge": pnl / max(capital, 1e-12),
+        "cost_stress_2x_net_pnl_per_share": stressed_pnl,
+        "cost_stress_2x_net_edge": stressed_pnl / max(capital, 1e-12),
+    }
 
 
 def label_matured_samples(
@@ -21,55 +95,81 @@ def label_matured_samples(
     horizon_seconds: int,
     max_target_staleness_seconds: int,
 ) -> dict[str, Any]:
-    """Label a forecast only with information observed no later than t+h."""
+    """Label the best executable post-cost action using only state by t+h."""
     if horizon_seconds <= 0:
         raise ValueError("horizon_seconds must be positive")
     if max_target_staleness_seconds < 0:
         raise ValueError("max_target_staleness_seconds must be nonnegative")
 
-    by_market: dict[str, list[tuple[int, float]]] = defaultdict(list)
+    by_market: dict[str, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
     for row in samples:
         market_id = str(row.get("market_id") or "")
         ts = int(finite(row.get("ts"), 0.0))
-        mid = finite(row.get("mid"))
-        if market_id and ts > 0 and math.isfinite(mid):
-            by_market[market_id].append((ts, mid))
+        if (
+            market_id and ts > 0
+            and row.get("target_semantics_version") == TARGET_SEMANTICS_VERSION
+        ):
+            by_market[market_id].append((ts, row))
     for values in by_market.values():
         values.sort(key=lambda item: item[0])
 
     labeled = 0
     missing_observation = 0
     stale_observation = 0
+    incompatible_target_semantics = 0
+    unexecutable_round_trip = 0
     lags: list[int] = []
     for row in samples:
         if row.get("y") is not None:
             continue
         origin_ts = int(finite(row.get("ts"), 0.0))
         market_id = str(row.get("market_id") or "")
-        origin_mid = finite(row.get("mid"))
-        if origin_ts <= 0 or not market_id or not math.isfinite(origin_mid):
+        if origin_ts <= 0 or not market_id:
+            continue
+        if row.get("target_semantics_version") != TARGET_SEMANTICS_VERSION:
+            incompatible_target_semantics += 1
             continue
         target_ts = origin_ts + horizon_seconds
         if now < target_ts:
             continue
 
-        chosen: tuple[int, float] | None = None
-        for obs_ts, obs_mid in by_market.get(market_id, []):
+        chosen: tuple[int, dict[str, Any]] | None = None
+        for obs_ts, observation in by_market.get(market_id, []):
             if obs_ts <= origin_ts:
                 continue
             if obs_ts > target_ts:
                 break
-            chosen = (obs_ts, obs_mid)
+            chosen = (obs_ts, observation)
         if chosen is None:
             missing_observation += 1
             continue
 
-        obs_ts, obs_mid = chosen
+        obs_ts, target = chosen
         lag = target_ts - obs_ts
         if lag > max_target_staleness_seconds:
             stale_observation += 1
             continue
-        row["y"] = obs_mid - origin_mid
+        yes = _side_label(row, target, "YES")
+        no = _side_label(row, target, "NO")
+        if yes is None or no is None:
+            unexecutable_round_trip += 1
+            continue
+        yes_edge, no_edge = yes["net_edge"], no["net_edge"]
+        if yes_edge > 0.0 and yes_edge >= no_edge:
+            target_value, action = yes_edge, "BUY_YES"
+        elif no_edge > 0.0:
+            target_value, action = -no_edge, "BUY_NO"
+        else:
+            target_value, action = 0.0, "NOTHING"
+        row["y"] = target_value
+        row["target_action"] = action
+        row["yes_executable_net_edge"] = yes_edge
+        row["no_executable_net_edge"] = no_edge
+        row["yes_executable_net_pnl_per_share"] = yes["net_pnl_per_share"]
+        row["no_executable_net_pnl_per_share"] = no["net_pnl_per_share"]
+        row["yes_cost_stress_2x_net_edge"] = yes["cost_stress_2x_net_edge"]
+        row["no_cost_stress_2x_net_edge"] = no["cost_stress_2x_net_edge"]
+        row["target_execution"] = {"YES": yes, "NO": no}
         row["target_observation_ts"] = obs_ts
         row["target_staleness_seconds"] = lag
         labeled += 1
@@ -79,6 +179,9 @@ def label_matured_samples(
         "newly_labeled": labeled,
         "missing_pre_horizon_observation": missing_observation,
         "stale_pre_horizon_observation": stale_observation,
+        "incompatible_target_semantics": incompatible_target_semantics,
+        "unexecutable_round_trip": unexecutable_round_trip,
+        "target_semantics_version": TARGET_SEMANTICS_VERSION,
         "max_target_staleness_seconds": max(lags) if lags else None,
         "mean_target_staleness_seconds": (sum(lags) / len(lags)) if lags else None,
     }

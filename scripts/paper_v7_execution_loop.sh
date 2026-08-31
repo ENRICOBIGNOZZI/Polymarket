@@ -258,6 +258,8 @@ else
     --universe "$RUN_ROOT/universe/current.json" \
     --approvals "config/v7_external_fair_rule_approvals.json" \
     --external-venues "$RUN_ROOT/external_fair/external_venues.json" \
+    --champion-pointer "$RUN_ROOT/external_fair/model_registry/fair_value_champion.json" \
+    --challenger-pointer "$RUN_ROOT/external_fair/model_registry/fair_value_challenger.json" \
     >> "$RUN_ROOT/external_fair/rtds_monitor.log" 2>&1 &
   pids+=("$!")
 fi

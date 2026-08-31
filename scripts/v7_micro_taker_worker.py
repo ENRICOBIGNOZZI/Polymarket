@@ -18,6 +18,7 @@ import v7_micro_taker_core as economics
 from v7_execution_ledger import LedgerEvent
 from v7_ledger_spool import spool_event
 from v7_shared_market_state import SharedStateError
+from v7_micro_target import TARGET_SEMANTICS_VERSION
 
 FLOW_FEATURE_DIM = 8
 MODEL_FEATURE_DIM = 14
@@ -25,9 +26,9 @@ MODEL_TRAINING_WINDOW_SECONDS = 300
 MODEL_RIDGE = 1_000.0
 MODEL_PREDICTION_SHRINKAGE = 0.50
 MODEL_ACTIVE_QUANTILE = 0.90
-MODEL_SPEC_VERSION = "lagged_sparse_ridge_v3"
-DATASET_VERSION = 2
-DATASET_LINEAGE = "EVENT_NOVEL_SHARED_STATE_V2"
+MODEL_SPEC_VERSION = "executable_net_edge_sparse_ridge_v4"
+DATASET_VERSION = 3
+DATASET_LINEAGE = "EVENT_NOVEL_EXECUTABLE_ROUND_TRIP_V3"
 COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT = "complete_round_trip_executable_ev"
 CONSERVATIVE_MARKING_CONTRACT = "full_depth_executable_bid_net_fee_or_zero_fail_closed"
 LIVE_FLOW_SCHEMA = "polymarket_v7_live_trade_flow_v1"
@@ -266,17 +267,27 @@ def model_validity(
 def prediction_activity_threshold(
     samples: list[dict[str, Any]], beta: list[float],
     quantile: float = MODEL_ACTIVE_QUANTILE,
+    *, horizon_seconds: int = 30,
 ) -> float:
-    magnitudes = sorted(
-        abs(sum(a * b for a, b in zip(beta, row["x"])))
-        for row in samples if isinstance(row.get("x"), list)
-        and len(row["x"]) == len(beta)
-    )
-    if not magnitudes:
+    eligible = [row for row in samples if isinstance(row.get("x"), list)
+                and len(row["x"]) == len(beta)]
+    if not eligible:
         return math.inf
-    index = min(len(magnitudes) - 1, max(0, int(
-        min(1.0, max(0.0, quantile)) * (len(magnitudes) - 1))))
-    return magnitudes[index]
+    cluster_counts: dict[tuple[str, int], int] = defaultdict(int)
+    for row in eligible:
+        cluster_counts[_independent_cluster_key(row, horizon_seconds)] += 1
+    weighted = sorted((
+        abs(sum(a * b for a, b in zip(beta, row["x"]))),
+        1.0 / cluster_counts[_independent_cluster_key(row, horizon_seconds)],
+    ) for row in eligible)
+    target_weight = min(1.0, max(0.0, quantile)) * sum(
+        weight for _, weight in weighted)
+    cumulative = 0.0
+    for magnitude, weight in weighted:
+        cumulative += weight
+        if cumulative >= target_weight:
+            return magnitude
+    return weighted[-1][0]
 
 
 def model_prediction(x: list[float], beta: list[float], threshold: float) -> float:
@@ -286,17 +297,170 @@ def model_prediction(x: list[float], beta: list[float], threshold: float) -> flo
     return MODEL_PREDICTION_SHRINKAGE * raw
 
 
+def _realized_executable_action(
+    row: dict[str, Any], prediction: float,
+) -> tuple[float, float, float] | None:
+    """Return base edge, 2x-cost edge and probe PnL for the chosen side."""
+    if not math.isfinite(prediction) or abs(prediction) <= 1e-12:
+        return None
+    side = "yes" if prediction > 0.0 else "no"
+    edge = _finite(row.get(f"{side}_executable_net_edge"))
+    stressed_edge = _finite(row.get(f"{side}_cost_stress_2x_net_edge"))
+    pnl = _finite(row.get(f"{side}_executable_net_pnl_per_share"))
+    execution = row.get("target_execution")
+    side_execution = (
+        execution.get(side.upper())
+        if isinstance(execution, dict) and isinstance(execution.get(side.upper()), dict)
+        else {}
+    )
+    if not math.isfinite(edge) or not math.isfinite(stressed_edge):
+        return None
+    if not math.isfinite(pnl):
+        capital = _finite(side_execution.get("entry_vwap"), 1.0) + _finite(
+            side_execution.get("entry_fee_per_share"), 0.0)
+        pnl = edge * max(capital, 1e-12)
+    shares = max(0.0, _finite(row.get("label_probe_shares"), 1.0))
+    return edge, stressed_edge, pnl * shares
+
+
+def executable_strategy_oos(
+    rows: list[dict[str, Any]], predictions: list[float], *,
+    horizon_seconds: int, minimum_active_rows: int = 20,
+    minimum_clusters: int = 12,
+) -> dict[str, Any]:
+    """Evaluate the actual predicted actions with equal event-time weight.
+
+    Repeated markets in one event/horizon bucket cannot manufacture evidence:
+    they collapse into one cluster before confidence and profitability gates.
+    """
+    grouped: dict[tuple[str, int], list[tuple[float, float, float]]] = defaultdict(list)
+    missing_labels = 0
+    active_rows = 0
+    side_counts = {"YES": 0, "NO": 0}
+    bucket_seconds = max(1, int(horizon_seconds))
+    for row, prediction in zip(rows, predictions):
+        if not math.isfinite(prediction) or abs(prediction) <= 1e-12:
+            continue
+        active_rows += 1
+        side_counts["YES" if prediction > 0.0 else "NO"] += 1
+        outcome = _realized_executable_action(row, prediction)
+        event = str(row.get("event_id") or row.get("market_id") or "")
+        ts = int(_finite(row.get("ts"), 0.0))
+        if outcome is None or not event or ts <= 0:
+            missing_labels += 1
+            continue
+        grouped[(event, ts // bucket_seconds)].append(outcome)
+
+    cluster_edges = [statistics.fmean(value[0] for value in values)
+                     for values in grouped.values()]
+    cluster_stressed = [statistics.fmean(value[1] for value in values)
+                        for values in grouped.values()]
+    cluster_pnl = [statistics.fmean(value[2] for value in values)
+                   for values in grouped.values()]
+
+    def confidence(values: list[float]) -> tuple[float | None, float | None, float | None]:
+        if not values:
+            return None, None, None
+        mean = statistics.fmean(values)
+        standard_error = (
+            statistics.stdev(values) / math.sqrt(len(values))
+            if len(values) >= 2 else math.inf
+        )
+        lower = mean - 1.96 * standard_error if math.isfinite(standard_error) else None
+        return mean, standard_error if math.isfinite(standard_error) else None, lower
+
+    mean_edge, edge_se, edge_lower = confidence(cluster_edges)
+    stressed_mean, stressed_se, stressed_lower = confidence(cluster_stressed)
+    positive_fraction = (
+        sum(value > 0.0 for value in cluster_edges) / len(cluster_edges)
+        if cluster_edges else 0.0
+    )
+    stressed_positive_fraction = (
+        sum(value > 0.0 for value in cluster_stressed) / len(cluster_stressed)
+        if cluster_stressed else 0.0
+    )
+    reasons: list[str] = []
+    if active_rows < minimum_active_rows:
+        reasons.append("INSUFFICIENT_EXECUTABLE_ACTIONS")
+    if len(cluster_edges) < minimum_clusters:
+        reasons.append("INSUFFICIENT_EXECUTABLE_EVENT_TIME_CLUSTERS")
+    if missing_labels > 0:
+        reasons.append("MISSING_SIDE_SPECIFIC_EXECUTABLE_LABELS")
+    if edge_lower is None or edge_lower <= 0.0:
+        reasons.append("EXECUTABLE_NET_EDGE_CI_NOT_POSITIVE")
+    if stressed_lower is None or stressed_lower <= 0.0:
+        reasons.append("EXECUTABLE_2X_COST_EDGE_CI_NOT_POSITIVE")
+    if positive_fraction < 0.55:
+        reasons.append("EXECUTABLE_POSITIVE_CLUSTER_FRACTION_TOO_LOW")
+    if stressed_positive_fraction < 0.55:
+        reasons.append("EXECUTABLE_2X_COST_POSITIVE_CLUSTER_FRACTION_TOO_LOW")
+    return {
+        "valid": not reasons,
+        "reasons": reasons,
+        "active_rows": active_rows,
+        "missing_side_specific_labels": missing_labels,
+        "event_time_clusters": len(cluster_edges),
+        "cluster_weighting": "equal_weight_event_or_market_x_horizon_bucket",
+        "mean_executable_net_edge": mean_edge,
+        "standard_error_executable_net_edge": edge_se,
+        "lower_95_executable_net_edge": edge_lower,
+        "positive_cluster_fraction": positive_fraction,
+        "mean_2x_cost_net_edge": stressed_mean,
+        "standard_error_2x_cost_net_edge": stressed_se,
+        "lower_95_2x_cost_net_edge": stressed_lower,
+        "positive_2x_cost_cluster_fraction": stressed_positive_fraction,
+        "mean_probe_net_pnl": statistics.fmean(cluster_pnl) if cluster_pnl else None,
+        "total_equal_cluster_probe_net_pnl": sum(cluster_pnl),
+        "chosen_side_counts": side_counts,
+        "minimum_active_rows": minimum_active_rows,
+        "minimum_event_time_clusters": minimum_clusters,
+    }
+
+
+def _prediction_diagnostics(
+    targets: list[float], predictions: list[float],
+) -> dict[str, Any]:
+    residuals = [target - prediction for target, prediction in zip(targets, predictions)]
+    baseline_mse = statistics.fmean(target * target for target in targets)
+    model_mse = statistics.fmean(value * value for value in residuals)
+    improvement = (
+        (baseline_mse - model_mse) / baseline_mse
+        if baseline_mse > 1e-15 else -math.inf
+    )
+    pred_mean, target_mean = statistics.fmean(predictions), statistics.fmean(targets)
+    covariance = statistics.fmean(
+        (prediction - pred_mean) * (target - target_mean)
+        for prediction, target in zip(predictions, targets)
+    )
+    pred_var = statistics.fmean((prediction - pred_mean) ** 2 for prediction in predictions)
+    target_var = statistics.fmean((target - target_mean) ** 2 for target in targets)
+    correlation = (
+        covariance / math.sqrt(pred_var * target_var)
+        if pred_var > 1e-18 and target_var > 1e-18 else 0.0
+    )
+    active = [(prediction, target) for prediction, target in zip(predictions, targets)
+              if abs(prediction) > 1e-12 and abs(target) > 1e-12]
+    directional_accuracy = (
+        sum((prediction > 0.0) == (target > 0.0) for prediction, target in active)
+        / len(active) if active else 0.0
+    )
+    sigma = statistics.stdev(residuals) if len(residuals) >= 2 else math.inf
+    return {
+        "baseline_mse": baseline_mse,
+        "model_mse": model_mse,
+        "mse_improvement_fraction": improvement,
+        "prediction_target_correlation": correlation,
+        "directional_accuracy": directional_accuracy,
+        "directional_samples": len(active),
+        "oos_residual_sigma": max(1e-4, sigma) if math.isfinite(sigma) else None,
+    }
+
+
 def chronological_oos_diagnostics(
     samples: list[dict[str, Any]], *, horizon_seconds: int,
     minimum_train_samples: int = 120, minimum_oos_samples: int = 40,
 ) -> dict[str, Any]:
-    """Purged chronological holdout proving that alpha exists beyond fit data.
-
-    Many markets update in the same second, so raw row count is not treated as
-    independent evidence. The purge removes training labels whose forecast
-    horizon overlaps the holdout boundary. Risk remains closed unless the model
-    beats a no-change forecast and has positive directional/correlation skill.
-    """
+    """Purged OOS proof on realized executable actions, never midpoint fit."""
     rows = []
     for row in causal_model_rows(samples):
         try:
@@ -311,6 +475,7 @@ def chronological_oos_diagnostics(
         "model_mse": None, "mse_improvement_fraction": None,
         "prediction_target_correlation": None, "directional_accuracy": None,
         "oos_residual_sigma": None, "folds": [],
+        "executable_strategy": {},
         "positive_fold_fraction": 0.0,
         "minimum_positive_fold_fraction": 0.60,
         "training_window_seconds": MODEL_TRAINING_WINDOW_SECONDS,
@@ -337,39 +502,19 @@ def chronological_oos_diagnostics(
     if reasons:
         result["reasons"] = reasons
         return result
-    beta = solve_ridge(train, MODEL_RIDGE, MODEL_FEATURE_DIM)
-    activity_threshold = prediction_activity_threshold(train, beta)
+    beta = solve_ridge(
+        train, MODEL_RIDGE, MODEL_FEATURE_DIM,
+        horizon_seconds=horizon_seconds)
+    activity_threshold = prediction_activity_threshold(
+        train, beta, horizon_seconds=horizon_seconds)
     predictions = [
         model_prediction(row["x"], beta, activity_threshold) for row in holdout
     ]
     targets = [float(row["y"]) for row in holdout]
-    residuals = [target - prediction for target, prediction in zip(targets, predictions)]
-    baseline_mse = statistics.fmean(target * target for target in targets)
-    model_mse = statistics.fmean(value * value for value in residuals)
-    improvement = (baseline_mse - model_mse) / baseline_mse if baseline_mse > 1e-15 else -math.inf
-    pred_mean, target_mean = statistics.fmean(predictions), statistics.fmean(targets)
-    covariance = statistics.fmean(
-        (prediction - pred_mean) * (target - target_mean)
-        for prediction, target in zip(predictions, targets)
-    )
-    pred_var = statistics.fmean((prediction - pred_mean) ** 2 for prediction in predictions)
-    target_var = statistics.fmean((target - target_mean) ** 2 for target in targets)
-    correlation = covariance / math.sqrt(pred_var * target_var) if pred_var > 1e-18 and target_var > 1e-18 else 0.0
-    active = [
-        (prediction, target) for prediction, target in zip(predictions, targets)
-        if abs(prediction) > 1e-8 and abs(target) > 1e-12
-    ]
-    directional_accuracy = (
-        sum((prediction > 0.0) == (target > 0.0) for prediction, target in active) / len(active)
-        if active else 0.0
-    )
-    sigma = statistics.stdev(residuals) if len(residuals) >= 2 else math.inf
-    if improvement < 0.02:
-        reasons.append("OOS_DOES_NOT_BEAT_NO_CHANGE_BASELINE")
-    if correlation < 0.05:
-        reasons.append("OOS_NONPOSITIVE_PREDICTIVE_CORRELATION")
-    if len(active) < minimum_oos_samples // 2 or directional_accuracy < 0.52:
-        reasons.append("OOS_DIRECTIONAL_SKILL_NOT_ESTABLISHED")
+    predictive = _prediction_diagnostics(targets, predictions)
+    executable = executable_strategy_oos(
+        holdout, predictions, horizon_seconds=horizon_seconds)
+    reasons.extend(f"OOS_{reason}" for reason in executable["reasons"])
     folds: list[dict[str, Any]] = []
     fold_width = max(minimum_oos_samples, len(rows) // 10)
     for fraction in (0.50, 0.60, 0.70, 0.80, 0.90):
@@ -386,43 +531,29 @@ def chronological_oos_diagnostics(
         ]
         if len(fold_train) < minimum_train_samples:
             continue
-        fold_beta = solve_ridge(fold_train, MODEL_RIDGE, MODEL_FEATURE_DIM)
-        fold_threshold = prediction_activity_threshold(fold_train, fold_beta)
+        fold_beta = solve_ridge(
+            fold_train, MODEL_RIDGE, MODEL_FEATURE_DIM,
+            horizon_seconds=horizon_seconds)
+        fold_threshold = prediction_activity_threshold(
+            fold_train, fold_beta, horizon_seconds=horizon_seconds)
         fold_predictions = [
             model_prediction(row["x"], fold_beta, fold_threshold)
             for row in fold_holdout
         ]
         fold_targets = [float(row["y"]) for row in fold_holdout]
-        fold_baseline = statistics.fmean(value * value for value in fold_targets)
-        fold_model = statistics.fmean(
-            (target - prediction) ** 2
-            for target, prediction in zip(fold_targets, fold_predictions)
-        )
-        fold_improvement = (
-            (fold_baseline - fold_model) / fold_baseline
-            if fold_baseline > 1e-15 else -math.inf
-        )
-        fold_prediction_mean = statistics.fmean(fold_predictions)
-        fold_target_mean = statistics.fmean(fold_targets)
-        fold_covariance = statistics.fmean(
-            (prediction - fold_prediction_mean) * (target - fold_target_mean)
-            for prediction, target in zip(fold_predictions, fold_targets)
-        )
-        fold_prediction_var = statistics.fmean(
-            (prediction - fold_prediction_mean) ** 2 for prediction in fold_predictions)
-        fold_target_var = statistics.fmean(
-            (target - fold_target_mean) ** 2 for target in fold_targets)
-        fold_correlation = (
-            fold_covariance / math.sqrt(fold_prediction_var * fold_target_var)
-            if fold_prediction_var > 1e-18 and fold_target_var > 1e-18 else 0.0
+        fold_predictive = _prediction_diagnostics(fold_targets, fold_predictions)
+        fold_executable = executable_strategy_oos(
+            fold_holdout, fold_predictions, horizon_seconds=horizon_seconds,
+            minimum_active_rows=max(10, minimum_oos_samples // 2),
+            minimum_clusters=max(8, min(12, minimum_oos_samples // 2)),
         )
         folds.append({
             "train_samples": len(fold_train),
             "oos_samples": len(fold_holdout),
-            "mse_improvement_fraction": fold_improvement,
-            "prediction_target_correlation": fold_correlation,
+            **fold_predictive,
+            "executable_strategy": fold_executable,
             "prediction_activity_threshold": fold_threshold,
-            "positive": fold_improvement >= 0.02 and fold_correlation >= 0.05,
+            "positive": fold_executable["valid"],
         })
     positive_fold_fraction = (
         sum(row["positive"] for row in folds) / len(folds) if folds else 0.0
@@ -431,12 +562,8 @@ def chronological_oos_diagnostics(
         reasons.append("OOS_FOLD_STABILITY_NOT_ESTABLISHED")
     result.update({
         "valid": not reasons, "reasons": reasons,
-        "baseline_mse": baseline_mse, "model_mse": model_mse,
-        "mse_improvement_fraction": improvement,
-        "prediction_target_correlation": correlation,
-        "directional_accuracy": directional_accuracy,
-        "directional_samples": len(active),
-        "oos_residual_sigma": max(1e-4, sigma) if math.isfinite(sigma) else None,
+        **predictive,
+        "executable_strategy": executable,
         "folds": folds,
         "positive_fold_fraction": positive_fold_fraction,
         "prediction_activity_threshold": (
@@ -485,6 +612,7 @@ def fixed_forward_oos_diagnostics(
         "oos_residual_sigma": None,
         "model_spec_version": MODEL_SPEC_VERSION,
         "frozen_challenger": True,
+        "executable_strategy": {},
     }
     reasons: list[str] = []
     if not challenger_valid:
@@ -502,51 +630,15 @@ def fixed_forward_oos_diagnostics(
 
     predictions = [model_prediction(row["x"], beta, threshold) for row in holdout]
     targets = [float(row["y"]) for row in holdout]
-    residuals = [target - prediction for target, prediction in zip(targets, predictions)]
-    baseline_mse = statistics.fmean(target * target for target in targets)
-    model_mse = statistics.fmean(value * value for value in residuals)
-    improvement = (
-        (baseline_mse - model_mse) / baseline_mse
-        if baseline_mse > 1e-15 else -math.inf
-    )
-    prediction_mean = statistics.fmean(predictions)
-    target_mean = statistics.fmean(targets)
-    covariance = statistics.fmean(
-        (prediction - prediction_mean) * (target - target_mean)
-        for prediction, target in zip(predictions, targets)
-    )
-    prediction_var = statistics.fmean(
-        (prediction - prediction_mean) ** 2 for prediction in predictions)
-    target_var = statistics.fmean(
-        (target - target_mean) ** 2 for target in targets)
-    correlation = covariance / math.sqrt(prediction_var * target_var) \
-        if prediction_var > 1e-18 and target_var > 1e-18 else 0.0
-    active = [
-        (prediction, target) for prediction, target in zip(predictions, targets)
-        if abs(prediction) > 1e-8 and abs(target) > 1e-12
-    ]
-    directional_accuracy = (
-        sum((prediction > 0.0) == (target > 0.0)
-            for prediction, target in active) / len(active)
-        if active else 0.0
-    )
-    if improvement < 0.02:
-        reasons.append("FORWARD_OOS_DOES_NOT_BEAT_NO_CHANGE_BASELINE")
-    if correlation < 0.05:
-        reasons.append("FORWARD_OOS_NONPOSITIVE_PREDICTIVE_CORRELATION")
-    if len(active) < minimum_oos_samples // 2 or directional_accuracy < 0.52:
-        reasons.append("FORWARD_OOS_DIRECTIONAL_SKILL_NOT_ESTABLISHED")
-    sigma = statistics.stdev(residuals) if len(residuals) >= 2 else math.inf
+    predictive = _prediction_diagnostics(targets, predictions)
+    executable = executable_strategy_oos(
+        holdout, predictions, horizon_seconds=horizon_seconds)
+    reasons.extend(f"FORWARD_OOS_{reason}" for reason in executable["reasons"])
     result.update({
         "valid": not reasons,
         "reasons": reasons,
-        "baseline_mse": baseline_mse,
-        "model_mse": model_mse,
-        "mse_improvement_fraction": improvement,
-        "prediction_target_correlation": correlation,
-        "directional_accuracy": directional_accuracy,
-        "directional_samples": len(active),
-        "oos_residual_sigma": max(1e-4, sigma) if math.isfinite(sigma) else None,
+        **predictive,
+        "executable_strategy": executable,
     })
     return result
 
@@ -603,8 +695,11 @@ def load_or_freeze_model_challenger(
     }
     if boundary <= 0 or len(train) < 40:
         return None, readiness
-    beta = solve_ridge(train, MODEL_RIDGE, MODEL_FEATURE_DIM)
-    threshold = prediction_activity_threshold(train, beta)
+    beta = solve_ridge(
+        train, MODEL_RIDGE, MODEL_FEATURE_DIM,
+        horizon_seconds=horizon_seconds)
+    threshold = prediction_activity_threshold(
+        train, beta, horizon_seconds=horizon_seconds)
     if (len(beta) != MODEL_FEATURE_DIM
             or not all(math.isfinite(value) for value in beta)
             or not math.isfinite(threshold)):
@@ -629,7 +724,18 @@ def load_or_freeze_model_challenger(
     return challenger, readiness
 
 
-def solve_ridge(samples: list[dict[str, Any]], ridge: float, feature_dim: int) -> list[float]:
+def _independent_cluster_key(
+    row: dict[str, Any], horizon_seconds: int,
+) -> tuple[str, int]:
+    event = str(row.get("event_id") or row.get("market_id") or "UNKNOWN")
+    ts = int(_finite(row.get("ts"), 0.0))
+    return event, ts // max(1, int(horizon_seconds))
+
+
+def solve_ridge(
+    samples: list[dict[str, Any]], ridge: float, feature_dim: int, *,
+    horizon_seconds: int = 30,
+) -> list[float]:
     labeled: list[dict[str, Any]] = []
     for row in samples:
         if row.get("y") is None:
@@ -647,14 +753,27 @@ def solve_ridge(samples: list[dict[str, Any]], ridge: float, feature_dim: int) -
     means = [0.0] * p
     scales = [1.0] * p
     training = labeled[-10000:]
+    cluster_counts: dict[tuple[str, int], int] = defaultdict(int)
+    for row in training:
+        cluster_counts[_independent_cluster_key(row, horizon_seconds)] += 1
+    weights = [
+        1.0 / cluster_counts[_independent_cluster_key(row, horizon_seconds)]
+        for row in training
+    ]
+    total_weight = sum(weights)
     for index in range(1, p):
-        means[index] = statistics.fmean(float(row["x"][index]) for row in training)
-        variance = statistics.fmean(
-            (float(row["x"][index]) - means[index]) ** 2 for row in training)
+        means[index] = sum(
+            weight * float(row["x"][index])
+            for row, weight in zip(training, weights)
+        ) / max(total_weight, 1e-12)
+        variance = sum(
+            weight * (float(row["x"][index]) - means[index]) ** 2
+            for row, weight in zip(training, weights)
+        ) / max(total_weight, 1e-12)
         scales[index] = max(1e-8, math.sqrt(variance))
     matrix = [[0.0] * p for _ in range(p)]
     rhs = [0.0] * p
-    for row in training:
+    for row, weight in zip(training, weights):
         raw_x = [float(v) for v in row["x"]]
         x = [1.0] + [
             (raw_x[index] - means[index]) / scales[index]
@@ -662,9 +781,9 @@ def solve_ridge(samples: list[dict[str, Any]], ridge: float, feature_dim: int) -
         ]
         target = float(row["y"])
         for i in range(p):
-            rhs[i] += x[i] * target
+            rhs[i] += weight * x[i] * target
             for j in range(p):
-                matrix[i][j] += x[i] * x[j]
+                matrix[i][j] += weight * x[i] * x[j]
     for i in range(1, p):
         matrix[i][i] += ridge
     for i in range(p):
@@ -922,6 +1041,8 @@ def depth_adjusted_economics(
     slippage_bps_per_leg: float,
     adverse_markout_penalty_bps: float,
     capital_cost_bps_per_hour: float,
+    prediction_sigma_net_edge: float,
+    uncertainty_z: float,
 ) -> economics.RoundTripEconomics | None:
     if shares <= 0.0 or not fee.authoritative:
         return None
@@ -938,13 +1059,18 @@ def depth_adjusted_economics(
     entry_fee = economics.fee_per_share(entry_price, fee, taker=True)
     exit_fee = economics.fee_per_share(expected_exit_price, fee, taker=True)
     capital_per_share = entry_price + entry_fee
+    uncertainty_penalty = (
+        max(0.0, float(uncertainty_z))
+        * max(0.0, float(prediction_sigma_net_edge))
+        * capital_per_share
+    )
     adverse_penalty = max(0.0, float(adverse_markout_penalty_bps)) / 10000.0 * capital_per_share
     capital_time_cost = (
         max(0.0, float(capital_cost_bps_per_hour)) / 10000.0
         * (float(candidate.horizon_seconds) / 3600.0) * capital_per_share
     )
     gross_markout = expected_exit_price - entry_price
-    net_pnl = gross_markout - entry_fee - exit_fee - candidate.uncertainty_penalty_per_share - adverse_penalty - capital_time_cost
+    net_pnl = gross_markout - entry_fee - exit_fee - uncertainty_penalty - adverse_penalty - capital_time_cost
     net_edge = net_pnl / max(capital_per_share, 1e-12)
     return economics.RoundTripEconomics(
         side=candidate.side,
@@ -954,14 +1080,82 @@ def depth_adjusted_economics(
         entry_fee_per_share=entry_fee,
         exit_fee_per_share=exit_fee,
         gross_markout_per_share=gross_markout,
-        uncertainty_penalty_per_share=candidate.uncertainty_penalty_per_share,
+        uncertainty_penalty_per_share=uncertainty_penalty,
         adverse_markout_penalty_per_share=adverse_penalty,
         capital_time_cost_per_share=capital_time_cost,
         net_pnl_per_share=net_pnl,
         capital_per_share=capital_per_share,
         net_edge=net_edge,
-        economic_score=net_edge / max(candidate.uncertainty_penalty_per_share, 1e-4),
+        economic_score=net_edge / max(uncertainty_penalty, 1e-4),
     )
+
+
+def executable_edge_candidate(
+    *, book: economics.BookSnapshot, predicted_net_edge: float,
+    prediction_sigma_net_edge: float, fee: economics.FeeSpec,
+    horizon_seconds: int, now: int, slippage_bps_per_leg: float,
+    uncertainty_z: float, adverse_markout_penalty_bps: float,
+    capital_cost_bps_per_hour: float, max_book_age_seconds: int,
+) -> tuple[economics.RoundTripEconomics, float] | None:
+    """Invert a learned executable edge into the side-specific exit forecast.
+
+    This preserves one economic unit end-to-end: the model predicts net return
+    on deployed capital; the pricing engine reconstructs the gross exit needed
+    to earn it and then independently applies OOS uncertainty.
+    """
+    if (not math.isfinite(predicted_net_edge)
+            or not math.isfinite(prediction_sigma_net_edge)
+            or abs(predicted_net_edge) <= 1e-12
+            or prediction_sigma_net_edge < 0.0):
+        return None
+    side = "YES" if predicted_net_edge > 0.0 else "NO"
+    target_edge = abs(predicted_net_edge)
+
+    def price(value: float, sigma_probability: float, z: float) -> economics.RoundTripEconomics | None:
+        return economics.round_trip_economics(
+            side=side,
+            book=book,
+            predicted_yes_mid=value,
+            prediction_sigma_probability=sigma_probability,
+            fee=fee,
+            horizon_seconds=horizon_seconds,
+            now=now,
+            slippage_bps_per_leg=slippage_bps_per_leg,
+            uncertainty_z=z,
+            adverse_markout_penalty_bps=adverse_markout_penalty_bps,
+            capital_cost_bps_per_hour=capital_cost_bps_per_hour,
+            max_book_age_seconds=max_book_age_seconds,
+        )
+
+    favorable_boundary = 0.999999 if side == "YES" else 0.000001
+    maximum = price(favorable_boundary, 0.0, 0.0)
+    if maximum is None or maximum.net_edge + 1e-12 < target_edge:
+        return None
+    low, high = 0.000001, 0.999999
+    point: economics.RoundTripEconomics | None = None
+    predicted_yes_mid = favorable_boundary
+    for _ in range(64):
+        predicted_yes_mid = 0.5 * (low + high)
+        point = price(predicted_yes_mid, 0.0, 0.0)
+        if point is None:
+            return None
+        if side == "YES":
+            if point.net_edge < target_edge:
+                low = predicted_yes_mid
+            else:
+                high = predicted_yes_mid
+        else:
+            if point.net_edge < target_edge:
+                high = predicted_yes_mid
+            else:
+                low = predicted_yes_mid
+    predicted_yes_mid = high if side == "YES" else low
+    point = price(predicted_yes_mid, 0.0, 0.0)
+    if point is None:
+        return None
+    sigma_probability = prediction_sigma_net_edge * point.capital_per_share
+    robust = price(predicted_yes_mid, sigma_probability, uncertainty_z)
+    return (robust, predicted_yes_mid) if robust is not None else None
 
 
 def conservative_marked_equity(
@@ -1082,16 +1276,18 @@ def main() -> int:
     legacy_samples = state.get("samples") if isinstance(state.get("samples"), list) else []
     dataset_migration: dict[str, Any] = state.get("dataset_migration") if isinstance(state.get("dataset_migration"), dict) else {}
     if prior_dataset_version < DATASET_VERSION and legacy_samples:
-        archive_path = args.run_dir / "state_dataset_v1_degenerate_repeated_snapshot.json"
+        archive_path = args.run_dir / (
+            f"state_dataset_v{prior_dataset_version}_incompatible_target.json")
         if not archive_path.exists():
             archived = dict(state)
-            archived["dataset_archive_reason"] = "DEGENERATE_REPEATED_SNAPSHOT"
+            archived["dataset_archive_reason"] = (
+                "MIDPOINT_TARGET_INCOMPATIBLE_WITH_EXECUTABLE_NET_EDGE")
             archived["superseded_by_dataset_version"] = DATASET_VERSION
             base.atomic_json(archive_path, archived)
         dataset_migration = {
             "from_version": prior_dataset_version,
             "to_version": DATASET_VERSION,
-            "reason": "DEGENERATE_REPEATED_SNAPSHOT",
+            "reason": "MIDPOINT_TARGET_INCOMPATIBLE_WITH_EXECUTABLE_NET_EDGE",
             "archived_samples": len(legacy_samples),
             "archive_path": str(archive_path),
             "migrated_at": int(time.time()),
@@ -1248,9 +1444,8 @@ def main() -> int:
                 failures.append(f"exit_depth:{market_id}")
             continue
         prediction = model_prediction(feature[0], beta, activity_threshold)
-        prediction = max(-2 * feature[2], min(2 * feature[2], prediction))
-        predicted_yes_mid = max(0.001, min(0.999, feature[1] + prediction))
-        flip = (side == "YES" and predicted_yes_mid <= feature[1]) or (side == "NO" and predicted_yes_mid >= feature[1])
+        flip = ((side == "YES" and prediction <= 0.0)
+                or (side == "NO" and prediction >= 0.0))
         if now - int(position["entry_ts"]) >= args.horizon_seconds or flip or bool(state.get("killed")):
             exit_price = max(1e-6, bid_vwap * (1.0 - slip))
             fee = base.fee_per_share(exit_price, market.fee) * shares
@@ -1328,6 +1523,7 @@ def main() -> int:
         "already_positioned": 0,
         "missing_fee": 0,
         "prediction_evaluated": 0,
+        "inactive_learned_edge": 0,
         "no_complete_round_trip_ev": 0,
         "zero_capital_room": 0,
         "entry_or_exit_depth_rejected": 0,
@@ -1338,7 +1534,9 @@ def main() -> int:
         "opened": 0,
     }
     if not killed and not new_risk_frozen and model_valid and flow_valid:
-        ranked: list[tuple[float, Any, str, base.Book, economics.RoundTripEconomics, float]] = []
+        ranked: list[tuple[
+            float, Any, str, base.Book, economics.RoundTripEconomics, float, float,
+        ]] = []
         for market_id, (market, yes, no, feature) in current.items():
             if market_id in positions or market.fee is None:
                 if market_id in positions:
@@ -1348,15 +1546,16 @@ def main() -> int:
                 continue
             rejection_funnel["prediction_evaluated"] += 1
             prediction = model_prediction(feature[0], beta, activity_threshold)
-            prediction = max(-2 * feature[2], min(2 * feature[2], prediction))
-            predicted_yes_mid = max(0.001, min(0.999, feature[1] + prediction))
+            if abs(prediction) <= 1e-12:
+                rejection_funnel["inactive_learned_edge"] += 1
+                continue
             snapshot = book_snapshot(yes, no, market.liq, now=now, max_age_seconds=args.max_book_age_seconds)
             if snapshot is None:
                 continue
-            candidate = economics.choose_side(
+            priced = executable_edge_candidate(
                 book=snapshot,
-                predicted_yes_mid=predicted_yes_mid,
-                prediction_sigma_probability=float(sigma),
+                predicted_net_edge=prediction,
+                prediction_sigma_net_edge=float(sigma),
                 fee=fee_spec(market.fee),
                 horizon_seconds=args.horizon_seconds,
                 now=now,
@@ -1365,10 +1564,13 @@ def main() -> int:
                 adverse_markout_penalty_bps=args.adverse_markout_bps,
                 capital_cost_bps_per_hour=args.capital_cost_bps_per_hour,
                 max_book_age_seconds=args.max_book_age_seconds,
-                minimum_net_edge=args.min_edge,
             )
-            if candidate is None:
+            if priced is None:
                 rejection_funnel["no_complete_round_trip_ev"] += 1
+                continue
+            candidate, predicted_yes_mid = priced
+            if candidate.net_edge < args.min_edge or candidate.net_pnl_per_share <= 0.0:
+                rejection_funnel["nonpositive_net_edge"] += 1
                 continue
             book = yes if candidate.side == "YES" else no
             room_probe = max(0.0, min(args.max_trade_usd, max_market_fraction * equity, cash))
@@ -1376,22 +1578,26 @@ def main() -> int:
                 rejection_funnel["zero_capital_room"] += 1
                 continue
             shares_probe = room_probe / max(candidate.capital_per_share, 1e-9)
-            adjusted = depth_adjusted_economics(candidate, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares_probe, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour)
+            adjusted = depth_adjusted_economics(candidate, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares_probe, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour, prediction_sigma_net_edge=float(sigma), uncertainty_z=args.uncertainty_z)
             if adjusted is None:
                 rejection_funnel["entry_or_exit_depth_rejected"] += 1
                 continue
             shares_probe = room_probe / max(adjusted.capital_per_share, 1e-9)
-            adjusted = depth_adjusted_economics(adjusted, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares_probe, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour)
+            adjusted = depth_adjusted_economics(adjusted, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares_probe, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour, prediction_sigma_net_edge=float(sigma), uncertainty_z=args.uncertainty_z)
             if adjusted is None or adjusted.net_edge < args.min_edge or adjusted.net_pnl_per_share <= 0.0:
                 if adjusted is None:
                     rejection_funnel["entry_or_exit_depth_rejected"] += 1
                 else:
                     rejection_funnel["nonpositive_net_edge"] += 1
                 continue
-            ranked.append((adjusted.economic_score, market, adjusted.side, book, adjusted, predicted_yes_mid))
+            ranked.append((adjusted.economic_score, market, adjusted.side, book,
+                           adjusted, predicted_yes_mid, prediction))
             admission_rows.append({
                 "market_id": market.id,
                 "side": adjusted.side,
+                "learned_executable_net_edge": prediction,
+                "learned_executable_edge_sigma": float(sigma),
+                "learned_robust_edge_after_uncertainty": adjusted.net_edge,
                 "net_edge": adjusted.net_edge,
                 "net_pnl_per_share": adjusted.net_pnl_per_share,
                 "entry_price": adjusted.entry_price,
@@ -1409,21 +1615,22 @@ def main() -> int:
         signals = len(ranked)
         rejection_funnel["ranked_signals"] = signals
         best_edge = max((row[4].net_edge for row in ranked), default=0.0)
-        for _score, market, side, book, candidate, predicted_yes_mid in ranked:
+        for (_score, market, side, book, candidate, predicted_yes_mid,
+             learned_executable_edge) in ranked:
             if len(positions) >= args.max_positions:
                 break
             if market.id in positions or market.fee is None:
                 continue
             room = max(0.0, min(args.max_trade_usd, max_market_fraction * equity, cash))
             shares = room / max(candidate.capital_per_share, 1e-9)
-            candidate = depth_adjusted_economics(candidate, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour)
+            candidate = depth_adjusted_economics(candidate, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour, prediction_sigma_net_edge=float(sigma), uncertainty_z=args.uncertainty_z)
             if candidate is None or candidate.net_edge < args.min_edge or candidate.net_pnl_per_share <= 0.0:
                 continue
             shares = room / max(candidate.capital_per_share, 1e-9)
             if shares < book.min_order:
                 rejection_funnel["below_minimum_order"] += 1
                 continue
-            candidate = depth_adjusted_economics(candidate, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour)
+            candidate = depth_adjusted_economics(candidate, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour, prediction_sigma_net_edge=float(sigma), uncertainty_z=args.uncertainty_z)
             if candidate is None or candidate.net_edge < args.min_edge or candidate.net_pnl_per_share <= 0.0:
                 if candidate is None:
                     rejection_funnel["entry_or_exit_depth_rejected"] += 1
@@ -1442,6 +1649,8 @@ def main() -> int:
                 "cost": cost,
                 "entry_ts": now,
                 "entry_net_edge": candidate.net_edge,
+                "model_predicted_executable_net_edge": learned_executable_edge,
+                "model_prediction_sigma_net_edge": float(sigma),
                 "expected_exit_price": candidate.expected_exit_price,
             }
             cash -= cost
@@ -1549,6 +1758,24 @@ def main() -> int:
             "no_state_version": no.state_version,
             "yes_lineage_epoch": yes.lineage_epoch,
             "no_lineage_epoch": no.lineage_epoch,
+            "target_semantics_version": TARGET_SEMANTICS_VERSION,
+            "label_horizon_seconds": args.horizon_seconds,
+            "label_probe_shares": max(yes.min_order, no.min_order),
+            "round_trip_slippage_bps": args.slippage_bps,
+            "adverse_markout_bps": args.adverse_markout_bps,
+            "capital_cost_bps_per_hour": args.capital_cost_bps_per_hour,
+            "fee": {
+                "authoritative": market.fee is not None,
+                "enabled": bool(market.fee.enabled) if market.fee else False,
+                "rate": float(market.fee.rate) if market.fee else None,
+                "exponent": float(market.fee.exponent) if market.fee else None,
+                "taker_only": bool(market.fee.taker_only) if market.fee else None,
+                "source": str(market.fee.source) if market.fee else "",
+            },
+            "yes_bids": [[price, size] for price, size in yes.bids],
+            "yes_asks": [[price, size] for price, size in yes.asks],
+            "no_bids": [[price, size] for price, size in no.bids],
+            "no_asks": [[price, size] for price, size in no.asks],
             "mid": feature[1], "spread": feature[2], "x": feature[3], "y": None,
         })
         known_sample_keys.add(key)
@@ -1604,7 +1831,7 @@ def main() -> int:
             activity_threshold if math.isfinite(activity_threshold) else None),
         "prediction_shrinkage": MODEL_PREDICTION_SHRINKAGE,
         "model_active_quantile": MODEL_ACTIVE_QUANTILE,
-        "prediction_sigma_probability": sigma,
+        "prediction_sigma_net_edge": sigma,
         "model_valid": model_valid,
         "model_invalid_reasons": model_invalid_reasons,
         "validation_diagnostics": validation_diagnostics,
@@ -1627,9 +1854,10 @@ def main() -> int:
         "best_edge": best_edge,
         "realized_pnl_last_tick": realized_last_tick,
         "realized_pnl_total": realized_total,
-        "admission_contract": "causal_flow_depth_complete_round_trip_ev",
+        "target_semantics_version": TARGET_SEMANTICS_VERSION,
+        "admission_contract": "causal_flow_learned_executable_net_edge_plus_depth_complete_round_trip_ev",
         "execution_contract": COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT,
-        "feature_contract": "book_microprice_depth_parity_plus_receive_causal_flow_plus_strictly_prior_1_5_15_30s_market_regime_lags",
+        "feature_contract": "book_microprice_depth_parity_plus_receive_causal_flow_plus_strictly_prior_1_5_15_30s_market_regime_lags; label=fee_depth_cost_net_executable_round_trip_edge",
         "exit_liquidity_contract": "shares_specific_full_visible_bid_depth_vwap_fail_closed",
         "failures": failures,
     }
@@ -1639,11 +1867,11 @@ def main() -> int:
         "cash", "equity", "peak", "drawdown", "killed",
         "new_risk_frozen", "drain_requested", "drain_complete", "marking_complete", "market_capital_ceiling",
         "unmarkable_positions", "marking_contract",
-        "prediction_sigma_probability", "model_valid", "model_invalid_reasons",
+        "prediction_sigma_net_edge", "model_valid", "model_invalid_reasons",
         "validation_diagnostics", "model_challenger", "model_challenger_readiness",
         "flow_valid", "flow_diagnostics",
         "rejection_funnel",
-        "dataset_version", "dataset_lineage", "dataset_diagnostics",
+        "dataset_version", "dataset_lineage", "dataset_diagnostics", "target_semantics_version",
         "novel_samples_last_tick", "duplicate_snapshots_rejected_last_tick",
         "labeled_samples", "model_labeled_samples",
         "market_state_source", "discovered_markets", "fee_ready_markets",
@@ -1662,12 +1890,12 @@ def main() -> int:
     })
     base.append_csv(
         args.run_dir / "equity.csv",
-        ["timestamp", "cash", "equity", "drawdown", "open_positions", "signals", "opened", "best_edge", "labeled_samples", "model_labeled_samples", "realized_pnl_total", "prediction_sigma_probability"],
+        ["timestamp", "cash", "equity", "drawdown", "open_positions", "signals", "opened", "best_edge", "labeled_samples", "model_labeled_samples", "realized_pnl_total", "prediction_sigma_net_edge"],
         {
             "timestamp": now, "cash": cash, "equity": equity, "drawdown": drawdown,
             "open_positions": len(positions), "signals": signals, "opened": opened,
             "best_edge": best_edge, "labeled_samples": labeled, "model_labeled_samples": model_labeled,
-            "realized_pnl_total": realized_total, "prediction_sigma_probability": sigma,
+            "realized_pnl_total": realized_total, "prediction_sigma_net_edge": sigma,
         },
     )
     print(json.dumps({
@@ -1675,7 +1903,7 @@ def main() -> int:
         "feature_ready_markets": len(current), "labeled": labeled, "model_labeled": model_labeled,
         "signals": signals, "opened": opened, "positions": len(positions), "equity": equity,
         "realized_pnl_total": realized_total, "best_edge": best_edge,
-        "prediction_sigma_probability": sigma, "model_valid": model_valid,
+        "prediction_sigma_net_edge": sigma, "model_valid": model_valid,
         "model_invalid_reasons": model_invalid_reasons,
         "novel_samples": novel_samples,
         "duplicate_snapshots_rejected": duplicate_snapshots_rejected,

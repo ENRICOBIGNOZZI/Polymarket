@@ -86,24 +86,48 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
             self.source,
         )
 
+    def test_selector_token_action_side_authority_is_fail_closed_and_audited(self) -> None:
+        for token in (
+            "execution_cell_authority_required",
+            "execution_authority_semantics",
+            "authorized_execution_cells",
+            "yes_execution_authority_mask",
+            "no_execution_authority_mask",
+            "context.selector_execution_authority_mask",
+            'metadata["selector_execution_authority"]',
+            '"chosen_cell_authorized"',
+            '"inventory_reduction_bypass"',
+            "inventory_seed_authorized",
+            "sell_inventory_authorized",
+            "inventory_drain_active_by_market_",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.source)
+
     def test_runtime_loads_bounded_exploration_and_soft_inventory_policy(self) -> None:
         exploration = self.policy["exploration"]
         per_quote = float(exploration["max_quote_notional_fraction"])
         per_market = float(exploration["max_market_fraction"])
         total = float(exploration["max_capital_fraction"])
         self.assertLessEqual(2.0 * per_quote, per_market)
-        expected_market_cap = int(total // (2.0 * per_quote))
-        self.assertEqual(expected_market_cap, 5)
+        expected_execution_cap = int(total // (2.0 * per_quote))
+        self.assertEqual(expected_execution_cap, 5)
         selection = self.policy["market_selection"]
         recent = selection["recent_flow"]
         self.assertEqual(
-            int(selection["cold_start_maximum_markets"]), expected_market_cap
+            int(selection["cold_start_maximum_markets"]),
+            int(selection["max_active_markets"]),
         )
         self.assertEqual(
-            int(recent["minimum_operational_markets"]), expected_market_cap
+            int(recent["minimum_operational_markets"]), expected_execution_cap
         )
         self.assertEqual(
-            int(recent["maximum_zero_flow_reserve_markets"]), expected_market_cap
+            int(recent["observation_universe_markets"]),
+            int(selection["max_active_markets"]),
+        )
+        self.assertEqual(
+            int(recent["maximum_zero_flow_reserve_markets"]),
+            int(selection["max_active_markets"]),
         )
         for token in (
             'inventory, "soft_directional_inventory_fraction"',

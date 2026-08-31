@@ -80,7 +80,7 @@
     "reward_sleeve_capital_usd": 2000,
     "reward_max_quote_shares": 100,
     "fallback_universe_max_age_seconds": 180,
-    "cold_start_maximum_markets": 5,
+  "cold_start_maximum_markets": 40,
     "recent_flow": {
       "enabled": true,
       "lookback_seconds": 1800,
@@ -97,7 +97,8 @@
       "rotation_min_relative_fill_multiplier": 1.5,
       "minimum_markets": 1,
       "minimum_operational_markets": 5,
-      "maximum_zero_flow_reserve_markets": 5,
+      "observation_universe_markets": 40,
+      "maximum_zero_flow_reserve_markets": 40,
       "minimum_prints": 2,
       "minimum_side_prints_2m": 2,
       "minimum_side_prints_10m": 1,

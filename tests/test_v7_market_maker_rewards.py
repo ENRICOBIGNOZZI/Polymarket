@@ -37,6 +37,7 @@ def _universe(path: Path, *, timestamp_ms: int, model_sha: str = SHA, markets=No
         "liquidity": 1000.0,
         "volume_24h": 500.0,
         "score": 12.0,
+        "end_date": "2099-01-01T00:00:00Z",
         "active": True,
         "closed": False,
         "accepting_orders": True,
@@ -194,6 +195,16 @@ class MakerRewardSelectorTests(unittest.TestCase):
             large["best_projected_fill_probability"],
         )
         self.assertEqual(small["quote_opportunities"][0]["queue_ahead_shares"], 5.0)
+        self.assertTrue(snapshot["execution_cell_authority_required"])
+        self.assertEqual(
+            snapshot["execution_authority_semantics"],
+            rewards.EXECUTION_AUTHORITY_SEMANTICS,
+        )
+        self.assertEqual(small["execution_role"], "FLOW_AUTHORIZED")
+        self.assertGreater(small["authorized_execution_cell_count"], 0)
+        self.assertEqual(large["execution_role"], "WARM_FLOW_OBSERVATION")
+        self.assertEqual(large["authorized_execution_cell_count"], 0)
+        self.assertEqual(snapshot["control_exploration_cell_count"], 0)
 
     def test_config_requires_fail_closed_timed_sports_exclusion(self) -> None:
         from tempfile import TemporaryDirectory
@@ -550,6 +561,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             "accepting_orders": True, "spread": 0.02, "liquidity": 1_000.0,
             "volume_24h": 10_000.0, "clob_token_ids": ["yes", "no"],
             "midpoint": 0.50, "timed_sports": False,
+            "end_date": "2099-01-01T00:00:00Z",
         }
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -598,9 +610,15 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertEqual(snapshot["markets"][0]["reward_intensity"], 0.0)
         self.assertEqual(snapshot["markets"][0]["midpoint"], 0.45)
         self.assertEqual(snapshot["markets"][0]["flow_to_depth_24h"], 0.5)
-        self.assertEqual(snapshot["cold_start_maximum_markets"], 5)
+        self.assertEqual(snapshot["cold_start_maximum_markets"], 40)
         self.assertEqual(snapshot["markets"][0]["side_mode"], "STABLE_SPREAD_EXPLORATION")
         self.assertEqual(snapshot["markets"][0]["quote_opportunities"], [])
+        self.assertEqual(snapshot["authorized_execution_cell_count"], 1)
+        self.assertEqual(snapshot["control_exploration_cell_count"], 1)
+        self.assertEqual(
+            snapshot["markets"][0]["authorized_execution_cells"],
+            [rewards._control_exploration_cell(snapshot["markets"][0])],
+        )
         status = rewards.selector_status(snapshot)
         self.assertTrue(status["ready"])
         self.assertEqual(status["state"], "OPERATIONAL_FALLBACK")
@@ -631,9 +649,17 @@ class MakerRewardSelectorTests(unittest.TestCase):
                 universe, selection_cfg, capacity_cfg, capacity,
                 model_sha=SHA, primary_error="cold-start", now_ms=now_ms,
             )
-        self.assertEqual(snapshot["selected_count"], 5)
-        self.assertEqual(snapshot["unused_resource_capacity_markets"], capacity - 5)
+        self.assertEqual(snapshot["selected_count"], 8)
+        self.assertEqual(snapshot["unused_resource_capacity_markets"], capacity - 8)
         self.assertEqual(snapshot["markets"][0]["recent_prints"], 0)
+        self.assertEqual(
+            sum(bool(row["authorized_execution_cells"])
+                for row in snapshot["markets"]),
+            1,
+        )
+        self.assertFalse(any(
+            row["inventory_seed_authorized"] for row in snapshot["markets"]
+        ))
 
     def test_recent_flow_admits_liquid_two_cent_tail(self) -> None:
         from tempfile import TemporaryDirectory
@@ -692,7 +718,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
         base = {
             "event_ids": ["e"], "question": "Q", "slug": "q",
             "active": True, "closed": False, "accepting_orders": True,
-            "spread": 0.02,
+            "spread": 0.02, "end_date": "2099-01-01T00:00:00Z",
         }
         rows = [
             {**base, "event_ids": ["eh"], "market_id": "huge", "condition_id": "ch", "clob_token_ids": ["yh", "nh"],
@@ -724,6 +750,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             "question": "Q", "slug": "q", "active": True, "closed": False,
             "accepting_orders": True, "liquidity": 1_000.0,
             "volume_24h": 10_000.0, "midpoint": 0.50,
+            "end_date": "2099-01-01T00:00:00Z",
         }
         rows = [
             {**base, "event_ids": ["wide"], "market_id": "wide", "condition_id": "cw",
@@ -901,6 +928,8 @@ class MakerRewardSelectorTests(unittest.TestCase):
             "model_sha": SHA,
             "source": "public_clob_rewards",
             "selection_mode": "REWARDED",
+            "execution_cell_authority_required": True,
+            "execution_authority_semantics": rewards.EXECUTION_AUTHORITY_SEMANTICS,
             "degraded": False,
             "reward_pool_count": 1,
             "reward_market_count": 1,
@@ -909,6 +938,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             "markets": [{
                 "condition_id": "c1", "market_id": "m1",
                 "yes_token": "y1", "no_token": "n1",
+                "authorized_execution_cells": [],
             }],
         }
         rotated = json.loads(json.dumps(base))

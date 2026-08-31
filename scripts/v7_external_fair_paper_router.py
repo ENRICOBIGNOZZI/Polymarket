@@ -87,6 +87,118 @@ def expected_calibration_error(
     )
 
 
+def logistic_calibration_line(
+    predictions: list[float], actuals: list[float], *, ridge: float = 1e-6,
+    max_iter: int = 50,
+) -> tuple[float | None, float | None]:
+    """Fit outcome ~ intercept + slope*logit(prediction) by logistic MLE."""
+    pairs = [
+        (min(1.0 - 1e-9, max(1e-9, float(prediction))), int(actual))
+        for prediction, actual in zip(predictions, actuals)
+        if math.isfinite(prediction) and math.isfinite(actual)
+        and 0.0 <= prediction <= 1.0 and actual in (0.0, 1.0)
+    ]
+    if len(pairs) < 2 or len({actual for _, actual in pairs}) < 2:
+        return None, None
+    intercept, slope = 0.0, 1.0
+    for _ in range(max(1, int(max_iter))):
+        g0, g1 = ridge * intercept, ridge * (slope - 1.0)
+        h00, h01, h11 = ridge, 0.0, ridge
+        for probability, actual in pairs:
+            x = math.log(probability / (1.0 - probability))
+            z = max(-35.0, min(35.0, intercept + slope * x))
+            fitted = 1.0 / (1.0 + math.exp(-z))
+            error = fitted - actual
+            variance = max(1e-9, fitted * (1.0 - fitted))
+            g0 += error
+            g1 += error * x
+            h00 += variance
+            h01 += variance * x
+            h11 += variance * x * x
+        determinant = h00 * h11 - h01 * h01
+        if abs(determinant) < 1e-12:
+            return None, None
+        delta_intercept = (h11 * g0 - h01 * g1) / determinant
+        delta_slope = (-h01 * g0 + h00 * g1) / determinant
+        intercept -= delta_intercept
+        slope = max(0.01, min(10.0, slope - delta_slope))
+        if abs(delta_intercept) + abs(delta_slope) < 1e-9:
+            break
+    return intercept, slope
+
+
+def _wilson_interval(successes: int, trials: int, z: float = 1.96) -> tuple[float, float]:
+    if trials <= 0:
+        return math.nan, math.nan
+    proportion = successes / trials
+    denominator = 1.0 + z * z / trials
+    centre = (proportion + z * z / (2.0 * trials)) / denominator
+    radius = z / denominator * math.sqrt(
+        proportion * (1.0 - proportion) / trials
+        + z * z / (4.0 * trials * trials))
+    return max(0.0, centre - radius), min(1.0, centre + radius)
+
+
+def probability_interval_bin_diagnostics(
+    predictions: list[float], actuals: list[float],
+    lowers: list[float], uppers: list[float], *, bins: int = 10,
+    minimum_bin_size: int = 3,
+) -> dict[str, Any]:
+    """Validate epistemic probability bands against independent bin rates.
+
+    A Bernoulli realization is always 0 or 1, so asking whether it lies inside
+    a fair-probability band is mathematically invalid. We instead compare each
+    bin's mean model band with the Wilson interval for its empirical event rate.
+    """
+    groups: list[list[tuple[float, float, float, float]]] = [
+        [] for _ in range(max(1, int(bins)))
+    ]
+    for prediction, actual, lower, upper in zip(
+        predictions, actuals, lowers, uppers
+    ):
+        values = (prediction, actual, lower, upper)
+        if (
+            not all(math.isfinite(value) for value in values)
+            or not 0.0 <= lower <= prediction <= upper <= 1.0
+            or actual not in (0.0, 1.0)
+        ):
+            continue
+        index = min(len(groups) - 1, int(prediction * len(groups)))
+        groups[index].append(values)
+    rows: list[dict[str, Any]] = []
+    for index, group in enumerate(groups):
+        if len(group) < max(1, int(minimum_bin_size)):
+            continue
+        mean_prediction = statistics.fmean(row[0] for row in group)
+        mean_lower = statistics.fmean(row[2] for row in group)
+        mean_upper = statistics.fmean(row[3] for row in group)
+        successes = sum(int(row[1]) for row in group)
+        observed_rate = successes / len(group)
+        observed_lower, observed_upper = _wilson_interval(successes, len(group))
+        consistent = mean_lower <= observed_upper and mean_upper >= observed_lower
+        rows.append({
+            "bin": index,
+            "markets": len(group),
+            "mean_prediction": mean_prediction,
+            "mean_lower": mean_lower,
+            "mean_upper": mean_upper,
+            "observed_rate": observed_rate,
+            "observed_rate_wilson95_lower": observed_lower,
+            "observed_rate_wilson95_upper": observed_upper,
+            "probability_band_consistent": consistent,
+        })
+    return {
+        "eligible_bin_count": len(rows),
+        "consistency_rate": (
+            sum(int(row["probability_band_consistent"]) for row in rows) / len(rows)
+            if rows else None),
+        "mean_probability_band_width": (
+            statistics.fmean(row["mean_upper"] - row["mean_lower"] for row in rows)
+            if rows else None),
+        "bins": rows,
+    }
+
+
 def fee_per_share(price: float, schedule: dict[str, Any], *, taker: bool = True) -> float:
     if not 0.0 < price < 1.0:
         return math.inf
@@ -593,7 +705,8 @@ class PaperRouter:
         cluster_delta: list[float] = []
         cluster_predictions: list[float] = []
         cluster_actuals: list[float] = []
-        covered = coverage_n = 0
+        cluster_lowers: list[float] = []
+        cluster_uppers: list[float] = []
         for rows in by_market.values():
             model_losses = [finite(row.get("model_brier"), math.nan) for row in rows]
             market_losses = [finite(row.get("market_brier"), math.nan) for row in rows]
@@ -611,14 +724,25 @@ class PaperRouter:
             if probabilities and math.isfinite(actual):
                 cluster_predictions.append(sum(probabilities) / len(probabilities))
                 cluster_actuals.append(actual)
-            for row in rows:
-                lower, upper, actual_row = (
-                    finite(row.get("lower"), math.nan), finite(row.get("upper"), math.nan),
-                    finite(row.get("actual_yes"), math.nan),
-                )
-                if all(math.isfinite(value) for value in (lower, upper, actual_row)):
-                    coverage_n += 1
-                    covered += int(lower <= actual_row <= upper)
+                valid_bands = [
+                    (finite(row.get("lower"), math.nan),
+                     finite(row.get("upper"), math.nan))
+                    for row in rows
+                ]
+                valid_bands = [
+                    (lower, upper) for lower, upper in valid_bands
+                    if math.isfinite(lower) and math.isfinite(upper)
+                    and 0.0 <= lower <= upper <= 1.0
+                ]
+                if valid_bands:
+                    cluster_lowers.append(statistics.fmean(
+                        lower for lower, _ in valid_bands))
+                    cluster_uppers.append(statistics.fmean(
+                        upper for _, upper in valid_bands))
+                else:
+                    # Keep vector alignment; invalid bands fail diagnostics.
+                    cluster_lowers.append(math.nan)
+                    cluster_uppers.append(math.nan)
         delta_mean = sum(cluster_delta) / len(cluster_delta) if cluster_delta else None
         delta_upper = None
         if len(cluster_delta) >= 2 and delta_mean is not None:
@@ -626,19 +750,25 @@ class PaperRouter:
                 len(cluster_delta))
         calibration_error = expected_calibration_error(
             cluster_predictions, cluster_actuals)
-        slope = None
-        if len(cluster_predictions) >= 2:
-            mean_p = sum(cluster_predictions) / len(cluster_predictions)
-            mean_y = sum(cluster_actuals) / len(cluster_actuals)
-            variance = sum((value - mean_p) ** 2 for value in cluster_predictions)
-            if variance > 1e-12:
-                slope = sum((p - mean_p) * (y - mean_y)
-                            for p, y in zip(cluster_predictions, cluster_actuals)) / variance
+        calibration_intercept, slope = logistic_calibration_line(
+            cluster_predictions, cluster_actuals)
+        interval_diagnostics = probability_interval_bin_diagnostics(
+            cluster_predictions, cluster_actuals, cluster_lowers, cluster_uppers,
+            bins=int((self.config.get("promotion") or {}).get(
+                "probability_interval_bins", 10)),
+            minimum_bin_size=int((self.config.get("promotion") or {}).get(
+                "minimum_probability_interval_bin_size", 3)),
+        )
         fills = {
             str(row.get("fill_id")): row for row in records.values()
             if row.get("event_type") == "VIRTUAL_FILL" and row.get("fill_id")
         }
-        finals = [row for row in records.values() if row.get("event_type") == "VIRTUAL_FINAL"]
+        finals_by_fill: dict[str, dict[str, Any]] = {}
+        for row in records.values():
+            fill_id = str(row.get("fill_id") or "")
+            if row.get("event_type") == "VIRTUAL_FINAL" and fill_id:
+                finals_by_fill.setdefault(fill_id, row)
+        finals = list(finals_by_fill.values())
         stressed_2x = 0.0
         matched_finals = 0
         for final in finals:
@@ -653,8 +783,15 @@ class PaperRouter:
             self.config.get("promotion"), dict) else {}
         minimum = int(promotion.get("minimum_forward_shadow_contracts") or 50)
         slope_range = promotion.get("calibration_slope_range") or [0.75, 1.25]
-        coverage_range = promotion.get("interval_coverage_range") or [0.85, 0.99]
-        interval_coverage = covered / coverage_n if coverage_n else None
+        interval_consistency = interval_diagnostics["consistency_rate"]
+        interval_bin_count = int(interval_diagnostics["eligible_bin_count"])
+        interval_width = interval_diagnostics["mean_probability_band_width"]
+        minimum_interval_bins = int(
+            promotion.get("minimum_probability_interval_bins") or 5)
+        minimum_interval_consistency = float(
+            promotion.get("minimum_probability_interval_bin_consistency") or 0.80)
+        maximum_interval_width = float(
+            promotion.get("maximum_mean_probability_interval_width") or 0.20)
         reasons: list[str] = []
         if len(by_market) < minimum:
             reasons.append("INSUFFICIENT_INDEPENDENT_SETTLEMENT_MARKETS")
@@ -664,9 +801,17 @@ class PaperRouter:
             reasons.append("CALIBRATION_ERROR_GATE")
         if slope is None or not float(slope_range[0]) <= slope <= float(slope_range[1]):
             reasons.append("CALIBRATION_SLOPE_GATE")
-        if interval_coverage is None or not float(coverage_range[0]) <= interval_coverage <= float(coverage_range[1]):
-            reasons.append("INTERVAL_COVERAGE_GATE")
-        if matched_finals < minimum or stressed_2x <= 0.0:
+        if (
+            interval_bin_count < minimum_interval_bins
+            or interval_consistency is None
+            or interval_consistency < minimum_interval_consistency
+            or interval_width is None
+            or interval_width > maximum_interval_width
+        ):
+            reasons.append("PROBABILITY_INTERVAL_CALIBRATION_GATE")
+        final_markets = {str(row.get("market_id") or "") for row in finals}
+        final_markets.discard("")
+        if len(final_markets) < minimum or matched_finals < minimum or stressed_2x <= 0.0:
             reasons.append("POSITIVE_2X_COST_STRESS_GATE")
         return {
             "eligible_for_manual_paper_promotion": not reasons,
@@ -684,10 +829,17 @@ class PaperRouter:
             "model_minus_market_brier_ci95_upper": delta_upper,
             "calibration_error": calibration_error,
             "calibration_error_definition": "10-bin ECE, settlement clusters equal weighted",
+            "calibration_intercept": calibration_intercept,
             "calibration_slope": slope,
-            "interval_coverage": interval_coverage,
-            "interval_coverage_n": coverage_n,
-            "virtual_final_markets": len({str(row.get("market_id") or "") for row in finals}),
+            "calibration_slope_definition": (
+                "logistic MLE: outcome ~ intercept + slope*logit(prediction), "
+                "one equal-weighted observation per settlement market"),
+            "probability_interval_diagnostics": interval_diagnostics,
+            "interval_coverage": None,
+            "interval_coverage_definition": (
+                "DEPRECATED_INVALID_FOR_BERNOULLI_REALIZATIONS; use "
+                "probability_interval_diagnostics"),
+            "virtual_final_markets": len(final_markets),
             "virtual_2x_cost_stress_pnl": stressed_2x,
             "blocking_reasons": reasons,
         }

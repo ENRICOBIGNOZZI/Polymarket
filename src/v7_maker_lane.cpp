@@ -53,6 +53,16 @@ MakerDecision MakerInstrumentLane::on_market_event(
     update.prior_aggressive_sell_prints_per_second =
         std::max(0.0, context.prior_aggressive_sell_prints_per_second);
     update.flow_prior_valid = context.flow_prior_valid;
+    update.selector_authority_required = context.selector_authority_required;
+    update.selector_execution_authority_mask =
+        context.selector_execution_authority_mask;
+    update.selector_generation = context.selector_generation;
+    update.selector_projected_flow_reach_probability =
+        context.selector_projected_flow_reach_probability;
+    update.selector_projected_queue_depletion_probability =
+        context.selector_projected_queue_depletion_probability;
+    update.selector_projected_fill_probability =
+        context.selector_projected_fill_probability;
 
     const bool sign_valid = inventory_sign_ == 1 || inventory_sign_ == -1;
     const bool book_valid = event.book.valid != 0 && event.book.lineage_continuous != 0

@@ -414,6 +414,60 @@ void test_inventory_forces_reducing_side() {
     assert(decision.intents[0].side == pm::v7::Side::Sell);
 }
 
+void test_selector_authority_allows_only_exact_token_action_side_cell() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    update.selector_authority_required = 1;
+    update.selector_execution_authority_mask =
+        pm::v7::maker::execution_authority_bit(
+            pm::v7::maker::Action::Join, pm::v7::Side::Buy);
+    const auto model = profitable_model();
+    pm::v7::maker::InventorySnapshot inventory;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 1.0;
+    risk.max_abs_residual_shares = 10.0;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(decision.reason == pm::v7::maker::DecisionReason::Quote);
+    assert(decision.action == pm::v7::maker::Action::OneSided);
+    assert(decision.placement_action == pm::v7::maker::Action::Join);
+    assert(decision.intent_count == 1);
+    assert(decision.intents[0].side == pm::v7::Side::Buy);
+    assert(decision.intents[0].price_tick == update.best_bid_tick);
+    assert(decision.bid_selector_cell_authorized == 1);
+    assert(decision.bid_inventory_reduction_bypass == 0);
+}
+
+void test_selector_authority_fails_closed_but_never_blocks_inventory_reduction() {
+    auto update = normal_update();
+    update.selector_authority_required = 1;
+    update.selector_execution_authority_mask = 0;
+    const auto model = profitable_model();
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 1.0;
+    risk.max_abs_residual_shares = 10.0;
+
+    pm::v7::maker::MakerHotPath flat_hot;
+    pm::v7::maker::InventorySnapshot flat;
+    const auto rejected = flat_hot.on_market_update(update, flat, quotes, risk, model);
+    assert(rejected.reason == pm::v7::maker::DecisionReason::NoEconomicQuote);
+    assert(rejected.intent_count == 1);
+    assert(rejected.intents[0].type == pm::v7::IntentType::Withdraw);
+
+    pm::v7::maker::MakerHotPath reducing_hot;
+    pm::v7::maker::InventorySnapshot long_inventory;
+    long_inventory.yes_shares = 8.0;
+    const auto reducing = reducing_hot.on_market_update(
+        update, long_inventory, quotes, risk, model);
+    assert(reducing.action == pm::v7::maker::Action::OneSided);
+    assert(reducing.intent_count == 1);
+    assert(reducing.intents[0].side == pm::v7::Side::Sell);
+    assert(reducing.ask_selector_cell_authorized == 0);
+    assert(reducing.ask_inventory_reduction_bypass == 1);
+}
+
 void test_partial_inventory_sizes_reducing_quote_to_available_residual() {
     pm::v7::maker::MakerHotPath hot;
     auto update = normal_update();
@@ -795,6 +849,8 @@ int main() {
     test_outcome_cell_orientation_is_respected();
     test_sell_cell_controls_one_sided_inventory_reduction();
     test_inventory_forces_reducing_side();
+    test_selector_authority_allows_only_exact_token_action_side_cell();
+    test_selector_authority_fails_closed_but_never_blocks_inventory_reduction();
     test_partial_inventory_sizes_reducing_quote_to_available_residual();
     test_transient_no_economic_quote_cannot_cancel_before_minimum_lifetime();
     test_positive_exploration_ev_breaks_robust_cold_start();

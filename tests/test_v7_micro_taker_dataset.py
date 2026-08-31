@@ -12,10 +12,23 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import v7_micro_taker_data as data  # noqa: E402
 from v7_micro_taker_worker import (  # noqa: E402
     MODEL_FEATURE_DIM, canonical_live_flow_features, causal_model_rows,
-    chronological_oos_diagnostics, fixed_forward_oos_diagnostics,
+    chronological_oos_diagnostics, executable_strategy_oos,
+    fixed_forward_oos_diagnostics,
     load_or_freeze_model_challenger, model_validity, sample_diagnostics,
     sample_key,
 )
+
+
+def executable_labels(target: float, *, stressed: float | None = None) -> dict:
+    magnitude = abs(target)
+    stress = magnitude if stressed is None else stressed
+    return {
+        "yes_executable_net_edge": magnitude if target > 0.0 else -magnitude,
+        "no_executable_net_edge": magnitude if target < 0.0 else -magnitude,
+        "yes_cost_stress_2x_net_edge": stress if target > 0.0 else -magnitude,
+        "no_cost_stress_2x_net_edge": stress if target < 0.0 else -magnitude,
+        "label_probe_shares": 5.0,
+    }
 
 
 def book(token: str, version: int, *, epoch: int = 1) -> data.Book:
@@ -95,6 +108,7 @@ def test_purged_chronological_oos_requires_real_predictive_skill() -> None:
             "sample_key": f"m:{index}", "market_id": f"m-{index % 8}",
             "event_id": f"e-{index % 8}", "ts": 1_000 + index * 2,
             "y": 0.002 * signal,
+            **executable_labels(0.002 * signal),
             "x": [1.0, signal, 0.0, 0.0, 0.0, 0.0, 0.2, -0.1],
         })
     diagnostics = chronological_oos_diagnostics(samples, horizon_seconds=30)
@@ -113,11 +127,40 @@ def test_purged_chronological_oos_rejects_no_skill() -> None:
             "sample_key": f"m:{index}", "market_id": f"m-{index % 8}",
             "event_id": f"e-{index % 8}", "ts": 1_000 + index * 2,
             "y": target,
+            **executable_labels(target),
             "x": [1.0, signal, 0.0, 0.0, 0.0, 0.0, 0.2, -0.1],
         })
     diagnostics = chronological_oos_diagnostics(samples, horizon_seconds=30)
     assert not diagnostics["valid"]
-    assert "OOS_DOES_NOT_BEAT_NO_CHANGE_BASELINE" in diagnostics["reasons"]
+    assert any("EXECUTABLE" in reason or "FOLD_STABILITY" in reason
+               for reason in diagnostics["reasons"])
+
+
+def test_executable_oos_equal_weights_event_time_and_requires_2x_cost_profit() -> None:
+    rows = []
+    predictions = []
+    for index in range(60):
+        target = 0.01
+        row = {
+            "market_id": f"m-{index}", "event_id": f"e-{index}",
+            "ts": 1_000 + 31 * index, "y": target,
+            **executable_labels(target, stressed=-0.001),
+        }
+        rows.append(row)
+        predictions.append(0.01)
+    diagnostics = executable_strategy_oos(
+        rows, predictions, horizon_seconds=30)
+    assert diagnostics["mean_executable_net_edge"] > 0.0
+    assert diagnostics["lower_95_executable_net_edge"] > 0.0
+    assert diagnostics["lower_95_2x_cost_net_edge"] < 0.0
+    assert not diagnostics["valid"]
+    assert "EXECUTABLE_2X_COST_EDGE_CI_NOT_POSITIVE" in diagnostics["reasons"]
+
+    burst_rows = [{**rows[0], "market_id": f"copy-{index}"} for index in range(100)]
+    burst = executable_strategy_oos(
+        burst_rows, [0.01] * len(burst_rows), horizon_seconds=30)
+    assert burst["event_time_clusters"] == 1
+    assert "INSUFFICIENT_EXECUTABLE_EVENT_TIME_CLUSTERS" in burst["reasons"]
 
 
 def test_lag_features_never_borrow_same_second_observations() -> None:
@@ -145,6 +188,7 @@ def test_frozen_challenger_uses_only_post_selection_forward_rows() -> None:
             "mid": 0.5, "spread": 0.01,
             "x": [1.0, signal, 0.0, 0.0, 0.0, 0.0, 0.2, -0.1],
             "y": 0.002 * signal,
+            **executable_labels(0.002 * signal),
         })
     model_rows = causal_model_rows(rows)
     challenger, readiness = load_or_freeze_model_challenger(
@@ -171,6 +215,7 @@ def test_frozen_challenger_uses_only_post_selection_forward_rows() -> None:
             "mid": 0.5, "spread": 0.01,
             "x": [1.0, signal, 0.0, 0.0, 0.0, 0.0, 0.2, -0.1],
             "y": 0.002 * signal,
+            **executable_labels(0.002 * signal),
         })
     combined = causal_model_rows(rows + future)
     forward = fixed_forward_oos_diagnostics(
@@ -203,6 +248,9 @@ class DatasetReadinessTests(unittest.TestCase):
 
     def test_no_skill_oos_gate(self) -> None:
         test_purged_chronological_oos_rejects_no_skill()
+
+    def test_grouped_executable_profit_gate(self) -> None:
+        test_executable_oos_equal_weights_event_time_and_requires_2x_cost_profit()
 
     def test_strictly_prior_lag_features(self) -> None:
         test_lag_features_never_borrow_same_second_observations()

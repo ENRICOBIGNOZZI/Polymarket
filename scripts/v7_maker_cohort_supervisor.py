@@ -57,6 +57,8 @@ def validate_selection(value: dict[str, Any], model_sha: str) -> list[dict[str, 
         or value.get("authenticated_execution") is not False
         or value.get("real_order_submission") is not False
         or value.get("model_sha") != model_sha
+        or value.get("execution_cell_authority_required") is not True
+        or value.get("execution_authority_semantics") != "token_action_side_v2"
         or value.get("source") not in ALLOWED_SOURCES
         or not isinstance(markets, list)
         or not markets
@@ -71,8 +73,32 @@ def validate_selection(value: dict[str, Any], model_sha: str) -> list[dict[str, 
             not isinstance(row, dict)
             or not all(str(row.get(key) or "") for key in keys)
             or str(row.get("yes_token")) == str(row.get("no_token"))
+            or not isinstance(row.get("authorized_execution_cells"), list)
+            or not isinstance(row.get("inventory_seed_authorized"), bool)
         ):
             raise ValueError("maker_rotation_market_invalid")
+        tokens = {str(row["yes_token"]), str(row["no_token"])}
+        sell_authorized = False
+        for cell in row["authorized_execution_cells"]:
+            if not isinstance(cell, dict):
+                raise ValueError("maker_rotation_cell_invalid")
+            token = str(cell.get("token_id") or "")
+            action = str(cell.get("action") or "").upper()
+            side = str(cell.get("quote_side") or "").upper()
+            try:
+                projected_fill = float(cell.get("projected_fill_probability") or 0.0)
+            except (TypeError, ValueError):
+                raise ValueError("maker_rotation_cell_invalid") from None
+            if (
+                token not in tokens
+                or action not in {"JOIN", "IMPROVE1", "FADE1", "FADE2"}
+                or side not in {"BUY", "SELL"}
+                or not 0.0 <= projected_fill <= 1.0
+            ):
+                raise ValueError("maker_rotation_cell_invalid")
+            sell_authorized = sell_authorized or side == "SELL"
+        if bool(row["inventory_seed_authorized"]) != sell_authorized:
+            raise ValueError("maker_rotation_inventory_seed_authority_invalid")
     return markets
 
 
@@ -122,24 +148,29 @@ def projected_cells(
             continue
         if exclude_market_ids is not None and market_id in exclude_market_ids:
             continue
-        opportunities = market.get("quote_opportunities")
-        if not isinstance(opportunities, list):
+        authority_cells = market.get("authorized_execution_cells")
+        if not isinstance(authority_cells, list):
             continue
-        for opportunity in opportunities:
-            if not isinstance(opportunity, dict):
+        for authority in authority_cells:
+            if not isinstance(authority, dict):
                 continue
             try:
                 probability = float(
-                    opportunity.get("projected_best_fill_probability") or 0.0
+                    authority.get("projected_fill_probability") or 0.0
                 )
             except (TypeError, ValueError):
                 probability = 0.0
             if not (0.0 <= probability <= 1.0):
                 continue
-            token_id = str(opportunity.get("token_id") or "")
-            quote_side = str(opportunity.get("quote_side") or "").upper()
-            cell = "|".join((market_id, token_id, quote_side))
-            if market_id and token_id and quote_side in {"BUY", "SELL"}:
+            token_id = str(authority.get("token_id") or "")
+            action = str(authority.get("action") or "").upper()
+            quote_side = str(authority.get("quote_side") or "").upper()
+            cell = "|".join((market_id, token_id, action, quote_side))
+            if (
+                market_id and token_id
+                and action in {"JOIN", "IMPROVE1", "FADE1", "FADE2"}
+                and quote_side in {"BUY", "SELL"}
+            ):
                 output.append((probability, cell))
     return sorted(output, key=lambda item: (-item[0], item[1]))
 
@@ -299,6 +330,8 @@ class CohortSupervisor:
         self.logs: list[Any] = []
         self.stop_requested = False
         self.rotation_count = 0
+        self.cell_authority_refresh_count = 0
+        self.last_cell_authority_refresh_ms = 0
         self.last_rotation_ms = 0
         self.pending_membership_sha256 = ""
         self.pending_rotation_key = ""
@@ -357,6 +390,8 @@ class CohortSupervisor:
             "model_sha": self.args.model_sha,
             "state": state,
             "rotation_count": self.rotation_count,
+            "cell_authority_refresh_count": self.cell_authority_refresh_count,
+            "last_cell_authority_refresh_ms": self.last_cell_authority_refresh_ms,
             "last_rotation_ms": self.last_rotation_ms,
             "candidate_confirmations": self.pending_confirmations,
             "candidate_required_confirmations": self.args.candidate_confirmations,
@@ -499,6 +534,80 @@ class CohortSupervisor:
         if not allowed:
             return None
         return candidate
+
+    def refresh_same_membership_authority(self) -> bool:
+        """Project fresh authority onto every already-warm market identity.
+
+        Candidate ranking churn must not force a process restart when its best
+        cell is already subscribed by the runtime observation universe. Missing
+        candidate rows lose authority but remain warm; new identities still go
+        through the explicit rotation gate.
+        """
+        runtime = read_json(self.selection)
+        candidate = read_json(self.candidate)
+        try:
+            validate_selection(runtime, self.args.model_sha)
+            validate_selection(candidate, self.args.model_sha)
+        except ValueError:
+            return False
+        if (
+            candidate.get("degraded") is True
+            or int(candidate.get("timestamp_ms") or 0)
+                <= int(runtime.get("timestamp_ms") or 0)
+        ):
+            return False
+        runtime_rows = {
+            str(row.get("market_id") or ""): row
+            for row in runtime["markets"] if isinstance(row, dict)
+        }
+        candidate_rows = {
+            str(row.get("market_id") or ""): row
+            for row in candidate["markets"] if isinstance(row, dict)
+        }
+        projected_rows: list[dict[str, Any]] = []
+        overlap = 0
+        for market_id, incumbent in runtime_rows.items():
+            challenger = candidate_rows.get(market_id)
+            if challenger is not None and all(
+                str(challenger.get(key) or "") == str(incumbent.get(key) or "")
+                for key in ("condition_id", "yes_token", "no_token")
+            ):
+                projected_rows.append(dict(challenger))
+                overlap += 1
+                continue
+            observation = dict(incumbent)
+            observation.update({
+                "execution_role": "WARM_RUNTIME_OBSERVATION",
+                "control_exploration_authorized": False,
+                "authorized_execution_cells": [],
+                "authorized_execution_cell_count": 0,
+                "inventory_seed_authorized": False,
+                "quote_opportunities": [],
+            })
+            projected_rows.append(observation)
+        if overlap <= 0:
+            return False
+        projected = dict(candidate)
+        projected["markets"] = projected_rows
+        projected["selected_count"] = len(projected_rows)
+        projected["resource_capacity_markets"] = runtime[
+            "resource_capacity_markets"]
+        projected["in_place_authority_projection"] = True
+        projected["candidate_membership_sha256"] = membership_sha256(candidate)
+        projected["runtime_warm_membership_sha256"] = membership_sha256(runtime)
+        projected["warm_identity_overlap_count"] = overlap
+        projected["authorized_execution_cell_count"] = sum(
+            len(row.get("authorized_execution_cells") or [])
+            for row in projected_rows
+        )
+        atomic_json(self.selection, projected)
+        self.cell_authority_refresh_count += 1
+        self.last_cell_authority_refresh_ms = time.time_ns() // 1_000_000
+        self.rotation_gate_metrics = {
+            "rotation_gate_reason": "WARM_MEMBERSHIP_CELL_AUTHORITY_REFRESHED",
+            "warm_identity_overlap_count": overlap,
+        }
+        return True
 
     def write_flow_pause_drain(self) -> None:
         atomic_json(self.drain, {
@@ -654,6 +763,7 @@ class CohortSupervisor:
                 if self.sync_no_fresh_flow_pause():
                     time.sleep(self.args.poll_seconds)
                     continue
+                authority_refreshed = self.refresh_same_membership_authority()
                 candidate = self.pending_candidate()
                 if candidate is not None:
                     if not self.observe_candidate_generation(candidate):
@@ -664,7 +774,9 @@ class CohortSupervisor:
                         self.rotate_if_safe(candidate)
                 else:
                     self.reset_pending_confirmation()
-                    self.write_status("RUNNING")
+                    self.write_status(
+                        "RUNNING_CELL_REFRESHED" if authority_refreshed else "RUNNING"
+                    )
                 time.sleep(self.args.poll_seconds)
             return 0
         finally:

@@ -88,6 +88,8 @@ constexpr double kNormalQuoteCapitalFraction = 0.01;
 
 struct SideEconomics {
     bool admissible = false;
+    bool selector_cell_authorized = false;
+    bool inventory_reduction_bypass = false;
     Side side = Side::None;
     std::int64_t price_tick = 0;
     double quote_shares = 0.0;
@@ -236,6 +238,19 @@ struct ExplorationChoice {
     out.price_tick = quote_tick;
     out.quote_shares = quote_shares;
 
+    const double residual = inventory.residual_shares();
+    out.selector_cell_authorized = (
+        update.selector_execution_authority_mask
+        & execution_authority_bit(action, side)) != 0;
+    out.inventory_reduction_bypass =
+        (residual > kEps && side == Side::Sell)
+        || (residual < -kEps && side == Side::Buy);
+    if (update.selector_authority_required != 0
+        && !out.selector_cell_authorized
+        && !out.inventory_reduction_bypass) {
+        return out;
+    }
+
     if (quote_shares <= 0.0 || quote_tick <= 0) return out;
     if (side == Side::Buy && quote_tick >= update.best_ask_tick) return out;
     if (side == Side::Sell && quote_tick <= update.best_bid_tick) return out;
@@ -312,7 +327,6 @@ struct ExplorationChoice {
     if (distance_ticks < 0.0) adverse_markout += (-distance_ticks) * 0.0001;
 
     const double capture = side == Side::Buy ? fair_value - price : price - fair_value;
-    const double residual = inventory.residual_shares();
     const double signed_delta = side == Side::Buy ? quote_shares : -quote_shares;
     const double next_inventory_fraction = clamp(
         (residual + signed_delta) / std::max(kEps, risk.max_abs_residual_shares), -2.0, 2.0);
@@ -499,6 +513,16 @@ MakerDecision MakerHotPath::on_market_update(
     const MakerModelSnapshot& model) noexcept {
 
     MakerDecision decision;
+    decision.selector_authority_required = update.selector_authority_required;
+    decision.selector_execution_authority_mask =
+        update.selector_execution_authority_mask;
+    decision.selector_generation = update.selector_generation;
+    decision.selector_projected_flow_reach_probability =
+        update.selector_projected_flow_reach_probability;
+    decision.selector_projected_queue_depletion_probability =
+        update.selector_projected_queue_depletion_probability;
+    decision.selector_projected_fill_probability =
+        update.selector_projected_fill_probability;
     const std::int64_t start_ns = monotonic_ns();
 
     const double decay_per_second = model.valid() ? model.feature_decay : 0.90;
@@ -539,7 +563,10 @@ MakerDecision MakerHotPath::on_market_update(
     // every unrelated book message, so a busy feed erased real flow in
     // milliseconds.  feature_decay now has stable per-second semantics.
     const double tau_seconds = -1.0 / std::log(std::max(1e-6, decay_per_second));
-    if (!flow_evidence_valid_ && update.flow_prior_valid != 0) {
+    if (update.flow_prior_valid != 0
+        && (!flow_evidence_valid_
+            || (update.selector_generation != 0
+                && update.selector_generation != selector_generation_))) {
         ew_aggressive_buy_shares_per_second_ = std::max(
             0.0, update.prior_aggressive_buy_shares_per_second);
         ew_aggressive_sell_shares_per_second_ = std::max(
@@ -549,6 +576,7 @@ MakerDecision MakerHotPath::on_market_update(
         ew_aggressive_sell_prints_per_second_ = std::max(
             0.0, update.prior_aggressive_sell_prints_per_second);
         flow_evidence_valid_ = 1;
+        selector_generation_ = update.selector_generation;
     } else {
         ew_aggressive_buy_shares_per_second_ *= time_decay;
         ew_aggressive_sell_shares_per_second_ *= time_decay;
@@ -988,9 +1016,21 @@ MakerDecision MakerHotPath::on_market_update(
                         choice.economics->opposite_flow_prints_per_second;
                 }
                 decision.action = choice.action;
+                decision.placement_action = choice.action;
                 decision.reason = DecisionReason::ExplorationQuote;
                 decision.robust_ev = choice.adjusted_ev;
                 decision.ev_uncertainty = choice.economics->uncertainty;
+                if (choice.economics->side == Side::Buy) {
+                    decision.bid_selector_cell_authorized = static_cast<std::uint8_t>(
+                        choice.economics->selector_cell_authorized);
+                    decision.bid_inventory_reduction_bypass = static_cast<std::uint8_t>(
+                        choice.economics->inventory_reduction_bypass);
+                } else {
+                    decision.ask_selector_cell_authorized = static_cast<std::uint8_t>(
+                        choice.economics->selector_cell_authorized);
+                    decision.ask_inventory_reduction_bypass = static_cast<std::uint8_t>(
+                        choice.economics->inventory_reduction_bypass);
+                }
                 const bool persistent = persistent_lifetime_sample(
                     update, intent_sequence_ + 1, model.exploration_persistent_fraction);
                 exploration_max_rest_ns_ = persistent
@@ -1025,6 +1065,7 @@ MakerDecision MakerHotPath::on_market_update(
     const bool want_bid = best->bid.admissible;
     const bool want_ask = best->ask.admissible;
     decision.action = inventory_one_sided || (want_bid != want_ask) ? Action::OneSided : best->action;
+    decision.placement_action = best->action;
     decision.reason = DecisionReason::Quote;
     decision.bid_fill_probability = best->bid.fill_probability;
     decision.ask_fill_probability = best->ask.fill_probability;
@@ -1043,6 +1084,14 @@ MakerDecision MakerHotPath::on_market_update(
     decision.robust_ev = (want_bid ? best->bid.robust_ev : 0.0) + (want_ask ? best->ask.robust_ev : 0.0);
     decision.ev_uncertainty = (want_bid ? best->bid.uncertainty : 0.0)
                             + (want_ask ? best->ask.uncertainty : 0.0);
+    decision.bid_selector_cell_authorized = static_cast<std::uint8_t>(
+        want_bid && best->bid.selector_cell_authorized);
+    decision.ask_selector_cell_authorized = static_cast<std::uint8_t>(
+        want_ask && best->ask.selector_cell_authorized);
+    decision.bid_inventory_reduction_bypass = static_cast<std::uint8_t>(
+        want_bid && best->bid.inventory_reduction_bypass);
+    decision.ask_inventory_reduction_bypass = static_cast<std::uint8_t>(
+        want_ask && best->ask.inventory_reduction_bypass);
 
     auto reconcile_side = [&](Side side, bool active, std::int64_t active_tick,
                               bool wanted, const SideEconomics& economics) noexcept {
