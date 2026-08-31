@@ -109,7 +109,7 @@ class V7FastArbLegFreshnessContractTest(unittest.TestCase):
 
     def test_silent_ws_failure_is_bounded_before_quiet_lineage_is_trusted(self) -> None:
         self.assertIn("websocket::stream_base::timeout timeouts", self.fast_ws)
-        self.assertIn("std::chrono::seconds(5)", self.fast_ws)
+        self.assertIn("std::chrono::seconds(60)", self.fast_ws)
         self.assertIn('ws.write(asio::buffer(std::string_view{"PING"}), error)', self.fast_ws)
         self.assertIn("websocket closed; reconnecting and invalidating L2 lineage", self.fast_ws)
 
