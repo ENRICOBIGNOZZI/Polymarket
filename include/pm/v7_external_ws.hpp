@@ -18,6 +18,16 @@
 
 namespace pm::v7::external_fair {
 
+class ExternalFrameObserver {
+public:
+    virtual ~ExternalFrameObserver() = default;
+    virtual void on_connection_epoch(std::uint64_t) noexcept {}
+    virtual void on_frame(std::uint64_t connection_epoch,
+                          std::int64_t local_receive_monotonic_ns,
+                          std::int64_t local_receive_wall_ns,
+                          std::string_view payload) noexcept = 0;
+};
+
 #if PM_V7_EXTERNAL_USE_STD_STOP_TOKEN
 using ExternalStopToken = std::stop_token;
 #else
@@ -74,7 +84,8 @@ struct ExternalWsSnapshot {
 class ExternalVenueWsClient final {
 public:
     ExternalVenueWsClient(ExternalVenueConnectionSpec spec,
-                          ExternalVenueIngress& ingress);
+                          ExternalVenueIngress& ingress,
+                          ExternalFrameObserver* observer = nullptr);
 
     ExternalVenueWsClient(const ExternalVenueWsClient&) = delete;
     ExternalVenueWsClient& operator=(const ExternalVenueWsClient&) = delete;
@@ -89,6 +100,7 @@ public:
 private:
     ExternalVenueConnectionSpec spec_;
     ExternalVenueIngress& ingress_;
+    ExternalFrameObserver* observer_ = nullptr;
     std::atomic<std::uint64_t> connection_epoch_{0};
     std::atomic<std::uint64_t> connection_attempts_{0};
     std::atomic<std::uint64_t> successful_connections_{0};

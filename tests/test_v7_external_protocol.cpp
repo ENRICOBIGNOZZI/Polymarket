@@ -22,6 +22,14 @@ int main() {
     assert(std::abs(output[0].bid - 65000.10) < 1e-9);
     assert(std::abs(output[0].ask_size - 2.30) < 1e-9);
 
+    const auto binance_depth_owned_by_l2 = decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'005, 2'005,
+        R"({"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":400900218,"u":400900219,"b":[["65000.10","1.20"]],"a":[["65000.20","2.30"]]})",
+        output);
+    assert(binance_depth_owned_by_l2.invalid_frame == 0);
+    assert(binance_depth_owned_by_l2.output_count == 0);
+    assert(binance_depth_owned_by_l2.ignored_events == 1);
+
     const auto binance_trade = decode_external_venue_frame(
         VenueId::BinanceSpot, 1, 10, 1'010, 2'010,
         R"({"e":"aggTrade","E":1672515782136,"s":"BTCUSDT","a":12345,"p":"65000.50","q":"0.25","T":1672515782136,"m":false})",

@@ -1,14 +1,28 @@
+#include "pm/v7_binance_l2.hpp"
+#include "pm/v7_binance_l2_protocol.hpp"
 #include "pm/v7_external_state.hpp"
 #include "pm/v7_external_ws.hpp"
 
+#include <boost/asio/connect.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ssl/context.hpp>
+#include <boost/asio/ssl/stream.hpp>
+#include <boost/beast/core.hpp>
+#include <boost/beast/http.hpp>
+#include <boost/beast/ssl.hpp>
 #include <boost/json.hpp>
+
+#include <openssl/ssl.h>
 
 #include <atomic>
 #include <chrono>
 #include <csignal>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
+#include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -19,6 +33,11 @@ namespace json = boost::json;
 using namespace pm::v7::external_fair;
 
 namespace {
+namespace net = boost::asio;
+namespace ssl = net::ssl;
+namespace beast = boost::beast;
+namespace http = beast::http;
+using tcp = net::ip::tcp;
 std::atomic<bool> stopping{false};
 
 void signal_handler(int) noexcept { stopping.store(true, std::memory_order_relaxed); }
@@ -61,6 +80,124 @@ json::object transport_json(const ExternalWsSnapshot& value, const char* venue) 
         {"healthy", value.healthy != 0},
     };
 }
+
+const char* l2_state_name(BinanceL2State state) noexcept {
+    switch (state) {
+        case BinanceL2State::Buffering: return "BUFFERING";
+        case BinanceL2State::Live: return "LIVE";
+        case BinanceL2State::Gapped: return "GAPPED";
+    }
+    return "UNKNOWN";
+}
+
+json::object l2_json(const BinanceL2Metrics& value) {
+    return {
+        {"state", l2_state_name(value.state)}, {"valid", value.valid != 0},
+        {"last_update_id", value.last_update_id},
+        {"latest_receive_monotonic_ns", value.latest_receive_monotonic_ns},
+        {"best_bid", value.best_bid}, {"best_ask", value.best_ask},
+        {"mid", value.mid}, {"microprice", value.microprice},
+        {"spread_bps", value.spread_bps},
+        {"bid_depth_l1", value.bid_depth_l1}, {"ask_depth_l1", value.ask_depth_l1},
+        {"bid_depth_l5", value.bid_depth_l5}, {"ask_depth_l5", value.ask_depth_l5},
+        {"bid_depth_l10", value.bid_depth_l10}, {"ask_depth_l10", value.ask_depth_l10},
+        {"bid_depth_l20", value.bid_depth_l20}, {"ask_depth_l20", value.ask_depth_l20},
+        {"imbalance_l1", value.imbalance_l1}, {"imbalance_l5", value.imbalance_l5},
+        {"imbalance_l10", value.imbalance_l10},
+        {"bid_levels", value.bid_levels}, {"ask_levels", value.ask_levels},
+    };
+}
+
+class BinanceSpotL2Observer final : public ExternalFrameObserver {
+public:
+    void on_connection_epoch(std::uint64_t epoch) noexcept override {
+        std::lock_guard lock(mutex_);
+        book_.begin_recovery();
+        connection_epoch_ = epoch;
+    }
+
+    void on_frame(std::uint64_t epoch, std::int64_t receive_ns, std::int64_t,
+                  std::string_view payload) noexcept override {
+        BinanceDepthDelta delta;
+        const auto parsed = parse_binance_spot_depth_delta(payload, receive_ns, delta);
+        if (parsed == BinanceDepthParseState::Ignored) return;
+        std::lock_guard lock(mutex_);
+        if (epoch != connection_epoch_) {
+            book_.begin_recovery();
+            connection_epoch_ = epoch;
+        }
+        poll_snapshot();
+        if (parsed != BinanceDepthParseState::Parsed || !book_.buffer_delta(std::move(delta))) {
+            book_.begin_recovery();
+        }
+        start_snapshot_if_needed();
+    }
+
+    [[nodiscard]] BinanceL2Metrics metrics() const noexcept {
+        std::lock_guard lock(mutex_);
+        return book_.metrics();
+    }
+
+private:
+    static std::optional<BinanceDepthSnapshot> fetch_snapshot() noexcept {
+        try {
+            net::io_context io;
+            ssl::context context(ssl::context::tls_client);
+            context.set_default_verify_paths();
+            context.set_verify_mode(ssl::verify_peer);
+            tcp::resolver resolver(io);
+            beast::ssl_stream<beast::tcp_stream> stream(io, context);
+            const auto endpoints = resolver.resolve("api.binance.com", "443");
+            beast::get_lowest_layer(stream).connect(endpoints);
+            if (!SSL_set_tlsext_host_name(stream.native_handle(), "api.binance.com")) return std::nullopt;
+            stream.handshake(ssl::stream_base::client);
+            http::request<http::empty_body> request{http::verb::get, "/api/v3/depth?symbol=BTCUSDT&limit=1000", 11};
+            request.set(http::field::host, "api.binance.com");
+            request.set(http::field::user_agent, "polymarket-v7-external-l2/1");
+            http::write(stream, request);
+            beast::flat_buffer buffer;
+            http::response<http::string_body> response;
+            http::read(stream, buffer, response);
+            const auto receive_ns = monotonic_now_ns();
+            boost::system::error_code ignored;
+            stream.shutdown(ignored);
+            BinanceDepthSnapshot output;
+            if (response.result() != http::status::ok
+                || parse_binance_depth_snapshot(response.body(), receive_ns, output) != BinanceDepthParseState::Parsed) {
+                return std::nullopt;
+            }
+            return output;
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+
+    void poll_snapshot() noexcept {
+        if (!snapshot_future_.valid()
+            || snapshot_future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+        const auto completed_epoch = snapshot_epoch_;
+        const auto snapshot = snapshot_future_.get();
+        if (completed_epoch != connection_epoch_ || !snapshot || !book_.install_snapshot(*snapshot)) {
+            book_.begin_recovery();
+        }
+    }
+
+    void start_snapshot_if_needed() noexcept {
+        if (book_.state() != BinanceL2State::Buffering || snapshot_future_.valid()) return;
+        snapshot_epoch_ = connection_epoch_;
+        try {
+            snapshot_future_ = std::async(std::launch::async, [] { return fetch_snapshot(); });
+        } catch (...) {
+            book_.begin_recovery();
+        }
+    }
+
+    mutable std::mutex mutex_{};
+    BinanceL2Book book_{};
+    std::future<std::optional<BinanceDepthSnapshot>> snapshot_future_{};
+    std::uint64_t connection_epoch_ = 0;
+    std::uint64_t snapshot_epoch_ = 0;
+};
 } // namespace
 
 int main(int argc, char** argv) {
@@ -85,7 +222,8 @@ int main(int argc, char** argv) {
         ExternalVenueIngress binance_ingress(VenueId::BinanceSpot, asset_handle);
         ExternalVenueIngress coinbase_ingress(VenueId::CoinbaseSpot, asset_handle);
         ExternalVenueIngress bybit_ingress(VenueId::BybitSpot, asset_handle);
-        ExternalVenueWsClient binance(btc_spot_connection_spec(VenueId::BinanceSpot, asset_handle), binance_ingress);
+        BinanceSpotL2Observer binance_l2;
+        ExternalVenueWsClient binance(btc_spot_connection_spec(VenueId::BinanceSpot, asset_handle), binance_ingress, &binance_l2);
         ExternalVenueWsClient coinbase(btc_spot_connection_spec(VenueId::CoinbaseSpot, asset_handle), coinbase_ingress);
         ExternalVenueWsClient bybit(btc_spot_connection_spec(VenueId::BybitSpot, asset_handle), bybit_ingress);
 
@@ -137,6 +275,7 @@ int main(int argc, char** argv) {
                 {"aggregate_trade_imbalance", snapshot.aggregate_trade_imbalance},
                 {"latest_input_receive_monotonic_ns", snapshot.latest_input_receive_monotonic_ns},
                 {"drained_last_cycle", drained},
+                {"binance_spot_l2", l2_json(binance_l2.metrics())},
                 {"venues", std::move(venues)},
             });
             std::this_thread::sleep_for(std::chrono::milliseconds(100));

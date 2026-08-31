@@ -218,6 +218,14 @@ void decode_binance(const json::object& root, std::uint64_t asset_handle,
         return;
     }
 
+    // Diff-depth frames are reconstructed by the dedicated bounded Binance L2
+    // observer. They are not BBO payloads and must not inflate generic decoder
+    // failure counts merely because b/a are arrays instead of scalar fields.
+    if (ieq(text_of(find_value(*object, "e")), "depthUpdate")) {
+        ++result.ignored_events;
+        return;
+    }
+
     if (find_value(*object, "u") != nullptr && find_value(*object, "b") != nullptr
         && find_value(*object, "a") != nullptr) {
         ++result.recognized_events;

@@ -67,7 +67,7 @@ ExternalVenueConnectionSpec btc_spot_connection_spec(
             spec.target = "/ws";
             spec.symbol = "BTCUSDT";
             spec.subscription_json =
-                R"({"method":"SUBSCRIBE","params":["btcusdt@bookTicker","btcusdt@aggTrade"],"id":1})";
+                R"({"method":"SUBSCRIBE","params":["btcusdt@depth@100ms","btcusdt@bookTicker","btcusdt@aggTrade"],"id":1})";
             break;
         case VenueId::CoinbaseSpot:
             spec.host = "advanced-trade-ws.coinbase.com";
@@ -99,8 +99,8 @@ ExternalVenueConnectionSpec btc_spot_connection_spec(
 
 ExternalVenueWsClient::ExternalVenueWsClient(
     ExternalVenueConnectionSpec spec,
-    ExternalVenueIngress& ingress)
-    : spec_(std::move(spec)), ingress_(ingress) {
+    ExternalVenueIngress& ingress, ExternalFrameObserver* observer)
+    : spec_(std::move(spec)), ingress_(ingress), observer_(observer) {
     if (spec_.venue == VenueId::Unknown || spec_.asset_handle == 0
         || spec_.host.empty() || spec_.port.empty() || spec_.target.empty()
         || spec_.subscription_json.empty() || spec_.max_message_bytes == 0
@@ -151,6 +151,7 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
             connected_.store(true, std::memory_order_release);
             healthy_.store(true, std::memory_order_release);
             successful_connections_.fetch_add(1, std::memory_order_relaxed);
+            if (observer_ != nullptr) observer_->on_connection_epoch(epoch);
             consecutive_failures = 0;
             // macOS worker threads default to a 512 KiB stack. The bounded
             // 1 MiB Beast buffer must therefore live on the heap once per
@@ -177,6 +178,7 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
                 }
                 const auto* bytes = static_cast<const char*>(front.data());
                 const std::string_view payload(bytes, front.size());
+                if (observer_ != nullptr) observer_->on_frame(epoch, receive_ns, wall_ns, payload);
                 const auto decoded = ingress_.on_frame(
                     epoch, receive_ns, wall_ns, payload);
                 if (decoded.invalid_frame != 0 || decoded.output_overflow != 0
