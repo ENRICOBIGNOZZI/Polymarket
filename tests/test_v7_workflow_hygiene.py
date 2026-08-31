@@ -32,6 +32,13 @@ def test_current_workflow_inventory_is_v7_only_and_cleanup_has_actions_scope():
     assert "scripts/v7_prune_workflow_metadata.py" in workflow
 
 
+def test_ci_runs_exact_v7_review_branches_without_enabling_branch_deployment():
+    ci = (ROOT / ".github/workflows/ci.yml").read_text()
+    deploy = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text()
+    assert 'branches: [main, "codex/v7-*"]' in ci
+    assert "canonical main does not match the explicitly approved SHA" in deploy
+
+
 def test_paper_deploy_health_window_covers_exhaustive_universe_startup():
     workflow = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text()
     assert "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=390" in workflow

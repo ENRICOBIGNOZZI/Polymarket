@@ -2,7 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    # Exact SHA verification for V7 review branches is safe to run before a
+    # pull request exists. Deployment remains separately restricted to main.
+    branches: [main, "codex/v7-*"]
   pull_request:
   workflow_dispatch:
     inputs:
