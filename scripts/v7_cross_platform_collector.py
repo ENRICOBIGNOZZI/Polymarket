@@ -237,6 +237,41 @@ def _venues(config_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     return section, venue
 
 
+def kalshi_authenticated_ws_preflight(venue: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a non-secret status for the optional authenticated WS upgrade.
+
+    The public REST collector never opens an authenticated socket.  In
+    particular, an unset or non-file private-key path is a hard, explicit
+    blocker rather than an invitation to try a credential-less connection.
+    """
+    path_env = str(venue.get("private_key_path_env") or "")
+    key_id_env = str(venue.get("key_id_env") or "")
+    configured_path = os.environ.get(path_env, "").strip() if path_env else ""
+    if not configured_path or not Path(configured_path).is_file():
+        return {
+            "state": "BLOCKED_KALSHI_WS_PRIVATE_KEY_PATH_MISSING",
+            "websocket_attempted": False,
+            "private_key_path_present": False,
+            "key_id_present": bool(os.environ.get(key_id_env, "").strip()) if key_id_env else False,
+        }
+    if not key_id_env or not os.environ.get(key_id_env, "").strip():
+        return {
+            "state": "BLOCKED_KALSHI_WS_KEY_ID_MISSING",
+            "websocket_attempted": False,
+            "private_key_path_present": True,
+            "key_id_present": False,
+        }
+    return {
+        # Socket startup is deliberately owned by a dedicated authenticated
+        # adapter, not by this public polling process. This is a configuration
+        # fact, not a claim that an authenticated session was established.
+        "state": "KALSHI_WS_CREDENTIALS_CONFIGURED_ADAPTER_NOT_STARTED",
+        "websocket_attempted": False,
+        "private_key_path_present": True,
+        "key_id_present": True,
+    }
+
+
 def collect_once(*, repository_root: Path, config_path: Path, mappings_path: Path,
                  tape_path: Path, state_path: Path, status_path: Path,
                  client: PersistentJsonClient | Any | None = None,
@@ -245,6 +280,7 @@ def collect_once(*, repository_root: Path, config_path: Path, mappings_path: Pat
     monotonic = time.monotonic_ns()
     sha = git_head(repository_root)
     section, venue = _venues(config_path)
+    authenticated_ws = kalshi_authenticated_ws_preflight(venue)
     verified = load_verified_mappings(mappings_path, "cross_platform", now_ms=timestamp,
                                       repository_sha=sha)
     own_client = client is None
@@ -368,6 +404,8 @@ def collect_once(*, repository_root: Path, config_path: Path, mappings_path: Pat
         "book_synchronization_active": synced > 0, "fee_model_verified": False,
         "joint_execution_simulator": True, "second_venue": "kalshi",
         "transport": "PUBLIC_REST_POLLING", "polling_latency_not_event_latency": True,
+        "authenticated_websocket": authenticated_ws,
+        "authenticated_websocket_status": authenticated_ws["state"],
         "discovered_markets": discovered, "synchronized_books": synced,
         "discovery_exhaustive": discovery_exhaustive if transport_state != "DOWN" else False,
         "discovery_time_budget_exhausted": discovery_time_budget_exhausted,

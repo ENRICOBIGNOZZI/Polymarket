@@ -44,9 +44,41 @@ def test_kalshi_public_polling_collects_real_books_but_not_fake_equivalence(tmp_
     assert status["verified_mappings"] == 0
     assert status["blocker"] == "BLOCKED_NO_VERIFIED_EQUIVALENCE"
     assert status["polling_latency_not_event_latency"] is True
+    assert status["authenticated_websocket_status"] == "BLOCKED_KALSHI_WS_PRIVATE_KEY_PATH_MISSING"
+    assert status["authenticated_websocket"]["websocket_attempted"] is False
     rows = [json.loads(line) for line in (tmp_path / "books.jsonl").read_text().splitlines()]
     assert any(row["kind"] == "ORDERBOOK_SNAPSHOT" for row in rows)
     assert all(row["real_order_submission"] is False for row in [status])
+
+
+def test_kalshi_authenticated_ws_preflight_requires_a_real_private_key_path(tmp_path):
+    venue = {
+        "private_key_path_env": "PM_TEST_KALSHI_PRIVATE_KEY_PATH",
+        "key_id_env": "PM_TEST_KALSHI_KEY_ID",
+    }
+    previous_path = os.environ.pop("PM_TEST_KALSHI_PRIVATE_KEY_PATH", None)
+    previous_key_id = os.environ.get("PM_TEST_KALSHI_KEY_ID")
+    try:
+        os.environ["PM_TEST_KALSHI_KEY_ID"] = "key-id"
+        missing = cross.kalshi_authenticated_ws_preflight(venue)
+        assert missing["state"] == "BLOCKED_KALSHI_WS_PRIVATE_KEY_PATH_MISSING"
+        assert missing["websocket_attempted"] is False
+
+        key = tmp_path / "kalshi.pem"
+        key.write_text("private-key-material", encoding="utf-8")
+        os.environ["PM_TEST_KALSHI_PRIVATE_KEY_PATH"] = str(key)
+        configured = cross.kalshi_authenticated_ws_preflight(venue)
+        assert configured["state"] == "KALSHI_WS_CREDENTIALS_CONFIGURED_ADAPTER_NOT_STARTED"
+        assert configured["private_key_path_present"] is True
+    finally:
+        if previous_path is None:
+            os.environ.pop("PM_TEST_KALSHI_PRIVATE_KEY_PATH", None)
+        else:
+            os.environ["PM_TEST_KALSHI_PRIVATE_KEY_PATH"] = previous_path
+        if previous_key_id is None:
+            os.environ.pop("PM_TEST_KALSHI_KEY_ID", None)
+        else:
+            os.environ["PM_TEST_KALSHI_KEY_ID"] = previous_key_id
 
 
 def test_kalshi_metadata_discovery_pages_to_exhaustion_and_polls_books(tmp_path):
