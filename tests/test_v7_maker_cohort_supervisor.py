@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from v7_maker_cohort_supervisor import (  # noqa: E402
     CohortSupervisor,
     atomic_json,
+    directional_inventory_markets,
     flat_state,
     fresh_flow_eligible,
     inventory_drainable_state,
@@ -145,9 +146,12 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         self.assertFalse(inventory_drainable_state(seeded, SHA))
         seeded["inventory"]["market-1"]["pending_merge_shares"] = 0.0
         seeded["inventory"]["market-1"]["yes_shares"] = 9.0
-        # Directional inventory may enter drain; the C++ PAPER owner still
-        # requires fresh, full L1 bid depth before it can prove flat.
-        self.assertTrue(inventory_drainable_state(seeded, SHA))
+        # Selector churn must not cross a directional residual at the current
+        # bid merely to make a whole-cohort membership handoff possible.
+        self.assertFalse(inventory_drainable_state(seeded, SHA))
+        self.assertEqual(directional_inventory_markets(seeded, SHA), {
+            "market-1": -1.0,
+        })
 
     def test_runtime_contract_uses_one_flat_handoff_cohort(self) -> None:
         loop = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
@@ -160,6 +164,8 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         self.assertIn('"MAKER_ROTATION_DRAIN"', runtime)
         self.assertIn('root["active_order_count"]', runtime)
         self.assertIn('root["new_risk_frozen"]', runtime)
+        self.assertIn("directional_rotation_preservations", runtime)
+        self.assertIn("DIRECTIONAL_MARKET_DRAINING", supervisor)
         self.assertIn("require_frozen=True", supervisor)
         self.assertIn("atomic_json(self.selection, latest)", supervisor)
         self.assertIn('--candidate-confirmations "$MAKER_CANDIDATE_CONFIRMATIONS"', loop)
@@ -413,6 +419,60 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             self.assertEqual(rows["reserve"]["authorized_execution_cells"], [])
             self.assertEqual(refreshed["warm_identity_overlap_count"], 1)
             self.assertEqual(supervisor.rotation_count, 0)
+
+    def test_directional_market_drains_in_place_without_global_rotation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selection_path = root / "micro_maker/reward_selection.json"
+            candidate_path = root / "micro_maker/reward_selection_candidate.json"
+            current = selection("held")
+            reserve = json.loads(json.dumps(current["markets"][0]))
+            reserve.update({
+                "market_id": "reserve", "condition_id": "reserve-condition",
+                "yes_token": "reserve-yes", "no_token": "reserve-no",
+                "authorized_execution_cells": [],
+                "inventory_seed_authorized": False,
+            })
+            current["markets"].append(reserve)
+            current["selected_count"] = 2
+            candidate = selection("new")
+            candidate["timestamp_ms"] = 2_000
+            candidate["markets"][0].update({
+                "condition_id": "new-condition",
+                "yes_token": "new-yes", "no_token": "new-no",
+            })
+            candidate["markets"][0]["authorized_execution_cells"][0][
+                "token_id"
+            ] = "new-yes"
+            atomic_json(selection_path, current)
+            atomic_json(candidate_path, candidate)
+            held_state = state()
+            held_state["inventory"] = {
+                "held": {
+                    "yes_shares": 5.0, "no_shares": 0.0,
+                    "yes_cost": 1.05, "no_cost": 0.0,
+                }
+            }
+            atomic_json(root / "micro_maker/state.json", held_state)
+            supervisor = CohortSupervisor(self.supervisor_args(
+                root, selection_path, candidate_path
+            ))
+
+            self.assertTrue(supervisor.refresh_same_membership_authority())
+            refreshed = read_json(selection_path)
+            rows = {row["market_id"]: row for row in refreshed["markets"]}
+            self.assertEqual(rows["held"]["execution_role"], "DRAINING_INVENTORY")
+            self.assertEqual(rows["held"]["authorized_execution_cells"], [])
+            self.assertFalse(rows["held"]["inventory_seed_authorized"])
+            self.assertEqual(rows["reserve"]["execution_role"], "ROTATION_CONTROL")
+            self.assertEqual(len(rows["reserve"]["authorized_execution_cells"]), 1)
+
+            supervisor.rotate_if_safe(candidate)
+            self.assertFalse(supervisor.drain.exists())
+            self.assertEqual(supervisor.rotation_count, 0)
+            status = read_json(root / "micro_maker/rotation_status.json")
+            self.assertEqual(status["state"], "RUNNING_DIRECTIONAL_DRAIN")
+            self.assertEqual(status["directional_drain_markets"], ["held"])
 
     def test_quiet_flow_fallback_keeps_last_known_good_without_global_pause(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

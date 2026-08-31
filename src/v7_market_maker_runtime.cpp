@@ -1632,7 +1632,8 @@ void write_runtime_diagnostics(
     const fs::path& run_root, std::string_view model_sha,
     const std::vector<std::unique_ptr<ShardRuntime>>& shards,
     const MakerFillFunnelCounters& fill_funnel,
-    std::uint64_t inventory_seed_budget_rejections) {
+    std::uint64_t inventory_seed_budget_rejections,
+    std::uint64_t directional_rotation_preservations) {
     ShardDiagnostics total;
     for (const auto& shard : shards) {
         const auto value = shard->diagnostics();
@@ -1683,6 +1684,7 @@ void write_runtime_diagnostics(
     root["quote_intents"] = total.quote_intents;
     root["rejected_below_minimum_order"] = total.rejected_below_minimum_order;
     root["inventory_seed_budget_rejections"] = inventory_seed_budget_rejections;
+    root["directional_rotation_preservations"] = directional_rotation_preservations;
     root["raw_last_trade_events"] = total.raw_last_trade_events;
     root["valid_trade_prints"] = total.valid_trade_prints;
     root["trade_missing_side"] = total.trade_missing_side;
@@ -1759,6 +1761,7 @@ public:
         inventory_targets_.assign(max_market + 1, 0);
         inventory_drain_active_by_market_.assign(max_market + 1, 0);
         inventory_seed_budget_rejected_by_market_.assign(max_market + 1, 0);
+        directional_rotation_preserved_by_market_.assign(max_market + 1, 0);
         inventory_last_replenish_ns_.assign(max_market + 1, 0);
         latest_yes_books_.assign(max_market + 1, {});
         latest_no_books_.assign(max_market + 1, {});
@@ -2140,6 +2143,27 @@ private:
             if (market == nullptr) continue;
             const bool authority_retired = inventory_targets_[handle] > 0
                 && !sell_inventory_authorized(*market);
+            const auto* inventory = policy_.inventory(handle);
+            // A selector membership refresh may retire a seeded market after
+            // one inventory leg filled. Do not convert that control-plane
+            // event into a taker-style liquidation at the current bid. Retire
+            // the seed target and reserve floor, preserve the directional
+            // residual, and let the HFT inventory-reduction bypass quote a
+            // passive economically valid exit. Global cutover drains retain
+            // their explicit fail-closed liquidation semantics.
+            if (!globally_requested && authority_retired && inventory != nullptr
+                && inventory->directional_microunits != 0) {
+                if (!policy_.set_complete_set_reserve_floor(handle, 0)) {
+                    return false;
+                }
+                inventory_targets_[handle] = 0;
+                inventory_drain_active_by_market_[handle] = 0;
+                if (directional_rotation_preserved_by_market_[handle] == 0) {
+                    directional_rotation_preserved_by_market_[handle] = 1;
+                    ++directional_rotation_preservations_;
+                }
+                continue;
+            }
             const bool requested = globally_requested || authority_retired;
             const bool active = inventory_drain_active_by_market_[handle] != 0;
             if (requested != active) {
@@ -2371,6 +2395,10 @@ public:
         return inventory_seed_budget_rejections_;
     }
 
+    [[nodiscard]] std::uint64_t directional_rotation_preservations() const noexcept {
+        return directional_rotation_preservations_;
+    }
+
 private:
     MakerPaperExecutionPolicy policy_{};
     SleeveCapitalAccount capital_{};
@@ -2380,12 +2408,14 @@ private:
     std::vector<std::int64_t> inventory_targets_;
     std::vector<std::uint8_t> inventory_drain_active_by_market_;
     std::vector<std::uint8_t> inventory_seed_budget_rejected_by_market_;
+    std::vector<std::uint8_t> directional_rotation_preserved_by_market_;
     std::vector<std::int64_t> inventory_last_replenish_ns_;
     std::vector<BookHotSnapshot> latest_yes_books_;
     std::vector<BookHotSnapshot> latest_no_books_;
     InventoryFactoryPolicy inventory_factory_{};
     std::int64_t inventory_seed_cap_microdollars_ = 0;
     std::uint64_t inventory_seed_budget_rejections_ = 0;
+    std::uint64_t directional_rotation_preservations_ = 0;
     std::atomic<bool>* new_risk_frozen_ = nullptr;
     MakerFillFunnelCounters* fill_funnel_ = nullptr;
     bool inventory_drain_any_ = false;
@@ -3504,7 +3534,8 @@ int main(int argc, char** argv) {
                         new_risk_frozen.load(std::memory_order_acquire));
                     write_runtime_diagnostics(
                         options.run_root, options.model_sha, shards, fill_funnel,
-                        execution->inventory_seed_budget_rejections());
+                        execution->inventory_seed_budget_rejections(),
+                        execution->directional_rotation_preservations());
                     last_state_ms = now;
                 }
                 if (now - last_model_check_ms >= 2000) {

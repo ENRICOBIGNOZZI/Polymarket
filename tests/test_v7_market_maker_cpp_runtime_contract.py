@@ -104,6 +104,16 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, self.source)
 
+    def test_selector_retirement_preserves_directional_inventory_for_passive_exit(self) -> None:
+        start = self.source.index("[[nodiscard]] bool sync_inventory_drain_mode()")
+        end = self.source.index("[[nodiscard]] bool maybe_replenish", start)
+        control = self.source[start:end]
+        self.assertIn("!globally_requested && authority_retired", control)
+        self.assertIn("inventory->directional_microunits != 0", control)
+        self.assertIn("inventory_targets_[handle] = 0", control)
+        self.assertIn("directional_rotation_preservations_", control)
+        self.assertNotIn("liquidate_directional_inventory", control)
+
     def test_runtime_loads_bounded_exploration_and_soft_inventory_policy(self) -> None:
         exploration = self.policy["exploration"]
         per_quote = float(exploration["max_quote_notional_fraction"])

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Rotate the PAPER Maker process cohort only through a proven flat handoff.
+"""Rotate the PAPER Maker cohort without forcing directional inventory losses.
 
 The C++ maker and its two evidence observers consume one immutable selection per
 process generation. This supervisor follows the continuously refreshed
 candidate selection without ever discarding hypothetical inventory or live
-PAPER orders: it freezes new risk, waits for a fresh flat state, atomically
-promotes the candidate, and restarts all three consumers as one cohort.
+PAPER orders. Balanced complete sets may be merged during a global handoff;
+directional residuals remain in a market-local draining lane while the warm
+cohort continues operating and can exit passively on positive economics.
 """
 from __future__ import annotations
 
@@ -254,15 +255,15 @@ def inventory_drainable_state(
     *,
     newer_than_ms: int = 0,
 ) -> bool:
-    """Accept inventory the frozen PAPER engine can merge or unwind to cash.
+    """Accept only flat or balanced inventory for a membership handoff.
 
     The maker intentionally seeds balanced YES/NO complete sets. Requiring zero
     inventory before requesting a drain therefore makes every cohort rotation
-    impossible. Balanced complete sets are merged; a directional residual is
-    crossed only by the canonical PAPER execution owner when a fresh L1 bid
-    covers the entire quantity. In-flight split/merge accounting still fails
-    closed. The post-drain handoff requires ``flat_state`` and proves that all
-    merge/unwind work completed before any process is stopped.
+    impossible. Balanced complete sets are safe to merge. A directional
+    residual is not a rotation prerequisite: crossing it at the current bid
+    crystallizes adverse selection and turns selector churn into trading loss.
+    Such a market remains warm in its own draining lane until passive economics
+    make it flat. In-flight split/merge accounting still fails closed.
     """
     if (
         value.get("schema") != "polymarket_v7_professional_maker_state_v2"
@@ -293,9 +294,38 @@ def inventory_drainable_state(
             yes < -1e-9 or no < -1e-9
             or yes_cost < -1e-12 or no_cost < -1e-12
             or pending > 1e-9
+            or abs(yes - no) > 1e-9
         ):
             return False
     return True
+
+
+def directional_inventory_markets(
+    value: dict[str, Any], model_sha: str
+) -> dict[str, float]:
+    """Return validated market-local directional residuals by market id."""
+    if (
+        value.get("schema") != "polymarket_v7_professional_maker_state_v2"
+        or value.get("paper_only") is not True
+        or value.get("authenticated_execution") is not False
+        or value.get("real_order_submission") is not False
+        or value.get("model_sha") != model_sha
+        or not isinstance(value.get("inventory"), dict)
+    ):
+        return {}
+    output: dict[str, float] = {}
+    for market_id, row in value["inventory"].items():
+        if not isinstance(row, dict):
+            return {}
+        try:
+            residual = float(row.get("yes_shares") or 0.0) - float(
+                row.get("no_shares") or 0.0
+            )
+        except (TypeError, ValueError):
+            return {}
+        if abs(residual) > 1e-9:
+            output[str(market_id)] = residual
+    return output
 
 
 def flat_state(
@@ -381,6 +411,9 @@ class CohortSupervisor:
     def write_status(self, state: str, **extra: Any) -> None:
         runtime = read_json(self.selection)
         candidate = read_json(self.candidate)
+        directional = directional_inventory_markets(
+            read_json(self.state), self.args.model_sha
+        )
         payload: dict[str, Any] = {
             "schema": "polymarket_v7_maker_cohort_rotation_status_v1",
             "timestamp_ms": time.time_ns() // 1_000_000,
@@ -403,6 +436,8 @@ class CohortSupervisor:
                 safe_membership_sha256(candidate) if candidate else ""
             ),
             "fresh_flow_pause_active": self.flow_pause_latched,
+            "directional_drain_market_count": len(directional),
+            "directional_drain_markets": sorted(directional),
             "cohort_pids": {name: process.pid for name, process in self.processes.items()},
         }
         payload.update(self.rotation_gate_metrics)
@@ -564,10 +599,26 @@ class CohortSupervisor:
             str(row.get("market_id") or ""): row
             for row in candidate["markets"] if isinstance(row, dict)
         }
+        directional = directional_inventory_markets(
+            read_json(self.state), self.args.model_sha
+        )
         projected_rows: list[dict[str, Any]] = []
         overlap = 0
         for market_id, incumbent in runtime_rows.items():
             challenger = candidate_rows.get(market_id)
+            if market_id in directional:
+                draining = dict(incumbent)
+                draining.update({
+                    "execution_role": "DRAINING_INVENTORY",
+                    "control_exploration_authorized": False,
+                    "authorized_execution_cells": [],
+                    "authorized_execution_cell_count": 0,
+                    "inventory_seed_authorized": False,
+                    "quote_opportunities": [],
+                    "directional_inventory_shares": directional[market_id],
+                })
+                projected_rows.append(draining)
+                continue
             if challenger is not None and all(
                 str(challenger.get(key) or "") == str(incumbent.get(key) or "")
                 for key in ("condition_id", "yes_token", "no_token")
@@ -585,8 +636,38 @@ class CohortSupervisor:
                 "quote_opportunities": [],
             })
             projected_rows.append(observation)
-        if overlap <= 0:
+        if overlap <= 0 and not directional:
             return False
+        # Keep one strictly bounded positive-edge control cell alive while a
+        # different market drains. This prevents a directional residual from
+        # collapsing the entire warm universe without granting authority to
+        # add risk in the draining market itself.
+        if directional and not any(
+            row.get("authorized_execution_cells") for row in projected_rows
+        ):
+            for row in projected_rows:
+                if str(row.get("market_id") or "") in directional:
+                    continue
+                token = str(row.get("yes_token") or "")
+                if not token:
+                    continue
+                row.update({
+                    "execution_role": "ROTATION_CONTROL",
+                    "control_exploration_authorized": True,
+                    "authorized_execution_cells": [{
+                        "token_id": token,
+                        "outcome": "YES",
+                        "action": "JOIN",
+                        "quote_side": "BUY",
+                        "authority_basis": "DIRECTIONAL_DRAIN_CONTROL",
+                        "projected_flow_reach_probability": 0.0,
+                        "projected_queue_depletion_probability": 0.0,
+                        "projected_fill_probability": 0.0,
+                    }],
+                    "authorized_execution_cell_count": 1,
+                    "inventory_seed_authorized": False,
+                })
+                break
         projected = dict(candidate)
         projected["markets"] = projected_rows
         projected["selected_count"] = len(projected_rows)
@@ -596,6 +677,7 @@ class CohortSupervisor:
         projected["candidate_membership_sha256"] = membership_sha256(candidate)
         projected["runtime_warm_membership_sha256"] = membership_sha256(runtime)
         projected["warm_identity_overlap_count"] = overlap
+        projected["directional_drain_markets"] = sorted(directional)
         projected["authorized_execution_cell_count"] = sum(
             len(row.get("authorized_execution_cells") or [])
             for row in projected_rows
@@ -604,8 +686,12 @@ class CohortSupervisor:
         self.cell_authority_refresh_count += 1
         self.last_cell_authority_refresh_ms = time.time_ns() // 1_000_000
         self.rotation_gate_metrics = {
-            "rotation_gate_reason": "WARM_MEMBERSHIP_CELL_AUTHORITY_REFRESHED",
+            "rotation_gate_reason": (
+                "DIRECTIONAL_MARKET_DRAIN_AUTHORITY_REFRESHED"
+                if directional else "WARM_MEMBERSHIP_CELL_AUTHORITY_REFRESHED"
+            ),
             "warm_identity_overlap_count": overlap,
+            "directional_drain_market_count": len(directional),
         }
         return True
 
@@ -653,8 +739,20 @@ class CohortSupervisor:
                 return
             target_cell = str(metrics.get("rotation_target_cell") or "")
         now_ms = time.time_ns() // 1_000_000
+        current_state = read_json(self.state)
+        directional = directional_inventory_markets(
+            current_state, self.args.model_sha
+        )
+        if directional:
+            self.rotation_gate_metrics.update({
+                "rotation_gate_reason": "DIRECTIONAL_MARKET_DRAINING",
+                "directional_drain_market_count": len(directional),
+                "directional_drain_markets": sorted(directional),
+            })
+            self.write_status("RUNNING_DIRECTIONAL_DRAIN")
+            return
         if not inventory_drainable_state(
-            read_json(self.state), self.args.model_sha,
+            current_state, self.args.model_sha,
             newer_than_ms=now_ms - 5_000,
         ):
             self.write_status("PENDING_NONFLAT")

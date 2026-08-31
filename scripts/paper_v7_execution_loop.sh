@@ -635,10 +635,11 @@ pids+=("$!")
 
 # Canonical Maker cohort: one immutable selection generation is consumed by
 # the PAPER execution owner and both evidence observers. The cohort supervisor
-# follows the slow-plane candidate only through a fresh flat handoff: freeze
-# new risk, cancel every PAPER order, prove zero inventory, atomically promote,
-# then restart all three consumers together. No inventory or PnL state is ever
-# discarded merely to chase a changing public-flow universe.
+# refreshes execution-cell authority in place. A balanced complete-set sleeve
+# can still use a fresh flat handoff, but a directional residual becomes a
+# market-local DRAINING_INVENTORY lane: it cannot add risk and it is never
+# crossed at the current bid merely to chase selector membership. The remaining
+# warm markets continue operating while that passive economic exit is pending.
 (
   while [[ ! -e "$KILL" ]] && { ! maker_selection_ready || ! fee_registry_ready; }; do sleep 1; done
   [[ ! -e "$KILL" ]] || exit 0
