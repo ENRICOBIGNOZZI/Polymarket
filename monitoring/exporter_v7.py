@@ -31,17 +31,10 @@ from v7_external_fair import summarize_external_fair
 from v7_maker_fillability_exact import summarize_best_available_fillability
 from v7_maker_microstructure import summarize_maker_microstructure
 from v7_portfolio_reconciliation import reconcile as reconcile_portfolio
-from v7_runtime_contract import MAKER_SELECTOR_OPERATIONAL_STATES as _MAKER_SELECTOR_OPERATIONAL_STATES
-
-_MAKER_ROTATION_OPERATIONAL_STATES = frozenset({
-    "RUNNING",
-    "DRAINING",
-    "PENDING_NONFLAT",
-    "PENDING_DRAIN_TIMEOUT",
-    "PENDING_CONFIRMATION",
-    "PENDING_COOLDOWN",
-    "PAUSED_NO_FRESH_FLOW",
-})
+from v7_runtime_contract import (
+    MAKER_ROTATION_OPERATIONAL_STATES as _MAKER_ROTATION_OPERATIONAL_STATES,
+    MAKER_SELECTOR_OPERATIONAL_STATES as _MAKER_SELECTOR_OPERATIONAL_STATES,
+)
 
 _FILLABILITY_CACHE_KEY: tuple[str, str, int] | None = None
 _FILLABILITY_CACHE_VALUE: dict[str, Any] | None = None

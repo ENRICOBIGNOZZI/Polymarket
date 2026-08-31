@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "monitoring"))
 
 from v7_runtime_contract import (
+    MAKER_ROTATION_OPERATIONAL_STATES,
     RECOVERABLE,
     SAFE,
     UNSAFE,
@@ -197,6 +198,64 @@ class V7RuntimeChaosContractTest(unittest.TestCase):
             result = runtime_health(root, SHA, now=1000, stale_seconds=30)
             self.assertEqual(result.classification, SAFE)
             self.assertNotIn("maker_selector_not_ready", result.reasons)
+
+    def test_every_emitted_operational_rotation_state_is_runtime_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write(
+                root / "control/runtime_status.json",
+                {
+                    "version": 7,
+                    "timestamp": 1000,
+                    "paper_only": True,
+                    "authenticated_execution": False,
+                    "real_order_submission": False,
+                    "model_sha": SHA,
+                    "pid": os.getpid(),
+                    "killed": False,
+                    "state": "running",
+                },
+            )
+            self._write(
+                root / "micro_maker/selector_status.json",
+                {
+                    "timestamp_ms": 1_000_000,
+                    "model_sha": SHA,
+                    "paper_only": True,
+                    "authenticated_execution": False,
+                    "real_order_submission": False,
+                    "ready": True,
+                    "state": "OPERATIONAL_BILATERAL_FLOW",
+                },
+            )
+            self._write(
+                root / "micro_maker/status.json",
+                {
+                    "timestamp_ms": 1_000_000,
+                    "model_sha": SHA,
+                    "paper_only": True,
+                    "authenticated_execution": False,
+                    "killed": False,
+                    "source": "full_visible_bid_depth_net_verified_fee_and_slippage",
+                },
+            )
+            rotation_path = root / "micro_maker/rotation_status.json"
+            for state in sorted(MAKER_ROTATION_OPERATIONAL_STATES):
+                with self.subTest(state=state):
+                    self._write(
+                        rotation_path,
+                        {
+                            "timestamp_ms": 1_000_000,
+                            "model_sha": SHA,
+                            "paper_only": True,
+                            "authenticated_execution": False,
+                            "real_order_submission": False,
+                            "state": state,
+                        },
+                    )
+                    result = runtime_health(root, SHA, now=1000, stale_seconds=30)
+                    self.assertEqual(result.classification, SAFE)
+                    self.assertNotIn("maker_cohort_not_ready", result.reasons)
 
     def test_failure_isolation_matrix_covers_deterministic_chaos_scenarios(self) -> None:
         policy = json.loads((ROOT / "config/v7_runtime_supervision.json").read_text())

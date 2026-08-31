@@ -26,6 +26,17 @@ MAKER_SELECTOR_OPERATIONAL_STATES = {
     "OPERATIONAL_RECENT_FLOW",
     "OPERATIONAL_BILATERAL_FLOW",
 }
+MAKER_ROTATION_OPERATIONAL_STATES = {
+    "RUNNING",
+    "RUNNING_CELL_REFRESHED",
+    "RUNNING_DIRECTIONAL_DRAIN",
+    "DRAINING",
+    "PENDING_NONFLAT",
+    "PENDING_DRAIN_TIMEOUT",
+    "PENDING_CONFIRMATION",
+    "PENDING_COOLDOWN",
+    "PAUSED_NO_FRESH_FLOW",
+}
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -273,10 +284,7 @@ def runtime_health(run_root: Path, expected_sha: str, *, now: int, stale_seconds
                 unsafe.append("maker_cohort_execution_authority_unsafe")
             if rotation.get("model_sha") != expected_sha:
                 unsafe.append("maker_cohort_identity_drift")
-            if rotation.get("state") not in {
-                "RUNNING", "DRAINING", "PENDING_NONFLAT", "PENDING_DRAIN_TIMEOUT",
-                "PENDING_CONFIRMATION", "PENDING_COOLDOWN",
-            }:
+            if rotation.get("state") not in MAKER_ROTATION_OPERATIONAL_STATES:
                 recoverable.append("maker_cohort_not_ready")
             try:
                 rotation_age = now * 1000 - int(rotation.get("timestamp_ms") or 0)
