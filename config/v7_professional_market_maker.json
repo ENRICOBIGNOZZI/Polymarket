@@ -271,6 +271,7 @@
     "inventory_factory_enabled": true,
     "bootstrap_complete_set_fraction": 0.10,
     "seed_min_quote_multiples": 1.0,
+    "seed_max_market_fraction": 0.004,
     "seed_visible_depth_fraction": 0.10,
     "replenish_trigger_fraction": 0.50,
     "replenish_cooldown_seconds": 60

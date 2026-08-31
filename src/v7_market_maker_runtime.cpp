@@ -398,6 +398,10 @@ struct InventoryFactoryPolicy {
     std::uint8_t enabled = 0;
     double bootstrap_complete_set_fraction = 0.10;
     double seed_min_quote_multiples = 2.0;
+    // Complete-set collateral is capital, even though the pair is directionally
+    // neutral. Dynamic SELL authority must not let a large venue minimum bypass
+    // the evidence-collection budget for one market.
+    double seed_max_market_fraction = 0.05;
     double seed_visible_depth_fraction = 0.10;
     double replenish_trigger_fraction = 0.50;
     double max_market_gross_fraction = 0.05;
@@ -411,6 +415,9 @@ struct InventoryFactoryPolicy {
             && bootstrap_complete_set_fraction <= max_maker_gross_fraction
             && std::isfinite(seed_min_quote_multiples)
             && seed_min_quote_multiples >= 1.0
+            && std::isfinite(seed_max_market_fraction)
+            && seed_max_market_fraction > 0.0
+            && seed_max_market_fraction <= max_market_gross_fraction
             && std::isfinite(seed_visible_depth_fraction)
             && seed_visible_depth_fraction > 0.0
             && seed_visible_depth_fraction <= 1.0
@@ -495,6 +502,8 @@ InventoryFactoryPolicy load_inventory_factory_policy(const fs::path& policy_path
         inventory, "bootstrap_complete_set_fraction", out.bootstrap_complete_set_fraction);
     out.seed_min_quote_multiples = object_number(
         inventory, "seed_min_quote_multiples", out.seed_min_quote_multiples);
+    out.seed_max_market_fraction = object_number(
+        inventory, "seed_max_market_fraction", out.seed_max_market_fraction);
     out.seed_visible_depth_fraction = object_number(
         inventory, "seed_visible_depth_fraction", out.seed_visible_depth_fraction);
     out.replenish_trigger_fraction = object_number(
@@ -1622,7 +1631,8 @@ private:
 void write_runtime_diagnostics(
     const fs::path& run_root, std::string_view model_sha,
     const std::vector<std::unique_ptr<ShardRuntime>>& shards,
-    const MakerFillFunnelCounters& fill_funnel) {
+    const MakerFillFunnelCounters& fill_funnel,
+    std::uint64_t inventory_seed_budget_rejections) {
     ShardDiagnostics total;
     for (const auto& shard : shards) {
         const auto value = shard->diagnostics();
@@ -1672,6 +1682,7 @@ void write_runtime_diagnostics(
     root["decisions"] = total.decisions;
     root["quote_intents"] = total.quote_intents;
     root["rejected_below_minimum_order"] = total.rejected_below_minimum_order;
+    root["inventory_seed_budget_rejections"] = inventory_seed_budget_rejections;
     root["raw_last_trade_events"] = total.raw_last_trade_events;
     root["valid_trade_prints"] = total.valid_trade_prints;
     root["trade_missing_side"] = total.trade_missing_side;
@@ -1747,10 +1758,16 @@ public:
         exploration_market_active_.assign(max_market + 1, 0);
         inventory_targets_.assign(max_market + 1, 0);
         inventory_drain_active_by_market_.assign(max_market + 1, 0);
+        inventory_seed_budget_rejected_by_market_.assign(max_market + 1, 0);
         inventory_last_replenish_ns_.assign(max_market + 1, 0);
         latest_yes_books_.assign(max_market + 1, {});
         latest_no_books_.assign(max_market + 1, {});
         inventory_factory_ = inventory_factory;
+        inventory_seed_cap_microdollars_ = std::min(
+            limits.max_market_exposure_microdollars,
+            microdollars(starting_capital
+                         * inventory_factory_.seed_max_market_fraction));
+        if (inventory_factory_.enabled && inventory_seed_cap_microdollars_ <= 0) return false;
         new_risk_frozen_ = new_risk_frozen;
         fill_funnel_ = fill_funnel;
         if (new_risk_frozen_ == nullptr || fill_funnel_ == nullptr) return false;
@@ -1781,7 +1798,10 @@ public:
                     market->yes_min_order * inventory_factory_.seed_min_quote_multiples,
                     market->no_min_order * inventory_factory_.seed_min_quote_multiples}));
                 const auto minimum = microdollars(minimum_shares);
-                if (minimum <= 0 || minimum > limits.max_market_exposure_microdollars) continue;
+                if (minimum <= 0 || minimum > inventory_seed_cap_microdollars_) {
+                    ++inventory_seed_budget_rejections_;
+                    continue;
+                }
                 minimums[market->market_handle] = minimum;
                 if (minimum_total > std::numeric_limits<std::int64_t>::max() - minimum) return false;
                 minimum_total += minimum;
@@ -1824,7 +1844,7 @@ public:
                 auto target = microdollars(std::max(
                     minimum_shares, std::min(risk_adjusted, depth_cap_shares)));
                 target = std::clamp(target, minimum,
-                    limits.max_market_exposure_microdollars);
+                    inventory_seed_cap_microdollars_);
                 remaining_minimum -= minimum;
                 target = std::min(target, remaining - remaining_minimum);
                 if (target < minimum
@@ -2144,14 +2164,26 @@ private:
         auto target = inventory_targets_[handle];
         if (target <= 0) {
             const auto* market = markets_[handle];
-            if (market == nullptr || !sell_inventory_authorized(*market)) return true;
+            if (market == nullptr) return true;
+            if (!sell_inventory_authorized(*market)) {
+                inventory_seed_budget_rejected_by_market_[handle] = 0;
+                return true;
+            }
             const double minimum_shares = std::ceil(std::max({
                 base_quote_shares_,
                 market->yes_min_order * inventory_factory_.seed_min_quote_multiples,
                 market->no_min_order * inventory_factory_.seed_min_quote_multiples}));
             target = microdollars(minimum_shares);
-            if (target <= 0
-                || !policy_.set_complete_set_reserve_floor(handle, target)) {
+            if (target <= 0) return false;
+            if (target > inventory_seed_cap_microdollars_) {
+                if (inventory_seed_budget_rejected_by_market_[handle] == 0) {
+                    inventory_seed_budget_rejected_by_market_[handle] = 1;
+                    ++inventory_seed_budget_rejections_;
+                }
+                return true;
+            }
+            inventory_seed_budget_rejected_by_market_[handle] = 0;
+            if (!policy_.set_complete_set_reserve_floor(handle, target)) {
                 return false;
             }
             auto split = policy_.split_complete_sets(
@@ -2335,6 +2367,10 @@ public:
         return telemetry_overflow_.load(std::memory_order_acquire);
     }
 
+    [[nodiscard]] std::uint64_t inventory_seed_budget_rejections() const noexcept {
+        return inventory_seed_budget_rejections_;
+    }
+
 private:
     MakerPaperExecutionPolicy policy_{};
     SleeveCapitalAccount capital_{};
@@ -2343,10 +2379,13 @@ private:
     std::vector<std::uint8_t> exploration_market_active_;
     std::vector<std::int64_t> inventory_targets_;
     std::vector<std::uint8_t> inventory_drain_active_by_market_;
+    std::vector<std::uint8_t> inventory_seed_budget_rejected_by_market_;
     std::vector<std::int64_t> inventory_last_replenish_ns_;
     std::vector<BookHotSnapshot> latest_yes_books_;
     std::vector<BookHotSnapshot> latest_no_books_;
     InventoryFactoryPolicy inventory_factory_{};
+    std::int64_t inventory_seed_cap_microdollars_ = 0;
+    std::uint64_t inventory_seed_budget_rejections_ = 0;
     std::atomic<bool>* new_risk_frozen_ = nullptr;
     MakerFillFunnelCounters* fill_funnel_ = nullptr;
     bool inventory_drain_any_ = false;
@@ -3464,7 +3503,8 @@ int main(int argc, char** argv) {
                     writer.write_state(
                         new_risk_frozen.load(std::memory_order_acquire));
                     write_runtime_diagnostics(
-                        options.run_root, options.model_sha, shards, fill_funnel);
+                        options.run_root, options.model_sha, shards, fill_funnel,
+                        execution->inventory_seed_budget_rejections());
                     last_state_ms = now;
                 }
                 if (now - last_model_check_ms >= 2000) {

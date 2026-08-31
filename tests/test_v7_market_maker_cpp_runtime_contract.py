@@ -145,6 +145,16 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, self.source)
         self.assertEqual(float(self.policy["inventory"]["seed_min_quote_multiples"]), 1.0)
+        self.assertEqual(
+            float(self.policy["inventory"]["seed_max_market_fraction"]), per_market
+        )
+        for token in (
+            'inventory, "seed_max_market_fraction"',
+            "target > inventory_seed_cap_microdollars_",
+            'root["inventory_seed_budget_rejections"]',
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.source)
 
     def test_declared_inventory_factory_has_runtime_callsite_and_canonical_evidence(self) -> None:
         inventory = self.policy["inventory"]
