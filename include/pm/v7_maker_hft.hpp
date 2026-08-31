@@ -226,6 +226,11 @@ struct MakerModelSnapshot {
     // confidence penalty, but must still have positive adjusted EV.
     double exploration_confidence_z = 0.0;
     double exploration_epsilon = 0.0;
+    // Conditional on opening a PAPER exploration quote, this bounded arm
+    // samples the positive-EV placement with greatest conservative fill
+    // probability instead of the placement with greatest point EV. This is an
+    // information intervention, not permission to quote negative economics.
+    double exploration_action_information_fraction = 0.0;
     double exploration_quote_notional_fraction = 0.0;
     // The per-market budget is deliberately distinct from the per-quote target.
     // A venue minimum may round one quote above its target only while the
@@ -349,10 +354,19 @@ struct MakerDecision {
     double ask_opposite_flow_shares_per_second = 0.0;
     double bid_opposite_flow_prints_per_second = 0.0;
     double ask_opposite_flow_prints_per_second = 0.0;
+    double exploration_quote_propensity = 0.0;
+    double exploration_side_propensity = 0.0;
+    double exploration_action_information_fraction = 0.0;
+    double exploration_action_arm_propensity = 0.0;
+    double exploration_action_propensity = 0.0;
+    double exploration_lifetime_propensity = 0.0;
+    double exploration_selection_propensity = 0.0;
+    double exploration_assignment_propensity = 0.0;
     std::int64_t exploration_max_rest_ns = 0;
     std::array<StrategyIntent, 4> intents{};
     std::uint8_t intent_count = 0;
     std::uint8_t exploration_persistent = 0;
+    std::uint8_t exploration_information_arm = 0;
     std::uint8_t external_fair_authority = 0;
     std::uint8_t selector_authority_required = 0;
     std::uint8_t selector_execution_authority_mask = 0;
@@ -397,12 +411,21 @@ private:
     std::uint64_t intent_sequence_ = 0;
     std::int64_t last_exploration_quote_ns_ = 0;
     std::int64_t exploration_max_rest_ns_ = 0;
+    double exploration_quote_propensity_ = 0.0;
+    double exploration_side_propensity_ = 0.0;
+    double exploration_action_information_fraction_ = 0.0;
+    double exploration_action_arm_propensity_ = 0.0;
+    double exploration_action_propensity_ = 0.0;
+    double exploration_lifetime_propensity_ = 0.0;
+    double exploration_selection_propensity_ = 0.0;
+    double exploration_assignment_propensity_ = 0.0;
     Action exploration_action_ = Action::Join;
     Side exploration_side_ = Side::None;
     std::uint8_t initialized_ = 0;
     std::uint8_t flow_evidence_valid_ = 0;
     std::uint8_t exploration_active_ = 0;
     std::uint8_t exploration_persistent_ = 0;
+    std::uint8_t exploration_information_arm_ = 0;
     std::uint64_t selector_generation_ = 0;
 };
 

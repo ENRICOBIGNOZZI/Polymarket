@@ -92,6 +92,77 @@ class MakerRewardSelectorTests(unittest.TestCase):
             "projected_fill_probability": 0.0039,
         }])
 
+    def test_low_sample_control_is_side_specific_bounded_and_exposes_actions(self) -> None:
+        rows = []
+        for index, probability in enumerate((0.08, 0.06, 0.04)):
+            rows.append({
+                "market_id": f"m{index}", "yes_token": f"y{index}",
+                "authorized_execution_cells": [],
+                "quote_opportunities": [{
+                    "outcome": "NO", "token_id": f"n{index}",
+                    "quote_side": "SELL", "book_evidence_valid": True,
+                    "opposite_flow_is_fresh": False,
+                    "opposite_prints_30s": 1,
+                    "last_opposite_flow_age_ms": 250,
+                    "improve1_available": True,
+                    "projected_flow_reach_probability": probability,
+                    "projected_join_queue_depletion_probability": 0.25,
+                    "projected_join_fill_probability": probability * 0.25,
+                    "projected_improve1_fill_probability": probability,
+                }],
+            })
+        self.assertEqual(rewards._authorize_control_cells(
+            rows,
+            maximum_markets=2,
+            minimum_prints_30s=1,
+            maximum_last_side_age_ms=30_000,
+        ), 4)
+        authorized = [row for row in rows if row["authorized_execution_cells"]]
+        self.assertEqual([row["market_id"] for row in authorized], ["m0", "m1"])
+        for row in authorized:
+            self.assertEqual(row["execution_role"], "LOW_SAMPLE_FRESH_FLOW_CONTROL")
+            self.assertEqual(
+                [(cell["token_id"], cell["quote_side"], cell["action"])
+                 for cell in row["authorized_execution_cells"]],
+                [(row["quote_opportunities"][0]["token_id"], "SELL", "JOIN"),
+                 (row["quote_opportunities"][0]["token_id"], "SELL", "IMPROVE1")],
+            )
+
+    def test_control_adds_positive_missing_action_inside_authorized_market(self) -> None:
+        opportunity = {
+            "outcome": "YES", "token_id": "yes", "quote_side": "BUY",
+            "book_evidence_valid": True, "opposite_flow_is_fresh": True,
+            "opposite_prints_30s": 2, "last_opposite_flow_age_ms": 100,
+            "improve1_available": True,
+            "projected_flow_reach_probability": 0.02,
+            "projected_join_queue_depletion_probability": 0.10,
+            "projected_join_fill_probability": 0.002,
+            "projected_improve1_fill_probability": 0.02,
+        }
+        rows = [{
+            "market_id": "m", "yes_token": "yes",
+            "execution_role": "FLOW_AUTHORIZED",
+            "control_exploration_authorized": False,
+            "quote_opportunities": [opportunity],
+            "authorized_execution_cells": [{
+                "outcome": "YES", "token_id": "yes", "quote_side": "BUY",
+                "action": "IMPROVE1", "authority_basis": "FRESH_OPPOSITE_FLOW",
+                "projected_flow_reach_probability": 0.02,
+                "projected_queue_depletion_probability": 1.0,
+                "projected_fill_probability": 0.02,
+            }],
+            "authorized_execution_cell_count": 1,
+        }]
+        self.assertEqual(rewards._authorize_control_cells(
+            rows, maximum_markets=5, minimum_prints_30s=1,
+            maximum_last_side_age_ms=30_000,
+        ), 1)
+        self.assertEqual(
+            [cell["action"] for cell in rows[0]["authorized_execution_cells"]],
+            ["IMPROVE1", "JOIN"],
+        )
+        self.assertEqual(rows[0]["execution_role"], "FLOW_AUTHORIZED")
+
     def test_fill_projection_decays_old_burst_in_event_time(self) -> None:
         fresh_rate, fresh_weight = rewards._decayed_opposite_flow_rate(
             shares_10m=120.0, prints_10m=2, prints_30s=2,
@@ -235,9 +306,10 @@ class MakerRewardSelectorTests(unittest.TestCase):
         )
         self.assertEqual(small["execution_role"], "FLOW_AUTHORIZED")
         self.assertGreater(small["authorized_execution_cell_count"], 0)
-        self.assertEqual(large["execution_role"], "WARM_FLOW_OBSERVATION")
-        self.assertEqual(large["authorized_execution_cell_count"], 0)
-        self.assertEqual(snapshot["control_exploration_cell_count"], 0)
+        self.assertEqual(large["execution_role"], "POSITIVE_FLOW_CONTROL")
+        self.assertEqual(large["authorized_execution_cell_count"], 1)
+        self.assertEqual(snapshot["control_exploration_cell_count"], 1)
+        self.assertEqual(snapshot["control_exploration_market_count"], 1)
 
     def test_config_requires_fail_closed_timed_sports_exclusion(self) -> None:
         from tempfile import TemporaryDirectory

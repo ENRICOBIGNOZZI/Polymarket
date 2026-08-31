@@ -758,6 +758,11 @@ MakerModelSnapshot load_model_snapshot(const fs::path& policy_path,
     }
     model.exploration_epsilon = std::clamp(object_number(
         exploration, "epsilon", 0.0), 0.0, 1.0);
+    // At most one quarter of bounded PAPER placements may optimize information
+    // rate instead of current point EV. Both arms still pass exact selector
+    // authority and strictly positive adjusted-EV checks in the hot path.
+    model.exploration_action_information_fraction = std::clamp(object_number(
+        exploration, "action_information_fraction", 0.0), 0.0, 0.25);
     const double configured_exploration_confidence_z = object_number(
         exploration, "confidence_z", -1.0);
     const bool valid_exploration_confidence = std::isfinite(configured_exploration_confidence_z)
@@ -2802,6 +2807,25 @@ private:
                 record.decision.exploration_persistent != 0 ? "PERSISTENT" : "CONTROL";
             metadata["exploration_max_rest_ms"] =
                 record.decision.exploration_max_rest_ns / 1'000'000LL;
+            metadata["exploration_action_arm"] =
+                record.decision.exploration_information_arm != 0
+                    ? "INFORMATION" : "ECONOMIC";
+            metadata["exploration_quote_propensity"] =
+                record.decision.exploration_quote_propensity;
+            metadata["exploration_side_propensity"] =
+                record.decision.exploration_side_propensity;
+            metadata["exploration_action_arm_propensity"] =
+                record.decision.exploration_action_arm_propensity;
+            metadata["exploration_action_propensity"] =
+                record.decision.exploration_action_propensity;
+            metadata["exploration_lifetime_propensity"] =
+                record.decision.exploration_lifetime_propensity;
+            metadata["exploration_selection_propensity"] =
+                record.decision.exploration_selection_propensity;
+            metadata["exploration_assignment_propensity"] =
+                record.decision.exploration_assignment_propensity;
+            metadata["exploration_action_information_fraction"] =
+                record.decision.exploration_action_information_fraction;
         }
         event["metadata"] = std::move(metadata);
     }

@@ -65,6 +65,22 @@ constexpr double kNormalQuoteCapitalFraction = 0.01;
     return mix64(seed) % kBuckets < threshold;
 }
 
+[[nodiscard]] bool information_action_sample(
+    const MarketUpdate& update, std::uint64_t quote_sequence, double fraction) noexcept {
+    if (fraction >= 1.0) return true;
+    if (!(fraction > 0.0)) return false;
+    constexpr std::uint64_t kBuckets = 1'000'000ULL;
+    const auto threshold = static_cast<std::uint64_t>(
+        std::floor(clamp(fraction, 0.0, 1.0) * static_cast<double>(kBuckets)));
+    // Distinct salts keep action assignment independent of the quote-arrival,
+    // side and lifetime interventions while remaining exactly reproducible.
+    const std::uint64_t seed = update.state_version
+        ^ (update.instrument_handle * 0xd6e8feb86659fd93ULL)
+        ^ (update.market_handle * 0xa5a35625d3c1f113ULL)
+        ^ (quote_sequence * 0x8cb92baa3f3d8dd7ULL);
+    return mix64(seed) % kBuckets < threshold;
+}
+
 [[nodiscard]] double logistic(double value) noexcept {
     if (value >= 0.0) {
         const double e = std::exp(-value);
@@ -124,15 +140,63 @@ struct ExplorationChoice {
     const SideEconomics* economics = nullptr;
     Action action = Action::Join;
     double adjusted_ev = -std::numeric_limits<double>::infinity();
+    double side_propensity = 0.0;
+    double action_arm_propensity = 0.0;
+    double action_propensity = 0.0;
+    bool information_arm = false;
 };
 
 [[nodiscard]] ExplorationChoice choose_exploration(
     const Candidate* candidates,
     std::size_t candidate_count,
     const MakerModelSnapshot& model,
-    Side preferred_side) noexcept {
-    ExplorationChoice best;
-    double best_fill_probability = -1.0;
+    Side preferred_side,
+    bool information_arm) noexcept {
+    struct SideChoices {
+        ExplorationChoice economic{};
+        ExplorationChoice information{};
+    };
+    const auto choices_for_side = [&](Side wanted_side) noexcept {
+        SideChoices choices;
+        double economic_fill_probability = -1.0;
+        double information_fill_probability = -1.0;
+        for (std::size_t i = 0; i < candidate_count; ++i) {
+            const auto& candidate = candidates[i];
+            // JOIN and IMPROVE1 are the two non-crossing placement arms whose
+            // reach/queue trade-off is currently underidentified.
+            if (candidate.action != Action::Join
+                && candidate.action != Action::Improve1) continue;
+            const auto& economics = wanted_side == Side::Sell
+                ? candidate.ask : candidate.bid;
+            const double adjusted_ev = exploration_adjusted_ev(economics, model);
+            if (!finite(adjusted_ev) || adjusted_ev <= 0.0
+                || economics.price_tick <= 0 || economics.side != wanted_side) continue;
+
+            if (adjusted_ev > choices.economic.adjusted_ev + kEps
+                || (std::abs(adjusted_ev - choices.economic.adjusted_ev) <= kEps
+                    && economics.fill_probability > economic_fill_probability)) {
+                choices.economic.economics = &economics;
+                choices.economic.action = candidate.action;
+                choices.economic.adjusted_ev = adjusted_ev;
+                economic_fill_probability = economics.fill_probability;
+            }
+            if (economics.fill_probability > information_fill_probability + kEps
+                || (std::abs(economics.fill_probability
+                             - information_fill_probability) <= kEps
+                    && adjusted_ev > choices.information.adjusted_ev)) {
+                choices.information.economics = &economics;
+                choices.information.action = candidate.action;
+                choices.information.adjusted_ev = adjusted_ev;
+                information_fill_probability = economics.fill_probability;
+            }
+        }
+        return choices;
+    };
+
+    const auto buy = choices_for_side(Side::Buy);
+    const auto sell = choices_for_side(Side::Sell);
+    const bool buy_available = buy.economic.economics != nullptr;
+    const bool sell_available = sell.economic.economics != nullptr;
     // Give the deterministically sampled side the first opportunity to collect
     // side-specific evidence. Fall back to the other side only when the
     // preferred side has no positive adjusted-EV placement. This prevents a
@@ -141,37 +205,23 @@ struct ExplorationChoice {
         ? std::array<Side, 2>{Side::Sell, Side::Buy}
         : std::array<Side, 2>{Side::Buy, Side::Sell};
     for (const auto wanted_side : side_order) {
-        best = {};
-        best_fill_probability = -1.0;
-        for (std::size_t i = 0; i < candidate_count; ++i) {
-            const auto& candidate = candidates[i];
-            // JOIN and IMPROVE1 increase information rate without crossing.
-            if (candidate.action != Action::Join && candidate.action != Action::Improve1) continue;
-            const auto& economics = wanted_side == Side::Sell ? candidate.ask : candidate.bid;
-            const double adjusted_ev = exploration_adjusted_ev(economics, model);
-            // Exploration has its own tiny PAPER capital envelope and exists
-            // to learn below the exploit confidence floor.  Requiring the
-            // exploit floor here recreates the cold-start deadlock: a strictly
-            // positive point-EV cell can never rest long enough to label its
-            // reach, queue depletion and markout.  Zero remains fail-closed.
-            if (!finite(adjusted_ev) || adjusted_ev <= 0.0
-                || economics.price_tick <= 0 || economics.side != wanted_side) continue;
-            // Exploration still spends real PAPER risk. Rank by conservative
-            // expected dollars first; use fill probability only as a tie-break
-            // for equally economic placements. Maximizing fill probability
-            // selected IMPROVE1 precisely where informed flow was most toxic.
-            if (adjusted_ev > best.adjusted_ev + kEps
-                || (std::abs(adjusted_ev - best.adjusted_ev) <= kEps
-                    && economics.fill_probability > best_fill_probability)) {
-                best.economics = &economics;
-                best.action = candidate.action;
-                best.adjusted_ev = adjusted_ev;
-                best_fill_probability = economics.fill_probability;
-            }
-        }
-        if (best.economics != nullptr) return best;
+        const auto& side_choices = wanted_side == Side::Sell ? sell : buy;
+        if (side_choices.economic.economics == nullptr) continue;
+        const bool distinct_actions =
+            side_choices.economic.action != side_choices.information.action;
+        ExplorationChoice selected = information_arm
+            ? side_choices.information : side_choices.economic;
+        selected.information_arm = information_arm;
+        const double information_fraction = clamp(
+            model.exploration_action_information_fraction, 0.0, 1.0);
+        selected.action_arm_propensity = information_arm
+            ? information_fraction : 1.0 - information_fraction;
+        selected.action_propensity = distinct_actions
+            ? selected.action_arm_propensity : 1.0;
+        selected.side_propensity = buy_available && sell_available ? 0.5 : 1.0;
+        return selected;
     }
-    return best;
+    return {};
 }
 
 [[nodiscard]] const SideEconomics* exploration_side(
@@ -476,6 +526,9 @@ bool MakerModelSnapshot::valid() const noexcept {
     if (!finite(toxicity_withdraw_threshold) || toxicity_withdraw_threshold < 0.0 || toxicity_withdraw_threshold > 1.0) return false;
     if (!finite(one_sided_inventory_fraction) || one_sided_inventory_fraction < 0.0) return false;
     if (!finite(exploration_epsilon) || exploration_epsilon < 0.0 || exploration_epsilon > 1.0) return false;
+    if (!finite(exploration_action_information_fraction)
+        || exploration_action_information_fraction < 0.0
+        || exploration_action_information_fraction > 0.25) return false;
     if (!finite(exploration_confidence_z) || exploration_confidence_z < 0.0
         || exploration_confidence_z > std::max(0.0, robust_ev_z)) return false;
     if (!finite(exploration_quote_notional_fraction) || exploration_quote_notional_fraction < 0.0
@@ -835,6 +888,21 @@ MakerDecision MakerHotPath::on_market_update(
         ? quotes.ask_active != 0 : quotes.bid_active != 0;
     const std::int64_t exploration_quote_tick = exploration_side_ == Side::Sell
         ? quotes.ask_tick : quotes.bid_tick;
+    const auto attach_exploration_assignment = [&]() noexcept {
+        decision.exploration_quote_propensity = exploration_quote_propensity_;
+        decision.exploration_side_propensity = exploration_side_propensity_;
+        decision.exploration_action_information_fraction =
+            exploration_action_information_fraction_;
+        decision.exploration_action_arm_propensity =
+            exploration_action_arm_propensity_;
+        decision.exploration_action_propensity = exploration_action_propensity_;
+        decision.exploration_lifetime_propensity = exploration_lifetime_propensity_;
+        decision.exploration_selection_propensity =
+            exploration_selection_propensity_;
+        decision.exploration_assignment_propensity =
+            exploration_assignment_propensity_;
+        decision.exploration_information_arm = exploration_information_arm_;
+    };
 
     // The minimum exposure belongs to the accepted order, not to the decision
     // branch that happens to be selected on a later book update.  In
@@ -851,6 +919,7 @@ MakerDecision MakerHotPath::on_market_update(
         decision.reason = DecisionReason::ExplorationHold;
         decision.exploration_max_rest_ns = exploration_max_rest_ns_;
         decision.exploration_persistent = exploration_persistent_;
+        attach_exploration_assignment();
         if (economic_quote) {
             decision.robust_ev = best->score;
         } else if (finite(best_observed_robust_ev)) {
@@ -923,6 +992,7 @@ MakerDecision MakerHotPath::on_market_update(
         if (exploration_active_ && exploration_quote_active) {
             decision.exploration_max_rest_ns = exploration_max_rest_ns_;
             decision.exploration_persistent = exploration_persistent_;
+            attach_exploration_assignment();
             if (exploration_max_rest_ns_ > 0
                 && exploration_elapsed >= exploration_max_rest_ns_) {
                 decision.action = Action::Withdraw;
@@ -997,7 +1067,8 @@ MakerDecision MakerHotPath::on_market_update(
             return decision;
         }
 
-        const bool sampled = last_exploration_quote_ns_ == 0
+        const bool first_exploration_quote = last_exploration_quote_ns_ == 0;
+        const bool sampled = first_exploration_quote
             || exploration_sample(update, model.exploration_epsilon);
         if (exploration_configured
             && quotes.bid_active == 0 && quotes.ask_active == 0
@@ -1006,9 +1077,12 @@ MakerDecision MakerHotPath::on_market_update(
                 ^ (update.instrument_handle * 0x94d049bb133111ebULL)
                 ^ (intent_sequence_ * 0xbf58476d1ce4e5b9ULL)) & 1ULL) != 0
                 ? Side::Sell : Side::Buy;
+            const bool information_arm = information_action_sample(
+                update, intent_sequence_ + 1,
+                model.exploration_action_information_fraction);
             const auto choice = choose_exploration(
                 exploration_candidates.data(), exploration_candidate_count, model,
-                preferred_side);
+                preferred_side, information_arm);
             if (choice.economics != nullptr) {
                 auto authorized_exploration = *choice.economics;
                 authorized_exploration.robust_ev = choice.adjusted_ev;
@@ -1057,6 +1131,26 @@ MakerDecision MakerHotPath::on_market_update(
                 exploration_persistent_ = static_cast<std::uint8_t>(persistent);
                 decision.exploration_max_rest_ns = exploration_max_rest_ns_;
                 decision.exploration_persistent = exploration_persistent_;
+                const double quote_propensity = first_exploration_quote
+                    ? 1.0 : model.exploration_epsilon;
+                const double lifetime_propensity = persistent
+                    ? model.exploration_persistent_fraction
+                    : 1.0 - model.exploration_persistent_fraction;
+                decision.exploration_quote_propensity = quote_propensity;
+                decision.exploration_side_propensity = choice.side_propensity;
+                decision.exploration_action_information_fraction =
+                    model.exploration_action_information_fraction;
+                decision.exploration_action_arm_propensity =
+                    choice.action_arm_propensity;
+                decision.exploration_action_propensity = choice.action_propensity;
+                decision.exploration_lifetime_propensity = lifetime_propensity;
+                decision.exploration_selection_propensity = quote_propensity
+                    * choice.side_propensity * choice.action_propensity;
+                decision.exploration_assignment_propensity = quote_propensity
+                    * choice.side_propensity * choice.action_arm_propensity
+                    * lifetime_propensity;
+                decision.exploration_information_arm = static_cast<std::uint8_t>(
+                    choice.information_arm);
                 append_intent(decision, make_intent(++intent_sequence_, update, model,
                                                     IntentType::Quote, choice.economics->side,
                                                     choice.economics->price_tick,
@@ -1065,6 +1159,22 @@ MakerDecision MakerHotPath::on_market_update(
                 exploration_active_ = 1;
                 exploration_action_ = choice.action;
                 exploration_side_ = choice.economics->side;
+                exploration_quote_propensity_ = decision.exploration_quote_propensity;
+                exploration_side_propensity_ = decision.exploration_side_propensity;
+                exploration_action_information_fraction_ =
+                    decision.exploration_action_information_fraction;
+                exploration_action_arm_propensity_ =
+                    decision.exploration_action_arm_propensity;
+                exploration_action_propensity_ =
+                    decision.exploration_action_propensity;
+                exploration_lifetime_propensity_ =
+                    decision.exploration_lifetime_propensity;
+                exploration_selection_propensity_ =
+                    decision.exploration_selection_propensity;
+                exploration_assignment_propensity_ =
+                    decision.exploration_assignment_propensity;
+                exploration_information_arm_ =
+                    decision.exploration_information_arm;
                 last_exploration_quote_ns_ = now;
                 const std::int64_t end_ns = monotonic_ns();
                 decision.latency.decision_ns = end_ns - decision_start_ns;

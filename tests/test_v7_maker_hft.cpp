@@ -655,6 +655,100 @@ void test_point_ev_exploration_prefers_highest_economic_placement() {
     assert(decision.intents[0].expected_ev > model.min_robust_ev_per_share);
 }
 
+void test_information_arm_identifies_join_improve_tradeoff_with_exact_propensity() {
+    auto model = profitable_model();
+    model.base_ev_se_per_share = 0.025;
+    model.robust_ev_z = 100.0;
+    model.min_robust_ev_per_share = 0.00001;
+    configure_exploration(model);
+    model.exploration_confidence_z = 0.0;
+    model.exploration_action_information_fraction = 0.20;
+    pm::v7::maker::InventorySnapshot inventory;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 20.0;
+    risk.exploration_max_quote_shares = 2.0;
+    risk.max_abs_residual_shares = 200.0;
+
+    bool saw_join = false;
+    bool saw_improve = false;
+    for (std::uint64_t version = 1; version <= 512; ++version) {
+        pm::v7::maker::MakerHotPath hot;
+        auto update = normal_update();
+        update.state_version = version;
+        const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+        assert(decision.reason == pm::v7::maker::DecisionReason::ExplorationQuote);
+        assert(decision.intent_count == 1);
+        assert(decision.intents[0].expected_ev > 0.0);
+        assert(std::abs(decision.exploration_quote_propensity - 1.0) < 1e-12);
+        assert(std::abs(decision.exploration_side_propensity - 1.0) < 1e-12);
+        assert(std::abs(decision.exploration_action_information_fraction - 0.20) < 1e-12);
+        assert(std::abs(decision.exploration_lifetime_propensity - 1.0) < 1e-12);
+        if (decision.action == pm::v7::maker::Action::Improve1) {
+            saw_improve = true;
+            assert(decision.exploration_information_arm == 1);
+            assert(std::abs(decision.exploration_action_arm_propensity - 0.20) < 1e-12);
+            assert(std::abs(decision.exploration_action_propensity - 0.20) < 1e-12);
+            assert(decision.intents[0].price_tick == update.best_bid_tick + 1);
+        } else {
+            saw_join = true;
+            assert(decision.action == pm::v7::maker::Action::Join);
+            assert(decision.exploration_information_arm == 0);
+            assert(std::abs(decision.exploration_action_arm_propensity - 0.80) < 1e-12);
+            assert(std::abs(decision.exploration_action_propensity - 0.80) < 1e-12);
+            assert(decision.intents[0].price_tick == update.best_bid_tick);
+        }
+        assert(std::abs(decision.exploration_selection_propensity
+                        - decision.exploration_action_propensity) < 1e-12);
+        assert(std::abs(decision.exploration_assignment_propensity
+                        - decision.exploration_action_arm_propensity) < 1e-12);
+
+        // Assignment is a pure function of the recorded state and quote
+        // sequence, so a replay produces the identical arm and propensity.
+        pm::v7::maker::MakerHotPath replay_hot;
+        const auto replay = replay_hot.on_market_update(
+            update, inventory, quotes, risk, model);
+        assert(replay.action == decision.action);
+        assert(replay.exploration_action_arm_propensity
+               == decision.exploration_action_arm_propensity);
+    }
+    assert(saw_join && saw_improve);
+}
+
+void test_information_arm_never_selects_nonpositive_improve() {
+    auto model = profitable_model();
+    model.base_ev_se_per_share = 0.025;
+    model.robust_ev_z = 100.0;
+    model.min_robust_ev_per_share = 0.00001;
+    configure_exploration(model);
+    model.exploration_confidence_z = 0.0;
+    model.exploration_action_information_fraction = 0.25;
+    const auto improve_index = pm::v7::maker::execution_cell_index(
+        pm::v7::maker::Action::Improve1, 1, pm::v7::Side::Buy);
+    auto& improve = model.execution_cells[improve_index];
+    improve.valid = 1;
+    improve.fill_probability = 0.99;
+    improve.adverse_markout_per_share = 0.02;
+    improve.fill_weight = 1.0;
+    improve.markout_weight = 1.0;
+    pm::v7::maker::InventorySnapshot inventory;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 20.0;
+    risk.exploration_max_quote_shares = 2.0;
+    risk.max_abs_residual_shares = 200.0;
+    for (std::uint64_t version = 1; version <= 128; ++version) {
+        pm::v7::maker::MakerHotPath hot;
+        auto update = normal_update();
+        update.state_version = version;
+        const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+        assert(decision.reason == pm::v7::maker::DecisionReason::ExplorationQuote);
+        assert(decision.action == pm::v7::maker::Action::Join);
+        assert(decision.intents[0].expected_ev > 0.0);
+        assert(std::abs(decision.exploration_action_propensity - 1.0) < 1e-12);
+    }
+}
+
 void test_exploration_collects_positive_buy_and_inventory_backed_sell_evidence() {
     auto model = profitable_model();
     model.base_ev_se_per_share = 0.025;
@@ -925,6 +1019,8 @@ int main() {
     test_positive_exploration_ev_breaks_robust_cold_start();
     test_zero_runtime_exploration_cap_is_an_explicit_denial();
     test_point_ev_exploration_prefers_highest_economic_placement();
+    test_information_arm_identifies_join_improve_tradeoff_with_exact_propensity();
+    test_information_arm_never_selects_nonpositive_improve();
     test_exploration_collects_positive_buy_and_inventory_backed_sell_evidence();
     test_exploration_never_emits_uncovered_sell();
     test_persistent_lifetime_arm_is_explicit_and_bounded();

@@ -102,6 +102,177 @@ def _control_exploration_cell(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _control_exploration_cells(
+    row: dict[str, Any],
+    *,
+    minimum_prints_30s: int,
+    maximum_last_side_age_ms: int,
+) -> list[dict[str, Any]]:
+    """Return positive JOIN/IMPROVE arms for one causal market-side cell.
+
+    The main selector deliberately needs more than one print before granting
+    ordinary execution authority. A bounded PAPER control lane must be able to
+    learn from the first fresh print, otherwise the stricter gate is an
+    absorbing state. This helper never infers a side: the public aggressor
+    print, token and valid local book must all identify it explicitly.
+    """
+    opportunities = (
+        row.get("quote_opportunities")
+        if isinstance(row.get("quote_opportunities"), list) else [])
+    best: tuple[float, str, dict[str, Any], str] | None = None
+    for opportunity in opportunities:
+        if not isinstance(opportunity, dict):
+            continue
+        token_id = str(opportunity.get("token_id") or "")
+        outcome = str(opportunity.get("outcome") or "").upper()
+        quote_side = str(opportunity.get("quote_side") or "").upper()
+        age_ms = int(finite(opportunity.get("last_opposite_flow_age_ms"), -1.0))
+        low_sample_fresh = (
+            int(finite(opportunity.get("opposite_prints_30s"), 0.0))
+                >= max(1, minimum_prints_30s)
+            and 0 <= age_ms <= max(1_000, maximum_last_side_age_ms)
+        )
+        ordinary_fresh = opportunity.get("opposite_flow_is_fresh") is True
+        join_probability = max(0.0, finite(
+            opportunity.get("projected_join_fill_probability"), 0.0))
+        improve_probability = max(0.0, finite(
+            opportunity.get("projected_improve1_fill_probability"), 0.0))
+        best_probability = max(
+            join_probability,
+            improve_probability
+                if opportunity.get("improve1_available") is True else 0.0,
+        )
+        if (
+            not token_id or outcome not in {"YES", "NO"}
+            or quote_side not in {"BUY", "SELL"}
+            or opportunity.get("book_evidence_valid") is not True
+            or not (ordinary_fresh or low_sample_fresh)
+            or best_probability <= 0.0
+        ):
+            continue
+        authority_basis = (
+            "POSITIVE_FLOW_CONTROL" if ordinary_fresh
+            else "LOW_SAMPLE_FRESH_FLOW_CONTROL")
+        identity = "|".join((token_id, quote_side))
+        candidate = (best_probability, identity, opportunity, authority_basis)
+        if best is None or candidate[:2] > best[:2]:
+            best = candidate
+    if best is None:
+        return []
+
+    _probability, _identity, opportunity, authority_basis = best
+    common = {
+        "outcome": str(opportunity["outcome"]).upper(),
+        "token_id": str(opportunity["token_id"]),
+        "quote_side": str(opportunity["quote_side"]).upper(),
+        "authority_basis": authority_basis,
+        "projected_flow_reach_probability": max(0.0, finite(
+            opportunity.get("projected_flow_reach_probability"), 0.0)),
+    }
+    cells: list[dict[str, Any]] = []
+    join_probability = max(0.0, finite(
+        opportunity.get("projected_join_fill_probability"), 0.0))
+    if join_probability > 0.0:
+        cells.append({
+            **common,
+            "action": "JOIN",
+            "projected_queue_depletion_probability": max(0.0, finite(
+                opportunity.get("projected_join_queue_depletion_probability"),
+                0.0,
+            )),
+            "projected_fill_probability": join_probability,
+        })
+    improve_probability = max(0.0, finite(
+        opportunity.get("projected_improve1_fill_probability"), 0.0))
+    if opportunity.get("improve1_available") is True and improve_probability > 0.0:
+        cells.append({
+            **common,
+            "action": "IMPROVE1",
+            "projected_queue_depletion_probability": 1.0,
+            "projected_fill_probability": improve_probability,
+        })
+    return cells
+
+
+def _authorize_control_cells(
+    rows: list[dict[str, Any]],
+    *,
+    maximum_markets: int,
+    minimum_prints_30s: int,
+    maximum_last_side_age_ms: int,
+) -> int:
+    """Authorize bounded, distinct causal controls without global collapse."""
+    maximum_markets = max(1, int(maximum_markets))
+    authorized_rows = [
+        row for row in rows if row.get("authorized_execution_cells")]
+    already_authorized = len(authorized_rows)
+    authorized_cells = 0
+
+    # A market may clear the main threshold for IMPROVE1 while its JOIN arm is
+    # positive but sub-threshold (or vice versa). Fill-policy learning requires
+    # both admissible actions; add the missing arm inside the same market budget
+    # instead of treating any one authorized action as a completed experiment.
+    for row in authorized_rows[:maximum_markets]:
+        controls = _control_exploration_cells(
+            row,
+            minimum_prints_30s=minimum_prints_30s,
+            maximum_last_side_age_ms=maximum_last_side_age_ms,
+        )
+        existing = {
+            (str(cell.get("token_id") or ""), str(cell.get("action") or ""),
+             str(cell.get("quote_side") or ""))
+            for cell in row.get("authorized_execution_cells", [])
+            if isinstance(cell, dict)
+        }
+        additions = [
+            cell for cell in controls
+            if (str(cell["token_id"]), str(cell["action"]),
+                str(cell["quote_side"])) not in existing
+        ]
+        if additions:
+            row["authorized_execution_cells"].extend(additions)
+            row["authorized_execution_cell_count"] = len(
+                row["authorized_execution_cells"])
+            row["control_exploration_authorized"] = True
+            authorized_cells += len(additions)
+
+    remaining_markets = max(0, maximum_markets - already_authorized)
+    if remaining_markets <= 0:
+        return authorized_cells
+
+    candidates: list[tuple[float, str, dict[str, Any], list[dict[str, Any]]]] = []
+    for row in rows:
+        if row.get("authorized_execution_cells"):
+            continue
+        cells = _control_exploration_cells(
+            row,
+            minimum_prints_30s=minimum_prints_30s,
+            maximum_last_side_age_ms=maximum_last_side_age_ms,
+        )
+        if not cells:
+            continue
+        probability = max(
+            finite(cell.get("projected_fill_probability"), 0.0)
+            for cell in cells)
+        identity = str(row.get("market_id") or "")
+        candidates.append((probability, identity, row, cells))
+
+    for _probability, _identity, row, cells in sorted(
+        candidates, key=lambda item: (-item[0], item[1])
+    )[:remaining_markets]:
+        row["control_exploration_authorized"] = True
+        row["execution_role"] = str(cells[0]["authority_basis"])
+        row["authorized_execution_cells"] = cells
+        row["authorized_execution_cell_count"] = len(cells)
+        authorized_cells += len(cells)
+
+    # With no causal print anywhere, retain one reproducible control rather
+    # than either freezing learning or spraying the warm observation universe.
+    if authorized_cells == 0 and already_authorized == 0:
+        return _authorize_one_control_cell(rows)
+    return authorized_cells
+
+
 def _authorize_one_control_cell(rows: list[dict[str, Any]]) -> int:
     """Authorize exactly one best research cell when no full flow cell exists."""
     if any(row.get("authorized_execution_cells") for row in rows):
@@ -1218,7 +1389,15 @@ def _recent_flow_snapshot(
             stable_reserve_added += 1
             if len(selected) >= reserve_target:
                 break
-    control_cells_authorized = _authorize_one_control_cell(selected)
+    control_cells_authorized = _authorize_control_cells(
+        selected,
+        maximum_markets=max(1, int(flow_cfg.get(
+            "control_exploration_maximum_markets", operational_floor))),
+        minimum_prints_30s=max(1, int(flow_cfg.get(
+            "control_minimum_prints_30s", 1))),
+        maximum_last_side_age_ms=max(1_000, int(float(flow_cfg.get(
+            "control_maximum_last_side_age_seconds", 30.0)) * 1_000.0)),
+    )
     _annotate_inventory_seed_authority(selected)
     if len(selected) < minimum_markets:
         raise ValueError(f"maker_recent_flow_insufficient_markets:{len(selected)}")
@@ -1254,6 +1433,9 @@ def _recent_flow_snapshot(
         "stable_reserve_added": stable_reserve_added,
         "flow_authorized_market_count": flow_authorized_markets,
         "control_exploration_cell_count": control_cells_authorized,
+        "control_exploration_market_count": sum(
+            1 for row in selected
+            if row.get("control_exploration_authorized") is True),
         "authorized_execution_cell_count": authorized_execution_cell_count,
         "minimum_authorized_projected_fill_probability": (
             minimum_authorized_fill_probability),
@@ -1261,7 +1443,7 @@ def _recent_flow_snapshot(
         "minimum_side_prints_2m": minimum_side_prints_2m,
         "maximum_last_side_age_ms": maximum_last_side_age_ms,
         "markets": selected,
-        "note": "PAPER maker observes the configured universe but execution is fail-closed to selector-authorized token/action/side cells. Fresh opposite flow may authorize multiple economic placements; if none clears the main fillability threshold, exactly one best sub-threshold fresh-flow cell receives control authority, falling back to deterministic JOIN/YES/BUY only when no positive flow cell exists. The runtime still requires positive point EV. Rewards remain zero unless verified.",
+        "note": "PAPER maker observes the configured universe but execution is fail-closed to selector-authorized token/action/side cells. Fresh opposite flow may authorize multiple economic placements. Sub-threshold controls are causal, per market-side, bounded by the exploration market cap, and expose both positive JOIN and IMPROVE1 arms when available. Only complete absence of causal flow falls back to one deterministic JOIN/YES/BUY control. The runtime still requires positive point EV. Rewards remain zero unless verified.",
     }
 
 

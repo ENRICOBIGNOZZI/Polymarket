@@ -122,6 +122,8 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
         self.assertLessEqual(2.0 * per_quote, per_market)
         expected_execution_cap = int(total // (2.0 * per_quote))
         self.assertEqual(expected_execution_cap, 5)
+        self.assertGreater(float(exploration["action_information_fraction"]), 0.0)
+        self.assertLessEqual(float(exploration["action_information_fraction"]), 0.25)
         selection = self.policy["market_selection"]
         recent = selection["recent_flow"]
         self.assertEqual(
@@ -144,6 +146,7 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
             'exploration, "max_quote_notional_fraction"',
             'exploration, "max_market_fraction"',
             'exploration, "max_capital_fraction"',
+            'exploration, "action_information_fraction"',
             "exploration_market_cap",
             "model.exploration_max_active_markets = configured_market_capacity",
             "model.exploration_concurrent_market_cap = exploration_market_cap",
@@ -153,6 +156,14 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
             "shard->set_sleeve_starting_capital(config.starting_capital)",
         ):
             with self.subTest(token=token):
+                self.assertIn(token, self.source)
+        for token in (
+            'metadata["exploration_action_arm"]',
+            'metadata["exploration_action_propensity"]',
+            'metadata["exploration_selection_propensity"]',
+            'metadata["exploration_assignment_propensity"]',
+        ):
+            with self.subTest(propensity_token=token):
                 self.assertIn(token, self.source)
         self.assertEqual(float(self.policy["inventory"]["seed_min_quote_multiples"]), 1.0)
         self.assertEqual(
